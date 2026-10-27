@@ -1535,8 +1535,9 @@ func (g *GitHub) FileAt(ctx context.Context, slug, path, ref string, limit int64
 	return data, nil
 }
 
-// CompareCommits returns the ancestry-bearing compare response for phase
-// advancement. Ordinary callers use Compare and do not materialize commits.
+// CompareCommits returns the ancestry-bearing compare response, for a
+// caller that needs the commit list. Callers that need only files and
+// counts use Compare, which does not materialize commits.
 func (g *GitHub) CompareCommits(ctx context.Context, slug, base, head string) (CommitComparison, error) {
 	var cmp CommitComparison
 	err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/compare/%s...%s", slug, base, head), nil, &cmp)

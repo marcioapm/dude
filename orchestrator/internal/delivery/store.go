@@ -151,9 +151,10 @@ type PhaseRun struct {
 	RestartNote, Tier string
 	// A review limited to a range of commits; nil reviews the whole branch.
 	ReviewRange *ReviewRange
-	// The range names the loop the review's findings belong to (a pull
-	// request's fix on its candidate, rangeFindings): a fresh Run keeps it.
-	LoopRange bool
+	// A fresh Run keeps ReviewRange: the range names the loop the review's
+	// findings belong to (a pull request's fix on its candidate,
+	// rangeFindings).
+	KeepRange bool
 	// A publishing Run: the branch dude fast-forwards to what it pushed
 	// (runs.branch), "" for the task branch. A candidate for an open pull
 	// request's fix (CandidateBranch) is checked before the pull request

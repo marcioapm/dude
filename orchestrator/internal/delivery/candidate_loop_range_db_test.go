@@ -15,14 +15,18 @@ func largeRound(t *testing.T) *laterRound {
 	return r
 }
 
-// reviewRangeOf is the review_range->>'of' of the round's correctness
+// reviewRangeOf is the review_range->>'of' of the round's one correctness
 // reviewer, "none" for NULL, and the fresh reason its run.created records.
 func (r *laterRound) reviewRangeOf() (of, fresh string) {
 	r.t.Helper()
-	if err := r.owner.QueryRow(r.ctx, `SELECT COALESCE(x.review_range->>'of', 'none'), COALESCE(e.payload->>'fresh', '')
+	var n int
+	if err := r.owner.QueryRow(r.ctx, `SELECT count(*), max(COALESCE(x.review_range->>'of', 'none')), max(COALESCE(e.payload->>'fresh', ''))
 		FROM runs x JOIN events e ON e.run_id = x.id AND e.event_type = 'run.created'
-		WHERE x.task_id = 'wi_rr' AND x.id <> 'run_rr1' AND x.category = 'correctness'`).Scan(&of, &fresh); err != nil {
+		WHERE x.task_id = 'wi_rr' AND x.id <> 'run_rr1' AND x.category = 'correctness'`).Scan(&n, &of, &fresh); err != nil {
 		r.t.Fatal(err)
+	}
+	if n != 1 {
+		r.t.Fatalf("%d correctness reviewers for the round, want 1", n)
 	}
 	return of, fresh
 }

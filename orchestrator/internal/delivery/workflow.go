@@ -840,7 +840,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
-				p.ReviewRange, p.LoopRange = reviewRange, st.checkingCandidate()
+				p.ReviewRange, p.KeepRange = reviewRange, st.checkingCandidate()
 				p.Continue = cont
 				d.apply(p)
 				if st.Integration != nil {

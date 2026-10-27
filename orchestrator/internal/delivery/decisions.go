@@ -473,10 +473,11 @@ func atGate(st *State) workflow.Result {
 // heads it is shown at, when it last parked there (Since), and the heads
 // the round before was shown at (Previous), with the task's own commits
 // since them (not the base's, nor a merge of it) in each repository GitHub
-// could compare; and what each repository would
-// open (Repos), measured against its base. SentBack: the people's feedback
-// sent from the hold is being fixed, until the delivery parks there again.
-// Cleared once a pull request opens.
+// could compare; and what each repository would open (Repos), measured
+// against its base. A rebase or force-push between holds gives the task's
+// commits new SHAs, which CommitsSince counts as new. SentBack: the
+// people's feedback sent from the hold is being fixed, until the delivery
+// parks there again. Cleared once a pull request opens.
 type Hold struct {
 	Round        int               `json:"round"`
 	Heads        map[string]string `json:"heads"`
@@ -535,7 +536,7 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 			base = b
 		}
 		held := HeldRepo{Name: repo.Name, Head: st.Branch, Base: base}
-		var own []forge.ComparedCommit
+		var listedNow []forge.ComparedCommit
 		listed := false
 		if gh != nil {
 			cmp, err := gh.CompareCommits(ctx, forge.SlugFromURL(repo.URL), base, to)
@@ -546,7 +547,7 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 				}
 				held.Additions, held.Deletions = &add, &del
 			}
-			own, listed = cmp.Commits, err == nil && len(cmp.Commits) >= cmp.TotalCommits
+			listedNow, listed = cmp.Commits, err == nil && len(cmp.Commits) >= cmp.TotalCommits
 		}
 		st.Hold.Repos = append(st.Hold.Repos, held)
 		if from := prev[repo.Name]; counted && from != "" && from != to {
@@ -555,7 +556,7 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 				counted = false
 				continue
 			}
-			n += tasksOwnSince(own, before.Commits)
+			n += tasksOwnSince(listedNow, before.Commits)
 		}
 	}
 	if counted {

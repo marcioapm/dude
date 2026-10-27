@@ -213,7 +213,7 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 		if err := releaseRunTx(ctx, tx, p.ID); err != nil {
 			return "", err
 		}
-		if !in.LoopRange {
+		if !in.KeepRange {
 			in.ReviewRange = nil
 		}
 		in.freshReason = "large_delta"
