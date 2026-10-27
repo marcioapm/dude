@@ -189,9 +189,9 @@ const SERVER_LIVE = now - 24 * SEC;
 const AUDIT_AT = now - 21 * 60 * MIN;
 
 /** The live digest's state, from the page's `?step=`. */
+const fixtureStep = typeof window === "undefined" ? null : localStorage.getItem("dude.fixtures.automationStep");
 function step(): "running" | "done" | "posted" | "scrolled" {
-  const s = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("step");
-  return s === "done" || s === "posted" || s === "scrolled" ? s : "running";
+  return fixtureStep === "done" || fixtureStep === "posted" || fixtureStep === "scrolled" ? fixtureStep : "running";
 }
 
 /** Every automation run's activity, by run. */

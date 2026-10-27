@@ -1278,10 +1278,10 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
         ) : null}
       </SettingsSection>
       {run.payloads.length === 0 && !run.payloadsPurged || a.trigger.kind === "incoming" ? null : (
-      <SettingsSection title="Trigger payload">
+      <SettingsDisclosure icon="braces" summary="Trigger payload">
         {run.payloadsPurged ? <SettingsNote>Payloads are kept 30 days.</SettingsNote>
           : <pre className="automationPayload">{JSON.stringify(run.payloads.length === 1 ? run.payloads[0]!.body : run.payloads, null, 2)}</pre>}
-      </SettingsSection>
+      </SettingsDisclosure>
       )}
       {a.kind === "agent" ? (
         <SettingsSection title="Activity" data-testid="run-activity"

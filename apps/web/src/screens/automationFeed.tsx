@@ -168,8 +168,7 @@ export function CommandLog({ command, events, live }: { command: string; events:
     <LogStream data-testid="command-log" lines={lines} lineNumbers live={live} maxHeight={480}
       title={<span className="ds-mono"><Icon name="terminal" size={12} /> {command}</span>}
       toolbar={<span className="logToolbar">{live ? <LiveMark>Running</LiveMark> : exitCode !== null
-        ? <span className={exitCode === 0 ? "logExit" : "logExit logExitBad"} data-testid="command-exit">exit {exitCode}</span> : null}
-        <span className="ds-hint">{lines.length} {lines.length === 1 ? "line" : "lines"}</span></span>}
+        ? <span className={exitCode === 0 ? "logExit" : "logExit logExitBad"} data-testid="command-exit">exit {exitCode}</span> : null}</span>}
       emptyMessage={live ? "Waiting for output…" : "It printed nothing."} />
   );
 }
@@ -178,9 +177,9 @@ export function CommandLog({ command, events, live }: { command: string; events:
 export function ContainerLog({ image, events, live }: { image: string; events: readonly PersistedEvent[]; live: boolean }) {
   const { lines } = useMemo(() => logLines(events, true), [events]);
   return (
-    <LogStream data-testid="container-log" lines={lines} timestamps live={live} maxHeight={480}
+    <LogStream data-testid="container-log" lines={lines} timestamps lineNumbers={false} live={live} maxHeight={480}
       title={<span className="ds-mono"><Icon name="layers" size={12} /> {image}</span>}
-      toolbar={<span className="logToolbar">{live ? <LiveMark /> : null}<span className="ds-hint">{lines.length} {lines.length === 1 ? "line" : "lines"}</span></span>}
+      toolbar={live ? <LiveMark /> : undefined}
       emptyMessage={live ? "Waiting for the container's output…" : "Its container printed nothing."} />
   );
 }
