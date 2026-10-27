@@ -7,7 +7,7 @@
  * events stream RunScreen uses.
  */
 
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import { ChatMessage, ChatAside, ChatTranscript, FeedDelivery, LogStream, summarizeToolArgs, type LogLine } from "@dude/design-system/components";
 import { formatDuration, Icon } from "@dude/design-system";
 import type { AgentRole, AutomationRunDetail, PersistedEvent } from "@dude/domain";
@@ -26,17 +26,6 @@ export const EV_LOG_EXITED = "automation.log.exited";
 /** The run's activity as it arrives: its backfill, then live. */
 export function useRunActivity(client: ApiClient, runId: string, agent = true) {
   return useEventStream({ client, automationRunId: runId, limit: agent ? Number.POSITIVE_INFINITY : 2500 });
-}
-
-/** Now, ticking each second while `on` (a live run's duration); still otherwise. */
-export function useNow(on: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!on) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [on]);
-  return now;
 }
 
 /**

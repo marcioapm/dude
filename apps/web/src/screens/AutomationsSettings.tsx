@@ -41,7 +41,7 @@ import {
   TriggerSummary,
   type RepoFilterValue,
 } from "@dude/design-system/components";
-import { formatDuration, formatTimestamp } from "@dude/design-system";
+import { formatDuration, formatTimestamp, useNow } from "@dude/design-system";
 import {
   Badge,
   Button,
@@ -123,7 +123,7 @@ import {
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { AutomationToolList } from "./automationTools.tsx";
-import { AutomationFeed, CommandLog, ContainerLog, EV_FOLLOW_UP, EV_LOG_EXITED, EV_LOG_LINE, LiveMark, RunNowLine, activityCount, useNow, useRunActivity } from "./automationFeed.tsx";
+import { AutomationFeed, CommandLog, ContainerLog, EV_FOLLOW_UP, EV_LOG_EXITED, EV_LOG_LINE, LiveMark, RunNowLine, activityCount, useRunActivity } from "./automationFeed.tsx";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { project } from "../api/conversation.ts";
