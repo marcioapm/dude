@@ -24,6 +24,7 @@ func TestAMergedManifestMigrationOrCIConfigTouchesEveryChange(t *testing.T) {
 		"r/bun.lockb": true, "r/package-lock.json": true, "r/yarn.lock": true, "r/pnpm-lock.yaml": true,
 		"r/Cargo.lock": true, "r/migrations/190_x.sql": true, "r/db/migrations/1.sql": true,
 		"r/.github/workflows/ci.yml": true,
+
 		"r/lib/other.go": false, "r/docs/go.mod.md": false, "r/src/package.jsonc": false,
 		"r/lock/x.go": false, "r/migration.go": false, "r/sub/.github/x.yml": false, "github/.x": false,
 	} {
