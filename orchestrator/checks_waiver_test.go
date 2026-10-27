@@ -156,7 +156,7 @@ func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 	// plain pass or a person's waiver.
 	account := checksSection(w.gh.Pull(1).Body)
 	for _, want := range []string{"the judge passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)",
-		"- **Implementer** — backed; the rest passed by the judge\n  - `" + fakeagent.FailingCommand + "` — **pre-existing** — the recorded call says so (`mcall_test`)"} {
+		"- **Implementer** — passed by the judge\n  - `" + fakeagent.FailingCommand + "` — **pre-existing** — the recorded call says so (`mcall_test`)"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("PR account lacks %q:\n%s", want, account)
 		}
@@ -349,7 +349,7 @@ func TestAFailureTheWaiverDoesNotCoverMayBeWaivedForTheAttempt(t *testing.T) {
 	// The held message keeps the agent's evidence and says why the waiver
 	// does not cover it.
 	want := "Your checks report was not verified. Nothing from this Run has been pushed.\n\n" +
-		"- make test: TestClock needs a hardware clock — the Implementer's waiver does not cover this failure: the recorded call says so (judgement: no)\n\n" +
+		"- make test: TestClock needs a hardware clock — the Implementer's waiver does not cover this failure: the recorded call says so — not passed by the judge: the recorded call says so (judgement: no)\n\n" +
 		"A reported failure that predates this task passes once this Run's own tool calls show the same command failing the same way at the commit of the target branch this task builds on (target: main at "
 	if got := w.ids(`SELECT payload->'detail'->>'message' FROM events WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY cursor`, wi); len(got) != 2 || !strings.HasPrefix(got[1], want) {
 		t.Errorf("the fixer's held message is %q, want %q", got, want)

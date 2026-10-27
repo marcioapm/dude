@@ -157,7 +157,7 @@ func TestTheChecksContextNamesTheTaskBase(t *testing.T) {
 	if want := "- target: main at " + h.Main + "\n"; len(fake.asked) != 1 || !strings.Contains(fake.asked[0].Context, want) {
 		t.Fatalf("after the merge the context lacks %q:\n%s", want, clip(fake.asked[0].Context))
 	}
-	if msg := sendBack(got.Verdicts, got.bases); !strings.Contains(msg, "the commit of the target branch this task builds on (target: main at "+h.Main+")") {
+	if msg := got.sendBack(); !strings.Contains(msg, "the commit of the target branch this task builds on (target: main at "+h.Main+")") {
 		t.Fatalf("the send-back names no task base:\n%s", msg)
 	}
 }
@@ -363,6 +363,66 @@ func TestWithNoTierAReportedFailureIsRejectedNotSkipped(t *testing.T) {
 	})
 }
 
+// A failure of a waived command that the judge finds is not the waived
+// failure is still asked whether it predates the task: shown at the task's
+// base it passes as pre-existing, otherwise it is rejected with both reasons.
+func TestAFailureTheWaiverDoesNotCoverMayStillBePreexisting(t *testing.T) {
+	for _, shown := range []bool{true, false} {
+		t.Run(map[bool]string{true: "shown at the task base", false: "not shown"}[shown], func(t *testing.T) {
+			w := newHarnessWorld(t)
+			startedFrom(w)
+			waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+			checksReply(w, failingTest)
+			endTurn(w)
+			fake := &waiverFake{waived: judge.No, preexisting: map[bool]string{true: judge.Yes, false: judge.No}[shown]}
+			w.s.Judge = fake
+			got, err := w.s.judgeChecks(context.Background(), w.run)
+			if err != nil || got.Verified != shown || got.JudgePassed != shown || got.Carried {
+				t.Fatalf("%+v %v", got, err)
+			}
+			if fake.waiverQuestions() != 1 || fake.preexistingQuestions() != 1 || !isPreexistingQuestion(fake.asked[1]) {
+				t.Fatalf("asked %d, %d about the waiver", len(fake.asked), fake.waiverQuestions())
+			}
+			v := got.Verdicts[0]
+			if shown && (v.Result != delivery.CheckPreexisting || v.Waiver != nil) {
+				t.Fatalf("verdict %+v", v)
+			}
+			if !shown && (v.Result != delivery.CheckFail || !strings.Contains(v.WaiverReason, "does not cover") || !strings.Contains(v.JudgeReason, "not passed by the judge")) {
+				t.Fatalf("verdict %+v", v)
+			}
+		})
+	}
+}
+
+// With no judgement tier the rejection says only a person can pass the
+// failure, and the send-back does not say how the judge would pass it;
+// a tier that answered no keeps that paragraph.
+func TestWithNoTierTheSendBackSaysOnlyAPersonCanPassAFailure(t *testing.T) {
+	for _, off := range []bool{true, false} {
+		t.Run(map[bool]string{true: "no tier", false: "the judge said no"}[off], func(t *testing.T) {
+			w := newHarnessWorld(t)
+			startedFrom(w)
+			checksReply(w, failingTsc)
+			endTurn(w)
+			fake := &preexistingFake{answer: judge.No}
+			if off {
+				fake.err = judge.ErrOff
+			}
+			w.s.Judge = fake
+			got, err := w.s.judgeChecks(context.Background(), w.run)
+			if err != nil || got.Verified {
+				t.Fatalf("%+v %v", got, err)
+			}
+			msg := got.sendBack()
+			hint := strings.Contains(msg, "passes once this Run's own tool calls show")
+			person := strings.Contains(msg, "no judgement tier: only a person can pass a reported failure")
+			if hint == off || person != off {
+				t.Fatalf("hint %v, only a person %v:\n%s", hint, person, msg)
+			}
+		})
+	}
+}
+
 // The first failure the judge does not pass rejects the report there, and
 // the send-back names it and every failure not yet asked about.
 func TestTheSendBackNamesTheFailuresAfterTheFirstRejected(t *testing.T) {
@@ -376,7 +436,7 @@ func TestTheSendBackNamesTheFailuresAfterTheFirstRejected(t *testing.T) {
 	if err != nil || got.Verified || fake.calls != 1 || len(got.Verdicts) != 2 || got.Verdicts[1].Command != "make test" {
 		t.Fatalf("%+v %v, asked %d", got, err, fake.calls)
 	}
-	if msg := sendBack(got.Verdicts, got.bases); !strings.Contains(msg, "- make test: TestClock needs a hardware clock\n") {
+	if msg := got.sendBack(); !strings.Contains(msg, "- make test: TestClock needs a hardware clock\n") {
 		t.Fatalf("the send-back lacks the second failure:\n%s", msg)
 	}
 }

@@ -193,7 +193,7 @@ func TestBesideACarriedFailureThePassesAreBackedAndMissingIsAsked(t *testing.T) 
 			// The send-back names the missing check alone, never the
 			// carried failure or the backed pass.
 			if !tc.verified {
-				if want := sendBack(got.Verdicts[2:], nil); got.Verdicts[2].Command != "missing checks" || got.Message != want {
+				if want := (checksDecision{Verdicts: got.Verdicts[2:]}).sendBack(); got.Verdicts[2].Command != "missing checks" || got.Message != want {
 					t.Fatalf("the send-back is\n%s\nwant\n%s", got.Message, want)
 				}
 			}

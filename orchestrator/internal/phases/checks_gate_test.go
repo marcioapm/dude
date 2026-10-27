@@ -302,7 +302,7 @@ func TestChecksTooManyChecksAreSentBackUnjudged(t *testing.T) {
 				return
 			}
 			want := fmt.Sprintf("the report lists %d checks, more than the %d that are verified", tc.n, checksCountMax)
-			if got.Verified || !strings.Contains(sendBack(got.Verdicts, nil), want) {
+			if got.Verified || !strings.Contains((checksDecision{Verdicts: got.Verdicts}).sendBack(), want) {
 				t.Fatalf("%+v: the send-back lacks %q", got, want)
 			}
 		})
