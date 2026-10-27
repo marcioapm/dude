@@ -101,6 +101,33 @@ func TestTheOwnersPickOfANotedStuckRetryDirectsTheNextFix(t *testing.T) {
 	}
 }
 
+// The owner's pick of the conductor's noted amend on a not-converging
+// escalation replaces the named finding's criterion with exactly the note:
+// not the question, not the label.
+func TestTheOwnersPickOfANotedAmendMakesTheNoteTheCriterion(t *testing.T) {
+	w, task := notConvergingConducted(t)
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	_, e := w.escalationOf(task)
+	named := e.Detail.(map[string]any)["findingIds"].([]any)[0].(string)
+	const criterion = "FACTORY.md names the finding it fixes on its first line."
+	w.must(task, "ask_person", `{"questions":[{"question":"The criterion stays unmet after two fixes. Amend it?",
+		"choices":[{"note":"`+criterion+`"},{"label":"Stop"}]}],"actions":["amend","stop"]}`)
+	if status, out := w.answerAs(ana, task, "Amend: "+criterion); status != 200 {
+		t.Fatalf("the answer: %d %v", status, out)
+	}
+	if d := w.decided(task); d == nil || d["action"] != "amend" || d["note"] != criterion {
+		t.Fatalf("decided %v", d)
+	}
+	w.until("the amend carried out", func() bool {
+		return w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND id = $2 AND acceptance <> $3`,
+			task, named, fakeagent.FindingAcceptance) == 1
+	})
+	if got := w.str(`SELECT COALESCE(acceptance, '') FROM review_findings WHERE id = $1`, named); got != criterion {
+		t.Fatalf("the amended criterion reads %q, want %q", got, criterion)
+	}
+}
+
 // A waiver offered with no note, or a note on an action that needs none,
 // is refused, recording no question.
 func TestAChoicesNoteIsRequiredWhereNeededAndRefusedElsewhere(t *testing.T) {
