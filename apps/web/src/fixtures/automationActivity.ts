@@ -166,7 +166,7 @@ function audit(run: string, t0: number): PersistedEvent[] {
     completed(run, t0 + 86 * SEC, "a2", "bash", { exitCode: 3, output: out("Scanning your binary for known vulnerabilities...\n\nVulnerability #1: GO-2026-4013\n    Excessive memory use in golang.org/x/net/html\n  Found in: golang.org/x/net@v0.30.0\n  Fixed in: golang.org/x/net@v0.33.0\n\nYour code is affected by 1 vulnerability from 1 module.") }),
     message(run, t0 + 120 * SEC, "One affected module. Running the whole test suite against `golang.org/x/net@v0.33.0` before suggesting the bump."),
     called(run, t0 + 166 * SEC, "a3", "bash", { command: "go get golang.org/x/net@v0.33.0 && go test ./... -count=1" }),
-    ev(run, "agent.tool.completed", t0 + 30 * MIN, { tool: "bash", callId: "a3", status: "aborted", note: "Stopped by the time limit.",
+    ev(run, "agent.tool.completed", t0 + 30 * MIN, { tool: "bash", callId: "a3", status: "aborted", note: "Stopped by the time limit, when the run reached 30 minutes.",
       output: out("ok   example/svc-auth/internal/token  4.211s\nok   example/svc-auth/internal/session  12.904s\n=== RUN   TestRotateUnderLoad") }),
   ];
 }

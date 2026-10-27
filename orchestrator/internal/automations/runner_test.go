@@ -1079,6 +1079,33 @@ func TestAutomationConcurrencyRows(t *testing.T) {
 	}
 }
 
+// The lux time limit ends an agent run with its open call aborted and the
+// note naming how long the run had run.
+func TestAutomationTimeLimitAbortsTheOpenCall(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_limit", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Work", "timeLimitMinutes": 30}}})
+	h.deliver("l-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("running", func() bool {
+		r := h.runs("aut_limit")
+		return len(r) == 1 && r[0].Status == "running" && r[0].LuxRunID != ""
+	})
+	run := h.runs("aut_limit")[0]
+	// No follow pass may be in flight while the open call is planted.
+	h.runner.Wait()
+	exec(t, h.owner, `UPDATE automation_runs SET started_at = now() - interval '30 minutes',
+		feed_state = '{"open":["limit-call"],"calls":{"limit-call":"bash"}}' WHERE id = $1`, run.ID)
+	h.until("the run fails", func() bool { h.fake.Timeout(run.LuxRunID); return h.runs("aut_limit")[0].Status == "failed" })
+	var note string
+	if err := h.owner.QueryRow(context.Background(), `SELECT payload->>'note' FROM events WHERE automation_run_id = $1
+		AND event_type = 'agent.tool.completed' AND payload->>'callId' = 'limit-call' AND payload->>'status' = 'aborted'`, run.ID).Scan(&note); err != nil {
+		t.Fatal(err)
+	}
+	if note != "Stopped by the time limit, when the run reached 30 minutes." {
+		t.Fatalf("note %q", note)
+	}
+}
+
 // hangTier is a model tier whose agent stays busy until stopped.
 func (h *harness) hangTier() string {
 	id := h.org + "_hang"

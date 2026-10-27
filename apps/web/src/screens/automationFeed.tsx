@@ -90,9 +90,11 @@ function feedNote(turn: ToolTurn): ReactNode {
   }
   if (turn.status === "aborted" && turn.stoppedNote) {
     const ran = turn.endedAt ? Date.parse(turn.endedAt) - Date.parse(turn.startedAt) : 0;
+    // The call's duration goes after the first clause: "Stopped by the time limit after 27m 14s, when …".
+    const [head, ...rest] = turn.stoppedNote.replace(/\.$/, "").split(", ");
     return (
       <p className="automationStoppedNote" data-testid="stopped-note">
-        <Icon name="stop" size={12} /> {turn.stoppedNote.replace(/\.$/, "")}{ran > 0 ? ` after ${formatDuration(ran)}` : ""}.
+        <Icon name="stop" size={12} /> {head}{ran > 0 ? ` after ${formatDuration(ran)}` : ""}{rest.length ? `, ${rest.join(", ")}` : ""}.
       </p>
     );
   }

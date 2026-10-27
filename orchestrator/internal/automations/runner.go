@@ -1223,7 +1223,19 @@ func feedFrames(ctx context.Context, tx pgx.Tx, a Automation, runID string, fram
 		if exit != nil {
 			codes = append(codes, *exit)
 		}
-		if err := f.End(ctx, tx, stoppedNote(reason), codes...); err != nil {
+		note := stoppedNote(reason)
+		if reason == "timeout" {
+			// The limit is the run's age when lux stopped it, in whole minutes.
+			var minutes int
+			if err := tx.QueryRow(ctx, `SELECT round(extract(epoch FROM now() - COALESCE(started_at, created_at)) / 60)::int
+				FROM automation_runs WHERE id = $1`, runID).Scan(&minutes); err != nil {
+				return err
+			}
+			if minutes > 0 {
+				note = fmt.Sprintf("Stopped by the time limit, when the run reached %d minutes.", minutes)
+			}
+		}
+		if err := f.End(ctx, tx, note, codes...); err != nil {
 			return err
 		}
 	}

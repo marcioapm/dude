@@ -838,7 +838,7 @@ describe("a run's activity", () => {
     expect(failed.textContent).toContain("Stopped at its 30-minute time limit during a bash call");
     const last = card(c, "bash", 2)!;
     expect(last.getAttribute("data-status")).toBe("aborted");
-    expect(c.querySelector("[data-testid=stopped-note]")?.textContent).toBe(" Stopped by the time limit after 27m 14s.");
+    expect(c.querySelector("[data-testid=stopped-note]")?.textContent).toBe(" Stopped by the time limit after 27m 14s, when the run reached 30 minutes.");
     await click(last.querySelector<HTMLElement>("[role=button]")!);
     expect(last.textContent).toContain("TestRotateUnderLoad");
     // A non-zero exit is failed, never ✓.
