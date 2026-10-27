@@ -187,6 +187,8 @@ type Server struct {
 	LogMessage   string
 	LogSignature string
 	downloadAuth []string
+	// Actions workflow runs by id (joblogs.go: SetWorkflowRun).
+	WorkflowRuns map[int64]WorkflowRun
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -893,6 +895,8 @@ func (s *Server) Handler() http.Handler {
 		write(w, 201, map[string]any{})
 	})
 	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}/logs", s.jobLogs)
+	mux.HandleFunc("GET "+prefix+"/actions/runs/{id}", s.workflowRun)
+	mux.HandleFunc("GET "+prefix+"/actions/runs/{id}/jobs", s.workflowRunJobs)
 	mux.HandleFunc("GET "+prefix+"/check-runs/{id}", s.checkRun)
 	mux.HandleFunc("GET "+prefix+"/check-runs/{id}/annotations", s.checkRunAnnotations)
 	mux.HandleFunc("GET "+prefix+"/hooks", func(w http.ResponseWriter, r *http.Request) {

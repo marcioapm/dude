@@ -217,7 +217,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     // every count (tracking-work.md, "Archive"). Their edges still count
     // below: an archived blocker still blocks.
     const epics = (await sql`
-      SELECT id, project_id AS "projectId", title, origin - 'thread' AS origin FROM epics WHERE archived_at IS NULL
+      SELECT id, project_id AS "projectId", title, CASE WHEN origin->>'via' IS NOT NULL THEN NULL ELSE origin - 'thread' - 'channel' END AS origin FROM epics WHERE archived_at IS NULL
       ORDER BY position, created_at`) as EpicRow[];
 
     // `statusSince` is when the task last changed status, read from the
@@ -225,7 +225,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     // reasons that are not a column change.
     const tasks = (await sql`
       SELECT w.id, p.key_prefix || '-' || w.number AS key,
-             w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status, w.resolution, w.origin->>'provider' AS "originProvider",
+             w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status, w.resolution, CASE WHEN w.origin->>'via' IS NOT NULL THEN NULL ELSE w.origin->>'provider' END AS "originProvider",
              ${sql.unsafe(peopleJson("w"))}, ${sql.unsafe(escalationJson("w"))},
              COALESCE(
                (SELECT max(e.occurred_at) FROM events e

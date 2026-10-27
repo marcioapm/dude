@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   automationDefaults,
   automationInputSchema,
+  ORG_AUTOMATION_PROJECT_SECRET,
   parseCron,
+  PRESET_PICKS_NO_SECRETS,
+  PRESET_SECRET_RECIPIENT,
   repoFilterAllows,
   repoFilterSchema,
   repoGlobMatches,
@@ -19,6 +22,30 @@ const base = {
 };
 const issuesOf = (r: { success: boolean; error?: { issues: { path: (string | number)[]; message: string }[] } }) =>
   r.success ? [] : r.error!.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+
+describe("an automation's secrets", () => {
+  const command = { name: "Digest", kind: "command", trigger: base.trigger, command: "make digest" };
+  test("an organisation automation picks the organisation's secrets, never a project's", () => {
+    const org = automationInputSchema("organization");
+    expect(org.safeParse({ ...command, secrets: [{ source: "organization", name: "GH_TOKEN" }] }).success).toBe(true);
+    expect(issuesOf(org.safeParse({ ...command, secrets: [{ source: "project", name: "GH_TOKEN" }] })))
+      .toEqual([`secrets: ${ORG_AUTOMATION_PROJECT_SECRET}`]);
+  });
+
+  test("a project automation picks both levels, a name once per level; a bare name is no pick", () => {
+    const project = automationInputSchema("project");
+    const both = [{ source: "organization", name: "GH_TOKEN" }, { source: "project", name: "GH_TOKEN" }];
+    expect(project.safeParse({ ...command, secrets: both }).success).toBe(true);
+    expect(issuesOf(project.safeParse({ ...command, secrets: [both[0], both[0]] }))).toEqual(["secrets: each secret is picked once"]);
+    expect(project.safeParse({ ...command, secrets: ["GH_TOKEN"] }).success).toBe(false);
+  });
+
+  test("one of dude's agents picks none: its role decides", () => {
+    expect(issuesOf(automationInputSchema("project").safeParse({ ...base, secrets: [{ source: "organization", name: "NPM_TOKEN" }] })))
+      .toEqual([`secrets: ${PRESET_PICKS_NO_SECRETS}`]);
+    expect(PRESET_SECRET_RECIPIENT).toEqual({ qa_browser: "tester", reviewer: "reviewer", investigator: null });
+  });
+});
 
 describe("an automation's session", () => {
   test("a resumable session expires after 1 to 30 days, no more", () => {

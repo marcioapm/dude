@@ -42,3 +42,7 @@
 {{- define "results/github/budget-cut"}}{{.}}: text and list tails omitted to fit the result budget{{end}}
 
 {{- define "results/github/text-cut"}} {{.Cut}}: {{.Kept}} of {{.Total}} bytes{{end}}
+
+{{- define "results/github/run-jobs-next"}}read a failed job's log with github_check_log, its id as checkId{{end}}
+
+{{- define "results/github/run-jobs-cut"}}{{.Cut}}: the first {{.Shown}} of {{.Total}} jobs{{end}}

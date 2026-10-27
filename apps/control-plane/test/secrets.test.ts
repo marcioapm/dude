@@ -327,6 +327,109 @@ describe("a project's secrets", () => {
   });
 });
 
+describe("an organisation's secrets", () => {
+  const orgPath = (org = ORG) => `/v1/organizations/${org}/secrets`;
+  beforeEach(async () => {
+    await owner`DELETE FROM organization_secrets`;
+    await owner`DELETE FROM automations`;
+  });
+
+  test("an admin adds one ticked for nobody; members read names and hints, never values or picks", async () => {
+    const added = await call(adminKey, "POST", orgPath(), { name: "STATUSPAGE_KEY", value: VALUE });
+    expect(added.status).toBe(201);
+    expect(added.json).toMatchObject({ name: "STATUSPAGE_KEY", hint: "3f9a", recipients: [], updatedBy: { name: "Ana" } });
+    const [row] = await owner`SELECT value FROM organization_secrets WHERE name = 'STATUSPAGE_KEY'`;
+    expect(row.value).toBe(VALUE);
+
+    const asMember = await call(memberKey, "GET", orgPath());
+    expect(asMember.status).toBe(200);
+    expect(asMember.json.organization).toEqual({ id: ORG, name: ORG });
+    expect(asMember.json.secrets).toEqual([{ ...added.json, overriddenIn: [], pickedBy: null }]);
+  });
+
+  test("lists the projects with their own of a name, and, to an admin, the automations that pick it", async () => {
+    await call(adminKey, "POST", orgPath(), { name: "GH_TOKEN", value: VALUE, recipients: ["implementer", "fixer"] });
+    await seed("GH_TOKEN", REPLACED);
+    await owner`INSERT INTO automations (id, organization_id, project_id, name, kind, trigger, command, secrets)
+      VALUES ('aut_pick', ${ORG}, NULL, 'Digest', 'command', '{"kind":"schedule","cron":"0 3 * * *","tz":"UTC"}', 'true',
+        '[{"source":"organization","name":"GH_TOKEN"}]'),
+      ('aut_proj', ${ORG}, ${PROJECT}, 'Own', 'command', '{"kind":"schedule","cron":"0 3 * * *","tz":"UTC"}', 'true',
+        '[{"source":"project","name":"GH_TOKEN"}]')`;
+    const listed = await call(adminKey, "GET", orgPath());
+    expect(listed.json.secrets[0]).toMatchObject({
+      name: "GH_TOKEN", recipients: ["implementer", "fixer"],
+      overriddenIn: [{ id: PROJECT, name: "Web" }],
+      pickedBy: [{ id: "aut_pick", name: "Digest", projectId: null }],
+    });
+  });
+
+  test("an admin changes who gets it and its value apart, then removes it; each is audited by name alone", async () => {
+    const [{ since }] = await owner`SELECT COALESCE(max(cursor), 0) AS since FROM events`;
+    await call(adminKey, "POST", orgPath(), { name: "NPM_TOKEN", value: VALUE, recipients: ["tester"] });
+    const changed = await call(adminKey, "PUT", `${orgPath()}/NPM_TOKEN/recipients`, { recipients: [] });
+    expect(changed.json).toMatchObject({ recipients: [], hint: "3f9a" });
+    const rotated = await call(adminKey, "PUT", `${orgPath()}/NPM_TOKEN`, { value: REPLACED });
+    expect(rotated.json).toMatchObject({ recipients: [], hint: "e2b8" });
+    expect((await call(adminKey, "DELETE", `${orgPath()}/NPM_TOKEN`)).status).toBe(204);
+    expect((await call(adminKey, "DELETE", `${orgPath()}/NPM_TOKEN`)).status).toBe(404);
+    const rows = await owner`SELECT payload FROM events WHERE event_type = 'settings.updated' AND project_id IS NULL
+      AND payload->'changed' ? 'organizationSecrets' AND cursor > ${since} ORDER BY cursor`;
+    expect(rows.map((r: { payload: Json }) => r.payload.changed.organizationSecrets)).toEqual([
+      { NPM_TOKEN: "added" }, { NPM_TOKEN: { recipients: [] } }, { NPM_TOKEN: "replaced" }, { NPM_TOKEN: "removed" },
+    ]);
+    const all = JSON.stringify(await owner`SELECT payload FROM events WHERE cursor > ${since}`);
+    for (const v of [...VALUES, "LEAKCANARY", "3f9a", "e2b8"]) expect(all).not.toContain(v);
+  });
+
+  test("a member may not change them; another organisation's path is not found; bad names and recipients are refused", async () => {
+    await call(adminKey, "POST", orgPath(), { name: "NPM_TOKEN", value: VALUE });
+    for (const [method, path, body] of [
+      ["POST", orgPath(), { name: "X_KEY", value: REPLACED }],
+      ["PUT", `${orgPath()}/NPM_TOKEN`, { value: REPLACED }],
+      ["PUT", `${orgPath()}/NPM_TOKEN/recipients`, { recipients: ["tester"] }],
+      ["DELETE", `${orgPath()}/NPM_TOKEN`, undefined],
+    ] as const) {
+      expect(`${method} ${path} ${(await call(memberKey, method, path, body)).status}`).toBe(`${method} ${path} 403`);
+    }
+    expect((await call(otherKey, "GET", orgPath())).status).toBe(404);
+    expect((await call(adminKey, "GET", orgPath(OTHER))).status).toBe(404);
+    expect((await call(adminKey, "POST", orgPath(OTHER), { name: "X_KEY", value: VALUE })).status).toBe(404);
+    expect((await call(adminKey, "POST", orgPath(), { name: "NPM_TOKEN", value: REPLACED })).status).toBe(409);
+    for (const body of [
+      { name: "GIT_TOKEN", value: VALUE }, { name: "LUX_A", value: VALUE }, { name: "A-B", value: VALUE },
+      { name: "OK_NAME", value: VALUE, recipients: ["conductor"] }, { name: "OK_NAME", value: VALUE, recipients: ["tester", "tester"] },
+    ]) {
+      expect((await call(adminKey, "POST", orgPath(), body)).status).toBe(400);
+    }
+    const [row] = await owner`SELECT value FROM organization_secrets WHERE name = 'NPM_TOKEN'`;
+    expect(row.value).toBe(VALUE);
+  });
+
+  test("a recipe's env that would override an organisation secret ticked for previews is refused, and the reverse", async () => {
+    const orgClash = "Server web in Web sets PORT in its own environment, which would override this in that project's previews. Rename one of them.";
+    // Adding one ticked for previews, named as web's env var.
+    const add = await call(adminKey, "POST", orgPath(), { name: "PORT", value: VALUE, recipients: ["previews", "tester"] });
+    expect(add.status).toBe(409);
+    expect(add.json.error.message).toBe(orgClash);
+    // Ticked for agents only, it is not a preview secret: added; ticking previews then is refused.
+    expect((await call(adminKey, "POST", orgPath(), { name: "PORT", value: VALUE, recipients: ["tester"] })).status).toBe(201);
+    const tick = await call(adminKey, "PUT", `${orgPath()}/PORT/recipients`, { recipients: ["tester", "previews"] });
+    expect(tick.status).toBe(409);
+    expect(tick.json.error.message).toBe(orgClash);
+    expect((await call(memberKey, "GET", orgPath())).json.secrets[0].recipients).toEqual(["tester"]);
+
+    // A recipe setting an organisation preview secret's name is refused, naming the server and the variable.
+    await call(adminKey, "POST", orgPath(), { name: "NPM_TOKEN", value: VALUE, recipients: ["previews"] });
+    const api = { name: "api", port: 8080, command: "go run .", env: [{ name: "NPM_TOKEN", value: "x" }] };
+    const put = await call(adminKey, "PUT", `/v1/projects/${PROJECT}/servers/api`, api);
+    expect(put.status).toBe(409);
+    expect(put.json.error.message).toBe("NPM_TOKEN is a preview secret of org_sec, and server api setting it would override it in previews. Rename one of them.");
+    // Once it is no longer ticked for previews, the recipe saves.
+    await call(adminKey, "PUT", `${orgPath()}/NPM_TOKEN/recipients`, { recipients: ["tester"] });
+    expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/servers/api`, api)).status).toBe(200);
+  });
+});
+
 describe("migration 081", () => {
   test("secrets are the organization's alone", async () => {
     await seed("SEED_LLM_KEY", VALUE);

@@ -127,6 +127,65 @@ describe("a provider's page", () => {
     expect(c.querySelectorAll("[data-testid=chat-request]").length).toBeLessThanOrEqual(5);
   });
 
+  test("an admin sets what a channel is usually about and hides a project; the hidden one leaves the channels' choices", async () => {
+    const client = new Chatting("a");
+    const set: Array<[string, string[]]> = [];
+    const hidden: string[][] = [];
+    const setChannel = client.setChannelProjects.bind(client);
+    client.setChannelProjects = (p, id, name, ids) => (set.push([id, ids]), setChannel(p, id, name, ids));
+    const setHidden = client.setHiddenProjects.bind(client);
+    client.setHiddenProjects = (p, ids) => (hidden.push(ids), setHidden(p, ids));
+    const c = await show(<Pages client={client} page="chat/slack" />, "chat-channel-projects");
+    const row = (id: string) => c.querySelector(`[data-conversation=${id}]`)!;
+    expect([...row("C1").querySelectorAll("[data-testid=chat-channel-project]")].map((b) => b.getAttribute("data-project"))).toEqual(["BIL"]);
+    expect(text(row("C2"))).toContain("#nightly");
+    // Add ABS to #nightly from its list.
+    await act(async () => void row("C2").querySelector("button[role=combobox]")!.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const options = await until(() => {
+      const o = [...document.querySelectorAll<HTMLElement>("[role=option]")];
+      return o.length ? o : null;
+    }, "the projects");
+    expect(options.map((o) => o.textContent)).toEqual(["BIL · Billing", "ABS · Acme Backend", "SEC · Security"]);
+    await click(options[1]!);
+    await until(() => (set.length ? set : null), "the save");
+    expect(set).toEqual([["C2", ["prj_abs"]]]);
+    // Remove BIL from #support.
+    await click(row("C1").querySelector("[data-testid=chat-channel-remove]")!);
+    await until(() => (set.length > 1 ? set : null), "the removal");
+    expect(set[1]).toEqual(["C1", []]);
+    // Hide SEC: no channel can be about it any more.
+    const hiddenRow = c.querySelector("[data-testid=chat-hidden]")!;
+    await act(async () => void hiddenRow.querySelector("button[role=combobox]")!.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const all = await until(() => {
+      const o = [...document.querySelectorAll<HTMLElement>("[role=option]")];
+      return o.length ? o : null;
+    }, "the projects to hide");
+    await click(all.find((o) => o.textContent === "SEC · Security")!);
+    await until(() => (hidden.length ? hidden : null), "the hide");
+    expect(hidden).toEqual([["prj_sec"]]);
+    await until(() => c.querySelector("[data-testid=chat-hidden] [data-project=SEC]"), "SEC hidden");
+    await act(async () => void row("C2").querySelector("button[role=combobox]")!.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const left = await until(() => {
+      const o = [...document.querySelectorAll<HTMLElement>("[role=option]")];
+      return o.length ? o : null;
+    }, "the projects left");
+    expect(left.map((o) => o.textContent)).toEqual(["BIL · Billing"]);
+  });
+
+  test("a member reads a channel's projects and the hidden ones, and changes neither", async () => {
+    const client = new Chatting("a");
+    client.member = true;
+    const chatProjects = client.chatProjects.bind(client);
+    client.chatProjects = async () => ({ ...await chatProjects(), canEdit: false });
+    const c = await show(<Pages client={client} page="chat/slack" />, "chat-channel-projects");
+    expect(text(c.querySelector("[data-conversation=C1]"))).toContain("BIL");
+    expect(c.querySelectorAll("[data-testid=chat-channel-remove], [data-testid=chat-channel-add], [data-testid=chat-hidden-add]").length).toBe(0);
+    expect(text(c.querySelector("[data-testid=chat-hidden]"))).toContain("None set");
+  });
+
   test("long instructions take the control column: their row fills it", async () => {
     const c = await show(<Pages client={new Chatting("a")} page="chat/slack" />, "chat-provider-slack");
     const area = c.querySelector("[data-testid=chat-provider-instructions]")!;
@@ -353,6 +412,32 @@ describe("a chat-born session", () => {
     expect(text(c.querySelector("[data-testid=routing-shared]"))).toBe("· Shared with 1 person from #design-private; 1 is not connected");
     expect(text(c.querySelector("[data-testid=routing-line]"))).toContain("Skipped, not connectedGUGus");
     expect(text(c.querySelector("[data-testid=routing-line]"))).toContain("Asked the model once, on the Judgements tier.");
+  });
+
+  test("made outside a thread, it quotes the channel before the mention, labelled so, as it quotes a thread", async () => {
+    const origin: SessionChatOrigin = {
+      provider: "slack", workspaceId: "T1", conversationId: "C9", conversationName: "#nightly", conversationKind: "public",
+      threadId: "1.5", permalink: "https://acme.slack.com/archives/C9/p1", requestedBy: "Eli",
+      channel: [{ by: "CI Bot", text: "Run #812 failed https://github.com/acme/api/actions/runs/812", inDude: false, app: true },
+        { by: "Eli", person: "per_eli", text: "seen it", inDude: true }],
+      routing: { route: "brainstorm", confidence: 0.9, reasoning: "Investigate.", added: [], skipped: [], requestId: "chr_2" },
+    };
+    const c = await show(<SessionOrigin origin={origin} names={(id) => (id === "per_eli" ? { id, name: "Eli Park" } : null)} />, "session-origin");
+    expect(c.querySelector("[data-testid=origin-thread]")).toBeNull();
+    const quoted = c.querySelector("[data-testid=origin-channel] figure")!;
+    expect(quoted.getAttribute("aria-label")).toBe("The channel #nightly before the mention, on Slack");
+    expect(text(quoted.querySelector("figcaption"))).toBe("Quoted from Slack·#nightly, before the mention·2 messagesOpen in Slack");
+    expect(text(quoted)).toContain("actions/runs/812");
+    expect(text(quoted)).toContain("Eli Park");
+  });
+
+  test("a task filed from outside a thread says it quotes the channel before the mention", async () => {
+    const origin = { provider: "slack", workspaceId: "T1", conversationId: "C9", conversationName: "#nightly", threadId: "1.5",
+      permalink: "https://acme.slack.com/archives/C9/p1", requestedBy: "Eli",
+      channel: [{ by: "CI Bot", text: "Run #812 failed", inDude: false }] };
+    const c = await show(<TaskOrigin origin={origin} names={() => null} />, "task-origin-thread");
+    expect(text(c.querySelector("h2"))).toBe("The Slack channel before the mention, as filed");
+    expect(c.querySelector("[data-testid=origin-channel]")).not.toBeNull();
   });
 });
 

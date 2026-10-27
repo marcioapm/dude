@@ -9,10 +9,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/judge"
 )
 
@@ -20,14 +22,20 @@ import (
 // session are told it.
 type threadContext struct {
 	Messages []quotedMessage
+	// Older messages read and left out to fit (within).
+	Omitted int `json:",omitempty"`
 }
 
 type quotedMessage struct {
+	// The message's id at the provider.
+	ID     string `json:"id,omitempty"`
 	By     string `json:"by"`
 	Handle string `json:"handle,omitempty"`
 	Person string `json:"person,omitempty"`
 	Text   string `json:"text"`
 	InDude bool   `json:"inDude"`
+	// Posted by an app (a bot), never a person of the organisation.
+	App bool `json:"app,omitempty"`
 }
 
 func (t threadContext) hash() string {
@@ -39,12 +47,15 @@ func (t threadContext) hash() string {
 }
 
 // render is the thread as text: each message by its author, people not
-// in dude marked so.
+// in dude and apps marked so.
 func (t threadContext) render() string {
 	var b strings.Builder
 	for _, m := range t.Messages {
 		by := m.By
-		if !m.InDude {
+		switch {
+		case m.App:
+			by += " (an app)"
+		case !m.InDude:
 			by += " (not in dude)"
 		}
 		fmt.Fprintf(&b, "> %s: %s\n", by, strings.ReplaceAll(m.Text, "\n", "\n> "))
@@ -53,6 +64,100 @@ func (t threadContext) render() string {
 }
 
 const threadMessagesMax = 30
+
+// A top-level mention reads the channel before it: at most
+// channelMessagesMax messages from the channelWindow before the mention,
+// rendered within channelChars (the oldest left out first, and counted).
+const (
+	channelMessagesMax = 30
+	channelWindow      = 24 * time.Hour
+	channelChars       = 12000
+)
+
+// heard is what a mention was said after: its thread, or for a top-level
+// mention the channel before it. Both are external text, quoted, never
+// instructions.
+type heard struct {
+	Thread  threadContext
+	Channel threadContext
+}
+
+// hash covers everything the decision is made from: a thread-only
+// mention's hash is its thread's.
+func (h heard) hash() string {
+	if len(h.Channel.Messages) == 0 {
+		return h.Thread.hash()
+	}
+	return threadContext{Messages: append(append([]quotedMessage{}, h.Thread.Messages...),
+		append([]quotedMessage{{By: "\x00channel"}}, h.Channel.Messages...)...)}.hash()
+}
+
+// channel is the channel's text before the mention, at most channelChars,
+// saying how many older messages it left out; "" for none.
+func (h heard) channel() string {
+	return h.Channel.renderWithin(channelChars)
+}
+
+// within keeps the newest messages whose rendering fits in limit
+// characters, counting the older ones left out: what is stored and quoted
+// is only what the model was shown.
+func (t threadContext) within(limit int) threadContext {
+	kept, size := len(t.Messages), 0
+	for i := len(t.Messages) - 1; i >= 0; i-- {
+		n := len([]rune(threadContext{Messages: t.Messages[i : i+1]}.render())) + 1
+		if size+n > limit {
+			break
+		}
+		size += n
+		kept = i
+	}
+	return threadContext{Messages: t.Messages[kept:], Omitted: t.Omitted + kept}
+}
+
+// renderWithin is render keeping the newest messages that fit in limit
+// characters, opening with how many older ones were left out.
+func (t threadContext) renderWithin(limit int) string {
+	if len(t.Messages) == 0 {
+		return ""
+	}
+	t = t.within(limit)
+	text := t.render()
+	if t.Omitted > 0 {
+		text = fmt.Sprintf("(%d earlier %s left out)\n%s", t.Omitted, plural(t.Omitted, "message", "messages"), text)
+	}
+	return text
+}
+
+// topLevel is whether m is not in a thread (it starts none, or is a DM's
+// own message).
+func topLevel(m Mention) bool { return m.ThreadID == "" || m.ThreadID == m.MessageID }
+
+// channelBefore reads the conversation before a top-level mention: up to
+// channelMessagesMax from channelWindow before it, oldest first, quoted as
+// a thread is, and only the newest that fit in channelChars. A transient
+// failure (a rate limit, the provider down) is returned, for the delivery
+// to be retried as a thread read's is; a refusal (no scope, not in the
+// channel) is noted and leaves the channel out: it never fails the mention.
+func (s *Service) channelBefore(ctx context.Context, org string, p Provider, inst Installation, m Mention) (threadContext, error) {
+	if !topLevel(m) || m.MessageID == "" {
+		return threadContext{}, nil
+	}
+	msgs, err := p.FetchHistory(ctx, inst, m.ConversationID, m.MessageID, channelWindow, channelMessagesMax)
+	if err != nil {
+		s.noteFailure(ctx, org, m.Provider, err)
+		if transient, _ := IsTransient(err); transient {
+			return threadContext{}, err
+		}
+		return threadContext{}, nil
+	}
+	slices.Reverse(msgs)
+	quoted, err := s.quoteMessages(ctx, org, p, inst, msgs, m.MessageID)
+	if err != nil {
+		s.log().Warn("quoting the channel before a mention failed", "provider", m.Provider, "error", err)
+		return threadContext{}, nil
+	}
+	return threadContext{Messages: quoted}.within(channelChars), nil
+}
 
 // thread reads the mention's thread, without the mention: everyone's
 // messages, members' and not (dude's own left out).
@@ -79,9 +184,17 @@ func (s *Service) quote(ctx context.Context, org string, p Provider, inst Instal
 }
 
 func (s *Service) quoteMessages(ctx context.Context, org string, p Provider, inst Installation, msgs []ThreadMessage, skip string) ([]quotedMessage, error) {
-	var users []string
+	// dude's own messages are its replies, not context; every other bot's
+	// (a CI report, an alert) is kept, by its name, never as a person.
+	msgs = slices.DeleteFunc(slices.Clone(msgs), func(m ThreadMessage) bool {
+		return m.ID == skip || (m.UserID != "" && m.UserID == inst.BotUserID)
+	})
+	var users, bots []string
 	for _, msg := range msgs {
-		if !msg.Bot && msg.ID != skip && msg.UserID != "" && !slices.Contains(users, msg.UserID) {
+		switch {
+		case msg.Bot && msg.BotName == "" && msg.UserID != "" && !slices.Contains(bots, msg.UserID):
+			bots = append(bots, msg.UserID)
+		case !msg.Bot && msg.UserID != "" && !slices.Contains(users, msg.UserID):
 			users = append(users, msg.UserID)
 		}
 	}
@@ -109,20 +222,20 @@ func (s *Service) quoteMessages(ctx context.Context, org string, p Provider, ins
 	}
 	var strangers []string
 	for _, u := range users {
-		if _, ok := people[u]; !ok && u != inst.BotUserID {
+		if _, ok := people[u]; !ok {
 			strangers = append(strangers, u)
 		}
 	}
-	names := s.names(ctx, p, inst, strangers)
+	names := s.names(ctx, p, inst, append(strangers, bots...))
 	var out []quotedMessage
 	for _, msg := range msgs {
-		if msg.Bot || msg.ID == skip || msg.UserID == inst.BotUserID {
-			continue
-		}
-		q := quotedMessage{Text: clip(msg.Text, 2000)}
-		if person, ok := people[msg.UserID]; ok {
+		q := quotedMessage{ID: msg.ID, Text: clip(msg.Text, 2000)}
+		switch person, ok := people[msg.UserID]; {
+		case msg.Bot:
+			q.App, q.By = true, firstNonEmpty(msg.BotName, names[msg.UserID], "an app")
+		case ok:
 			q.Person, q.By, q.InDude = person[0], person[1], true
-		} else {
+		default:
 			q.By = names[msg.UserID]
 		}
 		out = append(out, q)
@@ -152,7 +265,9 @@ const (
 func (s *Service) world(ctx context.Context, org, person string, m Mention, kind string, connected []string) (World, error) {
 	w := World{Conversation: m.ConversationID, Kind: kind}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM projects WHERE key_prefix IS NOT NULL`).Scan(&w.ProjectsTotal); err != nil {
+		hidden := delivery.HiddenProjectSQL("p.id", "$3")
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM projects p WHERE key_prefix IS NOT NULL AND NOT `+
+			delivery.HiddenProjectSQL("p.id", "$1"), m.Provider).Scan(&w.ProjectsTotal); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT p.id, p.key_prefix, p.name,
@@ -160,7 +275,7 @@ func (s *Service) world(ctx context.Context, org, person string, m Mention, kind
 				  FROM (SELECT e.id, e.title, e.position FROM epics e WHERE e.project_id = p.id AND COALESCE(e.state, 'active') <> 'done'
 				        ORDER BY e.created_at DESC LIMIT $1) e), '[]'),
 				(SELECT count(*) FROM epics e WHERE e.project_id = p.id AND COALESCE(e.state, 'active') <> 'done')
-			FROM projects p WHERE p.key_prefix IS NOT NULL ORDER BY p.name LIMIT $2`, epicsMax, projectsMax)
+			FROM projects p WHERE p.key_prefix IS NOT NULL AND NOT `+hidden+` ORDER BY p.name LIMIT $2`, epicsMax, projectsMax, m.Provider)
 		if err != nil {
 			return err
 		}
@@ -191,9 +306,58 @@ func (s *Service) world(ctx context.Context, org, person string, m Mention, kind
 			return err
 		}
 		w.Sessions, err = pgx.CollectRows(rows, pgx.RowToStructByPos[SessionRef])
-		return err
+		if err != nil {
+			return err
+		}
+		return hints(ctx, tx, m, &w)
 	})
 	return w, err
+}
+
+// learnedOf is how many of a conversation's latest requests that made
+// something the learned hint reads.
+const learnedOf = 20
+
+// hints reads the conversation's hints into w: the projects its last
+// learnedOf requests' results ended up in (a task's or epic's project, a
+// session's linked ones), and the projects it is usually about. A hidden
+// project is in neither.
+func hints(ctx context.Context, tx pgx.Tx, m Mention, w *World) error {
+	// Along chat_requests_conversation_idx: the conversation's newest
+	// requests with a result, then each result's project(s).
+	rows, err := tx.Query(ctx, `WITH r AS (SELECT result_kind, result_id FROM chat_requests
+			WHERE provider = $1 AND external_workspace_id = $2 AND conversation_id = $3 AND result_id IS NOT NULL
+			ORDER BY created_at DESC LIMIT $4),
+		made AS (SELECT r.result_id, t.project_id FROM r JOIN tasks t ON r.result_kind = 'task' AND t.id = r.result_id
+			UNION SELECT r.result_id, e.project_id FROM r JOIN epics e ON r.result_kind = 'epic' AND e.id = r.result_id
+			UNION SELECT r.result_id, sp.project_id FROM r JOIN session_projects sp ON r.result_kind = 'session' AND sp.session_id = r.result_id)
+		SELECT p.key_prefix, count(DISTINCT made.result_id)::int, (SELECT count(*) FROM r)::int
+		FROM made JOIN projects p ON p.id = made.project_id
+		WHERE p.key_prefix IS NOT NULL AND NOT `+delivery.HiddenProjectSQL("p.id", "$1")+`
+		GROUP BY p.key_prefix ORDER BY 2 DESC, 1 LIMIT 5`, m.Provider, m.WorkspaceID, m.ConversationID, learnedOf)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var h LearnedHint
+		if err := rows.Scan(&h.Key, &h.Count, &w.LearnedOf); err != nil {
+			rows.Close()
+			return err
+		}
+		w.Learned = append(w.Learned, h)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows, err = tx.Query(ctx, `SELECT p.key_prefix FROM chat_channel_projects c JOIN projects p ON p.id = c.project_id
+		WHERE c.provider = $1 AND c.external_workspace_id = $2 AND c.conversation_id = $3 AND p.key_prefix IS NOT NULL
+		  AND NOT `+delivery.HiddenProjectSQL("p.id", "$1")+` ORDER BY p.key_prefix`, m.Provider, m.WorkspaceID, m.ConversationID)
+	if err != nil {
+		return err
+	}
+	w.Usual, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	return err
 }
 
 // rounds is how many clarifying questions this thread was asked.
@@ -220,13 +384,26 @@ func Instructions(orgName, organisation, providerName, provider string) string {
 }
 
 // RoutingInput is the routing call's user message: the mention, the thread
-// before it, the projects and the sessions it may resume, within
-// contextBudget, each list ending with how many were left out.
-func RoutingInput(who, where, provider, text string, thread string, w World) string {
+// before it (or, for a top-level mention, the channel before it), the
+// projects and the sessions it may resume, within contextBudget, each list
+// ending with how many were left out.
+func RoutingInput(who, where, provider, text string, thread, channel string, w World) string {
 	var in strings.Builder
 	fmt.Fprintf(&in, "## The message\n\n%s wrote in %s on %s:\n\n%s\n", who, where, provider, text)
 	if thread != "" {
 		fmt.Fprintf(&in, "\n## The thread before it\n\n%s\n", thread)
+	}
+	if channel != "" {
+		fmt.Fprintf(&in, "\n## The channel before it\n\n%s\n", channel)
+	}
+	if len(w.Usual) > 0 {
+		fmt.Fprintf(&in, "\n## This channel is usually about\n\n%s (a hint, not a rule)\n", strings.Join(w.Usual, ", "))
+	}
+	if len(w.Learned) > 0 {
+		in.WriteString("\n## Where this conversation's earlier requests went\n\n")
+		for _, h := range w.Learned {
+			fmt.Fprintf(&in, "- %s: %d of the last %d\n", h.Key, h.Count, w.LearnedOf)
+		}
 	}
 	budget := contextBudget
 	in.WriteString("\n## Projects they can file in\n\n")
@@ -279,7 +456,7 @@ func RoutingInput(who, where, provider, text string, thread string, w World) str
 
 // ask is the one routing judgement, on the organisation's Judgements tier,
 // bounded by RoutingTimeout.
-func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m Mention, conv ConversationInfo, t threadContext, w World) (judge.Structured, error) {
+func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m Mention, conv ConversationInfo, h heard, w World) (judge.Structured, error) {
 	if s.Judge == nil {
 		return judge.Structured{}, errors.New("no judge is configured")
 	}
@@ -292,8 +469,8 @@ func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m 
 		return judge.Structured{}, err
 	}
 	var thread string
-	if len(t.Messages) > 0 {
-		thread = t.render()
+	if len(h.Thread.Messages) > 0 {
+		thread = h.Thread.render()
 	}
 	j := *s.Judge
 	if j.Timeout == 0 || j.Timeout > RoutingTimeout {
@@ -301,7 +478,7 @@ func (s *Service) ask(ctx context.Context, org string, p Provider, who asker, m 
 	}
 	return j.Structured(ctx, org, judge.StructuredAsk{Asker: "chat.route", About: p.Info().Name + " · " + conv.Name,
 		Instructions: Instructions(who.OrgName, orgText, p.Info().Name, providerText),
-		Input:        RoutingInput(who.Name, conv.Name, p.Info().Name, m.Text, thread, w), MaxTokens: 4096,
+		Input:        RoutingInput(who.Name, conv.Name, p.Info().Name, m.Text, thread, h.channel(), w), MaxTokens: 4096,
 		Parse: func(obj []byte) (any, judge.Judgement, error) {
 			a, err := ParseAnswer(obj)
 			if err != nil {

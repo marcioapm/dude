@@ -16,12 +16,13 @@ import { errorText, useSave } from "../hooks/useSave.tsx";
 import { MachineSelect } from "./MachinesSettings.tsx";
 import { canRunContainers, ImageField, imageWords, type ImageChoices } from "../images.tsx";
 import { ProjectSecretsSection } from "./ProjectSecrets.tsx";
+import { useOrgSecrets } from "./OrgSecrets.tsx";
 
 const IDLE_TIMEOUTS = [5, 10, 15, 30, 60, 120, 240];
 const WAKE_TIMEOUTS = Array.from({ length: PREVIEW_WAKE_TIMEOUT_MAX_MINUTES }, (_, i) =>
   ({ value: String(i + 1), label: i === 0 ? "1 minute" : `${i + 1} minutes` }));
 
-export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, onCount, images, onManageImages }: {
+export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, onCount, images, onManageImages, onManageOrgSecrets }: {
   client: ApiClient;
   project: ProjectDetail;
   canEdit: boolean;
@@ -32,10 +33,13 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
   /** The organisation's images, as the settings screen loaded them. */
   images: ImageChoices;
   onManageImages?: (() => void) | undefined;
+  /** Open Organisation settings → Secrets, where the inherited rows change. */
+  onManageOrgSecrets?: (() => void) | undefined;
 }) {
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
   const [previews, setPreviews] = useState<PreviewSettings | null>(null);
   const [secrets, setSecrets] = useState<ProjectSecret[] | null>(null);
+  const org = useOrgSecrets(client, project.organizationId);
   const [problem, setProblem] = useState<string | null>(null);
   const [editing, setEditing] = useState<Recipe | "new" | null>(null);
   const [removing, setRemoving] = useState<Recipe | null>(null);
@@ -188,7 +192,8 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
       </SettingsSection>
 
       <ProjectSecretsSection client={client} projectId={project.id} secrets={secrets} recipes={recipes}
-        canEdit={canEdit} onChanged={() => void load()} />
+        canEdit={canEdit} onChanged={() => void load()}
+        inherited={org.secrets ? { orgName, secrets: org.secrets, onManage: onManageOrgSecrets } : undefined} />
 
       {editing ? (
         <ServerRecipeDialog

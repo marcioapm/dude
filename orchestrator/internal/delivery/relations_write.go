@@ -281,8 +281,10 @@ type BlocksOut struct {
 	Status string `json:"status"`
 }
 
-// RelationsOf reads the relations of the given tasks, for list_tasks.
-func RelationsOf(ctx context.Context, tx pgx.Tx, taskIDs []string) (map[string]*TaskRelationsOut, error) {
+// RelationsOf reads the relations of the given tasks, for list_tasks. An
+// edge whose other side is in a project in hidden (a caller's Fence) is
+// left out: neither its key nor its status is shown.
+func RelationsOf(ctx context.Context, tx pgx.Tx, taskIDs, hidden []string) (map[string]*TaskRelationsOut, error) {
 	out := map[string]*TaskRelationsOut{}
 	rows, err := tx.Query(ctx, `SELECT t.id, t.status = ANY($2::task_status[]) AND NOT EXISTS (SELECT 1 FROM task_blocked_by(t.id)),
 			(SELECT a.how FROM task_auto_starts a WHERE a.task_id = t.id)
@@ -302,33 +304,34 @@ func RelationsOf(ctx context.Context, tx pgx.Tx, taskIDs []string) (map[string]*
 	rows, err = tx.Query(ctx, `SELECT r.from_task_id, r.to_task_id, r.kind::text,
 			fp.key_prefix || '-' || f.number, f.status::text,
 			f.status = 'done' AND EXISTS (SELECT 1 FROM pull_requests pr WHERE pr.task_id = f.id AND pr.state = 'merged'),
-			tp.key_prefix || '-' || t.number, t.status::text
+			tp.key_prefix || '-' || t.number, t.status::text, f.project_id = ANY($2), t.project_id = ANY($2)
 		FROM task_relations r JOIN tasks f ON f.id = r.from_task_id JOIN projects fp ON fp.id = f.project_id
 		JOIN tasks t ON t.id = r.to_task_id JOIN projects tp ON tp.id = t.project_id
-		WHERE r.from_task_id = ANY($1) OR r.to_task_id = ANY($1) ORDER BY r.created_at`, taskIDs)
+		WHERE r.from_task_id = ANY($1) OR r.to_task_id = ANY($1) ORDER BY r.created_at`, taskIDs, db.NonNil(hidden))
 	if err != nil {
 		return nil, err
 	}
 	var fromID, toID, kind, fromKey, fromStatus, toKey, toStatus string
-	var merged bool
-	_, err = pgx.ForEachRow(rows, []any{&fromID, &toID, &kind, &fromKey, &fromStatus, &merged, &toKey, &toStatus}, func() error {
+	var merged, fromHidden, toHidden bool
+	_, err = pgx.ForEachRow(rows, []any{&fromID, &toID, &kind, &fromKey, &fromStatus, &merged, &toKey, &toStatus, &fromHidden, &toHidden}, func() error {
+		// Each side is told of the other only when the other is in reach.
 		if kind == "duplicates" {
-			if o := out[fromID]; o != nil {
+			if o := out[fromID]; o != nil && !toHidden {
 				o.DuplicateOf = toKey
 			}
-			if o := out[toID]; o != nil {
+			if o := out[toID]; o != nil && !fromHidden {
 				o.DuplicatedBy = append(o.DuplicatedBy, fromKey)
 			}
 			return nil
 		}
-		if o := out[toID]; o != nil {
+		if o := out[toID]; o != nil && !fromHidden {
 			if kind == "blocks" {
 				o.BlockedBy = append(o.BlockedBy, BlockerOut{Key: fromKey, Status: fromStatus, Merged: merged})
 			} else {
 				o.Related = append(o.Related, fromKey)
 			}
 		}
-		if o := out[fromID]; o != nil {
+		if o := out[fromID]; o != nil && !toHidden {
 			if kind == "blocks" {
 				o.Blocks = append(o.Blocks, BlocksOut{Key: toKey, Status: toStatus})
 			} else {

@@ -59,7 +59,17 @@ const DECIDING_JSON = `
      AND w.status IN ('running', 'waiting') AND w.state ? 'hold' AND NOT w.state ? 'pullRequestIds'
    ORDER BY w.created_at DESC LIMIT 1) AS hold`;
 
-const TASK_SELECT = `
+const TASK_SELECT = taskSelect("origin");
+
+/**
+ * TASK_SELECT for a list: the origin without the conversation quoted on it
+ * (thread, channel), which only the task's own page shows: up to 12 000
+ * characters a task, on up to 200 of them.
+ */
+const TASK_LIST_SELECT = taskSelect("origin - 'thread' - 'channel'");
+
+function taskSelect(origin: string): string {
+  return `
   id, organization_id AS "organizationId", project_id AS "projectId", epic_id AS "epicId", ${REPOSITORIES_JSON}, ${SOURCE_JSON},
   -- Each delivery's own decider, by attempt: a start over writes state.attempt; a first start
   -- does not, and its generated branch (delivery.BranchFor: dude/<this task>/attempt-N) names it;
@@ -69,7 +79,9 @@ const TASK_SELECT = `
         THEN substring(w.state->>'branch' from '/attempt-([0-9]{1,6})$')::int END, 1),
       'decider', COALESCE(w.state->>'decider', 'policy'), 'branch', NULLIF(w.state->>'branch', '')) ORDER BY w.created_at), '[]'::json)
     FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery') AS deciders,
-  title, goal, acceptance_criteria AS "acceptanceCriteria", status, origin,
+  title, goal, acceptance_criteria AS "acceptanceCriteria", status,
+  -- An origin a task inherited from a chat-born session (via) fences it but is not where it came from.
+  CASE WHEN origin->>'via' IS NOT NULL THEN NULL ELSE ${origin} END AS origin,
   -- Lifecycle (migrations 157/158): why a person ended it, and whether it is put away.
   resolution, archived_at AS "archivedAt",
   (SELECT person_ref(p) FROM people p WHERE p.id = tasks.closed_by) AS "closedBy",
@@ -78,6 +90,7 @@ const TASK_SELECT = `
     WHERE r.from_task_id = tasks.id AND r.kind = 'duplicates') AS "duplicateOf",
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
   requested_by AS "requestedBy", ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;
+}
 
 // A Run's columns, as a fragment of `sql`: the builder's offline threshold
 // is a parameter.
@@ -426,7 +439,7 @@ async function listTasks(ctx: RequestContext): Promise<Response> {
 
   const tasks = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
-      SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks
+      SELECT ${scope.sql.unsafe(TASK_LIST_SELECT)} FROM tasks
       WHERE (${projectId}::text IS NULL OR project_id = ${projectId})
         AND (${status}::text IS NULL OR status::text = ${status})
         AND (archived_at IS NOT NULL) = ${archived}

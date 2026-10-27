@@ -4,7 +4,7 @@
  * read returns, as a backend would.
  */
 
-import type { Automation, AutomationInput, AutomationPromptVersion, AutomationRun, AutomationRunDetail, AutomationRunsResponse, EventSubscriptions, EventVerdict, NewAutomation, PastDelivery, RunNow } from "@dude/domain";
+import type { Automation, AutomationInput, AutomationPromptVersion, AutomationRun, AutomationRunDetail, AutomationRunsResponse, AutomationToolCall, EventSubscriptions, EventVerdict, NewAutomation, PastDelivery, RunNow } from "@dude/domain";
 import { automationDefaults, parseCron, repoFilterAllows } from "@dude/domain";
 import { ORG, PEOPLE, PROJECT } from "./data.ts";
 
@@ -29,12 +29,48 @@ function automation(over: Partial<Automation> & Pick<Automation, "id" | "name" |
 
 const NO_FILTERS = { branch: [], label: [], paths: [], author: [] };
 
+// The weekly digest: an organisation agent that runs pr-stats and posts with post_to_chat.
+const DIGEST_AGO = (3 * 24 + 3) * 60 * MIN;
+const DIGEST_PROMPT = [
+  `Write this week's PR digest for ${ORG.name} and post it to #engineering.`,
+  "",
+  "1. Run `pr-stats --org acme --merged-list --format json` for the facts: what merged, by whom, in which repository, and the numbers against last week.",
+  "2. Run `pr-stats --org acme --format text` for the numbers table. Paste it as it prints; don't recompute anything.",
+  "3. Post one message with `post_to_chat` to #engineering, in Slack mrkdwn, with these sections in this order:",
+  "   - 📦 _What shipped_: 3–6 bullets grouped by theme, each linking its PRs (`<url|web#270>`). Name features, not people.",
+  "   - ✨ _Feature highlight_: one feature, 80 words at most: what it is and why it matters.",
+  "   - 📊 _Numbers_: the text table in a code block.",
+  "   - 🤖 _Bots_: one line on bot PRs opened and merged against last week.",
+  "   - 😈 _Parting shot_: 1–2 sentences, snarky, never at a named person's expense.",
+  "",
+  "Only repositories in pr-stats' output appear. If pr-stats fails, post nothing and say why.",
+].join("\n");
+const at = (ago: number, plusMs = 0) => new Date(Date.now() - ago + plusMs).toISOString();
+const DIGEST_CALLS: Record<string, AutomationToolCall[]> = {
+  arn_d1: [
+    { id: "evt_d1", tool: "post_to_chat", at: at(DIGEST_AGO, 192_000), status: "completed", args: { channel: "#engineering" }, durationMs: 640,
+      error: null, posted: { channel: "#engineering", channelId: "C0ENGINEER", ts: "1761318192.000100",
+        permalink: "https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100" } },
+  ],
+  arn_d0: [
+    { id: "evt_d0", tool: "post_to_chat", at: at(DIGEST_AGO + 7 * 24 * 60 * MIN, 178_000), status: "failed", args: { channel: "#engineering" },
+      durationMs: 40, posted: null,
+      error: `Slack is not connected for ${ORG.name}: an organisation admin adds dude's Slack app in Organisation settings → Chat. Nothing was posted` },
+  ],
+};
+
 export const AUTOMATIONS: Automation[] = [
   automation({ id: "aut_triage", name: "PR triage", kind: "agent",
     trigger: { kind: "github", event: "pull_request", actions: ["opened", "reopened"], filters: { ...NO_FILTERS, author: ["!dependabot[bot]"] } },
     repoFilter: { mode: "except", repos: ["example/sandbox-*", "example/notebooks"] },
     agent: { own: { prompt: "Read {{pr.title}} in {{repository}} and label it." } },
+    secrets: [{ source: "organization", name: "STATUSPAGE_KEY" }],
     lastRun: { id: "arn_t1", status: "succeeded", at: iso(12 * MIN) } }),
+  automation({ id: "aut_digest", name: "Weekly PR digest", kind: "agent", repos: "none",
+    trigger: { kind: "schedule", cron: "0 15 * * 5", tz: "Europe/Lisbon" },
+    agent: { own: { prompt: DIGEST_PROMPT, timeLimitMinutes: 30 } },
+    secrets: [{ source: "organization", name: "GH_TOKEN" }],
+    nextRunAt: iso(-4 * 24 * 60 * MIN), lastRun: { id: "arn_d1", status: "succeeded", at: iso(DIGEST_AGO) } }),
   automation({ id: "aut_audit", name: "Nightly dependency audit", kind: "agent", sessionMode: "resumable", expiryDays: 7,
     trigger: { kind: "schedule", cron: "0 3 * * *", tz: "Europe/Lisbon" }, repoFilter: { mode: "only", repos: ["example/svc-*"] },
     agent: { preset: { role: "investigator", overrides: {} }, brief: "Audit dependencies and file a task for each upgrade that matters." },
@@ -51,6 +87,10 @@ export const AUTOMATIONS: Automation[] = [
   automation({ id: "aut_changelog", name: "Changelog builder", kind: "server", projectId: PROJECT.id, projectName: PROJECT.name, enabled: false,
     trigger: { kind: "github", event: "pull_request", actions: ["closed"], filters: NO_FILTERS },
     server: { command: "bun run changelog:serve", port: 8080, path: "/events", health: "/healthz" } }),
+  automation({ id: "aut_investigate", name: "Investigate a failed deploy", kind: "agent", projectId: PROJECT.id, projectName: PROJECT.name,
+    trigger: { kind: "github", event: "workflow_run", actions: ["completed"], filters: NO_FILTERS },
+    agent: { own: { prompt: "Read the failed run's logs in {{repository}} and file one task with the evidence." } },
+    secrets: [{ source: "organization", name: "SENTRY_TOKEN" }, { source: "project", name: "SEED_LLM_KEY" }] }),
 ];
 
 const RUNS: Record<string, AutomationRun[]> = {
@@ -64,6 +104,14 @@ const RUNS: Record<string, AutomationRun[]> = {
     { id: "arn_a1", automationId: "aut_audit", status: "failed", reason: "the agent's turn failed: the registry did not answer", source: "schedule",
       session: "resumed", runId: null, startedBy: null, costUsd: 0.84, createdAt: iso(21 * 60 * MIN), startedAt: iso(21 * 60 * MIN),
       endedAt: iso(21 * 60 * MIN - 6 * MIN), event: null, action: null, payloadCount: 0 },
+  ],
+  aut_digest: [
+    { id: "arn_d1", automationId: "aut_digest", status: "succeeded", reason: null, source: "schedule", session: "ephemeral", runId: null,
+      startedBy: null, costUsd: 0.44, createdAt: iso(DIGEST_AGO), startedAt: iso(DIGEST_AGO), endedAt: iso(DIGEST_AGO - 4 * MIN), event: null,
+      action: null, payloadCount: 0 },
+    { id: "arn_d0", automationId: "aut_digest", status: "failed", reason: `post_to_chat failed: Slack is not connected for ${ORG.name}`, source: "schedule",
+      session: "ephemeral", runId: null, startedBy: null, costUsd: 0.41, createdAt: iso(DIGEST_AGO + 7 * 24 * 60 * MIN),
+      startedAt: iso(DIGEST_AGO + 7 * 24 * 60 * MIN), endedAt: iso(DIGEST_AGO + 7 * 24 * 60 * MIN - 3 * MIN), event: null, action: null, payloadCount: 0 },
   ],
 };
 
@@ -223,9 +271,13 @@ export class FixtureAutomations {
   run(id: string, runId: string): AutomationRunDetail {
     const r = (this.runs[id] ?? []).find((x) => x.id === runId);
     if (!r) throw new Error(`no run ${runId}`);
+    if (id === "aut_digest") {
+      return { ...r, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
+        stopReason: null, requests: [], toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null };
+    }
     return { ...r, payloads: [{ deliveryId: DELIVERIES[0]!.id, event: "pull_request", action: "opened", body: DELIVERIES[0]!.body }],
       payloadsPurged: false, logTail: "Labelled #214: area/checkout.", exitCode: null, containerStartedAt: null, containerStoppedAt: null,
-      stopReason: null, requests: [] };
+      stopReason: null, requests: [], toolCalls: [], failedCallId: null };
   }
 
   deliveries(): { deliveries: PastDelivery[] } {

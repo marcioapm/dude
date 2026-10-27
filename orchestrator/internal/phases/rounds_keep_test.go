@@ -32,6 +32,32 @@ func TestAContinuingFixerGivenANewSecretCannotResume(t *testing.T) {
 	}
 }
 
+// The same for an organisation secret ticked for fixers after the row was
+// made (migration 210): it is in force for the project, so the first resume
+// is refused naming it; one the project holds of its own is the project's.
+func TestAContinuingFixerGivenANewOrganisationSecretCannotResume(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, status, ended_at)
+		VALUES ('run_im_'||$1, $1, 'prj_'||$1, 'wi_'||$1, 1, 'implement', 'implementer', 'completed', now())`, w.run.Org)
+	w.exec(`UPDATE runs SET phase = 'fix', role = 'implementer', continues_run_id = 'run_im_'||organization_id, continues_how = 'resume',
+		project_secret_names = '{GH_TOKEN}', finishes = 0 WHERE id = $1`, w.run.ID)
+	w.run.Phase, w.run.Role = "fix", "implementer"
+	// The recorded GH_TOKEN is the project's; the organisation's of that name is not in force here.
+	w.exec(`INSERT INTO project_secrets (project_id, organization_id, name, value, hint, recipients)
+		VALUES ($1, $2, 'GH_TOKEN', 'project-gh', 'p-gh', '{fixer}')`, w.run.ProjectID, w.run.Org)
+	w.exec(`INSERT INTO organization_secrets (organization_id, name, value, hint, recipients)
+		VALUES ($1, 'GH_TOKEN', 'org-gh', 'o-gh', '{fixer}')`, w.run.Org)
+	if err := w.s.roundSecrets(w.ctx, w.run); err != nil {
+		t.Fatalf("only an overridden organisation name added: %v", err)
+	}
+	w.exec(`INSERT INTO organization_secrets (organization_id, name, value, hint, recipients)
+		VALUES ($1, 'NPM_TOKEN', 'org-npm', 'onpm', '{fixer}')`, w.run.Org)
+	var cannot errCannotResume
+	if err := w.s.roundSecrets(w.ctx, w.run); !errors.As(err, &cannot) || !strings.Contains(err.Error(), "its phase is now given NPM_TOKEN") {
+		t.Fatalf("an organisation secret added for fixers: %v, want errCannotResume naming NPM_TOKEN", err)
+	}
+}
+
 // A completed reviewer or tester is kept for its next round on a project
 // that goes on from the previous one; an integration's reviewer never is,
 // since no round goes on from it.

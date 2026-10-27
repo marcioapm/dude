@@ -83,6 +83,9 @@ const peerDiffRun = `SELECT r.id FROM runs r
 func listPeers(ctx context.Context, tx pgx.Tx, c Caller) (listPeersOut, error) {
 	out := listPeersOut{Tasks: []peerOut{}}
 	peers, err := delivery.Peers(ctx, tx, c.TaskID)
+	if err == nil {
+		peers, err = peersInReach(ctx, tx, c, peers)
+	}
 	if err != nil || len(peers) == 0 {
 		return out, err
 	}

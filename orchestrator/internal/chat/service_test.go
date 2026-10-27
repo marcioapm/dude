@@ -249,7 +249,7 @@ func TestChatRoutingContextSaysWhatItLeftOut(t *testing.T) {
 		}
 		projects = append(projects, chat.Project{ID: fmt.Sprint(i), Key: fmt.Sprintf("P%03d", i), Name: "Project", Epics: epics, EpicsTotal: 25})
 	}
-	in := chat.RoutingInput("Eli", "#support", "Slack", "hi", "", chat.World{Projects: projects, ProjectsTotal: 140, Kind: chat.KindPublic})
+	in := chat.RoutingInput("Eli", "#support", "Slack", "hi", "", "", chat.World{Projects: projects, ProjectsTotal: 140, Kind: chat.KindPublic})
 	if len(in) > 30000 {
 		t.Fatalf("input %d characters", len(in))
 	}

@@ -372,7 +372,7 @@ func sameSpecTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow) (
 		return false, nil
 	}
 	var same bool
-	if err := tx.QueryRow(ctx, `SELECT ARRAY(SELECT s.name FROM project_secrets s WHERE s.project_id = r.project_id AND $2 = ANY(s.recipients) ORDER BY s.name)
+	if err := tx.QueryRow(ctx, `SELECT ARRAY(SELECT s.name FROM secrets_in_force(r.organization_id, r.project_id) s WHERE $2 = ANY(s.recipients) ORDER BY s.name)
 			= ARRAY(SELECT n FROM unnest(r.project_secret_names) n ORDER BY n)
 		FROM runs r WHERE r.id = $1`, p.ID, SecretRecipients[role]).Scan(&same); err != nil || !same {
 		return false, err

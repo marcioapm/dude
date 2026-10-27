@@ -488,20 +488,22 @@ func TestAutomationResumedServerSeesThisFiringsEnv(t *testing.T) {
 
 // lux keeps no secret's value and refuses a resume that does not give
 // every declared secret again. A resumable Server declares its event file
-// and an agent its chosen project secrets: the next firing resumes the kept
-// container with each of them (the event file holding the new event), not
-// a fresh one.
+// and an agent its chosen project and organisation secrets: the next
+// firing resumes the kept container with each of them (the event file
+// holding the new event), not a fresh one.
 func TestAutomationResumeGivesEveryDeclaredSecretAgain(t *testing.T) {
 	h := newHarness(t)
 	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	exec(t, h.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'ACME_TOKEN', 'acme-1', 'e-1')`, h.org, h.project)
+	exec(t, h.owner, `INSERT INTO organization_secrets (organization_id, name, value, hint) VALUES ($1, 'ORG_TOKEN', 'org-1', 'g-1')`, h.org)
 	h.automation("aut_rsrv", "server", map[string]any{"kind": "github", "event": "pull_request"},
 		map[string]any{"session_mode": "resumable", "expiry_days": 7,
 			"server": map[string]any{"command": "serve", "port": 8080, "path": "/events", "health": nil}})
 	h.automation("aut_ragent", "agent", map[string]any{"kind": "github", "event": "pull_request"},
 		map[string]any{"session_mode": "resumable", "expiry_days": 7,
 			"agent": map[string]any{"own": map[string]any{"tierId": h.tier, "prompt": "Triage {{pr.title}}."}}})
-	exec(t, h.owner, `UPDATE automations SET secrets = '{ACME_TOKEN}' WHERE id IN ('aut_rsrv', 'aut_ragent')`)
+	exec(t, h.owner, `UPDATE automations SET secrets = '[{"source":"project","name":"ACME_TOKEN"},{"source":"organization","name":"ORG_TOKEN"}]'
+		WHERE id IN ('aut_rsrv', 'aut_ragent')`)
 	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
 	h.until("the agent's first run succeeds", func() bool { r := h.runs("aut_ragent"); return len(r) == 1 && r[0].Status == "succeeded" })
 	h.until("the server's first event is POSTed", func() bool {
@@ -521,7 +523,10 @@ func TestAutomationResumeGivesEveryDeclaredSecretAgain(t *testing.T) {
 	// lux would declare it on the resume and require it on every resume
 	// after, so it is not given until Start fresh.
 	exec(t, h.owner, `INSERT INTO project_secrets (organization_id, project_id, name, value, hint) VALUES ($1, $2, 'ACME_LATER', 'later-1', 'l-1')`, h.org, h.project)
-	exec(t, h.owner, `UPDATE automations SET secrets = '{ACME_TOKEN,ACME_LATER}' WHERE id IN ('aut_rsrv', 'aut_ragent')`)
+	exec(t, h.owner, `UPDATE automations SET secrets = '[{"source":"project","name":"ACME_TOKEN"},{"source":"organization","name":"ORG_TOKEN"},
+		{"source":"project","name":"ACME_LATER"}]' WHERE id IN ('aut_rsrv', 'aut_ragent')`)
+	// A rotated organisation value reaches the resume: lux holds no value.
+	exec(t, h.owner, `UPDATE organization_secrets SET value = 'org-2' WHERE organization_id = $1 AND name = 'ORG_TOKEN'`, h.org)
 	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
 	for id, r := range first {
 		h.until(id+"'s second run starts", func() bool { rs := h.runs(id); return len(rs) == 2 && rs[1].Session != "" })
@@ -539,6 +544,9 @@ func TestAutomationResumeGivesEveryDeclaredSecretAgain(t *testing.T) {
 		}
 		if given["ACME_TOKEN"] != "acme-1" {
 			t.Errorf("%s: the resume gave ACME_TOKEN %q", id, given["ACME_TOKEN"])
+		}
+		if given["ORG_TOKEN"] != "org-2" {
+			t.Errorf("%s: the resume gave the organisation's ORG_TOKEN %q, want its current value", id, given["ORG_TOKEN"])
 		}
 		if _, ok := given["ACME_LATER"]; ok {
 			t.Errorf("%s: the resume gave ACME_LATER, which the kept Run never declared", id)

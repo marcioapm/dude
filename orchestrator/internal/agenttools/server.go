@@ -35,6 +35,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
+	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/embeddings"
@@ -79,6 +80,11 @@ type Server struct {
 	// PublicURL is dude's https origin (auth.public_url), the base of a
 	// guide section's link; "", links are the web app's hash path alone.
 	PublicURL string
+	// Chat reads the conversation a chat-born session came from
+	// (chat_history); nil, the tool says chat is not available.
+	Chat ChatReader
+	// ChatProviders are the chat providers post_to_chat posts through.
+	ChatProviders chat.Registry
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -121,6 +127,9 @@ type env struct {
 	syncBaseWait    time.Duration
 	syncPR          func(ctx context.Context, org, prID string) error
 	publicURL       string
+	chat            ChatReader
+	chatProviders   chat.Registry
+	db              *db.DB
 	prepared        any
 }
 
@@ -471,7 +480,7 @@ func (c Caller) agent() capabilities.Agent {
 func (c Caller) tools() []tool {
 	if c.AutomationID != "" {
 		create, _ := find("create_task", c.Role, c.grants)
-		return append(append([]tool{create}, githubReadTools...), automationCommentTool)
+		return append(append([]tool{create}, githubReadTools...), automationCommentTool, postToChatTool)
 	}
 	return granted(c.Role, c.grants)
 }
@@ -676,9 +685,15 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	}
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
-		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL}
+		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL,
+		chat: s.Chat, chatProviders: s.ChatProviders, db: s.DB}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
+		// A prepare step may refuse the call before its arguments are redacted or counted.
+		if refused, ok := c.env.prepared.(refusal); ok {
+			s.recordRefusal(ctx, c, t, refused)
+			return nil, refused
+		}
 	}
 	if s.BeforeCall != nil {
 		s.BeforeCall(t.name)

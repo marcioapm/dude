@@ -11,7 +11,8 @@ import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { PEOPLE, PROJECT } from "../src/fixtures/data.ts";
+import { ORG, PEOPLE, PROJECT } from "../src/fixtures/data.ts";
+import { ORG_AUTOMATION_PICKS, PRESET_SECRETS } from "@dude/domain";
 import { AutomationPage, AutomationsList, NewAutomationDialog, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
@@ -67,7 +68,7 @@ describe("the organisation's list", () => {
   test("the count, next run as a day and time / On event / Off, and the filters as words with no labels", async () => {
     const c = await show(<AutomationsList client={new FixtureClient("a")} orgName="Example" projectId={null} canCreate onOpen={() => undefined} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
-    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("6 automations");
+    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("8 automations");
     const next = (id: string) => rows(c).find((r) => r.getAttribute("data-id") === id)!.querySelectorAll("td")[6]!.textContent;
     expect(next("aut_triage")).toBe("On event");
     expect(next("aut_changelog")).toBe("Off");
@@ -83,7 +84,8 @@ describe("the organisation's list", () => {
     const opened: string[] = [];
     const c = await show(<AutomationsList client={client} orgName="Example" projectId={null} canCreate onOpen={(id) => opened.push(id)} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
-    expect(names(c)).toEqual(["PR triage", "Nightly dependency audit", "Weekly cost report", "Release notes to Slack", "Nightly QA pass", "Changelog builder"]);
+    expect(names(c)).toEqual(["PR triage", "Weekly PR digest", "Nightly dependency audit", "Weekly cost report", "Release notes to Slack", "Nightly QA pass",
+      "Changelog builder", "Investigate a failed deploy"]);
     const cost = rows(c).find((r) => r.getAttribute("data-id") === "aut_cost")!;
     expect(cost.querySelector('[data-held="true"]')?.getAttribute("aria-label")).toBe("Example's admins");
     const sw = rows(c)[0]!.querySelector<HTMLElement>("[data-testid=automation-enabled]")!;
@@ -91,7 +93,7 @@ describe("the organisation's list", () => {
     await click(sw);
     expect(opened).toEqual([]);
     expect((await client.automation("aut_triage")).enabled).toBe(false);
-    await click(rows(c)[1]!);
+    await click(rows(c)[2]!);
     expect(opened).toEqual(["aut_audit"]);
   });
 });
@@ -102,7 +104,7 @@ describe("a project's list", () => {
     const here = await until(() => c.querySelector("[data-testid=also-running]"), "Also running here");
     expect(here.textContent).toContain("Also running here, from Example");
     const own = rows(c).filter((r) => !here.contains(r)).map(nameOf);
-    expect(own).toEqual(["Nightly QA pass", "Changelog builder"]);
+    expect(own).toEqual(["Nightly QA pass", "Changelog builder", "Investigate a failed deploy"]);
     const theirs = rows(c).filter((r) => here.contains(r)).map(nameOf);
     expect(theirs).toContain("PR triage");
     expect(theirs).toContain("Release notes to Slack");
@@ -427,24 +429,136 @@ describe("the header's ⋯ menu", () => {
 });
 
 describe("secrets and webhook wording", () => {
-  test("an organisation automation explains project secrets instead of offering a picker", async () => {
-    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
-      onPlace={() => undefined} onBack={() => undefined} />);
-    await until(() => c.querySelector("[data-testid=owner-row]"), "the page");
-    expect(c.textContent).toContain("Secrets belong to a project, so an organisation automation is given none. Make it a project's automation to use that project's secrets.");
-    expect(c.querySelectorAll("[role=group][aria-label='Project secrets']").length).toBe(0);
+  const page = (client: FixtureClient, id: string) => show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id }}
+    onPlace={() => undefined} onBack={() => undefined} />);
+  const box = (c: HTMLElement, name: string) => [...c.querySelectorAll<HTMLElement>("[role=checkbox]")].find((b) => b.getAttribute("aria-label") === name);
+
+  test("an organisation automation picks from the organisation's secrets only", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, "aut_triage");
+    const picker = await until(() => c.querySelector<HTMLElement>("[data-testid=secret-picker]"), "the picker");
+    expect([...picker.querySelectorAll("[role=group]")].map((g) => g.getAttribute("aria-label"))).toEqual(["Example's"]);
+    expect(c.textContent).toContain(ORG_AUTOMATION_PICKS("Example"));
+    expect(box(c, "STATUSPAGE_KEY (Example)")!.getAttribute("aria-checked")).toBe("true");
+    await click(box(c, "NPM_TOKEN (Example)")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_triage").secrets.length === 2 ? true : null, "saved");
+    expect((await client.automation("aut_triage")).secrets).toEqual([
+      { source: "organization", name: "STATUSPAGE_KEY" }, { source: "organization", name: "NPM_TOKEN" }]);
   });
 
-  test("a project automation chooses its project's secrets and saves those names", async () => {
+  test("a project automation picks from both lists; the organisation's same name is disabled and says the project's wins", async () => {
     const client = new FixtureClient("a");
-    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_qa" }}
-      onPlace={() => undefined} onBack={() => undefined} />);
-    const group = await until(() => c.querySelector<HTMLElement>("[role=group][aria-label='Project secrets']"), "the secrets");
-    expect(group.textContent).toContain("DATABASE_SEED_URL");
-    await click(group.querySelector<HTMLElement>("[role=checkbox]")!);
+    const c = await page(client, "aut_investigate");
+    const picker = await until(() => c.querySelector<HTMLElement>("[data-testid=secret-picker]"), "the picker");
+    expect([...picker.querySelectorAll("[role=group]")].map((g) => g.getAttribute("aria-label"))).toEqual(["Example's", "web-console's"]);
+    const shadowed = box(c, "SEED_LLM_KEY (Example)")!;
+    expect(shadowed.hasAttribute("disabled")).toBe(true);
+    expect(picker.querySelector("[data-overridden=true]")!.textContent).toContain("Overridden by web-console's SEED_LLM_KEY");
+    await click(box(c, "DATABASE_SEED_URL (web-console)")!);
     await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
-    await until(() => client.fixtureAutomation("aut_qa").secrets.length === 1 ? true : null, "saved");
-    expect((await client.automation("aut_qa")).secrets).toEqual(["DATABASE_SEED_URL"]);
+    await until(() => client.fixtureAutomation("aut_investigate").secrets.length === 3 ? true : null, "saved");
+    expect(client.fixtureAutomation("aut_investigate").secrets).toContainEqual({ source: "project", name: "DATABASE_SEED_URL" });
+  });
+
+  test("an organisation pick the project then overrides saves as the project's; unticking it leaves no ref of that name", async () => {
+    const client = new FixtureClient("a");
+    const first = await page(client, "aut_investigate");
+    await until(() => first.querySelector("[data-testid=secret-picker]"), "the picker");
+    await click(box(first, "GH_TOKEN (Example)")!);
+    await click(first.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_investigate").secrets.some((r) => r.name === "GH_TOKEN") ? true : null, "saved the organisation's");
+    expect(client.fixtureAutomation("aut_investigate").secrets).toContainEqual({ source: "organization", name: "GH_TOKEN" });
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+
+    await client.addProjectSecret(PROJECT.id, "GH_TOKEN", "ghp_project_value", ["implementer"]);
+    const c = await page(client, "aut_investigate");
+    await until(() => c.querySelector("[data-testid=secret-picker]"), "the picker");
+    expect(box(c, "GH_TOKEN (Example)")!.getAttribute("aria-checked")).toBe("false");
+    expect(box(c, "GH_TOKEN (web-console)")!.getAttribute("aria-checked")).toBe("true");
+    await click(box(c, "DATABASE_SEED_URL (web-console)")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_investigate").secrets.some((r) => r.name === "DATABASE_SEED_URL") ? true : null, "saved");
+    expect(client.fixtureAutomation("aut_investigate").secrets.filter((r) => r.name === "GH_TOKEN")).toEqual([{ source: "project", name: "GH_TOKEN" }]);
+
+    await click(box(c, "GH_TOKEN (web-console)")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_investigate").secrets.some((r) => r.name === "GH_TOKEN") ? null : true, "saved without GH_TOKEN");
+    expect(client.fixtureAutomation("aut_investigate").secrets.map((r) => r.name)).not.toContain("GH_TOKEN");
+  });
+
+  test("Save waits for the project's secrets; then an overridden organisation pick is sent as the project's", async () => {
+    const client = new FixtureClient("a");
+    // web-console holds its own SEED_LLM_KEY; this pick predates it.
+    (client.fixtureAutomation("aut_investigate") as { secrets: unknown }).secrets = [{ source: "organization", name: "SEED_LLM_KEY" }];
+    let release = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const read = client.projectSecrets.bind(client);
+    client.projectSecrets = async () => { await gate; return read(); };
+    const sent: unknown[] = [];
+    const update = client.updateAutomation.bind(client);
+    client.updateAutomation = (id, input) => { sent.push(input.secrets); return update(id, input); };
+    const c = await page(client, "aut_investigate");
+    const notify = await until(() => [...c.querySelectorAll<HTMLElement>("[role=switch]")]
+      .find((s) => s.closest("label")?.textContent === "Notify"), "the failure switch");
+    await click(notify);
+    const submit = c.querySelector<HTMLButtonElement>("button[type=submit]")!;
+    expect(submit.disabled).toBe(true);
+    expect(submit.getAttribute("aria-busy")).toBe("true");
+    await click(submit);
+    await settle(120);
+    expect(sent).toEqual([]);
+
+    await act(async () => release());
+    await until(() => c.querySelector("[data-testid=secret-picker]"), "the picker");
+    expect(submit.disabled).toBe(false);
+    await click(submit);
+    await until(() => (sent.length ? sent : null), "the save");
+    expect(sent).toEqual([[{ source: "project", name: "SEED_LLM_KEY" }]]);
+  });
+
+  test("saving the prompt alone also sends an overridden organisation pick as the project's", async () => {
+    const client = new FixtureClient("a");
+    (client.fixtureAutomation("aut_investigate") as { secrets: unknown }).secrets = [{ source: "organization", name: "SEED_LLM_KEY" }];
+    const c = await page(client, "aut_investigate");
+    await until(() => c.querySelector("[data-testid=secret-picker]"), "the picker");
+    const doc = c.querySelector<HTMLElement>("[data-testid=automation-prompt] [data-testid=automation-prompt-document]")!;
+    await click(doc.querySelector<HTMLElement>("[data-testid=markdown-edit]")!);
+    await typeInto(doc.querySelector<HTMLTextAreaElement>("[data-testid=markdown-source]")!, "Read the logs.");
+    await click(doc.querySelector<HTMLElement>("[data-testid=markdown-save]")!);
+    const own = () => (client.fixtureAutomation("aut_investigate").agent as { own: { prompt: string } }).own.prompt;
+    await until(() => (own() === "Read the logs." ? true : null), "the prompt saved");
+    expect(client.fixtureAutomation("aut_investigate").secrets).toEqual([{ source: "project", name: "SEED_LLM_KEY" }]);
+  });
+
+  test("one of dude's agents shows what its role gets, read-only; the Investigator gets none", async () => {
+    const client = new FixtureClient("a");
+    // A project secret ticked for Tester joins the line, after the organisation's.
+    await client.changeProjectSecretRecipients(PROJECT.id, "DATABASE_SEED_URL", ["previews", "tester"]);
+    const qa = await page(client, "aut_qa");
+    const line = await until(() => qa.querySelector<HTMLElement>("[data-testid=preset-secrets-line]"), "the line");
+    // Example's SEED_LLM_KEY is ticked for Tester, but web-console holds its own (Previews only): neither reaches it.
+    expect(line.textContent).toBe("Tester gets NPM_TOKEN, SENTRY_TOKEN from Example · DATABASE_SEED_URL from web-console");
+    expect(qa.textContent).toContain(PRESET_SECRETS("Tester"));
+    expect(qa.querySelector("[data-testid=secret-picker]")).toBeNull();
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    const audit = await page(client, "aut_audit");
+    const none = await until(() => audit.querySelector<HTMLElement>("[data-testid=preset-secrets-line]"), "the line");
+    expect(none.textContent).toBe("Investigator gets no secrets: it is not one of the agents a secret is given to");
+  });
+
+  test("a scheduled organisation automation checks out None or Some", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, "aut_digest");
+    const row = await until(() => c.querySelector<HTMLElement>("[data-testid=org-checked-out]"), "the row");
+    const none = [...row.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "None")!;
+    expect(none.getAttribute("aria-pressed")).toBe("true");
+    expect(row.querySelector("[data-testid=repo-filter]")).toBeNull();
+    await click([...row.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Some")!);
+    await click(c.querySelector<HTMLButtonElement>("button[type=submit]")!);
+    await until(() => client.fixtureAutomation("aut_digest").repos === "all" ? true : null, "saved Some");
   });
 
   test("a webhook says retried once, on 5xx or no answer in 30 seconds", async () => {
@@ -534,5 +648,101 @@ describe("the test event's helpers", () => {
     expect(pr).toMatchObject({ action: "opened", repository: { full_name: "acme/web" }, sender: { login: "you" }, pull_request: { number: 1 } });
     expect(testTemplate("push", null)).toMatchObject({ ref: "refs/heads/main" });
     expect("action" in testTemplate("push", null)).toBe(false);
+  });
+});
+
+describe("post_to_chat", () => {
+  const page = (client: FixtureClient, place: AutomationsPlace) =>
+    show(<AutomationPage client={client} orgName="Acme" people={PEOPLE} place={place} onPlace={() => undefined} onBack={() => undefined} />);
+
+  test("an agent's Tools row lists its tools, post_to_chat first and New, with no callout while Slack is connected", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest" });
+    const row = await until(() => c.querySelector<HTMLElement>("[data-testid=tools-row]"), "the Tools row");
+    expect(row.textContent).toContain("What its agent can call, besides the shell in its machine.");
+    const tools = [...row.querySelectorAll("li[data-tool]")];
+    expect(tools.map((t) => t.getAttribute("data-tool"))).toEqual(["post_to_chat", "create_task", "github_comment", "github_search",
+      "github_pull_request", "github_issue", "github_check_log"]);
+    expect(tools[0]!.textContent).toContain("New");
+    expect(tools[0]!.textContent).toContain("through Acme's Slack installation");
+    await settle(50);
+    expect(row.querySelector("[data-testid=tool-unavailable]")).toBeNull();
+    expect(c.textContent).toContain("It opens no pull requests.");
+  });
+
+  test("without Slack, post_to_chat's row says runs that call it fail, and links Organisation settings → Chat", async () => {
+    const client = new FixtureClient("a");
+    await client.disconnectChat();
+    const c = await page(client, { id: "aut_digest" });
+    const callout = await until(() => c.querySelector<HTMLElement>("li[data-tool=post_to_chat] [data-testid=tool-unavailable]"), "the callout");
+    expect(callout.textContent).toBe("Slack is not connected for Acme. Runs that call it fail on the call. Connect Slack in Organisation settings → Chat");
+    expect(callout.querySelector("a")?.getAttribute("href")).toBe("#/org/settings/chat");
+    expect(c.querySelectorAll("[data-testid=tool-unavailable]").length).toBe(1);
+  });
+
+  test("a run's post is a Slack card on the log with its channel and the link to the message", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d1" });
+    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]"), "the call");
+    expect(call.querySelector("time")?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    expect(call.querySelector('[data-icon="slack"]')).not.toBeNull();
+    expect(call.textContent).toContain("#engineering");
+    const posted = call.querySelector<HTMLElement>("[data-testid=posted-link]")!;
+    expect(posted.textContent).toBe(" Posted to #engineering · Open the message in Slack");
+    const link = posted.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("1 tool call. Open one for its output.");
+    expect(c.querySelector("[data-testid=run-failed]")).toBeNull();
+    // The note's "Open one" holds: the post opens to its answer.
+    const head = call.querySelector<HTMLElement>("[role=button][aria-expanded]");
+    expect(head?.getAttribute("aria-expanded")).toBe("false");
+    await click(head!);
+    expect(head!.getAttribute("aria-expanded")).toBe("true");
+    expect(call.textContent).toContain(`"channelId": "C0ENGINEER"`);
+    expect(call.textContent).toContain(`"ts": "1761318192.000100"`);
+  });
+
+  test("a run that failed on post_to_chat says so under Run, and the call shows its error", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
+    expect(failed.getAttribute("data-tone")).toBe("danger");
+    expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. Nothing was posted; Márcio Martins was told.`);
+    const call = c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]")!;
+    expect(call.textContent).toContain(`Slack is not connected for ${ORG.name}: an organisation admin adds dude's Slack app in Organisation settings → Chat.`);
+    expect(call.querySelector("[data-testid=posted-link]")).toBeNull();
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the last one; its owner was told.");
+  });
+
+  test("the danger callout follows the call the run failed on, not the reason's words nor which call came last", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    const search = { id: "evt_s", tool: "github_search", at: new Date().toISOString(), status: "completed" as const, args: { q: "is:pr" },
+      durationMs: 90, error: null, posted: null };
+    // A call after the refusal: the run still failed on the refusal.
+    client.automationRun = async (id, runId) => {
+      const r = await real(id, runId);
+      return runId === "arn_d0" ? { ...r, toolCalls: [...r.toolCalls, search] }
+        : { ...r, status: "failed", reason: "post_to_chat failed: the agent wrote this itself", failedCallId: null };
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    await until(() => c.querySelector("[data-testid=run-failed]"), "the failure");
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the post_to_chat call at");
+    const other = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d1" });
+    await until(() => other.querySelector("[data-testid=run-tools]"), "the log");
+    expect(other.querySelector("[data-testid=run-failed]")).toBeNull();
+    expect(other.textContent).toContain("post_to_chat failed: the agent wrote this itself");
+  });
+
+  test("a run that posted, then failed on a refused post, says that message was not posted, not that nothing was", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    client.automationRun = async (id, runId) => {
+      const r = await real(id, runId);
+      const posted = (await real(id, "arn_d1")).toolCalls;
+      return runId === "arn_d0" ? { ...r, toolCalls: [...posted, ...r.toolCalls] } : r;
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
+    expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. That message was not posted; Márcio Martins was told.`);
+    expect(c.querySelector("[data-testid=posted-link]")).not.toBeNull();
   });
 });

@@ -187,9 +187,11 @@ type Automation struct {
 	Server                         json.RawMessage
 	Webhook                        json.RawMessage
 	WebhookSecret                  string
-	Secrets                        []string
-	NotifyOnFailure                bool
-	NextRunAt                      *time.Time
+	// [{source: organization|project, name}] (migration 210); runs get
+	// what automation_secrets_given resolves them to.
+	Secrets         json.RawMessage
+	NotifyOnFailure bool
+	NextRunAt       *time.Time
 }
 
 func (a Automation) policy() Policy {
@@ -1246,6 +1248,17 @@ const (
 // endIn ends a live run in tx; all names a counter (allPosted, allInputs)
 // that must have reached every payload the run holds, or allAny.
 func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason string, cost *float64, all string) (bool, error) {
+	// Only an agent's run can call post_to_chat.
+	failedOn := ""
+	if status == "succeeded" && a.Kind == "agent" {
+		failed, eventID, err := postFailed(ctx, tx, runID)
+		if err != nil {
+			return false, err
+		}
+		if failed != "" {
+			status, reason, failedOn = "failed", failed, eventID
+		}
+	}
 	tag, err := tx.Exec(ctx, `UPDATE automation_runs SET status = $2, reason = NULLIF($3, ''), cost_usd = COALESCE($4, cost_usd),
 		ended_at = now(), container_stopped_at = CASE WHEN container_started_at IS NOT NULL THEN COALESCE(container_stopped_at, now()) END
 		WHERE id = $1 AND status IN ('queued', 'running')
@@ -1254,6 +1267,11 @@ func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason s
 		runID, status, reason, cost, all)
 	if err != nil || tag.RowsAffected() == 0 {
 		return false, err
+	}
+	if failedOn != "" {
+		if err := recordFailedOnPost(ctx, tx, a, runID, failedOn); err != nil {
+			return false, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE automation_sessions SET last_run_at = now() WHERE automation_id = $1`, a.ID); err != nil {
 		return false, err
@@ -2062,7 +2080,7 @@ func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payl
 				in.Repos[i].Setup = a.SetupScript
 			}
 		}
-		if in.Secrets, err = projectSecrets(ctx, tx, a); err != nil {
+		if in.Secrets, err = givenSecrets(ctx, tx, a); err != nil {
 			return err
 		}
 		var orgEgress, projectEgress []string
@@ -2122,8 +2140,8 @@ func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payl
 
 // automationRepos are what a run checks out: a project automation's
 // repositories (all, none or the ones named); an organisation's on a
-// schedule, every project's its filter covers; on an event, the event's
-// repository when one of the organisation's.
+// schedule, none when its repos is "none", else every project's its filter
+// covers; on an event, the event's repository when one of the organisation's.
 func automationRepos(ctx context.Context, tx pgx.Tx, a Automation, payloads []Payload) ([]phases.AutomationRepo, error) {
 	type repo struct{ ID, Name, URL, Branch, Setup string }
 	rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, COALESCE(setup_script, '') FROM repositories
@@ -2167,6 +2185,10 @@ func automationRepos(ctx context.Context, tx pgx.Tx, a Automation, payloads []Pa
 			}
 		}
 	default:
+		// An organisation schedule's Checked out None: an empty workspace.
+		if string(a.Repos) == `"none"` {
+			break
+		}
 		for _, r := range all {
 			if RepoAllowed(a.RepoFilter, slugOf(r.URL)) {
 				picked = append(picked, r)
@@ -2194,23 +2216,17 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// projectSecrets are the chosen secrets' values, as env. An organisation
-// automation has none to choose from (secrets are a project's).
-func projectSecrets(ctx context.Context, tx pgx.Tx, a Automation) ([]lux.Secret, error) {
-	if a.ProjectID == "" || len(a.Secrets) == 0 {
-		return nil, nil
-	}
-	rows, err := tx.Query(ctx, `SELECT name, value FROM project_secrets WHERE project_id = $1 AND name = ANY($2) ORDER BY name`, a.ProjectID, a.Secrets)
+// givenSecrets are the values a run gets, as env: its picks or its preset
+// role's, as automation_secrets_given (migration 210) resolves them.
+func givenSecrets(ctx context.Context, tx pgx.Tx, a Automation) ([]lux.Secret, error) {
+	rows, err := tx.Query(ctx, `SELECT name, value FROM automation_secrets_given($1)`, a.ID)
 	if err != nil {
 		return nil, err
 	}
-	var out []lux.Secret
-	var name, value string
-	_, err = pgx.ForEachRow(rows, []any{&name, &value}, func() error {
-		out = append(out, lux.Secret{Name: name, Value: value, As: "env"})
-		return nil
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (lux.Secret, error) {
+		s := lux.Secret{As: "env"}
+		return s, row.Scan(&s.Name, &s.Value)
 	})
-	return out, err
 }
 
 func slugOf(url string) string { return forge.SlugFromURL(url) }

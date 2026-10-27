@@ -134,7 +134,7 @@ func orgTier(ctx context.Context, tx pgx.Tx) (Tier, error) {
 
 // redactor redacts what a call stores: the proxy's key (a proxy may echo
 // it in an error), the tier's header values, which may be credentials,
-// and, for a question about a task, its project's secret values.
+// and, for a question about a task, its project's and organisation's secret values.
 func redactor(ctx context.Context, tx pgx.Tx, proxyKey string, taskID *string, headers map[string]string) (*redact.Redactor, error) {
 	var list []redact.Secret
 	if proxyKey != "" {
@@ -144,7 +144,11 @@ func redactor(ctx context.Context, tx pgx.Tx, proxyKey string, taskID *string, h
 		list = append(list, redact.Secret{Name: name, Value: value})
 	}
 	if taskID != nil {
-		rows, err := tx.Query(ctx, `SELECT s.name, s.value FROM project_secrets s JOIN tasks t ON t.project_id = s.project_id WHERE t.id = $1`, *taskID)
+		// Not secrets_in_force: an organisation value the project overrides is
+		// redacted too, on purpose, since the task's Runs may predate the
+		// override. UNION drops a pair both levels hold with one value.
+		rows, err := tx.Query(ctx, `SELECT s.name, s.value FROM project_secrets s JOIN tasks t ON t.project_id = s.project_id WHERE t.id = $1
+			UNION SELECT o.name, o.value FROM organization_secrets o JOIN tasks t ON t.organization_id = o.organization_id WHERE t.id = $1`, *taskID)
 		if err != nil {
 			return nil, err
 		}

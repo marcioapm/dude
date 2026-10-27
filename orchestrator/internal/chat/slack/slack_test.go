@@ -435,6 +435,7 @@ func TestOnlyTheMessageMethodsSendJSON(t *testing.T) {
 	p.ListMembers(ctx, inst, "C1")
 	p.User(ctx, inst, "U1")
 	p.FetchThread(ctx, inst, "C1", "1.2", "")
+	p.FetchHistory(ctx, inst, "C1", "1700000000.000002", 24*time.Hour, 30)
 	p.PostReply(ctx, inst, "C1", "", chat.Reply{Text: "x"})
 	p.PostEphemeral(ctx, inst, "C1", "", "U1", chat.Reply{Text: "x"})
 	p.UpdateQuestion(ctx, inst, "C1", "1.2", chat.ExternalUser{}, "x")
@@ -443,7 +444,7 @@ func TestOnlyTheMessageMethodsSendJSON(t *testing.T) {
 	p.Revoke(ctx, inst)
 	const form, jsonBody = "application/x-www-form-urlencoded", "application/json"
 	for method, want := range map[string]string{"conversations.info": form, "conversations.members": form,
-		"conversations.replies": form, "users.info": form, "reactions.add": form, "reactions.remove": form, "auth.revoke": form,
+		"conversations.replies": form, "conversations.history": form, "users.info": form, "reactions.add": form, "reactions.remove": form, "auth.revoke": form,
 		"chat.postMessage": jsonBody, "chat.postEphemeral": jsonBody, "chat.update": jsonBody} {
 		if got[method] != want {
 			t.Errorf("%s sent as %q, want %q", method, got[method], want)

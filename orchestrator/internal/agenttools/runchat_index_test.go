@@ -44,6 +44,25 @@ func planUses(t *testing.T, owner *pgx.Conn, index, query string, args ...any) b
 	return true
 }
 
+// asApp runs owner's next queries as the app does, dude_app under org's
+// row security, until the returned func resets it: a plan read as the
+// owner has no organisation qual and is not the plan production runs.
+func asApp(t *testing.T, owner *pgx.Conn, org string) func() {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := owner.Exec(ctx, `SET ROLE dude_app`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `SELECT set_config('app.organization_id', $1, false)`, org); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if _, err := owner.Exec(ctx, `RESET ROLE`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // invalidate marks index INVALID, as a cancelled CREATE INDEX CONCURRENTLY
 // leaves it (the test database's owner is its superuser).
 func invalidate(t *testing.T, owner *pgx.Conn, index string) {
@@ -131,8 +150,9 @@ func TestRunChatReadsItsConversationIndex(t *testing.T) {
 }
 
 // Migration 167 rebuilds a v2 GitHub reads index a cancelled 163 or 164
-// left INVALID, and the hourly counts read it again.
-func TestAnInvalidGitHubReadIndexIsRebuiltBy167(t *testing.T) {
+// left INVALID; 197 to 202 then replace both with the counted-attempt
+// indexes, which the hourly counts read.
+func TestAnInvalidGitHubReadIndexIsRebuiltBy167AndReplaced(t *testing.T) {
 	owner, apply := dbtest.Upgrade(t, "167")
 	ctx := context.Background()
 	if _, err := owner.Exec(ctx, `INSERT INTO organizations (id, name, slug) VALUES ('org_g', 'G', 'g')`); err != nil {
@@ -141,7 +161,7 @@ func TestAnInvalidGitHubReadIndexIsRebuiltBy167(t *testing.T) {
 	if _, err := owner.Exec(ctx, `INSERT INTO events (id, organization_id, event_type, session_id, task_id, occurred_at, actor_type, actor_id, source, payload)
 		SELECT 'evt_' || n, 'org_g', CASE WHEN n % 50 = 0 THEN 'agent.tool.attempted' ELSE 'agent.tool.dude' END,
 			'ses_' || n % 7, 'tsk_' || n % 7, now() - make_interval(mins => n % 90), 'agent', 'run_x', 'agent',
-			jsonb_build_object('tool', 'github_issue')
+			jsonb_build_object('tool', CASE WHEN n % 100 = 0 THEN 'github_run_jobs' ELSE 'github_issue' END, 'automationId', 'aut_' || n % 7)
 		FROM generate_series(1, 5000) n`); err != nil {
 		t.Fatal(err)
 	}
@@ -153,12 +173,14 @@ func TestAnInvalidGitHubReadIndexIsRebuiltBy167(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []struct{ index, query, scope string }{
-		{"events_session_github_reads_v2_idx", githubReadsBySession, "ses_0"},
-		{"events_task_github_reads_v2_idx", githubReadsByTask, "tsk_0"},
+		{"events_session_tool_attempts_idx", githubReadsBySession, "ses_0"},
+		{"events_task_tool_attempts_idx", githubReadsByTask, "tsk_0"},
+		{"events_automation_tool_attempts_idx", githubReadsByAutomation, "aut_0"},
 	} {
 		if !valid(t, owner, c.index) {
-			t.Errorf("167 left %s invalid", c.index)
+			t.Errorf("%s is invalid", c.index)
 		}
+		reset := asApp(t, owner, "org_g")
 		var n int
 		if err := owner.QueryRow(ctx, c.query, c.scope).Scan(&n); err != nil {
 			t.Fatal(err)
@@ -166,5 +188,6 @@ func TestAnInvalidGitHubReadIndexIsRebuiltBy167(t *testing.T) {
 		if !planUses(t, owner, c.index, c.query, c.scope) {
 			t.Errorf("the hourly count of %s does not read %s", c.scope, c.index)
 		}
+		reset()
 	}
 }

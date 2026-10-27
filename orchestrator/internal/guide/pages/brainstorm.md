@@ -1,6 +1,6 @@
 ---
 title: Brainstorm sessions
-covers: [tool:propose, tool:relate, tool:name_session, tool:refresh_checkout]
+covers: [tool:propose, tool:relate, tool:name_session, tool:refresh_checkout, tool:chat_history]
 ---
 A brainstorm session is a conversation with an agent about your projects, before any work is planned. This page covers starting a session, linking projects, sharing it, filing what it proposes, and the investigators it can start.
 
@@ -58,9 +58,12 @@ Besides the checkouts, the brainstorm agent can:
 
 - search memories, tasks and epics in linked projects and the organisation's memories (`search_memory`), and remember things for the session;
 - read linked projects' tasks, epics, repositories, findings and pull requests;
-- read GitHub issues, pull requests and check logs;
+- read GitHub issues, pull requests, Actions runs' jobs and check logs;
 - read another Run's Chat, for the Runs the session started (`run_chat`);
+- for a session started from chat, read more of the conversation it came from: its thread, or the channel when the request was not in one, 30 messages a page, at most 30 reads an hour (`chat_history`);
 - read dude's settings as they apply to the session (`settings`).
+
+A session started from chat never sees a project an admin hid from that chat (on the chat provider's settings page): it is not offered, cannot be linked, and every tool refuses it, its investigators' included. Hiding applies to new work: a task already filed in a project that is hidden later keeps working on it, and still reaches no other hidden project.
 
 Its machine is small and does not run code. What needs running to be known, it says is not checked, and proposes a task that finds out.
 

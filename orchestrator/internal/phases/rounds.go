@@ -127,8 +127,8 @@ func (s *Syncer) roundSecrets(ctx context.Context, r phaseRun) error {
 	}
 	var added []string
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT s.name FROM project_secrets s JOIN runs r ON r.id = $1
-			WHERE r.continues_how = 'resume' AND r.finishes = 0 AND s.project_id = r.project_id AND $2 = ANY(s.recipients)
+		rows, err := tx.Query(ctx, `SELECT s.name FROM runs r, secrets_in_force(r.organization_id, r.project_id) s
+			WHERE r.id = $1 AND r.continues_how = 'resume' AND r.finishes = 0 AND $2 = ANY(s.recipients)
 			  AND NOT (s.name = ANY(r.project_secret_names))
 			ORDER BY s.name`, r.ID, recipient)
 		if err != nil {
