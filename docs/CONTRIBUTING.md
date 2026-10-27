@@ -408,8 +408,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   or `.github/**` file counts as touching the task (`affectsEveryChange`).
   A merge whose first parent is not the head dude read (a push landed
   meanwhile), or a head moved since the merge, is tested. A head found
-  moved (adopted) is always tested. A
-  conflict, there or on an open
+  moved (adopted) is always tested. A conflict, there or on an open
   pull request, starts one integration Run per head/base pair
   (`State.IntegrationPairs`): a fixer told to `git merge lux/<base>` and
   resolve keeping both sides' intent, then an internal review that runs
