@@ -416,6 +416,43 @@ describe("settings", () => {
     expect(page.requests.find((r: Json) => r.id === "chr_c1").confidence).toBe(1);
   });
 
+  test("a failed request's cause is its own field, an admin's alone, with tokens redacted; a request that did not fail has none", async () => {
+    // chi_1's bot token is xoxb-secret; the proxy key and a bearer credential are token-shaped.
+    const insert = (id: string, route: string, reasoning: string, failure: string | null, result: string | null) => owner`
+      INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id,
+        route, asked_route, reasoning, failure, result_kind, result_id, created_at)
+      VALUES (${id}, ${ORG}, 'slack', ${id}, 'T1', 'C1', 'U2', ${route}, ${route === "failed" ? "task" : null}, ${reasoning}, ${failure},
+        ${result ? "session" : null}, ${result}, now() - interval '3 hours')`;
+    await owner`INSERT INTO sessions (id, organization_id, title) VALUES ('ses_fb', ${ORG}, 'Exports')`;
+    await insert("chr_f1", "failed", "A clear task. (its reply was not posted: slack chat.postMessage: invalid_auth xoxb-secret)",
+      "its reply was not posted: slack chat.postMessage: invalid_auth xoxb-secret", null);
+    await insert("chr_f2", "failed", "the routing call failed: the LLM proxy answered 400: bad key sk-live-abcdef0123456789 (Bearer eyJhbGciOi.payload)",
+      "the routing call failed: the LLM proxy answered 400: bad key sk-live-abcdef0123456789 (Bearer eyJhbGciOi.payload)", "ses_fb");
+    await insert("chr_f3", "task", "A clear task.", null, null);
+    try {
+      expect((await call(memberKey, "GET", "/v1/organization/chat/requests?route=failed")).status).toBe(403);
+      const res = await call(adminKey, "GET", "/v1/organization/chat/requests?provider=slack");
+      const raw = await res.text();
+      expect(raw).not.toContain("xoxb-secret");
+      expect(raw).not.toContain("sk-live-abcdef0123456789");
+      expect(raw).not.toContain("eyJhbGciOi");
+      const byId = new Map((JSON.parse(raw).requests as Json[]).map((r) => [r.id, r]));
+      expect(byId.get("chr_f1").failure).toBe("its reply was not posted: slack chat.postMessage: invalid_auth [REDACTED:bot_token]");
+      expect(byId.get("chr_f1").reasoning).toBe("A clear task. (its reply was not posted: slack chat.postMessage: invalid_auth [REDACTED:bot_token])");
+      expect(byId.get("chr_f1").result).toBeNull();
+      expect(byId.get("chr_f2").failure).toBe("the routing call failed: the LLM proxy answered 400: bad key [REDACTED:token] ([REDACTED:token])");
+      expect(byId.get("chr_f2").result).toEqual({ kind: "session", id: "ses_fb", label: "Exports" });
+      expect(byId.get("chr_f3").failure).toBeNull();
+      expect(byId.get("chr_f3").reasoning).toBe("A clear task.");
+      // The route filter's Failed finds both failures, with or without a fallback.
+      const failed = (await (await call(adminKey, "GET", "/v1/organization/chat/requests?route=failed")).json() as Json).requests as Json[];
+      expect(failed.map((r) => r.id).filter((id: string) => id.startsWith("chr_f")).sort()).toEqual(["chr_f1", "chr_f2"]);
+    } finally {
+      await owner`DELETE FROM chat_requests WHERE id IN ('chr_f1', 'chr_f2', 'chr_f3')`;
+      await owner`DELETE FROM sessions WHERE id = 'ses_fb'`;
+    }
+  });
+
   test("Requests list at most 200, newest first", async () => {
     await owner`
       INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id, external_user_id, route, created_at)

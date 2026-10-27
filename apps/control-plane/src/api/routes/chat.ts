@@ -23,6 +23,7 @@ import {
   chatChannelProjectsInputSchema,
   chatHiddenProjectsInputSchema,
   chatRequestsQuerySchema,
+  redactChatFailure,
   routingInstructionsInputSchema,
 } from "@dude/domain";
 import { type OrgScope, withOrg } from "../../db/client.ts";
@@ -297,7 +298,7 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
     const rows = await sql`
     SELECT r.id, r.provider, r.conversation_kind AS "conversationKind", r.conversation_name AS "conversationName",
       r.external_user_name AS "externalUserName", (SELECT person_ref(p) FROM people p WHERE p.id = r.person_id) AS person,
-      r.text, r.permalink, r.route, r.asked_route AS "askedRoute", r.confidence::float8 AS confidence, r.reasoning, r.rounds,
+      r.text, r.permalink, r.route, r.asked_route AS "askedRoute", r.confidence::float8 AS confidence, r.reasoning, r.failure, r.rounds,
       CASE WHEN r.result_kind IS NULL THEN NULL ELSE json_build_object('kind', r.result_kind, 'id', r.result_id, 'label',
         CASE r.result_kind
           WHEN 'session' THEN (SELECT s.title FROM sessions s WHERE s.id = r.result_id)
@@ -311,6 +312,18 @@ async function listRequests(ctx: RequestContext): Promise<Response> {
         ORDER BY l.created_at, l.project_key), '[]') FROM chat_request_links l WHERE l.request_id = r.id) AS linked
     FROM chat_requests r WHERE r.id = ANY(${sql.array(ids, "TEXT")})
     ORDER BY r.created_at DESC, r.id DESC`;
+    // The orchestrator stores failures redacted; a row written before that,
+    // or a provider echoing its token another way, is redacted again here
+    // against the installations' tokens, which never leave this function.
+    // Reasoning is too: a failure was appended to it before 214.
+    const tokens = rows.some((r: { route: string }) => r.route === "failed")
+      ? (await sql`SELECT bot_token FROM chat_installations`).map((i: { bot_token: string }) => ({ name: "bot_token", value: i.bot_token }))
+      : [];
+    for (const r of rows as Array<{ route: string; reasoning: string; failure: string | null }>) {
+      if (r.route !== "failed") continue;
+      r.reasoning = redactChatFailure(r.reasoning, tokens);
+      if (r.failure) r.failure = redactChatFailure(r.failure, tokens);
+    }
     return { rows, week };
   });
   return json(week ? { requests: rows, week } : { requests: rows });
