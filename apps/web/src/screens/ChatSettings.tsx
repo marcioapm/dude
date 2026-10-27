@@ -487,17 +487,16 @@ const ROUTE_WORD: Record<string, string> = {
 };
 const EVERY = "__every__";
 
-const MADE_ROUTES: ReadonlySet<string> = new Set<ChatMadeRoute>(["brainstorm", "task", "epic", "resume", "task_link"]);
-
-/**
- * What a failed request still made: its made_route, recorded when it
- * failed. A row older than that is read from its result: a task or epic
- * bound by a task link is the link, a session the brainstorm made instead
- * unless resume was asked. Null when nothing was made.
- */
 export function failedMade(r: Pick<ChatRequestRow, "route" | "askedRoute" | "result" | "madeRoute">): ChatMadeRoute | null {
   if (r.route !== "failed" || !r.result) return null;
-  if (r.madeRoute && MADE_ROUTES.has(r.madeRoute)) return r.madeRoute as ChatMadeRoute;
+  switch (r.madeRoute) {
+    case "brainstorm":
+    case "task":
+    case "epic":
+    case "resume":
+    case "task_link": return r.madeRoute;
+  }
+  // Legacy rows lack provenance; an asked resume may also have made a brainstorm.
   if (r.askedRoute === "task_link") return "task_link";
   switch (r.result.kind) {
     case "session": return r.askedRoute === "resume" ? "resume" : "brainstorm";
@@ -506,10 +505,8 @@ export function failedMade(r: Pick<ChatRequestRow, "route" | "askedRoute" | "res
   }
 }
 
-/** A failure's text past which the line is clipped, with the rest behind "Show all". */
 export const FAILURE_CLIP = 140;
 
-/** Why a failed request failed: one muted danger line under its route, the whole text on hover or on Show all. */
 function FailureLine({ failure }: { failure: string }) {
   const [open, setOpen] = useState(false);
   const long = failure.length > FAILURE_CLIP;
