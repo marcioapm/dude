@@ -170,6 +170,13 @@ export const EventTypes = {
    * Payload: `{ project, repositories: [{ id, name }] }`.
    */
   BrainstormCheckoutRequested: "session.checkout.requested",
+  /**
+   * A chat-born session's agent posted in its thread (reply_in_thread).
+   * Payload: `{ provider, channel, conversationId, threadId, ts, permalink }`.
+   */
+  ThreadReplyPosted: "chat.reply.posted",
+  /** A thread post refused, by dude or the provider. Payload: `{ tool, provider, channel, conversationId, error }`. */
+  ThreadReplyRefused: "chat.reply.refused",
   /** The agent filled the proposal card. Payload: `{ proposalId, items }`. */
   BrainstormProposed: "session.proposed",
   /** A member filed items from the card. Payload: `{ proposalId, by, filed: [{ item, key, kind }] }`. */
