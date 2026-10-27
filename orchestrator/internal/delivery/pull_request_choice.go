@@ -25,17 +25,17 @@ const PullRequestOpenText = "The pull request is already open."
 // Payload: {from, to} (null: the project's).
 const EvPullRequestChoiceChanged = "task.pull_request_choice_changed"
 
-// pullRequestOpenedSQL ($1 the task): a pull request row of the task's
-// current attempt, dude's own or adopted, open or ended. One whose Run is
-// unknown belongs to the current attempt.
-const pullRequestOpenedSQL = `SELECT EXISTS (SELECT 1 FROM pull_requests pr LEFT JOIN runs r ON r.id = pr.run_id
-	WHERE pr.task_id = $1 AND COALESCE(r.attempt, task_attempt($1)) = task_attempt($1))`
+// attemptPullRequestsSQL ($1 the task): the pull request rows of the
+// task's current attempt, dude's own or adopted, open or ended. One whose
+// Run is unknown belongs to the current attempt.
+const attemptPullRequestsSQL = `SELECT 1 FROM pull_requests pr LEFT JOIN runs r ON r.id = pr.run_id
+	WHERE pr.task_id = $1 AND COALESCE(r.attempt, task_attempt($1)) = task_attempt($1)`
 
 // PullRequestOpenedTx says whether the task's current attempt has had a
 // pull request.
 func PullRequestOpenedTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 	var opened bool
-	err := tx.QueryRow(ctx, pullRequestOpenedSQL, taskID).Scan(&opened)
+	err := tx.QueryRow(ctx, `SELECT EXISTS (`+attemptPullRequestsSQL+`)`, taskID).Scan(&opened)
 	return opened, err
 }
 
@@ -104,11 +104,6 @@ func firstPullRequestChoiceTx(ctx context.Context, tx pgx.Tx, taskID string) (st
 	return PullRequestChoiceTx(ctx, tx, taskID)
 }
 
-// draftOpenedSQL ($1 the task): a draft pull request row of the task's
-// current attempt, as pullRequestOpenedSQL scopes it.
-const draftOpenedSQL = `SELECT EXISTS (SELECT 1 FROM pull_requests pr LEFT JOIN runs r ON r.id = pr.run_id
-	WHERE pr.task_id = $1 AND COALESCE(r.attempt, task_attempt($1)) = task_attempt($1) AND pr.state = 'draft')`
-
 // PullRequestChoiceAtOpening is the task's choice as the step opening its
 // first pull requests reads it, and whether the current attempt already
 // has a pull request row. A run of that step retried after opening some
@@ -118,22 +113,20 @@ const draftOpenedSQL = `SELECT EXISTS (SELECT 1 FROM pull_requests pr LEFT JOIN 
 // stopped resolving cannot stop a half-opened delivery.
 func (s *Store) PullRequestChoiceAtOpening(ctx context.Context, org, taskID string) (choice string, opened bool, err error) {
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		if opened, err = PullRequestOpenedTx(ctx, tx, taskID); err != nil {
-			return err
-		}
-		if !opened {
-			choice, err = PullRequestChoiceTx(ctx, tx, taskID)
-			return err
-		}
 		var draft bool
-		if err := tx.QueryRow(ctx, draftOpenedSQL, taskID).Scan(&draft); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (`+attemptPullRequestsSQL+`),
+			EXISTS (`+attemptPullRequestsSQL+` AND pr.state = 'draft')`, taskID).Scan(&opened, &draft); err != nil {
 			return err
 		}
-		choice = PullRequestOpen
-		if draft {
+		switch {
+		case !opened:
+			choice, err = PullRequestChoiceTx(ctx, tx, taskID)
+		case draft:
 			choice = PullRequestDraft
+		default:
+			choice = PullRequestOpen
 		}
-		return nil
+		return err
 	})
 	return choice, opened, err
 }
@@ -149,16 +142,24 @@ func (w *steps) choiceReleased(ctx context.Context, sc workflow.StepContext, st 
 	if !st.ChoiceGate {
 		return false, nil
 	}
-	choice, err := w.s.FirstPullRequestChoice(ctx, sc.OrganizationID, st.TaskID)
-	if errors.As(err, new(ChoiceUnresolved)) {
-		// Nothing says to stop asking: the hold stays.
-		return false, nil
-	}
-	if err != nil || choice == PullRequestAsk || choice == "" {
+	released, err := choiceStopsAsking(w.s.FirstPullRequestChoice(ctx, sc.OrganizationID, st.TaskID))
+	if err != nil || !released {
 		return false, err
 	}
 	releaseChoiceGate(st)
 	return true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", ReasonChoiceChanged)
+}
+
+// choiceStopsAsking says the choice read at the hold of Ask me first is no
+// longer Ask me first. One that does not resolve says nothing: the hold stays.
+func choiceStopsAsking(choice string, err error) (bool, error) {
+	if errors.As(err, new(ChoiceUnresolved)) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return choice != PullRequestAsk && choice != "", nil
 }
 
 func releaseChoiceGate(st *State) {
@@ -196,11 +197,8 @@ func choiceReleasedAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepCo
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR SHARE`, st.TaskID); err != nil {
 		return res, false, err
 	}
-	choice, err := firstPullRequestChoiceTx(ctx, tx, st.TaskID)
-	if errors.As(err, new(ChoiceUnresolved)) {
-		return res, false, nil
-	}
-	if err != nil || choice == PullRequestAsk || choice == "" {
+	released, err := choiceStopsAsking(firstPullRequestChoiceTx(ctx, tx, st.TaskID))
+	if err != nil || !released {
 		return res, false, err
 	}
 	releaseChoiceGate(st)
