@@ -157,6 +157,19 @@ describe("a task held on Ask me first", () => {
     expect(page.textContent).not.toContain("a fixer is working");
   });
 
+  test("an escalation while the feedback sent back was being fixed claims no fixer at work: the header is the escalation's", async () => {
+    const client = new Held(atHold({ status: "awaiting_input", awaitingDecision: null, hold: { ...HOLD, sentBack: true },
+      escalation: { reason: "stuck", detail: { findingIds: ["f1"] }, actions: ["retry", "stop"], at: new Date().toISOString() } }));
+    client.feedbackItems = [delivered("f1")];
+    const page = await taskPage(client);
+    await until(() => page.querySelector("[data-testid=escalation]"), "the escalation");
+    await act(async () => settle());
+    expect(page.querySelectorAll("[data-testid=ready-for-review]").length).toBe(0);
+    expect(page.textContent).not.toContain("a fixer is working");
+    const header = text(page.querySelector("[data-testid=header-status]"));
+    expect(header).toBe("Needs you");
+  });
+
   test("anyone else, while the owner's feedback is with a fixer, waits with Write feedback and no Open", async () => {
     const client = new Held(atHold({ status: "running", awaitingDecision: null, hold: { ...HOLD, sentBack: true },
       owner: { id: "u_sam", name: "Sam Lee", photoUrl: null, online: false } }));

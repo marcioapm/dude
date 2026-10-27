@@ -8,15 +8,20 @@
 import { PULL_REQUEST_CHOICE, PULL_REQUEST_CHOICES, type PullRequestChoice } from "@dude/domain";
 import type { TaskDetail } from "./api/client.ts";
 
-type GateFacts = Pick<TaskDetail, "decider" | "awaitingDecision" | "hold" | "pullRequestOpened">;
+type GateFacts = Pick<TaskDetail, "decider" | "awaitingDecision" | "hold" | "pullRequestOpened" | "status" | "escalation">;
 
 /** Deliver holds the task before its first pull request, for its owner's answer. */
 export const heldAtGate = (task: GateFacts): boolean =>
   task.decider !== "conductor" && !task.pullRequestOpened && task.awaitingDecision?.point === "before_pull_request";
 
-/** Deliver is fixing the feedback sent from its hold before the first pull request (the hold's sentBack). */
+/**
+ * A fixer works on the feedback sent from the hold before the first pull
+ * request: the hold's sentBack, while the delivery runs. An escalation or a
+ * stop leaves sentBack set (a Retry goes back to the fix) with nobody at work.
+ */
 export const sentBackFromGate = (task: GateFacts): boolean =>
-  task.decider !== "conductor" && !task.pullRequestOpened && !heldAtGate(task) && task.hold?.sentBack === true;
+  task.decider !== "conductor" && !task.pullRequestOpened && !heldAtGate(task) && task.hold?.sentBack === true
+  && task.status === "running" && !task.escalation;
 
 /** Why a task's choice can no longer change: a pull request is open. */
 export const PULL_REQUEST_OPEN_TEXT = "The pull request is already open.";
