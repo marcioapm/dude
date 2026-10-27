@@ -72,7 +72,31 @@ func publishFile(path, name, description, poster string) (json.RawMessage, error
 		return nil, err
 	}
 	label := cmp.Or(name, filepath.Base(path))
-	say := func(why error) { fmt.Fprintf(thumbStderr, "dude publish: no thumbnail for %s: %v\n", label, why) }
+	thumb, err := thumbnailOf(raw, path, video, posterImg)
+	if err != nil {
+		fmt.Fprintf(thumbStderr, "dude publish: no thumbnail for %s: %v\n", label, err)
+		return raw, nil
+	}
+	if thumb == "" {
+		return raw, nil
+	}
+	return withThumbnail(raw, thumb), nil
+}
+
+// thumbMaking runs first in thumbnailOf; tests replace it to panic there.
+var thumbMaking = func() {}
+
+// thumbnailOf makes and publishes the thumbnail of the file published at
+// path, answering its name, or "" when the file needs none. A panic (in
+// an image decoder, say) is returned as an error: FILE is already
+// published, and its answer must still be printed.
+func thumbnailOf(raw json.RawMessage, path string, video bool, posterImg image.Image) (thumb string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			thumb, err = "", fmt.Errorf("panic: %v", r)
+		}
+	}()
+	thumbMaking()
 	var img image.Image
 	switch {
 	case posterImg != nil:
@@ -82,30 +106,23 @@ func publishFile(path, name, description, poster string) (json.RawMessage, error
 	default:
 		img, err = imageToShrink(path)
 	}
-	if err != nil {
-		say(err)
-		return raw, nil
-	}
-	if img == nil {
-		return raw, nil
+	if err != nil || img == nil {
+		return "", err
 	}
 	sum, err := sha256Of(raw, path)
 	if err != nil {
-		say(err)
-		return raw, nil
+		return "", err
 	}
 	tmp, err := writeThumb(img)
 	if err != nil {
-		say(err)
-		return raw, nil
+		return "", err
 	}
 	defer os.Remove(tmp)
-	thumb := thumbsDir + sum + ".jpg"
+	thumb = thumbsDir + sum + ".jpg"
 	if _, err := publish(tmp, thumb, ""); err != nil {
-		say(err)
-		return raw, nil
+		return "", err
 	}
-	return withThumbnail(raw, thumb), nil
+	return thumb, nil
 }
 
 var videoExtensions = []string{".mp4", ".m4v", ".webm", ".mov", ".ogv"}

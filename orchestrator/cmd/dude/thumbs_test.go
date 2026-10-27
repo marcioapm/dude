@@ -286,6 +286,25 @@ func TestAThumbnailRefusedLeavesTheFilesAnswer(t *testing.T) {
 	}
 }
 
+// A panic while making the thumbnail leaves the file's answer and success,
+// and one line on stderr.
+func TestAPanicMakingTheThumbnailLeavesTheFilesAnswer(t *testing.T) {
+	t.Setenv("LUX_ARTIFACTS", "")
+	old := thumbMaking
+	thumbMaking = func() { panic("decoder exploded") }
+	t.Cleanup(func() { thumbMaking = old })
+	shim := recordingShim(t, 0)
+	src := filepath.Join(t.TempDir(), "shot.png")
+	writePNG(t, src, noisy(1000, 1000))
+	answer, stderr, err := publishing(t, src)
+	if err != nil || shim.count() != 1 || answer["id"] != "art_0000000000000001" || answer["thumbnail"] != nil {
+		t.Fatalf("%v, %d calls, answer %v; want the image's answer alone", err, shim.count(), answer)
+	}
+	if stderr != "dude publish: no thumbnail for shot.png: panic: decoder exploded\n" {
+		t.Fatalf("stderr %q", stderr)
+	}
+}
+
 // On an older lux, the thumbnail is copied into $LUX_ARTIFACTS beside the
 // file, named by the file's sha256 computed here.
 func TestAnOlderLuxGetsTheThumbnailCopiedToo(t *testing.T) {
