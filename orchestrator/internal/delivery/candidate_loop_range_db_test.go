@@ -61,16 +61,22 @@ func TestAFreshLargeDeltaReviewerKeepsTheCandidateLoopsRange(t *testing.T) {
 // A pull request's fix loop on its candidate weighs only the findings it
 // would send a fix: an open blocking finding of a review outside its range
 // (run_rr1, of the whole branch) does not keep the loop going. One of the
-// loop's own does.
+// loop's own does. The same holds for reviewExit, which a person's accept of
+// a not_converging escalation on the candidate goes to.
 func TestACandidateLoopsExitWeighsOnlyTheFindingsItsFixIsSent(t *testing.T) {
-	for _, c := range []struct {
+	type exitCase struct {
 		name string
+		step string
 		of   string
 		want string
-	}{
-		{"outside the candidate's range", "", "simplify"},
-		{"of the candidate's fix", RangePullRequestFix, "fix"},
-	} {
+	}
+	var cases []exitCase
+	for _, step := range []string{"awaitReview", "reviewExit"} {
+		cases = append(cases,
+			exitCase{step + " outside the candidate's range", step, "", "simplify"},
+			exitCase{step + " of the candidate's fix", step, RangePullRequestFix, "fix"})
+	}
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newLaterRound(t, "app/greet.go").firstRound()
 			r.onCandidate()
@@ -85,7 +91,11 @@ func TestACandidateLoopsExitWeighsOnlyTheFindingsItsFixIsSent(t *testing.T) {
 			r.exec(`INSERT INTO review_findings (id, organization_id, task_id, run_id, severity, category, title, description, status)
 				VALUES ('fnd_b', $1, 'wi_rr', $2, 'blocking', 'correctness', 'T', 'd', 'open')`, from)
 			r.st.ReviewRunIDs = []string{"run_rr2"}
-			res, err := r.steps.awaitReview(r.ctx, r.sc("awaitReview"))
+			exit := r.steps.awaitReview
+			if c.step == "reviewExit" {
+				exit = r.steps.reviewExit
+			}
+			res, err := exit(r.ctx, r.sc(c.step))
 			if err != nil {
 				t.Fatal(err)
 			}

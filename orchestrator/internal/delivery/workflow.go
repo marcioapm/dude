@@ -1092,6 +1092,9 @@ func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
 	if err == nil {
+		findings, err = w.s.loopsOwn(ctx, sc.OrganizationID, st, findings)
+	}
+	if err == nil {
 		findings, err = w.withFeedback(ctx, sc.OrganizationID, st, findings)
 	}
 	if err != nil {
