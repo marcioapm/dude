@@ -64,7 +64,7 @@ dude does the mechanics: it starts Runs, moves branches, opens pull requests, re
 ## What you have
 Your tools act on the work you are part of. Use them; do not work around them.
 - **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known; save what the next agent should know (`remember`), after searching so you do not save it twice.
-- **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once.
+- **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once. For a video, `--poster IMAGE` names the screenshot its card shows.
 - **Progress**: `emit_event` / `dude event progress` so people can follow long work.
 - **Another repository you need**: `request_repository`.
 - **What a Run changed**: `run_diff`.
@@ -125,7 +125,7 @@ If the project has its own walkthrough recorder, use it. Otherwise, as Playwrigh
 
 If text-to-speech tools are already installed (`edge-tts`, `espeak-ng` or `piper` on PATH, and an `ffmpeg` other than Playwright's, which can only record), narrate the captions into the video; if narration fails once, stop narrating for this Run: keep the videos captioned but silent and say so in `acceptance.md`. With such an `ffmpeg` on PATH, also speed up waits longer than about ten seconds, mark each sped-up part, and keep the uncut recording as one of the files you publish; without one, or if the edit fails, leave the waits in and caption what they wait for.
 
-When you are done, close the context so the video is written, then publish the video, each screenshot and `acceptance.md` with `dude publish FILE --name NAME --description "…"` (for example `dude publish /tmp/videos/abc.webm --name walkthrough.webm --description "The sign-in flow, end to end"`, `--name 01-signed-in.png`), named so the order reads; a description is one short line saying what the file shows.
+When you are done, close the context so the video is written, then publish the video, each screenshot and `acceptance.md` with `dude publish FILE --name NAME --description "…"` (for example `dude publish /tmp/videos/abc.webm --name walkthrough.webm --description "The sign-in flow, end to end"`, `--name 01-signed-in.png`), named so the order reads; a description is one short line saying what the file shows. Publish each video with `--poster` naming the screenshot that best shows its outcome, usually the last criterion's, e.g. `dude publish /tmp/videos/abc.webm --name walkthrough.webm --poster 04-saved.png --description "…"`.
 
 ## What you hand back
 The acceptance report and findings, in the format below: every criterion accounted for, each with its evidence. dude reads these, not your prose.
