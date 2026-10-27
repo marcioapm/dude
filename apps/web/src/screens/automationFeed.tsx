@@ -8,7 +8,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChatAside, ChatTranscript, FeedDelivery, LogStream, summarizeToolArgs, type LogLine } from "@dude/design-system/components";
+import { ChatMessage, ChatAside, ChatTranscript, FeedDelivery, LogStream, summarizeToolArgs, type LogLine } from "@dude/design-system/components";
 import { formatDuration, Icon } from "@dude/design-system";
 import type { AgentRole, AutomationRunDetail, PersistedEvent } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
@@ -143,6 +143,9 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
       {interleaved(groups, sent).map((item) => "node" in item
         ? <Fragment key={item.id}>{item.node}</Fragment>
         : Array.isArray(item.group) ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside> : render(item.group))}
+      {live && conversation.activity ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
+        activity={conversation.activity} data-testid="automation-activity"
+        activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} /> : null}
     </ChatTranscript>
   );
 }

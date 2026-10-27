@@ -763,6 +763,12 @@ describe("a run's activity", () => {
     expect(c.querySelector("[data-testid=run-activity]")?.textContent).toContain("Follows the latest · scroll up to stop");
   });
 
+  test("a live automation shows tool activity while waiting", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    await until(() => card(c, "bash"), "the call");
+    expect(c.querySelector('[data-testid="automation-activity"]')).not.toBeNull();
+  });
+
   test("log events do not refetch the full run", async () => {
     const client = new FixtureClient("a");
     const real = client.automationRun.bind(client);
