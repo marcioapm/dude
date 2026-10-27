@@ -35,6 +35,10 @@ import (
 // EventIncoming is an incoming delivery's Payload.Event.
 const EventIncoming = "incoming"
 
+// IncomingNeedsProject is why an organisation incoming automation naming no
+// project runs nothing: packages/domain's INCOMING_NEEDS_PROJECT.
+const IncomingNeedsProject = "Pick at least one project: tasks are filed there and its repositories are the ones it can check out."
+
 // Condition is one row of an incoming trigger's conditions.
 type Condition struct {
 	Path   string   `json:"path"`
@@ -379,6 +383,9 @@ func ArriveIncoming(ctx context.Context, tx pgx.Tx, automationID, deliveryID str
 	group := GroupKey(a.Trigger.GroupBy, body)
 	if !a.Enabled {
 		return nil, verdict(VerdictSkipped, "the automation was turned off", nil, group, "")
+	}
+	if a.ProjectID == "" && len(a.ProjectIDs) == 0 {
+		return nil, verdict(VerdictSkipped, IncomingNeedsProject, nil, group, "")
 	}
 	payloads := []Payload{{DeliveryID: deliveryID, Event: EventIncoming, GroupKey: group, Body: body}}
 	if live, err := liveGroupRun(ctx, tx, a, group); err != nil {

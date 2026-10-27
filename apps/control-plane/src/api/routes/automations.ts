@@ -16,6 +16,7 @@ import {
   DELIVERY_VERDICTS,
   enabledSchema,
   EventTypes,
+  INCOMING_NEEDS_PROJECT,
   newAutomationSchema,
   newHookId,
   repoFilterAllows,
@@ -375,6 +376,10 @@ async function setEnabled(ctx: RequestContext): Promise<Response> {
   const row = await withOrg(ctx.principal.organizationId, async (scope) => {
     const current = await readOne(scope, id);
     await requireEditor(ctx, current.projectId);
+    // An organisation incoming automation runs in its projects: none named, nothing to file in or check out.
+    if (enabled && current.projectId === null && current.trigger.kind === "incoming" && current.projectIds.length === 0) {
+      throw new HttpError(400, INCOMING_NEEDS_PROJECT, "incoming_needs_project");
+    }
     // Off does not touch the kept session or its expiry clock.
     await scope.sql`UPDATE automations SET enabled = ${enabled}, next_run_at = NULL, updated_by = ${ctx.principal.personId},
       updated_at = now() WHERE id = ${id}`;

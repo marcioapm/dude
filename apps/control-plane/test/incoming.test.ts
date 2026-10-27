@@ -273,9 +273,16 @@ describe("an incoming automation's routes", () => {
     const refused = await call("PUT", `/v1/automations/${id}`, settings);
     expect(refused.status).toBe(400);
     expect((await refused.json() as Json).error.details.fieldErrors.projectIds).toEqual([INCOMING_NEEDS_PROJECT]);
+    // Nor is it turned on while it names none.
+    const on = await call("PUT", `/v1/automations/${id}/enabled`, { enabled: true });
+    expect(on.status).toBe(400);
+    expect((await on.json() as Json).error).toMatchObject({ code: "incoming_needs_project", message: INCOMING_NEEDS_PROJECT });
+    expect((await (await call("GET", `/v1/automations/${id}`)).json() as Json).enabled).toBe(false);
+    expect((await call("PUT", `/v1/automations/${id}/enabled`, { enabled: false })).status).toBe(200);
     const saved = await call("PUT", `/v1/automations/${id}`, { ...settings, projectIds: [PRJ] });
     expect(saved.status).toBe(200);
     expect((await saved.json() as Json).projectIds).toEqual([PRJ]);
+    expect((await call("PUT", `/v1/automations/${id}/enabled`, { enabled: true })).status).toBe(200);
     expect((await call("PUT", `/v1/automations/${id}`, { ...settings, projectIds: ["prj_nope"] })).status).toBe(400);
   });
 

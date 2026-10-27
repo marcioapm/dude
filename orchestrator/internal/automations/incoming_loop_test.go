@@ -246,6 +246,30 @@ func TestIncomingRunStartsFromItsFirstDelivery(t *testing.T) {
 	}
 }
 
+// A delivery accepted while its automation was on is skipped if it is off
+// by the time the loop reads it, and an organisation incoming automation
+// naming no project skips every delivery, saying so.
+func TestIncomingSkippedWhenOffOrWithNoProject(t *testing.T) {
+	h := newHarness(t)
+	cmd := map[string]any{"command": "true"}
+	h.incoming("aut_off", nil, "", cmd)
+	exec(t, h.owner, `UPDATE automations SET kind = 'command', agent = NULL, enabled = false WHERE id = 'aut_off'`)
+	h.incoming("aut_noproj", nil, "", map[string]any{"command": "true", "project_id": nil})
+	exec(t, h.owner, `UPDATE automations SET kind = 'command', agent = NULL WHERE id = 'aut_noproj'`)
+	h.receive("aut_off", "dlv_off", alert("firing", "g", "high"))
+	h.receive("aut_noproj", "dlv_noproj", alert("firing", "g", "high"))
+	h.until("both read", func() bool { return h.delivery("dlv_off").Verdict != "" && h.delivery("dlv_noproj").Verdict != "" })
+	if d := h.delivery("dlv_off"); d.Verdict != VerdictSkipped || d.Reason != "the automation was turned off" || d.Run != "" {
+		t.Errorf("turned off: %+v", d)
+	}
+	if d := h.delivery("dlv_noproj"); d.Verdict != VerdictSkipped || d.Reason != IncomingNeedsProject || d.Run != "" {
+		t.Errorf("no project: %+v", d)
+	}
+	if r := append(h.runs("aut_off"), h.runs("aut_noproj")...); len(r) != 0 {
+		t.Errorf("runs %+v", r)
+	}
+}
+
 // Once the group's run has ended, the next delivery of that group is
 // checked and fires afresh.
 func TestIncomingAfterTheRunEndedStartsAgain(t *testing.T) {
