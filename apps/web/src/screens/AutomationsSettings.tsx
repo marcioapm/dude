@@ -123,7 +123,7 @@ import {
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
 import { AutomationToolList } from "./automationTools.tsx";
-import { AutomationFeed, CommandLog, ContainerLog, EV_LOG_EXITED, EV_LOG_LINE, LiveMark, RunNowLine, activityCount, useNow, useRunActivity } from "./automationFeed.tsx";
+import { AutomationFeed, CommandLog, ContainerLog, EV_FOLLOW_UP, EV_LOG_EXITED, EV_LOG_LINE, LiveMark, RunNowLine, activityCount, useNow, useRunActivity } from "./automationFeed.tsx";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { useReloadOnEvents } from "../hooks/useEventStream.ts";
 import { project } from "../api/conversation.ts";
@@ -1232,17 +1232,16 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
   const [problem, setProblem] = useState<string | null>(null);
   const { events } = useRunActivity(client, runId, a.kind === "agent");
   // Only facts-changing events trigger a detail read; log traffic stays in the feed.
-  const moved = events.filter((e) => e.eventType === "automation.run.ended" || e.eventType === "automation.delivery.sent" ||
-    e.eventType === "automation.log.exited" || e.eventType === "agent.tool.dude").at(-1)?.cursor ?? 0;
+  const moved = events.filter((e) => e.eventType === "automation.run.ended" || e.eventType === EV_FOLLOW_UP ||
+    e.eventType === EV_LOG_EXITED || e.eventType === "agent.tool.dude").at(-1)?.cursor ?? 0;
+  const read = useCallback(() => { void client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId]);
   useEffect(() => {
-    const timer = setTimeout(() => { void client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, moved ? 1000 : 0);
+    const timer = setTimeout(read, moved ? 1000 : 0);
     return () => clearTimeout(timer);
-  }, [client, a.id, runId, moved]);
+  }, [read, moved]);
   // Cost and server requests can change without an agent event. Stop polling once the run ends.
   useVisibleInterval(() => {
-    if (run?.status === "running" || run?.status === "queued") {
-      void client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e)));
-    }
+    if (run?.status === "running" || run?.status === "queued") read();
   }, 4000);
   const tick = useNow(run?.status === "running");
   // Projected once for the hint; the feed projects its own with the run's status.
