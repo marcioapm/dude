@@ -1455,6 +1455,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 		return false, err
 	}
 	keep := a.SessionMode == "resumable" && source != SourceTest
+	r.serverLog(ctx, a, runID, luxRunID)
 	if got, err := r.Lux.Get(ctx, luxRunID); err == nil && lux.Terminal(got.State) {
 		r.forgetPreview(luxRunID)
 		return true, r.endServer(ctx, a, runID, "failed", "error", "its container ended: "+cmp.Or(got.StateReason, got.State))
@@ -1505,6 +1506,37 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}
 	r.stopOrCancel(ctx, luxRunID, keep)
 	return true, nil
+}
+
+// serverLogTail is how many of a server's last log lines one pass reads.
+const serverLogTail = 500
+
+// serverLog records the server's container log lines it has not yet, in
+// the run's activity. A log lux cannot give (the server not started yet)
+// is read again next pass.
+func (r *Runner) serverLog(ctx context.Context, a Automation, runID, luxRunID string) {
+	raw, err := r.Lux.ServerLog(ctx, luxRunID, "automation", serverLogTail)
+	if err != nil {
+		return
+	}
+	var out struct {
+		Lines []phases.ServerLine `json:"lines"`
+	}
+	if json.Unmarshal(raw, &out) != nil || len(out.Lines) == 0 {
+		return
+	}
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		f, err := phases.LoadAutomationFeed(ctx, tx, phases.AutomationRunRef{ID: runID, Org: a.Org, ProjectID: a.ProjectID, Lines: true})
+		if err != nil {
+			return err
+		}
+		if err := f.ServerLines(ctx, tx, out.Lines); err != nil {
+			return err
+		}
+		return f.Save(ctx, tx)
+	}); err != nil {
+		r.Log.Warn("recording a server's log failed", "run", runID, "error", err)
+	}
 }
 
 func (r *Runner) endServer(ctx context.Context, a Automation, runID, status, stop, reason string) error {

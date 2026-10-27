@@ -771,6 +771,14 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 	if len(bodies) != 3 || !strings.Contains(bodies[1], `"synchronize"`) || !strings.Contains(bodies[2], `"synchronize"`) {
 		t.Errorf("POST bodies %q", bodies)
 	}
+	// Its container log is its activity, each line once however often it was read.
+	var lines []string
+	rows, _ = h.owner.Query(context.Background(), `SELECT payload->>'text' FROM events WHERE automation_run_id = $1 AND event_type = $2
+		AND (payload->>'server')::bool ORDER BY cursor`, r.ID, phases.EvLogLine)
+	lines, _ = pgx.CollectRows(rows, pgx.RowTo[string])
+	if len(lines) != 3 || lines[1] != "bun run serve" || lines[2] != "listening on :8080" {
+		t.Errorf("container log in the activity: %q", lines)
+	}
 	h.until("the container is ended", func() bool { return lux.Terminated(h.luxState(r.LuxRunID)) })
 }
 

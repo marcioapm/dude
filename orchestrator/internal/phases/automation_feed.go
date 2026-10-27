@@ -6,7 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
-
+	"time"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
@@ -38,6 +38,9 @@ type AutomationFeed struct {
 	// Per dude tool, the cursor of the last of its records joined to a completion.
 	joined map[string]int64
 	logs   bool
+	// A server's log: the newest line time recorded, and how many lines at it.
+	serverAt   int64
+	serverSeen int
 }
 
 // automationFeedState is automation_runs.feed_state.
@@ -54,6 +57,8 @@ type automationFeedState struct {
 	// on a kept session (placement 2 on) skips the replay its resume starts with.
 	SessionEpoch int              `json:"sessionEpoch,omitempty"`
 	Joined       map[string]int64 `json:"joined,omitempty"`
+	ServerAt     int64            `json:"serverAt,omitempty"`
+	ServerSeen   int              `json:"serverSeen,omitempty"`
 }
 
 // LoadAutomationFeed restores the feed of run as its last batch saved it.
@@ -71,7 +76,7 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 	}
 	t.message.WriteString(st.Message)
 	t.sessionEpoch = max(st.SessionEpoch, 1)
-	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines}
+	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines, serverAt: st.ServerAt, serverSeen: st.ServerSeen}
 	t.completing = f.joinDudeRecord
 	t.thought.WriteString(st.Thought)
 	maps.Copy(t.seenCalls, st.Calls)
@@ -249,6 +254,50 @@ func (f *AutomationFeed) End(ctx context.Context, tx pgx.Tx, note string, exitCo
 	return nil
 }
 
+// ServerLine is one line of a server's container log as lux keeps it.
+type ServerLine struct {
+	T      int64  `json:"t"` // Unix milliseconds
+	Stream string `json:"stream"`
+	Text   string `json:"text"`
+}
+
+// ServerLines records the lines of a server's log (lux's tail, oldest
+// first) not recorded before: each after the newest time recorded, and
+// at that time those of its lines not yet counted.
+func (f *AutomationFeed) ServerLines(ctx context.Context, tx pgx.Tx, lines []ServerLine) error {
+	seen := 0
+	for _, l := range lines {
+		if l.T < f.serverAt {
+			continue
+		}
+		if l.T == f.serverAt {
+			seen++
+			if seen <= f.serverSeen {
+				continue
+			}
+		} else {
+			f.serverAt, f.serverSeen, seen = l.T, 0, 1
+		}
+		f.serverSeen = seen
+		stream := l.Stream
+		if stream != "stderr" {
+			stream = "stdout"
+		}
+		for _, text := range strings.Split(strings.TrimRight(l.Text, "\n"), "\n") {
+			p := map[string]any{"stream": stream, "text": text, "server": true}
+			if len(text) > logLineMax {
+				p["text"], p["cut"] = cutRunes(text[:logLineMax], false), len(text)
+			}
+			if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvLogLine, OrganizationID: f.t.run.Org, ProjectID: f.t.run.ProjectID,
+				AutomationRunID: f.t.run.ID, OccurredAt: time.UnixMilli(l.T), ActorType: ledger.ActorAgent, ActorID: f.t.run.ID,
+				Source: ledger.SourceRunner, Payload: p}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Save keeps what the feed holds for the next batch, in tx.
 func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 	t := f.t
@@ -261,7 +310,8 @@ func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 		calls[id] = t.seenCalls[id]
 	}
 	st := automationFeedState{Message: t.message.String(), Thought: t.thought.String(), Open: slices.Sorted(maps.Keys(t.openCalls)),
-		Calls: calls, Announced: t.announced, Harness: harness, Partial: f.partial, SessionEpoch: t.sessionEpoch, Joined: f.joined}
+		Calls: calls, Announced: t.announced, Harness: harness, Partial: f.partial, SessionEpoch: t.sessionEpoch, Joined: f.joined,
+		ServerAt: f.serverAt, ServerSeen: f.serverSeen}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
