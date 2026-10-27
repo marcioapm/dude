@@ -148,14 +148,12 @@ type Reply struct {
 }
 
 // Row is a set of choices under a reply, each coming back as an
-// Interaction with its Value, closed by a link (LinkURL, LinkLabel).
-// Linked are lines saying what was chosen from it already.
+// Interaction with its Value. Linked are lines saying what was chosen
+// from it already.
 type Row struct {
-	Heading   string   `json:"heading"`
-	Choices   []Choice `json:"choices,omitempty"`
-	LinkURL   string   `json:"linkUrl,omitempty"`
-	LinkLabel string   `json:"linkLabel,omitempty"`
-	Linked    []string `json:"linked,omitempty"`
+	Heading string   `json:"heading"`
+	Choices []Choice `json:"choices,omitempty"`
+	Linked  []string `json:"linked,omitempty"`
 }
 
 // Choice is one button of a question; Value comes back in the Interaction.

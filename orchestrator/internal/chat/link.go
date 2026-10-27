@@ -16,22 +16,21 @@ import (
 )
 
 // A brainstorm made with no project linked offers, under its reply, up to
-// linkCandidatesMax projects to link (a choice each) and the session page.
+// linkCandidatesMax projects to link, a choice each.
 const (
 	linkCandidatesMax = 3
 	linkValuePrefix   = "link:"
 	linkHeading       = "No project is linked, so this session can't read any repository or CI. Link one:"
 	anotherHeading    = "Link another project:"
-	chooseLabel       = "Choose in dude"
 )
 
 // linkOffer is what a request's reply offered to link (chat_requests.link_offer):
 // the reply as posted, its session, and the candidates a click names by index.
+// An offer stored with a chooseUrl decodes the same: the field is ignored.
 type linkOffer struct {
 	Text       string          `json:"text"`
 	LinkURL    string          `json:"linkUrl"`
 	LinkLabel  string          `json:"linkLabel"`
-	ChooseURL  string          `json:"chooseUrl"`
 	Session    string          `json:"session"`
 	Candidates []linkCandidate `json:"candidates"`
 }
@@ -88,7 +87,7 @@ type linkedLine struct {
 // row is the offer's row with the candidates not linked yet, and a line
 // for each that was. Its heading asks for a first project, or another.
 func (o linkOffer) row(request string, linked []linkedLine) *Row {
-	row := &Row{Heading: linkHeading, LinkURL: o.ChooseURL, LinkLabel: chooseLabel}
+	row := &Row{Heading: linkHeading}
 	if len(linked) > 0 {
 		row.Heading = anotherHeading
 	}
