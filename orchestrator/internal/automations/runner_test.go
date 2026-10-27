@@ -673,7 +673,7 @@ func TestAutomationCommandGetsTheEvent(t *testing.T) {
 func TestAutomationCommandLinesArriveInOrderWithTheExitCode(t *testing.T) {
 	h := newHarness(t)
 	h.automation("aut_lines", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"},
-		map[string]any{"command": "echo one; sleep 0.05; echo two >&2; sleep 0.05; printf 'three'; exit 3"})
+		map[string]any{"command": "echo one; sleep 0.2; echo two >&2; sleep 0.2; printf 'three'; exit 3"})
 	exec(t, h.owner, `UPDATE automations SET next_run_at = now() - interval '1 minute' WHERE id = 'aut_lines'`)
 	h.until("the run fails", func() bool { r := h.runs("aut_lines"); return len(r) == 1 && r[0].Status == "failed" })
 	run := h.runs("aut_lines")[0]

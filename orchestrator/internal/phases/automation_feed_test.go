@@ -323,6 +323,47 @@ func TestServerLogReadsAreDedupedAtTheWindowEdgeAndGapsAreMarked(t *testing.T) {
 	}
 }
 
+// A line without its newline past 4 KB is recorded cut, saying how long it
+// was; a CRLF line loses its CR; the rest waits for its newline.
+func TestAutomationCommandLinesCutLongPartialsAndTrimCR(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	a.ref.Lines = true
+	ctx := context.Background()
+	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+		f, err := LoadAutomationFeed(ctx, tx, a.ref)
+		if err != nil {
+			return err
+		}
+		for _, data := range []string{"a\r\n", strings.Repeat("x", 5000), "tail"} {
+			if err := f.Apply(ctx, tx, lux.Frame{Kind: "record", Channel: "stdout", Data: data}); err != nil {
+				return err
+			}
+		}
+		return f.Save(ctx, tx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := w.owner.Query(ctx, `SELECT payload->>'text', COALESCE((payload->>'cut')::int, 0) FROM events
+		WHERE automation_run_id = $1 AND event_type = 'automation.log.line' ORDER BY cursor`, a.ref.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		Text string
+		Cut  int
+	}])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d lines, want CRLF and cut partial", len(got))
+	}
+	if got[0].Text != "a" || got[0].Cut != 0 || len(got[1].Text) != logLineMax || got[1].Cut != 5000 {
+		t.Fatalf("lines %d: %q cut %d; second %d bytes cut %d", len(got), got[0].Text, got[0].Cut, len(got[1].Text), got[1].Cut)
+	}
+}
+
 // A command's lines are capped per read (500, then one marker for that
 // read) and per run (2000, then one marker for the rest of the run).
 func TestAutomationCommandLogIsBoundedAcrossBatches(t *testing.T) {
