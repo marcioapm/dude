@@ -140,13 +140,12 @@ func (c Caller) run() delivery.RunRef {
 // event is a ledger event by the calling agent, on its Run; an automation
 // run's is keyed by automation_run_id alone.
 func (c Caller) event(typ string, payload map[string]any) ledger.Event {
+	e := c.run().Event(typ, ledger.ActorAgent, payload)
 	if c.AutomationID != "" {
 		payload["automationId"], payload["automationRunId"], payload["actingFor"] = c.AutomationID, c.RunID, c.AutomationScope.OwnerID
-		e := c.run().Event(typ, ledger.ActorAgent, payload)
 		e.RunID, e.AutomationRunID = "", c.RunID
-		return e
 	}
-	return c.run().Event(typ, ledger.ActorAgent, payload)
+	return e
 }
 
 // runColumn is the events column c's own events are keyed by.
