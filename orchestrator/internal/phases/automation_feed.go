@@ -41,10 +41,15 @@ type AutomationFeed struct {
 	// A server's log: the newest line time recorded, and how many lines at it.
 	serverAt   int64
 	serverSeen int
+	logCount   int
+	logCut     bool
+	batchLines int
 }
 
 // automationFeedState is automation_runs.feed_state.
 type automationFeedState struct {
+	LogCount  int               `json:"logCount,omitempty"`
+	LogCut    bool              `json:"logCut,omitempty"`
 	Message   string            `json:"message,omitempty"`
 	Thought   string            `json:"thought,omitempty"`
 	Open      []string          `json:"open,omitempty"`
@@ -76,7 +81,7 @@ func LoadAutomationFeed(ctx context.Context, tx pgx.Tx, run AutomationRunRef) (*
 	}
 	t.message.WriteString(st.Message)
 	t.sessionEpoch = max(st.SessionEpoch, 1)
-	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines, serverAt: st.ServerAt, serverSeen: st.ServerSeen}
+	f := &AutomationFeed{t: t, s: &Syncer{}, partial: st.Partial, joined: st.Joined, logs: run.Lines, serverAt: st.ServerAt, serverSeen: st.ServerSeen, logCount: st.LogCount, logCut: st.LogCut}
 	t.completing = f.joinDudeRecord
 	t.thought.WriteString(st.Thought)
 	maps.Copy(t.seenCalls, st.Calls)
@@ -219,7 +224,24 @@ func (f *AutomationFeed) lines(ctx context.Context, tx pgx.Tx, stream, data stri
 	return nil
 }
 
+func (f *AutomationFeed) allowLogLine(ctx context.Context, tx pgx.Tx) (bool, error) {
+	if f.logCount >= 2000 || f.batchLines >= 500 {
+		if !f.logCut {
+			f.logCut = true
+			return false, f.s.event(ctx, tx, f.t.run, "automation.log.cut", ledger.ActorSystem,
+				map[string]any{"text": "Additional log lines omitted; the final output remains in the log tail."})
+		}
+		return false, nil
+	}
+	f.logCount++
+	f.batchLines++
+	return true, nil
+}
+
 func (f *AutomationFeed) line(ctx context.Context, tx pgx.Tx, stream, line string) error {
+	if allowed, err := f.allowLogLine(ctx, tx); err != nil || !allowed {
+		return err
+	}
 	line = strings.TrimSuffix(line, "\r")
 	p := map[string]any{"stream": stream, "text": line}
 	if len(line) > logLineMax {
@@ -289,6 +311,11 @@ func (f *AutomationFeed) ServerLines(ctx context.Context, tx pgx.Tx, lines []Ser
 			stream = "stdout"
 		}
 		for _, text := range strings.Split(strings.TrimRight(l.Text, "\n"), "\n") {
+			if allowed, err := f.allowLogLine(ctx, tx); err != nil {
+				return err
+			} else if !allowed {
+				continue
+			}
 			p := map[string]any{"stream": stream, "text": text, "server": true}
 			if len(text) > logLineMax {
 				p["text"], p["cut"] = cutRunes(text[:logLineMax], false), len(text)
@@ -316,7 +343,7 @@ func (f *AutomationFeed) Save(ctx context.Context, tx pgx.Tx) error {
 	}
 	st := automationFeedState{Message: t.message.String(), Thought: t.thought.String(), Open: slices.Sorted(maps.Keys(t.openCalls)),
 		Calls: calls, Announced: t.announced, Harness: harness, Partial: f.partial, SessionEpoch: t.sessionEpoch, Joined: f.joined,
-		ServerAt: f.serverAt, ServerSeen: f.serverSeen}
+		ServerAt: f.serverAt, ServerSeen: f.serverSeen, LogCount: f.logCount, LogCut: f.logCut}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err

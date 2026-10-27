@@ -214,6 +214,34 @@ func TestAutomationRunningOutputSurvivesAnAbortedEnd(t *testing.T) {
 	}
 }
 
+func TestAutomationCommandLogIsBoundedAcrossBatches(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	a.ref.Lines = true
+	ctx := context.Background()
+	for range 3 {
+		if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+			f, err := LoadAutomationFeed(ctx, tx, a.ref)
+			if err != nil {
+				return err
+			}
+			if err := f.Apply(ctx, tx, lux.Frame{Kind: "record", Channel: "stdout", Data: strings.Repeat("line\n", 3000)}); err != nil {
+				return err
+			}
+			return f.Save(ctx, tx)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var lines, cuts int
+	if err := w.owner.QueryRow(ctx, `SELECT count(*) FILTER (WHERE event_type='automation.log.line'), count(*) FILTER (WHERE event_type='automation.log.cut') FROM events WHERE automation_run_id=$1`, a.ref.ID).Scan(&lines, &cuts); err != nil {
+		t.Fatal(err)
+	}
+	if lines > 2000 || cuts != 1 {
+		t.Fatalf("lines=%d cuts=%d", lines, cuts)
+	}
+}
+
 type automationWorld struct {
 	t    *testing.T
 	w    *harnessWorld
