@@ -281,7 +281,8 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 type Fired struct {
 	Run       string
 	Cancelled []Cancelled
-	// What Arrive decided, for a delivery's verdict, and a Skip's reason as written on its run.
+	// What the firing did, for a delivery's verdict: Arrive's decision, or Skip
+	// when an incoming follow-up found its run full; a Skip's reason.
 	Action Action
 	Reason string
 }
@@ -312,21 +313,22 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 	fired := Fired{Action: d.Action}
 	switch d.Action {
 	case MergeInto, SendInto:
+		fired.Run = d.Into
 		if a.Trigger.Kind == "incoming" {
 			held, err := holdFollowUp(ctx, tx, d.Into, payloads[0])
 			if err != nil || held {
-				return Fired{Run: d.Into, Action: d.Action}, err
+				return fired, err
 			}
 			return Fired{Action: Skip, Reason: followUpsFull}, nil
 		}
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw)
-		return Fired{Run: d.Into, Action: d.Action}, err
+		return fired, err
 	case Skip:
-		id := ids.New(ids.AutomationRun)
+		fired.Run, fired.Reason = ids.New(ids.AutomationRun), d.Reason
 		_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
 			started_by, scheduled_for, ended_at) VALUES ($1, $2, $3, 'skipped', $4, $5, $6, NULLIF($7, ''), $8, now())`,
-			id, a.Org, a.ID, d.Reason, source, raw, startedBy, scheduledFor)
-		return Fired{Run: id, Action: d.Action, Reason: d.Reason}, err
+			fired.Run, a.Org, a.ID, d.Reason, source, raw, startedBy, scheduledFor)
+		return fired, err
 	case CancelAndStart:
 		rows, err := tx.Query(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
 			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'

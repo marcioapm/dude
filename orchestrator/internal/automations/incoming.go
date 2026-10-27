@@ -61,7 +61,7 @@ func PathValue(body json.RawMessage, path string) (json.RawMessage, bool) {
 		switch {
 		case len(at) > 0 && at[0] == '[':
 			i, err := strconv.Atoi(key)
-			if err != nil || i < 0 || strings.TrimLeft(key, "0123456789") != "" {
+			if err != nil || strings.TrimLeft(key, "0123456789") != "" {
 				return nil, false
 			}
 			var list []json.RawMessage
@@ -166,6 +166,14 @@ func writeJSString(b *strings.Builder, s string) {
 	b.WriteString(strings.NewReplacer(`\u2028`, "\u2028", `\u2029`, "\u2029").Replace(out))
 }
 
+// first is the condition's value for every op but one_of; "" with none.
+func (c Condition) first() string {
+	if len(c.Values) == 0 {
+		return ""
+	}
+	return c.Values[0]
+}
+
 // Holds says whether c holds for body. contains on an array asks whether an
 // element is the value; on a string, whether it is a substring.
 func Holds(c Condition, body json.RawMessage) ConditionResult {
@@ -175,10 +183,7 @@ func Holds(c Condition, body json.RawMessage) ConditionResult {
 		text = valueText(raw)
 		actual = text
 	}
-	first := ""
-	if len(c.Values) > 0 {
-		first = c.Values[0]
-	}
+	first := c.first()
 	r := ConditionResult{Actual: actual}
 	switch c.Op {
 	case "exists":
@@ -221,10 +226,7 @@ const missActualRunes = 200
 // Miss is why a missed condition skips a delivery, as the Deliveries tab
 // says it; the body's value is cut to missActualRunes characters and "…".
 func Miss(c Condition, r ConditionResult) string {
-	first := ""
-	if len(c.Values) > 0 {
-		first = c.Values[0]
-	}
+	first := c.first()
 	actual := r.Actual
 	if rs := []rune(actual); len(rs) > missActualRunes {
 		actual = string(rs[:missActualRunes]) + "…"
@@ -507,9 +509,8 @@ func holdFollowUp(ctx context.Context, tx pgx.Tx, runID string, p Payload) (bool
 	return tag.RowsAffected() == 1, err
 }
 
-// resolveIncoming reads the bodies of incoming follow-ups a run keeps by
-// reference ({deliveryId, groupKey}) from incoming_deliveries. A body
-// retention has emptied reads as JSON null.
+// resolveIncoming reads the bodies of the incoming deliveries a run holds by
+// reference (holdFollowUp). A body retention has emptied reads as JSON null.
 func resolveIncoming(ctx context.Context, tx pgx.Tx, payloads []Payload) error {
 	var want []string
 	for _, p := range payloads {
@@ -657,10 +658,7 @@ type IncomingVerdict struct {
 // EvaluateIncoming checks body against a's trigger without storing anything.
 func EvaluateIncoming(ctx context.Context, tx pgx.Tx, a Automation, body json.RawMessage) (IncomingVerdict, error) {
 	v := IncomingVerdict{Results: EvaluateConditions(a.Trigger.Conditions, body), GroupKey: GroupKey(a.Trigger.GroupBy, body)}
-	v.Matches = true
-	for _, r := range v.Results {
-		v.Matches = v.Matches && r.OK
-	}
+	v.Matches = !slices.ContainsFunc(v.Results, func(r ConditionResult) bool { return !r.OK })
 	live, err := liveGroupRun(ctx, tx, a, v.GroupKey)
 	if live != "" {
 		v.LiveRunID = &live
