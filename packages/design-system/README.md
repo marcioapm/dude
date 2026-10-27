@@ -2776,7 +2776,8 @@ component. Gallery: "Chat providers" (`gallery/sections/ChatProviders.tsx`).
   word (`ROUTE_SPEC`), so it reads without colour. Refusals and failures are
   `subtle`; routes that made or linked something are `tinted`. `fallback`
   adds "was Task" in muted text when dude overrode an answer under the 75%
-  bar.
+  bar. `made` names what a failed request still made ("Failed → Brainstorm");
+  without it a failure reads "Failed".
 - **OriginFact** — where a session, task or epic came from outside dude:
   "<glyph> From <provider> · #support · thread by Márcia". The whole fact is
   the link to the permalink, with the external glyph; `compact` drops

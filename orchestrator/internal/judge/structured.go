@@ -89,8 +89,53 @@ func (s Service) Structured(ctx context.Context, org string, ask StructuredAsk) 
 		return Structured{}, fmt.Errorf("record the judgement: %w", err)
 	}
 	if askErr != nil {
-		return Structured{CallID: out.CallID}, askErr
+		return Structured{CallID: out.CallID}, redactedErr(red, askErr)
 	}
 	out.Summary.CallID = out.CallID
 	return out, nil
+}
+
+// redactedError is an error whose text had the tier's secrets replaced; it
+// still unwraps to the original, so errors.Is(err, ErrUnparseable) holds.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
+// redactedErr is err with the proxy key and the tier's header values
+// redacted from its text: a proxy's answer may echo them, and the caller
+// stores the error (chat's Requests shows it).
+func redactedErr(red *redact.Redactor, err error) error {
+	if red.Empty() {
+		return err
+	}
+	if msg := red.String(err.Error()); msg != err.Error() {
+		return &redactedError{msg: msg, err: err}
+	}
+	return err
+}
+
+// Redact is text with the proxy key and the organisation's judgement tier's
+// header values redacted, as Structured redacts its error: for an error
+// text stored before Structured did. With no tier readable, only the key.
+func (s Service) Redact(ctx context.Context, org, text string) string {
+	var headers map[string]string
+	var red *redact.Redactor
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		if tier, err := orgTier(ctx, tx); err == nil {
+			headers = tier.Headers
+		}
+		var err error
+		red, err = redactor(ctx, tx, s.LLM.Key, nil, headers)
+		return err
+	}); err != nil && s.LLM.Key != "" {
+		red = redact.FromList([]redact.Secret{{Name: "DUDE_LLM_KEY", Value: s.LLM.Key}})
+	}
+	if red.Empty() {
+		return text
+	}
+	return red.String(text)
 }
