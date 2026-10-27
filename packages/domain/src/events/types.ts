@@ -43,6 +43,10 @@ export const EventTypes = {
    * `changed.owner` is `{ from, to }` (to null: the organisation's admins hold it).
    */
   AutomationChanged: "automation.changed",
+  /** A firing queued an automation run. On the run. Payload: `{ automationId, automationRunId }`. */
+  AutomationRunQueued: "automation.run.queued",
+  /** An automation run started: its lux Run is claimed (a webhook's POST is due). On the run. Payload: `{ automationId, automationRunId }`. */
+  AutomationRunStarted: "automation.run.started",
 
   // The image library (the backend writes the person's acts, dude-image-builder the builds')
   /** An image was added, described, archived or made the default base. Payload: `{ imageId, name, changed }`. */

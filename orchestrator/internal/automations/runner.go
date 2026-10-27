@@ -397,7 +397,25 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 	_, err = tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
 		started_by, scheduled_for) VALUES ($1, $2, $3, 'queued', NULLIF($4, ''), $5, $6, NULLIF($7, ''), $8)`,
 		fired.Run, a.Org, a.ID, reason, source, raw, startedBy, scheduledFor)
-	return fired, err
+	if err != nil {
+		return fired, err
+	}
+	return fired, runEvent(ctx, tx, a, fired.Run, EvRunQueued)
+}
+
+// Events a run's list watches for: a run was queued, or it started.
+const (
+	EvRunQueued  = "automation.run.queued"
+	EvRunStarted = "automation.run.started"
+)
+
+// runEvent records that runID was queued or started, naming its automation
+// so a list of that automation's runs knows a run it has not read yet.
+func runEvent(ctx context.Context, tx pgx.Tx, a Automation, runID, typ string) error {
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: a.Org, ProjectID: a.ProjectID,
+		AutomationRunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner,
+		Payload: map[string]any{"automationId": a.ID, "automationRunId": runID}})
+	return err
 }
 
 // EndCancelled ends the lux Runs of runs a firing cancelled: a kept
@@ -840,6 +858,11 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 		_, err = tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', started_at = now(), reason = NULL,
 			session = CASE WHEN $2 = 'webhook' THEN 'ephemeral' END WHERE id = $1`, runID, a.Kind)
 		claimed = err == nil
+		// Any other kind's start is recorded once its lux Run is claimed
+		// (submit): this claim is undone while lux is unreachable or busy.
+		if claimed && a.Kind == "webhook" {
+			err = runEvent(ctx, tx, a, runID, EvRunStarted)
+		}
 		return err
 	}); err != nil {
 		if db.IsNotFound(err) {
@@ -958,6 +981,9 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 			return err
 		}
 		claimed = true
+		if err := runEvent(ctx, tx, a, runID, EvRunStarted); err != nil {
+			return err
+		}
 		if resumable {
 			_, err = tx.Exec(ctx, `INSERT INTO automation_sessions (automation_id, organization_id, lux_run_id, last_run_at)
 				VALUES ($1, $2, $3, now()) ON CONFLICT (automation_id) DO UPDATE SET lux_run_id = EXCLUDED.lux_run_id, last_run_at = now()`,

@@ -1521,6 +1521,36 @@ func TestAutomationConcurrencyCancelReadsAnAgentsLastFrames(t *testing.T) {
 	}
 }
 
+// A run's list learns of a run it has not read from the ledger: Fire
+// records the queued run, and its start records it started, each naming
+// the automation.
+func TestAutomationRunQueuedAndStartedAreRecorded(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	h.automation("aut_seen", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": g.hold("echo done"), "concurrency": "queue"})
+	h.deliver("se-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("running", func() bool {
+		r := h.runs("aut_seen")
+		return len(r) == 1 && r[0].Status == "running" && r[0].LuxRunID != ""
+	})
+	run := h.runs("aut_seen")[0]
+	rows, err := h.owner.Query(context.Background(), `SELECT event_type || ' ' || (payload->>'automationId') || ' ' || (payload->>'automationRunId')
+		FROM events WHERE automation_run_id = $1 AND event_type IN ('automation.run.queued', 'automation.run.started') ORDER BY cursor`, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"automation.run.queued aut_seen " + run.ID, "automation.run.started aut_seen " + run.ID}
+	if !slices.Equal(got, want) {
+		t.Fatalf("run events %q, want %q", got, want)
+	}
+}
+
 // Concurrency send: an event arriving while the agent works is given to
 // that agent as input, with the automation's prompt for that event, once.
 func TestAutomationConcurrencySendReachesTheAgent(t *testing.T) {

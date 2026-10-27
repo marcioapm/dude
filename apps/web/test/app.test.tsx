@@ -855,6 +855,8 @@ describe("navigation and an automation run's activity", () => {
       automation("automation.log.exited", { exitCode: 1 });
       automation("automation.delivery.sent", { deliveryId: "dlv_q", source: "incoming", summary: "resolved" });
       automation("automation.run.ended", { status: "failed", reason: "exit 1" });
+      automation("automation.run.queued", { automationId: "aut_q", automationRunId: "arn_quiet" });
+      automation("automation.run.started", { automationId: "aut_q", automationRunId: "arn_quiet" });
     });
     // Past the 400 ms reload delay.
     await settle(900);

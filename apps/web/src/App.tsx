@@ -131,7 +131,8 @@ const SIDEBAR = "dude.sidebar";
  * model request and a cost sample still reload.
  */
 const QUIET_EVENTS: ReadonlySet<string> = new Set([...AGENT_CHATTER, EventTypes.PlanUpdated, EventTypes.WorkerHeartbeat,
-  "automation.log.line", "automation.log.cut", "automation.log.exited", "automation.delivery.sent", "automation.run.ended"]);
+  "automation.log.line", "automation.log.cut", "automation.log.exited", "automation.delivery.sent", "automation.run.ended",
+  EventTypes.AutomationRunQueued, EventTypes.AutomationRunStarted]);
 
 /** A session's events that change your list of sessions or what waits on you. */
 const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([

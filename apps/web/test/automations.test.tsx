@@ -946,6 +946,7 @@ describe("a run's activity", () => {
     for (let i = 0; i < 10; i++) {
       emit({ ...base, eventType: "agent.message", runId: "run_task", payload: { text: `task ${i}` } });
       emit({ ...base, eventType: "agent.tool.called", runId: null, automationRunId: "arn_other", payload: { tool: "bash", callId: `o${i}` } });
+      emit({ ...base, eventType: "automation.run.started", runId: null, automationRunId: "arn_other", payload: { automationId: "aut_other", automationRunId: "arn_other" } });
       emit({ ...base, eventType: "automation.log.line", runId: null, automationRunId: "arn_d3", payload: { stream: "stdout", text: "x" } });
     }
     // The stream's events commit at the end of one act; the throttled re-read would fire in the next.
@@ -956,6 +957,52 @@ describe("a run's activity", () => {
     await settle(100);
     await settle(1500);
     expect([unrelated, reads - before]).toEqual([0, 1]);
+  });
+
+  const runEvent = (eventType: string, automationId: string, runId: string) => emit({ eventType, occurredAt: new Date().toISOString(),
+    organizationId: "org", projectId: null, taskId: null, runId: null, sessionId: null, workflowRunId: null, automationRunId: runId,
+    actor: { type: "system", id: runId }, source: "runner", correlationId: null, causationId: null, payload: { automationId, automationRunId: runId } });
+
+  test("a run that starts while the list is open is read once and appears", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRuns.bind(client);
+    let reads = 0;
+    let started = false;
+    client.automationRuns = async (...args) => {
+      reads++;
+      const got = await real(...args);
+      if (!started) return got;
+      const fresh = { ...got.runs[0]!, id: "arn_fresh", status: "running" as const, now: null, createdAt: new Date().toISOString() };
+      return { ...got, runs: [fresh, ...got.runs] };
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs" });
+    await until(() => c.querySelector("[data-testid=run-row]"), "the list");
+    await settle(100);
+    const before = reads;
+    started = true;
+    runEvent("automation.run.started", "aut_digest", "arn_fresh");
+    await settle(100);
+    await settle(1500);
+    expect(reads - before).toBe(1);
+    expect(c.querySelector("[data-testid=run-row][data-id=arn_fresh]")?.textContent).toContain("Running");
+  });
+
+  test("a queued command run turns Running in the list when it starts, with no page change", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRuns.bind(client);
+    let status: "queued" | "running" = "queued";
+    client.automationRuns = async (...args) => {
+      const got = await real(...args);
+      return { ...got, runs: got.runs.map((r) => r.id === "arn_c2" ? { ...r, status, startedAt: status === "running" ? r.startedAt : null } : r) };
+    };
+    const c = await page(client, { id: "aut_cost", tab: "runs" });
+    const row = () => c.querySelector<HTMLElement>("[data-testid=run-row][data-id=arn_c2]");
+    await until(() => row()?.textContent?.includes("Queued") || null, "the queued run");
+    await settle(100);
+    status = "running";
+    runEvent("automation.run.started", "aut_cost", "arn_c2");
+    // The list re-reads at most once a second.
+    await until(() => row()?.textContent?.includes("Running") || null, "the run running", 100);
   });
 
   test("a command run's log: its exact first and last lines in order, stderr marked, and a non-zero exit in the bad tone", async () => {

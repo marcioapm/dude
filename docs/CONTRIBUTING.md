@@ -939,7 +939,10 @@ their creator.
   time). A delivery added to a running run (its group's, Merge, Send) is
   `automation.delivery.sent {deliveryId, source, event, action, groupKey,
   summary}` at its arrival; its body stays on the delivery. `log_tail` is
-  still written as before: the CLI and older runs read it.
+  still written as before: the CLI and older runs read it. A firing that
+  queues a run records `automation.run.queued`, and the run's start (its
+  lux Run claimed) `automation.run.started`, each `{automationId,
+  automationRunId}`: the runs list re-reads on them for a run it has not read.
   `GET /v1/events?automationRunId=` and its stream (`/v1/events/stream`)
   read one run's activity, for whoever reads the run (another
   organisation's run is a 404). `GET …/runs/:runId` also carries

@@ -1185,6 +1185,7 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
   useEffect(load, [load]);
   useReloadOnEvents({ client, all: true }, load, 1000, (event) => {
     // Only this automation's run events and its runs' calls change the list; anything else needs no re-read.
+    // A run the list has not read yet is known by its event naming this automation (automation.run.queued, .started).
     const ours = event.payload.automationId === a.id || data?.runs.some((r) => r.id === event.automationRunId);
     return !ours || !(event.eventType.startsWith("automation.run.") || event.eventType === "agent.tool.called" || event.eventType === "agent.tool.completed");
   });
