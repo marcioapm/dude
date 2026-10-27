@@ -420,6 +420,9 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 		n := i + 1
 		item.Kind = strings.TrimSpace(item.Kind)
 		item.Title = strings.TrimSpace(item.Title)
+		if len(item.Images) > 0 && item.Kind != "task" {
+			return proposeOut{}, refuse(rItemOnlyTaskItemHasImages, n)
+		}
 		switch item.Kind {
 		case "epic", "task":
 			p, err := linkedProject(ctx, tx, c, item.Project)
@@ -450,6 +453,19 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 			}
 			if err := checkTaskText(&item.Goal, &item.AcceptanceCriteria, true); err != nil {
 				return proposeOut{}, refuse(rItem, n, err)
+			}
+			// Images the session's members shared, which filing makes the task's own.
+			images, err := delivery.SessionImagesTx(ctx, tx, c.SessionID, item.Images)
+			if err != nil {
+				var bad delivery.AttachmentError
+				if errors.As(err, &bad) {
+					return proposeOut{}, refuse(rItem, n, bad.Message)
+				}
+				return proposeOut{}, err
+			}
+			// The copies' ids are as long as these: the goal filed is as long as this one.
+			if utf16Len(delivery.WithSessionImages(item.Goal, images)) > GoalMax {
+				return proposeOut{}, refuse(rItemGoalTooLongWithImages, n, GoalMax)
 			}
 			if e := strings.TrimSpace(item.Epic); e != "" && !newEpics[strings.ToLower(p.Key+"/"+e)] {
 				id, err := epicByTitle(ctx, tx, p.ID, e)

@@ -4,9 +4,9 @@
  * Images uploaded and never sent (or taken out of their task's text) are
  * removed a day later, unless a feedback item names one as its picture, and every object
  * whose attachment row is gone — swept, removed by a person, or taken with
- * its task (ON DELETE CASCADE) — is deleted from storage. The rows' trigger
- * queues the keys (migration 071); this drains the queue. A key whose
- * delete fails stays queued for the next pass.
+ * its task (ON DELETE CASCADE) — is deleted from storage, unless another row
+ * still names it. The rows' trigger queues the keys (migration 071); this
+ * drains the queue. A key whose delete fails stays queued for the next pass.
  *
  * It looks across organizations, so it runs as dude_sweeper, which may see
  * attachments and the queue and nothing else of a tenant.
@@ -53,7 +53,13 @@ export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_
   while (Date.now() < deadline) {
     const keys = await withoutTenant(async ({ sql }) => {
       await sql`SET LOCAL ROLE dude_sweeper`;
-      return (await sql`SELECT object_key FROM attachment_object_deletions WHERE NOT (object_key = ANY(${sql.array(skip, "TEXT")}))
+      // A key another row still names (a brainstorm's image filed onto a task shares its objects) is not deleted
+      // but dropped from the queue, in the same snapshot as the batch is chosen. A row is only ever copied from a
+      // live one naming the key, so once none does, none can later.
+      return (await sql`WITH named AS (SELECT object_key FROM attachments UNION SELECT original_key FROM attachments),
+          kept AS (DELETE FROM attachment_object_deletions WHERE object_key IN (SELECT object_key FROM named))
+        SELECT object_key FROM attachment_object_deletions WHERE NOT (object_key = ANY(${sql.array(skip, "TEXT")}))
+          AND object_key NOT IN (SELECT object_key FROM named)
         ORDER BY queued_at LIMIT ${SWEEP_BATCH}`) as Array<{ object_key: string }>;
     });
     if (keys.length === 0) break;

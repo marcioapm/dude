@@ -35,6 +35,8 @@ const (
 	PeerMessage = "pm"
 	PeerWait    = "pw"
 	EpicNote    = "epn"
+	// A task's copy of an image shared in a brainstorm session.
+	Attachment = "att"
 	// A person's feedback (migration 127).
 	FeedbackBatch = "fbt"
 	FeedbackItem  = "fbi"

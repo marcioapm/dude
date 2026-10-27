@@ -42,6 +42,8 @@ const (
 	rItemProjectProposedTwice              = "item %d: project %s is item %d's already"
 	rItemLinkReason                        = "item %d: a link_project gives its reason, 1 to %d characters, for the member who confirms it"
 	rItemOnlyTaskItemHasRelations          = "item %d: only a task item has relations; relate existing tasks with relate"
+	rItemOnlyTaskItemHasImages             = "item %d: only a task item has images"
+	rItemGoalTooLongWithImages             = "item %d: too long with its images: a goal of at most %d characters"
 	rItemNamesTaskByKeyOr                  = "item %d: %s names a task by key or by item, not both"
 	rItemNamesItself                       = "item %d: %s names itself"
 	rItemNamesItemWhichNotTask             = "item %d: %s names item %d, which is not a task of this proposal"

@@ -524,7 +524,9 @@ type proposalCard struct {
 	CreatedAt any                     `json:"createdAt"`
 	Items     []delivery.ProposalItem `json:"items"`
 	Status    []map[string]any        `json:"status"`
-	raw       json.RawMessage
+	// The images its task items name, by id, as a message's attachments are.
+	Attachments map[string]json.RawMessage `json:"attachments,omitempty"`
+	raw         json.RawMessage
 }
 
 // proposalsFor reads the session's cards for one member. Every card it ever
@@ -577,6 +579,23 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 	if err != nil {
 		return nil, err
 	}
+	shown, err := proposalImages(ctx, tx, sessionID, cards)
+	if err != nil {
+		return nil, err
+	}
+	for i := range cards {
+		c := &cards[i]
+		for _, it := range c.Items {
+			for _, img := range it.Images {
+				if info, ok := shown[img]; ok {
+					if c.Attachments == nil {
+						c.Attachments = map[string]json.RawMessage{}
+					}
+					c.Attachments[img] = info
+				}
+			}
+		}
+	}
 	for i := range cards {
 		c := &cards[i]
 		c.Status = make([]map[string]any, len(c.Items))
@@ -618,6 +637,17 @@ func linkedProjectIDs(ctx context.Context, tx pgx.Tx, sessionID string) ([]strin
 	}
 	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	return db.NonNil(out), err
+}
+
+// proposalImages is the metadata of every image the cards' items name, by id.
+func proposalImages(ctx context.Context, tx pgx.Tx, sessionID string, cards []proposalCard) (map[string]json.RawMessage, error) {
+	var named []string
+	for _, c := range cards {
+		for _, it := range c.Items {
+			named = append(named, it.Images...)
+		}
+	}
+	return delivery.SessionImageInfo(ctx, tx, sessionID, named)
 }
 
 // fileFacts is what deciding who may file a set of items reads: the
@@ -980,6 +1010,12 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": refused.Msg})
 				continue
 			}
+			// An image no longer the session's to give: refused before anything of the item was written.
+			var badImage delivery.AttachmentError
+			if errors.As(err, &badImage) {
+				results = append(results, map[string]any{"item": n, "status": "refused", "why": badImage.Message})
+				continue
+			}
 			if err != nil {
 				var refused delivery.RelationRefusal
 				if errors.As(err, &refused) {
@@ -1094,7 +1130,8 @@ func fileItem(ctx context.Context, tx pgx.Tx, org, sessionID, proposalID, runID 
 				return "", "", "", err
 			}
 		}
-		id, key, err := delivery.CreateTaskTx(ctx, tx, org, project, f, epic, item.Title, strings.TrimSpace(item.Goal), item.AcceptanceCriteria)
+		id, key, err := delivery.CreateTaskWithSessionImagesTx(ctx, tx, org, project, f, epic, item.Title, strings.TrimSpace(item.Goal),
+			item.AcceptanceCriteria, sessionID, item.Images)
 		if err == nil {
 			err = delivery.InheritOrigin(ctx, tx, "tasks", id, sessionID, "")
 		}

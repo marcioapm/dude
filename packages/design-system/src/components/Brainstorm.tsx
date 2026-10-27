@@ -133,6 +133,8 @@ export interface ProposalCardItem {
   readonly title: ReactNode;
   /** One line under it: a task's goal, an epic's description, the comment's words. */
   readonly detail?: ReactNode;
+  /** A task item's images, filed with it as the task's own: the app's rendering of them (thumbnails), under its detail. */
+  readonly images?: ReactNode;
   /** A proposed epic's notes, pinned for its agents when it is filed: Markdown, in order. */
   readonly notes?: ReadonlyArray<string> | undefined;
   /** An edit's text before and after. */
@@ -391,6 +393,7 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
                   {item.tag ? <span className={styles["tag"]}>{item.tag}</span> : null}
                 </div>
                 {item.detail ? <div className={styles["itemDetail"]}>{item.detail}</div> : null}
+                {item.images ? <div data-testid="proposal-images">{item.images}</div> : null}
                 {item.notes && item.notes.length > 0 ? <ProposedNotes notes={item.notes} /> : null}
                 {item.relations?.length ? <ItemRelations relations={item.relations} /> : null}
                 {item.before !== undefined || item.after !== undefined ? (

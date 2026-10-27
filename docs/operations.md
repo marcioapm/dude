@@ -1225,7 +1225,9 @@ backend. The backend's one background loop deletes uploads never sent after
 ([Commenting on previews](#commenting-on-previews)), and the objects of
 every attachment row that is gone — removed, swept,
 or with its task (`ON DELETE CASCADE`); a delete storage refuses is retried on
-the next pass, every 10 minutes. The orchestrator reads the delivered
+the next pass, every 10 minutes. An image a brainstorm's card files onto a
+task is a second row on the same objects, so an object is deleted only once
+no row names it. The orchestrator reads the delivered
 variant to give it to lux, so it needs `s3:GetObject` on the bucket too.
 
 With `DUDE_WEB_DIR` set, GET and HEAD requests that match no API route and

@@ -17,3 +17,5 @@
 {{- define "refusals/domain/attachments/task-text-shows-at-most-images"}}a task's text shows at most %d images{{end}}
 
 {{- define "refusals/domain/attachments/task-images-are-at-most-mib"}}a task's images are at most %d MiB together{{end}}
+
+{{- define "refusals/domain/attachments/image-not-shared-in-this-session"}}image %s is not one a member shared in this session{{end}}

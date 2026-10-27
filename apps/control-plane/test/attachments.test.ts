@@ -392,6 +392,29 @@ describe("a brainstorm session's images", () => {
     expect((await owner`SELECT 1 FROM attachments WHERE id = ${id}`).length).toBe(0);
     expect((await owner`SELECT 1 FROM attachment_object_deletions WHERE object_key = ${row.object_key}`).length).toBe(1);
   });
+
+  test("an image filed onto a task keeps its objects when the session goes, until the task's copy goes too", async () => {
+    await owner`INSERT INTO sessions (id, organization_id, title) VALUES ('ssn_att_filed', ${ORG}, 'Filed')`;
+    await owner`INSERT INTO session_people (session_id, person_id, organization_id, role, accepted_at)
+      VALUES ('ssn_att_filed', ${anaPerson}, ${ORG}, 'owner', now())`;
+    const id = ((await (await upload(anaKey, "ssn_att_filed", form(png(5, 5), "image/png", png(5, 5), "image/png"), "brainstorms")).json()) as Json).id;
+    const [row] = await owner`SELECT object_key, original_key FROM attachments WHERE id = ${id}`;
+    // Filing copies the row onto the task, on the same objects (delivery.CreateTaskWithSessionImagesTx).
+    await owner`INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes, sha256, object_key,
+        original_content_type, original_width, original_height, original_bytes, original_key, for_prompt, attached_at)
+      SELECT 'att_filedcopy', organization_id, ${taskId}, name, content_type, width, height, bytes, sha256, object_key,
+        original_content_type, original_width, original_height, original_bytes, original_key, true, now()
+      FROM attachments WHERE id = ${id}`;
+    await owner`DELETE FROM sessions WHERE id = 'ssn_att_filed'`;
+    await sweepAttachments();
+    expect(objects.has(row.object_key)).toBe(true);
+    expect(objects.has(row.original_key)).toBe(true);
+    expect(await owner`SELECT 1 FROM attachment_object_deletions WHERE object_key IN (${row.object_key}, ${row.original_key})`).toHaveLength(0);
+    await owner`DELETE FROM attachments WHERE id = 'att_filedcopy'`;
+    await sweepAttachments();
+    expect(objects.has(row.object_key)).toBe(false);
+    expect(objects.has(row.original_key)).toBe(false);
+  });
 });
 
 describe("removing an unsent one", () => {

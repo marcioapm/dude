@@ -38,6 +38,8 @@ rItemProjectAlreadyLinked              refusals/tools/brainstorm/item-project-al
 rItemProjectProposedTwice              refusals/tools/brainstorm/item-project-proposed-twice
 rItemLinkReason                        refusals/tools/brainstorm/item-link-reason
 rItemOnlyTaskItemHasRelations          refusals/tools/brainstorm/item-only-task-item-has-relations
+rItemOnlyTaskItemHasImages             refusals/tools/brainstorm/item-only-task-item-has-images
+rItemGoalTooLongWithImages             refusals/tools/brainstorm/item-goal-too-long-with-images
 rItemNamesTaskByKeyOr                  refusals/tools/brainstorm/item-names-task-by-key-or
 rItemNamesItself                       refusals/tools/brainstorm/item-names-itself
 rItemNamesItemWhichNotTask             refusals/tools/brainstorm/item-names-item-which-not-task
