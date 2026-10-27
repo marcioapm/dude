@@ -990,8 +990,9 @@ their creator.
     past that a refusal only adds to `incoming_refusals` (automation, hour,
     code, n), answered the same, and the Deliveries tab says "N more refused
     this hour". A `bad_signature` row keeps no headers. Headers are kept with the values of
-    `Authorization`, cookies, the signature header and any name holding
-    `token`, `secret` or `signature` replaced by `••••`.
+    the configured verification header (by its exact name), `x-amz-*`, and
+    any name holding `token`, `secret`, `signature`, `cookie`, `key`,
+    `auth`, `password` or `credential` replaced by `••••`.
   - **Matching** (`ArriveIncoming`, a step of the automations loop): a
     delivery whose group key (the value at `groupBy`) is a live run's of the
     automation is **sent to that run** whatever the concurrency, its

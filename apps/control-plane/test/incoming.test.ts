@@ -214,6 +214,16 @@ describe("the public endpoint", () => {
       "sent_to_run", "sent_to_run", "refused"]);
   });
 
+  test("the configured header is kept as •••• by its exact name, whatever it is called; common credential names too", async () => {
+    const { id, hook, secret } = await hookWith({ mode: "header", header: "X-Hook-Key" });
+    expect((await post(hook, "{}", { "x-hook-key": secret, "x-api-key": "k-123", "x-auth": "abc", "user-agent": "curl/8" })).status).toBe(202);
+    const signed = await hookWith({ mode: "signature", header: "X-Hub-Mac", prefix: "" });
+    const body = `{"s":1}`;
+    expect((await post(signed.hook, body, { "x-hub-mac": sign(signed.secret, body) })).status).toBe(202);
+    expect((await rows(id))[0].headers).toMatchObject({ "X-Hook-Key": "••••", "X-Api-Key": "••••", "X-Auth": "••••", "User-Agent": "curl/8" });
+    expect((await rows(signed.id))[0].headers["X-Hub-Mac"]).toBe("••••");
+  });
+
   test("an automation that is off refuses, keeping no body", async () => {
     const { id, hook, secret } = await hookWith({ mode: "header", header: "Authorization" });
     await call("PUT", `/v1/automations/${id}/enabled`, { enabled: false });

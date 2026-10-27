@@ -671,8 +671,9 @@ starts: the orchestrator's automations loop matches stored deliveries.
 **What is stored, and for how long** (`incoming_deliveries`, migration
 211, under row-level security). Every request to a known hook gets a row:
 when, its verdict, its group key, its size, and its headers with the
-values of `Authorization`, cookies, the signature header and any header
-named like a token or secret replaced by `••••`. An accepted request keeps
+values of the configured verification header, `Authorization`, cookies,
+`x-amz-*` and any header named like a credential (token, secret,
+signature, key, auth, password, credential) replaced by `••••`. An accepted request keeps
 its JSON body and headers **30 days**; then a delivery a run holds keeps
 its row (body and headers emptied) for the run's page, and any other
 (skipped, or its run deleted) is deleted;

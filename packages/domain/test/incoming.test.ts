@@ -159,6 +159,11 @@ describe("a delivery's headers", () => {
       expect(redactedHeader(name, "X-Signature")).toBe(true);
     }
     expect(redactedHeader("X-Auth", "X-Auth")).toBe(true);
+    for (const name of ["X-Api-Key", "Api-Key", "X-Auth", "X-Password", "X-Credential", "X-Amz-Security-Token", "X-Amz-Date", "Set-Cookie"]) {
+      expect(redactedHeader(name, null)).toBe(true);
+    }
+    expect(redactedHeader("X-Hub-Mac", "X-Hub-Mac")).toBe(true);
+    expect(redactedHeader("X-Hub-Mac", null)).toBe(false);
     for (const name of ["Content-Type", "User-Agent", "X-Forwarded-For"]) expect(redactedHeader(name, "X-Signature")).toBe(false);
   });
 });

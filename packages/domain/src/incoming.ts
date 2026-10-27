@@ -227,12 +227,14 @@ export interface AutomationDeliveryDetail extends AutomationDelivery {
   body: Record<string, unknown> | null;
 }
 
-/** The headers a delivery keeps no value of: what proves a sender, and anything named like a secret. */
-export function redactedHeader(name: string, signatureHeader: string | null): boolean {
+/** Parts of a header name that mark a credential: its value is not kept. */
+const CREDENTIAL_NAME_PARTS = ["token", "secret", "signature", "cookie", "key", "auth", "password", "credential"];
+
+/** The headers a delivery keeps no value of: the configured verification header by its exact name, and anything named like a credential (AWS's x-amz-* included). */
+export function redactedHeader(name: string, verificationHeader: string | null): boolean {
   const n = name.toLowerCase();
-  if (n === "authorization" || n === "cookie" || n === "set-cookie" || n === "proxy-authorization") return true;
-  if (signatureHeader && n === signatureHeader.toLowerCase()) return true;
-  return n.includes("token") || n.includes("secret") || n.includes("signature") || n.includes("cookie");
+  if (verificationHeader && n === verificationHeader.toLowerCase()) return true;
+  return n.startsWith("x-amz-") || CREDENTIAL_NAME_PARTS.some((part) => n.includes(part));
 }
 
 /** The redaction mark a dropped header value is shown as. */

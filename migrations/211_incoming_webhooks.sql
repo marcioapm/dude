@@ -52,8 +52,8 @@ CREATE TABLE incoming_deliveries (
   reason_index    integer,
   group_key       text CHECK (length(group_key) <= 2000),
   bytes           integer NOT NULL CHECK (bytes >= 0),
-  -- As received, with the values of Authorization, the signature header,
-  -- cookies and any *token* / *secret* name dropped (the control plane does it).
+  -- As received, with the values of the verification header and any name
+  -- like a credential dropped (the control plane does it); none on a bad_signature.
   headers         jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(headers) = 'object'),
   -- The body: never kept for a refused request, emptied (with headers) after 30 days.
   payload         jsonb,
