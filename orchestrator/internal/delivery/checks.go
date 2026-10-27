@@ -26,8 +26,8 @@ const (
 
 // Recorded results the checks gate's judge gives a reported fail or not-run
 // it passes, never an agent's: CheckPreexisting, a failure the Run's calls
-// show the same at its starting commit; CheckDeferred, a check a later
-// phase of the delivery runs.
+// show the same at the commit of the target branch the task builds on;
+// CheckDeferred, a check a later phase of the delivery runs.
 const (
 	CheckPreexisting = "pre-existing"
 	CheckDeferred    = "deferred"

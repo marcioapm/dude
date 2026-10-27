@@ -32,7 +32,12 @@ var (
 	checksUnparseable    = delivery.MustText("notices/checks/unparseable")
 	checksUnestablished  = delivery.MustText("notices/checks/unestablished")
 	checksUnchanged      = delivery.MustText("notices/checks/unchanged")
+	checksNoTaskBase     = delivery.MustText("notices/checks/no-task-base")
 )
+
+// errNoTaskBase rejects a reported failure without a judge call when no
+// target-branch commit is known to measure it against.
+var errNoTaskBase = errors.New(checksNoTaskBase.Render(nil))
 
 // checksCountMax bounds the judge calls one report costs, one per check
 // plus one, made in turn before anything is pushed.
@@ -79,8 +84,9 @@ type checksDecision struct {
 	JudgePassed bool            `json:"judgePassed,omitempty"`
 	Verdicts    []checksVerdict `json:"checks"`
 	Message     string          `json:"message"`
-	// Each repository's starting commit, "repo@sha", for the send-back.
-	bases []string
+	// The commit of each repository's target branch the task builds on,
+	// for the send-back.
+	bases []taskBase
 	// Unchanged: a fresh inspection at this turn found every repository the
 	// Run may push at its starting commit with nothing staged, unstaged or
 	// untracked (unchangedBeforePush), so no report was judged. Epoch is
@@ -264,17 +270,18 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 				}
 			}
 			nonPass = append(nonPass, unwaived...)
-			if d.bases, err = startingCommits(ctx, tx, r.ID); err != nil {
-				return err
-			}
 			testPhase, err = deliveryTests(ctx, tx, r.TaskID)
 			return err
 		}); err != nil {
 			return d, err
 		}
+		var err error
+		if d.bases, err = s.taskBases(ctx, r); err != nil {
+			return d, err
+		}
 		rejected.bases = d.bases
 	}
-	text, err := s.checksContext(ctx, r, checks)
+	text, err := s.checksContext(ctx, r, checks, d.bases)
 	if err != nil {
 		return d, err
 	}
@@ -293,6 +300,9 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			}
 			j, err = svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID,
 				Question: waivedQuestion.Render(h.waiver.Covered), Context: text + waived})
+		} else if h.check.Result == delivery.CheckFail && len(d.bases) == 0 {
+			// Nothing to measure a failure against: rejected unasked.
+			err = errNoTaskBase
 		} else {
 			j, err = svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID,
 				Question: preexistingQuestion.Render(struct {
@@ -328,9 +338,12 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		}
 		reason = cmp.Or(reason, checksUnestablished.Render(nil))
 		v.Decision, v.CallID = j.Decision, j.CallID
-		if h.waiver != nil {
+		switch {
+		case h.waiver != nil:
 			v.WaiverReason = checksNotCovered.Render(struct{ Role, Reason string }{h.waiver.Role, reason})
-		} else {
+		case errors.Is(err, errNoTaskBase):
+			v.JudgeReason = reason
+		default:
 			v.JudgeReason = checksNotPreexisting.Render(reason)
 		}
 		// The send-back names this and every non-pass not yet judged.
@@ -389,39 +402,76 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 
 // sendBack is the send-back of a rejected report: only the verdicts that
 // did not pass, and, when one is a reported failure, how a failure that
-// predates the change passes, naming each starting commit.
-func sendBack(verdicts []checksVerdict, bases []string) string {
+// predates the change passes, naming the commit of each target branch the
+// task builds on.
+func sendBack(verdicts []checksVerdict, bases []taskBase) string {
 	failed := slices.DeleteFunc(slices.Clone(verdicts), func(v checksVerdict) bool { return v.Result == delivery.CheckPass || v.passedUnbacked() })
 	return checksText.Render(struct {
 		Checks []checksVerdict
 		Failed bool
 		Bases  string
-	}{failed, slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), strings.Join(bases, ", ")})
+	}{failed, slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(bases)})
 }
 
-// startingCommits are the commits each repository of the Run started
-// from, "repo@sha", sorted: where its checkout really started
-// (runs.base_shas), else the commit it was asked to start from
-// (runs.base_refs).
-func startingCommits(ctx context.Context, tx pgx.Tx, runID string) ([]string, error) {
-	var refs, shas map[string]string
-	if err := tx.QueryRow(ctx, `SELECT base_refs, base_shas FROM runs WHERE id = $1`, runID).Scan(&refs, &shas); err != nil {
+// taskBase is the commit of a repository's target branch the task builds
+// on, rendered "repo: branch at sha".
+type taskBase struct{ Repo, Branch, SHA string }
+
+func (b taskBase) String() string { return b.Repo + ": " + b.Branch + " at " + b.SHA }
+
+func joinBases(bases []taskBase) string {
+	out := make([]string, len(bases))
+	for i, b := range bases {
+		out[i] = b.String()
+	}
+	return strings.Join(out, ", ")
+}
+
+// taskBases are, per repository the task may change that the Run's
+// checkout holds, the commit of its target branch the task builds on:
+// GitHub's merge base of that branch and the commit the Run started from
+// (runs.base_shas). The Run's start holds the task's earlier work and any
+// base merged into it, so after a merge from the target branch this is
+// that merged commit, and never one of the task's own. A repository whose
+// start was not recorded, or that GitHub cannot compare, has none: no
+// failure in it passes as pre-existing. Sorted by repository.
+func (s *Syncer) taskBases(ctx context.Context, r phaseRun) ([]taskBase, error) {
+	var starts map[string]string
+	var tb delivery.TaskBranch
+	var repos []delivery.Repository
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		if err = tx.QueryRow(ctx, `SELECT base_shas FROM runs WHERE id = $1`, r.ID).Scan(&starts); err != nil {
+			return err
+		}
+		if tb, err = delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
+			return err
+		}
+		repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID)
+		return err
+	}); err != nil || len(starts) == 0 || s.Forges == nil {
 		return nil, err
 	}
-	bases := map[string]string{}
-	for repo, sha := range refs {
-		if sha != "" {
-			bases[repo] = sha
-		}
+	gh, err := s.Forges.For(ctx, r.Org)
+	if err != nil || gh == nil {
+		return nil, err
 	}
-	for repo, sha := range shas {
-		if sha != "" {
-			bases[repo] = sha
+	byName := repositoriesBySpecName(repos)
+	var out []taskBase
+	for _, name := range slices.Sorted(maps.Keys(starts)) {
+		repo, ok := byName[name]
+		slug := forge.SlugFromURL(repo.URL)
+		if !ok || repo.Access != "write" || !isSHA(starts[name]) || slug == "" {
+			continue
 		}
-	}
-	var out []string
-	for _, repo := range slices.Sorted(maps.Keys(bases)) {
-		out = append(out, repo+"@"+bases[repo])
+		branch := baseBranch(tb, repo)
+		c, err := gh.Compare(ctx, slug, branch, starts[name])
+		if err != nil && forge.Transient(err) {
+			return nil, err
+		}
+		if err != nil || !isSHA(c.MergeBase.SHA) {
+			continue
+		}
+		out = append(out, taskBase{Repo: repo.Name, Branch: branch, SHA: c.MergeBase.SHA})
 	}
 	return out, nil
 }
@@ -478,13 +528,14 @@ type checksStream struct {
 
 // checksContext is what the judge reads: the report, the project's notes
 // for the Run's role, what the Run changed and the tool calls it recorded,
-// each with how it ended, in order (checksReportMax and its neighbours).
-func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []delivery.Check) (string, error) {
+// each with how it ended, in order (checksReportMax and its neighbours);
+// with bases, the target-branch commits the task builds on (taskBases).
+func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []delivery.Check, bases []taskBase) (string, error) {
 	report, _ := json.Marshal(checks)
 	var notes string
 	// Changes and calls are read only up to what their caps can show.
 	var changes strings.Builder
-	var shown, bases []string
+	var shown []string
 	var total int
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var p, o []byte
@@ -514,10 +565,6 @@ func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []deliver
 			return err
 		}
 		shown, total, err = newestCalls(ctx, tx, r.ID, 0, checksCallsMax)
-		if err != nil {
-			return err
-		}
-		bases, err = startingCommits(ctx, tx, r.ID)
 		return err
 	})
 	if err != nil {
@@ -525,7 +572,8 @@ func (s *Syncer) checksContext(ctx context.Context, r phaseRun, checks []deliver
 	}
 	return checksContextText.Render(struct {
 		Report, Notes, Changes string
-		Bases, Calls           []string
+		Bases                  []taskBase
+		Calls                  []string
 		Omitted                int
 	}{boundHead(string(report), checksReportMax), boundHead(notes, checksNotesMax), boundHead(changes.String(), checksChangesMax),
 		bases, shown, total - len(shown)}), nil

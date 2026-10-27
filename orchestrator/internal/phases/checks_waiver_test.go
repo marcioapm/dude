@@ -281,6 +281,7 @@ func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
+			startedFrom(w)
 			tc.setup(w)
 			checksReply(w, tc.report)
 			endTurn(w)

@@ -90,7 +90,7 @@ describe("checks judgements in the task's Activity", () => {
     ], people, [impl], [], 1);
     expect(lines.map((l) => [textOf(l.text), l.quote])).toEqual([[
       "The implementer's checks were verified, with failures the judge passed",
-      "npx tsc --noEmit: pre-existing, passed by the judge: it fails the same at the commit the Run started from — 95 errors at the parent, 95 with the change (judgement mcall_1)\n"
+      "npx tsc --noEmit: pre-existing, passed by the judge: it fails the same at the commit of the target branch the task builds on — 95 errors at the parent, 95 with the change (judgement mcall_1)\n"
         + "open the settings page: deferred, passed by the judge: a later phase runs it — the tester runs it (judgement mcall_2)\n"
         + "make lint: pass — clean (judgement mcall_3)",
     ]]);

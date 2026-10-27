@@ -110,9 +110,9 @@ func TestGoldenChecksPreexistingTexts(t *testing.T) {
 		{"fail", MustText("notices/checks/preexisting").Render(q{failed, true})},
 		{"not-run with a test phase", MustText("notices/checks/preexisting").Render(q{browser, true})},
 		{"not-run without a test phase", MustText("notices/checks/preexisting").Render(q{browser, false})},
-		{"send-back", MustText("notices/checks").Render(map[string]any{"Failed": true, "Bases": "api@1111111, web@2222222",
+		{"send-back", MustText("notices/checks").Render(map[string]any{"Failed": true, "Bases": "api: main at 1111111, web: release/2 at 2222222",
 			"Checks": []verdict{{Command: failed.Command, Result: CheckFail, Reason: failed.Evidence, Decision: "unsure",
-				JudgeReason: MustText("notices/checks/not-preexisting").Render("no run at the starting commit is recorded")}}})},
+				JudgeReason: MustText("notices/checks/not-preexisting").Render("no run at the task's base is recorded")}}})},
 	})
 }
 

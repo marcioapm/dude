@@ -132,10 +132,10 @@ func (j *scriptedJudge) waiverQuestions() int {
 	return n
 }
 
-// A writer that shows its failure the same at the commit it started from
-// passes without a person: every writer's report is judged pre-existing,
+// A writer that shows its failure the same at the target branch's commit
+// the task builds on passes without a person: every writer's report is judged pre-existing,
 // nothing is sent back or escalated, and the work reaches the pull request.
-func TestAFailureShownAtTheStartingCommitPassesWithoutAPerson(t *testing.T) {
+func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 	w := newWorld(t)
 	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
 	w.onModel("simplifier", fakeagent.ChecksBaseShownModel)
@@ -155,7 +155,7 @@ func TestAFailureShownAtTheStartingCommitPassesWithoutAPerson(t *testing.T) {
 	// The pull request names the judge's pass as its own result, never a
 	// plain pass or a person's waiver.
 	account := checksSection(w.gh.Pull(1).Body)
-	for _, want := range []string{"the judge passed failures that fail the same at the starting commit (pre-existing)",
+	for _, want := range []string{"the judge passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)",
 		"- **Implementer** — backed; the rest passed by the judge\n  - `" + fakeagent.FailingCommand + "` — **pre-existing** — the recorded call says so (`mcall_test`)"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("PR account lacks %q:\n%s", want, account)
@@ -166,15 +166,15 @@ func TestAFailureShownAtTheStartingCommitPassesWithoutAPerson(t *testing.T) {
 	}
 }
 
-// The same writer without a run at its starting commit is held as before.
-func TestAFailureNotShownAtTheStartingCommitIsHeld(t *testing.T) {
+// The same writer without a run at the task base is held as before.
+func TestAFailureNotShownAtTheTaskBaseIsHeld(t *testing.T) {
 	w := newWorld(t)
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
 	if n := len(w.gh.Pulls()); n != 0 {
 		t.Errorf("%d pull requests", n)
 	}
 	if got := w.ids(`SELECT payload->>'message' FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvRunChecksJudged); len(got) != 1 ||
-		!strings.Contains(got[0], "not passed by the judge: the recorded call says so") || !strings.Contains(got[0], "at the commit you started from (target@") {
+		!strings.Contains(got[0], "not passed by the judge: the recorded call says so") || !strings.Contains(got[0], "this task builds on (target: main at ") {
 		t.Errorf("held %q", got)
 	}
 }
@@ -350,7 +350,7 @@ func TestAFailureTheWaiverDoesNotCoverMayBeWaivedForTheAttempt(t *testing.T) {
 	// does not cover it.
 	want := "Your checks report was not verified. Nothing from this Run has been pushed.\n\n" +
 		"- make test: TestClock needs a hardware clock — the Implementer's waiver does not cover this failure: the recorded call says so (judgement: no)\n\n" +
-		"A reported failure that predates your change passes once this Run's own tool calls show the same command failing the same way at the commit you started from (target@"
+		"A reported failure that predates this task passes once this Run's own tool calls show the same command failing the same way at the commit of the target branch this task builds on (target: main at "
 	if got := w.ids(`SELECT payload->'detail'->>'message' FROM events WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY cursor`, wi); len(got) != 2 || !strings.HasPrefix(got[1], want) {
 		t.Errorf("the fixer's held message is %q, want %q", got, want)
 	}

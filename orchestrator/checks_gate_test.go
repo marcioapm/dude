@@ -48,8 +48,9 @@ func (j *scriptedJudge) Judge(_ context.Context, _ string, a judge.Ask) (judge.J
 			d = judge.Yes
 		}
 	case strings.HasPrefix(a.Question, "This Run reported a check that did not pass"):
-		// Pre-existing: a recorded run at the starting commit fails with
-		// the same tests as the Run's own.
+		// Pre-existing: a recorded run at the target branch's commit the
+		// context names as the task's base fails with the same tests as
+		// the Run's own.
 		d = judge.No
 		if base, head := baseAndHeadFailures(a.Context); base != "" && base == head {
 			d = judge.Yes
@@ -96,13 +97,19 @@ func failing(context string) string {
 	return strings.Join(out, ",")
 }
 
-// baseAndHeadFailures are failing's of the context's recorded call of
-// fakeagent.BaseCommand and of its last other call.
+// baseAndHeadFailures are failing's of the context's recorded call in a
+// checkout of the task's base it lists (fakeagent.BaseDir at that commit)
+// and of its last other call.
 func baseAndHeadFailures(context string) (base, head string) {
+	_, listed, _ := strings.Cut(context, "### The commit of each target branch this task builds on\n- ")
+	listed, _, _ = strings.Cut(listed, "\n")
+	_, sha, _ := strings.Cut(listed, " at ")
 	_, calls, _ := strings.Cut(context, "### The tool calls this Run recorded, in order")
 	for _, call := range strings.Split(calls, "\n- ")[1:] {
-		if strings.Contains(call, fakeagent.BaseCommand) {
-			base = failing(call)
+		if strings.Contains(call, fakeagent.BaseDir) {
+			if sha != "" && strings.Contains(call, fakeagent.BaseDir+" "+sha) {
+				base = failing(call)
+			}
 		} else {
 			head = failing(call)
 		}

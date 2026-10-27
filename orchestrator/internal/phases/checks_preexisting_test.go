@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/judge"
 )
 
@@ -26,18 +27,52 @@ func bashCall(w *harnessWorld, id, command, output string, exit int) {
 }
 
 const (
-	baseSHA      = "1111111111111111111111111111111111111111"
 	tscFailure   = "src/legacy/a.ts(3,1): error TS2304\nFound 95 errors."
 	failingTsc   = "checks:\n  - command: npx tsc --noEmit\n    result: fail\n    evidence: 95 errors on the parent, 95 with the change, none in changed files\n"
 	notRunInUI   = "checks:\n  - command: open the settings page in a browser\n    result: not-run\n    evidence: no browser in this sandbox\n"
 	reportedPass = "  - command: make lint\n    result: pass\n    evidence: clean\n"
 )
 
-// startedFrom records the commit the harness's Run started from.
-func startedFrom(w *harnessWorld) {
+// taskHistory is the harness's task repository "target" on a fake GitHub:
+// main at Main, the task's earlier work at Earlier on top of it, and the
+// Run started from Earlier, as a fixer after the implementer starts.
+type taskHistory struct {
+	Main, Earlier string
+	acc           *accountingRun
+}
+
+// startedFrom gives the harness's Run a task repository whose target
+// branch the task builds on is at taskHistory.Main, and starts the Run
+// from the task's own earlier commit on top of it.
+func startedFrom(w *harnessWorld) *taskHistory {
 	w.t.Helper()
+	a := newAccountingRun(w.t)
+	h := &taskHistory{Main: a.start, acc: a}
+	h.Earlier = a.commit(map[string]string{"earlier.txt": "the implementer's work\n"}, "Earlier work")
+	git(w.t, a.work, "push", "-q", a.origin, "HEAD:refs/heads/"+delivery.BranchFor(w.run.TaskID, 1))
+	gh := a.github()
+	w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return gh, nil })
+	w.run.Attempt = 1
+	mustOwner(w.t, w, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		SELECT 'repo_' || organization_id, organization_id, project_id, 'target', 'https://github.com/acme/target.git', 'main' FROM runs WHERE id = $1`, w.run.ID)
+	mustOwner(w.t, w, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
+		SELECT organization_id, task_id, 'repo_' || organization_id, 'write' FROM runs WHERE id = $1`, w.run.ID)
 	mustOwner(w.t, w, `UPDATE runs SET base_refs = jsonb_build_object('target', $2::text), base_shas = jsonb_build_object('target', $2::text) WHERE id = $1`,
-		w.run.ID, baseSHA)
+		w.run.ID, h.Earlier)
+	return h
+}
+
+// mainMerged is a merge of the target branch, moved on by another task's
+// work, into the task's branch: the Run then starts from that merge.
+func (h *taskHistory) mainMerged(w *harnessWorld) {
+	w.t.Helper()
+	h.Main = h.acc.advanceBase(map[string]string{"other.txt": "another task's work\n"})
+	h.acc.syncBase()
+	git(w.t, h.acc.work, "merge", "-q", "--no-edit", "refs/remotes/lux/main")
+	merged := h.acc.head()
+	git(w.t, h.acc.work, "push", "-q", h.acc.origin, "HEAD:refs/heads/"+delivery.BranchFor(w.run.TaskID, 1))
+	mustOwner(w.t, w, `UPDATE runs SET base_refs = jsonb_build_object('target', $2::text), base_shas = jsonb_build_object('target', $2::text) WHERE id = $1`,
+		w.run.ID, merged)
 }
 
 // delivering gives the harness's task a delivery whose attempt's policy
@@ -61,13 +96,13 @@ func (f *waiverFake) preexistingQuestions() int {
 	return n
 }
 
-// A reported failure the judge finds failing the same way at the Run's
-// starting commit passes as pre-existing, its judgement named; the rest of
-// the report is judged as ever.
+// A reported failure the judge finds failing the same way at the target
+// branch's commit the task builds on passes as pre-existing, its judgement
+// named; the rest of the report is judged as ever.
 func TestAPreexistingFailurePassesOnTheJudgesYes(t *testing.T) {
 	w := newHarnessWorld(t)
-	startedFrom(w)
-	bashCall(w, "base", "git worktree add ../parent "+baseSHA+" && cd ../parent && npx tsc --noEmit", tscFailure, 2)
+	h := startedFrom(w)
+	bashCall(w, "base", "git worktree add ../base "+h.Main+" && cd ../base && npx tsc --noEmit", tscFailure, 2)
 	bashCall(w, "head", "npx tsc --noEmit", tscFailure, 2)
 	checksReply(w, failingTsc+reportedPass)
 	endTurn(w)
@@ -96,16 +131,104 @@ func TestAPreexistingFailurePassesOnTheJudgesYes(t *testing.T) {
 	}
 }
 
-// The judge reads where each repository started, beside the Run's calls.
-func TestTheChecksContextNamesTheStartingCommits(t *testing.T) {
+// The judge reads the target branch's commit the task builds on: never
+// the commit the Run started from, which holds the task's earlier work;
+// after a merge of the target branch, the merged commit.
+func TestTheChecksContextNamesTheTaskBase(t *testing.T) {
 	w := newHarnessWorld(t)
-	startedFrom(w)
-	text, err := w.s.checksContext(context.Background(), w.run, []delivery.Check{{Command: "make check", Result: "fail"}})
+	h := startedFrom(w)
+	checksReply(w, failingTsc)
+	endTurn(w)
+	fake := &waiverFake{}
+	w.s.Judge = fake
+	if _, err := w.s.judgeChecks(context.Background(), w.run); err != nil {
+		t.Fatal(err)
+	}
+	want := "### The commit of each target branch this task builds on\n- target: main at " + h.Main + "\n\n### The project's notes"
+	if len(fake.asked) != 1 || !strings.Contains(fake.asked[0].Context, want) || strings.Contains(fake.asked[0].Context, h.Earlier) {
+		t.Fatalf("the context lacks %q or names the Run's start %s:\n%s", want, h.Earlier, clip(fake.asked[0].Context))
+	}
+	h.mainMerged(w)
+	fake.asked = nil
+	got, err := w.s.judgeChecks(context.Background(), w.run)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "### The commit each repository this Run started from\n- target@" + baseSHA + "\n\n### The project's notes"; !strings.Contains(text, want) {
-		t.Fatalf("the context lacks %q:\n%s", want, clip(text))
+	if want := "- target: main at " + h.Main + "\n"; len(fake.asked) != 1 || !strings.Contains(fake.asked[0].Context, want) {
+		t.Fatalf("after the merge the context lacks %q:\n%s", want, clip(fake.asked[0].Context))
+	}
+	if msg := sendBack(got.Verdicts, got.bases); !strings.Contains(msg, "the commit of the target branch this task builds on (target: main at "+h.Main+")") {
+		t.Fatalf("the send-back names no task base:\n%s", msg)
+	}
+}
+
+// taskBaseJudge answers the pre-existing question as a judge reading the
+// context would: yes only when a recorded call runs the command at the
+// commit the context names as the task's base, failing the same way.
+type taskBaseJudge struct{ asked int }
+
+func (j *taskBaseJudge) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judgement, error) {
+	j.asked++
+	if !isPreexistingQuestion(a) {
+		return judge.Judgement{Decision: map[bool]string{true: judge.Yes, false: judge.No}[strings.Contains(a.Question, "reported pass")], CallID: "call_test"}, nil
+	}
+	_, listed, _ := strings.Cut(a.Context, "### The commit of each target branch this task builds on\n- target: main at ")
+	base, _, _ := strings.Cut(listed, "\n")
+	_, calls, _ := strings.Cut(a.Context, "### The tool calls this Run recorded, in order")
+	if base != "" && strings.Contains(calls, "worktree add ../base "+base) {
+		return judge.Judgement{Decision: judge.Yes, CallID: "call_test", Reasoning: "fails the same at the task's base"}, nil
+	}
+	return judge.Judgement{Decision: judge.No, CallID: "call_test", Reasoning: "no run at the task's base"}, nil
+}
+
+// Two writers of one attempt: the implementer's commit brought a failure,
+// and the fixer after it shows that failure at the commit it started from.
+// That commit is the implementer's, so the failure is the task's own and is
+// sent back; shown at the target branch's commit the task builds on, where
+// it fails the same, it passes.
+func TestAFailureShownOnlyAtTheRunsStartIsTheTasksOwn(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		at     func(*taskHistory) string
+		passes bool
+	}{
+		{"at the fixer's own start", func(h *taskHistory) string { return h.Earlier }, false},
+		{"at the task's base", func(h *taskHistory) string { return h.Main }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			w.run.Phase = "fix"
+			h := startedFrom(w)
+			bashCall(w, "base", "git worktree add ../base "+tc.at(h)+" && cd ../base && npx tsc --noEmit", tscFailure, 2)
+			bashCall(w, "head", "npx tsc --noEmit", tscFailure, 2)
+			checksReply(w, failingTsc)
+			endTurn(w)
+			w.s.Judge = &taskBaseJudge{}
+			got, err := w.s.judgeChecks(context.Background(), w.run)
+			if err != nil || got.Verified != tc.passes || got.JudgePassed != tc.passes {
+				t.Fatalf("%+v %v", got, err)
+			}
+			if !tc.passes && (got.Verdicts[0].Result != delivery.CheckFail || !strings.Contains(got.Verdicts[0].JudgeReason, "no run at the task's base")) {
+				t.Fatalf("verdicts %+v", got.Verdicts)
+			}
+		})
+	}
+}
+
+// With no target-branch commit known for the task, a reported failure is
+// sent back without asking the judge.
+func TestAFailureWithNoTaskBaseIsRejectedUnasked(t *testing.T) {
+	w := newHarnessWorld(t)
+	checksReply(w, failingTsc)
+	endTurn(w)
+	fake := &waiverFake{preexisting: judge.Yes}
+	w.s.Judge = fake
+	got, err := w.s.judgeChecks(context.Background(), w.run)
+	if err != nil || got.Verified || got.JudgePassed || len(fake.asked) != 0 {
+		t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
+	}
+	if v := got.Verdicts; len(v) != 1 || v[0].Result != delivery.CheckFail || !strings.Contains(v[0].JudgeReason, "no recorded commit of the target branch") {
+		t.Fatalf("verdicts %+v", v)
 	}
 }
 
@@ -125,7 +248,7 @@ func TestAFailureTheJudgeDoesNotFindPreexistingIsSentBack(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
-			startedFrom(w)
+			h := startedFrom(w)
 			checksReply(w, failingTsc+reportedPass)
 			endTurn(w)
 			fake := &preexistingFake{answer: tc.answer, err: tc.err, unrecorded: tc.unrecorded}
@@ -141,7 +264,7 @@ func TestAFailureTheJudgeDoesNotFindPreexistingIsSentBack(t *testing.T) {
 				t.Fatalf("recorded %+v, asked %d", got, fake.calls)
 			}
 			for _, want := range []string{"- npx tsc --noEmit: 95 errors on the parent, 95 with the change, none in changed files — not passed by the judge: " + tc.reason,
-				"at the commit you started from (target@" + baseSHA + ")", "A failure in code you changed"} {
+				"this task builds on (target: main at " + h.Main + ")", "in a separate checkout of that commit"} {
 				if !strings.Contains(got.Message, want) {
 					t.Errorf("the send-back lacks %q:\n%s", want, got.Message)
 				}
@@ -240,6 +363,7 @@ func (deferringFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judg
 // pre-existing question; another failure is.
 func TestACarriedWaiverIsAskedFirstAndAloneForItsFailure(t *testing.T) {
 	w := newHarnessWorld(t)
+	startedFrom(w)
 	waive(w, w.run, delivery.ScopeAttempt, heldFailure)
 	// The unwaived failure is listed first; the waiver is still asked first.
 	checksReply(w, failingTsc+strings.TrimPrefix(failingTest, "checks:\n"))

@@ -184,14 +184,18 @@ def _checks_questions() -> list[str]:
 
 def _preexisting_answer(question: str) -> str:
     """The scripted answer to the pre-existing question: yes when the Run
-    recorded the reported command's failure at the starting commit (a call
-    naming ../starting-commit) with the same FAIL lines as its own run."""
+    recorded the reported command's failure in a checkout of the target
+    branch's commit the context names as the task's base (a call naming
+    ../task-base at that commit) with the same FAIL lines as its own run."""
+    listed = question.split("### The commit of each target branch this task builds on\n- ", 1)
+    sha = listed[1].split("\n", 1)[0].split(" at ")[-1] if len(listed) == 2 else ""
     calls = question.split("### The tool calls this Run recorded, in order", 1)[-1].split("\n- ")[1:]
     base = head = None
     for call in calls:
         fails = sorted({line.strip() for line in call.split("\n") if line.strip().startswith("FAIL: ")})
-        if "../starting-commit" in call:
-            base = fails
+        if "../task-base" in call:
+            if sha and f"../task-base {sha}" in call:
+                base = fails
         else:
             head = fails
     return "yes" if base and base == head else "no"

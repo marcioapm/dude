@@ -1750,7 +1750,7 @@ type ChecksVerdict = { command?: string; result?: string; reason?: string; decis
 
 /** How a check's recorded result reads: one the judge passed without a backed pass says so, never "pass". */
 const CHECK_RESULT_LABEL = new Map([
-  ["pre-existing", "pre-existing, passed by the judge: it fails the same at the commit the Run started from"],
+  ["pre-existing", "pre-existing, passed by the judge: it fails the same at the commit of the target branch the task builds on"],
   ["deferred", "deferred, passed by the judge: a later phase runs it"],
 ]);
 

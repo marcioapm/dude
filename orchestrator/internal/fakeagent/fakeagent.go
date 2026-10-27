@@ -841,8 +841,9 @@ var CheckOutputs = [2]string{"FAIL: TestGreeting (0.00s)\n    greeting_test.go:9
 // not cause; ChecksNewFailureModel sees the same command fail with that
 // failure and a new one (PreexistingOutputs[1]); ChecksOtherFailureModel
 // sees OtherFailingCommand fail; ChecksBaseShownModel is
-// ChecksPreexistingModel that first runs FailingCommand in a checkout of
-// the commit it started from (BaseCommand) and sees the same failure.
+// ChecksPreexistingModel that first runs FailingCommand in a separate
+// checkout of the target branch's commit the task builds on (BaseCommand)
+// and sees the same failure.
 const (
 	ChecksPreexistingModel  = "fake/checks-preexisting"
 	ChecksNewFailureModel   = "fake/checks-new-failure"
@@ -850,8 +851,14 @@ const (
 	ChecksBaseShownModel    = "fake/checks-base-shown"
 	FailingCommand          = "make test"
 	OtherFailingCommand     = "make lint"
-	BaseCommand             = "make -C ../starting-commit test"
+	// BaseDir is where BaseCommand checks the task's base out.
+	BaseDir     = "../task-base"
+	BaseCommand = "git worktree add " + BaseDir + " " + AtMain + " && make -C " + BaseDir + " test"
 )
+
+// AtMain in a scripted command is its first repository's main as the fake
+// lux has it when it plays the command.
+const AtMain = "{main}"
 
 var PreexistingOutputs = [2]string{"FAIL: TestClock (0.00s)\n    clock_test.go:4: needs a hardware clock\nexit status 1",
 	"FAIL: TestClock (0.00s)\n    clock_test.go:4: needs a hardware clock\nFAIL: TestGreeting (0.00s)\n    greeting_test.go:9: got \"\", want \"hello\"\nexit status 1"}
