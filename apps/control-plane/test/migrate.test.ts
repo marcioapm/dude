@@ -196,7 +196,8 @@ test("212 takes incoming triggers, finds a hook across organisations, and keeps 
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'Acme', 'acme'), ('org_b', 'Other', 'other')`;
     await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', 'org_a', 'platform', 'platform', 'PLAT')`;
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["212_incoming_webhooks.sql", "213_chat_link_offers.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["212_incoming_webhooks.sql", "213_chat_link_offers.sql",
+      "214_automation_run_events.sql", "215_events_automation_run_idx.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
     const incoming = { kind: "incoming", hookId: "hk_abcdefghijkl0123", verify: { mode: "header", header: "Authorization" }, ratePerHour: 12 };
     await sql`INSERT INTO automations (id, organization_id, project_id, name, kind, trigger, agent, incoming_secret, incoming_hint, project_ids)
@@ -231,6 +232,61 @@ test("212 takes incoming triggers, finds a hook across organisations, and keeps 
       return [...await tx`SELECT id FROM incoming_deliveries`];
     });
     expect(seen).toEqual([]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
+test("214 keys an automation run's activity to it, alone, moves the tool server's old rows, and purges them with the log", async () => {
+  const { url, sql } = await migratedBefore("214");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'Acme', 'acme'), ('org_b', 'Other', 'other')`;
+    await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', 'org_a', 'platform', 'platform', 'PLAT')`;
+    await sql`INSERT INTO automations (id, organization_id, name, kind, trigger, agent)
+      VALUES ('aut_a', 'org_a', 'Digest', 'agent', ${{ kind: "schedule", cron: "0 15 * * 5", tz: "Europe/Lisbon" }}::jsonb, ${{ own: { prompt: "" } }}::jsonb)`;
+    await sql`INSERT INTO automation_runs (id, organization_id, automation_id, status, source, log_tail, created_at) VALUES
+      ('arn_old', 'org_a', 'aut_a', 'succeeded', 'schedule', 'done', now() - interval '100 days'),
+      ('arn_new', 'org_a', 'aut_a', 'running', 'schedule', 'so far', now())`;
+    // What the tool server wrote before: a call's record under run_id, and create_task's task.created on its task.
+    await sql`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload) VALUES
+      ('evt_call', 'org_a', 'agent.tool.dude', 'arn_old', NULL, 'agent', 'arn_old', 'control-plane', '{"tool":"post_to_chat"}'),
+      ('evt_task', 'org_a', 'task.created', 'arn_old', 'tsk_1', 'agent', 'arn_old', 'control-plane', '{}')`;
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["214_automation_run_events.sql", "215_events_automation_run_idx.sql"]);
+    expect([...await sql`SELECT id, run_id, task_id, automation_run_id FROM events ORDER BY id`]).toEqual([
+      { id: "evt_call", run_id: null, task_id: null, automation_run_id: "arn_old" },
+      { id: "evt_task", run_id: null, task_id: "tsk_1", automation_run_id: null },
+    ]);
+    const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
+    for (const other of ["run_id", "session_id", "task_id"]) {
+      expect(await refusal(async () => await sql.unsafe(`INSERT INTO events (id, organization_id, event_type, automation_run_id, ${other},
+        actor_type, actor_id, source) VALUES ('evt_x', 'org_a', 'agent.message', 'arn_new', 'x', 'agent', 'a', 'runner')`))).toContain("events_automation_run_scope");
+    }
+    expect(await refusal(async () => await sql`INSERT INTO events (id, organization_id, event_type, automation_run_id, actor_type, actor_id, source)
+      VALUES ('evt_y', 'org_a', 'agent.message', 'arn_none', 'agent', 'a', 'runner')`)).toContain("events_automation_run_fk");
+    await sql`INSERT INTO events (id, organization_id, event_type, automation_run_id, actor_type, actor_id, source) VALUES
+      ('evt_live', 'org_a', 'agent.message', 'arn_new', 'agent', 'arn_new', 'runner')`;
+    expect([...await sql`SELECT indexdef FROM pg_indexes WHERE indexname = 'events_automation_run_cursor_idx'`]).toHaveLength(1);
+    // Another organisation's reader sees none of it.
+    const seen = await sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE dude_app`;
+      await tx`SELECT set_config('app.organization_id', 'org_b', true)`;
+      return [...await tx`SELECT id FROM events WHERE automation_run_id IS NOT NULL`];
+    });
+    expect(seen).toEqual([]);
+    // Retention, as the sweeper: only the old run's rows, which it may not delete directly.
+    expect(await refusal(async () => await sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE dude_sweeper`;
+      await tx`DELETE FROM events WHERE automation_run_id = 'arn_old'`;
+    }))).toContain("permission denied");
+    const purged = await sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE dude_sweeper`;
+      return [...await tx`SELECT purge_automation_run_events(now() - interval '90 days', 100) AS n`];
+    });
+    expect(Number(purged[0].n)).toBe(1);
+    expect([...await sql`SELECT id FROM events WHERE automation_run_id IS NOT NULL ORDER BY id`]).toEqual([{ id: "evt_live" }]);
+    // Deleting the automation takes its runs' activity with it.
+    await sql`DELETE FROM automations WHERE id = 'aut_a'`;
+    expect([...await sql`SELECT id FROM events ORDER BY id`]).toEqual([{ id: "evt_task" }]);
   } finally {
     await sql.end();
   }
