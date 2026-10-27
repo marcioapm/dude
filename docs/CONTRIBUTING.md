@@ -1134,6 +1134,26 @@ delivery handled twice makes nothing twice (`chat_requests` is unique per
 delivery). An install or a link is begun by a signed-in browser (an HttpOnly
 cookie whose hash the state holds) and finished only in that browser.
 
+**Why a request failed (`chat_requests.failure`, migration 214).** A failed
+request keeps its cause apart from the model's `reasoning`: the routing
+call's error (`the routing call failed: the LLM proxy answered 400: …`,
+the proxy key and the tier's header values redacted by
+`judge.Service.Structured`), the refusal of what it tried to make, the
+provider's refusal of its reply (`its reply was not posted: slack
+chat.postMessage: invalid_arguments`, the bot token redacted by the Slack
+adapter's `scrub`), or giving up (`dude could not act on it: …`, `Slack did
+not answer after 6 tries`). Causes accumulate with `; ` in that order.
+`GET /v1/organization/chat/requests` (admins only) returns it as `failure`,
+redacted again against the installations' bot tokens and token shapes
+(`redactChatFailure`); a request that did not fail has `null`. Requests
+shows it as a muted danger line under the route, clipped past 140
+characters with the whole text in a tooltip and behind Show all, on the
+Requests page and a provider's recent requests. The route reads from the
+row's result: **Failed** when nothing was made, **Failed → Brainstorm**
+(the fallback session, or a refused reply after a brainstorm), **Failed →
+Task**, **→ Epic**, **→ Resume** or **→ Task link** when a refused reply or
+giving up kept what was made. The route filter's Failed lists them all.
+
 **What routing reads (`chat/context.go`).** Thread mentions use `FetchThread`;
 top-level mentions use `FetchHistory`: at most 30 messages from the preceding
 24 hours, oldest first under `## The channel before it`. `quoteMessages`
