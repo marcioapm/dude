@@ -817,6 +817,22 @@ describe("a run's activity", () => {
     expect(bash.textContent).toContain("{\"merged\": 12");
   });
 
+  test("a reply the agent finished reaches a live run's feed over the stream, as on the Run page, without reading the run", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    let reads = 0;
+    client.automationRun = async (...args) => { reads++; return real(...args); };
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const feed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed]"), "the feed");
+    await settle(100);
+    const before = reads;
+    await act(async () => emit({ eventType: "agent.message", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+      runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_d3", actor: { type: "agent", id: "arn_d3" }, source: "runner",
+      correlationId: null, causationId: null, payload: { text: "Twelve merged this week; three wait on review." } }));
+    await until(() => (feed.textContent?.includes("Twelve merged this week; three wait on review.") ? true : null), "the reply in the feed");
+    expect(reads - before).toBe(0);
+  });
+
   test("log events do not refetch the full run", async () => {
     const client = new FixtureClient("a");
     const real = client.automationRun.bind(client);
