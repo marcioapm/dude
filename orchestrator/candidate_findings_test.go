@@ -57,8 +57,13 @@ func TestAPullRequestFixRoundIsSentTheBlockingFindingThatKeepsTheLoopGoing(t *te
 			w.wi, second).Scan(&secondID, &secondRun)
 		return secondID != ""
 	})
-	var rangeOf string
+	var rangeOf, fresh string
 	_ = w.owner.QueryRow(ctx, `SELECT COALESCE(review_range->>'of', 'none') FROM runs WHERE id = $1`, secondRun).Scan(&rangeOf)
+	_ = w.owner.QueryRow(ctx, `SELECT COALESCE(payload->>'fresh', '') FROM events WHERE run_id = $1 AND event_type = 'run.created'`,
+		secondRun).Scan(&fresh)
+	if fresh != "large_delta" {
+		t.Fatalf("review %s was not made fresh for a large delta (fresh %q): the repro's premise does not hold", secondRun, fresh)
+	}
 	// The loop's end: a person asked, or the candidate promoted.
 	w.until("the candidate's loop to end", func() bool {
 		w.sync()
@@ -77,5 +82,13 @@ func TestAPullRequestFixRoundIsSentTheBlockingFindingThatKeepsTheLoopGoing(t *te
 		t.Fatalf("%d fixes on the candidate after review %s (range %s) raised blocking %s: %d sent it, %d sent no finding and no feedback %v; "+
 			"the finding ended %s, the task %s (escalation %q)",
 			len(fixes), secondRun, rangeOf, secondID, len(sent), len(empty), empty, status, w.taskStatus(w.wi), w.escalationReason(w.wi))
+	}
+	// The fresh reviewer stays in the candidate's loop, and the loop ends
+	// without running out of fix rounds.
+	if rangeOf != delivery.RangePullRequestFix {
+		t.Errorf("review %s's range %q, want %q", secondRun, rangeOf, delivery.RangePullRequestFix)
+	}
+	if reason := w.escalationReason(w.wi); reason == "exhausted" {
+		t.Errorf("the candidate's loop ended exhausted (finding %s %s, task %s)", secondID, status, w.taskStatus(w.wi))
 	}
 }
