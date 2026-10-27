@@ -97,6 +97,45 @@ func (w *world) atTheHold(ana string) string {
 	return task
 }
 
+// handBackEnteringTheGate has the conducted task's owner (ana) hand back
+// as the conductor enters the gate before the pull request: the step
+// leaving the test commits with decisions back with Deliver. Returns the
+// hook's arming, still armed.
+func (w *world) handBackEnteringTheGate(task, ana string) *atomic.Bool {
+	w.t.Helper()
+	var once sync.Once
+	armed := w.gated(func(step, next string) {
+		if step != "test" || next == step {
+			return
+		}
+		once.Do(func() {
+			if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+				w.t.Errorf("hand-back while entering the gate: %d %v", status, out)
+			}
+		})
+	})
+	w.talk(task)
+	w.implemented(task)
+	armed.Store(true)
+	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.finishSimplifierReview(task)
+	return armed
+}
+
+// changesTargetAndWeb has the implementer commit in both target and web, so
+// the first opening opens a pull request in each.
+func (w *world) changesTargetAndWeb() {
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "implement" {
+			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
+		}
+		return b
+	}
+}
+
 // Ask me first, set on the project after the delivery started, holds the
 // first pull request until its owner opens it; nobody else can. Once open,
 // a person's feedback on it is fixed with no hold.
@@ -360,22 +399,7 @@ func TestUnderTheConductorAskMeFirstIsThePersonsQuestion(t *testing.T) {
 		task := w.task()
 		w.assignOwner(task, ana)
 		w.projectChoice(delivery.PullRequestAsk)
-		var once sync.Once
-		armed := w.gated(func(step, next string) {
-			if step != "test" || next == step {
-				return
-			}
-			once.Do(func() {
-				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
-					t.Errorf("hand-back while entering the gate: %d %v", status, out)
-				}
-			})
-		})
-		w.talk(task)
-		w.implemented(task)
-		armed.Store(true)
-		w.must(task, "start_phase", `{"phase":"simplify"}`)
-		w.finishSimplifierReview(task)
+		armed := w.handBackEnteringTheGate(task, ana)
 		w.until("Deliver holding the gate, asking", func() bool {
 			return w.heldBeforePR(task) && w.conductorQuestion(task) != "" && w.signalsTaken(task) || len(w.gh.Pulls()) > 0
 		})
@@ -486,15 +510,7 @@ func TestALaterRepositorysPullRequestIsNeitherHeldNorADraft(t *testing.T) {
 // draft too.
 func TestOpenAsDraftSurvivesARetriedOpening(t *testing.T) {
 	w := newWorld(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		labels, _ := spec["labels"].(map[string]any)
-		if labels["dude.phase"] == "implement" {
-			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
-		}
-		return b
-	}
+	w.changesTargetAndWeb()
 	var failed atomic.Bool
 	w.web.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
@@ -525,15 +541,7 @@ func TestOpenAsDraftSurvivesARetriedOpening(t *testing.T) {
 // follows the draft it opened, never escalates, and opens web's as a draft.
 func TestARetriedOpeningFollowsItsOpenedPullRequestNotThePolicy(t *testing.T) {
 	w := newWorld(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		labels, _ := spec["labels"].(map[string]any)
-		if labels["dude.phase"] == "implement" {
-			b.Commit = map[string]string{"target:API.md": "api\n", "web:PAGE.md": "page\n"}
-		}
-		return b
-	}
+	w.changesTargetAndWeb()
 	var failed atomic.Bool
 	var broke atomic.Value
 	w.web.Set(func(s *fakegithub.Server) {

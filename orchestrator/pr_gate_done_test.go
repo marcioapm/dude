@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
-	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -114,22 +113,7 @@ func TestDoneWithoutAPullRequestUnderTheConductor(t *testing.T) {
 		ana := w.person("Ana")
 		task := w.task()
 		w.assignOwner(task, ana)
-		var once sync.Once
-		armed := w.gated(func(step, next string) {
-			if step != "test" || next == step {
-				return
-			}
-			once.Do(func() {
-				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
-					t.Errorf("hand-back while entering the gate: %d %v", status, out)
-				}
-			})
-		})
-		w.talk(task)
-		w.implemented(task)
-		armed.Store(true)
-		w.must(task, "start_phase", `{"phase":"simplify"}`)
-		w.finishSimplifierReview(task)
+		armed := w.handBackEnteringTheGate(task, ana)
 		w.until("Deliver's gate question", func() bool { return w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0 })
 		armed.Store(false)
 		if n := len(w.gh.Pulls()); n != 0 {
@@ -194,14 +178,7 @@ func TestDoneWithoutAPullRequestIsRefusedWhileFeedbackIsOpen(t *testing.T) {
 	w := newWorld(t)
 	ana := w.person("Ana")
 	task := w.atTheHold(ana)
-	mustExec(t, w.owner, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
-		SELECT 'fbt_dw', $1, $2, task_attempt($2), person_id, 'dw' FROM api_keys WHERE id = $3`, w.org, task, ana)
-	for _, id := range []string{"fbi_dw1", "fbi_dw2"} {
-		mustExec(t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind,
-				anchor, status, submitted_at)
-			SELECT $4, $1, $2, task_attempt($2), 'fbt_dw', person_id, 'Open', 'general', '{"kind":"general"}', 'open', now()
-			FROM api_keys WHERE id = $3`, w.org, task, ana, id)
-	}
+	w.openItems(task, ana, "fbt_dw", "fbi_dw1", "fbi_dw2")
 	status, out := w.callAs(ana, "/internal/tasks/"+task+"/done-without-pull-request", map[string]any{})
 	e, _ := out["error"].(map[string]any)
 	if status != 409 || e["code"] != "feedback_open" || e["message"] != delivery.FeedbackNotHandledText(2) {

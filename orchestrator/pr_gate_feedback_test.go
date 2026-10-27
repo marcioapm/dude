@@ -24,6 +24,20 @@ func (w *world) holdSentBack(task string) bool {
 	return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state->'hold'->>'sentBack')::boolean`, task) == 1
 }
 
+// openItems records items open on the task's current attempt, by author's
+// person, in one batch, with no signal to the delivery.
+func (w *world) openItems(task, author, batch string, ids ...string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+		SELECT $4, $1, $2, task_attempt($2), person_id, $4 FROM api_keys WHERE id = $3`, w.org, task, author, batch)
+	for _, id := range ids {
+		mustExec(w.t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind,
+				anchor, status, submitted_at)
+			SELECT $5, $1, $2, task_attempt($2), $4, person_id, 'Open', 'general', '{"kind":"general"}', 'open', now()
+			FROM api_keys WHERE id = $3`, w.org, task, author, batch, id)
+	}
+}
+
 // An item submitted at the hold, general or pinned on the preview, goes to
 // a fixer with the task running "fixing your feedback"; the fixer resolves
 // it, the round is reviewed again, and the hold comes back at the new heads
@@ -111,14 +125,7 @@ func TestAtTheHoldHandledFeedbackStartsNothingAndOpenFeedbackRefusesOpen(t *test
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); n != fixes || !w.heldBeforePR(task) {
 		t.Fatalf("a handled signal: %d fixes (was %d), held %v", n, fixes, w.heldBeforePR(task))
 	}
-	mustExec(t, w.owner, `INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
-		SELECT 'fbt_quiet', $1, $2, task_attempt($2), person_id, 'quiet' FROM api_keys WHERE id = $3`, w.org, task, ana)
-	for _, id := range []string{"fbi_q1", "fbi_q2"} {
-		mustExec(t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind,
-				anchor, status, submitted_at)
-			SELECT $4, $1, $2, task_attempt($2), 'fbt_quiet', person_id, 'Quiet', 'general', '{"kind":"general"}', 'open', now()
-			FROM api_keys WHERE id = $3`, w.org, task, ana, id)
-	}
+	w.openItems(task, ana, "fbt_quiet", "fbi_q1", "fbi_q2")
 	status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true})
 	e, _ := out["error"].(map[string]any)
 	if status != 409 || e["code"] != "feedback_open" || e["message"] != "2 feedback items still open" {
