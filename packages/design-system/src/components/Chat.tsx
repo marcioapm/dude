@@ -48,6 +48,8 @@ export function ProviderGlyph({ provider, size = 14, label, inline, className }:
 
 /** Where a mention went. */
 export type ChatRoute = "brainstorm" | "task" | "epic" | "resume" | "task_link" | "clarify" | "channel_projects" | "not_connected" | "not_member" | "failed";
+/** A route that makes something: what a failed request may still have made. */
+export type ChatMadeRoute = Extract<ChatRoute, "brainstorm" | "task" | "epic" | "resume" | "task_link">;
 
 /** Each route's tone, glyph and word: it reads without colour. Refusals and failures are subtle. */
 export const ROUTE_SPEC: Record<ChatRoute, { readonly tone: ToneName; readonly icon: IconName; readonly label: string; readonly subtle: boolean }> = {
@@ -68,14 +70,14 @@ export interface RouteBadgeProps {
   /** What the model answered when dude went another way: "was Task". */
   readonly fallback?: ChatRoute | null | undefined;
   /** A failed request's: what dude made instead, as "Failed → Brainstorm"; none when nothing was made. */
-  readonly made?: ChatRoute | null | undefined;
+  readonly made?: ChatMadeRoute | null | undefined;
   readonly size?: "sm" | "md" | undefined;
 }
 
 /** Where a mention went: a Badge with the route's glyph and word, and what it was asked as when dude overrode it. */
 export function RouteBadge({ route, fallback, made, size = "sm" }: RouteBadgeProps) {
   const spec = ROUTE_SPEC[route];
-  const label = route === "failed" && made && made !== route ? `${spec.label} → ${ROUTE_SPEC[made].label}` : spec.label;
+  const label = route === "failed" && made ? `${spec.label} → ${ROUTE_SPEC[made].label}` : spec.label;
   return (
     <span className={styles["route"]} data-route={route}>
       <Badge tone={spec.tone} emphasis={spec.subtle ? "subtle" : "tinted"} icon={spec.icon} size={size}>{label}</Badge>

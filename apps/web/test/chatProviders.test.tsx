@@ -285,7 +285,7 @@ describe("Requests", () => {
 describe("Requests' failed rows", () => {
   const base: ChatRequestRow = {
     id: "chr_x", provider: "slack", conversationKind: "public", conversationName: "#support", externalUserName: "Eli Park", person: null,
-    text: "file it", permalink: "", route: "failed", askedRoute: "task", confidence: 0.9, reasoning: "A clear task.", failure: null, rounds: 0,
+    text: "file it", permalink: "", route: "failed", askedRoute: "task", confidence: 0.9, reasoning: "A clear task.", failure: null, madeRoute: null, rounds: 0,
     result: null, sharedAdded: [], sharedSkipped: [], linked: [], createdAt: new Date(Date.now() - 60_000).toISOString(),
   };
   /** Requests showing these rows alone, on the full page or a provider's. */
@@ -347,7 +347,44 @@ describe("Requests' failed rows", () => {
     await click(more);
     expect(text(r.querySelector("[data-testid=chat-request-failure-text]"))).toBe(long.replace(/\s+/g, " ").trim());
     expect(more.getAttribute("aria-expanded")).toBe("true");
+    // Show less clips it again.
+    await click(more);
+    const clipped = text(r.querySelector("[data-testid=chat-request-failure-text]"));
+    expect(clipped.length).toBe(FAILURE_CLIP);
+    expect(clipped.endsWith("…")).toBe(true);
+    expect(more.getAttribute("aria-expanded")).toBe("false");
   });
+
+  // Every shape a failed row is written in, with made_route set (recorded
+  // when it failed) and NULL (a row older than 214, read from its result).
+  const session = { kind: "session", id: "ssn_1", label: "S" } as const;
+  const task = { kind: "task", id: "wi_1", label: "BIL-7 T" } as const;
+  const epic = { kind: "epic", id: "epc_1", label: "BIL › E" } as const;
+  const shapes: Array<[string, Partial<ChatRequestRow>, string]> = [
+    ["a failed routing call's brainstorm", { askedRoute: null, result: session, madeRoute: "brainstorm" }, "Failed → Brainstorm"],
+    ["a failed routing call's brainstorm, legacy", { askedRoute: null, result: session, madeRoute: null }, "Failed → Brainstorm"],
+    ["a model resume that fell back to a brainstorm", { askedRoute: "resume", result: session, madeRoute: "brainstorm" }, "Failed → Brainstorm was Resume"],
+    ["a bound session resumed", { askedRoute: "resume", result: session, madeRoute: "resume" }, "Failed → Resume"],
+    ["a bound session resumed, legacy", { askedRoute: "resume", result: session, madeRoute: null }, "Failed → Resume"],
+    ["a task filed", { askedRoute: "task", result: task, madeRoute: "task" }, "Failed → Task"],
+    ["a task filed, legacy", { askedRoute: "task", result: task, madeRoute: null }, "Failed → Task"],
+    ["a thread bound to a task", { askedRoute: "task_link", result: task, madeRoute: "task_link" }, "Failed → Task link"],
+    ["a thread bound to a task, legacy", { askedRoute: "task_link", result: task, madeRoute: null }, "Failed → Task link"],
+    ["a thread bound to an epic", { askedRoute: "task_link", result: epic, madeRoute: "task_link" }, "Failed → Task link"],
+    ["a thread bound to an epic, legacy", { askedRoute: "task_link", result: epic, madeRoute: null }, "Failed → Task link"],
+    ["an epic filed", { askedRoute: "epic", result: epic, madeRoute: "epic" }, "Failed → Epic"],
+    ["an epic filed, legacy", { askedRoute: "epic", result: epic, madeRoute: null }, "Failed → Epic"],
+    ["a task refused, its brainstorm too", { askedRoute: "task", result: null, madeRoute: null }, "Failed was Task"],
+    ["refused before anything was made", { askedRoute: null, result: null, madeRoute: null }, "Failed"],
+  ];
+  for (const [what, shape, label] of shapes) {
+    test(`${what}: ${label}`, async () => {
+      const r = await row({ ...base, failure: "x", ...shape });
+      // The badge, then its "was X" when shown, each its own element.
+      const parts = [...r.querySelector("[data-route=failed]")!.children].map((e) => text(e as HTMLElement));
+      expect(parts.join(" ")).toBe(label);
+    });
+  }
 
   test("a provider's recent requests show the same failure line and label", async () => {
     const r = await row({ ...base, failure: "dude could not act on it: slack conversations.info: missing_scope" }, "chat/slack");

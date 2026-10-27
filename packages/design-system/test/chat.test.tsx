@@ -76,6 +76,7 @@ describe("RouteBadge", () => {
     expect(text(renderToStaticMarkup(<RouteBadge route="failed" made="brainstorm" />))).toBe("Failed → Brainstorm");
     expect(text(renderToStaticMarkup(<RouteBadge route="failed" made="brainstorm" fallback="task" />))).toBe("Failed → Brainstorm was Task");
     expect(text(renderToStaticMarkup(<RouteBadge route="failed" made="task" fallback="task" />))).toBe("Failed → Task");
+    expect(text(renderToStaticMarkup(<RouteBadge route="failed" made="brainstorm" fallback="resume" />))).toBe("Failed → Brainstorm was Resume");
     expect(text(renderToStaticMarkup(<RouteBadge route="failed" fallback="clarify" />))).toBe("Failed was Clarify");
     // Only a failure names what it made: a route that made something is its own word.
     expect(text(renderToStaticMarkup(<RouteBadge route="task" made="brainstorm" />))).toBe("Task");
