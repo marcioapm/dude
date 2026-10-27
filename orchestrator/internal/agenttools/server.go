@@ -934,7 +934,7 @@ type refusal struct {
 	blocked *delivery.BlockedError
 	// A start refused as archived or closed: its reason.
 	lifecycle string
-	// Refused for the run's call budget (withinLimits and post_to_chat's own counts).
+	// Refused for the run's call budget (withinLimits, and post_to_chat's minute count).
 	limited bool
 }
 

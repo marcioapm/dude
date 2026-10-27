@@ -253,7 +253,7 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out p
 		return out, "", err
 	}
 	if made >= postsPerRun {
-		return out, "", refuseLimited(rPostPerRun, postsPerRun)
+		return out, "", refuse(rPostPerRun, postsPerRun)
 	}
 	switch target := c.env.prepared.(type) {
 	case error:
