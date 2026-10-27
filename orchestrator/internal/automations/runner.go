@@ -379,12 +379,7 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 			return Fired{}, err
 		}
 		for _, id := range cancelledIDs {
-			if err := feedFrames(ctx, tx, a, id, nil, true, "cancelled", nil); err != nil {
-				return Fired{}, err
-			}
-			if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "automation.run.ended", OrganizationID: a.Org, ProjectID: a.ProjectID,
-				AutomationRunID: id, ActorType: ledger.ActorSystem, ActorID: id, Source: ledger.SourceRunner,
-				Payload: map[string]any{"status": "cancelled", "reason": "a newer event restarted it (Concurrency: cancel)"}}); err != nil {
+			if err := runEnded(ctx, tx, a, id, "cancelled", "cancelled", "a newer event restarted it (Concurrency: cancel)"); err != nil {
 				return Fired{}, err
 			}
 		}
@@ -415,6 +410,18 @@ func runEvent(ctx context.Context, tx pgx.Tx, a Automation, runID, typ string) e
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: a.Org, ProjectID: a.ProjectID,
 		AutomationRunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner,
 		Payload: map[string]any{"automationId": a.ID, "automationRunId": runID}})
+	return err
+}
+
+// runEnded ends runID's activity, aborting its open calls with stopped as
+// their reason, and records the run's end with its status and reason.
+func runEnded(ctx context.Context, tx pgx.Tx, a Automation, runID, stopped, status, reason string) error {
+	if err := feedFrames(ctx, tx, a, runID, nil, true, stopped, nil); err != nil {
+		return err
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: "automation.run.ended", OrganizationID: a.Org, ProjectID: a.ProjectID,
+		AutomationRunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner,
+		Payload: map[string]any{"status": status, "reason": reason}})
 	return err
 }
 
@@ -1518,12 +1525,7 @@ func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason s
 	if err != nil || tag.RowsAffected() == 0 {
 		return false, err
 	}
-	if err := feedFrames(ctx, tx, a, runID, nil, true, cmp.Or(reason, status), nil); err != nil {
-		return false, err
-	}
-	if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "automation.run.ended", OrganizationID: a.Org, ProjectID: a.ProjectID,
-		AutomationRunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner,
-		Payload: map[string]any{"status": status, "reason": reason}}); err != nil {
+	if err := runEnded(ctx, tx, a, runID, cmp.Or(reason, status), status, reason); err != nil {
 		return false, err
 	}
 	if failedOn != "" {
