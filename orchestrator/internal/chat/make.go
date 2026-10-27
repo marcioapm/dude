@@ -99,6 +99,7 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 		}
 	}
 	r.ID = ids.New(ids.ChatRequest)
+	r.offer = nil
 	origin := Origin{Provider: m.Provider, WorkspaceID: m.WorkspaceID, ConversationID: m.ConversationID, ConversationName: r.ConversationName,
 		ConversationKind: r.Kind, ThreadID: m.ThreadID, TopLevel: topLevel(m), Permalink: r.Permalink, RequestedBy: r.UserName}
 	f := delivery.Filer{ActorType: "person", ActorID: who.Person, Person: who.Person}
@@ -111,7 +112,10 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 				return err
 			}
 			r.ResultKind, r.ResultID = "session", id
-			reply = Reply{Text: sessionReply(title, r, who), LinkURL: s.link(who.Slug, "sessions/"+url.PathEscape(id))}
+			reply = Reply{Text: sessionReply(title, r, who), LinkURL: s.link(who.Slug, "sessions/"+url.PathEscape(id)), LinkLabel: "Open in dude"}
+			if d.Project == nil {
+				offerLinks(r, &reply, id, r.candidates)
+			}
 		case RouteResume:
 			if err := delivery.LockSession(ctx, tx, d.Session); err != nil {
 				return err

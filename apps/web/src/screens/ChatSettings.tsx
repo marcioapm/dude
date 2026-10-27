@@ -571,7 +571,11 @@ function RequestsTable({ client, providers, provider, route, limit, summary }: {
                 <Td wrap>{r.result ? (
                   <a href={resultHref(r.result)} data-testid="chat-request-result" className="chatRequestResult">
                     <span className="chatRequestKind"><Icon name={RESULT_ICON[r.result.kind]} size={12} /></span>{r.result.label ?? r.result.id}</a>
-                ) : <span className="muted">{r.route === "not_connected" ? "Asked to connect" : r.route.startsWith("not_") ? "Refused privately" : "—"}</span>}</Td>
+                ) : <span className="muted">{r.route === "not_connected" ? "Asked to connect" : r.route.startsWith("not_") ? "Refused privately" : "—"}</span>}
+                  {r.linked.map((l) => (
+                    <span key={l.key} className="muted chatRequestLinked" data-testid="chat-request-linked" title={`${l.key} · ${l.name}`}>
+                      {l.by} linked {l.key} from {pv.name}</span>
+                  ))}</Td>
                 <Td align="right" muted fit>
                   <span className="chatRequestWhen">{formatTimestamp(r.createdAt, "relative")}
                     {r.reasoning ? (

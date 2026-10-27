@@ -691,15 +691,45 @@ func (p *Provider) Permalink(inst chat.Installation, conversation, message, thre
 	return link
 }
 
-// blocks is a reply as Block Kit: its words, and its link as a button.
+// blocks is a reply as Block Kit: its words, its link as a button, and its
+// row: a line per choice made from it, then a button per choice left and
+// the row's link.
 func blocks(r chat.Reply) []any {
-	out := []any{map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": r.Text}}}
+	section := func(text string) any {
+		return map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}}
+	}
+	link := func(id, label, to string) any {
+		return map[string]any{"type": "button", "action_id": id, "text": map[string]any{"type": "plain_text", "text": label}, "url": to}
+	}
+	out := []any{section(r.Text)}
 	if r.LinkURL != "" {
-		label := firstOf(r.LinkLabel, "Open in dude")
-		out = append(out, map[string]any{"type": "actions", "elements": []any{map[string]any{"type": "button",
-			"action_id": "open_link", "text": map[string]any{"type": "plain_text", "text": label}, "url": r.LinkURL}}})
+		out = append(out, map[string]any{"type": "actions", "elements": []any{link("open_link", firstOf(r.LinkLabel, "Open in dude"), r.LinkURL)}})
+	}
+	if row := r.Row; row != nil {
+		for _, line := range row.Linked {
+			out = append(out, map[string]any{"type": "context", "elements": []any{map[string]any{"type": "mrkdwn", "text": line}}})
+		}
+		var buttons []any
+		for i, c := range row.Choices {
+			buttons = append(buttons, map[string]any{"type": "button", "action_id": fmt.Sprintf("link_%d", i),
+				"text": map[string]any{"type": "plain_text", "text": c.Label}, "value": c.Value})
+		}
+		if row.Heading != "" {
+			out = append(out, section(row.Heading))
+		}
+		if row.LinkURL != "" {
+			buttons = append(buttons, link("row_link", firstOf(row.LinkLabel, "Open in dude"), row.LinkURL))
+		}
+		if len(buttons) > 0 {
+			out = append(out, map[string]any{"type": "actions", "block_id": "row", "elements": buttons})
+		}
 	}
 	return out
+}
+
+// UpdateReply replaces a reply dude posted with r (chat.update).
+func (p *Provider) UpdateReply(ctx context.Context, inst chat.Installation, conversation, message string, r chat.Reply) error {
+	return p.call(ctx, inst.Token, "chat.update", map[string]any{"channel": conversation, "ts": message, "text": r.Text, "blocks": blocks(r)}, nil)
 }
 
 // PostReply posts r in the thread, and returns its message id.

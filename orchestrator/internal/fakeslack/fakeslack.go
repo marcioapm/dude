@@ -58,8 +58,11 @@ type Ephemeral struct {
 	Blocks                        json.RawMessage
 }
 
-// Update is a chat.update of a message.
-type Update struct{ Channel, TS, Text string }
+// Update is a chat.update of a message, with the blocks it put.
+type Update struct {
+	Channel, TS, Text string
+	Blocks            json.RawMessage
+}
 
 // Server is the fake.
 type Server struct {
@@ -680,7 +683,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, method string) {
 					return
 				}
 				s.messages[i].Text = str(a, "text")
-				s.updates = append(s.updates, Update{Channel: c.ID, TS: ts, Text: str(a, "text")})
+				if len(a["blocks"]) > 0 {
+					s.messages[i].Blocks = a["blocks"]
+				}
+				s.updates = append(s.updates, Update{Channel: c.ID, TS: ts, Text: str(a, "text"), Blocks: a["blocks"]})
 				reply(w, map[string]any{"ts": ts})
 				return
 			}

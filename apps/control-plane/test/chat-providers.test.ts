@@ -354,6 +354,14 @@ describe("settings", () => {
     expect(task.person.id).toBe(memberPerson);
     expect(task.sharedAdded.map((p: Json) => p.id)).toEqual([adminPerson]);
     expect(task.sharedSkipped).toEqual(["U9"]);
+    expect(task.linked).toEqual([]);
+    // A project linked from the request's reply is on its row, by whom, oldest first.
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_2', ${ORG}, 'Operations', 'ops', 'OPS')`;
+    await owner`INSERT INTO chat_request_links (request_id, organization_id, project_id, project_key, project_name, linked_by, linked_by_name, event_id, created_at)
+      VALUES ('chr_1', ${ORG}, 'prj_2', 'OPS', 'Operations', ${memberPerson}, 'Eli Park', 'ev_a', now() - interval '2 minutes'),
+        ('chr_1', ${ORG}, 'prj_1', 'BIL', 'Billing', ${adminPerson}, 'Márcia', 'ev_b', now() - interval '1 minute')`;
+    const withLinks = (await (await call(adminKey, "GET", "/v1/organization/chat/requests")).json() as Json).requests[1];
+    expect(withLinks.linked).toEqual([{ key: "OPS", name: "Operations", by: "Eli Park" }, { key: "BIL", name: "Billing", by: "Márcia" }]);
     expect(task.confidence).toBeCloseTo(0.8);
     const filtered = await (await call(adminKey, "GET", "/v1/organization/chat/requests?route=task&provider=slack")).json() as Json;
     expect(filtered.requests.map((r: Json) => r.id)).toEqual(["chr_1"]);

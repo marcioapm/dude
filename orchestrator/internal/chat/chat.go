@@ -139,11 +139,23 @@ type Page struct {
 }
 
 // Reply is what dude posts: words, and optionally a link with its label
-// (a button where the provider has them).
+// (a button where the provider has them), and a row of choices under it.
 type Reply struct {
 	Text      string
 	LinkURL   string
 	LinkLabel string
+	Row       *Row
+}
+
+// Row is a set of choices under a reply, each coming back as an
+// Interaction with its Value, closed by a link (LinkURL, LinkLabel).
+// Linked are lines saying what was chosen from it already.
+type Row struct {
+	Heading   string   `json:"heading"`
+	Choices   []Choice `json:"choices,omitempty"`
+	LinkURL   string   `json:"linkUrl,omitempty"`
+	LinkLabel string   `json:"linkLabel,omitempty"`
+	Linked    []string `json:"linked,omitempty"`
 }
 
 // Choice is one button of a question; Value comes back in the Interaction.
@@ -224,6 +236,8 @@ type Provider interface {
 	PostEphemeral(ctx context.Context, inst Installation, conversation, thread, user string, r Reply) error
 	PostQuestion(ctx context.Context, inst Installation, conversation, thread string, q Question) (string, error)
 	UpdateQuestion(ctx context.Context, inst Installation, conversation, message string, chosenBy ExternalUser, label string) error
+	// UpdateReply replaces a posted reply (PostReply's message) with r.
+	UpdateReply(ctx context.Context, inst Installation, conversation, message string, r Reply) error
 	React(ctx context.Context, inst Installation, conversation, message string, r Reaction) error
 
 	// OAuth: an admin installs the app; a member signs in to link.

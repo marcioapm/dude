@@ -73,3 +73,9 @@ mReviewQuestionNotFound               refusals/domain/review-questions/not-found
 mReviewQuestionNotOpen                refusals/domain/review-questions/not-open
 mReviewQuestionAnswerRequired         refusals/domain/review-questions/answer-required
 mReviewQuestionReasonRequired         refusals/domain/review-questions/reason-required
+MChatLinkNotOffered                   refusals/domain/chat-links/not-offered
+MChatLinkOnlyAskerOrAdmin             refusals/domain/chat-links/only-asker-or-admin
+MChatLinkHidden                       refusals/domain/chat-links/hidden
+MChatLinkGone                         refusals/domain/chat-links/gone
+MChatLinkLinkedAlready                refusals/domain/chat-links/linked-already
+MChatLinkRefused                      refusals/domain/chat-links/refused

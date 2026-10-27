@@ -1438,6 +1438,14 @@ describe("a session's model", () => {
     expect(page.querySelector("[data-testid=session-header-model]")!.textContent).toBe("Brainstorm · Thinker · OpenCode (organisation default)");
   });
 
+  test("a project linked from a chat reply says who linked which project, and from where", () => {
+    const people = { names: new Map([[ANA.id, ANA.name]]), byId: new Map() } as unknown as Parameters<typeof sessionNotice>[1];
+    expect(sessionNotice(ev("session.linked", { projects: [], linked: "ABS", via: "slack", viaName: "Slack" }, { type: "person", id: ANA.id }), people))
+      .toBe(`${ANA.name} linked ABS from Slack.`);
+    expect(sessionNotice(ev("session.linked", { projects: [] }, { type: "person", id: ANA.id }), people))
+      .toBe(`${ANA.name} changed what the session reads.`);
+  });
+
   test("the Chat's words for a change, a reset, a removed tier and a fresh agent", () => {
     const people = { names: new Map([[ANA.id, ANA.name]]), byId: new Map() } as unknown as Parameters<typeof sessionNotice>[1];
     expect(sessionNotice(ev("session.model.changed", { by: ANA.id, tier: { id: "mtr_opus", name: "Opus (High)" }, harness: "claude-code" }), people))

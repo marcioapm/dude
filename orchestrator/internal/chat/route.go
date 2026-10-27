@@ -46,6 +46,9 @@ func (s *Service) process(ctx context.Context, d claimed) error {
 		if err := json.Unmarshal(d.Payload, &in); err != nil {
 			return unreadable(err)
 		}
+		if strings.HasPrefix(in.Value, linkValuePrefix) {
+			return s.linkProject(ctx, d, p, in)
+		}
 		return s.answer(ctx, d, p, in)
 	}
 	var ev storedEvent
@@ -157,6 +160,10 @@ type request struct {
 	AwaitsAfter *int64
 	// What is posted once the request commits.
 	effects []effect
+	// A brainstorm with no project: what may be offered to link (before
+	// it is made), and what its reply offered (link_offer).
+	candidates []linkCandidate
+	offer      *linkOffer
 	// The conversation's members, for a private or group conversation;
 	// the linked ones (user → person); the others' display names.
 	members     []string
@@ -184,17 +191,23 @@ func record(ctx context.Context, tx pgx.Tx, r *request) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	var offer []byte
+	if r.offer != nil {
+		if offer, err = json.Marshal(r.offer); err != nil {
+			return false, err
+		}
+	}
 	tag, err := tx.Exec(ctx, `INSERT INTO chat_requests (id, organization_id, provider, event_id, external_workspace_id, conversation_id,
 			conversation_kind, conversation_name, thread_id, external_user_id, external_user_name, person_id, text, permalink, context_hash,
 			route, asked_route, confidence, reasoning, rounds, result_kind, result_id, shared_added, shared_skipped, model_call_id,
-			mention, question, effects, awaits_session_after)
+			mention, question, effects, awaits_session_after, link_offer)
 		VALUES ($1, current_organization_id(), $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9, $10, NULLIF($11, ''), $12, $13, NULLIF($14, ''),
-			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, $27, $28)
+			$15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), NULLIF($21, ''), $22, $23, NULLIF($24, ''), $25, $26, $27, $28, $29)
 		ON CONFLICT (provider, event_id) DO NOTHING`,
 		r.ID, r.Mention.Provider, r.EventID, r.Mention.WorkspaceID, r.Mention.ConversationID, r.Kind, r.ConversationName,
 		r.Mention.ThreadID, r.Mention.UserID, r.UserName, r.Person, clip(r.Mention.Text, 4000), r.Permalink, r.ContextHash,
 		r.Route, r.AskedRoute, r.Confidence, clip(r.Reasoning, 2000), r.Rounds, r.ResultKind, r.ResultID, db.NonNil(r.Added),
-		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects, r.AwaitsAfter)
+		db.NonNil(r.Skipped), r.ModelCall, mention, question, effects, r.AwaitsAfter, offer)
 	if err != nil {
 		return false, err
 	}
@@ -425,12 +438,14 @@ func (s *Service) route(ctx context.Context, d claimed, p Provider, m Mention, p
 		if got.Answer == nil {
 			// No answer, a proxy error or invalid JSON: a brainstorm.
 			r.Route, r.Reasoning = RouteFailed, "the routing call failed: "+got.Failed
+			r.candidates = linkCandidates(world, nil)
 			return s.make(ctx, org, p, inst, who, r, h, Decision{Route: RouteBrainstorm, Title: clip(trimmed(m.Text), 80)}, nil)
 		}
 		a = *got.Answer
 		r.Confidence, r.Reasoning = ptr(a.Confidence), a.Reasoning
 		dec = Decide(a, world, r.Rounds, false, m.Text)
 	}
+	r.candidates = linkCandidates(world, dec.Maybe)
 	if dec.Problem != "" {
 		r.AskedRoute = dec.AskedRoute
 		r.Reasoning = strings.TrimSpace(r.Reasoning + " (" + dec.Problem + ")")
