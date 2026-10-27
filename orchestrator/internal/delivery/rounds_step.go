@@ -83,14 +83,10 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 // step's choice of reviewers, and between the test step's skip
 // (carryForward) and its tester's Continue.
 func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *State, phase string, from map[string]string) (RoundChange, error) {
-	// Keyed by the identity's sha256, not the JSON, to keep the state small.
 	identity, _ := json.Marshal([]any{phase, st.Attempt, st.Iteration, st.Retries, st.PRIteration, st.Decisions, st.Candidate, from, st.Heads})
-	sum := sha256.Sum256(identity)
-	cacheKey := hex.EncodeToString(sum[:])
-	var cached []byte
-	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT state->'roundDelta'->$2 FROM workflow_runs WHERE id = $1`, sc.WorkflowRunID, cacheKey).Scan(&cached)
-	}); err != nil {
+	cacheKey := roundDeltaKey(identity)
+	cached, err := w.cachedRoundDelta(ctx, sc, cacheKey)
+	if err != nil {
 		return RoundChange{}, err
 	}
 	// A line count alone, cached before paths were measured, is measured again.
@@ -125,12 +121,33 @@ func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *St
 	if !keepForReview && !keepForSkip {
 		change.Paths = nil
 	}
-	raw, _ := json.Marshal(change)
-	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{roundDelta}', COALESCE(state->'roundDelta', '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)) WHERE id = $1`, sc.WorkflowRunID, cacheKey, raw)
+	return change, w.cacheRoundDelta(ctx, sc, cacheKey, change)
+}
+
+// roundDeltaKey is the roundDelta cache's key for identity: its sha256,
+// not the identity itself, to keep the state small.
+func roundDeltaKey(identity []byte) string {
+	sum := sha256.Sum256(identity)
+	return hex.EncodeToString(sum[:])
+}
+
+// cachedRoundDelta is the workflow run's roundDelta entry at key, empty for
+// none.
+func (w *steps) cachedRoundDelta(ctx context.Context, sc workflow.StepContext, key string) ([]byte, error) {
+	var cached []byte
+	err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT state->'roundDelta'->$2 FROM workflow_runs WHERE id = $1`, sc.WorkflowRunID, key).Scan(&cached)
+	})
+	return cached, err
+}
+
+// cacheRoundDelta records v, as JSON, as the roundDelta entry at key.
+func (w *steps) cacheRoundDelta(ctx context.Context, sc workflow.StepContext, key string, v any) error {
+	raw, _ := json.Marshal(v)
+	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{roundDelta}', COALESCE(state->'roundDelta', '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)) WHERE id = $1`, sc.WorkflowRunID, key, raw)
 		return err
 	})
-	return change, err
 }
 
 // lastReviewRound is where the checkouts of the attempt's latest completed

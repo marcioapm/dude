@@ -9,8 +9,6 @@ package delivery
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -289,12 +287,9 @@ type MergeChange struct {
 // that waits on GitHub and runs again asks nothing it already has.
 func (w *steps) mergeChange(ctx context.Context, sc workflow.StepContext, st *State) (MergeChange, error) {
 	i := st.Integration
-	sum := sha256.Sum256([]byte("merge:" + i.pair()))
-	cacheKey := hex.EncodeToString(sum[:])
-	var cached []byte
-	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT state->'roundDelta'->$2 FROM workflow_runs WHERE id = $1`, sc.WorkflowRunID, cacheKey).Scan(&cached)
-	}); err != nil {
+	cacheKey := roundDeltaKey([]byte("merge:" + i.pair()))
+	cached, err := w.cachedRoundDelta(ctx, sc, cacheKey)
+	if err != nil {
 		return MergeChange{}, err
 	}
 	var m MergeChange
@@ -356,12 +351,7 @@ func (w *steps) mergeChange(ctx context.Context, sc workflow.StepContext, st *St
 			return MergeChange{}, err
 		}
 	}
-	raw, _ := json.Marshal(m)
-	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{roundDelta}', COALESCE(state->'roundDelta', '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)) WHERE id = $1`, sc.WorkflowRunID, cacheKey, raw)
-		return err
-	})
-	return m, err
+	return m, w.cacheRoundDelta(ctx, sc, cacheKey, m)
 }
 
 func intersects(a, b []string) bool {
