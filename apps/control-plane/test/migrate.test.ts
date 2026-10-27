@@ -328,7 +328,7 @@ test("215 gives each failed request of the last 30 days its cause apart from the
           route, asked_route, result_kind, result_id, reasoning)
         VALUES (${id}, 'org_a', 'slack', ${id}, 'T1', 'C1', 'U1', ${route}, ${asked}, ${kind}, ${kind ? `x_${id}` : null}, 'x')`;
     }
-    expect((await migrate(url, { log: () => {} })).applied).toEqual(["215_chat_request_failure_backfill.sql", "216_attachment_storage_keys.sql"]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["215_chat_request_failure_backfill.sql"]);
     expect(Object.fromEntries((await sql`SELECT id, made_route FROM chat_requests WHERE starts_with(id, 'chr_m_')`)
       .map((r: { id: string; made_route: string | null }) => [r.id, r.made_route])))
       .toEqual(Object.fromEntries(made.map(([id, , , , want]) => [id, want])));
