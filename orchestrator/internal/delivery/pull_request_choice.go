@@ -217,10 +217,16 @@ func FeedbackStillOpenText(n int) string {
 	return fmt.Sprintf("%d feedback items still open", n)
 }
 
+// HeldByDeliver says Deliver, not the conductor, holds the delivery at the
+// gate before its pull request.
+func (d *Delivery) HeldByDeliver() bool {
+	return d.AtGate() && !d.State.conducted()
+}
+
 // HeldByChoice says the task's delivery is held before its pull request by
 // its Ask me first, under Deliver: a change of the choice wakes it.
 func (d *Delivery) HeldByChoice() bool {
-	return d != nil && d.AtGate() && d.State.ChoiceGate && !d.State.conducted()
+	return d != nil && d.HeldByDeliver() && d.State.ChoiceGate
 }
 
 // ChoiceRefusal is a change of the task's choice that is not made: its

@@ -513,7 +513,7 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 	case "conductorDecision":
 		// Deliver's hold before the pull request takes it to a fix; any
 		// other decision reads the items when the next fix runs.
-		if !d.AtGate() || d.State.conducted() {
+		if !d.HeldByDeliver() {
 			out.Waiting = "the delivery's next fix takes them up"
 		}
 	case "decide":

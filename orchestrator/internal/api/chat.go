@@ -372,7 +372,7 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 			return err
 		}
 		handedBack := body.Decider == delivery.DeciderPolicy
-		if handedBack && d.AtGate() && body.OpenPullRequest && d.State.Decider != delivery.DeciderConductor {
+		if handedBack && body.OpenPullRequest && d.HeldByDeliver() {
 			// Deliver's own hold: the people's open feedback goes to a fixer
 			// first, as the opening step would send it.
 			if n, err := delivery.BlockingFeedbackTx(r.Context(), tx, taskID, d.State.Attempt); err != nil {

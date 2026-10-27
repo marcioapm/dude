@@ -31,7 +31,7 @@ func FeedbackNotHandledText(n int) string {
 func DoneWithoutPullRequestTx(ctx context.Context, tx pgx.Tx, org, taskID string, actor Actor) error {
 	stopped, err := StopAllTx(ctx, tx, org, taskID, "done without a pull request", false, func(locked Stopped) error {
 		d := locked.Delivery
-		if d == nil || !d.Live() || !d.AtGate() || d.State.conducted() {
+		if d == nil || !d.Live() || !d.HeldByDeliver() {
 			return lifecycleRefuse("not_held", "the task is not held before its pull request")
 		}
 		opened, err := PullRequestOpenedTx(ctx, tx, taskID)
