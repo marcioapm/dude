@@ -241,6 +241,11 @@ func TestAChoiceChangedWhileEnteringTheHoldOpensThePullRequest(t *testing.T) {
 	if s := w.taskStatus(task); s == "awaiting_input" {
 		t.Errorf("task %s once its pull request opened", s)
 	}
+	// The release is the task's one move for the changed choice.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
+		AND payload->>'reason' = $2`, task, delivery.ReasonChoiceChanged); n != 1 {
+		t.Errorf("%d moves for the changed choice", n)
+	}
 }
 
 // The owner's change of Ask me first holds the task's row, uncommitted, as
