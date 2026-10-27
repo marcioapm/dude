@@ -209,8 +209,7 @@ def test_a_brainstorm_with_no_project_offers_the_learned_one_and_the_askers_clic
     assert "dude github_" not in answer, answer
     jobs = next(line for line in answer.splitlines() if line.startswith("Jobs:"))
     assert "integration" in jobs and "failure" in jobs, jobs
-    # Its agent was told of the checkout as a member's link in dude tells it (the syncer's resume). That
-    # resume can land before or after the `said` snapshot, so the whole transcript is searched.
+    # The checkout resume may precede `said`, so search the whole transcript.
     notice = f"A member linked {keys['api']}/{fake_github.repo}; it is checked out at"
     try:
         wait_until(lambda: any(notice in t for t in _said(n["marcia"], session)), timeout=30)
