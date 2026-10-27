@@ -150,7 +150,7 @@ func TestAWaivedFailurePassesOnlyOnTheJudgesYes(t *testing.T) {
 			// Carried with the waiver it rests on, and the Missing question
 			// still asked over the whole report.
 			v := got.Verdicts[0]
-			if !got.Carried || len(got.Verdicts) != 2 || v.Result != checksWaived || v.CallID != "call_test" || v.Waiver == nil ||
+			if !got.Carried || len(got.Verdicts) != 2 || v.Result != delivery.CheckWaived || v.CallID != "call_test" || v.Waiver == nil ||
 				v.Waiver.RunID != w.run.ID || v.Waiver.Note != "Needs a hardware clock CI lacks." || v.Waiver.Person != "per_ana" ||
 				got.Verdicts[1].Command != "missing checks" || got.Verdicts[1].Result != "pass" {
 				t.Fatalf("carried %+v", got)
@@ -187,7 +187,7 @@ func TestBesideACarriedFailureThePassesAreBackedAndMissingIsAsked(t *testing.T) 
 				})
 			}
 			if err != nil || pass != tc.verified || got.Verified != tc.verified || len(fake.asked) != 3 || len(got.Verdicts) != 3 ||
-				got.Verdicts[0].Result != checksWaived || got.Verdicts[1].Command != "make lint" || got.Verdicts[1].Result != "pass" {
+				got.Verdicts[0].Result != delivery.CheckWaived || got.Verdicts[1].Command != "make lint" || got.Verdicts[1].Result != "pass" {
 				t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 			}
 			// The send-back names the missing check alone, never the

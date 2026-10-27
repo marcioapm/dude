@@ -27,11 +27,17 @@ const (
 // Recorded results the checks gate's judge gives a reported fail or not-run
 // it passes, never an agent's: CheckPreexisting, a failure the Run's calls
 // show the same at the commit of the target branch the task builds on;
-// CheckDeferred, a check a later phase of the delivery runs.
+// CheckDeferred, a check a later phase of the delivery runs; CheckWaived,
+// the failure a person waived for the attempt.
 const (
 	CheckPreexisting = "pre-existing"
 	CheckDeferred    = "deferred"
+	CheckWaived      = "waived"
 )
+
+// MissingChecks is the command of the checks gate's recorded verdict of its
+// Missing question, which backs no reported check.
+const MissingChecks = "missing checks"
 
 type Check struct {
 	Command  string `json:"command" yaml:"command"`

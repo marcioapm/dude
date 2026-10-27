@@ -652,7 +652,7 @@ func TestACarriedWaiverIsAskedFirstAndAloneForItsFailure(t *testing.T) {
 		!isPreexistingQuestion(fake.asked[1]) || !strings.Contains(fake.asked[1].Question, "npx tsc --noEmit") {
 		t.Fatalf("asked %d", len(fake.asked))
 	}
-	if v := got.Verdicts; v[0].Result != checksWaived || v[0].Command != "make test" || v[1].Result != delivery.CheckPreexisting {
+	if v := got.Verdicts; v[0].Result != delivery.CheckWaived || v[0].Command != "make test" || v[1].Result != delivery.CheckPreexisting {
 		t.Fatalf("verdicts %+v", v)
 	}
 }

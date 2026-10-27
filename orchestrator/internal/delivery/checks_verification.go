@@ -54,10 +54,10 @@ func (j gatedJudgement) status() string {
 		switch c.Result {
 		case CheckPass:
 			// Missing's answer backs no reported check.
-			backed = backed || c.Command != missingChecks
+			backed = backed || c.Command != MissingChecks
 		case CheckPreexisting, CheckDeferred:
 			judged = true
-		case checksWaived:
+		case CheckWaived:
 			carried = true
 		}
 	}
@@ -73,13 +73,6 @@ func (j gatedJudgement) status() string {
 	}
 	return "backed"
 }
-
-// The checks gate's recorded verdict of its Missing question, and the
-// result of a reported failure a person's waiver passed.
-const (
-	missingChecks = "missing checks"
-	checksWaived  = "waived"
-)
 
 // carriedFrom is the waiver a carried Run's first waived check rests on.
 func (j gatedJudgement) carriedFrom() *CarriedWaiver {

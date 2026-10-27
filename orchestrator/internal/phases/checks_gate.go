@@ -45,13 +45,6 @@ var errNoTaskBase = errors.New(checksNoTaskBase.Render(nil))
 // two when a carried waiver does not cover it, plus one for Missing.
 const checksCountMax = 30
 
-// Results of a reported failure or not-run check that passed without being
-// backed. checksWaived: the judge found it the failure a person waived for
-// the attempt. delivery.CheckPreexisting and CheckDeferred: the judge found
-// it failing the same way at the target branch's commit the task builds
-// on, or a check a later phase of the delivery runs.
-const checksWaived = "waived"
-
 type checksVerdict struct {
 	Command  string `json:"command"`
 	Result   string `json:"result,omitempty"`
@@ -68,9 +61,10 @@ type checksVerdict struct {
 	JudgeReason string `json:"judgeReason,omitempty"`
 }
 
-// passedUnbacked: a verdict that passes the turn without a backed pass.
+// passedUnbacked: a verdict that passes the turn without a backed pass:
+// waived (delivery.CheckWaived), pre-existing or deferred.
 func (v checksVerdict) passedUnbacked() bool {
-	return v.Result == checksWaived || v.Result == delivery.CheckPreexisting || v.Result == delivery.CheckDeferred
+	return v.Result == delivery.CheckWaived || v.Result == delivery.CheckPreexisting || v.Result == delivery.CheckDeferred
 }
 
 type checksDecision struct {
@@ -338,7 +332,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			}
 			if passedBy(j, err) {
 				d.Carried = true
-				d.Verdicts = append(d.Verdicts, checksVerdict{Command: v.Command, Result: checksWaived, Decision: j.Decision,
+				d.Verdicts = append(d.Verdicts, checksVerdict{Command: v.Command, Result: delivery.CheckWaived, Decision: j.Decision,
 					Reason: j.Reasoning, CallID: j.CallID, Waiver: h.waiver})
 				continue
 			}
@@ -391,7 +385,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		if i < len(passes) {
 			name, q, want = passes[i].Command, backedQuestion.Render(passes[i]), judge.Yes
 		} else {
-			name, q, want = "missing checks", missingQuestion.Render(nil), judge.No
+			name, q, want = delivery.MissingChecks, missingQuestion.Render(nil), judge.No
 		}
 		j, err := svc.Judge(ctx, r.Org, judge.Ask{Asker: "phases.checks", About: r.ID, TaskID: &r.TaskID, Question: q, Context: text})
 		if offTier(err) {
