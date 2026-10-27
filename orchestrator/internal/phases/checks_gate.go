@@ -40,8 +40,9 @@ var (
 // target-branch commit is known to measure it against.
 var errNoTaskBase = errors.New(checksNoTaskBase.Render(nil))
 
-// checksCountMax bounds the judge calls one report costs, one per check
-// plus one, made in turn before anything is pushed.
+// checksCountMax caps the checks one report may list, and so its judge
+// calls, made in turn before anything is pushed: each check costs one,
+// two when a carried waiver does not cover it, plus one for Missing.
 const checksCountMax = 30
 
 // Results of a reported failure or not-run check that passed without being
@@ -496,10 +497,12 @@ func joinBases(bases []taskBase) string {
 // checkout holds, the commit of its target branch the task builds on:
 // GitHub's merge base of that branch and the commit the Run started from
 // (runs.base_shas). The Run's start holds the task's earlier work and any
-// base merged into it, so after a merge from the target branch this is
-// that merged commit, and never one of the task's own. A repository whose
-// start was not recorded, or that GitHub cannot compare, has none: no
-// failure in it passes as pre-existing. Sorted by repository.
+// merge of the target branch made before the Run started, so the base is
+// the newest such merged commit, never one of the task's own. A merge made
+// during the Run is not seen: a failure it brought in is measured against
+// the older base, where it does not show, and is rejected. A repository
+// whose start was not recorded, or that GitHub refuses to compare, has
+// none: no failure in it passes as pre-existing. Sorted by repository.
 func (s *Syncer) taskBases(ctx context.Context, r phaseRun) ([]taskBase, error) {
 	var starts map[string]string
 	var tb delivery.TaskBranch
