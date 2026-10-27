@@ -430,7 +430,12 @@ describe("runs", () => {
     await ev("evt_n3", "agent.tool.completed", { tool: "bash", callId: "c2", status: "completed" });
     await open(["c1"]);
     expect(await now()).toEqual({ tool: "read", args: { filePath: "go.mod" } });
+    await owner`UPDATE automation_runs SET feed_state = ${{ open: ["c1"], message: "Grouping by",
+      harness: { partialTools: { c1: { output: { head: "{\"merged\": 12" } } } } }} WHERE id = 'arn_now'`;
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_now`))).live)
+      .toEqual({ message: "Grouping by", output: { c1: { output: { head: "{\"merged\": 12" } } } });
     await owner`UPDATE automation_runs SET status='succeeded' WHERE id='arn_now'`;
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_now`))).live).toBeNull();
     await open(["c1"]);
     expect(await now()).toBeNull();
     await open([]);

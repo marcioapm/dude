@@ -2155,7 +2155,8 @@ function childOf(state: Projection, payload: Record<string, unknown>, event: Per
 }
 
 /** A tool's outcome from an `agent.tool.completed` payload, or null if it reported none. */
-function resultFrom(payload: Record<string, unknown>): ToolResult | null {
+/** A completion payload's output streams and exit code, as a tool turn's result. */
+export function resultFrom(payload: Record<string, unknown>): ToolResult | null {
   const result: ToolResult = {};
   for (const key of ["output", "stdout", "stderr"] as const) {
     const stream = payload[key] as Record<string, unknown> | undefined;

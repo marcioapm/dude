@@ -12,7 +12,7 @@ import { ChatMessage, ChatAside, ChatTranscript, FeedDelivery, LogStream, summar
 import { formatDuration, Icon } from "@dude/design-system";
 import type { AgentRole, AutomationRunDetail, PersistedEvent } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
-import { project, type ToolTurn, type Turn } from "../api/conversation.ts";
+import { project, resultFrom, type ToolTurn, type Turn } from "../api/conversation.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { usePeople } from "../people.tsx";
 import { asides, interleaved, renderTurn, type Speaker } from "./transcriptTurns.tsx";
@@ -118,9 +118,14 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
   const people = usePeople();
   const status = live ? "running" : run.status === "succeeded" ? "completed" : run.status === "cancelled" ? "aborted" : "failed";
   const conversation = useMemo(() => project(events, status), [events, status]);
-  // A call that exited non-zero is failed — opened, in danger — whatever the harness called it.
-  const turns = useMemo(() => conversation.turns.filter((t) => t.kind !== "usage").map((t) =>
-    t.kind === "tool" && t.status === "completed" && (t.result?.exitCode ?? 0) !== 0 ? { ...t, status: "failed" as const } : t), [conversation]);
+  // A call still running shows the output the orchestrator holds for it so far (run.live, read with the run's facts).
+  const liveOutput = live ? run.live?.output ?? {} : {};
+  const turns = useMemo(() => conversation.turns.filter((t) => t.kind !== "usage").map((t) => {
+    if (t.kind !== "tool") return t;
+    if (t.status === "running" && liveOutput[t.id]) return { ...t, result: resultFrom(liveOutput[t.id]!) };
+    // A call that exited non-zero is failed — opened, in danger — whatever the harness called it.
+    return t.status === "completed" && (t.result?.exitCode ?? 0) !== 0 ? { ...t, status: "failed" as const } : t;
+  }), [conversation, liveOutput]);
   const groups = useMemo(() => asides(turns), [turns]);
   const sent = useMemo(() => events.filter((e) => e.eventType === EV_FOLLOW_UP).map((e) => {
     const id = String(e.payload.deliveryId ?? "");
@@ -145,7 +150,8 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
       {interleaved(groups, sent).map((item) => "node" in item
         ? <Fragment key={item.id}>{item.node}</Fragment>
         : Array.isArray(item.group) ? <ChatAside key={item.group[0]!.id}>{item.group.map(render)}</ChatAside> : render(item.group))}
-      {live && conversation.activity ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
+      {live && run.live?.message ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
+        content={run.live.message} streaming data-testid="automation-streaming" /> : live && conversation.activity ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
         activity={conversation.activity} data-testid="automation-activity"
         activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} /> : null}
     </ChatTranscript>

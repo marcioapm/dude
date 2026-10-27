@@ -510,7 +510,9 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     const a = await readOne(scope, ctx.params.id!);
     const [r] = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS}, r.payloads, r.payloads_purged_at IS NOT NULL AS "payloadsPurged",
         r.log_tail AS "logTail", r.exit_code AS "exitCode", r.container_started_at AS "containerStartedAt",
-        r.container_stopped_at AS "containerStoppedAt", r.stop_reason AS "stopReason", r.scheduled_for AS "scheduledFor"
+        r.container_stopped_at AS "containerStoppedAt", r.stop_reason AS "stopReason", r.scheduled_for AS "scheduledFor",
+        CASE WHEN r.status = 'running' THEN json_build_object('message', COALESCE(r.feed_state->>'message', ''),
+          'output', COALESCE(r.feed_state->'harness'->'partialTools', '{}'::jsonb)) END AS "live"
       FROM automation_runs r WHERE r.automation_id = $1 AND r.id = $2`, [a.id, ctx.params.runId!])) as Array<Record<string, unknown>>;
     if (!r) throw notFound(`automation ${a.id} has no run ${ctx.params.runId}`);
     const requests = (await scope.sql`SELECT id, delivery_id AS "deliveryId", try, http_status AS "httpStatus", ms, error,

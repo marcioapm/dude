@@ -769,6 +769,24 @@ describe("a run's activity", () => {
     expect(c.querySelector('[data-testid="automation-activity"]')).not.toBeNull();
   });
 
+  test("a live run's unfinished reply streams with its caret and a running call shows its output so far", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    client.automationRun = async (id, runId) => ({ ...(await real(id, runId)),
+      live: { message: "Grouping the merged pull requests by", output: { c1: { output: { head: "{\"merged\": 12" } } } } });
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const streaming = await until(() => c.querySelector<HTMLElement>("[data-testid=automation-streaming]"), "the streaming reply");
+    expect(streaming.textContent).toContain("Grouping the merged pull requests by");
+    // The caret is Markdown's last aria-hidden mark after the streamed words; a finished reply has none.
+    const marks = [...streaming.querySelectorAll("span[aria-hidden]")].filter((s) => s.textContent === "" && s.closest("p"));
+    expect(marks.length).toBe(1);
+    const bash = card(c, "bash")!;
+    expect(bash.getAttribute("data-status")).toBe("running");
+    await click(bash.querySelector<HTMLElement>("[role=button]")!);
+    expect(bash.textContent).toContain("so far");
+    expect(bash.textContent).toContain("{\"merged\": 12");
+  });
+
   test("log events do not refetch the full run", async () => {
     const client = new FixtureClient("a");
     const real = client.automationRun.bind(client);

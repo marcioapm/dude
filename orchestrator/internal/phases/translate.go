@@ -153,6 +153,8 @@ type harnessState struct {
 // keeps across its parks and resumes, stored under these JSON names as they
 // are (harnessStateJSON embeds it).
 type talkerState struct {
+	// An automation run's calls still running: their output so far, by
+	// call id, shown live and kept on an aborted completion.
 	PartialTools map[string]map[string]any `json:"partialTools,omitempty"`
 	// Its turns failed in a row (turnFailed), and whether the turn that
 	// ended last was one: a turn that did not fail resets the count.
@@ -1316,7 +1318,7 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 				t.announced[callID] = title
 			}
 		case "in_progress":
-			if result := toolResult(u); len(result) > 0 {
+			if result := toolResult(u); len(result) > 0 && t.run.AutomationRunID != "" {
 				if t.PartialTools == nil {
 					t.PartialTools = map[string]map[string]any{}
 				}
