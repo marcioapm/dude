@@ -11,7 +11,7 @@ import "@dude/design-system/base.css";
 import "./app.css";
 
 import { ApiClient, ApiError, type MeAnswer } from "./api/client.ts";
-import { fixtureScenario, type FixtureScenario } from "./fixtures/scenario.ts";
+import { fixtureScenario, RUN_KEY, type FixtureScenario } from "./fixtures/scenario.ts";
 import { SignedIn } from "./SignedIn.tsx";
 import { DudeMark } from "./DudeMark.tsx";
 
@@ -25,7 +25,10 @@ import { AuthRefusal } from "./authRefusal.ts";
 async function fixtureClient(scenario: FixtureScenario): Promise<ApiClient> {
   const { FixtureClient, installFixtureStream } = await import("./fixtures/client.ts");
   installFixtureStream();
-  return new FixtureClient(scenario);
+  const client = new FixtureClient(scenario);
+  // `?run=no-slack`: the organisation has no Slack installation (an automation's post_to_chat cannot post).
+  if (localStorage.getItem(RUN_KEY) === "no-slack") await client.disconnectChat();
+  return client;
 }
 
 function Root() {

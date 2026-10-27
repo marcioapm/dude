@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { PEOPLE, PROJECT } from "../src/fixtures/data.ts";
+import { ORG, PEOPLE, PROJECT } from "../src/fixtures/data.ts";
 import { ORG_AUTOMATION_PICKS, PRESET_SECRETS } from "@dude/domain";
 import { AutomationPage, AutomationsList, NewAutomationDialog, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
 
@@ -650,5 +650,101 @@ describe("the test event's helpers", () => {
     expect(pr).toMatchObject({ action: "opened", repository: { full_name: "acme/web" }, sender: { login: "you" }, pull_request: { number: 1 } });
     expect(testTemplate("push", null)).toMatchObject({ ref: "refs/heads/main" });
     expect("action" in testTemplate("push", null)).toBe(false);
+  });
+});
+
+describe("post_to_chat", () => {
+  const page = (client: FixtureClient, place: AutomationsPlace) =>
+    show(<AutomationPage client={client} orgName="Acme" people={PEOPLE} place={place} onPlace={() => undefined} onBack={() => undefined} />);
+
+  test("an agent's Tools row lists its tools, post_to_chat first and New, with no callout while Slack is connected", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest" });
+    const row = await until(() => c.querySelector<HTMLElement>("[data-testid=tools-row]"), "the Tools row");
+    expect(row.textContent).toContain("What its agent can call, besides the shell in its machine.");
+    const tools = [...row.querySelectorAll("li[data-tool]")];
+    expect(tools.map((t) => t.getAttribute("data-tool"))).toEqual(["post_to_chat", "create_task", "github_comment", "github_search",
+      "github_pull_request", "github_issue", "github_check_log"]);
+    expect(tools[0]!.textContent).toContain("New");
+    expect(tools[0]!.textContent).toContain("through Acme's Slack installation");
+    await settle(50);
+    expect(row.querySelector("[data-testid=tool-unavailable]")).toBeNull();
+    expect(c.textContent).toContain("It opens no pull requests.");
+  });
+
+  test("without Slack, post_to_chat's row says runs that call it fail, and links Organisation settings → Chat", async () => {
+    const client = new FixtureClient("a");
+    await client.disconnectChat();
+    const c = await page(client, { id: "aut_digest" });
+    const callout = await until(() => c.querySelector<HTMLElement>("li[data-tool=post_to_chat] [data-testid=tool-unavailable]"), "the callout");
+    expect(callout.textContent).toBe("Slack is not connected for Acme. Runs that call it fail on the call. Connect Slack in Organisation settings → Chat");
+    expect(callout.querySelector("a")?.getAttribute("href")).toBe("#/org/settings/chat");
+    expect(c.querySelectorAll("[data-testid=tool-unavailable]").length).toBe(1);
+  });
+
+  test("a run's post is a Slack card on the log with its channel and the link to the message", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d1" });
+    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]"), "the call");
+    expect(call.querySelector("time")?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    expect(call.querySelector('[data-icon="slack"]')).not.toBeNull();
+    expect(call.textContent).toContain("#engineering");
+    const posted = call.querySelector<HTMLElement>("[data-testid=posted-link]")!;
+    expect(posted.textContent).toBe(" Posted to #engineering · Open the message in Slack");
+    const link = posted.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("1 tool call. Open one for its output.");
+    expect(c.querySelector("[data-testid=run-failed]")).toBeNull();
+    // The note's "Open one" holds: the post opens to its answer.
+    const head = call.querySelector<HTMLElement>("[role=button][aria-expanded]");
+    expect(head?.getAttribute("aria-expanded")).toBe("false");
+    await click(head!);
+    expect(head!.getAttribute("aria-expanded")).toBe("true");
+    expect(call.textContent).toContain(`"channelId": "C0ENGINEER"`);
+    expect(call.textContent).toContain(`"ts": "1761318192.000100"`);
+  });
+
+  test("a run that failed on post_to_chat says so under Run, and the call shows its error", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
+    expect(failed.getAttribute("data-tone")).toBe("danger");
+    expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. Nothing was posted; Márcio Martins was told.`);
+    const call = c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]")!;
+    expect(call.textContent).toContain(`Slack is not connected for ${ORG.name}: an organisation admin adds dude's Slack app in Organisation settings → Chat.`);
+    expect(call.querySelector("[data-testid=posted-link]")).toBeNull();
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the last one; its owner was told.");
+  });
+
+  test("the danger callout follows the call the run failed on, not the reason's words nor which call came last", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    const search = { id: "evt_s", tool: "github_search", at: new Date().toISOString(), status: "completed" as const, args: { q: "is:pr" },
+      durationMs: 90, error: null, posted: null };
+    // A call after the refusal: the run still failed on the refusal.
+    client.automationRun = async (id, runId) => {
+      const r = await real(id, runId);
+      return runId === "arn_d0" ? { ...r, toolCalls: [...r.toolCalls, search] }
+        : { ...r, status: "failed", reason: "post_to_chat failed: the agent wrote this itself", failedCallId: null };
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    await until(() => c.querySelector("[data-testid=run-failed]"), "the failure");
+    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the post_to_chat call at");
+    const other = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d1" });
+    await until(() => other.querySelector("[data-testid=run-tools]"), "the log");
+    expect(other.querySelector("[data-testid=run-failed]")).toBeNull();
+    expect(other.textContent).toContain("post_to_chat failed: the agent wrote this itself");
+  });
+
+  test("a run that posted, then failed on a refused post, says that message was not posted, not that nothing was", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    client.automationRun = async (id, runId) => {
+      const r = await real(id, runId);
+      const posted = (await real(id, "arn_d1")).toolCalls;
+      return runId === "arn_d0" ? { ...r, toolCalls: [...posted, ...r.toolCalls] } : r;
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
+    const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
+    expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. That message was not posted; Márcio Martins was told.`);
+    expect(c.querySelector("[data-testid=posted-link]")).not.toBeNull();
   });
 });

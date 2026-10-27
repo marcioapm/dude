@@ -129,9 +129,9 @@ export { StepList, StepRow } from "./StepList.tsx";
 export type { StepListProps, StepRowProps } from "./StepList.tsx";
 export { SettingsLayout, SettingsHeader, SettingsNote, SettingsExplainer, SettingsSection, SettingRow, SettingSource, SettingFields, SettingField, SettingsDisclosure, SettingsMeta, TextButton, Switch } from "./Settings.tsx";
 export type { SettingsLayoutProps, SettingsNavItem, SettingRowProps, SettingSourceProps, SwitchProps } from "./Settings.tsx";
-export { ChipsInput, DayToggles, KindMark, ListSwitch, NextRuns, OwnerMark, RepoFilterField, SchedulePicker, ScopeChip, SessionMark, TriggerSummary,
+export { AgentTools, ChipsInput, DayToggles, KindMark, ListSwitch, NextRuns, OwnerMark, RepoFilterField, SchedulePicker, ScopeChip, SessionMark, TriggerSummary,
   cityOf, cronOf, describeCron, repoFilterCount, repoGlob, scheduleOf } from "./Automations.tsx";
-export type { AutomationKindName, RepoFilterValue, ScheduleMode } from "./Automations.tsx";
+export type { AgentTool, AgentToolUnavailable, AutomationKindName, RepoFilterValue, ScheduleMode } from "./Automations.tsx";
 export { ConditionRows, DeliveryVerdict, IncomingSummary, conditionWords } from "./Incoming.tsx";
 export type { ConditionOpName, ConditionResultMark, DeliveryVerdictValue, TriggerCondition } from "./Incoming.tsx";
 export { PromptHistory } from "./PromptHistory.tsx";

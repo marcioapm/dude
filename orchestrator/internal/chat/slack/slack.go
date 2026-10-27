@@ -49,7 +49,10 @@ type Config struct {
 }
 
 // Provider is Slack.
-type Provider struct{ cfg Config }
+type Provider struct {
+	cfg      Config
+	channels channelCache
+}
 
 // New is the Slack provider for cfg.
 func New(cfg Config) *Provider {

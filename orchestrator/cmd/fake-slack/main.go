@@ -30,5 +30,5 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	log.Fatal(http.Serve(ln, fakeslack.New(*clientID, *clientSecret)))
+	log.Fatal(http.Serve(ln, fakeslack.New(*clientID, *clientSecret).WithChannelList()))
 }
