@@ -169,6 +169,36 @@ describe("the public endpoint", () => {
     expect((await rows(id)).map((r) => r.verdict)).toEqual([null, "refused", "refused"]);
   });
 
+  test("each mode takes the secret only in its own place: another mode's place is 401", async () => {
+    const header = await hookWith({ mode: "header", header: "Authorization" });
+    expect((await post(header.hook, "{}", {}, `?token=${encodeURIComponent(header.secret)}`)).status).toBe(401);
+    const query = await hookWith({ mode: "query", param: "token" });
+    expect((await post(query.hook, "{}", { authorization: query.secret })).status).toBe(401);
+    expect((await post(query.hook, "{}", { authorization: `Bearer ${query.secret}` })).status).toBe(401);
+    const signed = await hookWith({ mode: "signature", header: "X-Signature", prefix: "sha256=" });
+    for (const given of [`sha256=${signed.secret}`, signed.secret]) {
+      expect((await post(signed.hook, "{}", { "x-signature": given })).status).toBe(401);
+    }
+    expect((await post(signed.hook, "{}", {}, `?token=${encodeURIComponent(signed.secret)}`)).status).toBe(401);
+    expect((await post(signed.hook, "{}", { authorization: signed.secret })).status).toBe(401);
+  });
+
+  test("1 MiB exactly is taken, one byte more is 413; a signed body over 1 MiB is 413 before its signature is checked", async () => {
+    const { id, hook, secret } = await hookWith({ mode: "header", header: "X-Token" });
+    const exactly = (n: number) => `{"a":"${"x".repeat(n - 8)}"}`;
+    expect(exactly(1_048_576).length).toBe(1_048_576);
+    expect((await post(hook, exactly(1_048_576), { "x-token": secret })).status).toBe(202);
+    expect((await post(hook, exactly(1_048_577), { "x-token": secret })).status).toBe(413);
+    expect((await rows(id)).map((r) => [r.verdict, r.reason, r.payload === null, r.bytes]))
+      .toEqual([[null, null, false, 1_048_576], ["refused", "too_large", true, 1_048_577]]);
+    const signed = await hookWith({ mode: "signature", header: "X-Signature", prefix: "sha256=" });
+    const big = exactly(1_048_577);
+    const res = await post(signed.hook, big, { "x-signature": `sha256=${sign(signed.secret, big)}` });
+    expect(res.status).toBe(413);
+    expect((await post(signed.hook, big, { "x-signature": "sha256=00" })).status).toBe(413);
+    expect((await rows(signed.id)).map((r) => r.reason)).toEqual(["too_large", "too_large"]);
+  });
+
   test("too large is 413, not JSON is 415, a JSON array is 415: each stored refused with no body", async () => {
     const { id, hook, secret } = await hookWith({ mode: "header", header: "X-Token" });
     const big = `{"a":"${"x".repeat(1_048_576)}"}`;
