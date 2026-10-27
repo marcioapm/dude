@@ -443,9 +443,9 @@ func untiered(d checksDecision) checksDecision {
 }
 
 // sendBack is the send-back of a rejected report: only the verdicts that
-// did not pass, and, when one is a reported failure and a judgement tier
-// answered, how a failure that predates the task passes, naming the commit
-// of each target branch the task builds on.
+// did not pass, and, when one is a reported failure, a judgement tier
+// answered and a task base is known, how a failure that predates the task
+// passes, naming the commit of each target branch the task builds on.
 func (d checksDecision) sendBack() string {
 	failed := d.unpassed()
 	// Each field one line: evidence and reasons are free text, and the
@@ -454,11 +454,12 @@ func (d checksDecision) sendBack() string {
 		failed[i].Command, failed[i].Reason = oneLine(v.Command), oneLine(v.Reason)
 		failed[i].WaiverReason, failed[i].JudgeReason = oneLine(v.WaiverReason), oneLine(v.JudgeReason)
 	}
+	passable := !d.untiered && len(d.bases) > 0
 	return checksText.Render(struct {
 		Checks []checksVerdict
 		Failed bool
 		Bases  string
-	}{failed, !d.untiered && slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(d.bases)})
+	}{failed, passable && slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(d.bases)})
 }
 
 // unpassed are the verdicts that did not pass.

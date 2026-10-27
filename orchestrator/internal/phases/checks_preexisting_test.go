@@ -248,6 +248,11 @@ func TestAFailureWithNoTaskBaseIsRejectedUnasked(t *testing.T) {
 	if v := got.Verdicts; len(v) != 1 || v[0].Result != delivery.CheckFail || !strings.Contains(v[0].JudgeReason, "no recorded commit of the target branch") {
 		t.Fatalf("verdicts %+v", v)
 	}
+	// No run could pass it, so the send-back does not say how one would.
+	if msg := got.sendBack(); !strings.Contains(msg, "no recorded commit of the target branch") ||
+		strings.Contains(msg, "passes once this Run's own tool calls show") {
+		t.Fatalf("send-back:\n%s", msg)
+	}
 }
 
 // GitHub failing to compare leaves the turn unjudged, to be judged again
