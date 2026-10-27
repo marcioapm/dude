@@ -978,10 +978,8 @@ func verificationSection(v *prVerification, heads map[string]string, taskLink st
 	if len(v.StandsFor) > 0 {
 		tested = v.StandsFor
 		if v.Why == MergeUntouchedWhy {
-			// A clean merge of the target branch before the pull request.
 			fmt.Fprintf(&b, " Not tested again after the merge of the target branch: it touched none of the task's files; these verdicts are test %s's.", v.RunID)
 		} else {
-			// A test step that started no tester: the changes since are outside the product.
 			b.WriteString(" Not tested again since: the changes after it touch only paths no criterion depends on.")
 		}
 	}
