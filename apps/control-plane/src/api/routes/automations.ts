@@ -52,6 +52,8 @@ export const COLUMNS = `a.id, a.project_id AS "projectId", p.name AS "projectNam
   a.server, a.webhook, a.webhook_hint AS "webhookSecretHint", a.secrets, a.notify_on_failure AS "notifyOnFailure",
   a.next_run_at AS "nextRunAt", a.created_at AS "createdAt", a.updated_at AS "updatedAt",
   a.incoming_hint AS "incomingSecretHint", a.project_ids AS "projectIds",
+  (SELECT f.public_url FROM forge_credentials f WHERE a.trigger->>'kind' = 'incoming' AND f.forge = 'github' AND f.public_url IS NOT NULL
+     LIMIT 1) AS "publicOrigin",
   (SELECT json_build_object('id', o.id, 'name', o.name, 'photoUrl', person_ref(o)->>'photoUrl') FROM people o WHERE o.id = a.owner_id) AS owner,
   (SELECT json_build_object('id', r.id, 'status', r.status, 'at', COALESCE(r.ended_at, r.started_at, r.created_at))
      FROM automation_runs r WHERE r.automation_id = a.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS "lastRun"`;
@@ -294,8 +296,9 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
     await checkReferences(scope, input, current);
     input.trigger = savedTrigger(input.trigger, current.trigger);
     const triggerChanged = JSON.stringify(input.trigger) !== JSON.stringify(current.trigger);
-    // Becoming incoming makes its verification secret, answered this once.
-    const fresh = input.trigger.kind === "incoming" && current.incomingSecretHint === null ? newSigningSecret() : null;
+    // Becoming incoming (a new hook) makes its verification secret, answered this once; leaving it drops the secret.
+    const fresh = input.trigger.kind === "incoming" && current.trigger.kind !== "incoming" ? newSigningSecret() : null;
+    const incoming = input.trigger.kind === "incoming";
     await scope.sql`
       UPDATE automations SET name = ${input.name}, description = ${input.description}, kind = ${input.kind},
         trigger = ${input.trigger}::jsonb, session_mode = ${input.sessionMode}, expiry_days = ${input.expiryDays},
@@ -304,7 +307,8 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
         image_id = ${input.imageId}, setup_script = ${input.setupScript}, command = ${input.command},
         server = ${input.server}::jsonb, webhook = ${input.webhook}::jsonb,
         webhook_secret = CASE WHEN ${input.kind} = 'webhook' THEN COALESCE(webhook_secret, ${newSigningSecret()}) ELSE webhook_secret END,
-        incoming_secret = COALESCE(${fresh}, incoming_secret), incoming_hint = COALESCE(${fresh ? secretHint(fresh) : null}, incoming_hint),
+        incoming_secret = CASE WHEN ${incoming} THEN COALESCE(${fresh}, incoming_secret) END,
+        incoming_hint = CASE WHEN ${incoming} THEN COALESCE(${fresh ? secretHint(fresh) : null}, incoming_hint) END,
         project_ids = ${scope.sql.array(input.projectIds, "text")}::text[],
         secrets = ${input.secrets}::jsonb, notify_on_failure = ${input.notifyOnFailure},
         next_run_at = CASE WHEN ${triggerChanged} THEN NULL ELSE next_run_at END,

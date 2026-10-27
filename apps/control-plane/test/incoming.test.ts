@@ -94,7 +94,7 @@ async function hookWith(verify: Record<string, unknown>, extra: Record<string, u
   const created = await res.json() as Json;
   expect(created.incomingSecret).toMatch(/^whsec_[A-Za-z0-9_-]{43}$/);
   expect(created.incomingSecretHint).toBe(created.incomingSecret.slice(-4));
-  const { id, projectId: _p, projectName: _n, enabled: _e, owner: _o, ownerLeftAt: _l, webhookSecretHint: _w, incomingSecretHint: _i,
+  const { id, projectId: _p, projectName: _n, enabled: _e, owner: _o, ownerLeftAt: _l, webhookSecretHint: _w, incomingSecretHint: _i, publicOrigin: _po,
     nextRunAt: _x, lastRun: _r, canEdit: _c, canTransfer: _t, createdAt: _ca, updatedAt: _u, incomingSecret: _s, ...settings } = created;
   const saved = await call("PUT", `/v1/automations/${id}`, { ...settings, trigger: { ...settings.trigger, verify, ratePerHour: 5 }, ...extra });
   expect(saved.status).toBe(200);
@@ -319,6 +319,31 @@ describe("an incoming automation's routes", () => {
     expect((await post(hook, "{}", { authorization: rotated.incomingSecret })).status).toBe(202);
   });
 
+  test("an incoming automation answers dude's public origin, where GitHub's webhooks are registered, for its URL", async () => {
+    const { id } = await hookWith({ mode: "header", header: "Authorization" });
+    expect((await (await call("GET", `/v1/automations/${id}`)).json() as Json).publicOrigin).toBeNull();
+    await owner`INSERT INTO forge_credentials (id, organization_id, forge, auth, secret, public_url)
+      VALUES ('fc_inc', ${ORG}, 'github', 'pat', 'ghp_x', 'https://dude.example.com')`;
+    expect((await (await call("GET", `/v1/automations/${id}`)).json() as Json).publicOrigin).toBe("https://dude.example.com");
+    await owner`DELETE FROM forge_credentials WHERE organization_id = ${ORG}`;
+  });
+
+  test("switched away from incoming, the secret goes; switched back, a new hook gets a new secret, answered once", async () => {
+    const { id, hook, secret, a } = await hookWith({ mode: "header", header: "Authorization" });
+    const away = await call("PUT", `/v1/automations/${id}`, { ...a, trigger: { kind: "schedule", cron: "0 3 * * *", tz: "UTC" } });
+    expect(away.status).toBe(200);
+    expect((await away.json() as Json).incomingSecretHint).toBeNull();
+    expect((await owner`SELECT incoming_secret FROM automations WHERE id = ${id}`)[0].incoming_secret).toBeNull();
+    const back = await call("PUT", `/v1/automations/${id}`, { ...a, trigger: { ...a.trigger, verify: { mode: "header", header: "Authorization" } } });
+    const json = await back.json() as Json;
+    expect(json.trigger.hookId).not.toBe(hook);
+    expect(json.incomingSecret).toMatch(/^whsec_/);
+    expect(json.incomingSecret).not.toBe(secret);
+    expect(json.incomingSecretHint).toBe(json.incomingSecret.slice(-4));
+    expect((await post(json.trigger.hookId, "{}", { authorization: secret })).status).toBe(401);
+    expect((await post(json.trigger.hookId, "{}", { authorization: json.incomingSecret })).status).toBe(202);
+  });
+
   test("a save keeps the hook: the URL never changes by a settings save", async () => {
     const { id, hook, a } = await hookWith({ mode: "header", header: "Authorization" });
     const res = await call("PUT", `/v1/automations/${id}`, { ...a, trigger: { ...a.trigger, hookId: "hk_attackerchosen000" } });
@@ -336,7 +361,7 @@ describe("an incoming automation's routes", () => {
   test("an organisation incoming automation is created, then refused a save until it names a project", async () => {
     const res = await call("POST", "/v1/automations", { name: "Page triage", kind: "agent", trigger: "incoming" });
     expect(res.status).toBe(201);
-    const { id, projectId: _p, projectName: _n, enabled: _e, owner: _o, ownerLeftAt: _l, webhookSecretHint: _w, incomingSecretHint: _i,
+    const { id, projectId: _p, projectName: _n, enabled: _e, owner: _o, ownerLeftAt: _l, webhookSecretHint: _w, incomingSecretHint: _i, publicOrigin: _po,
       nextRunAt: _x, lastRun: _r, canEdit: _c, canTransfer: _t, createdAt: _ca, updatedAt: _u, incomingSecret: _s, ...settings } = await res.json() as Json;
     const refused = await call("PUT", `/v1/automations/${id}`, settings);
     expect(refused.status).toBe(400);

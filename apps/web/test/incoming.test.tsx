@@ -87,7 +87,8 @@ describe("the trigger rows", () => {
   test("the endpoint, a signature's fields and the curl; header and query modes change them", async () => {
     const c = await page(new FixtureClient("a"), { id: "aut_alert" });
     const url = await until(() => c.querySelector<HTMLElement>("[data-testid=endpoint-url]"), "the endpoint");
-    expect(url.textContent).toBe(`${window.location.origin}/v1/hooks/hk_7f3a9c21e4b04d18`);
+    // dude's public origin, where GitHub reaches it, not the page's.
+    expect(url.textContent).toBe("https://dude.example.com/v1/hooks/hk_7f3a9c21e4b04d18");
     expect(c.querySelector<HTMLInputElement>("input[aria-label='Header name']")!.value).toBe("X-Signature");
     expect(c.querySelector<HTMLInputElement>("input[aria-label='Signature prefix']")!.value).toBe("sha256=");
     expect(c.querySelector("[data-testid=secret-hint]")!.textContent).toBe("••••a91c");

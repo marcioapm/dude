@@ -11,6 +11,7 @@
   "id": "aut_1",
   "imageId": null,
   "incomingSecretHint": null,
+  "publicOrigin": null,
   "kind": "agent",
   "lastRun": { "id": "arn_1", "status": "succeeded", "at": "2026-10-24T09:02:11.000Z" },
   "machineSizeId": null,

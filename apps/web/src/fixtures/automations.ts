@@ -23,7 +23,7 @@ function automation(over: Partial<Automation> & Pick<Automation, "id" | "name" |
     description: "", sessionMode: "ephemeral", expiryDays: null, concurrency: "queue", parallelMax: 2, repos: "all", repoFilter: null,
     agent: null, machineSizeId: null, imageId: null, setupScript: null, command: null, server: null, webhook: null, secrets: [],
     notifyOnFailure: true, projectId: null, projectName: null, enabled: true, owner: person("u_marcio"), ownerLeftAt: null,
-    webhookSecretHint: null, incomingSecretHint: null, projectIds: [], nextRunAt: null, lastRun: null, canEdit: true, canTransfer: true,
+    webhookSecretHint: null, incomingSecretHint: null, publicOrigin: null, projectIds: [], nextRunAt: null, lastRun: null, canEdit: true, canTransfer: true,
     createdAt: iso(30 * 24 * 60 * MIN), updatedAt: iso(24 * 60 * MIN), ...over,
   };
 }

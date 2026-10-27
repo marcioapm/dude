@@ -281,8 +281,9 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 type Fired struct {
 	Run       string
 	Cancelled []Cancelled
-	// What Arrive decided, for an incoming delivery's verdict.
+	// What Arrive decided, for a delivery's verdict, and a Skip's reason as written on its run.
 	Action Action
+	Reason string
 }
 
 // Cancelled is a cancelled run's lux Run; Keep says it is the automation's
@@ -318,7 +319,7 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 		_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
 			started_by, scheduled_for, ended_at) VALUES ($1, $2, $3, 'skipped', $4, $5, $6, NULLIF($7, ''), $8, now())`,
 			id, a.Org, a.ID, d.Reason, source, raw, startedBy, scheduledFor)
-		return Fired{Run: id, Action: d.Action}, err
+		return Fired{Run: id, Action: d.Action, Reason: d.Reason}, err
 	case CancelAndStart:
 		rows, err := tx.Query(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
 			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'
@@ -573,10 +574,7 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 				return err
 			}
 			cancelled = append(cancelled, fired.Cancelled...)
-			verdict, reason, err := firedVerdict(ctx, tx, fired)
-			if err != nil {
-				return err
-			}
+			verdict, reason := firedVerdict(fired)
 			if err := recordGitHubVerdict(ctx, tx, a, d.ID, verdict, reason, fired.Run); err != nil {
 				return err
 			}

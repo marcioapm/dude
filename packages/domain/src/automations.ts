@@ -496,6 +496,8 @@ export interface Automation extends AutomationInput {
   webhookSecretHint: string | null;
   /** An incoming webhook's verification secret: its last four characters, never the value. */
   incomingSecretHint: string | null;
+  /** Where senders reach dude (the origin GitHub's webhooks are registered at), for an incoming webhook's URL; null when unknown. */
+  publicOrigin: string | null;
   nextRunAt: string | null;
   lastRun: { id: string; status: AutomationRunStatus; at: string } | null;
   canEdit: boolean;

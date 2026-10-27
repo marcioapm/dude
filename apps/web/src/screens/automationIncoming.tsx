@@ -66,9 +66,9 @@ export function takeSecret(id: string): string | null {
   return s;
 }
 
-/** An automation's URL, as a sender POSTs it. */
-export function hookUrl(hookId: string, origin = window.location.origin): string {
-  return `${origin}/v1/hooks/${hookId}`;
+/** An automation's URL, as a sender POSTs it: at dude's public origin when known (where GitHub reaches it), else this page's. */
+export function hookUrl(hookId: string, origin?: string | null): string {
+  return `${(origin || window.location.origin).replace(/\/+$/, "")}/v1/hooks/${hookId}`;
 }
 
 const SAMPLE = `'{"status":"firing","groupKey":"example"}'`;
@@ -114,7 +114,7 @@ const VERIFY_HELP: Record<IncomingVerifyMode, string> = {
 };
 
 /** The Trigger section's incoming rows. */
-export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, paths, groupError }: {
+export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, paths, groupError, origin }: {
   trigger: IncomingTrigger;
   hint: string | null;
   ro: boolean;
@@ -124,10 +124,12 @@ export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, pat
   paths?: readonly string[] | undefined;
   /** Group by's refusal after a save was tried. */
   groupError?: string | undefined;
+  /** dude's public origin, when known. */
+  origin?: string | null | undefined;
 }) {
   const [copied, setCopied] = useState(false);
   const v = trigger.verify;
-  const url = hookUrl(trigger.hookId);
+  const url = hookUrl(trigger.hookId, origin);
   const shown = v.mode === "query" ? `${url}?${v.param}=••••` : url;
   return (
     <>
@@ -192,12 +194,14 @@ export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, pat
 }
 
 /** The verification secret, shown this once after Create, a save that made it, or Rotate. */
-export function SecretOnce({ secret, trigger, rotated, onClose }: { secret: string; trigger: IncomingTrigger; rotated: boolean; onClose: () => void }) {
+export function SecretOnce({ secret, trigger, origin, rotated, onClose }: {
+  secret: string; trigger: IncomingTrigger; origin?: string | null | undefined; rotated: boolean; onClose: () => void;
+}) {
   return (
     <KeyShownOnce title={rotated ? "New verification secret" : "Verification secret"} label="Secret" doneLabel="I've stored it" secret={secret}
       description={rotated ? "The old secret stops working now. Copy this one: it is not shown again." : "Copy it now: it is not shown again."}
       usageHeading={`The sender sets · ${INCOMING_VERIFY_LABEL[trigger.verify.mode]}`}
-      usage={curlFor(hookUrl(trigger.hookId), trigger.verify, `${secret.slice(0, 6)}…`)}
+      usage={curlFor(hookUrl(trigger.hookId, origin), trigger.verify, `${secret.slice(0, 6)}…`)}
       usageNote="dude keeps only its last 4 characters to show. Rotate makes a new one." onClose={onClose} />
   );
 }

@@ -28,7 +28,7 @@ func init() {
 // PUT refuses (automationInputSchema is strict): automation update drops them,
 // so `dude automation show ID` output, edited, is its input.
 var automationReadOnly = []string{"id", "projectId", "projectName", "enabled", "owner", "ownerLeftAt",
-	"webhookSecretHint", "incomingSecretHint", "incomingSecret", "nextRunAt", "lastRun", "canEdit", "canTransfer", "createdAt", "updatedAt"}
+	"webhookSecretHint", "incomingSecretHint", "incomingSecret", "publicOrigin", "nextRunAt", "lastRun", "canEdit", "canTransfer", "createdAt", "updatedAt"}
 
 func autPath(id string, suffix string) string { return "/v1/automations/" + esc(id) + suffix }
 

@@ -52,6 +52,7 @@ export function incomingAutomations(build: (over: Partial<Automation> & Pick<Aut
   return [
     build({ id: "aut_alert", name: "Investigate the alert", kind: "agent", projectId: project.id, projectName: project.name,
       sessionMode: "resumable", expiryDays: 1, concurrency: "send", trigger: ALERT_TRIGGER, incomingSecretHint: "a91c",
+      publicOrigin: "https://dude.example.com",
       agent: { own: { prompt: ALERT_PROMPT, timeLimitMinutes: 60 } }, secrets: [{ source: "organization", name: "SENTRY_TOKEN" }],
       lastRun: { id: "arn_alert1", status: "running", at: iso(66 * MIN) } }),
     build({ id: "aut_pager", name: "Page triage", kind: "agent", enabled: false, incomingSecretHint: "07de",

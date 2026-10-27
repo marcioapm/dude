@@ -511,7 +511,7 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
         onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
       {rotating ? <RotateDialog client={client} a={a} onClose={() => setRotating(false)}
         onRotated={(x, value) => { setRotating(false); setA(x); setSecret({ value, rotated: true }); }} /> : null}
-      {secret && a.trigger.kind === "incoming" ? <SecretOnce secret={secret.value} trigger={a.trigger} rotated={secret.rotated} onClose={() => setSecret(null)} /> : null}
+      {secret && a.trigger.kind === "incoming" ? <SecretOnce secret={secret.value} trigger={a.trigger} origin={a.publicOrigin} rotated={secret.rotated} onClose={() => setSecret(null)} /> : null}
       {transferring ? <TransferDialog client={client} a={a} orgName={orgName} people={people} onClose={() => setTransferring(false)}
         onDone={(x) => { setTransferring(false); setA(x); }} /> : null}
       {deleting ? <DeleteDialog client={client} a={a} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); onBack(); }} /> : null}
@@ -609,7 +609,7 @@ function AutomationSettings({ client, a, orgName, onSaved, onTransfer, onTry, on
                 onChange={(s) => set("trigger", { kind: "schedule", ...s })} />
             </SettingRow>
           ) : trigger.kind === "incoming" ? (
-            <IncomingTriggerRows trigger={trigger} hint={a.trigger.kind === "incoming" ? a.incomingSecretHint : null} ro={ro}
+            <IncomingTriggerRows trigger={trigger} hint={a.trigger.kind === "incoming" ? a.incomingSecretHint : null} ro={ro} origin={a.publicOrigin}
               groupError={tried && invalid?.path === "trigger.groupBy" ? invalid.message : undefined}
               onChange={(t) => set("trigger", t)} onRotate={onRotate} />
           ) : (

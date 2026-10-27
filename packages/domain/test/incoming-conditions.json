@@ -11,7 +11,11 @@
     "silenced": false,
     "nothing": null,
     "tags": ["db", "prod"],
-    "a.b": "dotted key"
+    "a.b": "dotted key",
+    "ratio": 1.0,
+    "big": 1e3,
+    "small": 1.5e-7,
+    "meta": { "html": "<a&b>", "n": 2.50, "line": "x\u2028y" }
   },
   "cases": [
     { "path": "status", "op": "is", "values": ["firing"], "ok": true, "actual": "firing" },
@@ -39,7 +43,11 @@
     { "path": "tags.1", "op": "is", "values": ["prod"], "ok": true, "actual": "prod" },
     { "path": "commonLabels", "op": "is", "values": ["x"], "ok": false, "actual": "{\"alertname\":\"HighErrorRate\",\"service\":\"api\",\"severity\":\"critical\"}" },
     { "path": "count", "op": "contains", "values": ["3"], "ok": false, "actual": "3" },
-    { "path": "missing.deeper", "op": "is", "values": ["x"], "ok": false, "actual": "missing" }
+    { "path": "missing.deeper", "op": "is", "values": ["x"], "ok": false, "actual": "missing" },
+    { "path": "ratio", "op": "is", "values": ["1"], "ok": true, "actual": "1" },
+    { "path": "big", "op": "is", "values": ["1000"], "ok": true, "actual": "1000" },
+    { "path": "small", "op": "is", "values": ["1.5e-7"], "ok": true, "actual": "1.5e-7" },
+    { "path": "meta", "op": "is", "values": ["x"], "ok": false, "actual": "{\"html\":\"<a&b>\",\"n\":2.5,\"line\":\"x\u2028y\"}" }
   ],
   "groupKeys": [
     { "groupBy": "groupKey", "key": "{}/{alertname=\"HighErrorRate\"}:{service=\"api\"}" },

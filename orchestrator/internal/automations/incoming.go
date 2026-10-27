@@ -87,17 +87,83 @@ func PathValue(body json.RawMessage, path string) (json.RawMessage, bool) {
 }
 
 // valueText is a JSON value as conditions compare it: a string as itself,
-// anything else as its compact JSON.
+// anything else as JavaScript's JSON.stringify writes it, so the web's live
+// check (packages/domain conditionText) agrees: keys in their order,
+// numbers in their shortest form (1.0 is 1, 1e3 is 1000), no HTML escapes.
 func valueText(raw json.RawMessage) string {
 	var s string
 	if len(raw) > 0 && raw[0] == '"' && json.Unmarshal(raw, &s) == nil {
 		return s
 	}
-	var b bytes.Buffer
-	if json.Compact(&b, raw) != nil {
+	var b strings.Builder
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := writeJS(&b, dec); err != nil {
 		return string(raw)
 	}
 	return b.String()
+}
+
+// writeJS writes the next JSON value of dec as JSON.stringify would.
+func writeJS(b *strings.Builder, dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch t := tok.(type) {
+	case json.Delim:
+		closing := map[json.Delim]byte{'{': '}', '[': ']'}[t]
+		b.WriteByte(byte(t))
+		for i := 0; dec.More(); i++ {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			if t == '{' {
+				key, err := dec.Token()
+				if err != nil {
+					return err
+				}
+				writeJSString(b, key.(string))
+				b.WriteByte(':')
+			}
+			if err := writeJS(b, dec); err != nil {
+				return err
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return err
+		}
+		b.WriteByte(closing)
+	case json.Number:
+		f, err := t.Float64()
+		if err != nil {
+			return err
+		}
+		// encoding/json formats a float64 as ES6's number-to-string does.
+		out, err := json.Marshal(f)
+		if err != nil {
+			return err
+		}
+		b.Write(out)
+	case string:
+		writeJSString(b, t)
+	case bool:
+		b.WriteString(strconv.FormatBool(t))
+	case nil:
+		b.WriteString("null")
+	}
+	return nil
+}
+
+// writeJSString writes s quoted as JSON.stringify does: no HTML escapes, and
+// U+2028/U+2029 left as they are.
+func writeJSString(b *strings.Builder, s string) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	out := strings.TrimSuffix(buf.String(), "\n")
+	b.WriteString(strings.NewReplacer(`\u2028`, "\u2028", `\u2029`, "\u2029").Replace(out))
 }
 
 // Holds says whether c holds for body. contains on an array asks whether an
@@ -412,28 +478,21 @@ func ArriveIncoming(ctx context.Context, tx pgx.Tx, automationID, deliveryID str
 	if err != nil {
 		return nil, err
 	}
-	v, reason, err := firedVerdict(ctx, tx, fired)
-	if err != nil {
-		return nil, err
-	}
+	v, reason := firedVerdict(fired)
 	return fired.Cancelled, verdict(v, reason, nil, group, fired.Run)
 }
 
-// firedVerdict says what a firing did, as a delivery's verdict: a run of
-// its own (started, queued included), added to another run (merged or
-// sent), or skipped by the concurrency, with its reason.
-func firedVerdict(ctx context.Context, tx pgx.Tx, fired Fired) (string, string, error) {
-	var status, reason string
-	if err := tx.QueryRow(ctx, `SELECT status, COALESCE(reason, '') FROM automation_runs WHERE id = $1`, fired.Run).Scan(&status, &reason); err != nil {
-		return "", "", err
+// firedVerdict says what a firing did, as a delivery's verdict, from what
+// Fire wrote: a run of its own (started, queued included), added to another
+// run (merged or sent), or skipped by the concurrency, with its reason.
+func firedVerdict(fired Fired) (string, string) {
+	switch fired.Action {
+	case Skip:
+		return VerdictSkipped, fired.Reason
+	case MergeInto, SendInto:
+		return VerdictSentToRun, ""
 	}
-	switch {
-	case status == "skipped":
-		return VerdictSkipped, reason, nil
-	case fired.Action == MergeInto || fired.Action == SendInto:
-		return VerdictSentToRun, "", nil
-	}
-	return VerdictStarted, "", nil
+	return VerdictStarted, ""
 }
 
 // FollowUpCap is how many deliveries one live run holds; a later one of
