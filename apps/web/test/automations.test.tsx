@@ -799,6 +799,14 @@ describe("a run's activity", () => {
     expect(c.querySelector('[data-testid="automation-activity"]')).not.toBeNull();
   });
 
+  test("a create_task card shows + with the project key of the task it made and its title", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_alert", tab: "runs", runId: "arn_alert1" });
+    const created = await until(() => card(c, "create_task") ?? null, "the create_task card");
+    expect(created.querySelector("[data-icon]")?.getAttribute("data-icon")).toBe("plus");
+    expect([...created.querySelectorAll("[title]")].map((s) => s.getAttribute("title")))
+      .toContain("WC · Bound checkout-api's payment-gateway retries (#4182)");
+  });
+
   test("a live run's unfinished reply streams with its caret and a running call shows its output so far", async () => {
     const client = new FixtureClient("a");
     const real = client.automationRun.bind(client);

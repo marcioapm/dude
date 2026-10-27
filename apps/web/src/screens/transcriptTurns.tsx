@@ -170,16 +170,21 @@ export interface Speaker {
 
 /**
  * A dude tool an automation's agent called, as its card shows it: post_to_chat
- * by the Slack glyph and its channel, and a refusal's words from the tool
- * server's record (ToolTurn.dude).
+ * by the Slack glyph and its channel, create_task by "+" with its project and
+ * title, and a refusal's words from the tool server's record (ToolTurn.dude).
  */
 function dudeToolView(turn: ToolTurn): { icon?: IconName; summary?: ReactNode; error?: string } | null {
   if (!turn.dude) return null;
   const name = turn.tool.replace(/^dude_/, "");
   const args = (turn.args && typeof turn.args === "object" ? turn.args : {}) as Record<string, unknown>;
   const channel = turn.dude.posted?.channel ?? (typeof args.channel === "string" ? args.channel : "");
+  const text = (k: string) => (typeof args[k] === "string" ? args[k] as string : "");
+  // create_task takes no project: the key of the task it made names it (WC-231 → WC).
+  const made = turn.dude.result && typeof turn.dude.result === "object" ? (turn.dude.result as Record<string, unknown>).key : undefined;
+  const projectKey = typeof made === "string" ? made.replace(/-\d+$/, "") : "";
   return {
     ...(name === "post_to_chat" ? { icon: "slack" as const, summary: <span className="ds-mono">{channel}</span> } : {}),
+    ...(name === "create_task" ? { icon: "plus" as const, summary: [projectKey, text("title")].filter(Boolean).join(" · ") } : {}),
     ...(turn.dude.error ? { error: turn.dude.error } : {}),
   };
 }

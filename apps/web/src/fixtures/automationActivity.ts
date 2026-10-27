@@ -112,7 +112,7 @@ function alert(run: string, t0: number): PersistedEvent[] {
     ev(run, "automation.delivery.sent", t0 + 35 * MIN, { deliveryId: "dlv_9k2h", source: "incoming", event: "incoming",
       groupKey: `{}/{alertname="HighErrorRate"}:{service="api"}`, summary: "resolved · HighErrorRate · api" }),
     message(run, t0 + 35 * MIN + 96 * SEC, "It resolved nine minutes in, with no rollback: the gateway recovered and the rate fell with it. #4182's retries made the spike worse while it lasted. Filing a task to bound them before the next gateway incident."),
-    called(run, t0 + 35 * MIN + 100 * SEC, "t1", "create_task", { project: "web-console", title: "Bound checkout-api's payment-gateway retries (#4182)" }),
+    called(run, t0 + 35 * MIN + 100 * SEC, "t1", "create_task", { title: "Bound checkout-api's payment-gateway retries (#4182)", goal: "HighErrorRate fired 11:55–12:04 on checkout-api …" }),
     completed(run, t0 + 35 * MIN + 100.8 * SEC, "t1", "create_task", { output: out(`{"key":"WC-231"}`), dude: { eventId: "evt_dude_t1", result: { key: "WC-231" } } }),
     message(run, t0 + 35 * MIN + 132 * SEC, "Filed **WC-231** in web-console. Nothing else to do here: the alert is resolved and the cause is a code change, not an outage."),
   ];
