@@ -863,6 +863,30 @@ func (f fileFacts) cannotFileIn(items []delivery.ProposalItem, n int, filed func
 	return fileBlock{}
 }
 
+// refusedBlocker is the first unfiled item that item n waits on, directly
+// or through other unfiled items, that this request refused, with its
+// reason; -1 when there is none. Filing n without it would lose the edge.
+func refusedBlocker(items []delivery.ProposalItem, n int, filed func(int) bool, refused map[int]string) (int, string) {
+	seen := map[int]bool{n: true}
+	var walk func(i int) (int, string)
+	walk = func(i int) (int, string) {
+		for _, b := range delivery.ItemBlockers(items, i) {
+			if b < 0 || b >= len(items) || seen[b] || filed(b) {
+				continue
+			}
+			seen[b] = true
+			if why, ok := refused[b]; ok {
+				return b, why
+			}
+			if at, why := walk(b); at >= 0 {
+				return at, why
+			}
+		}
+		return -1, ""
+	}
+	return walk(n)
+}
+
 // withBlockers is the items to file, each with the card's unfiled items it
 // waits on (filing an item files its blockers with it), in the order
 // filing takes them: new epics first, then each task after what it waits on.
@@ -990,6 +1014,14 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 			return err
 		}
 		relations := 0
+		// Items refused in this request, with why: an item waiting on one is
+		// refused too, since its blocking edge would have no task to point at.
+		refusedWhy := map[int]string{}
+		refuse := func(n int, why string) {
+			refusedWhy[n] = why
+			results = append(results, map[string]any{"item": n, "status": "refused", "why": why})
+		}
+		isDone := func(i int) bool { return done[i] }
 		for _, n := range order {
 			if n < 0 || n >= len(items) {
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "no such item"})
@@ -1000,8 +1032,12 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				results = append(results, map[string]any{"item": n, "status": "refused", "why": "already filed"})
 				continue
 			}
-			if no := facts.cannotFileIn(items, n, func(i int) bool { return done[i] }, p.Person, role); no.why != "" {
-				results = append(results, map[string]any{"item": n, "status": "refused", "why": no.why})
+			if no := facts.cannotFileIn(items, n, isDone, p.Person, role); no.why != "" {
+				refuse(n, no.why)
+				continue
+			}
+			if at, why := refusedBlocker(items, n, isDone, refusedWhy); at >= 0 {
+				refuse(n, fmt.Sprintf("Waits on item %d, which was refused: %s.", at+1, strings.TrimSuffix(why, ".")))
 				continue
 			}
 			// Each refusal must undo this item's writes without undoing earlier filings.
@@ -1020,7 +1056,7 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				if badImage.Message != "" {
 					why = badImage.Message
 				}
-				results = append(results, map[string]any{"item": n, "status": "refused", "why": why})
+				refuse(n, why)
 				continue
 			}
 			if err != nil {

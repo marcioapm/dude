@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -362,5 +363,71 @@ func TestFilingRefusesAnItemWhoseImageIsNotTheSessions(t *testing.T) {
 	}
 	if n := s.count(`SELECT count(*) FROM attachments WHERE task_id IS NOT NULL AND organization_id = $1`, s.org); n != 0 {
 		t.Errorf("%d task uploads written for a refused image", n)
+	}
+}
+
+// A task waiting on an item refused for its image, directly or through
+// another refused item, is refused too: filed, it would have no blocked_by.
+// The card's other items are filed.
+func TestFilingRefusesATaskBlockedByAnItemRefusedForItsImage(t *testing.T) {
+	s := newSessionWorld(t)
+	b := s.withImages()
+	id := s.session()
+	other := s.session()
+	s.uploadToSession(b, "att_elsewhere", other, "elsewhere.png", screenshot)
+	s.sentIn(other, "att_elsewhere")
+	proposal := s.proposal(id, []delivery.ProposalItem{
+		{Kind: "task", Project: "BL", Title: "Blocker", Goal: "A goal long enough to be filed", Images: []string{"att_elsewhere"}},
+		{Kind: "task", Project: "BL", Title: "Dependent", Goal: "A goal long enough to be filed", BlockedBy: []delivery.ProposalRef{{Item: 1}}},
+		{Kind: "task", Project: "BL", Title: "Transitive", Goal: "A goal long enough to be filed", BlockedBy: []delivery.ProposalRef{{Item: 2}}},
+		{Kind: "task", Project: "BL", Title: "Sibling", Goal: "A goal long enough to be filed"},
+	})
+	before := s.count(`SELECT next_task_number FROM projects WHERE id = $1`, s.project)
+	file := func(items ...int) map[int]map[string]any {
+		out := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": proposal, "items": items})
+		byItem := map[int]map[string]any{}
+		for _, r := range out["results"].([]any) {
+			r := r.(map[string]any)
+			byItem[int(r["item"].(float64))] = r
+		}
+		return byItem
+	}
+	refusedFor := func(r map[string]any, blocker int) bool {
+		why, _ := r["why"].(string)
+		return r["status"] == "refused" && strings.Contains(why, "Waits on item "+strconv.Itoa(blocker)+", which was refused")
+	}
+	for _, items := range [][]int{{1}, {0, 1}, {2}} {
+		results := file(items...)
+		if r := results[0]; r["status"] != "refused" || !strings.Contains(r["why"].(string), "not one a member shared in this session") {
+			t.Errorf("file %v: the blocker %v", items, r)
+		}
+		if r := results[1]; !refusedFor(r, 1) || !strings.Contains(r["why"].(string), "not one a member shared in this session") {
+			t.Errorf("file %v: the dependent %v", items, r)
+		}
+		if r, ok := results[2]; ok && !refusedFor(r, 2) {
+			t.Errorf("file %v: the transitive dependent %v", items, r)
+		}
+		if n := s.count(`SELECT count(*) FROM tasks WHERE organization_id = $1`, s.org); n != 0 {
+			t.Fatalf("file %v: %d tasks written", items, n)
+		}
+		if n := s.count(`SELECT count(*) FROM session_filings WHERE proposal_id = $1`, proposal); n != 0 {
+			t.Fatalf("file %v: %d filings", items, n)
+		}
+	}
+	results := file(0, 1, 2, 3)
+	if !refusedFor(results[2], 2) || results[3]["status"] != "filed" {
+		t.Errorf("the whole card: %v", results)
+	}
+	if n := s.count(`SELECT count(*) FROM tasks WHERE organization_id = $1 AND title <> 'Sibling'`, s.org); n != 0 {
+		t.Errorf("%d dependent tasks written", n)
+	}
+	if n := s.count(`SELECT count(*) FROM task_relations WHERE organization_id = $1`, s.org); n != 0 {
+		t.Errorf("%d task relations written", n)
+	}
+	if n := s.count(`SELECT count(*) FROM session_filings WHERE proposal_id = $1`, proposal); n != 1 {
+		t.Errorf("%d filings, want the sibling's", n)
+	}
+	if n := s.count(`SELECT next_task_number FROM projects WHERE id = $1`, s.project); n != before+1 {
+		t.Errorf("task counter %d, want %d", n, before+1)
 	}
 }
