@@ -1,4 +1,4 @@
--- 212_chat_link_offers.sql — "Link a project" on a chat reply: the
+-- 213_chat_link_offers.sql — "Link a project" on a chat reply: the
 -- projects a brainstorm with none linked was offered, and those linked from it.
 
 -- What the request's reply offered to link, recorded with it: its words and
