@@ -303,8 +303,6 @@ func TestAnOffBranchCheckoutRidesOnTheNextNote(t *testing.T) {
 	}
 }
 
-// A kept checkout with commits of its own still wakes the conductor by
-// itself: there is work of its own in the way.
 func TestANewerCheckoutSyncSupersedesOnlyItsOwnRidingWarning(t *testing.T) {
 	e := newEditing(t)
 	e.wokenWith(e.task, "after implement")
@@ -342,6 +340,8 @@ func TestANewerCheckoutSyncSupersedesOnlyItsOwnRidingWarning(t *testing.T) {
 	}
 }
 
+// A kept checkout with commits of its own still wakes the conductor by
+// itself: there is work of its own in the way.
 func TestAKeptCheckoutWithItsOwnCommitsStillWakes(t *testing.T) {
 	e := newEditing(t)
 	e.wokenWith(e.task, "after implement")
