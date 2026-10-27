@@ -255,6 +255,12 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 		if seen, ok := t.seenCalls[id]; ok {
 			name = seen
 		}
+		for key, value := range t.PartialTools[id] {
+			if _, supplied := payload[key]; !supplied {
+				payload[key] = value
+			}
+		}
+		delete(t.PartialTools, id)
 		delete(t.openCalls, id)
 		delete(t.waitsOn, id)
 		delete(t.announced, id)

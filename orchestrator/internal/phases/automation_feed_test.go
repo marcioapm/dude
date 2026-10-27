@@ -192,6 +192,28 @@ func TestDudeRecordsJoinArgumentsNotCompletionOrder(t *testing.T) {
 	}
 }
 
+func TestAutomationRunningOutputSurvivesAnAbortedEnd(t *testing.T) {
+	w := newHarnessWorld(t)
+	a := newAutomationWorld(t, w)
+	a.feed(feedCases[0].records[2], map[string]any{"type": "acp.tool_call_update", "data": map[string]any{"toolCallId": "c1", "status": "in_progress", "title": "bash", "rawOutput": map[string]any{"output": "partial result"}}})
+	ctx := context.Background()
+	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+		f, err := LoadAutomationFeed(ctx, tx, a.ref)
+		if err != nil {
+			return err
+		}
+		return f.End(ctx, tx, "Stopped")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := a.events()
+	last := got[len(got)-1]
+	out, _ := last.Payload["output"].(map[string]any)
+	if last.Payload["status"] != "aborted" || out["head"] != "partial result" {
+		t.Fatalf("completion: %v", last)
+	}
+}
+
 type automationWorld struct {
 	t    *testing.T
 	w    *harnessWorld
