@@ -1179,7 +1179,10 @@ class FakeGitHub:
                     # Commits on the base the head lacks: how far behind it is; and the reverse.
                     behind = self._git("rev-list", "--count", f"{m[2]}..{m[1]}").stdout.strip()
                     ahead = self._git("rev-list", "--count", f"{m[1]}..{m[2]}").stdout.strip()
-                    return self._send(200, {"files": files, "behind_by": int(behind or 0), "ahead_by": int(ahead or 0)})
+                    # GitHub sends the merge base as a commit object.
+                    merge_base = self._git("merge-base", m[1], m[2]).stdout.strip()
+                    return self._send(200, {"files": files, "behind_by": int(behind or 0), "ahead_by": int(ahead or 0),
+                                            "merge_base_commit": {"sha": merge_base}})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
                     if int(m[1]) not in self.github.pulls:
                         return self._send(404, {"message": "Not Found"})
