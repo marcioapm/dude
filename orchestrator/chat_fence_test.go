@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,6 +36,61 @@ func TestAMemberCannotLinkAProjectHiddenFromTheChatASessionCameFrom(t *testing.T
 	s.ok(s.marcio, "POST", "/internal/sessions/"+other+"/link", map[string]any{"projects": link})
 	if n := s.count(`SELECT count(*) FROM session_projects WHERE session_id = $1 AND project_id = $2`, other, s.webProject); n != 1 {
 		t.Fatal("a session not from chat could not link it")
+	}
+}
+
+// A link the session's rules refuse answers with its code and changes
+// nothing the session links.
+func TestASessionLinkTheRulesRefuseChangesNothing(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	mustExec(t, s.owner, `UPDATE sessions SET origin = '{"provider":"slack","conversationId":"C1"}' WHERE id = $1`, id)
+	hidden := "prj_hid_" + s.org
+	mustExec(t, s.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'Hidden', $1, 'HID')`, hidden, s.org)
+	mustExec(t, s.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, s.org, hidden)
+	bl := map[string]any{"projectId": s.project, "repositoryIds": []string{s.repoID}}
+	many := []map[string]any{bl}
+	for i := range delivery.LinksMax {
+		p := fmt.Sprintf("prj_many%02d_%s", i, s.org)
+		mustExec(t, s.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, $1, $1, $3)`, p, s.org,
+			fmt.Sprintf("M%02d", i))
+		many = append(many, map[string]any{"projectId": p, "repositoryIds": []string{}})
+	}
+	links := func() string {
+		return s.one(`SELECT (SELECT string_agg(project_id, ',' ORDER BY project_id) FROM session_projects WHERE session_id = $1) || ' / ' ||
+			(SELECT string_agg(repository_id, ',' ORDER BY repository_id) FROM session_repositories WHERE session_id = $1)`, id)
+	}
+	before := links()
+	if before != s.project+" / "+s.repoID {
+		t.Fatalf("linked before %q", before)
+	}
+	for _, c := range []struct {
+		name     string
+		projects []map[string]any
+		status   int
+		code     string
+	}{
+		{"the same project twice", []map[string]any{bl, {"projectId": s.project, "repositoryIds": []string{}}}, 400, "bad_request"},
+		{"51 projects", many, 400, "bad_request"},
+		{"a repository of another project", []map[string]any{{"projectId": s.project, "repositoryIds": []string{s.repoID, s.webRepo}}}, 404, "not_found"},
+		{"an unknown project", []map[string]any{bl, {"projectId": "prj_nope", "repositoryIds": []string{}}}, 404, "not_found"},
+		{"a project hidden from the session's chat", []map[string]any{bl, {"projectId": hidden, "repositoryIds": []string{}}}, 409, "hidden_from_chat"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": c.projects})
+			e, _ := out["error"].(map[string]any)
+			if status != c.status || e["code"] != c.code {
+				t.Fatalf("%d %v", status, out)
+			}
+			if after := links(); after != before {
+				t.Fatalf("links %q, were %q", after, before)
+			}
+		})
+	}
+	// The same body less what each case added links.
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": many[:delivery.LinksMax]})
+	if n := s.count(`SELECT count(*) FROM session_projects WHERE session_id = $1`, id); n != delivery.LinksMax {
+		t.Fatalf("%d linked", n)
 	}
 }
 
