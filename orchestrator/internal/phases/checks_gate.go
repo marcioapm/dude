@@ -61,12 +61,6 @@ type checksVerdict struct {
 	JudgeReason string `json:"judgeReason,omitempty"`
 }
 
-// passedUnbacked: a verdict that passes the turn without a backed pass:
-// waived (delivery.CheckWaived), pre-existing or deferred.
-func (v checksVerdict) passedUnbacked() bool {
-	return v.Result == delivery.CheckWaived || v.Result == delivery.CheckPreexisting || v.Result == delivery.CheckDeferred
-}
-
 type checksDecision struct {
 	Turn     int64 `json:"turn"`
 	Round    int   `json:"round"`
@@ -459,9 +453,11 @@ func (d checksDecision) sendBack() string {
 	}{failed, passable && slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(d.bases)})
 }
 
-// unpassed are the verdicts that did not pass.
+// unpassed are the verdicts that did not pass: neither backed, waived,
+// pre-existing nor deferred.
 func (d checksDecision) unpassed() []checksVerdict {
-	return slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return v.Result == delivery.CheckPass || v.passedUnbacked() })
+	passed := []string{delivery.CheckPass, delivery.CheckWaived, delivery.CheckPreexisting, delivery.CheckDeferred}
+	return slices.DeleteFunc(slices.Clone(d.Verdicts), func(v checksVerdict) bool { return slices.Contains(passed, v.Result) })
 }
 
 // unverified is what the escalation of a held report keeps of each check
