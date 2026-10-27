@@ -576,6 +576,7 @@ func hereOf(ctx context.Context, tx pgx.Tx, c Caller) (delivery.RelatedTask, err
 
 func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[string]any, error) {
 	relations := len(in.AddRelations)+len(in.RemoveRelations) > 0
+	var present []string
 	if relations {
 		add, err := edgesOf(ctx, tx, c, in.AddRelations)
 		if err != nil {
@@ -585,11 +586,11 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 		if err != nil {
 			return nil, err
 		}
-		if err := delivery.ConductRelationsTx(ctx, tx, c.run(), add, remove); err != nil {
+		if present, err = delivery.ConductRelationsTx(ctx, tx, c.run(), add, remove); err != nil {
 			return conducted[map[string]any](nil, err)
 		}
 		if in.Goal == nil && in.AcceptanceCriteria == nil {
-			return map[string]any{"updated": true, "next": relationsWrittenNext}, nil
+			return withPresent(map[string]any{"updated": true, "next": relationsWrittenNext}, present), nil
 		}
 	}
 	spec := delivery.TaskSpec{Goal: in.Goal}
@@ -605,5 +606,15 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 		return nil, refuse(rAcceptanceCriteriaTooLongAtMost, CriteriaMax)
 	}
 	err := delivery.ConductUpdateTask(ctx, tx, c.run(), spec)
-	return conducted(map[string]any{"updated": true, "next": taskUpdatedNext}, err)
+	return conducted(withPresent(map[string]any{"updated": true, "next": taskUpdatedNext}, present), err)
+}
+
+// withPresent adds to update_task's answer the relations it was asked to
+// add that were there already, and says so.
+func withPresent(out map[string]any, present []string) map[string]any {
+	if len(present) > 0 {
+		out["alreadyRelated"] = present
+		out["note"] = relationsPresent.Render(present)
+	}
+	return out
 }

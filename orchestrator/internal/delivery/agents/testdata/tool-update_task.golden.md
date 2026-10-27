@@ -50,7 +50,7 @@ Write what Chat settled into the task: its goal, its acceptance criteria, or bot
         ],
         "additionalProperties": false
       },
-      "description": "relations to add to this task, at any status: blocked_by (it can't start before that task is merged), blocks, related"
+      "description": "relations to add to this task, at any status: blocked_by (it can't start before that task is merged), blocks, related. One already there as the same kind is left as it is and named in the answer; a different relation between the same two tasks is refused"
     },
     "removeRelations": {
       "type": [

@@ -377,6 +377,55 @@ func TestUpdateTaskOnlyBeforeTheImplementer(t *testing.T) {
 	w.refused(task, "update_task", `{"goal":"Something else entirely, now."}`, "an implementer has started")
 }
 
+// update_task re-stating a relation already there, same kind and
+// direction, writes the rest and says the relation was there; another
+// kind between the same two tasks still refuses the whole update.
+func TestUpdateTaskRestatingARelationAppliesTheRest(t *testing.T) {
+	w := conducting(t)
+	task, other := w.task(), w.task()
+	var key, otherKey string
+	_ = w.owner.QueryRow(context.Background(), `SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id
+		WHERE t.id = $1`, task).Scan(&key)
+	_ = w.owner.QueryRow(context.Background(), `SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id
+		WHERE t.id = $1`, other).Scan(&otherKey)
+	conductor := w.talk(task)
+	mustExec(t, w.owner, `INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_run_id)
+		VALUES ($1, $2, $3, 'blocks', $4)`, w.org, task, other, conductor)
+	goalOf := func() string {
+		var goal string
+		_ = w.owner.QueryRow(context.Background(), `SELECT goal FROM tasks WHERE id = $1`, task).Scan(&goal)
+		return goal
+	}
+
+	args, _ := json.Marshal(map[string]any{"goal": "Say hello, as the person decided.",
+		"addRelations": []map[string]string{{"kind": "blocks", "task": otherKey}}})
+	out := w.must(task, "update_task", string(args))
+	if got := goalOf(); got != "Say hello, as the person decided." {
+		t.Errorf("the goal after a re-stated relation: %q", got)
+	}
+	if present, _ := out["alreadyRelated"].([]any); len(present) != 1 || present[0] != "blocks "+otherKey {
+		t.Errorf("the answer does not name the relation already there: %v", out)
+	}
+	if note, _ := out["note"].(string); !strings.Contains(note, "blocks "+otherKey) {
+		t.Errorf("the answer's note: %q", note)
+	}
+	if n := w.count(`SELECT count(*) FROM task_relations WHERE from_task_id = $1 OR to_task_id = $1`, task); n != 1 {
+		t.Errorf("%d edges after re-stating one", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.relation_added'`, task); n != 0 {
+		t.Errorf("%d relation_added events for an edge already there", n)
+	}
+
+	for _, rel := range []map[string]string{{"kind": "related", "task": otherKey}, {"kind": "blocked_by", "task": otherKey}} {
+		args, _ = json.Marshal(map[string]any{"goal": "Something else, with another relation.",
+			"addRelations": []map[string]string{rel}})
+		w.refused(task, "update_task", string(args), key+" and "+otherKey+" are already related")
+		if got := goalOf(); got != "Say hello, as the person decided." {
+			t.Errorf("%s refused, yet the goal was saved: %q", rel["kind"], got)
+		}
+	}
+}
+
 // taskImages are the task's images its prompt is given, in order, and
 // those let go since (detached_at).
 func (w *world) taskImages(task string) (prompt, letGo []string) {

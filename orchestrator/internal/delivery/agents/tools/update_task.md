@@ -9,7 +9,7 @@ the task's acceptance criteria, the whole list, as agreed
 {{- end}}
 
 {{- define "tools/update_task/addRelations" -}}
-relations to add to this task, at any status: blocked_by (it can't start before that task is merged), blocks, related
+relations to add to this task, at any status: blocked_by (it can't start before that task is merged), blocks, related. One already there as the same kind is left as it is and named in the answer; a different relation between the same two tasks is refused
 {{- end}}
 
 {{- define "tools/update_task/addRelations.kind" -}}
