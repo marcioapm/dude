@@ -9,6 +9,9 @@ import (
 // acting on it.
 func (s *Service) SetBeforeMake(fn func(ctx context.Context) error) { s.beforeMake = fn }
 
+// SetBeforeLinkRead sets the hook run before a link click reads its request.
+func (s *Service) SetBeforeLinkRead(fn func(ctx context.Context) error) { s.beforeLinkRead = fn }
+
 // SetDeliveryTimeout bounds one attempt at a delivery, in place of DeliveryTimeout.
 func (s *Service) SetDeliveryTimeout(d time.Duration) { s.deliveryTimeout = d }
 

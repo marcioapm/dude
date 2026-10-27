@@ -1,12 +1,15 @@
 package chat_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeslack"
@@ -591,6 +594,36 @@ func TestChatAnUpdateFailingPastItsRetriesLeavesTheLinkAndFailsNothing(t *testin
 	if n := w.count(`SELECT count(*) FROM chat_events WHERE organization_id = $1 AND kind = 'interaction' AND attempts = $2 - 1`,
 		w.org, chat.MaxAttempts); n != 1 {
 		t.Fatal("the update was not tried MaxAttempts times")
+	}
+}
+
+// A click whose link committed, then whose delivery fails transiently before
+// the update on every attempt left, still ends linked, with no failed
+// request and no "Sorry".
+func TestChatAClickWhoseLinkCommittedFailsNothingWhereverItsLastAttemptFails(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	reply, session := w.brainstorm("Eli")
+	w.fake.FailNext("chat.update", "ratelimited")
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
+	if l := w.linked(session); l != "ABS" {
+		t.Fatalf("linked %q", l)
+	}
+	reads := 0
+	w.svc.SetBeforeLinkRead(func(context.Context) error {
+		reads++
+		return &pgconn.PgError{Code: "40001", Message: "could not serialize access"}
+	})
+	for range chat.MaxAttempts {
+		w.due()
+		w.sweep()
+	}
+	if reads != chat.MaxAttempts-1 {
+		t.Fatalf("the request was read %d times, want %d", reads, chat.MaxAttempts-1)
+	}
+	w.linkedOnce(session)
+	if len(w.fake.Ephemerals()) != 0 || len(w.fake.Updates()) != 0 {
+		t.Fatalf("ephemerals %+v, updates %+v", w.fake.Ephemerals(), w.fake.Updates())
 	}
 }
 

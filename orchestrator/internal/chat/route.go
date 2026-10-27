@@ -980,6 +980,21 @@ func (s *Service) giveUp(ctx context.Context, d claimed, cause error, transient 
 	if m.ConversationID == "" || m.UserID == "" {
 		return
 	}
+	if d.Kind == "interaction" {
+		// A click whose link committed did what it was for, whichever step
+		// failed after: it ends as no failed request and no "Sorry".
+		var linked bool
+		err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM chat_request_links WHERE event_id = $1)`, d.ID).Scan(&linked)
+		})
+		if err != nil {
+			s.log().Warn("reading whether a click linked a project failed", "provider", d.Provider, "event", d.ID, "error", err)
+		}
+		if linked {
+			s.log().Warn("a click that linked a project was not finished", "provider", d.Provider, "event", d.ID, "error", cause)
+			return
+		}
+	}
 	var inst Installation
 	var ok bool
 	var who asker

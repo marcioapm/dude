@@ -141,6 +141,11 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 		providerID = p.Info().ID
 	)
 	if err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+		if s.beforeLinkRead != nil {
+			if err := s.beforeLinkRead(ctx); err != nil {
+				return err
+			}
+		}
 		if inst, installed, err = loadInstallation(ctx, tx, providerID); err != nil || !installed || inst.WorkspaceID != in.WorkspaceID {
 			installed = false
 			return err
