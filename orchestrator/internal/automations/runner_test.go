@@ -1448,6 +1448,79 @@ func TestAutomationConcurrencyCancelsDoNotStallTheSweep(t *testing.T) {
 	}
 }
 
+// A resumable agent's frames after its last follow pass belong to the run
+// a newer event cancelled: its final read records them, its cursor moves
+// past them, and the run resuming its session does not record them again.
+func TestAutomationConcurrencyCancelReadsAnAgentsLastFrames(t *testing.T) {
+	h := newHarness(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_last_agent", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "cancel", "session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
+	cursorOf := func(runID string) string {
+		var c string
+		if err := h.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_cursor, '') FROM automation_runs WHERE id = $1`, runID).Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	h.deliver("la-1", "push", push)
+	h.until("the agent's busy is read", func() bool {
+		r := h.runs("aut_last_agent")
+		return len(r) == 1 && r[0].Status == "running" && r[0].LuxRunID != "" && cursorOf(r[0].ID) != ""
+	})
+	first := h.runs("aut_last_agent")[0]
+	h.runner.Wait()
+	// No sweep from here until the newer event: these frames are read by no follow pass.
+	h.fake.AgentSays(first.LuxRunID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "Late words from the agent."}})
+	h.fake.AgentSays(first.LuxRunID, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "late-call", "title": "bash", "kind": "execute",
+		"status": "in_progress", "rawInput": map[string]any{"command": "make late"}})
+	last := ""
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_ = h.lux.Output(ctx, first.LuxRunID, "", 0, func(f lux.Frame) error {
+		if f.Cursor != "" {
+			last = f.Cursor
+		}
+		return nil
+	})
+	cancel()
+	h.deliver("la-2", "push", push)
+	h.until("the newer run resumes the session", func() bool {
+		r := h.runs("aut_last_agent")
+		return len(r) == 2 && r[1].Status == "running" && r[1].Session == "resumed"
+	})
+	second := h.runs("aut_last_agent")[1]
+	h.until("the resumed run is followed", func() bool {
+		var followed bool
+		_ = h.owner.QueryRow(context.Background(), `SELECT followed_at IS NOT NULL FROM automation_runs WHERE id = $1`, second.ID).Scan(&followed)
+		return followed
+	})
+	h.runner.Wait()
+	count := func(runID string) (messages, called, aborted int) {
+		if err := h.owner.QueryRow(context.Background(), `SELECT
+			count(*) FILTER (WHERE event_type = 'agent.message' AND payload->>'text' = 'Late words from the agent.'),
+			count(*) FILTER (WHERE event_type = 'agent.tool.called' AND payload->>'callId' = 'late-call'),
+			count(*) FILTER (WHERE event_type = 'agent.tool.completed' AND payload->>'callId' = 'late-call' AND payload->>'status' = 'aborted'
+				AND payload->>'note' = 'Stopped: the run was cancelled.')
+			FROM events WHERE automation_run_id = $1`, runID).Scan(&messages, &called, &aborted); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if m, c, a := count(first.ID); m != 1 || c != 1 || a != 1 {
+		t.Fatalf("cancelled run's late frames: messages=%d called=%d aborted=%d", m, c, a)
+	}
+	var lastEpoch, lastSeq, gotEpoch, gotSeq int
+	fmt.Sscanf(last, "%d.%d", &lastEpoch, &lastSeq)
+	fmt.Sscanf(cursorOf(first.ID), "%d.%d", &gotEpoch, &gotSeq)
+	if gotEpoch < lastEpoch || gotEpoch == lastEpoch && gotSeq < lastSeq {
+		t.Fatalf("cancelled run's cursor %q is before its last frame %q", cursorOf(first.ID), last)
+	}
+	if m, c, a := count(second.ID); m != 0 || c != 0 || a != 0 {
+		t.Fatalf("resumed run recorded the cancelled run's frames: messages=%d called=%d aborted=%d", m, c, a)
+	}
+}
+
 // Concurrency send: an event arriving while the agent works is given to
 // that agent as input, with the automation's prompt for that event, once.
 func TestAutomationConcurrencySendReachesTheAgent(t *testing.T) {
