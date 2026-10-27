@@ -135,6 +135,11 @@ describe("IncomingVerdictPanel, CodeWell and a disclosure's glyph", () => {
     expect(renderToStaticMarkup(<SettingsDisclosure summary="How">x</SettingsDisclosure>)).toContain('data-icon="layers"');
     expect(renderToStaticMarkup(<SettingsDisclosure icon="send" summary="How">x</SettingsDisclosure>)).toContain('data-icon="send"');
   });
+
+  test("SettingsDisclosure's body is capped unless full", () => {
+    expect(renderToStaticMarkup(<SettingsDisclosure summary="How">x</SettingsDisclosure>)).not.toContain("data-full");
+    expect(renderToStaticMarkup(<SettingsDisclosure full summary="How">x</SettingsDisclosure>)).toContain('data-full="true"');
+  });
 });
 
 describe("TriggerSummary on an incoming webhook", () => {

@@ -169,7 +169,7 @@ export function IncomingTriggerRows({ trigger, hint, ro, onChange, onRotate, pat
         </div>
       </SettingRow>
       <SettingRow label="How to send" block>
-        <SettingsDisclosure icon="send" summary={`URL, ${v.mode === "query" ? "parameter" : "header"} and a curl example`}>
+        <SettingsDisclosure icon="send" full summary={`URL, ${v.mode === "query" ? "parameter" : "header"} and a curl example`}>
           <HowToSend url={url} verify={v} />
         </SettingsDisclosure>
       </SettingRow>
@@ -499,7 +499,7 @@ export function RunTrigger({ a, run, onDelivery }: { a: Automation; run: Automat
       ]} />
       {later.length > 0 ? (
         <div data-testid="sent-to-run">
-          <h4 className="incomingSubHead ds-label">Sent to this run <span className="muted">· later deliveries of the same group</span></h4>
+          <h4 className="incomingSubHead">Sent to this run <span className="muted">· later deliveries of the same group</span></h4>
           <ol className="automationTimeline">
             {later.map((d) => (
               <li key={d.id}>

@@ -180,11 +180,13 @@ export function SettingField({ label, htmlFor, source, children }: {
 /**
  * Something folded on the chrome shade: by default an inherited value (the
  * organization's prompt a project's adds to; layers glyph); with `icon` any
- * reference a row offers on demand (how to send to a URL).
+ * reference a row offers on demand (how to send to a URL). The body scrolls
+ * past 320px unless `full`.
  */
-export function SettingsDisclosure({ summary, icon = "layers", children }: {
+export function SettingsDisclosure({ summary, icon = "layers", full = false, children }: {
   readonly summary: ReactNode;
   readonly icon?: IconName | undefined;
+  readonly full?: boolean | undefined;
   readonly children: ReactNode;
 }) {
   return (
@@ -194,7 +196,7 @@ export function SettingsDisclosure({ summary, icon = "layers", children }: {
         <span className={styles["disclosureText"]}>{summary}</span>
         <span className={styles["disclosureShow"]}>Show</span>
       </summary>
-      <div className={styles["disclosureBody"]}>{children}</div>
+      <div className={styles["disclosureBody"]} data-full={full || undefined}>{children}</div>
     </details>
   );
 }

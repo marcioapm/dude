@@ -709,6 +709,8 @@ body {
 }
 .incomingSubHead {
   margin: var(--ds-space-12) 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
 }
 
 /* A tier naming no model yet: its Requests cell, in the attention tone. */
