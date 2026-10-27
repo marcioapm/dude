@@ -696,6 +696,11 @@ body {
   min-width: 0;
   flex: 1;
 }
+.incomingDisclosure {
+  padding: var(--ds-space-6) var(--ds-space-12);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-control);
+}
 .incomingDisclosure > summary {
   cursor: pointer;
   font-size: var(--ds-text-sm);
@@ -731,6 +736,10 @@ body {
 .incomingFilter {
   max-width: 256px;
 }
+/* A verdict and its reason wrap to two lines; compact rows would touch. */
+.incomingRoomyRows td {
+  padding-block: var(--ds-space-6);
+}
 .incomingVerdictBox {
   display: flex;
   flex-direction: column;
@@ -742,6 +751,10 @@ body {
 }
 .incomingVerdictBox > p {
   margin: 0;
+}
+.incomingVerdictBox > .incomingOutcome {
+  padding-top: var(--ds-space-8);
+  border-top: 1px solid var(--ds-color-border);
 }
 .incomingOutcome[data-ok="false"] b {
   color: var(--ds-tone-danger-fg);

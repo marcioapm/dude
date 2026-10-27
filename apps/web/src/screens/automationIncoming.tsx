@@ -288,7 +288,7 @@ export function DeliveriesTab({ client, a, onOpen, onRun }: {
       </span>
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
       {!list ? <Spinner label="Loading…" /> : shown.length === 0 ? <EmptyState title="No deliveries in the last 30 days" /> : (
-        <Table density="compact">
+        <Table density="compact" className="incomingRoomyRows">
           <THead><Tr><Th width="14%">When</Th><Th>Verdict</Th><Th hideWhenNarrow>{incoming ? "Group key" : "Event"}</Th><Th hideWhenNarrow width={88} align="right">Size</Th></Tr></THead>
           <TBody>{shown.map((d) => (
             <Tr key={d.id} interactive onClick={() => onOpen(d.id)} data-testid="delivery-row" data-id={d.id}>

@@ -1235,7 +1235,8 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
         {run.payloadsPurged ? <SettingsNote>Payloads are kept 30 days.</SettingsNote>
           : a.trigger.kind === "incoming" && run.payloads.length > 0 ? (
             <CodeEditor aria-label="Trigger payload" language="plain" readOnly minLines={6} maxLines={18}
-              value={JSON.stringify(run.payloads[0]!.body, null, 2)} header={<span className="ds-mono">json · {run.payloads[0]!.deliveryId}</span>} />
+              value={JSON.stringify(run.payloads[0]!.body, null, 2)} header={<span className="ds-mono">json · {run.payloads[0]!.deliveryId}
+                {run.deliveries?.[0] ? ` · ${run.deliveries[0].bytes.toLocaleString("en-GB")} bytes` : ""}</span>} />
           )
           : <pre className="automationPayload">{JSON.stringify(run.payloads.length === 1 ? run.payloads[0]!.body : run.payloads, null, 2)}</pre>}
       </SettingsSection>
