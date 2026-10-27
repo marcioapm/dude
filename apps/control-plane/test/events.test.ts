@@ -338,4 +338,28 @@ describe("SSE stream", () => {
     const cursors = seen.map((s) => s.cursor);
     expect(cursors).toEqual([...cursors].sort((a, b) => a - b));
   });
+
+  test("an automation run's stream carries that run's activity only: not another run's, nor another organisation's", async () => {
+    const tag = Bun.randomUUIDv7("hex").slice(-8);
+    const [mine, sibling, theirs] = [`arn_m${tag}`, `arn_s${tag}`, `arn_t${tag}`];
+    for (const [org, aut] of [[ORG_A, `aut_a${tag}`], [ORG_B, `aut_b${tag}`]] as const) {
+      await owner`INSERT INTO automations (id, organization_id, name, kind, trigger, agent)
+        VALUES (${aut}, ${org}, 'Digest', 'agent', ${{ kind: "schedule", cron: "0 15 * * 5", tz: "Europe/Lisbon" }}::jsonb, ${{ own: { prompt: "" } }}::jsonb)`;
+    }
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES
+      (${mine}, ${ORG_A}, ${`aut_a${tag}`}, 'running', 'schedule'), (${sibling}, ${ORG_A}, ${`aut_a${tag}`}, 'running', 'schedule'),
+      (${theirs}, ${ORG_B}, ${`aut_b${tag}`}, 'running', 'schedule')`;
+    // As the orchestrator writes them: inserts that NOTIFY, the bus filters.
+    const write = (org: string, run: string, type: string) => owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id,
+      source, automation_run_id) VALUES (${`evt_${Bun.randomUUIDv7("hex").slice(-12)}`}, ${org}, ${type}, 'agent', ${run}, 'runner', ${run})`;
+    await write(ORG_A, mine, "agent.message");
+    await write(ORG_A, sibling, "sibling.backfill");
+    const seen = await collect(`${baseUrl}/v1/events/stream?automationRunId=${mine}`, 3, async () => {
+      await write(ORG_B, theirs, "other.org");
+      await write(ORG_A, sibling, "sibling.live");
+      await write(ORG_A, mine, "agent.tool.called");
+      await write(ORG_A, mine, "agent.tool.completed");
+    });
+    expect(seen.map((s) => s.type)).toEqual(["agent.message", "agent.tool.called", "agent.tool.completed"]);
+  });
 });

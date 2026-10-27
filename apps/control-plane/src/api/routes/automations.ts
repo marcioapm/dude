@@ -459,6 +459,17 @@ const RUN_COLUMNS = `r.id, r.automation_id AS "automationId", r.status, r.reason
   jsonb_array_length(r.payloads) AS "payloadCount",
   (SELECT json_build_object('id', p.id, 'name', p.name, 'photoUrl', person_ref(p)->>'photoUrl') FROM people p WHERE p.id = r.started_by) AS "startedBy"`;
 
+/**
+ * A running run's newest tool call its agent has not finished, as
+ * {tool, args} (the runs list's "now:" line); null otherwise. The orchestrator
+ * keeps the open calls in feed_state; their call events are read on
+ * events_automation_run_cursor_idx, newest first.
+ */
+const NOW_CALL = `CASE WHEN r.status = 'running' THEN (SELECT json_build_object('tool', e.payload->>'tool', 'args', e.payload->'input')
+    FROM events e WHERE e.automation_run_id = r.id AND e.event_type = 'agent.tool.called'
+      AND r.feed_state->'open' ? (e.payload->>'callId')
+    ORDER BY e.cursor DESC LIMIT 1) END AS "now"`;
+
 export const runsQuery = z.object({
   status: z.enum(["queued", "running", "succeeded", "failed", "skipped", "cancelled"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -475,7 +486,7 @@ async function listRuns(ctx: RequestContext): Promise<Response> {
   if (!parsed.success) throw badRequest("unknown run filter", parsed.error.flatten());
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const a = await readOne(scope, ctx.params.id!);
-    const runs = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS} FROM automation_runs r
+    const runs = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS}, ${NOW_CALL} FROM automation_runs r
       WHERE r.automation_id = $1 AND ($2::text IS NULL OR r.status = $2) ORDER BY r.created_at DESC, r.id DESC LIMIT $3`,
     [a.id, parsed.data.status ?? null, parsed.data.limit])) as Array<Record<string, unknown>>;
     const [kept] = (await scope.sql`SELECT created_at AS "since", last_run_at AS "lastRunAt",
@@ -522,9 +533,9 @@ const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "slack.message.p
  * channel and link. A post's text is left out: its message is in Slack.
  */
 async function toolCalls(scope: OrgScope, runId: string) {
-  // run_id is the automation run's id on every event its agent's calls write (events_run_cursor_idx).
+  // automation_run_id keys every event its agent's calls write (migration 214, events_automation_run_cursor_idx).
   const rows = (await scope.sql`SELECT id, event_type AS type, occurred_at AS at, payload FROM events
-    WHERE run_id = ${runId} AND event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[])
+    WHERE automation_run_id = ${runId} AND event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[])
     ORDER BY occurred_at, cursor`) as Array<{ id: string; type: string; at: Date; payload: Record<string, unknown> }>;
   const attempts = new Map<string, Date[]>();
   const posts: Array<{ channel: string; channelId: string; ts: string; permalink: string }> = [];

@@ -30,6 +30,7 @@ const EVENT_COLUMNS = `
   run_id            AS "runId",
   session_id        AS "sessionId",
   workflow_run_id   AS "workflowRunId",
+  automation_run_id AS "automationRunId",
   actor_type        AS "actorType",
   actor_id          AS "actorId",
   source,
@@ -54,6 +55,7 @@ interface EventRow {
   runId: string | null;
   sessionId: string | null;
   workflowRunId: string | null;
+  automationRunId?: string | null;
   actorType: PersistedEvent["actor"]["type"];
   actorId: string;
   source: PersistedEvent["source"];
@@ -78,6 +80,8 @@ function toPersisted(row: EventRow): PersistedEvent {
     runId: row.runId,
     sessionId: row.sessionId,
     workflowRunId: row.workflowRunId,
+    // Only an automation run's activity carries it (migration 214).
+    ...(row.automationRunId ? { automationRunId: row.automationRunId } : {}),
     actor: row.actorPerson
       ? { type: row.actorType, ...row.actorPerson, ...(row.actorType === "human" ? { keyId: row.actorId } : {}) }
       : { type: row.actorType, id: row.actorId },
@@ -152,6 +156,8 @@ export interface EventQuery {
   runId?: string | undefined;
   taskId?: string | undefined;
   projectId?: string | undefined;
+  /** An automation run's activity (events_automation_run_cursor_idx). */
+  automationRunId?: string | undefined;
   eventTypes?: readonly string[] | undefined;
   limit?: number | undefined;
   /**
@@ -190,6 +196,7 @@ export async function query(organizationId: string, q: EventQuery = {}): Promise
         AND (${q.runId ?? null}::text IS NULL OR run_id = ${q.runId ?? null})
         AND (${q.taskId ?? null}::text IS NULL OR task_id = ${q.taskId ?? null})
         AND (${q.projectId ?? null}::text IS NULL OR project_id = ${q.projectId ?? null})
+        AND (${q.automationRunId ?? null}::text IS NULL OR automation_run_id = ${q.automationRunId ?? null})
         AND (${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[] IS NULL
              OR event_type = ANY(${q.eventTypes?.length ? (q.eventTypes as string[]) : null}::text[]))
         AND (${viewer}::text IS NULL OR session_id IS NULL
