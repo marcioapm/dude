@@ -840,7 +840,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
-				p.ReviewRange = reviewRange
+				p.ReviewRange, p.LoopRange = reviewRange, st.checkingCandidate()
 				p.Continue = cont
 				d.apply(p)
 				if st.Integration != nil {
@@ -1029,10 +1029,14 @@ func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *
 	return Exit(policy, findings, st.Iteration, conv)
 }
 
-// loopFindings is what the review loop weighs: the reviewers' findings, with
-// the loop's convergence, and the people's feedback still to be handled.
+// loopFindings is what the review loop weighs: the reviewers' findings its
+// loop owns (loopsOwn), with the loop's convergence, and the people's
+// feedback still to be handled.
 func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
 	findings, conv, err := w.s.ConvergingFindings(ctx, org, st)
+	if err == nil {
+		findings, err = w.s.loopsOwn(ctx, org, st, findings)
+	}
 	if err != nil {
 		return nil, conv, err
 	}
@@ -1135,6 +1139,9 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		return workflow.Result{}, err
 	}
 	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
+	if err == nil {
+		findings, err = w.s.loopsOwn(ctx, sc.OrganizationID, st, findings)
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -1143,25 +1150,6 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		if f.Status == "open" {
 			open = append(open, f.ID)
 		}
-	}
-	if st.checkingCandidate() {
-		// A pull request's fix fixes what its own reviews raised — of the
-		// fix, and of its simplifier's diff — never the findings a person
-		// let the pull request open with. After a failed test SimplifyBase
-		// is empty: the narrow review's open findings are not sent.
-		ranges := []*ReviewRange{{Of: RangePullRequestFix, Base: st.Candidate.Base}}
-		if len(st.SimplifyBase) > 0 {
-			ranges = append(ranges, &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase})
-		}
-		var ours []string
-		for _, r := range ranges {
-			ids, err := w.s.rangeFindings(ctx, sc.OrganizationID, st, r)
-			if err != nil {
-				return workflow.Result{}, err
-			}
-			ours = append(ours, ids...)
-		}
-		open = slices.DeleteFunc(open, func(id string) bool { return !slices.Contains(ours, id) })
 	}
 	if err := w.writerCandidate(ctx, sc, st, PhaseFix); err != nil {
 		return workflow.Result{}, err
