@@ -86,7 +86,7 @@ const ReasonChoiceUnresolved = "pull_request_choice_unresolved"
 // FirstPullRequestChoice is the task's choice before its pull request, as
 // the step that opens it reads it: "" once the current attempt has had a
 // pull request, whatever the choice says, so only the first opening is
-// held or made a draft by it.
+// held by it.
 func (s *Store) FirstPullRequestChoice(ctx context.Context, org, taskID string) (string, error) {
 	choice := ""
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
