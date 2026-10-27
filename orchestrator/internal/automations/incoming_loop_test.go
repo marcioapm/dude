@@ -99,7 +99,8 @@ func TestIncomingGroupFollowUpsReachTheLiveRun(t *testing.T) {
 // Deliveries that cannot be decided hold up nothing: 50 whose runs the
 // database refuses fill a whole batch, yet a delivery with a group key
 // longer than the column takes, one whose missed condition quotes a long
-// value, and another organisation's delivery are all decided; after its
+// value, one whose condition lists values past the reason's 2000 characters,
+// and another organisation's delivery are all decided; after its
 // last try each refused one is skipped, saying why.
 func TestIncomingQueueGoesOnPastDeliveriesItCannotDecide(t *testing.T) {
 	h := newHarness(t)
@@ -120,6 +121,12 @@ func TestIncomingQueueGoesOnPastDeliveriesItCannotDecide(t *testing.T) {
 	long := strings.Repeat("k", 2100)
 	h.receive("aut_good", "dlv_long_key", map[string]any{"status": "firing", "k": long})
 	h.receive("aut_good", "dlv_long_value", map[string]any{"status": strings.Repeat("w", 2500), "k": "other"})
+	var many []string
+	for i := range 400 {
+		many = append(many, fmt.Sprintf("v%04d", i))
+	}
+	h.automation("aut_list", "command", incoming("aut_list", []Condition{{Path: "status", Op: "one_of", Values: many}}, ""), cmd)
+	h.receive("aut_list", "dlv_long_list", map[string]any{"status": "resolved"})
 
 	other := dbtest.Org(t, h.owner)
 	exec(t, h.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1 || '_p', $1, 'api', 'api', 'API')`, other)
@@ -137,7 +144,7 @@ func TestIncomingQueueGoesOnPastDeliveriesItCannotDecide(t *testing.T) {
 	}
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		_, _ = h.runner.Sweep(context.Background())
-		if read("dlv_long_key") != "" && read("dlv_long_value") != "" && read("dlv_other") != "" {
+		if read("dlv_long_key") != "" && read("dlv_long_value") != "" && read("dlv_long_list") != "" && read("dlv_other") != "" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -149,6 +156,10 @@ func TestIncomingQueueGoesOnPastDeliveriesItCannotDecide(t *testing.T) {
 	}
 	if d := h.delivery("dlv_long_value"); d.Verdict != VerdictSkipped || d.Reason != "status is "+strings.Repeat("w", 200)+"…, not firing" {
 		t.Errorf("long value: %s %q", d.Verdict, d.Reason)
+	}
+	// A condition's own words past 2000 characters: the reason is cut, and the delivery decided at once.
+	if d := h.delivery("dlv_long_list"); d.Verdict != VerdictSkipped || len(d.Reason) != 2000 || !strings.HasPrefix(d.Reason, "status is resolved, not one of v0000") {
+		t.Errorf("long values list: %s %d %.60q", d.Verdict, len(d.Reason), d.Reason)
 	}
 	if v := read("dlv_other"); v != VerdictStarted {
 		t.Errorf("the other organisation's delivery: %q", v)
