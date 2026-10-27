@@ -554,8 +554,8 @@ describe("a brainstorm session's page", () => {
   });
 
   test("a task item shows the images it will carry, as a message's; one the session no longer has is left out", async () => {
-    const design = { id: "att_design", name: "design.png", contentType: "image/png", width: 640, height: 400, bytes: 2048,
-      original: { contentType: "image/png", width: 1280, height: 800, bytes: 8192 } };
+    const design = { id: "att_design", name: "design.png", contentType: "image/png" as const, width: 640, height: 400, bytes: 2048,
+      original: { contentType: "image/png" as const, width: 1280, height: 800, bytes: 8192 } };
     const client = new SessionClient(detail("chat", {
       proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [
         { kind: "task", project: "BL", title: "Dropdown checklist", goal: "g", images: ["att_design", "att_gone"] },
