@@ -322,7 +322,15 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 			return Fired{Action: Skip, Reason: followUpsFull}, nil
 		}
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw)
-		return fired, err
+		if err != nil {
+			return fired, err
+		}
+		for _, p := range payloads {
+			if err := followUpArrived(ctx, tx, d.Into, p); err != nil {
+				return fired, err
+			}
+		}
+		return fired, nil
 	case Skip:
 		fired.Run, fired.Reason = ids.New(ids.AutomationRun), d.Reason
 		_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
