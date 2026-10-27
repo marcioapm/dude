@@ -43,6 +43,8 @@
 
 {{- define "wakes/facts/test-passed"}}test {{.}}: every criterion passed or was settled by a person.{{end}}
 
+{{- define "wakes/facts/merge-not-retested"}}GitHub merged {{.Base}} into the task branch in {{.Repo}} before the pull request; the merge was not tested again because it touched none of the task's files ({{.Paths}} paths), and test {{.RunID}}'s verdicts stand. The pull request's CI checks the merge.{{end}}
+
 {{- define "wakes/facts/feedback-open"}}
 {{- if eq .When "after-fix"}}{{.N}} feedback items from people are still open after the fix: read them with feedback.
 {{- else if eq .When "after-integration"}}{{.N}} feedback items from people are open after the base integration: read them with feedback.

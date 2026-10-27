@@ -11,11 +11,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -23,7 +25,9 @@ import (
 // {fromRunId, from, heads, paths, criteria}: the previous round whose
 // verdicts stand, its checkouts, the heads they now stand for, the paths
 // changed between (all non-product), and each verdict as {criterion,
-// status, decision}.
+// status, decision}. For a clean merge of the target branch before the
+// pull request (carryOverMerge), also why (MergeUntouchedWhy) and merge
+// {repo, base, baseHead}; paths are then the paths the merge brought in.
 const EvTestSkipped = "test.skipped"
 
 // carryTx is what test Run runID's carried criteria may rest on: the
@@ -91,7 +95,10 @@ func NonProduct(p Policy, paths []string) bool {
 func (w *steps) carryForward(ctx context.Context, sc workflow.StepContext, st *State, judge []string, directed bool) (skip bool, err error) {
 	st.CarryFrom = ""
 	if st.Integration != nil {
-		return false, nil
+		if !st.Integration.cleanServerMerge() || st.RetestDue || directed || len(judge) > 0 {
+			return false, nil
+		}
+		return w.carryOverMerge(ctx, sc, st)
 	}
 	prev, err := w.s.PreviousRound(ctx, sc.OrganizationID, st.TaskID, st.Attempt, PhaseTest, "")
 	if err != nil || prev == nil {
@@ -106,32 +113,9 @@ func (w *steps) carryForward(ctx context.Context, sc workflow.StepContext, st *S
 	if st.RetestDue || directed || len(judge) > 0 || !NonProduct(st.Policy, delta.Paths) {
 		return false, nil
 	}
-	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, prev.ID)
-	if err != nil || len(in.Verdicts) == 0 || judgeGate(st.Policy, in).Outcome != "pass" {
+	verdicts, ok, err := w.passedAsCriteriaRead(ctx, sc, st, prev.ID)
+	if err != nil || !ok {
 		return false, err
-	}
-	var criteria []string
-	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT acceptance_criteria FROM tasks WHERE id = $1`, st.TaskID).Scan(&raw); err != nil {
-			return err
-		}
-		return json.Unmarshal(raw, &criteria)
-	}); err != nil {
-		return false, err
-	}
-	// The verdicts must be on the criteria as they read now: one added or
-	// edited while the task was stopped has not been judged. A task
-	// without criteria has the tester's derived checks, which nothing here
-	// can compare, so it is tested.
-	if len(in.Verdicts) != len(criteria) || slices.ContainsFunc(in.Verdicts, func(v StoredVerdict) bool {
-		return v.Criterion < 1 || v.Criterion > len(criteria) || v.Text != criteria[v.Criterion-1]
-	}) {
-		return false, nil
-	}
-	verdicts := make([]map[string]any, len(in.Verdicts))
-	for i, v := range in.Verdicts {
-		verdicts[i] = map[string]any{"criterion": v.Criterion, "status": v.Status, "decision": v.Decision}
 	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		return emitTx(ctx, tx, sc.OrganizationID, st, EvTestSkipped, map[string]any{"fromRunId": prev.ID,
@@ -141,6 +125,254 @@ func (w *steps) carryForward(ctx context.Context, sc workflow.StepContext, st *S
 	}
 	st.TestRunID = prev.ID
 	return true, nil
+}
+
+// passedAsCriteriaRead says test Run runID passed the gate as it stands,
+// on every one of the task's criteria as they read now, and returns its
+// verdicts as EvTestSkipped records them.
+func (w *steps) passedAsCriteriaRead(ctx context.Context, sc workflow.StepContext, st *State, runID string) ([]map[string]any, bool, error) {
+	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
+	if err != nil || len(in.Verdicts) == 0 || judgeGate(st.Policy, in).Outcome != "pass" {
+		return nil, false, err
+	}
+	var criteria []string
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT acceptance_criteria FROM tasks WHERE id = $1`, st.TaskID).Scan(&raw); err != nil {
+			return err
+		}
+		return json.Unmarshal(raw, &criteria)
+	}); err != nil {
+		return nil, false, err
+	}
+	// The verdicts must be on the criteria as they read now: one added or
+	// edited while the task was stopped has not been judged. A task
+	// without criteria has the tester's derived checks, which nothing here
+	// can compare, so it is tested.
+	if len(in.Verdicts) != len(criteria) || slices.ContainsFunc(in.Verdicts, func(v StoredVerdict) bool {
+		return v.Criterion < 1 || v.Criterion > len(criteria) || v.Text != criteria[v.Criterion-1]
+	}) {
+		return nil, false, nil
+	}
+	verdicts := make([]map[string]any, len(in.Verdicts))
+	for i, v := range in.Verdicts {
+		verdicts[i] = map[string]any{"criterion": v.Criterion, "status": v.Status, "decision": v.Decision}
+	}
+	return verdicts, true, nil
+}
+
+// MergeUntouchedWhy is EvTestSkipped's why for a clean merge of the target
+// branch before the pull request (carryOverMerge).
+const MergeUntouchedWhy = "merged target branch touched none of the task's files"
+
+// cleanServerMerge says the integration is the merge GitHub made, cleanly,
+// of the target branch into the task branch before its pull request opened
+// (syncBeforePR's MergeCommit, onto the head it read): not a head found
+// moved, not an agent's integration, not one on an open pull request.
+func (i *Integration) cleanServerMerge() bool {
+	return i.BeforePR && i.Published && i.ServerMerge && i.Number == 0 && strings.HasPrefix(i.RunID, "server-")
+}
+
+// carryOverMerge is carryForward's choice for a clean before-PR merge: no
+// tester when the paths the merge brought in (the target branch's change
+// from the task's merge base to BaseHead) share none with the task's own
+// (from that merge base to the task's head before the merge), and the
+// previous test round passed the gate at the heads before the merge. The
+// pull request's CI checks the merge itself. Unmeasured: tested.
+func (w *steps) carryOverMerge(ctx context.Context, sc workflow.StepContext, st *State) (bool, error) {
+	i := st.Integration
+	// The measurement and the gate stand for the merge GitHub made; a head
+	// moved since (a publish while the step waited) is untested work.
+	if st.Heads[i.Repo] != strings.TrimPrefix(i.RunID, "server-") {
+		return false, nil
+	}
+	pre := maps.Clone(st.Heads)
+	pre[i.Repo] = i.Head
+	prev, err := w.s.PreviousRound(ctx, sc.OrganizationID, st.TaskID, st.Attempt, PhaseTest, "")
+	if err != nil || prev == nil {
+		return false, err
+	}
+	if ok, err := w.s.stoodAt(ctx, sc.OrganizationID, st.TaskID, prev, pre); err != nil || !ok {
+		return false, err
+	}
+	// The database's vetoes before GitHub's compares.
+	verdicts, ok, err := w.passedAsCriteriaRead(ctx, sc, st, prev.ID)
+	if err != nil || !ok {
+		return false, err
+	}
+	m, err := w.mergeChange(ctx, sc, st)
+	if err != nil || !m.Measured || len(m.Merged) == 0 || intersects(m.Merged, m.Task) || affectsEveryChange(m.Merged) {
+		return false, err
+	}
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		if err := carryGateOverMergeTx(ctx, tx, sc.WorkflowRunID, st, pre); err != nil {
+			return err
+		}
+		// News for a live conductor, held for its next note (heldWakePrefix):
+		// it never starts or resumes one.
+		if err := wakeLiveConductorTx(ctx, tx, sc.OrganizationID, st.TaskID, "checkout", heldWakePrefix+"merge:"+i.pair(),
+			mergeNotRetestedLine(i.Repo, i.Base, prev.ID, len(m.Merged))); err != nil {
+			return err
+		}
+		return emitTx(ctx, tx, sc.OrganizationID, st, EvTestSkipped, map[string]any{"fromRunId": prev.ID,
+			"from": pre, "heads": st.Heads, "paths": m.Merged, "criteria": verdicts, "why": MergeUntouchedWhy,
+			"merge": map[string]any{"repo": i.Repo, "base": i.Base, "baseHead": i.BaseHead}})
+	}); err != nil {
+		return false, err
+	}
+	st.TestRunID = prev.ID
+	return true, nil
+}
+
+// wakeLiveConductorTx is RecordWakeTx for a task whose conductor is live;
+// a task with none gets no row, since a wake would start one.
+func wakeLiveConductorTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line string) error {
+	var live bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+`)`, taskID).Scan(&live); err != nil || !live {
+		return err
+	}
+	_, err := RecordWakeTx(ctx, tx, org, taskID, kind, key, line)
+	return err
+}
+
+// carryGateOverMergeTx moves a person's Open or Draft given at the heads
+// before the merge (pre) to the merged heads: the merge is what opening the
+// pull request brought in, not new work to authorize. One given at other
+// heads, or none, is left as it is. gateAt is Owned: read and written in
+// the row, locked.
+func carryGateOverMergeTx(ctx context.Context, tx pgx.Tx, wfID string, st *State, pre map[string]string) error {
+	var raw []byte
+	if err := tx.QueryRow(ctx, `SELECT state->'gateAt' FROM workflow_runs WHERE id = $1 FOR UPDATE`, wfID).Scan(&raw); err != nil {
+		return err
+	}
+	var at *GateAt
+	if len(raw) == 0 || json.Unmarshal(raw, &at) != nil || at == nil || !maps.Equal(nonNilMap(at.Heads), nonNilMap(pre)) {
+		return nil
+	}
+	at.Heads = maps.Clone(nonNilMap(st.Heads))
+	moved, _ := json.Marshal(at)
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{gateAt}', $2::jsonb) WHERE id = $1`, wfID, moved); err != nil {
+		return err
+	}
+	st.GateAt = at
+	return nil
+}
+
+// stoodAt says the verdicts of prev were the delivery's at heads: its
+// round ended there, or a later skip carried them there.
+func (s *Store) stoodAt(ctx context.Context, org, taskID string, prev *Predecessor, heads map[string]string) (bool, error) {
+	if maps.Equal(nonNilMap(prev.BaseRefs), nonNilMap(heads)) {
+		return true, nil
+	}
+	raw, _ := json.Marshal(nonNilMap(heads))
+	var carried bool
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
+			AND payload->>'fromRunId' = $3 AND payload->'heads' = $4::jsonb)`, taskID, EvTestSkipped, prev.ID, raw).Scan(&carried)
+	})
+	return carried, err
+}
+
+// MergeChange is what a clean before-PR merge brought in and what the task
+// changed, as <repo>/<path>s; Task is not asked when Merged reaches every
+// change. Not Measured: refused, cut short, or no forge.
+type MergeChange struct {
+	Measured bool     `json:"measured"`
+	Merged   []string `json:"merged,omitempty"`
+	Task     []string `json:"task,omitempty"`
+}
+
+// mergeChange measures st.Integration's two sides with GitHub's compare,
+// once per merge: cached in roundDelta under the merge's pair, so a step
+// that waits on GitHub and runs again asks nothing it already has.
+func (w *steps) mergeChange(ctx context.Context, sc workflow.StepContext, st *State) (MergeChange, error) {
+	i := st.Integration
+	cacheKey := roundDeltaKey([]byte("merge:" + i.pair()))
+	cached, err := w.cachedRoundDelta(ctx, sc, cacheKey)
+	if err != nil {
+		return MergeChange{}, err
+	}
+	var m MergeChange
+	if len(cached) > 0 && json.Unmarshal(cached, &m) == nil {
+		return m, nil
+	}
+	if w.forges == nil {
+		return MergeChange{}, nil
+	}
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	switch {
+	case forge.Transient(err):
+		return MergeChange{}, forgeWait(err)
+	case err != nil && forge.Refused(err), err == nil && gh == nil:
+		return MergeChange{}, nil
+	case err != nil:
+		return MergeChange{}, err
+	}
+	var slug string
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		repos, err := TaskRepositories(ctx, tx, st.TaskID)
+		for _, r := range repos {
+			if r.Name == i.Repo {
+				slug = forge.SlugFromURL(r.URL)
+			}
+		}
+		return err
+	}); err != nil || slug == "" {
+		return MergeChange{}, err
+	}
+	paths := func(base, head string) ([]string, bool, error) {
+		cmp, err := gh.Compare(ctx, slug, base, head)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return nil, false, ctx.Err()
+		case forge.Transient(err):
+			return nil, false, forgeWait(err)
+		case err != nil, cmp.Truncated():
+			return nil, false, nil
+		}
+		var out []string
+		for _, f := range cmp.Files {
+			out = append(out, i.Repo+"/"+f.Filename)
+			if f.PreviousFilename != "" {
+				out = append(out, i.Repo+"/"+f.PreviousFilename)
+			}
+		}
+		return out, true, nil
+	}
+	// Three dots: each side from the merge base of the two. A merge that
+	// reaches every change (affectsEveryChange) is tested whatever the task
+	// changed, so its task side is not asked.
+	m.Merged, m.Measured, err = paths(i.Head, i.BaseHead)
+	if err != nil || !m.Measured {
+		return MergeChange{}, err
+	}
+	if !affectsEveryChange(m.Merged) {
+		if m.Task, m.Measured, err = paths(i.BaseHead, i.Head); err != nil || !m.Measured {
+			return MergeChange{}, err
+		}
+	}
+	return m, w.cacheRoundDelta(ctx, sc, cacheKey, m)
+}
+
+func intersects(a, b []string) bool {
+	return slices.ContainsFunc(a, func(p string) bool { return slices.Contains(b, p) })
+}
+
+// everyChangeGlobs are paths whose change reaches every change of their
+// repository without sharing a path with it: dependency manifests and
+// lockfiles, database migrations, CI configuration.
+var everyChangeGlobs = []string{
+	"**/go.mod", "**/go.sum", "**/package.json", "**/bun.lock", "**/bun.lockb", "**/package-lock.json",
+	"**/yarn.lock", "**/pnpm-lock.yaml", "**/*.lock", "**/migrations/**", ".github/**",
+}
+
+// affectsEveryChange says one of paths, each <repo>/<path in repo>, is
+// among everyChangeGlobs: a merge bringing it in touches the task.
+func affectsEveryChange(paths []string) bool {
+	return slices.ContainsFunc(paths, func(path string) bool {
+		_, inRepo, _ := strings.Cut(path, "/")
+		return slices.ContainsFunc(everyChangeGlobs, func(g string) bool { return MatchesGlob(g, inRepo) })
+	})
 }
 
 // carryFrom is the run a resumed round's message names for carried

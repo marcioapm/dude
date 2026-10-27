@@ -1281,15 +1281,6 @@ func (g *GitHub) UpdateBranch(ctx context.Context, slug string, number int, expe
 	return g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/update-branch", slug, number), body, nil)
 }
 
-// MergeBase merges head, an exact commit, into branch on GitHub without a
-// pull request: the merge commit's first parent is branch's head, its
-// second head. "" with no error when branch already contains head (204);
-// GitHub refuses a conflict with 409.
-func (g *GitHub) MergeBase(ctx context.Context, slug, branch, head string) (string, error) {
-	m, err := g.MergeCommit(ctx, slug, branch, head)
-	return m.SHA, err
-}
-
 // Merged is a merge commit GitHub made, with its parents, first parent
 // first.
 type Merged struct {
@@ -1297,8 +1288,11 @@ type Merged struct {
 	Parents []string
 }
 
-// MergeCommit is MergeBase with the merge's parents, as GitHub answers
-// them: the first is the head branch was at when GitHub merged.
+// MergeCommit merges head, an exact commit, into branch on GitHub without a
+// pull request, and returns the merge with its parents as GitHub answers
+// them: the first is the head branch was at when GitHub merged, the second
+// head. An empty SHA with no error when branch already contains head (204);
+// GitHub refuses a conflict with 409.
 func (g *GitHub) MergeCommit(ctx context.Context, slug, branch, head string) (Merged, error) {
 	var out struct {
 		SHA     string `json:"sha"`

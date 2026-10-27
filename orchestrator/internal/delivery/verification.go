@@ -423,6 +423,16 @@ func testFailedLine(runID string, criteria []int, findings, round int) string {
 // testPassedLine is the conductor's fact on test runID passing.
 func testPassedLine(runID string) string { return render(testPassedTmpl, runID) }
 
+// mergeNotRetestedLine is the conductor's fact on a clean merge of base
+// into repo before the pull request, with paths changed, that test runID's
+// verdicts cover (carryOverMerge).
+func mergeNotRetestedLine(repo, base, runID string, paths int) string {
+	return render(mergeNotRetestTmpl, struct {
+		Repo, Base, RunID string
+		Paths             int
+	}{repo, base, runID, paths})
+}
+
 // criteriaOf names the criteria in a gate's detail: number and text.
 func criteriaOf(verdicts []StoredVerdict, numbers []int) []map[string]any {
 	var out []map[string]any
@@ -966,9 +976,12 @@ func verificationSection(v *prVerification, heads map[string]string, taskLink st
 	}
 	tested := v.Heads
 	if len(v.StandsFor) > 0 {
-		// A test step that started no tester: the changes since are outside the product.
 		tested = v.StandsFor
-		b.WriteString(" Not tested again since: the changes after it touch only paths no criterion depends on.")
+		if v.Why == MergeUntouchedWhy {
+			fmt.Fprintf(&b, " Not tested again after the merge of the target branch: it touched none of the task's files; these verdicts are test %s's.", v.RunID)
+		} else {
+			b.WriteString(" Not tested again since: the changes after it touch only paths no criterion depends on.")
+		}
 	}
 	if stale(tested, heads) {
 		b.WriteString(" **Stale:** the branch has changed since; this verdict is about the commits above.")
@@ -1004,10 +1017,11 @@ func stale(tested, now map[string]string) bool {
 	return false
 }
 
-// prVerification is the latest test of the attempt, for the pull request.
-// StandsFor is the heads a later test step that started no tester carried
-// it to (EvTestSkipped), nil for none.
+// prVerification is the latest test of the attempt (RunID), for the pull
+// request. StandsFor is the heads a later test step that started no tester
+// carried it to (EvTestSkipped), nil for none; Why, that skip's why.
 type prVerification struct {
+	RunID, Why       string
 	Heads, StandsFor map[string]string
 	Criteria         []prCriterion
 }
@@ -1020,10 +1034,11 @@ type prCriterion struct {
 // latestVerification reads the attempt's latest recorded verdict.
 func latestVerification(ctx context.Context, tx pgx.Tx, st *State) (*prVerification, error) {
 	rows, err := tx.Query(ctx, `SELECT v.text, v.status, COALESCE(v.decision, ''), COALESCE(p.name, ''),
-			COALESCE(v.decision_note, ''), v.carried_from IS NOT NULL, v.heads,
-			(SELECT e.payload->'heads' FROM events e WHERE e.task_id = v.task_id AND e.event_type = 'test.skipped'
-			   AND e.payload->>'fromRunId' = v.run_id ORDER BY e.cursor DESC LIMIT 1)
+			COALESCE(v.decision_note, ''), v.carried_from IS NOT NULL, v.heads, sk.heads, COALESCE(sk.why, ''), v.run_id
 		FROM acceptance_verdicts v LEFT JOIN people p ON p.id = v.decided_by
+		LEFT JOIN LATERAL (SELECT e.payload->'heads' AS heads, e.payload->>'why' AS why FROM events e
+			WHERE e.task_id = v.task_id AND e.event_type = 'test.skipped' AND e.payload->>'fromRunId' = v.run_id
+			ORDER BY e.cursor DESC LIMIT 1) sk ON true
 		WHERE v.run_id = (SELECT r.id FROM runs r JOIN acceptance_verdicts av ON av.run_id = r.id
 			WHERE r.task_id = $1 AND ($2 = 0 OR r.attempt = $2) ORDER BY av.created_at DESC, r.created_at DESC LIMIT 1)
 		ORDER BY v.criterion`, st.TaskID, st.Attempt)
@@ -1035,11 +1050,12 @@ func latestVerification(ctx context.Context, tx pgx.Tx, st *State) (*prVerificat
 	for rows.Next() {
 		var c prCriterion
 		var heads, standsFor []byte
-		if err := rows.Scan(&c.Text, &c.Status, &c.Decision, &c.DecidedBy, &c.Note, &c.Carried, &heads, &standsFor); err != nil {
+		var why, runID string
+		if err := rows.Scan(&c.Text, &c.Status, &c.Decision, &c.DecidedBy, &c.Note, &c.Carried, &heads, &standsFor, &why, &runID); err != nil {
 			return nil, err
 		}
 		if v == nil {
-			v = &prVerification{}
+			v = &prVerification{RunID: runID, Why: why}
 			_ = json.Unmarshal(heads, &v.Heads)
 			_ = json.Unmarshal(standsFor, &v.StandsFor)
 		}

@@ -500,7 +500,11 @@ forcing (`orchestrator/internal/delivery/integration.go`).
   for it.
 - **Automatic, with `whenBehind` `update`.** Before a pull request opens,
   the workflow asks GitHub to merge the moved base into the branch (a
-  `merge-base` line on the activity) and tests the new head again. A
+  `merge-base` line on the activity) and tests the new head again, unless
+  the merge was clean, touched none of the files the task changed, and the
+  last test passed at the head before it: then that test's verdicts stand
+  (`test.skipped`), the pull request opens as the person chose, and its CI
+  checks the merge. A
   conflict, there or on an open pull request, starts an **integration
   Run**: a fixer told to merge and resolve keeping both sides' intent, then
   an internal review that reads `git show --remerge-diff` of the merge,

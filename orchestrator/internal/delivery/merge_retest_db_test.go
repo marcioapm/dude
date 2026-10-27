@@ -1,0 +1,559 @@
+package delivery
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
+)
+
+// A merged path every change of its repository depends on (a dependency
+// manifest or lockfile, a migration, CI) touches the task, at any depth;
+// a near name does not.
+func TestAMergedManifestMigrationOrCIConfigTouchesEveryChange(t *testing.T) {
+	for path, want := range map[string]bool{
+		"r/go.mod": true, "r/svc/go.sum": true, "r/package.json": true, "r/apps/web/bun.lock": true,
+		"r/bun.lockb": true, "r/package-lock.json": true, "r/yarn.lock": true, "r/pnpm-lock.yaml": true,
+		"r/Cargo.lock": true, "r/migrations/190_x.sql": true, "r/db/migrations/1.sql": true,
+		"r/.github/workflows/ci.yml": true,
+
+		"r/lib/other.go": false, "r/docs/go.mod.md": false, "r/src/package.jsonc": false,
+		"r/lock/x.go": false, "r/migration.go": false, "r/sub/.github/x.yml": false, "github/.x": false,
+	} {
+		if got := affectsEveryChange([]string{"r/lib/a.go", path}); got != want {
+			t.Errorf("%s: %v, want %v", path, got, want)
+		}
+	}
+	if affectsEveryChange(nil) {
+		t.Error("no paths touch every change")
+	}
+}
+
+// skips counts the task's test.skipped events.
+func (f *verdictFixture) skips() int {
+	f.t.Helper()
+	var n int
+	if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM events WHERE task_id = 'wi_c' AND event_type = $1`, EvTestSkipped).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+// Each carryForward condition still holds for a clean merge of other
+// files: a fix of a failed test due, a directed test, a finding to judge,
+// a previous round that did not pass, criteria edited since, and a
+// previous round at heads other than the merge's first parent each retest.
+func TestACleanMergeIsTestedWhenAnyOtherConditionFails(t *testing.T) {
+	other := map[string]string{"lib/other.go": "package lib"}
+	for _, c := range []struct {
+		name     string
+		set      func(f *verdictFixture, st *State)
+		judge    []string
+		directed bool
+	}{
+		{"none (the skip happens)", nil, nil, false},
+		{"a fix of a failed test due", func(_ *verdictFixture, st *State) { st.RetestDue = true }, nil, false},
+		{"a directed test", nil, nil, true},
+		{"a finding to judge", nil, []string{"fnd_1"}, false},
+		{"a previous round that failed", func(f *verdictFixture, _ *State) {
+			f.exec(`UPDATE acceptance_verdicts SET status = 'fail' WHERE run_id = 'run_c' AND organization_id = $1`)
+		}, nil, false},
+		{"a criterion edited since", func(f *verdictFixture, _ *State) {
+			f.exec(`UPDATE tasks SET acceptance_criteria = '["it greets by name"]' WHERE id = 'wi_c' AND organization_id = $1`)
+		}, nil, false},
+		{"a previous round at other heads", func(f *verdictFixture, _ *State) {
+			f.exec(`UPDATE runs SET base_refs = '{"repo": "0000000000000000000000000000000000000000"}' WHERE id = 'run_c' AND organization_id = $1`)
+		}, nil, false},
+		// The same merge, not known as GitHub's merge onto the head read: a
+		// head adopted, or a delivery's state from before ServerMerge was
+		// recorded.
+		{"a merge not answered by MergeCommit", func(_ *verdictFixture, st *State) { st.Integration.ServerMerge = false }, nil, false},
+		{"an agent's integration", func(_ *verdictFixture, st *State) { st.Integration.RunID = "run_integration" }, nil, false},
+		// Each of the merge's other marks, alone: one after the pull request,
+		// one not published (a prFix's), one on an open pull request.
+		{"an integration not before the pull request", func(_ *verdictFixture, st *State) { st.Integration.BeforePR = false }, nil, false},
+		{"an integration not published", func(_ *verdictFixture, st *State) { st.Integration.Published = false }, nil, false},
+		{"an integration on pull request 7", func(_ *verdictFixture, st *State) { st.Integration.Number = 7 }, nil, false},
+		// The person's Draft at the heads before the merge; then a commit
+		// lands on the merged branch (a publish while the step waited).
+		{"the merged repo's head moved since the merge", func(f *verdictFixture, st *State) {
+			f.setGate(map[string]string{"repo": st.Integration.Head}, true)
+			st.Heads["repo"] = f.gh.CommitFiles("feature", "A fix", map[string]string{"app/greet.go": "package app // fixed"})
+		}, nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc := mergeFixture(t, other)
+			f.merged(st, sc, "repo")
+			if c.set != nil {
+				c.set(f, st)
+			}
+			gate := f.gate()
+			asked := f.compares.Load()
+			skip, err := f.steps.carryForward(f.ctx, sc, st, c.judge, c.directed)
+			want := strings.HasPrefix(c.name, "none")
+			if err != nil || skip != want || (f.skips() == 1) != want {
+				t.Fatalf("skip %v (%v), %d skips; want skip %v", skip, err, f.skips(), want)
+			}
+			// Every veto here is known without GitHub: none asks for a compare.
+			if n := f.compares.Load() - asked; !want && n != 0 {
+				t.Errorf("%d compares for a merge vetoed before measuring", n)
+			}
+			if after := f.gate(); !want && !reflect.DeepEqual(after, gate) {
+				t.Fatalf("gate moved from %+v to %+v without a skip", gate, after)
+			}
+		})
+	}
+}
+
+// A person's Open or Draft given at the heads before the merge moves, as
+// given, to the merged heads with the skip; one given at other heads is
+// theirs to give again at the merged code, and stays where it was.
+func TestACleanMergeSkipMovesOnlyAGateGivenAtThePreMergeHeads(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		pre   bool
+		draft bool
+	}{{"Open at the pre-merge heads", true, false}, {"Draft at the pre-merge heads", true, true}, {"Draft at other heads", false, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+			f.merged(st, sc, "repo")
+			given := map[string]string{"repo": st.Integration.Head}
+			if !c.pre {
+				given = map[string]string{"repo": "0000000000000000000000000000000000000000"}
+			}
+			f.setGate(given, c.draft)
+			st.GateAt = &GateAt{Heads: given, Draft: c.draft}
+			if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
+				t.Fatalf("skip %v (%v)", skip, err)
+			}
+			want := &GateAt{Heads: given, Draft: c.draft}
+			if c.pre {
+				want.Heads = map[string]string{"repo": f.gh.SHA("feature")}
+			}
+			if got := f.gate(); !reflect.DeepEqual(got, want) || !reflect.DeepEqual(st.GateAt, want) {
+				t.Fatalf("gate in the row %+v, in the state %+v; want %+v", got, st.GateAt, want)
+			}
+		})
+	}
+}
+
+// setGate records the person's Open or Draft at heads in the delivery's row.
+func (f *verdictFixture) setGate(heads map[string]string, draft bool) {
+	f.t.Helper()
+	raw, _ := json.Marshal(GateAt{Heads: heads, Draft: draft})
+	if _, err := f.owner.Exec(f.ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{gateAt}', $1::jsonb) WHERE id = 'wf_c'`, raw); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// gate is the row's gateAt, nil when none is given.
+func (f *verdictFixture) gate() *GateAt {
+	f.t.Helper()
+	var raw []byte
+	if err := f.owner.QueryRow(f.ctx, `SELECT state->'gateAt' FROM workflow_runs WHERE id = 'wf_c'`).Scan(&raw); err != nil {
+		f.t.Fatal(err)
+	}
+	var at *GateAt
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &at); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	return at
+}
+
+// exec runs sql with the fixture's organization as $1, then args.
+func (f *verdictFixture) exec(sql string, args ...any) {
+	f.t.Helper()
+	if _, err := f.owner.Exec(f.ctx, sql, append([]any{f.org}, args...)...); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// GitHub failing to compare either side of the merge: a transient failure
+// waits and asks again, starting nothing and opening nothing; a refusal
+// retests.
+func TestACleanMergeGitHubCannotCompareIsWaitedOnOrTested(t *testing.T) {
+	for _, side := range []string{"merge", "task"} {
+		for _, c := range []struct {
+			name   string
+			status int
+			wait   bool
+		}{{"transient", http.StatusBadGateway, true}, {"refused", http.StatusUnprocessableEntity, false}} {
+			t.Run(side+" side "+c.name, func(t *testing.T) {
+				f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+				f.merged(st, sc, "repo")
+				// Three dots, each side from the merge base: the merge's is
+				// task head...target branch, the task's the reverse.
+				from := map[string]string{"merge": st.Integration.Head, "task": st.Integration.BaseHead}[side]
+				f.gh.Set(func(s *fakegithub.Server) {
+					s.Intercept = func(r *http.Request) int {
+						if strings.Contains(r.URL.Path, "/compare/"+from+"...") {
+							return c.status
+						}
+						return 0
+					}
+				})
+				runs := f.runs()
+				skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false)
+				var wait workflow.Wait
+				if skip || errors.As(err, &wait) != c.wait || !c.wait && err != nil || f.skips() != 0 ||
+					f.runs() != runs || len(f.gh.Pulls()) != 0 {
+					t.Fatalf("skip %v, %v, %d skips, %d Runs, %d pull requests; want a wait %v and nothing else",
+						skip, err, f.skips(), f.runs()-runs, len(f.gh.Pulls()), c.wait)
+				}
+				if !c.wait {
+					return
+				}
+				// GitHub answers again: the skip happens.
+				f.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+				if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
+					t.Fatalf("after GitHub answers: skip %v, %v", skip, err)
+				}
+			})
+		}
+	}
+}
+
+// runs counts the task's Runs.
+func (f *verdictFixture) runs() int {
+	f.t.Helper()
+	var n int
+	if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM runs WHERE task_id = 'wi_c'`).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+// GitHub lists at most forge.CompareFileCap files: a side cut there may
+// hide the path the two share, so either side cut short is tested.
+func TestACleanMergeOfAComparisonCutShortIsTested(t *testing.T) {
+	many := map[string]string{}
+	for n := range forge.CompareFileCap + 1 {
+		many[fmt.Sprintf("gen/f%03d.go", n)] = "package gen"
+	}
+	for _, side := range []string{"merge", "task"} {
+		t.Run(side+" side", func(t *testing.T) {
+			mainFiles := map[string]string{"lib/other.go": "package lib"}
+			if side == "merge" {
+				mainFiles = many
+			}
+			f, st, sc := mergeFixture(t, mainFiles)
+			if side == "task" {
+				// More of the task's work, before the merge.
+				st.Heads["repo"] = f.gh.CommitFiles("feature", "Generated", many)
+				f.exec(`UPDATE runs SET base_refs = jsonb_build_object('repo', $2::text) WHERE id = 'run_c' AND organization_id = $1`, st.Heads["repo"])
+			}
+			f.merged(st, sc, "repo")
+			if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || skip || f.skips() != 0 {
+				t.Fatalf("skip %v (%v): a comparison cut short must be tested", skip, err)
+			}
+		})
+	}
+}
+
+// The comparison of a merge is GitHub's once: the step entered again asks
+// nothing. A later merge, at a new pair, is measured anew, and one that
+// touches the task's file is tested; so is the merged head once it moves.
+func TestACleanMergeIsComparedOncePerMerge(t *testing.T) {
+	f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+	f.merged(st, sc, "repo")
+	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
+		t.Fatalf("first: skip %v (%v)", skip, err)
+	}
+	asked := f.compares.Load()
+	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip || f.compares.Load() != asked {
+		t.Fatalf("again: skip %v (%v), %d compares; want the skip from the first measurement", skip, err, f.compares.Load()-asked)
+	}
+	// The measurement stays cached, but stands for the merge only: a
+	// delivery whose head moved past it is tested.
+	moved := *st
+	moved.Heads = maps.Clone(st.Heads)
+	moved.Heads["repo"] = strings.Repeat("f", 40)
+	skips := f.skips()
+	if skip, err := f.steps.carryForward(f.ctx, sc, &moved, nil, false); err != nil || skip || f.skips() != skips {
+		t.Fatalf("moved head: skip %v (%v), %d skips; want it tested", skip, err, f.skips())
+	}
+	// Main moves on, touching the task's file; GitHub merges it in too:
+	// the skip of the first merge stands for its heads, and this pair is
+	// measured anew.
+	f.gh.CommitFiles("main", "Same greeting", map[string]string{"app/greet.go": "package app"})
+	f.merged(st, sc, "repo")
+	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || skip || f.skips() != skips {
+		t.Fatalf("second merge: skip %v (%v), %d skips; want it tested", skip, err, f.skips())
+	}
+}
+
+// Two repositories. GitHub merges the target branch into the first
+// (other), where the task changed nothing: skipped. Then into the second
+// (repo): of a file the task did not change, skipped too, standing on the
+// first skip, and the person's Draft follows both merges; of the task's
+// file, tested. A skip on record at other heads carries nothing.
+func TestACleanMergeInEachOfTwoRepositories(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		skip  bool
+	}{
+		{"other files", map[string]string{"lib/other.go": "package lib"}, true},
+		{"the task's file", map[string]string{"app/greet.go": "package app"}, false},
+		{"a skip at other heads", map[string]string{"lib/other.go": "package lib"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc := mergeFixture(t, c.files)
+			f.withSecondRepo(st, map[string]string{"b/main.go": "package b"})
+			f.setGate(maps.Clone(st.Heads), true)
+			f.merged(st, sc, "other")
+			first := maps.Clone(st.Heads)
+			if c.name == "a skip at other heads" {
+				// The first merge's skip, recorded for heads it never stood at.
+				f.exec(`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+					VALUES ('ev_s', $1, 'test.skipped', 'wi_c', 'system', 'workflow', 'orchestrator',
+					'{"fromRunId": "run_c", "heads": {"other": "0000000000000000000000000000000000000000", "repo": "x"}}')`)
+			} else if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
+				t.Fatalf("other's merge, where the task changed nothing: skip %v (%v)", skip, err)
+			}
+			f.merged(st, sc, "repo")
+			skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false)
+			if err != nil || skip != c.skip {
+				t.Fatalf("repo's merge: skip %v (%v), want %v", skip, err, c.skip)
+			}
+			if !c.skip {
+				return
+			}
+			var from map[string]string
+			if err := f.owner.QueryRow(f.ctx, `SELECT payload->'from' FROM events WHERE task_id = 'wi_c' AND event_type = $1
+				AND payload->'heads' = $2::jsonb`, EvTestSkipped, mustJSON(t, st.Heads)).Scan(&from); err != nil || !maps.Equal(from, first) {
+				t.Fatalf("the second skip stands on %v (%v), want the first's heads %v", from, err, first)
+			}
+			if at := f.gate(); at == nil || !maps.Equal(at.Heads, st.Heads) || !at.Draft {
+				t.Fatalf("gate %+v, want the Draft at the final heads %v", at, st.Heads)
+			}
+		})
+	}
+}
+
+// withSecondRepo gives the task a second repository, other (acme/other),
+// its feature branch from main with no change of the task's on it, and
+// main then a commit of mainFiles. The test round stood at both heads, and
+// GitHub answers for both repositories.
+func (f *verdictFixture) withSecondRepo(st *State, mainFiles map[string]string) {
+	f.t.Helper()
+	other := fakegithub.New(bareRepo(f.t), "acme/other")
+	head := other.Branch("feature", "main", "Start")
+	other.CommitFiles("main", "Other work", mainFiles)
+	first, second := f.gh.Handler(), other.Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/compare/") {
+			f.compares.Add(1)
+		}
+		if strings.HasPrefix(r.URL.Path, "/repos/acme/other/") {
+			second.ServeHTTP(w, r)
+			return
+		}
+		first.ServeHTTP(w, r)
+	}))
+	f.t.Cleanup(srv.Close)
+	f.steps.forges = forgeOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})}
+	f.other = other
+	f.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ('repo_d', $1, 'prj_c', 'other', 'https://github.com/acme/other.git', 'main')`)
+	f.exec(`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_c', 'repo_d', $1)`)
+	f.exec(`UPDATE runs SET base_refs = base_refs || jsonb_build_object('other', $2::text) WHERE id = 'run_c' AND organization_id = $1`, head)
+	st.Heads["other"] = head
+}
+
+// merged runs syncBeforePR: GitHub merges main into repo's task branch, and
+// the step goes to the test with the merge as its integration.
+func (f *verdictFixture) merged(st *State, sc workflow.StepContext, repo string) {
+	f.t.Helper()
+	res, diverted, err := f.steps.syncBeforePR(f.ctx, sc, st)
+	if err != nil || !diverted || res.Next != "test" || st.Integration == nil || !st.Integration.ServerMerge || st.Integration.Repo != repo {
+		f.t.Fatalf("syncBeforePR: %+v %v %v, integration %+v; want GitHub's merge in %s, then the test", res, diverted, err, st.Integration, repo)
+	}
+	gh := map[string]*fakegithub.Server{"repo": f.gh, "other": f.other}[repo]
+	if st.Heads[repo] != gh.SHA("feature") {
+		f.t.Fatalf("%s's head %s, branch at %s", repo, st.Heads[repo], gh.SHA("feature"))
+	}
+}
+
+// A branch found moved before the pull request (GitHub merged, its answer
+// lost, or a person pushed) is adopted and tested again, whatever it holds.
+func TestAnAdoptedMovedHeadBeforeThePullRequestIsTested(t *testing.T) {
+	f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+	if f.gh.MergeInto("feature", "main", nil) == "" {
+		t.Fatal("merging main on GitHub")
+	}
+	res, diverted, err := f.steps.syncBeforePR(f.ctx, sc, st)
+	if err != nil || !diverted || res.Next != "test" || st.Integration == nil || st.Integration.ServerMerge {
+		t.Fatalf("syncBeforePR: %+v %v %v %+v; want the moved head adopted", res, diverted, err, st.Integration)
+	}
+	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || skip || f.skips() != 0 {
+		t.Fatalf("skip %v (%v): an adopted head must be tested", skip, err)
+	}
+}
+
+// A push to the task branch landing between syncBeforePR's read of it and
+// GitHub's merge is in the merge: its first parent is not the head read,
+// so the merged head is tested.
+func TestAMergeOverAPushThatLandedMeanwhileIsTested(t *testing.T) {
+	f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+	var pushed atomic.Bool
+	f.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/merges") && !pushed.Swap(true) {
+				f.gh.CommitFiles("feature", "A fix", map[string]string{"app/greet.go": "package app // fixed"})
+			}
+			return 0
+		}
+	})
+	res, diverted, err := f.steps.syncBeforePR(f.ctx, sc, st)
+	if err != nil || !diverted || res.Next != "test" || !pushed.Load() || st.Integration == nil || st.Integration.ServerMerge {
+		t.Fatalf("syncBeforePR: %+v %v %v pushed %v, %+v; want a merge not known clean", res, diverted, err, pushed.Load(), st.Integration)
+	}
+	if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || skip || f.skips() != 0 {
+		t.Fatalf("skip %v (%v): a merge over a push must be tested", skip, err)
+	}
+}
+
+// The skip tells a live conductor, in a line the table admits however long
+// the target branch's name; a task with no live conductor gets no line.
+func TestACleanMergeSkipTellsOnlyALiveConductorInOneLine(t *testing.T) {
+	for _, live := range []bool{true, false} {
+		t.Run(map[bool]string{true: "live conductor", false: "no conductor"}[live], func(t *testing.T) {
+			f, st, sc := mergeFixture(t, map[string]string{"lib/other.go": "package lib"})
+			f.merged(st, sc, "repo")
+			// The base names only the line and the record; the compare
+			// stands on the merge's commits.
+			st.Integration.Base = "release/" + strings.Repeat("payments-hotfix-", 6)
+			if live {
+				f.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+					VALUES ('run_cond', $1, 'prj_c', 'wi_c', 1, 'running', 'conductor', 'agent')`)
+			}
+			if skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false); err != nil || !skip {
+				t.Fatalf("skip %v (%v)", skip, err)
+			}
+			rows, err := f.owner.Query(f.ctx, `SELECT line FROM conductor_wakes WHERE task_id = 'wi_c'`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !live {
+				if len(lines) != 0 {
+					t.Fatalf("lines %q for a task with no conductor", lines)
+				}
+				return
+			}
+			if len(lines) != 1 || utf8.RuneCountInString(lines[0]) != 300 || !strings.HasPrefix(lines[0], "GitHub merged "+st.Integration.Base+" into") ||
+				!strings.HasSuffix(lines[0], "…") {
+				t.Fatalf("lines %q, want one clipped to 300 characters naming the base", lines)
+			}
+		})
+	}
+}
+
+// mergeFixture is a task whose test round run_c passed its one criterion
+// at the feature branch's head, the task's own change app/greet.go on it;
+// main then gains a commit of mainFiles. st is the delivery at the gate,
+// before syncBeforePR.
+func mergeFixture(t *testing.T, mainFiles map[string]string) (*verdictFixture, *State, workflow.StepContext) {
+	t.Helper()
+	f := newVerdictFixture(t)
+	f.compares = f.withRepo()
+	head := f.gh.CommitFiles("feature", "Greet", map[string]string{"app/greet.go": "package app"})
+	f.gh.CommitFiles("main", "Other work", mainFiles)
+	f.exec(`DELETE FROM pull_requests WHERE task_id = 'wi_c' AND organization_id = $1`)
+	f.exec(`INSERT INTO task_repositories (task_id, repository_id, organization_id) VALUES ('wi_c', 'repo_c', $1)`)
+	f.exec(`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
+		VALUES ('wf_c', $1, 'task.delivery', 'c', 'running', 'openPullRequest', '{}', 'wi_c')`)
+	f.exec(`UPDATE runs SET base_refs = jsonb_build_object('repo', $2::text) WHERE id = 'run_c' AND organization_id = $1`, head)
+	f.exec(`INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, evidence)
+		VALUES ($1, 'wi_c', 'run_c', 1, 'it greets', 'pass', '{greet.webm}')`)
+	p := DefaultPolicy()
+	p.Test = true
+	st := &State{TaskID: "wi_c", ProjectID: "prj_c", Attempt: 1, Policy: p, Branch: "feature", Draft: true,
+		Heads: map[string]string{"repo": head}}
+	return f, st, workflow.StepContext{WorkflowRunID: "wf_c", OrganizationID: f.org}
+}
+
+// A clean merge of main before the pull request, of files the task did not
+// change, after a passing test: the test step starts no tester, records
+// the skip with the merge's paths and why, and the gate weighs the previous
+// round. One that touches the task's file is tested.
+func TestACleanMergeOfOtherFilesBeforeThePullRequestIsNotTestedAgain(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		skip  bool
+		// GitHub compares asked: the merge's side, then the task's.
+		compares int64
+	}{
+		{"other files", map[string]string{"lib/other.go": "package lib"}, true, 2},
+		// The same content: git merges it cleanly, and the path is the task's.
+		{"the task's file", map[string]string{"app/greet.go": "package app"}, false, 2},
+		// A file every change of the repository depends on: the merge's
+		// side alone decides it.
+		{"a lockfile", map[string]string{"lib/other.go": "package lib", "web/bun.lock": "{}"}, false, 1},
+		// An empty commit on main: a merge whose compare lists no file is
+		// tested, an empty list not taken as clear of the task.
+		{"no files", map[string]string{}, false, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, st, sc := mergeFixture(t, c.files)
+			f.merged(st, sc, "repo")
+			runs := f.runs()
+			asked := f.compares.Load()
+			skip, err := f.steps.carryForward(f.ctx, sc, st, nil, false)
+			if err != nil || skip != c.skip {
+				t.Fatalf("skip %v (%v), want %v", skip, err, c.skip)
+			}
+			if n := f.compares.Load() - asked; n != c.compares {
+				t.Errorf("%d compares, want %d", n, c.compares)
+			}
+			var paths []string
+			var why string
+			n := 0
+			rows, err := f.owner.Query(f.ctx, `SELECT payload->>'why', payload->'paths' FROM events
+				WHERE task_id = 'wi_c' AND event_type = $1 AND payload->>'fromRunId' = 'run_c'
+				AND payload->'heads'->>'repo' = $2`, EvTestSkipped, st.Heads["repo"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				n++
+				if err := rows.Scan(&why, &paths); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !c.skip {
+				if n != 0 {
+					t.Fatalf("%d skips of a merge to be tested", n)
+				}
+				return
+			}
+			if n != 1 || why != MergeUntouchedWhy || !slices.Equal(paths, []string{"repo/lib/other.go"}) || st.TestRunID != "run_c" {
+				t.Fatalf("%d skips, why %q, paths %v, gate on %q", n, why, paths, st.TestRunID)
+			}
+			if after := f.runs(); after != runs {
+				t.Errorf("%d Runs created by a skip", after-runs)
+			}
+		})
+	}
+}
