@@ -357,11 +357,11 @@ export class PreviewCommenting {
     return source ? this.#panes.find((p) => p.win === source) ?? null : null;
   }
 
-  /** A window to hold: at the cap, the oldest closed one makes room, else the oldest the task's name doesn't hold. */
+  /** A window to hold: at the cap (reached only by open(); #adopt makes its own room), the oldest closed one makes room, else the oldest. */
   #add(win: Window, url: string | null, server: string | null): Pane {
     if (this.#panes.length >= MAX_WINDOWS) {
       const byAge = [...this.#panes].sort((a, b) => a.touched - b.touched);
-      this.#drop(byAge.find((p) => p.state === "closed" || closedOrGone(p.win)) ?? byAge.find((p) => p.win !== this.#named) ?? byAge[0]!);
+      this.#drop(byAge.find((p) => p.state === "closed" || closedOrGone(p.win)) ?? byAge[0]!);
     }
     const pane: Pane = { win, url, server, state: "waiting", saved: 0, pendingHighlight: null, inFlight: null, answered: new Map(), helloTimer: 0, touched: ++this.#clock };
     this.#panes.push(pane);
