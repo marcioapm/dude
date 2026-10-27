@@ -88,6 +88,8 @@
 .tdWrap {
   white-space: normal;
   max-width: none;
+  /* Wrapped onto a second line, a cell keeps the rows apart by space. */
+  padding-block: var(--ds-space-6);
 }
 .tdFit {
   max-width: none;

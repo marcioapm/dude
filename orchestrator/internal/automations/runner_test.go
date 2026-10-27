@@ -739,6 +739,10 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 	if len(reqs) != 3 || reqs[0] != want[0] || reqs[1] != want[1] || reqs[2] != want[2] {
 		t.Errorf("requests %+v, want %+v", reqs, want)
 	}
+	// The second pass POSTs only what came since: d-2's body, never d-1's again.
+	if len(bodies) != 3 || !strings.Contains(bodies[1], `"synchronize"`) || !strings.Contains(bodies[2], `"synchronize"`) {
+		t.Errorf("POST bodies %q", bodies)
+	}
 	h.until("the container is ended", func() bool { return lux.Terminated(h.luxState(r.LuxRunID)) })
 }
 
@@ -932,7 +936,7 @@ func TestAutomationPreviewThatNeverSignsInBacksOff(t *testing.T) {
 	}
 }
 
-// Webhook only: one signed POST per firing, never queued or merged (Q13).
+// Send a webhook: one signed POST per firing, never queued or merged (Q13).
 func TestAutomationWebhookSignsEachPost(t *testing.T) {
 	h := newHarness(t)
 	var mu sync.Mutex

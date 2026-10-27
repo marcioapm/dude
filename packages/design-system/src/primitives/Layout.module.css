@@ -124,6 +124,10 @@
 .calloutBody:has(> .calloutActionsBox) {
   flex: 1 1 auto;
 }
+/* Callout fill: the body takes the callout's width whatever it holds. */
+.calloutFill {
+  flex: 1 1 auto;
+}
 /* CalloutActions: the wrapper is the container its pairs stack on, the callout's width, not the viewport's. */
 .calloutActionsBox {
   container-type: inline-size;

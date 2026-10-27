@@ -192,6 +192,8 @@ type Automation struct {
 	Secrets         json.RawMessage
 	NotifyOnFailure bool
 	NextRunAt       *time.Time
+	// An organisation incoming automation's projects (migration 212).
+	ProjectIDs []string
 }
 
 func (a Automation) policy() Policy {
@@ -202,14 +204,15 @@ const automationColumns = `a.id, a.organization_id, COALESCE(a.project_id, ''), 
 	COALESCE(a.owner_id, ''), a.owner_left_at IS NOT NULL, a.trigger, a.session_mode, COALESCE(a.expiry_days, 0),
 	a.concurrency, a.parallel_max, a.repos, a.repo_filter, COALESCE(a.agent, 'null'), COALESCE(a.machine_size_id, ''),
 	COALESCE(a.image_id, ''), COALESCE(a.setup_script, ''), COALESCE(a.command, ''), COALESCE(a.server, 'null'),
-	COALESCE(a.webhook, 'null'), COALESCE(a.webhook_secret, ''), a.secrets, a.notify_on_failure, a.next_run_at`
+	COALESCE(a.webhook, 'null'), COALESCE(a.webhook_secret, ''), a.secrets, a.notify_on_failure, a.next_run_at, a.project_ids`
 
 func scanAutomation(row pgx.Row) (Automation, error) {
 	var a Automation
 	var trigger, filter []byte
 	err := row.Scan(&a.ID, &a.Org, &a.ProjectID, &a.Name, &a.Kind, &a.Enabled, &a.OwnerID, &a.OwnerHeld, &trigger,
 		&a.SessionMode, &a.ExpiryDays, &a.Concurrency, &a.ParallelMax, &a.Repos, &filter, &a.Agent, &a.MachineSizeID,
-		&a.ImageID, &a.SetupScript, &a.Command, &a.Server, &a.Webhook, &a.WebhookSecret, &a.Secrets, &a.NotifyOnFailure, &a.NextRunAt)
+		&a.ImageID, &a.SetupScript, &a.Command, &a.Server, &a.Webhook, &a.WebhookSecret, &a.Secrets, &a.NotifyOnFailure, &a.NextRunAt,
+		&a.ProjectIDs)
 	if err != nil {
 		return a, err
 	}
@@ -242,7 +245,9 @@ type Payload struct {
 	DeliveryID string          `json:"deliveryId"`
 	Event      string          `json:"event"`
 	Action     string          `json:"action"`
-	Body       json.RawMessage `json:"body"`
+	Body       json.RawMessage `json:"body,omitempty"`
+	// An incoming delivery's group (incoming.go); a live run's group is its first payload's.
+	GroupKey string `json:"groupKey,omitempty"`
 }
 
 // Sweep is one pass of the loop. Returns how much it did, so the loop runs
@@ -255,7 +260,7 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 	for _, step := range []struct {
 		name string
 		do   func(context.Context) (int, error)
-	}{{"schedules", r.fireSchedules}, {"deliveries", r.matchDeliveries}, {"start", r.startQueued},
+	}{{"schedules", r.fireSchedules}, {"deliveries", r.matchDeliveries}, {"incoming", r.matchIncoming}, {"start", r.startQueued},
 		{"follow", r.followRunning}, {"expiry", r.expireSessions}} {
 		did, err := step.do(ctx)
 		n += did
@@ -276,6 +281,10 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 type Fired struct {
 	Run       string
 	Cancelled []Cancelled
+	// What the firing did, for a delivery's verdict: Arrive's decision, or Skip
+	// when an incoming follow-up found its run full; a Skip's reason.
+	Action Action
+	Reason string
 }
 
 // Cancelled is a cancelled run's lux Run; Keep says it is the automation's
@@ -301,17 +310,25 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 	}
 	d := Arrive(a.policy(), source, live)
 	raw, _ := json.Marshal(nonNil(payloads))
-	var fired Fired
+	fired := Fired{Action: d.Action}
 	switch d.Action {
 	case MergeInto, SendInto:
+		fired.Run = d.Into
+		if a.Trigger.Kind == "incoming" {
+			held, err := holdFollowUp(ctx, tx, d.Into, payloads[0])
+			if err != nil || held {
+				return fired, err
+			}
+			return Fired{Action: Skip, Reason: followUpsFull}, nil
+		}
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw)
-		return Fired{Run: d.Into}, err
+		return fired, err
 	case Skip:
-		id := ids.New(ids.AutomationRun)
+		fired.Run, fired.Reason = ids.New(ids.AutomationRun), d.Reason
 		_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
 			started_by, scheduled_for, ended_at) VALUES ($1, $2, $3, 'skipped', $4, $5, $6, NULLIF($7, ''), $8, now())`,
-			id, a.Org, a.ID, d.Reason, source, raw, startedBy, scheduledFor)
-		return Fired{Run: id}, err
+			fired.Run, a.Org, a.ID, d.Reason, source, raw, startedBy, scheduledFor)
+		return fired, err
 	case CancelAndStart:
 		rows, err := tx.Query(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
 			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'
@@ -556,6 +573,9 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 				continue
 			}
 			if !v.Matches {
+				if err := recordGitHubVerdict(ctx, tx, a, d.ID, VerdictSkipped, filterWords(v), ""); err != nil {
+					return err
+				}
 				continue
 			}
 			fired, err := Fire(ctx, tx, a, SourceEvent, payloads, "", nil)
@@ -563,6 +583,10 @@ func (r *Runner) matchDelivery(ctx context.Context, d pendingDelivery) error {
 				return err
 			}
 			cancelled = append(cancelled, fired.Cancelled...)
+			verdict, reason := firedVerdict(fired)
+			if err := recordGitHubVerdict(ctx, tx, a, d.ID, verdict, reason, fired.Run); err != nil {
+				return err
+			}
 		}
 		if len(pending) > 0 {
 			_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET automations_attempts = automations_attempts + 1,
@@ -702,6 +726,9 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 			Scan(&run.Source, &run.Payloads, &run.At); err != nil {
 			return err
 		}
+		if err := resolveIncoming(ctx, tx, run.Payloads); err != nil {
+			return err
+		}
 		var err error
 		if a, err = Load(ctx, tx, automationID); err != nil {
 			return err
@@ -751,6 +778,12 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 // submit resumes the kept session or submits a new lux Run for a claimed
 // run; false, nil leaves it for the next pass.
 func (r *Runner) submit(ctx context.Context, a Automation, runID, source string, payloads []Payload, at *time.Time, kept string) (bool, error) {
+	// An incoming agent run starts from the delivery that started it;
+	// follow-ups held while it was queued reach it afterwards as inputs
+	// (sendInputs). Any other kind gets them all in its event file.
+	if a.Trigger.Kind == "incoming" && a.Kind == "agent" && len(payloads) > 1 {
+		payloads = payloads[:1]
+	}
 	// A test run's session is its own: fresh and ephemeral, the kept one untouched (Q21).
 	resumable := a.SessionMode == "resumable" && source != SourceTest
 	var luxRunID, session, startReason string
@@ -1005,11 +1038,14 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	}
 	var cursor, prior string
 	var busy bool
-	var payloads []Payload
-	var inputsSent int
+	var pending []Payload
+	var held, inputsSent int
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, payloads, inputs_sent, COALESCE(log_tail, '') FROM automation_runs WHERE id = $1`, runID).
-			Scan(&cursor, &busy, &payloads, &inputsSent, &prior)
+		// Only the payloads not yet given to the agent: a long-lived run's array is not read whole every pass.
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, jsonb_array_length(payloads), inputs_sent, COALESCE(log_tail, ''),
+			(SELECT COALESCE(jsonb_agg(e ORDER BY i), '[]') FROM jsonb_array_elements(payloads) WITH ORDINALITY p(e, i) WHERE i > inputs_sent)
+			FROM automation_runs WHERE id = $1`, runID).
+			Scan(&cursor, &busy, &held, &inputsSent, &prior, &pending)
 	}); err != nil {
 		return false, err
 	}
@@ -1020,8 +1056,8 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	// Events sent into the run while it works (Concurrency: send): each
 	// reaches its agent as input, and its turn is waited for afresh.
 	sent := 0
-	if a.Kind == "agent" && !lux.Terminal(got.State) && failed == "" && inputsSent < len(payloads) {
-		if sent, err = r.sendInputs(ctx, a, runID, luxRunID, payloads, inputsSent); err != nil {
+	if a.Kind == "agent" && !lux.Terminal(got.State) && failed == "" && inputsSent < held {
+		if sent, err = r.sendInputs(ctx, a, runID, luxRunID, pending, inputsSent); err != nil {
 			return false, err
 		}
 	}
@@ -1071,17 +1107,20 @@ func (r *Runner) endTurnDone(ctx context.Context, a Automation, runID, luxRunID 
 	return true, nil
 }
 
-// sendInputs gives a running agent the payloads after the first sent ones,
-// each as the automation's prompt for that event; it says how many went.
-// A request id per payload makes a retry after a lost answer one input.
-func (r *Runner) sendInputs(ctx context.Context, a Automation, runID, luxRunID string, payloads []Payload, sent int) (int, error) {
+// sendInputs gives a running agent pending, the payloads after the first
+// sent ones, each as the automation's prompt for that event; it says how
+// many went. A request id per payload makes a retry after a lost answer one input.
+func (r *Runner) sendInputs(ctx context.Context, a Automation, runID, luxRunID string, pending []Payload, sent int) (int, error) {
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error { return resolveIncoming(ctx, tx, pending) }); err != nil {
+		return 0, err
+	}
 	n := 0
-	for i := sent; i < len(payloads); i++ {
-		text, _, err := r.prompt(ctx, a, payloads[i:i+1], nil)
+	for i := range pending {
+		text, _, err := r.prompt(ctx, a, pending[i:i+1], nil)
 		if err != nil {
 			return n, err
 		}
-		if err := r.Lux.Input(ctx, luxRunID, lux.InputRequest{Text: text, RequestID: fmt.Sprintf("automation-%s-%d", runID, i)}); err != nil {
+		if err := r.Lux.Input(ctx, luxRunID, lux.InputRequest{Text: text, RequestID: fmt.Sprintf("automation-%s-%d", runID, sent+i)}); err != nil {
 			return n, err
 		}
 		n++
@@ -1320,16 +1359,19 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 		Health *string `json:"health"`
 	}
 	_ = json.Unmarshal(a.Server, &cfg)
-	var payloads []Payload
-	var posted int
+	var pending []Payload
+	var held, posted int
 	var started, last time.Time
 	var failedReq bool
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT payloads, posted, started_at, last_request_at,
+		// Only the payloads not yet POSTed, as followRun reads its inputs. A
+		// Server runs on GitHub events only (automations_server_events), so each carries its body.
+		return tx.QueryRow(ctx, `SELECT jsonb_array_length(payloads), posted, started_at, last_request_at,
+			(SELECT COALESCE(jsonb_agg(e ORDER BY i), '[]') FROM jsonb_array_elements(payloads) WITH ORDINALITY p(e, i) WHERE i > posted),
 			EXISTS (SELECT 1 FROM automation_run_requests q WHERE q.run_id = r.id AND (q.http_status IS NULL OR q.http_status >= 400)
 			  AND NOT EXISTS (SELECT 1 FROM automation_run_requests q2 WHERE q2.run_id = r.id AND q2.delivery_id = q.delivery_id AND q2.try > q.try
 			    AND q2.http_status BETWEEN 200 AND 299) AND (q.try = 2 OR q.http_status BETWEEN 400 AND 499))
-			FROM automation_runs r WHERE id = $1`, runID).Scan(&payloads, &posted, &started, &last, &failedReq)
+			FROM automation_runs r WHERE id = $1`, runID).Scan(&held, &posted, &started, &last, &pending, &failedReq)
 	}); err != nil {
 		return false, err
 	}
@@ -1348,12 +1390,12 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 		}
 		return false, nil
 	}
-	if posted < len(payloads) {
-		for i := posted; i < len(payloads); i++ {
-			r.postOnce(ctx, a, runID, base+cfg.Path, signIn, payloads[i])
+	if len(pending) > 0 {
+		for _, p := range pending {
+			r.postOnce(ctx, a, runID, base+cfg.Path, signIn, p)
 		}
 		return true, r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE automation_runs SET posted = $2, last_request_at = now() WHERE id = $1`, runID, len(payloads))
+			_, err := tx.Exec(ctx, `UPDATE automation_runs SET posted = $2, last_request_at = now() WHERE id = $1`, runID, held)
 			return err
 		})
 	}
@@ -1788,8 +1830,12 @@ func (r *Runner) prompt(ctx context.Context, a Automation, payloads []Payload, a
 	var s agentSettings
 	_ = json.Unmarshal(a.Agent, &s)
 	vars := Variables(payloads, at, a.Trigger.TZ)
+	fill := func(text string) string { return Substitute(text, vars) }
+	if a.Trigger.Kind == "incoming" {
+		fill = func(text string) string { return incomingPrompt(text, payloads) }
+	}
 	if s.Own != nil {
-		return Substitute(s.Own.Prompt, vars), "agent", nil
+		return fill(s.Own.Prompt), "agent", nil
 	}
 	if s.Preset == nil {
 		return "", "", errors.New("the automation has no agent")
@@ -1811,7 +1857,7 @@ func (r *Runner) prompt(ctx context.Context, a Automation, payloads []Payload, a
 		in.ProjectPrompt, in.ProjectPromptMode = *projectPrompt, *mode
 	}
 	rolePrompt := delivery.Instructions(role, "", in)
-	brief := Substitute(s.Brief, vars)
+	brief := fill(s.Brief)
 	return rolePrompt + "\n\n# Your task\n\nYou were started by an automation, " + strconv.Quote(a.Name) +
 		", not for a task: there is no pull request to open. You may create dude tasks and comment on GitHub as dude.\n\n" + brief, role, nil
 }
@@ -1925,9 +1971,13 @@ func (r *Runner) toolsToken(ctx context.Context, a Automation, runID string, pay
 			return err
 		}
 		for _, repo := range repos {
-			if slug := slugOf(repo.URL); slug != "" && RepoAllowed(a.RepoFilter, slug) {
+			if slug := slugOf(repo.URL); slug != "" && RepoAllowed(a.RepoFilter, slug) && inProjects(a, repo.Project) {
 				scope.Repos = append(scope.Repos, slug)
 			}
+		}
+		if scope.ProjectID == "" && a.Trigger.Kind == "incoming" && len(a.ProjectIDs) > 0 {
+			// create_task files in the organisation incoming automation's first project.
+			scope.ProjectID = a.ProjectIDs[0]
 		}
 		if len(payloads) > 0 {
 			var event struct {
@@ -2143,6 +2193,9 @@ func (r *Runner) specInput(ctx context.Context, a Automation, runID string, payl
 // schedule, none when its repos is "none", else every project's its filter
 // covers; on an event, the event's repository when one of the organisation's.
 func automationRepos(ctx context.Context, tx pgx.Tx, a Automation, payloads []Payload) ([]phases.AutomationRepo, error) {
+	if a.ProjectID == "" && a.Trigger.Kind == "incoming" {
+		return incomingRepos(ctx, tx, a)
+	}
 	type repo struct{ ID, Name, URL, Branch, Setup string }
 	rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, COALESCE(setup_script, '') FROM repositories
 		WHERE ($1 = '' OR project_id = $1) ORDER BY project_id, name`, a.ProjectID)
@@ -2251,6 +2304,10 @@ func (r *Runner) RunNow(ctx context.Context, org, automationID, person string, d
 			// Run now queues or starts (Q7), never cancels: nothing to end.
 			fired, err := Fire(ctx, tx, a, SourceRunNow, nil, person, &now)
 			runID, verdict = fired.Run, Verdict{Matches: true}
+			return err
+		}
+		if a.Trigger.Kind == "incoming" {
+			runID, verdict, err = runNowIncoming(ctx, tx, a, person, deliveryID, test)
 			return err
 		}
 		var p Payload

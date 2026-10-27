@@ -960,6 +960,7 @@ function TaskDialogFor(props: {
   onSaved: (id: string) => void;
 }) {
   const { client, open, onClose } = props;
+  const { you } = usePeople();
   const [existing, setExisting] = useState<ExistingTask | null>(null);
   const { toast } = useToast();
   // Keyed by what it edits, so a late answer for another task lands
@@ -968,7 +969,7 @@ function TaskDialogFor(props: {
     if (!open.editing) return;
     let current = true;
     void client.getTask(open.editing).then(
-      (item) => current && setExisting(existingTask(item, item.runs.length > 0)),
+      (item) => current && setExisting(existingTask(item, item.runs.length > 0, you)),
       (err: unknown) => {
         if (!current) return;
         toast({ title: errorText(err), tone: "danger" });

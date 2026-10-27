@@ -6,7 +6,9 @@ stores it; the orchestrator's automations loop matches it and runs the
 command, whose log carries the event. A written test event that matches is
 accepted (202) and one the filters would skip is refused (422, `filtered`).
 When the owner leaves the organisation, the automation is held by its admins
-and stays on.
+and stays on. On an automation's Settings, ticking a secret and saving
+scroll only the main pane, never the document under the app's shell; this
+guards the Checkbox only, Select's half is the design system's own test.
 """
 
 from __future__ import annotations
@@ -15,11 +17,15 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from helpers import ApiClient, execute, provision_person, query, wait_until
+import pytest
+from playwright.sync_api import Page, expect
+
+from helpers import ApiClient, execute, provision_person, query, sign_in, toast, wait_until
 
 
 def _runs(who: ApiClient, automation_id: str) -> list[dict]:
@@ -210,3 +216,40 @@ def test_a_minutely_schedule_fires_stops_when_off_and_run_now_queues_behind_a_li
     execute(env.owner_dsn, "UPDATE automations SET next_run_at = now() - interval '1 second' WHERE id = %s", (a["id"],))
     time.sleep(5)
     assert len([r for r in _runs(client, a["id"]) if r["source"] == "schedule"]) == count
+
+
+@pytest.mark.ui
+def test_ticking_a_secret_and_saving_scroll_the_main_pane_never_the_document(
+    page: Page, web_url: str, client: ApiClient, org: dict, console_errors: list
+):
+    added = client.post(f"/v1/organizations/{org['id']}/secrets", {"name": "GH_TOKEN", "value": "ghp_e2e-scroll-0000"})
+    assert added.status_code in (200, 201), added.text
+    created = client.post("/v1/automations", {"name": "Push echo", "kind": "command", "trigger": "github"})
+    assert created.status_code == 201, created.text
+    a = created.json()
+    saved = client.put(f"/v1/automations/{a['id']}", {
+        "name": "Push echo", "kind": "command", "command": "echo push",
+        "trigger": {"kind": "github", "event": "push", "actions": [], "filters": {}},
+    })
+    assert saved.status_code == 200, saved.text
+
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    sign_in(page, web_url, org["api_key"], at=f"#/org/settings/automations/{a['id']}")
+    box = page.get_by_role("checkbox", name=re.compile(r"^GH_TOKEN \("))
+    expect(box).to_be_visible()
+    # The form is taller than the window, so the Secrets picker sits below the fold until main scrolls.
+    assert page.evaluate("() => { const m = document.getElementById('main'); return m.scrollHeight > m.clientHeight; }")
+    page.evaluate("() => { const m = document.getElementById('main'); m.scrollTop = m.scrollHeight; }")
+
+    document = "() => ({ top: document.scrollingElement.scrollTop, height: document.scrollingElement.scrollHeight, view: innerHeight })"
+    box.click()
+    expect(box).to_have_attribute("aria-checked", "true")
+    ticked = page.evaluate(document)
+    assert ticked["top"] == 0 and ticked["height"] <= ticked["view"], ticked
+
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(toast(page, "Automation saved")).to_be_visible()
+    after = page.evaluate(document)
+    assert after["top"] == 0 and after["height"] <= after["view"], after
+    assert [s["name"] for s in client.get(f"/v1/automations/{a['id']}").json()["secrets"]] == ["GH_TOKEN"]
+    assert console_errors == [], console_errors

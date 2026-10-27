@@ -134,6 +134,7 @@
       "name": "Morning digest",
       "notifyOnFailure": true,
       "parallelMax": 2,
+      "projectIds": [],
       "repoFilter": null,
       "repos": "all",
       "secrets": [],
@@ -348,6 +349,56 @@
   {
     "args": [
       "automation",
+      "delivery",
+      "aut_in",
+      "dlv_1"
+    ],
+    "route": "GET /v1/automations/:id/deliveries/:deliveryId"
+  },
+  {
+    "args": [
+      "automation",
+      "rotate",
+      "aut_in"
+    ],
+    "route": "POST /v1/automations/:id/incoming-secret/rotate"
+  },
+  {
+    "args": [
+      "automation",
+      "run",
+      "aut_in",
+      "--body",
+      "-"
+    ],
+    "route": "POST /v1/automations/:id/runs",
+    "body": {
+      "payload": {
+        "status": "firing"
+      }
+    }
+  },
+  {
+    "args": [
+      "automation",
+      "create",
+      "--name",
+      "Investigate the alert",
+      "--kind",
+      "agent",
+      "--trigger",
+      "incoming"
+    ],
+    "route": "POST /v1/automations",
+    "body": {
+      "kind": "agent",
+      "name": "Investigate the alert",
+      "trigger": "incoming"
+    }
+  },
+  {
+    "args": [
+      "automation",
       "test",
       "aut_gh",
       "-"
@@ -429,5 +480,37 @@
       "subscriptions"
     ],
     "route": "GET /v1/automations/subscriptions"
+  },
+  {
+    "args": [
+      "task",
+      "before-pr",
+      "wi_12",
+      "ask"
+    ],
+    "route": "PUT /v1/tasks/:id/pull-request-choice",
+    "body": {
+      "choice": "ask"
+    }
+  },
+  {
+    "args": [
+      "task",
+      "before-pr",
+      "wi_12",
+      "project"
+    ],
+    "route": "PUT /v1/tasks/:id/pull-request-choice",
+    "body": {
+      "choice": null
+    }
+  },
+  {
+    "args": [
+      "task",
+      "done-without-pr",
+      "wi_12"
+    ],
+    "route": "POST /v1/tasks/:id/done-without-pull-request"
   }
 ]

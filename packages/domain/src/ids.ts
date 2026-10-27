@@ -52,6 +52,7 @@ export const ID_PREFIXES = {
   automationRun: "arn",
   automationRequest: "arq",
   automationPromptVersion: "apv",
+  incomingDelivery: "dlv",
   chatInstallation: "chi",
   chatRequest: "chr",
 } as const;

@@ -117,7 +117,12 @@ colour table) can import the typed values from `@dude/design-system/tokens`.
 
 Behavioural primitives (Select, Dialog, Tabs, Tooltip, Toast, Checkbox,
 ScrollArea, RowMenu) sit on Radix, which is unstyled and does keyboard/ARIA
-correctly. Everything else is hand-rolled.
+correctly. Everything else is hand-rolled. Inside a `<form>`, Radix's
+Checkbox and Select add a hidden, absolutely positioned native control, so
+each of their roots is `position: relative` to keep it in the primitive's
+box; unpositioned, it lands at the control's document offset and makes the
+whole page scroll under a fixed app shell
+(`test/formControlContainment.test.tsx`).
 
 Shared keyframes live in `styles/base.css`; a CSS module must reference
 them as `animation: global(ds-name) …` or the name is hashed to nothing and
@@ -511,13 +516,27 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   A person's message read on the same resume stays their own turn.
 - **A decision with no agent to ask it** sits in the task's notices, in the
   escalation's grammar, not as a `QuestionCard`: a `QuestionCard` is a turn
-  and needs a transcript. An adopted branch reviewed under Deliver waits on
-  its owner before dude publishes it: an attention `Callout`, "**Open the
-  pull request?** Review is done on `stack/top`. dude opens its pull request
-  into `stack/base` once you say how.", branch and base in mono, then
-  **Open** (primary) and **Draft** (secondary). Only the owner is offered
-  them; anyone else reads "Waiting for Ana to decide.". With a conductor
-  deciding, the same question is its gate question in Chat.
+  and needs a transcript.
+- **A delivery held before its pull request** is `ReadyForReview`, in the
+  task's notices where an escalation would be, in its grammar. A project or
+  task on **Ask me first**, and every adopted branch, stops there once
+  review, simplify and the test pass: "**Ready for your review.** Review,
+  simplify and the browser test passed. No pull request is open yet." Then
+  one row per repository it would open (name, `head → base` in mono,
+  `DiffStat`, Changes), a `ReviewEvidence` row, and **Open pull request**
+  (primary), **Open as draft** (secondary), **Send feedback** (quiet) and,
+  at the row's end, **Done without a pull request** (quiet; it confirms
+  first). Only the owner is offered them. Anyone else reads "Waiting for
+  Sam…" on the neutral tone, with **Write feedback**. Feedback sent from the
+  hold turns it info: "**Sent back:** a fixer is working on your 2 items…".
+  The Open buttons stay drawn and refused with "2 feedback items still
+  open"; once every item is handled it says the round is being reviewed and
+  tested again, never "0 items". Anyone else, meanwhile, reads "**Sam's
+  feedback is with a fixer.**" on the neutral tone, with **Write feedback**
+  and no Open. Findings left for a person never refuse them. When the fix's round
+  passes, the panel is back: "Round 2 · after your feedback", "+3 commits
+  since you last looked", and each item it resolved with its commit. With a
+  conductor deciding, the same question is its gate question in Chat.
 
 ### A task's Chat (the conductor)
 
@@ -924,7 +943,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   named "Ways to pick it back up", each button beside one muted sentence
   saying what it does (its `aria-describedby`, `calloutActionLineId`); the
   pairs stack, button over sentence, on the callout's own width (a
-  container query), so a narrow main pane stacks them too. Each opens one `Dialog` whose
+  container query), so a narrow main pane stacks them too. A `Callout`'s
+  body is otherwise as wide as its words; with `CalloutActions` in it, or
+  with `fill` (a notice whose rows span it and whose last action sits at
+  the row's end, as `ReadyForReview`), it takes the callout's width. Each opens one `Dialog` whose
   `ChoiceList` holds all three, so the choice is made with what each keeps
   and throws away in view: under it, one line per thing the task has —
   conversation, workspace, branch, agent session (labelled "Session") —
@@ -1597,7 +1619,10 @@ here.
 - A page's own note: a settings page with its own audience (Memory: who
   may add, who may change) renders its own `SettingsNote`; the frame's
   default is for the rest. "From <organisation>" is `SettingSource`
-  wherever it appears, a table cell too.
+  wherever it appears, a table cell too. A setting with no organisation
+  value (a project's Before the pull request) is `SettingSource
+  source="default"`: "Default · Open it", with Reset once changed. It never
+  says "From" anything.
 - **ArtifactPreview** renders by kind: Markdown as `Markdown
   variant="document"`, text and JSON in mono (JSON pretty-printed when it
   parses, as typed when it does not — a half-written result is still worth
@@ -2532,6 +2557,36 @@ MarkdownCheatsheet.
   *People's feedback*).
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
+- **ReviewEvidence**: what was checked before a person decides, one chip
+  each on the active wash: "3 reviewers passed", "2 low findings left for
+  you", "Browser test passed · video 1:42", "Preview · open with
+  commenting". Each chip leads to where it is read: a tab (a button) or the
+  preview (a link, new tab). A passed check's glyph is in success ink, and
+  the words always say so. It is never a status: a failed check is not
+  drawn here, it is an escalation. Findings shown here are information and
+  never hold the pull request.
+- **ReadyForReview** — a delivery held before its pull request (see *Human
+  intervention*): `line`, `repositories` (one row each, a list named "What
+  would be opened", `→` read "into", each Changes named "Changes in web"),
+  `evidence`, `state` (`yours` on the attention tone, `sent-back` on info
+  with both Open buttons `RefusedButton`s whose reason is also a visible
+  line hidden from the accessibility tree; `items: 0` says the round is
+  being reviewed and tested again, `waiting` on neutral with no
+  Open or Done, and with `sentBack` "Sam's feedback is with a fixer"),
+  `round` (round 2 on: commits since `GateAt`, and what it resolved),
+  `heldMs`, and the owner's `onOpen`, `onDraft`, `onFeedback` and
+  `onDoneWithout` (only while `yours`; the app confirms first). Its
+  `Callout` is `fill`: the rows span the notice and Done without sits at
+  the row's end. Under 560px each repository's refs and Done without take
+  their own lines.
+- **BeforePullRequestFact**: a task's delivery choice that can still
+  change, under the task's facts in the Overview rail. The owner gets a
+  compact `Select` with when it is read ("Read when Deliver reaches the
+  pull request."). Once a pull request is open it is disabled, with the
+  reason under it: "The pull request is already open." Anyone else reads
+  the value as text, with "Only Sam can change it." A change is
+  acknowledged with a toast that says what Deliver will now do, never with
+  a banner.
 - **SessionHeader** — the transcript's header on its own, for an agent
   session whose views sit under it. `titleSelector` optionally wraps only the
   title, leaving owner/model/machine tips independent; standalone and
@@ -2687,6 +2742,12 @@ are in `docs/design/accounts.md`):
   set in a square sunken well) under `usageHeading` ("How to use it"),
   with a muted `usageNote`. Done closes it;
   nothing shows it again. `copy` replaces the clipboard write in tests.
+  `doneLabel?` (default "Done") names the closing button, e.g. "I've stored it" for an incoming webhook's secret; `label?` (default "Key") names the field.
+- **CodeWell** (`inline?`) — text to copy as it is (a curl, a CLI line, a
+  URL): a square sunken well, mono at the mono size, the density's code
+  padding (`--ds-space-code-y/x`), no frame, wrapping anywhere. A `pre` for
+  a block; `inline` a `code` in a line of text. `KeyShownOnce`'s usage is
+  one; an incoming webhook's endpoint URL and curl are others.
 - **FrontDoor / FrontDoorMessage / FrontDoorLink / HowList** — a page that
   is one centred column: the app's `mark`, a heading (the page's `h1`) and
   its `line`, cards, and fine print (`footer`) with an inline
@@ -2908,6 +2969,8 @@ comments when opened there, never on the standalone Run page.
   both its sides.
 - **`FeedbackCard`** is one item: author, when, where its batch went, its
   status (`feedbackStatusSpec`: tone, glyph and words — never hue alone),
+  and what it holds (`holds`: the merge, or, while a delivery is held
+  before its pull request, its opening),
   what it is on (`FeedbackAnchorLine`), its words, its thread
   (`FeedbackThread`, on the thread's 2px bar) and the actions its status
   allows: Reply and Resolve while it needs handling; Reopen once answered
@@ -3025,13 +3088,21 @@ Settings → *Project secrets* (`#s-secrets`), *OverriddenBy / SecretName*
 `TriggerSummary`, `SessionMark`, `ListSwitch`, `NextRuns`, `DayToggles`,
 `SchedulePicker`, `ChipsInput`, `RepoFilterField`, `AgentTools`, and the helpers
 `describeCron`, `scheduleOf`, `cronOf`, `repoGlob`, `repoFilterCount`,
-`cityOf`. Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
-`#au-schedule`, `#au-chips`, `#au-repo-filter`, `#au-tools`), in both themes and
+`cityOf`; `src/components/Incoming.tsx`: `ConditionRows`, `DeliveryVerdict`, `IncomingVerdictPanel`; `src/components/CodeWell.tsx`: `CodeWell`.
+Gallery: Automations (`#automations`, `#au-marks`, `#au-owner`,
+`#au-schedule`, `#au-chips`, `#au-repo-filter`, `#au-conditions`,
+`#au-delivery-verdict`, `#au-tools`), in both themes and
 densities. No tone of their own: an automation's state is its runs'
 (`StatusMark`), so `paletteDistance` is untouched.
 
+- **ConditionRows** (`value`, `onChange?`, `results?`, `paths?`): an incoming webhook's conditions on its JSON body, AND'd. Each row is a mono path `Input`, an operator `Select` (is, is not, one of, contains, exists) and its value: an `Input`, a `ChipsInput` for one of (values OR'd), nothing for exists. Rows lead with "When"/"and"; with `results` the lead is a ✓ (success tone) or ✗ (danger tone) mark named "Holds"/"Does not hold", and a missed row says what the body had. "+ Condition" adds a row; each row's remove button is named "Remove condition N". The rows are a container: below 420px of their own width (a phone, a narrow dialog, the gallery's 390px sample; a desktop settings row's ~460px control column keeps one line, as the gallery's 460px sample shows) a row stacks path and operator over its value. Its operator words, and `conditionWords`, are the domain's (`CONDITION_OPS`, `CONDITION_OP_LABEL`, `describeCondition` in `@dude/domain`).
+- **DeliveryVerdict** (`verdict`, `onRun?`, `detail?`): what dude did with one delivery, as a chip at the chip height: Started run (success, play glyph), Sent to running agent (info, send), Skipped (neutral, dotted circle) and the condition that missed, Refused · Bad signature / Not JSON / Too large / Rate limited / Turned off (danger, circle-x); Waiting (neutral, clock) while dude has not read it yet. With `onRun` the first two are buttons named "<verdict>: open the run" when they have a run; a sent verdict with none is a plain chip. Tones are the existing five.
+- **IncomingVerdictPanel** (`outcome?`, `ok?`): a test body's live verdict in the Run now dialog: a status region on the sunken shade, square (structure is square), 12/16 padding, its lines (group key, `ConditionRows` with results) and then `outcome` set apart by space, its bold words in danger when `ok` is false. No frame: shade and space tell it apart.
+- **SettingsDisclosure** takes `icon?` (default `layers`, for something inherited): with another glyph it folds a reference a row offers on demand, e.g. an incoming webhook's How to send (`send`), on the chrome shade with no border. Its body scrolls past 320px; `full` shows it whole (How to send's curl).
+- **Td** `wrap`: a cell allowed onto more lines also gets 6px block padding, so wrapped compact rows keep apart by space.
+
 - **KindMark** (`kind`, `role?`): the kind as glyph and word (Agent,
-  Command, Server, Webhook only); an agent that is one of dude's roles adds
+  Command, Server, Send a webhook); an agent that is one of dude's roles adds
   "· Tester" in muted text.
 - **ScopeChip** (`org`, `project?`, `projectId?`): where an automation lives:
   "Organisation" with a building glyph on the info tint, or the project's
@@ -3044,7 +3115,7 @@ densities. No tone of their own: an automation's state is its runs'
   that wrap in a narrow cell, the glyph staying beside the first word; a long event name breaks under the glyph rather than being cut off, and a line never ends on the "·" alone. A schedule in words when it is a
   preset ("Daily at 03:00", "Weekdays at 09:30", "Every 15 minutes") else
   the cron line, then the zone's city muted; an event in mono and its
-  actions, or "any action".
+  actions, or "any action"; an incoming webhook as "Incoming" and, muted in mono, its first condition and "+N" for the rest, or "any JSON".
 - **SessionMark** (`mode`, `expiryDays?`): Ephemeral, or Resumable and its
   expiry in days.
 - **ListSwitch** (`checked`, `onCheckedChange`, `label`): the settings

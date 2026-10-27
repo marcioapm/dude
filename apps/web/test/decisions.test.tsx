@@ -88,9 +88,9 @@ class DecisionsClient extends FixtureClient {
 
 async function page(client: DecisionsClient, opened: string[] = []) {
   const { container, unmount } = await mount(
-    <PeopleProvider client={client}>
+    <ToastProvider><PeopleProvider client={client}>
       <TaskScreen client={client} taskId={TASK_ID} onOpenRun={(id) => opened.push(id)} onBack={() => {}} />
-    </PeopleProvider>,
+    </PeopleProvider></ToastProvider>,
   );
   mounted.push(unmount);
   await until(() => container.querySelector("[data-testid=task-screen]"), "the task page");
@@ -588,6 +588,16 @@ describe("what the Chat is made of", () => {
 
   test("nothing for a task its conductor never decided for", () => {
     expect(conductedLines({ decider: "policy", runs: [run({ id: "a" })] }, [ev("conductor.decision_awaited", { point: "start" }, 1)])).toEqual([]);
+  });
+
+  test("under Deliver, each hold before the pull request is dude's notice, round 2 said as such", () => {
+    const hold = (round: number, at: number) => ev("conductor.decision_awaited",
+      { point: "before_pull_request", policy: "openPullRequest", actions: [], phases: [], round }, at);
+    const lines = conductedLines({ decider: "policy", runs: [] }, [hold(1, 1), hold(2, 2)]);
+    expect(lines.map((l) => l.kind === "notice" ? l.text : l.kind)).toEqual([
+      "Deliver is holding the pull request for your review.",
+      "Back at the hold, round 2: reviewed and tested again. Deliver is holding the pull request for your review.",
+    ]);
   });
 
   test("ready to merge, and no longer, are dude's notices in its own words, once each", () => {

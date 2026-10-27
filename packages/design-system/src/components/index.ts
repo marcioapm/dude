@@ -36,7 +36,7 @@ export {
   SubmitFeedbackDialog, feedbackHolds, feedbackStatusSpec, lineWords,
 } from "./FeedbackCard.tsx";
 export type {
-  CommentEditorProps, DraftsTrayProps, DraftsTrayRow, FeedbackCardItem, FeedbackCardProps, FeedbackStatusSpec, FeedbackThreadEntry, SubmitFeedbackDialogProps,
+  CommentEditorProps, DraftsTrayProps, DraftsTrayRow, FeedbackCardItem, FeedbackCardProps, FeedbackHolds, FeedbackStatusSpec, FeedbackThreadEntry, SubmitFeedbackDialogProps,
 } from "./FeedbackCard.tsx";
 export type { DiffViewProps, DiffFileProps, FileDiff, DiffHunk, DiffLine, DiffLineKind, FileChangeKind } from "./DiffView.tsx";
 export { LogStream } from "./LogStream.tsx";
@@ -132,6 +132,9 @@ export type { SettingsLayoutProps, SettingsNavItem, SettingRowProps, SettingSour
 export { AgentTools, ChipsInput, DayToggles, KindMark, ListSwitch, NextRuns, OwnerMark, RepoFilterField, SchedulePicker, ScopeChip, SessionMark, TriggerSummary,
   cityOf, cronOf, describeCron, repoFilterCount, repoGlob, scheduleOf } from "./Automations.tsx";
 export type { AgentTool, AgentToolUnavailable, AutomationKindName, RepoFilterValue, ScheduleMode } from "./Automations.tsx";
+export { ConditionRows, DeliveryVerdict, IncomingSummary, IncomingVerdictPanel, conditionWords } from "./Incoming.tsx";
+export type { ConditionOpName, ConditionResultMark, DeliveryVerdictValue, TriggerCondition } from "./Incoming.tsx";
+export { CodeWell } from "./CodeWell.tsx";
 export { PromptHistory } from "./PromptHistory.tsx";
 export type { PromptHistoryProps, PromptHistoryVersion } from "./PromptHistory.tsx";
 export { EpicCard, EpicRow, EpicProgress, EpicPullRequests } from "./EpicCard.tsx";
@@ -149,6 +152,10 @@ export type { SearchSelectorProps } from "./SearchSelector.tsx";
 export { SessionList, SessionItem, SessionItemContent } from "./SessionList.tsx";
 export { DiffStat } from "./DiffStat.tsx";
 export type { DiffStatProps } from "./DiffStat.tsx";
+export { ReadyForReview, ReviewEvidence } from "./ReadyForReview.tsx";
+export type { EvidenceChip, HeldRepository, ReadyForReviewProps, ReadyForReviewRound, ReadyForReviewState, ReviewEvidenceProps } from "./ReadyForReview.tsx";
+export { BeforePullRequestFact } from "./BeforePullRequestFact.tsx";
+export type { BeforePullRequestFactProps, BeforePullRequestFactState } from "./BeforePullRequestFact.tsx";
 export { SessionRail, SessionRailBlock, SessionFacts, ToolUsage, ChangedFiles, PublishedFiles } from "./SessionRail.tsx";
 export type { ChangedFile, PublishedFile, ToolCount } from "./SessionRail.tsx";
 export type { SessionListProps, SessionItemProps } from "./SessionList.tsx";

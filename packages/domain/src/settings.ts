@@ -72,6 +72,12 @@ export const ROLE_ENABLED_BY = { simplifier: "simplify", qa_browser: "test" } as
 /** Where a value comes from, as a project's settings show it. */
 export type SettingSource = "organization" | "project";
 
+/**
+ * Where a delivery value comes from: as SettingSource, or "default" for a
+ * setting only a project has (pullRequest) that the project has not set.
+ */
+export type DeliverySettingSource = SettingSource | "default";
+
 export interface Setting<T> {
   value: T;
   source: SettingSource;
@@ -136,7 +142,17 @@ export interface RoleSettings {
   };
 }
 
-export type DeliverySettings = { [K in keyof FullDeliveryPolicy]: Setting<FullDeliveryPolicy[K]> };
+export type DeliverySettings = {
+  [K in keyof FullDeliveryPolicy]: K extends (typeof PROJECT_ONLY_DELIVERY_KEYS)[number]
+    ? { value: FullDeliveryPolicy[K]; source: DeliverySettingSource }
+    : Setting<FullDeliveryPolicy[K]>;
+};
+
+/**
+ * Delivery settings only a project has: an organisation's settings refuse
+ * them, and a value an organisation stored is not read.
+ */
+export const PROJECT_ONLY_DELIVERY_KEYS = ["pullRequest"] as const satisfies ReadonlyArray<keyof FullDeliveryPolicy>;
 
 /**
  * What an agent's Run may reach (the Network page). On the organisation's
@@ -218,6 +234,8 @@ export const settingsPatchSchema = z
         conductorWarmMinutes: nullable(field("conductorWarmMinutes")),
         conductorEditLines: nullable(field("conductorEditLines")),
         conductorEditFiles: nullable(field("conductorEditFiles")),
+        /** A project's only: refused on the organisation's settings. */
+        pullRequest: nullable(field("pullRequest")),
       })
       .strict()
       .optional(),

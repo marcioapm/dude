@@ -21,6 +21,7 @@ import {
   egressAllows,
   EventTypes,
   newId,
+  PROJECT_ONLY_DELIVERY_KEYS,
   promptRoleSchema,
   resolveMachineSize,
   resolveHarness,
@@ -32,6 +33,7 @@ import {
   settingsPatchSchema,
   type AgentModels,
   type AgentEgressMode,
+  type DeliverySettingSource,
   type DeliverySettings,
   type FullDeliveryPolicy,
   type NetworkSettings,
@@ -231,6 +233,9 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
       project !== undefined && layers.project
         ? { value: project as T, source: "project" }
         : { value: (org === undefined ? fallback : org) as T, source: "organization" };
+    /** A project-only value: the project's, else the factory's; an organisation's stored one is not read. */
+    const projectOnly = <T>(project: unknown, fallback: T): { value: T; source: DeliverySettingSource } =>
+      project !== undefined && layers.project ? { value: project as T, source: "project" } : { value: fallback, source: "default" };
 
     const orgPolicy = layers.org.deliveryPolicy;
     const projectPolicy = layers.project?.deliveryPolicy ?? {};
@@ -239,7 +244,9 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
       // reviewers) that nobody edits here.
       (Object.keys(deliveryPolicySchema.shape) as Array<keyof FullDeliveryPolicy>).map((k) => [
         k,
-        pick(projectPolicy[k], orgPolicy[k], factory[k]),
+        (PROJECT_ONLY_DELIVERY_KEYS as readonly string[]).includes(k)
+          ? projectOnly(projectPolicy[k], factory[k])
+          : pick(projectPolicy[k], orgPolicy[k], factory[k]),
       ]),
     ) as DeliverySettings;
 
@@ -425,6 +432,9 @@ async function patchOrganizationSettings(ctx: RequestContext): Promise<Response>
     const layers = await loadLayers(scope, undefined, true);
     if (!layers) throw notFound("organization not found");
     if (patch.network?.mode) throw badRequest("an organisation's list has no mode: only a project's adds to it or replaces it");
+    for (const k of PROJECT_ONLY_DELIVERY_KEYS) {
+      if (patch.delivery?.[k] !== undefined) throw badRequest(`${k} is a project's setting: an organisation has no value for it`);
+    }
     const next = applyPatch(layers.org.agentModels, layers.org.deliveryPolicy, patch);
     await scope.sql`
       UPDATE organizations SET default_agent_models = ${next.models}::jsonb, delivery_policy = ${next.policy}::jsonb,

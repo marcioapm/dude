@@ -47,7 +47,7 @@ func fixtureSettings(t *testing.T) string {
 	}
 	b, _ := json.Marshal(pick(got, "name", "description", "kind", "trigger", "sessionMode", "expiryDays", "concurrency",
 		"parallelMax", "repos", "repoFilter", "agent", "machineSizeId", "imageId", "setupScript", "command", "server",
-		"webhook", "secrets", "notifyOnFailure"))
+		"webhook", "secrets", "notifyOnFailure", "projectIds"))
 	return string(b)
 }
 
@@ -86,6 +86,12 @@ func automationCases(t *testing.T) []automationCase {
 		{[]string{"automation", "run-list", "aut_1", "--status", "failed", "--limit", "10"}, "", "GET", "/v1/automations/aut_1/runs?limit=10&status=failed", ``, ""},
 		{[]string{"automation", "run-show", "aut_1", "arn_1"}, "", "GET", "/v1/automations/aut_1/runs/arn_1", ``, ""},
 		{[]string{"automation", "deliveries", "aut_gh"}, "", "GET", "/v1/automations/aut_gh/deliveries", ``, ""},
+		{[]string{"automation", "delivery", "aut_in", "dlv_1"}, "", "GET", "/v1/automations/aut_in/deliveries/dlv_1", ``, ""},
+		{[]string{"automation", "rotate", "aut_in"}, "", "POST", "/v1/automations/aut_in/incoming-secret/rotate", ``, ""},
+		{[]string{"automation", "run", "aut_in", "--body", "-"}, `{"status":"firing"}`, "POST", "/v1/automations/aut_in/runs",
+			`{"payload":{"status":"firing"}}`, ""},
+		{[]string{"automation", "create", "--name", "Investigate the alert", "--kind", "agent", "--trigger", "incoming"}, "",
+			"POST", "/v1/automations", `{"kind":"agent","name":"Investigate the alert","trigger":"incoming"}`, ""},
 		{[]string{"automation", "test", "aut_gh", "-"}, prEvent, "POST", "/v1/automations/aut_gh/test-event/evaluate",
 			`{"body":{"action":"opened","pull_request":{"number":7}}}`, ""},
 		{[]string{"automation", "start-fresh", "aut_1"}, "", "POST", "/v1/automations/aut_1/start-fresh", ``, ""},
@@ -96,6 +102,10 @@ func automationCases(t *testing.T) []automationCase {
 		{[]string{"automation", "next", "0 9 * * 1-5", "--tz", "Europe/Lisbon"}, "", "POST", "/v1/automations/schedule/next",
 			`{"cron":"0 9 * * 1-5","tz":"Europe/Lisbon"}`, ""},
 		{[]string{"automation", "subscriptions"}, "", "GET", "/v1/automations/subscriptions", ``, ""},
+		// Recorded here for cli-bodies.test.ts: a task command's body checked against its route's schema.
+		{[]string{"task", "before-pr", "wi_12", "ask"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":"ask"}`, ""},
+		{[]string{"task", "before-pr", "wi_12", "project"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":null}`, ""},
+		{[]string{"task", "done-without-pr", "wi_12"}, "", "POST", "/v1/tasks/wi_12/done-without-pull-request", ``, ""},
 	}
 }
 

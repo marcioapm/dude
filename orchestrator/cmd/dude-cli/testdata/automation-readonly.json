@@ -1,2 +1,2 @@
 ["id", "projectId", "projectName", "enabled", "owner", "ownerLeftAt",
-  "webhookSecretHint", "nextRunAt", "lastRun", "canEdit", "canTransfer", "createdAt", "updatedAt"]
+  "webhookSecretHint", "incomingSecretHint", "incomingSecret", "publicOrigin", "nextRunAt", "lastRun", "canEdit", "canTransfer", "createdAt", "updatedAt"]

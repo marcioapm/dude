@@ -31,6 +31,7 @@ import {
   scheduleNextBody,
   shape,
 } from "../src/api/routes/automations.ts";
+import { pullRequestChoiceInput } from "../src/api/routes/work.ts";
 import type { RequestContext } from "../src/api/router.ts";
 
 const RECORDED = "orchestrator/cmd/dude-cli/testdata/automation-requests.json";
@@ -63,11 +64,14 @@ const bodies: Record<string, (r: Recorded) => ZodTypeAny[]> = {
   "PUT /v1/automations/:id/owner": () => [transferOwnerSchema],
   "PUT /v1/automations/:id/webhook-secret": () => [webhookSecretSchema],
   "POST /v1/automations/:id/duplicate": () => [],
+  "POST /v1/automations/:id/incoming-secret/rotate": () => [],
   "POST /v1/automations/:id/runs": () => [runNowBody, runNowSchema],
   "POST /v1/automations/:id/start-fresh": () => [],
   "POST /v1/automations/:id/test-event/evaluate": () => [evaluateBody, evaluateEventSchema],
   "POST /v1/automations/:id/prompt-history/restore": () => [restorePromptSchema],
   "POST /v1/automations/schedule/next": () => [scheduleNextBody],
+  "PUT /v1/tasks/:id/pull-request-choice": () => [pullRequestChoiceInput],
+  "POST /v1/tasks/:id/done-without-pull-request": () => [],
 };
 
 // dude CLI routes with a body that nothing here checks yet. It only shrinks:

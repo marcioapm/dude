@@ -229,6 +229,13 @@ export function escalationWords(e: Escalation): EscalationWords {
     case "source_changed":
       // The orchestrator's reason names what changed and the two ways on.
       return { short: "Adopted work changed on GitHub", sentence: typeof d.reason === "string" && d.reason ? d.reason : "Delivery stopped: source changed.", runId };
+    case "pull_request_choice_unresolved": {
+      const sentence = "Deliver stopped before opening the pull request: this project's delivery settings no longer load, so it can't tell whether to open it, open a draft or ask you first. Pick this task's own Before the pull request in Overview, or have a project admin fix Settings → Delivery, then Retry.";
+      // The orchestrator's error names the setting that does not load.
+      if (typeof d.error !== "string" || !d.error) return { short: "Delivery settings don't load", sentence, runId };
+      const parts: Words = [`${sentence} What doesn't load: `, { mono: shortError(d.error) }, "."];
+      return { short: "Delivery settings don't load", sentence: plainWords(parts), parts, runId };
+    }
     default: {
       const words = e.reason.replaceAll("_", " ");
       return { short: words.charAt(0).toUpperCase() + words.slice(1), sentence: `Delivery stopped: ${words}.`, runId };

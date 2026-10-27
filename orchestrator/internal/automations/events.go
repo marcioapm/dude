@@ -125,10 +125,12 @@ func askGitHub(ctx context.Context, d *db.DB, forges Forges, org string) (Subscr
 	return Subscriptions{Source: "webhook", Events: events}, true
 }
 
-// Retention: payloads 30 days, run logs 90 (Q4).
+// Retention: payloads 30 days, run logs 90 (Q4); a refused incoming
+// request's row 7 days (it never had a body).
 const (
 	PayloadRetention = 30 * 24 * time.Hour
 	LogRetention     = 90 * 24 * time.Hour
+	RefusedRetention = 7 * 24 * time.Hour
 )
 
 // RetainBatch is how many rows one retention statement changes, each batch
@@ -138,7 +140,8 @@ const RetainBatch = 5000
 
 // Retain deletes stored deliveries past their 30 days, empties automation
 // runs' payloads at 30 days and their logs at 90 (the run rows stay, so the
-// Runs tab still says what ran): one batch of each. Returns how many rows
+// Runs tab still says what ran), deletes refused incoming requests at 7 days
+// and empties the other incoming deliveries' bodies at 30: one batch of each. Returns how many rows
 // it changed; the loop calls it again at once while that is not 0.
 func Retain(ctx context.Context, d *db.DB, now time.Time) (int, error) {
 	return RetainUpTo(ctx, d, now, RetainBatch)
@@ -160,6 +163,19 @@ func RetainUpTo(ctx context.Context, d *db.DB, now time.Time, limit int) (int, e
 		{`UPDATE automation_runs SET log_tail = NULL WHERE id IN (SELECT id FROM automation_runs
 			WHERE created_at < $1 AND log_tail IS NOT NULL ORDER BY created_at LIMIT $2)`,
 			[]any{now.Add(-LogRetention), limit}},
+		{`DELETE FROM incoming_deliveries WHERE id IN (SELECT id FROM incoming_deliveries
+			WHERE verdict = 'refused' AND received_at < $1 ORDER BY received_at LIMIT $2)`,
+			[]any{now.Add(-RefusedRetention), limit}},
+		{`DELETE FROM incoming_refusals WHERE (automation_id, hour, code) IN (SELECT automation_id, hour, code FROM incoming_refusals
+			WHERE hour < $1 ORDER BY hour LIMIT $2)`,
+			[]any{now.Add(-RefusedRetention), limit}},
+		// A decided delivery no run holds (skipped, or its run deleted) goes at 30 days; one a run holds keeps its row for the run's page.
+		{`DELETE FROM incoming_deliveries WHERE id IN (SELECT id FROM incoming_deliveries
+			WHERE run_id IS NULL AND verdict IN ('started', 'sent_to_run', 'skipped') AND received_at < $1 ORDER BY received_at LIMIT $2)`,
+			[]any{now.Add(-PayloadRetention), limit}},
+		{`UPDATE incoming_deliveries SET payload = NULL, headers = '{}', payload_purged_at = $3 WHERE id IN (SELECT id FROM incoming_deliveries
+			WHERE payload IS NOT NULL AND verdict IS NOT NULL AND received_at < $1 ORDER BY received_at LIMIT $2)`,
+			[]any{now.Add(-PayloadRetention), limit, now}},
 	} {
 		if err := d.InSystem(ctx, "automations-retention", func(tx pgx.Tx) error {
 			tag, err := tx.Exec(ctx, step.sql, step.args...)

@@ -59,6 +59,8 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 			w.Write(b)
 		case r.URL.Path == "/v1/automations/aut_gh" && r.Method == "GET":
 			io.WriteString(w, `{"id":"aut_gh","kind":"command","trigger":{"kind":"github","event":"pull_request","actions":["opened"],"filters":{}}}`)
+		case r.URL.Path == "/v1/automations/aut_in" && r.Method == "GET":
+			io.WriteString(w, `{"id":"aut_in","kind":"agent","trigger":{"kind":"incoming","hookId":"hk_7f3a9c21e4b04d18","conditions":[],"groupBy":"","ratePerHour":30}}`)
 		case r.URL.Path == "/v1/automations/aut_1/prompt-history":
 			io.WriteString(w, `{"versions":[{"id":"apv_2","number":2,"current":true},{"id":"apv_1","number":1,"current":false}]}`)
 		case r.URL.Path == "/v1/projects/prj_1/automations":

@@ -193,6 +193,13 @@ type State struct {
 	// opening needs an authorization at the current heads (gateHeld), or
 	// an Open or Draft at them, whoever decides by then.
 	GateRequired bool `json:"gateRequired,omitempty"`
+	// The gate is required because the task's choice before its pull
+	// request was Ask me first when Deliver reached it (PullRequestChoiceTx):
+	// a change of the choice while held releases it (choiceReleased).
+	ChoiceGate bool `json:"choiceGate,omitempty"`
+	// Where Deliver last held the delivery before its pull request, for the
+	// person reading it: the round and the heads it was shown at.
+	Hold *Hold `json:"hold,omitempty"`
 	// Authorization heads and draft mode, owned by the row. GateOpened and
 	// Draft are latched and outlive a head change; gateHeld checks these heads.
 	GateAt *GateAt `json:"gateAt,omitempty"`
@@ -202,6 +209,9 @@ type State struct {
 	// The step handed an integration over: the wait after it takes one
 	// pass first (closeHandedOver). Never persisted.
 	handingOver bool
+	// The task's Open as draft, read by this run of the opening step for
+	// its first pull request alone. Never persisted.
+	draftChoice bool
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
 	// A decision point the policy took in the step committing (next): set
@@ -1422,7 +1432,7 @@ func (w *steps) beforePR(ctx context.Context, sc workflow.StepContext, st *State
 	}
 	// A person's branch is never published as a pull request without their Open or Draft.
 	if st.adoptedBranch() {
-		st.GateRequired = true
+		st.GateRequired, st.ChoiceGate = true, false
 	}
 	return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", line)
 }
@@ -1565,6 +1575,24 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	// policy chose to open waits for the person's answer like any other, and
 	// one handed back after the conductor entered the gate opens only with
 	// the person's Open or Draft at the heads it opens.
+	if len(st.PullRequestIDs) == 0 && (!st.GateRequired || st.ChoiceGate) {
+		// The task's choice before its first pull requests, read now: Open
+		// as draft opens them as drafts, a retry of this step that already
+		// opened some included. Ask me first holds as a gate the conductor
+		// entered does, but never once the attempt has a pull request row.
+		choice, opened, err := w.s.PullRequestChoiceAtOpening(ctx, sc.OrganizationID, st.TaskID)
+		if unresolved := (ChoiceUnresolved{}); errors.As(err, &unresolved) {
+			return w.escalate(ctx, sc, st, ReasonChoiceUnresolved, map[string]any{"error": unresolved.Err.Error()})
+		}
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if !opened {
+			st.GateRequired, st.ChoiceGate = choice == PullRequestAsk, choice == PullRequestAsk
+		}
+		// Not the latched Draft: a later opening (another repository's) is not this one.
+		st.draftChoice = choice == PullRequestDraft
+	}
 	if len(st.PullRequestIDs) == 0 && (st.conducted() || st.GateRequired) && !st.gateHeld() {
 		if st.conducted() {
 			return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
@@ -1583,7 +1611,14 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		}
 	}
 	if st.GateRequired && st.GateAt != nil {
-		st.Draft = st.GateAt.Draft
+		// The owner's Draft at the hold of the task's Ask me first drafts
+		// this opening's pull requests only, as the choice's Open as draft
+		// does; the conductor's gate and an adopted branch's latch it.
+		if st.ChoiceGate {
+			st.draftChoice = st.draftChoice || st.GateAt.Draft && len(st.PullRequestIDs) == 0
+		} else {
+			st.Draft = st.GateAt.Draft
+		}
 	}
 	if res, diverted, err := w.syncBeforePR(ctx, sc, st); diverted || err != nil {
 		return res, err
@@ -1599,6 +1634,10 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		st.PRIteration = 0
 	}
 	st.PullRequestIDs = prIDs
+	if len(prIDs) > 0 {
+		// The hold is over: nothing reads it once a pull request is on record.
+		st.Hold = nil
+	}
 	if len(prIDs) == 0 {
 		// Nothing changed in any repository: the work is what the agents
 		// published. A person reads it and says when it is done, or gives
@@ -2923,6 +2962,9 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	case ReasonTestFailedCriteria, ReasonNotConverging:
 		// One more fix round; a blocked test's retry is the tester again.
 		st.Escalation.Step = "fix"
+	case ReasonChoiceUnresolved:
+		// The opening, which reads the choice again.
+		st.Escalation.Step = "openPullRequest"
 	}
 	if ids := st.Escalation.RunIDs(); len(ids) > 0 && strings.HasSuffix(reason, "_failed") {
 		// A Run failed, and lux keeps it: the step waiting on it can wait on

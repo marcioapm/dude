@@ -68,9 +68,10 @@ describe("the organisation's list", () => {
   test("the count, next run as a day and time / On event / Off, and the filters as words with no labels", async () => {
     const c = await show(<AutomationsList client={new FixtureClient("a")} orgName="Example" projectId={null} canCreate onOpen={() => undefined} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
-    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("8 automations");
+    expect(c.querySelector("[data-testid=automations-count]")?.textContent).toBe("10 automations");
     const next = (id: string) => rows(c).find((r) => r.getAttribute("data-id") === id)!.querySelectorAll("td")[6]!.textContent;
     expect(next("aut_triage")).toBe("On event");
+    expect(next("aut_alert")).toBe("On delivery");
     expect(next("aut_changelog")).toBe("Off");
     expect(next("aut_qa")).toMatch(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2} [A-Z][a-z]{2} \d{2}:\d{2}$/);
     const bar = c.querySelector<HTMLElement>("[data-testid=filter-bar]")!;
@@ -85,7 +86,7 @@ describe("the organisation's list", () => {
     const c = await show(<AutomationsList client={client} orgName="Example" projectId={null} canCreate onOpen={(id) => opened.push(id)} />);
     await until(() => (rows(c).length ? rows(c) : null), "the rows");
     expect(names(c)).toEqual(["PR triage", "Weekly PR digest", "Nightly dependency audit", "Weekly cost report", "Release notes to Slack", "Nightly QA pass",
-      "Changelog builder", "Investigate a failed deploy"]);
+      "Changelog builder", "Investigate a failed deploy", "Investigate the alert", "Page triage"]);
     const cost = rows(c).find((r) => r.getAttribute("data-id") === "aut_cost")!;
     expect(cost.querySelector('[data-held="true"]')?.getAttribute("aria-label")).toBe("Example's admins");
     const sw = rows(c)[0]!.querySelector<HTMLElement>("[data-testid=automation-enabled]")!;
@@ -104,7 +105,7 @@ describe("a project's list", () => {
     const here = await until(() => c.querySelector("[data-testid=also-running]"), "Also running here");
     expect(here.textContent).toContain("Also running here, from Example");
     const own = rows(c).filter((r) => !here.contains(r)).map(nameOf);
-    expect(own).toEqual(["Nightly QA pass", "Changelog builder", "Investigate a failed deploy"]);
+    expect(own).toEqual(["Nightly QA pass", "Changelog builder", "Investigate a failed deploy", "Investigate the alert"]);
     const theirs = rows(c).filter((r) => here.contains(r)).map(nameOf);
     expect(theirs).toContain("PR triage");
     expect(theirs).toContain("Release notes to Slack");
@@ -127,16 +128,17 @@ describe("the New automation dialog", () => {
     await show(<NewAutomationDialog client={client} projectId={null} onClose={() => undefined} onCreated={() => undefined} />);
     const kinds = await until(() => document.body.querySelector<HTMLElement>("[role=radiogroup][aria-label='What runs']"), "the kinds");
     const radios = [...kinds.querySelectorAll<HTMLElement>("[role=radio]")];
-    expect(radios.map((r) => r.querySelector("span > span")?.textContent)).toEqual(["Agent", "Command", "Server", "Webhook only"]);
+    expect(radios.map((r) => r.querySelector("span > span")?.textContent)).toEqual(["Agent", "Command", "Server", "Send a webhook"]);
     expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false", "false"]);
     const triggers = document.body.querySelector<HTMLElement>("[role=group][aria-label='When it runs']")!;
     const triggerButtons = () => [...triggers.querySelectorAll<HTMLButtonElement>("button")];
-    expect(triggerButtons().map((b) => b.textContent)).toEqual(["Schedule", "GitHub event"]);
-    expect(triggerButtons().map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
-    // A server answers events: Schedule cannot be chosen, and says why.
+    expect(triggerButtons().map((b) => b.textContent)).toEqual(["Schedule", "GitHub event", "Incoming webhook"]);
+    expect(triggerButtons().map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false", "false"]);
+    // A server answers events: Schedule and Incoming webhook cannot be chosen, and it says why.
     await click(radios[2]!);
     expect(radios[2]!.getAttribute("aria-checked")).toBe("true");
     expect(triggerButtons()[0]!.disabled).toBe(true);
+    expect(triggerButtons()[2]!.disabled).toBe(true);
     expect(triggerButtons()[1]!.getAttribute("aria-pressed")).toBe("true");
     expect(document.body.textContent).toContain("A server answers GitHub events.");
     await click(radios[1]!);
@@ -160,7 +162,7 @@ describe("an automation's page", () => {
     await click([...crumbs.querySelectorAll("button")].find((b) => b.textContent === "Automations")!);
     expect(back).toEqual(["list"]);
     const tabs = [...c.querySelectorAll("[role=tablist][aria-label=Automation] [role=tab]")].map((t) => [t.textContent, t.getAttribute("aria-selected")]);
-    expect(tabs).toEqual([["Settings", "false"], ["Runs", "true"]]);
+    expect(tabs).toEqual([["Settings", "false"], ["Runs", "true"], ["Deliveries", "false"]]);
     for (const unmount of mounted) await unmount();
     mounted = [];
     const s = await show(<AutomationPage client={new FixtureClient("a")} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}

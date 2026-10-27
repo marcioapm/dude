@@ -11,6 +11,7 @@ import { Badge } from "../primitives/Badge.tsx";
 import { Callout } from "../primitives/Layout.tsx";
 import type { Person } from "../util/viewTypes.ts";
 import styles from "./Automations.module.css";
+import { IncomingSummary, type TriggerCondition } from "./Incoming.tsx";
 // ListSwitch is the settings Switch without its label row: one look, one stylesheet.
 import settingsStyles from "./Settings.module.css";
 
@@ -26,7 +27,7 @@ const KIND: Record<AutomationKindName, { icon: IconName; label: string }> = {
   agent: { icon: "agent", label: "Agent" },
   command: { icon: "terminal", label: "Command" },
   server: { icon: "globe", label: "Server" },
-  webhook: { icon: "send", label: "Webhook only" },
+  webhook: { icon: "send", label: "Send a webhook" },
 };
 
 /** The kind as glyph and word; an agent that is one of dude's roles adds "· Tester" in muted text. */
@@ -99,9 +100,11 @@ export function OwnerMark({ owner, avatarOnly, left, org }: {
  */
 export function TriggerSummary({ trigger, wrap }: {
   readonly trigger: { readonly kind: "schedule"; readonly cron: string; readonly tz: string }
-    | { readonly kind: "github"; readonly event: string; readonly actions?: readonly string[] | undefined };
+    | { readonly kind: "github"; readonly event: string; readonly actions?: readonly string[] | undefined }
+    | { readonly kind: "incoming"; readonly conditions: readonly TriggerCondition[] };
   readonly wrap?: boolean | undefined;
 }) {
+  if (trigger.kind === "incoming") return <IncomingSummary conditions={trigger.conditions} wrap={wrap} />;
   const schedule = trigger.kind === "schedule";
   const glyph = <Icon name={schedule ? "clock" : "github"} size={14} className={styles["kindIcon"]} />;
   const words = schedule ? describeCron(trigger.cron) : trigger.event;

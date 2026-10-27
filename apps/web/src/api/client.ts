@@ -23,6 +23,10 @@ import type {
   AutomationRunDetail,
   AutomationPromptVersion,
   AutomationRunsResponse,
+  AutomationDelivery,
+  AutomationDeliveryDetail,
+  DeliveryFilter,
+  IncomingVerdict,
   EventSubscriptions,
   EventVerdict,
   NewAutomation,
@@ -116,6 +120,7 @@ import type {
   RelationSide,
   TaskRelations,
   TaskStatus,
+  PullRequestChoice,
 } from "@dude/domain";
 import type {
   ChatConnectStateView,
@@ -265,6 +270,8 @@ export interface GithubAppInput {
   clearOauthClientSecret?: boolean;
 }
 
+export type { DeliveryFilter } from "@dude/domain";
+
 /** Whether GitHub's webhooks reach dude, and each repository's hook. */
 export interface WebhookHealth {
   lastDeliveryAt: string | null;
@@ -350,17 +357,21 @@ export interface ChatSent {
   decider?: Decider;
 }
 
+/** What a task held before its pull request waits for, on the board and in the tree. */
+export const READY_FOR_REVIEW_WAITING = "Ready for your review: no pull request yet";
+
 /**
  * The navigation tree gives each task's escalation, when delivery stopped
  * for a person, and who decides it with whether its conductor is live; the
  * design system's NavTask shows them as what the task waits for, in words,
  * and as its driver.
  */
-function withWaitingFor(projects: NavProject[]): NavProject[] {
+export function withWaitingFor(projects: NavProject[]): NavProject[] {
   const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean }): NavTask => {
     const { decider, conductorLive, ...rest } = t;
     const driven = decider ? { ...rest, driver: driverMode(decider, conductorLive === true) } : rest;
-    return t.escalation ? { ...driven, waitingFor: escalationWords(t.escalation).short } : driven;
+    if (t.escalation) return { ...driven, heldForReview: false, waitingFor: escalationWords(t.escalation).short };
+    return t.heldForReview ? { ...driven, waitingFor: READY_FOR_REVIEW_WAITING } : driven;
   };
   return projects.map((p) => ({
     ...p,
@@ -1109,8 +1120,18 @@ export class ApiClient {
     return this.#request("POST", `/v1/tasks/${taskId}/runs`, {});
   }
 
-  createTask(input: { projectId: string } & Partial<TaskFields> & { title: string }): Promise<Task> {
+  createTask(input: { projectId: string } & Partial<TaskFields> & { title: string; pullRequestChoice?: PullRequestChoice | null }): Promise<Task> {
     return this.#request("POST", "/v1/tasks", input);
+  }
+
+  /** What Deliver does before the task's pull request, its own (null: its project's): the owner's, until one is open. */
+  setPullRequestChoice(taskId: string, choice: PullRequestChoice | null): Promise<{ taskId: string; pullRequestChoice: PullRequestChoice | null }> {
+    return this.#request("PUT", `/v1/tasks/${encodeURIComponent(taskId)}/pull-request-choice`, { choice });
+  }
+
+  /** The owner's Done without a pull request, at Deliver's hold before it: the branch kept, the task Done. */
+  doneWithoutPullRequest(taskId: string): Promise<{ taskId: string; status: "done" }> {
+    return this.#request("POST", `/v1/tasks/${encodeURIComponent(taskId)}/done-without-pull-request`);
   }
 
   /** Edit a task. What it asks for is fixed once delivery starts; where it sits is not. */
@@ -1364,11 +1385,11 @@ export class ApiClient {
     return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}`);
   }
 
-  createAutomation(input: NewAutomation & { projectId: string | null; tz: string }): Promise<Automation> {
+  createAutomation(input: NewAutomation & { projectId: string | null; tz: string }): Promise<Automation & { incomingSecret?: string }> {
     return this.#request("POST", "/v1/automations", input);
   }
 
-  updateAutomation(id: string, input: AutomationInput): Promise<Automation> {
+  updateAutomation(id: string, input: AutomationInput): Promise<Automation & { incomingSecret?: string }> {
     return this.#request("PUT", `/v1/automations/${encodeURIComponent(id)}`, input);
   }
 
@@ -1409,6 +1430,24 @@ export class ApiClient {
     return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries`);
   }
 
+  /** The Deliveries tab: the last 30 days' deliveries with their verdicts, at most 100, of one verdict when filtered; an incoming automation's refusals this hour counted, not stored. */
+  automationDeliveryList(id: string, verdict?: DeliveryFilter): Promise<{ deliveries: AutomationDelivery[]; refusedNotStored?: number }> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries${verdict ? `?verdict=${verdict}` : ""}`);
+  }
+
+  automationDelivery(id: string, deliveryId: string): Promise<AutomationDeliveryDetail> {
+    return this.#request("GET", `/v1/automations/${encodeURIComponent(id)}/deliveries/${encodeURIComponent(deliveryId)}`);
+  }
+
+  /** A new verification secret for an incoming webhook, answered this once. */
+  rotateIncomingSecret(id: string): Promise<Automation & { incomingSecret: string }> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/incoming-secret/rotate`);
+  }
+
+  evaluateIncoming(id: string, body: Record<string, unknown>): Promise<IncomingVerdict> {
+    return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/test-event/evaluate`, { body });
+  }
+
   runAutomation(id: string, body: RunNow): Promise<{ runId: string }> {
     return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/runs`, body);
   }
@@ -1429,7 +1468,7 @@ export class ApiClient {
     return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/prompt-history/restore`, { versionId });
   }
 
-  duplicateAutomation(id: string): Promise<Automation> {
+  duplicateAutomation(id: string): Promise<Automation & { incomingSecret?: string }> {
     return this.#request("POST", `/v1/automations/${encodeURIComponent(id)}/duplicate`);
   }
 

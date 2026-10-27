@@ -450,7 +450,15 @@ describe("runs", () => {
       ('pd-3', ${ORG}, 'push', '{}', now())`;
     const { deliveries } = await body(await call("bo", "GET", `/v1/automations/${a.id}/deliveries`));
     expect(deliveries.map((d: { id: string }) => d.id)).toEqual(["pd-1"]);
-    expect(deliveries[0]).toMatchObject({ action: "opened", repository: "acme/web", sender: "ana" });
+    expect(deliveries[0]).toMatchObject({ action: "opened", repository: "acme/web", sender: "ana", verdict: null });
+    expect("body" in deliveries[0]).toBe(false);
+    // What the matcher made of it for this automation.
+    await owner`INSERT INTO automation_github_verdicts (organization_id, automation_id, delivery_id, verdict, reason)
+      VALUES (${ORG}, ${a.id}, 'pd-1', 'skipped', 'Author: it is by ana, who is excluded')`;
+    const { deliveries: after } = await body(await call("bo", "GET", `/v1/automations/${a.id}/deliveries?verdict=skipped`));
+    expect(after.map((d: { id: string; verdict: string; reason: string }) => [d.id, d.verdict, d.reason]))
+      .toEqual([["pd-1", "skipped", "Author: it is by ana, who is excluded"]]);
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/deliveries?verdict=started`))).deliveries).toEqual([]);
   });
 });
 

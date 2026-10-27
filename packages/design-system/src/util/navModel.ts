@@ -68,6 +68,8 @@ export interface NavTask {
    * findings"). Shown where it would otherwise say only "waiting for you".
    */
   readonly waitingFor?: string | undefined;
+  /** Deliver holds it before its first pull request for its owner's review. */
+  readonly heldForReview?: boolean | undefined;
   /** Its pull requests, one per repository it changed, in the order they were opened. */
   readonly pullRequests?: ReadonlyArray<PrChipPullRequest> | undefined;
   /**

@@ -101,7 +101,9 @@ import type { NavProject } from "@dude/design-system";
 import { attemptScoped, formatPlace, type TaskTab } from "../place.ts";
 import { attemptOfRun, attemptOfWork, attemptStarts, attemptMark, attemptsOf, closedAtStartOver, eventAttempts, isAdoptedPr, prInAttempt, prOfEvent, runsById, setAsideOf, type RunsById, type SetAside } from "../attempts.ts";
 import { SourceLine } from "./StartsFrom.tsx";
-import { OpenOrDraft, heldForOpenOrDraft } from "./OpenOrDraft.tsx";
+import { HeldPanel } from "./HeldPanel.tsx";
+import { heldAtGate, sentBackFromGate } from "../beforePullRequest.ts";
+import { BeforePullRequestControl } from "./BeforePullRequestControl.tsx";
 import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/components";
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
@@ -591,8 +593,14 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const reviewing = phases.some((r) => r.phase === "review" && r.status === "running");
   const othersSaid = (what: "findings" | "files") => others.map((o) => `attempt ${o.n} had ${o[what]}`).join(", ");
   const source = item.source ?? null;
-  // An adopted branch reviewed under Deliver waits on its owner's Open or Draft.
-  const openOrDraft = !earlier && source !== null && heldForOpenOrDraft(item);
+  // A delivery Deliver holds before its pull request for its owner (an adopted branch, Ask me first), or a fix of their feedback from there.
+  const held = !earlier && (heldAtGate(item) || sentBackFromGate(item));
+  // The held panel's preview: open a running one with commenting; start one the project can make; else nothing.
+  const previewServer = commenting.offer.kind === "available" ? commenting.offer.servers[0] : undefined;
+  const heldPreview = previewServer ? { kind: "open" as const, open: () => commenting.open(previewServer) }
+    : servers.data && !servers.data.run && servers.data.recipes.length > 0
+      ? { kind: "start" as const, busy: servers.busy !== null, start: () => void servers.act("*", () => client.startPreview(taskId)) }
+      : null;
   // Existing work to review starts at review: no implementer is promised. Work to continue gets one first.
   const continues = source?.mode === "continue";
   const deliverSteps = source === null ? "an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request"
@@ -647,7 +655,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
             {!earlier ? lifecycle.marks : null}
             {driver}
-            {!earlier ? <MergeHoldChip count={feedback.blocking} onOpen={() => pickTab("feedback")} /> : null}
+            {!earlier ? <MergeHoldChip count={feedback.blocking} beforePR={held} onOpen={() => pickTab("feedback")} /> : null}
             {prs.map((pr) => (
               <PrChip key={pr.id} pr={pr} data-testid="pr-link" />
             ))}
@@ -672,13 +680,23 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <DriverConfirmation control={driverControl} />
       {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
-      {item.escalation || stop || aside || problem || blocked || openOrDraft || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+      {item.escalation || stop || aside || problem || blocked || held || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
         <div className="taskNotices">
           {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
           {!earlier ? lifecycle.notice : null}
           {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
           {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
-          {openOrDraft && source ? <OpenOrDraft client={client} task={item} source={source} you={people.you} onDone={() => void load()} /> : null}
+          {held ? (
+            <HeldPanel client={client} task={item} you={people.you} runs={phases} findings={mine.findings}
+              verification={parts.verifications.find((v) => !v.stale) ?? null} feedback={feedback.items}
+              preview={heldPreview}
+              onFindings={() => pickTab("findings")} onFiles={() => pickTab("files")} onFeedback={() => pickTab("feedback")}
+              onChanges={(repo) => {
+                const run = phases.find((r) => r.status === "completed" && r.heads && repo in r.heads);
+                if (run) onOpenRun(run.id);
+              }}
+              onDone={() => void load()} />
+          ) : null}
           {heldByQuestions ? (
             <Callout tone="attention" data-testid="questions-hold">
               <div className="escalation">
@@ -713,7 +731,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       ) : null}
 
       {editing ? (
-        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started)} onSaved={() => void load()} />
+        <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started, people.you)} onSaved={() => void load()} />
       ) : null}
       {lifecycle.dialogs}
       {stopping ? (
@@ -850,7 +868,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
                     <span data-testid="task-source-mode-fact"> · {continues ? "Continue the work" : "Review it as is"}</span></span> }] : []),
                   // A task never started over names no attempt anywhere.
                   ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
-                ]} /></PageRailBlock>
+                ]} />
+                  {!earlier ? <BeforePullRequestControl client={client} task={item} you={people.you} onChanged={() => void load()} /> : null}
+                </PageRailBlock>
                 <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
                 {prs.map((pr) => earlier ? (
                   // An earlier attempt's pull request is only to read: no Merge, no requests.

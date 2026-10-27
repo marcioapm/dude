@@ -309,6 +309,30 @@ body {
 .escalationProblem {
   color: var(--ds-tone-danger-fg);
 }
+/* Done without a pull request's confirmation: what stays, what does not happen, where the task goes. */
+.confirmList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  color: var(--ds-color-text-secondary);
+}
+.confirmList li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--ds-space-8);
+}
+.confirmList li > svg {
+  color: var(--ds-color-text-muted);
+  align-self: center;
+}
+.confirmList code {
+  overflow-wrap: anywhere;
+  color: var(--ds-color-text-primary);
+}
 .escalationCriteria {
   margin: 0;
   padding-left: var(--ds-space-16);
@@ -662,6 +686,55 @@ body {
   font-family: var(--ds-font-mono);
   font-size: var(--ds-text-xs);
   white-space: pre-wrap;
+}
+
+/* An incoming webhook's rows, Deliveries and test dialog (screens/automationIncoming.tsx): layout only; the wells, panel and timeline are the design system's. */
+.incomingSections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-24);
+}
+.incomingInline,
+.incomingEndpoint,
+.incomingSecret {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.incomingVerify {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  flex: 1;
+}
+.incomingHowTo {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.incomingHowTo > button {
+  align-self: flex-start;
+}
+.incomingBreak {
+  overflow-wrap: anywhere;
+}
+.incomingStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.incomingFilter {
+  max-width: 256px;
+}
+.incomingSubHead {
+  margin: var(--ds-space-12) 0 var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
 }
 
 /* A tier naming no model yet: its Requests cell, in the attention tone. */
@@ -1805,6 +1878,19 @@ body {
   gap: var(--ds-space-8) var(--ds-space-12);
 }
 /* General feedback's way in: a quiet line that opens the same editor a line comment uses. */
+/* The Feedback tab while a delivery is held before its pull request: where its words go (nowhere on GitHub). */
+.feedbackBeforePR {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+.feedbackBeforePR > svg {
+  flex: none;
+  color: var(--ds-color-text-muted);
+  align-self: center;
+}
 .feedbackGeneral {
   display: flex;
   flex-wrap: wrap;

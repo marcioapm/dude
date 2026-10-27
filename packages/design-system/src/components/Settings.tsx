@@ -8,8 +8,9 @@ import styles from "./Settings.module.css";
  * a project's: a left menu of pages (a page may have sub-pages, as Agents
  * has its roles), a note on who may change what, sections of rows — a
  * label with its help on the left, the control on the right — and, on a
- * project's page, each value's source: "From Acme" or "Overridden", with
- * Reset.
+ * project's page, each value's source: "From Acme", "Overridden" with
+ * Reset, or, for a setting only a project has, "Default · <value>" with
+ * Reset once changed.
  */
 
 export interface SettingsNavItem {
@@ -177,16 +178,26 @@ export function SettingField({ label, htmlFor, source, children }: {
   );
 }
 
-/** Something inherited, folded: the organization's prompt a project's adds to. */
-export function SettingsDisclosure({ summary, children }: { readonly summary: ReactNode; readonly children: ReactNode }) {
+/**
+ * Something folded on the chrome shade: by default an inherited value (the
+ * organization's prompt a project's adds to; layers glyph); with `icon` any
+ * reference a row offers on demand (how to send to a URL). The body scrolls
+ * past 320px unless `full`.
+ */
+export function SettingsDisclosure({ summary, icon = "layers", full = false, children }: {
+  readonly summary: ReactNode;
+  readonly icon?: IconName | undefined;
+  readonly full?: boolean | undefined;
+  readonly children: ReactNode;
+}) {
   return (
     <details className={styles["disclosure"]}>
       <summary className={styles["disclosureSummary"]}>
-        <Icon name="layers" size={14} className={styles["noteIcon"]} />
+        <Icon name={icon} size={14} className={styles["noteIcon"]} />
         <span className={styles["disclosureText"]}>{summary}</span>
         <span className={styles["disclosureShow"]}>Show</span>
       </summary>
-      <div className={styles["disclosureBody"]}>{children}</div>
+      <div className={styles["disclosureBody"]} data-full={full || undefined}>{children}</div>
     </details>
   );
 }
@@ -221,24 +232,49 @@ export function SettingRow({ label, help, htmlFor, source, block, fill, classNam
   );
 }
 
-export interface SettingSourceProps {
-  /** Where the value comes from. */
-  readonly source: "organization" | "project";
-  /** The organization's name: "From Acme". */
-  readonly from: string;
-  /** The value underneath, as a person reads it: "Acme: off". */
-  readonly inherited?: ReactNode;
-  /** Put the organization's value back. */
-  readonly onReset?: (() => void) | undefined;
-  readonly disabled?: boolean | undefined;
-}
+export type SettingSourceProps =
+  | {
+      /** Where the value comes from. */
+      readonly source: "organization" | "project";
+      /** The organization's name: "From Acme". */
+      readonly from: string;
+      /** The value underneath, as a person reads it: "Acme: off". */
+      readonly inherited?: ReactNode;
+      /** Put the organization's value back. */
+      readonly onReset?: (() => void) | undefined;
+      readonly disabled?: boolean | undefined;
+    }
+  | {
+      /** A setting only a project has: nothing above it but the product's default. */
+      readonly source: "default";
+      /** The default, as a person reads it: "Open it". */
+      readonly inherited: ReactNode;
+      /** Put the default back; given only while the value differs. */
+      readonly onReset?: (() => void) | undefined;
+      readonly disabled?: boolean | undefined;
+    };
 
 /**
- * Where a project's value comes from: its organization ("From Acme"), or
- * the project itself ("Overridden", what it overrides, and Reset). Glyph
- * and word, never colour alone.
+ * Where a project's value comes from: its organization ("From Acme"), the
+ * project itself ("Overridden", what it overrides, and Reset), or, for a
+ * project-only setting, the product default ("Default · Open it", and
+ * Reset while it differs). Glyph and word, never colour alone.
  */
-export function SettingSource({ source, from, inherited, onReset, disabled }: SettingSourceProps) {
+export function SettingSource(props: SettingSourceProps) {
+  const { source, inherited, onReset, disabled } = props;
+  if (source === "default") {
+    return (
+      <span className={styles["inherited"]} data-source="default">
+        Default · {inherited}
+        {onReset ? (
+          <button type="button" className={styles["reset"]} onClick={onReset} disabled={disabled} aria-label="Reset to the default">
+            Reset
+          </button>
+        ) : null}
+      </span>
+    );
+  }
+  const { from } = props;
   if (source === "organization") {
     return (
       <span className={styles["inherited"]} data-source="organization">
