@@ -28,7 +28,7 @@ func init() {
 // PUT refuses (automationInputSchema is strict): automation update drops them,
 // so `dude automation show ID` output, edited, is its input.
 var automationReadOnly = []string{"id", "projectId", "projectName", "enabled", "owner", "ownerLeftAt",
-	"webhookSecretHint", "nextRunAt", "lastRun", "canEdit", "canTransfer", "createdAt", "updatedAt"}
+	"webhookSecretHint", "incomingSecretHint", "incomingSecret", "nextRunAt", "lastRun", "canEdit", "canTransfer", "createdAt", "updatedAt"}
 
 func autPath(id string, suffix string) string { return "/v1/automations/" + esc(id) + suffix }
 
@@ -88,7 +88,7 @@ var automationCommands = map[string]command{
 					}
 				}
 				if *trigger != "" {
-					if err := oneOf("--trigger", *trigger, "schedule", "github"); err != nil {
+					if err := oneOf("--trigger", *trigger, "schedule", "github", "incoming"); err != nil {
 						return nil, err
 					}
 				}
@@ -160,7 +160,7 @@ var automationCommands = map[string]command{
 		func(fs *flag.FlagSet) doer {
 			name := fs.String("name", "", "its name (required)")
 			kind := fs.String("kind", "", "agent, command, server or webhook (required)")
-			trigger := fs.String("trigger", "", "schedule or github (required)")
+			trigger := fs.String("trigger", "", "schedule, github or incoming (an incoming webhook: its verification secret is shown this once) (required)")
 			preset := fs.String("preset", "", "with --kind agent: one of dude's roles, qa_browser, reviewer or investigator (default: its own agent)")
 			tz := fs.String("tz", "", "a schedule's time zone, e.g. Europe/Lisbon (default: UTC)")
 			return func(c *cli, a []string) (any, error) {
@@ -170,7 +170,7 @@ var automationCommands = map[string]command{
 				if err := oneOf("--kind", *kind, "agent", "command", "server", "webhook"); err != nil {
 					return nil, err
 				}
-				if err := oneOf("--trigger", *trigger, "schedule", "github"); err != nil {
+				if err := oneOf("--trigger", *trigger, "schedule", "github", "incoming"); err != nil {
 					return nil, err
 				}
 				body := obj{"name": *name, "kind": *kind, "trigger": *trigger}
@@ -246,10 +246,10 @@ var automationCommands = map[string]command{
 			o, _ := v.(obj)
 			return pick(o, "id", "name", "webhookSecretHint"), nil
 		})},
-	"automation run": {"ID", "run an automation now: a schedule as it is; on GitHub events, a past delivery or a test event",
+	"automation run": {"ID", "run an automation now: a schedule as it is; on GitHub events, a past delivery or a test event; on an incoming webhook, a past delivery or a body",
 		func(fs *flag.FlagSet) doer {
 			delivery := fs.String("delivery", "", "a past delivery's id, from automation deliveries")
-			body := fs.String("body", "", "a test event's body: a JSON file, or - for stdin")
+			body := fs.String("body", "", "a test event's body, or an incoming webhook's: a JSON file, or - for stdin")
 			event := fs.String("event", "", "with --body: the GitHub event (default: the automation's)")
 			action := fs.String("action", "", "with --body: its action, e.g. opened, written into the body when the body names none")
 			deliveryID := fs.String("delivery-id", "", "with --body: its X-GitHub-Delivery (default: a made-up test-…)")
@@ -284,6 +284,13 @@ var automationCommands = map[string]command{
 						return nil, err
 					}
 					t, _ := aut["trigger"].(obj)
+					if str(t, "kind") == "incoming" {
+						// An incoming webhook's test is the body itself.
+						if *action != "" || *deliveryID != "" {
+							return nil, errors.New("automation run: an incoming webhook takes --body alone")
+						}
+						return c.post(autPath(a[0], "/runs"), obj{"payload": b})
+					}
 					if ev = str(t, "event"); ev == "" {
 						return nil, errors.New("automation run: a scheduled automation takes no test event")
 					}
@@ -322,8 +329,14 @@ var automationCommands = map[string]command{
 		noFlags(func(c *cli, a []string) (any, error) {
 			return c.request("GET", autPath(a[0], "/runs/"+esc(a[1])), nil)
 		})},
-	"automation deliveries": {"ID", "the last 30 days' deliveries of a GitHub automation's event, for automation run --delivery",
+	"automation deliveries": {"ID", "the last 30 days' deliveries of a GitHub or incoming automation and what dude did with each, for automation run --delivery",
 		automationRequest("GET", "/deliveries", nil)},
+	"automation delivery": {"ID DELIVERY", "one delivery: its verdict, group key, headers (secrets as ••••) and body",
+		noFlags(func(c *cli, a []string) (any, error) {
+			return c.request("GET", autPath(a[0], "/deliveries/"+esc(a[1])), nil)
+		})},
+	"automation rotate": {"ID", "a new verification secret for an incoming webhook, shown this once; the old one stops working",
+		automationRequest("POST", "/incoming-secret/rotate", nil)},
 	"automation test": {"ID BODY", "whether an event body (a JSON file, or - for stdin) would run a GitHub automation, and which filter skips it if not",
 		noFlags(func(c *cli, a []string) (any, error) {
 			b, err := c.jsonArg("BODY", a[1])

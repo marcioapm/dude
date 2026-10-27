@@ -63,6 +63,7 @@ const bodies: Record<string, (r: Recorded) => ZodTypeAny[]> = {
   "PUT /v1/automations/:id/owner": () => [transferOwnerSchema],
   "PUT /v1/automations/:id/webhook-secret": () => [webhookSecretSchema],
   "POST /v1/automations/:id/duplicate": () => [],
+  "POST /v1/automations/:id/incoming-secret/rotate": () => [],
   "POST /v1/automations/:id/runs": () => [runNowBody, runNowSchema],
   "POST /v1/automations/:id/start-fresh": () => [],
   "POST /v1/automations/:id/test-event/evaluate": () => [evaluateBody, evaluateEventSchema],

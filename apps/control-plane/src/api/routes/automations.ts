@@ -16,6 +16,7 @@ import {
   enabledSchema,
   EventTypes,
   newAutomationSchema,
+  newHookId,
   repoFilterAllows,
   repositoryFullName,
   restorePromptSchema,
@@ -38,6 +39,7 @@ import { badRequest, HttpError, json, noContent, notFound, parseBody } from "../
 import { requireSize } from "./machines.ts";
 import { requireImage } from "./images.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { readDeliveries, readDelivery } from "./incoming.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** An automation's row as every read selects it. */
@@ -47,6 +49,7 @@ export const COLUMNS = `a.id, a.project_id AS "projectId", p.name AS "projectNam
   a.agent, a.machine_size_id AS "machineSizeId", a.image_id AS "imageId", a.setup_script AS "setupScript", a.command,
   a.server, a.webhook, a.webhook_hint AS "webhookSecretHint", a.secrets, a.notify_on_failure AS "notifyOnFailure",
   a.next_run_at AS "nextRunAt", a.created_at AS "createdAt", a.updated_at AS "updatedAt",
+  a.incoming_hint AS "incomingSecretHint", a.project_ids AS "projectIds",
   (SELECT json_build_object('id', o.id, 'name', o.name, 'photoUrl', person_ref(o)->>'photoUrl') FROM people o WHERE o.id = a.owner_id) AS owner,
   (SELECT json_build_object('id', r.id, 'status', r.status, 'at', COALESCE(r.ended_at, r.started_at, r.created_at))
      FROM automation_runs r WHERE r.automation_id = a.id ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS "lastRun"`;
@@ -111,7 +114,7 @@ async function record(scope: OrgScope, ctx: RequestContext | null, a: { id: stri
 export const listQuery = z.object({
   scope: z.enum(["organization", "project"]).optional(),
   project: z.string().min(1).optional(),
-  trigger: z.enum(["schedule", "github"]).optional(),
+  trigger: z.enum(["schedule", "github", "incoming"]).optional(),
   /** agent, command, server, webhook; or agent:own / agent:<role>. */
   kind: z.string().regex(/^(agent(:[a-z_]+)?|command|server|webhook)$/).optional(),
   enabled: z.enum(["true", "false"]).optional(),
@@ -210,7 +213,9 @@ async function createAutomation(ctx: RequestContext): Promise<Response> {
   await requireEditor(ctx, input.projectId);
   const scope: AutomationScope = input.projectId ? "project" : "organization";
   const settings = automationDefaults(input, input.tz);
-  const parsed = automationInputSchema(scope).safeParse(settings);
+  // It starts off with no project; a save names one (INCOMING_NEEDS_PROJECT).
+  const unsaved = scope === "organization" && settings.trigger.kind === "incoming" ? { ...settings, projectIds: ["unsaved"] } : settings;
+  const parsed = automationInputSchema(scope).safeParse(unsaved);
   if (!parsed.success) throw badRequest("request body failed validation", parsed.error.flatten());
   const id = newId("automation");
   const row = await withOrg(ctx.principal.organizationId, async (scope) => {
@@ -219,16 +224,19 @@ async function createAutomation(ctx: RequestContext): Promise<Response> {
       if (!p) throw notFound(`project ${input.projectId} not found`);
     }
     const secret = settings.kind === "webhook" ? newSigningSecret() : null;
+    const incoming = settings.trigger.kind === "incoming" ? newSigningSecret() : null;
     await scope.sql`
       INSERT INTO automations (id, organization_id, project_id, name, kind, owner_id, trigger, agent, command, server, webhook,
-        webhook_secret, webhook_hint, created_by, updated_by)
+        webhook_secret, webhook_hint, incoming_secret, incoming_hint, created_by, updated_by)
       VALUES (${id}, ${scope.organizationId}, ${input.projectId}, ${settings.name}, ${settings.kind}, ${ctx.principal.personId},
         ${settings.trigger}::jsonb, ${settings.agent}::jsonb, ${settings.command}, ${settings.server}::jsonb, ${settings.webhook}::jsonb,
-        ${secret}, ${secret ? secretHint(secret) : null}, ${ctx.principal.personId}, ${ctx.principal.personId})`;
+        ${secret}, ${secret ? secretHint(secret) : null}, ${incoming}, ${incoming ? secretHint(incoming) : null},
+        ${ctx.principal.personId}, ${ctx.principal.personId})`;
     await record(scope, ctx, { id, name: settings.name, projectId: input.projectId }, { created: true });
-    return readOne(scope, id);
+    return { row: await readOne(scope, id), incoming };
   });
-  return json(await shape(ctx, row), 201);
+  // An incoming webhook's secret is answered this once (SecretOnce), never again.
+  return json({ ...(await shape(ctx, row.row)), ...(row.incoming ? { incomingSecret: row.incoming } : {}) }, 201);
 }
 
 function newSigningSecret(): string {
@@ -255,6 +263,23 @@ async function checkReferences(scope: OrgScope, input: AutomationInput, current:
     const missing = input.repos.filter((r) => !found.some((f) => f.id === r));
     if (missing.length) throw badRequest(`the project has no repository ${missing[0]}`);
   }
+  if (input.projectIds.length > 0) {
+    const found = (await scope.sql`SELECT id FROM projects WHERE id = ANY(${scope.sql.array(input.projectIds, "text")}::text[])`) as Array<{ id: string }>;
+    const missing = input.projectIds.filter((p) => !found.some((f) => f.id === p));
+    if (missing.length) throw badRequest(`there is no project ${missing[0]}`);
+    if (Array.isArray(input.repos)) {
+      const repos = (await scope.sql`SELECT id FROM repositories WHERE project_id = ANY(${scope.sql.array(input.projectIds, "text")}::text[])
+        AND id = ANY(${scope.sql.array(input.repos, "text")}::text[])`) as Array<{ id: string }>;
+      const outside = input.repos.filter((r) => !repos.some((f) => f.id === r));
+      if (outside.length) throw badRequest(`repository ${outside[0]} is in none of the automation's projects`);
+    }
+  }
+}
+
+/** The trigger a save writes: an incoming one keeps its hook (its URL), or gets one when it becomes incoming. */
+function savedTrigger(input: AutomationInput["trigger"], current: Row["trigger"]): AutomationInput["trigger"] {
+  if (input.kind !== "incoming") return input;
+  return { ...input, hookId: current.kind === "incoming" ? current.hookId : newHookId() };
 }
 
 /** Replace an automation's settings. Its on/off, owner and signing secret have routes of their own. */
@@ -265,7 +290,10 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
     await requireEditor(ctx, current.projectId);
     const input = (await parseBody(ctx.request, automationInputSchema(current.projectId ? "project" : "organization"))) as AutomationInput;
     await checkReferences(scope, input, current);
+    input.trigger = savedTrigger(input.trigger, current.trigger);
     const triggerChanged = JSON.stringify(input.trigger) !== JSON.stringify(current.trigger);
+    // Becoming incoming makes its verification secret, answered this once.
+    const fresh = input.trigger.kind === "incoming" && current.incomingSecretHint === null ? newSigningSecret() : null;
     await scope.sql`
       UPDATE automations SET name = ${input.name}, description = ${input.description}, kind = ${input.kind},
         trigger = ${input.trigger}::jsonb, session_mode = ${input.sessionMode}, expiry_days = ${input.expiryDays},
@@ -274,6 +302,8 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
         image_id = ${input.imageId}, setup_script = ${input.setupScript}, command = ${input.command},
         server = ${input.server}::jsonb, webhook = ${input.webhook}::jsonb,
         webhook_secret = CASE WHEN ${input.kind} = 'webhook' THEN COALESCE(webhook_secret, ${newSigningSecret()}) ELSE webhook_secret END,
+        incoming_secret = COALESCE(${fresh}, incoming_secret), incoming_hint = COALESCE(${fresh ? secretHint(fresh) : null}, incoming_hint),
+        project_ids = ${scope.sql.array(input.projectIds, "text")}::text[],
         secrets = ${input.secrets}::jsonb, notify_on_failure = ${input.notifyOnFailure},
         next_run_at = CASE WHEN ${triggerChanged} THEN NULL ELSE next_run_at END,
         updated_by = ${ctx.principal.personId}, updated_at = now()
@@ -281,9 +311,9 @@ async function putAutomation(ctx: RequestContext): Promise<Response> {
     await scope.sql`UPDATE automations SET webhook_hint = right(webhook_secret, 4) WHERE id = ${id} AND webhook_hint IS NULL AND webhook_secret IS NOT NULL`;
     await keepPromptVersion(scope, ctx, id, current.agent, input.agent, null);
     await record(scope, ctx, { id, name: input.name, projectId: current.projectId }, { settings: true });
-    return readOne(scope, id);
+    return { row: await readOne(scope, id), fresh };
   });
-  return json(await shape(ctx, row));
+  return json({ ...(await shape(ctx, row.row)), ...(row.fresh ? { incomingSecret: row.fresh } : {}) });
 }
 
 /**
@@ -320,18 +350,22 @@ async function duplicateAutomation(ctx: RequestContext): Promise<Response> {
     await requireEditor(ctx, a.projectId);
     const name = `${a.name.slice(0, 120 - " (copy)".length)} (copy)`;
     const secret = a.kind === "webhook" ? newSigningSecret() : null;
+    // A copy of an incoming webhook gets a URL and a secret of its own.
+    const incoming = a.trigger.kind === "incoming" ? newSigningSecret() : null;
+    const trigger = a.trigger.kind === "incoming" ? { ...a.trigger, hookId: newHookId() } : a.trigger;
     await scope.sql`
       INSERT INTO automations (id, organization_id, project_id, name, description, kind, enabled, owner_id, trigger, session_mode,
         expiry_days, concurrency, parallel_max, repos, repo_filter, agent, machine_size_id, image_id, setup_script, command, server,
-        webhook, webhook_secret, webhook_hint, secrets, notify_on_failure, created_by, updated_by)
-      SELECT ${copy}, organization_id, project_id, ${name}, description, kind, false, ${ctx.principal.personId}, trigger, session_mode,
+        webhook, webhook_secret, webhook_hint, incoming_secret, incoming_hint, project_ids, secrets, notify_on_failure, created_by, updated_by)
+      SELECT ${copy}, organization_id, project_id, ${name}, description, kind, false, ${ctx.principal.personId}, ${trigger}::jsonb, session_mode,
         expiry_days, concurrency, parallel_max, repos, repo_filter, agent, machine_size_id, image_id, setup_script, command, server,
-        webhook, ${secret}, ${secret ? secretHint(secret) : null}, secrets, notify_on_failure, ${ctx.principal.personId}, ${ctx.principal.personId}
+        webhook, ${secret}, ${secret ? secretHint(secret) : null}, ${incoming}, ${incoming ? secretHint(incoming) : null}, project_ids,
+        secrets, notify_on_failure, ${ctx.principal.personId}, ${ctx.principal.personId}
       FROM automations WHERE id = ${id}`;
     await record(scope, ctx, { id: copy, name, projectId: a.projectId }, { created: true, duplicateOf: id });
-    return readOne(scope, copy);
+    return { row: await readOne(scope, copy), incoming };
   });
-  return json(await shape(ctx, row), 201);
+  return json({ ...(await shape(ctx, row.row)), ...(row.incoming ? { incomingSecret: row.incoming } : {}) }, 201);
 }
 
 async function setEnabled(ctx: RequestContext): Promise<Response> {
@@ -461,20 +495,44 @@ async function getRun(ctx: RequestContext): Promise<Response> {
 }
 
 /**
- * The stored deliveries of the automation's event from the last 30 days,
- * for Run now's "A past delivery" list.
+ * What reached the automation in the last 30 days and what dude did with
+ * it: its Deliveries tab, and Run now's "A past delivery" list
+ * (routes/incoming.ts reads them).
  */
 async function listDeliveries(ctx: RequestContext): Promise<Response> {
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const a = await readOne(scope, ctx.params.id!);
-    if (a.trigger.kind !== "github") throw badRequest("a scheduled automation runs on no event");
-    const rows = (await scope.sql`SELECT id, event, payload->>'action' AS action, payload->'repository'->>'full_name' AS repository,
-        payload->'sender'->>'login' AS sender, received_at AS "receivedAt", payload AS body
-      FROM webhook_deliveries WHERE event = ${a.trigger.event} AND received_at > now() - interval '30 days'
-      ORDER BY received_at DESC LIMIT 50`) as Array<Record<string, unknown>>;
-    return { deliveries: rows.map((d) => ({ ...d, receivedAt: iso(d.receivedAt) })) };
+    if (a.trigger.kind === "schedule") throw badRequest("a scheduled automation runs on no event");
+    return { deliveries: await readDeliveries(scope, a.id, a.trigger) };
   });
   return json(out);
+}
+
+async function getDelivery(ctx: RequestContext): Promise<Response> {
+  const out = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const a = await readOne(scope, ctx.params.id!);
+    if (a.trigger.kind === "schedule") throw badRequest("a scheduled automation runs on no event");
+    const d = await readDelivery(scope, a.id, a.trigger, ctx.params.deliveryId!);
+    if (!d) throw notFound(`automation ${a.id} has no delivery ${ctx.params.deliveryId}`);
+    return d;
+  });
+  return json(out);
+}
+
+/** A new verification secret for an incoming webhook: the old one stops working now; the new one is answered this once. */
+async function rotateIncomingSecret(ctx: RequestContext): Promise<Response> {
+  const id = ctx.params.id!;
+  const secret = newSigningSecret();
+  const row = await withOrg(ctx.principal.organizationId, async (scope) => {
+    const current = await readOne(scope, id);
+    await requireEditor(ctx, current.projectId);
+    if (current.trigger.kind !== "incoming") throw badRequest("only an incoming webhook has a verification secret");
+    await scope.sql`UPDATE automations SET incoming_secret = ${secret}, incoming_hint = ${secretHint(secret)}, updated_at = now(),
+      updated_by = ${ctx.principal.personId} WHERE id = ${id}`;
+    await record(scope, ctx, current, { incomingSecret: "rotated" });
+    return readOne(scope, id);
+  });
+  return json({ ...(await shape(ctx, row)), incomingSecret: secret });
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +620,7 @@ export const runNowBody = z.union([
   z.object({ deliveryId: z.string().min(1).max(200) }).strict(),
   z.object({ testEvent: z.object({ event: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), action: z.string().max(64).nullable().optional(),
     deliveryId: z.string().min(1).max(200), body: z.record(z.unknown()) }).strict() }).strict(),
+  z.object({ payload: z.record(z.unknown()) }).strict(),
 ]);
 
 export const evaluateBody = z.object({ body: z.record(z.unknown()) }).strict();
@@ -608,6 +667,8 @@ export function registerAutomationRoutes(router: Router): void {
   router.post("/v1/automations/:id/runs", runNow);
   router.get("/v1/automations/:id/runs/:runId", getRun);
   router.get("/v1/automations/:id/deliveries", listDeliveries);
+  router.get("/v1/automations/:id/deliveries/:deliveryId", getDelivery);
+  router.post("/v1/automations/:id/incoming-secret/rotate", rotateIncomingSecret);
   router.post("/v1/automations/:id/test-event/evaluate", evaluateTestEvent);
   router.post("/v1/automations/:id/start-fresh", startFresh);
   router.get("/v1/automations/:id/prompt-history", promptHistory);
