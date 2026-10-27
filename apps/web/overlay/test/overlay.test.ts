@@ -1229,14 +1229,18 @@ test("dude reached through the openers, with the page between them closed, stays
   const dudeTab = fakeWin();
   const previewPage = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: dudeTab });
   opener = previewPage as unknown as Opener;
-  boot({ heartbeatMs: HB });
+  // A long session wait, so the page stays waiting rather than dropping to "not opened from dude" mid-test.
+  boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
   fromDude(sessionFor(), DUDE, dudeTab);
   previewPage.closed = true;
   // With no chain left to fall back to, the pin outlasts the waiting beats: dude is still said hello to, not taken for closed.
   dropToWaiting(beat);
   for (let i = 0; i < 6; i++) beat();
   await tick(1_100);
-  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  const before = posted(dudeTab).length;
+  beat();
+  expect(posted(dudeTab).slice(before)).toEqual([["hello", DUDE]]);
   fromDude(sessionFor(), DUDE, dudeTab);
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
