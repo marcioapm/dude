@@ -85,6 +85,7 @@
   box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
 }
 .picture {
+  position: relative;
   display: grid;
   place-items: center;
   aspect-ratio: 16 / 9;
@@ -101,6 +102,17 @@
 .dark {
   background: var(--ds-color-text-strong);
   color: var(--ds-color-text-inverse);
+}
+/* A video's thumbnail: the play glyph over the picture, still clearly a video. */
+.play {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--ds-radius-full);
+  background: var(--ds-color-scrim);
+  color: var(--ds-color-on-accent);
 }
 .caption {
   display: flex;

@@ -279,13 +279,12 @@ test("a picture that can't be drawn says why in the box and the draft is saved w
   expect("picture" in draft).toBe(false);
 });
 
-test("opened with no opener it says to open the preview from dude, and never offers Comment or Save", () => {
+test("opened with no opener it offers Connect to dude, and never offers Comment or Save", () => {
   page(CART, false);
   boot();
-  expect(tid("ov-no-opener")!.textContent).toContain("Open this preview from dude to comment");
-  // Any of the task's links in dude opens it with the comment tool: there is no Comment button to press.
-  expect(tid("ov-no-opener")!.textContent).toContain("Open the preview from any of the task's links in dude");
-  expect(tid("ov-no-opener")!.textContent).not.toContain("press Comment");
+  expect(tid("ov-no-opener")!.textContent).toContain("Connect to dude to comment: dude opens and finds this preview's task");
+  expect(tid("ov-connect")!.localName).toBe("button");
+  expect(tid("ov-no-opener")!.textContent).toContain("Hide for this tab");
   expect(count('[data-testid="ov-comment"]')).toBe(0);
   expect(count('[data-testid="ov-save"]')).toBe(0);
 });
@@ -293,7 +292,7 @@ test("opened with no opener it says to open the preview from dude, and never off
 test("an opener that never answers is treated as none after the wait", async () => {
   boot();
   await tick(80);
-  expect(tid("ov-no-opener")!.textContent).toContain("Open this preview from dude to comment");
+  expect(tid("ov-no-opener")!.textContent).toContain("Connect to dude to comment");
   expect(count('[data-testid="ov-comment"]')).toBe(0);
   // A late session still connects: the tab may have been slow.
   connect();
@@ -315,6 +314,8 @@ test("dude's tab closing mid-comment keeps the words, offers Copy text and no Sa
   expect(count('[data-testid="ov-copy"]')).toBe(1);
   expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
   expect(tid("ov-disconnected")!.textContent).toContain("dude's tab was closed");
+  // The closed panel offers Connect to dude too.
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
 });
 
 test("pins only what resolves to exactly one element; the rest are listed as not found here", () => {
@@ -848,4 +849,500 @@ test("a session whose window name is not one dude gives is refused whole, before
   }
   fromDude({ ...themed("dark"), dudeWindow: "dude-tab-ok" });
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+// The heartbeat's interval, given a delay no other timer uses, is taken out of the window's timers and beaten by hand.
+// Every function registered at that delay is kept and beaten, so a second heartbeat would show as a second hello.
+const HB = 777;
+let beats: Array<() => void> = [];
+function heartbeatByHand(): () => void {
+  beats = [];
+  const real = win.setInterval.bind(win);
+  win.setInterval = (fn: () => void, ms: number) => {
+    if (ms !== HB) return real(fn, ms);
+    beats.push(fn);
+    return 0;
+  };
+  return () => { for (const fn of beats) fn(); };
+}
+const hellos = () => sent().filter((m) => m.type === "hello").length;
+// Quiet beats after which a connected overlay drops to waiting.
+const QUIET_TO_WAITING = 4;
+const dropToWaiting = (beat: () => void) => { for (let i = 0; i < QUIET_TO_WAITING; i++) beat(); };
+
+test("dude's tab reloading: hello after two quiet beats and again after three, reaching dude after four and hello each beat, and the reloaded tab's session reconnects with the box's words kept", async () => {
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB });
+  expect(beats.length).toBe(1);
+  connect();
+  await writeOnPay("Half a thought");
+  expect(hellos()).toBe(1);
+  beat();
+  expect(hellos()).toBe(1);
+  // A message from dude (here a session, as any answer is) restarts the count.
+  connect();
+  beat();
+  beat();
+  expect(hellos()).toBe(2);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  // A third quiet beat: dude may only be slow, so hello again, still connected.
+  beat();
+  expect(hellos()).toBe(3);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(count('[data-testid="ov-comment"]')).toBe(1);
+  beat();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(hellos()).toBe(4);
+  expect(count('[data-testid="ov-save"]')).toBe(0);
+  expect(tid("ov-disconnected")!.textContent).toContain("Reaching dude again");
+  beat();
+  expect(hellos()).toBe(5);
+  // The reloaded tab is a new document in the same window: the browser gives the same opener as source.
+  connect();
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
+  expect((tid("ov-save") as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("picking stops when the connection drops to waiting: no hover label, Comment gone, and a click reaches the page", () => {
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB });
+  connect();
+  tid("ov-comment")!.click();
+  const pay = sized(win.document.querySelector("button.pay")!);
+  hover(pay);
+  expect(count('[data-testid="ov-label"]')).toBe(1);
+  for (let i = 0; i < 3; i++) beat();
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  beat();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-hint"]')).toBe(0);
+  expect(count('[data-testid="ov-label"]')).toBe(0);
+  hover(pay);
+  expect(count('[data-testid="ov-label"]')).toBe(0);
+  const click = new win.MouseEvent("click", { bubbles: true, cancelable: true });
+  pay.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(false);
+  expect(count('[data-testid="ov-comment-box"]')).toBe(0);
+});
+
+test("dude's tab closing while the connection waits says it was closed and offers Connect, the words kept", async () => {
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
+  connect();
+  await writeOnPay("Half a thought");
+  dropToWaiting(beat);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  opener!.closed = true;
+  await tick(1_100);
+  expect(tid("ov-conn")!.textContent).toBe("dude's tab closed");
+  expect(tid("ov-disconnected")!.textContent).toContain("dude's tab was closed");
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
+});
+
+test("a dude tab that stops answering (left the task) offers Connect after five waiting beats, still saying hello, the words kept", async () => {
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
+  connect();
+  await writeOnPay("Half a thought");
+  dropToWaiting(beat);
+  for (let i = 0; i < 4; i++) beat();
+  expect(count('[data-testid="ov-connect"]')).toBe(0);
+  beat();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect(tid("ov-disconnected")!.textContent).toContain("may have reloaded, been closed, or left this task");
+  for (let i = 0; i < 22; i++) beat();
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  // The start's hello, three connected-quiet ones, then one for each of the 27 beats waiting.
+  expect(hellos()).toBe(1 + 3 + 27);
+  // Drawn again now (a route change there and back), it still offers Connect.
+  const back = win.location.pathname;
+  win.history.pushState({}, "", "/other");
+  win.history.pushState({}, "", back);
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect((q("textarea") as HTMLTextAreaElement).value).toBe("Half a thought");
+  // dude answering again connects, and the panel goes.
+  connect();
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(count('[data-testid="ov-no-opener"]')).toBe(0);
+  // The next quiet stretch starts its count over: Reaching dude again, not Connect.
+  dropToWaiting(beat);
+  expect(tid("ov-disconnected")!.textContent).toContain("Reaching dude again");
+  expect(count('[data-testid="ov-connect"]')).toBe(0);
+});
+
+test("not connected, it says hello once a beat and never twice in one: a hello between beats spares the next beat's", async () => {
+  page(CART);
+  const beat = heartbeatByHand();
+  boot({ heartbeatMs: HB, sessionWaitMs: 10 });
+  expect(hellos()).toBe(1);
+  // The hello at start is this beat's.
+  beat();
+  expect(hellos()).toBe(1);
+  await tick(30);
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
+  for (let i = 0; i < 5; i++) beat();
+  expect(hellos()).toBe(6);
+  // Connected and answering, nothing extra is said.
+  connect();
+  for (let i = 0; i < 5; i++) { beat(); connect(); }
+  expect(hellos()).toBe(6);
+  // A save given up on between beats says hello: the next beat, which would have said one, does not.
+  overlay.stop();
+  page(CART);
+  const beat2 = heartbeatByHand();
+  boot({ heartbeatMs: HB, saveWaitMs: 20 });
+  connect();
+  await writeOnPay("Words");
+  beat2();
+  tid("ov-save")!.click();
+  await tick(50);
+  expect(hellos()).toBe(2);
+  beat2();
+  expect(hellos()).toBe(2);
+  beat2();
+  expect(hellos()).toBe(3);
+});
+
+type FakeWin = { postMessage: ReturnType<typeof mock>; closed: boolean; focus: () => void; opener?: unknown; location?: unknown };
+const fakeWin = (extra: Partial<FakeWin> = {}): FakeWin => ({ postMessage: mock(() => {}), closed: false, focus: () => {}, ...extra });
+const posted = (w: FakeWin) => w.postMessage.mock.calls.map((c) => [(c[0] as OverlayToDude).type, c[1]]);
+const sessionFor = (): DudeToOverlay => ({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true });
+// window.open replaced: each call's arguments recorded, answered by `open` (a new fake window by default).
+function recordOpens(open: () => FakeWin = fakeWin): unknown[][] {
+  const opens: unknown[][] = [];
+  win.open = (...args: unknown[]) => { opens.push(args); return open(); };
+  return opens;
+}
+
+test("Connect to dude opens dude's preview-connect page with an opener, says hello to that tab each beat, and only its session connects", () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  const opens = recordOpens(() => dudeTab);
+  boot({ heartbeatMs: HB });
+  beat();
+  expect(opens).toEqual([]);
+  tid("ov-connect")!.click();
+  // No third argument: no noopener, no noreferrer, so the new tab's window.opener is this page.
+  expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "_blank"]]);
+  expect(tid("ov-connect-note")!.getAttribute("data-connect")).toBe("opened");
+  expect(posted(dudeTab)).toEqual([]);
+  beat();
+  beat();
+  expect(posted(dudeTab)).toEqual([["hello", DUDE], ["hello", DUDE]]);
+  // Another window at dude's origin, and the right window from another origin, are not heard.
+  fromDude(sessionFor(), DUDE, fakeWin());
+  fromDude(sessionFor(), "https://evil.example.test", dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-comment"]')).toBe(0);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(count('[data-testid="ov-no-opener"]')).toBe(0);
+  expect(count('[data-testid="ov-comment"]')).toBe(1);
+});
+
+test("a dude tab Connect opened that is closed before it answers puts the panel back to its first words", async () => {
+  page(CART, false);
+  const dudeTab = fakeWin();
+  win.open = () => dudeTab;
+  boot();
+  tid("ov-connect")!.click();
+  expect(tid("ov-connect-note")!.getAttribute("data-connect")).toBe("opened");
+  dudeTab.closed = true;
+  await tick(1_100);
+  expect(count('[data-testid="ov-connect-note"]')).toBe(0);
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
+  expect(tid("ov-no-opener")!.textContent).toContain("Connect to dude to comment");
+});
+
+test("a dude tab Connect opened that is closed after it connected says dude's tab was closed", async () => {
+  page(CART, false);
+  const dudeTab = fakeWin();
+  win.open = () => dudeTab;
+  boot();
+  tid("ov-connect")!.click();
+  fromDude(sessionFor(), DUDE, dudeTab);
+  await writeOnPay("Half a thought");
+  dudeTab.closed = true;
+  await tick(1_100);
+  expect(tid("ov-conn")!.textContent).toBe("dude's tab closed");
+  expect(tid("ov-disconnected")!.textContent).toContain("dude's tab was closed");
+});
+
+test("after Connect and a session, four quiet beats say Reaching dude again, not Connect's looking note", async () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  win.open = () => dudeTab;
+  boot({ heartbeatMs: HB });
+  tid("ov-connect")!.click();
+  fromDude(sessionFor(), DUDE, dudeTab);
+  await writeOnPay("Half a thought");
+  dropToWaiting(beat);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-no-opener"]')).toBe(0);
+  expect(count('[data-testid="ov-connect-note"]')).toBe(0);
+  expect(tid("ov-disconnected")!.textContent).toContain("Reaching dude again");
+});
+
+test("reloaded after Connect to dude, Connect opens preview-connect in the dude tab it opened before, by the window name that tab's session gave", () => {
+  page(CART, false);
+  const dudeTab = fakeWin();
+  const opens = recordOpens(() => dudeTab);
+  boot();
+  tid("ov-connect")!.click();
+  fromDude({ ...sessionFor(), dudeWindow: "dude-tab-abc123" } as DudeToOverlay, DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  // The reload: a new document in the same tab, which keeps the tab's sessionStorage and has no opener.
+  const kept = win.sessionStorage.getItem("dude-overlay-dudeWindow");
+  overlay.stop();
+  page(CART, false);
+  if (kept !== null) win.sessionStorage.setItem("dude-overlay-dudeWindow", kept);
+  const reopens = recordOpens(() => dudeTab);
+  boot();
+  tid("ov-connect")!.click();
+  expect(reopens).toEqual([[`${DUDE}/#/preview-connect`, "dude-tab-abc123"]]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("the stored dude tab name is used once: Connect pressed again with no session between opens a new tab", () => {
+  page(CART, false);
+  win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
+  const opens = recordOpens();
+  boot();
+  tid("ov-connect")!.click();
+  tid("ov-connect")!.click();
+  expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "dude-tab-abc123"], [`${DUDE}/#/preview-connect`, "_blank"]]);
+});
+
+test("a page opened from a preview page drops the dude tab name its storage inherited; one opened by another origin keeps it", async () => {
+  page(CART, false);
+  win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
+  // The preview page that opened this one: same origin, and itself opened by no one, so Connect is offered.
+  opener = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: null }) as unknown as Opener;
+  const opens = recordOpens();
+  boot();
+  tid("ov-connect")!.click();
+  expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "_blank"]]);
+  // A page another origin opened, reloaded after Connect: that opener is not one of this preview's pages.
+  overlay.stop();
+  page(CART);
+  win.sessionStorage.setItem("dude-overlay-dudeWindow", "dude-tab-abc123");
+  const reopens = recordOpens();
+  boot();
+  await tick(80);
+  tid("ov-connect")!.click();
+  expect(reopens).toEqual([[`${DUDE}/#/preview-connect`, "dude-tab-abc123"]]);
+});
+
+test("Connect to dude opens a new tab when the stored name is not one dude gives, or came from a dude tab this page didn't open", () => {
+  page(CART, false);
+  win.sessionStorage.setItem("dude-overlay-dudeWindow", "_self");
+  const opens = recordOpens();
+  boot();
+  tid("ov-connect")!.click();
+  expect(opens).toEqual([[`${DUDE}/#/preview-connect`, "_blank"]]);
+  // A dude tab that opened this preview (reached as its opener) has its own opener: its name is not kept.
+  overlay.stop();
+  page(CART);
+  boot();
+  fromDude({ ...sessionFor(), dudeWindow: "dude-tab-opener" } as DudeToOverlay);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(win.sessionStorage.getItem("dude-overlay-dudeWindow") ?? "").toBe("");
+});
+
+test("after Connect to dude, ten seconds with no session says dude didn't find the task or didn't answer, and offers Connect again", () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  win.open = () => fakeWin();
+  boot({ heartbeatMs: HB });
+  tid("ov-connect")!.click();
+  for (let i = 0; i < 4; i++) beat();
+  expect(tid("ov-connect-note")!.textContent).toContain("is looking for this preview's task");
+  beat();
+  const note = tid("ov-connect-note")!.textContent!;
+  expect(note).toContain("dude didn't find this preview's task, or didn't answer");
+  expect(note).toContain("press Connect to dude again");
+  expect(note).not.toContain("is looking");
+  expect(tid("ov-no-opener")!.textContent).toContain("Connect to dude to comment");
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  // Pressed again, the note starts over.
+  tid("ov-connect")!.click();
+  expect(tid("ov-connect-note")!.textContent).toContain("is looking for this preview's task");
+});
+
+test("a blocked pop-up is said in the panel, and Connect to dude can be pressed again", () => {
+  page(CART, false);
+  let next: FakeWin | null = null;
+  win.open = () => next;
+  boot();
+  tid("ov-connect")!.click();
+  expect(tid("ov-connect-note")!.textContent).toContain("The browser blocked dude's tab from opening");
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
+  next = fakeWin();
+  tid("ov-connect")!.click();
+  expect(tid("ov-connect-note")!.getAttribute("data-connect")).toBe("opened");
+});
+
+test("a page opened from a preview page reaches dude through its openers: hello goes to dude, and only dude's reply is heard", () => {
+  page(CART, false);
+  const dudeTab = fakeWin();
+  // The page that opened this one: the same preview, so readable, and opened by dude.
+  const previewPage = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: dudeTab });
+  opener = previewPage as unknown as Opener;
+  boot();
+  expect(posted(dudeTab)).toEqual([["hello", DUDE]]);
+  expect(posted(previewPage)).toEqual([]);
+  fromDude(sessionFor(), DUDE, previewPage);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("once dude answered through the chain, the page stays connected to it after the preview page between them closes", async () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  const previewPage = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: dudeTab });
+  opener = previewPage as unknown as Opener;
+  boot({ heartbeatMs: HB });
+  fromDude(sessionFor(), DUDE, dudeTab);
+  previewPage.closed = true;
+  await tick(1_100);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  expect(count('[data-testid="ov-disconnected"]')).toBe(0);
+  // dude's tab is still the one hello goes to and the one heard.
+  beat();
+  beat();
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("dude reached through the openers, with the page between them closed, stays pinned through a slow reload and reconnects", async () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  const previewPage = fakeWin({ location: { origin: new URL(PAGE).origin }, opener: dudeTab });
+  opener = previewPage as unknown as Opener;
+  // A long session wait, so the page stays waiting rather than dropping to "not opened from dude" mid-test.
+  boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
+  fromDude(sessionFor(), DUDE, dudeTab);
+  previewPage.closed = true;
+  // With no chain left to fall back to, the pin outlasts the waiting beats: dude is still said hello to, not taken for closed.
+  dropToWaiting(beat);
+  for (let i = 0; i < 6; i++) beat();
+  await tick(1_100);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  const before = posted(dudeTab).length;
+  beat();
+  expect(posted(dudeTab).slice(before)).toEqual([["hello", DUDE]]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("a dude window that answered and then stops answering is let go after the waiting beats: the dude up the openers is heard instead", () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const first = fakeWin();
+  const second = fakeWin();
+  let up: FakeWin = first;
+  opener = { postMessage: mock(() => {}), closed: false, focus: () => {}, location: { origin: new URL(PAGE).origin }, get opener() { return up; } } as unknown as Opener;
+  boot({ heartbeatMs: HB, sessionWaitMs: 60_000 });
+  fromDude(sessionFor(), DUDE, first);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  // The openers now lead to another dude window; the one that answered stays open and says nothing more.
+  up = second;
+  dropToWaiting(beat);
+  for (let i = 0; i < 4; i++) beat();
+  fromDude(sessionFor(), DUDE, second);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  beat();
+  expect(posted(second).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, second);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("a dude window that stops answering, with no other dude up the openers, is kept: still said hello to, and Connect offered", () => {
+  page(CART, false);
+  const beat = heartbeatByHand();
+  const dudeTab = fakeWin();
+  win.open = () => dudeTab;
+  boot({ heartbeatMs: HB });
+  tid("ov-connect")!.click();
+  fromDude(sessionFor(), DUDE, dudeTab);
+  dropToWaiting(beat);
+  for (let i = 0; i < 6; i++) beat();
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+// A page another site opened: its opener is live, of another origin, and never answers, so Connect is offered.
+async function connectUnderForeignOpener(): Promise<FakeWin> {
+  const dudeTab = fakeWin();
+  win.open = () => dudeTab;
+  boot({ heartbeatMs: HB });
+  await tick(80);
+  tid("ov-connect")!.click();
+  return dudeTab;
+}
+
+test("with a foreign opener up the chain, the tab Connect opened that goes quiet after connecting stays the one said hello to, and its session reconnects", async () => {
+  const beat = heartbeatByHand();
+  const dudeTab = await connectUnderForeignOpener();
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+  const toForeign = posted(opener as unknown as FakeWin).length;
+  dropToWaiting(beat);
+  for (let i = 0; i < 6; i++) beat();
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  expect(posted(opener as unknown as FakeWin).length).toBe(toForeign);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("with a foreign opener up the chain, the tab Connect opened that answers only after the waiting beats still connects", async () => {
+  const beat = heartbeatByHand();
+  const dudeTab = await connectUnderForeignOpener();
+  for (let i = 0; i < 6; i++) beat();
+  expect(count('[data-testid="ov-connect"]')).toBe(1);
+  expect(posted(dudeTab).at(-1)).toEqual(["hello", DUDE]);
+  fromDude(sessionFor(), DUDE, dudeTab);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("the walk up the openers reaches dude at exactly five steps, stops after five same-origin pages, and at an opener that can't be read past", () => {
+  page(CART, false);
+  const origin = new URL(PAGE).origin;
+  const nearTab = fakeWin();
+  let near: FakeWin = nearTab;
+  for (let i = 0; i < 4; i++) near = fakeWin({ location: { origin }, opener: near });
+  opener = near as unknown as Opener;
+  boot();
+  // dude is five steps up: reached.
+  expect(posted(nearTab)).toEqual([["hello", DUDE]]);
+  overlay.stop();
+  page(CART, false);
+  const dudeTab = fakeWin();
+  let top: FakeWin = dudeTab;
+  for (let i = 0; i < 5; i++) top = fakeWin({ location: { origin }, opener: top });
+  opener = top as unknown as Opener;
+  boot();
+  // dude is six steps up: too far, so nothing is said to anyone.
+  expect(posted(dudeTab)).toEqual([]);
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
+  overlay.stop();
+  page(CART, false);
+  const throws = fakeWin({ location: { origin } });
+  Object.defineProperty(throws, "opener", { get: () => { throw new Error("blocked"); } });
+  opener = throws as unknown as Opener;
+  boot();
+  expect(tid("ov-conn")!.textContent).toBe("not opened from dude");
 });

@@ -3,13 +3,18 @@
  * its files, and the gallery's split of pictures from documents.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LiveDiff, splitRows, type LiveDiffFile } from "../src/components/LiveDiff.tsx";
-import { FileGallery, type GalleryFile } from "../src/components/FileGallery.tsx";
+import type { GalleryFile } from "../src/components/FileGallery.tsx";
 import { artifactKind } from "../src/components/ArtifactRow.tsx";
+import { cssModuleAsWritten } from "./cssModule.ts";
+
+// The gallery's class names as written, so a card's classes can be read.
+mock.module(...cssModuleAsWritten(new URL("../src/components/FileGallery.module.css", import.meta.url)));
+const { FileGallery } = await import("../src/components/FileGallery.tsx");
 
 const file = (path: string, status: LiveDiffFile["status"], lines: Array<["+" | "-" | " ", string]>): LiveDiffFile => ({
   path, status,
@@ -143,6 +148,21 @@ describe("FileGallery", () => {
     expect(html).toContain(">v2<");
     expect(html).toContain("Download all");
     expect(html).toContain("3 KB");
+  });
+
+  test("a video with a picture shows it under a play glyph, still a button; without one, the dark card", () => {
+    const html = (thumbnail?: string) => renderToStaticMarkup(<FileGallery files={[files[1]!]} thumbnail={() => thumbnail} onOpen={() => {}} onDownload={() => {}} />);
+    const card = new DOMParser().parseFromString(html("blob:poster"), "text/html").querySelector("[data-testid='file-card']")!;
+    expect(card.tagName).toBe("BUTTON");
+    const picture = card.firstElementChild!;
+    expect(picture.querySelector("img")?.getAttribute("src")).toBe("blob:poster");
+    expect(picture.querySelectorAll("svg").length).toBe(1);
+    expect(picture.classList.contains("picture")).toBe(true);
+    expect(picture.classList.contains("dark")).toBe(false);
+    const bare = new DOMParser().parseFromString(html(), "text/html").querySelector("[data-testid='file-card']")!.firstElementChild!;
+    expect(bare.querySelector("img")).toBeNull();
+    expect(bare.querySelectorAll("svg").length).toBe(1);
+    expect(bare.classList.contains("dark")).toBe(true);
   });
 
   test("a file's description is a line under its name, in a card and a row, the latest version's; none, no line", async () => {

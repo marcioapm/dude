@@ -163,7 +163,7 @@ func (s *Store) SettleChildWith(ctx context.Context, org, childID string, outcom
 			COALESCE((SELECT jsonb_object_agg(k, v) FROM (SELECT k, v FROM (SELECT key AS k,
 			  CASE jsonb_typeof(value) WHEN 'object' THEN value->>'sha' ELSE value #>> '{}' END AS v FROM jsonb_each(r.heads)) normalized
 			  WHERE k ~ '^[A-Za-z0-9_.-]{1,100}$' AND v ~ '^[0-9a-f]{40,64}$' ORDER BY k LIMIT 100) refs), '{}'),
-			ARRAY(SELECT id FROM artifacts WHERE run_id = r.id ORDER BY id LIMIT 100),
+			ARRAY(SELECT id FROM artifacts WHERE run_id = r.id AND name NOT LIKE '.dude-%' ORDER BY id LIMIT 100),
 			GREATEST(0, run_model_usd(r))::double precision, $3, $4::jsonb
 			FROM runs r WHERE r.id = $1`, childID, status, !c.Actionable, verify)
 		if err != nil {

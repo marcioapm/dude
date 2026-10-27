@@ -25,6 +25,8 @@ export interface FileVersion {
   readonly version: number;
   /** What its maker said it is for, one short line; shown under the name. */
   readonly description?: string | undefined;
+  /** A small picture of it (an image's or a video's), when one was made. */
+  readonly thumbnailId?: string | undefined;
 }
 
 /** A file: its versions, newest first — the first is the file. */
@@ -51,7 +53,7 @@ type Filter = "all" | "documents" | "media";
 export interface FileGalleryProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   readonly controls?: boolean | undefined;
   readonly files: ReadonlyArray<GalleryFile>;
-  /** A thumbnail's bytes, for images: the app makes the URL (it holds the key). */
+  /** A card's picture, an image's or a video's: the app makes the URL (it holds the key). */
   readonly thumbnail?: ((v: FileVersion) => string | undefined) | undefined;
   readonly onOpen: (file: GalleryFile) => void;
   readonly onDownload: (v: FileVersion) => void;
@@ -107,11 +109,12 @@ export function FileGallery({ files, controls = true, thumbnail, onOpen, onDownl
             {media.map((f) => {
               const latest = f.versions[0]!;
               const kind = kinds.get(f.name)!;
-              const src = kind === "image" ? thumbnail?.(latest) : undefined;
+              const src = thumbnail?.(latest);
               return (
                 <button key={f.name} type="button" className={styles["card"]} onClick={() => onOpen(f)} data-testid="file-card" data-name={f.name}>
-                  <span className={cx(styles["picture"], kind === "video" && styles["dark"])}>
+                  <span className={cx(styles["picture"], kind === "video" && !src && styles["dark"])}>
                     {src ? <img src={src} alt="" /> : <Icon name={kind === "video" ? "play" : "image"} size={32} />}
+                    {src && kind === "video" ? <span className={styles["play"]} aria-hidden><Icon name="play" size={24} /></span> : null}
                   </span>
                   <span className={styles["caption"]}>
                     <span className={styles["name"]}>

@@ -8,8 +8,9 @@ dude's origin. Everything between them is the browser's own postMessage.
 
 It drives: the Servers tab's server link -> pick an element -> save -> the draft in
 dude's tray and on the Feedback tab with its picture -> Show on preview; a page
-opened directly shows the no-opener panel; a message from another origin is
-ignored; Restart and the unavailable reason. Screenshots go to
+opened directly offers Connect to dude, which opens dude, finds the task and
+connects; dude's tab reloading reconnects by itself; a message from another
+origin is ignored; Restart and the unavailable reason. Screenshots go to
 DUDE_PREVIEW_SHOTS when set (1440x900 dark and light, 390x844).
 
 Run with: python3 apps/web/test/browser_preview_feedback.py
@@ -69,6 +70,16 @@ HEARD = """(() => {
   window.addEventListener('message', (e) => window.__heard.push(e.origin));
 })()"""
 
+# In dude's tab: when the commenting notice first reads open, kept even if it closes again before the driver looks.
+STAMP_RECONNECT = f"""(() => {{
+  if (location.origin !== '{DUDE}') return;
+  const now = () => performance.timeOrigin + performance.now();
+  const seen = () => {{
+    if (window.__openAt === undefined && document.querySelector('[data-testid=commenting-notice][data-state=open]')) window.__openAt = now();
+  }};
+  new MutationObserver(seen).observe(document, {{ childList: true, subtree: true, attributes: true, attributeFilter: ['data-state'] }});
+}})()"""
+
 # --ds-color-accent in each theme (tokens.css), as getComputedStyle writes it.
 ACCENT = {"dark": "rgb(39, 121, 188)", "light": "rgb(22, 109, 175)"}
 # --ds-color-overlay: the toolbar's fill.
@@ -89,7 +100,8 @@ def ov_text(page, testid):
 
 
 def ov_click(page, testid):
-    """A real pointer click at the middle of an overlay control."""
+    """A real pointer click at the middle of an overlay control, once it is drawn."""
+    wait_ov(page, testid)
     box = ov(page, """(r, id) => { const b = r.querySelector(`[data-testid='${id}']`).getBoundingClientRect();
       return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; }""", testid)
     page.mouse.click(box["x"], box["y"])
@@ -241,7 +253,7 @@ class CommentingOnAPreview(unittest.TestCase):
         page.bring_to_front()
         tray = page.get_by_test_id("fb-tray")
         expect(tray).to_have_attribute("data-count", "1")
-        expect(page.get_by_test_id("commenting-notice")).to_contain_text("1 draft saved from it so far")
+        expect(page.get_by_test_id("commenting-notice")).to_contain_text("1 draft saved from the preview so far")
         shoot(page, "dude-commenting-open")
         tray.get_by_role("button", name="Review").click()
         expect(tray.get_by_test_id("fb-tray-row")).to_contain_text("Preview")
@@ -417,25 +429,159 @@ class CommentingOnAPreview(unittest.TestCase):
             self.assertEqual(ov(pv, "r => r.querySelector('[data-testid=ov-comment-box] textarea').value"), "Half a thought", testid)
         self.assertEqual(self.errors, [])
 
-    def test_a_preview_opened_directly_says_to_open_it_from_dude(self):
+    def test_a_preview_opened_directly_offers_connect_to_dude(self):
         ctx, page = self.context()
         pv = ctx.new_page()
         self.watch(pv)
         pv.goto(f"{PREVIEW}/")
         wait_ov(pv, "ov-no-opener")
-        self.assertIn("Open this preview from dude to comment", ov_text(pv, "ov-no-opener"))
+        self.assertIn("Connect to dude to comment: dude opens and finds this preview's task", ov_text(pv, "ov-no-opener"))
         self.assertEqual(ov_count(pv, "ov-comment"), 0)
         self.assertEqual(ov_count(pv, "ov-save"), 0)
+        # Connect to dude is a button, not a link: nothing to copy, and nothing opened noopener.
+        self.assertEqual(ov(pv, "r => r.querySelector('[data-testid=ov-connect]').localName"), "button")
+        self.assertEqual(ov(pv, "r => r.querySelectorAll('a[data-k=open-dude]').length"), 0)
         shoot(pv, "overlay-no-opener", themes=False)
-        # No task is known here: Open dude is an honest link to dude's origin in a new tab.
-        box = ov(pv, """r => { const a = r.querySelector('[data-k=open-dude]'); const b = a.getBoundingClientRect();
-          return { href: a.href, x: b.x + b.width / 2, y: b.y + b.height / 2 }; }""")
-        self.assertEqual(box["href"], f"{DUDE}/")
+        self.assertEqual(self.errors, [])
+
+    def test_connect_to_dude_opens_dude_finds_the_task_and_connects(self):
+        ctx, page = self.context()
+        # The fixtures and the run are remembered once dude's page has read them; then no dude tab is open.
+        expect(page.get_by_test_id("server-url").first).to_be_visible(timeout=20_000)
+        page.close()
+        pv = ctx.new_page()
+        self.watch(pv)
+        pv.goto(f"{PREVIEW}/")
+        wait_ov(pv, "ov-connect")
         with ctx.expect_page() as opened:
-            pv.mouse.click(box["x"], box["y"])
-        opened.value.wait_for_url(f"{DUDE}/**", wait_until="domcontentloaded")
-        self.assertEqual(opened.value.url.split("#")[0], f"{DUDE}/")
-        self.assertIsNone(opened.value.evaluate("() => window.opener"))
+            ov_click(pv, "ov-connect")
+        dude = opened.value
+        self.watch(dude)
+        # The new tab is dude's preview-connect page with this preview as its opener.
+        dude.wait_for_url(f"{DUDE}/**", wait_until="domcontentloaded", timeout=20_000)
+        self.assertTrue(dude.evaluate("() => window.opener !== null"))
+        # dude finds the task, goes to it in the same tab, and the overlay connects through that tab.
+        dude.wait_for_function(f"() => location.hash.includes('/task/{TASK}/')", timeout=20_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertEqual(ov_count(pv, "ov-no-opener"), 0)
+        expect(dude.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
+        # A draft saved from here lands in that tab.
+        ov_click(pv, "ov-comment")
+        pv.hover("button.greet")
+        pv.mouse.click(*self.center(pv, "button.greet"))
+        wait_ov(pv, "ov-comment-box")
+        pv.keyboard.type("Saved through Connect to dude.")
+        pv.keyboard.press("Control+Enter")
+        wait_ov(pv, "ov-saved")
+        expect(dude.get_by_test_id("fb-tray")).to_have_attribute("data-count", "1")
+        self.assertEqual(self.errors, [])
+
+    def test_a_preview_reloaded_after_connect_to_dude_connects_again_through_the_same_dude_tab(self):
+        ctx, page = self.context()
+        expect(page.get_by_test_id("server-url").first).to_be_visible(timeout=20_000)
+        page.close()
+        pv = ctx.new_page()
+        self.watch(pv)
+        pv.goto(f"{PREVIEW}/")
+        wait_ov(pv, "ov-connect")
+        with ctx.expect_page() as opened:
+            ov_click(pv, "ov-connect")
+        dude = opened.value
+        self.watch(dude)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        dude.evaluate("() => { window.__sameDocument = true; window.__hashes = []; addEventListener('hashchange', () => __hashes.push(location.hash)); }")
+        # The reload: the preview's new document has no opener and no handle on dude's tab.
+        pv.reload()
+        wait_ov(pv, "ov-connect")
+        pages = len(ctx.pages)
+        ov_click(pv, "ov-connect")
+        # The same dude tab goes to preview-connect, then to the task, and the preview connects: no second dude tab.
+        dude.wait_for_function("() => window.__hashes?.some((h) => h.includes('preview-connect'))", timeout=20_000)
+        dude.wait_for_function(f"() => location.hash.includes('/task/{TASK}/')", timeout=20_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertEqual(len(ctx.pages), pages)
+        # A hash change in the app already loaded, not a new load.
+        self.assertTrue(dude.evaluate("() => window.__sameDocument === true"))
+        expect(dude.get_by_test_id("commenting-notice")).to_have_attribute("data-state", "open")
+        self.assertEqual(self.errors, [])
+
+    def test_connect_pressed_again_after_the_dude_tab_found_nothing_connects_in_a_new_tab(self):
+        ctx, page = self.context()
+        expect(page.get_by_test_id("server-url").first).to_be_visible(timeout=20_000)
+        page.close()
+        pv = ctx.new_page()
+        self.watch(pv)
+        pv.goto(f"{PREVIEW}/")
+        wait_ov(pv, "ov-connect")
+        with ctx.expect_page() as opened:
+            ov_click(pv, "ov-connect")
+        dude = opened.value
+        self.watch(dude)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        # From here this dude tab hears nothing from the preview, so its next lookup never happens.
+        dude.evaluate(f"() => addEventListener('message', (e) => {{ if (e.origin === '{PREVIEW}') e.stopImmediatePropagation(); }}, true)")
+        pv.reload()
+        wait_ov(pv, "ov-connect")
+        ov_click(pv, "ov-connect")
+        pv.wait_for_function("() => /didn't find this preview's task/.test(window.__ovRoot?.querySelector('[data-testid=ov-connect-note]')?.textContent ?? '')", timeout=30_000)
+        pages = len(ctx.pages)
+        with ctx.expect_page(timeout=20_000) as opened2:
+            ov_click(pv, "ov-connect")
+        fresh = opened2.value
+        self.watch(fresh)
+        self.assertEqual(len(ctx.pages), pages + 1)
+        fresh.wait_for_function(f"() => location.hash.includes('/task/{TASK}/')", timeout=20_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        self.assertEqual(self.errors, [])
+
+    def test_dude_reloading_reconnects_by_itself_and_a_draft_saves(self):
+        ctx, page = self.context()
+        self.watch(page)
+        comment = page.get_by_test_id("server-url").first
+        expect(comment).to_be_visible(timeout=20_000)
+        with ctx.expect_page() as opened:
+            comment.click()
+        pv = opened.value
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        # dude's tab reloads: its new document holds no handle on the preview.
+        page.add_init_script(STAMP_RECONNECT)
+        page.reload()
+        # Under load the dev server re-serves the app's modules on a reload slowly.
+        expect(page.get_by_test_id("server-url").first).to_be_visible(timeout=45_000)
+        # Nothing is saved: only the overlay's heartbeat can reach the reloaded tab, which adopts the window it opened before.
+        page.wait_for_function("() => window.__openAt !== undefined", timeout=30_000)
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=30_000)
+        ov_click(pv, "ov-comment")
+        pv.hover("button.greet")
+        pv.mouse.click(*self.center(pv, "button.greet"))
+        wait_ov(pv, "ov-comment-box")
+        pv.keyboard.type("Saved after dude reloaded.")
+        pv.keyboard.press("Control+Enter")
+        wait_ov(pv, "ov-saved")
+        expect(page.get_by_test_id("fb-tray")).to_have_attribute("data-count", "1")
+        self.assertEqual(self.errors, [])
+
+    def test_a_tab_opened_from_the_preview_stays_connected_when_the_preview_closes(self):
+        ctx, page = self.context()
+        self.watch(page)
+        comment = page.get_by_test_id("server-url").first
+        expect(comment).to_be_visible(timeout=20_000)
+        with ctx.expect_page() as opened:
+            comment.click()
+        pv = opened.value
+        pv.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        # A target=_blank tab from the preview reaches dude through the preview's opener.
+        with ctx.expect_page() as opened2:
+            pv.evaluate(f"() => window.open('{PREVIEW}/cart', '_blank')")
+        pv2 = opened2.value
+        self.watch(pv2)
+        pv2.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=20_000)
+        pv.close()
+        # Two more hellos from pv2 reach dude after the close: one beat period (4 s connected) apart, so the 1 s closed check has run.
+        heard = page.evaluate(f"() => window.__heard.filter((o) => o === '{PREVIEW}').length")
+        page.wait_for_function(f"n => window.__heard.filter((o) => o === '{PREVIEW}').length > n + 1", arg=heard, timeout=20_000)
+        self.assertEqual(ov(pv2, "r => r.querySelector('[data-connection]').getAttribute('data-connection')"), "connected")
+        self.assertEqual(ov_count(pv2, "ov-disconnected"), 0)
         self.assertEqual(self.errors, [])
 
     def test_the_overlay_follows_the_os_then_dudes_theme_live(self):
