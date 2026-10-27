@@ -1183,7 +1183,10 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
     client.automationRuns(a.id, status === "all" ? undefined : status).then(setData, (e: unknown) => setProblem(errorText(e)));
   }, [client, a.id, status]);
   useEffect(load, [load]);
-  useReloadOnEvents({ client, all: true }, load, 1000);
+  useReloadOnEvents({ client, all: true }, load, 1000, (event) => {
+    const ours = event.payload.automationId === a.id || data?.runs.some((r) => r.id === event.automationRunId);
+    return !ours || !(event.eventType.startsWith("automation.run.") || event.eventType === "agent.tool.called" || event.eventType === "agent.tool.completed");
+  });
   return (
     <div data-testid="automation-runs">
       {data?.session ? (
@@ -1225,10 +1228,14 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
 function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Automation; runId: string; onDelivery: (id: string) => void }) {
   const [run, setRun] = useState<AutomationRunDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const { events } = useRunActivity(client, runId);
-  // The run's facts (status, cost, requests) are read again whenever its activity moves.
-  const moved = events.length > 0 ? events[events.length - 1]!.cursor : 0;
-  useEffect(() => { client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId, moved]);
+  const { events } = useRunActivity(client, runId, a.kind === "agent");
+  // Only facts-changing events trigger a detail read; log traffic stays in the feed.
+  const moved = events.filter((e) => e.eventType === "automation.run.ended" || e.eventType === "automation.delivery.sent" ||
+    e.eventType === "automation.log.exited" || e.eventType === "agent.tool.dude").at(-1)?.cursor ?? 0;
+  useEffect(() => {
+    const timer = setTimeout(() => { void client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, moved ? 1000 : 0);
+    return () => clearTimeout(timer);
+  }, [client, a.id, runId, moved]);
   // Cost and server requests can change without an agent event. Stop polling once the run ends.
   useVisibleInterval(() => {
     if (run?.status === "running" || run?.status === "queued") {

@@ -24,8 +24,8 @@ export const EV_LOG_LINE = "automation.log.line";
 export const EV_LOG_EXITED = "automation.log.exited";
 
 /** The run's activity as it arrives: its backfill, then live. */
-export function useRunActivity(client: ApiClient, runId: string) {
-  return useEventStream({ client, automationRunId: runId, limit: Number.POSITIVE_INFINITY });
+export function useRunActivity(client: ApiClient, runId: string, agent = true) {
+  return useEventStream({ client, automationRunId: runId, limit: agent ? Number.POSITIVE_INFINITY : 2500 });
 }
 
 /** Now, ticking each second while `on` (a live run's duration); still otherwise. */
@@ -153,6 +153,10 @@ export function logLines(events: readonly PersistedEvent[], server: boolean): { 
   let exitCode: number | null = null;
   for (const e of events) {
     if (e.eventType === EV_LOG_EXITED && typeof e.payload.exitCode === "number") exitCode = e.payload.exitCode;
+    if (e.eventType === "automation.log.cut") {
+      lines.push({ seq: e.cursor, text: String(e.payload.text ?? "Log lines omitted"), channel: "stdout" });
+      continue;
+    }
     if (e.eventType !== EV_LOG_LINE || Boolean(e.payload.server) !== server) continue;
     const stderr = e.payload.stream === "stderr";
     lines.push({ seq: e.cursor, text: String(e.payload.text ?? ""), ts: e.occurredAt, channel: stderr ? "stderr" : "stdout",

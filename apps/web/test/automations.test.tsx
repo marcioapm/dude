@@ -763,6 +763,24 @@ describe("a run's activity", () => {
     expect(c.querySelector("[data-testid=run-activity]")?.textContent).toContain("Follows the latest · scroll up to stop");
   });
 
+  test("log events do not refetch the full run", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    let requests = 0;
+    client.automationRun = async (...args) => { requests++; return real(...args); };
+    const c = await page(client, { id: "aut_cost", tab: "runs", runId: "arn_c2" });
+    await until(() => c.querySelector("[data-testid=command-log]"), "the log");
+    const before = requests;
+    for (let i = 0; i < 20; i++) {
+      emit({ eventType: "automation.log.line", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+        runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_c2", actor: { type: "agent", id: "arn_c2" }, source: "runner",
+        correlationId: null, causationId: null, payload: { stream: "stdout", text: `volume-${i}` } });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await until(() => c.textContent?.includes("volume-19") || null, "last line");
+    expect(requests - before).toBe(0);
+  });
+
   test("a running call's card turns completed with its output when its completion arrives", async () => {
     const client = new FixtureClient("a");
     const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });

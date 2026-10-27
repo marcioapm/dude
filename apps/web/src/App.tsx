@@ -130,7 +130,8 @@ const SIDEBAR = "dude.sidebar";
  * What it spends is (a card's, a lane's, an epic's cost), so a finished
  * model request and a cost sample still reload.
  */
-const QUIET_EVENTS: ReadonlySet<string> = new Set([...AGENT_CHATTER, EventTypes.PlanUpdated, EventTypes.WorkerHeartbeat]);
+const QUIET_EVENTS: ReadonlySet<string> = new Set([...AGENT_CHATTER, EventTypes.PlanUpdated, EventTypes.WorkerHeartbeat,
+  "automation.log.line", "automation.log.cut", "automation.log.exited", "automation.delivery.sent", "automation.run.ended"]);
 
 /** A session's events that change your list of sessions or what waits on you. */
 const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
