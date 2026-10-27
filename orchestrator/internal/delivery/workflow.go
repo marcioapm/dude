@@ -250,6 +250,8 @@ type Escalation struct {
 	// The step that was waiting on the Run that failed, for "resume": it
 	// waits on it again once it is taken back up. "" when no Run failed.
 	At string `json:"at,omitempty"`
+	// Signals awaited by the interrupted step, before the escalation.
+	AtSignals []string `json:"atSignals,omitempty"`
 	// A person's decision, once made: set as it is taken, so a second is
 	// refused before the workflow has acted on the first.
 	Decided *HumanDecision `json:"decided,omitempty"`
@@ -3040,7 +3042,15 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if d.Action == "stop" {
 			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
 		}
-		return workflow.Result{Next: e.At, State: st, AwaitSignals: []string{SignalPhaseFinished}}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action)
+		// The waits on a person reading their pull requests or the work are
+		// in review; every other step sets its own status, or is at work.
+		status := "running"
+		if e.At == "awaitPullRequest" || e.At == "awaitRead" {
+			status = "review"
+		} else if e.At == "conductorDecision" && !st.conducted() && st.Decision != nil && st.Decision.Point == PointBeforePR {
+			status = "awaiting_input"
+		}
+		return resumeEscalationAt(st, e), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, "a person decided: "+d.Action)
 	}
 	switch d.Action {
 	case "stop":
@@ -3160,9 +3170,24 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// The Run that failed was taken back up with the decision (the API
 		// does it, where it can say if it no longer can): the step that
 		// waited on it waits on it again.
-		return park(e.At, st, e.RunIDs()), nil
+		st.PendingRunIDs = e.RunIDs()
+		return resumeEscalationAt(st, e), nil
 	}
 	return retry(st, e.Step, e), nil
+}
+
+// resumeEscalationAt restores the interrupted wait. Old rows have no saved
+// signals: phase waits must keep folding phase.finished through settle;
+// other steps run immediately and reconstruct their own wait, including
+// the gate's human.feedback and the pull request wait's full signal set.
+func resumeEscalationAt(st *State, e *Escalation) workflow.Result {
+	if len(e.AtSignals) > 0 {
+		return workflow.Result{Next: e.At, State: st, AwaitSignals: slices.Clone(e.AtSignals)}
+	}
+	if AbortedRetryStep[e.At] != "" {
+		return workflow.Result{Next: e.At, State: st, AwaitSignals: []string{SignalPhaseFinished}}
+	}
+	return workflow.Result{Next: e.At, State: st}
 }
 
 // retry runs a step that stopped again, afresh — new Runs, a new budget

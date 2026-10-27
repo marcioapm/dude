@@ -81,7 +81,11 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 	if len(failures) > 0 {
 		detail["failures"] = failures
 	}
-	st.Escalation = &Escalation{Reason: ReasonChecksUnverified, At: d.Step, Detail: detail}
+	var atSignals []string
+	if err := tx.QueryRow(ctx, `SELECT awaiting_signals FROM workflow_runs WHERE id = $1`, d.WorkflowID).Scan(&atSignals); err != nil {
+		return err
+	}
+	st.Escalation = &Escalation{Reason: ReasonChecksUnverified, At: d.Step, AtSignals: atSignals, Detail: detail}
 	if st.conducted() {
 		st.Escalations++
 		if _, err := RecordWakeTx(ctx, tx, org, taskID, "escalation", fmt.Sprintf("%s:escalation:%d", d.WorkflowID, st.Escalations),

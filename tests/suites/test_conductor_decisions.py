@@ -268,3 +268,51 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     assert me and decided[0]["payload"]["answeredBy"] == me, (me, decided)
     # The retry's fix goes back to the conductor, at its next decision.
     _waiting_on(client, task["id"], "after_fix", "the retry's fix never came back to the conductor")
+
+
+def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision(
+        client: ApiClient, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str):
+    """While the delivery waits on the conductor after the implementer, an
+    implementer the conductor started itself (start_agent) is held at the
+    checks gate and escalates; the person waives it, and the conductor's next
+    decision is carried out: the review runs, and nothing is refused as taken
+    already."""
+    project = _conducting(client, forge_project)
+    models = {**project["agentModels"], **client.on_models({"implementer": "fake/checks-unbacked"})}
+    assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
+    assert client.put("/v1/judgements/settings", {"tierId": client.tier_for("judge-e2e")}).status_code == 200
+    assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
+    task = client.create_task(project["id"], "Greet, with a helper the checks gate holds")
+    conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
+    _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
+    # The delivery's own implementer is held too: waived, it waits on the conductor after it.
+    _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
+    _waived(client, task["id"], "the delivery's implementer")
+    _waiting_on(client, task["id"], "after_implement", "the implementer never came back")
+
+    # The conductor's own implementer, which the delivery does not wait on, is held and escalates.
+    _say(client, task["id"], "Have a helper write it.", _tool("start_agent", {"profile": "implementer", "key": "helper"}))
+    child = wait_until(lambda: query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND source_kind = 'task_conductor'",
+                                     (task["id"],)), timeout=60, message="the conductor's implementer never started")[0]["id"]
+    _waived(client, task["id"], "the conductor's implementer")
+    wait_until(lambda: client.get_run(child)["status"] == "completed", timeout=120, message="the waived helper never finished")
+    _waiting_on(client, task["id"], "after_implement", "the delivery did not go back to the conductor's decision")
+
+    reviews = len(_phases(client, task["id"], "review"))
+    _say(client, task["id"], "Review it.", _tool("decide", {"action": "next"}))
+    wait_until(lambda: len(_phases(client, task["id"], "review")) > reviews, timeout=90,
+               message=f"the conductor's decision after the escalation never ran: {_said(client, conductor)}")
+    assert not [t for t in _said(client, conductor) if "taken already" in t], _said(client, conductor)
+    _waiting_on(client, task["id"], "after_review", "the review never came back to the conductor")
+    decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
+    assert decided == ["start_phase", "next"], decided
+
+
+def _waived(client: ApiClient, task_id: str, what: str) -> None:
+    """Waits for the checks gate to escalate and waives it, as the task's owner."""
+    wait_until(lambda: (_task(client, task_id).get("escalation") or {}).get("reason") == "checks_unverified",
+               timeout=90, message=f"the checks gate never escalated {what}")
+    resp = client.post(f"/v1/tasks/{task_id}/decide", {"action": "waive", "note": "CI runs the check; the owner reviewed it."})
+    assert resp.status_code == 200, resp.text
+    wait_until(lambda: _task(client, task_id).get("escalation") is None, timeout=60,
+               message=f"the waiver of {what} was never carried out")
