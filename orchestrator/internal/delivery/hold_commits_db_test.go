@@ -106,6 +106,14 @@ func TestAHoldCountsAMergeByWhetherItBringsInTheBase(t *testing.T) {
 			}
 			f.merged(st, sc, "repo")
 		}, 2},
+		// A rewrite gives the task's commits new SHAs: the rewritten first
+		// commit's parent is in the base, yet it is not a merge of it.
+		{"the branch rewritten onto main", func(f *verdictFixture, st *State, _ workflow.StepContext) {
+			taskCommit(f.gh, st, "repo", 1)
+			sq := gitOn(t, f.gh, "commit-tree", "refs/heads/feature^{tree}", "-p", "refs/heads/main", "-m", "squashed")
+			gitOn(t, f.gh, "update-ref", "refs/heads/feature", sq)
+			st.Heads["repo"] = sq
+		}, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, second := heldAround(t, nil, c.between, nil)
