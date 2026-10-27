@@ -673,7 +673,9 @@ starts: the orchestrator's automations loop matches stored deliveries.
 when, its verdict, its group key, its size, and its headers with the
 values of `Authorization`, cookies, the signature header and any header
 named like a token or secret replaced by `••••`. An accepted request keeps
-its JSON body **30 days** (then the body is emptied and the row stays);
+its JSON body and headers **30 days**; then a delivery a run holds keeps
+its row (body and headers emptied) for the run's page, and any other
+(skipped, or its run deleted) is deleted;
 a refused one **never stores its body**, and its row is deleted after **7
 days** (`automations.Retain`, hourly). The automation's Deliveries tab
 lists the last 30 days.

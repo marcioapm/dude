@@ -55,7 +55,7 @@ CREATE TABLE incoming_deliveries (
   -- As received, with the values of Authorization, the signature header,
   -- cookies and any *token* / *secret* name dropped (the control plane does it).
   headers         jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(headers) = 'object'),
-  -- The body: never kept for a refused request, emptied after 30 days.
+  -- The body: never kept for a refused request, emptied (with headers) after 30 days.
   payload         jsonb,
   payload_purged_at timestamptz,
   run_id          text REFERENCES automation_runs(id) ON DELETE SET NULL,
@@ -83,6 +83,9 @@ CREATE INDEX incoming_deliveries_rate_idx ON incoming_deliveries (automation_id,
 CREATE INDEX incoming_deliveries_pending_idx ON incoming_deliveries (received_at) WHERE verdict IS NULL;
 -- Retention: refused rows go at 7 days, bodies at 30.
 CREATE INDEX incoming_deliveries_refused_idx ON incoming_deliveries (received_at) WHERE verdict = 'refused';
+-- Retention: a decided delivery no run holds goes at 30 days.
+CREATE INDEX incoming_deliveries_unheld_idx ON incoming_deliveries (received_at)
+  WHERE run_id IS NULL AND verdict IN ('started', 'sent_to_run', 'skipped');
 -- The endpoint's count of an automation's refused rows this hour (at most 100 are stored).
 CREATE INDEX incoming_deliveries_refused_automation_idx ON incoming_deliveries (automation_id, received_at) WHERE verdict = 'refused';
 CREATE INDEX incoming_deliveries_payload_kept_idx ON incoming_deliveries (received_at) WHERE payload IS NOT NULL;

@@ -301,13 +301,17 @@ func TestRetainIncomingRefusedSevenDaysBodiesThirty(t *testing.T) {
 	exec(t, owner, `INSERT INTO automations (id, organization_id, name, kind, trigger, agent)
 		VALUES ('aut_ret', $1, 'R', 'agent', '{"kind":"incoming","hookId":"hk_ret000000000000"}', '{"own":{"prompt":""}}')`, org)
 	day := 24 * time.Hour
-	exec(t, owner, `INSERT INTO incoming_deliveries (id, organization_id, automation_id, verdict, reason, bytes, payload, received_at) VALUES
-		('ref_8', $1, 'aut_ret', 'refused', 'bad_signature', 1, NULL, $2),
-		('ref_6', $1, 'aut_ret', 'refused', 'rate_limited', 1, NULL, $3),
-		('ok_31', $1, 'aut_ret', 'skipped', 'x', 2, '{}', $4),
-		('ok_29', $1, 'aut_ret', 'started', NULL, 2, '{}', $5),
-		('unread_31', $1, 'aut_ret', NULL, NULL, 2, '{}', $4)`,
-		org, now.Add(-8*day), now.Add(-6*day), now.Add(-31*day), now.Add(-29*day))
+	exec(t, owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_ret', $1, 'aut_ret', 'succeeded', 'event')`, org)
+	hdr := `{"User-Agent":"Grafana"}`
+	exec(t, owner, `INSERT INTO incoming_deliveries (id, organization_id, automation_id, verdict, reason, bytes, payload, received_at, headers, run_id) VALUES
+		('ref_8', $1, 'aut_ret', 'refused', 'bad_signature', 1, NULL, $2, '{}', NULL),
+		('ref_6', $1, 'aut_ret', 'refused', 'rate_limited', 1, NULL, $3, '{}', NULL),
+		('skip_31', $1, 'aut_ret', 'skipped', 'x', 2, '{}', $4, $6, NULL),
+		('skip_29', $1, 'aut_ret', 'skipped', 'x', 2, '{}', $5, $6, NULL),
+		('ran_31', $1, 'aut_ret', 'started', NULL, 2, '{}', $4, $6, 'arn_ret'),
+		('ok_29', $1, 'aut_ret', 'started', NULL, 2, '{}', $5, $6, 'arn_ret'),
+		('unread_31', $1, 'aut_ret', NULL, NULL, 2, '{}', $4, $6, NULL)`,
+		org, now.Add(-8*day), now.Add(-6*day), now.Add(-31*day), now.Add(-29*day), hdr)
 	exec(t, owner, `INSERT INTO incoming_refusals (organization_id, automation_id, hour, code, n) VALUES
 		($1, 'aut_ret', date_trunc('hour', $2::timestamptz), 'bad_signature', 400), ($1, 'aut_ret', date_trunc('hour', $3::timestamptz), 'bad_signature', 9)`,
 		org, now.Add(-8*day), now.Add(-6*day))
@@ -315,15 +319,16 @@ func TestRetainIncomingRefusedSevenDaysBodiesThirty(t *testing.T) {
 		t.Fatal(err)
 	}
 	type row struct {
-		ID   string
-		Body bool
+		ID            string
+		Body, Headers bool
 	}
-	rows, _ := owner.Query(ctx, `SELECT id, payload IS NOT NULL FROM incoming_deliveries WHERE organization_id = $1 ORDER BY id`, org)
+	rows, _ := owner.Query(ctx, `SELECT id, payload IS NOT NULL, headers <> '{}' FROM incoming_deliveries WHERE organization_id = $1 ORDER BY id`, org)
 	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[row])
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []row{{"ok_29", true}, {"ok_31", false}, {"ref_6", false}, {"unread_31", true}}
+	// Past 30 days: a delivery no run holds goes; one a run holds keeps its row, without body or headers.
+	want := []row{{"ok_29", true, true}, {"ran_31", false, false}, {"ref_6", false, false}, {"skip_29", true, true}, {"unread_31", true, true}}
 	if !slices.Equal(got, want) {
 		t.Errorf("after retention %+v, want %+v (an unread body waits for its reader)", got, want)
 	}

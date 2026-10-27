@@ -1024,8 +1024,9 @@ their creator.
     A run's detail names the delivery that started it, its group, and the
     later deliveries sent to it.
 - **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90;
-  an incoming delivery's body 30 days (its row stays), a refused one's row 7
-  (`automations.Retain`, hourly).
+  an incoming delivery's body and headers 30 days (then its row is deleted
+  unless a run holds it), a refused one's row 7 and the per-hour refusal
+  counts 7 (`automations.Retain`, hourly).
 
 ### Chat providers (Slack first)
 
