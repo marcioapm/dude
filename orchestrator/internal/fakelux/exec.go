@@ -471,6 +471,16 @@ func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start in
 	if toEnd {
 		// lux reports the workload's exit before the Run's end.
 		s.luxEvent(run, "exited", map[string]any{"exitCode": exitCode(err, -1)})
+		if hold := s.afterExited; hold != nil {
+			// The Run stays running while the hook holds it: a reader sees
+			// the exit before the terminal state.
+			s.mu.Unlock()
+			hold(run.ID)
+			s.mu.Lock()
+			if run.State != "running" {
+				return false
+			}
+		}
 	} else {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
 			"content": map[string]any{"type": "text", "text": string(out)}})

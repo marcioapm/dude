@@ -696,6 +696,62 @@ func TestAutomationCommandLinesArriveInOrderWithTheExitCode(t *testing.T) {
 	}
 }
 
+// lux records a failed command's exit, and only later its Run's terminal
+// state: a pass that reads the exit while the Run still runs records it,
+// and the pass that sees the Run end does not record it again.
+func TestAutomationCommandExitReadBeforeTheRunEndsIsRecordedOnce(t *testing.T) {
+	h := newHarness(t)
+	held, release := make(chan string, 1), make(chan struct{})
+	h.fake.AfterExited(func(runID string) {
+		held <- runID
+		<-release
+	})
+	defer h.fake.AfterExited(nil)
+	h.automation("aut_exit", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"},
+		map[string]any{"command": "echo boom; exit 4"})
+	exec(t, h.owner, `UPDATE automations SET next_run_at = now() - interval '1 minute' WHERE id = 'aut_exit'`)
+	exits := func(runID string) []string {
+		rows, err := h.owner.Query(context.Background(), `SELECT payload->>'exitCode' FROM events
+			WHERE automation_run_id = $1 AND event_type = $2 ORDER BY cursor`, runID, phases.EvLogExited)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	var luxRun string
+	h.until("lux holds the exited command", func() bool {
+		select {
+		case luxRun = <-held:
+			return true
+		default:
+			return false
+		}
+	})
+	h.until("the exit is recorded while the run is still running", func() bool {
+		r := h.runs("aut_exit")
+		return len(r) == 1 && r[0].Status == "running" && len(exits(r[0].ID)) == 1
+	})
+	if s := h.luxState(luxRun); s != "running" {
+		t.Fatalf("lux Run %s before the hook let go", s)
+	}
+	close(release)
+	h.until("the run fails", func() bool { r := h.runs("aut_exit"); return len(r) == 1 && r[0].Status == "failed" })
+	h.runner.Wait()
+	for range 3 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.runner.Wait()
+	if got := exits(h.runs("aut_exit")[0].ID); !slices.Equal(got, []string{"4"}) {
+		t.Fatalf("exit events %q", got)
+	}
+}
+
 func TestAutomationFeedReadsSecretsOncePerTransaction(t *testing.T) {
 	h := newHarness(t)
 	h.automation("aut_redact", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"}, map[string]any{"command": "true"})

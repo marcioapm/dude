@@ -802,6 +802,7 @@ type Server struct {
 	beforeAssign        func(runID string)
 	afterPlacement      func(runID string, epoch int)
 	beforeCommandResult func(epoch int)
+	afterExited         func(runID string)
 	eventPages          func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
@@ -1252,6 +1253,16 @@ func (s *Server) BeforeEvent(fn func(runID string, eventID int64, typ string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.beforeEvent = fn
+}
+
+// AfterExited has a run-to-end workload's Run call fn once lux has
+// recorded its exited event and before the Run takes its terminal state,
+// without the fake's lock: while fn blocks, the Run is still running with
+// its exit code in its output. nil clears it.
+func (s *Server) AfterExited(fn func(runID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.afterExited = fn
 }
 
 // BeforeStart has every placement (a submit's, a resume's) call fn as it
