@@ -36,7 +36,7 @@ export {
   SubmitFeedbackDialog, feedbackHolds, feedbackStatusSpec, lineWords,
 } from "./FeedbackCard.tsx";
 export type {
-  CommentEditorProps, DraftsTrayProps, DraftsTrayRow, FeedbackCardItem, FeedbackCardProps, FeedbackStatusSpec, FeedbackThreadEntry, SubmitFeedbackDialogProps,
+  CommentEditorProps, DraftsTrayProps, DraftsTrayRow, FeedbackCardItem, FeedbackCardProps, FeedbackHolds, FeedbackStatusSpec, FeedbackThreadEntry, SubmitFeedbackDialogProps,
 } from "./FeedbackCard.tsx";
 export type { DiffViewProps, DiffFileProps, FileDiff, DiffHunk, DiffLine, DiffLineKind, FileChangeKind } from "./DiffView.tsx";
 export { LogStream } from "./LogStream.tsx";
@@ -149,6 +149,10 @@ export type { SearchSelectorProps } from "./SearchSelector.tsx";
 export { SessionList, SessionItem, SessionItemContent } from "./SessionList.tsx";
 export { DiffStat } from "./DiffStat.tsx";
 export type { DiffStatProps } from "./DiffStat.tsx";
+export { ReadyForReview, ReviewEvidence } from "./ReadyForReview.tsx";
+export type { EvidenceChip, HeldRepository, ReadyForReviewProps, ReadyForReviewRound, ReadyForReviewState, ReviewEvidenceProps } from "./ReadyForReview.tsx";
+export { BeforePullRequestFact } from "./BeforePullRequestFact.tsx";
+export type { BeforePullRequestFactProps, BeforePullRequestFactState } from "./BeforePullRequestFact.tsx";
 export { SessionRail, SessionRailBlock, SessionFacts, ToolUsage, ChangedFiles, PublishedFiles } from "./SessionRail.tsx";
 export type { ChangedFile, PublishedFile, ToolCount } from "./SessionRail.tsx";
 export type { SessionListProps, SessionItemProps } from "./SessionList.tsx";

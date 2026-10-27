@@ -71,6 +71,10 @@ export const EventTypes = {
   TaskStatusChanged: "task.status_changed",
   /** Handed to someone else to drive. Payload: `{ from, to }`, person ids. */
   TaskOwnerChanged: "task.owner_changed",
+  /** Its owner changed what Deliver does before its pull request. Payload: `{ from, to }`, each open, draft, ask or null (the project's). */
+  TaskPullRequestChoiceChanged: "task.pull_request_choice_changed",
+  /** Its owner finished it from Deliver's hold without a pull request. Payload: `{ branch, repositories, heads }`. */
+  TaskDoneWithoutPullRequest: "task.done_without_pull_request",
   /** Who is on it changed. Payload: `{ people }`, person ids, the owner first. */
   TaskPeopleChanged: "task.people_changed",
   /** A person's comment on a task, shown in its Activity. Payload: `{ text }`. */

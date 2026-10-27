@@ -1,0 +1,221 @@
+.root {
+  min-width: 0;
+}
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  min-width: 0;
+}
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  flex-wrap: wrap;
+}
+.lead {
+  margin: 0;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.age {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+  white-space: nowrap;
+}
+.muted {
+  color: var(--ds-color-text-muted);
+  font-size: var(--ds-text-sm);
+}
+.round {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-6) var(--ds-space-12);
+  font-size: var(--ds-text-sm);
+}
+.roundTag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+}
+.settled {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+}
+.settledRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+}
+.settledText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-secondary);
+}
+.sha {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+.ok {
+  color: var(--ds-tone-success-fg);
+  flex: none;
+}
+.repos {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+}
+.repo {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  font-size: var(--ds-text-sm);
+}
+.repoIcon {
+  color: var(--ds-color-text-muted);
+}
+.repoName {
+  font-family: var(--ds-font-mono);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+.refs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.ref {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ref:last-child {
+  flex: none;
+}
+.arrow {
+  color: var(--ds-color-text-muted);
+  flex: none;
+}
+.stat {
+  white-space: nowrap;
+}
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ds-color-accent-text);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  border-radius: var(--ds-radius-mark);
+}
+.link:hover {
+  text-decoration: underline;
+}
+.link:focus-visible {
+  outline: 2px solid var(--ds-color-focus-ring);
+  outline-offset: 2px;
+}
+.chips {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-6);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  height: var(--ds-size-chip);
+  padding: 0 var(--ds-space-8);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-active-wash);
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.chip b {
+  color: var(--ds-color-text-primary);
+  font-weight: var(--ds-weight-medium);
+}
+.chip:not([data-static]):hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.chipIcon {
+  color: var(--ds-color-text-muted);
+  flex: none;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.end {
+  margin-left: auto;
+}
+.reason {
+  color: var(--ds-color-text-secondary);
+  font-size: var(--ds-text-sm);
+}
+.waiting {
+  margin: 0;
+  color: var(--ds-color-text-secondary);
+}
+
+@media (max-width: 560px) {
+  .repo {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    row-gap: 0;
+  }
+  .refs {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+  .settledRow {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .settledRow > :last-child {
+    grid-column: 2;
+  }
+  .settledText {
+    white-space: normal;
+  }
+  .reason {
+    flex-basis: 100%;
+  }
+  .end {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}

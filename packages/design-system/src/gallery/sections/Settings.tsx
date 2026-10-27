@@ -90,6 +90,17 @@ function SettingsDemo() {
     >
       <SettingsNote icon="layers">Values marked “From Acme” follow the organisation; change one to override it here.</SettingsNote>
       <SettingsHeader title="Delivery" description="How a task goes from Deliver to a pull request." />
+      <SettingsSection title="Review">
+        {/* A setting only a project has: its source is the product's default, Reset once changed. */}
+        <SettingRow label="Before the pull request" help="When review, simplify and the test pass, Deliver opens the pull request."
+          source={<SettingSource source="default" inherited="Open it" />}>
+          <Select aria-label="Before the pull request" value="open" options={[{ value: "open", label: "Open it" }]} />
+        </SettingRow>
+        <SettingRow label="Before the pull request, changed" help="Deliver stops for your review before the pull request: you open it, send feedback, or finish without one."
+          source={<SettingSource source="default" inherited="Open it" onReset={() => {}} />}>
+          <Select aria-label="Before the pull request, changed" value="ask" options={[{ value: "ask", label: "Ask me first" }]} />
+        </SettingRow>
+      </SettingsSection>
       <SettingsSection title="Loop">
         <SettingRow label="Review rounds" help="Before the owner is asked." source={<SettingSource source="organization" from="Acme" />}>
           <Input aria-label="Review rounds" defaultValue="5" style={{ width: 80 }} />

@@ -218,6 +218,8 @@ noun is what it acts on.
 | `task reset-machine TASK ROLE [--note N]` | Throws away its agent machine for ROLE (e.g. `implementer`) |
 | `task preview TASK [--stop]` | Starts or stops its preview environment |
 | `task done TASK` | Marks finished work with nothing to merge done |
+| `task before-pr TASK open\|draft\|ask\|project` | What Deliver does before its first pull request: open it, open a draft, or ask its owner first; `project` follows the project's setting. Its owner only, until a pull request is open |
+| `task done-without-pr TASK` | Answers a task held before its pull request: Done, its branch kept on GitHub, no pull request. Its owner only |
 | `task stop TASK [--restart [--decider policy\|conductor]] [--note N]` | Stops all of its work where it stands; `--restart` starts its next attempt |
 | `task close TASK wont_do\|duplicate\|cant_reproduce [--duplicate-of T] [--close-pr] [--remove-relations] [--note N]` | Ends it without doing it |
 | `task reopen TASK` | Reopens a closed task |

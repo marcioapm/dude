@@ -510,6 +510,12 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 	}
 	switch d.Step {
 	case "awaitPullRequest", "awaitRead":
+	case "conductorDecision":
+		// Deliver's hold before the pull request takes it to a fix; any
+		// other decision reads the items when the next fix runs.
+		if !d.HeldByDeliver() {
+			out.Waiting = "the delivery's next fix takes them up"
+		}
 	case "decide":
 		out.Waiting = "a person decides on the escalation first"
 	case "implementRun":

@@ -10,7 +10,8 @@ export type FixtureScenario = (typeof SCENARIOS)[number];
 const KEY = "dude.fixtures";
 /**
  * The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted, stalled, refused; or peers, its epic's
- * agents coordinating; asks, two of the viewer's tasks waiting on them; and machine moves: raised, refused-platform, refused-largest, refused-moves, conductor, session, start-over.
+ * agents coordinating; asks, two of the viewer's tasks waiting on them; machine moves: raised, refused-platform, refused-largest, refused-moves, conductor, session, start-over;
+ * and a delivery held before its pull request: held, held-other, held-feedback, held-round-2.
  */
 export const RUN_KEY = `${KEY}.run`;
 

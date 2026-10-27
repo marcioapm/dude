@@ -25,9 +25,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AttachDropZone, Badge, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, type MarkdownEditorHandle } from "@dude/design-system";
-import { ATTACHMENT_LIMITS, TASK_CRITERIA_MAX, TASK_GOAL_MAX, attachmentMarkdown, taskAttachmentIds, taskGoalShortBy } from "@dude/domain";
+import { AttachDropZone, Badge, firstName, Callout, Breadcrumb, Button, Checkbox, Fieldset, FormStack, HelpList, Input, KeyHint, Markdown, MarkdownCheatsheet, MarkdownEditor, Select, Skeleton, Tooltip, type MarkdownEditorHandle } from "@dude/design-system";
+import { ATTACHMENT_LIMITS, DEFAULT_PULL_REQUEST_CHOICE, TASK_CRITERIA_MAX, TASK_GOAL_MAX, attachmentMarkdown, taskAttachmentIds, taskGoalShortBy, type PullRequestChoice } from "@dude/domain";
 import { ApiError, type ApiClient, type Epic, type Repository, type TaskDetail, type TaskFields, type TaskRepository, type TaskSource } from "../api/client.ts";
+import { BEFORE_PR_LABEL, PULL_REQUEST_OPEN_TEXT, choiceHint, taskChoice, taskChoiceOptions, type TaskPullRequestChoice } from "../beforePullRequest.ts";
 import { StartsFromField, sourceDraft, sourceInput, useSourceCheck, useSourceRepositories, type SourceDraft } from "./StartsFrom.tsx";
 import { unsavedWords } from "../hooks/discard.ts";
 import { errorText, FormDialog, useSave } from "../hooks/useSave.tsx";
@@ -62,14 +63,20 @@ function shortGoalText(goal: string): string | undefined {
  * for and where); "repositories" once that stopped, to be picked back up
  * where it was; nothing before it starts.
  */
-export type ExistingTask = { id: string; fixed: "all" | "repositories" | null; savedSource?: TaskSource | null } & TaskFields;
+export type ExistingTask = {
+  id: string; fixed: "all" | "repositories" | null; savedSource?: TaskSource | null;
+  /** Its own choice before the pull request (null: the project's), and why it can no longer change, if it cannot. */
+  pullRequestChoice?: PullRequestChoice | null; choiceLocked?: string | null;
+} & TaskFields;
 
-/** A task as the dialog edits it; `started` says delivery has begun. */
-export function existingTask(item: TaskDetail, started: boolean): ExistingTask {
+/** A task as the dialog edits it; `started` says delivery has begun; `you` is the reader's key. */
+export function existingTask(item: TaskDetail, started: boolean, you?: string | null): ExistingTask {
   const { id, title, goal, acceptanceCriteria, epicId, repositories } = item;
   const stopped = item.status === "aborted" || item.status === "failed";
   return { id, fixed: !started ? null : stopped ? "repositories" : "all", title, goal, acceptanceCriteria, epicId, repositories,
-    savedSource: item.source ?? null };
+    savedSource: item.source ?? null, pullRequestChoice: item.pullRequestChoice ?? null,
+    choiceLocked: item.pullRequestOpened ? PULL_REQUEST_OPEN_TEXT
+      : item.owner && you && item.owner.id !== you ? `Only ${firstName(item.owner.name)} can change it.` : null };
 }
 
 export interface TaskDialogProps {
@@ -91,9 +98,11 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   const [criteriaSource, setCriteriaSource] = useState(opened[2]);
   const [epic, setEpic] = useState<string>(existing?.epicId ?? epicId ?? NO_EPIC);
   const [chosen, setChosen] = useState<TaskRepository[]>(existing?.repositories ?? []);
+  const savedChoice = taskChoice(existing?.pullRequestChoice);
+  const [beforePR, setBeforePR] = useState<TaskPullRequestChoice>(savedChoice);
   // The choices arrive after it opens; until they have, a save could miss
   // a repository the project needs named.
-  const [choices, setChoices] = useState<{ projectName: string; epics: Epic[]; repositories: Repository[] } | null>(null);
+  const [choices, setChoices] = useState<{ projectName: string; epics: Epic[]; repositories: Repository[]; pullRequest: PullRequestChoice } | null>(null);
   const [loadProblem, setLoadProblem] = useState<string | null>(null);
   // Created, but its delivery did not start: a retry delivers it rather
   // than creating a second.
@@ -122,7 +131,8 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
   useEffect(() => {
     let current = true;
     void Promise.all([client.listEpics(projectId), client.getProject(projectId)]).then(
-      ([{ epics }, project]) => current && setChoices({ projectName: project.name, epics, repositories: project.repositories }),
+      ([{ epics }, project]) => current && setChoices({ projectName: project.name, epics, repositories: project.repositories,
+        pullRequest: project.deliveryPolicy.pullRequest ?? DEFAULT_PULL_REQUEST_CHOICE }),
       (err: unknown) => current && setLoadProblem(errorText(err)),
     );
     return () => {
@@ -269,7 +279,8 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
       throw new Error(`A task's images are at most ${limits.messageBytes >> 20} MiB together; remove one to save.`);
     }
     const posted = created === null;
-    const id = created ?? (await client.createTask({ projectId, title: title.trim(), ...fields })).id;
+    const id = created ?? (await client.createTask({ projectId, title: title.trim(), ...fields,
+      ...(beforePR !== "project" ? { pullRequestChoice: beforePR } : {}) })).id;
     setCreated(id);
     // Just created from this very text, with nothing to swap: the PATCH would repeat the POST.
     if (posted && ids.length === 0) return id;
@@ -305,8 +316,10 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
     let id = existing?.id ?? created ?? "";
     void save(
       async () => {
-        if (existing) await client.updateTask(existing.id, fields);
-        else id = await createWithImages(fields, goal.trim(), criteria.items);
+        if (existing) {
+          await client.updateTask(existing.id, fields);
+          if (beforePR !== savedChoice) await client.setPullRequestChoice(existing.id, beforePR === "project" ? null : beforePR);
+        } else id = await createWithImages(fields, goal.trim(), criteria.items);
         if (deliver) await client.deliver(id);
       },
       () => {
@@ -407,6 +420,17 @@ export function TaskDialog({ client, projectId, onClose, existing, epicId, onSav
             onValueChange={setEpic}
             options={[{ value: NO_EPIC, label: "No epic" }, ...(choices?.epics ?? []).map((e) => ({ value: e.id, label: e.title }))]}
           />
+          {choices !== null ? (
+            <Select<TaskPullRequestChoice>
+              label={BEFORE_PR_LABEL}
+              value={beforePR}
+              onValueChange={setBeforePR}
+              options={taskChoiceOptions(choices.pullRequest)}
+              hint={existing?.choiceLocked ?? choiceHint(beforePR, choices.pullRequest)}
+              disabled={Boolean(existing?.choiceLocked)}
+              data-testid="task-before-pr"
+            />
+          ) : null}
           {choosing ? (
             <RepositoryChooser repositories={repositories} chosen={chosen} onChange={setChosen} disabled={existing?.fixed != null} />
           ) : null}

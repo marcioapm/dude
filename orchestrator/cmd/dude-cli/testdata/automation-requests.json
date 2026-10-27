@@ -429,5 +429,37 @@
       "subscriptions"
     ],
     "route": "GET /v1/automations/subscriptions"
+  },
+  {
+    "args": [
+      "task",
+      "before-pr",
+      "wi_12",
+      "ask"
+    ],
+    "route": "PUT /v1/tasks/:id/pull-request-choice",
+    "body": {
+      "choice": "ask"
+    }
+  },
+  {
+    "args": [
+      "task",
+      "before-pr",
+      "wi_12",
+      "project"
+    ],
+    "route": "PUT /v1/tasks/:id/pull-request-choice",
+    "body": {
+      "choice": null
+    }
+  },
+  {
+    "args": [
+      "task",
+      "done-without-pr",
+      "wi_12"
+    ],
+    "route": "POST /v1/tasks/:id/done-without-pull-request"
   }
 ]

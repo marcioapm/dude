@@ -9,7 +9,7 @@
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
-  BUILDER_OFFLINE_SECONDS, EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, blockedRefusal, newId,
+  BUILDER_OFFLINE_SECONDS, EventTypes, PULL_REQUEST_CHOICES, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, blockedRefusal, newId,
   resolveAgentModel, resolveTier, startRefusalWords,
   taskCriteriaInput, taskGoalInput, taskGoalShortBy, taskSourceInputSchema,
 } from "@dude/domain";
@@ -46,7 +46,18 @@ const DECIDING_JSON = `
   -- The live delivery parked by reviewers' open questions (the orchestrator's State.QuestionsHeld).
   COALESCE((SELECT (w.state->>'questionsHeld')::boolean FROM workflow_runs w WHERE w.task_id = tasks.id
     AND w.workflow_type = 'task.delivery' AND w.status IN ('running', 'waiting')
-    ORDER BY w.created_at DESC LIMIT 1), false) AS "heldByQuestions"`;
+    ORDER BY w.created_at DESC LIMIT 1), false) AS "heldByQuestions",
+  -- Before the pull request: the task's own choice (null: the project's), the project's, and whether the
+  -- current attempt has had a pull request (delivery.PullRequestOpenedTx), which fixes the choice.
+  pull_request_choice AS "pullRequestChoice",
+  COALESCE((SELECT p.delivery_policy->>'pullRequest' FROM projects p WHERE p.id = tasks.project_id), 'open') AS "projectPullRequest",
+  EXISTS (SELECT 1 FROM pull_requests pr LEFT JOIN runs r ON r.id = pr.run_id
+    WHERE pr.task_id = tasks.id AND COALESCE(r.attempt, task_attempt(tasks.id)) = task_attempt(tasks.id)) AS "pullRequestOpened",
+  -- Where Deliver holds its live delivery before the pull request, and since when (the orchestrator's State.Hold);
+  -- null once a pull request is on record.
+  (SELECT w.state->'hold' FROM workflow_runs w WHERE w.task_id = tasks.id AND w.workflow_type = 'task.delivery'
+     AND w.status IN ('running', 'waiting') AND w.state ? 'hold' AND NOT w.state ? 'pullRequestIds'
+   ORDER BY w.created_at DESC LIMIT 1) AS hold`;
 
 const TASK_SELECT = taskSelect("origin");
 
@@ -162,6 +173,8 @@ const createTaskInput = z.object({
   acceptanceCriteria: taskCriteriaInput.default([]),
   /** Existing work it starts from (a pull request or a branch); omitted or null for new work. */
   source: taskSourceInput.optional(),
+  /** What Deliver does before its pull request; omitted or null follows the project. Its creator owns it. */
+  pullRequestChoice: z.enum(PULL_REQUEST_CHOICES).nullable().optional(),
 });
 
 async function createTask(ctx: RequestContext): Promise<Response> {
@@ -186,10 +199,10 @@ async function createTask(ctx: RequestContext): Promise<Response> {
     // Whoever creates it drives it until they hand it to someone.
     await scope.sql`
       INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, goal,
-                               acceptance_criteria, status)
+                               acceptance_criteria, status, pull_request_choice)
        VALUES (${taskId}, ${organizationId}, ${input.projectId}, ${project[0]!.number}, ${input.epicId},
                ${input.title}, ${input.goal},
-               ${input.acceptanceCriteria ?? []}::jsonb, 'received')`;
+               ${input.acceptanceCriteria ?? []}::jsonb, 'received', ${input.pullRequestChoice ?? null})`;
      await scope.sql`
        INSERT INTO task_people (task_id, person_id, organization_id, position)
        VALUES (${taskId}, ${ctx.principal.personId}, ${organizationId}, 0)`;
@@ -274,6 +287,27 @@ async function deliverTask(ctx: RequestContext): Promise<Response> {
 async function markTaskDone(ctx: RequestContext): Promise<Response> {
   return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${ctx.params.id}/done`,
     "{}", ctx.principal);
+}
+
+/**
+ * Done without a pull request: the owner's answer to Deliver's hold before
+ * the pull request. The branch stays, no pull request opens, the task is Done.
+ */
+async function doneWithoutPullRequest(ctx: RequestContext): Promise<Response> {
+  return orchestrator(ctx.principal.organizationId, "POST", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/done-without-pull-request`,
+    "{}", ctx.principal);
+}
+
+export const pullRequestChoiceInput = z.object({ choice: z.enum(PULL_REQUEST_CHOICES).nullable() }).strict();
+
+/**
+ * What Deliver does before the task's pull request, the task's own (null:
+ * its project's): its owner only, until a pull request is open.
+ */
+async function setPullRequestChoice(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, pullRequestChoiceInput);
+  return orchestrator(ctx.principal.organizationId, "PUT", `/internal/tasks/${encodeURIComponent(ctx.params.id!)}/pull-request-choice`,
+    JSON.stringify(input), ctx.principal);
 }
 
 // Close and Close and archive (docs/design/tracking-work.md, "Data, API,
@@ -715,6 +749,8 @@ export function registerWorkRoutes(router: Router): void {
   router.post("/v1/tasks/:id/runs", createRun);
   router.post("/v1/tasks/:id/deliver", deliverTask);
   router.post("/v1/tasks/:id/done", markTaskDone);
+  router.post("/v1/tasks/:id/done-without-pull-request", doneWithoutPullRequest);
+  router.put("/v1/tasks/:id/pull-request-choice", setPullRequestChoice);
   router.post("/v1/tasks/:id/close", closeTask);
   router.post("/v1/tasks/:id/reopen", lifecycleStep("reopen"));
   router.post("/v1/tasks/:id/archive", archiveTask);

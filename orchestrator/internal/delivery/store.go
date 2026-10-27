@@ -1342,7 +1342,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		body += fmt.Sprintf("\n\nOne of %d pull requests for this work, all from `%s`; the others are in %s.",
 			len(all), st.Branch, strings.Join(others, ", "))
 	}
-	draft := gh.Settings.OpenAs == "draft" || st.Draft
+	draft := gh.Settings.OpenAs == "draft" || st.Draft || st.draftChoice
 	base := st.BaseFor(repo)
 	in := forge.OpenPullRequest{Slug: slug, Title: title, Body: body, Head: st.Branch, Base: base, Draft: draft}
 	var ref forge.PullRequestRef

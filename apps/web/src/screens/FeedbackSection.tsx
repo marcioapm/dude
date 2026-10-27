@@ -20,6 +20,7 @@ import { Icon, plural } from "@dude/design-system";
 import { FEEDBACK_LIMITS, type FeedbackAnchorInput, type FeedbackItem } from "@dude/domain";
 import type { ApiClient, PullRequest, TaskDetail } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
+import { heldAtGate, sentBackFromGate } from "../beforePullRequest.ts";
 import type { People } from "../people.tsx";
 import {
   FEEDBACK_FULL, Submitter, cardItem, draftAnchorInput, feedbackDestination, runsOf, submitRefusal, threadOf, useTaskFeedback,
@@ -164,13 +165,15 @@ export function FeedbackTray({ client, task, fb, current, prs, openBlockers }: {
   );
 }
 
-/** "3 feedback items hold the merge", beside the status: neutral, never amber, a way to the Feedback tab. */
-export function MergeHoldChip({ count, onOpen }: { count: number; onOpen: () => void }) {
+/** "3 feedback items hold the merge" (or, held before it, the pull request), beside the status: neutral, never amber, a way to the Feedback tab. */
+export function MergeHoldChip({ count, beforePR = false, onOpen }: { count: number; beforePR?: boolean; onOpen: () => void }) {
   if (count === 0) return null;
   return (
-    <Tooltip content="Submitted feedback not yet handled: dude won't merge the pull request, and the task can't be marked done, until each is resolved or answered.">
+    <Tooltip content={beforePR
+      ? "Submitted feedback not yet handled: the pull request is not opened until each is resolved or answered."
+      : "Submitted feedback not yet handled: dude won't merge the pull request, and the task can't be marked done, until each is resolved or answered."}>
       <button type="button" className="mergeHold" onClick={onOpen} data-testid="merge-hold">
-        <Icon name="comments" size={12} /> <b>{plural(count, "feedback item")}</b> {count === 1 ? "holds" : "hold"} the merge
+        <Icon name="comments" size={12} /> <b>{plural(count, "feedback item")}</b> {count === 1 ? "holds" : "hold"} the {beforePR ? "pull request" : "merge"}
       </button>
     </Tooltip>
   );
@@ -248,6 +251,9 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
   const stopped = task.status === "failed" || task.status === "aborted";
   const readOnly = earlier || done;
   const authors = [...new Set(submitted.map((i) => i.author?.name.split(" ")[0] ?? "someone"))];
+  // Held before its pull request (or fixing what was sent from there): an open item holds the pull request's opening.
+  const beforePR = !earlier && (heldAtGate(task) || sentBackFromGate(task));
+  const holds = beforePR ? "pull request" as const : "merge" as const;
 
   const card = (i: FeedbackItem) => {
     const a = i.anchor;
@@ -261,7 +267,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
         onJump={jump}
         onReply={(b) => d.reply(i.id, b)} onResolve={() => d.resolve(i.id)} onReopen={() => d.reopen(i.id)}
         onSaveDraft={(b) => d.saveDraft(i, b, null)} onDelete={() => d.deleteDraft(i.id)} maxLength={FEEDBACK_LIMITS.body}
-        editing={i.status === "draft" ? fb.editing === i.id : undefined}
+        editing={i.status === "draft" ? fb.editing === i.id : undefined} holds={holds}
         onEditingChange={(on) => fb.setEditing(on ? i.id : null)} />
     );
   };
@@ -275,16 +281,27 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
         </PageRailBlock>
         <PageRailBlock label={earlier ? `Attempt ${shown}` : "This attempt"}>
           <KeyValueList items={[
-            { label: earlier ? "Open when set aside" : "Holding the merge", value: String(needs.length) },
+            { label: earlier ? "Open when set aside" : beforePR ? "Holding the pull request" : "Holding the merge", value: String(needs.length) },
             { label: "Resolved", value: String(settled.filter((i) => i.status === "resolved").length) },
             { label: "Answered", value: String(settled.filter((i) => i.status === "replied").length) },
             { label: "From", value: authors.join(", ") || "nobody yet" },
           ]} />
           <p className="muted">Feedback belongs to an attempt. Starting over begins with none; an earlier attempt's stays here to read.</p>
         </PageRailBlock>
-        <PageRailBlock label="What holds the merge">
-          <p className="muted">An item submitted and not yet handled: open, with an agent, or resolved in a commit not yet published. An answer, or anyone's Resolve, lets it go; Reopen holds it again.</p>
-        </PageRailBlock>
+        {beforePR ? (
+          <PageRailBlock label="What holds the pull request">
+            <p className="muted">While Deliver holds it for your review, an item submitted and not yet handled holds the pull request's opening. Resolved or answered, it lets it go.</p>
+          </PageRailBlock>
+        ) : (
+          <PageRailBlock label="What holds the merge">
+            <p className="muted">An item submitted and not yet handled: open, with an agent, or resolved in a commit not yet published. An answer, or anyone's Resolve, lets it go; Reopen holds it again.</p>
+          </PageRailBlock>
+        )}
+        {beforePR ? (
+          <PageRailBlock label="Where it goes">
+            <p className="muted">A fixer on the branch. Its round is reviewed and tested again, then the hold comes back to you at the new heads.</p>
+          </PageRailBlock>
+        ) : null}
       </PageRail>
     }>
       <div className="taskPane feedbackPane" data-testid="feedback-tab">
@@ -314,6 +331,12 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
                 </span>
               </Callout>
             ) : null}
+            {beforePR ? (
+              <p className="feedbackBeforePR" data-testid="feedback-before-pr">
+                <Icon name="lock" size={14} />
+                <span><b>Feedback before the pull request: nothing goes to GitHub.</b> GitHub's reviewers and CI see none of it; it stays on the task.</span>
+              </p>
+            ) : null}
             <GeneralComposer createDraft={d.createDraft} full={d.full} />
             {preview?.wayIn}
           </>
@@ -337,7 +360,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
           <>
             <section className="feedbackGroup" aria-label="Needs handling" data-testid="feedback-needs">
               <h2 className="feedbackGroupHead">Needs handling <span className="ds-tnum">{needs.length}</span>
-                <span className="muted">holds the pull request's merge and Mark done</span></h2>
+                <span className="muted">{beforePR ? "holds the pull request's opening" : "holds the pull request's merge and Mark done"}</span></h2>
               {needs.length === 0 ? <p className="muted">Nothing: every item is resolved or answered.</p> : needs.map(card)}
             </section>
             {filter === "all" ? (

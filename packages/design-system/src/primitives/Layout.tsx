@@ -111,6 +111,8 @@ const CALLOUT_ICON: Record<CalloutTone, IconName> = {
 
 export interface CalloutProps extends HTMLAttributes<HTMLDivElement> {
   readonly tone?: CalloutTone | undefined;
+  /** The body takes the callout's width, so rows inside it span the notice and a trailing action sits at its end. */
+  readonly fill?: boolean | undefined;
 }
 
 /**
@@ -119,11 +121,11 @@ export interface CalloutProps extends HTMLAttributes<HTMLDivElement> {
  * other tones politely (role=status). Not for agent events — those are in
  * the transcript — and not for the outcome of an action, which is a toast.
  */
-export function Callout({ tone = "neutral", className, children, ...rest }: CalloutProps) {
+export function Callout({ tone = "neutral", fill = false, className, children, ...rest }: CalloutProps) {
   return (
     <div role={tone === "danger" ? "alert" : "status"} data-tone={tone} className={cx(styles["callout"], className)} {...rest}>
       <Icon name={CALLOUT_ICON[tone]} size={14} className={styles["calloutIcon"]} />
-      <div className={styles["calloutBody"]}>{children}</div>
+      <div className={cx(styles["calloutBody"], fill && styles["calloutFill"])}>{children}</div>
     </div>
   );
 }

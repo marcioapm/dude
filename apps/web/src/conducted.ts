@@ -42,7 +42,7 @@ export function conductedLines(task: { decider: string; runs: readonly Run[] }, 
   });
   const steers = conductorSteers(events);
   const lined = task.runs.filter((r) => r.conductorRunId || steers.has(r.id));
-  if (task.decider !== "conductor" && lined.length === 0) return [...resets, ...relationNotices(events)].sort(byInstant((l) => l.at));
+  if (task.decider !== "conductor" && lined.length === 0) return [...resets, ...holdNotices(events), ...relationNotices(events)].sort(byInstant((l) => l.at));
   const out: ConductedLine[] = [...resets, ...lined.map((run): ConductedLine => ({ kind: "run", id: run.id, at: run.createdAt, run, steers: steers.get(run.id) ?? [] }))];
   for (const e of events) {
     const p = (e.payload ?? {}) as Record<string, unknown>;
@@ -96,6 +96,19 @@ function pr(p: Record<string, unknown>): string {
 
 /** What dude's notices shown in Chat whoever decides, conductor or not, are about: the task's relations, and a pull request mention a stopped task did not pass on. */
 const RELATION_NOTICES: ReadonlySet<string> = new Set(["unblocked", "auto_started", "auto_start_refused", "auto_start_failed", "auto_start_set", "mention_held"]);
+
+/** Under Deliver, each hold before the pull request, as dude's notice: the first, and each round after the owner's feedback. */
+export function holdNotices(events: readonly PersistedEvent[]): ConductedLine[] {
+  return events.flatMap((e): ConductedLine[] => {
+    const p = (e.payload ?? {}) as Record<string, unknown>;
+    if (e.eventType !== EventTypes.ConductorDecisionAwaited || p.point !== "before_pull_request" || p.policy !== "openPullRequest"
+      || !Array.isArray(p.actions) || p.actions.length > 0) return [];
+    const round = typeof p.round === "number" && p.round > 1 ? p.round : null;
+    return [{ kind: "notice", id: e.eventId, at: e.occurredAt,
+      text: round ? `Back at the hold, round ${round}: reviewed and tested again. Deliver is holding the pull request for your review.`
+        : "Deliver is holding the pull request for your review." }];
+  });
+}
 
 /** dude's notices about what the task waits on — unblocked, started when unblocked, or not — oldest first. */
 export function relationNotices(events: readonly PersistedEvent[]): ConductedLine[] {

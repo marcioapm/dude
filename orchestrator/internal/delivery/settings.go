@@ -142,12 +142,17 @@ func (rs RoleSettings) TimeLimit() int {
 
 // ResolvePolicy is the delivery policy a task runs with: the factory's
 // defaults, then its organization's, then its project's, then the task's
-// own — each layer setting only what it names.
+// own — each layer setting only what it names. The first layer is the
+// organisation's: a project-only key stored there (ProjectOnlyPolicyKeys)
+// is passed over.
 func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 	p := DefaultPolicy()
 	for i, raw := range layers {
 		if len(raw) == 0 {
 			continue
+		}
+		if i == 0 {
+			raw = withoutProjectOnlyKeys(raw)
 		}
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return p, fmt.Errorf("delivery policy layer %d: %w", i, err)
@@ -156,8 +161,43 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 			return p, fmt.Errorf("delivery policy layer %d: %w", i, err)
 		}
 	}
+	if err := p.checkPullRequest(); err != nil {
+		return p, err
+	}
 	err := p.checkReviewerKeys()
 	return p, err
+}
+
+// withoutProjectOnlyKeys is an organisation's stored policy with the keys
+// only a project sets removed; raw as it is when it is not an object.
+func withoutProjectOnlyKeys(raw json.RawMessage) json.RawMessage {
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(raw, &keys) != nil {
+		return raw
+	}
+	found := false
+	for _, k := range ProjectOnlyPolicyKeys {
+		if _, ok := keys[k]; ok {
+			delete(keys, k)
+			found = true
+		}
+	}
+	if !found {
+		return raw
+	}
+	out, err := json.Marshal(keys)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// checkPullRequest refuses a pullRequest value that is not one of its three.
+func (p *Policy) checkPullRequest() error {
+	if !IsPullRequestChoice(p.PullRequest) {
+		return fmt.Errorf("pullRequest: %q is not open, draft or ask", p.PullRequest)
+	}
+	return nil
 }
 
 // Prompts are the prompts one Run is told with: the organization's (nil

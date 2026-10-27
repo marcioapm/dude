@@ -186,6 +186,21 @@ export const REVIEWER_CATEGORY_IN_SENTENCE: Partial<Record<ReviewerCategory, str
 };
 
 /**
+ * What Deliver does before the pull request (a project's `pullRequest`, and
+ * a task's own over it). "open" is the default.
+ */
+export const PULL_REQUEST_CHOICES = ["open", "draft", "ask"] as const;
+export type PullRequestChoice = (typeof PULL_REQUEST_CHOICES)[number];
+export const DEFAULT_PULL_REQUEST_CHOICE: PullRequestChoice = "open";
+
+/** Each choice's name and its one line, wherever the choice is shown. */
+export const PULL_REQUEST_CHOICE: Record<PullRequestChoice, { label: string; hint: string }> = {
+  open: { label: "Open it", hint: "When review, simplify and the test pass, Deliver opens the pull request." },
+  draft: { label: "Open as draft", hint: "Deliver opens a draft pull request: no reviewers are asked, but CI still runs on most repositories." },
+  ask: { label: "Ask me first", hint: "Deliver stops for your review before the pull request: you open it, send feedback, or finish without one." },
+};
+
+/**
  * How a project's work is delivered, over the factory's defaults. Each field
  * left out keeps the default; a task's own overrides layer on top.
  */
@@ -216,6 +231,12 @@ export const deliveryPolicySchema = z
     conductorEditLines: z.number().int().min(1).max(10_000),
     /** The most changed files a conductor may publish at once. */
     conductorEditFiles: z.number().int().min(1).max(1000),
+    /**
+     * What Deliver does once review, simplify and the test pass and no pull
+     * request is open: open it, open it as a draft, or ask the task's owner
+     * first. A project's setting only: an organisation never sets it.
+     */
+    pullRequest: z.enum(PULL_REQUEST_CHOICES),
   })
   .partial()
   .strict();
@@ -467,6 +488,27 @@ export const taskSchema = z.object({
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
   /** Its delivery is parked until its reviewers' open questions are answered or withdrawn. */
   heldByQuestions: z.boolean().default(false),
+  /** What Deliver does before its pull request, its own: null follows the project's (`projectPullRequest`). */
+  pullRequestChoice: z.enum(PULL_REQUEST_CHOICES).nullable().default(null),
+  /** Its project's choice before the pull request, as its settings say now. */
+  projectPullRequest: z.enum(PULL_REQUEST_CHOICES).default("open"),
+  /** Its current attempt has had a pull request: the choice no longer applies, and is fixed. */
+  pullRequestOpened: z.boolean().default(false),
+  /**
+   * Where Deliver last held its live delivery before the pull request: the
+   * round, the commits since the round before was shown (null: not
+   * counted), what each repository would open, when it was held, and
+   * whether the owner's feedback from it is being fixed (sentBack); null
+   * when it never held, and once a pull request is on record.
+   */
+  hold: z.object({
+    round: z.number().int(),
+    commitsSince: z.number().int().nullable().default(null),
+    repos: z.array(z.object({ name: z.string(), head: z.string(), base: z.string(),
+      additions: z.number().int().nullable().default(null), deletions: z.number().int().nullable().default(null) })).default([]),
+    since: z.string().nullable().default(null),
+    sentBack: z.boolean().default(false),
+  }).nullable().default(null),
   /** Why a person ended it (lifecycle.ts); null while it hasn't. */
   resolution: z.enum(["wont_do", "duplicate", "cant_reproduce", "nothing_to_merge"]).nullable().default(null),
   /** Closed as a duplicate of this key. */

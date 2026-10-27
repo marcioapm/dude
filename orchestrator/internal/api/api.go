@@ -142,6 +142,7 @@ func (s *Server) Handler() http.Handler {
 	s.sessionRoutes(mux)
 	s.noteRoutes(mux)
 	s.feedbackRoutes(mux)
+	s.pullRequestGateRoutes(mux)
 	s.chatProviderRoutes(mux)
 	// dude's own stance for each role: the one section of its instruction
 	// file a saved prompt takes the place of, and where a first edit starts.
@@ -1226,7 +1227,7 @@ func (s *Server) markDone(w http.ResponseWriter, r *http.Request, org string) er
 		if n, err := delivery.BlockingFeedbackTx(r.Context(), tx, id, 0); err != nil {
 			return err
 		} else if n > 0 {
-			return fail(http.StatusConflict, "feedback_open", "%d feedback items from people are not handled yet", n)
+			return fail(http.StatusConflict, "feedback_open", "%s", delivery.FeedbackNotHandledText(n))
 		}
 		if d != nil && d.Step == "awaitRead" && d.Live() {
 			if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET status = 'completed', awaiting_signals = '[]'::jsonb,
