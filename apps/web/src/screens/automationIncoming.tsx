@@ -482,7 +482,6 @@ export function RunNowIncomingDialog({ client, a, picked: initial, mode: initial
 // A run an incoming delivery started
 // ---------------------------------------------------------------------------
 
-/** The run's trigger: the delivery that started it, its group, its conditions, and the later deliveries sent to it. */
 /**
  * What started an incoming run, as one line of its Run section: the
  * delivery's id (opening it), when it was received, the conditions that
