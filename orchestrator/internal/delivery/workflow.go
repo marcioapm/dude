@@ -1371,15 +1371,19 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 }
 
 // testRoundKey is key, distinct per fix round a failed test started: the
-// simplify and test after it are new Runs, not the ones before it.
+// simplify and test after it are new Runs, not the ones before it. It is
+// also distinct per visit: a decision carried out (Decisions) or a review
+// round completed (Iteration) since the last visit makes new Runs, while a
+// replay of the same visit finds its own.
 func testRoundKey(sc workflow.StepContext, st *State, part string) string {
+	visit := fmt.Sprint(part, ":visit:", st.Decisions, ".", st.Iteration)
 	if st.Integration != nil {
-		return key(sc, st, ":integration:", st.Integration.RunID, part, ":test-round:", st.TestFixRounds)
+		return key(sc, st, ":integration:", st.Integration.RunID, visit, ":test-round:", st.TestFixRounds)
 	}
 	if st.TestFixRounds > 0 {
-		return key(sc, st, part, ":after-test:", st.TestFixRounds)
+		return key(sc, st, visit, ":after-test:", st.TestFixRounds)
 	}
-	return key(sc, st, part)
+	return key(sc, st, visit)
 }
 
 func (w *steps) awaitTest(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
