@@ -116,6 +116,11 @@ func TestResumingAnAbortedTaskContinuesTheSameAgent(t *testing.T) {
 	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume", "note": "Keep the API."}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
 	}
+	// The pick-up hands the note to the kept Runs only: the workflow's
+	// state, which a later phase Run's person_note is taken from, has none.
+	if said := w.str(`SELECT COALESCE(state->>'personSaid', '') FROM workflow_runs WHERE task_id = $1`, wi); said != "" {
+		t.Errorf("the resume put the note in the workflow's state: %q", said)
+	}
 	if s := w.taskStatus(wi); s != "running" {
 		t.Errorf("a resumed task is %s", s)
 	}
