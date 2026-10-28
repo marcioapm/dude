@@ -884,10 +884,14 @@ their creator.
   the bot is in for 5 minutes and, past 50 pages of 200, asks for the id
   rather than saying there is none) or an id. The channel is looked up in the
   tool's prepare step (`.before(resolvePostChannel)`), outside the call's
-  transaction. `text` is 1–40,000 characters of the agent's own text (Slack's
-  limit; past a block's 3,000 it goes as the message's plain text,
-  `slack.PostText`); like every tool call's arguments it is redacted with the
-  run's secret values before it leaves dude. **10 posts a run**: the 11th is
+  transaction. `text` is 1–40,000 characters of the agent's own Slack mrkdwn
+  (Slack's limit), sent unchanged at every length as the message's text with
+  no blocks (`slack.PostText`, `mrkdwn: true`, `unfurl_links: false`). Labelled
+  links use `<https://example.com|label>`. Plain-text system replies still go
+  through `PostReply` and escape mrkdwn control characters; providers without
+  `PostText` retain the `PostReply` fallback. Like every tool call's arguments,
+  the text is redacted with the run's secret values before it leaves dude.
+  **10 posts a run**: the 11th is
   refused ("post_to_chat is limited to 10 messages per run"). Only a call
   that reached `chat.postMessage` counts, including one Slack refused
   (`countingAttempts`, counted from the ledger under a lock on the run's row);
