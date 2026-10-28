@@ -295,19 +295,15 @@ func postOutside(ctx context.Context, c Caller, in postChecked) (postDone, error
 	return postDone{ts: ts, permalink: in.provider.Permalink(in.inst, in.channelID, ts, "")}, nil
 }
 
-// textPoster is a provider that posts text past what one of PostReply's
-// blocks takes (blockMax characters).
+// textPoster is a provider that preserves intentional mrkdwn without blocks.
 type textPoster interface {
 	PostText(ctx context.Context, inst chat.Installation, conversation, text string) (string, error)
 }
 
-// blockMax is what one Block Kit section's text takes (Slack's limit).
-const blockMax = 3000
-
-// post posts in.Text with no thread: through PostReply, or, longer than a
-// block takes, as the message's plain mrkdwn text.
+// post posts in.Text with no thread, preserving mrkdwn through PostText when
+// supported, and falling back to PostReply for other providers.
 func post(ctx context.Context, in postChecked) (string, error) {
-	if p, ok := in.provider.(textPoster); ok && utf8.RuneCountInString(in.Text) > blockMax {
+	if p, ok := in.provider.(textPoster); ok {
 		return p.PostText(ctx, in.inst, in.channelID, in.Text)
 	}
 	return in.provider.PostReply(ctx, in.inst, in.channelID, "", chat.Reply{Text: in.Text})

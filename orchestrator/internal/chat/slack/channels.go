@@ -66,9 +66,8 @@ func (p *Provider) ForgetChannel(inst chat.Installation, name string) {
 	p.channels.forget(channelKey{inst.ID, channelName(name)})
 }
 
-// PostText posts text (mrkdwn) as a new message with no blocks, for text
-// longer than one section block takes (3,000 characters; Slack's own limit
-// on a message is 40,000), and returns its ts.
+// PostText posts intentional mrkdwn as a new message with no blocks and
+// returns its ts. Slack's message text limit is 40,000 characters.
 func (p *Provider) PostText(ctx context.Context, inst chat.Installation, conversation, text string) (string, error) {
 	var out struct {
 		TS string `json:"ts"`

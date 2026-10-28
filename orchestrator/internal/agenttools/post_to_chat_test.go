@@ -1,8 +1,12 @@
 package agenttools_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -31,11 +35,12 @@ func setupChat(t *testing.T, installed bool) chatFixture {
 
 // chatOptions vary setupChat: conversations.list pages of pageSize channels
 // (0: as asked), more channels added before the fake serves, and the
-// server's BeforeCall hook.
+// server's BeforeCall hook and outgoing chat.postMessage arguments.
 type chatOptions struct {
 	pageSize   int
 	more       func(*fakeslack.Server)
 	beforeCall func(tool string)
+	postArgs   func(map[string]json.RawMessage)
 }
 
 func setupChatWith(t *testing.T, installed bool, o chatOptions) chatFixture {
@@ -48,7 +53,26 @@ func setupChatWith(t *testing.T, installed bool, o chatOptions) chatFixture {
 	if o.more != nil {
 		o.more(fake)
 	}
-	srv := httptest.NewServer(fake.WithChannelPages(o.pageSize))
+	handler := fake.WithChannelPages(o.pageSize)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if o.postArgs != nil && r.URL.Path == "/api/chat.postMessage" {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+			var args map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &args); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			o.postArgs(args)
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
 	f := setupWith(t, &agenttools.Server{ChatProviders: chat.Registry{"slack": p}, BeforeCall: o.beforeCall})
@@ -289,7 +313,7 @@ func TestPostToChatRefusesTextOverSlacksLimit(t *testing.T) {
 	if n := len(c.fake.BotMessages()); n != 0 {
 		t.Errorf("%d messages reached Slack", n)
 	}
-	// At the limit it posts: past a block's 3,000 characters, as plain text.
+	// At Slack's message text limit it still posts without section blocks.
 	long := strings.Repeat("é", 40000)
 	if status, out := c.postToChat(t, "#engineering", long); status != 200 {
 		t.Fatalf("at the limit: %d %v", status, out)
@@ -426,10 +450,8 @@ func TestPostToChatConcurrentCallsTakeTheTenthPostOnce(t *testing.T) {
 	}
 }
 
-// Past one block's 3,000 characters the post is the message's plain text,
-// with no blocks (Slack refuses a longer section: invalid_blocks); a short
-// one is a section block.
-func TestPostToChatPostsLongTextWithoutBlocks(t *testing.T) {
+// Intentional mrkdwn is posted without section blocks at every message length.
+func TestPostToChatPostsTextWithoutBlocks(t *testing.T) {
 	c := setupChat(t, true)
 	long := strings.Repeat("é", 3001)
 	if status, out := c.postToChat(t, "#engineering", long); status != 200 {
@@ -442,8 +464,41 @@ func TestPostToChatPostsLongTextWithoutBlocks(t *testing.T) {
 	if len(msgs) != 2 || msgs[0].Text != long || len(msgs[0].Blocks) != 0 && string(msgs[0].Blocks) != "null" {
 		t.Fatalf("the long post: %d messages, blocks %.80s", len(msgs), msgs[0].Blocks)
 	}
-	if !strings.Contains(string(msgs[1].Blocks), `"type":"section"`) {
-		t.Errorf("the short post's blocks: %s", msgs[1].Blocks)
+	if msgs[1].Text != "short" || len(msgs[1].Blocks) != 0 && string(msgs[1].Blocks) != "null" {
+		t.Errorf("the short post: text %q, blocks %s", msgs[1].Text, msgs[1].Blocks)
+	}
+}
+
+func TestPostToChatPreservesIntentionalMrkdwnLinksAtEveryLength(t *testing.T) {
+	const link = "<https://github.com/acme/repo/pull/1|repo#1>"
+	for _, length := range []int{len(link), 3000, 3001} {
+		t.Run(fmt.Sprint(length), func(t *testing.T) {
+			text := link + strings.Repeat("x", length-len(link))
+			var posts atomic.Int32
+			c := setupChatWith(t, true, chatOptions{postArgs: func(args map[string]json.RawMessage) {
+				posts.Add(1)
+				var got string
+				if err := json.Unmarshal(args["text"], &got); err != nil || got != text {
+					t.Errorf("intentional labelled link not preserved: text %.100q, want %.100q: %v", got, text, err)
+				}
+				if string(args["mrkdwn"]) != "true" || string(args["unfurl_links"]) != "false" {
+					t.Errorf("Slack options: mrkdwn=%s unfurl_links=%s", args["mrkdwn"], args["unfurl_links"])
+				}
+				if blocks := args["blocks"]; len(blocks) != 0 && string(blocks) != "null" {
+					t.Errorf("unexpected blocks: %.100s", blocks)
+				}
+			}})
+			if status, out := c.postToChat(t, "#engineering", text); status != 200 {
+				t.Fatalf("post: %d %v", status, out)
+			}
+			msgs := c.fake.BotMessages()
+			if posts.Load() != 1 || len(msgs) != 1 {
+				t.Fatalf("Slack received %d requests and %d messages", posts.Load(), len(msgs))
+			}
+			if msgs[0].Text != text || msgs[0].Channel != "C0ENGINEER" || msgs[0].ThreadTS != msgs[0].TS {
+				t.Errorf("Slack message: channel %q, thread %q, ts %q, text %.100q", msgs[0].Channel, msgs[0].ThreadTS, msgs[0].TS, msgs[0].Text)
+			}
+		})
 	}
 }
 
