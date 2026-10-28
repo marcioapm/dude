@@ -193,6 +193,20 @@ func childStop(t *testing.T, w *resumeWorld, id string) (control, reason string,
 	return control, reason, keep
 }
 
+func childFamilySnapshot(w *resumeWorld) string {
+	w.t.Helper()
+	var raw string
+	if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object(
+		't', (SELECT status FROM tasks WHERE id = $1),
+		'w', (SELECT jsonb_build_object('status', status, 'step', step, 'state', state, 'attempt', attempt)
+			FROM workflow_runs WHERE task_id = $1),
+		'attempts', (SELECT jsonb_object_agg(id, attempt) FROM runs WHERE id IN ('run_parent', 'run_child', 'run_sibling')))::text`,
+		w.run.TaskID).Scan(&raw); err != nil {
+		w.t.Fatal(err)
+	}
+	return raw
+}
+
 // A person aborting a conductor's (or a session's) child while the syncer
 // records a batch of that child's lifecycle in one transaction. The batch
 // holds the child's row and has updated it once; the abort takes the
@@ -206,19 +220,7 @@ func TestAChildAbortBesideItsLifecycleBatchDoesNotDeadlock(t *testing.T) {
 		t.Run(parent, func(t *testing.T) {
 			w := newResumeWorld(t)
 			child := childFamily(w, parent == "session")
-			snapshot := func() string {
-				var raw string
-				if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object(
-					't', (SELECT status FROM tasks WHERE id = $1),
-					'w', (SELECT jsonb_build_object('status', status, 'step', step, 'state', state, 'attempt', attempt)
-						FROM workflow_runs WHERE task_id = $1),
-					'attempts', (SELECT jsonb_object_agg(id, attempt) FROM runs WHERE id IN ('run_parent', 'run_child', 'run_sibling')))::text`,
-					w.run.TaskID).Scan(&raw); err != nil {
-					t.Fatal(err)
-				}
-				return raw
-			}
-			before := snapshot()
+			before := childFamilySnapshot(w)
 			batchErr, abortErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error {
 				return app.InOrg(ctx, child.Org, func(tx pgx.Tx) error { return delivery.AbortChildTx(ctx, tx, child.TaskID, child.ID) })
 			})
@@ -242,7 +244,7 @@ func TestAChildAbortBesideItsLifecycleBatchDoesNotDeadlock(t *testing.T) {
 					t.Errorf("%s: status %s, control %s, stop reason %q; want it live", id, status, control, reason)
 				}
 			}
-			if after := snapshot(); after != before {
+			if after := childFamilySnapshot(w); after != before {
 				t.Errorf("the task or its delivery changed:\nbefore %s\nafter  %s", before, after)
 			}
 		})
@@ -303,19 +305,7 @@ func TestAParentEndingBesideItsChildsLifecycleBatchDoesNotDeadlock(t *testing.T)
 			if c.before != nil {
 				c.before(w)
 			}
-			snapshot := func() string {
-				var raw string
-				if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object(
-					't', (SELECT status FROM tasks WHERE id = $1),
-					'w', (SELECT jsonb_build_object('status', status, 'step', step, 'state', state, 'attempt', attempt)
-						FROM workflow_runs WHERE task_id = $1),
-					'attempts', (SELECT jsonb_object_agg(id, attempt) FROM runs WHERE id IN ('run_parent', 'run_child', 'run_sibling')))::text`,
-					w.run.TaskID).Scan(&raw); err != nil {
-					t.Fatal(err)
-				}
-				return raw
-			}
-			before := snapshot()
+			before := childFamilySnapshot(w)
 			batchErr, opErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error { return c.op(ctx, app, w) })
 			if err != nil {
 				t.Fatalf("race: %v (batch %v, %s %v)", err, batchErr, c.name, opErr)
@@ -339,7 +329,7 @@ func TestAParentEndingBesideItsChildsLifecycleBatchDoesNotDeadlock(t *testing.T)
 				t.Errorf("the parent: status %s, control %s, stop reason %q, keep %v; want %s, %s, no child stop reason, keep %v",
 					status, control, reason, keep, c.parentStatus, c.parentControl, c.parentKeep)
 			}
-			if after := snapshot(); after != before {
+			if after := childFamilySnapshot(w); after != before {
 				t.Errorf("the task, its delivery or family attempts changed:\nbefore %s\nafter  %s", before, after)
 			}
 		})

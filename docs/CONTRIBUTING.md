@@ -651,14 +651,13 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
 
 ### Child lifecycle lock modes
 
-Child lifecycle operations take locks in this order: the session or task
-Chat advisory lock, the parent Run, then (for task children) the delivery
-and task, then the child Run. The parent is `FOR NO KEY UPDATE`, the task
-is `FOR NO KEY UPDATE`, and the delivery and child are `FOR UPDATE`.
+`lockChildTx` takes the session or task Chat advisory lock, the parent Run,
+then (for task children) the delivery and task, then the child Run. Parent
+and task use `FOR NO KEY UPDATE`; delivery and child use `FOR UPDATE`.
 `EndChildParent`, `MarkChildParentEndedTx` and `LockLiveWorkTx` also lock
 the parent `FOR NO KEY UPDATE` before stopping children. These operations
-neither change the parent's key nor delete it; the lock still excludes
-concurrent parent writers.
+neither change the parent's key nor delete it; concurrent parent writers
+still wait.
 
 Do not strengthen those parent locks to `FOR UPDATE`: a child's follower
 holds the child while applying its lifecycle frames in one batch. A second
@@ -666,8 +665,8 @@ UPDATE in that transaction rechecks the child's foreign keys to the parent
 (`parent_run_id`, `conductor_run_id`), requiring `KEY SHARE`. If a parent
 holder blocks that check while waiting for the child, they deadlock.
 Child admission retains `FOR UPDATE` on the parent: it reads existing
-children without locking or updating them, and inserts its own new child;
-it does not wait on a child row held by a follower. Keep the lock order.
+children without locking or updating them, so it does not wait on a child
+row held by a follower. Keep the lock order.
 
 ### Servers and branch previews
 
