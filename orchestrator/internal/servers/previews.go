@@ -380,18 +380,16 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 		// default branch where nothing was published yet. Never a
 		// candidate: unchecked, and deleted once the task branch takes it.
 		ref := tr.DefaultBranch
-		if r.TaskID == "" {
-			repos = append(repos, previewRef{tr.Name, tr.URL, ref, tr.SetupScript})
-			continue
-		}
-		var branch string
-		err := tx.QueryRow(ctx, `SELECT branch FROM runs WHERE task_id = $1 AND branch IS NOT NULL AND heads ? $2
+		if r.TaskID != "" {
+			var branch string
+			err := tx.QueryRow(ctx, `SELECT branch FROM runs WHERE task_id = $1 AND branch IS NOT NULL AND heads ? $2
 			AND `+delivery.NotGeneratedCandidateSQL("runs")+` ORDER BY created_at DESC LIMIT 1`, r.TaskID, tr.Name).Scan(&branch)
-		switch {
-		case err == nil:
-			ref = branch
-		case !db.IsNotFound(err):
-			return nil, err
+			switch {
+			case err == nil:
+				ref = branch
+			case !db.IsNotFound(err):
+				return nil, err
+			}
 		}
 		repos = append(repos, previewRef{tr.Name, tr.URL, ref, tr.SetupScript})
 	}

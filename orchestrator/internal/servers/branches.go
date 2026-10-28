@@ -17,14 +17,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
 
-// Branch previews: a preview of a project's branch, with no task. Started
-// from the CLI, it serves every project repository at the branch where the
-// repository has it (else its default branch), syncs when the branch is
-// pushed to (a push delivery, BranchEvent), and ends when the branch is
-// deleted in the primary repository (a push with deleted, a delete
-// delivery, or the daily check, CheckBranches) or after 30 days unused
-// (reapAfter). Only the wakeable path takes them: nothing else serves a
-// preview with no task to end it.
+// Branch previews serve a project's branch without a task. Secondary
+// repositories use their default branch where that branch is absent.
+// Pushes sync the preview; primary-repository deletion or 30 days unused
+// ends it. Only the wakeable path serves branch previews.
 
 // BranchPreview is a branch preview as the API shows it.
 type BranchPreview struct {
@@ -81,7 +77,7 @@ func ValidBranch(b string) bool {
 	return true
 }
 
-// primaryRepo is the repository a project's preview servers run in (the
+// primaryRepoSlug is the repository a project's preview servers run in (the
 // first by name, as taskRefs orders them): its slug on the forge, "" for
 // one the forge does not hold.
 func primaryRepoSlug(ctx context.Context, tx pgx.Tx, projectID string) (slug string, found bool, err error) {
@@ -127,10 +123,10 @@ func (s *Service) StartBranchPreview(ctx context.Context, gh *forge.GitHub, org,
 		}
 		return nil
 	})
-	if err != nil || existing != nil {
-		if existing != nil {
-			return *existing, nil
-		}
+	if existing != nil {
+		return *existing, nil
+	}
+	if err != nil {
 		return BranchPreview{}, err
 	}
 	if slug == "" || gh == nil {
@@ -241,9 +237,8 @@ func (s *Service) BranchPreview(ctx context.Context, org, id string) (BranchPrev
 	return out, err
 }
 
-// StopBranchPreview ends a live branch preview for good; the sweep deletes
-// its lux servers and cancels its Run. One already ended is answered as it
-// is.
+// StopBranchPreview ends a live branch preview; the sweep cleans up lux.
+// An ended preview is returned unchanged.
 func (s *Service) StopBranchPreview(ctx context.Context, org, id, actor string, identity ...string) (BranchPreview, error) {
 	actorType := ledger.ActorHuman
 	if len(identity) == 2 {
@@ -439,11 +434,11 @@ func (p *Previews) branchGone(ctx context.Context, org, projectID, branch string
 		return false, err
 	}
 	gh, err := p.forge(ctx, org)
-	if err != nil || gh == nil || slug == "" {
-		if err == nil {
-			err = errors.New("no forge holds the primary repository")
-		}
+	if err != nil {
 		return false, err
+	}
+	if gh == nil || slug == "" {
+		return false, errors.New("no forge holds the primary repository")
 	}
 	return gh.BranchGone(ctx, slug, branch)
 }
