@@ -55,12 +55,13 @@ const latestInput = `SELECT cursor, occurred_at, payload FROM events WHERE sessi
 	ORDER BY cursor DESC LIMIT 1`
 
 // repliesThisTurn counts the session's reply_in_thread attempts after that
-// input ($3 its cursor, the exact boundary). occurred_at is stamped by the
-// writing process's clock, so the range starts a minute before the input's
-// ($2): it only narrows the scan of events_session_tool_attempts_idx
-// (session_id, occurred_at) to the turn.
+// input: cursor > $3 is the exact boundary. occurred_at is stamped by each
+// writer's clock, so its range starts a minute before the input's ($2) and
+// only narrows the read to the turn along events_session_tool_attempts_idx
+// (session_id, occurred_at). "cursor + 0" keeps the planner off cursor's
+// own indexes, whose range is every tenant's events since the turn began.
 const repliesThisTurn = `SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'agent.tool.attempted'
-	AND payload->>'tool' = 'reply_in_thread' AND occurred_at >= $2::timestamptz - interval '1 minute' AND cursor > $3`
+	AND payload->>'tool' = 'reply_in_thread' AND occurred_at >= $2::timestamptz - interval '1 minute' AND cursor + 0 > $3`
 
 type replyInThreadIn struct {
 	Text string `json:"text"`
