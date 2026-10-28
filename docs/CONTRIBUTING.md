@@ -694,7 +694,7 @@ row held by a follower. Keep the lock order.
   (done, failed, aborted). A stopped preview's lux Run is cancelled, a lost
   one too (lux keeps a lost Run to resume).
 - **A branch preview of a project** (`runs.preview_branch`, migration 221)
-  is a preview with no task: `dude preview start PROJECT BRANCH`
+  is a preview with no task: `dude preview create PROJECT BRANCH`
   (`servers/branches.go`, `POST /v1/projects/:id/branch-previews`), one live
   per project branch, refused (`branch_not_found`) when the project's first
   repository has no such branch on GitHub. Wakeable only. It serves every

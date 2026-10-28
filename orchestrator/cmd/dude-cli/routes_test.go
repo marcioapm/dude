@@ -288,9 +288,10 @@ var routeCases = []routeCase{
 	{[]string{"question", "list", "wi_12"}, "GET", "/v1/questions?taskId=wi_12", ``},
 	{[]string{"task", "artifacts", "wi_12"}, "GET", "/v1/artifacts?taskId=wi_12", ``},
 	{[]string{"task", "servers", "wi_12"}, "GET", "/v1/tasks/wi_12/servers", ``},
-	// start reads the preview again by id until its servers have URLs.
-	{[]string{"preview", "start", "ABS", "feature/login"}, "GET", "/v1/branch-previews/run_bp", ``},
-	{[]string{"preview", "start", "ABS", "feature/login", "--wait", "0"}, "POST", "/v1/projects/prj_1/branch-previews", `{"branch":"feature/login"}`},
+	{[]string{"preview", "create", "ABS", "feature/login"}, "POST", "/v1/projects/prj_1/branch-previews", `{"branch":"feature/login"}`},
+	{[]string{"preview", "create", "ABS", "feature/login", "--start"}, "POST", "/v1/runs/run_bp/servers/web/start", ``},
+	{[]string{"preview", "start", "ABS", "feature/login"}, "POST", "/v1/runs/run_bp/servers/web/start", ``},
+	{[]string{"preview", "start", "run_bp", "--wait", "0"}, "POST", "/v1/runs/run_bp/servers/web/start", ``},
 	{[]string{"preview", "list", "ABS"}, "GET", "/v1/projects/prj_1/branch-previews", ``},
 	{[]string{"preview", "show", "run_bp"}, "GET", "/v1/branch-previews/run_bp", ``},
 	{[]string{"preview", "stop", "run_bp"}, "DELETE", "/v1/branch-previews/run_bp", ``},

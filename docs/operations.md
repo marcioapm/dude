@@ -410,7 +410,7 @@ added keep their old labels until they are replaced.
   aborted has its lux servers deleted — their URLs then say "This preview
   is gone" — and then its Run cancelled. lux's own 30-day expiry is the
   safety net; a server lux expires or someone deletes ends its preview.
-- **A branch preview** (`dude preview start PROJECT BRANCH`, no task)
+- **A branch preview** (`dude preview create PROJECT BRANCH`, no task)
   ends when its branch is deleted (GitHub's `push` with `deleted`, or
   `delete`, on the project's first repository; a daily check asks GitHub
   as the backstop and ends it only on a definite not-found), when stopped,
