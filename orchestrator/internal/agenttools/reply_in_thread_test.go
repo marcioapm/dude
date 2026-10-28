@@ -2,6 +2,7 @@ package agenttools_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -138,9 +139,33 @@ func TestReplyInThreadRedactsTheRunsSecretValues(t *testing.T) {
 	}
 }
 
+// The agent's text is escaped once, as every other reply: a disguised link
+// or a person's mention arrives as literal text, in the text and the block.
+func TestReplyInThreadEscapesTheAgentsMarkup(t *testing.T) {
+	th := setupThread(t, true, nil)
+	status, out := th.reply(t, `{"text":"Fixed in <https://evil.example|https://github.com/acme/api/pull/12> & <@U123> *now*"}`)
+	if status != 200 {
+		t.Fatalf("reply: %d %v", status, out)
+	}
+	want := "Fixed in &lt;https://evil.example|https://github.com/acme/api/pull/12&gt; &amp; &lt;@U123&gt; *now*"
+	msgs := th.fake.BotMessages()
+	if len(msgs) != 1 || msgs[0].Text != want {
+		t.Fatalf("Slack got %+v", msgs)
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	if err := json.Unmarshal(msgs[0].Blocks, &blocks); err != nil || len(blocks) == 0 || blocks[0].Type != "section" || blocks[0].Text.Text != want {
+		t.Fatalf("blocks %s (%v)", msgs[0].Blocks, err)
+	}
+}
+
 func TestReplyInThreadRefusesABroadcastAndAnOverlongText(t *testing.T) {
 	th := setupThread(t, true, nil)
-	for _, b := range []string{"<!channel>", "<!here>", "<!everyone>", "<!here|here>"} {
+	for _, b := range []string{"<!channel>", "<!here>", "<!everyone>", "<!here|here>", "<!subteam^S1|@eng>"} {
 		status, out := th.reply(t, fmt.Sprintf(`{"text":"Heads up %s: it is fixed"}`, b))
 		if status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "never notifies a whole channel") {
 			t.Errorf("%s: %d %v", b, status, out)
@@ -156,8 +181,8 @@ func TestReplyInThreadRefusesABroadcastAndAnOverlongText(t *testing.T) {
 	if n := len(th.fake.BotMessages()); n != 0 {
 		t.Errorf("%d posts reached Slack", n)
 	}
-	if n := th.count(t, `SELECT count(*) FROM events WHERE session_id = 'ssn_thread' AND event_type = $1`, agenttools.EvThreadReplyRefused); n != 6 {
-		t.Errorf("%d refusals recorded on the session, want 6", n)
+	if n := th.count(t, `SELECT count(*) FROM events WHERE session_id = 'ssn_thread' AND event_type = $1`, agenttools.EvThreadReplyRefused); n != 7 {
+		t.Errorf("%d refusals recorded on the session, want 7", n)
 	}
 	// None of them spent the turn's budget.
 	for i := range 3 {

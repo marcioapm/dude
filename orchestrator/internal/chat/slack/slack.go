@@ -737,14 +737,6 @@ func (p *Provider) Permalink(inst chat.Installation, conversation, message, thre
 // LinkURL buttons, never markup in the text, so nothing it says is lost.
 var mrkdwnEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
 
-// replyText is r's words as mrkdwn: escaped once, unless they are markup.
-func replyText(r chat.Reply) string {
-	if r.Markup {
-		return r.Text
-	}
-	return mrkdwnEscape(r.Text)
-}
-
 // blocks is a reply as Block Kit: its words, its link as a button, and its
 // row: a line per choice made from it, then a button per choice left and
 // the row's link.
@@ -755,7 +747,7 @@ func blocks(r chat.Reply) []any {
 	link := func(id, label, to string) any {
 		return map[string]any{"type": "button", "action_id": id, "text": map[string]any{"type": "plain_text", "text": label}, "url": to}
 	}
-	out := []any{map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": replyText(r)}}}
+	out := []any{section(r.Text)}
 	if r.LinkURL != "" {
 		out = append(out, map[string]any{"type": "actions", "elements": []any{link("open_link", firstOf(r.LinkLabel, "Open in dude"), r.LinkURL)}})
 	}
@@ -791,7 +783,7 @@ func (p *Provider) PostReply(ctx context.Context, inst chat.Installation, conver
 	var out struct {
 		TS string `json:"ts"`
 	}
-	args := map[string]any{"channel": conversation, "text": replyText(r), "blocks": blocks(r), "unfurl_links": false}
+	args := map[string]any{"channel": conversation, "text": mrkdwnEscape(r.Text), "blocks": blocks(r), "unfurl_links": false}
 	if thread != "" {
 		args["thread_ts"] = thread
 	}

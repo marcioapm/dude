@@ -38,8 +38,10 @@ const (
 	EvThreadReplyRefused = "chat.reply.refused"
 )
 
-// broadcast matches the provider markup that notifies a whole conversation.
-var broadcast = regexp.MustCompile(`<!(channel|here|everyone)(\|[^>]*)?>`)
+// broadcast matches every Slack special mention (<!channel>, <!here>,
+// <!subteam^…>, …). The text is escaped when posted, so these never reach
+// Slack as markup; refusing them tells the agent so.
+var broadcast = regexp.MustCompile(`<![^>]*>`)
 
 // repliesThisTurn counts the session's reply_in_thread attempts after the
 // latest input a person gave it (a message, or an answer to its question),
@@ -136,7 +138,7 @@ func replyThread(o chat.Origin) string {
 // postInThread posts, with no transaction open.
 func postInThread(ctx context.Context, c Caller, r threadReply) (threadPosted, error) {
 	thread := replyThread(r.origin)
-	ts, err := r.provider.PostReply(ctx, r.inst, r.origin.ConversationID, thread, chat.Reply{Text: r.text, Markup: true})
+	ts, err := r.provider.PostReply(ctx, r.inst, r.origin.ConversationID, thread, chat.Reply{Text: r.text})
 	if err != nil {
 		if c.env.db != nil {
 			chat.NoteFailure(ctx, c.env.db, nil, c.Org, r.origin.Provider, err)

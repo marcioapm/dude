@@ -376,6 +376,27 @@ func TestEscapedTextIsReadPlainAndRepliedEscapedOnce(t *testing.T) {
 	}
 }
 
+// An agent's thread reply is a plain Reply: a disguised link, a user
+// group and a person's mention arrive as literal text; mrkdwn emphasis is
+// left alone.
+func TestAnAgentsReplyIsEscapedOnceInTheTextAndTheBlock(t *testing.T) {
+	fake, p, inst := world(t)
+	root := fake.Post("C1", "", "U1", "@dude hi")
+	const typed = "<https://evil.example|https://github.com/acme/api/pull/12> & <!subteam^S1|@eng> <@U123> *bold* _it_ `code`"
+	if _, err := p.PostReply(context.Background(), inst, "C1", root, chat.Reply{Text: typed}); err != nil {
+		t.Fatal(err)
+	}
+	const want = "&lt;https://evil.example|https://github.com/acme/api/pull/12&gt; &amp; &lt;!subteam^S1|@eng&gt; &lt;@U123&gt; *bold* _it_ `code`"
+	var blocks []struct {
+		Text struct{ Type, Text string } `json:"text"`
+	}
+	m := fake.BotMessages()[0]
+	_ = json.Unmarshal(m.Blocks, &blocks)
+	if m.Text != want || len(blocks) != 1 || blocks[0].Text.Type != "mrkdwn" || blocks[0].Text.Text != want {
+		t.Fatalf("text %q, blocks %+v", m.Text, blocks)
+	}
+}
+
 func TestRepliesEphemeralsQuestionsAndReactions(t *testing.T) {
 	fake, p, inst := world(t)
 	ctx := context.Background()

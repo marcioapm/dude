@@ -141,10 +141,7 @@ type Page struct {
 // Reply is what dude posts: words, and optionally a link with its label
 // (a button where the provider has them), and a row of choices under it.
 type Reply struct {
-	Text string
-	// Markup: Text is already in the provider's markup (an agent's words),
-	// posted as written; otherwise it is plain words, escaped.
-	Markup    bool
+	Text      string
 	LinkURL   string
 	LinkLabel string
 	Row       *Row
