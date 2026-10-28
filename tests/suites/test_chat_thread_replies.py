@@ -89,6 +89,9 @@ def test_a_brainstorm_answers_in_the_thread_the_mention_came_from(client: ApiCli
         raise AssertionError(f"the agent's reply was never posted: {events}") from None
     assert posted == [{"c": channel, "t": root}], posted
     assert "It is 22:15 in Berlin" in [m["Text"] for m in _thread(slack, channel, root)], _thread(slack, channel, root)
+    # The mention's own routing reply is in before the thread is measured.
+    wait_until(lambda: any(m["Text"].startswith("Added to your session") for m in _thread(slack, channel, root)),
+               timeout=30, message="the bound-thread mention got no routing reply")
     before = len(_thread(slack, channel, root))
 
     # Typed in dude: that turn has no thread to answer, and the reply is refused.
