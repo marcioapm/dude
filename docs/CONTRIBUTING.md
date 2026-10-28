@@ -1349,28 +1349,22 @@ is the answer, the 👀 is cleared. Refusals: cleared, with the private note.
 A mark is cosmetic: no route or outcome depends on it, and a failed one is
 noted for the installation's health, never retried.
 
-**What goes back to the thread.** A mention's own reply is the routing
-reply and the marks. Past that, two writers, split by who knows what is
-worth saying:
-- *The session's agent decides* (`reply_in_thread`, capability `chat.reply`,
-  `agenttools/reply_in_thread.go`), granted by `capabilities.Resolve` only to
-  a brainstorm whose session came from a chat thread. It takes text alone and
-  posts to the conversation and thread of the turn's latest person input, as
-  that input's `chat.message` recorded it (`chat.writerFrom`); a turn typed in
-  dude is refused. Text is escaped once like every reply; at most 3 posts a
-  turn, counted from the ledger under a per-session advisory lock. Shaped as
-  `post_to_chat`: checked in a transaction, posted with none open, recorded.
-- *dude posts* a chat-origin task's progress (`chat_notices`, migration 219,
-  `delivery/chat_notices.go`, `chat/notices.go`): started, pull request opened
-  (dude's link only, never the repository's URL), done, failed or stopped (a
-  fixed phrase per known reason, otherwise "it failed"/"it was cancelled").
-  The row is written in the move's own transaction, `UNIQUE (task_id, kind)`
-  with `ON CONFLICT DO NOTHING`, and fixes the text's facts. The
-  `chat-notices` loop claims a row with a lease, posts with no transaction
-  open, retries transient failures with backoff until 6 hours after the row
-  was recorded, and otherwise gives up with a `thread_notice_failed` line in
-  the task's Chat. Posting is at least once: a crash between the post and its
-  record re-posts after the lease.
+**What goes back to the thread.** Beyond routing replies and marks:
+- *The session's agent decides* via `reply_in_thread` (`chat.reply`, granted
+  only to chat-born brainstorms). The destination comes from the latest
+  person input's `chat.message` (`chat.writerFrom`); inputs typed in dude
+  are refused. Text is escaped once, special mentions (`<!…>`) are refused,
+  and a per-session advisory lock enforces 3 posts per turn from ledger
+  attempts. As with `post_to_chat`, no transaction spans the provider call.
+- *dude posts task progress* via `chat_notices` (migration 219,
+  `delivery/chat_notices.go`, `chat/notices.go`): started, PR opened (dude's
+  link, never the repository URL), done, failed or stopped. Reasons are
+  allow-listed; others become "it failed"/"it was cancelled". Each task/kind
+  is snapshotted once in the status/PR transaction. The loop leases rows,
+  posts outside transactions, retries transient failures for 6 hours from
+  creation, and records `thread_notice_failed` in the task's Chat on giving
+  up. Settlement ignores cancellation. Posting is at least once: a crash
+  after posting can repeat it when the lease expires.
 
 **Configuration**: `slack.signing_secret`, `slack.client_id`,
 `slack.client_secret` (both secrets), `slack.api_url` (default

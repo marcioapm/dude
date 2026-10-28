@@ -1,13 +1,8 @@
--- 219_chat_notices.sql — what dude posts in the chat thread a task came
--- from: its delivery started, a pull request opened, it was done, or it
--- failed or was stopped. An outbox: a row is recorded in the transaction
--- that moves the task (delivery.RecordStatusTx, the pull request's
--- recording), at most one per task and kind, and the chat-notices loop
--- posts it with no transaction open, retrying a transient failure with
--- backoff until 6 hours after it was recorded. Posting is at least once:
--- a crash between the post and its record re-posts after the claim's
--- lease. What it says is fixed when it is recorded: the task's key and
--- title, why it failed (a fixed phrase), and the thread.
+-- 219_chat_notices.sql — chat-origin task progress outbox, recorded in the
+-- status/PR transaction once per task and kind. Snapshots the task's key,
+-- title, allow-listed failure reason and thread. Posts outside transactions,
+-- retrying transient failures for 6 hours. At least once: a crash after
+-- posting can repeat the post when the claim's lease expires.
 --
 -- Catalog-only (no scan, no backfill); the foreign keys take SHARE ROW
 -- EXCLUSIVE on tasks and organizations, briefly, until this commits.
