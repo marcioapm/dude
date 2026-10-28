@@ -3044,6 +3044,11 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if d.Action == "stop" {
 			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
 		}
+		// A waiver lets the held turn finish without another agent turn.
+		// Its note belongs to the next Run the delivery starts.
+		if d.Action == ActionWaive {
+			st.PersonSaid = d.Said
+		}
 		// The waits on a person reading their pull requests or the work are
 		// in review; every other step sets its own status, or is at work.
 		status := "running"

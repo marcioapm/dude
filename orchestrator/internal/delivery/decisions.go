@@ -680,9 +680,14 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 		// The findings it names and the direction the person must give.
 		limit = escalationLineChars
 	}
+	text := clip(oneLine(line), limit)
+	if kind == "escalation" && strings.HasSuffix(key, ":decided") {
+		// A person's words are not a machine-generated fact to summarize.
+		text = line
+	}
 	tag, err := tx.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, delivered_at)
 		VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7 THEN now() END) ON CONFLICT (task_id, key) DO NOTHING`,
-		ids.New("cwk"), org, taskID, kind, key, clip(oneLine(line), limit), settled)
+		ids.New("cwk"), org, taskID, kind, key, text, settled)
 	return err == nil && tag.RowsAffected() == 1, err
 }
 

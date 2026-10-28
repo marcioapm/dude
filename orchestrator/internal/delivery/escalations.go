@@ -343,7 +343,7 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 	case in.Conductor != "", in.Halting:
 		return nil
 	case in.QuestionID != "":
-		line = escalationAnsweredLine(in.QuestionID, in.Action)
+		line = withPersonSaid(said, escalationAnsweredLine(in.QuestionID, in.Action))
 	case len(closed) > 0:
 		line = escalationOnBannerLine(in.Action, closed[0].ID, in.ActorType == ledger.ActorSystem, said)
 	case conducted && said != "" && in.ActorType != ledger.ActorSystem:
