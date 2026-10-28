@@ -232,22 +232,50 @@ func TestDeletedPrimaryBranchNeverWakesDefaultCode(t *testing.T) {
 }
 
 func TestUnavailablePrimaryBranchRetriesWithoutDefaultCode(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
-	w.gh.Branch("feature/retry", "main", "retry")
-	id := w.startBranch("feature/retry")
-	w.gh.RefStatus = map[string]int{"feature/retry": 502}
-	w.lux.RequestServer(w.serverID(id, "web"), "/")
-	w.until("retry scheduled", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at IS NOT NULL`, id) == 1
-	})
-	if len(w.luxRuns()) != 0 || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND ended_at IS NULL AND next_attempt_at IS NOT NULL`, id) != 1 {
-		t.Fatalf("unavailable forge did not preserve a retryable preview: %s", w.describeRuns())
+	for _, tc := range []struct {
+		name                  string
+		refStatus, repoStatus int
+	}{
+		{"ref unavailable", 502, 200},
+		{"repository unavailable", 404, 502},
+		{"repository hidden", 404, 404},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			w.gh.Branch("feature/retry", "main", "retry")
+			id := w.startBranch("feature/retry")
+			handler := w.gh.Handler()
+			srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/git/ref/heads/") {
+					rw.WriteHeader(tc.refStatus)
+					fmt.Fprint(rw, `{"message":"ref unavailable"}`)
+				} else if r.URL.Path == "/repos/acme/target" {
+					rw.WriteHeader(tc.repoStatus)
+					fmt.Fprint(rw, `{"message":"repository unavailable"}`)
+				} else {
+					handler.ServeHTTP(rw, r)
+				}
+			}))
+			defer srv.Close()
+			var originalURL string
+			if err := w.owner.QueryRow(context.Background(), `SELECT api_base_url FROM forge_credentials WHERE organization_id = $1`, w.org).Scan(&originalURL); err != nil {
+				t.Fatal(err)
+			}
+			mustExec(t, w.owner, `UPDATE forge_credentials SET api_base_url = $1 WHERE organization_id = $2`, srv.URL, w.org)
+			w.lux.RequestServer(w.serverID(id, "web"), "/")
+			w.until("retry scheduled", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at IS NOT NULL`, id) == 1
+			})
+			if len(w.luxRuns()) != 0 || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND ended_at IS NULL AND next_attempt_at IS NOT NULL`, id) != 1 {
+				t.Fatalf("unavailable forge did not preserve a retryable preview: %s", w.describeRuns())
+			}
+			mustExec(t, w.owner, `UPDATE forge_credentials SET api_base_url = $1 WHERE organization_id = $2`, originalURL, w.org)
+			mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, id)
+			w.until("retry running", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, id) == 1 })
+		})
 	}
-	w.gh.RefStatus = nil
-	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, id)
-	w.until("retry running", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, id) == 1 })
 }
 
 func TestDeletionReceiptsCannotEndRecreatedPreviews(t *testing.T) {
