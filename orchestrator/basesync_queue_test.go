@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,7 +21,6 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
-	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // heldConflict is a task whose pull request conflicts with a moved base,
@@ -28,11 +28,7 @@ import (
 // its workflow, so the only writers are the ones a test makes.
 func (w *world) heldConflict() (wi, prID, owner string) {
 	w.t.Helper()
-	w.toolsWithSync()
-	wi = w.reviewing()
-	w.tell()
-	w.conflictWithMovedBase()
-	w.sync()
+	wi = w.toldConflict()
 	// A real model: lux is given the writer's own prompt, not a script.
 	mustExec(w.t, w.owner, `UPDATE projects SET agent_models = '{}'::jsonb WHERE id = $1`, w.project)
 	w.onModel("implementer", "claude-impl")
@@ -41,11 +37,28 @@ func (w *world) heldConflict() (wi, prID, owner string) {
 	return wi, w.prOf(wi), w.person("owner")
 }
 
+// toldConflict is a task under review, told of a conflict with a moved
+// base and synced: the pull request conflicts.
+func (w *world) toldConflict() string {
+	w.t.Helper()
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.tell()
+	w.conflictWithMovedBase()
+	w.sync()
+	return wi
+}
+
+// resolve is actor's Resolve conflicts on prID: the API's code and body.
+func (w *world) resolve(actor, prID string) (int, map[string]any) {
+	return w.callAs(actor, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+}
+
 // queueResolve is the owner's Resolve conflicts, accepted; the base SHA
 // it queued.
 func (w *world) queueResolve(owner, prID string) string {
 	w.t.Helper()
-	code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+	code, body := w.resolve(owner, prID)
 	if code != 200 || body["status"] != "queued" {
 		w.t.Fatalf("resolve: %d %v", code, body)
 	}
@@ -54,6 +67,37 @@ func (w *world) queueResolve(owner, prID string) string {
 		w.t.Fatalf("resolve named no base: %v", body)
 	}
 	return sha
+}
+
+// pendingBaseSync records a request for sha on prID, told to no writer.
+func (w *world) pendingBaseSync(wi, prID, sha string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO base_sync_requests(organization_id,task_id,pull_request_id,base,base_sha)
+		VALUES($1,$2,$3,'main',$4)`, w.org, wi, prID, sha)
+}
+
+// pendingBaseSyncs counts the task's requests not yet completed.
+func (w *world) pendingBaseSyncs(wi string) int {
+	return w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi)
+}
+
+// untilBlockedBy waits up to 20 s for a backend to wait on a lock pid
+// holds, or for done to close; false if neither happened.
+func (w *world) untilBlockedBy(ctx context.Context, pid int, done <-chan struct{}) bool {
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-done:
+			return true
+		default:
+		}
+		var n int
+		if err := w.owner.QueryRow(ctx, blockedBy, pid).Scan(&n); err == nil && n > 0 {
+			return true
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return false
 }
 
 // freshFixer is a new fix Run of the task, pending: the next writer.
@@ -94,17 +138,17 @@ func (w *world) heardQueued(runID, luxRunID, sha string) int {
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	queued := func(input string) bool {
+		return strings.Contains(input, "Queued conflict resolution") && strings.Contains(input, sha)
+	}
 	n := 0
 	for _, id := range ids {
-		for _, body := range w.lux.InputBodies(luxRunID, id) {
-			if strings.Contains(body, "Queued conflict resolution") && strings.Contains(body, sha) {
-				n++
-				break
-			}
+		if slices.ContainsFunc(w.lux.InputBodies(luxRunID, id), queued) {
+			n++
 		}
 	}
 	for _, in := range w.lux.ResumeInputs(luxRunID) {
-		if strings.Contains(in, "Queued conflict resolution") && strings.Contains(in, sha) {
+		if queued(in) {
 			n++
 		}
 	}
@@ -120,7 +164,7 @@ func (w *world) baseSyncDirectives(runID, sha string) int {
 func TestAQueuedRequestReachesAScheduledWriter(t *testing.T) {
 	w := newWorld(t)
 	wi, prID, owner := w.heldConflict()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	free := func() { releaseOnce.Do(func() { close(release) }) }
@@ -160,7 +204,7 @@ func TestAQueuedRequestReachesAScheduledWriter(t *testing.T) {
 func TestARequestDuringAWritersPromptClaimIsDelivered(t *testing.T) {
 	w := newWorld(t)
 	wi, prID, owner := w.heldConflict()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	first := w.queueResolve(owner, prID)
 	fixer := w.freshFixer(wi, "queue-claim")
 	var second string
@@ -176,27 +220,16 @@ func TestARequestDuringAWritersPromptClaimIsDelivered(t *testing.T) {
 			w.gh.AdvanceBase("main", "Base moves while the writer's prompt is built")
 			go func() {
 				defer close(done)
-				code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+				code, body := w.resolve(owner, prID)
 				if code != 200 {
 					t.Errorf("second resolve: %d %v", code, body)
 				}
 				second, _ = body["baseSha"].(string)
 			}()
 			// Barrier: the request has committed, or waits on this claim.
-			deadline := time.Now().Add(20 * time.Second)
-			for time.Now().Before(deadline) {
-				select {
-				case <-done:
-					return
-				default:
-				}
-				var n int
-				if err := w.owner.QueryRow(ctx, blockedBy, pid).Scan(&n); err == nil && n > 0 {
-					return
-				}
-				time.Sleep(2 * time.Millisecond)
+			if !w.untilBlockedBy(ctx, pid, done) {
+				t.Error("the concurrent request neither committed nor waited on the claim")
 			}
-			t.Error("the concurrent request neither committed nor waited on the claim")
 		})
 	}
 	w.until("the writer submitted", func() bool { return w.luxRunOf(fixer) != "" })
@@ -232,7 +265,7 @@ func TestARequestDuringAWritersPromptClaimIsDelivered(t *testing.T) {
 func TestAResumedWriterHearsAQueuedRequest(t *testing.T) {
 	w := newWorld(t)
 	wi, prID, owner := w.heldConflict()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	fixer := w.freshFixer(wi, "queue-resume")
 	w.until("the writer runs", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND lux_state='running'`, fixer) == 1
@@ -246,8 +279,7 @@ func TestAResumedWriterHearsAQueuedRequest(t *testing.T) {
 	// Accepted while no writer was live (say, during review, before this
 	// continuation existed): pending, told to no one.
 	sha := w.gh.SHA("main")
-	mustExec(t, w.owner, `INSERT INTO base_sync_requests(organization_id,task_id,pull_request_id,base,base_sha)
-		VALUES($1,$2,$3,'main',$4)`, w.org, wi, prID, sha)
+	w.pendingBaseSync(wi, prID, sha)
 	if status, body := w.call("/internal/runs/"+fixer+"/resume", map[string]any{}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
 	}
@@ -270,14 +302,13 @@ func TestAResumedWriterHearsAQueuedRequest(t *testing.T) {
 func TestAnEarlierAttemptsRequestIsNotBriefedToANewWriter(t *testing.T) {
 	w := newWorld(t)
 	wi, prID, owner := w.heldConflict()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	current := w.queueResolve(owner, prID)
 	mustExec(t, w.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
 		head_branch, base_branch, head_sha, title, state, checks) SELECT 'pr_earlier', organization_id, project_id, task_id,
 		repository_id, 99, 'https://x/99', 'dude/old/attempt-1', 'main', head_sha, 'old', 'closed', 'passing'
 		FROM pull_requests WHERE id = $1`, prID)
-	mustExec(t, w.owner, `INSERT INTO base_sync_requests(organization_id,task_id,pull_request_id,base,base_sha)
-		VALUES($1,$2,'pr_earlier','main','0ld0ba5e')`, w.org, wi)
+	w.pendingBaseSync(wi, "pr_earlier", "0ld0ba5e")
 	fixer := w.freshFixer(wi, "queue-attempt")
 	w.until("the writer submitted", func() bool { return w.luxRunOf(fixer) != "" })
 	prompt := w.submittedPrompt(w.luxRunOf(fixer))
@@ -302,8 +333,7 @@ func TestAnObsoleteSyncDoesNotCompleteARequest(t *testing.T) {
 	pull := w.gh.Pull(1)
 	without := w.gh.SHA(pull.Head)
 	base := w.gh.SHA("main")
-	mustExec(t, w.owner, `INSERT INTO base_sync_requests(organization_id,task_id,pull_request_id,base,base_sha)
-		VALUES($1,$2,$3,'main',$4)`, w.org, wi, prID, base)
+	w.pendingBaseSync(wi, prID, base)
 	gitOut(t, w.gh.Repo, "branch", "-f", pull.Head, "main") // H1 contains the base
 	compareHeld, compareGo := make(chan struct{}), make(chan struct{})
 	var holds atomic.Int32
@@ -352,8 +382,7 @@ func TestAncestryIsComparedOncePerHead(t *testing.T) {
 	wi, prID, _ := w.heldConflict()
 	ctx := context.Background()
 	base := w.gh.SHA("main")
-	mustExec(t, w.owner, `INSERT INTO base_sync_requests(organization_id,task_id,pull_request_id,base,base_sha)
-		VALUES($1,$2,$3,'main',$4)`, w.org, wi, prID, base)
+	w.pendingBaseSync(wi, prID, base)
 	var compares, failures atomic.Int32
 	failures.Store(1)
 	w.gh.Set(func(s *fakegithub.Server) {
@@ -401,7 +430,7 @@ func TestASyncAndAWritersClaimDoNotDeadlock(t *testing.T) {
 	w := newWorld(t)
 	wi, prID, _ := w.heldConflict()
 	ctx := context.Background()
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	head := w.gh.SHA(w.gh.Pull(1).Head)
 	// The earlier request is of the moved base, not in the head; the later
 	// one of a base the head contains. A sync reads them integrated-first.
@@ -426,15 +455,9 @@ func TestASyncAndAWritersClaimDoNotDeadlock(t *testing.T) {
 				swept <- err
 			}()
 			// Barrier: the writer's claim waits on this sync's lock.
-			deadline := time.Now().Add(20 * time.Second)
-			for time.Now().Before(deadline) {
-				var n int
-				if err := w.owner.QueryRow(ctx, blockedBy, pid).Scan(&n); err == nil && n > 0 {
-					return
-				}
-				time.Sleep(2 * time.Millisecond)
+			if !w.untilBlockedBy(ctx, pid, nil) {
+				t.Error("the writer's claim never waited on the sync")
 			}
-			t.Error("the writer's claim never waited on the sync")
 		})
 	}
 	if err := w.prs.Sync(ctx, w.org, prID); err != nil {
@@ -480,14 +503,14 @@ func TestResolveConflictsOnAnEscalationSaysRequestedThenQueued(t *testing.T) {
 	w.conflictWithMovedBase()
 	w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
 	prID, owner := w.prOf(wi), w.person("owner")
-	code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+	code, body := w.resolve(owner, prID)
 	if code != 200 || body["status"] != "requested" {
 		t.Fatalf("resolve on the escalation: %d %v; want requested", code, body)
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND state->'escalation'->'decided' IS NOT NULL`, wi); n != 1 {
 		t.Fatalf("the escalation was not decided: %d", n)
 	}
-	code, body = w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+	code, body = w.resolve(owner, prID)
 	if code != 200 || body["status"] != "queued" {
 		t.Fatalf("the repeat on the decided escalation: %d %v; want queued", code, body)
 	}
@@ -509,7 +532,7 @@ func TestResolveConflictsWithAWaitingWriterSaysQueued(t *testing.T) {
 			// Not picked up by a pump: no pump runs in this test.
 			mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,phase)
 				VALUES('run_waiting_writer',$1,$2,$3,1,$4::run_status,'implementer','agent','fix')`, w.org, w.project, wi, c.writer)
-			code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+			code, body := w.resolve(owner, prID)
 			if code != 200 || body["status"] != c.want {
 				t.Fatalf("resolve with a %s writer: %d %v; want %s", c.writer, code, body, c.want)
 			}

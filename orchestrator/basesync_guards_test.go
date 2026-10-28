@@ -181,22 +181,18 @@ func TestAStaleConflictsFeedbackIsFixed(t *testing.T) {
 // Busy delivery must accept the owner's request without starting another writer.
 func TestResolveConflictsQueuesDuringCandidateReview(t *testing.T) {
 	w := newWorld(t)
-	w.toolsWithSync()
-	wi := w.reviewing()
-	w.tell()
-	w.conflictWithMovedBase()
-	w.sync()
+	wi := w.toldConflict()
 	mustExec(t, w.owner, `UPDATE workflow_runs SET step='awaitReview', awaiting_signals='[]',
 		state=state-'escalation' WHERE task_id=$1`, wi)
 	prID := w.prOf(wi)
 	owner := w.person("owner")
 	for range 2 {
-		code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+		code, body := w.resolve(owner, prID)
 		if code != 200 || body["status"] != "queued" {
 			t.Fatalf("busy resolve: %d %v; want success with queued status", code, body)
 		}
 	}
-	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
+	if n := w.pendingBaseSyncs(wi); n != 1 {
 		t.Fatalf("pending requests %d, want one", n)
 	}
 	if n := w.count(integrationRuns, wi); n != 0 {
@@ -204,33 +200,29 @@ func TestResolveConflictsQueuesDuringCandidateReview(t *testing.T) {
 	}
 	// A step writing its old snapshot cannot overwrite the independent row.
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state=state-'pendingBaseSync' WHERE task_id=$1`, wi)
-	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
+	if n := w.pendingBaseSyncs(wi); n != 1 {
 		t.Fatalf("transition dropped request: %d", n)
 	}
 	w.gh.AdvanceBase("main", "Another base change on the same PR head")
-	code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+	code, body := w.resolve(owner, prID)
 	if code != 200 {
 		t.Fatalf("new base: %d %v", code, body)
 	}
-	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 2 {
+	if n := w.pendingBaseSyncs(wi); n != 2 {
 		t.Fatalf("new base on same head requests %d, want two", n)
 	}
 }
 
 func TestQueuedBaseSyncTargetsWriterAndRetainsUntilAncestry(t *testing.T) {
 	w := newWorld(t)
-	w.toolsWithSync()
-	wi := w.reviewing()
-	w.tell()
-	w.conflictWithMovedBase()
-	w.sync()
+	wi := w.toldConflict()
 	mustExec(t, w.owner, `UPDATE workflow_runs SET step='awaitFix',awaiting_signals='[]',state=state-'escalation' WHERE task_id=$1`, wi)
 	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,phase)
  VALUES('run_queue_writer',$1,$2,$3,1,'running','implementer','agent','fix')`, w.org, w.project, wi)
 	pr := w.prOf(wi)
 	owner := w.person("owner")
 	for range 2 {
-		code, body := w.callAs(owner, "/internal/pull-requests/"+pr+"/resolve-conflicts", map[string]any{})
+		code, body := w.resolve(owner, pr)
 		if code != 200 {
 			t.Fatalf("resolve: %d %v", code, body)
 		}
@@ -238,14 +230,14 @@ func TestQueuedBaseSyncTargetsWriterAndRetainsUntilAncestry(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM directives WHERE run_id='run_queue_writer' AND text LIKE '%call sync_base%merge lux/main%Do not rebase%'`); n != 1 {
 		t.Fatalf("writer directives %d", n)
 	}
-	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
+	if n := w.pendingBaseSyncs(wi); n != 1 {
 		t.Fatalf("directive consumed request: %d", n)
 	}
 	// A forge reading of the still-unintegrated public head is not completion.
 	if err := w.prs.Sync(context.Background(), w.org, pr); err != nil {
 		t.Fatal(err)
 	}
-	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
+	if n := w.pendingBaseSyncs(wi); n != 1 {
 		t.Fatalf("unintegrated request retired: %d", n)
 	}
 	// The next writer's submitted prompt carries the request, claimed for
@@ -254,7 +246,7 @@ func TestQueuedBaseSyncTargetsWriterAndRetainsUntilAncestry(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE workflow_runs SET status='waiting', awaiting_signals='["queue_test_hold"]', wake_at=NULL WHERE task_id=$1`, wi)
 	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{}'::jsonb WHERE id = $1`, w.project)
 	w.onModel("implementer", "claude-impl")
-	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	w.lux.Decide = hang
 	next := w.freshFixer(wi, "queue-next-writer")
 	w.until("the next writer submitted", func() bool { return w.luxRunOf(next) != "" })
 	if prompt := w.submittedPrompt(w.luxRunOf(next)); !strings.Contains(prompt, "Queued conflict resolution") ||
