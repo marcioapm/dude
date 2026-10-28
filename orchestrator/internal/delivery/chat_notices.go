@@ -108,8 +108,9 @@ func epicStatusNoticeTx(ctx context.Context, tx pgx.Tx, taskID, status string) e
 // tx, so two of its tasks ending in overlapping transactions do not each
 // count the other still running: the second waits here, and its count, a
 // later statement, sees the first's commit. Taken after the moved task's
-// row, and by nothing else; the epic's row would deadlock against
-// ArchiveEpicTx, which locks the epic before its tasks.
+// row, and by nothing else. The notice's insert then takes KEY SHARE on the
+// epic's row (its foreign key), which epic archive and unarchive's FOR NO
+// KEY UPDATE never block: they lock the epic before its tasks.
 func LockEpicNoticesTx(ctx context.Context, tx pgx.Tx, epicID string) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('epic_notices:' || $1))`, epicID)
 	return err

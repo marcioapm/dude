@@ -755,8 +755,8 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 // and cost count from. A move to done releases what the task blocked, if
 // it merged (releaseDependantsTx). A move a chat thread hears of (started,
 // done, failed or stopped) records its notice and its epic's
-// (chat_notices.go); the epic's comes last, so its lock is the last this
-// move takes.
+// (chat_notices.go); the epic's comes last, so its advisory lock and its
+// foreign key's KEY SHARE on the epic row are the last locks this move takes.
 func RecordStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, status, reason string) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvTaskStatusChanged, OrganizationID: org, ProjectID: projectID, TaskID: taskID,

@@ -270,6 +270,80 @@ func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 	}
 }
 
+// An epic's last task ending while a person archives the epic: the move
+// holds the task's row and its notice's foreign key then needs the epic's,
+// while the archive holds the epic's and waits for the task's. Both finish,
+// never a deadlock.
+func TestChatEpicNoticeOfALastTaskEndingWhileTheEpicIsArchivedNeverDeadlocks(t *testing.T) {
+	w := setup(t)
+	origin := `{"provider":"slack","workspaceId":"T1","conversationId":"C1","conversationName":"#support","threadId":"1.0"}`
+	for i := range 5 {
+		epic := fmt.Sprintf("epc_arch%d_%s", i, w.org)
+		w.exec(`INSERT INTO epics (id, organization_id, project_id, title, origin) VALUES ($1, $2, $3, 'Archived', $4::jsonb)`, epic, w.org, w.project, origin)
+		var tasks []string
+		for j, status := range []string{"done", "running"} {
+			id := fmt.Sprintf("wi_arch%d_%d_%s", i, j, w.org)
+			w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin)
+				VALUES ($1, $2, $3, $4, $5, 'Archiver', $6, $7::jsonb)`, id, w.org, w.project, 200+i*2+j, epic, status, origin)
+			tasks = append(tasks, id)
+		}
+		held, blocked := make(chan struct{}), make(chan struct{})
+		archiver := make(chan int, 1)
+		errs := make(chan error, 2)
+		go func() {
+			errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+				// SetTaskStatusTx's row update, held until the archive waits on it.
+				if _, err := tx.Exec(w.ctx, `UPDATE tasks SET status = 'failed', updated_at = now() WHERE id = $1`, tasks[1]); err != nil {
+					return err
+				}
+				close(held)
+				<-blocked
+				return delivery.RecordStatusTx(w.ctx, tx, w.org, w.project, tasks[1], "failed", "lux: exit 1")
+			})
+		}()
+		<-held
+		go func() {
+			errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+				var pid int
+				if err := tx.QueryRow(w.ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+					return err
+				}
+				archiver <- pid
+				_, _, err := delivery.ArchiveEpicTx(w.ctx, tx, w.org, epic, true, delivery.Actor{ActorType: "system", ActorID: "test"},
+					func(delivery.EpicTask) error { return nil })
+				return err
+			})
+		}()
+		waited := w.waitBlocked(<-archiver, 30*time.Second)
+		close(blocked)
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: %v", i, err)
+			}
+		}
+		if waited != nil {
+			t.Fatalf("round %d: %v", i, waited)
+		}
+		if n := w.count(`SELECT count(*) FROM chat_notices WHERE epic_id = $1 AND kind = 'epic_finished'`, epic); n != 1 {
+			t.Fatalf("round %d: %d finished notices, want 1", i, n)
+		}
+	}
+}
+
+// waitBlocked waits until the backend pid waits on a lock: an error when it
+// has not within limit.
+func (w *world) waitBlocked(pid int, limit time.Duration) error {
+	w.t.Helper()
+	deadline := time.Now().Add(limit)
+	for w.count(`SELECT count(*) FROM pg_locks WHERE pid = $1 AND NOT granted`, pid) == 0 {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("backend %d never waited on a lock within %s", pid, limit)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil
+}
+
 // An epic made in dude, with its tasks, says nothing anywhere.
 func TestChatEpicNoticesNothingForAWebFiledEpic(t *testing.T) {
 	w := setup(t)

@@ -1376,7 +1376,10 @@ noted for the installation's health, never retried.
   display state (planned/active/done) plays no part. `RecordStatusTx` and
   `RecordPROpenedNoticeTx` record it last, under an advisory lock per epic
   (`LockEpicNoticesTx`) taken after the task's own row, so two tasks ending
-  at once see each other's move. A given-up epic notice is a `chat.notice`
+  at once see each other's move. The insert's foreign key then takes KEY
+  SHARE on the epic's row, after the task's, so epic archive and unarchive
+  lock the epic `FOR NO KEY UPDATE` (never `FOR UPDATE`) before its tasks.
+  A given-up epic notice is a `chat.notice`
   on the epic's project, correlated with the epic.
 - *Where a notice goes* is the subject's origin: its own conversation, the
   session it was filed from (`via: session`), or, for a task a task's agent
