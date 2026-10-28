@@ -286,14 +286,14 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	for _, base := range requestedBases {
 		cmp, err := gh.Compare(ctx, slug, base, status.HeadSHA)
-		if err != nil {
-			continue
-		} // Forge unavailable: retain pending and retry next sync.
-		if cmp.BehindBy != 0 || cmp.MergeBase.SHA != base {
+		switch {
+		case err != nil:
+			// The forge could not answer: left pending, asked next sync.
+		case cmp.BehindBy == 0 && cmp.MergeBase.SHA == base:
+			integrated = append(integrated, base)
+		default:
 			notIntegrated = append(notIntegrated, base)
-			continue
 		}
-		integrated = append(integrated, base)
 	}
 	checksJSON, _ := json.Marshal(db.NonNil(status.CheckList))
 	reviewsJSON, _ := json.Marshal(db.NonNil(status.Reviews))
@@ -365,20 +365,20 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 				ORDER BY created_at, base_sha FOR UPDATE`, pr.ID, append(slices.Clone(integrated), notIntegrated...)); err != nil {
 				return err
 			}
-		}
-		if len(integrated) > 0 {
-			if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET completed_at=now(), compared_head=$3
-				WHERE pull_request_id=$1 AND base_sha=ANY($2) AND completed_at IS NULL`, pr.ID, integrated, status.HeadSHA); err != nil {
-				return err
+			if len(integrated) > 0 {
+				if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET completed_at=now(), compared_head=$3
+					WHERE pull_request_id=$1 AND base_sha=ANY($2) AND completed_at IS NULL`, pr.ID, integrated, status.HeadSHA); err != nil {
+					return err
+				}
 			}
-		}
-		if s.BaseSyncLocked != nil && len(integrated)+len(notIntegrated) > 0 {
-			s.BaseSyncLocked(ctx, tx)
-		}
-		if len(notIntegrated) > 0 {
-			if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET compared_head=$3
-				WHERE pull_request_id=$1 AND base_sha=ANY($2) AND completed_at IS NULL`, pr.ID, notIntegrated, status.HeadSHA); err != nil {
-				return err
+			if s.BaseSyncLocked != nil {
+				s.BaseSyncLocked(ctx, tx)
+			}
+			if len(notIntegrated) > 0 {
+				if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET compared_head=$3
+					WHERE pull_request_id=$1 AND base_sha=ANY($2) AND completed_at IS NULL`, pr.ID, notIntegrated, status.HeadSHA); err != nil {
+					return err
+				}
 			}
 		}
 

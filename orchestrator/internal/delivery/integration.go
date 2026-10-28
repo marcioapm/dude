@@ -231,9 +231,10 @@ const (
 // the workflow waiting on that pull request is signalled to integrate its
 // base, whatever whenBehind says; one stopped at that pull request's
 // conflict escalation is decided so (retry for a failed integration, else
-// wait with the request queued). Busy delivery retains a request too; the handler
-// starts no phase itself. in.Authorize checks who may decide an escalation.
-func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, head, baseSHA string,
+// wait with the request queued). A busy delivery is signalled too, the
+// request left queued; the handler starts no phase itself. in.Authorize
+// checks who may decide an escalation.
+func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, baseSHA string,
 	in EscalationDecision) (ResolveOutcome, error) {
 	_, d, err := LockEscalationTx(ctx, tx, taskID)
 	if err != nil {
@@ -245,15 +246,18 @@ func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo 
 	signal := forge.Signal{Kind: "conflict", Repo: repo, Number: number, Requested: true}
 	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, baseSHA)
 	if e := d.State.Escalation; e != nil {
-		var alreadyQueued bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM base_sync_requests WHERE pull_request_id=$1 AND base_sha=$2)`, prID, baseSHA).Scan(&alreadyQueued); err != nil {
-			return 0, err
+		ours := e.Reason == "pull_request_conflict" && e.about(repo, number)
+		if ours && e.Decided != nil {
+			var repeat bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM base_sync_requests WHERE pull_request_id=$1 AND base_sha=$2)`, prID, baseSHA).Scan(&repeat); err != nil {
+				return 0, err
+			}
+			if repeat {
+				// A repeat of the request that decided it: still queued.
+				return ResolveQueued, nil
+			}
 		}
-		if e.Decided != nil && e.Reason == "pull_request_conflict" && e.about(repo, number) && alreadyQueued {
-			// A repeat of the request that decided it: still queued.
-			return ResolveQueued, nil
-		}
-		if e.Reason != "pull_request_conflict" || e.Decided != nil || !e.about(repo, number) {
+		if !ours || e.Decided != nil {
 			return 0, escalationErr("conflict", "%s", mDudeWaitingOnDecisionAboutSomething)
 		}
 		in.Action = "wait"

@@ -300,7 +300,7 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		return fail(http.StatusConflict, "conflict", "the pull request is %s", pr.State)
 	}
 	if action == "resolve-conflicts" {
-		return s.resolveConflicts(w, r, org, id, pr.TaskID, pr.Repo, pr.Number, pr.HeadSHA, pr.Mergeable)
+		return s.resolveConflicts(w, r, org, id, pr.TaskID, pr.Repo, pr.Number, pr.Mergeable)
 	}
 	slug := forge.SlugFromURL(pr.URL)
 	gh, err := s.forge(r.Context(), org)
@@ -400,7 +400,7 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 // last read as conflicting; the workflow checks GitHub again before it
 // starts the integration Run.
 func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, id, taskID, repo string, number int,
-	head, mergeable string) error {
+	mergeable string) error {
 	if mergeable != forge.MergeConflicting {
 		return fail(http.StatusConflict, "conflict", "the pull request does not conflict with its base")
 	}
@@ -423,14 +423,12 @@ func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, i
 	if err != nil {
 		return err
 	}
-	// status: "requested" when the delivery acts on the request now,
-	// "queued" when it waits for a writer (resolveStatus).
 	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo, "baseSha": baseSHA}
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "resolve conflicts on"); err != nil {
 			return err
 		}
-		outcome, err := delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head, baseSHA,
+		outcome, err := delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, baseSHA,
 			delivery.EscalationDecision{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})
 		if err := escalationFailure(err); err != nil {
 			return err
@@ -456,26 +454,15 @@ func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, i
 }
 
 // resolveStatus words a Resolve conflicts for the person who asked:
-//   - ResolveQueued: the delivery is busy, or already decided with this
-//     base requested — "queued" for its next capable writer;
-//   - ResolveDecided: the conflict escalation was decided, retry or wait;
-//     both act now (wait returns to the pull request with the signal to
-//     integrate) — "requested";
-//   - ResolveNow: the delivery waits on the pull request and integrates
-//     now — "requested", unless the task's writer is pending or paused and
-//     was handed the request as a directive (writerWaits): that writer has
-//     it when it runs, so "queued".
+// "queued" when it waits for the task's next capable writer — the delivery
+// is busy (ResolveQueued), or would act now but the task's writer that was
+// handed it is pending or paused (writerWaits) — else "requested". A
+// decided escalation (ResolveDecided) always acts now.
 func resolveStatus(outcome delivery.ResolveOutcome, writerWaits bool) string {
-	switch {
-	case outcome == delivery.ResolveQueued:
+	if outcome == delivery.ResolveQueued || outcome == delivery.ResolveNow && writerWaits {
 		return "queued"
-	case outcome == delivery.ResolveDecided:
-		return "requested"
-	case writerWaits:
-		return "queued"
-	default:
-		return "requested"
 	}
+	return "requested"
 }
 
 // forgeRefusal passes GitHub's refusal on as the person's answer: why it

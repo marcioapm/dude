@@ -35,6 +35,38 @@ func (h heldTask) directives(runID string) []string {
 	return texts
 }
 
+// workflowSteps is the delivery's workflow steps over h's database.
+func (h heldTask) workflowSteps() *steps {
+	return &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+}
+
+// stepContext is the delivery's step, at st.
+func (h heldTask) stepContext(step string, st *State) workflow.StepContext {
+	raw, _ := json.Marshal(st)
+	return workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: step, State: raw}
+}
+
+// workflowState is the delivery's state as stored.
+func (h heldTask) workflowState() []byte {
+	h.t.Helper()
+	var raw []byte
+	if err := h.owner.QueryRow(h.ctx, `SELECT state FROM workflow_runs WHERE id = 'wf_h'`).Scan(&raw); err != nil {
+		h.t.Fatal(err)
+	}
+	return raw
+}
+
+// waive escalates run_held's unverified checks and has its owner waive
+// them at scope, with absNote.
+func (h heldTask) waive(scope string) {
+	h.t.Helper()
+	h.exec(`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
+		VALUES ('ev_failure',$1,'run.checks.judged','run_held','wi_h','system','dude','test',
+		'{"turn":0,"verified":false,"checks":[{"command":"make test","result":"fail","reason":"hardware unavailable"}]}')`, h.org)
+	h.escalate("run_held")
+	h.decideAs("per_ola", EscalationDecision{Action: ActionWaive, Scope: scope, Note: absNote})
+}
+
 func (h heldTask) decideAs(person string, in EscalationDecision) {
 	h.t.Helper()
 	in.ActorType, in.ActorID, in.Person = "human", person, person
@@ -55,8 +87,7 @@ func TestAChecksRetryHandsTheOwnersNoteToTheHeldRun(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("directives %q, want one", got)
 	}
-	want := "The task's owner, Ola Nordmann, said:\n\n" + absNote
-	if !strings.HasPrefix(got[0], want) {
+	if !strings.HasPrefix(got[0], ownerSaid) {
 		t.Fatalf("the directive does not start with the owner's words:\n%s", got[0])
 	}
 	if !strings.HasSuffix(got[0], "held") {
@@ -85,7 +116,7 @@ func TestAResumeHandsTheOwnersNoteToTheResumedRun(t *testing.T) {
 		WHERE id = 'wf_h'`)
 	h.decideAs("per_ola", EscalationDecision{Action: "resume", Note: absNote})
 	got := h.directives("run_held")
-	if len(got) != 1 || got[0] != "The task's owner, Ola Nordmann, said:\n\n"+absNote {
+	if len(got) != 1 || got[0] != ownerSaid {
 		t.Fatalf("directives %q", got)
 	}
 }
@@ -128,31 +159,21 @@ func TestARetrysNoteGoesToTheNextFixRun(t *testing.T) {
 	h.exec(`UPDATE workflow_runs SET step = 'decide', state = state || '{"escalation":{"reason":"stuck","step":"fix","detail":{"reason":"stuck","findingIds":["f"]}}}'
 		WHERE id = 'wf_h'`)
 	h.decideAs("per_ola", EscalationDecision{Action: "retry", Note: absNote})
-	var raw []byte
-	if err := h.owner.QueryRow(h.ctx, `SELECT state FROM workflow_runs WHERE id = 'wf_h'`).Scan(&raw); err != nil {
-		h.t.Fatal(err)
-	}
+	raw := h.workflowState()
 	w := &steps{s: &Store{DB: h.app}}
 	res, err := w.decide(h.ctx, workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw})
 	if err != nil || res.Next != "fix" {
 		t.Fatalf("decided: %q %v", res.Next, err)
 	}
 	st := res.State.(*State)
-	want := "The task's owner, Ola Nordmann, said:\n\n" + absNote
-	if st.PersonSaid != want {
+	if st.PersonSaid != ownerSaid {
 		t.Fatalf("the state hands on %q", st.PersonSaid)
 	}
 	id, err := w.phase(h.ctx, workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org}, st, PhaseFix, "k_fix", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got string
-	if err := h.owner.QueryRow(h.ctx, `SELECT COALESCE(person_note, '') FROM runs WHERE id = $1`, id).Scan(&got); err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Fatalf("the fix Run's person_note %q", got)
-	}
+	h.assertOwnerNoteOnRun(id, ownerSaid)
 	raw, _ = json.Marshal(st)
 	res, err = w.fix(h.ctx, workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, State: raw})
 	if err != nil {
@@ -182,16 +203,8 @@ func TestAChecksWaiversNoteGoesToTheNextRun(t *testing.T) {
 	for _, scope := range []string{ScopeRun, ScopeAttempt} {
 		t.Run(scope, func(t *testing.T) {
 			h := ownedHeldTask(t)
-			h.exec(`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
-				VALUES ('ev_failure',$1,'run.checks.judged','run_held','wi_h','system','dude','test',
-				'{"turn":0,"verified":false,"checks":[{"command":"make test","result":"fail","reason":"hardware unavailable"}]}')`, h.org)
-			h.escalate("run_held")
-			h.decideAs("per_ola", EscalationDecision{Action: ActionWaive, Scope: scope, Note: absNote})
-			var raw []byte
-			if err := h.owner.QueryRow(h.ctx, `SELECT state FROM workflow_runs WHERE id = 'wf_h'`).Scan(&raw); err != nil {
-				t.Fatal(err)
-			}
-			res, err := (&steps{s: &Store{DB: h.app}}).decide(h.ctx, workflow.StepContext{OrganizationID: h.org, State: raw})
+			h.waive(scope)
+			res, err := (&steps{s: &Store{DB: h.app}}).decide(h.ctx, workflow.StepContext{OrganizationID: h.org, State: h.workflowState()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -236,17 +249,9 @@ func TestOwnerWaiverSurvivesPendingFixerWakes(t *testing.T) {
 				if at == "awaitPRFix" {
 					h.ownerPRs()
 				}
-				h.exec(`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
-					VALUES ('ev_failure',$1,'run.checks.judged','run_held','wi_h','system','dude','test',
-					'{"turn":0,"verified":false,"checks":[{"command":"make test","result":"fail","reason":"hardware unavailable"}]}')`, h.org)
-				h.escalate("run_held")
-				h.decideAs("per_ola", EscalationDecision{Action: ActionWaive, Scope: scope, Note: absNote})
-				w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
-				var raw []byte
-				if err := h.owner.QueryRow(h.ctx, `SELECT state FROM workflow_runs WHERE id='wf_h'`).Scan(&raw); err != nil {
-					t.Fatal(err)
-				}
-				sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, State: raw}
+				h.waive(scope)
+				w := h.workflowSteps()
+				sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, State: h.workflowState()}
 				res, err := w.decide(h.ctx, sc)
 				if err != nil {
 					t.Fatal(err)
@@ -350,10 +355,9 @@ func TestOwnerWaitDispatchHandsNoteToFixer(t *testing.T) {
 				h.exec(`INSERT INTO feedback_batches(id,organization_id,task_id,attempt,author_person_id,submission_key) VALUES('batch_owner',$1,'wi_h',1,'per_ola','owner')`, h.org)
 				h.exec(`INSERT INTO feedback_items(id,organization_id,task_id,attempt,batch_id,author_person_id,body,anchor_kind,anchor,status,submitted_at) VALUES('fb_owner',$1,'wi_h',1,'batch_owner','per_ola','Fix this','general','{"kind":"general"}','open',now())`, h.org)
 			}
-			st.Escalation = &Escalation{Reason: reason, Decided: &HumanDecision{Action: action, Said: "The task's owner, Ola Nordmann, said:\n\n" + absNote}}
-			raw, _ := json.Marshal(st)
-			w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
-			sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+			st.Escalation = &Escalation{Reason: reason, Decided: &HumanDecision{Action: action, Said: ownerSaid}}
+			w := h.workflowSteps()
+			sc := h.stepContext("decide", st)
 			res, err := w.decide(h.ctx, sc)
 			if err != nil {
 				t.Fatal(err)
@@ -409,9 +413,8 @@ func TestAStopsNoteDoesNotReachAPhaseAfterAResume(t *testing.T) {
 	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), PendingRunIDs: []string{"run_held"},
 		Escalation: &Escalation{Reason: "fix_failed", Step: "fix", At: "awaitFix", Detail: map[string]any{"runId": "run_held"},
 			Decided: &HumanDecision{Action: "stop", Said: ownerSaid}}}
-	raw, _ := json.Marshal(st)
-	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
-	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+	w := h.workflowSteps()
+	sc := h.stepContext("decide", st)
 	res, err := w.decide(h.ctx, sc)
 	if err != nil {
 		t.Fatal(err)
@@ -450,9 +453,8 @@ func TestAWaitNoteEndsAtAwaitRead(t *testing.T) {
 	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"target": "abc"},
 		Integration: &Integration{Repo: "api", BeforePR: true},
 		Escalation:  &Escalation{Reason: "pull_request_conflict", Decided: &HumanDecision{Action: "wait", Said: ownerSaid}}}
-	raw, _ := json.Marshal(st)
-	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
-	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+	w := h.workflowSteps()
+	sc := h.stepContext("decide", st)
 	res, err := w.decide(h.ctx, sc)
 	if err != nil || res.Next != "openPullRequest" {
 		t.Fatalf("decided: %q %v", res.Next, err)
@@ -481,7 +483,7 @@ func (h heldTask) readFeedbackFix(sc workflow.StepContext, st *State, id string)
 	h.exec(`INSERT INTO feedback_batches(id,organization_id,task_id,attempt,author_person_id,submission_key) VALUES($2,$1,'wi_h',1,'per_ola',$2)`, h.org, "batch_"+id)
 	h.exec(`INSERT INTO feedback_items(id,organization_id,task_id,attempt,batch_id,author_person_id,body,anchor_kind,anchor,status,submitted_at)
 		VALUES($2,$1,'wi_h',1,$3,'per_ola','Rename it','general','{"kind":"general"}','open',now())`, h.org, id, "batch_"+id)
-	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	w := h.workflowSteps()
 	sc.Step = "awaitRead"
 	sc.Signals = []workflow.Signal{{Name: SignalHumanFeedback}}
 	sc.State, _ = json.Marshal(st)
@@ -513,9 +515,8 @@ func TestAWaiverNoteAtAwaitReadSurvivesAnEmptyWake(t *testing.T) {
 	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"target": "abc"},
 		Escalation: &Escalation{Reason: ReasonChecksUnverified, At: "awaitRead", AtSignals: []string{SignalHumanFeedback},
 			Decided: &HumanDecision{Action: ActionWaive, Said: ownerSaid}}}
-	raw, _ := json.Marshal(st)
-	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
-	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+	w := h.workflowSteps()
+	sc := h.stepContext("decide", st)
 	res, err := w.decide(h.ctx, sc)
 	if err != nil || res.Next != "awaitRead" {
 		t.Fatalf("decided: %q %v", res.Next, err)
@@ -563,9 +564,8 @@ func TestOwnerNoteIsSpentByEachPhaseStart(t *testing.T) {
 			st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"api": "aaa"},
 				PersonSaid: ownerSaid}
 			c.state(st)
-			raw, _ := json.Marshal(st)
-			w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
-			sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: c.name, State: raw}
+			w := h.workflowSteps()
+			sc := h.stepContext(c.name, st)
 			res, err := c.step(w)(h.ctx, sc)
 			if err != nil {
 				t.Fatal(err)
@@ -605,9 +605,8 @@ func TestAReviewWithNoReviewersKeepsTheOwnersNote(t *testing.T) {
 	policy.RequiredReviewers, policy.AlwaysReviewers, policy.ConditionalReviewers = nil, nil, nil
 	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: policy, Heads: map[string]string{"api": "aaa"},
 		PersonSaid: ownerSaid}
-	raw, _ := json.Marshal(st)
-	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
-	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "review", State: raw}
+	w := h.workflowSteps()
+	sc := h.stepContext("review", st)
 	res, err := w.review(h.ctx, sc)
 	if err != nil {
 		t.Fatal(err)

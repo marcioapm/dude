@@ -59,6 +59,13 @@ func baseSyncInstruction(repo, base, sha string) string {
 
 type baseSyncRequest struct{ pr, base, sha, repo string }
 
+// tellTx marks the request as told to runID, how (via).
+func (q baseSyncRequest) tellTx(ctx context.Context, tx pgx.Tx, runID, via string) error {
+	_, err := tx.Exec(ctx, `UPDATE base_sync_requests SET writer_run_id=$3, via=$4 WHERE pull_request_id=$1 AND base_sha=$2`,
+		q.pr, q.sha, runID, via)
+	return err
+}
+
 // lockBaseSyncTx locks the task's in-scope pending requests that match
 // which (SQL over q, $2 the Run), in order.
 func lockBaseSyncTx(ctx context.Context, tx pgx.Tx, taskID, runID, which string) ([]baseSyncRequest, error) {
@@ -68,17 +75,10 @@ func lockBaseSyncTx(ctx context.Context, tx pgx.Tx, taskID, runID, which string)
 	if err != nil {
 		return nil, err
 	}
-	var out []baseSyncRequest
-	for rows.Next() {
-		var q baseSyncRequest
-		if err := rows.Scan(&q.pr, &q.base, &q.sha, &q.repo); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		out = append(out, q)
-	}
-	rows.Close()
-	return out, rows.Err()
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (q baseSyncRequest, err error) {
+		err = row.Scan(&q.pr, &q.base, &q.sha, &q.repo)
+		return q, err
+	})
 }
 
 // RouteBaseSyncTx queues once per writer; requests remain pending until trusted
@@ -91,14 +91,13 @@ func RouteBaseSyncTx(ctx context.Context, tx pgx.Tx, r RunRef) error {
 		return err
 	}
 	for _, q := range requests {
-		if _, _, err = QueueDirective(ctx, tx, r, Directive{Text: baseSyncInstruction(q.repo, q.base, q.sha), Scope: "run"}); err != nil {
+		if _, _, err := QueueDirective(ctx, tx, r, Directive{Text: baseSyncInstruction(q.repo, q.base, q.sha), Scope: "run"}); err != nil {
 			return err
 		}
 		if _, err := ledger.Append(ctx, tx, r.Event(EvPullRequestAction, ledger.ActorSystem, map[string]any{"action": "base-sync-writing", "repo": q.repo, "runId": r.RunID, "base": q.base, "baseSha": q.sha})); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE base_sync_requests SET writer_run_id=$3, via=$4 WHERE pull_request_id=$1 AND base_sha=$2`,
-			q.pr, q.sha, r.RunID, baseSyncViaDirective); err != nil {
+		if err := q.tellTx(ctx, tx, r.RunID, baseSyncViaDirective); err != nil {
 			return err
 		}
 	}
@@ -118,8 +117,7 @@ func ClaimBaseSyncPromptTx(ctx context.Context, tx pgx.Tx, r RunRef) (string, er
 	}
 	lines := make([]string, 0, len(requests))
 	for _, q := range requests {
-		if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET writer_run_id=$3, via=$4 WHERE pull_request_id=$1 AND base_sha=$2`,
-			q.pr, q.sha, r.RunID, baseSyncViaPrompt); err != nil {
+		if err := q.tellTx(ctx, tx, r.RunID, baseSyncViaPrompt); err != nil {
 			return "", err
 		}
 		lines = append(lines, baseSyncInstruction(q.repo, q.base, q.sha))
