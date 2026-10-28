@@ -86,10 +86,23 @@ func HiddenFrom(ctx context.Context, tx pgx.Tx, provider string) (Fence, error) 
 // InheritOrigin copies a session or task's chat provider to a task or epic
 // without an origin. It records {provider, via, from}, not a conversation:
 // a task filed from a chat-born session reaches that session's thread
-// through from (chat_notices.go).
+// through from (chat_notices.go). A task made by a task's agent also gets
+// notify, its parent's chat destination resolved now, in the parent's own
+// organisation: its notices go to the parent's thread, and its own
+// children inherit the same destination without walking the ancestry.
 func InheritOrigin(ctx context.Context, tx pgx.Tx, table, id, fromSession, fromTask string) error {
 	provider, err := originProvider(ctx, tx, fromSession, fromTask)
 	if err != nil || provider == "" {
+		return err
+	}
+	if fromSession == "" && table == "tasks" {
+		_, err = tx.Exec(ctx, `UPDATE tasks c SET origin = jsonb_build_object('provider', $3::text, 'via', 'task', 'from', p.id)
+				|| COALESCE((SELECT jsonb_build_object('notify', jsonb_strip_nulls(jsonb_build_object('provider', d.dest->'provider',
+					'workspaceId', d.dest->'workspaceId', 'conversationId', d.dest->'conversationId', 'conversationName', d.dest->'conversationName',
+					'conversationKind', d.dest->'conversationKind', 'threadId', d.dest->'threadId', 'topLevel', d.dest->'topLevel')))
+				FROM (SELECT `+noticeDestSQL("p.origin")+` AS dest) d
+				WHERE d.dest->>'provider' = $3 AND d.dest->>'conversationId' IS NOT NULL), '{}')
+			FROM tasks p WHERE c.id = $1 AND c.origin IS NULL AND p.id = $2 AND p.organization_id = c.organization_id`, id, fromTask, provider)
 		return err
 	}
 	via, from := "task", fromTask
