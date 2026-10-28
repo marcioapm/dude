@@ -1,11 +1,13 @@
 package delivery
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -151,8 +153,13 @@ func TestARetrysNoteGoesToTheNextFixRun(t *testing.T) {
 	if got != want {
 		t.Fatalf("the fix Run's person_note %q", got)
 	}
-	if park("awaitFix", st, []string{id}); st.PersonSaid != "" {
-		t.Fatalf("the words outlive the Runs they were for: %q", st.PersonSaid)
+	raw, _ = json.Marshal(st)
+	res, err = w.fix(h.ctx, workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, State: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State.(*State).PersonSaid != "" {
+		t.Fatalf("the words outlive the Runs they were for: %q", res.State.(*State).PersonSaid)
 	}
 }
 
@@ -217,6 +224,167 @@ func TestALongBannerNoteReachesTheConductorVerbatim(t *testing.T) {
 	}
 }
 
+// Re-parking on an existing fixer must not spend a waiver's words. A
+// delayed finish from a sibling and a sibling PR closing both wake waits.
+func TestOwnerWaiverSurvivesPendingFixerWakes(t *testing.T) {
+	for _, scope := range []string{ScopeRun, ScopeAttempt} {
+		for _, at := range []string{"awaitFix", "awaitPRFix"} {
+			t.Run(scope+"/"+at, func(t *testing.T) {
+				h := ownedHeldTask(t)
+				h.exec(`UPDATE runs SET phase='fix' WHERE id='run_held'`)
+				h.exec(`UPDATE workflow_runs SET step=$1, state=state || '{"pendingRunIds":["run_held"]}' WHERE id='wf_h'`, at)
+				if at == "awaitPRFix" {
+					h.ownerPRs()
+				}
+				h.exec(`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
+					VALUES ('ev_failure',$1,'run.checks.judged','run_held','wi_h','system','dude','test',
+					'{"turn":0,"verified":false,"checks":[{"command":"make test","result":"fail","reason":"hardware unavailable"}]}')`, h.org)
+				h.escalate("run_held")
+				h.decideAs("per_ola", EscalationDecision{Action: ActionWaive, Scope: scope, Note: absNote})
+				w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+				var raw []byte
+				if err := h.owner.QueryRow(h.ctx, `SELECT state FROM workflow_runs WHERE id='wf_h'`).Scan(&raw); err != nil {
+					t.Fatal(err)
+				}
+				sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, State: raw}
+				res, err := w.decide(h.ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sc.State, _ = json.Marshal(res.State)
+				sc.Step = at
+				sc.Signals = []workflow.Signal{{Name: SignalPhaseFinished, Payload: json.RawMessage(`{"runId":"run_other"}`)}}
+				wait := w.awaitFix
+				if at == "awaitPRFix" {
+					h.exec(`UPDATE pull_requests SET state='closed' WHERE id='pr_sibling'`)
+					sc.Signals = []workflow.Signal{{Name: SignalPullRequestEnded}}
+					wait = w.endable(w.awaitPRFix)
+				}
+				res, err = wait(h.ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sc.State, _ = json.Marshal(res.State)
+				if at == "awaitPRFix" {
+					pending := res.State.(*State)
+					pending.Candidate = &Candidate{From: map[string]string{"api": "aaa"}, Branch: "candidate"}
+					sc.State, _ = json.Marshal(pending)
+				}
+				h.exec(`UPDATE runs SET status='completed', ended_at=now(), heads='{"api":{"sha":"bbb","changedPaths":["main.go"],"base":"aaa"}}' WHERE id='run_held'`)
+				sc.Signals = []workflow.Signal{{Name: SignalPhaseFinished, Payload: json.RawMessage(`{"runId":"run_held"}`)}}
+				res, err = wait(h.ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st := res.State.(*State)
+				// Start real phase work after the finish; force two reviewers so
+				// consuming at the first creation cannot strand the second.
+				st.RetryCategories = []string{"correctness", "security"}
+				sc.State, _ = json.Marshal(st)
+				res, err = w.review(h.ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st = res.State.(*State)
+				if len(st.PendingRunIDs) != 2 {
+					t.Fatalf("reviewers: %v", st.PendingRunIDs)
+				}
+				for _, id := range st.PendingRunIDs {
+					h.assertOwnerNoteOnRun(id, ownerSaid)
+				}
+				if st.PersonSaid != "" {
+					t.Fatal("note remains after full fan-out")
+				}
+				later, err := w.phase(h.ctx, sc, st, PhaseTest, "later_without_note", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				h.assertOwnerNoteOnRun(later, "")
+			})
+		}
+	}
+}
+
+func (h heldTask) ownerPRs() {
+	h.exec(`INSERT INTO repositories(id,organization_id,project_id,name,url) VALUES('repo_owner',$1,'prj_h','api','https://github.com/acme/api')`, h.org)
+	h.exec(`INSERT INTO pull_requests(id,organization_id,project_id,task_id,repository_id,number,url,head_branch,base_branch,head_sha,title,state)
+		VALUES ('pr_open',$1,'prj_h','wi_h','repo_owner',1,'https://github.com/acme/api/pull/1','work','main','aaa','P','open'),
+		('pr_sibling',$1,'prj_h','wi_h','repo_owner',2,'https://github.com/acme/api/pull/2','other','main','aaa','S','open')`, h.org)
+	h.exec(`UPDATE workflow_runs SET state=state || '{"pullRequestIds":["pr_open","pr_sibling"]}' WHERE id='wf_h'`)
+}
+
+// ownerSaid is absNote marked as Ola Nordmann's words (PersonSaidTx).
+const ownerSaid = "The task's owner, Ola Nordmann, said:\n\n" + absNote
+
+// assertOwnerNoteOnRun checks the Run's recorded person_note (what its
+// prompt leads with) is exactly want; "" for none.
+func (h heldTask) assertOwnerNoteOnRun(id, want string) {
+	h.t.Helper()
+	var note string
+	if err := h.owner.QueryRow(h.ctx, `SELECT COALESCE(person_note,'') FROM runs WHERE id=$1`, id).Scan(&note); err != nil {
+		h.t.Fatal(err)
+	}
+	if note != want {
+		h.t.Fatalf("Run %s person_note %q, want %q", id, note, want)
+	}
+}
+
+func TestOwnerWaitDispatchHandsNoteToFixer(t *testing.T) {
+	for _, route := range []string{"conflict", "integration-feedback", "open-feedback", "waiting", "stop", "done"} {
+		t.Run(route, func(t *testing.T) {
+			h := ownedHeldTask(t)
+			h.ownerPRs()
+			h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+			reason, action := "pull_request_conflict", "wait"
+			if route == "stop" || route == "done" {
+				reason, action = "pull_request_closed", route
+			}
+			st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), PullRequestIDs: []string{"pr_open"}}
+			if route == "conflict" || route == "integration-feedback" {
+				st.PRFeedback = []forge.ActionableFeedback{{Repo: "api", Source: "review", Body: "Please fix this"}}
+			}
+			if route == "integration-feedback" || route == "open-feedback" {
+				st.Integration = &Integration{Repo: "api"}
+			}
+			if route == "open-feedback" {
+				h.exec(`INSERT INTO feedback_batches(id,organization_id,task_id,attempt,author_person_id,submission_key) VALUES('batch_owner',$1,'wi_h',1,'per_ola','owner')`, h.org)
+				h.exec(`INSERT INTO feedback_items(id,organization_id,task_id,attempt,batch_id,author_person_id,body,anchor_kind,anchor,status,submitted_at) VALUES('fb_owner',$1,'wi_h',1,'batch_owner','per_ola','Fix this','general','{"kind":"general"}','open',now())`, h.org)
+			}
+			st.Escalation = &Escalation{Reason: reason, Decided: &HumanDecision{Action: action, Said: "The task's owner, Ola Nordmann, said:\n\n" + absNote}}
+			raw, _ := json.Marshal(st)
+			w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+			sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+			res, err := w.decide(h.ctx, sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if route == "waiting" || route == "stop" || route == "done" {
+				if res.Next == "prFix" || len(res.State.(*State).PendingRunIDs) > 0 {
+					t.Fatal("note alone started work")
+				}
+				// No Run was started for the words: none may carry them later.
+				if said := res.State.(*State).PersonSaid; said != "" {
+					t.Fatalf("%s kept the note: %q", route, said)
+				}
+				return
+			}
+			if res.Next != "prFix" {
+				t.Fatalf("dispatch %q", res.Next)
+			}
+			sc.State, _ = json.Marshal(res.State)
+			res, err = w.prFix(h.ctx, sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st = res.State.(*State)
+			if len(st.PendingRunIDs) != 1 || st.PersonSaid != "" {
+				t.Fatalf("handoff %+v", st)
+			}
+			h.assertOwnerNoteOnRun(st.PendingRunIDs[0], ownerSaid)
+		})
+	}
+}
+
 // A fresh Run's prompt leads with the person's words (after a replay);
 // a resumed round's message does too.
 func TestAPersonsNoteLeadsThePromptAndTheRoundMessage(t *testing.T) {
@@ -230,4 +398,165 @@ func TestAPersonsNoteLeadsThePromptAndTheRoundMessage(t *testing.T) {
 	if p := Prompt(PhaseFix, PromptInput{Title: "T", Goal: "G"}); strings.Contains(p, "said:") {
 		t.Errorf("a prompt with no words has some:\n%s", p)
 	}
+}
+
+// A Stop's note is for the record, not a later Run: a resume pick-up
+// (which hands its own note to the kept Runs, never to State) leaves the
+// next phase Run with no person_note.
+func TestAStopsNoteDoesNotReachAPhaseAfterAResume(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE runs SET phase='fix', status='failed', ended_at=now() WHERE id='run_held'`)
+	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), PendingRunIDs: []string{"run_held"},
+		Escalation: &Escalation{Reason: "fix_failed", Step: "fix", At: "awaitFix", Detail: map[string]any{"runId": "run_held"},
+			Decided: &HumanDecision{Action: "stop", Said: ownerSaid}}}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+	res, err := w.decide(h.ctx, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = res.State.(*State)
+	if st.Stopped == nil {
+		t.Fatalf("not stopped: %+v", st)
+	}
+	// What the API's resume pick-up (api.pickUp) does to State.
+	st.Recover = &Recover{Action: "resume", At: "awaitFix"}
+	st.PendingRunIDs = []string{"run_held"}
+	h.exec(`UPDATE tasks SET status='running' WHERE id='wi_h'`)
+	sc.Step = "recover"
+	sc.State, _ = json.Marshal(st)
+	res, err = w.recover(h.ctx, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Next != "awaitFix" {
+		t.Fatalf("resumed at %q", res.Next)
+	}
+	st = res.State.(*State)
+	id, err := w.phase(h.ctx, sc, st, PhaseReview, "after_resume", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.assertOwnerNoteOnRun(id, "")
+}
+
+// A Before-PR integration waited past opens no pull request and waits on
+// a person reading the work: the wait's words were for no Run, and a
+// later fixer for read feedback does not get them.
+func TestAWaitNoteEndsAtAwaitRead(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"target": "abc"},
+		Integration: &Integration{Repo: "api", BeforePR: true},
+		Escalation:  &Escalation{Reason: "pull_request_conflict", Decided: &HumanDecision{Action: "wait", Said: ownerSaid}}}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+	res, err := w.decide(h.ctx, sc)
+	if err != nil || res.Next != "openPullRequest" {
+		t.Fatalf("decided: %q %v", res.Next, err)
+	}
+	sc.Step = "openPullRequest"
+	sc.State, _ = json.Marshal(res.State)
+	res, err = w.openPullRequest(h.ctx, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Next != "awaitRead" {
+		t.Fatalf("opened: %q", res.Next)
+	}
+	if said := res.State.(*State).PersonSaid; said != "" {
+		t.Fatalf("awaitRead kept the wait's note: %q", said)
+	}
+}
+
+// Each step that starts a phase Run hands it the owner's words once and
+// spends them: the next phase Run starts with none. A genuine wait on
+// the pull requests spends them too, starting nothing.
+func TestOwnerNoteIsSpentByEachPhaseStart(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		step  func(*steps) workflow.Step
+		state func(*State)
+		await string
+	}{
+		{"implementRun", func(w *steps) workflow.Step { return w.implementRun }, func(st *State) { st.Retries = 1 }, "awaitImplement"},
+		{"simplify", func(w *steps) workflow.Step { return w.simplify }, func(*State) {}, "awaitSimplify"},
+		{"test", func(w *steps) workflow.Step { return w.test }, func(*State) {}, "awaitTest"},
+		{"waitForPR", func(w *steps) workflow.Step { return w.decide }, func(st *State) {
+			st.PullRequestIDs = []string{"pr_open"}
+			st.Escalation = &Escalation{Reason: "pull_request_conflict", Decided: &HumanDecision{Action: "wait", Said: ownerSaid}}
+		}, "awaitPullRequest"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := ownedHeldTask(t)
+			h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+			if c.name == "waitForPR" {
+				h.ownerPRs()
+			}
+			st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"api": "aaa"},
+				PersonSaid: ownerSaid}
+			c.state(st)
+			raw, _ := json.Marshal(st)
+			w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+			sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: c.name, State: raw}
+			res, err := c.step(w)(h.ctx, sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Next != c.await {
+				t.Fatalf("next %q, want %q", res.Next, c.await)
+			}
+			st = res.State.(*State)
+			if c.name == "waitForPR" {
+				if len(st.PendingRunIDs) != 0 {
+					t.Fatalf("the wait started %v", st.PendingRunIDs)
+				}
+			} else {
+				if len(st.PendingRunIDs) != 1 {
+					t.Fatalf("started %v, want one Run", st.PendingRunIDs)
+				}
+				h.assertOwnerNoteOnRun(st.PendingRunIDs[0], ownerSaid)
+			}
+			if st.PersonSaid != "" {
+				t.Fatalf("%s kept the note: %q", c.name, st.PersonSaid)
+			}
+			later, err := w.phase(h.ctx, sc, st, PhaseReview, "later_"+c.name, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.assertOwnerNoteOnRun(later, "")
+		})
+	}
+}
+
+// A review round that warrants no reviewer and no gate starts no Run:
+// the words wait for the next Run that does start.
+func TestAReviewWithNoReviewersKeepsTheOwnersNote(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+	policy := DefaultPolicy()
+	policy.RequiredReviewers, policy.AlwaysReviewers, policy.ConditionalReviewers = nil, nil, nil
+	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: policy, Heads: map[string]string{"api": "aaa"},
+		PersonSaid: ownerSaid}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "review", State: raw}
+	res, err := w.review(h.ctx, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = res.State.(*State)
+	if res.Next != "awaitReview" || len(st.PendingRunIDs) != 0 || len(st.ReviewRunIDs) != 0 {
+		t.Fatalf("review started reviewers: %q %v %v", res.Next, st.PendingRunIDs, st.ReviewRunIDs)
+	}
+	if st.PersonSaid != ownerSaid {
+		t.Fatalf("no reviewer started, yet the note is %q", st.PersonSaid)
+	}
+	next, err := w.phase(h.ctx, sc, st, PhaseTest, "next_after_empty_review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.assertOwnerNoteOnRun(next, ownerSaid)
 }

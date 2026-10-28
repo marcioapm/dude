@@ -75,7 +75,7 @@ type State struct {
 	// A person's note on the decision the delivery goes on from (an
 	// escalation's, a pick-up's), marked as their words (PersonSaidTx):
 	// the next phase Runs started carry it (runs.person_note), then it is
-	// spent (park).
+	// spent after the full phase step succeeds.
 	PersonSaid string `json:"personSaid,omitempty"`
 	// The review round's Runs, every one, while it is waited for: each
 	// must have finished for the round to be complete. Empty in a round
@@ -596,8 +596,6 @@ func settle(st *State, sc workflow.StepContext) []string {
 
 func park(next string, st *State, pending []string) workflow.Result {
 	st.PendingRunIDs = pending
-	// The Runs waited on were started with the person's words: spent.
-	st.PersonSaid = ""
 	return workflow.Result{Next: next, State: st, AwaitSignals: []string{SignalPhaseFinished}}
 }
 
@@ -696,6 +694,7 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 		return workflow.Result{}, err
 	}
 	st.Iteration = 0
+	st.PersonSaid = ""
 	return park("awaitImplement", st, []string{runID}), nil
 }
 
@@ -874,6 +873,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		st.PendingRunIDs = nil
 		return workflow.Result{Next: "awaitReview", State: st}, nil
 	}
+	// Every intended reviewer now has the note; none is consumed on a
+	// partial fan-out or when no reviewer was started.
+	st.PersonSaid = ""
 	return park("awaitReview", st, runIDs), nil
 }
 
@@ -1212,6 +1214,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	st.PersonSaid = ""
 	return park("awaitFix", st, []string{runID}), nil
 }
 
@@ -1281,6 +1284,7 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	st.PersonSaid = ""
 	return park("awaitSimplify", st, []string{runID}), nil
 }
 
@@ -1378,6 +1382,7 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 		return workflow.Result{}, err
 	}
 	st.RetestDue = false
+	st.PersonSaid = ""
 	return park("awaitTest", st, []string{runID}), nil
 }
 
@@ -1986,6 +1991,7 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			return workflow.Result{}, err
 		}
 	}
+	st.PersonSaid = ""
 	return park("awaitPRFix", st, []string{runID}), nil
 }
 
@@ -3059,8 +3065,14 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		return resumeEscalationAt(st, e), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, "a person decided: "+d.Action)
 	}
+	// A wait decision may dispatch work immediately, before the ordinary
+	// retry path below. Genuine waiting still spends the note in waitForPR.
+	st.PersonSaid = d.Said
 	switch d.Action {
 	case "stop":
+		// The stop's words are for the record (its decision event), not
+		// for a Run a later pick-up starts: a resume never overwrites them.
+		st.PersonSaid = ""
 		// Kept, so the task can be picked back up where it stopped.
 		e.Decided = nil
 		st.Stopped = e
@@ -3074,6 +3086,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
 	case "done":
+		st.PersonSaid = ""
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
 		if e.Reason == "pull_request_closed" {
@@ -3120,9 +3133,6 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")
 	}
-	// Going on: working again, whichever step takes it up. The next Runs
-	// it starts are told what the person said with it.
-	st.PersonSaid = d.Said
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
 	}
@@ -3312,6 +3322,9 @@ func waitForPR(st *State) workflow.Result {
 // awaitRead waits on a person reading work that opened no pull request:
 // their feedback takes it up again; marking it done ends it.
 func awaitRead(st *State) workflow.Result {
+	// As waitForPR: words for the Runs a decision started are not for the
+	// fixer a person's later feedback starts.
+	st.PersonSaid = ""
 	return workflow.Result{Next: "awaitRead", State: st, AwaitSignals: []string{SignalHumanFeedback}}
 }
 
