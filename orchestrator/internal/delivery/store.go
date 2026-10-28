@@ -1434,7 +1434,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		if err != nil {
 			return err
 		}
-		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID, ref.URL)
+		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID)
 	})
 	return id, err
 }

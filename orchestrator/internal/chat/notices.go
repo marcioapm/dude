@@ -23,8 +23,13 @@ import (
 const (
 	// noticeBatch bounds one PostNotices pass.
 	noticeBatch = 50
-	// noticeTries is how many times a notice is tried before dude gives up.
-	noticeTries = MaxAttempts
+	// noticeWindow is how long after it was recorded a notice is still
+	// tried on a transient failure: a provider's outage of hours, not a
+	// count shared with deliveries, where a person is waiting.
+	noticeWindow = 6 * time.Hour
+	// noticeBackoffShift caps backoffBase's doubling (5 s << 7 is past
+	// backoffMax already) so a notice tried for hours never overflows it.
+	noticeBackoffShift = 8
 )
 
 type dueNotice struct {
@@ -36,19 +41,21 @@ type notice struct {
 	TaskID, Key, Title, Detail, Slug                    string
 	Project, ConversationName, ProviderName             string
 	Attempts                                            int
+	// Recorded more than noticeWindow ago: a failure now gives up.
+	Expired bool
 }
 
 // noticeText is a notice's one line: the task's key and title, what
-// happened, the pull request's link or the failure's reason. Plain words:
-// the provider escapes them once.
+// happened, and why it failed or stopped. Plain words: the provider
+// escapes them once. The Open in dude button links the task.
 func noticeText(n notice) string {
 	head := n.Key + " " + n.Title
 	switch n.Kind {
-	case "started":
+	case delivery.NoticeStarted:
 		return "Started " + head + "."
-	case "pr_opened":
-		return "Opened a pull request for " + head + ": " + n.Detail
-	case "done":
+	case delivery.NoticePROpened:
+		return "Opened a pull request for " + head + "."
+	case delivery.NoticeDone:
 		return "Done: " + head + "."
 	}
 	if n.Detail != "" {
@@ -60,9 +67,11 @@ func noticeText(n notice) string {
 // PostNotices posts the notices that are due, at most noticeBatch a pass:
 // each read and settled in its own organisation's transaction, the
 // provider called with none open. A transient failure is tried again
-// later, longer each time; past noticeTries, or on any other failure, dude
-// gives up, recording the last error on the row. It returns how many it
-// settled.
+// later, longer each time, until noticeWindow after the notice was
+// recorded; past it, or on any other failure, dude gives up, recording the
+// last error on the row. Posting is at least once: a crash between the
+// post and its record posts it again once the claim's lease runs out. It
+// returns how many it settled.
 func (s *Service) PostNotices(ctx context.Context) (int, error) {
 	var due []dueNotice
 	if err := s.DB.InSystem(ctx, "chat-notices", func(tx pgx.Tx) error {
@@ -105,9 +114,10 @@ func (s *Service) postNotice(ctx context.Context, d dueNotice) (bool, error) {
 			FROM organizations o, tasks t WHERE c.id = $1 AND o.id = c.organization_id AND t.id = c.task_id
 			  AND c.posted_at IS NULL AND c.gave_up_at IS NULL AND c.next_attempt_at <= now()
 			RETURNING c.id, c.kind, c.provider, c.external_workspace_id, c.conversation_id, c.thread_id,
-				c.task_id, c.task_key, c.task_title, c.detail, o.slug, c.attempts, t.project_id, c.conversation_name`, d.ID, claimLease.String()).
+				c.task_id, c.task_key, c.task_title, c.detail, o.slug, c.attempts, t.project_id, c.conversation_name,
+				c.created_at <= now() - $3::interval`, d.ID, claimLease.String(), noticeWindow.String()).
 			Scan(&n.ID, &n.Kind, &n.Provider, &n.Workspace, &n.Conversation, &n.Thread, &n.TaskID, &n.Key, &n.Title, &n.Detail, &n.Slug,
-				&n.Attempts, &n.Project, &n.ConversationName)
+				&n.Attempts, &n.Project, &n.ConversationName, &n.Expired)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -135,8 +145,8 @@ func (s *Service) postNotice(ctx context.Context, d dueNotice) (bool, error) {
 		return true, s.settleNotice(ctx, d.Org, n, ts, nil, 0)
 	}
 	s.noteFailure(ctx, d.Org, n.Provider, err)
-	if transient, after := IsTransient(err); transient && n.Attempts+1 < noticeTries {
-		wait := min(max(backoffBase<<n.Attempts, after), backoffMax)
+	if transient, after := IsTransient(err); transient && !n.Expired {
+		wait := min(max(backoffBase<<min(n.Attempts, noticeBackoffShift), after), backoffMax)
 		s.log().Warn("a chat notice failed; trying again", "notice", n.ID, "attempt", n.Attempts+1, "in", wait, "error", err)
 		return false, s.settleNotice(ctx, d.Org, n, "", err, wait)
 	}
@@ -145,9 +155,11 @@ func (s *Service) postNotice(ctx context.Context, d dueNotice) (bool, error) {
 }
 
 // settleNotice records an attempt: posted (ts), due again after retry, or
-// given up with failure.
+// given up with failure. A post the provider took is recorded even when
+// ctx is cancelled (a shutdown), or it would be posted again.
 func (s *Service) settleNotice(ctx context.Context, org string, n notice, ts string, failure error, retry time.Duration) error {
-	return s.DB.InOrg(context.WithoutCancel(ctx), org, func(tx pgx.Tx) error {
+	ctx = context.WithoutCancel(ctx)
+	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		switch {
 		case failure == nil:
 			_, err := tx.Exec(ctx, `UPDATE chat_notices SET posted_at = now(), message_id = $2, attempts = attempts + 1, last_error = NULL

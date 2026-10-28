@@ -117,6 +117,8 @@ def test_a_task_routed_from_slack_tells_the_thread_it_started_opened_a_pull_requ
         return got if len(got) >= 3 else None
     got = wait_until(notices, timeout=30, message="dude's notices in the thread")
     title = "Tidy the export page"
-    assert got == [f"Started {key} {title}.", f"Opened a pull request for {key} {title}: {pr['url']}", f"Done: {key} {title}."], got
+    # The pull request's URL names the repository: the thread gets dude's task link (the button) alone.
+    assert got == [f"Started {key} {title}.", f"Opened a pull request for {key} {title}.", f"Done: {key} {title}."], got
+    assert not [m for m in _thread(slack, channel, root) if pr["url"] in json.dumps(m)], _thread(slack, channel, root)
     rows = query(owner_dsn, "SELECT kind, attempts FROM chat_notices WHERE task_id = %s ORDER BY created_at", (task,))
     assert rows == [{"kind": "started", "attempts": 1}, {"kind": "pr_opened", "attempts": 1}, {"kind": "done", "attempts": 1}], rows

@@ -3,11 +3,13 @@ package orchestrator_test
 import (
 	"context"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/chat/slack"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeslack"
 )
 
@@ -66,12 +68,61 @@ func TestOriginATaskFiledFromAChatBornSessionPostsItsNoticesInTheSessionsThread(
 		got = append(got, m.Text)
 	}
 	key := s.one(`SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, task)
-	want := []string{"Started " + key + " Fix the export timeout.", "Opened a pull request for " + key + " Fix the export timeout: ",
+	want := []string{"Started " + key + " Fix the export timeout.", "Opened a pull request for " + key + " Fix the export timeout.",
 		"Done: " + key + " Fix the export timeout."}
-	if len(got) != 3 || got[0] != want[0] || !strings.HasPrefix(got[1], want[1]) || !strings.Contains(got[1], "/pull/") || got[2] != want[2] {
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("the thread got %q", got)
 	}
 	if n := s.count(`SELECT count(*) FROM chat_notices WHERE task_id = $1`, webTask); n != 0 {
 		t.Errorf("%d notices for the task filed from a web session", n)
+	}
+}
+
+// A chat-origin task that adopts a person's pull request tells its thread
+// once the pull request is recorded as its own, as one dude opened does.
+func TestAdoptedPullRequestOfAChatOriginTaskPostsItsNoticeInTheThread(t *testing.T) {
+	w := newWorld(t)
+	fake := fakeslack.New("cid", "csecret")
+	fake.AddTeam("T1", "Acme")
+	fake.AddConversation(fakeslack.Conversation{ID: "C0SUPPORT", Team: "T1", Name: "support", Kind: "public", Members: []string{"UBT1", "U1"}})
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	mustExec(t, w.owner, `INSERT INTO chat_installations (id, organization_id, provider, external_workspace_id, workspace_name,
+		workspace_domain, bot_user_id, bot_token) VALUES ($1, $2, 'slack', 'T1', 'Acme', 'acme', 'UBT1', $3)`, "chi_"+w.org, w.org, fake.Token("T1"))
+	svc := &chat.Service{DB: w.app, PublicURL: "https://dude.example.com", Providers: chat.Registry{"slack": slack.New(slack.Config{
+		ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})}}
+	root := fake.Post("C0SUPPORT", "", "U1", "<@UBT1> take over the half-done export")
+
+	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
+	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeReview)
+	mustExec(t, w.owner, `UPDATE tasks SET origin = jsonb_build_object('provider', 'slack', 'workspaceId', 'T1', 'conversationId', 'C0SUPPORT',
+		'conversationName', '#support', 'conversationKind', 'public', 'threadId', $2::text) WHERE id = $1`, wi, root)
+	w.startDelivery(wi)
+	w.until("waiting on the adopted pull request", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
+	})
+	if c := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND adopted AND number = $2`, wi, n); c != 1 || len(w.gh.Pulls()) != 1 {
+		t.Fatalf("adopted %d, %d pull requests", c, len(w.gh.Pulls()))
+	}
+	if c := w.count(`SELECT count(*) FROM chat_notices WHERE task_id = $1 AND kind = 'pr_opened' AND detail = ''`, wi); c != 1 {
+		t.Fatalf("%d pull-request notices recorded", c)
+	}
+	if _, err := svc.PostNotices(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range fake.BotMessages() {
+		if m.Channel != "C0SUPPORT" || m.ThreadTS != root {
+			t.Errorf("a notice outside the thread: %+v", m)
+		}
+		got = append(got, m.Text)
+	}
+	var key, title string
+	if err := w.owner.QueryRow(context.Background(), `SELECT p.key_prefix || '-' || t.number, t.title FROM tasks t JOIN projects p ON p.id = t.project_id
+		WHERE t.id = $1`, wi).Scan(&key, &title); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got, "Opened a pull request for "+key+" "+title+".") {
+		t.Fatalf("the thread got %q", got)
 	}
 }

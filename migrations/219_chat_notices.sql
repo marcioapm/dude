@@ -4,11 +4,13 @@
 -- that moves the task (delivery.RecordStatusTx, the pull request's
 -- recording), at most one per task and kind, and the chat-notices loop
 -- posts it with no transaction open, retrying a transient failure with
--- backoff and giving up after 6 tries. What it says is fixed when it is
--- recorded: the task's key and title, the pull request's link or why it
--- failed, and the thread.
+-- backoff until 6 hours after it was recorded. Posting is at least once:
+-- a crash between the post and its record re-posts after the claim's
+-- lease. What it says is fixed when it is recorded: the task's key and
+-- title, why it failed (a fixed phrase), and the thread.
 --
--- A new, empty table: no lock on anything that exists.
+-- Catalog-only (no scan, no backfill); the foreign keys take SHARE ROW
+-- EXCLUSIVE on tasks and organizations, briefly, until this commits.
 CREATE TABLE chat_notices (
   id                    text PRIMARY KEY,
   organization_id       text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,

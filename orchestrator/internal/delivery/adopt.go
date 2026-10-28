@@ -191,7 +191,7 @@ func (s *Store) recordAdopted(ctx context.Context, org string, st *State, repo R
 		if err != nil {
 			return err
 		}
-		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID, pr.URL)
+		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID)
 	})
 	return id, err
 }

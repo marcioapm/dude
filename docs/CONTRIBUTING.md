@@ -1303,48 +1303,25 @@ noted for the installation's health, never retried.
 **What goes back to the thread.** A mention's own reply is the routing
 reply and the marks. Past that, two writers, split by who knows what is
 worth saying:
-- *The session's agent decides* (`reply_in_thread`, capability
-  `chat.reply`, `agenttools/reply_in_thread.go`). `capabilities.Resolve`
-  grants it only to a brainstorm whose session's `origin` names a
-  conversation; `Default` never lists it, so a web session neither lists
-  nor finds the tool, and its instruction file has no thread contract
-  (`contracts/chat-thread.md`, under `## The chat thread` when granted).
-  The tool takes the text alone: the conversation, thread and installation
-  come from the session's origin, and the installation must still be that
-  workspace's. Text is the provider's markup (`Reply.Markup`, posted
-  unescaped), 1–3 000 characters (one Block Kit section; refused with
-  "summarise and link"), never `<!channel>`/`<!here>`/`<!everyone>`, with
-  the Run's secret values redacted by `Server.call`. At most 3 posts a
-  turn: `agent.tool.attempted` rows for the tool after the session's
-  latest person `chat.message` or `question.answered`, counted under a
-  per-session advisory lock, so a restart counts the same. It is
-  `post_to_chat`'s shape (checked and attempted in a transaction, posted
-  with none open, recorded after); it shares `textWithin` and the revoked
-  codes. Each post is `chat.reply.posted`, each refusal past the origin
-  check `chat.reply.refused` (the automation events keep their meaning);
-  the session page shows both. The agent decides because only it knows
-  whether a question was answered, worth a line, or needs nothing.
-- *dude posts* a chat-origin task's progress (`chat_notices`, migration
-  219, `delivery/chat_notices.go`, `chat/notices.go`): started, pull
-  request opened (with its link), done, failed or stopped (with the
-  reason), once each. No agent watches a task's whole delivery, and these
-  are facts, not judgement. `RecordStatusTx` (every status writer goes
-  through it) and the two pull-request recorders insert the row in their
-  own transaction, `UNIQUE (task_id, kind)` with `ON CONFLICT DO NOTHING`,
-  so a retried move or a round back to running says nothing new. The row
-  fixes the text's facts then: the task's key and title (its own project,
-  even one hidden since, F4: a notice never names another), the thread,
-  the detail. The thread is the task's origin's, or for a task filed from
-  a chat-born session (origin `{provider, via: session, from}`, which
-  `InheritOrigin` already wrote) that session's. A web-filed task has no
-  row. The `chat-notices` loop (`Service.PostNotices`, 50 due a pass along
-  `chat_notices_pending_idx`, the sweeper reading only id, organisation
-  and the due columns) claims a row by moving `next_attempt_at` a lease
-  ahead, posts with no transaction open (escaped once, with an Open in
-  dude button), and records posted, a retry (transient: 5 s doubling to
-  10 minutes, or Retry-After), or a give-up after 6 tries or any other
-  refusal: `gave_up_at`, `last_error`, and a `chat.notice`
-  (`thread_notice_failed`) in the task's Chat.
+- *The session's agent decides* (`reply_in_thread`, capability `chat.reply`,
+  `agenttools/reply_in_thread.go`), granted by `capabilities.Resolve` only to
+  a brainstorm whose session came from a chat thread. It takes text alone and
+  posts to the conversation and thread of the turn's latest person input, as
+  that input's `chat.message` recorded it (`chat.writerFrom`); a turn typed in
+  dude is refused. Text is escaped once like every reply; at most 3 posts a
+  turn, counted from the ledger under a per-session advisory lock. Shaped as
+  `post_to_chat`: checked in a transaction, posted with none open, recorded.
+- *dude posts* a chat-origin task's progress (`chat_notices`, migration 219,
+  `delivery/chat_notices.go`, `chat/notices.go`): started, pull request opened
+  (dude's link only, never the repository's URL), done, failed or stopped (a
+  fixed phrase per known reason, otherwise "it failed"/"it was cancelled").
+  The row is written in the move's own transaction, `UNIQUE (task_id, kind)`
+  with `ON CONFLICT DO NOTHING`, and fixes the text's facts. The
+  `chat-notices` loop claims a row with a lease, posts with no transaction
+  open, retries transient failures with backoff until 6 hours after the row
+  was recorded, and otherwise gives up with a `thread_notice_failed` line in
+  the task's Chat. Posting is at least once: a crash between the post and its
+  record re-posts after the lease.
 
 **Configuration**: `slack.signing_secret`, `slack.client_id`,
 `slack.client_secret` (both secrets), `slack.api_url` (default

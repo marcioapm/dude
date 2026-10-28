@@ -80,7 +80,7 @@ The agent then decides what goes back, with `reply_in_thread`. It answers in the
 
 It never posts logs, code or tool output, since people outside the organisation may read the thread. It posts at most 3 messages after each message of yours, each at most about 3,000 characters, never notifies the whole channel or a group, and never pings a person. Each post, or why one was refused, shows in the session.
 
-A task made from chat (routed by dude, or filed from a session started from chat) gets dude's own notices in the thread, once each: when its delivery starts, when its pull request opens (with the link), when it is done, and if it fails or is stopped (with the reason). A task filed from the web posts nothing. If the chat refuses a notice, dude stops trying and the task's Chat says why.
+A task made from chat (routed by dude, or filed from a session started from chat) gets dude's own notices in the thread, once each: when its delivery starts, when its pull request opens (with dude's link to the task), when it is done, and if it fails or is stopped (with the reason, when it is one dude knows). A task filed from the web posts nothing. If the chat refuses a notice, or is down for more than 6 hours, dude stops trying and the task's Chat says why.
 
 Its machine is small and does not run code. What needs running to be known, it says is not checked, and proposes a task that finds out.
 
