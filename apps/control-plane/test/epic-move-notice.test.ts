@@ -96,6 +96,8 @@ test("moving an epic's last running task out finishes the epic, once, with what 
 });
 
 test("a task moved out of an epic made in dude records nothing", async () => {
+  // An ended task stays, so only the epic's having no conversation stops the finish.
+  await task("done", WEB_EPIC);
   const left = await task("running", WEB_EPIC);
   expect((await move(left, null)).status).toBe(200);
   expect([...await owner`SELECT count(*)::int AS n FROM chat_notices WHERE epic_id = ${WEB_EPIC}`]).toEqual([{ n: 0 }]);
