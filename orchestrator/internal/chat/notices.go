@@ -29,16 +29,18 @@ type dueNotice struct {
 
 type notice struct {
 	ID, Kind, Provider, Workspace, Conversation, Thread string
-	TaskID, Key, Title, Detail, Slug                    string
-	Project, ConversationName, ProviderName             string
-	Attempts                                            int
+	// One of TaskID and EpicID is set: the notice's subject.
+	TaskID, EpicID, Key, Title, Detail, Slug string
+	Project, ConversationName, ProviderName  string
+	Attempts                                 int
 	// Recorded more than noticeWindow ago: a failure now gives up.
 	Expired bool
 }
 
-// noticeText is a notice's one line: the task's key and title, what
-// happened, and why it failed or stopped. Plain words: the provider
-// escapes them once. The Open in dude button links the task.
+// noticeText is a notice's one line: the task's key and title, or the
+// epic's project key and title, what happened, and why a task failed or
+// stopped or how an epic's tasks ended. Plain words: the provider escapes
+// them once. The Open in dude button links the task or epic.
 func noticeText(n notice) string {
 	head := n.Key + " " + n.Title
 	switch n.Kind {
@@ -48,6 +50,12 @@ func noticeText(n notice) string {
 		return "Opened a pull request for " + head + "."
 	case delivery.NoticeDone:
 		return "Done: " + head + "."
+	case delivery.NoticeEpicStarted:
+		return "Started the epic " + n.Key + " › " + n.Title + "."
+	case delivery.NoticeEpicPROpened:
+		return "Opened the first pull request for the epic " + n.Key + " › " + n.Title + "."
+	case delivery.NoticeEpicFinished:
+		return "The epic " + n.Key + " › " + n.Title + " finished: " + n.Detail + "."
 	}
 	if n.Detail != "" {
 		return "Stopped " + head + ": " + n.Detail + "."
@@ -99,13 +107,14 @@ func (s *Service) postNotice(ctx context.Context, d dueNotice) (bool, error) {
 	)
 	err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `UPDATE chat_notices c SET next_attempt_at = now() + $2::interval
-			FROM organizations o, tasks t WHERE c.id = $1 AND o.id = c.organization_id AND t.id = c.task_id
+			FROM organizations o WHERE c.id = $1 AND o.id = c.organization_id
 			  AND c.posted_at IS NULL AND c.gave_up_at IS NULL AND c.next_attempt_at <= now()
 			RETURNING c.id, c.kind, c.provider, c.external_workspace_id, c.conversation_id, c.thread_id,
-				c.task_id, c.subject_key, c.subject_title, c.detail, o.slug, c.attempts, t.project_id, c.conversation_name,
-				c.created_at <= now() - $3::interval`, d.ID, claimLease.String(), noticeWindow.String()).
-			Scan(&n.ID, &n.Kind, &n.Provider, &n.Workspace, &n.Conversation, &n.Thread, &n.TaskID, &n.Key, &n.Title, &n.Detail, &n.Slug,
-				&n.Attempts, &n.Project, &n.ConversationName, &n.Expired)
+				COALESCE(c.task_id, ''), COALESCE(c.epic_id, ''), c.subject_key, c.subject_title, c.detail, o.slug, c.attempts,
+				COALESCE((SELECT t.project_id FROM tasks t WHERE t.id = c.task_id), (SELECT e.project_id FROM epics e WHERE e.id = c.epic_id)),
+				c.conversation_name, c.created_at <= now() - $3::interval`, d.ID, claimLease.String(), noticeWindow.String()).
+			Scan(&n.ID, &n.Kind, &n.Provider, &n.Workspace, &n.Conversation, &n.Thread, &n.TaskID, &n.EpicID, &n.Key, &n.Title, &n.Detail,
+				&n.Slug, &n.Attempts, &n.Project, &n.ConversationName, &n.Expired)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -127,7 +136,11 @@ func (s *Service) postNotice(ctx context.Context, d dueNotice) (bool, error) {
 	if !ok || perr != nil || inst.WorkspaceID != n.Workspace {
 		return true, s.settleNotice(ctx, d.Org, n, "", fmt.Errorf("the %s installation this thread was in is gone", n.Provider), 0)
 	}
-	reply := Reply{Text: noticeText(n), LinkURL: s.link(n.Slug, "task/"+url.PathEscape(n.TaskID)), LinkLabel: "Open in dude"}
+	page := "task/" + url.PathEscape(n.TaskID)
+	if n.EpicID != "" {
+		page = "epic/" + url.PathEscape(n.EpicID)
+	}
+	reply := Reply{Text: noticeText(n), LinkURL: s.link(n.Slug, page), LinkLabel: "Open in dude"}
 	ts, err := p.PostReply(ctx, inst, n.Conversation, n.Thread, reply)
 	if err == nil {
 		return true, s.settleNotice(ctx, d.Org, n, ts, nil, 0)
@@ -163,11 +176,18 @@ func (s *Service) settleNotice(ctx context.Context, org string, n notice, ts str
 		if err != nil {
 			return err
 		}
-		// The task's Chat says the thread was not told, and why.
+		// The task's Chat says the thread was not told, and why. An epic
+		// has no Chat: the line goes on its project's ledger, correlated
+		// with the epic as its other events are.
+		payload := map[string]any{"about": "thread_notice_failed", "kind": n.Kind, "noticeId": n.ID,
+			"text": fmt.Sprintf("dude could not tell the %s thread in %s: %s", n.ProviderName, n.ConversationName, clip(failure.Error(), 300))}
+		correlation := n.TaskID
+		if n.EpicID != "" {
+			payload["epicId"], correlation = n.EpicID, n.EpicID
+		}
 		_, err = ledger.Append(ctx, tx, ledger.Event{Type: delivery.EvChatNotice, OrganizationID: org, TaskID: n.TaskID,
-			ProjectID: n.Project, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: n.TaskID,
-			Payload: map[string]any{"about": "thread_notice_failed", "kind": n.Kind, "noticeId": n.ID,
-				"text": fmt.Sprintf("dude could not tell the %s thread in %s: %s", n.ProviderName, n.ConversationName, clip(failure.Error(), 300))}})
+			ProjectID: n.Project, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: correlation,
+			Payload: payload})
 		return err
 	})
 }

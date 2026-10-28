@@ -754,7 +754,9 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 // RecordStatusTx records that a task's status changed, and why: what time
 // and cost count from. A move to done releases what the task blocked, if
 // it merged (releaseDependantsTx). A move a chat thread hears of (started,
-// done, failed or stopped) records its notice (chat_notices.go).
+// done, failed or stopped) records its notice and its epic's
+// (chat_notices.go); the epic's comes last, so its lock is the last this
+// move takes.
 func RecordStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, status, reason string) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvTaskStatusChanged, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
@@ -764,10 +766,13 @@ func RecordStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, stat
 	if err == nil {
 		err = statusNoticeTx(ctx, tx, taskID, status, reason)
 	}
-	if err != nil || status != "done" {
+	if err == nil && status == "done" {
+		err = releaseDependantsTx(ctx, tx, org, taskID)
+	}
+	if err != nil {
 		return err
 	}
-	return releaseDependantsTx(ctx, tx, org, taskID)
+	return epicStatusNoticeTx(ctx, tx, taskID, status)
 }
 
 // Emit records a workflow event about the task.
