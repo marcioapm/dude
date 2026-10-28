@@ -225,6 +225,9 @@ describe("a brainstorm session's page", () => {
       ev("agent.tool.dude", { tool: "update_task", arguments: {}, result: {} }),
     ]));
     const usage = await until(() => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]"), "Tools used in the session rail");
+    await act(async () => {
+      emit({ ...ev("agent.tool.called", { tool: "read", callId: "c_other" }), sessionId: "ssn_other" });
+    });
     expect([...usage.children].map((row) => [...row.querySelectorAll("span")].map((cell) => cell.textContent)))
       .toEqual([["dude name session (completed)", "2"], ["dude name session (called)", "1"], ["dude update task (completed)", "1"]]);
     expect(usage.parentElement!.textContent).toContain("Harness calls include failures and may repeat dude's completed actions.");
