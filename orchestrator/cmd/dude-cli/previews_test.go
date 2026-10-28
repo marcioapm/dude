@@ -42,6 +42,8 @@ func TestPreviewLifecycle(t *testing.T) {
 		{"wait requires start", []string{"create", "ABS", "feature/login", "--wait", "0"}, "", "requires --start"},
 		{"negative wait", []string{"start", "run_bp", "--wait=-1s"}, "", "must not be negative"},
 		{"invalid duration", []string{"start", "run_bp", "--wait", "oops"}, "", "invalid value"},
+		{"create negative wait", []string{"create", "ABS", "feature/login", "--start", "--wait=-1s"}, "", "must not be negative"},
+		{"unknown flag", []string{"start", "run_bp", "--start"}, "", "flag provided but not defined"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			posts, reads, polls, views := []string{}, 0, 0, 0
@@ -139,6 +141,12 @@ func TestPreviewLifecycle(t *testing.T) {
 				t.Fatal("HTTP call outlived wait deadline")
 			}
 			if tc.want != "" {
+				switch tc.name {
+				case "missing branch", "missing id", "wait requires start", "negative wait", "create negative wait", "invalid duration", "unknown flag":
+					if len(posts) != 0 {
+						t.Fatalf("invalid or missing preview must not mutate: %v", posts)
+					}
+				}
 				if err == nil || !strings.Contains(err.Error(), tc.want) {
 					t.Fatalf("wanted %q: out=%s err=%v", tc.want, out, err)
 				}
