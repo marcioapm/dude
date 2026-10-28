@@ -64,6 +64,18 @@ describe("resolving conflicts", () => {
     expect(h).not.toContain("pr-update-branch");
   });
 
+  test("durable requests show queued, writer progress, and ancestry completion", () => {
+    for (const [status, words] of [["queued", "queued for the next writer"], ["resolving", "Writer integrating base"], ["complete", "integrated in the public PR"]] as const) {
+      const h = renderToStaticMarkup(
+        <PullRequestActions client={{} as ApiClient} pr={pr({ baseSyncStatus: status })} defaultMethod="squash" onChanged={() => {}}>
+          {({ facts }) => <div>{facts.base}</div>}
+        </PullRequestActions>,
+      );
+      expect(h).toContain(words);
+      expect(h).not.toContain("pr-resolve-conflicts");
+    }
+  });
+
   test("asks the workflow once, disabled while asking, and reads the pull request back", async () => {
     const { click, settle } = await import("./dom.ts");
     let release!: () => void;

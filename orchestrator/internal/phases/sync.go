@@ -1687,6 +1687,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			var err error
 			queued, err = delivery.PendingBaseSyncPrompt(ctx, tx, r.TaskID)
+			if err == nil && queued != "" {
+				_, err = tx.Exec(ctx, `UPDATE base_sync_requests SET writer_run_id=$2 WHERE task_id=$1 AND completed_at IS NULL`, r.TaskID, r.ID)
+			}
 			return err
 		}); err != nil {
 			return lux.Spec{}, runSizes{}, nil, nil, err

@@ -217,6 +217,62 @@ func TestResolveConflictsQueuesDuringCandidateReview(t *testing.T) {
 	}
 }
 
+func TestQueuedBaseSyncTargetsWriterAndRetainsUntilAncestry(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.tell()
+	w.conflictWithMovedBase()
+	w.sync()
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step='awaitFix',awaiting_signals='[]',state=state-'escalation' WHERE task_id=$1`, wi)
+	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,phase)
+ VALUES('run_queue_writer',$1,$2,$3,1,'running','implementer','agent','fix')`, w.org, w.project, wi)
+	pr := w.prOf(wi)
+	owner := w.person("owner")
+	for range 2 {
+		code, body := w.callAs(owner, "/internal/pull-requests/"+pr+"/resolve-conflicts", map[string]any{})
+		if code != 200 {
+			t.Fatalf("resolve: %d %v", code, body)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id='run_queue_writer' AND text LIKE '%call sync_base%merge lux/main%Do not rebase%'`); n != 1 {
+		t.Fatalf("writer directives %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
+		t.Fatalf("directive consumed request: %d", n)
+	}
+	// A forge reading of the still-unintegrated public head is not completion.
+	if err := w.prs.Sync(context.Background(), w.org, pr); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
+		t.Fatalf("unintegrated request retired: %d", n)
+	}
+	// The next writer briefing includes the request without telling a reviewer to write.
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		prompt, err := delivery.PendingBaseSyncPrompt(context.Background(), tx, wi)
+		if err == nil && !strings.Contains(prompt, "merge lux/main") {
+			t.Errorf("next writer brief: %q", prompt)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A trusted forge comparison closes it only once the requested base is
+	// actually an ancestor of the public head (not a candidate assertion).
+	pull := w.gh.Pull(1)
+	w.commitFileIn(w.gh.Repo, pull.Head, "queue-proof.txt", "proof\n", "proof")
+	// Resetting this test public branch to main is a trusted ancestry fixture,
+	// not an agent report; no workflow promotion is exercised here.
+	gitOut(t, w.gh.Repo, "branch", "-f", pull.Head, "main")
+	if err := w.prs.Sync(context.Background(), w.org, pr); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NOT NULL`, wi); n != 1 {
+		t.Fatalf("ancestry did not complete request: %d", n)
+	}
+}
+
 // Resolve conflicts is refused, saying why, unless the owner asks about a
 // conflicting open pull request the task's workflow waits on or escalated.
 func TestResolveConflictsRefusesWhatItCannotDo(t *testing.T) {
@@ -250,6 +306,10 @@ func TestResolveConflictsRefusesWhatItCannotDo(t *testing.T) {
 		}, 409, "the pull request is merged"},
 		"a delivery that ended": {func(w *world, wi string) string {
 			mustExec(w.t, w.owner, `UPDATE workflow_runs SET status='completed' WHERE task_id=$1`, wi)
+			return w.person("owner")
+		}, 409, "dude is not waiting on this pull request"},
+		"a stopped task with a stale live delivery": {func(w *world, wi string) string {
+			mustExec(w.t, w.owner, `UPDATE workflow_runs SET status='aborted', state=jsonb_set(state,'{halt}','{}') WHERE task_id=$1`, wi)
 			return w.person("owner")
 		}, 409, "dude is not waiting on this pull request"},
 		"another escalation": {func(w *world, wi string) string {

@@ -216,18 +216,25 @@ func IntegrationMergeWhen(base, recorded string) string {
 // conflict escalation is decided so (retry for a failed integration, else
 // wait with the request queued). Busy delivery retains a request too; the handler
 // starts no phase itself. in.Authorize checks who may decide an escalation.
-func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, head string,
+func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, head, baseSHA string,
 	in EscalationDecision) error {
 	_, d, err := LockEscalationTx(ctx, tx, taskID)
 	if err != nil {
 		return err
 	}
-	if d == nil || !d.Live() || d.TaskStatus == "stopped" || d.TaskStatus == "closed" || d.TaskStatus == "done" || !slices.Contains(d.State.PullRequestIDs, prID) {
+	if d == nil || !d.Live() || d.State.Halt != nil || d.TaskStatus == "closed" || d.TaskStatus == "done" || !slices.Contains(d.State.PullRequestIDs, prID) {
 		return escalationErr("conflict", "%s", mDudeNotWaitingOnThisPull)
 	}
 	signal := forge.Signal{Kind: "conflict", Repo: repo, Number: number, Requested: true}
-	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, head)
+	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, baseSHA)
 	if e := d.State.Escalation; e != nil {
+		var alreadyQueued bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM base_sync_requests WHERE pull_request_id=$1 AND base_sha=$2)`, prID, baseSHA).Scan(&alreadyQueued); err != nil {
+			return err
+		}
+		if e.Decided != nil && e.Reason == "pull_request_conflict" && e.about(repo, number) && alreadyQueued {
+			return nil
+		}
 		if e.Reason != "pull_request_conflict" || e.Decided != nil || !e.about(repo, number) {
 			return escalationErr("conflict", "%s", mDudeWaitingOnDecisionAboutSomething)
 		}
