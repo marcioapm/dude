@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -98,6 +99,12 @@ func TestGoldenToolLists(t *testing.T) {
 		}
 		b.WriteString("\n")
 	}
+	fmt.Fprint(&b, "\"brainstorm-from-chat\":")
+	chat := capabilities.Of(slices.Concat(capabilities.Defaults[delivery.RoleBrainstorm], capabilities.FromChat[delivery.RoleBrainstorm])...)
+	for _, tl := range granted(delivery.RoleBrainstorm, chat) {
+		b.WriteString(" " + tl.name)
+	}
+	b.WriteString("\n")
 	golden(t, "tool-lists", b.String())
 	golden(t, "tool-server-instructions", serverInstructionsGolden(t))
 }

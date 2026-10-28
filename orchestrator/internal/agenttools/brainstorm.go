@@ -43,6 +43,7 @@ var brainstormTools = []tool{
 	defineSession("refresh_checkout", refreshCheckout).limit(checkoutsPerRun),
 	defineSession("start_agent", startAgent),
 	chatHistoryTool,
+	replyInThreadTool,
 }
 
 // namesPerRun bounds how often one Run renames its session.

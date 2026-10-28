@@ -57,3 +57,38 @@ func TestABrainstormLosesNameSessionOnceAMemberNamedItsSession(t *testing.T) {
 		t.Errorf("a conductor's grants changed: start_phase %v, name_session %v", g.Tool("start_phase"), g.Tool("name_session"))
 	}
 }
+
+// reply_in_thread is a brainstorm's only when a chat thread started its
+// session: a session from the web, or one whose origin names no
+// conversation, resolves without it, and keeps chat_history.
+func TestOnlyAChatBornSessionsBrainstormRepliesInItsThread(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	for _, s := range []struct{ id, origin string }{
+		{"ssn_chat", `{"provider":"slack","workspaceId":"T1","conversationId":"C1","threadId":"1.1"}`},
+		{"ssn_web", ""}, {"ssn_partial", `{"provider":"slack"}`},
+	} {
+		if _, err := owner.Exec(ctx, `INSERT INTO sessions (id, organization_id, title, titled_by, origin) VALUES ($1, $2, 'Berlin', 'agent', NULLIF($3, '')::jsonb)`,
+			s.id, org, s.origin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for session, want := range map[string]bool{"ssn_chat": true, "ssn_web": false, "ssn_partial": false, "ssn_missing": false} {
+		var g capabilities.Grants
+		if err := app.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+			g, err = capabilities.Resolve(ctx, tx, capabilities.Agent{Role: "brainstorm", Org: org, Run: "run_" + session, Session: session})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if g.Tool("reply_in_thread") != want || !g.Tool("chat_history") {
+			t.Errorf("%s: reply_in_thread %v, want %v; chat_history %v", session, g.Tool("reply_in_thread"), want, g.Tool("chat_history"))
+		}
+	}
+	for role := range capabilities.Defaults {
+		if capabilities.Default(role).Tool("reply_in_thread") {
+			t.Errorf("%q's defaults, read with no session, reply in a thread", role)
+		}
+	}
+}

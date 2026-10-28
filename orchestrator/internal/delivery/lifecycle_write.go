@@ -504,6 +504,13 @@ func ArchiveTaskTx(ctx context.Context, tx pgx.Tx, org string, in ArchiveInput) 
 	if err := archiveRowTx(ctx, tx, t.ID, in.Actor.Person); err != nil {
 		return out, err
 	}
+	// An ended task archived left its epic's current tasks with no move: the
+	// rest may all have ended. A closed one's move already asked.
+	if out.Closed == nil {
+		if err := epicNoticeTx(ctx, tx, t.ID, NoticeEpicFinished); err != nil {
+			return out, err
+		}
+	}
 	e := in.Actor.event(org, t.ProjectID, t.ID, EvTaskArchived, payload)
 	e.CausationID = causation
 	_, err = ledger.Append(ctx, tx, e)
@@ -571,7 +578,9 @@ type EpicTask struct {
 func ArchiveEpicTx(ctx context.Context, tx pgx.Tx, org, epicID string, withEndedTasks bool, a Actor, authorize func(EpicTask) error) (archivedEpic bool, tasks []string, err error) {
 	var projectID, title string
 	var already bool
-	err = tx.QueryRow(ctx, `SELECT project_id, title, archived_at IS NOT NULL FROM epics WHERE id = $1 FOR UPDATE`, epicID).
+	// NO KEY UPDATE: a task move's chat_notices.epic_id FK check takes KEY
+	// SHARE on this row after the task's, which FOR UPDATE would deadlock.
+	err = tx.QueryRow(ctx, `SELECT project_id, title, archived_at IS NOT NULL FROM epics WHERE id = $1 FOR NO KEY UPDATE`, epicID).
 		Scan(&projectID, &title, &already)
 	if db.IsNotFound(err) {
 		return false, nil, lifecycleRefuse("not_found", "epic %s not found", epicID)
@@ -648,7 +657,7 @@ func ArchiveEpicTx(ctx context.Context, tx pgx.Tx, org, epicID string, withEnded
 func UnarchiveEpicTx(ctx context.Context, tx pgx.Tx, org, epicID string, a Actor) ([]string, error) {
 	var projectID, title string
 	var at *string
-	err := tx.QueryRow(ctx, `SELECT project_id, title, archived_at::text FROM epics WHERE id = $1 FOR UPDATE`, epicID).Scan(&projectID, &title, &at)
+	err := tx.QueryRow(ctx, `SELECT project_id, title, archived_at::text FROM epics WHERE id = $1 FOR NO KEY UPDATE`, epicID).Scan(&projectID, &title, &at)
 	if db.IsNotFound(err) {
 		return nil, lifecycleRefuse("not_found", "epic %s not found", epicID)
 	}

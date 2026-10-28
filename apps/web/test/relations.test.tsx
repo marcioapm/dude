@@ -440,6 +440,21 @@ describe("the task's history", () => {
     expect(said(lines)).toEqual(["Start when unblocked could not start it: policy: bad. It is no longer set: start it from here."]);
   });
 
+  test("a chat thread dude could not tell of the task's progress is said in Chat, whoever decides", () => {
+    const text = "dude could not tell the Slack thread in #support: slack chat.postMessage: is_archived";
+    for (const decider of ["policy", "conductor"] as const) {
+      const chat = conductedLines({ decider, runs: [] }, [ev(EventTypes.ChatNotice, { about: "thread_notice_failed", kind: "done", text })]);
+      expect(chat.map((l) => l.kind === "notice" && l.text)).toEqual([text]);
+    }
+  });
+
+  test("an epic's notice dude gave up on is said in the Chat of the task whose move recorded it", () => {
+    const text = "dude could not tell the Slack thread in #support of the epic CP › Exports: slack chat.postMessage: is_archived";
+    const chat = conductedLines({ decider: "policy", runs: [] },
+      [ev(EventTypes.ChatNotice, { about: "thread_notice_failed", kind: "epic_started", epicId: "epc_1", noticeId: "chn_1", text })]);
+    expect(chat.map((l) => l.kind === "notice" && l.text)).toEqual([text]);
+  });
+
   test("Chat's head says it was released by a merge: ready to start, or started when unblocked", () => {
     const fmt = (n: number) => `$${n}`;
     const waiting = taskHistory({ status: "received", runs: [] }, [], [], null, fmt, [ev(EventTypes.TaskUnblocked, { by: "CP-41", pr: 431 })]);

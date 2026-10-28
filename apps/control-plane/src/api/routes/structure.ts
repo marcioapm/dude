@@ -389,9 +389,10 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
   }
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
     const current = (await scope.sql`
-      SELECT project_id AS "projectId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
+      SELECT project_id AS "projectId", epic_id AS "epicId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
       FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
       projectId: string;
+      epicId: string | null;
       status: string;
       title: string;
       goal: string;
@@ -456,6 +457,13 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     }
     // The new owner goes first; everyone else on it stays, after them.
     if (ownerId !== undefined) await setTaskPeople(scope, ctx, id, projectId, [ownerId], true);
+    // Moved out of an epic: the epic's other tasks may all have ended
+    // (migration 222's rule). Its advisory lock is the last lock this
+    // transaction takes, as on a status move.
+    const leftEpic = current[0].epicId;
+    if (leftEpic && input.epicId !== undefined && (input.epicId ?? null) !== leftEpic) {
+      await scope.sql`SELECT chat_epic_notice(${leftEpic}, 'epic_finished', ${id})`;
+    }
     const rows = (await scope.sql`
       SELECT id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)},
         ${scope.sql.unsafe(SOURCE_JSON)}, title, goal,

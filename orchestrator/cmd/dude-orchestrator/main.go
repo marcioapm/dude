@@ -272,6 +272,9 @@ func run(log *slog.Logger) error {
 		// The marks of mentions that made or resumed a session: ✅ on its
 		// agent's first output, a page of 50 waiting requests a pass.
 		{"chat-reactions", 2 * time.Second, chatService.SettleMarks},
+		// What a chat-born task's delivery did, posted in its thread once
+		// each (started, pull request, done, failed), 50 due a pass.
+		{"chat-notices", 2 * time.Second, chatService.PostNotices},
 		// Requests past 30 days and deliveries past 7, in batches.
 		{"chat-retention", time.Hour, chatService.Retain},
 		{"notify", 2 * time.Second, notifier.Sweep},

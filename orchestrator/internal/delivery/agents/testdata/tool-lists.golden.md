@@ -7,3 +7,4 @@
 "qa_browser": list_machine_sizes request_machine list_tasks list_epics emit_event list_repositories request_repository search_memory get_memory remember run_diff
 "investigator": list_machine_sizes request_machine list_tasks list_epics ask_person emit_event list_repositories request_repository create_task search_memory get_memory remember run_diff message wait_for_reply note
 "": list_tasks list_epics emit_event list_repositories request_repository search_memory get_memory remember run_diff
+"brainstorm-from-chat": list_machine_sizes request_machine settings run_chat github_search github_issue github_pull_request github_check_log github_run_jobs refresh_pull_requests list_tasks list_epics list_repositories pull_requests findings search_memory get_memory remember propose relate ask_person name_session refresh_checkout start_agent chat_history reply_in_thread

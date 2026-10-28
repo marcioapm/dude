@@ -225,6 +225,9 @@ describe("a brainstorm session's page", () => {
       ev("agent.tool.dude", { tool: "update_task", arguments: {}, result: {} }),
     ]));
     const usage = await until(() => page.querySelector<HTMLElement>("[data-testid=session-rail] [data-testid=tool-usage]"), "Tools used in the session rail");
+    await act(async () => {
+      emit({ ...ev("agent.tool.called", { tool: "read", callId: "c_other" }), sessionId: "ssn_other" });
+    });
     expect([...usage.children].map((row) => [...row.querySelectorAll("span")].map((cell) => cell.textContent)))
       .toEqual([["dude name session (completed)", "2"], ["dude name session (called)", "1"], ["dude update task (completed)", "1"]]);
     expect(usage.parentElement!.textContent).toContain("Harness calls include failures and may repeat dude's completed actions.");
@@ -1465,6 +1468,13 @@ describe("a session's model", () => {
       .toBe(`${ANA.name} linked ABS from Slack.`);
     expect(sessionNotice(ev("session.linked", { projects: [] }, { type: "person", id: ANA.id }), people))
       .toBe(`${ANA.name} changed what the session reads.`);
+  });
+
+  test("a chat-born session's thread posts and refusals say where, or why not", () => {
+    const people = { names: new Map([[ANA.id, ANA.name]]), byId: new Map() } as unknown as Parameters<typeof sessionNotice>[1];
+    expect(sessionNotice(ev("chat.reply.posted", { channel: "#support", ts: "1.2" }), people)).toBe("Brainstorm posted in the thread in #support.");
+    expect(sessionNotice(ev("chat.reply.refused", { channel: "#support", error: "at most 3 thread replies per turn" }), people))
+      .toBe("Brainstorm's post in the thread was not sent: at most 3 thread replies per turn.");
   });
 
   test("the Chat's words for a change, a reset, a removed tier and a fresh agent", () => {

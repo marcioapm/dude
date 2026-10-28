@@ -36,7 +36,13 @@ const (
 	requestsKept = 30 * 24 * time.Hour
 	backoffBase  = 5 * time.Second
 	backoffMax   = 10 * time.Minute
+	// Beyond this shift the delay is already capped; bound it to avoid overflow.
+	backoffShift = 8
 )
+
+func retryBackoff(attempts int, after time.Duration) time.Duration {
+	return min(max(backoffBase<<min(attempts, backoffShift), after), backoffMax)
+}
 
 // threadKey is what orders deliveries: one thread's in the order received,
 // different threads' at once.
@@ -134,11 +140,7 @@ func (s *Service) handle(parent context.Context, d claimed) {
 		transient, after := IsTransient(err)
 		switch {
 		case transient && d.Attempts+1 < MaxAttempts:
-			wait := backoffBase << d.Attempts
-			if after > wait {
-				wait = after
-			}
-			wait = min(wait, backoffMax)
+			wait := retryBackoff(d.Attempts, after)
 			s.log().Warn("chat delivery failed; trying again", "provider", d.Provider, "event", d.ID, "attempt", d.Attempts+1,
 				"in", wait, "error", err)
 			s.settle(settle, d, err, wait)
