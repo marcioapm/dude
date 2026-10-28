@@ -253,6 +253,7 @@ func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 			start     = make(chan struct{})
 			moved     = make(chan struct{}, 2)
 			errs      = make(chan error, 2)
+			pids      [2]int
 		)
 		ready.Add(2)
 		wg.Add(2)
@@ -262,7 +263,7 @@ func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 				defer wg.Done()
 				errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
 					// Both transactions open before either moves.
-					if _, err := tx.Exec(w.ctx, `SELECT 1`); err != nil {
+					if err := tx.QueryRow(w.ctx, `SELECT pg_backend_pid()`).Scan(&pids[j]); err != nil {
 						return err
 					}
 					ready.Done()
@@ -270,16 +271,26 @@ func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 					if _, err := delivery.SetTaskStatusTx(w.ctx, tx, w.org, w.project, task, "", status, "pull requests merged"); err != nil {
 						return err
 					}
-					// Each holds its commit until the other has counted too, or
-					// a while: unserialised counts both see the other running.
+					// The first to count holds its commit until the other is
+					// seen waiting on a lock, or has counted too: unserialised,
+					// both counts see the other still running.
 					moved <- struct{}{}
-					deadline := time.After(300 * time.Millisecond)
+					deadline := time.Now().Add(30 * time.Second)
 					for len(moved) < 2 {
-						select {
-						case <-deadline:
-							return nil
-						case <-time.After(5 * time.Millisecond):
+						var waiting bool
+						if err := w.svc.DB.InOrg(w.ctx, w.org, func(probe pgx.Tx) error {
+							return probe.QueryRow(w.ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted)`,
+								pids[1-j]).Scan(&waiting)
+						}); err != nil {
+							return err
 						}
+						if waiting {
+							return nil
+						}
+						if time.Now().After(deadline) {
+							return fmt.Errorf("the other move neither waited nor counted within 30s")
+						}
+						time.Sleep(2 * time.Millisecond)
 					}
 					return nil
 				})

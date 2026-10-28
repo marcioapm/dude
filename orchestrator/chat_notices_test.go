@@ -79,7 +79,8 @@ func TestOriginATaskFiledFromAChatBornSessionPostsItsNoticesInTheSessionsThread(
 }
 
 // A chat-origin task that adopts a person's pull request tells its thread
-// once the pull request is recorded as its own, as one dude opened does.
+// once the pull request is recorded as its own, as one dude opened does,
+// and its chat-filed epic's thread hears of the epic's first pull request.
 func TestAdoptedPullRequestOfAChatOriginTaskPostsItsNoticeInTheThread(t *testing.T) {
 	w := newWorld(t)
 	fake := fakeslack.New("cid", "csecret")
@@ -95,8 +96,12 @@ func TestAdoptedPullRequestOfAChatOriginTaskPostsItsNoticeInTheThread(t *testing
 
 	n := w.gh.OpenAsPerson("alice", "feature/half", "main", "Half done")
 	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeReview)
+	epic := "epc_adopt_" + w.org
 	mustExec(t, w.owner, `UPDATE tasks SET origin = jsonb_build_object('provider', 'slack', 'workspaceId', 'T1', 'conversationId', 'C0SUPPORT',
 		'conversationName', '#support', 'conversationKind', 'public', 'threadId', $2::text) WHERE id = $1`, wi, root)
+	mustExec(t, w.owner, `INSERT INTO epics (id, organization_id, project_id, title, origin) SELECT $1, organization_id, project_id, 'Exports', origin
+		FROM tasks WHERE id = $2`, epic, wi)
+	mustExec(t, w.owner, `UPDATE tasks SET epic_id = $1 WHERE id = $2`, epic, wi)
 	w.startDelivery(wi)
 	w.until("waiting on the adopted pull request", func() bool {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
@@ -106,6 +111,9 @@ func TestAdoptedPullRequestOfAChatOriginTaskPostsItsNoticeInTheThread(t *testing
 	}
 	if c := w.count(`SELECT count(*) FROM chat_notices WHERE task_id = $1 AND kind = 'pr_opened' AND detail = ''`, wi); c != 1 {
 		t.Fatalf("%d pull-request notices recorded", c)
+	}
+	if c := w.count(`SELECT count(*) FROM chat_notices WHERE epic_id = $1 AND kind = 'epic_pr_opened'`, epic); c != 1 {
+		t.Fatalf("%d epic pull-request notices recorded", c)
 	}
 	if _, err := svc.PostNotices(context.Background()); err != nil {
 		t.Fatal(err)
@@ -123,6 +131,10 @@ func TestAdoptedPullRequestOfAChatOriginTaskPostsItsNoticeInTheThread(t *testing
 		t.Fatal(err)
 	}
 	if !slices.Contains(got, "Opened a pull request for "+key+" "+title+".") {
+		t.Fatalf("the thread got %q", got)
+	}
+	prefix := strings.SplitN(key, "-", 2)[0]
+	if !slices.Contains(got, "Opened the first pull request for the epic "+prefix+" › Exports.") {
 		t.Fatalf("the thread got %q", got)
 	}
 }

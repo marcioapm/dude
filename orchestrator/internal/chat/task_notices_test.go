@@ -60,6 +60,35 @@ func TestChatNoticesOfTasksATasksAgentMadePostInTheParentsThread(t *testing.T) {
 	}
 }
 
+// A task filed from a chat-born session, whose agent makes a follow-up:
+// the follow-up's notices go to the session's thread, resolved through the
+// session when it was made.
+func TestChatNoticesOfATaskMadeByASessionFiledTasksAgentPostInTheSessionsThread(t *testing.T) {
+	w := setup(t)
+	root, session := w.sessionMention()
+	filed := "wi_filed_" + w.org
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, status, origin) VALUES ($1, $2, $3, 50, 'Filed', 'running',
+		jsonb_build_object('provider', 'slack', 'via', 'session', 'from', $4::text))`, filed, w.org, w.project, session)
+	child := w.childOf(filed, "Session follow up")
+	if o := w.one(`SELECT concat_ws('|', origin->>'via', origin->>'from', origin->'notify'->>'conversationId', origin->'notify'->>'threadId')
+		FROM tasks WHERE id = $1`, child); o != "task|"+filed+"|C1|"+root {
+		t.Fatalf("the child's origin %s", o)
+	}
+	// Only the routing keys are snapshotted: never the session's permalink,
+	// who asked, its routing, or anything else its origin holds.
+	if keys, all := w.one(`SELECT string_agg(k, ',' ORDER BY k) FROM tasks, jsonb_object_keys(origin->'notify') k WHERE id = $1`, child),
+		w.one(`SELECT string_agg(k, ',' ORDER BY k) FROM sessions, jsonb_object_keys(origin) k WHERE id = $1`, session); keys !=
+		"conversationId,conversationKind,conversationName,provider,threadId,topLevel,workspaceId" {
+		t.Fatalf("notify holds %s (the session's origin holds %s)", keys, all)
+	}
+	w.move(child, "running", "planning with the conductor")
+	w.postNotices()
+	key := "BIL-" + w.one(`SELECT number::text FROM tasks WHERE id = $1`, child)
+	if got := w.threadNotices("C1", root); !strings.Contains(strings.Join(got, "\n"), "Started "+key+" Session follow up.") {
+		t.Fatalf("the session's thread got %q", got)
+	}
+}
+
 // A task's agent's task whose parent has no chat thread (made in dude)
 // says nothing, nor does one an automation made.
 func TestChatNoticesNothingForAChildOfAWebTaskOrAnAutomationsTask(t *testing.T) {
