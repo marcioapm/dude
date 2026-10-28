@@ -674,6 +674,19 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   stopped with `DELETE /v1/tasks/:id/preview`, or ends when its task does
   (done, failed, aborted). A stopped preview's lux Run is cancelled, a lost
   one too (lux keeps a lost Run to resume).
+- **A branch preview of a project** (`runs.preview_branch`, migration 221)
+  is a preview with no task: `dude preview start PROJECT BRANCH`
+  (`servers/branches.go`, `POST /v1/projects/:id/branch-previews`), one live
+  per project branch, refused (`branch_not_found`) when the project's first
+  repository has no such branch on GitHub. Wakeable only. It serves every
+  project repository at the branch where the forge has it, else the default
+  branch, read on every wake (`refs`), at `<server>-<branch>-<project slug>`
+  (a hashed label hashes `branch:<b>`, never a task id). A `push` webhook to
+  the branch syncs it (`sync_wanted_at`); a push with `deleted` or a `delete`
+  of the branch in the first repository ends it, and a daily check
+  (`CheckBranches`) ends it only when GitHub definitely has no such branch.
+  Unused 30 days, it is reaped (a task's preview: 7). It carries no comment
+  overlay: feedback belongs to a task.
 - **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
   own (`preview_servers`), one per recipe marked to start in previews, at
   `<server>-<task key>-<project slug>.<preview domain>` — one DNS label

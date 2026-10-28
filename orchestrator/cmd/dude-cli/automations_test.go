@@ -106,6 +106,8 @@ func automationCases(t *testing.T) []automationCase {
 		{[]string{"task", "before-pr", "wi_12", "ask"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":"ask"}`, ""},
 		{[]string{"task", "before-pr", "wi_12", "project"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":null}`, ""},
 		{[]string{"task", "done-without-pr", "wi_12"}, "", "POST", "/v1/tasks/wi_12/done-without-pull-request", ``, ""},
+		{[]string{"preview", "start", "ABS", "feature/login", "--wait", "0"}, "", "POST", "/v1/projects/prj_1/branch-previews",
+			`{"branch":"feature/login"}`, ""},
 	}
 }
 

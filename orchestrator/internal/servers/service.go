@@ -144,9 +144,11 @@ type runRow struct {
 	// The epoch of the first placement on the size runs.machine records (a
 	// resume's resize); 0 for the submit's.
 	SizeSince int
+	// A branch preview's branch; TaskID is "" then.
+	PreviewBranch string
 }
 
-const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text, COALESCE(r.phase::text, ''),
+const runSelect = `SELECT r.id, r.project_id, COALESCE(r.task_id, ''), COALESCE(r.preview_branch, ''), r.kind, r.status::text, COALESCE(r.phase::text, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.branch, ''), r.base_shas, r.lux_repositories,
 	r.started_at,
 	(SELECT json_build_object('id', p.id, 'name', p.name) FROM people p WHERE p.id = CASE WHEN r.kind = 'preview'
@@ -161,7 +163,7 @@ const runSelect = `SELECT r.id, r.project_id, r.task_id, r.kind, r.status::text,
 func scanRun(row pgx.Row) (runRow, error) {
 	var r runRow
 	var settings []byte
-	err := row.Scan(&r.ID, &r.ProjectID, &r.TaskID, &r.Kind, &r.Status, &r.Phase, &r.LuxRunID, &r.LuxState, &r.Branch,
+	err := row.Scan(&r.ID, &r.ProjectID, &r.TaskID, &r.PreviewBranch, &r.Kind, &r.Status, &r.Phase, &r.LuxRunID, &r.LuxState, &r.Branch,
 		&r.BaseSHAs, &r.Repos, &r.StartedAt, &r.StartedBy, &settings, &r.WithSetup, &r.Wakeable, &r.WakeWanted,
 		&r.StartFailures, &r.Error, &r.SizeSince)
 	if err == nil {

@@ -6,10 +6,11 @@
  * Who may do what: anyone in the organization reads; a project's editors
  * (api/access.ts — its maintainers, for now the organization's admins)
  * change its recipes, preview settings and preview secrets; any member starts, stops, adds
- * and removes a Run's servers and a task's preview. Opening a terminal is
- * lux's to allow, not dude's.
+ * and removes a Run's servers, a task's preview and a project's branch
+ * previews. Opening a terminal is lux's to allow, not dude's.
  */
 
+import { z } from "zod";
 import { auditActor } from "../auth.ts";
 import {
   DEFAULT_SECRET_RECIPIENTS,
@@ -316,6 +317,18 @@ async function startPreview(ctx: RequestContext): Promise<Response> {
   return forward(ctx, "POST", taskPath(ctx, "preview"));
 }
 
+/** A branch preview's start: the branch of the project it previews (the orchestrator checks it on GitHub). */
+export const branchPreviewInput = z.object({ branch: z.string().trim().min(1).max(255) }).strict();
+
+const projectPreviewsPath = (ctx: RequestContext) => `/internal/projects/${encodeURIComponent(ctx.params.id!)}/branch-previews`;
+const branchPreviewPath = (ctx: RequestContext) => `/internal/branch-previews/${encodeURIComponent(ctx.params.id!)}`;
+
+/** Starts a branch preview, or answers the project's live one of that branch (200). Any member, as a task's preview. */
+async function startBranchPreview(ctx: RequestContext): Promise<Response> {
+  const input = await parseBody(ctx.request, branchPreviewInput);
+  return forward(ctx, "POST", projectPreviewsPath(ctx), JSON.stringify(input));
+}
+
 /** `origin` from the query: an https origin exactly as a browser writes one (no path, no trailing slash), or 400. */
 function previewOrigin(ctx: RequestContext): string {
   const given = ctx.url.searchParams.get("origin") ?? "";
@@ -377,6 +390,12 @@ export function registerServerRoutes(router: Router): void {
   router.post("/v1/tasks/:id/preview", startPreview);
   router.delete("/v1/tasks/:id/preview", (ctx) => forward(ctx, "DELETE", taskPath(ctx, "preview")));
   router.get("/v1/preview-servers/lookup", lookupPreviewServer);
+
+  // A project's branch previews: a branch's, with no task. Each is addressed by its id, never by its branch.
+  router.post("/v1/projects/:id/branch-previews", startBranchPreview);
+  router.get("/v1/projects/:id/branch-previews", (ctx) => forward(ctx, "GET", projectPreviewsPath(ctx)));
+  router.get("/v1/branch-previews/:id", (ctx) => forward(ctx, "GET", branchPreviewPath(ctx)));
+  router.delete("/v1/branch-previews/:id", (ctx) => forward(ctx, "DELETE", branchPreviewPath(ctx)));
 
   router.get("/v1/runs/:runId/servers", (ctx) => forward(ctx, "GET", runPath(ctx)));
   router.post("/v1/runs/:runId/servers", addRunServer);
