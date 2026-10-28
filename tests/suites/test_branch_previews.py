@@ -10,6 +10,11 @@ webhook) syncs the running preview to the new commit → the branch deleted
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+from pathlib import Path
+
 import requests
 
 from helpers import ApiClient, wait_until
@@ -73,6 +78,60 @@ def test_a_branch_preview_follows_its_branch_and_ends_with_it(client: ApiClient,
     wait_until(lambda: lux_get(env, f"/v1/runs/{lux_run}")["state"] in ("cancelled", "terminated"), timeout=60,
                message="the ended preview's Run was never cancelled")
     assert client.get(f"/v1/projects/{pid}/branch-previews").json()["previews"] == []
+
+
+def test_cli_branch_preview_lifecycle(client: ApiClient, forge_project: dict, fake_github, env, tmp_path):
+    binary = Path(__file__).resolve().parents[2] / "orchestrator" / "bin" / "dude-cli"
+    home = tmp_path / "home"
+    home.mkdir()
+    config = tmp_path / "config"
+    config.mkdir()
+    cli_env = {k: v for k, v in os.environ.items() if not k.startswith("DUDE_")}
+    cli_env.update(HOME=str(home), XDG_CONFIG_HOME=str(config),
+                   DUDE_URL=env.control_plane_url, DUDE_API_KEY=client.api_key)
+
+    def cli(*args):
+        result = subprocess.run([str(binary), "preview", *args], cwd=tmp_path, env=cli_env,
+                                input="", capture_output=True, text=True, timeout=45)
+        assert result.returncode == 0, (args, result.returncode, result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    pid = forge_project["id"]
+    project = forge_project["key"]
+    recipe = {"name": "web", "port": 3000, "command": "npm run dev", "workdir": "", "env": [], "autostartInPreviews": True}
+    assert client.put(f"/v1/projects/{pid}/servers/web", recipe).status_code == 200
+    ids = []
+    for branch in ("feature/acme-login", "feature/acme-settings"):
+        fake_github.push_branch(branch)
+        started = cli("start", project, branch)
+        preview_id = started["id"]
+        assert preview_id and preview_id not in ids, started
+        ids.append(preview_id)
+        assert started["branch"] == branch, started
+        [web] = started["servers"]
+        assert web["url"] and f"web-{branch.replace('/', '-')}-" in web["url"], web
+        again = cli("start", project, branch)
+        assert again["id"] == preview_id, again
+
+        # A paused preview with servers proves the real orchestrator reconciled the CLI's request.
+        asleep = wait_until(lambda: (p := client.get(f"/v1/branch-previews/{preview_id}").json())["status"] == "paused"
+                            and p["servers"] and p, timeout=60, message="the CLI preview never went to sleep")
+        shown = cli("show", preview_id)
+        assert shown["id"] == preview_id and shown["branch"] == branch and shown["status"] == "paused", shown
+        assert shown["servers"] == asleep["servers"], shown
+        listed = cli("list", project)["previews"]
+        assert [p["id"] for p in listed] == [preview_id], listed
+        assert listed[0]["branch"] == branch and listed[0]["status"] == "paused", listed
+        assert listed[0]["servers"] == shown["servers"], listed
+
+        if len(ids) == 1:
+            cli("stop", preview_id)
+        else:
+            cli("stop", project, branch)
+        ended = wait_until(lambda: (p := cli("show", preview_id))["status"] == "completed" and p,
+                           timeout=60, message="the CLI stop never ended the preview")
+        assert ended["id"] == preview_id and ended["branch"] == branch and ended["endedAt"], ended
+        assert cli("list", project)["previews"] == []
 
 
 def lux_get(env, path: str) -> dict:
