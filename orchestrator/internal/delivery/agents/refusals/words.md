@@ -1,8 +1,8 @@
 {{define "refusals/words/mid-operation"}}{{.Repo}}: {{template "wakes/facts/operation-name" .Op}} is in progress in your checkout: finish or abort it, then publish.{{end}}
 
-{{- define "refusals/words/escalation-note"}}The conductor proposed: {{clip (oneLine .Proposal) 1500}}
-The owner answered: {{clip (oneLine .Answer) 1000}}{{with .Decided}}
-The conductor decided: {{clip (oneLine .) 1000}}{{end}}{{end}}
+{{- define "refusals/words/escalation-note"}}The conductor proposed: {{.Proposal}}
+The owner answered: {{.Answer}}{{with .Decided}}
+The conductor decided: {{.}}{{end}}{{end}}
 
 {{- define "refusals/words/escalation-banner"}}a person decides it on the banner, or by answering your question about it (ask_person, the escalation's actions as choices){{end}}
 

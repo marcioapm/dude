@@ -210,40 +210,72 @@ func IntegrationMergeWhen(base, recorded string) string {
 	return render(integrationMergeWhenTmpl, struct{ Base, BaseHead string }{base, recorded})
 }
 
+// ResolveOutcome is what a person's "Resolve conflicts" did to the delivery.
+type ResolveOutcome int
+
+const (
+	// ResolveNow: the delivery waits on the pull request and was signalled
+	// to integrate its base now.
+	ResolveNow ResolveOutcome = iota
+	// ResolveDecided: the pull request's conflict escalation was decided
+	// (retry the failed integration, or wait, which goes back to the pull
+	// request with the signal to integrate): the delivery acts now.
+	ResolveDecided
+	// ResolveQueued: the delivery is busy (another step, or an integration
+	// under way), or the escalation was already decided with this base
+	// requested: the request waits for the task's next capable writer.
+	ResolveQueued
+)
+
 // ResolveConflictsTx is a person's "Resolve conflicts" on a pull request:
 // the workflow waiting on that pull request is signalled to integrate its
 // base, whatever whenBehind says; one stopped at that pull request's
 // conflict escalation is decided so (retry for a failed integration, else
-// wait with the request queued). Anything else is a conflict: the handler
-// starts no phase itself. in.Authorize checks who may decide an escalation.
-func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, head string,
-	in EscalationDecision) error {
+// wait with the request queued). A busy delivery is signalled too, the
+// request left queued; the handler starts no phase itself. in.Authorize
+// checks who may decide an escalation.
+func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, baseSHA string,
+	in EscalationDecision) (ResolveOutcome, error) {
 	_, d, err := LockEscalationTx(ctx, tx, taskID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if d == nil || !d.Live() || !slices.Contains(d.State.PullRequestIDs, prID) {
-		return escalationErr("conflict", "%s", mDudeNotWaitingOnThisPull)
+	if d == nil || !d.Live() || d.State.Halt != nil || d.TaskStatus == "closed" || d.TaskStatus == "done" || !slices.Contains(d.State.PullRequestIDs, prID) {
+		return 0, escalationErr("conflict", "%s", mDudeNotWaitingOnThisPull)
 	}
 	signal := forge.Signal{Kind: "conflict", Repo: repo, Number: number, Requested: true}
-	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, head)
+	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, baseSHA)
 	if e := d.State.Escalation; e != nil {
-		if e.Reason != "pull_request_conflict" || e.Decided != nil || !e.about(repo, number) {
-			return escalationErr("conflict", "%s", mDudeWaitingOnDecisionAboutSomething)
+		ours := e.Reason == "pull_request_conflict" && e.about(repo, number)
+		if ours && e.Decided != nil {
+			var repeat bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM base_sync_requests WHERE pull_request_id=$1 AND base_sha=$2)`, prID, baseSHA).Scan(&repeat); err != nil {
+				return 0, err
+			}
+			if repeat {
+				// A repeat of the request that decided it: still queued.
+				return ResolveQueued, nil
+			}
+		}
+		if !ours || e.Decided != nil {
+			return 0, escalationErr("conflict", "%s", mDudeWaitingOnDecisionAboutSomething)
 		}
 		in.Action = "wait"
 		if slices.Contains(e.Actions(), "retry") {
 			in.Action = "retry"
 		}
 		if err := DecideEscalationTx(ctx, tx, org, taskID, in); err != nil || in.Action == "retry" {
-			return err
+			return ResolveDecided, err
 		}
-		return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
+		return ResolveDecided, workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
 	}
+	// Busy delivery accepts a durable request too. Signals are only wakeups;
+	// base_sync_requests owns pending work independently of step snapshots.
+	outcome := ResolveNow
 	if d.Step != "awaitPullRequest" || d.State.Integration != nil {
-		return escalationErr("conflict", "%s", mDudeAlreadyWorkingOnTaskTry)
+		outcome = ResolveQueued
 	}
-	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
+	return outcome, workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
 }
 
 // about says the escalation names this pull request.

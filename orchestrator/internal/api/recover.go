@@ -344,7 +344,7 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 				}
 			}
 			wfID = *t.WorkflowID
-			if err := pickUp(r.Context(), tx, org, t, body.Action, note); err != nil {
+			if err := pickUp(r.Context(), tx, org, t, body.Action, note, p.Person); err != nil {
 				return err
 			}
 			// Try again under the conductor: a new conductor on this
@@ -491,9 +491,15 @@ func reopenTask(ctx context.Context, tx pgx.Tx, org, projectID, taskID, reason s
 // a resume takes the kept Runs back up (paused, to be resumed by the
 // syncer, with the note as their next message); a retry runs the step
 // again.
-func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, note string) error {
+func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, note, person string) error {
 	st := t.State
 	rc := &delivery.Recover{Action: action}
+	// The note reaches the resumed agents, or the step's new Runs, as the
+	// person's words.
+	said, err := delivery.PersonSaidTx(ctx, tx, st.TaskID, person, note)
+	if err != nil {
+		return err
+	}
 	if action == "resume" {
 		rc.At = t.resumeAt()
 		// The step waits on its phase Runs again; the conductor a Stop
@@ -501,7 +507,7 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 		st.PendingRunIDs = slices.DeleteFunc(append(slices.Clone(t.Kept), t.Unstarted...), func(id string) bool {
 			return st.Halt != nil && id == st.Halt.Conductor
 		})
-		if err := escalationFailure(delivery.ResumeKeptTx(ctx, tx, org, t.ProjectID, st.TaskID, t.Kept, note)); err != nil {
+		if err := escalationFailure(delivery.ResumeKeptTx(ctx, tx, org, t.ProjectID, st.TaskID, t.Kept, said)); err != nil {
 			return err
 		}
 		// Those lux never had start now, as they would have.
@@ -514,10 +520,11 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 		}
 	} else {
 		rc.Step = t.retryStep()
+		st.PersonSaid = said
 	}
 	st.Recover = rc
 	next, _ := json.Marshal(st)
-	_, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, status = 'running', step = 'recover',
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, status = 'running', step = 'recover',
 			awaiting_signals = '[]'::jsonb, wake_at = NULL, last_error = NULL, attempt = 0,
 			locked_by = NULL, locked_until = NULL
 		WHERE id = $1`, *t.WorkflowID, next)

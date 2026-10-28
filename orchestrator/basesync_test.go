@@ -738,16 +738,16 @@ func TestResolveConflictsIsAPersonsExplicitIntegration(t *testing.T) {
 	if n := w.count(integrationRuns, wi); n != 0 {
 		t.Fatalf("tell integrated by itself: %d", n)
 	}
-	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 200 {
-		t.Fatalf("resolve: %d %v", code, body)
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 200 || body["status"] != "requested" {
+		t.Fatalf("resolve: %d %v; want the delivery waiting on the pull request to act now", code, body)
 	}
 	w.until("integration started", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action'
 		AND payload->>'action'='integration-started' AND payload->>'runId' LIKE 'run_%'`, wi); n != 1 {
 		t.Fatalf("integration-started events %d", n)
 	}
-	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 409 {
-		t.Fatalf("a second resolve while integrating: %d", code)
+	if code, body := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 200 || body["status"] != "queued" {
+		t.Fatalf("a repeated resolve while integrating should queue idempotently: %d %v", code, body)
 	}
 }
 

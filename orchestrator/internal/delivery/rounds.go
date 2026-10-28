@@ -529,7 +529,8 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 	if note := strings.TrimSpace(in.ConductorNote); note != "" {
 		message += "\n\n" + render(fromConductorTmpl, note)
 	}
-	return message, nil
+	// A person's words on the decision this round goes on from come first.
+	return withPersonSaid(strings.TrimSpace(in.PersonNote), message), nil
 }
 
 // sinceLastRoundTx is what a resumed writer was not told and a fresh one's

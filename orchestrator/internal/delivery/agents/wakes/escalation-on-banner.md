@@ -1,1 +1,1 @@
-{{if .System}}The checks finished, so dude decided to wait on the pull request again.{{else}}The person decided the escalation on the banner: {{.Action}}.{{end}} Your question {{.QuestionID}} about it is closed. The delivery goes on.
+{{if .System}}The checks finished, so dude decided to wait on the pull request again.{{else}}The person decided the escalation on the banner: {{.Action}}.{{with .Said}} {{.}}{{end}}{{end}}{{with .QuestionID}} Your question {{.}} about it is closed.{{end}} The delivery goes on.

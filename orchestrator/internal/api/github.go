@@ -300,7 +300,7 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		return fail(http.StatusConflict, "conflict", "the pull request is %s", pr.State)
 	}
 	if action == "resolve-conflicts" {
-		return s.resolveConflicts(w, r, org, id, pr.TaskID, pr.Repo, pr.Number, pr.HeadSHA, pr.Mergeable)
+		return s.resolveConflicts(w, r, org, id, pr.TaskID, pr.Repo, pr.Number, pr.Mergeable)
 	}
 	slug := forge.SlugFromURL(pr.URL)
 	gh, err := s.forge(r.Context(), org)
@@ -400,20 +400,44 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 // last read as conflicting; the workflow checks GitHub again before it
 // starts the integration Run.
 func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, id, taskID, repo string, number int,
-	head, mergeable string) error {
+	mergeable string) error {
 	if mergeable != forge.MergeConflicting {
 		return fail(http.StatusConflict, "conflict", "the pull request does not conflict with its base")
 	}
 	p := principalOf(r)
-	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo}
-	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+	// Authorize before asking the forge. Network reads stay outside the delivery lock.
+	var base, url string
+	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "resolve conflicts on"); err != nil {
 			return err
 		}
-		if err := escalationFailure(delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head,
-			delivery.EscalationDecision{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})); err != nil {
+		return tx.QueryRow(r.Context(), `SELECT p.base_branch, repo.url FROM pull_requests p JOIN repositories repo ON repo.id=p.repository_id WHERE p.id=$1`, id).Scan(&base, &url)
+	}); err != nil {
+		return err
+	}
+	gh, err := s.forge(r.Context(), org)
+	if err != nil {
+		return err
+	}
+	baseSHA, err := gh.BranchSHA(r.Context(), forge.SlugFromURL(url), base)
+	if err != nil {
+		return err
+	}
+	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo, "baseSha": baseSHA}
+	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "resolve conflicts on"); err != nil {
 			return err
 		}
+		outcome, err := delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, baseSHA,
+			delivery.EscalationDecision{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})
+		if err := escalationFailure(err); err != nil {
+			return err
+		}
+		writerWaits, err := delivery.QueueBaseSyncTx(r.Context(), tx, org, taskID, id, base, baseSHA)
+		if err != nil {
+			return err
+		}
+		out["status"] = resolveStatus(outcome, writerWaits)
 		var projectID string
 		if err := tx.QueryRow(r.Context(), `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
 			return err
@@ -427,6 +451,18 @@ func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, i
 	s.kick()
 	write(w, http.StatusOK, out)
 	return nil
+}
+
+// resolveStatus words a Resolve conflicts for the person who asked:
+// "queued" when it waits for the task's next capable writer — the delivery
+// is busy (ResolveQueued), or would act now but the task's writer that was
+// handed it is pending or paused (writerWaits) — else "requested". A
+// decided escalation (ResolveDecided) always acts now.
+func resolveStatus(outcome delivery.ResolveOutcome, writerWaits bool) string {
+	if outcome == delivery.ResolveQueued || outcome == delivery.ResolveNow && writerWaits {
+		return "queued"
+	}
+	return "requested"
 }
 
 // forgeRefusal passes GitHub's refusal on as the person's answer: why it

@@ -53,7 +53,7 @@ const (
 	// A chat provider's installation, and a routed mention (migration 195).
 	ChatInstallation = "chi"
 	ChatRequest      = "chr"
-	// A notice dude posts in a task's chat thread (migration 219).
+	// A notice dude posts in a task's chat thread (migration 221).
 	ChatNotice = "chn"
 )
 

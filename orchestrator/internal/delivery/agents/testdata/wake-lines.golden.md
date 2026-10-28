@@ -58,6 +58,12 @@ The owner's answer to your question qst_1 decided the escalation: retry. The del
 
 The person decided the escalation on the banner: accept. Your question qst_2 about it is closed. The delivery goes on.
 
+## escalation-on-banner-said
+
+The person decided the escalation on the banner: retry. The task's owner, Ola Nordmann, said:
+
+Sync to main. Your question qst_2 about it is closed. The delivery goes on.
+
 ## escalation-checks-finished
 
 The checks finished, so dude decided to wait on the pull request again. Your question qst_2 about it is closed. The delivery goes on.

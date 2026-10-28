@@ -458,7 +458,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     // The new owner goes first; everyone else on it stays, after them.
     if (ownerId !== undefined) await setTaskPeople(scope, ctx, id, projectId, [ownerId], true);
     // Moved out of an epic: the epic's other tasks may all have ended
-    // (migration 219's rule). Its advisory lock is the last lock this
+    // (migration 221's rule). Its advisory lock is the last lock this
     // transaction takes, as on a status move.
     const leftEpic = current[0].epicId;
     if (leftEpic && input.epicId !== undefined && (input.epicId ?? null) !== leftEpic) {

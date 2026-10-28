@@ -23,6 +23,7 @@ var (
 	answerTmpl            = mustTemplate("notices/told/answer")
 	answerItemTmpl        = mustTemplate("notices/told/answer-item")
 	inTheirWordsTmpl      = mustTemplate("notices/told/in-their-words")
+	personSaidTmpl        = mustTemplate("notices/told/person-said")
 	restartLineTmpl       = mustTemplate("notices/told/restarted")
 	taskChangedTmpl       = mustTemplate("notices/told/task-changed")
 	mentionTmpl           = mustTemplate("notices/told/mention")

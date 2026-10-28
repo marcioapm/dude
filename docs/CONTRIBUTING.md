@@ -1356,7 +1356,7 @@ noted for the installation's health, never retried.
   are refused. Text is escaped once, special mentions (`<!…>`) are refused,
   and a per-session advisory lock enforces 3 posts per turn from ledger
   attempts. As with `post_to_chat`, no transaction spans the provider call.
-- *dude posts task progress* via `chat_notices` (migration 219,
+- *dude posts task progress* via `chat_notices` (migration 221,
   `delivery/chat_notices.go`, `chat/notices.go`): started, PR opened (dude's
   link, never the repository URL), done, failed or stopped. Reasons are
   allow-listed; others become "it failed"/"it was cancelled". Each task/kind
@@ -1378,7 +1378,7 @@ noted for the installation's health, never retried.
   notices, and adding tasks never repeats an epic notice. An empty epic
   never finishes. The epic's
   display state (planned/active/done) plays no part. One SQL function,
-  `chat_epic_notice` (migration 219, `SECURITY INVOKER`), holds the rule
+  `chat_epic_notice` (migration 221, `SECURITY INVOKER`), holds the rule
   and records it: `RecordStatusTx` and `RecordPROpenedNoticeTx` call it
   last, Archive of an ended task calls it, and the control plane's task
   edit calls it for the epic a task is moved out of. It takes an advisory

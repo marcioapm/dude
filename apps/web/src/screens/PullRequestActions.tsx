@@ -114,7 +114,13 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
   // and for anyone but the owner, the base's line says so in place of the
   // action.
   let conflict: PullRequestActionSlots["conflict"];
-  if (pr.behindBy > 0 && pr.mergeable !== "conflicting") {
+  if (pr.baseSyncStatus === "queued" || pr.baseSyncStatus === "resolving") {
+    facts.base = <span data-testid="pr-base-sync-status">{pr.baseSyncStatus === "queued" ? "Conflict resolution queued for the next writer" : "Writer integrating base; candidate review gates still apply"}</span>;
+  } else if (pr.baseSyncStatus === "complete" && pr.behindBy === 0 && pr.mergeable !== "conflicting") {
+    // A request completed earlier says nothing of a base that moved since:
+    // behind again, the PR offers Update branch as before.
+    facts.base = <span data-testid="pr-base-sync-status">Requested base integrated in the public PR</span>;
+  } else if (pr.behindBy > 0 && pr.mergeable !== "conflicting") {
     facts.base = refusedTip(
       <Button size="sm" disabled={off || busy !== null} onClick={() => void act("update", () => client.updatePullRequestBranch(pr.id))}
         data-testid="pr-update-branch">

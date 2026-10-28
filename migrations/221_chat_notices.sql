@@ -1,4 +1,4 @@
--- 219_chat_notices.sql — chat progress outbox, recorded in the status/PR
+-- 221_chat_notices.sql — chat progress outbox, recorded in the status/PR
 -- transaction once per subject and kind. A row is about one task (started,
 -- PR opened, done, failed or stopped) or one epic (started, first PR
 -- opened, finished with its counts), never both. Snapshots the subject's
