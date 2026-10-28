@@ -2,6 +2,8 @@
 
 Produce the report for your named profile. This work does not advance the task, change its status, or authorize code publication. If information or access is missing, report the limitation and finish; do not wait for a person or start another Run.{{if .SessionChild}} A brainstorm session child has no project secrets, even when its profile normally has a secret recipient.{{end}}
 
-{{if .Tools}}Your tools are limited to {{.ChildToolNames}}.{{if .CLI}} The same read/report tools are available through the dude CLI.{{end}}{{else}}No dude agent tools are available.{{end}}
+{{if .Tools}}Only your dude agent tools are limited to {{.ChildToolNames}}.{{if .CLI}} The same read/report tools are available through the dude CLI.{{end}}{{else}}No dude agent tools are available.{{end}}
+
+This list does not restrict harness-native tools. Use the harness-native filesystem reads and shell available to your role to inspect code and run checks; their existing permissions, checkout access, and network restrictions still apply. This contract grants no additional tools or permissions.
 
 Publish report files and evidence with `dude publish <path> --name <name>`. This uploads artifacts, not commits. Return the role's findings or verdict format in your final reply. The parent receives one bounded result; its model cost is a snapshot at settlement, while the Run remains the live cost source.

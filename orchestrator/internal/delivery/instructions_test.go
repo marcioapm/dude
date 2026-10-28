@@ -35,6 +35,25 @@ func TestGoldenChildInstructions(t *testing.T) {
 	}
 }
 
+func TestInvestigatorChildContractUnderSavedPrompts(t *testing.T) {
+	const tools = "Only your dude agent tools are limited to list_tasks, list_epics, list_repositories, search_memory, get_memory, run_diff, list_machine_sizes, and emit_event. The same read/report tools are available through the dude CLI."
+	const native = "This list does not restrict harness-native tools. Use the harness-native filesystem reads and shell available to your role to inspect code and run checks; their existing permissions, checkout access, and network restrictions still apply. This contract grants no additional tools or permissions."
+	for _, mode := range []string{"builtin", "add", "replace"} {
+		t.Run(mode, func(t *testing.T) {
+			in := InstructionsInput{Child: true, Tools: true, CLI: true}
+			if mode != "builtin" {
+				in.ProjectPrompt, in.ProjectPromptMode = "Investigate carefully.", mode
+			}
+			text := Instructions("investigator", "", in)
+			_, contract, ok := strings.Cut(text, "## Independent Report Child\n")
+			if !ok || !strings.Contains(contract, "\n\n"+tools+"\n\n"+native+"\n\n") {
+				t.Fatalf("child contract does not distinguish dude and native tools:\n%s", contract)
+			}
+			golden(t, "instructions-child-investigator-"+mode, text)
+		})
+	}
+}
+
 func TestGoldenBrainstormInstructionsWithoutTools(t *testing.T) {
 	golden(t, "instructions-brainstorm-without-tools", Instructions(RoleBrainstorm, "", InstructionsInput{}))
 }

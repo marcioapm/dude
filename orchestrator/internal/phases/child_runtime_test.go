@@ -11,6 +11,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -654,7 +655,21 @@ func TestChildReportSpec(t *testing.T) {
 			if spec.Git != nil && spec.Git.Push != nil {
 				t.Fatal("report child got push authority")
 			}
-			assertChildContract(t, childInstructions(t, spec))
+			agents := childInstructions(t, spec)
+			assertChildContract(t, agents)
+			if profile == "investigator" {
+				const toolParagraph = "Only your dude agent tools are limited to list_tasks, list_epics, list_repositories, search_memory, get_memory, run_diff, list_machine_sizes, and emit_event. The same read/report tools are available through the dude CLI."
+				const nativeParagraph = "This list does not restrict harness-native tools. Use the harness-native filesystem reads and shell available to your role to inspect code and run checks; their existing permissions, checkout access, and network restrictions still apply. This contract grants no additional tools or permissions."
+				if !strings.Contains(agents, "\n\n"+toolParagraph+"\n\n"+nativeParagraph+"\n\n") {
+					t.Fatalf("actual investigator instructions contradict native access:\n%s", agents)
+				}
+				if p := openCodePermission(t, spec); !reflect.DeepEqual(p, map[string]any{"*": "allow"}) {
+					t.Fatalf("investigator native permissions changed: %v", p)
+				}
+				if spec.Env["OPENCODE_ENABLE_EXA"] != "1" || spec.Git == nil || len(spec.Git.Repositories) == 0 {
+					t.Fatalf("investigator lacks its granted search or checkout: env=%v git=%+v", spec.Env["OPENCODE_ENABLE_EXA"], spec.Git)
+				}
+			}
 			for _, forbidden := range []string{"ask_person", "request_repository", "request_machine", "create_task"} {
 				if strings.Contains(spec.Workload.Prompt, forbidden) {
 					t.Fatalf("child prompt advertises %s", forbidden)
