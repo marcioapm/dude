@@ -174,10 +174,10 @@ func (p *Previews) reapAfter(branch bool) time.Duration {
 	switch {
 	case branch && p.BranchReapAfter > 0:
 		return p.BranchReapAfter
-	case branch:
-		return 30 * 24 * time.Hour
 	case p.ReapAfter > 0:
 		return p.ReapAfter
+	case branch:
+		return 30 * 24 * time.Hour
 	}
 	return 7 * 24 * time.Hour
 }
