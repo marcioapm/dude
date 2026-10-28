@@ -170,9 +170,9 @@ func TestGoldenInstructionsBrainstormMemberNamed(t *testing.T) {
 // gives it chat.reply, so its file has the thread's contract; a session
 // without it (from the web, or any default grant) has none of it.
 func TestGoldenInstructionsBrainstormFromChat(t *testing.T) {
-	fromChat := capabilities.Of(capabilities.Defaults[RoleBrainstorm]...)
+	fromChat := capabilities.Of(slices.Concat(capabilities.Defaults[RoleBrainstorm], capabilities.FromChat[RoleBrainstorm])...)
 	if !fromChat.Tool("reply_in_thread") {
-		t.Fatal("the brainstorm's row grants no chat.reply")
+		t.Fatal("the brainstorm's chat grant has no chat.reply")
 	}
 	in := goldenTask()
 	in.Tools, in.CLI = true, true

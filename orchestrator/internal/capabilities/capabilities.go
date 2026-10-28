@@ -132,7 +132,7 @@ var All = []Capability{
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
 		BaseSync, GitHubRead, DeliveryRead, Conduct, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
-	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, ChatReply, RunsRead,
+	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, RunsRead,
 		PRRefresh, SettingsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
@@ -142,6 +142,12 @@ var Defaults = map[string][]Key{
 	"qa_browser":   {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},
 	"investigator": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, WebSearch, WebFetch},
 	"":             {TasksRead, Memory, RunBasics, WebSearch, WebFetch},
+}
+
+// FromChat are granted on top of Defaults to an agent whose session was
+// started from a chat thread (sessions.origin names its conversation).
+var FromChat = map[string][]Key{
+	"brainstorm": {ChatReply},
 }
 
 // Agent is who the capabilities are for: a Run's role, organisation, and
@@ -157,14 +163,13 @@ type Grants struct {
 
 // Resolve is the capabilities a has: its role's defaults, less
 // session.name once a member has named a's session (titled_by 'person',
-// which the agent may not override), and with chat.reply only when its
-// role's row lists it and a's session was started from a chat thread
-// (sessions.origin names its conversation). A stored per-organisation or
+// which the agent may not override), and with its role's FromChat when a's
+// session was started from a chat thread. A stored per-organisation or
 // per-agent override is applied here, in tx, and nowhere else.
 func Resolve(ctx context.Context, tx pgx.Tx, a Agent) (Grants, error) {
 	g := Default(a.Role)
-	replies := slices.Contains(Defaults[a.Role], ChatReply)
-	if a.Session == "" || !g.Has(SessionName) && !replies {
+	fromChatKeys := FromChat[a.Role]
+	if a.Session == "" || !g.Has(SessionName) && len(fromChatKeys) == 0 {
 		return g, nil
 	}
 	var byPerson, fromChat bool
@@ -176,22 +181,21 @@ func Resolve(ctx context.Context, tx pgx.Tx, a Agent) (Grants, error) {
 	if byPerson {
 		g = g.Without(SessionName)
 	}
-	if replies && fromChat {
-		g.keys = append(g.keys, ChatReply)
+	if fromChat {
+		g.keys = append(g.keys, fromChatKeys...)
 	}
 	return g, nil
 }
 
 // Default is role's row of Defaults, or the "" row for a role it does not
-// list, less chat.reply, which only Resolve grants, having read the
-// session. For callers with no agent to resolve (a settings page's
-// built-in prompt) and for tests.
+// list. For callers with no agent to resolve (a settings page's built-in
+// prompt) and for tests.
 func Default(role string) Grants {
 	keys, ok := Defaults[role]
 	if !ok {
 		keys = Defaults[""]
 	}
-	return Of(keys...).Without(ChatReply)
+	return Of(keys...)
 }
 
 // Of grants exactly keys.
