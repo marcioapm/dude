@@ -1,10 +1,8 @@
--- 221_chat_notices.sql — chat progress outbox, recorded in the status/PR
--- transaction once per subject and kind. A row is about one task (started,
--- PR opened, done, failed or stopped) or one epic (started, first PR
--- opened, finished with its counts), never both. Snapshots the subject's
--- key and title, an allow-listed detail and the thread. Posts outside
--- transactions, retrying transient failures for 6 hours. At least once: a
--- crash after posting can repeat the post when the claim's lease expires.
+-- 221_chat_notices.sql — chat progress outbox: one row per task or epic and
+-- kind, recorded in the status/PR transaction with the subject's key,
+-- title, an allow-listed detail and the thread. Posted outside
+-- transactions, retrying transient failures for 6 hours; at least once (a
+-- crash after posting repeats it when the claim's lease expires).
 --
 -- Catalog-only (no scan, no backfill); the foreign keys take SHARE ROW
 -- EXCLUSIVE on tasks, epics and organizations, briefly, until this commits.
@@ -55,19 +53,16 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON chat_notices TO dude_app;
 -- The loop finds what is due across tenants, then posts each in its org.
 GRANT SELECT (id, organization_id, next_attempt_at, posted_at, gave_up_at) ON chat_notices TO dude_sweeper;
 
--- Records an epic's notice of p_kind once per epic ever, about the task
--- p_trigger_task_id moved or took out of it, when the epic's origin resolves
--- to a conversation (its own, or the session's it was filed from).
--- epic_finished is recorded only while the epic has a non-archived task and
--- every one is done, failed or aborted, with the counts. Level-triggered:
--- called on every move to an end and whenever a task leaves the epic's
--- current set, so the last unfinished one leaving finishes it too.
+-- Records an epic's p_kind once per epic ever, when its origin resolves to a
+-- conversation, naming p_trigger_task_id, the task that moved or left it.
+-- epic_finished needs a non-archived task and every one ended; the caller
+-- asks on every end and whenever a task leaves the epic's current set.
 --
--- The caller holds the task's row. The advisory lock comes next, so two of
--- the epic's tasks ending at once count each other's commit (READ
--- COMMITTED, the count a later statement); the insert's foreign key then
--- takes KEY SHARE on the epic's row, which epic archive's FOR NO KEY UPDATE
--- does not block. SECURITY INVOKER: the caller's tenant policy applies.
+-- The caller holds the task's row; the advisory lock comes next, so two
+-- tasks ending at once count each other's commit (READ COMMITTED, the count
+-- a later statement). The insert's foreign key then takes KEY SHARE on the
+-- epic, which epic archive's FOR NO KEY UPDATE does not block. SECURITY
+-- INVOKER: the caller's tenant policy applies.
 CREATE FUNCTION chat_epic_notice(p_epic_id text, p_kind text, p_trigger_task_id text) RETURNS void
 LANGUAGE plpgsql SECURITY INVOKER AS $$
 DECLARE

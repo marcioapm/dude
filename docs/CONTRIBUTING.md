@@ -1365,30 +1365,25 @@ noted for the installation's health, never retried.
   creation, and records `thread_notice_failed` in the task's Chat on giving
   up. Settlement ignores cancellation. Posting is at least once: a crash
   after posting can repeat it when the lease expires.
-- *dude posts epic progress* too, in addition to its tasks' own notices,
-  once per epic ever (`unique (epic_id, kind)`; a row has exactly one of
-  `task_id`/`epic_id`): `epic_started` on its first task's first move to
-  running, `epic_pr_opened` on its first pull request (the epic's dude
-  link), and `epic_finished` once it has a non-archived task and every
-  non-archived task is done, failed or aborted, with the counts ("2 done, 1
-  failed, 0 cancelled"; never called a success). Finishing is
-  level-triggered: it is checked on each task's end and also when the last
-  unfinished task is archived or moved out of the epic. Finished is said
-  once, ever: a task reopened or retried after it posts only its own
-  notices, and adding tasks never repeats an epic notice. An empty epic
-  never finishes. The epic's
-  display state (planned/active/done) plays no part. One SQL function,
-  `chat_epic_notice` (migration 221, `SECURITY INVOKER`), holds the rule
-  and records it: `RecordStatusTx` and `RecordPROpenedNoticeTx` call it
-  last, Archive of an ended task calls it, and the control plane's task
-  edit calls it for the epic a task is moved out of. It takes an advisory
-  lock per epic after the task's own row, so two tasks ending
-  at once see each other's move. The insert's foreign key then takes KEY
-  SHARE on the epic's row, after the task's, so epic archive and unarchive
-  lock the epic `FOR NO KEY UPDATE` (never `FOR UPDATE`) before its tasks.
-  A given-up epic notice is a `chat.notice` on the epic's project,
-  correlated with the epic, and a `thread_notice_failed` line in the Chat
-  of the task whose move or leaving recorded it (`trigger_task_id`).
+- *dude posts epic progress* too, once per epic ever (`unique (epic_id,
+  kind)`; a row has exactly one of `task_id`/`epic_id`): `epic_started` on
+  its first task's move to running, `epic_pr_opened` on its first pull
+  request, and `epic_finished` once it has a non-archived task and every
+  one is done, failed or aborted, with the counts ("2 done, 1 failed, 0
+  cancelled"; never called a success). Finishing is checked on each task's
+  end and when a task is archived or moved out of the epic; an empty epic
+  never finishes, and reopening or adding tasks never repeats a notice. The
+  epic's display state plays no part. `chat_epic_notice` (migration 221,
+  `SECURITY INVOKER`) holds the rule; `RecordStatusTx` and
+  `RecordPROpenedNoticeTx` call it last, as do Archive of an ended task and
+  the control plane's task edit for the epic a task leaves. Its per-epic
+  advisory lock, taken after the task's row, lets two tasks ending at once
+  see each other's move; its foreign key then takes KEY SHARE on the epic,
+  so epic archive and unarchive lock the epic `FOR NO KEY UPDATE` (never
+  `FOR UPDATE`) before its tasks. A given-up epic notice is a `chat.notice`
+  on the epic's project, correlated with the epic, and a
+  `thread_notice_failed` line in the Chat of the task that recorded it
+  (`trigger_task_id`).
 - *Where a notice goes* is the subject's origin: its own conversation, the
   session it was filed from (`via: session`), or, for a task a task's agent
   made (`via: task`), the parent's destination as resolved at creation and
