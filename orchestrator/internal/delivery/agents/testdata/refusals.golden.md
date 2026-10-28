@@ -620,7 +620,7 @@ item %d: only a task item has images
 
 ## refusals/tools/reply-in-thread/broadcast
 
-a thread reply never notifies a whole channel: remove %s and post again
+a thread reply never notifies a whole channel or a group: remove %s and post again
 
 ## refusals/tools/reply-in-thread/busy
 
@@ -645,6 +645,10 @@ the chat refused the reply: %s. Nothing was posted; answer in this session
 ## refusals/tools/reply-in-thread/text-length
 
 a thread reply is 1 to %d characters; this one is %d: summarise it in a few lines and point to the session or task link for the rest
+
+## refusals/tools/reply-in-thread/from-dude
+
+this turn's message was typed in dude, not in the chat: nothing was posted; answer in this session
 
 ## refusals/delivery/conduct/this-task-you-are-read-only
 

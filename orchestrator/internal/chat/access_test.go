@@ -239,6 +239,44 @@ func TestChatATaskKeepsTheThreadItWasFiledFrom(t *testing.T) {
 	}
 }
 
+// Each message the chat writes into a session records where it was said:
+// the session's own thread, a DM that resumed it (no thread at a DM's top
+// level), and a thread in another conversation bound by a resume. That is
+// where reply_in_thread answers that turn.
+func TestChatEachMessageIntoASessionRecordsWhereItWasSaid(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Exports"}))
+	root := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.last().ResultID
+	w.model.queue(resume(session))
+	w.dm("Márcia", "and from here?")
+	if got := w.last(); got.Route != "resume" || got.ResultID != session {
+		t.Fatalf("the DM did not resume: %+v", got)
+	}
+	w.model.queue(resume(session))
+	group := w.mention("Márcia", "M1", "", "continue that")
+	w.mention("Márcia", "M1", group, "in the bound thread")
+	rows, err := w.owner.Query(w.ctx, `SELECT payload->>'text', COALESCE(payload->>'provider', ''), COALESCE(payload->>'workspaceId', ''),
+			COALESCE(payload->>'conversationId', ''), COALESCE(payload->>'threadId', '<none>')
+		FROM events WHERE session_id = $1 AND event_type = 'chat.message' AND actor_type = 'person' ORDER BY cursor`, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (string, error) {
+		var text, provider, workspace, conv, thread string
+		err := r.Scan(&text, &provider, &workspace, &conv, &thread)
+		return strings.Join([]string{text, provider, workspace, conv, thread}, "|"), err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"why are exports slow?|slack|T1|C1|" + root, "and from here?|slack|T1|D1|",
+		"continue that|slack|T1|M1|" + group, "in the bound thread|slack|T1|M1|" + group}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("recorded\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 // A confident clarify is capped like an unsure answer: on the third
 // question in a thread, a brainstorm.
 func TestChatCapsConfidentClarifyingQuestions(t *testing.T) {

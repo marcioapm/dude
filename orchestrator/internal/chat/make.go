@@ -132,7 +132,7 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 			if err := tx.QueryRow(ctx, `SELECT COALESCE(title, '') FROM sessions WHERE id = $1`, d.Session).Scan(&title); err != nil {
 				return err
 			}
-			if err := sendToSession(ctx, tx, org, d.Session, who, m.Text, h.quote(), m.Provider); err != nil {
+			if err := sendToSession(ctx, tx, org, d.Session, who, m.Text, h.quote(), m, r.ConversationName); err != nil {
 				return err
 			}
 			r.ResultKind, r.ResultID = "session", d.Session
@@ -318,7 +318,7 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who a
 	if q := h.quote(); q != "" {
 		full = q + "\n\n" + full
 	}
-	wr := delivery.Writer{ActorType: "person", ActorID: who.Person, Person: who.Person, Via: map[string]any{"via": r.Mention.Provider}}
+	wr := writerFrom(who, r.Mention, r.ConversationName)
 	if _, _, err := delivery.StartBrainstorm(ctx, tx, org, id, wr,
 		delivery.Opening{Message: delivery.Attributed(who.Name, full), Shown: r.Mention.Text}); err != nil {
 		return "", "", err

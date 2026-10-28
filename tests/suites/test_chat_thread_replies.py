@@ -3,10 +3,13 @@ through the deployed processes, the fake Slack, the fake GitHub and the
 scripted agents.
 
 A mention routed to a brainstorm: the session's agent decides what goes
-back, with `reply_in_thread`. The scripted agent is told, by a "tool:"
-line in a member's message to the session (Slack's mention text reaches
-dude as one line), to call it; the thread receives exactly its words,
-after dude's routing reply.
+back, with `reply_in_thread`, to the thread the turn's message came from.
+The Slack mention records its conversation and thread on its message into
+the session. The scripted agent can only be told to call the tool by a
+"tool:" line in a message typed in dude (Slack's mention text reaches dude
+as one line), and a turn typed in dude gets no thread reply: the call is
+refused and the thread holds only dude's routing reply. The chat-sourced
+posts are covered by internal/agenttools' reply_in_thread tests.
 
 A mention routed to a task: dude itself posts the task's progress in the
 thread, once each and in order, as its fake delivery starts, opens a pull
@@ -67,23 +70,27 @@ def test_a_brainstorm_answers_in_the_thread_the_mention_came_from(client: ApiCli
     session = req["result"]["id"]
     wait_until(lambda: query(owner_dsn, "SELECT 1 FROM events WHERE session_id = %s AND event_type = 'agent.message'", (session,)),
                timeout=60, message="the session's agent never answered")
-    # Slack's mention text is one line, so the scripted agent is told what
-    # to call by a message in the session, as test_chat_context.py does.
+    # The Slack mention recorded where it was said: that turn's replies go there.
+    [said_in] = query(owner_dsn, """SELECT payload->>'conversationId' AS conversation, payload->>'threadId' AS thread FROM events
+        WHERE session_id = %s AND event_type = 'chat.message' AND actor_type = 'person' ORDER BY cursor""", (session,))
+    assert said_in == {"conversation": channel, "thread": root}, said_in
+    # Slack's mention text is one line, so the scripted agent can only be
+    # told what to call by a message typed in dude: that turn has no thread
+    # to answer, and the reply is refused.
     lines = ["answer in the thread", _tool("reply_in_thread", {"text": "It is 22:15 in Berlin"})]
     assert n["marcia"].post(f"/v1/brainstorms/{session}/chat", {"text": "\n".join(lines)}).status_code in (200, 201)
 
     try:
-        said = wait_until(lambda: [m for m in _thread(slack, channel, root) if "Berlin" in m["Text"]] or None, timeout=60)
+        refused = wait_until(lambda: query(owner_dsn, "SELECT payload->>'error' AS error FROM events WHERE session_id = %s AND event_type = 'chat.reply.refused'",
+                                           (session,)) or None, timeout=60)
     except AssertionError:
         events = query(owner_dsn, "SELECT event_type, left(payload::text, 300) AS p FROM events WHERE session_id = %s ORDER BY cursor", (session,))
-        raise AssertionError(f"the agent's reply never reached the thread: {events}") from None
-    assert [m["Text"] for m in said] == ["It is 22:15 in Berlin"], said
+        raise AssertionError(f"the agent's reply was never refused: {events}") from None
+    assert len(refused) == 1 and "typed in dude, not in the chat" in refused[0]["error"], refused
     thread = _thread(slack, channel, root)
-    # dude's routing reply first, then the agent's words, and nothing else.
-    assert len(thread) == 2 and thread[0]["Text"].startswith("Started a session") and thread[1]["Text"] == "It is 22:15 in Berlin", thread
-    posted = query(owner_dsn, "SELECT payload->>'channel' AS channel, payload->>'threadId' AS thread FROM events WHERE session_id = %s AND event_type = 'chat.reply.posted'",
-                   (session,))
-    assert posted == [{"channel": "#support", "thread": root}], posted
+    # dude's routing reply, and nothing else.
+    assert len(thread) == 1 and thread[0]["Text"].startswith("Started a session"), thread
+    assert query(owner_dsn, "SELECT count(*) AS n FROM events WHERE session_id = %s AND event_type = 'chat.reply.posted'", (session,)) == [{"n": 0}]
     # Nothing in any other conversation.
     assert all(m["Channel"] == channel for m in slack.state()["messages"] or [] if m.get("Bot"))
 

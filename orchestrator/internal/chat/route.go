@@ -756,7 +756,7 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 		}
 		r.Route, r.Reasoning, r.ResultKind, r.ResultID = RouteResume, "the thread is bound to this session", "session", b.Session
 		r.Confidence = nil
-		if err := sendToSession(ctx, tx, org, b.Session, who, m.Text, quoted, m.Provider); err != nil {
+		if err := sendToSession(ctx, tx, org, b.Session, who, m.Text, quoted, m, r.ConversationName); err != nil {
 			return err
 		}
 		r.effects = []effect{replyEffect(Reply{Text: "Added to your session " + quoteTitle(title),
@@ -856,11 +856,20 @@ func connectedIn(ctx context.Context, tx pgx.Tx, inst Installation, users []stri
 	return people, rows.Err()
 }
 
+// writerFrom is the person writing m into a session. Their chat.message
+// records where m was said: the conversation and thread a reply_in_thread
+// of that turn goes to, threadOf's as dude's own reply.
+func writerFrom(who asker, m Mention, conversationName string) delivery.Writer {
+	return delivery.Writer{ActorType: "person", ActorID: who.Person, Person: who.Person, Via: map[string]any{"via": m.Provider,
+		"provider": m.Provider, "workspaceId": m.WorkspaceID, "conversationId": m.ConversationID,
+		"conversationName": conversationName, "threadId": threadOf(m)}}
+}
+
 // sendToSession is the person's message, with the thread's newer messages
 // quoted before it, written into the session as theirs: queued for its
 // live agent, or starting one. They join an organisation session by
 // writing. The caller holds the session's lock.
-func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who asker, text, quoted, provider string) error {
+func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who asker, text, quoted string, m Mention, conversationName string) error {
 	if err := delivery.JoinByWriting(ctx, tx, delivery.SessionRef(org, session), who.Person, "person", who.Person); err != nil {
 		return err
 	}
@@ -868,7 +877,7 @@ func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who aske
 	if quoted != "" {
 		full = quoted + "\n\n" + text
 	}
-	wr := delivery.Writer{ActorType: "person", ActorID: who.Person, Person: who.Person, Via: map[string]any{"via": provider}}
+	wr := writerFrom(who, m, conversationName)
 	var runID string
 	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+delivery.LiveBrainstorm+` AND NOT `+delivery.Ending+`
 		FOR NO KEY UPDATE`, session).Scan(&runID)

@@ -692,7 +692,10 @@ export const EventTypes = {
    * `github:<login>`) carries `github: { login, repo, number, feedbackId,
    * kind, url?, path? }`. The conductor's reply on a pull request is `by:
    * "conductor"` (actor its Run) with `github: { repo, number, feedbackId,
-   * url, inReplyTo? }`.
+   * url, inReplyTo? }`. A person's message into a session from a chat
+   * thread carries where it was said: `{ via, provider, workspaceId,
+   * conversationId, conversationName, threadId }` (`threadId` "" at a
+   * direct message's top level); one typed in dude carries none.
    */
   ChatMessage: "chat.message",
   /**

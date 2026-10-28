@@ -2,7 +2,9 @@
 
 {{- define "refusals/tools/reply-in-thread/text-length"}}a thread reply is 1 to %d characters; this one is %d: summarise it in a few lines and point to the session or task link for the rest{{end}}
 
-{{- define "refusals/tools/reply-in-thread/broadcast"}}a thread reply never notifies a whole channel: remove %s and post again{{end}}
+{{- define "refusals/tools/reply-in-thread/broadcast"}}a thread reply never notifies a whole channel or a group: remove %s and post again{{end}}
+
+{{- define "refusals/tools/reply-in-thread/from-dude"}}this turn's message was typed in dude, not in the chat: nothing was posted; answer in this session{{end}}
 
 {{- define "refusals/tools/reply-in-thread/per-turn"}}at most %d thread replies per turn; this turn has posted them: say the rest in this session, and post again after the next message{{end}}
 

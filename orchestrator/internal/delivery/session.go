@@ -431,7 +431,10 @@ const imagesNotPassedOn = "the session's agent stopped before reading it; its im
 // sent again since: Try again's new Run is live, so they reach it.
 func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string, refused bool) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT d.id, d.text, d.interrupt,
-			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, ''), COALESCE(e.payload->>'text', '')
+			COALESCE(e.actor_type, ''), COALESCE(e.actor_id, ''), COALESCE(e.payload->>'text', ''),
+			COALESCE(jsonb_strip_nulls(jsonb_build_object('via', e.payload->'via', 'provider', e.payload->'provider',
+				'workspaceId', e.payload->'workspaceId', 'conversationId', e.payload->'conversationId',
+				'conversationName', e.payload->'conversationName', 'threadId', e.payload->'threadId')), '{}')
 		FROM directives d
 		LEFT JOIN LATERAL (SELECT e.actor_type, e.actor_id, e.payload FROM events e WHERE e.run_id = d.run_id
 			AND e.event_type IN ('chat.message', 'question.answered') AND e.payload->>'directiveId' = d.id
@@ -447,6 +450,9 @@ func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string,
 		Interrupt          bool
 		ActorType, ActorID string
 		Shown              string
+		// Where the message was said (chat's writerFrom), carried onto its
+		// copy so a thread reply of the next agent's turn still goes there.
+		Source map[string]any
 	}
 	left, err := pgx.CollectRows(rows, pgx.RowToStructByPos[unread])
 	if err != nil || len(left) == 0 {
@@ -459,6 +465,9 @@ func sessionHandOver(ctx context.Context, tx pgx.Tx, ref RunRef, retries string,
 			continue
 		}
 		w := Writer{ActorType: d.ActorType, ActorID: d.ActorID}
+		if len(d.Source) > 0 {
+			w.Via = d.Source
+		}
 		if w.ActorType == "" {
 			w.ActorType = ledger.ActorSystem
 		}

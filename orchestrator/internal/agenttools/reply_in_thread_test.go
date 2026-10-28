@@ -38,6 +38,7 @@ func setupThread(t *testing.T, installed bool, beforeCall func(string)) threadFi
 	fake.AddTeam("T1", "Acme")
 	fake.AddConversation(fakeslack.Conversation{ID: "C0SUPPORT", Team: "T1", Name: "support", Kind: "public", Members: []string{"UBT1", "U1"}})
 	fake.AddConversation(fakeslack.Conversation{ID: "C0RANDOMXX", Team: "T1", Name: "random", Kind: "public", Members: []string{"UBT1"}})
+	fake.AddConversation(fakeslack.Conversation{ID: "D0ANA", Team: "T1", Kind: "dm", Members: []string{"UBT1", "U1"}})
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
@@ -50,7 +51,10 @@ func setupThread(t *testing.T, installed bool, beforeCall func(string)) threadFi
 	root := fake.Post("C0SUPPORT", "", "U1", "@dude what time is it in Berlin?")
 	token := f.session(t, "ssn_thread", "", "")
 	mustExec(t, f.owner, `UPDATE sessions SET origin = $1::jsonb WHERE id = 'ssn_thread'`, fmt.Sprintf(chatOrigin, root))
-	return threadFixture{fixture: f, fake: fake, token: token, root: root}
+	th := threadFixture{fixture: f, fake: fake, token: token, root: root}
+	// The mention that started the session: its first turn.
+	th.personSaysIn(t, "C0SUPPORT", "#support", root, "what time is it in Berlin?")
+	return th
 }
 
 func (th threadFixture) reply(t *testing.T, args string) (int, map[string]any) {
@@ -58,12 +62,31 @@ func (th threadFixture) reply(t *testing.T, args string) (int, map[string]any) {
 	return th.post(t, th.token, "reply_in_thread", args)
 }
 
-// personSays records a member's message to the session: a new turn.
+// personSays records a member's message to the session from its own
+// thread: a new turn.
 func (th threadFixture) personSays(t *testing.T, text string) {
 	t.Helper()
+	th.personSaysIn(t, "C0SUPPORT", "#support", th.root, text)
+}
+
+// personSaysIn records a member's message to the session from a chat
+// conversation and thread, as the chat writes it (chat.writerFrom).
+func (th threadFixture) personSaysIn(t *testing.T, conversation, name, thread, text string) {
+	t.Helper()
+	th.says(t, "person", map[string]string{"text": text, "via": "slack", "provider": "slack", "workspaceId": "T1",
+		"conversationId": conversation, "conversationName": name, "threadId": thread})
+}
+
+// says records a chat.message on the session by actorType, with payload.
+func (th threadFixture) says(t *testing.T, actorType string, payload map[string]string) {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mustExec(t, th.owner, `INSERT INTO events (id, organization_id, session_id, run_id, event_type, actor_type, actor_id, source, payload)
-		VALUES ($1, $2, 'ssn_thread', 'run_ssn_thread', 'chat.message', 'person', 'person_ana', 'orchestrator', jsonb_build_object('text', $3::text))`,
-		fmt.Sprintf("evt_%d", time.Now().UnixNano()), th.org, text)
+		VALUES ($1, $2, 'ssn_thread', 'run_ssn_thread', 'chat.message', $3, 'person_ana', 'orchestrator', $4::jsonb)`,
+		fmt.Sprintf("evt_%d", time.Now().UnixNano()), th.org, actorType, string(raw))
 }
 
 func (th threadFixture) count(t *testing.T, query string, args ...any) int {
@@ -139,6 +162,80 @@ func TestReplyInThreadRedactsTheRunsSecretValues(t *testing.T) {
 	}
 }
 
+// A session started in #support and resumed from a DM answers that turn in
+// the DM, never in #support; the next message from #support's thread
+// brings the answer back there.
+func TestReplyInThreadAnswersInTheDMThatResumedTheSession(t *testing.T) {
+	th := setupThread(t, true, nil)
+	th.personSaysIn(t, "D0ANA", "a direct message", "", "and what time is it in Lisbon?")
+	status, out := th.reply(t, `{"text":"21:15 in Lisbon"}`)
+	if status != 200 || out["channel"] != "a direct message" {
+		t.Fatalf("reply: %d %v", status, out)
+	}
+	msgs := th.fake.BotMessages()
+	// At the DM's top level, as dude's own reply there: its own thread.
+	if len(msgs) != 1 || msgs[0].Channel != "D0ANA" || msgs[0].ThreadTS != msgs[0].TS || msgs[0].Text != "21:15 in Lisbon" {
+		t.Fatalf("Slack got %+v", msgs)
+	}
+	if n := th.count(t, `SELECT count(*) FROM events WHERE session_id = 'ssn_thread' AND event_type = $1 AND payload->>'conversationId' = 'D0ANA'
+		AND payload->>'threadId' = ''`, agenttools.EvThreadReplied); n != 1 {
+		t.Errorf("%d posted events name the DM", n)
+	}
+	th.personSays(t, "thanks, back here")
+	if status, out := th.reply(t, `{"text":"You are welcome"}`); status != 200 {
+		t.Fatalf("reply: %d %v", status, out)
+	}
+	msgs = th.fake.BotMessages()
+	if len(msgs) != 2 || msgs[1].Channel != "C0SUPPORT" || msgs[1].ThreadTS != th.root {
+		t.Fatalf("Slack got %+v", msgs)
+	}
+	for _, m := range msgs[:1] {
+		if m.Channel == "C0SUPPORT" {
+			t.Errorf("the DM's answer reached #support: %+v", m)
+		}
+	}
+}
+
+// A thread in another conversation bound to the session by a resume gets
+// the answer to a message from it.
+func TestReplyInThreadAnswersInABoundThreadOfAnotherConversation(t *testing.T) {
+	th := setupThread(t, true, nil)
+	other := th.fake.Post("C0RANDOMXX", "", "U1", "@dude continue the Berlin session")
+	th.personSaysIn(t, "C0RANDOMXX", "#random", other, "continue the Berlin session")
+	if status, out := th.reply(t, `{"text":"Picked it up here"}`); status != 200 || out["channel"] != "#random" {
+		t.Fatalf("reply: %d %v", status, out)
+	}
+	msgs := th.fake.BotMessages()
+	if len(msgs) != 1 || msgs[0].Channel != "C0RANDOMXX" || msgs[0].ThreadTS != other {
+		t.Fatalf("Slack got %+v", msgs)
+	}
+}
+
+// A message typed in dude to a chat-born session starts a turn with no
+// thread to answer: the reply is refused and nothing is posted.
+func TestReplyInThreadRefusesATurnTypedInDude(t *testing.T) {
+	th := setupThread(t, true, nil)
+	th.says(t, "person", map[string]string{"text": "what about Tokyo?"})
+	status, out := th.reply(t, `{"text":"06:15 in Tokyo"}`)
+	if status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "typed in dude, not in the chat") {
+		t.Fatalf("a web turn's reply: %d %v", status, out)
+	}
+	if n := len(th.fake.BotMessages()); n != 0 {
+		t.Errorf("%d posts reached Slack", n)
+	}
+	if n := th.count(t, `SELECT count(*) FROM events WHERE session_id = 'ssn_thread' AND event_type = $1`, agenttools.EvThreadReplyRefused); n != 1 {
+		t.Errorf("%d refusals on the session", n)
+	}
+	// An input from another workspace than the installation's is not posted either.
+	th.says(t, "person", map[string]string{"text": "hi", "provider": "slack", "workspaceId": "T9", "conversationId": "C0SUPPORT", "threadId": th.root})
+	if status, out := th.reply(t, `{"text":"hi"}`); status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "no longer connected") {
+		t.Errorf("another workspace's input: %d %v", status, out)
+	}
+	if n := len(th.fake.BotMessages()); n != 0 {
+		t.Errorf("%d posts reached Slack", n)
+	}
+}
+
 // The agent's text is escaped once, as every other reply: a disguised link
 // or a person's mention arrives as literal text, in the text and the block.
 func TestReplyInThreadEscapesTheAgentsMarkup(t *testing.T) {
@@ -210,6 +307,15 @@ func TestReplyInThreadPostsAtMostThreeATurn(t *testing.T) {
 	if n := len(th.fake.BotMessages()); n != 3 {
 		t.Fatalf("%d posts reached Slack, want 3", n)
 	}
+	// Only a person's input starts a turn: an agent's or dude's chat.message does not.
+	th.says(t, "agent", map[string]string{"text": "still thinking"})
+	th.says(t, "system", map[string]string{"text": "dude's note"})
+	if status, out := th.reply(t, `{"text":"answer 5"}`); status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "at most 3 thread replies per turn") {
+		t.Fatalf("after an agent's message: %d %v", status, out)
+	}
+	if n := len(th.fake.BotMessages()); n != 3 {
+		t.Fatalf("%d posts reached Slack, want 3", n)
+	}
 	th.personSays(t, "and in Lisbon?")
 	if status, out := th.reply(t, `{"text":"21:15 in Lisbon"}`); status != 200 {
 		t.Fatalf("a new turn's post: %d %v", status, out)
@@ -275,6 +381,7 @@ func TestReplyInThreadHoldsNoTransactionAcrossThePost(t *testing.T) {
 		workspace_domain, bot_user_id, bot_token) VALUES ($1, $2, 'slack', 'T1', 'Acme', 'acme', 'UBT1', $3)`, "chi_"+f.org, f.org, fake.Token("T1"))
 	token := f.session(t, "ssn_thread", "", "")
 	mustExec(t, f.owner, `UPDATE sessions SET origin = $1::jsonb WHERE id = 'ssn_thread'`, fmt.Sprintf(chatOrigin, "1.1"))
+	threadFixture{fixture: f}.personSaysIn(t, "C0SUPPORT", "#support", "1.1", "what time is it?")
 	done := make(chan int, 1)
 	go func() {
 		status, _ := f.post(t, token, "reply_in_thread", `{"text":"It is 22:15"}`)

@@ -71,14 +71,14 @@ A session started from chat never sees a project an admin hid from that chat (on
 
 When you mention dude in a chat thread and it starts or resumes a session, dude replies with the session's link and marks your message: 👀 while it works, ⏳ while the agent boots, ✅ once it answered.
 
-The agent then decides what goes back to the thread, with `reply_in_thread`. It posts only in the thread the session came from:
+The agent then decides what goes back, with `reply_in_thread`. It answers in the thread your message came from: the session's own thread, or the direct message or other thread you wrote to it from. A message you type in dude gets its answer in the session only, never in a thread:
 
 - a question it can answer directly gets a short answer there, and the full answer in the session;
 - when work is filed from the conversation, one short note saying what was created, with its link;
 - a question it needs answered, briefly;
 - nothing when the thread gains nothing: the ✅ says it answered.
 
-It never posts logs, code or tool output, since people outside the organisation may read the thread. It posts at most 3 messages after each message of yours, each at most about 3,000 characters, and never notifies the whole channel. Each post, or why one was refused, shows in the session.
+It never posts logs, code or tool output, since people outside the organisation may read the thread. It posts at most 3 messages after each message of yours, each at most about 3,000 characters, never notifies the whole channel or a group, and never pings a person. Each post, or why one was refused, shows in the session.
 
 A task made from chat (routed by dude, or filed from a session started from chat) gets dude's own notices in the thread, once each: when its delivery starts, when its pull request opens (with the link), when it is done, and if it fails or is stopped (with the reason). A task filed from the web posts nothing. If the chat refuses a notice, dude stops trying and the task's Chat says why.
 

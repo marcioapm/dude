@@ -399,6 +399,23 @@ func TestChatASuccessorEndingSilentGetsTheFailedMark(t *testing.T) {
 	}
 }
 
+// A message from the thread handed to a successor keeps where it was said:
+// the successor's turn still answers in that thread.
+func TestChatAHandedOverMessageKeepsWhereItWasSaid(t *testing.T) {
+	w := setup(t)
+	root, session := w.sessionMention()
+	w.exec(`UPDATE directives SET delivered_at = now() WHERE run_id IN (SELECT id FROM runs WHERE session_id = $1)`, session)
+	w.agentIs(session, "running", "running")
+	w.mention("Eli", "C1", root, "and the CSV?")
+	w.exec(`UPDATE runs SET status = 'failed', ended_at = now() WHERE session_id = $1`, session)
+	ended := w.handOver(session)
+	got := w.one(`SELECT payload->>'conversationId' || '|' || (payload->>'threadId') || '|' || (payload->>'workspaceId') FROM events
+		WHERE session_id = $1 AND event_type = 'chat.message' AND payload ? 'supersedes' AND run_id <> $2`, session, ended)
+	if got != "C1|"+root+"|T1" {
+		t.Fatalf("the handed-over message records %q", got)
+	}
+}
+
 // An aborted agent's unread message is not handed over, so it does not
 // hold back ❌.
 func TestChatAnAbortedAgentsUnreadMessageGetsTheFailedMark(t *testing.T) {
