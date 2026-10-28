@@ -1373,9 +1373,12 @@ noted for the installation's health, never retried.
   non-archived task is done, failed or aborted, with the counts ("2 done, 1
   failed, 0 cancelled"; never called a success). An empty epic never
   finishes; reopening or adding tasks never repeats a notice. The epic's
-  display state (planned/active/done) plays no part. `RecordStatusTx` and
-  `RecordPROpenedNoticeTx` record it last, under an advisory lock per epic
-  (`LockEpicNoticesTx`) taken after the task's own row, so two tasks ending
+  display state (planned/active/done) plays no part. One SQL function,
+  `chat_epic_notice` (migration 219, `SECURITY INVOKER`), holds the rule
+  and records it: `RecordStatusTx` and `RecordPROpenedNoticeTx` call it
+  last, Archive of an ended task calls it, and the control plane's task
+  edit calls it for the epic a task is moved out of. It takes an advisory
+  lock per epic after the task's own row, so two tasks ending
   at once see each other's move. The insert's foreign key then takes KEY
   SHARE on the epic's row, after the task's, so epic archive and unarchive
   lock the epic `FOR NO KEY UPDATE` (never `FOR UPDATE`) before its tasks.

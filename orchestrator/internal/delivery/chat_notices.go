@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 )
 
@@ -104,57 +103,11 @@ func epicStatusNoticeTx(ctx context.Context, tx pgx.Tx, taskID, status string) e
 	return nil
 }
 
-// LockEpicNoticesTx serialises the epic notices of one epic for the rest of
-// tx, so two of its tasks ending in overlapping transactions do not each
-// count the other still running: the second waits here, and its count, a
-// later statement, sees the first's commit. Taken after the moved task's
-// row, and by nothing else. The notice's insert then takes KEY SHARE on the
-// epic's row (its foreign key), which epic archive and unarchive's FOR NO
-// KEY UPDATE never block: they lock the epic before its tasks.
-func LockEpicNoticesTx(ctx context.Context, tx pgx.Tx, epicID string) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('epic_notices:' || $1))`, epicID)
-	return err
-}
-
-// epicNoticeTx records kind for the epic of taskID, once per epic ever,
-// when the epic's origin resolves to a conversation. Finished is recorded
-// only once the epic has a current (non-archived) task and every current
-// task has ended, with how many were done, failed and cancelled. An epic's
-// display state (planned, active, done) plays no part.
+// epicNoticeTx records kind for the epic of taskID, once per epic ever
+// (chat_epic_notice, migration 219: the destination, the lock, the finish
+// rule and the insert). The caller holds the task's row.
 func epicNoticeTx(ctx context.Context, tx pgx.Tx, taskID, kind string) error {
-	var epicID string
-	err := tx.QueryRow(ctx, `SELECT e.id FROM tasks t JOIN epics e ON e.id = t.epic_id
-		CROSS JOIN LATERAL (SELECT `+noticeDestSQL("e.origin")+` AS dest OFFSET 0) d
-		WHERE t.id = $1 AND d.dest->>'provider' IS NOT NULL AND d.dest->>'conversationId' IS NOT NULL`, taskID).Scan(&epicID)
-	if db.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if err := LockEpicNoticesTx(ctx, tx, epicID); err != nil {
-		return err
-	}
-	detail := ""
-	if kind == NoticeEpicFinished {
-		var current, done, failed, cancelled int
-		if err := tx.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE status = 'done'),
-				count(*) FILTER (WHERE status = 'failed'), count(*) FILTER (WHERE status = 'aborted')
-			FROM tasks WHERE epic_id = $1 AND archived_at IS NULL`, epicID).Scan(&current, &done, &failed, &cancelled); err != nil {
-			return err
-		}
-		if current == 0 || done+failed+cancelled != current {
-			return nil
-		}
-		detail = fmt.Sprintf("%d done, %d failed, %d cancelled", done, failed, cancelled)
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO chat_notices (id, organization_id, epic_id, kind, provider, external_workspace_id,
-			conversation_id, conversation_name, thread_id, subject_key, subject_title, detail, next_attempt_at)
-		SELECT $1, e.organization_id, e.id, $3, `+noticeColumnsSQL+`, p.key_prefix, e.title, $4, clock_timestamp()
-		FROM epics e JOIN projects p ON p.id = e.project_id
-		CROSS JOIN LATERAL (SELECT `+noticeDestSQL("e.origin")+` AS dest OFFSET 0) d
-		WHERE e.id = $2
-		ON CONFLICT DO NOTHING`, ids.New(ids.ChatNotice), epicID, kind, detail)
+	_, err := tx.Exec(ctx, `SELECT chat_epic_notice(epic_id, $2, id) FROM tasks WHERE id = $1 AND epic_id IS NOT NULL`, taskID, kind)
 	return err
 }
 

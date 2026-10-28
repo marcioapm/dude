@@ -29,7 +29,40 @@ func (w *world) routedEpic() (epic string, tasks []string, root string) {
 	for _, title := range []string{"Measure export time", "Stream the response"} {
 		tasks = append(tasks, w.one(`SELECT id FROM tasks WHERE epic_id = $1 AND title = $2`, epic, title))
 	}
+	w.t.Cleanup(func() {
+		if w.t.Failed() {
+			w.dumpNotices(epic, root)
+		}
+	})
 	return epic, tasks, root
+}
+
+// dumpNotices logs the org's chat_notices rows and every bot message, so a
+// failure tells a notice not recorded, not posted, or posted elsewhere.
+func (w *world) dumpNotices(epic, root string) {
+	w.t.Helper()
+	rows, err := w.owner.Query(w.ctx, `SELECT COALESCE(epic_id, task_id), kind, COALESCE(posted_at::text, '-'), attempts,
+			COALESCE(last_error, '-'), thread_id, next_attempt_at::text, COALESCE(gave_up_at::text, '-')
+		FROM chat_notices WHERE organization_id = $1 ORDER BY next_attempt_at, id`, w.org)
+	if err != nil {
+		w.t.Logf("chat_notices: %v", err)
+		return
+	}
+	defer rows.Close()
+	w.t.Logf("epic %s, thread %s; chat_notices (subject, kind, posted_at, attempts, last_error, thread_id, next_attempt_at, gave_up_at):", epic, root)
+	for rows.Next() {
+		var subject, kind, posted, lastErr, thread, next, gaveUp string
+		var attempts int
+		if err := rows.Scan(&subject, &kind, &posted, &attempts, &lastErr, &thread, &next, &gaveUp); err != nil {
+			w.t.Logf("scan: %v", err)
+			return
+		}
+		w.t.Logf("  %s %s %s %d %s %s %s %s", subject, kind, posted, attempts, lastErr, thread, next, gaveUp)
+	}
+	w.t.Logf("the fake's bot messages (channel, thread, ts, text):")
+	for _, m := range w.fake.BotMessages() {
+		w.t.Logf("  %s %s %s %q", m.Channel, m.ThreadTS, m.TS, m.Text)
+	}
 }
 
 // epicNotices are dude's epic notices in thread, in the order posted.
@@ -342,6 +375,63 @@ func (w *world) waitBlocked(pid int, limit time.Duration) error {
 		time.Sleep(5 * time.Millisecond)
 	}
 	return nil
+}
+
+// archive archives task as a person's Archive does, closing it as won't do
+// when it has not ended.
+func (w *world) archive(task string) {
+	w.t.Helper()
+	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.ArchiveTaskTx(w.ctx, tx, w.org, delivery.ArchiveInput{CloseInput: delivery.CloseInput{TaskID: task,
+			Resolution: delivery.ResolutionWontDo, Actor: delivery.Actor{ActorType: "system", ActorID: "test"}}})
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// The epic's last unfinished task archived: closed as won't do, it counts
+// as cancelled and finishes the epic.
+func TestChatEpicNoticeFinishesWhenItsLastUnfinishedTaskIsArchivedAndClosed(t *testing.T) {
+	w := setup(t)
+	_, tasks, root := w.routedEpic()
+	w.move(tasks[0], "running", "planning with the conductor")
+	w.move(tasks[0], "done", "pull requests merged")
+	w.archive(tasks[1])
+	w.postNotices()
+	want := []string{"Started the epic BIL › CSV exports.", "The epic BIL › CSV exports finished: 1 done, 0 failed, 1 cancelled."}
+	if got := w.epicNotices("C1", root); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the thread got %q", got)
+	}
+}
+
+// An ended task archived out of the epic, every other one ended: that
+// finishes it with no status move, counting what is left. Every end the
+// workflow writes asks itself, so here the end is written straight, as one
+// recorded before epic notices existed.
+func TestChatEpicNoticeFinishesWhenAnEndedTaskIsArchivedLeavingOnlyEndedOnes(t *testing.T) {
+	w := setup(t)
+	epic, tasks, root := w.routedEpic()
+	added := "wi_added_" + w.org
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin)
+		SELECT $1, $2, $3, 9, $4, 'Added', 'received', origin FROM epics WHERE id = $4`, added, w.org, w.project, epic)
+	w.move(tasks[0], "running", "planning with the conductor")
+	w.move(tasks[0], "done", "pull requests merged")
+	w.move(tasks[1], "running", "planning with the conductor")
+	w.move(tasks[1], "done", "pull requests merged")
+	w.exec(`UPDATE tasks SET status = 'aborted', resolution = 'wont_do' WHERE id = $1`, added)
+	if n := w.count(`SELECT count(*) FROM chat_notices WHERE epic_id = $1 AND kind = 'epic_finished'`, epic); n != 0 {
+		t.Fatalf("finished before anything asked")
+	}
+	w.archive(added)
+	w.postNotices()
+	want := []string{"Started the epic BIL › CSV exports.", "The epic BIL › CSV exports finished: 2 done, 0 failed, 0 cancelled."}
+	if got := w.epicNotices("C1", root); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the thread got %q", got)
+	}
+	if got := w.one(`SELECT trigger_task_id FROM chat_notices WHERE epic_id = $1 AND kind = 'epic_finished'`, epic); got != added {
+		t.Errorf("finished recorded of %q, want %s", got, added)
+	}
 }
 
 // An epic made in dude, with its tasks, says nothing anywhere.

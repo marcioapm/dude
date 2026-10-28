@@ -1890,15 +1890,33 @@ test("219 keeps one chat notice per task or epic and kind, each tenant's alone, 
       return [...await tx`SELECT id, organization_id FROM chat_notices WHERE posted_at IS NULL AND gave_up_at IS NULL ORDER BY next_attempt_at, id`];
     });
     expect(due.map((r) => r.id).sort()).toEqual(["chn_1", "chn_2", "chn_e1", "chn_e2", "chn_e3"]);
-    for (const column of ["subject_title", "epic_id", "task_id", "detail"]) {
+    for (const column of ["subject_title", "epic_id", "task_id", "trigger_task_id", "detail"]) {
       expect(await refusal(async () => await sql.begin(async (tx) => {
         await tx`SET LOCAL ROLE dude_sweeper`;
         return [...await tx`SELECT ${tx(column)} FROM chat_notices`];
       }))).toContain("permission denied");
     }
+    // The task an epic notice came of is an epic row's alone.
+    expect(await refusal(async () => await sql`UPDATE chat_notices SET trigger_task_id = 'wi_a' WHERE id = 'chn_1'`)).toContain("chat_notices_one_subject");
+    await sql`UPDATE chat_notices SET trigger_task_id = 'wi_a' WHERE id = 'chn_e1'`;
+    // chat_epic_notice runs as its caller: another tenant's epic records nothing.
+    await sql`UPDATE epics SET origin = '{"provider":"slack","workspaceId":"T1","conversationId":"C1","threadId":"1.0"}' WHERE id = 'epc_a'`;
+    const recordAs = (org: string) => sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE dude_app`;
+      await tx`SELECT set_config('app.organization_id', ${org}, true)`;
+      await tx`SELECT chat_epic_notice('epc_a', 'epic_pr_opened', NULL)`;
+    });
+    await recordAs("org_b");
+    expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE epic_id = 'epc_a' AND kind = 'epic_pr_opened'`]).toEqual([{ n: 0 }]);
+    await recordAs("org_a");
+    await recordAs("org_a");
+    expect([...await sql`SELECT subject_key, subject_title, thread_id FROM chat_notices WHERE epic_id = 'epc_a' AND kind = 'epic_pr_opened'`])
+      .toEqual([{ subject_key: "BIL", subject_title: "Exports", thread_id: "1.0" }]);
 
     await sql`DELETE FROM tasks WHERE id = 'wi_a'`;
-    expect([...await sql`SELECT id FROM chat_notices WHERE organization_id = 'org_a' ORDER BY id`]).toEqual([{ id: "chn_e1" }, { id: "chn_e2" }]);
+    expect([...await sql`SELECT id, trigger_task_id FROM chat_notices WHERE organization_id = 'org_a' AND id LIKE 'chn_e%' ORDER BY id`])
+      .toEqual([{ id: "chn_e1", trigger_task_id: null }, { id: "chn_e2", trigger_task_id: null }]);
+    expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_a'`]).toEqual([{ n: 3 }]);
     await sql`DELETE FROM epics WHERE id = 'epc_a'`;
     expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_a'`]).toEqual([{ n: 0 }]);
     expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_b'`]).toEqual([{ n: 2 }]);

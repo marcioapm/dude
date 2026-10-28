@@ -389,9 +389,10 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
   }
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
     const current = (await scope.sql`
-      SELECT project_id AS "projectId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
+      SELECT project_id AS "projectId", epic_id AS "epicId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
       FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
       projectId: string;
+      epicId: string | null;
       status: string;
       title: string;
       goal: string;
@@ -447,6 +448,12 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
         epic_id = CASE WHEN ${input.epicId !== undefined} THEN ${input.epicId ?? null} ELSE epic_id END,
         updated_at = now()
       WHERE id = ${id}`;
+    // Moved out of an epic: the epic's other tasks may all have ended
+    // (migration 219's rule). After the task's row, as a status move.
+    const leftEpic = current[0].epicId;
+    if (leftEpic && input.epicId !== undefined && (input.epicId ?? null) !== leftEpic) {
+      await scope.sql`SELECT chat_epic_notice(${leftEpic}, 'epic_finished', ${id})`;
+    }
     // Its images are what its text references: fixed with it while a delivery runs (refused above).
     if (input.goal !== undefined || input.acceptanceCriteria !== undefined) {
       await syncTaskAttachments(scope, id, input.goal ?? current[0].goal, input.acceptanceCriteria ?? current[0].acceptanceCriteria);

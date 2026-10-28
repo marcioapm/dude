@@ -504,6 +504,13 @@ func ArchiveTaskTx(ctx context.Context, tx pgx.Tx, org string, in ArchiveInput) 
 	if err := archiveRowTx(ctx, tx, t.ID, in.Actor.Person); err != nil {
 		return out, err
 	}
+	// An ended task archived left its epic's current tasks with no move: the
+	// rest may all have ended. A closed one's move already asked.
+	if out.Closed == nil {
+		if err := epicNoticeTx(ctx, tx, t.ID, NoticeEpicFinished); err != nil {
+			return out, err
+		}
+	}
 	e := in.Actor.event(org, t.ProjectID, t.ID, EvTaskArchived, payload)
 	e.CausationID = causation
 	_, err = ledger.Append(ctx, tx, e)
