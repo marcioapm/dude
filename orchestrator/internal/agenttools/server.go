@@ -828,7 +828,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		refusalID = s.recordRefusal(ctx, c, t, refused)
 	}
 	if err != nil || t.outside == nil {
-		if err == nil && (t.name == "start_agent" || t.name == "verify") && s.Kick != nil {
+		if err == nil && (t.name == "start_agent" || t.name == "start_agents" || t.name == "verify") && s.Kick != nil {
 			s.Kick()
 		}
 		return out, err

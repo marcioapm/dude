@@ -280,6 +280,13 @@ func restartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 			id = c.ReplacedBy
 			return nil
 		}
+		var cohortClosed bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM child_cohort_members m JOIN child_cohorts c ON c.id=m.cohort_id WHERE m.child_run_id=$1 AND c.directive_id IS NOT NULL)`, childID).Scan(&cohortClosed); err != nil {
+			return err
+		}
+		if cohortClosed {
+			return refuseText(rChildAlreadyReplaced)
+		}
 		if !c.Actionable {
 			return refuseText(rChildParentNotLive)
 		}
@@ -304,6 +311,9 @@ func restartChildTx(ctx context.Context, tx pgx.Tx, org, taskID, childID, key st
 		if _, err := tx.Exec(ctx, `UPDATE runs SET source_kind = 'task_conductor', child_profile = $2, child_prompt = $3,
 			child_capabilities = $4::jsonb, child_generation = $5, child_replaces = $6, child_restart_key = $7 WHERE id = $1`,
 			id, c.Profile, db.Nullable(c.Prompt), policy, c.Generation+1, childID, key); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE child_cohort_members SET child_run_id=$2, generation=$3 WHERE child_run_id=$1`, childID, id, c.Generation+1); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE runs SET replaced_by = $2,
@@ -471,6 +481,9 @@ func deliverChildResultTxWithHook(ctx context.Context, tx pgx.Tx, p childClaim, 
 			return false, fmt.Errorf("stale child result update affected %d rows", tag.RowsAffected())
 		}
 		return false, nil
+	}
+	if handled, delivered, err := deliverCohortTx(ctx, tx, p, c); handled || err != nil {
+		return delivered, err
 	}
 	var summary, verify []byte
 	// A failed child's own error says why (a refusal before it started has

@@ -30,6 +30,12 @@ func childFinalReplyTx(ctx context.Context, tx pgx.Tx, runID string) (string, er
 	return strings.TrimSpace(strings.Join(texts, "\n")), nil
 }
 
+// ChildInspectionReportTx reads the same final-reply evidence as delivery.
+// Callers must authorize the child and confirm settlement before reading.
+func ChildInspectionReportTx(ctx context.Context, tx pgx.Tx, runID string) (string, error) {
+	return childFinalReplyTx(ctx, tx, runID)
+}
+
 // childReplyExcerpt bounds a reply while preserving its head and tail; the tail
 // holds a writer's checks block.
 func childReplyExcerpt(reply string) string {

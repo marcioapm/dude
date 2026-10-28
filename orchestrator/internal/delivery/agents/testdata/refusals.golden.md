@@ -618,6 +618,30 @@ item %d: too long with its images: a goal of at most %d characters
 
 item %d: only a task item has images
 
+## refusals/tools/child/cohort-briefs
+
+cohort briefs exceed 60000 bytes
+
+## refusals/tools/child/cohort-member-key
+
+per-member keys are unsupported; use the cohort key
+
+## refusals/tools/child/cohort-size
+
+runs must contain 1–8 members
+
+## refusals/tools/child/inspection-page
+
+artifact offset must be nonnegative and limit at most 20
+
+## refusals/tools/child/inspection-scope
+
+unknown or inaccessible child Run
+
+## refusals/tools/child/inspection-budget
+
+child Run inspection exceeds 64000 bytes even after clipping; request fewer artifacts
+
 ## refusals/tools/reply-in-thread/broadcast
 
 a thread reply never notifies a whole channel or a group: remove %s and post again
