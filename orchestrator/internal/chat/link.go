@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -15,22 +16,21 @@ import (
 )
 
 // A brainstorm made with no project linked offers, under its reply, up to
-// linkCandidatesMax projects to link (a choice each) and the session page.
+// linkCandidatesMax projects to link, a choice each.
 const (
 	linkCandidatesMax = 3
 	linkValuePrefix   = "link:"
 	linkHeading       = "No project is linked, so this session can't read any repository or CI. Link one:"
 	anotherHeading    = "Link another project:"
-	chooseLabel       = "Choose in dude"
 )
 
 // linkOffer is what a request's reply offered to link (chat_requests.link_offer):
 // the reply as posted, its session, and the candidates a click names by index.
+// An offer stored with a chooseUrl decodes the same: the field is ignored.
 type linkOffer struct {
 	Text       string          `json:"text"`
 	LinkURL    string          `json:"linkUrl"`
 	LinkLabel  string          `json:"linkLabel"`
-	ChooseURL  string          `json:"chooseUrl"`
 	Session    string          `json:"session"`
 	Candidates []linkCandidate `json:"candidates"`
 }
@@ -43,31 +43,40 @@ type linkCandidate struct {
 
 func (c linkCandidate) label() string { return clip(c.Key+" · "+c.Name, 75) }
 
-// linkCandidates are the projects offered to a brainstorm with none linked,
-// in order and once each: what the conversation is usually about, where its
-// earlier requests went (most first), then the routing answer's
-// maybe_projects. Only projects of w, which never holds a hidden one.
+// linkCandidates are the projects offered to a brainstorm with none linked:
+// the routing answer's maybe_projects, in its order, as Decide kept them.
+// The conversation's hints are the model's context, never offered by code.
 func linkCandidates(w World, maybe []Project) []linkCandidate {
-	var out []linkCandidate
-	add := func(p Project, ok bool) {
-		if !ok || len(out) == linkCandidatesMax {
-			return
-		}
-		for _, c := range out {
-			if c.ID == p.ID {
-				return
-			}
-		}
-		out = append(out, linkCandidate{ID: p.ID, Key: p.Key, Name: p.Name})
-	}
-	for _, key := range w.Usual {
-		add(w.project(key))
-	}
-	for _, h := range w.Learned {
-		add(w.project(h.Key))
-	}
+	var keys []string
 	for _, p := range maybe {
-		add(w.project(p.ID))
+		keys = append(keys, p.ID)
+	}
+	return candidatesOf(w, keys)
+}
+
+// hintCandidates stand in for the model's judgement when the routing call
+// gave no answer: what the conversation is usually about, then where its
+// earlier requests went (most first).
+func hintCandidates(w World) []linkCandidate {
+	keys := slices.Clone(w.Usual)
+	for _, h := range w.Learned {
+		keys = append(keys, h.Key)
+	}
+	return candidatesOf(w, keys)
+}
+
+// candidatesOf are the projects of w named by keys (a key or an id), in
+// order, once each, at most linkCandidatesMax. w never holds a hidden one.
+func candidatesOf(w World, keys []string) []linkCandidate {
+	var out []linkCandidate
+	for _, key := range keys {
+		if len(out) == linkCandidatesMax {
+			break
+		}
+		p, ok := w.project(key)
+		if ok && !slices.ContainsFunc(out, func(c linkCandidate) bool { return c.ID == p.ID }) {
+			out = append(out, linkCandidate{ID: p.ID, Key: p.Key, Name: p.Name})
+		}
 	}
 	return out
 }
@@ -80,7 +89,7 @@ type linkedLine struct {
 // row is the offer's row with the candidates not linked yet, and a line
 // for each that was. Its heading asks for a first project, or another.
 func (o linkOffer) row(request string, linked []linkedLine) *Row {
-	row := &Row{Heading: linkHeading, LinkURL: o.ChooseURL, LinkLabel: chooseLabel}
+	row := &Row{Heading: linkHeading}
 	if len(linked) > 0 {
 		row.Heading = anotherHeading
 	}

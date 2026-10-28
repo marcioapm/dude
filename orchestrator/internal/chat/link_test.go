@@ -121,6 +121,33 @@ func labels(bs []button) string {
 	return strings.Join(out, ", ")
 }
 
+// allButtons are every button of a message, in any block, as "label url"
+// for a link and "label value" for a choice.
+func allButtons(t *testing.T, blocks json.RawMessage) string {
+	t.Helper()
+	var bs []struct {
+		Elements []struct {
+			Type  string `json:"type"`
+			Text  any    `json:"text"`
+			Value string `json:"value"`
+			URL   string `json:"url"`
+		} `json:"elements"`
+	}
+	if err := json.Unmarshal(blocks, &bs); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, b := range bs {
+		for _, e := range b.Elements {
+			if e.Type == "button" {
+				label, _ := e.Text.(map[string]any)["text"].(string)
+				out = append(out, label+" "+e.URL+e.Value)
+			}
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
 // clickAs posts user's click (a Slack user id) on value in message msg.
 func (w *world) clickAs(user, channel, msg, thread, value string) {
 	w.t.Helper()
@@ -143,7 +170,7 @@ func (w *linkWorld) repos(session string) string {
 		WHERE sr.session_id = $1`, session)
 }
 
-func TestChatALinkOffersTheChannelsProjectsThenTheLearnedThenTheModelsOnceEach(t *testing.T) {
+func TestChatALinkOffersOnlyTheModelsProjectsInItsOrderOnceEach(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.project)
 	// Learned: SDK twice, BIL once (also usual), OPS once.
@@ -151,22 +178,77 @@ func TestChatALinkOffersTheChannelsProjectsThenTheLearnedThenTheModelsOnceEach(t
 	w.earlier(w.sdk)
 	w.earlier(w.project)
 	w.earlier(w.ops)
-	reply, session := w.brainstorm("Márcia", "BIL", "ABS")
+	// The model's order, not the hints': SDK and OPS, which it left out, are not offered.
+	reply, _ := w.brainstorm("Márcia", "ABS", "BIL", "abs")
+	session := w.one(`SELECT result_id FROM chat_requests WHERE organization_id = $1 AND result_kind = 'session'`, w.org)
 	got := row(t, reply.Blocks)
-	if l := labels(got); l != "BIL · Billing, SDK · Client SDK, OPS · Operations, Choose in dude" {
+	if l := labels(got); l != "ABS · Acme Backend, BIL · Billing" {
 		t.Fatalf("row %q", l)
 	}
-	if got[3].URL != "https://dude.example.com/#/o/acme/sessions/"+session || got[3].Value != "" {
-		t.Fatalf("Choose in dude %+v", got[3])
+	// The row is link choices only; the session page is the reply's own link.
+	for _, b := range got {
+		if b.URL != "" || !strings.HasPrefix(b.Value, "link:") {
+			t.Fatalf("row button %+v", b)
+		}
+	}
+	if l := allButtons(t, reply.Blocks); !strings.HasPrefix(l, "Open in dude https://dude.example.com/#/o/acme/sessions/"+session+", ABS") ||
+		strings.Count(l, "https://") != 1 {
+		t.Fatalf("buttons %q, session %s", l, session)
 	}
 	if !strings.Contains(string(reply.Blocks), "No project is linked") {
 		t.Fatalf("blocks %s", reply.Blocks)
 	}
-	// The model's own guesses fill what the hints leave, in its order.
+	// At most three of the model's, in its order.
 	w2 := linkSetup(t)
 	reply, _ = w2.brainstorm("Márcia", "SDK", "ABS", "BIL", "OPS")
-	if l := labels(row(t, reply.Blocks)); l != "SDK · Client SDK, ABS · Acme Backend, BIL · Billing, Choose in dude" {
+	if l := labels(row(t, reply.Blocks)); l != "SDK · Client SDK, ABS · Acme Backend, BIL · Billing" {
 		t.Fatalf("row %q", l)
+	}
+	// The usual project the model names is offered alone.
+	w3 := linkSetup(t)
+	w3.usual(w3.abs, w3.sdk)
+	w3.earlier(w3.ops)
+	reply, _ = w3.brainstorm("Márcia", "ABS")
+	if l := labels(row(t, reply.Blocks)); l != "ABS · Acme Backend" {
+		t.Fatalf("row %q", l)
+	}
+}
+
+// A brainstorm the model says needs no project (the time in Berlin, in a
+// channel usually about ABS) offers nothing to link: no heading, no buttons,
+// only the reply's own link to the session.
+func TestChatABrainstormTheModelSuggestsNoProjectForOffersNoLink(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.abs)
+	w.earlier(w.abs)
+	w.earlier(w.sdk)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Time in Berlin",
+		"reasoning": "the channel hint doesn't apply to this question", "maybe_projects": nil}))
+	w.mention("Eli", "C1", "", "what time is it in Berlin?")
+	var last struct{ Route, ResultID string }
+	if err := w.owner.QueryRow(w.ctx, `SELECT route, result_id FROM chat_requests WHERE organization_id = $1 AND result_kind = 'session'`,
+		w.org).Scan(&last.Route, &last.ResultID); err != nil || last.Route != "brainstorm" {
+		t.Fatalf("request %+v, %v", last, err)
+	}
+	reply := lastBot(t, w.fake)
+	if bs := row(t, reply.Blocks); len(bs) != 0 {
+		t.Fatalf("row %+v", bs)
+	}
+	if h := sections(t, reply.Blocks); len(h) != 1 || strings.Contains(h[0], "Link") || strings.Contains(h[0], "No project") {
+		t.Fatalf("sections %q", h)
+	}
+	if want := "Open in dude https://dude.example.com/#/o/acme/sessions/" + last.ResultID; allButtons(t, reply.Blocks) != want {
+		t.Fatalf("buttons %q, want %q", allButtons(t, reply.Blocks), want)
+	}
+	if n := w.count(`SELECT count(*) FROM chat_requests WHERE organization_id = $1 AND link_offer IS NOT NULL`, w.org); n != 0 {
+		t.Fatalf("%d offers recorded", n)
+	}
+	// An empty list is the same as none.
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Weather", "reasoning": "general knowledge",
+		"maybe_projects": []string{}}))
+	w.mention("Eli", "C1", "", "will it rain tomorrow?")
+	if bs := row(t, lastBot(t, w.fake).Blocks); len(bs) != 0 {
+		t.Fatalf("row %+v", bs)
 	}
 }
 
@@ -176,12 +258,15 @@ func TestChatALinkNeverOffersAHiddenProjectAndWithoutCandidatesOnlyTheSessionPag
 	w.earlier(w.abs)
 	w.exec(`INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, w.org, w.abs)
 	// An unknown key and a hidden one from the model are dropped as well.
-	reply, _ := w.brainstorm("Márcia", "ABS", "NOPE")
-	if l := labels(row(t, reply.Blocks)); l != "Choose in dude" {
-		t.Fatalf("row %q", l)
+	reply, session := w.brainstorm("Márcia", "ABS", "NOPE")
+	if bs := row(t, reply.Blocks); len(bs) != 0 {
+		t.Fatalf("row %+v", bs)
 	}
 	if strings.Contains(string(reply.Blocks), "ABS") {
 		t.Fatalf("the hidden project is offered: %s", reply.Blocks)
+	}
+	if b := allButtons(t, reply.Blocks); b != "Open in dude https://dude.example.com/#/o/acme/sessions/"+session {
+		t.Fatalf("buttons %q", b)
 	}
 }
 
@@ -202,7 +287,7 @@ func TestChatASessionWithAProjectOffersNoLink(t *testing.T) {
 func TestChatTheAskersClickLinksTheProjectWithItsRepositories(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs, w.project)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS", "BIL")
 	bs := row(t, reply.Blocks)
 	woken := w.woken
 	w.click("Eli", "C1", reply.TS, reply.ThreadTS, bs[0].Value)
@@ -220,8 +305,8 @@ func TestChatTheAskersClickLinksTheProjectWithItsRepositories(t *testing.T) {
 	if h := sections(t, u[0].Blocks); len(h) != 2 || h[1] != "Link another project:" {
 		t.Fatalf("sections after the first link %q", h)
 	}
-	if l := labels(row(t, u[0].Blocks)); l != "BIL · Billing, Choose in dude" {
-		t.Fatalf("row after %q", l)
+	if l := allButtons(t, u[0].Blocks); l != "Open in dude https://dude.example.com/#/o/acme/sessions/"+session+", BIL · Billing "+bs[1].Value {
+		t.Fatalf("buttons after %q", l)
 	}
 	// The session has its line, as a member's link records it.
 	var payload map[string]any
@@ -251,8 +336,8 @@ func TestChatTheAskersClickLinksTheProjectWithItsRepositories(t *testing.T) {
 	if len(u) != 2 || !strings.Contains(string(u[1].Blocks), "Eli linked BIL · Billing") || !strings.Contains(string(u[1].Blocks), "Eli linked ABS") {
 		t.Fatalf("updates %+v", u)
 	}
-	if l := labels(row(t, u[1].Blocks)); l != "Choose in dude" {
-		t.Fatalf("row after both %q", l)
+	if l := allButtons(t, u[1].Blocks); l != "Open in dude https://dude.example.com/#/o/acme/sessions/"+session {
+		t.Fatalf("buttons after both %q", l)
 	}
 	// Nothing left to offer: no heading, only the reply's own words.
 	if h := sections(t, u[1].Blocks); len(h) != 1 || strings.Contains(h[0], "Link") {
@@ -264,10 +349,85 @@ func TestChatTheAskersClickLinksTheProjectWithItsRepositories(t *testing.T) {
 	}
 }
 
+// linkedRow is a message's row as text: its sections, its context lines
+// and its buttons.
+func linkedRow(t *testing.T, blocks json.RawMessage) (sectionTexts []string, lines []string, buttons string) {
+	t.Helper()
+	var bs []struct {
+		Type     string `json:"type"`
+		Elements []struct {
+			Text any `json:"text"`
+		} `json:"elements"`
+	}
+	if err := json.Unmarshal(blocks, &bs); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bs {
+		if b.Type == "context" {
+			for _, e := range b.Elements {
+				s, _ := e.Text.(string)
+				lines = append(lines, s)
+			}
+		}
+	}
+	return sections(t, blocks), lines, allButtons(t, blocks)
+}
+
+func TestChatLinkingTheOnlyCandidateLeavesOnlyItsLine(t *testing.T) {
+	w := linkSetup(t)
+	reply, session := w.brainstorm("Eli", "ABS")
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
+	u := w.fake.Updates()
+	if len(u) != 1 {
+		t.Fatalf("updates %+v", u)
+	}
+	texts, lines, buttons := linkedRow(t, u[0].Blocks)
+	if len(texts) != 1 || texts[0] != sections(t, reply.Blocks)[0] {
+		t.Fatalf("sections %q", texts)
+	}
+	if strings.Join(lines, "\n") != "Eli linked ABS · Acme Backend" {
+		t.Fatalf("lines %q", lines)
+	}
+	if buttons != "Open in dude https://dude.example.com/#/o/acme/sessions/"+session {
+		t.Fatalf("buttons %q", buttons)
+	}
+	if bs := row(t, u[0].Blocks); len(bs) != 0 {
+		t.Fatalf("row %+v", bs)
+	}
+}
+
+// An offer stored before the row lost its own link carries a chooseUrl: a
+// click on it links and updates the reply as any other.
+func TestChatALegacyOfferWithAChooseURLLinksAndUpdates(t *testing.T) {
+	w := linkSetup(t)
+	reply, session := w.brainstorm("Eli", "ABS", "SDK")
+	w.exec(`UPDATE chat_requests SET link_offer = link_offer || jsonb_build_object('chooseUrl', 'https://dude.example.com/#/o/acme/sessions/'||$2::text)
+		WHERE organization_id = $1 AND link_offer IS NOT NULL`, w.org, session)
+	if n := w.count(`SELECT count(*) FROM chat_requests WHERE organization_id = $1 AND link_offer ? 'chooseUrl'`, w.org); n != 1 {
+		t.Fatalf("%d legacy offers", n)
+	}
+	sdk := row(t, reply.Blocks)[1].Value
+	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
+	if l := w.linked(session); l != "ABS" {
+		t.Fatalf("linked %q", l)
+	}
+	u := w.fake.Updates()
+	if len(u) != 1 || u[0].TS != reply.TS {
+		t.Fatalf("updates %+v", u)
+	}
+	texts, lines, buttons := linkedRow(t, u[0].Blocks)
+	if len(texts) != 2 || texts[1] != "Link another project:" || strings.Join(lines, "\n") != "Eli linked ABS · Acme Backend" {
+		t.Fatalf("sections %q, lines %q", texts, lines)
+	}
+	if buttons != "Open in dude https://dude.example.com/#/o/acme/sessions/"+session+", SDK · Client SDK "+sdk {
+		t.Fatalf("buttons %q", buttons)
+	}
+}
+
 func TestChatAnAdminMayLinkForTheAskerAndNobodyElse(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	value := row(t, reply.Blocks)[0].Value
 	// Ana's account left Acme; Zed (U9) never connected; Gus (U3) is not connected.
 	for _, user := range []string{w.people["Ana"][1], "U9", "U3"} {
@@ -297,7 +457,7 @@ func TestChatAnAdminMayLinkForTheAskerAndNobodyElse(t *testing.T) {
 func TestChatAnotherMembersClickChangesNothing(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Márcia")
+	reply, session := w.brainstorm("Márcia", "ABS")
 	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
 	if l := w.linked(session); l != "" || len(w.fake.Updates()) != 0 ||
 		w.count(`SELECT count(*) FROM chat_request_links WHERE organization_id = $1`, w.org) != 0 {
@@ -311,7 +471,7 @@ func TestChatAnotherMembersClickChangesNothing(t *testing.T) {
 func TestChatAnAskerWhoLeftCannotLink(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	w.exec(`UPDATE people SET removed_at = now() WHERE id = $1`, w.people["Eli"][0])
 	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
 	if l := w.linked(session); l != "" || len(w.fake.Updates()) != 0 {
@@ -328,7 +488,7 @@ func TestChatAnAskerWhoLeftCannotLink(t *testing.T) {
 func TestChatAnAskerWhoHandedTheSessionOverCannotLink(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	// Eli hands it to Gus, keeping chat; then leaves it.
 	gus := w.people["Gus"][0]
 	// One owner at a time, checked at commit.
@@ -364,7 +524,7 @@ func TestChatAnAskerWhoHandedTheSessionOverCannotLink(t *testing.T) {
 func TestChatASecondClickOrARetryLinksAndPostsOnce(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	value := row(t, reply.Blocks)[0].Value
 	// The first update is rate limited: the click's delivery is tried again
 	// and posts it then.
@@ -399,7 +559,7 @@ func TestChatASecondClickOrARetryLinksAndPostsOnce(t *testing.T) {
 func TestChatAForgedLinkValueLinksNothing(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	value := row(t, reply.Blocks)[0].Value
 	request := strings.Split(value, ":")[1]
 	// A clarifying question's request offers nothing to link.
@@ -423,6 +583,56 @@ func TestChatAForgedLinkValueLinksNothing(t *testing.T) {
 	}
 }
 
+// The fallback's hints overlap and run past the cap: usual BIL, learned
+// BIL 2, ABS, OPS, SDK. Each is offered once, at most 3, usual first.
+func TestChatAFailedRoutingCallOffersItsHintsOnceEachAtMostThree(t *testing.T) {
+	w := linkSetup(t)
+	w.usual(w.project)
+	w.earlier(w.project)
+	w.earlier(w.project)
+	w.earlier(w.abs)
+	w.earlier(w.ops)
+	w.earlier(w.sdk)
+	w.model.queue("I think a task")
+	w.mention("Eli", "C1", "", "can you investigate the failures above?")
+	if got := w.requests(); got[len(got)-1].Route != "failed" {
+		t.Fatalf("request %+v", got[len(got)-1])
+	}
+	if l := labels(row(t, lastBot(t, w.fake).Blocks)); l != "BIL · Billing, ABS · Acme Backend, OPS · Operations" {
+		t.Fatalf("row %q", l)
+	}
+}
+
+// A clarifying question whose session choice is picked offers the
+// projects the question's answer suggested.
+func TestChatASessionPickedFromAQuestionOffersTheSuggestedProjects(t *testing.T) {
+	w := linkSetup(t)
+	w.model.queue(answer(map[string]any{"route": "clarify", "confidence": 0.9, "reasoning": "two ways", "maybe_projects": []string{"SDK"},
+		"question": map[string]any{"text": "Task or session?", "choices": []map[string]any{
+			{"id": "a", "label": "A task", "route": "task", "project": "BIL"}, {"id": "b", "label": "A session", "route": "brainstorm"}}}}))
+	root := w.mention("Eli", "C1", "", "the SDK release looks off")
+	q := lastBot(t, w.fake)
+	var blocks []map[string]any
+	_ = json.Unmarshal(q.Blocks, &blocks)
+	var value string
+	for _, e := range blocks[1]["elements"].([]any) {
+		if el := e.(map[string]any); el["text"].(map[string]any)["text"] == "A session" {
+			value = el["value"].(string)
+		}
+	}
+	if value == "" {
+		t.Fatalf("no session choice in %s", q.Blocks)
+	}
+	w.click("Eli", "C1", q.TS, root, value)
+	got := w.requests()
+	if last := got[len(got)-1]; last.Route != "brainstorm" || last.ResultKind != "session" {
+		t.Fatalf("request %+v", last)
+	}
+	if l := labels(row(t, lastBot(t, w.fake).Blocks)); l != "SDK · Client SDK" {
+		t.Fatalf("row %q", l)
+	}
+}
+
 func TestChatAFailedRoutingCallStillOffersTheUsualAndLearnedProjects(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
@@ -434,7 +644,7 @@ func TestChatAFailedRoutingCallStillOffersTheUsualAndLearnedProjects(t *testing.
 	if last.Route != "failed" || last.ResultKind != "session" {
 		t.Fatalf("request %+v", last)
 	}
-	if l := labels(row(t, lastBot(t, w.fake).Blocks)); l != "ABS · Acme Backend, SDK · Client SDK, Choose in dude" {
+	if l := labels(row(t, lastBot(t, w.fake).Blocks)); l != "ABS · Acme Backend, SDK · Client SDK" {
 		t.Fatalf("row %q", l)
 	}
 }
@@ -442,7 +652,7 @@ func TestChatAFailedRoutingCallStillOffersTheUsualAndLearnedProjects(t *testing.
 func TestChatAClickFromAnotherWorkspaceLinksAndPostsNothing(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	value := row(t, reply.Blocks)[0].Value
 	// Eli is connected in T2 as well, where the same conversation id
 	// exists: only the installation's workspace T1 is dude's.
@@ -465,7 +675,7 @@ func TestChatAClickFromAnotherWorkspaceLinksAndPostsNothing(t *testing.T) {
 func TestChatAClickNamingAnotherOrgsOfferIsNotOffered(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, _ := w.brainstorm("Eli")
+	reply, _ := w.brainstorm("Eli", "ABS")
 	// Globex: its own person, project, session and an offer in the same
 	// workspace and conversation ids, asked by the same Slack user id.
 	other := "org_globex_" + w.org
@@ -499,7 +709,7 @@ func TestChatAClickNamingAnotherOrgsOfferIsNotOffered(t *testing.T) {
 func TestChatAProjectHiddenAfterTheOfferIsRefusedAtTheClick(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	value := row(t, reply.Blocks)[0].Value
 	w.exec(`INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, w.org, w.abs)
 	w.click("Eli", "C1", reply.TS, reply.ThreadTS, value)
@@ -546,7 +756,8 @@ func TestChatAReplyRefusedInTheThreadGoesPrivatelyWithoutItsRow(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
 	w.fake.FailNext("chat.postMessage", "msg_too_long")
-	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.5, "reasoning": "can't tell the project", "title": "Nightly failures"}))
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.5, "reasoning": "can't tell the project", "title": "Nightly failures",
+		"maybe_projects": []string{"ABS"}}))
 	w.mention("Eli", "C1", "", "can you investigate the failures above?")
 	eph := w.fake.Ephemerals()
 	if len(eph) != 1 || !strings.Contains(eph[0].Text, "did not take dude's reply") {
@@ -565,7 +776,7 @@ func TestChatAReplyRefusedInTheThreadGoesPrivatelyWithoutItsRow(t *testing.T) {
 func TestChatAClickOnAnOfferWithNoMessageLinksOnceAndFailsNothing(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	value := row(t, reply.Blocks)[0].Value
 	// The reply refused in the thread (as a fallback ephemeral would have it):
 	// replied, with no message id.
@@ -583,7 +794,7 @@ func TestChatAClickOnAnOfferWithNoMessageLinksOnceAndFailsNothing(t *testing.T) 
 func TestChatAnUpdateFailingPastItsRetriesLeavesTheLinkAndFailsNothing(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	w.fake.FailTimes("chat.update", "ratelimited", 100)
 	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
 	for range chat.MaxAttempts {
@@ -603,7 +814,7 @@ func TestChatAnUpdateFailingPastItsRetriesLeavesTheLinkAndFailsNothing(t *testin
 func TestChatAClickWhoseLinkCommittedFailsNothingWhereverItsLastAttemptFails(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	w.fake.FailNext("chat.update", "ratelimited")
 	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)
 	if l := w.linked(session); l != "ABS" {
@@ -630,7 +841,7 @@ func TestChatAClickWhoseLinkCommittedFailsNothingWhereverItsLastAttemptFails(t *
 func TestChatAClickBeforeTheReplysIdIsKeptUpdatesItOnceItIs(t *testing.T) {
 	w := linkSetup(t)
 	w.usual(w.abs)
-	reply, session := w.brainstorm("Eli")
+	reply, session := w.brainstorm("Eli", "ABS")
 	// The reply posted, its id and outcome not written yet.
 	w.exec(`UPDATE chat_requests SET question_message_id = NULL, replied_at = NULL WHERE organization_id = $1`, w.org)
 	w.click("Eli", "C1", reply.TS, reply.ThreadTS, row(t, reply.Blocks)[0].Value)

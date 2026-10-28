@@ -259,10 +259,14 @@ def _chat_route(messages: list) -> str | None:
     if named:
         project = named
     if "which project" in said and not named:
-        # It can't tell: a brainstorm with no project, guessing at none
-        # itself, so what is offered to link comes from the hints alone.
+        # It can't tell: a brainstorm with no project, suggesting to link
+        # where this conversation's earlier requests went, as the real model
+        # must: its maybe_projects alone are what the reply offers.
+        learned = re.findall(r"^- ([A-Z][A-Z0-9]{1,5}): \d+ of the last",
+                             user.split("## Where this conversation's earlier requests went", 1)[-1].split("\n## ", 1)[0], re.MULTILINE) \
+            if "## Where this conversation's earlier requests went" in user else []
         return json.dumps({"route": "brainstorm", "confidence": 0.6, "reasoning": "scripted: no project named", "project": None,
-                           "title": "Which project?", "maybe_projects": []})
+                           "title": "Which project?", "maybe_projects": [k for k in learned if k in projects] or None})
     if "file a task" in said and project:
         return json.dumps({"route": "task", "confidence": 0.95, "reasoning": "scripted: one clear change", "project": project,
                            "title": "Tidy the export page", "goal": "Tidy the export page.", "criteria": ["It is tidy"]})
