@@ -57,14 +57,18 @@ func lockChildTx(ctx context.Context, tx pgx.Tx, childID string, betweenLocks fu
 		return nil, err
 	}
 	var live bool
+	// The parent NO KEY UPDATE: its writers wait, but the child's own
+	// follower, holding the child's row and updating it again, re-checks
+	// the child's foreign keys to the parent (KEY SHARE) while this waits
+	// for the child below; FOR UPDATE would deadlock with it.
 	if source == string(ChildParentSession) {
 		err = tx.QueryRow(ctx, `SELECT `+LiveBrainstorm+` AND r.replaced_by IS NULL
 			AND r.control <> 'abort' AND NOT COALESCE(`+Ending+`, false)
-			FROM runs r WHERE r.id=$1 AND r.session_id=$2 FOR UPDATE`, c.ParentID, c.SessionID).Scan(&live)
+			FROM runs r WHERE r.id=$1 AND r.session_id=$2 FOR NO KEY UPDATE`, c.ParentID, c.SessionID).Scan(&live)
 	} else {
 		err = tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.source_kind IS NULL AND r.phase IS NULL
 		AND r.replaced_by IS NULL AND r.control <> 'abort' AND NOT COALESCE(`+Ending+`, false)
-		FROM runs r WHERE r.id = $1 AND r.task_id = $2 FOR UPDATE`, c.ParentID, c.TaskID).Scan(&live)
+		FROM runs r WHERE r.id = $1 AND r.task_id = $2 FOR NO KEY UPDATE`, c.ParentID, c.TaskID).Scan(&live)
 	}
 	if err != nil {
 		return nil, err
