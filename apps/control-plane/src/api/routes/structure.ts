@@ -448,12 +448,6 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
         epic_id = CASE WHEN ${input.epicId !== undefined} THEN ${input.epicId ?? null} ELSE epic_id END,
         updated_at = now()
       WHERE id = ${id}`;
-    // Moved out of an epic: the epic's other tasks may all have ended
-    // (migration 219's rule). After the task's row, as a status move.
-    const leftEpic = current[0].epicId;
-    if (leftEpic && input.epicId !== undefined && (input.epicId ?? null) !== leftEpic) {
-      await scope.sql`SELECT chat_epic_notice(${leftEpic}, 'epic_finished', ${id})`;
-    }
     // Its images are what its text references: fixed with it while a delivery runs (refused above).
     if (input.goal !== undefined || input.acceptanceCriteria !== undefined) {
       await syncTaskAttachments(scope, id, input.goal ?? current[0].goal, input.acceptanceCriteria ?? current[0].acceptanceCriteria);
@@ -463,6 +457,13 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     }
     // The new owner goes first; everyone else on it stays, after them.
     if (ownerId !== undefined) await setTaskPeople(scope, ctx, id, projectId, [ownerId], true);
+    // Moved out of an epic: the epic's other tasks may all have ended
+    // (migration 219's rule). Its advisory lock is the last lock this
+    // transaction takes, as on a status move.
+    const leftEpic = current[0].epicId;
+    if (leftEpic && input.epicId !== undefined && (input.epicId ?? null) !== leftEpic) {
+      await scope.sql`SELECT chat_epic_notice(${leftEpic}, 'epic_finished', ${id})`;
+    }
     const rows = (await scope.sql`
       SELECT id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)},
         ${scope.sql.unsafe(SOURCE_JSON)}, title, goal,
