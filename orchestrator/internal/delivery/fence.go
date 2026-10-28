@@ -90,6 +90,7 @@ func HiddenFrom(ctx context.Context, tx pgx.Tx, provider string) (Fence, error) 
 // notify, its parent's chat destination resolved now, in the parent's own
 // organisation: its notices go to the parent's thread, and its own
 // children inherit the same destination without walking the ancestry.
+// OFFSET 0 keeps the destination to one lookup, not one per reference.
 func InheritOrigin(ctx context.Context, tx pgx.Tx, table, id, fromSession, fromTask string) error {
 	provider, err := originProvider(ctx, tx, fromSession, fromTask)
 	if err != nil || provider == "" {
@@ -100,7 +101,7 @@ func InheritOrigin(ctx context.Context, tx pgx.Tx, table, id, fromSession, fromT
 				|| COALESCE((SELECT jsonb_build_object('notify', jsonb_strip_nulls(jsonb_build_object('provider', d.dest->'provider',
 					'workspaceId', d.dest->'workspaceId', 'conversationId', d.dest->'conversationId', 'conversationName', d.dest->'conversationName',
 					'conversationKind', d.dest->'conversationKind', 'threadId', d.dest->'threadId', 'topLevel', d.dest->'topLevel')))
-				FROM (SELECT `+noticeDestSQL("p.origin")+` AS dest) d
+				FROM (SELECT `+noticeDestSQL("p.origin")+` AS dest OFFSET 0) d
 				WHERE d.dest->>'provider' = $3 AND d.dest->>'conversationId' IS NOT NULL), '{}')
 			FROM tasks p WHERE c.id = $1 AND c.origin IS NULL AND p.id = $2 AND p.organization_id = c.organization_id`, id, fromTask, provider)
 		return err
