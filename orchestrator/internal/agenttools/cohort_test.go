@@ -7,7 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Production JSON dispatch + real PostgreSQL settlement/outbox: not a real
@@ -32,7 +36,7 @@ func TestCohortDispatchAndInspection(t *testing.T) {
 		if i == 0 {
 			report += strings.Repeat("界", 17000)
 		}
-		mustExec(t, f.owner, `INSERT INTO events (id,organization_id,task_id,run_id,event_type,actor_type,actor_id,payload) VALUES ('evt_' || $3,$1,$2,$3,'agent.message','agent',$3,jsonb_build_object('text',$4::text))`, f.org, f.item, r.RunID, report)
+		mustExec(t, f.owner, `INSERT INTO events (id,organization_id,task_id,run_id,event_type,actor_type,actor_id,source,payload) VALUES ('evt_' || $3,$1,$2,$3,'agent.message','agent',$3,'orchestrator',jsonb_build_object('text',$4::text))`, f.org, f.item, r.RunID, report)
 		status := "completed"
 		if i == 1 {
 			status = "failed"
@@ -93,6 +97,67 @@ func TestCohortDispatchAndInspection(t *testing.T) {
 	for _, tool := range []string{"start_agents", "read_run"} {
 		if code, _ := f.post(t, worker, tool, `{}`); code != 404 {
 			t.Fatalf("worker %s: %d", tool, code)
+		}
+	}
+}
+
+func TestCohortInspectionScope(t *testing.T) {
+	f := setup(t)
+	token := f.run(t, "inspection_parent", "conductor", "running")
+	mustExec(t, f.owner, `UPDATE runs SET status='completed' WHERE id='inspection_parent'`)
+	other := f.run(t, "other_parent", "conductor", "running")
+	mustExec(t, f.owner, `UPDATE runs SET status='completed' WHERE id='other_parent'`)
+	mustExec(t, f.owner, `UPDATE runs SET status='running' WHERE id='inspection_parent'`)
+	f.run(t, "inspection_child", "investigator", "completed")
+	mustExec(t, f.owner, `UPDATE runs SET source_kind='task_conductor',parent_run_id='inspection_parent',child_profile='investigator',child_capabilities='{}' WHERE id='inspection_child'`)
+	if code, _ := f.post(t, token, "read_run", `{"run":"inspection_child"}`); code != 200 {
+		t.Fatalf("own child: %d", code)
+	}
+	mustExec(t, f.owner, `UPDATE runs SET status='completed' WHERE id='inspection_parent'`)
+	mustExec(t, f.owner, `UPDATE runs SET status='running' WHERE id='other_parent'`)
+	if code, _ := f.post(t, other, "read_run", `{"run":"inspection_child"}`); code != 422 {
+		t.Fatalf("another parent's child: %d", code)
+	}
+	mustExec(t, f.owner, `UPDATE runs SET status='completed' WHERE id='other_parent'`)
+	mustExec(t, f.owner, `UPDATE runs SET status='running' WHERE id='inspection_parent'`)
+	mustExec(t, f.owner, `INSERT INTO tasks(id,organization_id,project_id,number,title,goal) SELECT 'inspection_other_task',organization_id,project_id,2,'Other','Other' FROM tasks WHERE id=$1`, f.item)
+	mustExec(t, f.owner, `UPDATE runs SET task_id='inspection_other_task' WHERE id='inspection_child'`)
+	if code, _ := f.post(t, token, "read_run", `{"run":"inspection_child"}`); code != 422 {
+		t.Fatalf("cross-task child: %d", code)
+	}
+}
+
+func TestCohortCapabilitiesDeniedOnJSONAndMCP(t *testing.T) {
+	srv := &agenttools.Server{}
+	srv.ResolveCapabilitiesWith(func(_ context.Context, _ pgx.Tx, a capabilities.Agent) (capabilities.Grants, error) {
+		return capabilities.Default(a.Role).Without(capabilities.Cohorts, capabilities.ChildInspect), nil
+	})
+	f := setupWith(t, srv)
+	token := f.run(t, "cohort_reduced", "conductor", "running")
+	listed := f.getTools(t, token)
+	cs, err := f.connect(t, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"start_agents", "read_run"} {
+		if _, ok := listed[name]; ok {
+			t.Errorf("JSON lists denied %s", name)
+		}
+		for _, tool := range list.Tools {
+			if tool.Name == name {
+				t.Errorf("MCP lists denied %s", name)
+			}
+		}
+		if code, _ := f.post(t, token, name, `{}`); code != 404 {
+			t.Errorf("JSON %s: %d", name, code)
+		}
+		if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: map[string]any{}}); err == nil {
+			t.Errorf("MCP allowed %s", name)
 		}
 	}
 }

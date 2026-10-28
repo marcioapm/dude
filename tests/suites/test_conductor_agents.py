@@ -118,3 +118,47 @@ def test_child_writer_excludes_another_but_allows_reports_and_selective_abort(cl
     wait_until(lambda: client.get_run(writer["id"])["status"] == "aborted", timeout=60)
     assert client.get_run(sibling["id"])["status"] not in ("aborted", "failed", "completed")
     assert client.get(f"/v1/tasks/{task['id']}").json()["status"] not in ("aborted", "failed", "done")
+
+
+def test_cohort_staggered_completion_and_individual_inspection(client: ApiClient, owner_dsn, forge_project):
+    task, parent = _world(client, forge_project)
+    models = {**forge_project["agentModels"], **client.on_models({
+        "conductor": "fake/scripted", "investigator": "fake/hang"})}
+    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
+    _say(client, task["id"], "Run three independent investigations as one cohort.",
+         _tool("start_agents", {"key": "staggered", "runs": [
+             {"profile": "investigator", "prompt": f"Investigate area {i}; report evidence and stop."}
+             for i in range(3)]}))
+    members = wait_until(lambda: (rows if len(rows := _children(owner_dsn, task)) == 3 else None), timeout=60)
+    wait_until(lambda: all(client.get_run(r["id"])["status"] == "running" for r in members), timeout=90)
+    cohort = query(owner_dsn, "SELECT id FROM child_cohorts WHERE parent_run_id=%s", (parent,))[0]["id"]
+    for i, member in enumerate(members):
+        response = client.post(f"/v1/runs/{member['id']}/abort", {})
+        assert response.status_code == 200, response.text
+        wait_until(lambda: query(owner_dsn, "SELECT * FROM child_result_outbox WHERE child_run_id=%s AND consumed_at IS NOT NULL",
+                                 (member["id"],)), timeout=90)
+        directives = query(owner_dsn, "SELECT d.id,d.text,d.delivered_at FROM child_cohorts c JOIN directives d ON d.id=c.directive_id WHERE c.id=%s", (cohort,))
+        assert len(directives) == (1 if i == 2 else 0), directives
+        # The first two outbox receipts are consumed without parent inputs.
+        receipts = query(owner_dsn, "SELECT directive_id FROM child_result_outbox WHERE child_run_id=%s", (member["id"],))
+        assert bool(receipts[0]["directive_id"]) == (i == 2)
+    wait_until(lambda: query(owner_dsn, "SELECT d.id FROM child_cohorts c JOIN directives d ON d.id=c.directive_id WHERE c.id=%s AND d.delivered_at IS NOT NULL", (cohort,)), timeout=90)
+    for member in members:
+        # read_run deliberately withholds its body from the tool ledger. The
+        # scripted agent records selected fields from the actual tool answer.
+        _say(client, task["id"], "Inspect the settled child evidence.",
+             _tool("read_run", {"run": member["id"]}),
+             _tool("emit_event", {"type": "cohort.inspected", "data": {
+                 "run": "{{last.run}}", "status": "{{last.status}}",
+                 "settled": "{{last.settled}}", "resultStatus": "{{last.result.status}}"}}))
+        def inspected():
+            for event in client.events(runId=parent, limit=1000):
+                payload = event["payload"]
+                if event["eventType"] == "agent.custom.cohort.inspected" and payload["data"].get("run") == member["id"]:
+                    return payload["data"]
+            return None
+        result = wait_until(inspected, timeout=60)
+        assert result["run"] == member["id"] and result["settled"] == "true", result
+        assert result["status"] == result["resultStatus"] == "aborted", result
+    assert len(query(owner_dsn, "SELECT id FROM directives WHERE run_id=%s AND text LIKE %s", (parent, f"Cohort {cohort} settled:%"))) == 1
+    assert _point(client, task["id"]) == "after_implement"

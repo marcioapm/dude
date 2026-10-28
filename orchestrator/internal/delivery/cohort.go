@@ -140,8 +140,14 @@ func deliverCohortTx(ctx context.Context, tx pgx.Tx, p childClaim, c *lockedChil
 		}
 		notified = true
 	}
-	_, err = tx.Exec(ctx, `UPDATE child_result_outbox SET consumed_at=now(), directive_id=$4, claimed_by=NULL, claimed_until=NULL WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3`, p.Parent, p.Child, p.Generation, db.Nullable(directive))
-	return true, notified, err
+	tag, err := tx.Exec(ctx, `UPDATE child_result_outbox SET consumed_at=now(), directive_id=$4, claimed_by=NULL, claimed_until=NULL WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3 AND claimed_by=$5`, p.Parent, p.Child, p.Generation, db.Nullable(directive), p.Token)
+	if err != nil {
+		return true, false, err
+	}
+	if tag.RowsAffected() != 1 {
+		return true, false, fmt.Errorf("consume cohort child result update affected %d rows", tag.RowsAffected())
+	}
+	return true, notified, nil
 }
 
 func boundedCohortReport(reply string) string {
