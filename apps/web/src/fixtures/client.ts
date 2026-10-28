@@ -45,6 +45,7 @@ const CHAT_BUILT_IN = "You route a message someone wrote to dude, a software-del
  * would — so the screens re-read through the same path they do for real.
  */
 const streams = new Set<QuietEventSource>();
+const SCOPES = ["runId", "taskId", "sessionId", "automationRunId"] as const;
 let streamCursor = 1_000_000;
 let ledger: ((params: LedgerQuery) => PersistedEvent[]) | null = null;
 class QuietEventSource extends EventTarget {
@@ -82,6 +83,11 @@ class QuietEventSource extends EventTarget {
     }, 20);
   }
   #later: ReturnType<typeof setTimeout> | undefined;
+  /** Whether the backend's stream for this URL's scope would send `event` (the control plane's `matches`, events/bus.ts). */
+  accepts(event: PersistedEvent): boolean {
+    const q = new URL(this.url, window.location.origin).searchParams;
+    return SCOPES.every((k) => !q.get(k) || q.get(k) === event[k]);
+  }
   close() {
     clearTimeout(this.#opening);
     clearTimeout(this.#later);
@@ -90,11 +96,11 @@ class QuietEventSource extends EventTarget {
   }
 }
 
-/** Send an event down every open fixture stream, as the backend would. */
+/** Send an event down every open fixture stream whose scope takes it, as the backend would. */
 export function emit(event: Omit<PersistedEvent, "cursor" | "eventId">): void {
   const cursor = ++streamCursor;
-  const data = JSON.stringify({ ...event, cursor, eventId: `evt_fx_${cursor}` });
-  for (const s of streams) if (s.readyState === 1) s.onmessage?.(new MessageEvent("message", { data }));
+  const data = { ...event, cursor, eventId: `evt_fx_${cursor}` } as PersistedEvent;
+  for (const s of streams) if (s.readyState === 1 && s.accepts(data)) s.onmessage?.(new MessageEvent("message", { data: JSON.stringify(data) }));
 }
 
 /** Install the quiet stream for the fixtures; call once, before the app mounts. */
