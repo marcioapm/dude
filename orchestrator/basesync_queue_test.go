@@ -81,11 +81,29 @@ func (w *world) submittedPrompt(luxRunID string) string {
 	return spec.Workload.Prompt
 }
 
-// heardQueued counts how often the agent of luxRunID was given the queued instruction for
-// sha after its prompt (a directive or a resume's input).
-func (w *world) heardQueued(luxRunID, sha string) int {
+// heardQueued counts how often lux was handed runID's agent the queued
+// instruction for sha after its prompt: as a directive's input (one per
+// directive id: lux drops a repeat) or as a resume's input.
+func (w *world) heardQueued(runID, luxRunID, sha string) int {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT id FROM directives WHERE run_id=$1`, runID)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
+	}
 	n := 0
-	for _, in := range append(w.lux.Inputs(luxRunID), w.lux.ResumeInputs(luxRunID)...) {
+	for _, id := range ids {
+		for _, body := range w.lux.InputBodies(luxRunID, id) {
+			if strings.Contains(body, "Queued conflict resolution") && strings.Contains(body, sha) {
+				n++
+				break
+			}
+		}
+	}
+	for _, in := range w.lux.ResumeInputs(luxRunID) {
 		if strings.Contains(in, "Queued conflict resolution") && strings.Contains(in, sha) {
 			n++
 		}
@@ -130,7 +148,7 @@ func TestAQueuedRequestReachesAScheduledWriter(t *testing.T) {
 		t.Fatalf("a repeated request queued %d directives, want 1", n)
 	}
 	free()
-	w.until("the running writer hears the request", func() bool { return w.heardQueued(lr, sha) == 1 })
+	w.until("the running writer hears the request", func() bool { return w.heardQueued(fixer, lr, sha) == 1 })
 	if n := w.count(integrationRuns, wi); n != 0 {
 		t.Fatalf("the request started %d integration Runs", n)
 	}
@@ -201,7 +219,7 @@ func TestARequestDuringAWritersPromptClaimIsDelivered(t *testing.T) {
 		t.Fatalf("second request: in prompt %v, directives %d; want exactly one of them", inPrompt, directives)
 	}
 	if !inPrompt {
-		w.until("the writer hears the second request", func() bool { return w.heardQueued(lr, second) == 1 })
+		w.until("the writer hears the second request", func() bool { return w.heardQueued(fixer, lr, second) == 1 })
 	}
 	if n := w.baseSyncDirectives(fixer, first); n != 0 {
 		t.Fatalf("the prompted request was also sent as %d directives", n)
@@ -234,7 +252,7 @@ func TestAResumedWriterHearsAQueuedRequest(t *testing.T) {
 		t.Fatalf("resume: %d %v", status, body)
 	}
 	lr := w.luxRunOf(fixer)
-	w.until("the resumed writer hears the request", func() bool { return w.heardQueued(lr, sha) == 1 })
+	w.until("the resumed writer hears the request", func() bool { return w.heardQueued(fixer, lr, sha) == 1 })
 	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE base_sha=$1 AND writer_run_id=$2 AND completed_at IS NULL`, sha, fixer); n != 1 {
 		t.Fatalf("request not marked as the resumed writer's: %d", n)
 	}

@@ -264,9 +264,14 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	// A directive receipt or agent report is not completion. Only the forge's
 	// ancestry reading of the public PR head can retire a person's request.
-	var requestedBases []string
+	// Read outside any transaction; applied below only with the head this
+	// sync records (its compare-and-set), so a sync that loses to a newer
+	// head completes nothing. A base already read against this head as not
+	// in it is not asked again; a failed read is not remembered.
+	var requestedBases, integrated, notIntegrated []string
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT base_sha FROM base_sync_requests WHERE pull_request_id=$1 AND completed_at IS NULL`, pr.ID)
+		rows, err := tx.Query(ctx, `SELECT base_sha FROM base_sync_requests WHERE pull_request_id=$1 AND completed_at IS NULL
+			AND compared_head IS DISTINCT FROM $2 ORDER BY created_at, base_sha`, pr.ID, status.HeadSHA)
 		if err != nil {
 			return err
 		}
@@ -281,14 +286,10 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			continue
 		} // Forge unavailable: retain pending and retry next sync.
 		if cmp.BehindBy != 0 || cmp.MergeBase.SHA != base {
+			notIntegrated = append(notIntegrated, base)
 			continue
 		}
-		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE base_sync_requests SET completed_at=now() WHERE pull_request_id=$1 AND base_sha=$2 AND completed_at IS NULL`, pr.ID, base)
-			return err
-		}); err != nil {
-			return err
-		}
+		integrated = append(integrated, base)
 	}
 	checksJSON, _ := json.Marshal(db.NonNil(status.CheckList))
 	reviewsJSON, _ := json.Marshal(db.NonNil(status.Reviews))
@@ -349,6 +350,19 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrRaced
+		}
+		// The ancestry readings, against the head just recorded.
+		if len(integrated) > 0 {
+			if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET completed_at=now(), compared_head=$3
+				WHERE pull_request_id=$1 AND base_sha=ANY($2) AND completed_at IS NULL`, pr.ID, integrated, status.HeadSHA); err != nil {
+				return err
+			}
+		}
+		if len(notIntegrated) > 0 {
+			if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET compared_head=$3
+				WHERE pull_request_id=$1 AND base_sha=ANY($2) AND completed_at IS NULL`, pr.ID, notIntegrated, status.HeadSHA); err != nil {
+				return err
+			}
 		}
 
 		// One event per thing that changed. "Nothing happened" is not an

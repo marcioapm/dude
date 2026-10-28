@@ -76,6 +76,31 @@ describe("resolving conflicts", () => {
     }
   });
 
+  test("an earlier request's completion does not hide Update branch once the base moves again", async () => {
+    const behind = pr({ baseSyncStatus: "complete", mergeable: "behind", behindBy: 1 });
+    const h = renderToStaticMarkup(
+      <PullRequestActions client={{} as ApiClient} pr={behind} defaultMethod="squash" onChanged={() => {}}>
+        {({ facts }) => <div>{facts.base}</div>}
+      </PullRequestActions>,
+    );
+    expect(h).toContain('data-testid="pr-update-branch"');
+    expect(h).not.toContain("integrated in the public PR");
+    const { mount, click, settle } = await import("./dom.ts");
+    const updated: string[] = [];
+    const client = { updatePullRequestBranch: async (id: string) => void updated.push(id) } as unknown as ApiClient;
+    const { container, unmount } = await mount(
+      <PullRequestActions client={client} pr={behind} defaultMethod="squash" onChanged={() => {}}>
+        {({ facts }) => <div>{facts.base}</div>}
+      </PullRequestActions>,
+    );
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="pr-update-branch"]')!;
+    expect(button.textContent).toBe("Update branch");
+    await click(button);
+    await settle();
+    expect(updated).toEqual(["pr_1"]);
+    await unmount();
+  });
+
   test("asks the workflow once, disabled while asking, and reads the pull request back", async () => {
     const { click, settle } = await import("./dom.ts");
     let release!: () => void;

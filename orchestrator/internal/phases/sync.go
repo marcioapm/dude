@@ -1686,15 +1686,18 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
 	if grants.Has(capabilities.BaseSync) && (r.Phase == delivery.PhaseImplement || r.Phase == delivery.PhaseFix || r.Phase == delivery.PhaseSimplify) {
+		// A fresh writer's prompt carries what it claims, exactly; a
+		// resume sends no prompt, so a request it has not heard goes as a
+		// directive, delivered once it runs.
 		var queued string
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			if stored != nil {
+				return delivery.RouteBaseSyncTx(ctx, tx, r.ref())
+			}
 			var err error
-			queued, err = delivery.PendingBaseSyncPrompt(ctx, tx, r.TaskID)
+			queued, err = delivery.ClaimBaseSyncPromptTx(ctx, tx, r.ref())
 			if err == nil && s.BaseSyncClaim != nil {
 				s.BaseSyncClaim(ctx, tx, r.ID)
-			}
-			if err == nil && queued != "" {
-				_, err = tx.Exec(ctx, `UPDATE base_sync_requests SET writer_run_id=$2 WHERE task_id=$1 AND completed_at IS NULL`, r.TaskID, r.ID)
 			}
 			return err
 		}); err != nil {

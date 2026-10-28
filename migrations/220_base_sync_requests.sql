@@ -6,6 +6,12 @@ CREATE TABLE base_sync_requests (
   base text NOT NULL,
   base_sha text NOT NULL CHECK (base_sha <> ''),
   writer_run_id text REFERENCES runs(id),
+  -- How writer_run_id was told: 'prompt' (its submitted prompt) or
+  -- 'directive'. Null while no writer has been told.
+  via text CHECK (via IN ('prompt', 'directive')),
+  -- The public head the forge last read this base against (not in it, or,
+  -- once completed, in it): not compared again until the head moves.
+  compared_head text,
   created_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz,
   PRIMARY KEY (pull_request_id, base_sha)
