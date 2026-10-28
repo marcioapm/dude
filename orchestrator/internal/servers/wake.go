@@ -42,6 +42,8 @@ import (
 const (
 	// lux's own expiry, the safety net behind dude's reaper.
 	previewExpireAfter = "720h"
+	// A branch preview's: past its 30-day reap (reapAfter).
+	branchExpireAfter = "1080h"
 	// A wake another orchestrator claimed and has not finished is taken
 	// over after this.
 	wakeClaimFor = 2 * time.Minute
@@ -91,8 +93,9 @@ type wakeRun struct {
 	ClaimedAt time.Time
 }
 
-// wakeableSelect: wakeable previews with something to do. $1 is the reap
-// age, $2 parkCheckEvery, $3 wakeClaimFor, $5 parkSweepEvery and $6
+// wakeableSelect: wakeable previews with something to do. $1 is a task
+// preview's reap age and $7 a branch preview's, $2 parkCheckEvery, $3
+// wakeClaimFor, $5 parkSweepEvery and $6
 // timeoutCheckEvery, in seconds; $4 the page size. The inner query
 // computes each row's flags once (its servers' counts in one lateral
 // aggregate); the outer one keeps the
@@ -104,19 +107,21 @@ type wakeRun struct {
 // runs_wakeable_open_idx (065) serve, so the scan follows the live previews
 // and not every preview ever made. An ended preview is taken until endInLux
 // marks it lux_stop_reason = 'cancel' (nothing of it left in lux).
-const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status, lux_run_id, lux_state, task_ended,
+const wakeableSelect = `SELECT id, organization_id, project_id, task_id, preview_branch, status, lux_run_id, lux_state, task_ended,
 		wake_wanted_at, sync_wanted_at, lux_generation, lux_repositories, live, idle, reap, lux_left, park_due, start_failures, image_build_id,
 		timeouts_due
-	FROM (SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text AS status, r.created_at, r.start_failures,
+	FROM (SELECT r.id, r.organization_id, r.project_id, COALESCE(r.task_id, '') AS task_id,
+			COALESCE(r.preview_branch, '') AS preview_branch, r.status::text AS status, r.created_at, r.start_failures,
 			COALESCE(r.image_build_id, '') AS image_build_id,
 			COALESCE(r.lux_run_id, '') AS lux_run_id, COALESCE(r.lux_state, '') AS lux_state,
-			t.status IN ('done', 'failed', 'aborted') AS task_ended,
+			COALESCE(t.status IN ('done', 'failed', 'aborted'), false) AS task_ended,
 			r.wake_wanted_at, r.sync_wanted_at, r.lux_generation, r.lux_repositories, ps.live, ps.idle,
 			r.wake_wanted_at IS NOT NULL
 				AND (r.wake_claimed_at IS NULL OR r.wake_claimed_at < now() - make_interval(secs => $3)) AS wake_due,
+			-- A task's preview is reaped after $1, a branch preview's after $7.
 			r.status IN ('pending', 'paused')
 				AND COALESCE(r.lux_state, '') NOT IN ('running', 'starting', 'resuming', 'scheduled', 'submitted', 'stopping')
-				AND COALESCE(ps.woken, r.created_at) < now() - make_interval(secs => $1) AS reap,
+				AND COALESCE(ps.woken, r.created_at) < now() - make_interval(secs => CASE WHEN r.preview_branch IS NULL THEN $1::float8 ELSE $7::float8 END) AS reap,
 			ps.live > 0 OR (r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel') AS lux_left,
 			-- A new idle mark, or every server marked: checked at once; marks
 			-- already checked, every parkCheckEvery; none, every
@@ -131,7 +136,7 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status,
 			r.status IN ('scheduled', 'starting', 'running', 'paused') AND r.wake_wanted_at IS NULL AND ps.timeouts_off > 0
 				AND (r.wake_timeouts_checked_at IS NULL OR r.wake_timeouts_checked_at < now() - make_interval(secs => $6))
 				AS timeouts_due
-		FROM runs r JOIN tasks t ON t.id = r.task_id
+		FROM runs r LEFT JOIN tasks t ON t.id = r.task_id
 		-- Each project's two wake timeouts in seconds, read once per
 		-- project: the first-wake one until the preview has served, then
 		-- the later one.
@@ -162,8 +167,16 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, status,
 // The page a wakeable sweep takes at most; Previews.SweepLimit overrides it.
 const wakeableLimit = 1000
 
-func (p *Previews) reapAfter() time.Duration {
-	if p.ReapAfter > 0 {
+// reapAfter is how long a preview may go unwoken before it is ended: a
+// task's ReapAfter (previews.reap_after, 7 days unset), a branch preview's
+// (which no task ends) BranchReapAfter, else 30 days.
+func (p *Previews) reapAfter(branch bool) time.Duration {
+	switch {
+	case branch && p.BranchReapAfter > 0:
+		return p.BranchReapAfter
+	case branch:
+		return 30 * 24 * time.Hour
+	case p.ReapAfter > 0:
 		return p.ReapAfter
 	}
 	return 7 * 24 * time.Hour
@@ -183,14 +196,14 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 		if _, err := tx.Exec(ctx, `SET LOCAL jit = off`); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, wakeableSelect, p.reapAfter().Seconds(), parkCheckEvery.Seconds(), wakeClaimFor.Seconds(), limit,
-			parkSweepEvery.Seconds(), timeoutCheckEvery.Seconds())
+		rows, err := tx.Query(ctx, wakeableSelect, p.reapAfter(false).Seconds(), parkCheckEvery.Seconds(), wakeClaimFor.Seconds(), limit,
+			parkSweepEvery.Seconds(), timeoutCheckEvery.Seconds(), p.reapAfter(true).Seconds())
 		if err != nil {
 			return err
 		}
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (wakeRun, error) {
 			var r wakeRun
-			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState, &r.TaskEnded,
+			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Branch, &r.Status, &r.LuxRunID, &r.LuxState, &r.TaskEnded,
 				&r.WakeWanted, &r.SyncWanted, &r.Generation, &r.Repos, &r.Servers, &r.Idle, &r.Reap, &r.LuxLeft, &r.ParkDue,
 				&r.StartFailures, &r.ImageBuildID, &r.TimeoutsDue)
 		})
@@ -207,6 +220,12 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 		go func() {
 			defer func() { <-slots; wg.Done() }()
 			did, err := p.advanceWakeable(ctx, r)
+			if errors.Is(err, errPrimaryBranchGone) {
+				// Ref resolution already ended this exact run. Drain its normal
+				// cleanup immediately, rather than backing off an ended preview.
+				acted.Add(1)
+				return
+			}
 			if err != nil {
 				p.Log.Warn("wakeable preview sync failed", "run", r.ID, "error", err)
 				if rerr := p.retryLater(ctx, r.previewRun); rerr != nil {
@@ -329,11 +348,18 @@ func deref(s *string) string {
 // this preview already has, at whatever hostname: a create whose answer was
 // lost, or one another orchestrator made for it meanwhile.
 func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in lux.ServerInput, settings PreviewSettings, wakeTimeout time.Duration) (lux.TenantServer, error) {
-	labels := map[string]string{lux.AppLabel: lux.App, "dude.org": r.Org, "dude.project": r.ProjectID, "dude.task": r.TaskID,
-		"dude.preview": r.ID, "dude.kind": KindPreview}
+	labels := ownerLabels(r.previewRun, map[string]string{lux.AppLabel: lux.App, "dude.org": r.Org, "dude.project": r.ProjectID,
+		"dude.preview": r.ID, "dude.kind": KindPreview})
+	// The comment overlay files feedback on a task: a branch preview has
+	// none to file it on, and carries no inject. Its lux expiry is past its
+	// 30-day reap, so the reaper ends it first.
+	inject, expire := "", branchExpireAfter
+	if r.TaskID != "" {
+		inject, expire = p.inject(), previewExpireAfter
+	}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),
-		WakeTimeout: wakeTimeout.String(), ExpireAfter: previewExpireAfter, Inject: p.inject()}
+		WakeTimeout: wakeTimeout.String(), ExpireAfter: expire, Inject: inject}
 	domain := p.PreviewDomain
 	if p.PreviewRelative {
 		domain = ""
@@ -406,7 +432,7 @@ func loadSettings(ctx context.Context, tx pgx.Tx, projectID string, out *Preview
 // primaryRepoName is the repository the preview's servers run in: the
 // first of its task's, else of its project's.
 func (p *Previews) primaryRepoName(ctx context.Context, r wakeRun) (string, error) {
-	refs, err := p.refs(ctx, r.previewRun)
+	refs, err := p.repositoryMetadata(ctx, r.previewRun)
 	if err != nil || len(refs) == 0 {
 		return "", err
 	}
@@ -1179,22 +1205,29 @@ func (p *Previews) syncRunning(ctx context.Context, r wakeRun) (bool, error) {
 // servers and cancels its Run.
 func (p *Previews) complete(ctx context.Context, r wakeRun, reason, actorType, actor string) error {
 	ended := false
-	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), pending_starts = '{}',
-			wake_wanted_at = NULL, wake_claimed_at = NULL WHERE r.id = $1 AND `+livePreview, r.ID)
-		if ended = err == nil && tag.RowsAffected() > 0; !ended {
-			return err
-		}
-		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: r.Org, ProjectID: r.ProjectID,
-			TaskID: r.TaskID, RunID: r.ID, ActorType: actorType, ActorID: actor, Source: ledger.SourceOrchestrator,
-			CorrelationID: r.TaskID, Payload: map[string]any{"status": "completed", "kind": KindPreview, "reason": reason}}); err != nil {
-			return err
-		}
-		return phases.ServersChanged(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, map[string]any{"change": "stopped"})
+	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
+		ended, err = endPreviewTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, r.ID, reason, actorType, actor)
+		return err
 	}); err != nil || !ended {
 		return err
 	}
 	return p.endInLux(ctx, r)
+}
+
+// endPreviewTx ends a live preview in dude, recording why: false when it
+// was not live. Its lux servers and Run are the sweep's to end (endInLux).
+func endPreviewTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, runID, reason, actorType, actor string) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'completed', ended_at = now(), pending_starts = '{}',
+		wake_wanted_at = NULL, wake_claimed_at = NULL WHERE r.id = $1 AND `+livePreview, runID)
+	if err != nil || tag.RowsAffected() == 0 {
+		return false, err
+	}
+	if _, err := ledger.Append(ctx, tx, ledger.Event{Type: "run.completed", OrganizationID: org, ProjectID: projectID,
+		TaskID: taskID, RunID: runID, ActorType: actorType, ActorID: actor, Source: ledger.SourceOrchestrator,
+		CorrelationID: taskID, Payload: map[string]any{"status": "completed", "kind": KindPreview, "reason": reason}}); err != nil {
+		return false, err
+	}
+	return true, phases.ServersChanged(ctx, tx, org, projectID, taskID, runID, map[string]any{"change": "stopped"})
 }
 
 // endInLux deletes an ended preview's lux servers, recorded or only
@@ -1282,6 +1315,10 @@ func (s *Service) wakeableView(ctx context.Context, r *runRow, v *RunView, out *
 	out.Servers = []lux.Server{}
 	waking := r.WakeWanted
 	commenting, want := s.commenting(), s.inject()
+	if r.TaskID == "" {
+		// A branch preview carries no overlay (createServer).
+		commenting, want = Commenting{}, ""
+	}
 	for _, ts := range list {
 		var m map[string]any
 		if json.Unmarshal(ts.Raw, &m) != nil {

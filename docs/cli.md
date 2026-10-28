@@ -313,6 +313,23 @@ are resolved.
 | `repo requests [TASK]` | Agents' requests for another repository |
 | `repo decide REQUEST approve\|decline [--note N]` | Settles an agent's request for a repository |
 
+### preview
+
+A preview of a project's branch, with no task: every repository of the
+project at that branch where it has it, else its default branch, on the
+servers marked to start in previews. It syncs on every push to the branch,
+and ends when the branch is deleted or after 30 days unused, independently
+of the task-preview setting `previews.reap_after`. Opening one
+of its URLs wakes it; without a browser, `dude api POST
+/v1/runs/ID/servers/NAME/start` does.
+
+| Command | Does |
+|---|---|
+| `preview start PROJECT BRANCH [--wait 30s]` | Starts it, or answers the live one of that branch; prints its id and server URLs. Refused when the project's first repository has no such branch |
+| `preview list PROJECT` | The project's live branch previews: branch, servers and URLs, status, last used, started by |
+| `preview show ID` | One branch preview, live or ended |
+| `preview stop ID` / `preview stop PROJECT BRANCH` | Ends it: its servers are deleted |
+
 ### epic
 
 | Command | Does |
@@ -449,7 +466,7 @@ the same under the new name.
 | `relate` | `task relate` | `unrelate` | `task unrelate` |
 | `assign` | `task assign` | `decider` | `task decider` |
 | `retry` | `task retry` | `recover` | `task recover` |
-| `reset-machine` | `task reset-machine` | `preview` | `task preview` |
+| `reset-machine` | `task reset-machine` | `preview` | `task preview` (`preview` is now a branch preview's noun) |
 | `done` | `task done` | `stop` | `task stop` |
 | `close` | `task close` | `reopen` | `task reopen` |
 | `archive` | `task archive` | `unarchive` | `task unarchive` |

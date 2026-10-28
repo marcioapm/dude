@@ -192,7 +192,7 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 	}
 	var org, runID, projectID, taskID string
 	err := f.DB.InSystem(ctx, "lux-feed", func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT s.organization_id, s.run_id, r.project_id, r.task_id
+		return tx.QueryRow(ctx, `SELECT s.organization_id, s.run_id, r.project_id, COALESCE(r.task_id, '')
 			FROM preview_servers s JOIN runs r ON r.id = s.run_id WHERE s.lux_server_id = $1`, e.ServerID).
 			Scan(&org, &runID, &projectID, &taskID)
 	})

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -70,8 +71,29 @@ func (g *hookGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(201)
 		_ = json.NewEncoder(w).Encode(hook)
 	case "PATCH":
+		var patch map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&patch)
+		for _, h := range g.hooks[repo] {
+			if fmt.Sprint(h["id"]) == r.PathValue("id") {
+				h["events"] = patch["events"]
+			}
+		}
 		_, _ = w.Write([]byte(`{}`))
 	}
+}
+
+// hookEvents is the events repo's hooks were last given.
+func (g *hookGitHub) hookEvents(repo string) []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []string
+	for _, h := range g.hooks[repo] {
+		evs, _ := h["events"].([]any)
+		for _, e := range evs {
+			out = append(out, fmt.Sprint(e))
+		}
+	}
+	return out
 }
 
 func (g *hookGitHub) callsSoFar() []string {
@@ -271,5 +293,34 @@ func TestTheRepairRegistersAFewPerPassAndStopsAtARateLimit(t *testing.T) {
 	}
 	if n := len(w.gh.callsSoFar()) - before; n != 0 {
 		t.Errorf("%d GitHub calls with every hook registered", n)
+	}
+}
+
+// A hook registered before dude asked for push and delete is updated by
+// the repair, once: its events are what dude asks for now.
+func TestTheRepairGivesAnOlderHookTheEventsAskedForNow(t *testing.T) {
+	w := hookingWorld(t, 1)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET public_url = 'https://dude.example.com', webhook_url = $2
+		WHERE organization_id = $1`, w.org, hookURL)
+	w.gh.hooks["r00"] = []map[string]any{{"id": 7, "events": []any{"pull_request"}, "config": map[string]any{"url": hookURL}}}
+	// As 221 found it: healthy by every rule then, no events recorded.
+	mustExec(t, w.owner, `UPDATE repositories SET webhook_id = '7', webhook_url = $2, webhook_registered_at = now()
+		WHERE organization_id = $1`, w.org, hookURL)
+	if err := w.prs.RepairWebhooks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := w.gh.hookEvents("r00")
+	if !slices.Contains(got, "push") || !slices.Contains(got, "delete") || !slices.Contains(got, "pull_request") {
+		t.Fatalf("the hook's events are %v", got)
+	}
+	if calls := w.gh.callsSoFar(); strings.Join(calls, ",") != "GET r00,PATCH r00" {
+		t.Errorf("GitHub calls %v", calls)
+	}
+	before := len(w.gh.callsSoFar())
+	if err := w.prs.RepairWebhooks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.gh.callsSoFar()) - before; n != 0 {
+		t.Errorf("%d GitHub calls once the hook has today's events", n)
 	}
 }

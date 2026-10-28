@@ -79,8 +79,8 @@ region = "us-east-1"                                     # DUDE_S3_REGION
 # under it: <server>-<task>-<project>.<domain>. Unset, lux's own
 # (GET /v1/whoami previewDomain).
 # domain = "preview-absmartly.dev"                       # DUDE_PREVIEW_DOMAIN
-# A preview nobody has woken for this long is ended and its lux servers
-# deleted.
+# A task preview nobody has woken for this long is ended and its lux servers
+# deleted. Branch previews keep 30 days unused, independent of this setting.
 reap_after = "168h"                                      # DUDE_PREVIEW_REAP_AFTER
 
 [llm]

@@ -131,3 +131,49 @@ func TestASaltedLabelIsAnother(t *testing.T) {
 		t.Error("two salts gave one label")
 	}
 }
+
+// A branch preview's label names its branch where a task's names its key.
+func TestABranchPreviewLabelNamesItsBranch(t *testing.T) {
+	branch := func(b, slug string) PreviewOf {
+		return PreviewOf{Branch: b, ProjectID: "prj_" + slug, ProjectSlug: slug}
+	}
+	for _, c := range []struct {
+		server, branch, want string
+	}{
+		{"web", "main", "web-main-acme"},
+		{"web", "feature/Login_Page", "web-feature-login-page-acme"},
+		{"api", "--release/2.0--", "api-release-2-0-acme"},
+	} {
+		if got := PreviewLabel(c.server, branch(c.branch, "acme"), ""); got != c.want || !dnsLabel.MatchString(got) {
+			t.Errorf("PreviewLabel(%q, branch %q) = %q, want %q", c.server, c.branch, got, c.want)
+		}
+	}
+	long := PreviewLabel("web", branch("feature/"+strings.Repeat("x", 80), "acme"), "")
+	if len(long) != 63 || !dnsLabel.MatchString(long) || !regexp.MustCompile(`^web-feature-x+-[0-9a-f]{8}$`).MatchString(long) {
+		t.Errorf("a long branch's label is %q (%d)", long, len(long))
+	}
+}
+
+// A branch named like a task's key gives the same plain label as that
+// task's preview: lux's hostname_taken sends it to the salted form, whose
+// hash is never the task preview's, salted or not.
+func TestABranchNamedLikeATaskKeyIsSaltedApart(t *testing.T) {
+	task := PreviewOf{TaskID: "wi_1", TaskKey: "ACME-2", ProjectID: "prj_1", ProjectSlug: "acme"}
+	br := PreviewOf{Branch: "acme-2", ProjectID: "prj_1", ProjectSlug: "acme"}
+	if a, b := PreviewLabel("web", task, ""), PreviewLabel("web", br, ""); a != b || a != "web-acme-2-acme" {
+		t.Fatalf("plain labels: task %q, branch %q", a, b)
+	}
+	salted := PreviewLabel("web", br, "run_b")
+	if !strings.HasPrefix(salted, "web-acme-2-acme-") || salted == PreviewLabel("web", task, "run_b") ||
+		salted == PreviewLabel("web", task, "run_t") {
+		t.Errorf("salted branch label %q", salted)
+	}
+	// Past 63 the hash alone tells them apart, even for a task whose id is
+	// the branch's own hash input.
+	slug := strings.Repeat("s", 60)
+	lt := PreviewLabel("web", PreviewOf{TaskID: "acme-2", TaskKey: "acme-2", ProjectID: "prj_1", ProjectSlug: slug}, "")
+	lb := PreviewLabel("web", PreviewOf{Branch: "acme-2", ProjectID: "prj_1", ProjectSlug: slug}, "")
+	if lt == lb {
+		t.Errorf("a long task label and branch label share %q", lt)
+	}
+}

@@ -204,7 +204,7 @@ func run(log *slog.Logger) error {
 		DefaultImageContainers: agent.NestedContainers, Layer: agent.Layer, Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
-		FactoryLogins: set.FactoryLogins}
+		FactoryLogins: set.FactoryLogins, BranchMoved: serverService.BranchEvent}
 	store.SyncPullRequest = pullRequests.Sync
 	automationRunner := &automations.Runner{DB: database, Lux: luxClient, Forges: forges, Agent: agent,
 		Registry: registryLogin, Log: log}
@@ -247,6 +247,9 @@ func run(log *slog.Logger) error {
 			})
 		}},
 		{"previews", time.Second, previews.Sweep},
+		// Each live branch preview's branch, looked for on GitHub once a
+		// day: the backstop for a deletion whose webhook never came.
+		{"branch-previews", 10 * time.Minute, previews.CheckBranches},
 		// Start when unblocked: the requests a merge marked due, each fired
 		// in its own transaction after every blocker is read again.
 		{"auto-starts", time.Second, (&delivery.AutoStarts{DB: database, Starter: runtime}).Sweep},

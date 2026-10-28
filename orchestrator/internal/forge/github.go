@@ -1574,12 +1574,30 @@ func (g *GitHub) BranchSHA(ctx context.Context, slug, branch string) (string, er
 			SHA string `json:"sha"`
 		} `json:"object"`
 	}
-	err := g.do(ctx, "GET", "/repos/"+slug+"/git/ref/heads/"+branch, nil, &ref)
+	err := g.do(ctx, "GET", "/repos/"+slug+"/git/ref/heads/"+url.PathEscape(branch), nil, &ref)
 	var e *Error
 	if asError(err, &e) && e.NotFound() {
 		return "", nil
 	}
 	return ref.Object.SHA, err
+}
+
+// BranchGone is true only when GitHub definitely has no such branch: the
+// ref reads 404 and the repository itself reads. A repository GitHub does
+// not show (404 for want of access too), or any other failure, is an error,
+// never "gone".
+func (g *GitHub) BranchGone(ctx context.Context, slug, branch string) (bool, error) {
+	sha, err := g.BranchSHA(ctx, slug, branch)
+	if err != nil || sha != "" {
+		return false, err
+	}
+	var repo struct {
+		ID int64 `json:"id"`
+	}
+	if err := g.do(ctx, "GET", "/repos/"+slug, nil, &repo); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // DeleteBranch removes a branch; one already gone is not an error.
@@ -1645,12 +1663,15 @@ func (g *GitHub) HookEvents(ctx context.Context, slug, target string) ([]string,
 	return nil, nil
 }
 
-// WebhookEvents are the events that can change what dude does about a PR.
+// WebhookEvents are the events that can change what dude does about a PR,
+// and about a branch preview: push (its branch moved, or was deleted) and
+// delete.
 var WebhookEvents = []string{
 	"pull_request", "pull_request_review", "pull_request_review_comment",
 	// A thread resolved or reopened: whether it is ready to merge.
 	"pull_request_review_thread",
 	"issue_comment", "check_suite", "check_run", "status",
+	"push", "delete",
 }
 
 func checkState(state string, total int) string {

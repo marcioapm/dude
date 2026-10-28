@@ -78,6 +78,7 @@ var nouns = []struct{ name, help string }{
 	{"feedback", "your review of a task's work, drafted and sent to its agents"},
 	{"project", "projects and their boards"},
 	{"repo", "a project's repositories, and agents' requests for another"},
+	{"preview", "a project branch's preview, with no task: start, list, show, stop"},
 	{"epic", "epics: a project's tasks grouped, with their agents' conversations"},
 	{"note", "notes pinned on an epic, which every agent on it reads"},
 	{"brainstorm", "an agent to think something through with"},

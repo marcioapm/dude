@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -77,6 +78,8 @@ type Server struct {
 	mu    sync.Mutex
 	pulls map[int]*Pull
 	Hooks []map[string]any
+	// How many PATCHes of a hook were taken.
+	HookPatches int
 	// The combined status every commit reports; "" is success.
 	checks string
 	// Who the token comments as; "" is Login. A personal access token
@@ -912,6 +915,21 @@ func (s *Server) Handler() http.Handler {
 		h["id"] = len(s.Hooks) + 1
 		s.Hooks = append(s.Hooks, h)
 		write(w, 201, h)
+	})
+	mux.HandleFunc("PATCH "+prefix+"/hooks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var patch map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&patch)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, h := range s.Hooks {
+			if fmt.Sprint(h["id"]) == r.PathValue("id") {
+				maps.Copy(h, patch)
+				s.HookPatches++
+				write(w, 200, h)
+				return
+			}
+		}
+		fail(w, 404, "Not Found")
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.logRequest(r)
