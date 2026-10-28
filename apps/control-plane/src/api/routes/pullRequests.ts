@@ -21,6 +21,22 @@ import { kickOrchestrator, orchestrator } from "../../orchestrator/client.ts";
 import { tokenKind, verifyRepositories, type RepositoryRow } from "../../githubPermissions.ts";
 import type { PublicContext, RequestContext, Router } from "../router.ts";
 
+/**
+ * A person's base sync requests on the pull request, as one status. A
+ * pending request counts only while the task's latest delivery is live and
+ * tracks this pull request — the orchestrator's baseSyncInScope: one on a
+ * pull request no live delivery tracks reaches no writer, and showing it as
+ * queued would hide Update branch and Resolve conflicts for good. Without a
+ * request that counts, no status.
+ */
+const BASE_SYNC_STATUS = `(SELECT CASE WHEN count(*) FILTER (WHERE q.completed_at IS NULL) = 0 THEN 'complete'
+    WHEN bool_or(q.completed_at IS NULL AND EXISTS (SELECT 1 FROM runs w WHERE w.id=q.writer_run_id AND w.status IN ('pending','scheduled','starting','running','paused'))) THEN 'resolving' ELSE 'queued' END
+    FROM base_sync_requests q WHERE q.pull_request_id=pull_requests.id AND (q.completed_at IS NOT NULL OR q.pull_request_id IN (
+      SELECT jsonb_array_elements_text(COALESCE(d.state->'pullRequestIds','[]')) FROM (SELECT state, status FROM workflow_runs
+      WHERE task_id=pull_requests.task_id AND workflow_type='task.delivery' ORDER BY created_at DESC LIMIT 1) d
+      WHERE d.status IN ('running','waiting')))
+    HAVING count(*) > 0)`;
+
 export const PR_SELECT = `
   id, organization_id AS "organizationId", project_id AS "projectId",
   task_id AS "taskId", run_id AS "runId", repository_id AS "repositoryId",
@@ -29,9 +45,7 @@ export const PR_SELECT = `
   base_branch AS "baseBranch", head_sha AS "headSha", title, body,
   state, checks_json AS "checks", checks AS "checkState", review, reviews_json AS "reviews",
   mergeable_state AS "mergeable", behind_by AS "behindBy", unresolved_threads AS "unresolvedThreads",
-  (SELECT CASE WHEN count(*) FILTER (WHERE completed_at IS NULL) = 0 THEN 'complete'
-    WHEN bool_or(completed_at IS NULL AND EXISTS (SELECT 1 FROM runs w WHERE w.id=q.writer_run_id AND w.status IN ('pending','scheduled','starting','running','paused'))) THEN 'resolving' ELSE 'queued' END
-    FROM base_sync_requests q WHERE q.pull_request_id=pull_requests.id HAVING count(*) > 0) AS "baseSyncStatus",
+  ${BASE_SYNC_STATUS} AS "baseSyncStatus",
   created_at AS "createdAt", updated_at AS "updatedAt",
   merged_at AS "mergedAt", closed_at AS "closedAt"`;
 
