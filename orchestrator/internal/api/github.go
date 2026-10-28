@@ -423,14 +423,20 @@ func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, i
 	if err != nil {
 		return err
 	}
-	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo, "status": "queued", "baseSha": baseSHA}
+	// status: "queued" when the delivery was busy (its next capable writer
+	// integrates the base), "requested" when it acts on it now.
+	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo, "status": "requested", "baseSha": baseSHA}
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "resolve conflicts on"); err != nil {
 			return err
 		}
-		if err := escalationFailure(delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head, baseSHA,
-			delivery.EscalationDecision{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})); err != nil {
+		queued, err := delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head, baseSHA,
+			delivery.EscalationDecision{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})
+		if err := escalationFailure(err); err != nil {
 			return err
+		}
+		if queued {
+			out["status"] = "queued"
 		}
 		if err := delivery.QueueBaseSyncTx(r.Context(), tx, org, taskID, id, base, baseSHA); err != nil {
 			return err

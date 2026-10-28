@@ -216,40 +216,43 @@ func IntegrationMergeWhen(base, recorded string) string {
 // conflict escalation is decided so (retry for a failed integration, else
 // wait with the request queued). Busy delivery retains a request too; the handler
 // starts no phase itself. in.Authorize checks who may decide an escalation.
+// queued says the delivery was busy: the request waits for its next capable
+// writer rather than starting an integration now.
 func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, head, baseSHA string,
-	in EscalationDecision) error {
+	in EscalationDecision) (queued bool, err error) {
 	_, d, err := LockEscalationTx(ctx, tx, taskID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if d == nil || !d.Live() || d.State.Halt != nil || d.TaskStatus == "closed" || d.TaskStatus == "done" || !slices.Contains(d.State.PullRequestIDs, prID) {
-		return escalationErr("conflict", "%s", mDudeNotWaitingOnThisPull)
+		return false, escalationErr("conflict", "%s", mDudeNotWaitingOnThisPull)
 	}
 	signal := forge.Signal{Kind: "conflict", Repo: repo, Number: number, Requested: true}
 	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, baseSHA)
 	if e := d.State.Escalation; e != nil {
 		var alreadyQueued bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM base_sync_requests WHERE pull_request_id=$1 AND base_sha=$2)`, prID, baseSHA).Scan(&alreadyQueued); err != nil {
-			return err
+			return false, err
 		}
 		if e.Decided != nil && e.Reason == "pull_request_conflict" && e.about(repo, number) && alreadyQueued {
-			return nil
+			return false, nil
 		}
 		if e.Reason != "pull_request_conflict" || e.Decided != nil || !e.about(repo, number) {
-			return escalationErr("conflict", "%s", mDudeWaitingOnDecisionAboutSomething)
+			return false, escalationErr("conflict", "%s", mDudeWaitingOnDecisionAboutSomething)
 		}
 		in.Action = "wait"
 		if slices.Contains(e.Actions(), "retry") {
 			in.Action = "retry"
 		}
 		if err := DecideEscalationTx(ctx, tx, org, taskID, in); err != nil || in.Action == "retry" {
-			return err
+			return false, err
 		}
-		return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
+		return false, workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
 	}
 	// Busy delivery accepts a durable request too. Signals are only wakeups;
 	// base_sync_requests owns pending work independently of step snapshots.
-	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
+	busy := d.Step != "awaitPullRequest" || d.State.Integration != nil
+	return busy, workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
 }
 
 // about says the escalation names this pull request.
