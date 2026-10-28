@@ -39,15 +39,15 @@ func (p *Previews) reconcileServers(ctx context.Context, r wakeRun) (done bool, 
 	// lost (attachAll, the feed) is not made again here.
 	var recorded []recordedServer
 	var servedOnce bool
-	of := PreviewOf{TaskID: r.TaskID, ProjectID: r.ProjectID}
+	of := PreviewOf{TaskID: r.TaskID, ProjectID: r.ProjectID, Branch: r.Branch}
 	if err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
 		if recipes, err = LoadRecipes(ctx, tx, r.ProjectID); err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `SELECT p.key_prefix || '-' || t.number, p.slug, r.preview_ready_at IS NOT NULL
-			FROM tasks t JOIN projects p ON p.id = t.project_id JOIN runs r ON r.task_id = t.id
-			WHERE t.id = $1 AND r.id = $2`, r.TaskID, r.ID).Scan(&of.TaskKey, &of.ProjectSlug, &servedOnce); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(p.key_prefix || '-' || t.number, ''), p.slug, r.preview_ready_at IS NOT NULL
+			FROM runs r JOIN projects p ON p.id = r.project_id LEFT JOIN tasks t ON t.id = r.task_id
+			WHERE r.id = $1`, r.ID).Scan(&of.TaskKey, &of.ProjectSlug, &servedOnce); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT name, lux_server_id, deleted_at IS NULL FROM preview_servers WHERE run_id = $1`, r.ID)
@@ -197,7 +197,7 @@ func (p *Previews) updateServer(ctx context.Context, r wakeRun, cur lux.TenantSe
 		patch.Env = &env
 		changed = append(changed, "env")
 	}
-	if inject := p.injectPatch(cur); inject != nil {
+	if inject := p.injectPatch(cur); inject != nil && r.TaskID != "" {
 		patch.Inject = inject
 		changed = append(changed, "inject")
 	}

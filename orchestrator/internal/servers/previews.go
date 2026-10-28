@@ -55,9 +55,11 @@ type Previews struct {
 	Registry registry.Provider
 	// The idle limit's unit, for tests; zero is a minute.
 	Minute time.Duration
-	// A wakeable preview nobody has woken for this long is ended
+	// A wakeable task preview nobody has woken for this long is ended
 	// (previews.reap_after); zero is 7 days.
 	ReapAfter time.Duration
+	// The same for a branch preview; zero is 30 days.
+	BranchReapAfter time.Duration
 	// How many wakeable previews one sweep takes at most; zero is 1000.
 	SweepLimit int
 	// How long a wake's drain may page lux's events in all; zero is 30
@@ -76,7 +78,9 @@ type Previews struct {
 
 type previewRun struct {
 	ID, Org, ProjectID, TaskID, Status string
-	LuxRunID, LuxState                 string
+	// A branch preview's branch (runs.preview_branch); TaskID is "" then.
+	Branch             string
+	LuxRunID, LuxState string
 	// Its task is done, failed or aborted: the preview ends with it.
 	TaskEnded     bool
 	PendingStarts []string
@@ -93,12 +97,13 @@ type previewRun struct {
 func (p *Previews) Sweep(ctx context.Context) (int, error) {
 	var runs []previewRun
 	if err := p.DB.InSystem(ctx, "previews", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, r.task_id, r.status::text,
+		rows, err := tx.Query(ctx, `SELECT r.id, r.organization_id, r.project_id, COALESCE(r.task_id, ''), COALESCE(r.preview_branch, ''),
+				r.status::text,
 				COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''),
 				r.pending_starts, r.active_since,
 				(preview_settings(pr)->>'idleTimeoutMinutes')::float8,
-				t.status IN ('done', 'failed', 'aborted'), COALESCE(r.image_build_id, ''), r.lux_generation
-			FROM runs r JOIN projects pr ON pr.id = r.project_id JOIN tasks t ON t.id = r.task_id
+				COALESCE(t.status IN ('done', 'failed', 'aborted'), false), COALESCE(r.image_build_id, ''), r.lux_generation
+			FROM runs r JOIN projects pr ON pr.id = r.project_id LEFT JOIN tasks t ON t.id = r.task_id
 			WHERE r.kind = 'preview' AND NOT r.wakeable
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR (r.status = 'paused' AND cardinality(r.pending_starts) > 0)
@@ -113,14 +118,14 @@ func (p *Previews) Sweep(ctx context.Context) (int, error) {
 			  AND (r.op_token IS NULL OR r.op_deadline <= now())
 			-- Every live preview, those with something to do first.
 			ORDER BY (r.status IN ('pending', 'completed', 'failed') OR cardinality(r.pending_starts) > 0
-			          OR t.status IN ('done', 'failed', 'aborted')) DESC, r.created_at
+			          OR COALESCE(t.status IN ('done', 'failed', 'aborted'), false)) DESC, r.created_at
 			LIMIT 1000`)
 		if err != nil {
 			return err
 		}
 		runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (previewRun, error) {
 			var r previewRun
-			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Status, &r.LuxRunID, &r.LuxState,
+			return r, row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.Branch, &r.Status, &r.LuxRunID, &r.LuxState,
 				&r.PendingStarts, &r.ActiveSince, &r.IdleMinutes, &r.TaskEnded, &r.ImageBuildID, &r.Generation)
 		})
 		return err
@@ -273,24 +278,58 @@ const EngineStore = "/home/agent/.local/share"
 type previewRef struct{ Name, URL, Ref, Setup string }
 
 // refs are a preview's repositories: the task's, else its project's, each
-// at the task's branch where its work reached it, else its default branch.
-// Read afresh each time: a branch published since is what a wake syncs to.
+// at the task's branch where its work reached it, else its default branch;
+// a branch preview's, each project repository at its branch where the
+// forge has it, else its default branch. Read afresh each time: a branch
+// published or pushed since is what a wake syncs to.
 func (p *Previews) refs(ctx context.Context, r previewRun) ([]previewRef, error) {
 	var repos []previewRef
 	err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
 		repos, err = taskRefs(ctx, tx, r)
 		return err
 	})
-	return repos, err
+	if err != nil || r.Branch == "" {
+		return repos, err
+	}
+	return p.branchRefs(ctx, r.Org, r.Branch, repos)
+}
+
+// branchRefs moves each of a project's repositories (at their default
+// branches) to branch where the forge has it. A repository the forge cannot
+// say about (none connected, a local URL) stays at its default branch; a
+// forge error is returned, so the caller tries again rather than serving
+// the wrong code.
+func (p *Previews) branchRefs(ctx context.Context, org, branch string, repos []previewRef) ([]previewRef, error) {
+	gh, err := p.forge(ctx, org)
+	if err != nil || gh == nil {
+		return repos, err
+	}
+	for i, rp := range repos {
+		slug := forge.SlugFromURL(rp.URL)
+		if slug == "" {
+			continue
+		}
+		sha, err := gh.BranchSHA(ctx, slug, branch)
+		if err != nil {
+			return nil, err
+		}
+		if sha != "" {
+			repos[i].Ref = branch
+		}
+	}
+	return repos, nil
 }
 
 func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error) {
-	taskRepos, err := delivery.TaskRepositories(ctx, tx, r.TaskID)
-	if err != nil {
-		return nil, err
+	var taskRepos []delivery.Repository
+	if r.TaskID != "" {
+		var err error
+		if taskRepos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
+			return nil, err
+		}
 	}
 	if len(taskRepos) == 0 {
-		// A task naming none previews its project's code.
+		// A task naming none, and a branch preview, preview the project's code.
 		rows, err := tx.Query(ctx, `SELECT id, name, url, default_branch, 'read', COALESCE(setup_script, '') FROM repositories
 			WHERE project_id = $1 ORDER BY name`, r.ProjectID)
 		if err != nil {
@@ -306,6 +345,10 @@ func taskRefs(ctx context.Context, tx pgx.Tx, r previewRun) ([]previewRef, error
 		// default branch where nothing was published yet. Never a
 		// candidate: unchecked, and deleted once the task branch takes it.
 		ref := tr.DefaultBranch
+		if r.TaskID == "" {
+			repos = append(repos, previewRef{tr.Name, tr.URL, ref, tr.SetupScript})
+			continue
+		}
 		var branch string
 		err := tx.QueryRow(ctx, `SELECT branch FROM runs WHERE task_id = $1 AND branch IS NOT NULL AND heads ? $2
 			AND `+delivery.NotGeneratedCandidateSQL("runs")+` ORDER BY created_at DESC LIMIT 1`, r.TaskID, tr.Name).Scan(&branch)
@@ -381,10 +424,20 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	if outcome != nil {
 		return lux.Spec{}, "", nil, nil, outcome
 	}
+	if r.Branch != "" {
+		var err error
+		if repos, err = p.branchRefs(ctx, r.Org, r.Branch, repos); err != nil {
+			return lux.Spec{}, "", nil, nil, err
+		}
+	}
 
+	owner := r.TaskID
+	if owner == "" {
+		owner = r.Branch
+	}
 	spec := lux.Spec{
-		Name:   "preview " + r.TaskID,
-		Labels: map[string]string{lux.AppLabel: lux.App, "dude.org": r.Org, "dude.task": r.TaskID, "dude.run": r.ID, "dude.kind": KindPreview},
+		Name:   "preview " + owner,
+		Labels: ownerLabels(r, map[string]string{lux.AppLabel: lux.App, "dude.org": r.Org, "dude.run": r.ID, "dude.kind": KindPreview}),
 		Image:  lux.Image{Ref: image},
 		Workload: lux.Workload{
 			Adapter: "generic",
@@ -461,6 +514,17 @@ func (p *Previews) forge(ctx context.Context, org string) (*forge.GitHub, error)
 		return nil, nil
 	}
 	return p.Forges.For(ctx, org)
+}
+
+// ownerLabels adds what a preview belongs to, to labels: dude.task for a
+// task's, dude.project for a branch preview's (which has no task to name).
+func ownerLabels(r previewRun, labels map[string]string) map[string]string {
+	if r.TaskID != "" {
+		labels["dude.task"] = r.TaskID
+	} else {
+		labels["dude.project"] = r.ProjectID
+	}
+	return labels
 }
 
 func credentialRepos(refs []previewRef) []phases.CredentialRepo {

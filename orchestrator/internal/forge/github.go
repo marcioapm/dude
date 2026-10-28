@@ -1582,6 +1582,24 @@ func (g *GitHub) BranchSHA(ctx context.Context, slug, branch string) (string, er
 	return ref.Object.SHA, err
 }
 
+// BranchGone is true only when GitHub definitely has no such branch: the
+// ref reads 404 and the repository itself reads. A repository GitHub does
+// not show (404 for want of access too), or any other failure, is an error,
+// never "gone".
+func (g *GitHub) BranchGone(ctx context.Context, slug, branch string) (bool, error) {
+	sha, err := g.BranchSHA(ctx, slug, branch)
+	if err != nil || sha != "" {
+		return false, err
+	}
+	var repo struct {
+		ID int64 `json:"id"`
+	}
+	if err := g.do(ctx, "GET", "/repos/"+slug, nil, &repo); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // DeleteBranch removes a branch; one already gone is not an error.
 func (g *GitHub) DeleteBranch(ctx context.Context, slug, branch string) error {
 	err := g.do(ctx, "DELETE", "/repos/"+slug+"/git/refs/heads/"+branch, nil, nil)

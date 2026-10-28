@@ -5,7 +5,9 @@
 -- the branch on every push and ends when the branch is deleted or goes
 -- unused for 30 days (servers.Previews).
 
-ALTER TABLE runs ADD COLUMN preview_branch text;
+ALTER TABLE runs ADD COLUMN preview_branch text,
+  -- When the daily check last asked the forge whether the branch still exists.
+  ADD COLUMN preview_branch_checked_at timestamptz;
 
 -- Exactly one owner of a Run: its task, its session, or a project branch
 -- it previews. A branch preview is a preview, of a project.

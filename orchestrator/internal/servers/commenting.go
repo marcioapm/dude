@@ -175,7 +175,7 @@ func needsRestart(ts lux.TenantServer, want string) bool {
 // the restart that needsRestart asks for. lux applies it to the next
 // request.
 func (s *Service) syncInject(ctx context.Context, r runRow, name string) error {
-	if !r.Wakeable || s.inject() == "" {
+	if !r.Wakeable || r.TaskID == "" || s.inject() == "" {
 		return nil
 	}
 	list, err := s.Lux.ListServers(ctx, "", "dude.preview="+r.ID)
