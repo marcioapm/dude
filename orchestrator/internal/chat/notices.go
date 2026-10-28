@@ -29,10 +29,11 @@ type dueNotice struct {
 
 type notice struct {
 	ID, Kind, Provider, Workspace, Conversation, Thread string
-	// One of TaskID and EpicID is set: the notice's subject.
-	TaskID, EpicID, Key, Title, Detail, Slug string
-	Project, ConversationName, ProviderName  string
-	Attempts                                 int
+	// One of TaskID and EpicID is set: the notice's subject. TriggerTaskID
+	// is an epic notice's task whose move or leaving recorded it, if kept.
+	TaskID, EpicID, TriggerTaskID, Key, Title, Detail, Slug string
+	Project, ConversationName, ProviderName                 string
+	Attempts                                                int
 	// Recorded more than noticeWindow ago: a failure now gives up.
 	Expired bool
 }
@@ -110,10 +111,10 @@ func (s *Service) postNotice(ctx context.Context, d dueNotice) (bool, error) {
 			FROM organizations o WHERE c.id = $1 AND o.id = c.organization_id
 			  AND c.posted_at IS NULL AND c.gave_up_at IS NULL AND c.next_attempt_at <= now()
 			RETURNING c.id, c.kind, c.provider, c.external_workspace_id, c.conversation_id, c.thread_id,
-				COALESCE(c.task_id, ''), COALESCE(c.epic_id, ''), c.subject_key, c.subject_title, c.detail, o.slug, c.attempts,
+				COALESCE(c.task_id, ''), COALESCE(c.epic_id, ''), COALESCE(c.trigger_task_id, ''), c.subject_key, c.subject_title, c.detail, o.slug, c.attempts,
 				COALESCE((SELECT t.project_id FROM tasks t WHERE t.id = c.task_id), (SELECT e.project_id FROM epics e WHERE e.id = c.epic_id)),
 				c.conversation_name, c.created_at <= now() - $3::interval`, d.ID, claimLease.String(), noticeWindow.String()).
-			Scan(&n.ID, &n.Kind, &n.Provider, &n.Workspace, &n.Conversation, &n.Thread, &n.TaskID, &n.EpicID, &n.Key, &n.Title, &n.Detail,
+			Scan(&n.ID, &n.Kind, &n.Provider, &n.Workspace, &n.Conversation, &n.Thread, &n.TaskID, &n.EpicID, &n.TriggerTaskID, &n.Key, &n.Title, &n.Detail,
 				&n.Slug, &n.Attempts, &n.Project, &n.ConversationName, &n.Expired)
 		if db.IsNotFound(err) {
 			return nil
@@ -178,15 +179,26 @@ func (s *Service) settleNotice(ctx context.Context, org string, n notice, ts str
 		}
 		// The task's Chat says the thread was not told, and why. An epic
 		// has no Chat: the line goes on its project's ledger, correlated
-		// with the epic as its other events are.
-		payload := map[string]any{"about": "thread_notice_failed", "kind": n.Kind, "noticeId": n.ID,
-			"text": fmt.Sprintf("dude could not tell the %s thread in %s: %s", n.ProviderName, n.ConversationName, clip(failure.Error(), 300))}
+		// with the epic as its other events are, and in the Chat of the
+		// task whose move or leaving recorded it.
+		text := fmt.Sprintf("dude could not tell the %s thread in %s: %s", n.ProviderName, n.ConversationName, clip(failure.Error(), 300))
+		if n.EpicID != "" {
+			text = fmt.Sprintf("dude could not tell the %s thread in %s of the epic %s › %s: %s", n.ProviderName, n.ConversationName,
+				n.Key, n.Title, clip(failure.Error(), 300))
+		}
+		payload := map[string]any{"about": "thread_notice_failed", "kind": n.Kind, "noticeId": n.ID, "text": text}
 		correlation := n.TaskID
 		if n.EpicID != "" {
 			payload["epicId"], correlation = n.EpicID, n.EpicID
 		}
 		_, err = ledger.Append(ctx, tx, ledger.Event{Type: delivery.EvChatNotice, OrganizationID: org, TaskID: n.TaskID,
 			ProjectID: n.Project, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: correlation,
+			Payload: payload})
+		if err != nil || n.TriggerTaskID == "" {
+			return err
+		}
+		_, err = ledger.Append(ctx, tx, ledger.Event{Type: delivery.EvChatNotice, OrganizationID: org, TaskID: n.TriggerTaskID,
+			ProjectID: n.Project, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: n.TriggerTaskID,
 			Payload: payload})
 		return err
 	})

@@ -506,11 +506,15 @@ func TestChatEpicNoticesOfAnEpicWhoseProjectWasHiddenSinceStillPost(t *testing.T
 }
 
 // An epic's notice the provider refuses gives up, with a line on the
-// epic's project ledger, correlated with the epic.
+// epic's project ledger, correlated with the epic, and one in the Chat of
+// the task whose move recorded it (its events, as relationNotices reads).
 func TestChatEpicNoticeGivesUpOnTheEpicsLedger(t *testing.T) {
 	w := setup(t)
 	epic, tasks, _ := w.routedEpic()
 	w.move(tasks[0], "running", "planning with the conductor")
+	if got := w.one(`SELECT trigger_task_id FROM chat_notices WHERE epic_id = $1 AND kind = 'epic_started'`, epic); got != tasks[0] {
+		t.Fatalf("started recorded of %q, want %s", got, tasks[0])
+	}
 	// The task's started notice posts; the epic's is refused.
 	w.postNotices()
 	w.exec(`UPDATE chat_notices SET posted_at = NULL, next_attempt_at = now() WHERE epic_id = $1`, epic)
@@ -522,5 +526,14 @@ func TestChatEpicNoticeGivesUpOnTheEpicsLedger(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE event_type = 'chat.notice' AND correlation_id = $1 AND task_id IS NULL
 		AND project_id = $2 AND payload->>'about' = 'thread_notice_failed' AND payload->>'epicId' = $1`, epic, w.project); n != 1 {
 		t.Errorf("%d give-up lines on the epic", n)
+	}
+	text := w.one(`SELECT string_agg(payload->>'text', ' | ') FROM events WHERE event_type = 'chat.notice' AND task_id = $1
+		AND payload->>'about' = 'thread_notice_failed' AND payload->>'epicId' = $2`, tasks[0], epic)
+	if !strings.HasPrefix(text, "dude could not tell the Slack thread in #support of the epic BIL › CSV exports: ") || strings.Contains(text, " | ") {
+		t.Errorf("the task's Chat says %q", text)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE event_type = 'chat.notice' AND task_id = $1 AND payload->>'about' = 'thread_notice_failed'`,
+		tasks[1]); n != 0 {
+		t.Errorf("%d give-up lines on the epic's other task", n)
 	}
 }
