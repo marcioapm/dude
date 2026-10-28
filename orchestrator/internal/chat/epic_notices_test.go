@@ -374,6 +374,74 @@ func TestChatEpicNoticeOfALastTaskEndingWhileTheEpicIsArchivedNeverDeadlocks(t *
 	}
 }
 
+// An archived task moved out of its archived epic while a person unarchives
+// the epic, an ended task moved in since still current in it: the move holds
+// the task's row and its notice's foreign key then needs the epic's, while
+// the unarchive holds the epic's and waits for the task's. Both finish,
+// never a deadlock.
+func TestChatEpicNoticeOfAnArchivedTaskMovedOutWhileTheEpicIsUnarchivedNeverDeadlocks(t *testing.T) {
+	w := setup(t)
+	origin := `{"provider":"slack","workspaceId":"T1","conversationId":"C1","conversationName":"#support","threadId":"1.0"}`
+	const archivedAt = "2026-01-01 00:00:00+00"
+	for i := range 5 {
+		epic := fmt.Sprintf("epc_unarch%d_%s", i, w.org)
+		w.exec(`INSERT INTO epics (id, organization_id, project_id, title, origin, archived_at)
+			VALUES ($1, $2, $3, 'Unarchived', $4::jsonb, $5)`, epic, w.org, w.project, origin, archivedAt)
+		archived := fmt.Sprintf("wi_unarch%d_0_%s", i, w.org)
+		current := fmt.Sprintf("wi_unarch%d_1_%s", i, w.org)
+		w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin, archived_at)
+			VALUES ($1, $2, $3, $4, $5, 'Archived with it', 'done', $6::jsonb, $7),
+			       ($8, $2, $3, $9, $5, 'Moved in since', 'done', $6::jsonb, NULL)`,
+			archived, w.org, w.project, 300+i*2, epic, origin, archivedAt, current, 301+i*2)
+		held, blocked := make(chan struct{}), make(chan struct{})
+		unarchiver := make(chan int, 1)
+		errs := make(chan error, 2)
+		go func() {
+			errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+				// PATCH /tasks/:id's row lock, held until the unarchive waits on it.
+				if _, err := tx.Exec(w.ctx, `SELECT id FROM tasks WHERE id = $1 FOR UPDATE`, archived); err != nil {
+					return err
+				}
+				close(held)
+				<-blocked
+				if _, err := tx.Exec(w.ctx, `UPDATE tasks SET epic_id = NULL, updated_at = now() WHERE id = $1`, archived); err != nil {
+					return err
+				}
+				_, err := tx.Exec(w.ctx, `SELECT chat_epic_notice($1, 'epic_finished', $2)`, epic, archived)
+				return err
+			})
+		}()
+		<-held
+		go func() {
+			errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+				var pid int
+				if err := tx.QueryRow(w.ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+					return err
+				}
+				unarchiver <- pid
+				_, err := delivery.UnarchiveEpicTx(w.ctx, tx, w.org, epic, delivery.Actor{ActorType: "system", ActorID: "test"})
+				return err
+			})
+		}()
+		waited := w.waitBlocked(<-unarchiver, 30*time.Second)
+		close(blocked)
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: %v", i, err)
+			}
+		}
+		if waited != nil {
+			t.Fatalf("round %d: %v", i, waited)
+		}
+		if got := w.one(`SELECT trigger_task_id || ' ' || detail FROM chat_notices WHERE epic_id = $1 AND kind = 'epic_finished'`, epic); got != archived+" 1 done, 0 failed, 0 cancelled" {
+			t.Fatalf("round %d: finished as %q", i, got)
+		}
+		if n := w.count(`SELECT count(*) FROM epics WHERE id = $1 AND archived_at IS NULL`, epic); n != 1 {
+			t.Fatalf("round %d: the epic is still archived", i)
+		}
+	}
+}
+
 // waitBlocked waits until the backend pid waits on a lock: an error when it
 // has not within limit.
 func (w *world) waitBlocked(pid int, limit time.Duration) error {
