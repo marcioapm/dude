@@ -55,10 +55,10 @@ type Previews struct {
 	Registry registry.Provider
 	// The idle limit's unit, for tests; zero is a minute.
 	Minute time.Duration
-	// A wakeable task preview nobody has woken for this long is ended
-	// (previews.reap_after); zero is 7 days.
+	// A wakeable preview nobody has woken for this long is ended
+	// (previews.reap_after); zero is 7 days for tasks, 30 for branches.
 	ReapAfter time.Duration
-	// The same for a branch preview; zero is 30 days.
+	// A branch-specific override; zero uses ReapAfter, else 30 days.
 	BranchReapAfter time.Duration
 	// How many wakeable previews one sweep takes at most; zero is 1000.
 	SweepLimit int

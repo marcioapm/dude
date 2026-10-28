@@ -169,7 +169,7 @@ const wakeableLimit = 1000
 
 // reapAfter is how long a preview may go unwoken before it is ended: a
 // task's ReapAfter (previews.reap_after, 7 days unset), a branch preview's
-// (which no task ends) BranchReapAfter, 30 days unset.
+// (which no task ends) BranchReapAfter, else ReapAfter, else 30 days.
 func (p *Previews) reapAfter(branch bool) time.Duration {
 	switch {
 	case branch && p.BranchReapAfter > 0:
