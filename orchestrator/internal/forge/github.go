@@ -1663,12 +1663,15 @@ func (g *GitHub) HookEvents(ctx context.Context, slug, target string) ([]string,
 	return nil, nil
 }
 
-// WebhookEvents are the events that can change what dude does about a PR.
+// WebhookEvents are the events that can change what dude does about a PR,
+// and about a branch preview: push (its branch moved, or was deleted) and
+// delete.
 var WebhookEvents = []string{
 	"pull_request", "pull_request_review", "pull_request_review_comment",
 	// A thread resolved or reopened: whether it is ready to merge.
 	"pull_request_review_thread",
 	"issue_comment", "check_suite", "check_run", "status",
+	"push", "delete",
 }
 
 func checkState(state string, total int) string {

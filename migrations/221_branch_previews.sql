@@ -20,3 +20,8 @@ ALTER TABLE runs ADD CONSTRAINT runs_task_or_session
 -- One live preview per project branch: two starts reach the same one.
 CREATE UNIQUE INDEX runs_live_branch_preview_idx ON runs (project_id, preview_branch)
   WHERE preview_branch IS NOT NULL AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused');
+
+-- The events a repository's webhook was last registered with: one
+-- registered before dude asked for push and delete (or with no record) is
+-- not healthy, and the repair PATCHes it (prs.RegisterWebhooks).
+ALTER TABLE repositories ADD COLUMN webhook_events text[];

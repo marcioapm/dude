@@ -57,6 +57,10 @@ type Syncer struct {
 	// writing the base sync requests it found integrated and those it found
 	// not, holding the first's row locks.
 	BaseSyncLocked func(ctx context.Context, tx pgx.Tx)
+	// What a push to (or the deletion of) a branch of a repository does
+	// outside pull requests: branch previews follow it
+	// (servers.Service.BranchEvent). Nil: nothing.
+	BranchMoved func(ctx context.Context, org, slug, branch string, deleted bool) error
 }
 
 // DefaultCIGrace: how long CI may take to show up on a new head.
@@ -907,12 +911,17 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 		Attempts       int
 	}
 	var batch []delivery
+	// push and delete only when something follows branches (BranchMoved).
+	acted := forge.WebhookEvents
+	if s.BranchMoved == nil {
+		acted = slices.DeleteFunc(slices.Clone(acted), func(e string) bool { return e == "push" || e == "delete" })
+	}
 	if err := s.DB.InSystem(ctx, "webhooks", func(tx pgx.Tx) error {
 		// Every event is stored (automations trigger on any); only these can
-		// change a pull request. The rest are marked done in one statement,
-		// so a busy repository's pushes never hold up a review's sync.
+		// change a pull request or a branch preview. The rest are marked
+		// done in one statement.
 		if _, err := tx.Exec(ctx, `UPDATE webhook_deliveries SET processed_at = now()
-			WHERE processed_at IS NULL AND NOT (event = ANY($1))`, forge.WebhookEvents); err != nil {
+			WHERE processed_at IS NULL AND NOT (event = ANY($1))`, acted); err != nil {
 			return err
 		}
 		// A failed delivery waits before its next try, longer each time, so
@@ -949,8 +958,12 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 	return len(batch), nil
 }
 
-// process syncs every tracked PR a delivery is about.
+// process syncs every tracked PR a delivery is about; a push or a delete
+// of a branch goes to BranchMoved.
 func (s *Syncer) process(ctx context.Context, org, event string, payload json.RawMessage) error {
+	if event == "push" || event == "delete" {
+		return s.branchEvent(ctx, org, event, payload)
+	}
 	var p struct {
 		Repository struct {
 			FullName string `json:"full_name"`

@@ -167,6 +167,47 @@ func TestBranchEventsSyncAndEndOnlyTheirPreview(t *testing.T) {
 	}
 }
 
+// GitHub's deliveries reach branch previews: a push to the branch syncs a
+// running one; a push elsewhere, or a tag's, does nothing; a push that
+// deletes the branch, or a delete of it, ends it.
+func TestPushAndDeleteDeliveriesReachBranchPreviews(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.gh.Branch("feature/p", "main", "p")
+	w.gh.Branch("feature/q", "main", "q")
+	p, q := w.startBranch("feature/p"), w.startBranch("feature/q")
+	w.open(w.serverID(p, "web"))
+	run := w.luxRuns()[0]
+	w.until("running", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, p) == 1
+	})
+	repo := map[string]any{"full_name": "acme/target"}
+	w.webhook("push", map[string]any{"ref": "refs/heads/main", "repository": repo})
+	w.webhook("push", map[string]any{"ref": "refs/tags/feature/p", "repository": repo})
+	w.webhook("delete", map[string]any{"ref": "feature/p", "ref_type": "tag", "repository": repo})
+	w.webhook("push", map[string]any{"ref": "refs/heads/feature/p", "repository": map[string]any{"full_name": "acme/other"}})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = ANY($1) AND sync_wanted_at IS NOT NULL`, []string{p, q}); n != 0 {
+		t.Fatalf("pushes elsewhere asked %d previews to sync", n)
+	}
+	w.gh.CommitOnTop("feature/p", "more")
+	w.webhook("push", map[string]any{"ref": "refs/heads/feature/p", "repository": repo})
+	w.until("the running preview to sync", func() bool { return len(run.Syncs) == 1 })
+	if n := w.count(`SELECT count(*) FROM webhook_deliveries WHERE organization_id = $1 AND processed_at IS NULL`, w.org); n != 0 {
+		t.Errorf("%d deliveries left unprocessed", n)
+	}
+
+	w.webhook("push", map[string]any{"ref": "refs/heads/feature/p", "deleted": true, "repository": repo})
+	w.webhook("delete", map[string]any{"ref": "feature/q", "ref_type": "branch", "repository": repo})
+	w.until("both previews to end in lux", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = ANY($1) AND status = 'completed' AND lux_stop_reason = 'cancel'`,
+			[]string{p, q}) == 2
+	})
+	if !run.Cancelled {
+		t.Error("the running preview's lux run was not cancelled")
+	}
+}
+
 // The daily check ends a preview only when GitHub says the branch is gone;
 // a failure to ask keeps it.
 func TestTheDailyCheckEndsOnlyOnAMissingBranch(t *testing.T) {

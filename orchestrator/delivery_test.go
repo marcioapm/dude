@@ -216,6 +216,7 @@ func newWorld(t *testing.T) *world {
 	store.SyncPullRequest = w.prs.Sync
 	w.previews = &servers.Previews{Service: &servers.Service{DB: app, Lux: w.syncer.Lux, Log: w.log,
 		ConsoleURL: "https://console.lux.test/"}, Forges: forges, DefaultImage: "default:img"}
+	w.prs.BranchMoved = w.previews.BranchEvent
 	t.Cleanup(w.previews.Stop)
 	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: w.log, Kick: func() {},
 		Forges: forges, PRs: w.prs, Servers: w.previews.Service}).Handler())
