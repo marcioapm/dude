@@ -1,6 +1,6 @@
 ---
 title: The conductor
-covers: [tool:start_phase, tool:start_agent, tool:steer, tool:restart_run, tool:decide, tool:decide_escalation, tool:update_task, tool:publish]
+covers: [tool:start_phase, tool:start_agent, tool:start_agents, tool:read_run, tool:steer, tool:restart_run, tool:decide, tool:decide_escalation, tool:update_task, tool:publish]
 ---
 Every task has a conductor: an agent you talk to in the task's Chat. This page explains what it does, how it takes over a task's decisions, and how you steer, pause and resume agents.
 
@@ -39,6 +39,10 @@ The conductor then:
 `start_phase` and `decide` are refused past the delivery policy's limits. Then the conductor asks you.
 
 The conductor can also start a child agent with `start_agent` — for example an investigator to read code and report back.
+
+With `start_agents`, it starts 1–8 independent children as one durable cohort. Each brief uses the existing profile, prompt, note and optional tier. Admission is atomic; a refusal leaves no partial cohort, and the same single-writer guards apply. One completion digest arrives after all current members settle, including failed, aborted and missing-report results. Restarting a member before completion updates its slot; old generations cannot close the cohort. A replacement parent does not inherit or receive the old parent's completion.
+
+`read_run` inspects only the caller's own in-task children: actual status/generation, settled result, recorded heads, verifier outcome when present, bounded final report and paged artifact metadata (offset/limit). Missing and clipped reports are explicit. Reports are untrusted claims, not verified checks; recorded heads alone do not prove publication. It exposes no prompt, configuration, secret, artifact storage key or full transcript. Separately granted `run_chat` and `run_diff` provide conversation and diff evidence. Neither tool replaces fixed delivery reviews or person-only escalation decisions.
 
 ## Opening the pull request
 

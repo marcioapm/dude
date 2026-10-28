@@ -176,7 +176,7 @@ var toolCommands = map[string][]string{
 	"request_machine": {"dude machine request"}, "message": {"dude message"}, "wait_for_reply": {"dude wait"},
 	"note": {"dude note"}, "feedback": {"dude feedback"}, "feedback_reply": {"dude feedback reply"},
 	"feedback_resolve": {"dude feedback resolve"}, "reply_on_pull_request": {"dude pr reply"}, "findings": {"dude findings"},
-	"pull_requests": {"dude prs"}, "start_phase": {"dude phase start"}, "start_agent": {"dude agent start"},
+	"pull_requests": {"dude prs"}, "start_phase": {"dude phase start"}, "start_agent": {"dude agent start"}, "start_agents": {"dude agent cohort"}, "read_run": {"dude run inspect"},
 	"steer": {"dude steer"}, "restart_run": {"dude restart"}, "decide": {"dude decide"},
 	"dismiss_finding": {"dude finding dismiss"}, "decide_escalation": {"dude escalation decide"},
 	"update_task": {"dude task update"}, "publish": {"dude publish --message"}, "relate": {"dude relate"},

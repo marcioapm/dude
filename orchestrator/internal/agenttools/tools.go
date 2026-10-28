@@ -49,6 +49,8 @@ var tools = []tool{
 	define("run_chat", runChat).withholdingResult(),
 	define("start_phase", startPhase),
 	define("start_agent", startAgent),
+	define("start_agents", startAgents),
+	define("read_run", readRun).withholdingResult(),
 	define("verify", verify).limit(verifiesPerRun),
 	define("steer", steer),
 	define("restart_run", restartRun),
