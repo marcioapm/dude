@@ -5,3 +5,4 @@
 {{define "refusals/tools/child/cohort-member-key"}}per-member keys are unsupported; use the cohort key{{end}}
 {{define "refusals/tools/child/inspection-page"}}artifact offset must be nonnegative and limit at most 20{{end}}
 {{define "refusals/tools/child/inspection-scope"}}unknown or inaccessible child Run{{end}}
+{{define "refusals/tools/child/inspection-budget"}}child Run inspection exceeds 64000 bytes even after clipping; request fewer artifacts{{end}}

@@ -9,6 +9,7 @@ const (
 	rCohortBriefs                          = "cohort briefs exceed 60000 bytes"
 	rCohortMemberKey                       = "per-member keys are unsupported; use the cohort key"
 	rInspectionPage                        = "artifact offset must be nonnegative and limit at most 20"
+	rInspectionBudget                      = "child Run inspection exceeds 64000 bytes even after clipping; request fewer artifacts"
 	rInspectionScope                       = "unknown or inaccessible child Run"
 	rChildToolsReadOnly                    = "independent report children cannot mutate workflow or start Runs"
 	rYourContainerNotRunningAsLux          = "your container is not running as lux sees it; call sync_base again in a moment"
