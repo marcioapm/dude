@@ -29,7 +29,8 @@ var noticeOfStatus = map[string]string{"running": NoticeStarted, "done": NoticeD
 // origin carried the thread, the session's. A task with no such origin,
 // or one whose kind was already recorded, records nothing. detail is why
 // it failed (endedDetail); what it says of the task is its own key and
-// title alone, whatever is hidden from the chat since.
+// title alone, whatever is hidden from the chat since. The lateral's
+// OFFSET 0 keeps the session's origin one lookup, not one per reference.
 func recordNoticeTx(ctx context.Context, tx pgx.Tx, taskID, kind, detail string) error {
 	_, err := tx.Exec(ctx, `INSERT INTO chat_notices (id, organization_id, task_id, kind, provider, external_workspace_id,
 			conversation_id, conversation_name, thread_id, task_key, task_title, detail)
@@ -40,7 +41,8 @@ func recordNoticeTx(ctx context.Context, tx pgx.Tx, taskID, kind, detail string)
 			p.key_prefix || '-' || t.number, t.title, $4
 		FROM tasks t JOIN projects p ON p.id = t.project_id
 		CROSS JOIN LATERAL (SELECT COALESCE(CASE WHEN t.origin ? 'conversationId' THEN t.origin END,
-			(SELECT s.origin FROM sessions s WHERE t.origin->>'via' = 'session' AND s.id = t.origin->>'from')) AS origin) o
+			(SELECT s.origin FROM sessions s WHERE t.origin->>'via' = 'session' AND s.id = t.origin->>'from')) AS origin
+			OFFSET 0) o
 		WHERE t.id = $2 AND o.origin->>'provider' IS NOT NULL AND o.origin->>'conversationId' IS NOT NULL
 		ON CONFLICT DO NOTHING`, ids.New(ids.ChatNotice), taskID, kind, detail)
 	return err
