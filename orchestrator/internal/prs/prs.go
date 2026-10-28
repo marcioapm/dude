@@ -53,6 +53,10 @@ type Syncer struct {
 	// Test hook: called in a hand-over's transaction once one is found to
 	// close, before the delivery is locked; an error rolls it back.
 	HandingOver func(ctx context.Context) error
+	// Test hook: called in a sync's compare-and-set transaction between
+	// writing the base sync requests it found integrated and those it found
+	// not, holding the first's row locks.
+	BaseSyncLocked func(ctx context.Context, tx pgx.Tx)
 }
 
 // DefaultCIGrace: how long CI may take to show up on a new head.
@@ -351,12 +355,25 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		if tag.RowsAffected() == 0 {
 			return ErrRaced
 		}
-		// The ancestry readings, against the head just recorded.
+		// The ancestry readings, against the head just recorded. Their rows
+		// are locked first, in the order every writer of the queue locks
+		// them (created_at, base_sha): locked as the updates below reach
+		// them, a writer's prompt claim holding one and waiting on another
+		// would deadlock with this sync.
+		if len(integrated)+len(notIntegrated) > 0 {
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM base_sync_requests WHERE pull_request_id=$1 AND base_sha=ANY($2)
+				ORDER BY created_at, base_sha FOR UPDATE`, pr.ID, append(slices.Clone(integrated), notIntegrated...)); err != nil {
+				return err
+			}
+		}
 		if len(integrated) > 0 {
 			if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET completed_at=now(), compared_head=$3
 				WHERE pull_request_id=$1 AND base_sha=ANY($2) AND completed_at IS NULL`, pr.ID, integrated, status.HeadSHA); err != nil {
 				return err
 			}
+		}
+		if s.BaseSyncLocked != nil && len(integrated)+len(notIntegrated) > 0 {
+			s.BaseSyncLocked(ctx, tx)
 		}
 		if len(notIntegrated) > 0 {
 			if _, err := tx.Exec(ctx, `UPDATE base_sync_requests SET compared_head=$3

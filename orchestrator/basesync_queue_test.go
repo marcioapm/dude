@@ -393,3 +393,78 @@ func TestAncestryIsComparedOncePerHead(t *testing.T) {
 		t.Fatalf("the integrated base was not completed: %d", n)
 	}
 }
+
+// A sync recording its ancestry readings while a fresh writer claims the
+// same requests for its prompt: both lock them in the queue's order, so
+// neither is chosen as a deadlock victim and the writer starts.
+func TestASyncAndAWritersClaimDoNotDeadlock(t *testing.T) {
+	w := newWorld(t)
+	wi, prID, _ := w.heldConflict()
+	ctx := context.Background()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	head := w.gh.SHA(w.gh.Pull(1).Head)
+	// The earlier request is of the moved base, not in the head; the later
+	// one of a base the head contains. A sync reads them integrated-first.
+	moved, contained := w.gh.SHA("main"), gitOut(t, w.gh.Repo, "merge-base", head, "main")
+	mustExec(t, w.owner, `INSERT INTO base_sync_requests(organization_id,task_id,pull_request_id,base,base_sha,created_at)
+		VALUES($1,$2,$3,'main',$4,now()-interval '2 minutes'), ($1,$2,$3,'main',$5,now()-interval '1 minute')`,
+		w.org, wi, prID, moved, contained)
+	fixer := w.freshFixer(wi, "queue-deadlock")
+	var once sync.Once
+	var held atomic.Bool
+	swept := make(chan error, 1)
+	w.prs.BaseSyncLocked = func(ctx context.Context, tx pgx.Tx) {
+		once.Do(func() {
+			held.Store(true)
+			var pid int
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+				t.Error(err)
+				return
+			}
+			go func() {
+				_, err := w.syncer.Sweep(context.Background())
+				swept <- err
+			}()
+			// Barrier: the writer's claim waits on this sync's lock.
+			deadline := time.Now().Add(20 * time.Second)
+			for time.Now().Before(deadline) {
+				var n int
+				if err := w.owner.QueryRow(ctx, blockedBy, pid).Scan(&n); err == nil && n > 0 {
+					return
+				}
+				time.Sleep(2 * time.Millisecond)
+			}
+			t.Error("the writer's claim never waited on the sync")
+		})
+	}
+	if err := w.prs.Sync(ctx, w.org, prID); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !held.Load() {
+		t.Fatal("the sync never held its requests' locks")
+	}
+	select {
+	case err := <-swept:
+		if err != nil {
+			t.Fatalf("sweep: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the writer's sweep never finished")
+	}
+	w.until("the writer submitted or failed", func() bool {
+		return w.luxRunOf(fixer) != "" || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='failed'`, fixer) == 1
+	})
+	if got := w.str(`SELECT status::text || ' ' || COALESCE(error, '') FROM runs WHERE id=$1`, fixer); strings.HasPrefix(got, "failed") ||
+		strings.Contains(got, "deadlock") || strings.Contains(got, "40P01") {
+		t.Fatalf("the writer: %s", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id=$1 AND (retry_failures > 0 OR status='failed')`, fixer); n != 0 {
+		t.Fatalf("the writer's start failed %d times", n)
+	}
+	if prompt := w.submittedPrompt(w.luxRunOf(fixer)); !strings.Contains(prompt, moved) || strings.Contains(prompt, contained) {
+		t.Fatalf("the writer's prompt carries the wrong requests:\n%s", prompt)
+	}
+	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE base_sha=$1 AND completed_at IS NOT NULL AND compared_head=$2`, contained, head); n != 1 {
+		t.Fatalf("the contained base was not completed: %d", n)
+	}
+}
