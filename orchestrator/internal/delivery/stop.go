@@ -23,14 +23,16 @@ const liveStatus = `status IN ('pending', 'scheduled', 'starting', 'running', 'p
 // LockLiveWorkTx takes the task's Chat lock and its live conductor's row,
 // the order a conductor's children and Chat take them in, before the
 // caller locks the delivery and the task (LockEscalationTx). Returns the
-// live conductor, "" for none.
+// live conductor, "" for none. The conductor NO KEY UPDATE, as lockChildTx
+// takes a child's parent: a child's follower re-checks its foreign keys to
+// the conductor (KEY SHARE) while the caller waits for that child's row.
 func LockLiveWorkTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
 	if err := LockChat(ctx, tx, taskID); err != nil {
 		return "", err
 	}
 	var id string
 	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+`
-		AND r.source_kind IS NULL FOR UPDATE`, taskID).Scan(&id)
+		AND r.source_kind IS NULL FOR NO KEY UPDATE`, taskID).Scan(&id)
 	if db.IsNotFound(err) {
 		return "", nil
 	}
@@ -137,8 +139,7 @@ func (s Stopped) All() []string {
 // row (lockChild's prefix), the delivery and the task (LockEscalationTx),
 // then the phase Runs (RestartRunTx's order after the task) and each child.
 // A restart's replacement and a child, inserted referencing the conductor,
-// take Chat first: the conductor's FOR UPDATE here blocks that insert's key
-// share, and Chat keeps it from cycling with the delivery lock.
+// take Chat first, which serialises them with this.
 // locked, when given, runs once the delivery and task are locked and before
 // anything stops: a refusal there stops nothing, and what it closes is
 // closed while the Runs are still live.

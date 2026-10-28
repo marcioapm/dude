@@ -57,14 +57,18 @@ func lockChildTx(ctx context.Context, tx pgx.Tx, childID string, betweenLocks fu
 		return nil, err
 	}
 	var live bool
+	// The parent NO KEY UPDATE: its writers wait, but the child's own
+	// follower, holding the child's row and updating it again, re-checks
+	// the child's foreign keys to the parent (KEY SHARE) while this waits
+	// for the child below; FOR UPDATE would deadlock with it.
 	if source == string(ChildParentSession) {
 		err = tx.QueryRow(ctx, `SELECT `+LiveBrainstorm+` AND r.replaced_by IS NULL
 			AND r.control <> 'abort' AND NOT COALESCE(`+Ending+`, false)
-			FROM runs r WHERE r.id=$1 AND r.session_id=$2 FOR UPDATE`, c.ParentID, c.SessionID).Scan(&live)
+			FROM runs r WHERE r.id=$1 AND r.session_id=$2 FOR NO KEY UPDATE`, c.ParentID, c.SessionID).Scan(&live)
 	} else {
 		err = tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.source_kind IS NULL AND r.phase IS NULL
 		AND r.replaced_by IS NULL AND r.control <> 'abort' AND NOT COALESCE(`+Ending+`, false)
-		FROM runs r WHERE r.id = $1 AND r.task_id = $2 FOR UPDATE`, c.ParentID, c.TaskID).Scan(&live)
+		FROM runs r WHERE r.id = $1 AND r.task_id = $2 FOR NO KEY UPDATE`, c.ParentID, c.TaskID).Scan(&live)
 	}
 	if err != nil {
 		return nil, err
@@ -325,7 +329,8 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 				return err
 			}
 			var live bool
-			if err := tx.QueryRow(ctx, `SELECT `+LiveBrainstorm+` FROM runs r WHERE r.id=$1 AND r.session_id=$2 FOR UPDATE`, parentID, sessionID).Scan(&live); err != nil {
+			// The parent NO KEY UPDATE, as lockChildTx takes it.
+			if err := tx.QueryRow(ctx, `SELECT `+LiveBrainstorm+` FROM runs r WHERE r.id=$1 AND r.session_id=$2 FOR NO KEY UPDATE`, parentID, sessionID).Scan(&live); err != nil {
 				return err
 			}
 			if live {
@@ -340,7 +345,7 @@ func (s *Store) EndChildParent(ctx context.Context, org, taskID, parentID string
 		}
 		var live bool
 		if err := tx.QueryRow(ctx, `SELECT `+LiveConductor+` AND r.replaced_by IS NULL AND r.control <> 'abort'
-			AND NOT COALESCE(`+Ending+`, false) FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND r.source_kind IS NULL FOR UPDATE`, parentID, taskID).Scan(&live); err != nil {
+			AND NOT COALESCE(`+Ending+`, false) FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND r.source_kind IS NULL FOR NO KEY UPDATE`, parentID, taskID).Scan(&live); err != nil {
 			if db.IsNotFound(err) {
 				return refuseText(rChildWrongParent)
 			}
@@ -522,12 +527,13 @@ func childResultText(summary []byte, reply string) (string, error) {
 	return out.String(), err
 }
 
-// The caller holds Chat before the parent Run and task rows. The task NO
-// KEY UPDATE: a hand-over goes on to queue for the live conductor, whose
-// row the syncer's batch may hold while its foreign-key check waits on
-// this task's KEY SHARE.
+// The caller holds Chat before the parent Run and task rows. Both NO KEY
+// UPDATE: a hand-over goes on to queue for the live conductor, whose row
+// the syncer's batch may hold while its foreign-key check waits on this
+// task's KEY SHARE; and a child's batch, holding the child's row that the
+// update below waits for, re-checks its foreign keys to the parent.
 func MarkChildParentEndedTx(ctx context.Context, tx pgx.Tx, taskID, parentID string) error {
-	if _, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id=$1 AND task_id=$2 FOR UPDATE`, parentID, taskID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id=$1 AND task_id=$2 FOR NO KEY UPDATE`, parentID, taskID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `SELECT id FROM tasks WHERE id=$1 FOR NO KEY UPDATE`, taskID); err != nil {
