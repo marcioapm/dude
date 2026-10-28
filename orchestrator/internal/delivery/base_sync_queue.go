@@ -126,24 +126,3 @@ func ClaimBaseSyncPromptTx(ctx context.Context, tx pgx.Tx, r RunRef) (string, er
 	}
 	return strings.Join(lines, "\n\n"), nil
 }
-
-// PendingBaseSyncPrompt is what a capable writer's briefing would carry of
-// the task's in-scope pending requests, read only.
-func PendingBaseSyncPrompt(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
-	rows, err := tx.Query(ctx, `SELECT repo.name,q.base,q.base_sha FROM base_sync_requests q
- JOIN pull_requests p ON p.id=q.pull_request_id JOIN repositories repo ON repo.id=p.repository_id
- WHERE `+baseSyncInScope+` ORDER BY q.created_at, q.base_sha`, taskID)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-	var lines []string
-	for rows.Next() {
-		var repo, base, sha string
-		if err := rows.Scan(&repo, &base, &sha); err != nil {
-			return "", err
-		}
-		lines = append(lines, baseSyncInstruction(repo, base, sha))
-	}
-	return strings.Join(lines, "\n\n"), rows.Err()
-}

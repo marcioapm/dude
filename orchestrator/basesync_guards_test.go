@@ -248,15 +248,25 @@ func TestQueuedBaseSyncTargetsWriterAndRetainsUntilAncestry(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
 		t.Fatalf("unintegrated request retired: %d", n)
 	}
-	// The next writer briefing includes the request without telling a reviewer to write.
-	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-		prompt, err := delivery.PendingBaseSyncPrompt(context.Background(), tx, wi)
-		if err == nil && !strings.Contains(prompt, "merge lux/main") {
-			t.Errorf("next writer brief: %q", prompt)
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	// The next writer's submitted prompt carries the request, claimed for
+	// it (ClaimBaseSyncPromptTx), and no reviewer is told to write.
+	mustExec(t, w.owner, `UPDATE runs SET status='completed' WHERE id='run_queue_writer'`)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET status='waiting', awaiting_signals='["queue_test_hold"]', wake_at=NULL WHERE task_id=$1`, wi)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{}'::jsonb WHERE id = $1`, w.project)
+	w.onModel("implementer", "claude-impl")
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} }
+	next := w.freshFixer(wi, "queue-next-writer")
+	w.until("the next writer submitted", func() bool { return w.luxRunOf(next) != "" })
+	if prompt := w.submittedPrompt(w.luxRunOf(next)); !strings.Contains(prompt, "Queued conflict resolution") ||
+		!strings.Contains(prompt, "call sync_base") || !strings.Contains(prompt, "merge lux/main") {
+		t.Errorf("next writer's prompt lacks the request:\n%s", prompt)
+	}
+	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND writer_run_id=$2 AND via='prompt'`, wi, next); n != 1 {
+		t.Fatalf("request not claimed by the next writer's prompt: %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id=d.run_id WHERE r.task_id=$1
+		AND r.phase NOT IN ('implement','fix','simplify') AND d.text LIKE '%Queued conflict resolution%'`, wi); n != 0 {
+		t.Fatalf("a non-writer was told to write: %d", n)
 	}
 	// A trusted forge comparison closes it only once the requested base is
 	// actually an ancestor of the public head (not a candidate assertion).
