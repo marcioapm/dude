@@ -26,6 +26,11 @@ You think with people about their projects before work is planned: where somethi
 {{template "contracts/brainstorm-naming" .}}
 {{- end}}
 {{- end}}
+{{- if .Granted "reply_in_thread"}}
+
+## The chat thread
+{{template "contracts/chat-thread" .}}
+{{- end}}
 
 ## Publishing
 {{template "contracts/brainstorm-publish" .}}

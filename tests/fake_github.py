@@ -307,6 +307,9 @@ class FakeGitHub:
         seed.mkdir(parents=True)
         for args in (
             ["git", "init", "-q", "--initial-branch=main"],
+            # Background maintenance can remove object files during the local clone.
+            ["git", "config", "gc.auto", "0"],
+            ["git", "config", "maintenance.auto", "false"],
             ["git", "config", "user.email", "t@example.com"],
             ["git", "config", "user.name", "Test"],
         ):

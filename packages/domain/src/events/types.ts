@@ -174,6 +174,13 @@ export const EventTypes = {
    * Payload: `{ project, repositories: [{ id, name }] }`.
    */
   BrainstormCheckoutRequested: "session.checkout.requested",
+  /**
+   * A chat-born session's agent posted in its thread (reply_in_thread).
+   * Payload: `{ provider, channel, conversationId, threadId, ts, permalink }`.
+   */
+  ThreadReplyPosted: "chat.reply.posted",
+  /** A thread post refused, by dude or the provider. Payload: `{ tool, provider, channel, conversationId, error }`. */
+  ThreadReplyRefused: "chat.reply.refused",
   /** The agent filled the proposal card. Payload: `{ proposalId, items }`. */
   BrainstormProposed: "session.proposed",
   /** A member filed items from the card. Payload: `{ proposalId, by, filed: [{ item, key, kind }] }`. */
@@ -689,7 +696,10 @@ export const EventTypes = {
    * `github:<login>`) carries `github: { login, repo, number, feedbackId,
    * kind, url?, path? }`. The conductor's reply on a pull request is `by:
    * "conductor"` (actor its Run) with `github: { repo, number, feedbackId,
-   * url, inReplyTo? }`.
+   * url, inReplyTo? }`. A person's message into a session from a chat
+   * thread carries where it was said: `{ via, provider, workspaceId,
+   * conversationId, conversationName, threadId }` (`threadId` "" at a
+   * direct message's top level); one typed in dude carries none.
    */
   ChatMessage: "chat.message",
   /**

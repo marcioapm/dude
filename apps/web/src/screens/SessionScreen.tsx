@@ -628,6 +628,10 @@ export function sessionNotice(e: PersistedEvent, people: People): string | null 
     case EventTypes.BrainstormLinked:
       if (typeof p.linked === "string" && typeof p.viaName === "string") return `${by} linked ${p.linked} from ${p.viaName}.`;
       return `${by} changed what the session reads.`;
+    case EventTypes.ThreadReplyPosted:
+      return `Brainstorm posted in the thread in ${typeof p.channel === "string" && p.channel ? p.channel : "the chat"}.`;
+    case EventTypes.ThreadReplyRefused:
+      return `Brainstorm's post in the thread was not sent: ${typeof p.error === "string" ? p.error : "refused"}.`;
     case EventTypes.BrainstormCheckoutRequested: {
       const repos = Array.isArray(p.repositories) ? p.repositories as Array<{ name?: unknown }> : [];
       const names = repos.map((r) => `${typeof p.project === "string" ? p.project : ""}/${typeof r.name === "string" ? r.name : ""}`);

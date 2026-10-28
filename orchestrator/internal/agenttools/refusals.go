@@ -159,4 +159,12 @@ const (
 	rPostLookupCut                         = "could not finish looking up the channel %s; pass the channel id (C0123ABCD): the workspace has more channels than one lookup reads. Nothing was posted"
 	rPostSlackBusy                         = "Slack did not take the post (%s): nothing was posted; try again in a minute"
 	rPostSlackRefused                      = "Slack refused the post: %s. Nothing was posted"
+	rReplyNotFromChat                      = "this session was not started from a chat thread: there is no thread to reply in"
+	rReplyTextLength                       = "a thread reply is 1 to %d characters; this one is %d: summarise it in a few lines and point to the session or task link for the rest"
+	rReplyBroadcast                        = "a thread reply never notifies a whole channel or a group: remove %s and post again"
+	rReplyFromDude                         = "this turn's message was typed in dude, not in the chat: nothing was posted; answer in this session"
+	rReplyPerTurn                          = "at most %d thread replies per turn; this turn has posted them: say the rest in this session, and post again after the next message"
+	rReplyNotConnected                     = "the chat this session came from is no longer connected to dude: nothing was posted; answer in this session"
+	rReplyBusy                             = "the chat did not take the reply (%s): nothing was posted; try again in a minute"
+	rReplyRefused                          = "the chat refused the reply: %s. Nothing was posted; answer in this session"
 )

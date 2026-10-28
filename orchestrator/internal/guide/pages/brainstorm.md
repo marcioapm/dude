@@ -1,6 +1,6 @@
 ---
 title: Brainstorm sessions
-covers: [tool:propose, tool:relate, tool:name_session, tool:refresh_checkout, tool:chat_history]
+covers: [tool:propose, tool:relate, tool:name_session, tool:refresh_checkout, tool:chat_history, tool:reply_in_thread]
 ---
 A brainstorm session is a conversation with an agent about your projects, before any work is planned. This page covers starting a session, linking projects, sharing it, filing what it proposes, and the investigators it can start.
 
@@ -62,10 +62,29 @@ Besides the checkouts, the brainstorm agent can:
 - read linked projects' tasks, epics, repositories, findings and pull requests;
 - read GitHub issues, pull requests, Actions runs' jobs and check logs;
 - read another Run's Chat, for the Runs the session started (`run_chat`);
-- for a session started from chat, read more of the conversation it came from: its thread, or the channel when the request was not in one, 30 messages a page, at most 30 reads an hour (`chat_history`);
+- for a session started from chat, read more of the conversation it came from: its thread, or the channel when the request was not in one, 30 messages a page, at most 30 reads an hour (`chat_history`), and reply in its thread (`reply_in_thread`, below);
 - read dude's settings as they apply to the session (`settings`).
 
 A session started from chat never sees a project an admin hid from that chat (on the chat provider's settings page): it is not offered, cannot be linked, and every tool refuses it, its investigators' included. Hiding applies to new work: a task already filed in a project that is hidden later keeps working on it, and still reaches no other hidden project.
+
+## What you see in the chat thread
+
+When you mention dude in a chat thread and it starts or resumes a session, dude replies with the session's link and marks your message: 👀 while it works, ⏳ while the agent boots, ✅ once it answered.
+
+The agent uses `reply_in_thread` to answer where your message came from, including a direct message or another bound thread. Messages typed in dude are answered only in the session:
+
+- a question it can answer directly gets a short answer there, and the full answer in the session;
+- when work is filed from the conversation, one short note saying what was created, with its link;
+- a question it needs answered, briefly;
+- nothing when the thread gains nothing: the ✅ says it answered.
+
+Threads may include guests: the agent never posts logs, code or tool output. It can post at most 3 replies per turn, each about 3,000 characters, without notifying a channel, group or person. Posts and refusals appear in the session.
+
+A chat-origin task gets dude's notices when delivery starts, a PR opens (linking to the task), work finishes, or it fails or is stopped (with a known reason). Web-origin tasks post nothing. Notices retry transient failures for up to 6 hours; on giving up, the task's Chat says why.
+
+A chat-origin epic also gets three notices, once each ever: its first task starts, its first PR opens, and all its tasks have ended (also by archiving or moving the last unfinished one out), with how many were done, failed and cancelled. If one cannot be posted, the Chat of the task that triggered it says why. A task that a chat-origin task's agent creates posts its own notices in the same thread.
+
+Notices exist only for tasks and epics. The agent decides whether to answer, do the work itself (and report what its helpers found), or propose a task or an epic for someone to file; only filed work gets notices.
 
 Its machine is small and does not run code. What needs running to be known, it says is not checked, and proposes a task that finds out.
 

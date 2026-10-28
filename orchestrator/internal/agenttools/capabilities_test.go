@@ -62,7 +62,8 @@ func TestEachRolesToolsAreTheSameAsBeforeCapabilities(t *testing.T) {
 // A role's tool resolves to the definition its audience uses: a session
 // agent's own where it has one, the task agents' otherwise.
 func TestASessionAgentsNameFindsItsOwnDefinition(t *testing.T) {
-	brainstorm := capabilities.Default(delivery.RoleBrainstorm)
+	// The brainstorm's whole grant in a chat-born session, reply_in_thread included.
+	brainstorm := capabilities.Of(slices.Concat(capabilities.Defaults[delivery.RoleBrainstorm], capabilities.FromChat[delivery.RoleBrainstorm])...)
 	conductor := capabilities.Default(delivery.RoleConductor)
 	own := map[string]bool{}
 	for _, def := range allTools() {
@@ -185,15 +186,17 @@ func TestTheRegistryHasNoDeadEntries(t *testing.T) {
 		}
 	}
 	granted := map[capabilities.Key]bool{}
-	for role, keys := range capabilities.Defaults {
-		if role != "" && !slices.Contains(delivery.PromptRoles, role) {
-			t.Errorf("defaults for %q, which is no role", role)
-		}
-		for _, k := range keys {
-			if !seen[k] {
-				t.Errorf("%q is granted %s, which is no capability", role, k)
+	for _, grants := range []map[string][]capabilities.Key{capabilities.Defaults, capabilities.FromChat} {
+		for role, keys := range grants {
+			if role != "" && !slices.Contains(delivery.PromptRoles, role) {
+				t.Errorf("defaults for %q, which is no role", role)
 			}
-			granted[k] = true
+			for _, k := range keys {
+				if !seen[k] {
+					t.Errorf("%q is granted %s, which is no capability", role, k)
+				}
+				granted[k] = true
+			}
 		}
 	}
 	for _, c := range capabilities.All {

@@ -94,8 +94,9 @@ function pr(p: Record<string, unknown>): string {
   return typeof p.number === "number" ? `Pull request #${p.number}` : "The pull request";
 }
 
-/** What dude's notices shown in Chat whoever decides, conductor or not, are about: the task's relations, and a pull request mention a stopped task did not pass on. */
-const RELATION_NOTICES: ReadonlySet<string> = new Set(["unblocked", "auto_started", "auto_start_refused", "auto_start_failed", "auto_start_set", "mention_held"]);
+/** What dude's notices shown in Chat whoever decides, conductor or not, are about: the task's relations, a pull request mention a stopped task did not pass on, and a chat thread dude could not tell of its progress. */
+const RELATION_NOTICES: ReadonlySet<string> = new Set(["unblocked", "auto_started", "auto_start_refused", "auto_start_failed", "auto_start_set", "mention_held",
+  "thread_notice_failed"]);
 
 /** Under Deliver, each hold before the pull request, as dude's notice: the first, and each round after the owner's feedback. */
 export function holdNotices(events: readonly PersistedEvent[]): ConductedLine[] {

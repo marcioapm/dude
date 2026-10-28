@@ -758,17 +758,26 @@ func SetTaskStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, fro
 
 // RecordStatusTx records that a task's status changed, and why: what time
 // and cost count from. A move to done releases what the task blocked, if
-// it merged (releaseDependantsTx).
+// it merged (releaseDependantsTx). A move a chat thread hears of (started,
+// done, failed or stopped) records its notice and its epic's
+// (chat_notices.go); the epic's comes last, so its advisory lock and its
+// foreign key's KEY SHARE on the epic row are the last locks this move takes.
 func RecordStatusTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, status, reason string) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: EvTaskStatusChanged, OrganizationID: org, ProjectID: projectID, TaskID: taskID,
 		ActorType: ledger.ActorSystem, ActorID: "workflow", Source: ledger.SourceOrchestrator,
 		CorrelationID: taskID, Payload: map[string]any{"status": status, "reason": reason},
 	})
-	if err != nil || status != "done" {
+	if err == nil {
+		err = statusNoticeTx(ctx, tx, taskID, status, reason)
+	}
+	if err == nil && status == "done" {
+		err = releaseDependantsTx(ctx, tx, org, taskID)
+	}
+	if err != nil {
 		return err
 	}
-	return releaseDependantsTx(ctx, tx, org, taskID)
+	return epicStatusNoticeTx(ctx, tx, taskID, status)
 }
 
 // Emit records a workflow event about the task.
@@ -1436,7 +1445,10 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 				"headBranch": st.Branch, "baseBranch": base, "draft": ref.State == forge.StateDraft,
 				"reviewersRequested": db.NonNil(asked)},
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID)
 	})
 	return id, err
 }

@@ -36,6 +36,7 @@ const (
 	SessionAgents   Key = "session.agents"
 	SessionCheckout Key = "session.checkout"
 	ChatRead        Key = "chat.read"
+	ChatReply       Key = "chat.reply"
 	RunsRead        Key = "runs.read"
 	PRRefresh       Key = "pr.refresh"
 	LimitsRead      Key = "limits.read"
@@ -106,6 +107,8 @@ var All = []Capability{
 		Tools: []string{"refresh_checkout"}},
 	{Key: ChatRead, Description: "Read more of the chat conversation a session was started from: its thread, or the channel; at most 30 reads an hour.",
 		Tools: []string{"chat_history"}},
+	{Key: ChatReply, Description: "Reply in the chat thread the turn's message came from, not to a message typed in dude: at most 3 posts a turn, about 3,000 characters each; only a session started from chat has it.",
+		Tools: []string{"reply_in_thread"}},
 	{Key: RunsRead, Description: "Read another Run's Chat and the question it is waiting on: the task's Runs, or the Runs a session started.",
 		Tools: []string{"run_chat"}},
 	{Key: PRRefresh, Description: "Read the task's pull requests from GitHub now, rather than dude's last poll; counts against the hourly GitHub reads.",
@@ -141,6 +144,12 @@ var Defaults = map[string][]Key{
 	"":             {TasksRead, Memory, RunBasics, WebSearch, WebFetch},
 }
 
+// FromChat are granted on top of Defaults to an agent whose session was
+// started from a chat thread (sessions.origin names its conversation).
+var FromChat = map[string][]Key{
+	"brainstorm": {ChatReply},
+}
+
 // Agent is who the capabilities are for: a Run's role, organisation, and
 // its project and task Run, or its session.
 type Agent struct {
@@ -154,20 +163,26 @@ type Grants struct {
 
 // Resolve is the capabilities a has: its role's defaults, less
 // session.name once a member has named a's session (titled_by 'person',
-// which the agent may not override). A stored per-organisation or
+// which the agent may not override), and with its role's FromChat when a's
+// session was started from a chat thread. A stored per-organisation or
 // per-agent override is applied here, in tx, and nowhere else.
 func Resolve(ctx context.Context, tx pgx.Tx, a Agent) (Grants, error) {
 	g := Default(a.Role)
-	if a.Session == "" || !g.Has(SessionName) {
+	fromChatKeys := FromChat[a.Role]
+	if a.Session == "" || !g.Has(SessionName) && len(fromChatKeys) == 0 {
 		return g, nil
 	}
-	var byPerson bool
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(bool_or(titled_by = 'person'), false) FROM sessions WHERE id = $1`,
-		a.Session).Scan(&byPerson); err != nil {
+	var byPerson, fromChat bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(bool_or(titled_by = 'person'), false),
+			COALESCE(bool_or(origin->>'provider' IS NOT NULL AND origin->>'conversationId' IS NOT NULL), false)
+		FROM sessions WHERE id = $1`, a.Session).Scan(&byPerson, &fromChat); err != nil {
 		return Grants{}, err
 	}
 	if byPerson {
 		g = g.Without(SessionName)
+	}
+	if fromChat {
+		g.keys = append(g.keys, fromChatKeys...)
 	}
 	return g, nil
 }

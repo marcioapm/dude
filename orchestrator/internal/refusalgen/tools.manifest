@@ -155,3 +155,11 @@ rPostNotInChannel                      refusals/tools/post-to-chat/not-in-channe
 rPostLookupCut                         refusals/tools/post-to-chat/lookup-cut
 rPostSlackBusy                         refusals/tools/post-to-chat/slack-busy
 rPostSlackRefused                      refusals/tools/post-to-chat/slack-refused
+rReplyNotFromChat                      refusals/tools/reply-in-thread/not-from-chat
+rReplyTextLength                       refusals/tools/reply-in-thread/text-length
+rReplyBroadcast                        refusals/tools/reply-in-thread/broadcast
+rReplyFromDude                         refusals/tools/reply-in-thread/from-dude
+rReplyPerTurn                          refusals/tools/reply-in-thread/per-turn
+rReplyNotConnected                     refusals/tools/reply-in-thread/not-connected
+rReplyBusy                             refusals/tools/reply-in-thread/busy
+rReplyRefused                          refusals/tools/reply-in-thread/refused
