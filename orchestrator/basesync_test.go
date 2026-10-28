@@ -746,8 +746,8 @@ func TestResolveConflictsIsAPersonsExplicitIntegration(t *testing.T) {
 		AND payload->>'action'='integration-started' AND payload->>'runId' LIKE 'run_%'`, wi); n != 1 {
 		t.Fatalf("integration-started events %d", n)
 	}
-	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 409 {
-		t.Fatalf("a second resolve while integrating: %d", code)
+	if code, _ := w.callAs(me, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{}); code != 200 {
+		t.Fatalf("a repeated resolve while integrating should queue idempotently: %d", code)
 	}
 }
 

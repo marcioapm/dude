@@ -1682,6 +1682,19 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		promptIn.PRFeedback, in.CheckLogs = checkLogsInit(workspaceDir, promptIn.PRFeedback, initRoom(s.Agent, in))
 	}
 	in.Prompt = delivery.Prompt(r.Phase, promptIn)
+	if grants.Has(capabilities.BaseSync) && (r.Phase == delivery.PhaseImplement || r.Phase == delivery.PhaseFix || r.Phase == delivery.PhaseSimplify) {
+		var queued string
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			var err error
+			queued, err = delivery.PendingBaseSyncPrompt(ctx, tx, r.TaskID)
+			return err
+		}); err != nil {
+			return lux.Spec{}, runSizes{}, nil, nil, err
+		}
+		if queued != "" {
+			in.Prompt += "\n\n" + queued
+		}
+	}
 	if r.conductor() {
 		// The conductor's prompt, made in the transaction above, ends with
 		// the machine's paragraph as a phase's does.

@@ -405,13 +405,34 @@ func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, i
 		return fail(http.StatusConflict, "conflict", "the pull request does not conflict with its base")
 	}
 	p := principalOf(r)
-	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo}
-	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+	// Authorize before asking the forge. Network reads stay outside the delivery lock.
+	var base, url string
+	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "resolve conflicts on"); err != nil {
 			return err
 		}
-		if err := escalationFailure(delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head,
+		return tx.QueryRow(r.Context(), `SELECT p.base_branch, repo.url FROM pull_requests p JOIN repositories repo ON repo.id=p.repository_id WHERE p.id=$1`, id).Scan(&base, &url)
+	}); err != nil {
+		return err
+	}
+	gh, err := s.forge(r.Context(), org)
+	if err != nil {
+		return err
+	}
+	baseSHA, err := gh.BranchSHA(r.Context(), forge.SlugFromURL(url), base)
+	if err != nil {
+		return err
+	}
+	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo, "status": "queued", "baseSha": baseSHA}
+	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "resolve conflicts on"); err != nil {
+			return err
+		}
+		if err := escalationFailure(delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head+":"+baseSHA,
 			delivery.EscalationDecision{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})); err != nil {
+			return err
+		}
+		if err := delivery.QueueBaseSyncTx(r.Context(), tx, org, taskID, id, base, baseSHA); err != nil {
 			return err
 		}
 		var projectID string

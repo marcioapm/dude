@@ -214,7 +214,7 @@ func IntegrationMergeWhen(base, recorded string) string {
 // the workflow waiting on that pull request is signalled to integrate its
 // base, whatever whenBehind says; one stopped at that pull request's
 // conflict escalation is decided so (retry for a failed integration, else
-// wait with the request queued). Anything else is a conflict: the handler
+// wait with the request queued). Busy delivery retains a request too; the handler
 // starts no phase itself. in.Authorize checks who may decide an escalation.
 func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo string, number int, head string,
 	in EscalationDecision) error {
@@ -222,7 +222,7 @@ func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo 
 	if err != nil {
 		return err
 	}
-	if d == nil || !d.Live() || !slices.Contains(d.State.PullRequestIDs, prID) {
+	if d == nil || !d.Live() || d.TaskStatus == "stopped" || d.TaskStatus == "closed" || d.TaskStatus == "done" || !slices.Contains(d.State.PullRequestIDs, prID) {
 		return escalationErr("conflict", "%s", mDudeNotWaitingOnThisPull)
 	}
 	signal := forge.Signal{Kind: "conflict", Repo: repo, Number: number, Requested: true}
@@ -240,9 +240,8 @@ func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo 
 		}
 		return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
 	}
-	if d.Step != "awaitPullRequest" || d.State.Integration != nil {
-		return escalationErr("conflict", "%s", mDudeAlreadyWorkingOnTaskTry)
-	}
+	// Busy delivery accepts a durable request too. Signals are only wakeups;
+	// base_sync_requests owns pending work independently of step snapshots.
 	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, signal, key)
 }
 

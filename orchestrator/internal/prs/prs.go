@@ -262,6 +262,34 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if status.Mergeable == forge.MergeUnknown {
 		status.Mergeable, status.BehindBy = pr.Mergeable, pr.BehindBy
 	}
+	// A directive receipt or agent report is not completion. Only the forge's
+	// ancestry reading of the public PR head can retire a person's request.
+	var requestedBases []string
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT base_sha FROM base_sync_requests WHERE pull_request_id=$1 AND completed_at IS NULL`, pr.ID)
+		if err != nil {
+			return err
+		}
+		requestedBases, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, base := range requestedBases {
+		cmp, err := gh.Compare(ctx, slug, base, status.HeadSHA)
+		if err != nil {
+			continue
+		} // Forge unavailable: retain pending and retry next sync.
+		if cmp.BehindBy != 0 || cmp.MergeBase.SHA != base {
+			continue
+		}
+		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE base_sync_requests SET completed_at=now() WHERE pull_request_id=$1 AND base_sha=$2 AND completed_at IS NULL`, pr.ID, base)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
 	checksJSON, _ := json.Marshal(db.NonNil(status.CheckList))
 	reviewsJSON, _ := json.Marshal(db.NonNil(status.Reviews))
 	if ended {

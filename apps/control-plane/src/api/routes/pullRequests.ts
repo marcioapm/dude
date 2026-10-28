@@ -29,6 +29,9 @@ export const PR_SELECT = `
   base_branch AS "baseBranch", head_sha AS "headSha", title, body,
   state, checks_json AS "checks", checks AS "checkState", review, reviews_json AS "reviews",
   mergeable_state AS "mergeable", behind_by AS "behindBy", unresolved_threads AS "unresolvedThreads",
+  (SELECT CASE WHEN count(*) FILTER (WHERE completed_at IS NULL) = 0 THEN 'complete'
+    WHEN bool_or(writer_run_id IS NOT NULL AND completed_at IS NULL) THEN 'resolving' ELSE 'queued' END
+    FROM base_sync_requests q WHERE q.pull_request_id=pull_requests.id HAVING count(*) > 0) AS "baseSyncStatus",
   created_at AS "createdAt", updated_at AS "updatedAt",
   merged_at AS "mergedAt", closed_at AS "closedAt"`;
 

@@ -1061,6 +1061,7 @@ export const pullRequestSchema = z.object({
   reviews: z.array(prReviewSchema),
   mergeable: z.enum(["clean", "behind", "conflicting", "unknown"]),
   /** Commits its base has that it lacks. */
+  baseSyncStatus: z.enum(["queued", "resolving", "complete"]).nullable().optional(),
   behindBy: z.number().int(),
   unresolvedThreads: z.number().int(),
   /** The one state it shows as (`prDisplayState`, below). */

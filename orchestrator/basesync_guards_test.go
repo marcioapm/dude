@@ -178,6 +178,45 @@ func TestAStaleConflictsFeedbackIsFixed(t *testing.T) {
 	}
 }
 
+// Busy delivery must accept the owner's request without starting another writer.
+func TestResolveConflictsQueuesDuringCandidateReview(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.tell()
+	w.conflictWithMovedBase()
+	w.sync()
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step='awaitReview', awaiting_signals='[]',
+		state=state-'escalation' WHERE task_id=$1`, wi)
+	prID := w.prOf(wi)
+	owner := w.person("owner")
+	for range 2 {
+		code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+		if code != 200 || body["status"] != "queued" {
+			t.Fatalf("busy resolve: %d %v; want success with queued status", code, body)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
+		t.Fatalf("pending requests %d, want one", n)
+	}
+	if n := w.count(integrationRuns, wi); n != 0 {
+		t.Fatalf("queued request started %d parallel integration Runs", n)
+	}
+	// A step writing its old snapshot cannot overwrite the independent row.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state=state-'pendingBaseSync' WHERE task_id=$1`, wi)
+	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 1 {
+		t.Fatalf("transition dropped request: %d", n)
+	}
+	w.gh.AdvanceBase("main", "Another base change on the same PR head")
+	code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+	if code != 200 {
+		t.Fatalf("new base: %d %v", code, body)
+	}
+	if n := w.count(`SELECT count(*) FROM base_sync_requests WHERE task_id=$1 AND completed_at IS NULL`, wi); n != 2 {
+		t.Fatalf("new base on same head requests %d, want two", n)
+	}
+}
+
 // Resolve conflicts is refused, saying why, unless the owner asks about a
 // conflicting open pull request the task's workflow waits on or escalated.
 func TestResolveConflictsRefusesWhatItCannotDo(t *testing.T) {
