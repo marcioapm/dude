@@ -319,6 +319,37 @@ describe("a task's and a Run's servers", () => {
   });
 });
 
+describe("a project's branch previews", () => {
+  test("are the orchestrator's, asked as any member, by project or by the preview's id", async () => {
+    asked.length = 0;
+    const cases: Array<[string, string, unknown, number, string, string]> = [
+      ["POST", `/v1/projects/${PROJECT}/branch-previews`, { branch: " feature/login " }, 201,
+        `POST /internal/projects/${PROJECT}/branch-previews`, `{"branch":"feature/login"}`],
+      ["GET", `/v1/projects/${PROJECT}/branch-previews`, undefined, 200, `GET /internal/projects/${PROJECT}/branch-previews`, ""],
+      ["GET", "/v1/branch-previews/run_b", undefined, 200, "GET /internal/branch-previews/run_b", ""],
+      ["DELETE", "/v1/branch-previews/run_b", undefined, 200, "DELETE /internal/branch-previews/run_b", ""],
+    ];
+    for (const [method, path, sent, status, forwarded, forwardedBody] of cases) {
+      const res = await call(memberKey, method, path, sent);
+      expect(`${method} ${path} ${res.status}`).toBe(`${method} ${path} ${status}`);
+      const last = asked.at(-1)!;
+      expect(`${last.method} ${last.path}`).toBe(forwarded);
+      if (forwardedBody) expect(last.body).toBe(forwardedBody);
+      expect(last.org).toBe(ORG);
+      expect(last.actor).toStartWith("key_");
+    }
+  });
+
+  test("a start names one branch and nothing else, refused before the orchestrator is asked", async () => {
+    asked.length = 0;
+    for (const sent of [{}, { branch: "" }, { branch: "   " }, { branch: "x".repeat(256) }, { branch: "main", image: "x" }]) {
+      const res = await call(memberKey, "POST", `/v1/projects/${PROJECT}/branch-previews`, sent);
+      expect(`${JSON.stringify(sent)} ${res.status}`).toBe(`${JSON.stringify(sent)} 400`);
+    }
+    expect(asked).toEqual([]);
+  });
+});
+
 describe("a preview's task, looked up by its origin", () => {
   const ORIGIN = "https://web-look-1-web.preview.example.test";
   const lookup = (key: string, origin: string) => call(key, "GET", `/v1/preview-servers/lookup?origin=${encodeURIComponent(origin)}`);
