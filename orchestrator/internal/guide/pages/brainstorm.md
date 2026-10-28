@@ -82,6 +82,10 @@ Threads may include guests: the agent never posts logs, code or tool output. It 
 
 A chat-origin task gets dude's notices when delivery starts, a PR opens (linking to the task), work finishes, or it fails or is stopped (with a known reason). Web-origin tasks post nothing. Notices retry transient failures for up to 6 hours; on giving up, the task's Chat says why.
 
+A chat-origin epic also gets three notices of its own, once each: when its first task starts, when its first PR opens, and when all its tasks have ended, with how many were done, failed and cancelled. A task that a chat-origin task's agent creates posts its own notices in the same thread.
+
+Notices exist only for tasks and epics. The agent decides whether to answer, do the work itself (and report what its helpers found), or propose a task or an epic for someone to file; only filed work gets notices.
+
 Its machine is small and does not run code. What needs running to be known, it says is not checked, and proposes a task that finds out.
 
 ## The web

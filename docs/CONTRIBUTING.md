@@ -1365,6 +1365,31 @@ noted for the installation's health, never retried.
   creation, and records `thread_notice_failed` in the task's Chat on giving
   up. Settlement ignores cancellation. Posting is at least once: a crash
   after posting can repeat it when the lease expires.
+- *dude posts epic progress* too, in addition to its tasks' own notices,
+  once per epic ever (`unique (epic_id, kind)`; a row has exactly one of
+  `task_id`/`epic_id`): `epic_started` on its first task's first move to
+  running, `epic_pr_opened` on its first pull request (the epic's dude
+  link), and `epic_finished` once it has a non-archived task and every
+  non-archived task is done, failed or aborted, with the counts ("2 done, 1
+  failed, 0 cancelled"; never called a success). An empty epic never
+  finishes; reopening or adding tasks never repeats a notice. The epic's
+  display state (planned/active/done) plays no part. `RecordStatusTx` and
+  `RecordPROpenedNoticeTx` record it last, under an advisory lock per epic
+  (`LockEpicNoticesTx`) taken after the task's own row, so two tasks ending
+  at once see each other's move. A given-up epic notice is a `chat.notice`
+  on the epic's project, correlated with the epic.
+- *Where a notice goes* is the subject's origin: its own conversation, the
+  session it was filed from (`via: session`), or, for a task a task's agent
+  made (`via: task`), the parent's destination as resolved at creation and
+  stored as `origin.notify` beside `{provider, via, from}` (same
+  organisation only), so a child of a child inherits it with no ancestry
+  walk. Tasks and epics made in dude, by an automation, or from a parent
+  with no thread post nothing.
+- Notices exist only for a task or an epic. Routing decides whether a
+  mention becomes a task, an epic or a brainstorm; in a session the agent
+  decides whether to answer, do the work itself (reporting its `start_agent`
+  helpers' results with `reply_in_thread`), or propose a task or epic for a
+  member to file.
 
 **Configuration**: `slack.signing_secret`, `slack.client_id`,
 `slack.client_secret` (both secrets), `slack.api_url` (default
