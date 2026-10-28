@@ -119,7 +119,7 @@ const wakeableSelect = `SELECT id, organization_id, project_id, task_id, preview
 			-- A task's preview is reaped after $1, a branch preview's after $7.
 			r.status IN ('pending', 'paused')
 				AND COALESCE(r.lux_state, '') NOT IN ('running', 'starting', 'resuming', 'scheduled', 'submitted', 'stopping')
-				AND COALESCE(ps.woken, r.created_at) < now() - make_interval(secs => CASE WHEN r.preview_branch IS NULL THEN $1 ELSE $7 END) AS reap,
+				AND COALESCE(ps.woken, r.created_at) < now() - make_interval(secs => CASE WHEN r.preview_branch IS NULL THEN $1::float8 ELSE $7::float8 END) AS reap,
 			ps.live > 0 OR (r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel') AS lux_left,
 			-- A new idle mark, or every server marked: checked at once; marks
 			-- already checked, every parkCheckEvery; none, every
