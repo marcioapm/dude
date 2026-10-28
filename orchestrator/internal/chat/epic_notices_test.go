@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -217,6 +218,7 @@ func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 		var (
 			ready, wg sync.WaitGroup
 			start     = make(chan struct{})
+			moved     = make(chan struct{}, 2)
 			errs      = make(chan error, 2)
 		)
 		ready.Add(2)
@@ -232,8 +234,21 @@ func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 					}
 					ready.Done()
 					<-start
-					_, err := delivery.SetTaskStatusTx(w.ctx, tx, w.org, w.project, task, "", status, "pull requests merged")
-					return err
+					if _, err := delivery.SetTaskStatusTx(w.ctx, tx, w.org, w.project, task, "", status, "pull requests merged"); err != nil {
+						return err
+					}
+					// Each holds its commit until the other has counted too, or
+					// a while: unserialised counts both see the other running.
+					moved <- struct{}{}
+					deadline := time.After(300 * time.Millisecond)
+					for len(moved) < 2 {
+						select {
+						case <-deadline:
+							return nil
+						case <-time.After(5 * time.Millisecond):
+						}
+					}
+					return nil
 				})
 			}()
 		}
