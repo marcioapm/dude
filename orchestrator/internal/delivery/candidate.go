@@ -94,6 +94,31 @@ func (s *Store) rangeFindings(ctx context.Context, org string, st *State, r *Rev
 	return out, err
 }
 
+// loopsOwn keeps, on a candidate, the findings a pull request's fix loop
+// owns: its own reviews' — of the fix, and of its simplifier's diff — never
+// the findings a person let the pull request open with. After a failed
+// test SimplifyBase is empty: the narrow review's open findings are not the
+// loop's. Both the fix it sends and the exit it weighs read these.
+// Elsewhere it keeps every finding.
+func (s *Store) loopsOwn(ctx context.Context, org string, st *State, findings []FindingState) ([]FindingState, error) {
+	if !st.checkingCandidate() {
+		return findings, nil
+	}
+	ranges := []*ReviewRange{{Of: RangePullRequestFix, Base: st.Candidate.Base}}
+	if len(st.SimplifyBase) > 0 {
+		ranges = append(ranges, &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase})
+	}
+	var ours []string
+	for _, r := range ranges {
+		ids, err := s.rangeFindings(ctx, org, st, r)
+		if err != nil {
+			return nil, err
+		}
+		ours = append(ours, ids...)
+	}
+	return slices.DeleteFunc(findings, func(f FindingState) bool { return !slices.Contains(ours, f.ID) }), nil
+}
+
 // unreviewedHeads are the repositories whose candidate heads have neither
 // a completed review covering that repository in this attempt nor a person's
 // acceptance of that exact commit.

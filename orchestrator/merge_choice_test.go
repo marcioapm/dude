@@ -1,6 +1,9 @@
 package orchestrator_test
 
 import (
+	"context"
+	"encoding/json"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -67,6 +70,79 @@ func TestEachPullRequestChoiceOpensAtTheMergedHeadWithoutAnotherTest(t *testing.
 			}
 		})
 	}
+}
+
+// Ask me first, and the target branch gains a commit to a dependency
+// manifest (affectsEveryChange: it touches the task) as the opening
+// starts. The owner answers at the hold; GitHub merges main in, the merged
+// head is tested again, and the delivery is held again at it. The second
+// hold's commits since the first are the task's own, none here: main's
+// commit and GitHub's merge of it are not new work of the task.
+func TestAHoldAfterAnOverlappingMergeCountsOnlyTheTasksCommitsSince(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	var once sync.Once
+	w.gated(func(step, next string) {
+		if next != "openPullRequest" || step == next {
+			return
+		}
+		once.Do(func() {
+			w.commitFileIn(w.gh.Repo, "main", "go.mod", "module example.com/acme\n", "Another task's dependency bump")
+		})
+	}).Store(true)
+	w.projectChoice(delivery.PullRequestAsk)
+	task := w.testing("fake/scripted")
+	w.assignOwner(task, ana)
+	w.until("the first hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
+	first := w.hold(task)
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true, "draft": true}); status != 200 {
+		t.Fatalf("the owner's Open as draft: %d %v", status, out)
+	}
+	w.until("the second hold", func() bool {
+		return len(w.gh.Pulls()) > 0 || w.heldBeforePR(task) && w.hold(task).Round == 2
+	})
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened, want the owner asked again at the merged head", n)
+	}
+	second := w.hold(task)
+	merged := second.Heads["target"]
+	if got := gitOut(t, w.gh.Repo, "rev-list", "--count", merged+"..main"); got != "0" {
+		t.Fatalf("the second hold's head %s lacks main: %s behind", merged, got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'why' = $3`,
+		task, delivery.EvTestSkipped, delivery.MergeUntouchedWhy); n != 0 {
+		t.Fatalf("%d skips of a merge that touched the task, want it tested", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'test' AND status = 'completed'
+		AND base_refs->>'target' = $2`, task, merged); n != 1 {
+		t.Fatalf("%d completed tests at the merged head %s, want 1", n, merged)
+	}
+	from := first.Heads["target"]
+	ownSince := gitOut(t, w.gh.Repo, "rev-list", "--count", "--first-parent", "--no-merges", from+".."+merged)
+	mainSince := gitOut(t, w.gh.Repo, "rev-list", "--count", from+".."+merged)
+	if second.CommitsSince == nil || *second.CommitsSince != 0 {
+		got := "nil"
+		if second.CommitsSince != nil {
+			got = strconv.Itoa(*second.CommitsSince)
+		}
+		t.Errorf("round %d's commitsSince = %s, want 0: the task added %s commits of its own since round %d at %s; %s..%s holds %s, "+
+			"main's commit and GitHub's merge of it", second.Round, got, ownSince, first.Round, from, from, merged, mainSince)
+	}
+}
+
+// hold is the delivery's State.Hold, as the task's page reads it.
+func (w *world) hold(task string) delivery.Hold {
+	w.t.Helper()
+	var raw []byte
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->'hold', '{}'::jsonb) FROM workflow_runs
+		WHERE task_id = $1 AND workflow_type = 'task.delivery'`, task).Scan(&raw); err != nil {
+		w.t.Fatal(err)
+	}
+	var h delivery.Hold
+	if err := json.Unmarshal(raw, &h); err != nil {
+		w.t.Fatal(err)
+	}
+	return h
 }
 
 // The project's policy stops resolving while GitHub's merge of main is

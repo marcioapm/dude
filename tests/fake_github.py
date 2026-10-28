@@ -1181,8 +1181,14 @@ class FakeGitHub:
                     ahead = self._git("rev-list", "--count", f"{m[1]}..{m[2]}").stdout.strip()
                     # GitHub sends the merge base as a commit object.
                     merge_base = self._git("merge-base", m[1], m[2]).stdout.strip()
+                    # And the head's commits the base lacks, oldest first, each with its
+                    # parents (first parent first): at most 250, total_commits counting all.
+                    listed = [line.split() for line in
+                              self._git("rev-list", "--reverse", "--topo-order", "--parents", f"{m[1]}..{m[2]}").stdout.splitlines()]
+                    commits = [{"sha": c[0], "parents": [{"sha": p} for p in c[1:]]} for c in listed[:250]]
                     return self._send(200, {"files": files, "behind_by": int(behind or 0), "ahead_by": int(ahead or 0),
-                                            "merge_base_commit": {"sha": merge_base}})
+                                            "merge_base_commit": {"sha": merge_base},
+                                            "commits": commits, "total_commits": len(listed)})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)", path):
                     if int(m[1]) not in self.github.pulls:
                         return self._send(404, {"message": "Not Found"})
