@@ -147,7 +147,7 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 			// The post itself says whether the channel takes it; its name
 			// unknown, the channel is shown as the id it was given.
 			target.channelName = channel
-			noteFailure(ctx, c, err)
+			noteFailure(ctx, c, chatProvider, err)
 		}
 		return target
 	}
@@ -321,7 +321,7 @@ var revokedCodes = map[string]bool{"invalid_auth": true, "token_revoked": true, 
 // and said to the agent: a revoked installation as not connected, a
 // transient error to try again, any other with Slack's own code.
 func slackFailed(ctx context.Context, c Caller, channel string, err error) error {
-	noteFailure(ctx, c, err)
+	noteFailure(ctx, c, chatProvider, err)
 	if revokedCodes[apiCode(err)] {
 		var org string
 		if qerr := c.env.db.InOrg(ctx, c.Org, func(tx pgx.Tx) (err error) {
@@ -341,9 +341,9 @@ func slackFailed(ctx context.Context, c Caller, channel string, err error) error
 
 // noteFailure counts err for the installation's health, as the chat
 // service counts its own calls' failures.
-func noteFailure(ctx context.Context, c Caller, err error) {
+func noteFailure(ctx context.Context, c Caller, provider string, err error) {
 	if c.env.db != nil {
-		chat.NoteFailure(ctx, c.env.db, nil, c.Org, chatProvider, err)
+		chat.NoteFailure(ctx, c.env.db, nil, c.Org, provider, err)
 	}
 }
 

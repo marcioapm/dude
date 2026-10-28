@@ -14,12 +14,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// dude's notices in the chat thread a task came from (chat_notices,
-// migration 219): its delivery started, a pull request opened, it was
-// done, or it failed or was stopped. delivery records each, at most once
-// per task and kind, with the move that makes it; PostNotices posts the
-// due ones. dude posts these, not the session's agent: they follow the
-// task's delivery, which no agent in the thread's session watches.
 const (
 	// noticeBatch bounds one PostNotices pass.
 	noticeBatch = 50
@@ -27,9 +21,6 @@ const (
 	// tried on a transient failure: a provider's outage of hours, not a
 	// count shared with deliveries, where a person is waiting.
 	noticeWindow = 6 * time.Hour
-	// noticeBackoffShift caps backoffBase's doubling (5 s << 7 is past
-	// backoffMax already) so a notice tried for hours never overflows it.
-	noticeBackoffShift = 8
 )
 
 type dueNotice struct {
@@ -64,14 +55,11 @@ func noticeText(n notice) string {
 	return "Stopped " + head + "."
 }
 
-// PostNotices posts the notices that are due, at most noticeBatch a pass:
-// each read and settled in its own organisation's transaction, the
-// provider called with none open. A transient failure is tried again
-// later, longer each time, until noticeWindow after the notice was
-// recorded; past it, or on any other failure, dude gives up, recording the
-// last error on the row. Posting is at least once: a crash between the
-// post and its record posts it again once the claim's lease runs out. It
-// returns how many it settled.
+// PostNotices posts at most noticeBatch due notices, returning how many
+// settled. Provider calls hold no transaction. Transient failures retry
+// until noticeWindow after creation; other failures give up immediately.
+// Delivery is at least once: a crash after posting can repeat the post
+// when the claim's lease expires.
 func (s *Service) PostNotices(ctx context.Context) (int, error) {
 	var due []dueNotice
 	if err := s.DB.InSystem(ctx, "chat-notices", func(tx pgx.Tx) error {
@@ -146,7 +134,7 @@ func (s *Service) postNotice(ctx context.Context, d dueNotice) (bool, error) {
 	}
 	s.noteFailure(ctx, d.Org, n.Provider, err)
 	if transient, after := IsTransient(err); transient && !n.Expired {
-		wait := min(max(backoffBase<<min(n.Attempts, noticeBackoffShift), after), backoffMax)
+		wait := retryBackoff(n.Attempts, after)
 		s.log().Warn("a chat notice failed; trying again", "notice", n.ID, "attempt", n.Attempts+1, "in", wait, "error", err)
 		return false, s.settleNotice(ctx, d.Org, n, "", err, wait)
 	}

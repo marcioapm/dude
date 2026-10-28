@@ -24,13 +24,9 @@ const (
 // noticeOfStatus is the notice a task's move to status gives, if any.
 var noticeOfStatus = map[string]string{"running": NoticeStarted, "done": NoticeDone, "failed": NoticeFailed, "aborted": NoticeFailed}
 
-// recordNoticeTx records kind's notice for a task whose origin is a chat
-// thread: its own, or for a task filed from a chat-born session before its
-// origin carried the thread, the session's. A task with no such origin,
-// or one whose kind was already recorded, records nothing. detail is why
-// it failed (endedDetail); what it says of the task is its own key and
-// title alone, whatever is hidden from the chat since. The lateral's
-// OFFSET 0 keeps the session's origin one lookup, not one per reference.
+// recordNoticeTx snapshots a task's notice once per kind, using its chat
+// origin or a legacy session origin. Tasks with neither record nothing.
+// OFFSET 0 keeps the session origin to one lookup, not one per reference.
 func recordNoticeTx(ctx context.Context, tx pgx.Tx, taskID, kind, detail string) error {
 	_, err := tx.Exec(ctx, `INSERT INTO chat_notices (id, organization_id, task_id, kind, provider, external_workspace_id,
 			conversation_id, conversation_name, thread_id, task_key, task_title, detail)
@@ -48,10 +44,8 @@ func recordNoticeTx(ctx context.Context, tx pgx.Tx, taskID, kind, detail string)
 	return err
 }
 
-// RecordPROpenedNoticeTx records a task's pull-request notice. Its text
-// names the task alone, with dude's link: the pull request's URL names the
-// organisation's repository, and a thread may hold guests. The URL stays
-// on the task page.
+// RecordPROpenedNoticeTx names only the task: repository URLs stay on the
+// task page because the thread may include guests.
 func RecordPROpenedNoticeTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 	return recordNoticeTx(ctx, tx, taskID, NoticePROpened, "")
 }
@@ -70,20 +64,12 @@ func statusNoticeTx(ctx context.Context, tx pgx.Tx, taskID, status, reason strin
 }
 
 // endedReasons are the reasons a task fails or is stopped with, as said in
-// a thread that may hold guests. A reason not listed (a future writer's
-// error text among them) is said as endedGeneric's.
+// a thread that may hold guests. Unrecognised reasons use a generic phrase.
 var endedReasons = map[string]string{
 	"a person stopped the task":           "a person stopped the task",
 	"a person stopped it":                 "a person stopped the task",
 	"a person aborted a run":              "a person stopped its run",
 	"pull request closed without merging": "pull request closed without merging",
-}
-
-func endedGeneric(status string) string {
-	if status == "aborted" {
-		return "it was cancelled"
-	}
-	return "it failed"
 }
 
 // endedDetail is a failed or stopped notice's reason: a fixed phrase, or a
@@ -96,11 +82,14 @@ func endedDetail(status, reason string) string {
 	for _, label := range ResolutionLabel {
 		closed := "closed as " + strings.ToLower(label)
 		if reason == closed {
-			return closed
+			return reason
 		}
 		if by, ok := strings.CutPrefix(reason, closed+" by "); ok && by != "" && len(strings.Fields(by)) == 1 && utf8.RuneCountInString(by) <= 40 {
-			return closed + " by " + by
+			return reason
 		}
 	}
-	return endedGeneric(status)
+	if status == "aborted" {
+		return "it was cancelled"
+	}
+	return "it failed"
 }

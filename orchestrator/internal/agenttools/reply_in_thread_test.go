@@ -34,12 +34,21 @@ const chatOrigin = `{"provider":"slack","workspaceId":"T1","conversationId":"C0S
 
 func setupThread(t *testing.T, installed bool, beforeCall func(string)) threadFixture {
 	t.Helper()
+	return setupThreadWithHandler(t, installed, beforeCall, nil)
+}
+
+func setupThreadWithHandler(t *testing.T, installed bool, beforeCall func(string), wrap func(http.Handler) http.Handler) threadFixture {
+	t.Helper()
 	fake := fakeslack.New("cid", "csecret")
 	fake.AddTeam("T1", "Acme")
 	fake.AddConversation(fakeslack.Conversation{ID: "C0SUPPORT", Team: "T1", Name: "support", Kind: "public", Members: []string{"UBT1", "U1"}})
 	fake.AddConversation(fakeslack.Conversation{ID: "C0RANDOMXX", Team: "T1", Name: "random", Kind: "public", Members: []string{"UBT1"}})
 	fake.AddConversation(fakeslack.Conversation{ID: "D0ANA", Team: "T1", Kind: "dm", Members: []string{"UBT1", "U1"}})
-	srv := httptest.NewServer(fake)
+	var handler http.Handler = fake
+	if wrap != nil {
+		handler = wrap(handler)
+	}
+	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: srv.URL + "/api"})
 	f := setupWith(t, &agenttools.Server{ChatProviders: chat.Registry{"slack": p}, BeforeCall: beforeCall})
@@ -370,21 +379,13 @@ func TestReplyInThreadWithoutTheInstallationIsRefused(t *testing.T) {
 func TestReplyInThreadHoldsNoTransactionAcrossThePost(t *testing.T) {
 	held := make(chan struct{})
 	release := make(chan struct{})
-	fake := fakeslack.New("cid", "csecret")
-	fake.AddTeam("T1", "Acme")
-	fake.AddConversation(fakeslack.Conversation{ID: "C0SUPPORT", Team: "T1", Name: "support", Kind: "public", Members: []string{"UBT1"}})
-	slow := httptest.NewServer(holdPosts(fake, held, release))
-	t.Cleanup(slow.Close)
-	p := slack.New(slack.Config{ClientID: "cid", ClientSecret: "csecret", APIURL: slow.URL + "/api"})
-	f := setupWith(t, &agenttools.Server{ChatProviders: chat.Registry{"slack": p}})
-	mustExec(t, f.owner, `INSERT INTO chat_installations (id, organization_id, provider, external_workspace_id, workspace_name,
-		workspace_domain, bot_user_id, bot_token) VALUES ($1, $2, 'slack', 'T1', 'Acme', 'acme', 'UBT1', $3)`, "chi_"+f.org, f.org, fake.Token("T1"))
-	token := f.session(t, "ssn_thread", "", "")
-	mustExec(t, f.owner, `UPDATE sessions SET origin = $1::jsonb WHERE id = 'ssn_thread'`, fmt.Sprintf(chatOrigin, "1.1"))
-	threadFixture{fixture: f}.personSaysIn(t, "C0SUPPORT", "#support", "1.1", "what time is it?")
+	th := setupThreadWithHandler(t, true, nil, func(handler http.Handler) http.Handler {
+		return holdPosts(handler, held, release)
+	})
+	f := th.fixture
 	done := make(chan int, 1)
 	go func() {
-		status, _ := f.post(t, token, "reply_in_thread", `{"text":"It is 22:15"}`)
+		status, _ := th.reply(t, `{"text":"It is 22:15"}`)
 		done <- status
 	}()
 	select {

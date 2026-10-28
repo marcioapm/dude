@@ -1,17 +1,9 @@
 package agenttools
 
-// reply_in_thread (capabilities.ChatReply): a session started from a chat
-// thread posts a short message, as the organisation's installation, in the
-// conversation and thread the turn's latest person input came from (its
-// chat.message's recorded source), never the agent's argument. A turn
-// whose input was typed in dude gets no thread post. Its text was redacted
-// with the Run's secret values before the call reached the tool
-// (Server.call), and is escaped once when posted.
-//
-// Three steps, as post_to_chat's: checkReply, in the call's transaction,
-// reads the origin and the installation, checks the text and the turn's
-// budget and writes the attempt; postInThread calls the provider with no
-// transaction open; recordThreadReply records the post.
+// reply_in_thread posts to the latest person input's recorded chat thread,
+// never an agent-supplied destination. Inputs typed in dude are refused.
+// Server.call redacts the text; the provider escapes it once. Checks and
+// recording use separate transactions, with none open over the post.
 
 import (
 	"context"
@@ -75,8 +67,6 @@ type threadReply struct {
 	inst     chat.Installation
 	provider chat.Provider
 }
-
-type threadPosted struct{ ts, permalink string }
 
 // replyRefused is a refusal recorded on the session as EvThreadReplyRefused.
 func replyRefused(o chat.Origin, msg string) error {
@@ -172,25 +162,23 @@ func checkReply(ctx context.Context, tx pgx.Tx, c Caller, in replyInThreadIn) (t
 }
 
 // postInThread posts, with no transaction open.
-func postInThread(ctx context.Context, c Caller, r threadReply) (threadPosted, error) {
+func postInThread(ctx context.Context, c Caller, r threadReply) (postDone, error) {
 	ts, err := r.provider.PostReply(ctx, r.inst, r.to.ConversationID, r.to.ThreadID, chat.Reply{Text: r.text})
 	if err != nil {
-		if c.env.db != nil {
-			chat.NoteFailure(ctx, c.env.db, nil, c.Org, r.to.Provider, err)
-		}
+		noteFailure(ctx, c, r.to.Provider, err)
 		var transient *chat.TransientError
 		switch {
 		case revokedCodes[apiCode(err)]:
-			return threadPosted{}, replyRefused(r.to, refuseText(rReplyNotConnected).Error())
+			return postDone{}, replyRefused(r.to, refuseText(rReplyNotConnected).Error())
 		case errors.As(err, &transient):
-			return threadPosted{}, replyRefused(r.to, refuse(rReplyBusy, err.Error()).Error())
+			return postDone{}, replyRefused(r.to, refuse(rReplyBusy, err.Error()).Error())
 		}
-		return threadPosted{}, replyRefused(r.to, refuse(rReplyRefused, err.Error()).Error())
+		return postDone{}, replyRefused(r.to, refuse(rReplyRefused, err.Error()).Error())
 	}
-	return threadPosted{ts: ts, permalink: r.provider.Permalink(r.inst, r.to.ConversationID, ts, r.to.ThreadID)}, nil
+	return postDone{ts: ts, permalink: r.provider.Permalink(r.inst, r.to.ConversationID, ts, r.to.ThreadID)}, nil
 }
 
-func recordThreadReply(ctx context.Context, tx pgx.Tx, c Caller, r threadReply, done threadPosted) (map[string]any, error) {
+func recordThreadReply(ctx context.Context, tx pgx.Tx, c Caller, r threadReply, done postDone) (map[string]any, error) {
 	payload := map[string]any{"provider": r.to.Provider, "channel": r.to.ConversationName,
 		"conversationId": r.to.ConversationID, "threadId": r.to.ThreadID, "ts": done.ts, "permalink": done.permalink}
 	if _, err := ledger.Append(ctx, tx, c.event(EvThreadReplied, payload)); err != nil {
