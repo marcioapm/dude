@@ -13,7 +13,7 @@ import (
 // Replacement before the unread round directive arrives must carry the
 // current owner note, not replay that obsolete directive into a fresh round.
 func TestOwnerNoteSurvivesRoundReplacement(t *testing.T) {
-	for _, why := range []string{"unresumable session", "secret change"} {
+	for _, why := range []string{"unresumable session", "secret change", "removed secret"} {
 		t.Run(why, func(t *testing.T) {
 			w := timeLimitWorld(t, "resume", true)
 			ctx := context.Background()
@@ -33,8 +33,15 @@ func TestOwnerNoteSurvivesRoundReplacement(t *testing.T) {
 					t.Fatalf("secret change: %v", err)
 				}
 			}
-			if replaced, err := w.s.replaceRound(ctx, w.run, why); err != nil || !replaced {
-				t.Fatalf("replace: %v %v", replaced, err)
+			var replaced bool
+			var replaceErr error
+			if why == "removed secret" {
+				replaced, replaceErr = w.s.retireForSecrets(ctx, w.run, errSecretsGone{"OLD_TOKEN"})
+			} else {
+				replaced, replaceErr = w.s.replaceRound(ctx, w.run, why)
+			}
+			if replaceErr != nil || !replaced {
+				t.Fatalf("replace: %v %v", replaced, replaceErr)
 			}
 			var id string
 			if err := w.owner.QueryRow(ctx, `SELECT replaced_by FROM runs WHERE id=$1`, w.run.ID).Scan(&id); err != nil {

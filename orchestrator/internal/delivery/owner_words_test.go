@@ -153,8 +153,13 @@ func TestARetrysNoteGoesToTheNextFixRun(t *testing.T) {
 	if got != want {
 		t.Fatalf("the fix Run's person_note %q", got)
 	}
-	if park("awaitFix", st, []string{id}); st.PersonSaid != "" {
-		t.Fatalf("the words outlive the Runs they were for: %q", st.PersonSaid)
+	raw, _ = json.Marshal(st)
+	res, err = w.fix(h.ctx, workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, State: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State.(*State).PersonSaid != "" {
+		t.Fatalf("the words outlive the Runs they were for: %q", res.State.(*State).PersonSaid)
 	}
 }
 
