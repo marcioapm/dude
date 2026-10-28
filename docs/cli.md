@@ -318,7 +318,8 @@ are resolved.
 A preview of a project's branch, with no task: every repository of the
 project at that branch where it has it, else its default branch, on the
 servers marked to start in previews. It syncs on every push to the branch,
-and ends when the branch is deleted or after 30 days unused. Opening one
+and ends when the branch is deleted or after 30 days unused, independently
+of the task-preview setting `previews.reap_after`. Opening one
 of its URLs wakes it; without a browser, `dude api POST
 /v1/runs/ID/servers/NAME/start` does.
 
