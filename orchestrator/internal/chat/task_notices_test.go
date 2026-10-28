@@ -15,17 +15,21 @@ import (
 func (w *world) childOf(parent, title string) string {
 	w.t.Helper()
 	id := "wi_" + strings.ToLower(strings.ReplaceAll(title, " ", "")) + "_" + w.org
-	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(w.ctx, `INSERT INTO tasks (id, organization_id, project_id, number, title, status)
-			VALUES ($1, $2, $3, (SELECT COALESCE(max(number), 0) + 1 FROM tasks WHERE project_id = $3), $4, 'received')`,
-			id, w.org, w.project, title); err != nil {
-			return err
-		}
-		return delivery.InheritOrigin(w.ctx, tx, "tasks", id, "", parent)
-	}); err != nil {
+	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error { return w.childOfTx(tx, id, title, parent) }); err != nil {
 		w.t.Fatal(err)
 	}
 	return id
+}
+
+// childOfTx inserts task id in BIL, in the Backlog, and inherits its origin
+// from parent, in tx.
+func (w *world) childOfTx(tx pgx.Tx, id, title, parent string) error {
+	if _, err := tx.Exec(w.ctx, `INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+		VALUES ($1, $2, $3, (SELECT COALESCE(max(number), 0) + 1 FROM tasks WHERE project_id = $3), $4, 'received')`,
+		id, w.org, w.project, title); err != nil {
+		return err
+	}
+	return delivery.InheritOrigin(w.ctx, tx, "tasks", id, "", parent)
 }
 
 // A task made by the agent of a chat-routed task, and one made by that
@@ -126,18 +130,11 @@ func TestChatNoticesNeverResolveAnotherOrganisationsTask(t *testing.T) {
 	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, status, origin) VALUES ($1, $2, $3, 1, 'Theirs', 'running',
 		'{"provider":"slack","workspaceId":"T1","conversationId":"C1","conversationName":"#support","threadId":"5.5"}')`,
 		foreign, other, "prj_"+other)
-	insert := func(tx pgx.Tx, id string) error {
-		if _, err := tx.Exec(w.ctx, `INSERT INTO tasks (id, organization_id, project_id, number, title, status)
-			VALUES ($1, $2, $3, (SELECT COALESCE(max(number), 0) + 1 FROM tasks WHERE project_id = $3), 'Mine', 'received')`, id, w.org, w.project); err != nil {
-			return err
-		}
-		return delivery.InheritOrigin(w.ctx, tx, "tasks", id, "", foreign)
-	}
 	viaApp, viaOwner := "wi_rls_"+w.org, "wi_owner_"+w.org
-	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error { return insert(tx, viaApp) }); err != nil {
+	if err := w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error { return w.childOfTx(tx, viaApp, "Mine", foreign) }); err != nil {
 		t.Fatal(err)
 	}
-	if err := pgx.BeginFunc(w.ctx, w.owner, func(tx pgx.Tx) error { return insert(tx, viaOwner) }); err != nil {
+	if err := pgx.BeginFunc(w.ctx, w.owner, func(tx pgx.Tx) error { return w.childOfTx(tx, viaOwner, "Mine", foreign) }); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.count(`SELECT count(*) FROM tasks WHERE id = ANY($1) AND origin ? 'notify'`, []string{viaApp, viaOwner}); n != 0 {

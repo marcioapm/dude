@@ -12,6 +12,9 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
+// chatOrigin is an epic's or task's origin in #support's thread 1.0.
+const chatOrigin = `{"provider":"slack","workspaceId":"T1","conversationId":"C1","conversationName":"#support","threadId":"1.0"}`
+
 // routedEpic is an epic routed from a mention in #support, with two tasks
 // in the Backlog: the epic, its tasks in order, and the thread's root.
 func (w *world) routedEpic() (epic string, tasks []string, root string) {
@@ -85,6 +88,16 @@ func (w *world) moveRecorded(task, status, reason string) {
 	}); err != nil {
 		w.t.Fatal(err)
 	}
+}
+
+// addedTask adds a task to epic in the Backlog, with the epic's origin, as
+// one added after routing: its id.
+func (w *world) addedTask(epic string) string {
+	w.t.Helper()
+	added := "wi_added_" + w.org
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin)
+		SELECT $1, $2, $3, 9, $4, 'Added', 'received', origin FROM epics WHERE id = $4`, added, w.org, w.project, epic)
+	return added
 }
 
 // An epic routed from a thread tells it once when its first task starts,
@@ -216,9 +229,7 @@ func TestChatEpicNoticeFinishedIsNeverRepeated(t *testing.T) {
 	w.move(tasks[0], "running", "planning with the conductor")
 	w.move(tasks[0], "failed", "lux: exit 1")
 	// A task added since, delivered.
-	added := "wi_added_" + w.org
-	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin)
-		SELECT $1, $2, $3, 9, $4, 'Added', 'received', origin FROM epics WHERE id = $4`, added, w.org, w.project, epic)
+	added := w.addedTask(epic)
 	w.move(added, "running", "planning with the conductor")
 	w.prOpened(added)
 	w.move(added, "aborted", "a person stopped the task")
@@ -237,15 +248,14 @@ func TestChatEpicNoticeFinishedIsNeverRepeated(t *testing.T) {
 // exactly one finished notice: never none, never two.
 func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 	w := setup(t)
-	origin := `{"provider":"slack","workspaceId":"T1","conversationId":"C1","conversationName":"#support","threadId":"1.0"}`
 	for i := range 20 {
 		epic := fmt.Sprintf("epc_race%d_%s", i, w.org)
-		w.exec(`INSERT INTO epics (id, organization_id, project_id, title, origin) VALUES ($1, $2, $3, 'Race', $4::jsonb)`, epic, w.org, w.project, origin)
+		w.exec(`INSERT INTO epics (id, organization_id, project_id, title, origin) VALUES ($1, $2, $3, 'Race', $4::jsonb)`, epic, w.org, w.project, chatOrigin)
 		var tasks []string
 		for j := range 2 {
 			id := fmt.Sprintf("wi_race%d_%d_%s", i, j, w.org)
 			w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin)
-				VALUES ($1, $2, $3, $4, $5, 'Racer', 'running', $6::jsonb)`, id, w.org, w.project, 100+i*2+j, epic, origin)
+				VALUES ($1, $2, $3, $4, $5, 'Racer', 'running', $6::jsonb)`, id, w.org, w.project, 100+i*2+j, epic, chatOrigin)
 			tasks = append(tasks, id)
 		}
 		var (
@@ -275,24 +285,7 @@ func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 					// seen waiting on a lock, or has counted too: unserialised,
 					// both counts see the other still running.
 					moved <- struct{}{}
-					deadline := time.Now().Add(30 * time.Second)
-					for len(moved) < 2 {
-						var waiting bool
-						if err := w.svc.DB.InOrg(w.ctx, w.org, func(probe pgx.Tx) error {
-							return probe.QueryRow(w.ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted)`,
-								pids[1-j]).Scan(&waiting)
-						}); err != nil {
-							return err
-						}
-						if waiting {
-							return nil
-						}
-						if time.Now().After(deadline) {
-							return fmt.Errorf("the other move neither waited nor counted within 30s")
-						}
-						time.Sleep(2 * time.Millisecond)
-					}
-					return nil
+					return w.waitBlocked(pids[1-j], 30*time.Second, func() bool { return len(moved) == 2 })
 				})
 			}()
 		}
@@ -320,54 +313,30 @@ func TestChatEpicNoticeTwoTasksEndingConcurrentlyFinishOnce(t *testing.T) {
 // never a deadlock.
 func TestChatEpicNoticeOfALastTaskEndingWhileTheEpicIsArchivedNeverDeadlocks(t *testing.T) {
 	w := setup(t)
-	origin := `{"provider":"slack","workspaceId":"T1","conversationId":"C1","conversationName":"#support","threadId":"1.0"}`
 	for i := range 5 {
 		epic := fmt.Sprintf("epc_arch%d_%s", i, w.org)
-		w.exec(`INSERT INTO epics (id, organization_id, project_id, title, origin) VALUES ($1, $2, $3, 'Archived', $4::jsonb)`, epic, w.org, w.project, origin)
+		w.exec(`INSERT INTO epics (id, organization_id, project_id, title, origin) VALUES ($1, $2, $3, 'Archived', $4::jsonb)`, epic, w.org, w.project, chatOrigin)
 		var tasks []string
 		for j, status := range []string{"done", "running"} {
 			id := fmt.Sprintf("wi_arch%d_%d_%s", i, j, w.org)
 			w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin)
-				VALUES ($1, $2, $3, $4, $5, 'Archiver', $6, $7::jsonb)`, id, w.org, w.project, 200+i*2+j, epic, status, origin)
+				VALUES ($1, $2, $3, $4, $5, 'Archiver', $6, $7::jsonb)`, id, w.org, w.project, 200+i*2+j, epic, status, chatOrigin)
 			tasks = append(tasks, id)
 		}
-		held, blocked := make(chan struct{}), make(chan struct{})
-		archiver := make(chan int, 1)
-		errs := make(chan error, 2)
-		go func() {
-			errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-				// SetTaskStatusTx's row update, held until the archive waits on it.
-				if _, err := tx.Exec(w.ctx, `UPDATE tasks SET status = 'failed', updated_at = now() WHERE id = $1`, tasks[1]); err != nil {
-					return err
-				}
-				close(held)
-				<-blocked
+		w.lockRace(i,
+			// SetTaskStatusTx's row update, held until the archive waits on it.
+			func(tx pgx.Tx) error {
+				_, err := tx.Exec(w.ctx, `UPDATE tasks SET status = 'failed', updated_at = now() WHERE id = $1`, tasks[1])
+				return err
+			},
+			func(tx pgx.Tx) error {
 				return delivery.RecordStatusTx(w.ctx, tx, w.org, w.project, tasks[1], "failed", "lux: exit 1")
-			})
-		}()
-		<-held
-		go func() {
-			errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-				var pid int
-				if err := tx.QueryRow(w.ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
-					return err
-				}
-				archiver <- pid
+			},
+			func(tx pgx.Tx) error {
 				_, _, err := delivery.ArchiveEpicTx(w.ctx, tx, w.org, epic, true, delivery.Actor{ActorType: "system", ActorID: "test"},
 					func(delivery.EpicTask) error { return nil })
 				return err
 			})
-		}()
-		waited := w.waitBlocked(<-archiver, 30*time.Second)
-		close(blocked)
-		for range 2 {
-			if err := <-errs; err != nil {
-				t.Fatalf("round %d: %v", i, err)
-			}
-		}
-		if waited != nil {
-			t.Fatalf("round %d: %v", i, waited)
-		}
 		if n := w.count(`SELECT count(*) FROM chat_notices WHERE epic_id = $1 AND kind = 'epic_finished'`, epic); n != 1 {
 			t.Fatalf("round %d: %d finished notices, want 1", i, n)
 		}
@@ -381,58 +350,34 @@ func TestChatEpicNoticeOfALastTaskEndingWhileTheEpicIsArchivedNeverDeadlocks(t *
 // never a deadlock.
 func TestChatEpicNoticeOfAnArchivedTaskMovedOutWhileTheEpicIsUnarchivedNeverDeadlocks(t *testing.T) {
 	w := setup(t)
-	origin := `{"provider":"slack","workspaceId":"T1","conversationId":"C1","conversationName":"#support","threadId":"1.0"}`
 	const archivedAt = "2026-01-01 00:00:00+00"
 	for i := range 5 {
 		epic := fmt.Sprintf("epc_unarch%d_%s", i, w.org)
 		w.exec(`INSERT INTO epics (id, organization_id, project_id, title, origin, archived_at)
-			VALUES ($1, $2, $3, 'Unarchived', $4::jsonb, $5)`, epic, w.org, w.project, origin, archivedAt)
+			VALUES ($1, $2, $3, 'Unarchived', $4::jsonb, $5)`, epic, w.org, w.project, chatOrigin, archivedAt)
 		archived := fmt.Sprintf("wi_unarch%d_0_%s", i, w.org)
 		current := fmt.Sprintf("wi_unarch%d_1_%s", i, w.org)
 		w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin, archived_at)
 			VALUES ($1, $2, $3, $4, $5, 'Archived with it', 'done', $6::jsonb, $7),
 			       ($8, $2, $3, $9, $5, 'Moved in since', 'done', $6::jsonb, NULL)`,
-			archived, w.org, w.project, 300+i*2, epic, origin, archivedAt, current, 301+i*2)
-		held, blocked := make(chan struct{}), make(chan struct{})
-		unarchiver := make(chan int, 1)
-		errs := make(chan error, 2)
-		go func() {
-			errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-				// PATCH /tasks/:id's row lock, held until the unarchive waits on it.
-				if _, err := tx.Exec(w.ctx, `SELECT id FROM tasks WHERE id = $1 FOR UPDATE`, archived); err != nil {
-					return err
-				}
-				close(held)
-				<-blocked
+			archived, w.org, w.project, 300+i*2, epic, chatOrigin, archivedAt, current, 301+i*2)
+		w.lockRace(i,
+			// PATCH /tasks/:id's row lock, held until the unarchive waits on it.
+			func(tx pgx.Tx) error {
+				_, err := tx.Exec(w.ctx, `SELECT id FROM tasks WHERE id = $1 FOR UPDATE`, archived)
+				return err
+			},
+			func(tx pgx.Tx) error {
 				if _, err := tx.Exec(w.ctx, `UPDATE tasks SET epic_id = NULL, updated_at = now() WHERE id = $1`, archived); err != nil {
 					return err
 				}
 				_, err := tx.Exec(w.ctx, `SELECT chat_epic_notice($1, 'epic_finished', $2)`, epic, archived)
 				return err
-			})
-		}()
-		<-held
-		go func() {
-			errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-				var pid int
-				if err := tx.QueryRow(w.ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
-					return err
-				}
-				unarchiver <- pid
+			},
+			func(tx pgx.Tx) error {
 				_, err := delivery.UnarchiveEpicTx(w.ctx, tx, w.org, epic, delivery.Actor{ActorType: "system", ActorID: "test"})
 				return err
 			})
-		}()
-		waited := w.waitBlocked(<-unarchiver, 30*time.Second)
-		close(blocked)
-		for range 2 {
-			if err := <-errs; err != nil {
-				t.Fatalf("round %d: %v", i, err)
-			}
-		}
-		if waited != nil {
-			t.Fatalf("round %d: %v", i, waited)
-		}
 		if got := w.one(`SELECT trigger_task_id || ' ' || detail FROM chat_notices WHERE epic_id = $1 AND kind = 'epic_finished'`, epic); got != archived+" 1 done, 0 failed, 0 cancelled" {
 			t.Fatalf("round %d: finished as %q", i, got)
 		}
@@ -442,16 +387,66 @@ func TestChatEpicNoticeOfAnArchivedTaskMovedOutWhileTheEpicIsUnarchivedNeverDead
 	}
 }
 
-// waitBlocked waits until the backend pid waits on a lock: an error when it
-// has not within limit.
-func (w *world) waitBlocked(pid int, limit time.Duration) error {
+// lockRace runs hold in one transaction, then waiter in another; once the
+// waiter's backend waits on a lock, the first goes on with rest. Both must
+// commit within round: Postgres aborts one of a deadlocked pair.
+func (w *world) lockRace(round int, hold, rest, waiter func(pgx.Tx) error) {
 	w.t.Helper()
-	deadline := time.Now().Add(limit)
-	for w.count(`SELECT count(*) FROM pg_locks WHERE pid = $1 AND NOT granted`, pid) == 0 {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("backend %d never waited on a lock within %s", pid, limit)
+	held, blocked := make(chan struct{}), make(chan struct{})
+	waiterPID := make(chan int, 1)
+	errs := make(chan error, 2)
+	go func() {
+		errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+			if err := hold(tx); err != nil {
+				return err
+			}
+			close(held)
+			<-blocked
+			return rest(tx)
+		})
+	}()
+	<-held
+	go func() {
+		errs <- w.svc.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+			var pid int
+			if err := tx.QueryRow(w.ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+				return err
+			}
+			waiterPID <- pid
+			return waiter(tx)
+		})
+	}()
+	waited := w.waitBlocked(<-waiterPID, 30*time.Second, nil)
+	close(blocked)
+	for range 2 {
+		if err := <-errs; err != nil {
+			w.t.Fatalf("round %d: %v", round, err)
 		}
-		time.Sleep(5 * time.Millisecond)
+	}
+	if waited != nil {
+		w.t.Fatalf("round %d: %v", round, waited)
+	}
+}
+
+// waitBlocked waits until the backend pid waits on a lock, or until done
+// (when non-nil) reports true: an error when neither within limit. It
+// probes on a pool connection, so racing goroutines may call it at once.
+func (w *world) waitBlocked(pid int, limit time.Duration, done func() bool) error {
+	deadline := time.Now().Add(limit)
+	for done == nil || !done() {
+		var waiting bool
+		if err := w.svc.DB.InOrg(w.ctx, w.org, func(probe pgx.Tx) error {
+			return probe.QueryRow(w.ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted)`, pid).Scan(&waiting)
+		}); err != nil {
+			return err
+		}
+		if waiting {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("backend %d neither waited on a lock nor finished within %s", pid, limit)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 	return nil
 }
@@ -491,9 +486,7 @@ func TestChatEpicNoticeFinishesWhenItsLastUnfinishedTaskIsArchivedAndClosed(t *t
 func TestChatEpicNoticeFinishesWhenAnEndedTaskIsArchivedLeavingOnlyEndedOnes(t *testing.T) {
 	w := setup(t)
 	epic, tasks, root := w.routedEpic()
-	added := "wi_added_" + w.org
-	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, status, origin)
-		SELECT $1, $2, $3, 9, $4, 'Added', 'received', origin FROM epics WHERE id = $4`, added, w.org, w.project, epic)
+	added := w.addedTask(epic)
 	w.move(tasks[0], "running", "planning with the conductor")
 	w.move(tasks[0], "done", "pull requests merged")
 	w.move(tasks[1], "running", "planning with the conductor")
