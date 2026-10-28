@@ -95,6 +95,8 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 	out := map[string]any{"run": in.Run, "profile": profile, "status": status, "generation": generation, "replacedBy": replaced, "stopReason": stop, "recordedHeads": heads, "reportPresent": false, "reportClipped": false, "settled": false, "artifacts": []any{}}
 	// Report only after settlement: terminal transport drain must finish first.
 	var result json.RawMessage
+	var report string
+	reportLimit, nameLimit, descriptionLimit := 16000, 200, 1000
 	err = tx.QueryRow(ctx, `SELECT jsonb_build_object('status',status,'stale',stale,'commits',commits,'verify',verify,'findings',findings,'verdicts',verdicts)
  FROM child_results WHERE parent_run_id=$1 AND child_run_id=$2 AND generation=$3`, c.RunID, in.Run, generation).Scan(&result)
 	if err != nil && err != pgx.ErrNoRows {
@@ -103,7 +105,7 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 	if err == nil {
 		out["settled"] = true
 		out["result"] = result
-		report, err := delivery.ChildInspectionReportTx(ctx, tx, in.Run)
+		report, err = delivery.ChildInspectionReportTx(ctx, tx, in.Run)
 		if err != nil {
 			return nil, err
 		}
@@ -111,7 +113,7 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 		out["reportClipped"] = len(report) > 16000
 		out["report"] = w.text(report, 16000)
 	}
-	rows, err := tx.Query(ctx, `SELECT id, left(name,200), kind::text, left(COALESCE(description,''),1000) FROM artifacts WHERE run_id=$1 AND name NOT LIKE '.dude-%' ORDER BY id OFFSET $2 LIMIT $3`, in.Run, in.Offset, in.Limit+1)
+	rows, err := tx.Query(ctx, `SELECT id, left(name,201), kind::text, left(COALESCE(description,''),1001) FROM artifacts WHERE run_id=$1 AND name NOT LIKE '.dude-%' ORDER BY id OFFSET $2 LIMIT $3`, in.Run, in.Offset, in.Limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +131,13 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 	if more {
 		arts = arts[:in.Limit]
 	}
+	rawArts := append([]artifact(nil), arts...)
+	out["artifactsClipped"] = false
+	out["metadataClipped"] = false
 	for i := range arts {
+		if len(arts[i].Name) > nameLimit || len(arts[i].Description) > descriptionLimit {
+			out["artifactsClipped"] = true
+		}
 		arts[i].Name = w.text(arts[i].Name, 200)
 		arts[i].Description = w.text(arts[i].Description, 1000)
 	}
@@ -137,17 +145,37 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 	out["artifactsMore"] = more
 	out["artifactOffset"] = in.Offset
 	out["note"] = w.note() + " Reports are agent claims, not verified checks. recordedHeads are stored Run heads, not proof of publication. verify is the recorded verifier outcome, if present. Use run_chat or run_diff only if separately granted."
-	// Bound untrusted/large stored heads and verifier metadata as a whole. Never
-	// silently clip structured fields or label a partial report complete.
-	data, err := json.Marshal(out)
-	if err != nil {
-		return nil, err
+	// Check the encoded size after every reduction: JSON escaping can expand
+	// text sixfold. Re-wrap original text rather than cutting JSON or markers.
+	for {
+		data, err := json.Marshal(out)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) <= 64000 {
+			return data, nil
+		}
+		switch {
+		case report != "" && reportLimit > 0:
+			reportLimit = min(reportLimit, len(report)) / 2
+			out["report"] = w.text(report, reportLimit)
+			out["reportClipped"] = true
+		case len(arts) > 0 && (nameLimit > 0 || descriptionLimit > 0):
+			nameLimit /= 2
+			descriptionLimit /= 2
+			for i, a := range rawArts {
+				if len(a.Name) > nameLimit || len(a.Description) > descriptionLimit {
+					out["artifactsClipped"] = true
+				}
+				arts[i].Name = w.text(a.Name, nameLimit)
+				arts[i].Description = w.text(a.Description, descriptionLimit)
+			}
+		case out["metadataClipped"] == false:
+			delete(out, "recordedHeads")
+			delete(out, "result")
+			out["metadataClipped"] = true
+		default:
+			return nil, refuseText(rInspectionBudget)
+		}
 	}
-	if len(data) > 64000 {
-		delete(out, "recordedHeads")
-		delete(out, "result")
-		out["metadataClipped"] = true
-		data, err = json.Marshal(out)
-	}
-	return data, err
 }

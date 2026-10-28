@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
@@ -13,6 +14,77 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestReadRunSerializedBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name, report, artifact          string
+		metadata, irreducible           bool
+		reportClipped, artifactsClipped bool
+	}{
+		{name: "html", report: strings.Repeat("<", 16000), reportClipped: true},
+		{name: "control", report: strings.Repeat("\x01", 16000), reportClipped: true},
+		{name: "quotes-backslashes", report: strings.Repeat("\"\\", 8000)},
+		{name: "multibyte", report: strings.Repeat("界", 17000), reportClipped: true},
+		{name: "artifact-html", report: "normal report", artifact: "<", reportClipped: true, artifactsClipped: true},
+		{name: "artifact-quotes-backslashes", report: strings.Repeat("\"\\", 8000), artifact: "\"\\", reportClipped: true},
+		{name: "metadata", report: "normal report", metadata: true, reportClipped: true},
+		{name: "irreducible", report: "normal report", irreducible: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t)
+			token := f.conductor(t)
+			f.run(t, "inspection_child", "investigator", "completed")
+			mustExec(t, f.owner, `UPDATE runs SET source_kind='task_conductor',parent_run_id='run_cond',child_profile='investigator',child_capabilities='{}' WHERE id='inspection_child'`)
+			mustExec(t, f.owner, `INSERT INTO events (id,organization_id,task_id,run_id,event_type,actor_type,actor_id,source,payload) VALUES ('evt_report',$1,$2,'inspection_child','agent.message','agent','inspection_child','orchestrator',jsonb_build_object('text',$3::text))`, f.org, f.item, tc.report)
+			store := &delivery.Store{DB: f.app}
+			if _, err := store.SettleChild(context.Background(), f.org, "inspection_child", delivery.ChildOutcome{Status: "completed"}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.artifact != "" {
+				for i := range 20 {
+					mustExec(t, f.owner, `INSERT INTO artifacts(id,organization_id,run_id,kind,name,description,storage_key,sha256) VALUES ($1,$2,'inspection_child','report',$3,$4,$1,'hash')`, fmt.Sprintf("artifact_%02d", i), f.org, strings.Repeat(tc.artifact, 100), strings.Repeat(tc.artifact, 500))
+				}
+			}
+			if tc.metadata {
+				mustExec(t, f.owner, `UPDATE runs SET heads=jsonb_build_object('repo',$1::text) WHERE id='inspection_child'`, strings.Repeat("<", 16000))
+			}
+			if tc.irreducible {
+				mustExec(t, f.owner, `INSERT INTO artifacts(id,organization_id,run_id,kind,name,storage_key,sha256) VALUES ('large_kind',$1,'inspection_child',$2,'name','key','hash')`, f.org, strings.Repeat("<", 16000))
+			}
+			var raw json.RawMessage
+			code := f.postAs(t, token, "read_run", `{"run":"inspection_child","limit":20}`, &raw)
+			if tc.irreducible {
+				if code != 422 {
+					t.Fatalf("irreducible inspection: status %d, %d bytes", code, len(raw))
+				}
+				return
+			}
+			if code != 200 || !json.Valid(raw) || !utf8.Valid(raw) || len(raw) > 64000 {
+				t.Fatalf("inspection: status %d, valid JSON %v, %d bytes", code, json.Valid(raw), len(raw))
+			}
+			var out struct {
+				Report                                           string
+				ReportClipped, ArtifactsClipped, MetadataClipped bool
+				Artifacts                                        []struct{ Name, Description string }
+			}
+			if err := json.Unmarshal(raw, &out); err != nil {
+				t.Fatal(err)
+			}
+			if out.ReportClipped != tc.reportClipped || out.ArtifactsClipped != tc.artifactsClipped || out.MetadataClipped != tc.metadata {
+				t.Fatalf("clipping: report=%v artifacts=%v metadata=%v", out.ReportClipped, out.ArtifactsClipped, out.MetadataClipped)
+			}
+			texts := []string{out.Report}
+			for _, a := range out.Artifacts {
+				texts = append(texts, a.Name, a.Description)
+			}
+			for _, text := range texts {
+				if !strings.HasPrefix(text, "⟦external ") || !strings.Contains(text, "⟦/external ") || !utf8.ValidString(text) {
+					t.Fatal("inspection text lost its external wrapper or UTF-8 boundary")
+				}
+			}
+		})
+	}
+}
 
 // Production JSON dispatch + real PostgreSQL settlement/outbox: not a real
 // model acceptance test or a full lux stack test.

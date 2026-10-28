@@ -5,6 +5,7 @@ rCohortSize                            refusals/tools/child/cohort-size
 rCohortBriefs                          refusals/tools/child/cohort-briefs
 rCohortMemberKey                       refusals/tools/child/cohort-member-key
 rInspectionPage                        refusals/tools/child/inspection-page
+rInspectionBudget                      refusals/tools/child/inspection-budget
 rInspectionScope                       refusals/tools/child/inspection-scope
 rChildToolsReadOnly                    refusals/tools/child/tools-read-only
 rYourContainerNotRunningAsLux          refusals/tools/basesync/your-container-not-running-as-lux

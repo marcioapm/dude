@@ -638,6 +638,10 @@ artifact offset must be nonnegative and limit at most 20
 
 unknown or inaccessible child Run
 
+## refusals/tools/child/inspection-budget
+
+child Run inspection exceeds 64000 bytes even after clipping; request fewer artifacts
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
