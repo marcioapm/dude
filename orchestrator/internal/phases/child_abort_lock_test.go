@@ -116,18 +116,19 @@ func raceLifecycleBatch(w *resumeWorld, child phaseRun, op func(context.Context,
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(gate.release) }) }
 	var wg sync.WaitGroup
+	var bErr, oErr error
 	batchDone, opDone := make(chan struct{}), make(chan struct{})
-	// Joined before ctx is cancelled, so neither transaction is abandoned
-	// on a live connection.
+	// Join before cancellation and before reading the workers' errors.
 	defer func() {
 		unblock()
 		wg.Wait()
+		batchErr, opErr = bErr, oErr
 	}()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer close(batchDone)
-		batchErr = w.s.applyBatch(ctx, tr, []lux.Frame{luxState(1, "starting"), luxState(1, "running"),
+		bErr = w.s.applyBatch(ctx, tr, []lux.Frame{luxState(1, "starting"), luxState(1, "running"),
 			cursorFrame(record(1, "lux.warning", map[string]any{"message": "after the lifecycle"}), "c-family")})
 	}()
 	select {
@@ -141,7 +142,7 @@ func raceLifecycleBatch(w *resumeWorld, child phaseRun, op func(context.Context,
 	go func() {
 		defer wg.Done()
 		defer close(opDone)
-		opErr = op(ctx, app)
+		oErr = op(ctx, app)
 	}()
 	for blocked := false; !blocked; {
 		if err := w.owner.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
@@ -161,7 +162,7 @@ func raceLifecycleBatch(w *resumeWorld, child phaseRun, op func(context.Context,
 	}
 	unblock()
 	wg.Wait()
-	return batchErr, opErr, nil
+	return bErr, oErr, nil
 }
 
 // assertBatchCommitted fails unless the child's batch committed whole: its
