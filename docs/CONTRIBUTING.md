@@ -674,6 +674,19 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   stopped with `DELETE /v1/tasks/:id/preview`, or ends when its task does
   (done, failed, aborted). A stopped preview's lux Run is cancelled, a lost
   one too (lux keeps a lost Run to resume).
+- **A branch preview of a project** (`runs.preview_branch`, migration 221)
+  is a preview with no task: `dude preview start PROJECT BRANCH`
+  (`servers/branches.go`, `POST /v1/projects/:id/branch-previews`), one live
+  per project branch, refused (`branch_not_found`) when the project's first
+  repository has no such branch on GitHub. Wakeable only. It serves every
+  project repository at the branch where the forge has it, else the default
+  branch, read on every wake (`refs`), at `<server>-<branch>-<project slug>`
+  (a hashed label hashes `branch:<b>`, never a task id). A `push` webhook to
+  the branch syncs it (`sync_wanted_at`); a push with `deleted` or a `delete`
+  of the branch in the first repository ends it, and a daily check
+  (`CheckBranches`) ends it only when GitHub definitely has no such branch.
+  Unused 30 days, it is reaped (a task's preview: 7). It carries no comment
+  overlay: feedback belongs to a task.
 - **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
   own (`preview_servers`), one per recipe marked to start in previews, at
   `<server>-<task key>-<project slug>.<preview domain>` — one DNS label
@@ -1360,7 +1373,7 @@ noted for the installation's health, never retried.
   are refused. Text is escaped once, special mentions (`<!…>`) are refused,
   and a per-session advisory lock enforces 3 posts per turn from ledger
   attempts. As with `post_to_chat`, no transaction spans the provider call.
-- *dude posts task progress* via `chat_notices` (migration 221,
+- *dude posts task progress* via `chat_notices` (migration 222,
   `delivery/chat_notices.go`, `chat/notices.go`): started, PR opened (dude's
   link, never the repository URL), done, failed or stopped. Reasons are
   allow-listed; others become "it failed"/"it was cancelled". Each task/kind
@@ -1377,7 +1390,7 @@ noted for the installation's health, never retried.
   cancelled"; never called a success). Finishing is checked on each task's
   end and when a task is archived or moved out of the epic; an empty epic
   never finishes, and reopening or adding tasks never repeats a notice. The
-  epic's display state plays no part. `chat_epic_notice` (migration 221,
+  epic's display state plays no part. `chat_epic_notice` (migration 222,
   `SECURITY INVOKER`) holds the rule; `RecordStatusTx` and
   `RecordPROpenedNoticeTx` call it last, as do Archive of an ended task and
   the control plane's task edit for the epic a task leaves. Its per-epic

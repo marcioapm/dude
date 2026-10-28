@@ -12,7 +12,7 @@ import (
 )
 
 // What dude says in the chat thread a task came from, once each
-// (chat_notices, migration 221): its delivery started, a pull request
+// (chat_notices, migration 222): its delivery started, a pull request
 // opened, it was done, or it failed or was stopped. Recorded in the
 // transaction that moves the task; chat.Service.PostNotices posts it.
 const (
@@ -100,7 +100,7 @@ func epicStatusNoticeTx(ctx context.Context, tx pgx.Tx, taskID, status string) e
 }
 
 // epicNoticeTx records kind for the epic of taskID, once per epic ever
-// (chat_epic_notice, migration 221: the destination, the lock, the finish
+// (chat_epic_notice, migration 222: the destination, the lock, the finish
 // rule and the insert). The caller holds the task's row.
 func epicNoticeTx(ctx context.Context, tx pgx.Tx, taskID, kind string) error {
 	_, err := tx.Exec(ctx, `SELECT chat_epic_notice(epic_id, $2, id) FROM tasks WHERE id = $1 AND epic_id IS NOT NULL`, taskID, kind)

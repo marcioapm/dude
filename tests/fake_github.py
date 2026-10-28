@@ -1140,10 +1140,12 @@ class FakeGitHub:
                 if path == f"{prefix}/hooks":
                     return self._send(200, self.github.hooks)
                 if path.startswith(f"{prefix}/git/ref/heads/"):
-                    sha = self.github.branch_sha(path[len(f"{prefix}/git/ref/heads/"):])
+                    from urllib.parse import unquote
+                    branch = unquote(path[len(f"{prefix}/git/ref/heads/"):])
+                    sha = self.github.branch_sha(branch)
                     if not sha:
                         return self._send(404, {"message": "Not Found"})
-                    return self._send(200, {"ref": path[len(f"{prefix}/git/ref/"):], "object": {"sha": sha, "type": "commit"}})
+                    return self._send(200, {"ref": f"refs/heads/{branch}", "object": {"sha": sha, "type": "commit"}})
                 if path == f"{prefix}/branches":
                     # As GitHub lists them: by name, a page at a time, and an empty page past the last.
                     from urllib.parse import parse_qs

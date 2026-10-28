@@ -2,7 +2,10 @@ package prs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,13 +73,16 @@ func RegisterWebhooks(ctx context.Context, d *db.DB, gh *forge.GitHub, org strin
 			Scan(&secret); err != nil {
 			return err
 		}
+		// A hook registered with other events than dude asks for now (or
+		// before 221 recorded them) is not healthy: EnsureWebhook PATCHes it.
 		rows, err := tx.Query(ctx, `SELECT id, name, url FROM repositories
 			WHERE ($1 = '' OR id = $1)
 			  AND NOT ($2 AND webhook_url = $3 AND webhook_id IS NOT NULL AND webhook_registered_at IS NOT NULL
-			           AND webhook_error IS NULL)
+			           AND webhook_error IS NULL AND COALESCE(webhook_events @> $5 AND webhook_events <@ $5, false))
 			  AND (webhook_error IS NULL OR webhook_attempted_at IS NULL
 			       OR webhook_attempted_at <= now() - $4::interval)
-			ORDER BY webhook_attempted_at NULLS FIRST, name`, reg.RepositoryID, reg.OnlyMissing, reg.URL, reg.Backoff.String())
+			ORDER BY webhook_attempted_at NULLS FIRST, name`, reg.RepositoryID, reg.OnlyMissing, reg.URL, reg.Backoff.String(),
+			forge.WebhookEvents)
 		if err != nil {
 			return err
 		}
@@ -115,7 +121,8 @@ func RegisterWebhooks(ctx context.Context, d *db.DB, gh *forge.GitHub, org strin
 				webhook_id = COALESCE(NULLIF($2, ''), webhook_id),
 				webhook_registered_at = CASE WHEN $3 = '' THEN now() ELSE webhook_registered_at END,
 				webhook_url = CASE WHEN $3 = '' THEN $4 ELSE webhook_url END,
-				webhook_error = NULLIF($3, ''), webhook_attempted_at = now() WHERE id = $1`, rp.ID, id, res.Error, reg.URL)
+				webhook_events = CASE WHEN $3 = '' THEN $5::text[] ELSE webhook_events END,
+				webhook_error = NULLIF($3, ''), webhook_attempted_at = now() WHERE id = $1`, rp.ID, id, res.Error, reg.URL, forge.WebhookEvents)
 			return err
 		}); err != nil {
 			return results, false, err
@@ -123,6 +130,44 @@ func RegisterWebhooks(ctx context.Context, d *db.DB, gh *forge.GitHub, org strin
 		results = append(results, res)
 	}
 	return results, false, nil
+}
+
+// branchEvent passes a push or delete delivery about a branch on to
+// BranchMoved: a push to refs/heads/<b> (deleted when the push says so),
+// or a delete of ref_type branch. Tags and others are nothing.
+func (s *Syncer) branchEvent(ctx context.Context, org, event string, payload json.RawMessage, receivedAt time.Time) error {
+	if s.BranchMoved == nil {
+		return nil
+	}
+	var p struct {
+		Ref        string `json:"ref"`
+		RefType    string `json:"ref_type"`
+		Deleted    bool   `json:"deleted"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return fmt.Errorf("decode %s delivery: %w", event, err)
+	}
+	branch, deleted := "", false
+	switch event {
+	case "push":
+		var ok bool
+		if branch, ok = strings.CutPrefix(p.Ref, "refs/heads/"); !ok {
+			return nil
+		}
+		deleted = p.Deleted
+	case "delete":
+		if p.RefType != "branch" {
+			return nil
+		}
+		branch, deleted = p.Ref, true
+	}
+	if branch == "" || p.Repository.FullName == "" {
+		return nil
+	}
+	return s.BranchMoved(ctx, org, p.Repository.FullName, branch, deleted, receivedAt)
 }
 
 // RepairPerPass is how many repositories the repair asks GitHub about in
@@ -146,10 +191,11 @@ func (s *Syncer) RepairWebhooks(ctx context.Context) error {
 			WHERE c.forge = 'github' AND c.webhook_url <> ''
 			  AND EXISTS (SELECT 1 FROM repositories r WHERE r.organization_id = c.organization_id
 			    AND NOT (r.webhook_url IS NOT DISTINCT FROM c.webhook_url AND r.webhook_id IS NOT NULL
-			             AND r.webhook_registered_at IS NOT NULL AND r.webhook_error IS NULL)
+			             AND r.webhook_registered_at IS NOT NULL AND r.webhook_error IS NULL
+			             AND COALESCE(r.webhook_events @> $2 AND r.webhook_events <@ $2, false))
 			    AND (r.webhook_error IS NULL OR r.webhook_attempted_at IS NULL
 			         OR r.webhook_attempted_at <= now() - $1::interval))
-			ORDER BY c.organization_id`, repairBackoff.String())
+			ORDER BY c.organization_id`, repairBackoff.String(), forge.WebhookEvents)
 		if err != nil {
 			return err
 		}

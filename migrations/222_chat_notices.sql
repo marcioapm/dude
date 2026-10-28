@@ -1,4 +1,4 @@
--- 221_chat_notices.sql — chat progress outbox: one row per task or epic and
+-- 222_chat_notices.sql — chat progress outbox: one row per task or epic and
 -- kind, recorded in the status/PR transaction with the subject's key,
 -- title, an allow-listed detail and the thread. Posted outside
 -- transactions, retrying transient failures for 6 hours; at least once (a

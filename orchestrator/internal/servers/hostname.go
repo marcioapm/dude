@@ -29,22 +29,31 @@ func labelPart(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// PreviewOf identifies a preview's task and project: key and slug name the
-// label; ids distinguish hashed labels.
+// PreviewOf identifies a preview's task (or, for a branch preview, its
+// branch) and project: key or branch and slug name the label; ids
+// distinguish hashed labels.
 type PreviewOf struct {
 	TaskID, TaskKey, ProjectID, ProjectSlug string
+	// A branch preview's branch; "" for a task's preview.
+	Branch string
 }
 
 // PreviewLabel is the one DNS label a preview server is served at:
-// <server>-<task key>-<project slug>, each part normalised. Past 63
-// characters it is cut to 54 and ends in '-' and 8 hex characters of a hash
-// of the server name, task id and project id. The ids keep the suffix stable
-// across key-prefix renames and distinguish previews with the same key and
-// slug in different orgs. A nonempty salt joins the hash and forces the
-// hashed form for a retry after lux answers hostname_taken.
+// <server>-<task key>-<project slug>, or <server>-<branch>-<project slug>
+// for a branch preview, each part normalised. Past 63 characters it is cut
+// to 54 and ends in '-' and 8 hex characters of a hash of the server name,
+// task id (a branch preview: "branch:" and its branch, which no task id
+// starts with) and project id. The ids keep the suffix stable across
+// key-prefix renames and distinguish previews with the same key and slug in
+// different orgs. A nonempty salt joins the hash and forces the hashed form
+// for a retry after lux answers hostname_taken.
 func PreviewLabel(server string, of PreviewOf, salt string) string {
+	middle, owner := of.TaskKey, of.TaskID
+	if of.Branch != "" {
+		middle, owner = of.Branch, "branch:"+of.Branch
+	}
 	var parts []string
-	for _, p := range []string{server, of.TaskKey, of.ProjectSlug} {
+	for _, p := range []string{server, middle, of.ProjectSlug} {
 		if n := labelPart(p); n != "" {
 			parts = append(parts, n)
 		}
@@ -53,7 +62,7 @@ func PreviewLabel(server string, of PreviewOf, salt string) string {
 	if len(label) <= maxLabel && salt == "" && label != "" {
 		return label
 	}
-	sum := sha256.Sum256([]byte(server + "\x00" + of.TaskID + "\x00" + of.ProjectID + "\x00" + salt))
+	sum := sha256.Sum256([]byte(server + "\x00" + owner + "\x00" + of.ProjectID + "\x00" + salt))
 	suffix := hex.EncodeToString(sum[:4])
 	keep := maxLabel - 1 - len(suffix)
 	if len(label) > keep {

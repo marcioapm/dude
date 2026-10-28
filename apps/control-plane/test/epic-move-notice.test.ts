@@ -1,6 +1,6 @@
 /**
  * A task moved out of a chat-filed epic can leave the epic's current tasks
- * all ended: the move finishes the epic (chat_epic_notice, migration 221),
+ * all ended: the move finishes the epic (chat_epic_notice, migration 222),
  * once, with the counts of the tasks still in it.
  */
 

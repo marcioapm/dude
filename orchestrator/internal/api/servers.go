@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/servers"
 )
 
@@ -80,6 +81,42 @@ func (s *Server) serverRoutes(mux *http.ServeMux) {
 	}))
 	mux.Handle("DELETE /internal/tasks/{id}/preview", h(func(w http.ResponseWriter, r *http.Request, org string) error {
 		out, err := s.Servers.StopPreview(r.Context(), org, r.PathValue("id"), actor(r), principalOf(r).ActorType, principalOf(r).Person)
+		return answer(w, http.StatusOK, out, err)
+	}))
+	// A project's branch previews; one is addressed by its id, never by its
+	// branch (a branch name has '/' in it).
+	mux.Handle("POST /internal/projects/{id}/branch-previews", h(func(w http.ResponseWriter, r *http.Request, org string) error {
+		var in struct {
+			Branch string `json:"branch"`
+		}
+		if err := read(r, &in); err != nil {
+			return err
+		}
+		var gh *forge.GitHub
+		if s.Forges != nil {
+			var err error
+			if gh, err = s.Forges.For(r.Context(), org); err != nil {
+				return err
+			}
+		}
+		out, err := s.Servers.StartBranchPreview(r.Context(), gh, org, r.PathValue("id"), in.Branch, actor(r),
+			principalOf(r).ActorType, principalOf(r).Person)
+		status := http.StatusOK
+		if out.Created {
+			status = http.StatusCreated
+		}
+		return answer(w, status, out, err)
+	}))
+	mux.Handle("GET /internal/projects/{id}/branch-previews", h(func(w http.ResponseWriter, r *http.Request, org string) error {
+		out, err := s.Servers.BranchPreviews(r.Context(), org, r.PathValue("id"))
+		return answer(w, http.StatusOK, map[string]any{"previews": out}, err)
+	}))
+	mux.Handle("GET /internal/branch-previews/{id}", h(func(w http.ResponseWriter, r *http.Request, org string) error {
+		out, err := s.Servers.BranchPreview(r.Context(), org, r.PathValue("id"))
+		return answer(w, http.StatusOK, out, err)
+	}))
+	mux.Handle("DELETE /internal/branch-previews/{id}", h(func(w http.ResponseWriter, r *http.Request, org string) error {
+		out, err := s.Servers.StopBranchPreview(r.Context(), org, r.PathValue("id"), actor(r), principalOf(r).ActorType, principalOf(r).Person)
 		return answer(w, http.StatusOK, out, err)
 	}))
 }
