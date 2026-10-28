@@ -13,25 +13,20 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
-  ChatEvent,
   ChatMessage,
   ChatNotice,
-  ChatProgress,
   ChatTranscript,
   CostDisplay,
   EventRow,
   EventStream,
   ChangedFiles,
   ChatAside,
-  QuestionCard,
   Segmented,
   TerminalLink,
   SessionFacts,
   SessionHeader,
   SessionRail,
   SessionRailBlock,
-  ThinkingBlock,
-  ToolCallCard,
   ToolUsage,
   summarizeToolArgs,
   MachineChip,
@@ -42,7 +37,6 @@ import {
   AttachDropZone,
   CanRunContainersBadge,
   ImageViewer,
-  MentionChip,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Dialog, IconButton, LinkButton, Spinner, Textarea } from "@dude/design-system/primitives";
 import { BUILDER_GIVE_UP_MINUTES, builderOffline, DEFAULT_RUN_ROLE, EventTypes, HARNESS_LABEL, MIB, SETTINGS_ROLE_LABEL, TERMINAL_RUN_STATUSES, gib, machineSpec, runLabel, shortDigest, shownRunStatus, waitsForContainerHost } from "@dude/domain";
@@ -50,19 +44,18 @@ import type { AgentRole, Harness, PersistedEvent } from "@dude/domain";
 import type { ApiClient, CostSplit, Person, RecoverAction, RunDetail, RunDiffSummary } from "../api/client.ts";
 import { keptUntil as keptUntilDay } from "./Recovery.tsx";
 import { WaitingForHost } from "../waiting.tsx";
-import { SetupOutput, StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
+import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, READ_WHEN_BACK, READ_WHEN_STARTED, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolLabel, toolUsage, TOOL_USAGE_NOTE, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type HumanTurn, type QuestionTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
-import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries, ToolWithChildren } from "../childThreads.tsx";
+import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries } from "../childThreads.tsx";
 import { ChildBody } from "../childBody.tsx";
 import { childTitle } from "../childThreadView.tsx";
 import type { ComposerSubmission, QuestionAnswer, QuestionSubmission } from "@dude/design-system/components";
-import { useAnswerDraft } from "../answerDraft.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
 import { DraftedComposer } from "./DraftedComposer.tsx";
@@ -71,17 +64,20 @@ import { firstName, formatTimestamp, Icon } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { instant } from "../instant.ts";
-import { DudeMark, dudeName } from "../DudeMark.tsx";
+import { dudeName } from "../DudeMark.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { useFeedbackFocus } from "../feedback.tsx";
-import { TurnImages, limitsHint, useAttachmentLimits, useImageTray, useSentImages, type ImageTray, type SentImages } from "../hooks/useImages.tsx";
+import { limitsHint, useAttachmentLimits, useImageTray, useSentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
-import type { AttachmentInfo } from "@dude/domain";
 import { raisedProvenance, type RaisedMachine } from "../machines.ts";
 import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
 import {
-  DigestView, NoteToldView, PeerRail, PeerTurnView, PeerWaitView, noPeers, peerTool, useCoordination, usePeerContext, waitWords, type PeerContext,
+  PeerRail, useCoordination, usePeerContext, waitWords,
 } from "../coordination.tsx";
+import { asides, clock, interleaved, questionTurnSelector, renderTurn, viewedContext, type AskActions, type SteerActions, type ViewedTurn } from "./transcriptTurns.tsx";
+// SessionScreen, ChatSection, the mockups and tests import these from RunScreen.
+export { asides, clock, interleaved, pendingReason, questionTurnSelector, renderTurn, viewedContext } from "./transcriptTurns.tsx";
+export type { SteerActions, ViewedTurn } from "./transcriptTurns.tsx";
 
 export interface RunScreenProps {
   client: ApiClient;
@@ -1015,48 +1011,6 @@ function childBriefing(args: unknown): string | undefined {
   return typeof text === "string" ? text : undefined;
 }
 
-/**
- * The turns, with each run of what an agent does between its messages —
- * tool calls, thoughts, the events and progress it records — gathered
- * into one group: a `ChatAside` puts them on the message column, stacked
- * close, with a turn's air above and below the run, as the design system
- * draws it. Never one of them alone at the transcript's edge.
- */
-/**
- * The conductor's turns (grouped into asides) and the Chat's other lines,
- * merged by time: a line goes before the first turn that came after it.
- * Stable: turns keep their order, and lines theirs.
- */
-export function interleaved(groups: ReadonlyArray<Turn | Turn[]>, lines: ReadonlyArray<{ id: string; at: string; node: ReactNode }>):
-  Array<{ group: Turn | Turn[] } | { id: string; at: string; node: ReactNode }> {
-  const out: Array<{ group: Turn | Turn[] } | { id: string; at: string; node: ReactNode }> = [];
-  let i = 0;
-  for (const group of groups) {
-    const turn = Array.isArray(group) ? group[0]! : group;
-    let at: string | null = null;
-    if ("at" in turn) at = turn.at;
-    else if ("startedAt" in turn) at = turn.startedAt;
-    while (i < lines.length && at !== null && instant(lines[i]!.at) < instant(at)) out.push(lines[i++]!);
-    out.push({ group });
-  }
-  while (i < lines.length) out.push(lines[i++]!);
-  return out;
-}
-
-export function asides(turns: readonly Turn[]): Array<Turn | Turn[]> {
-  const out: Array<Turn | Turn[]> = [];
-  for (const turn of turns) {
-    if (turn.kind !== "tool" && turn.kind !== "thought" && turn.kind !== "event" && turn.kind !== "progress") {
-      out.push(turn);
-      continue;
-    }
-    const last = out[out.length - 1];
-    if (Array.isArray(last)) last.push(turn);
-    else out.push([turn]);
-  }
-  return out;
-}
-
 /** The actor's name for the event ledger, when it is a person the organisation knows. */
 function namedActor(event: PersistedEvent, people: People): { name?: string } {
   const name = actorName(humanActor(event), people.names);
@@ -1096,23 +1050,6 @@ export function EventLog({ events, people }: { events: readonly PersistedEvent[]
       </EventStream>
     </div>
   );
-}
-
-/** A live Run's queued steers: what each waits for, and sending one again (interrupting, or after a failure). */
-export interface SteerActions {
-  wait: (turn: HumanTurn) => SteerWait;
-  resend: (turn: HumanTurn, interrupt: boolean) => void;
-}
-
-/** The one line under a queued steer. */
-export function pendingReason(wait: SteerWait) {
-  switch (wait.kind) {
-    case "tool": return <>Lands after <b>{toolLabel(wait.tool)}</b> finishes.</>;
-    case "next_step": return "Lands at the agent's next step.";
-    case "next_turn": return "This agent reads messages only between turns — lands when this turn ends.";
-    case "paused": return "Lands when the run resumes.";
-    case "starting": return wait.back ? READ_WHEN_BACK : READ_WHEN_STARTED;
-  }
 }
 
 const NO_LINES: ReadonlyArray<{ id: string; at: string; node: ReactNode }> = [];
@@ -1206,318 +1143,10 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
   );
 });
 
-/** A turn whose images the viewer shows. */
-export type ViewedTurn = HumanTurn | { kind: "prompt"; attachments: AttachmentInfo[]; at: string };
-
-/** How a turn's images are shown, and opened. */
-export interface ShownImages {
-  images: Pick<SentImages, "sent" | "mounted" | "visible">;
-  open: (turn: ViewedTurn, index: number) => void;
-}
-
-/** "15:52:40": a read time, in the viewer's line. */
-export function clock(at: string): string {
-  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-}
-
 /** The lands hint as the drop overlay says it: "It reads them after the current tool." */
 function dropWhen(hint: string | null): string {
   if (!hint) return "It reads them at its next step.";
   return `It reads them ${hint.replace(/^Lands /, "")}.`;
-}
-
-/** A briefing Try again repeated to the fresh agent: one quiet line that opens to the full card. */
-function BriefedAgain({ turn, dude, shown }: { turn: PromptTurn; dude: string; shown: ShownImages | undefined }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div data-testid="chat-briefed-again">
-      <Button size="sm" variant="quiet" leadingIcon="retry" aria-expanded={open} onClick={() => setOpen(!open)} data-testid="briefed-again-toggle">
-        {BRIEFED_AGAIN}
-      </Button>
-      {open ? (
-        <ChatMessage role="system" name={dude} avatar={<DudeMark size="fill" />} intent="briefing" content={turn.text} startedAt={turn.at}
-          data-testid="chat-briefing" {...turnImages(turn, shown)} />
-      ) : null}
-    </div>
-  );
-}
-
-export const BRIEFED_AGAIN = "Briefed again with the same message";
-
-/** A turn's images, as ChatMessage's `attachments` prop; none when it has none. */
-function turnImages(turn: ViewedTurn, shown: ShownImages | undefined) {
-  if (turn.attachments.length === 0 || !shown) return {};
-  return { attachments: <TurnImages attachments={turn.attachments} images={shown.images} onOpen={(i) => shown.open(turn, i)} /> };
-}
-
-/** Where a Chat message was written on GitHub, or where the conductor's reply went: the pull request, linked to the comment. */
-function GithubSource({ github, reply }: { github: GithubRef; reply: boolean }) {
-  const pr = `${github.repo}#${github.number}`;
-  const what = reply ? <>Replied on {pr}</> : <>On {pr}</>;
-  return (
-    <div className="githubSource" data-testid="github-source">
-      {github.url ? <a href={github.url} target="_blank" rel="noreferrer noopener">{what} on GitHub</a> : <>{what} on GitHub</>}
-    </div>
-  );
-}
-
-/** "Márcio · steer to Implement · 15:52": who sent a message's images, to whom, when. */
-export function viewedContext(turn: ViewedTurn, people: People, agent: string, dude: string): string {
-  const at = new Date(turn.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-  if (turn.kind === "prompt") return `${dude} · task to ${agent} · ${at}`;
-  const who = actorName(turn.by, people.names);
-  return `${who ? firstName(who) : "Someone"} · ${turn.intent} to ${agent} · ${at}`;
-}
-
-/**
- * The people a session's message mentioned: each drawn as its chip in place
- * of its "@Name" run in the text (`inText`), and any whose name is not in
- * the text as chips under it (`rest`), so a name is never shown twice. The
- * reader's own is marked.
- */
-export function mentionChips(ids: readonly string[], text: string, people: People) {
-  const inText: { name: string; chip: ReactNode }[] = [];
-  const rest: ReactNode[] = [];
-  for (const id of ids) {
-    const person = people.byId.get(id) ?? { id, name: people.names.get(id) ?? "Someone" };
-    const chip = <MentionChip key={id} person={person} you={id === people.you} />;
-    if (text.includes(`@${person.name}`)) inText.push({ name: person.name, chip });
-    else rest.push(chip);
-  }
-  return { inText, rest: rest.length > 0 ? <span data-testid="mention-chips">{rest}</span> : null };
-}
-
-export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, ended: boolean, people: People, dude: string,
-  decide?: (requestId: string, approve: boolean) => void, waitingOn?: string, steer?: SteerActions, shown?: ShownImages,
-  toolNote?: (turn: ToolTurn) => ReactNode, ask?: AskActions, peer?: PeerContext, now?: number) {
-  switch (turn.kind) {
-    case "peer":
-      return <PeerTurnView key={turn.id} turn={turn} ctx={peer ?? noPeers(role, people)} />;
-    case "peerWait":
-      return <PeerWaitView key={turn.id} turn={turn} now={now} />;
-    case "noteTold":
-      return <NoteToldView key={turn.id} turn={turn} ctx={peer ?? noPeers(role, people)} />;
-    case "digest":
-      return <DigestView key={turn.id} turn={turn} ctx={peer ?? noPeers(role, people)} />;
-    case "repositoryRequest": {
-      // Asked of a person, like a question: approve brings it into the Run.
-      const what = `${turn.access === "write" ? "Change" : "Read"} ${turn.repository}`;
-      return (
-        <QuestionCard
-          key={turn.id}
-          data-testid="repository-request"
-          role={role}
-          // The agent's reason, quoted: its words cannot pass for the card's.
-          text={`**${what}?**\n\n${turn.reason.split("\n").map((line) => `> ${line}`).join("\n")}`}
-          options={turn.decision === null && !ended ? ["Approve", "Decline"] : []}
-          kind="request"
-          askedAt={turn.at}
-          answeredAt={turn.decidedAt}
-          dismissed={ended && turn.decision === null}
-          waitingOn={waitingOn}
-          {...(decide && turn.decision === null && !ended
-            ? { onChoose: (choice: string) => decide(turn.requestId, choice === "Approve") }
-            : {})}
-        />
-      );
-    }
-    case "notice":
-      return <ChatNotice key={turn.id} data-testid="chat-notice" kind={turn.notice} text={turn.text} at={turn.at} by={dude}
-        {...(turn.title ? { title: turn.title } : {})} />;
-    case "ended": {
-      // Where the transcript stops, and why: a failure in its tone, not a
-      // margin note (ChatNotice has no tones).
-      const callout = (
-        <Callout key={turn.id} data-testid="chat-ended" data-outcome={turn.outcome}
-          tone={turn.outcome === "failed" ? "danger" : "neutral"}>
-          {turn.outcome === "aborted" ? abortedBy(turn, people) : turn.text}
-        </Callout>
-      );
-      return turn.setup ? <Fragment key={turn.id}>{callout}<SetupOutput setup={turn.setup} /></Fragment> : callout;
-    }
-    case "progress":
-      // One row, updated in place as the agent reports.
-      return (
-        <ChatProgress key={turn.id} data-testid="chat-progress" role={role} done={turn.done} of={turn.of}
-          step={turn.step} at={turn.at} startedAt={turn.startedAt} ended={ended} />
-      );
-    case "event":
-      return <ChatEvent key={turn.id} data-testid="chat-event" role={role} type={turn.type} data={turn.data} at={turn.at} />;
-    case "question":
-      // A Run that ended on an unanswered question will never hear back.
-      return <AskTurn key={turn.id} turn={turn} role={role} ended={ended} people={people} waitingOn={waitingOn} ask={ask} />;
-    case "prompt":
-      // Try again's fresh agent, briefed with the failed one's words: one line, the briefing a click away.
-      if (turn.again) return <BriefedAgain key={turn.id} turn={turn} dude={dude} shown={shown} />;
-      // Written by the factory, not a person: the avatar and name say so.
-      // A conductor's is dude's briefing of it, tagged so.
-      return (
-        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent={turn.briefing ? "briefing" : "prompt"}
-          content={turn.text} startedAt={turn.at} data-testid={turn.briefing ? "chat-briefing" : undefined} {...turnImages(turn, shown)} />
-      );
-    case "told":
-      // What dude put in front of the agent's input that no one typed: dude's, in the briefing's frame.
-      return (
-        <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent="told"
-          content={turn.text} startedAt={turn.at} data-testid="chat-told" />
-      );
-    case "message":
-      return (
-        <ChatMessage
-          key={turn.id}
-          data-testid={role === "conductor" ? "conductor-turn" : undefined}
-          role={role}
-          content={turn.text}
-          startedAt={turn.at}
-          {...tokenFoot(turn, contextWindow)}
-        />
-      );
-    case "thought":
-      // Only when the thought ended is known, not how long it took.
-      return <ThinkingBlock key={turn.id} text={turn.text} />;
-    case "usage":
-      // A turn's totals, at its end: a quiet foot, not a message.
-      return (
-        <ChatMessage
-          key={turn.id}
-          role={role}
-          continued
-          startedAt={turn.at}
-          {...tokenFoot(turn, contextWindow)}
-          costUsd={null}
-        />
-      );
-    case "human": {
-      // Signed: the person's face and name when known; "Someone" only when the ledger kept no one. A
-      // conductor's steer is the conductor's: its face, colour and name, never a person's. One from a
-      // pull request is signed by its GitHub login, and says where it was written.
-      const name = turn.conductor ? null : actorName(turn.by, people.names);
-      const person = name && turn.by && !turn.github ? { ...(people.byId.get(turn.by.id) ?? {}), id: turn.by.id, name } : undefined;
-      const wait = steer && (turn.intent === "steer" || turn.intent === "message") && turn.deliveredAt === null && !turn.failed ? steer.wait(turn) : null;
-      // Only where there is a turn to stop, and not twice; never a message in Chat, which starts a turn.
-      const interruptible = turn.intent === "steer" && (wait?.kind === "tool" || wait?.kind === "next_step" || wait?.kind === "next_turn") && !turn.interrupting;
-      const chips = turn.mentions?.length ? mentionChips(turn.mentions, turn.text, people) : null;
-      const source = turn.github ? <GithubSource github={turn.github} reply={turn.conductor} /> : null;
-      const under = source && chips?.rest ? <>{source}{chips.rest}</> : source ?? chips?.rest ?? null;
-      return (
-        <ChatMessage
-          key={turn.id}
-          data-testid="human-turn"
-          data-by={turn.conductor ? "conductor" : turn.github ? "github" : undefined}
-          role={turn.conductor ? "conductor" : turn.github ? "integration" : "human"}
-          intent={turn.intent}
-          content={turn.text}
-          startedAt={turn.at}
-          deliveredAt={turn.deliveredAt}
-          read={turn.read}
-          readAfter={turn.after ? toolLabel(turn.after) : undefined}
-          failed={turn.failed ?? undefined}
-          {...(turn.heldFor && turn.deliveredAt === null && !turn.failed
-            ? { pendingReason: "Queued: goes after the answer the agent is waiting for." }
-            : wait ? { pendingReason: pendingReason(wait) } : {})}
-          {...(interruptible && steer ? { onInterrupt: () => steer.resend(turn, true) } : {})}
-          {...(turn.failed && steer && turn.intent === "steer" ? { onRetry: () => steer.resend(turn, false) } : {})}
-          person={person}
-          name={turn.conductor ? "Conductor" : name ?? "Someone"}
-          {...turnImages(turn, shown)}
-          {...(chips?.inText.length ? { mentions: chips.inText } : {})}
-          {...(under ? { attachments: under } : {})}
-        />
-      );
-    }
-    case "tool": {
-      // A coordination tool or a refused message shows its own card; its child sessions, if it started any, nest under it.
-      const coordination = peerTool(turn, peer);
-      const card = coordination || turn.refusal !== undefined ? (
-        <ToolCallCard
-          name={turn.tool}
-          args={turn.args}
-          status={turn.status}
-          startedAt={turn.startedAt}
-          endedAt={turn.endedAt}
-          output={coordination?.result ? undefined : turn.result?.output ?? turn.result?.stdout}
-          stderr={turn.result?.stderr}
-          exitCode={turn.refusal !== undefined ? undefined : turn.result?.exitCode}
-          {...(coordination ? { summary: coordination.summary, icon: coordination.icon } : {})}
-          {...(coordination?.result ? { result: coordination.result } : {})}
-          {...(turn.refusal !== undefined ? { error: turn.refusal } : {})}
-          note={toolNote?.(turn)}
-        />
-      ) : undefined;
-      return <ToolWithChildren key={turn.id} turn={turn} depth={1} note={toolNote?.(turn)} card={card} />;
-    }
-  }
-}
-
-/** The question's turn in a transcript (AskTurn marks it), for the transcript to keep in view. */
-export const questionTurnSelector = (questionId: string) => `[data-question="${CSS.escape(questionId)}"]`;
-
-/** Whom a session's question waits on: none when it is put to you, else their first name. */
-function questionFor(to: { id: string; name: string | null }, people: People): string | undefined {
-  if (to.id === people.you) return undefined;
-  const name = actorName(to, people.names);
-  return name ? firstName(name) : "someone else";
-}
-
-/** How a question waiting on the reader is answered: its form's Send, and the note's image tray. */
-export interface AskActions {
-  answer: (turn: QuestionTurn, submission: QuestionSubmission) => Promise<boolean>;
-  tray?: Pick<ImageTray, "attachments" | "add" | "remove" | "disabledReason" | "limits"> | undefined;
-}
-
-/**
- * An agent's question as its turn: the answer form while it waits on the
- * reader (its draft kept in this browser until sent), the record once
- * answered, as it was otherwise.
- */
-function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
-  turn: QuestionTurn; role: AgentRole; ended: boolean; people: People; waitingOn: string | undefined; ask: AskActions | undefined;
-}) {
-  const { key, draft, keep, forget } = useAnswerDraft(people.you, turn, ended);
-  const whom = turn.to ? questionFor(turn.to, people) : waitingOn;
-  const by = actorName(turn.answeredBy, people.names);
-  const open = !ended && turn.answeredAt === null && turn.closedAt === null && whom === undefined && ask !== undefined;
-  // The note's images are for several questions; one question has no note.
-  const tray = open && turn.items.length > 1 ? ask.tray : undefined;
-  return (
-    <QuestionCard
-      // The open form is keyed on the draft, so once the person is known it starts from their own; a settled card keeps its node.
-      key={open ? key : turn.questionId}
-      data-testid="question-turn"
-      data-question={turn.questionId}
-      role={role}
-      text={turn.text}
-      items={turn.items}
-      askedAt={turn.at}
-      answeredAt={turn.answeredAt}
-      answers={turn.answers}
-      answeredBy={by ? firstName(by) : undefined}
-      dismissed={ended && turn.answeredAt === null}
-      settledBy={turn.closedAt === null ? undefined : turn.closedBy === "withdrawn" ? "Withdrawn" : "Decided on the banner"}
-      waitingOn={whom}
-      onlyThey={turn.to !== null}
-      {...(open ? {
-        onSubmit: async (s: QuestionSubmission) => {
-          const ok = await ask.answer(turn, s);
-          if (ok) forget();
-          return ok;
-        },
-        draft,
-        onDraftChange: keep,
-      } : {})}
-      {...(tray ? {
-        attachments: tray.attachments, onAttachFiles: tray.add, onRemoveAttachment: tray.remove,
-        attachAccept: "image/png,image/jpeg,image/webp,image/gif", attachHint: limitsHint(tray.limits), attachDisabledReason: tray.disabledReason,
-      } : {})}
-    />
-  );
-}
-
-/** "Aborted by Ana: wrong task" — who stopped it, and why, when known. */
-function abortedBy(turn: Extract<Turn, { kind: "ended" }>, people: People): string {
-  const name = actorName(turn.by, people.names);
-  const who = name ? `Aborted by ${name}` : "Aborted";
-  return turn.why ? `${who}: ${turn.why}` : `${who}.`;
 }
 
 const ENDED_WORDS: Record<"completed" | "failed" | "aborted", string> = {
@@ -1703,14 +1332,6 @@ export function PreparingImage({ preparing }: { preparing: NonNullable<RunDetail
   );
 }
 
-/** A message's token foot: the context then, against the window when known, and the turn's output. */
-function tokenFoot(turn: { contextTokens: number | null; outputTokens: number | null }, contextWindow: number) {
-  return {
-    contextTokens: turn.contextTokens ?? undefined,
-    contextWindowTokens: turn.contextTokens !== null && contextWindow > 0 ? contextWindow : undefined,
-    outputTokens: turn.outputTokens ?? undefined,
-  };
-}
 
 /** One line describing an event, for the debugging timeline. */
 export function summarize(event: PersistedEvent): string {

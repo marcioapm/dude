@@ -218,6 +218,9 @@ func (t *translator) callStarted(ctx context.Context, tx pgx.Tx, s *Syncer, c *c
 	id, _ := payload["callId"].(string)
 	name, _ := payload["tool"].(string)
 	if c == nil {
+		if t.closed[id] {
+			return nil
+		}
 		if _, seen := t.seenCalls[id]; seen {
 			return nil
 		}
@@ -248,6 +251,9 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 	id, _ := payload["callId"].(string)
 	name, _ := payload["tool"].(string)
 	if c == nil {
+		if t.closed[id] {
+			return nil
+		}
 		// The pending announcement's name is lost when dude restarts between
 		// it and the completion; what survives the restart is the result's
 		// note, which capOutput withholds whatever the call is named.
@@ -255,6 +261,12 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 		if seen, ok := t.seenCalls[id]; ok {
 			name = seen
 		}
+		for key, value := range t.PartialTools[id] {
+			if _, supplied := payload[key]; !supplied {
+				payload[key] = value
+			}
+		}
+		delete(t.PartialTools, id)
 		delete(t.openCalls, id)
 		delete(t.waitsOn, id)
 		delete(t.announced, id)
@@ -265,6 +277,11 @@ func (t *translator) callEnded(ctx context.Context, tx pgx.Tx, s *Syncer, c *chi
 		}
 		if err := t.parentCallEnded(ctx, tx, s, id, payload); err != nil {
 			return err
+		}
+		if t.completing != nil {
+			if err := t.completing(ctx, tx, payload); err != nil {
+				return err
+			}
 		}
 		return s.event(ctx, tx, t.run, evToolCompleted, ledger.ActorAgent, payload)
 	}

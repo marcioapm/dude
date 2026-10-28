@@ -112,14 +112,7 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 		if inst, installed, err = chat.Installed(ctx, tx, chatProvider); err != nil {
 			return err
 		}
-		if recent, made, err = callsMade(ctx, tx, c.RunID, "post_to_chat"); err != nil {
-			return err
-		}
-		// This step's refusals (tagged "lookup") write no call, so the minute's bound adds them here.
-		var lookups int
-		err = tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2
-			AND payload->>'lookup' = 'true' AND occurred_at > now() - interval '1 minute'`, c.RunID, EvSlackPostRefused).Scan(&lookups)
-		recent += lookups
+		recent, made, err = callsMade(ctx, tx, c, "post_to_chat")
 		return err
 	}); err != nil {
 		return err
@@ -137,7 +130,7 @@ func resolvePostChannel(ctx context.Context, c Caller, args json.RawMessage) any
 		// checkPost refuses it, under the run's lock.
 		return textChecked{}
 	case recent >= callsPerMinute:
-		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
+		return refuseLimited(rTooManyCallsAtMostMinute, callsPerMinute)
 	}
 	shown := "#" + strings.TrimPrefix(channel, "#")
 	target := postTarget{inst: inst, provider: p, channelID: channel, channelName: shown}
@@ -187,6 +180,7 @@ func checkPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) 
 		if unconnectedOrg != "" {
 			recorded = notConnected(in.Channel, unconnectedOrg)
 		}
+		recorded.limited = refused.limited
 		return out, recorded
 	}
 	return out, err
@@ -247,7 +241,7 @@ func checkPost(ctx context.Context, tx pgx.Tx, c Caller, in postToChatIn) (out p
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM automation_runs WHERE id = $1 FOR UPDATE`, c.RunID); err != nil {
 		return out, "", err
 	}
-	_, made, err := callsMade(ctx, tx, c.RunID, "post_to_chat")
+	_, made, err := callsMade(ctx, tx, c, "post_to_chat")
 	if err != nil {
 		return out, "", err
 	}
@@ -370,16 +364,4 @@ func recordPostToChat(ctx context.Context, tx pgx.Tx, c Caller, in postChecked, 
 	return out, err
 }
 
-var postToChatTool = around(define("post_to_chat", checkPostToChat).before(lookedUp(resolvePostChannel)).countingAttempts(), postOutside, recordPostToChat)
-
-// lookedUp tags each refusal of prepare "lookup": it writes no call, so
-// resolvePostChannel adds it to the minute's calls.
-func lookedUp(prepare func(context.Context, Caller, json.RawMessage) any) func(context.Context, Caller, json.RawMessage) any {
-	return func(ctx context.Context, c Caller, args json.RawMessage) any {
-		prepared := prepare(ctx, c, args)
-		if r, ok := prepared.(refusal); ok && r.event != nil {
-			r.event.payload["lookup"] = true
-		}
-		return prepared
-	}
-}
+var postToChatTool = around(define("post_to_chat", checkPostToChat).before(resolvePostChannel).countingAttempts(), postOutside, recordPostToChat)

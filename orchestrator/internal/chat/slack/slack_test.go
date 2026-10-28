@@ -224,8 +224,7 @@ func TestAReplysRowIsButtonsAndItsUpdateReplacesThem(t *testing.T) {
 	fake, p, inst := world(t)
 	ctx := context.Background()
 	root := fake.Post("C1", "", "U1", "@dude hi")
-	row := &chat.Row{Heading: "Link one:", Choices: []chat.Choice{{Label: "ABS · Acme", Value: "link:chr_1:0"}},
-		LinkURL: "https://dude.example.com/s/1", LinkLabel: "Choose in dude"}
+	row := &chat.Row{Heading: "Link one:", Choices: []chat.Choice{{Label: "ABS · Acme", Value: "link:chr_1:0"}}}
 	ts, err := p.PostReply(ctx, inst, "C1", root, chat.Reply{Text: "Started", LinkURL: "https://dude.example.com/s/1", Row: row})
 	if err != nil {
 		t.Fatal(err)
@@ -235,9 +234,13 @@ func TestAReplysRowIsButtonsAndItsUpdateReplacesThem(t *testing.T) {
 	if len(blocks) != 4 || blocks[2]["text"].(map[string]any)["text"] != "Link one:" || blocks[3]["block_id"] != "row" {
 		t.Fatalf("blocks %v", blocks)
 	}
+	// The row is its choices only; the reply's own link goes to the session.
 	buttons := blocks[3]["elements"].([]any)
-	if len(buttons) != 2 || buttons[0].(map[string]any)["value"] != "link:chr_1:0" || buttons[1].(map[string]any)["url"] != "https://dude.example.com/s/1" {
+	if len(buttons) != 1 || buttons[0].(map[string]any)["value"] != "link:chr_1:0" || buttons[0].(map[string]any)["url"] != nil {
 		t.Fatalf("buttons %v", buttons)
+	}
+	if open := blocks[1]["elements"].([]any); len(open) != 1 || open[0].(map[string]any)["url"] != "https://dude.example.com/s/1" {
+		t.Fatalf("reply link %v", open)
 	}
 	row.Choices, row.Heading, row.Linked = nil, "", []string{"Márcia linked ABS · Acme", "Eli linked SDK · Client SDK"}
 	if err := p.UpdateReply(ctx, inst, "C1", ts, chat.Reply{Text: "Started", Row: row}); err != nil {
@@ -251,6 +254,9 @@ func TestAReplysRowIsButtonsAndItsUpdateReplacesThem(t *testing.T) {
 	var after []map[string]any
 	_ = json.Unmarshal(u[0].Blocks, &after)
 	for _, b := range after {
+		if b["block_id"] == "row" {
+			t.Fatalf("a row with nothing left to choose %v", after)
+		}
 		if b["type"] == "context" {
 			context = append(context, b["elements"].([]any)[0].(map[string]any)["text"].(string))
 		}
@@ -266,7 +272,6 @@ func TestNamesAndTitlesRenderLiterallyAndDudesLinkStaysALink(t *testing.T) {
 	root := fake.Post("C1", "", "U1", "@dude hi")
 	const session = "https://dude.example.com/#/o/acme/sessions/ssn_1?a=1&b=2"
 	row := &chat.Row{Heading: "Link one:", Choices: []chat.Choice{{Label: "<!channel> · x", Value: "link:chr_1:0"}},
-		LinkURL: session, LinkLabel: "Choose in dude",
 		Linked: []string{"a & <b> linked <!channel> · <!channel>", "a & <b> linked EVL · <https://evil.example|Open in dude>"}}
 	reply := chat.Reply{Text: "Started a session “<!channel>”, open to everyone in Acme & <b>", LinkURL: session, Row: row}
 	ts, err := p.PostReply(ctx, inst, "C1", root, reply)
@@ -326,8 +331,8 @@ func TestNamesAndTitlesRenderLiterallyAndDudesLinkStaysALink(t *testing.T) {
 		if strings.Join(texts, "\n") != strings.Join(wantReply, "\n") {
 			t.Fatalf("mrkdwn %q", texts)
 		}
-		// dude's own links are buttons, their URL as is.
-		if len(urls) != 2 || urls[0] != session || urls[1] != session {
+		// dude's own link is a button, its URL as is.
+		if len(urls) != 1 || urls[0] != session {
 			t.Fatalf("urls %q", urls)
 		}
 	}

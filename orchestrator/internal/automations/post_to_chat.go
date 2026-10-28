@@ -25,8 +25,8 @@ const EvRunFailedOnPost = "automation.run.failed_on_post"
 // after it (Slack was connected during the run); "" for none.
 func postFailed(ctx context.Context, tx pgx.Tx, runID string) (reason, eventID string, err error) {
 	err = tx.QueryRow(ctx, `SELECT r.payload->>'reason', r.id FROM events r
-		WHERE r.run_id = $1 AND r.event_type = $2 AND r.payload->>'code' = $3
-		  AND NOT EXISTS (SELECT 1 FROM events p WHERE p.run_id = $1 AND p.event_type = $4 AND (p.occurred_at, p.cursor) > (r.occurred_at, r.cursor))
+		WHERE r.automation_run_id = $1 AND r.event_type = $2 AND r.payload->>'code' = $3
+		  AND NOT EXISTS (SELECT 1 FROM events p WHERE p.automation_run_id = $1 AND p.event_type = $4 AND (p.occurred_at, p.cursor) > (r.occurred_at, r.cursor))
 		ORDER BY r.occurred_at DESC, r.cursor DESC LIMIT 1`,
 		runID, agenttools.EvSlackPostRefused, agenttools.PostNotConnected, agenttools.EvSlackPosted).Scan(&reason, &eventID)
 	if db.IsNotFound(err) {
@@ -40,7 +40,7 @@ func postFailed(ctx context.Context, tx pgx.Tx, runID string) (reason, eventID s
 
 // recordFailedOnPost records that a's run runID failed on the refusal eventID.
 func recordFailedOnPost(ctx context.Context, tx pgx.Tx, a Automation, runID, eventID string) error {
-	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvRunFailedOnPost, OrganizationID: a.Org, ProjectID: a.ProjectID, RunID: runID,
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvRunFailedOnPost, OrganizationID: a.Org, ProjectID: a.ProjectID, AutomationRunID: runID,
 		ActorType: ledger.ActorSystem, ActorID: "dude", Source: "orchestrator",
 		Payload: map[string]any{"automationId": a.ID, "automationRunId": runID, "eventId": eventID}})
 	return err

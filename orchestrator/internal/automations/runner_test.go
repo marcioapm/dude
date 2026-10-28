@@ -3,6 +3,7 @@ package automations
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -667,6 +668,118 @@ func TestAutomationCommandGetsTheEvent(t *testing.T) {
 	}
 }
 
+// A command's stdout and stderr are its run's activity, line by line in
+// the order written, ending with its exit code; log_tail is kept as before.
+func TestAutomationCommandLinesArriveInOrderWithTheExitCode(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_lines", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"},
+		map[string]any{"command": "echo one; sleep 0.2; echo two >&2; sleep 0.2; printf 'three'; exit 3"})
+	exec(t, h.owner, `UPDATE automations SET next_run_at = now() - interval '1 minute' WHERE id = 'aut_lines'`)
+	h.until("the run fails", func() bool { r := h.runs("aut_lines"); return len(r) == 1 && r[0].Status == "failed" })
+	run := h.runs("aut_lines")[0]
+	rows, err := h.owner.Query(context.Background(), `SELECT event_type, COALESCE(payload->>'stream', ''), COALESCE(payload->>'text', payload->>'exitCode')
+		FROM events WHERE automation_run_id = $1 AND event_type IN ('automation.log.line', 'automation.log.exited') ORDER BY cursor`, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Type, Stream, Text string }])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ Type, Stream, Text string }{{phases.EvLogLine, "stdout", "one"}, {phases.EvLogLine, "stderr", "two"},
+		{phases.EvLogLine, "stdout", "three"}, {phases.EvLogExited, "", "3"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("activity %v, want %v", got, want)
+	}
+	if !strings.Contains(run.Log, "one") || !strings.Contains(run.Log, "three") {
+		t.Errorf("log_tail %q", run.Log)
+	}
+}
+
+// lux records a failed command's exit, and only later its Run's terminal
+// state: a pass that reads the exit while the Run still runs records it,
+// and the pass that sees the Run end does not record it again.
+func TestAutomationCommandExitReadBeforeTheRunEndsIsRecordedOnce(t *testing.T) {
+	h := newHarness(t)
+	held, release := make(chan string, 1), make(chan struct{})
+	h.fake.AfterExited(func(runID string) {
+		held <- runID
+		<-release
+	})
+	defer h.fake.AfterExited(nil)
+	h.automation("aut_exit", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"},
+		map[string]any{"command": "echo boom; exit 4"})
+	exec(t, h.owner, `UPDATE automations SET next_run_at = now() - interval '1 minute' WHERE id = 'aut_exit'`)
+	exits := func(runID string) []string {
+		rows, err := h.owner.Query(context.Background(), `SELECT payload->>'exitCode' FROM events
+			WHERE automation_run_id = $1 AND event_type = $2 ORDER BY cursor`, runID, phases.EvLogExited)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	var luxRun string
+	h.until("lux holds the exited command", func() bool {
+		select {
+		case luxRun = <-held:
+			return true
+		default:
+			return false
+		}
+	})
+	h.until("the exit is recorded while the run is still running", func() bool {
+		r := h.runs("aut_exit")
+		return len(r) == 1 && r[0].Status == "running" && len(exits(r[0].ID)) == 1
+	})
+	if s := h.luxState(luxRun); s != "running" {
+		t.Fatalf("lux Run %s before the hook let go", s)
+	}
+	close(release)
+	h.until("the run fails", func() bool { r := h.runs("aut_exit"); return len(r) == 1 && r[0].Status == "failed" })
+	h.runner.Wait()
+	for range 3 {
+		if _, err := h.runner.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.runner.Wait()
+	if got := exits(h.runs("aut_exit")[0].ID); !slices.Equal(got, []string{"4"}) {
+		t.Fatalf("exit events %q", got)
+	}
+}
+
+func TestAutomationFeedReadsSecretsOncePerTransaction(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_redact", "command", map[string]any{"kind": "schedule", "cron": "0 3 * * *", "tz": "UTC"}, map[string]any{"command": "true"})
+	exec(t, h.owner, `INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_redact', $1, 'aut_redact', 'running', 'schedule')`, h.org)
+	exec(t, h.owner, `CREATE TABLE secret_lookups (n int)`)
+	exec(t, h.owner, `GRANT INSERT ON secret_lookups TO PUBLIC`)
+	exec(t, h.owner, `ALTER FUNCTION automation_run_secret_values(text) RENAME TO automation_run_secret_values_real`)
+	exec(t, h.owner, `CREATE FUNCTION automation_run_secret_values(rid text) RETURNS TABLE (name text, value text) LANGUAGE plpgsql VOLATILE AS $$
+		BEGIN INSERT INTO secret_lookups VALUES (1); RETURN QUERY SELECT * FROM automation_run_secret_values_real(rid); END $$`)
+	a := Automation{ID: "aut_redact", Org: h.org, ProjectID: h.project, Kind: "command"}
+	var frames []lux.Frame
+	for i := range 20 {
+		frames = append(frames, lux.Frame{Kind: "record", Channel: "stdout", Data: fmt.Sprintf("line %d\n", i)})
+	}
+	if err := h.app.InOrg(context.Background(), h.org, func(tx pgx.Tx) error {
+		return feedFrames(context.Background(), tx, a, "arn_redact", frames, false, "", nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var lookups int
+	if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FROM secret_lookups`).Scan(&lookups); err != nil {
+		t.Fatal(err)
+	}
+	if lookups != 1 {
+		t.Fatalf("secret lookups: %d", lookups)
+	}
+}
+
 // A Server: the event starts the container, dude POSTs it once the server
 // answers, a second event while it is up goes to the same container, a 5xx
 // is retried once, and after the idle time with nothing in flight it is
@@ -677,7 +790,16 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 	var got []http.Header
 	var bodies []string
 	fails := map[string]int{"d-2": 1}
+	var printAtHealth atomic.Pointer[string]
 	h.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			// A line printed after the pass read the log and before it stops the server.
+			if luxRun := printAtHealth.Swap(nil); luxRun != nil {
+				h.fake.ServerPrint(*luxRun, "automation", "stdout", "flushed at stop")
+			}
+			w.WriteHeader(200)
+			return
+		}
 		b, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		defer mu.Unlock()
@@ -693,7 +815,7 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 		t.Fatalf("ServerIdle %v, the decision says 30 s (Q3, Q16)", ServerIdle)
 	}
 	h.automation("aut_srv", "server", map[string]any{"kind": "github", "event": "pull_request"},
-		map[string]any{"server": map[string]any{"command": "bun run serve", "port": 8080, "path": "/events", "health": nil}})
+		map[string]any{"server": map[string]any{"command": "bun run serve", "port": 8080, "path": "/events", "health": "/health"}})
 	h.deliver("d-1", "pull_request", prBody("opened", "acme/web", "ana"))
 	h.until("the first POST", func() bool { mu.Lock(); defer mu.Unlock(); return len(got) == 1 })
 	// The clock stands still: nothing idles out before d-2 reaches the same container.
@@ -719,6 +841,8 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 		t.Fatalf("29 s after the last answer: %+v", r)
 	}
 	h.advance(time.Second)
+	luxRun := h.runs("aut_srv")[0].LuxRunID
+	printAtHealth.Store(&luxRun)
 	h.until("the run ends idle", func() bool { r := h.runs("aut_srv"); return len(r) == 1 && r[0].Status != "running" })
 	r := h.runs("aut_srv")[0]
 	if r.Status != "succeeded" || r.StopReason != "idle" || r.Payloads != 2 {
@@ -742,6 +866,14 @@ func TestAutomationServerPostsEventsAndStopsWhenIdle(t *testing.T) {
 	// The second pass POSTs only what came since: d-2's body, never d-1's again.
 	if len(bodies) != 3 || !strings.Contains(bodies[1], `"synchronize"`) || !strings.Contains(bodies[2], `"synchronize"`) {
 		t.Errorf("POST bodies %q", bodies)
+	}
+	// Its container log is its activity, each line once however often it was read.
+	var lines []string
+	rows, _ = h.owner.Query(context.Background(), `SELECT payload->>'text' FROM events WHERE automation_run_id = $1 AND event_type = $2
+		AND (payload->>'server')::bool ORDER BY cursor`, r.ID, phases.EvLogLine)
+	lines, _ = pgx.CollectRows(rows, pgx.RowTo[string])
+	if len(lines) != 4 || lines[1] != "bun run serve" || lines[2] != "listening on :8080" || lines[3] != "flushed at stop" {
+		t.Errorf("container log in the activity: %q", lines)
 	}
 	h.until("the container is ended", func() bool { return lux.Terminated(h.luxState(r.LuxRunID)) })
 }
@@ -1014,6 +1146,33 @@ func TestAutomationConcurrencyRows(t *testing.T) {
 	}
 }
 
+// The lux time limit ends an agent run with its open call aborted and the
+// note naming how long the run had run.
+func TestAutomationTimeLimitAbortsTheOpenCall(t *testing.T) {
+	h := newHarness(t)
+	h.automation("aut_limit", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Work", "timeLimitMinutes": 30}}})
+	h.deliver("l-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("running", func() bool {
+		r := h.runs("aut_limit")
+		return len(r) == 1 && r[0].Status == "running" && r[0].LuxRunID != ""
+	})
+	run := h.runs("aut_limit")[0]
+	// No follow pass may be in flight while the open call is planted.
+	h.runner.Wait()
+	exec(t, h.owner, `UPDATE automation_runs SET started_at = now() - interval '30 minutes',
+		feed_state = '{"open":["limit-call"],"calls":{"limit-call":"bash"}}' WHERE id = $1`, run.ID)
+	h.until("the run fails", func() bool { h.fake.Timeout(run.LuxRunID); return h.runs("aut_limit")[0].Status == "failed" })
+	var note string
+	if err := h.owner.QueryRow(context.Background(), `SELECT payload->>'note' FROM events WHERE automation_run_id = $1
+		AND event_type = 'agent.tool.completed' AND payload->>'callId' = 'limit-call' AND payload->>'status' = 'aborted'`, run.ID).Scan(&note); err != nil {
+		t.Fatal(err)
+	}
+	if note != "Stopped by the time limit, when the run reached 30 minutes." {
+		t.Fatalf("note %q", note)
+	}
+}
+
 // hangTier is a model tier whose agent stays busy until stopped.
 func (h *harness) hangTier() string {
 	id := h.org + "_hang"
@@ -1039,6 +1198,7 @@ func TestAutomationConcurrencyCancel(t *testing.T) {
 		return len(a) == 1 && a[0].Status == "running" && len(b) == 1 && b[0].Status == "running"
 	})
 	firstCmd, firstAgent := h.runs("aut_cancel")[0], h.runs("aut_cancel_kept")[0]
+	exec(t, h.owner, `UPDATE automation_runs SET feed_state='{"message":"buffered reply","open":["cancel-call"],"calls":{"cancel-call":"bash"}}' WHERE id=$1`, firstAgent.ID)
 	h.deliver("c-2", "push", push)
 	h.until("the second runs are running", func() bool {
 		a, b := h.runs("aut_cancel"), h.runs("aut_cancel_kept")
@@ -1055,21 +1215,421 @@ func TestAutomationConcurrencyCancel(t *testing.T) {
 	if in := h.fake.ResumeInputs(firstAgent.LuxRunID); len(in) != 1 || !strings.Contains(in[0], "Look at c-2") {
 		t.Errorf("resume inputs %q", in)
 	}
+	var aborted, ended, messages int
+	if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE event_type='agent.tool.completed' AND payload->>'status'='aborted' AND payload->>'note'='Stopped: the run was cancelled.'), count(*) FILTER (WHERE event_type='automation.run.ended'), count(*) FILTER (WHERE event_type='agent.message' AND payload->>'text'='buffered reply') FROM events WHERE automation_run_id=$1`, firstAgent.ID).Scan(&aborted, &ended, &messages); err != nil {
+		t.Fatal(err)
+	}
+	if aborted != 1 || ended != 1 || messages != 1 {
+		t.Fatalf("cancel feed: aborted=%d ended=%d messages=%d", aborted, ended, messages)
+	}
 	g.release(t)
+}
+
+// Output a cancelled command wrote after its last follow pass is read
+// once, before its lux Run is ended, into the cancelled run's activity.
+func TestAutomationConcurrencyCancelReadsTheLastOutput(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_last", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": "echo early; " + g.hold("echo late; sleep 60"), "concurrency": "cancel"})
+	h.deliver("l-1", "push", push)
+	lines := func(runID string) []string {
+		rows, err := h.owner.Query(context.Background(), `SELECT payload->>'text' FROM events
+			WHERE automation_run_id = $1 AND event_type = $2 ORDER BY cursor`, runID, phases.EvLogLine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	h.until("the first line is in the feed", func() bool {
+		r := h.runs("aut_last")
+		return len(r) == 1 && r[0].Status == "running" && slices.Contains(lines(r[0].ID), "early")
+	})
+	first := h.runs("aut_last")[0]
+	h.runner.Wait()
+	// No sweep from here: "late" reaches lux, and no follow pass reads it.
+	g.release(t)
+	wrote := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		seen := false
+		_ = h.lux.Output(ctx, first.LuxRunID, "", 0, func(f lux.Frame) error {
+			seen = seen || strings.Contains(f.Data, "late")
+			return nil
+		})
+		return seen
+	}
+	for deadline := time.Now().Add(10 * time.Second); !wrote(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("lux never recorded the late line")
+		}
+	}
+	ctx := context.Background()
+	body, _ := json.Marshal(push)
+	var fired Fired
+	if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) error {
+		a, err := Load(ctx, tx, "aut_last")
+		if err != nil {
+			return err
+		}
+		fired, err = Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: "l-2", Event: "push", Body: body}}, "", nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.runner.EndCancelled(ctx, fired.Cancelled)
+	h.runner.Wait()
+	if got := lines(first.ID); !slices.Equal(got, []string{"early", "late"}) {
+		t.Fatalf("cancelled run's lines %q", got)
+	}
+	if !lux.Terminated(h.luxState(first.LuxRunID)) {
+		t.Errorf("the cancelled command's lux Run is %s", h.luxState(first.LuxRunID))
+	}
+}
+
+// logLines is a run's recorded command lines, in order.
+func (h *harness) logLines(runID string) []string {
+	h.t.Helper()
+	rows, err := h.owner.Query(context.Background(), `SELECT payload->>'text' FROM events
+		WHERE automation_run_id = $1 AND event_type = $2 ORDER BY cursor`, runID, phases.EvLogLine)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return got
+}
+
+// luxWrote waits until the lux Run's output holds text.
+func (h *harness) luxWrote(luxRunID, text string) {
+	h.t.Helper()
+	wrote := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		seen := false
+		_ = h.lux.Output(ctx, luxRunID, "", 0, func(f lux.Frame) error {
+			seen = seen || strings.Contains(f.Data, text)
+			return nil
+		})
+		return seen
+	}
+	for deadline := time.Now().Add(10 * time.Second); !wrote(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("lux never recorded %q", text)
+		}
+	}
+}
+
+// fireNow fires automation id for one push delivery, as a sweep would.
+func (h *harness) fireNow(id, delivery string) Fired {
+	h.t.Helper()
+	ctx := context.Background()
+	body, _ := json.Marshal(map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	var fired Fired
+	if err := h.app.InOrg(ctx, h.org, func(tx pgx.Tx) error {
+		a, err := Load(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		fired, err = Fire(ctx, tx, a, SourceEvent, []Payload{{DeliveryID: delivery, Event: "push", Body: body}}, "", nil)
+		return err
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	return fired
+}
+
+// A follow pass in flight when its run is cancelled, holding the run's
+// old cursor inside lux's output stream, and the cancel's final read
+// record each line once: whether that pass was dispatched by the sweep
+// (the final read waits for it) or not (the cursor's compare-and-set
+// turns the later writer away).
+func TestAutomationConcurrencyCancelReadRacesNoFollower(t *testing.T) {
+	for _, dispatched := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dispatched=%v", dispatched), func(t *testing.T) {
+			h := newHarness(t)
+			g := newGate(t)
+			push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+			h.automation("aut_race", "command", map[string]any{"kind": "github", "event": "push"},
+				map[string]any{"command": "echo early; " + g.hold("echo late; sleep 60"), "concurrency": "cancel"})
+			h.deliver("r-1", "push", push)
+			h.until("the first line is in the feed", func() bool {
+				r := h.runs("aut_race")
+				return len(r) == 1 && r[0].Status == "running" && slices.Contains(h.logLines(r[0].ID), "early")
+			})
+			first := h.runs("aut_race")[0]
+			h.runner.Wait()
+			g.release(t)
+			h.luxWrote(first.LuxRunID, "late")
+
+			// The first stream of the run's output to reach a lifecycle
+			// event, after its records, waits there until released.
+			var holding atomic.Bool
+			held, release := make(chan struct{}), make(chan struct{})
+			h.fake.BeforeEvent(func(runID string, _ int64, _ string) {
+				if runID == first.LuxRunID && holding.CompareAndSwap(false, true) {
+					close(held)
+					<-release
+				}
+			})
+			defer h.fake.BeforeEvent(nil)
+			ctx := context.Background()
+			followed := make(chan struct{})
+			if dispatched {
+				if _, err := h.runner.followRunning(ctx); err != nil {
+					t.Fatal(err)
+				}
+				close(followed)
+			} else {
+				go func() {
+					defer close(followed)
+					if err := h.runner.followOne(ctx, first.ID, h.org, "aut_race", first.LuxRunID, SourceEvent); err != nil {
+						t.Error(err)
+					}
+				}()
+			}
+			<-held
+			h.runner.EndCancelled(ctx, h.fireNow("aut_race", "r-2").Cancelled)
+			if !dispatched {
+				h.runner.Wait()
+			}
+			close(release)
+			<-followed
+			h.runner.Wait()
+			if got := h.logLines(first.ID); !slices.Equal(got, []string{"early", "late"}) {
+				t.Fatalf("cancelled run's lines %q", got)
+			}
+		})
+	}
+}
+
+// Each cancelled run's final read takes up to readOutput's 2 s; a sweep
+// that cancels several runs returns without waiting for any of them.
+func TestAutomationConcurrencyCancelsDoNotStallTheSweep(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	ids := []string{"aut_stall_a", "aut_stall_b", "aut_stall_c"}
+	for _, id := range ids {
+		h.automation(id, "command", map[string]any{"kind": "github", "event": "push"},
+			map[string]any{"command": g.hold("echo done"), "concurrency": "cancel"})
+	}
+	h.deliver("st-1", "push", push)
+	h.until("every first run is running", func() bool {
+		for _, id := range ids {
+			if r := h.runs(id); len(r) != 1 || r[0].Status != "running" || r[0].LuxRunID == "" {
+				return false
+			}
+		}
+		return true
+	})
+	h.runner.Wait()
+	h.deliver("st-2", "push", push)
+	start := time.Now()
+	if _, err := h.runner.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	for _, id := range ids {
+		if r := h.runs(id); len(r) != 2 || r[0].Status != "cancelled" {
+			t.Fatalf("%s: %+v", id, r)
+		}
+	}
+	if took >= 2*time.Second {
+		t.Fatalf("a sweep cancelling %d runs took %s", len(ids), took)
+	}
+}
+
+// A resumable agent's frames after its last follow pass belong to the run
+// a newer event cancelled: its final read records them, its cursor moves
+// past them, and the run resuming its session does not record them again.
+func TestAutomationConcurrencyCancelReadsAnAgentsLastFrames(t *testing.T) {
+	h := newHarness(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_last_agent", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "cancel", "session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
+	cursorOf := func(runID string) string {
+		var c string
+		if err := h.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_cursor, '') FROM automation_runs WHERE id = $1`, runID).Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	h.deliver("la-1", "push", push)
+	h.until("the agent's busy is read", func() bool {
+		r := h.runs("aut_last_agent")
+		return len(r) == 1 && r[0].Status == "running" && r[0].LuxRunID != "" && cursorOf(r[0].ID) != ""
+	})
+	first := h.runs("aut_last_agent")[0]
+	h.runner.Wait()
+	// No sweep from here until the newer event: these frames are read by no follow pass.
+	h.fake.AgentSays(first.LuxRunID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "Late words from the agent."}})
+	h.fake.AgentSays(first.LuxRunID, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "late-call", "title": "bash", "kind": "execute",
+		"status": "in_progress", "rawInput": map[string]any{"command": "make late"}})
+	last := ""
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_ = h.lux.Output(ctx, first.LuxRunID, "", 0, func(f lux.Frame) error {
+		if f.Cursor != "" {
+			last = f.Cursor
+		}
+		return nil
+	})
+	cancel()
+	h.deliver("la-2", "push", push)
+	h.until("the newer run resumes the session", func() bool {
+		r := h.runs("aut_last_agent")
+		return len(r) == 2 && r[1].Status == "running" && r[1].Session == "resumed"
+	})
+	second := h.runs("aut_last_agent")[1]
+	h.until("the resumed run is followed", func() bool {
+		var followed bool
+		_ = h.owner.QueryRow(context.Background(), `SELECT followed_at IS NOT NULL FROM automation_runs WHERE id = $1`, second.ID).Scan(&followed)
+		return followed
+	})
+	h.runner.Wait()
+	count := func(runID string) (messages, called, aborted int) {
+		if err := h.owner.QueryRow(context.Background(), `SELECT
+			count(*) FILTER (WHERE event_type = 'agent.message' AND payload->>'text' = 'Late words from the agent.'),
+			count(*) FILTER (WHERE event_type = 'agent.tool.called' AND payload->>'callId' = 'late-call'),
+			count(*) FILTER (WHERE event_type = 'agent.tool.completed' AND payload->>'callId' = 'late-call' AND payload->>'status' = 'aborted'
+				AND payload->>'note' = 'Stopped: the run was cancelled.')
+			FROM events WHERE automation_run_id = $1`, runID).Scan(&messages, &called, &aborted); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if m, c, a := count(first.ID); m != 1 || c != 1 || a != 1 {
+		t.Fatalf("cancelled run's late frames: messages=%d called=%d aborted=%d", m, c, a)
+	}
+	var lastEpoch, lastSeq, gotEpoch, gotSeq int
+	fmt.Sscanf(last, "%d.%d", &lastEpoch, &lastSeq)
+	fmt.Sscanf(cursorOf(first.ID), "%d.%d", &gotEpoch, &gotSeq)
+	if gotEpoch < lastEpoch || gotEpoch == lastEpoch && gotSeq < lastSeq {
+		t.Fatalf("cancelled run's cursor %q is before its last frame %q", cursorOf(first.ID), last)
+	}
+	if m, c, a := count(second.ID); m != 0 || c != 0 || a != 0 {
+		t.Fatalf("resumed run recorded the cancelled run's frames: messages=%d called=%d aborted=%d", m, c, a)
+	}
+}
+
+// A follow pass in flight when its run is cancelled opens a call the
+// cancel's own end never saw; the cancel's final read, finding no frames
+// past that pass, still ends it as aborted.
+func TestAutomationCancelEndsACallAFollowerOpened(t *testing.T) {
+	h := newHarness(t)
+	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
+	h.automation("aut_follower_call", "agent", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"concurrency": "cancel", "session_mode": "resumable", "expiry_days": 7,
+			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
+	h.deliver("fc-1", "push", push)
+	h.until("the agent's busy is read", func() bool {
+		r := h.runs("aut_follower_call")
+		if len(r) != 1 || r[0].Status != "running" || r[0].LuxRunID == "" {
+			return false
+		}
+		var c string
+		_ = h.owner.QueryRow(context.Background(), `SELECT COALESCE(lux_cursor, '') FROM automation_runs WHERE id = $1`, r[0].ID).Scan(&c)
+		return c != ""
+	})
+	first := h.runs("aut_follower_call")[0]
+	h.runner.Wait()
+	h.fake.AgentSays(first.LuxRunID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "Working on it."}})
+	h.fake.AgentSays(first.LuxRunID, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "follower-call", "title": "bash", "kind": "execute",
+		"status": "in_progress", "rawInput": map[string]any{"command": "make"}})
+
+	// The follow pass waits at its first lifecycle event, after the records.
+	var holding atomic.Bool
+	held, release := make(chan struct{}), make(chan struct{})
+	h.fake.BeforeEvent(func(runID string, _ int64, _ string) {
+		if runID == first.LuxRunID && holding.CompareAndSwap(false, true) {
+			close(held)
+			<-release
+		}
+	})
+	defer h.fake.BeforeEvent(nil)
+	ctx := context.Background()
+	if _, err := h.runner.followRunning(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-held
+	h.runner.EndCancelled(ctx, h.fireNow("aut_follower_call", "fc-2").Cancelled)
+	close(release)
+	h.runner.Wait()
+
+	var called, aborted, completed int
+	var open string
+	if err := h.owner.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE event_type = 'agent.tool.called' AND payload->>'callId' = 'follower-call'),
+		count(*) FILTER (WHERE event_type = 'agent.tool.completed' AND payload->>'callId' = 'follower-call' AND payload->>'status' = 'aborted'),
+		count(*) FILTER (WHERE event_type = 'agent.tool.completed' AND payload->>'callId' = 'follower-call')
+		FROM events WHERE automation_run_id = $1`, first.ID).Scan(&called, &aborted, &completed); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.owner.QueryRow(ctx, `SELECT COALESCE(feed_state->'open', '[]'::jsonb)::text FROM automation_runs WHERE id = $1`, first.ID).Scan(&open); err != nil {
+		t.Fatal(err)
+	}
+	if called != 1 || completed != 1 || aborted != 1 || open != "[]" {
+		t.Fatalf("cancelled run's follower call: called=%d completed=%d aborted=%d open=%s", called, completed, aborted, open)
+	}
+}
+
+// A run's list learns of a run it has not read from the ledger: Fire
+// records the queued run, and its start records it started, each naming
+// the automation: a command's start when its lux Run is claimed, a
+// webhook's when its run is claimed for its POST.
+func TestAutomationRunQueuedAndStartedAreRecorded(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(t)
+	t.Cleanup(func() { g.release(t) })
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
+	t.Cleanup(hook.Close)
+	h.automation("aut_seen", "command", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"command": g.hold("echo done"), "concurrency": "queue"})
+	h.automation("aut_seen_hook", "webhook", map[string]any{"kind": "github", "event": "push"},
+		map[string]any{"webhook": map[string]any{"url": hook.URL}})
+	h.deliver("se-1", "push", map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}})
+	h.until("the command runs and the webhook is sent", func() bool {
+		c, w := h.runs("aut_seen"), h.runs("aut_seen_hook")
+		return len(c) == 1 && c[0].Status == "running" && c[0].LuxRunID != "" && len(w) == 1 && w[0].Status == "succeeded"
+	})
+	for _, id := range []string{"aut_seen", "aut_seen_hook"} {
+		run := h.runs(id)[0]
+		rows, err := h.owner.Query(context.Background(), `SELECT event_type || ' ' || (payload->>'automationId') || ' ' || (payload->>'automationRunId')
+			FROM events WHERE automation_run_id = $1 AND event_type IN ('automation.run.queued', 'automation.run.started') ORDER BY cursor`, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"automation.run.queued " + id + " " + run.ID, "automation.run.started " + id + " " + run.ID}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s run events %q, want %q", id, got, want)
+		}
+	}
 }
 
 // Concurrency send: an event arriving while the agent works is given to
 // that agent as input, with the automation's prompt for that event, once.
 func TestAutomationConcurrencySendReachesTheAgent(t *testing.T) {
 	h := newHarness(t)
-	h.automation("aut_send", "agent", map[string]any{"kind": "github", "event": "push"},
+	h.automation("aut_send", "agent", map[string]any{"kind": "github", "event": "pull_request"},
 		map[string]any{"concurrency": "send", "session_mode": "resumable", "expiry_days": 7,
 			"agent": map[string]any{"own": map[string]any{"tierId": h.hangTier(), "prompt": "Look at {{event.delivery_id}}"}}})
-	push := map[string]any{"ref": "refs/heads/main", "repository": map[string]any{"full_name": "acme/web"}}
-	h.deliver("s-1", "push", push)
+	h.deliver("s-1", "pull_request", prBody("opened", "acme/web", "ana"))
 	h.until("running", func() bool { r := h.runs("aut_send"); return len(r) == 1 && r[0].Status == "running" })
 	run := h.runs("aut_send")[0]
-	h.deliver("s-2", "push", push)
+	h.deliver("s-2", "pull_request", prBody("synchronize", "acme/web", "ana"))
 	requestID := "automation-" + run.ID + "-1"
 	h.until("the second event reaches the agent", func() bool { return len(h.fake.InputBodies(run.LuxRunID, requestID)) > 0 })
 	for range 3 {
@@ -1084,6 +1644,13 @@ func TestAutomationConcurrencySendReachesTheAgent(t *testing.T) {
 	}
 	if r := h.runs("aut_send"); len(r) != 1 || r[0].Payloads != 2 {
 		t.Errorf("runs %+v", r)
+	}
+	var arrivals int
+	if err := h.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE automation_run_id=$1 AND event_type='automation.delivery.sent' AND payload->>'source'='github' AND payload->>'summary'='pull_request synchronize'`, run.ID).Scan(&arrivals); err != nil {
+		t.Fatal(err)
+	}
+	if arrivals != 1 {
+		t.Fatalf("GitHub follow-up arrivals: %d", arrivals)
 	}
 	var sent int
 	if err := h.owner.QueryRow(context.Background(), `SELECT inputs_sent FROM automation_runs WHERE id = $1`, run.ID).Scan(&sent); err != nil || sent != 2 {

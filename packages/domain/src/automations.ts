@@ -535,6 +535,8 @@ export interface AutomationRun {
   event: string | null;
   action: string | null;
   payloadCount: number;
+  /** A running run's newest tool call not finished yet (the list's "now:" line); null otherwise. */
+  now?: { tool: string; args: unknown } | null;
 }
 
 export interface AutomationRunRequest {
@@ -563,6 +565,15 @@ export interface AutomationRunDetail extends AutomationRun {
   toolCalls: AutomationToolCall[];
   /** The post_to_chat refusal the orchestrator failed the run on (its event id); null for a run that did not fail on one. */
   failedCallId: string | null;
+  /** When a scheduled run was due. */
+  scheduledFor?: string | null;
+  /** What each delivery sent to the run while it ran gave its agent, by delivery id; null once its body is gone. */
+  sentBodies?: Record<string, unknown>;
+  /**
+   * A running agent's reply not yet ended and its calls' output so far, by call id, as the orchestrator holds them; null once it ends.
+   * `cursor` is the run's newest event when they were read: an `agent.message` after it supersedes `message`.
+   */
+  live?: { message: string; output: Record<string, Record<string, unknown>>; cursor?: number } | null;
 }
 
 /** One call an automation run's agent made to a dude tool, as the run's ledger has it. */

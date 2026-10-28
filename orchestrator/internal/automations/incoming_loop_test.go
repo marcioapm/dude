@@ -94,6 +94,20 @@ func TestIncomingGroupFollowUpsReachTheLiveRun(t *testing.T) {
 	if len(payloads) != 2 || payloads[0].DeliveryID != "dlv_1" || payloads[1].DeliveryID != "dlv_2" {
 		t.Errorf("the live run holds %+v", payloads)
 	}
+	// The follow-up is in the live run's activity where it arrived; the
+	// delivery that started the run is not.
+	rows, err := h.owner.Query(context.Background(), `SELECT payload->>'deliveryId', payload->>'source', payload->>'summary',
+		occurred_at <= now() FROM events WHERE automation_run_id = $1 AND event_type = $2 ORDER BY cursor`, first.Run, EvFollowUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		Delivery, Source, Summary string
+		Past                      bool
+	}])
+	if err != nil || len(sent) != 1 || sent[0].Delivery != "dlv_2" || sent[0].Source != "incoming" || sent[0].Summary != "resolved · HighErrorRate" {
+		t.Errorf("follow-ups in the feed: %+v %v", sent, err)
+	}
 }
 
 // Deliveries that cannot be decided hold up nothing: 50 whose runs the

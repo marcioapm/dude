@@ -52,6 +52,15 @@ export interface ToolTurn {
   machine?: { from: string | null; to: string; pool: string | null; answer?: string; error?: string; code?: string };
   /** dude refused the call (a message over the rate, to no peer): why, in its words. */
   refusal?: string;
+  /**
+   * An automation run's call of a dude tool: the tool server's record of it
+   * (its answer, a post's channel and link, a refusal's words), joined by
+   * the orchestrator to the harness's completion.
+   */
+  dude?: { eventId?: string; result?: unknown; error?: string;
+    posted?: { channel: string; channelId: string; ts: string; permalink: string } };
+  /** Why the run's end cut the call short (an aborted call's note). */
+  stoppedNote?: string;
   /** The child sessions (subagents) this call started, in the order they started. */
   children: ChildTurn[];
 }
@@ -2036,9 +2045,13 @@ function toolTurn(id: string, tool: string, payload: Record<string, unknown>, at
  * dude recorded is the outcome, whatever the harness says of the call.
  */
 function endTool(turn: ToolTurn, payload: Record<string, unknown>, at: string): void {
-  turn.status = turn.refusal !== undefined || payload.status === "error" ? "failed" : "completed";
+  // A call its run's end cut short (an automation run's time limit): aborted, its partial output kept.
+  turn.status = turn.refusal !== undefined || payload.status === "error" ? "failed" : payload.status === "aborted" ? "aborted" : "completed";
   turn.endedAt = at;
   turn.result = resultFrom(payload);
+  const dude = payload.dude as ToolTurn["dude"] | undefined;
+  if (dude && typeof dude === "object") turn.dude = dude;
+  if (typeof payload.note === "string") turn.stoppedNote = payload.note;
 }
 
 /**
@@ -2142,7 +2155,7 @@ function childOf(state: Projection, payload: Record<string, unknown>, event: Per
 }
 
 /** A tool's outcome from an `agent.tool.completed` payload, or null if it reported none. */
-function resultFrom(payload: Record<string, unknown>): ToolResult | null {
+export function resultFrom(payload: Record<string, unknown>): ToolResult | null {
   const result: ToolResult = {};
   for (const key of ["output", "stdout", "stderr"] as const) {
     const stream = payload[key] as Record<string, unknown> | undefined;

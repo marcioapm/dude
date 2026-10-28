@@ -208,12 +208,14 @@ func continueOrCreateTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun)
 		return "", err
 	}
 	if c.DeltaLines > MaxResumeDeltaLines {
-		// Fresh eyes on the whole branch: the predecessor is let go and any
-		// narrower range is no longer valid for this decision.
+		// Fresh eyes: the predecessor is let go and a narrower range is no
+		// longer valid for this decision, unless it is the loop's own.
 		if err := releaseRunTx(ctx, tx, p.ID); err != nil {
 			return "", err
 		}
-		in.ReviewRange = nil
+		if !in.KeepRange {
+			in.ReviewRange = nil
+		}
 		in.freshReason = "large_delta"
 		return createPhaseRunTx(ctx, tx, org, in)
 	}

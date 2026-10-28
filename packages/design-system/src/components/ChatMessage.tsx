@@ -114,6 +114,8 @@ export interface ChatMessageProps extends Omit<HTMLAttributes<HTMLElement>, "chi
    * which the app owns (the design system carries no brand image).
    */
   readonly avatar?: ReactNode;
+  /** The muted word after an agent's `name`, in place of its role's: "Automation". */
+  readonly roleLabel?: string | undefined;
   /** People the text @-mentions: each "@<name>" in it is drawn as their chip (`MentionChip`), in place. */
   readonly mentions?: ReadonlyArray<MarkdownMention> | undefined;
 }
@@ -182,6 +184,7 @@ export function ChatMessage({
   actions,
   person,
   avatar,
+  roleLabel,
   mentions,
   className,
   ...rest
@@ -258,7 +261,7 @@ export function ChatMessage({
         {continued ? null : (
           <header className={styles["header"]}>
             <span className={styles["name"]}>{name ?? person?.name ?? ROLE_LABEL[role]}</span>
-            {k === "agent" && name ? <span className={styles["roleName"]}>{ROLE_LABEL[role]}</span> : null}
+            {k === "agent" && name ? <span className={styles["roleName"]}>{roleLabel ?? ROLE_LABEL[role]}</span> : null}
             {k === "human" && INTENT_LABEL[humanIntent] ? <span className={cx(styles["intent"], styles[`intentTag-${humanIntent}`])}><span className="ds-cap">{INTENT_LABEL[humanIntent]}</span></span> : null}
             {queued ? (
               <span className={styles["queued-tag"]} title="Sent. The agent has not read it yet; the line under it says when it will.">

@@ -1,0 +1,213 @@
+package delivery
+
+import (
+	"net/http"
+	"os/exec"
+	"strings"
+	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
+)
+
+// heldAround holds the merge fixture's delivery at its head (round 1),
+// after before (nil: nothing) set it up; then between changes the branches,
+// answer (nil: none) sets GitHub's answers given round 1, and it holds the
+// delivery again at st's heads (round 2).
+func heldAround(t *testing.T, before func(*verdictFixture, *State), between func(*verdictFixture, *State, workflow.StepContext),
+	answer func(*verdictFixture, Hold)) (first, second Hold) {
+	t.Helper()
+	f, st, sc := mergeFixture(t, map[string]string{"go.mod": "module example.com/acme\n"})
+	if before != nil {
+		before(f, st)
+	}
+	if err := f.steps.holdAt(f.ctx, sc, st); err != nil {
+		t.Fatal(err)
+	}
+	first = *st.Hold
+	between(f, st, sc)
+	if answer != nil {
+		answer(f, first)
+	}
+	if err := f.steps.holdAt(f.ctx, sc, st); err != nil {
+		t.Fatal(err)
+	}
+	return first, *st.Hold
+}
+
+// heldTwice is heldAround with taskCommits of the task's own committed to
+// repo's branch, then GitHub merging main in (syncBeforePR).
+func heldTwice(t *testing.T, taskCommits int, answer func(*verdictFixture, Hold)) (first, second Hold) {
+	t.Helper()
+	return heldAround(t, nil, func(f *verdictFixture, st *State, sc workflow.StepContext) {
+		taskCommit(f.gh, st, "repo", taskCommits)
+		f.merged(st, sc, "repo")
+	}, answer)
+}
+
+// taskCommit commits n changes of the task's own to repo's branch.
+func taskCommit(gh *fakegithub.Server, st *State, repo string, n int) {
+	for i := range n {
+		st.Heads[repo] = gh.CommitFiles("feature", "A fix", map[string]string{"app/greet.go": "package app // " + strings.Repeat("x", i+1)})
+	}
+}
+
+// gitOn runs git in a fake's repository; its trimmed output. It names an
+// identity, as CI runners have none for a commit it makes.
+func gitOn(t *testing.T, gh *fakegithub.Server, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", gh.Repo}, args...)...)
+	cmd.Env = append(cmd.Environ(), "GIT_AUTHOR_NAME=Alice", "GIT_AUTHOR_EMAIL=alice@example.com",
+		"GIT_COMMITTER_NAME=Alice", "GIT_COMMITTER_EMAIL=alice@example.com")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// The first hold has no commits since; the second counts only the task's
+// commits since the first, not main's commit nor GitHub's merge of it.
+func TestAHoldCountsTheTasksOwnCommitsSinceThePreviousHold(t *testing.T) {
+	for _, own := range []int{0, 1, 2} {
+		first, second := heldTwice(t, own, nil)
+		if first.Round != 1 || first.CommitsSince != nil || first.Previous != nil || len(first.Repos) != 1 || first.Repos[0].Additions == nil {
+			t.Fatalf("first hold %+v, want round 1 with no commits since and its lines counted", first)
+		}
+		if second.Round != 2 || second.CommitsSince == nil || *second.CommitsSince != own {
+			t.Errorf("%d commits of the task's and a merge of main: round %d commitsSince %v, want %d", own, second.Round, countOf(second.CommitsSince), own)
+		}
+	}
+}
+
+// Merges counted between two holds: one of main made with main as its first
+// parent (a person's `git checkout main && git merge feature`, pushed to
+// feature) is main's; one of a side branch of the task's work, made without
+// fast-forward, is the task's, as is the side branch's commit.
+func TestAHoldCountsAMergeByWhetherItBringsInTheBase(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		between func(*verdictFixture, *State, workflow.StepContext)
+		want    int
+	}{
+		{"main merged with the branch as its second parent", func(f *verdictFixture, st *State, _ workflow.StepContext) {
+			taskCommit(f.gh, st, "repo", 1)
+			gitOn(t, f.gh, "update-ref", "refs/heads/onmain", "refs/heads/main")
+			merge := f.gh.MergeLocally("onmain", "feature", nil)
+			if merge == "" || f.gh.Parents(merge)[0] != f.gh.SHA("main") {
+				t.Fatalf("merge %q of feature into main's head", merge)
+			}
+			gitOn(t, f.gh, "update-ref", "refs/heads/feature", merge)
+			st.Heads["repo"] = merge
+		}, 1},
+		{"a side branch merged without fast-forward", func(f *verdictFixture, st *State, sc workflow.StepContext) {
+			if f.gh.Branch("side", "feature", "Side work") == "" {
+				t.Fatal("side branch")
+			}
+			st.Heads["repo"] = f.gh.MergeLocally("feature", "side", nil)
+			if st.Heads["repo"] == "" || len(f.gh.Parents(st.Heads["repo"])) != 2 {
+				t.Fatalf("merge %q of side into feature", st.Heads["repo"])
+			}
+			f.merged(st, sc, "repo")
+		}, 2},
+		// A rewrite gives the task's commits new SHAs: the rewritten first
+		// commit's parent is in the base, yet it is not a merge of it.
+		{"the branch rewritten onto main", func(f *verdictFixture, st *State, _ workflow.StepContext) {
+			taskCommit(f.gh, st, "repo", 1)
+			sq := gitOn(t, f.gh, "commit-tree", "refs/heads/feature^{tree}", "-p", "refs/heads/main", "-m", "squashed")
+			gitOn(t, f.gh, "update-ref", "refs/heads/feature", sq)
+			st.Heads["repo"] = sq
+		}, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, second := heldAround(t, nil, c.between, nil)
+			if second.Round != 2 || second.CommitsSince == nil || *second.CommitsSince != c.want {
+				t.Errorf("round %d commitsSince %v, want %d", second.Round, countOf(second.CommitsSince), c.want)
+			}
+		})
+	}
+}
+
+// With two repositories the count is the sum of each one's task commits,
+// and a compare failing in either leaves it out.
+func TestAHoldOfTwoRepositoriesSumsTheirCounts(t *testing.T) {
+	twoRepos := func(f *verdictFixture, st *State) { f.withSecondRepo(st, map[string]string{"b/main.go": "package b"}) }
+	commitAndMergeEach := func(f *verdictFixture, st *State, sc workflow.StepContext) {
+		taskCommit(f.gh, st, "repo", 1)
+		taskCommit(f.other, st, "other", 1)
+		f.merged(st, sc, "other")
+		f.merged(st, sc, "repo")
+	}
+	otherPreviousFails := func(f *verdictFixture, first Hold) {
+		from := first.Heads["other"]
+		f.other.Set(func(s *fakegithub.Server) {
+			s.Intercept = func(r *http.Request) int {
+				if strings.Contains(r.URL.Path, "/compare/") && strings.HasSuffix(r.URL.Path, "..."+from) {
+					return 502
+				}
+				return 0
+			}
+		})
+	}
+	t.Run("both compared", func(t *testing.T) {
+		_, second := heldAround(t, twoRepos, commitAndMergeEach, nil)
+		if second.Round != 2 || second.CommitsSince == nil || *second.CommitsSince != 2 {
+			t.Errorf("round %d commitsSince %v, want 2", second.Round, countOf(second.CommitsSince))
+		}
+	})
+	t.Run("other's previous compare failed", func(t *testing.T) {
+		_, second := heldAround(t, twoRepos, commitAndMergeEach, otherPreviousFails)
+		if second.Round != 2 || second.CommitsSince != nil {
+			t.Errorf("round %d commitsSince %v, want it left out", second.Round, countOf(second.CommitsSince))
+		}
+	})
+}
+
+// A compare the count needs that GitHub fails or lists short (base...the
+// branch now, or base...the head the first hold showed) leaves the count
+// out.
+func TestAHoldWhoseCompareFailsOrIsTruncatedLeavesTheCountOut(t *testing.T) {
+	failing := func(previous bool) func(*verdictFixture, Hold) {
+		return func(f *verdictFixture, first Hold) {
+			from := first.Heads["repo"]
+			f.gh.Set(func(s *fakegithub.Server) {
+				s.Intercept = func(r *http.Request) int {
+					if strings.Contains(r.URL.Path, "/compare/") && strings.HasSuffix(r.URL.Path, "..."+from) == previous {
+						return 502
+					}
+					return 0
+				}
+			})
+		}
+	}
+	truncated := func(previous bool) func(*verdictFixture, Hold) {
+		return func(f *verdictFixture, first Hold) {
+			from := first.Heads["repo"]
+			f.gh.Set(func(s *fakegithub.Server) {
+				s.CompareAnswer = func(_, head string, a map[string]any) {
+					if (head == from) == previous {
+						a["total_commits"] = 251
+					}
+				}
+			})
+		}
+	}
+	for name, answer := range map[string]func(*verdictFixture, Hold){
+		"now failed": failing(false), "previous failed": failing(true),
+		"now truncated": truncated(false), "previous truncated": truncated(true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, second := heldTwice(t, 1, answer)
+			if second.Round != 2 || second.CommitsSince != nil {
+				t.Errorf("round %d commitsSince %v, want it left out", second.Round, countOf(second.CommitsSince))
+			}
+		})
+	}
+}
+
+func countOf(n *int) any {
+	if n == nil {
+		return nil
+	}
+	return *n
+}

@@ -429,8 +429,20 @@ func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start in
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
 	beforeResult := s.beforeCommandResult
+	toEnd := runsToEnd(spec)
+	var out []byte
+	if toEnd {
+		// A generic workload's output, as lux's shim records it: plain
+		// stdout and stderr records, each as it is written.
+		cmd.Stdout = &recordWriter{s: s, run: run, ch: "stdout", epoch: epoch}
+		cmd.Stderr = &recordWriter{s: s, run: run, ch: "stderr", epoch: epoch}
+	}
 	s.mu.Unlock()
-	out, err := cmd.CombinedOutput()
+	if toEnd {
+		err = cmd.Run()
+	} else {
+		out, err = cmd.CombinedOutput()
+	}
 	if errors.Is(err, exec.ErrWaitDelay) {
 		// WaitDelay only replaces a successful exit: inherited pipes do
 		// not turn a successful workload into a failure.
@@ -456,13 +468,44 @@ func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start in
 	if !run.starting(epoch, start) || run.State != "running" || ctx.Err() == context.Canceled {
 		return false
 	}
-	s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
-		"content": map[string]any{"type": "text", "text": string(out)}})
+	if toEnd {
+		// lux reports the workload's exit before the Run's end.
+		s.luxEvent(run, "exited", map[string]any{"exitCode": exitCode(err, -1)})
+		if hold := s.afterExited; hold != nil {
+			// The Run stays running while the hook holds it: a reader sees
+			// the exit before the terminal state.
+			s.mu.Unlock()
+			hold(run.ID)
+			s.mu.Lock()
+			if run.State != "running" {
+				return false
+			}
+		}
+	} else {
+		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
+			"content": map[string]any{"type": "text", "text": string(out)}})
+	}
 	if err != nil {
 		s.setStateWith(run, "failed", "workload-failed")
 		return false
 	}
 	return true
+}
+
+// recordWriter appends what a workload writes to its Run's records.
+type recordWriter struct {
+	s     *Server
+	run   *Run
+	ch    string
+	epoch int
+}
+
+func (w *recordWriter) Write(p []byte) (int, error) {
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	w.run.records = append(w.run.records, record{Seq: int64(len(w.run.records) + 1), Epoch: w.epoch, Ch: w.ch, Data: string(p)})
+	w.run.cond.Broadcast()
+	return len(p), nil
 }
 
 // placeWorkspaceSecrets writes the spec's file secrets under /workspace into

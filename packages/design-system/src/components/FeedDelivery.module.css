@@ -1,0 +1,68 @@
+/*
+ * A delivery sent to a running agent, in its transcript. The info tone and
+ * the highlight tint (as a steer takes the accent); no colour of its own.
+ */
+
+.delivery {
+  container-type: inline-size;
+  background: color-mix(in srgb, var(--ds-tone-info-mark) var(--ds-tint-highlight), transparent);
+  box-shadow: inset 2px 0 0 var(--ds-tone-info-mark);
+  border-radius: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-compact);
+  padding-inline: var(--ds-space-8) var(--ds-space-4);
+  font-size: var(--ds-text-sm);
+  min-width: 0;
+}
+
+.glyph {
+  flex: none;
+  color: var(--ds-tone-info-fg);
+}
+
+.lead {
+  flex: none;
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+
+.summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-secondary);
+}
+
+.id {
+  flex: none;
+  color: var(--ds-color-text-secondary);
+}
+
+.time {
+  flex: none;
+  color: var(--ds-color-text-secondary);
+}
+
+.body {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: var(--ds-space-4) var(--ds-space-12) var(--ds-space-8);
+  font-size: var(--ds-text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ds-color-text-primary);
+}
+
+@container (max-width: 480px) {
+  .id {
+    display: none;
+  }
+}

@@ -10,7 +10,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
-import { FixtureClient } from "../src/fixtures/client.ts";
+import { FixtureClient, emit } from "../src/fixtures/client.ts";
+import { digestLater } from "../src/fixtures/automationActivity.ts";
 import { ORG, PEOPLE, PROJECT } from "../src/fixtures/data.ts";
 import { ORG_AUTOMATION_PICKS, PRESET_SECRETS } from "@dude/domain";
 import { AutomationPage, AutomationsList, NewAutomationDialog, automationsPlace, automationsSub, checkJson, testTemplate, type AutomationsPlace } from "../src/screens/AutomationsSettings.tsx";
@@ -400,7 +401,7 @@ describe("the header's ⋯ menu", () => {
       const el = document.querySelector<HTMLElement>("[data-testid=delete-consequences]");
       return el && !el.textContent?.includes("Reading") ? el : null;
     }, "what goes");
-    expect(says.textContent).toContain("Its one run goes with it: history, log and payload.");
+    expect(says.textContent).toContain("Its 2 runs go with it: their history, logs and payloads.");
     expect(says.textContent).toContain("Its kept session is ended");
     await click(document.querySelector<HTMLElement>("[data-testid=delete-confirm]")!);
     await until(() => (back === 1 ? true : null), "back to the list");
@@ -633,6 +634,35 @@ describe("Run now on an event", () => {
     await until(() => (checks().includes("must be a JSON object") ? true : null), "not an object");
     expect(checks()).toContain("× The body must be a JSON object.");
   });
+
+  test("Run on a picked past delivery starts its run and opens that run", async () => {
+    const client = new FixtureClient("a");
+    const asked: unknown[] = [];
+    const started: string[] = [];
+    const run = client.runAutomation.bind(client);
+    client.runAutomation = async (id, body) => {
+      asked.push(body);
+      const out = await run(id, body);
+      started.push(out.runId);
+      return out;
+    };
+    const places: AutomationsPlace[] = [];
+    const c = await show(<AutomationPage client={client} orgName="Example" people={PEOPLE} place={{ id: "aut_triage" }}
+      onPlace={(p) => places.push(p)} onBack={() => undefined} />);
+    await click(await until(() => c.querySelector("[data-testid=run-now]"), "Run now"));
+    const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+    const row = await until(() => dialog.querySelector<HTMLElement>("[data-testid=test-delivery] tbody tr"), "a past delivery");
+    await click(row);
+    const go = dialog.querySelector<HTMLButtonElement>("[data-testid=test-run]")!;
+    expect(go.textContent).toBe("Run on this delivery");
+    expect(go.disabled).toBe(false);
+    await click(go);
+    await until(() => (started.length ? started : null), "the run");
+    expect(asked).toEqual([{ deliveryId: expect.any(String) }]);
+    const opened = await until(() => places.find((p) => p.runId) ?? null, "the new run opens");
+    expect(opened).toEqual({ id: "aut_triage", tab: "runs", runId: started[0] });
+    await until(() => (document.querySelector("[role=dialog]") ? null : true), "the dialog closes");
+  });
 });
 
 describe("the test event's helpers", () => {
@@ -681,10 +711,9 @@ describe("post_to_chat", () => {
     expect(c.querySelectorAll("[data-testid=tool-unavailable]").length).toBe(1);
   });
 
-  test("a run's post is a Slack card on the log with its channel and the link to the message", async () => {
+  test("a run's post is the feed's Slack card with its channel and the link to the message; there is no separate log of calls", async () => {
     const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d1" });
-    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]"), "the call");
-    expect(call.querySelector("time")?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed] [data-tool=post_to_chat]"), "the call");
     expect(call.querySelector('[data-icon="slack"]')).not.toBeNull();
     expect(call.textContent).toContain("#engineering");
     const posted = call.querySelector<HTMLElement>("[data-testid=posted-link]")!;
@@ -692,29 +721,29 @@ describe("post_to_chat", () => {
     const link = posted.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://acme-hq.slack.com/archives/C0ENGINEER/p1761318192000100");
     expect(link.getAttribute("target")).toBe("_blank");
-    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("1 tool call. Open one for its output.");
+    expect(c.querySelector("[data-testid=run-tools]")).toBeNull();
+    expect(c.querySelector("[data-testid=run-activity]")?.textContent).toContain("3 messages and 4 tool calls. Kept as long as the run's log.");
     expect(c.querySelector("[data-testid=run-failed]")).toBeNull();
-    // The note's "Open one" holds: the post opens to its answer.
+    // It opens to the answer the tool gave.
     const head = call.querySelector<HTMLElement>("[role=button][aria-expanded]");
     expect(head?.getAttribute("aria-expanded")).toBe("false");
     await click(head!);
     expect(head!.getAttribute("aria-expanded")).toBe("true");
-    expect(call.textContent).toContain(`"channelId": "C0ENGINEER"`);
-    expect(call.textContent).toContain(`"ts": "1761318192.000100"`);
+    expect(call.textContent).toContain(`"channelId":"C0ENGINEER"`);
   });
 
-  test("a run that failed on post_to_chat says so under Run, and the call shows its error", async () => {
+  test("a run that failed on post_to_chat says so under Run, and the call in the feed is failed with its error", async () => {
     const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d0" });
     const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
     expect(failed.getAttribute("data-tone")).toBe("danger");
     expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. Nothing was posted; Márcio Martins was told.`);
-    const call = c.querySelector<HTMLElement>("[data-testid=tool-call][data-tool=post_to_chat]")!;
+    const call = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed] [data-tool=post_to_chat]"), "the call");
+    expect(call.getAttribute("data-status")).toBe("failed");
     expect(call.textContent).toContain(`Slack is not connected for ${ORG.name}: an organisation admin adds dude's Slack app in Organisation settings → Chat.`);
     expect(call.querySelector("[data-testid=posted-link]")).toBeNull();
-    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the last one; its owner was told.");
   });
 
-  test("the danger callout follows the call the run failed on, not the reason's words nor which call came last", async () => {
+  test("the danger callout says what was posted only for the call the run failed on, not for the reason's words", async () => {
     const client = new FixtureClient("a");
     const real = client.automationRun.bind(client);
     const search = { id: "evt_s", tool: "github_search", at: new Date().toISOString(), status: "completed" as const, args: { q: "is:pr" },
@@ -726,12 +755,10 @@ describe("post_to_chat", () => {
         : { ...r, status: "failed", reason: "post_to_chat failed: the agent wrote this itself", failedCallId: null };
     };
     const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
-    await until(() => c.querySelector("[data-testid=run-failed]"), "the failure");
-    expect(c.querySelector("[data-testid=run-tools]")?.textContent).toContain("The run failed on the post_to_chat call at");
+    expect((await until(() => c.querySelector("[data-testid=run-failed]"), "the failure")).textContent).toContain("Nothing was posted");
     const other = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d1" });
-    await until(() => other.querySelector("[data-testid=run-tools]"), "the log");
-    expect(other.querySelector("[data-testid=run-failed]")).toBeNull();
-    expect(other.textContent).toContain("post_to_chat failed: the agent wrote this itself");
+    const failed = await until(() => other.querySelector("[data-testid=run-failed]"), "the other's failure");
+    expect(failed.textContent).toBe("Failed. post_to_chat failed: the agent wrote this itself. Márcio Martins was told.");
   });
 
   test("a run that posted, then failed on a refused post, says that message was not posted, not that nothing was", async () => {
@@ -745,6 +772,396 @@ describe("post_to_chat", () => {
     const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d0" });
     const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
     expect(failed.textContent).toBe(`Failed. post_to_chat failed: Slack is not connected for ${ORG.name}. That message was not posted; Márcio Martins was told.`);
-    expect(c.querySelector("[data-testid=posted-link]")).not.toBeNull();
+  });
+});
+
+describe("a run's activity", () => {
+  const page = (client: FixtureClient, place: AutomationsPlace) =>
+    show(<AutomationPage client={client} orgName="Acme" people={PEOPLE} place={place} onPlace={() => undefined} onBack={() => undefined} />);
+  const card = (c: HTMLElement, tool: string, i = 0) => [...c.querySelectorAll<HTMLElement>(`[data-testid=run-feed] [data-tool=${tool}]`)][i];
+
+  test("a live agent run is a following feed signed by the automation, its running call ticking, with the Live mark", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const feed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed]"), "the feed");
+    await until(() => card(c, "bash"), "the call");
+    expect(feed.getAttribute("data-live")).toBe("true");
+    expect(c.querySelector("[data-testid=live-mark]")?.textContent).toBe("Live");
+    const turn = c.querySelector<HTMLElement>("[data-testid=agent-turn]")!;
+    expect(turn.textContent).toContain("Weekly PR digestAutomation");
+    expect(turn.querySelector('[role=img][aria-label="Automation"]')).not.toBeNull();
+    expect(card(c, "bash")!.getAttribute("data-status")).toBe("running");
+    expect(c.querySelector("[data-testid=run-activity]")?.textContent).toContain("Follows the latest · scroll up to stop");
+  });
+
+  test("a live automation shows tool activity while waiting", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    await until(() => card(c, "bash"), "the call");
+    expect(c.querySelector('[data-testid="automation-activity"]')).not.toBeNull();
+  });
+
+  test("a create_task card shows + with the project key of the task it made and its title", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_alert", tab: "runs", runId: "arn_alert1" });
+    const created = await until(() => card(c, "create_task") ?? null, "the create_task card");
+    expect(created.querySelector("[data-icon]")?.getAttribute("data-icon")).toBe("plus");
+    expect([...created.querySelectorAll("[title]")].map((s) => s.getAttribute("title")))
+      .toContain("WC · Bound checkout-api's payment-gateway retries (#4182)");
+  });
+
+  test("a live run's unfinished reply streams with its caret and a running call shows its output so far", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    client.automationRun = async (id, runId) => ({ ...(await real(id, runId)),
+      live: { message: "Grouping the merged pull requests by", output: { c1: { output: { head: "{\"merged\": 12" } } } } });
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const streaming = await until(() => c.querySelector<HTMLElement>("[data-testid=automation-streaming]"), "the streaming reply");
+    expect(streaming.textContent).toContain("Grouping the merged pull requests by");
+    // The caret is Markdown's last aria-hidden mark after the streamed words; a finished reply has none.
+    const marks = [...streaming.querySelectorAll("span[aria-hidden]")].filter((s) => s.textContent === "" && s.closest("p"));
+    expect(marks.length).toBe(1);
+    const bash = card(c, "bash")!;
+    expect(bash.getAttribute("data-status")).toBe("running");
+    await click(bash.querySelector<HTMLElement>("[role=button]")!);
+    expect(bash.textContent).toContain("so far");
+    expect(bash.textContent).toContain("{\"merged\": 12");
+  });
+
+  test("the posted fixture exposes the unfinished reply with its caret", async () => {
+    localStorage.setItem("dude.fixtures.automationStep", "posted");
+    try {
+      const c = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+      const reply = await until(() => c.querySelector<HTMLElement>("[data-testid=automation-streaming]"), "the unfinished fixture reply");
+      expect(reply.textContent).toContain("median time to merge");
+    } finally {
+      localStorage.removeItem("dude.fixtures.automationStep");
+    }
+  });
+
+  test("a reply the agent finished reaches a live run's feed over the stream, as on the Run page, without reading the run", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    let reads = 0;
+    client.automationRun = async (...args) => { reads++; return real(...args); };
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const feed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed]"), "the feed");
+    await settle(100);
+    const before = reads;
+    await act(async () => emit({ eventType: "agent.message", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+      runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_d3", actor: { type: "agent", id: "arn_d3" }, source: "runner",
+      correlationId: null, causationId: null, payload: { text: "Twelve merged this week; three wait on review." } }));
+    await until(() => (feed.textContent?.includes("Twelve merged this week; three wait on review.") ? true : null), "the reply in the feed");
+    expect(reads - before).toBe(0);
+  });
+
+  test("a finished reply replaces the unfinished one read with the run: its words occur once and the stream bubble goes", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    // Read when the run's newest event was the backfill's: the buffer predates anything the stream sends after.
+    client.automationRun = async (id, runId) => ({ ...(await real(id, runId)), live: { message: "Twelve merged this week; three", output: {}, cursor: 999_999 } });
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const feed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed]"), "the feed");
+    await until(() => c.querySelector("[data-testid=automation-streaming]"), "the streaming reply");
+    await act(async () => emit({ eventType: "agent.message", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+      runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_d3", actor: { type: "agent", id: "arn_d3" }, source: "runner",
+      correlationId: null, causationId: null, payload: { text: "Twelve merged this week; three wait on review." } }));
+    await until(() => (feed.textContent?.includes("three wait on review.") ? true : null), "the finished reply");
+    expect(c.querySelector("[data-testid=automation-streaming]")).toBeNull();
+    expect(feed.textContent!.split("Twelve merged this week; three").length - 1).toBe(1);
+  });
+
+  test("log events do not refetch the full run", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    let requests = 0;
+    client.automationRun = async (...args) => { requests++; return real(...args); };
+    const c = await page(client, { id: "aut_cost", tab: "runs", runId: "arn_c2" });
+    await until(() => c.querySelector("[data-testid=command-log]"), "the log");
+    const before = requests;
+    for (let i = 0; i < 20; i++) {
+      emit({ eventType: "automation.log.line", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+        runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_c2", actor: { type: "agent", id: "arn_c2" }, source: "runner",
+        correlationId: null, causationId: null, payload: { stream: "stdout", text: `volume-${i}` } });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await until(() => c.textContent?.includes("volume-19") || null, "last line");
+    // Past the detail's one-second delay: no read is pending either.
+    await settle(100);
+    await settle(1500);
+    expect(requests - before).toBe(0);
+    // A run-changing event reads the facts again, once.
+    emit({ eventType: "automation.log.exited", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+      runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_c2", actor: { type: "system", id: "arn_c2" }, source: "runner",
+      correlationId: null, causationId: null, payload: { exitCode: 0 } });
+    await settle(100);
+    await settle(1500);
+    expect(requests - before).toBe(1);
+  });
+
+  test("a running call's card turns completed with its output when its completion arrives", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    await until(() => card(c, "bash"), "the call");
+    expect(card(c, "bash")!.getAttribute("data-status")).toBe("running");
+    emit({ eventType: "agent.tool.completed", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+      runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_d3", actor: { type: "agent", id: "arn_d3" }, source: "runner",
+      correlationId: null, causationId: null, payload: { tool: "bash", callId: "c1", status: "completed", output: { head: '{"merged": 41}' }, exitCode: 0 } });
+    await until(() => card(c, "bash")!.getAttribute("data-status") === "completed" || null, "the completion");
+    await click(card(c, "bash")!.querySelector<HTMLElement>("[role=button]")!);
+    expect(card(c, "bash")!.textContent).toContain('{"merged": 41}');
+  });
+
+  test("a follow-up delivery is a row in the feed at its time, and the trigger line counts it instead of listing it", async () => {
+    const opened: string[] = [];
+    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Acme" people={PEOPLE}
+      place={{ id: "aut_alert", tab: "runs", runId: "arn_alert1" }} onPlace={(p) => { if (p.deliveryId) opened.push(p.deliveryId); }} onBack={() => undefined} />);
+    const rows = await until(() => {
+      const r = [...c.querySelectorAll<HTMLElement>("[data-testid=run-feed] [data-testid=feed-delivery]")];
+      return r.length === 2 ? r : null;
+    }, "the deliveries");
+    expect(rows[1]!.textContent).toContain("resolved · HighErrorRate · api");
+    // At its time: after the error-rate call it arrived during, before the message that reacts to it.
+    const feed = c.querySelector<HTMLElement>("[data-testid=run-feed]")!;
+    const order = [...feed.querySelectorAll<HTMLElement>("[data-testid=feed-delivery], [data-testid=agent-turn]")].map((e) =>
+      e.getAttribute("data-testid") === "feed-delivery" ? "delivery" : e.textContent ?? "");
+    const reacts = order.findIndex((t) => t.includes("It resolved nine minutes in"));
+    expect(reacts).toBeGreaterThan(0);
+    expect(order[reacts - 1]).toBe("delivery");
+    expect(c.querySelector("[data-testid=sent-to-run]")).toBeNull();
+    expect(c.querySelector("[data-testid=sent-to-run-count]")?.textContent).toBe(" · 2 later deliveries sent to this run");
+    await click(rows[1]!.querySelector<HTMLElement>('[aria-label="Open delivery dlv_9k2h"]')!);
+    expect(opened).toEqual(["dlv_9k2h"]);
+    await click(rows[1]!.querySelector<HTMLElement>(`[aria-label="Show the delivery's body"]`)!);
+    expect(JSON.parse(rows[1]!.querySelector("pre")!.textContent!).status).toBe("resolved");
+  });
+
+  test("a GitHub follow-up in the feed opens its delivery too", async () => {
+    const opened: string[] = [];
+    const c = await show(<AutomationPage client={new FixtureClient("a")} orgName="Acme" people={PEOPLE}
+      place={{ id: "aut_digest", tab: "runs", runId: "arn_d3" }} onPlace={(p) => { if (p.deliveryId) opened.push(p.deliveryId); }} onBack={() => undefined} />);
+    await until(() => c.querySelector("[data-testid=run-feed]"), "the feed");
+    emit({ eventType: "automation.delivery.sent", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null,
+      runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_d3", actor: { type: "integration", id: "gh-7" }, source: "orchestrator",
+      correlationId: null, causationId: null, payload: { deliveryId: "gh-7", source: "github", event: "pull_request", action: "synchronize", summary: "pull_request synchronize" } });
+    const row = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed] [data-testid=feed-delivery][data-source=github]"), "the GitHub row");
+    expect(row.textContent).toContain("pull_request synchronize");
+    await click(row.querySelector<HTMLElement>('[aria-label="Open delivery gh-7"]')!);
+    expect(opened).toEqual(["gh-7"]);
+  });
+
+  test("the runs list re-reads for its own runs' activity, never for another task's or automation's events", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRuns.bind(client);
+    let reads = 0;
+    client.automationRuns = async (...args) => { reads++; return real(...args); };
+    const c = await page(client, { id: "aut_digest", tab: "runs" });
+    await until(() => c.querySelector("[data-testid=run-now-line]"), "the list");
+    // The list's organisation-wide stream opens a moment after it mounts.
+    await settle(100);
+    const before = reads;
+    const base = { occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null, sessionId: null, workflowRunId: null,
+      actor: { type: "agent" as const, id: "x" }, source: "runner" as const, correlationId: null, causationId: null };
+    for (let i = 0; i < 10; i++) {
+      emit({ ...base, eventType: "agent.message", runId: "run_task", payload: { text: `task ${i}` } });
+      emit({ ...base, eventType: "agent.tool.called", runId: null, automationRunId: "arn_other", payload: { tool: "bash", callId: `o${i}` } });
+      emit({ ...base, eventType: "automation.run.started", runId: null, automationRunId: "arn_other", payload: { automationId: "aut_other", automationRunId: "arn_other" } });
+      emit({ ...base, eventType: "automation.log.line", runId: null, automationRunId: "arn_d3", payload: { stream: "stdout", text: "x" } });
+    }
+    // The stream's events commit at the end of one act; the throttled re-read would fire in the next.
+    await settle(100);
+    await settle(1500);
+    const unrelated = reads - before;
+    emit({ ...base, eventType: "agent.tool.called", runId: null, automationRunId: "arn_d3", payload: { tool: "read", callId: "n1" } });
+    await settle(100);
+    await settle(1500);
+    expect([unrelated, reads - before]).toEqual([0, 1]);
+  });
+
+  const runEvent = (eventType: string, automationId: string, runId: string) => emit({ eventType, occurredAt: new Date().toISOString(),
+    organizationId: "org", projectId: null, taskId: null, runId: null, sessionId: null, workflowRunId: null, automationRunId: runId,
+    actor: { type: "system", id: runId }, source: "runner", correlationId: null, causationId: null, payload: { automationId, automationRunId: runId } });
+
+  test("a run that starts while the list is open is read once and appears", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRuns.bind(client);
+    let reads = 0;
+    let started = false;
+    client.automationRuns = async (...args) => {
+      reads++;
+      const got = await real(...args);
+      if (!started) return got;
+      const fresh = { ...got.runs[0]!, id: "arn_fresh", status: "running" as const, now: null, createdAt: new Date().toISOString() };
+      return { ...got, runs: [fresh, ...got.runs] };
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs" });
+    await until(() => c.querySelector("[data-testid=run-row]"), "the list");
+    await settle(100);
+    const before = reads;
+    started = true;
+    runEvent("automation.run.started", "aut_digest", "arn_fresh");
+    await settle(100);
+    await settle(1500);
+    expect(reads - before).toBe(1);
+    expect(c.querySelector("[data-testid=run-row][data-id=arn_fresh]")?.textContent).toContain("Running");
+  });
+
+  test("a queued command run turns Running in the list when it starts, with no page change", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRuns.bind(client);
+    let status: "queued" | "running" = "queued";
+    client.automationRuns = async (...args) => {
+      const got = await real(...args);
+      return { ...got, runs: got.runs.map((r) => r.id === "arn_c2" ? { ...r, status, startedAt: status === "running" ? r.startedAt : null } : r) };
+    };
+    const c = await page(client, { id: "aut_cost", tab: "runs" });
+    const row = () => c.querySelector<HTMLElement>("[data-testid=run-row][data-id=arn_c2]");
+    await until(() => row()?.textContent?.includes("Queued") || null, "the queued run");
+    await settle(100);
+    status = "running";
+    runEvent("automation.run.started", "aut_cost", "arn_c2");
+    // The list re-reads at most once a second.
+    await until(() => row()?.textContent?.includes("Running") || null, "the run running", 100);
+  });
+
+  test("a command run's log: its exact first and last lines in order, stderr marked, and a non-zero exit in the bad tone", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, { id: "aut_cost", tab: "runs", runId: "arn_c2" });
+    const log = await until(() => c.querySelector<HTMLElement>("[data-testid=command-log]"), "the log");
+    const rows = () => [...log.querySelectorAll<HTMLElement>("[data-seq]")];
+    await until(() => rows().length === 118 || null, "the fixture's lines");
+    const ev = (eventType: string, payload: Record<string, unknown>) => emit({ eventType, occurredAt: new Date().toISOString(), organizationId: "org",
+      projectId: null, taskId: null, runId: null, sessionId: null, workflowRunId: null, automationRunId: "arn_c2", actor: { type: "agent", id: "arn_c2" },
+      source: "runner", correlationId: null, causationId: null, payload });
+    ev("automation.log.line", { stream: "stdout", text: "before the failure" });
+    ev("automation.log.line", { stream: "stderr", text: "error: 3 tests failed" });
+    ev("automation.log.exited", { exitCode: 3 });
+    await until(() => rows().length === 120 || null, "the new lines");
+    const text = (r: HTMLElement) => r.lastElementChild!.textContent;
+    expect(text(rows()[0]!)).toBe("$ bun run lint && bun test");
+    expect(rows().slice(-2).map(text)).toEqual(["before the failure", "error: 3 tests failed"]);
+    // The stderr line is marked stderr and error; the stdout line before it is not.
+    expect([rows().at(-1)!.dataset.channel, rows().at(-1)!.dataset.level]).toEqual(["stderr", "error"]);
+    expect([rows().at(-2)!.dataset.channel, rows().at(-2)!.dataset.level]).toEqual(["stdout", undefined]);
+  });
+
+  test("a command run's log ends with its exit code once ended, bad when non-zero", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    client.automationRun = async (id, runId) => ({ ...(await real(id, runId)), status: "failed", endedAt: new Date().toISOString() });
+    const c = await page(client, { id: "aut_cost", tab: "runs", runId: "arn_c2" });
+    await until(() => c.querySelector("[data-testid=command-log]"), "the log");
+    emit({ eventType: "automation.log.exited", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null, runId: null,
+      sessionId: null, workflowRunId: null, automationRunId: "arn_c2", actor: { type: "system", id: "arn_c2" }, source: "runner", correlationId: null,
+      causationId: null, payload: { exitCode: 3 } });
+    const exit = await until(() => c.querySelector<HTMLElement>("[data-testid=command-exit]"), "the exit");
+    expect(exit.textContent).toBe("exit 3");
+    expect(exit.className).toBe("logExit logExitBad");
+    const ok = await page(new FixtureClient("a"), { id: "aut_cost", tab: "runs", runId: "arn_c1" });
+    expect((await until(() => ok.querySelector<HTMLElement>("[data-testid=command-exit]"), "exit 0")).className).toBe("logExit");
+  });
+
+  test("a server run: its timeline waits while live and says it stopped idle; its container log holds only the server's lines, with times", async () => {
+    const live = await page(new FixtureClient("a"), { id: "aut_changelog", tab: "runs", runId: "arn_s2" });
+    const timeline = await until(() => live.querySelector<HTMLElement>("[data-testid=server-timeline]"), "the timeline");
+    expect(timeline.querySelector("[data-testid=server-waiting]")?.textContent).toContain("Waiting for the next event · stops after 30 s idle");
+    const log = await until(() => live.querySelector<HTMLElement>("[data-testid=container-log]"), "the container log");
+    // The timeline comes first, the container log under it.
+    expect(timeline.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const before = log.querySelectorAll("[data-seq]").length;
+    emit({ eventType: "automation.log.line", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null, runId: null,
+      sessionId: null, workflowRunId: null, automationRunId: "arn_s2", actor: { type: "agent", id: "arn_s2" }, source: "runner", correlationId: null,
+      causationId: null, payload: { stream: "stdout", text: "a command line, not the server's" } });
+    emit({ eventType: "automation.log.line", occurredAt: new Date().toISOString(), organizationId: "org", projectId: null, taskId: null, runId: null,
+      sessionId: null, workflowRunId: null, automationRunId: "arn_s2", actor: { type: "agent", id: "arn_s2" }, source: "runner", correlationId: null,
+      causationId: null, payload: { stream: "stdout", text: "POST /events 202", server: true } });
+    await until(() => log.textContent?.includes("POST /events 202") || null, "the server's line");
+    expect(log.querySelectorAll("[data-seq]").length).toBe(before + 1);
+    expect(log.textContent).not.toContain("a command line, not the server's");
+    // Each line carries its time.
+    const last = [...log.querySelectorAll<HTMLElement>("[data-seq]")].at(-1)!;
+    expect(last.children[1]!.textContent).toMatch(/^\d{2}:\d{2}:\d{2}/);
+    const stopped = await page(new FixtureClient("a"), { id: "aut_changelog", tab: "runs", runId: "arn_s1" });
+    const done = await until(() => stopped.querySelector<HTMLElement>("[data-testid=server-timeline]"), "the stopped timeline");
+    expect(done.textContent).toContain("Idle 30 s · stopped");
+    expect(done.querySelector("[data-testid=server-waiting]")).toBeNull();
+  });
+
+  test("scrolled up while live, new turns are counted and Jump to latest follows again; an ended feed flows with the page", async () => {
+    const client = new FixtureClient("a");
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    const feed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-feed]"), "the feed");
+    await until(() => card(c, "bash"), "the call");
+    expect(feed.getAttribute("data-following")).toBe("true");
+    const viewport = feed.querySelector<HTMLElement>("[role=log]")!;
+    let top = 0;
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => 2000 });
+    Object.defineProperty(viewport, "clientHeight", { configurable: true, get: () => 400 });
+    Object.defineProperty(viewport, "scrollTop", { configurable: true, get: () => top, set: (v: number) => { top = v; } });
+    viewport.scrollTo = ((o: ScrollToOptions) => { top = Math.min(o.top ?? 0, 1600); }) as typeof viewport.scrollTo;
+    top = 200;
+    await act(async () => { viewport.dispatchEvent(new Event("scroll")); });
+    expect(feed.getAttribute("data-following")).toBe("false");
+    for (const later of digestLater("arn_d3", Date.now())) {
+      const { cursor: _c, eventId: _e, ...rest } = later;
+      emit(rest);
+    }
+    const jump = await until(() => [...feed.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent?.includes("Jump to latest")) ?? null, "the jump pill");
+    expect(jump.textContent).toBe("2 new turns · Jump to latest");
+    await click(jump);
+    expect(feed.getAttribute("data-following")).toBe("true");
+    expect(top).toBe(1600);
+
+    const ended = await page(new FixtureClient("a"), { id: "aut_digest", tab: "runs", runId: "arn_d1" });
+    const record = await until(() => ended.querySelector<HTMLElement>("[data-testid=run-feed]"), "the ended feed");
+    // Ended, it is no scroller of its own: no fill, no live region, no cap on its height.
+    expect(record.getAttribute("data-live")).toBeNull();
+    expect(record.style.maxHeight).toBe("none");
+    expect(feed.style.maxHeight).toBe("");
+  });
+
+  test("a command run's output arrives in order in a LogStream with its exit code", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_cost", tab: "runs", runId: "arn_c1" });
+    const log = await until(() => c.querySelector<HTMLElement>("[data-testid=command-log]"), "the log");
+    expect(c.querySelector("[data-testid=command-exit]")?.textContent).toBe("exit 0");
+    expect(log.textContent).toContain("$ bun run lint && bun test");
+    expect(log.textContent!.indexOf("lint")).toBeLessThan(log.textContent!.indexOf("pass · 0 fail"));
+  });
+
+  test("a run stopped mid-call shows the call aborted, its partial output kept, with the stopped note", async () => {
+    const c = await page(new FixtureClient("a"), { id: "aut_audit", tab: "runs", runId: "arn_a2" });
+    const failed = await until(() => c.querySelector<HTMLElement>("[data-testid=run-failed]"), "the failure");
+    expect(failed.textContent).toContain("Stopped at its 30-minute time limit during a bash call");
+    const last = card(c, "bash", 2)!;
+    expect(last.getAttribute("data-status")).toBe("aborted");
+    expect(c.querySelector("[data-testid=stopped-note]")?.textContent).toBe(" Stopped by the time limit after 27m 14s, when the run reached 30 minutes.");
+    await click(last.querySelector<HTMLElement>("[role=button]")!);
+    expect(last.textContent).toContain("TestRotateUnderLoad");
+    // A non-zero exit is failed, never ✓.
+    expect(card(c, "bash", 1)!.getAttribute("data-exit-code")).toBe("3");
+    expect(card(c, "bash", 1)!.getAttribute("data-status")).toBe("failed");
+  });
+
+  test("the runs list's running row says what its agent is doing now; a finished row says nothing", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRuns.bind(client);
+    // A finished row that still carries a call says nothing: only a running row has a now line.
+    client.automationRuns = async (...args) => {
+      const r = await real(...args);
+      return { ...r, runs: r.runs.map((x) => x.status === "succeeded" ? { ...x, now: { tool: "read", args: { filePath: "stale" } } } : x) };
+    };
+    const c = await page(client, { id: "aut_digest", tab: "runs" });
+    const now = await until(() => c.querySelector<HTMLElement>("[data-testid=run-now-line]"), "the now line");
+    const hidden = [...now.querySelectorAll("[aria-hidden]")].map((e) => e.textContent).join("");
+    expect(now.querySelector(".ds-sr-only")?.textContent).toBe("Now: bash, pr-stats --org acme --since 7d --format json");
+    expect(hidden).toBe("now:bash · pr-stats --org acme --since 7d --format json");
+    expect(c.querySelectorAll("[data-testid=run-now-line]").length).toBe(1);
+    expect(c.textContent).not.toContain("stale");
+  });
+
+  test("a cancelled run's feed shows its unfinished call aborted, not failed", async () => {
+    const client = new FixtureClient("a");
+    const real = client.automationRun.bind(client);
+    client.automationRun = async (id, runId) => ({ ...(await real(id, runId)), status: "cancelled", endedAt: new Date().toISOString() });
+    const c = await page(client, { id: "aut_digest", tab: "runs", runId: "arn_d3" });
+    await until(() => card(c, "bash"), "the call");
+    expect(card(c, "bash")!.getAttribute("data-status")).toBe("aborted");
   });
 });

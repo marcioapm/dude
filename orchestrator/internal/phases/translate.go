@@ -115,6 +115,12 @@ type translator struct {
 	// The Run records no project secret names: its text has nothing to
 	// redact. Fixed once its lux Run exists (recordGiven), so load reads it.
 	noSecrets bool
+	// Adds to a completion of the Run's own call before it is recorded
+	// (AutomationFeed: dude's record of the call); nil for a Run.
+	completing func(ctx context.Context, tx pgx.Tx, payload map[string]any) error
+	// An automation run's calls its end already aborted: a later start or
+	// completion of one (a final read after a cancel) records nothing.
+	closed map[string]bool
 }
 
 // harnessState is runs.harness_state: Claude Code's running cost for its
@@ -150,6 +156,9 @@ type harnessState struct {
 // keeps across its parks and resumes, stored under these JSON names as they
 // are (harnessStateJSON embeds it).
 type talkerState struct {
+	// An automation run's calls still running: their output so far, by
+	// call id, shown live and kept on an aborted completion.
+	PartialTools map[string]map[string]any `json:"partialTools,omitempty"`
 	// Its turns failed in a row (turnFailed), and whether the turn that
 	// ended last was one: a turn that did not fail resets the count.
 	FailedTurns int  `json:"failedTurns,omitempty"`
@@ -1099,6 +1108,9 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 	clear(t.openCalls)
 	clear(t.waitsOn)
 	t.facts = childFacts{clear: true}
+	if t.run.AutomationRunID != "" {
+		return nil
+	}
 	// A turn's end is when an agent's edits settle.
 	s.pokeDiff(t.run.ID)
 	// A failed turn's idle: the turn is over, not done (turnFailed).
@@ -1309,6 +1321,13 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 				t.announced[callID] = title
 			}
 		case "in_progress":
+			if result := toolResult(u); len(result) > 0 && t.run.AutomationRunID != "" {
+				if t.PartialTools == nil {
+					t.PartialTools = map[string]map[string]any{}
+				}
+				withholdGitHubRead([]string{toolName(u), t.seenCalls[callID]}, result)
+				t.PartialTools[callID] = result
+			}
 			t.openCalls[callID] = true
 			return t.callStarted(ctx, tx, s, nil, map[string]any{"tool": toolName(u), "callId": callID, "input": input, "title": title})
 		case "completed", "failed":
@@ -1348,6 +1367,11 @@ func (t *translator) agentEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux
 // The failure and stream cursor commit together, before a following idle or
 // queued input can turn a failed prompt into completed work.
 func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agentErr string) error {
+	// An automation run's failed turn is the automations loop's to end
+	// (its readOutput sees the same turn end).
+	if t.run.AutomationRunID != "" {
+		return nil
+	}
 	var model, tier string
 	var produced bool
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(model, ''), COALESCE(model_tier, ''), EXISTS (SELECT 1 FROM events

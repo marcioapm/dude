@@ -196,7 +196,7 @@ func readLimits(ctx context.Context, tx pgx.Tx, c Caller, _ limitsIn) (limitsOut
 			Reruns: p.Reruns, Allowed: p.RerunsAllowed,
 			grantsOut: grantsFor(l.Grants, delivery.LimitRerun, p.Repo, p.Number, p.Head, limitsText("dude", nil), 1)})
 	}
-	_, reruns, err := callsMade(ctx, tx, c.RunID, "rerun_failed_checks")
+	_, reruns, err := callsMade(ctx, tx, c, "rerun_failed_checks")
 	if err != nil {
 		return out, err
 	}
@@ -219,7 +219,7 @@ func readLimits(ctx context.Context, tx pgx.Tx, c Caller, _ limitsIn) (limitsOut
 	}
 	out.MachineMoves = dudeLimit(machineMovesPerRun, moves)
 	if c.grants.Tool("verify") {
-		_, verifies, err := callsMade(ctx, tx, c.RunID, "verify")
+		_, verifies, err := callsMade(ctx, tx, c, "verify")
 		if err != nil {
 			return out, err
 		}

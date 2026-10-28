@@ -471,11 +471,13 @@ func atGate(st *State) workflow.Result {
 // Hold is where Deliver last held the delivery before its pull request:
 // the round (1, then one more after each fix of the people's feedback), the
 // heads it is shown at, when it last parked there (Since), and the heads
-// the round before was shown at (Previous), with the commits between them
-// in each repository GitHub could compare; and what each repository would
-// open (Repos), measured against its base. SentBack: the people's feedback
-// sent from the hold is being fixed, until the delivery parks there again.
-// Cleared once a pull request opens.
+// the round before was shown at (Previous), with the task's own commits
+// since them (not the base's, nor a merge of it) in each repository GitHub
+// could compare; and what each repository would open (Repos), measured
+// against its base. A rebase or force-push between holds gives the task's
+// commits new SHAs, which CommitsSince counts as new. SentBack: the
+// people's feedback sent from the hold is being fixed, until the delivery
+// parks there again. Cleared once a pull request opens.
 type Hold struct {
 	Round        int               `json:"round"`
 	Heads        map[string]string `json:"heads"`
@@ -535,28 +537,62 @@ func (w *steps) holdAt(ctx context.Context, sc workflow.StepContext, st *State) 
 		}
 		held := HeldRepo{Name: repo.Name, Head: st.Branch, Base: base}
 		if gh != nil {
-			if cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), base, to); err == nil && !cmp.Truncated() {
+			cmp, err := gh.CompareCommits(ctx, forge.SlugFromURL(repo.URL), base, to)
+			if err == nil && !cmp.Truncated() {
 				add, del := 0, 0
 				for _, f := range cmp.Files {
 					add, del = add+f.Additions, del+f.Deletions
 				}
 				held.Additions, held.Deletions = &add, &del
 			}
+			if from := prev[repo.Name]; counted && from != "" && from != to {
+				before, beforeErr := gh.CompareCommits(ctx, forge.SlugFromURL(repo.URL), base, from)
+				if err != nil || len(cmp.Commits) < cmp.TotalCommits || beforeErr != nil || len(before.Commits) < before.TotalCommits {
+					counted = false
+				} else {
+					n += tasksOwnSince(cmp.Commits, before.Commits)
+				}
+			}
 		}
 		st.Hold.Repos = append(st.Hold.Repos, held)
-		if from := prev[repo.Name]; counted && from != "" && from != to {
-			cmp, err := gh.Compare(ctx, forge.SlugFromURL(repo.URL), from, to)
-			if err != nil {
-				counted = false
-				continue
-			}
-			n += cmp.AheadBy
-		}
 	}
 	if counted {
 		st.Hold.CommitsSince = &n
 	}
 	return nil
+}
+
+// tasksOwnSince counts the commits of now (base...head, listed whole) that
+// are not in then (base...the previous hold's head) and are not a merge of
+// the base: a merge with any parent outside now's list, which the base
+// holds (syncBeforePR's, a person's Update branch, or main merged with the
+// branch as its second parent and pushed to it). A task's first commit has
+// its parent in the base too, but it is never a merge.
+func tasksOwnSince(now, then []forge.ComparedCommit) int {
+	inNow := make(map[string]bool, len(now))
+	for _, c := range now {
+		inNow[c.SHA] = true
+	}
+	inThen := make(map[string]bool, len(then))
+	for _, c := range then {
+		inThen[c.SHA] = true
+	}
+	n := 0
+	for _, c := range now {
+		if inThen[c.SHA] {
+			continue
+		}
+		baseMerge := false
+		if len(c.Parents) > 1 {
+			for _, p := range c.Parents {
+				baseMerge = baseMerge || !inNow[p.SHA]
+			}
+		}
+		if !baseMerge {
+			n++
+		}
+	}
+	return n
 }
 
 // feedbackAtGate takes the people's feedback signalled to a hold Deliver

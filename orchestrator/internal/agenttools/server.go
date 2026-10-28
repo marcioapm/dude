@@ -137,12 +137,23 @@ func (c Caller) run() delivery.RunRef {
 	return delivery.RunRef{Org: c.Org, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID, SessionID: c.SessionID}
 }
 
-// event is a ledger event by the calling agent, on its Run.
+// event is a ledger event by the calling agent, on its Run; an automation
+// run's is keyed by automation_run_id alone.
 func (c Caller) event(typ string, payload map[string]any) ledger.Event {
+	e := c.run().Event(typ, ledger.ActorAgent, payload)
 	if c.AutomationID != "" {
 		payload["automationId"], payload["automationRunId"], payload["actingFor"] = c.AutomationID, c.RunID, c.AutomationScope.OwnerID
+		e.RunID, e.AutomationRunID = "", c.RunID
 	}
-	return c.run().Event(typ, ledger.ActorAgent, payload)
+	return e
+}
+
+// runColumn is the events column c's own events are keyed by.
+func (c Caller) runColumn() string {
+	if c.AutomationID != "" {
+		return "automation_run_id"
+	}
+	return "run_id"
 }
 
 // NewToken mints a random token: the value, and the hash to store.
@@ -660,7 +671,49 @@ const (
 // call runs a tool and records the call in the ledger, in the same
 // transaction as what the tool did (for a tool split by outside, the
 // transaction recording what it did outside).
-func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (json.RawMessage, error) {
+func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessage) (outcome json.RawMessage, callErr error) {
+	// Refusals roll back the tool transaction; automation feeds still need
+	// an argument-bearing record for that call, including early refusals.
+	// A refusal that wrote its own event (slack.message.refused) is named by
+	// refusalEventId, so a reader lists that call once.
+	var refusalID string
+	// The call's attempt is on the ledger and counted (callsMade): its
+	// failure's record is marked afterAttempt and not counted again.
+	var attemptCounted bool
+	defer func() {
+		if c.AutomationID == "" || callErr == nil {
+			return
+		}
+		// A call refused for the run's call budget writes nothing: past
+		// the budget, records would not be bounded by it.
+		var refused refusal
+		isRefusal := errors.As(callErr, &refused)
+		if isRefusal && refused.limited {
+			return
+		}
+		// Only a refusal's own words reach the run's page; other errors carry database and internal text.
+		said := "internal error"
+		if isRefusal {
+			said = callErr.Error()
+		}
+		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			input := args
+			if len(input) == 0 {
+				input = json.RawMessage("{}")
+			}
+			payload := map[string]any{"tool": t.name, "arguments": input, "error": said, "attempted": true}
+			if refusalID != "" {
+				payload["refusalEventId"] = refusalID
+			}
+			if attemptCounted {
+				payload["afterAttempt"] = true
+			}
+			_, err := ledger.Append(ctx, tx, c.event(EventType, payload))
+			return err
+		}); err != nil {
+			s.Log.Error("recording automation tool error", "error", err)
+		}
+	}()
 	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if c.AutomationID != "" {
 			var live bool
@@ -691,7 +744,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		c.env.prepared = t.prepare(ctx, c, args)
 		// A prepare step may refuse the call before its arguments are redacted or counted.
 		if refused, ok := c.env.prepared.(refusal); ok {
-			s.recordRefusal(ctx, c, t, refused)
+			refusalID = s.recordRefusal(ctx, c, t, refused)
 			return nil, refused
 		}
 	}
@@ -772,7 +825,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	})
 	var refused refusal
 	if errors.As(err, &refused) {
-		s.recordRefusal(ctx, c, t, refused)
+		refusalID = s.recordRefusal(ctx, c, t, refused)
 	}
 	if err != nil || t.outside == nil {
 		if err == nil && (t.name == "start_agent" || t.name == "verify") && s.Kick != nil {
@@ -780,9 +833,10 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return out, err
 	}
+	attemptCounted = t.attempts
 	done, err := t.outside(ctx, c, checked)
 	if errors.As(err, &refused) && refused.event != nil {
-		s.recordRefusal(ctx, c, t, refused)
+		refusalID = s.recordRefusal(ctx, c, t, refused)
 	}
 	if err != nil {
 		return nil, err
@@ -815,10 +869,12 @@ func childToolAllowed(name string) bool {
 
 // recordRefusal records what a refused call says of itself, once the
 // call's own transaction is gone.
-func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused refusal) {
+// It returns the id of the refusal's own event, "" for none.
+func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused refusal) (eventID string) {
 	if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if refused.event != nil {
-			_, err := ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
+			var err error
+			eventID, err = ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
 			return err
 		}
 		if refused.blocked != nil {
@@ -830,7 +886,9 @@ func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused re
 		return nil
 	}); logged != nil {
 		s.Log.Error("recording a refused call failed", "tool", t.name, "run", c.RunID, "error", logged)
+		return ""
 	}
+	return eventID
 }
 
 // oldName is what a tool was called before, for the calls a Run made
@@ -848,29 +906,32 @@ func oldName(tool string) string {
 // ledger, where every call is, once (its attempt, or its result).
 func withinLimits(ctx context.Context, tx pgx.Tx, c Caller, t tool) error {
 	tool := t.name
-	recent, sameTool, err := callsMade(ctx, tx, c.RunID, tool)
+	recent, sameTool, err := callsMade(ctx, tx, c, tool)
 	if err != nil {
 		return err
 	}
 	limit := t.perRun
 	switch {
 	case recent >= callsPerMinute:
-		return refuse(rTooManyCallsAtMostMinute, callsPerMinute)
+		return refuseLimited(rTooManyCallsAtMostMinute, callsPerMinute)
 	case limit > 0 && sameTool >= limit:
-		return refuse(rLimitedCallsInRunThisRun, tool, limit)
+		return refuseLimited(rLimitedCallsInRunThisRun, tool, limit)
 	}
 	return nil
 }
 
 // callsMade are the Run's tool calls in the last minute, and its calls of
-// tool in its lifetime: counted from the ledger, where every call is, once
-// (its attempt, or its result).
-func callsMade(ctx context.Context, tx pgx.Tx, runID, tool string) (recent, sameTool int, err error) {
+// tool in its lifetime, each call counted once: by its attempt, or its
+// result. The minute also counts a refused call by its error record (which
+// a post's slack.message.refused accompanies), so a loop of refused calls
+// spends it; a failure after a counted attempt is marked afterAttempt.
+func callsMade(ctx context.Context, tx pgx.Tx, c Caller, tool string) (recent, sameTool int, err error) {
 	err = tx.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute'),
-			count(*) FILTER (WHERE payload->>'tool' = $3 OR payload->>'tool' = $4)
-		FROM events WHERE run_id = $1 AND event_type IN ($2, $5) AND payload->>'attempted' IS NULL`,
-		runID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool)
+			count(*) FILTER (WHERE occurred_at > now() - interval '1 minute' AND (payload->>'attempted' IS NULL
+				OR event_type = $2 AND payload ? 'error' AND payload->>'afterAttempt' IS NULL)),
+			count(*) FILTER (WHERE payload->>'attempted' IS NULL AND (payload->>'tool' = $3 OR payload->>'tool' = $4))
+		FROM events WHERE `+c.runColumn()+` = $1 AND event_type IN ($2, $5)`,
+		c.RunID, EventType, tool, oldName(tool), AttemptEventType).Scan(&recent, &sameTool)
 	return recent, sameTool, err
 }
 
@@ -882,6 +943,8 @@ type refusal struct {
 	blocked *delivery.BlockedError
 	// A start refused as archived or closed: its reason.
 	lifecycle string
+	// Refused for the run's call budget (withinLimits, and post_to_chat's minute count).
+	limited bool
 }
 
 type refusedEvent struct {
@@ -892,6 +955,11 @@ type refusedEvent struct {
 func (r refusal) Error() string { return r.msg }
 
 func refuse(format string, a ...any) error { return refusal{msg: fmt.Sprintf(format, a...)} }
+
+// refuseLimited is refuse for a call past the run's budget.
+func refuseLimited(format string, a ...any) error {
+	return refusal{msg: fmt.Sprintf(format, a...), limited: true}
+}
 
 // refuseRecorded is refuse with the event that records the refusal.
 func refuseRecorded(typ string, payload map[string]any, msg string) error {

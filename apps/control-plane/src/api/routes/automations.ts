@@ -459,6 +459,17 @@ const RUN_COLUMNS = `r.id, r.automation_id AS "automationId", r.status, r.reason
   jsonb_array_length(r.payloads) AS "payloadCount",
   (SELECT json_build_object('id', p.id, 'name', p.name, 'photoUrl', person_ref(p)->>'photoUrl') FROM people p WHERE p.id = r.started_by) AS "startedBy"`;
 
+/**
+ * A running run's newest tool call its agent has not finished, as
+ * {tool, args} (the runs list's "now:" line); null otherwise. The orchestrator
+ * keeps the open calls in feed_state; their call events are read on
+ * events_automation_run_cursor_idx, newest first.
+ */
+const NOW_CALL = `CASE WHEN r.status = 'running' AND jsonb_array_length(COALESCE(r.feed_state->'open', '[]'::jsonb)) > 0 THEN (SELECT json_build_object('tool', e.payload->>'tool', 'args', e.payload->'input')
+    FROM events e WHERE e.automation_run_id = r.id AND e.event_type = 'agent.tool.called'
+      AND r.feed_state->'open' ? (e.payload->>'callId')
+    ORDER BY e.cursor DESC LIMIT 1) END AS "now"`;
+
 export const runsQuery = z.object({
   status: z.enum(["queued", "running", "succeeded", "failed", "skipped", "cancelled"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -475,7 +486,8 @@ async function listRuns(ctx: RequestContext): Promise<Response> {
   if (!parsed.success) throw badRequest("unknown run filter", parsed.error.flatten());
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const a = await readOne(scope, ctx.params.id!);
-    const runs = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS} FROM automation_runs r
+    await scope.sql`SET LOCAL jit = off`;
+    const runs = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS}, ${NOW_CALL} FROM automation_runs r
       WHERE r.automation_id = $1 AND ($2::text IS NULL OR r.status = $2) ORDER BY r.created_at DESC, r.id DESC LIMIT $3`,
     [a.id, parsed.data.status ?? null, parsed.data.limit])) as Array<Record<string, unknown>>;
     const [kept] = (await scope.sql`SELECT created_at AS "since", last_run_at AS "lastRunAt",
@@ -498,14 +510,25 @@ async function getRun(ctx: RequestContext): Promise<Response> {
     const a = await readOne(scope, ctx.params.id!);
     const [r] = (await scope.sql.unsafe(`SELECT ${RUN_COLUMNS}, r.payloads, r.payloads_purged_at IS NOT NULL AS "payloadsPurged",
         r.log_tail AS "logTail", r.exit_code AS "exitCode", r.container_started_at AS "containerStartedAt",
-        r.container_stopped_at AS "containerStoppedAt", r.stop_reason AS "stopReason"
+        r.container_stopped_at AS "containerStoppedAt", r.stop_reason AS "stopReason", r.scheduled_for AS "scheduledFor",
+        CASE WHEN r.status = 'running' THEN json_build_object('message', COALESCE(r.feed_state->>'message', ''),
+          'output', COALESCE(r.feed_state->'harness'->'partialTools', '{}'::jsonb),
+          -- The run's newest event as feed_state was read: a later agent.message supersedes this message.
+          'cursor', (SELECT COALESCE(max(e.cursor), 0) FROM events e WHERE e.automation_run_id = r.id)) END AS "live"
       FROM automation_runs r WHERE r.automation_id = $1 AND r.id = $2`, [a.id, ctx.params.runId!])) as Array<Record<string, unknown>>;
     if (!r) throw notFound(`automation ${a.id} has no run ${ctx.params.runId}`);
     const requests = (await scope.sql`SELECT id, delivery_id AS "deliveryId", try, http_status AS "httpStatus", ms, error,
         response_excerpt AS "responseExcerpt", at FROM automation_run_requests WHERE run_id = ${r.id as string} ORDER BY at, try`) as Array<Record<string, unknown>>;
     // An incoming run's deliveries: the one that started it and the later ones of its group sent to it.
     const deliveries = a.trigger.kind === "incoming" ? await runDeliveries(scope, a.id, r.id as string) : undefined;
+    // What each delivery sent to the run while it ran gave its agent, for its row in the activity (FeedDelivery):
+    // an incoming one's body is kept on the delivery (30 days), a GitHub one's in the run's payloads.
+    const sent = (await scope.sql`SELECT e.payload->>'deliveryId' AS id,
+        COALESCE(d.payload, (SELECT p->'body' FROM jsonb_array_elements(${JSON.stringify(r.payloads ?? [])}::jsonb) p WHERE p->>'deliveryId' = e.payload->>'deliveryId' LIMIT 1)) AS body
+      FROM events e LEFT JOIN incoming_deliveries d ON d.id = e.payload->>'deliveryId'
+      WHERE e.automation_run_id = ${r.id as string} AND e.event_type = 'automation.delivery.sent'`) as Array<{ id: string; body: unknown }>;
     return { ...runOut(r), containerStartedAt: iso(r.containerStartedAt), containerStoppedAt: iso(r.containerStoppedAt),
+      scheduledFor: iso(r.scheduledFor), sentBodies: Object.fromEntries(sent.map((s) => [s.id, s.body ?? null])),
       requests: requests.map((q) => ({ ...q, at: iso(q.at) })), ...(deliveries ? { deliveries } : {}),
       ...(await toolCalls(scope, r.id as string)) };
   });
@@ -522,9 +545,9 @@ const TOOL_EVENTS = ["agent.tool.dude", "agent.tool.attempted", "slack.message.p
  * channel and link. A post's text is left out: its message is in Slack.
  */
 async function toolCalls(scope: OrgScope, runId: string) {
-  // run_id is the automation run's id on every event its agent's calls write (events_run_cursor_idx).
+  // automation_run_id keys every event its agent's calls write (migration 217, events_automation_run_cursor_idx).
   const rows = (await scope.sql`SELECT id, event_type AS type, occurred_at AS at, payload FROM events
-    WHERE run_id = ${runId} AND event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[])
+    WHERE automation_run_id = ${runId} AND event_type = ANY(${scope.sql.array(TOOL_EVENTS, "text")}::text[])
     ORDER BY occurred_at, cursor`) as Array<{ id: string; type: string; at: Date; payload: Record<string, unknown> }>;
   const attempts = new Map<string, Date[]>();
   const posts: Array<{ channel: string; channelId: string; ts: string; permalink: string }> = [];
@@ -543,13 +566,17 @@ async function toolCalls(scope: OrgScope, runId: string) {
   const out = [];
   for (const e of rows) {
     if (e.type !== "agent.tool.dude" && e.type !== "slack.message.refused") continue;
+    // A refused call's record names the refusal event that already stands for it.
+    if (e.type === "agent.tool.dude" && e.payload.refusalEventId) continue;
     const tool = String(e.payload.tool ?? "");
     const { text: _text, body: _body, ...args } = (e.payload.arguments ?? {}) as Record<string, unknown>;
-    const start = e.type === "agent.tool.dude" && !e.payload.attempted ? null : startOf(tool, e.at);
-    const failed = e.type === "slack.message.refused";
+    const refusedPost = e.type === "slack.message.refused";
+    const failed = refusedPost || e.payload.error != null;
+    // A refusal recorded only on the call's record spent no attempt of its own.
+    const start = refusedPost ? startOf(tool, e.at) : failed || !e.payload.attempted ? null : startOf(tool, e.at);
     out.push({
       id: e.id, tool, at: iso(start ?? e.at)!, status: failed ? "failed" : "completed",
-      args: failed ? { channel: e.payload.channel ?? null } : args,
+      args: refusedPost ? { channel: e.payload.channel ?? null } : args,
       durationMs: start ? Math.max(0, e.at.getTime() - start.getTime()) : null,
       error: failed ? String(e.payload.error ?? "") : null,
       posted: !failed && tool === "post_to_chat" ? posts.shift() ?? null : null,

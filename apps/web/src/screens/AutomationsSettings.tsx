@@ -41,7 +41,7 @@ import {
   TriggerSummary,
   type RepoFilterValue,
 } from "@dude/design-system/components";
-import { formatTimestamp } from "@dude/design-system";
+import { formatDuration, formatTimestamp, useNow } from "@dude/design-system";
 import {
   Badge,
   Button,
@@ -70,6 +70,7 @@ import {
   THead,
   Tr,
   Textarea,
+  KeyValueList,
   type ChoiceOption,
 } from "@dude/design-system/primitives";
 import {
@@ -117,12 +118,17 @@ import {
   type SecretRef,
   type SettingsResponse,
   type Trigger,
+  type AgentRole,
 } from "@dude/domain";
 import type { ApiClient, Member } from "../api/client.ts";
 import { errorText, useSave } from "../hooks/useSave.tsx";
-import { AutomationToolList, ToolCallList } from "./automationTools.tsx";
+import { AutomationToolList } from "./automationTools.tsx";
+import { AutomationFeed, CommandLog, ContainerLog, EV_FOLLOW_UP, EV_LOG_EXITED, EV_LOG_LINE, LiveMark, RunNowLine, activityCount, useRunActivity } from "./automationFeed.tsx";
+import { useVisibleInterval } from "../hooks/useVisibleInterval.ts";
+import { useReloadOnEvents } from "../hooks/useEventStream.ts";
+import { project } from "../api/conversation.ts";
 import { useOrgSecrets } from "./OrgSecrets.tsx";
-import { DeliveriesTab, DeliveryDetail, holdSecret, IncomingTriggerRows, ProjectsRow, RotateDialog, RunNowIncomingDialog, RunTrigger,
+import { DeliveriesTab, DeliveryDetail, holdSecret, IncomingTriggerLine, IncomingTriggerRows, ProjectsRow, RotateDialog, RunNowIncomingDialog,
   SecretOnce, takeSecret } from "./automationIncoming.tsx";
 
 /** Where the automations pages are: a list, one automation (its tab), one run or one delivery. */
@@ -459,7 +465,10 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
           {canRun ? (
             <Button variant="secondary" leadingIcon="play" data-testid="run-now" disabled={runNow.busy}
               onClick={() => a.trigger.kind !== "schedule" ? setRunning(true)
-                : void runNow.save(() => client.runAutomation(a.id, {}), () => onPlace({ id: a.id, tab: "runs" }), "Run started")}>
+                 : void runNow.save(async () => {
+                   const started = await client.runAutomation(a.id, {});
+                   onPlace({ id: a.id, tab: "runs", runId: started.runId });
+                 }, undefined, "Run started")}>
               Run now
             </Button>
           ) : null}
@@ -506,9 +515,9 @@ export function AutomationPage({ client, orgName, place, onPlace, onBack, people
         ) : null}
       </Tabs>
       {running && a.trigger.kind === "incoming" ? <RunNowIncomingDialog client={client} a={a} picked={place.deliveryId} checkJson={checkJson}
-        onClose={() => setRunning(false)} onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
+        onClose={() => setRunning(false)} onStarted={(runId) => { setRunning(false); onPlace({ id: a.id, tab: "runs", runId }); }} /> : null}
       {running && a.trigger.kind === "github" ? <RunNowDialog client={client} a={a} onClose={() => setRunning(false)}
-        onStarted={() => { setRunning(false); onPlace({ id: a.id, tab: "runs" }); }} /> : null}
+        onStarted={(runId) => { setRunning(false); onPlace({ id: a.id, tab: "runs", runId }); }} /> : null}
       {rotating ? <RotateDialog client={client} a={a} onClose={() => setRotating(false)}
         onRotated={(x, value) => { setRotating(false); setA(x); setSecret({ value, rotated: true }); }} /> : null}
       {secret && a.trigger.kind === "incoming" ? <SecretOnce secret={secret.value} trigger={a.trigger} origin={a.publicOrigin} rotated={secret.rotated} onClose={() => setSecret(null)} /> : null}
@@ -1174,6 +1183,12 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
     client.automationRuns(a.id, status === "all" ? undefined : status).then(setData, (e: unknown) => setProblem(errorText(e)));
   }, [client, a.id, status]);
   useEffect(load, [load]);
+  useReloadOnEvents({ client, all: true }, load, 1000, (event) => {
+    // Only this automation's run events and its runs' calls change the list; anything else needs no re-read.
+    // A run the list has not read yet is known by its event naming this automation (automation.run.queued, .started).
+    const ours = event.payload.automationId === a.id || data?.runs.some((r) => r.id === event.automationRunId);
+    return !ours || !(event.eventType.startsWith("automation.run.") || event.eventType === "agent.tool.called" || event.eventType === "agent.tool.completed");
+  });
   return (
     <div data-testid="automation-runs">
       {data?.session ? (
@@ -1192,14 +1207,15 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
       {problem ?? fresh.problem ? <Callout tone="danger">{problem ?? fresh.problem}</Callout> : null}
       {!data ? <Spinner label="Loading…" /> : data.runs.length === 0 ? <EmptyState title="No runs yet" /> : (
         <Table density="compact">
-          <THead><Tr><Th>Status</Th><Th>Why</Th><Th hideWhenNarrow>Session</Th><Th hideWhenNarrow>Cost</Th><Th>When</Th></Tr></THead>
+          <THead><Tr><Th style={{ width: 100 }}>Status</Th><Th style={{ width: "60%" }}>Why</Th>{a.sessionMode === "resumable" ? <Th hideWhenNarrow>Session</Th> : null}<Th hideWhenNarrow>Cost</Th><Th>When</Th></Tr></THead>
           <TBody>
             {data.runs.map((r) => (
               <Tr key={r.id} interactive onClick={() => onOpenRun(r.id)} data-testid="run-row" data-id={r.id}>
                 <Td><RunStatus status={r.status} /></Td>
                 <Td>{r.reason ?? (r.event ? `${r.event}${r.action ? ` · ${r.action}` : ""}${r.payloadCount > 1 ? ` · ${r.payloadCount} events` : ""}` : r.source === "schedule" ? "Scheduled" : "Run now")}
-                  {r.source === "test" ? <Badge size="sm" tone="info">Test</Badge> : null}</Td>
-                <Td hideWhenNarrow muted>{r.session ?? "—"}</Td>
+                  {r.source === "test" ? <Badge size="sm" tone="info">Test</Badge> : null}
+                  {r.status === "running" && r.now ? <RunNowLine tool={r.now.tool} args={r.now.args} /> : null}</Td>
+                 {a.sessionMode === "resumable" ? <Td hideWhenNarrow muted>{r.session ?? "—"}</Td> : null}
                 <Td hideWhenNarrow muted>{r.costUsd !== null ? `$${r.costUsd.toFixed(2)}` : "—"}</Td>
                 <Td muted>{ago(r.createdAt)}</Td>
               </Tr>
@@ -1214,21 +1230,47 @@ function RunsTab({ client, a, onOpenRun }: { client: ApiClient; a: Automation; o
 function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Automation; runId: string; onDelivery: (id: string) => void }) {
   const [run, setRun] = useState<AutomationRunDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  useEffect(() => { client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId]);
+  const { events } = useRunActivity(client, runId, a.kind === "agent");
+  // Only facts-changing events trigger a detail read; log traffic stays in the feed.
+  const moved = events.filter((e) => e.eventType === "automation.run.ended" || e.eventType === EV_FOLLOW_UP ||
+    e.eventType === EV_LOG_EXITED || e.eventType === "agent.tool.dude").at(-1)?.cursor ?? 0;
+  const read = useCallback(() => { void client.automationRun(a.id, runId).then(setRun, (e: unknown) => setProblem(errorText(e))); }, [client, a.id, runId]);
+  useEffect(() => {
+    const timer = setTimeout(read, moved ? 1000 : 0);
+    return () => clearTimeout(timer);
+  }, [read, moved]);
+  // Cost and server requests can change without an agent event. Stop polling once the run ends.
+  useVisibleInterval(() => {
+    if (run?.status === "running" || run?.status === "queued") read();
+  }, 4000);
+  const tick = useNow(run?.status === "running");
+  // Projected once for the hint; the feed projects its own with the run's status.
+  const hint = useMemo(() => a.kind === "agent" && run && run.status !== "running"
+    && events.some((e) => e.eventType !== EV_LOG_LINE && e.eventType !== EV_LOG_EXITED) ? activityCount(project(events).turns) : "",
+  [a.kind, run?.status, events]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!run) return problem ? <Callout tone="danger">{problem}</Callout> : <Spinner label="Loading…" />;
+  const live = run.status === "running";
   // The call the run failed on (a post_to_chat without Slack), as the API names it.
   const failedCall = run.failedCallId ? run.toolCalls.find((c) => c.id === run.failedCallId) ?? null : null;
-  const failedOnLast = failedCall !== null && failedCall === run.toolCalls.at(-1);
+  const started = run.startedAt ?? run.createdAt;
+  const elapsed = (run.endedAt ? Date.parse(run.endedAt) : tick) - Date.parse(started);
+  const fallback = run.logTail && events.length === 0 ? <pre className="automationPayload" data-testid="run-log-tail">{run.logTail}</pre> : null;
   return (
-    <div data-testid="run-detail" className="automationRunDetail">
+    <div data-testid="run-detail" className="automationRunDetail" data-kind={a.kind}>
       <SettingsSection title="Run">
-        <p className="automationRunHead"><RunStatus status={run.status} /> <span>{ago(run.createdAt)}</span>
-          {run.costUsd !== null ? <span className="automationRunCost">· ${run.costUsd.toFixed(2)}</span> : null}</p>
+        <p className="automationRunHead"><RunStatus status={run.status} />
+          {live ? <LiveMark /> : null}
+          <span>Started <span className="ds-tnum">{formatTimestamp(started, "time")}</span></span>
+          {run.status !== "queued" ? <span className="ds-hint ds-tnum">· {formatDuration(Math.max(0, elapsed))}</span> : null}
+          {run.costUsd !== null ? <span className="automationRunCost">· ${run.costUsd.toFixed(2)}{live ? " so far" : ""}</span> : null}</p>
+        <RunTriggerLine a={a} run={run} onDelivery={onDelivery} />
         {run.reason && failedCall ? (
           <Callout tone="danger" data-testid="run-failed">
             <b>Failed.</b> {run.reason}. {run.toolCalls.some((c) => c.posted) ? "That message was not posted" : "Nothing was posted"};{" "}
             {a.owner?.name ?? "its owner"} was told.
           </Callout>
+        ) : run.reason && run.status === "failed" ? (
+          <Callout tone="danger" data-testid="run-failed"><b>Failed.</b> {run.reason}{/[.!]$/.test(run.reason) ? "" : "."}{a.notifyOnFailure ? ` ${a.owner?.name ?? "Its owner"} was told.` : ""}</Callout>
         ) : run.reason ? <SettingsNote>{run.reason}</SettingsNote> : null}
         {a.kind === "server" && run.containerStartedAt ? (
           <ol className="automationTimeline" data-testid="server-timeline">
@@ -1236,7 +1278,8 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
             {run.requests.map((q) => (
               <li key={q.id}><time>{formatTimestamp(q.at, "time")}</time> POST {q.httpStatus ?? q.error ?? "no answer"}{q.try > 1 ? " (retried)" : ""}</li>
             ))}
-            {run.containerStoppedAt ? <li><time>{formatTimestamp(run.containerStoppedAt, "time")}</time> {run.stopReason === "idle" ? "Idle 30 s · stopped" : "Stopped"}</li> : null}
+            {run.containerStoppedAt ? <li><time>{formatTimestamp(run.containerStoppedAt, "time")}</time> {run.stopReason === "idle" ? "Idle 30 s · stopped" : "Stopped"}</li>
+              : live ? <li className="ds-hint" data-testid="server-waiting"><time>{formatTimestamp(new Date(tick), "time")}</time> Waiting for the next event · stops after 30 s idle</li> : null}
           </ol>
         ) : null}
         {run.requests.length > 0 ? (
@@ -1248,30 +1291,44 @@ function RunDetail({ client, a, runId, onDelivery }: { client: ApiClient; a: Aut
           </Table>
         ) : null}
       </SettingsSection>
-      <RunTrigger a={a} run={run} onDelivery={onDelivery} />
-      {run.payloads.length === 0 && !run.payloadsPurged ? null : (
-      <SettingsSection title="Trigger payload">
+      {run.payloads.length === 0 && !run.payloadsPurged || a.trigger.kind === "incoming" ? null : (
+      <SettingsDisclosure icon="braces" summary="Trigger payload">
         {run.payloadsPurged ? <SettingsNote>Payloads are kept 30 days.</SettingsNote>
-          : a.trigger.kind === "incoming" && run.payloads.length > 0 ? (
-            <CodeEditor aria-label="Trigger payload" language="plain" readOnly minLines={6} maxLines={18}
-              value={JSON.stringify(run.payloads[0]!.body, null, 2)} header={<span className="ds-mono">json · {run.payloads[0]!.deliveryId}
-                {run.deliveries?.[0] ? ` · ${run.deliveries[0].bytes.toLocaleString("en-GB")} bytes` : ""}</span>} />
-          )
           : <pre className="automationPayload">{JSON.stringify(run.payloads.length === 1 ? run.payloads[0]!.body : run.payloads, null, 2)}</pre>}
-      </SettingsSection>
+      </SettingsDisclosure>
       )}
-      {run.toolCalls.length > 0 ? (
-        <SettingsSection title="Log" data-testid="run-tools">
-          <SettingsNote>{run.toolCalls.length} tool {run.toolCalls.length === 1 ? "call" : "calls"}.{" "}
-            {failedOnLast ? "The run failed on the last one; its owner was told."
-              : failedCall ? `The run failed on the ${failedCall.tool} call at ${formatTimestamp(failedCall.at, "time")}; its owner was told.`
-              : "Open one for its output."}</SettingsNote>
-          <ToolCallList calls={run.toolCalls} />
-          {run.logTail ? <pre className="automationPayload">{run.logTail}</pre> : null}
+      {a.kind === "agent" ? (
+        <SettingsSection title="Activity" data-testid="run-activity"
+          actions={<span className="ds-hint">{live ? "Follows the latest · scroll up to stop" : hint}</span>}>
+          {fallback ?? <AutomationFeed run={run} events={events} name={a.name}
+            role={a.agent && "preset" in a.agent ? a.agent.preset.role as AgentRole : "investigator"} live={live} onDelivery={onDelivery} />}
+        </SettingsSection>
+      ) : a.kind === "command" ? (
+        <SettingsSection title="Output" data-testid="run-output">
+          {fallback ?? <CommandLog command={a.command ?? ""} events={events} live={live} />}
+        </SettingsSection>
+      ) : a.kind === "server" ? (
+        <SettingsSection title="Container log" data-testid="run-container-log">
+          {fallback ?? <ContainerLog image={a.server?.command ?? "server"} events={events} live={live} />}
         </SettingsSection>
       ) : run.logTail ? <SettingsSection title="Log"><pre className="automationPayload">{run.logTail}</pre></SettingsSection> : null}
     </div>
   );
+}
+
+/** The run's trigger as one line: a schedule's due time and how late it started; an incoming delivery; a GitHub event; Run now. */
+function RunTriggerLine({ a, run, onDelivery }: { a: Automation; run: AutomationRunDetail; onDelivery: (id: string) => void }) {
+  if (a.trigger.kind === "incoming") return <KeyValueList items={[{ label: "Trigger", value: <IncomingTriggerLine a={a} run={run} onDelivery={onDelivery} /> }]} />;
+  const late = run.scheduledFor && run.startedAt ? Math.round((Date.parse(run.startedAt) - Date.parse(run.scheduledFor)) / 1000) : null;
+  const value = a.trigger.kind === "schedule" && run.source === "schedule" ? (
+    <span className="automationTriggerLine"><TriggerSummary trigger={a.trigger} />
+      {run.scheduledFor ? <span className="ds-hint"> · due {formatTimestamp(run.scheduledFor, "datetime")}{late !== null && late >= 0 ? `, started ${late} s later` : ""}</span> : null}</span>
+  ) : run.event ? (
+    <span className="automationTriggerLine"><span className="ds-mono">{run.event}</span>{run.action ? ` · ${run.action}` : ""}
+      {run.payloads[0]?.deliveryId ? <span className="ds-hint ds-mono"> · {run.payloads[0].deliveryId}</span> : null}
+      {run.payloadCount > 1 ? <span className="ds-hint"> · {run.payloadCount - 1} later {run.payloadCount === 2 ? "delivery" : "deliveries"} sent to this run</span> : null}</span>
+  ) : <span>{run.source === "test" ? "Test run" : "Run now"}{run.startedBy ? ` by ${run.startedBy.name}` : ""}</span>;
+  return <KeyValueList items={[{ label: "Trigger", value }]} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -1363,7 +1420,7 @@ export function testTemplate(event: string, action: string | null): Record<strin
   return base;
 }
 
-function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a: Automation; onClose: () => void; onStarted: () => void }) {
+function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a: Automation; onClose: () => void; onStarted: (runId: string) => void }) {
   const trigger = a.trigger as Extract<Trigger, { kind: "github" }>;
   const [mode, setMode] = useState<"past" | "write">("past");
   const [deliveries, setDeliveries] = useState<PastDelivery[] | null>(null);
@@ -1387,8 +1444,8 @@ function RunNowDialog({ client, a, onClose, onStarted }: { client: ApiClient; a:
       footer={<>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={busy || !canRun} data-testid="test-run"
-          onClick={() => void save(() => client.runAutomation(a.id, mode === "past" ? { deliveryId: picked! }
-            : { testEvent: { event: trigger.event, action, deliveryId, body: (json as { value: Record<string, unknown> }).value } }), onStarted, "Run started")}>
+          onClick={() => void save(async () => { const result = await client.runAutomation(a.id, mode === "past" ? { deliveryId: picked! }
+            : { testEvent: { event: trigger.event, action, deliveryId, body: (json as { value: Record<string, unknown> }).value } }); onStarted(result.runId); }, () => undefined, "Run started")}>
           {mode === "past" ? "Run on this delivery" : "Run with this event"}
         </Button>
       </>}>

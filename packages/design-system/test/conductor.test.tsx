@@ -50,6 +50,14 @@ describe("the turns of a Chat", () => {
     expect(plain(h)).toContain("Conductor8s: Tiago asked for it.");
   });
 
+  test("an agent turn's name is followed by roleLabel when given, its role's word without it", () => {
+    const automation = plain(html(<ChatMessage role="investigator" name="Weekly PR digest" roleLabel="Automation" content="Numbers first." />));
+    expect(automation).toContain("Weekly PR digestAutomation");
+    expect(automation).not.toContain(ROLE_LABEL.investigator);
+    expect(plain(html(<ChatMessage role="investigator" name="Weekly PR digest" content="Numbers first." />)))
+      .toContain(`Weekly PR digest${ROLE_LABEL.investigator}`);
+  });
+
   test("dude's notice says who says it", () => {
     expect(plain(html(<ChatNotice kind="parked" by="El Duderino" text="Parked while nobody is writing." at="2026-10-02T10:00:00Z" />)))
       .toStartWith("El Duderino: Parked while nobody is writing.");
