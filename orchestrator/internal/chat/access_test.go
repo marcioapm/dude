@@ -277,6 +277,29 @@ func TestChatEachMessageIntoASessionRecordsWhereItWasSaid(t *testing.T) {
 	}
 }
 
+// A bare mention (the bot's name alone, the thread quoted) still records
+// where it was said: its turn's reply goes to that thread, not to an older one.
+func TestChatABareMentionRecordsWhereItWasSaid(t *testing.T) {
+	w := setup(t)
+	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "title": "Exports"}))
+	root := w.mention("Márcia", "C1", "", "why are exports slow?")
+	session := w.last().ResultID
+	// The latest input before the bare mention comes from another conversation.
+	w.model.queue(resume(session))
+	w.mention("Márcia", "M1", "", "continue that")
+	// The session's agent has ended: the bare mention starts a new one.
+	w.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE session_id = $1`, session)
+	w.mention("Márcia", "C1", root, "")
+	if got := w.last(); got.Route != "resume" || got.ResultID != session {
+		t.Fatalf("the bare mention did not go to the session: %+v", got)
+	}
+	last := w.one(`SELECT COALESCE(payload->>'conversationId', '') || '|' || COALESCE(payload->>'threadId', '') FROM events
+		WHERE session_id = $1 AND event_type = 'chat.message' AND actor_type = 'person' ORDER BY cursor DESC LIMIT 1`, session)
+	if last != "C1|"+root {
+		t.Fatalf("the latest input was recorded as %q, want C1|%s", last, root)
+	}
+}
+
 // A confident clarify is capped like an unsure answer: on the third
 // question in a thread, a brainstorm.
 func TestChatCapsConfidentClarifyingQuestions(t *testing.T) {

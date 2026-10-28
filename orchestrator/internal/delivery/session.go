@@ -282,7 +282,9 @@ func startBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID string, w Wr
 		// The message is read once its images are: Chat shows it as that directive's turn.
 		msg["directiveId"], msg["attachments"] = directiveID, attached
 	}
-	if !o.Answer && (o.Shown != "" || len(attached) > 0) {
+	// A message from chat is recorded even with no text of its own (a bare
+	// mention, the thread quoted): it says where the turn's reply goes.
+	if !o.Answer && (o.Shown != "" || len(attached) > 0 || w.Via["conversationId"] != nil) {
 		if supersedes != "" {
 			msg["supersedes"] = supersedes
 		}

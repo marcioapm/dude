@@ -107,7 +107,7 @@ var All = []Capability{
 		Tools: []string{"refresh_checkout"}},
 	{Key: ChatRead, Description: "Read more of the chat conversation a session was started from: its thread, or the channel; at most 30 reads an hour.",
 		Tools: []string{"chat_history"}},
-	{Key: ChatReply, Description: "Reply in the chat thread a session was started from: at most 3 posts a turn, about 3,000 characters each; only a session started from chat has it.",
+	{Key: ChatReply, Description: "Reply in the chat thread the turn's message came from, not to a message typed in dude: at most 3 posts a turn, about 3,000 characters each; only a session started from chat has it.",
 		Tools: []string{"reply_in_thread"}},
 	{Key: RunsRead, Description: "Read another Run's Chat and the question it is waiting on: the task's Runs, or the Runs a session started.",
 		Tools: []string{"run_chat"}},

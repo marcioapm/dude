@@ -264,6 +264,24 @@ func TestChatNoticeGivesUpOnTransientFailuresSixHoursAfterItWasRecorded(t *testi
 	}
 }
 
+// The window is time, not a try count: a notice already past it gives up on
+// its first transient failure.
+func TestChatNoticePastItsWindowGivesUpOnItsFirstTransientFailure(t *testing.T) {
+	w := setup(t)
+	task, root := w.routedTask()
+	w.move(task, "running", "planning with the conductor")
+	w.exec(`UPDATE chat_notices SET created_at = now() - interval '6 hours 1 minute' WHERE task_id = $1`, task)
+	w.fake.FailTimes("chat.postMessage", "ratelimited", 1)
+	w.postNotices()
+	if n := w.count(`SELECT count(*) FROM chat_notices WHERE task_id = $1 AND gave_up_at IS NOT NULL AND attempts = 1 AND posted_at IS NULL`, task); n != 1 {
+		t.Fatalf("not given up on the first try past the window: %s",
+			w.one(`SELECT row_to_json(n)::text FROM chat_notices n WHERE task_id = $1`, task))
+	}
+	if got := w.threadNotices("C1", root); len(got) != 0 {
+		t.Errorf("the thread got %q", got)
+	}
+}
+
 // cancelAfterPost cancels the caller's context once a post was taken.
 type cancelAfterPost struct {
 	chat.Provider
