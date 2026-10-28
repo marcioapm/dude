@@ -1,24 +1,29 @@
--- 219_chat_notices.sql — chat-origin task progress outbox, recorded in the
--- status/PR transaction once per task and kind. Snapshots the task's key,
--- title, allow-listed failure reason and thread. Posts outside transactions,
--- retrying transient failures for 6 hours. At least once: a crash after
--- posting can repeat the post when the claim's lease expires.
+-- 219_chat_notices.sql — chat progress outbox, recorded in the status/PR
+-- transaction once per subject and kind. A row is about one task (started,
+-- PR opened, done, failed or stopped) or one epic (started, first PR
+-- opened, finished with its counts), never both. Snapshots the subject's
+-- key and title, an allow-listed detail and the thread. Posts outside
+-- transactions, retrying transient failures for 6 hours. At least once: a
+-- crash after posting can repeat the post when the claim's lease expires.
 --
 -- Catalog-only (no scan, no backfill); the foreign keys take SHARE ROW
--- EXCLUSIVE on tasks and organizations, briefly, until this commits.
+-- EXCLUSIVE on tasks, epics and organizations, briefly, until this commits.
 CREATE TABLE chat_notices (
   id                    text PRIMARY KEY,
   organization_id       text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  task_id               text NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  kind                  text NOT NULL CHECK (kind IN ('started', 'pr_opened', 'done', 'failed')),
+  task_id               text REFERENCES tasks(id) ON DELETE CASCADE,
+  epic_id               text REFERENCES epics(id) ON DELETE CASCADE,
+  kind                  text NOT NULL CHECK (kind IN ('started', 'pr_opened', 'done', 'failed',
+                                                      'epic_started', 'epic_pr_opened', 'epic_finished')),
   provider              text NOT NULL,
   external_workspace_id text NOT NULL,
   conversation_id       text NOT NULL,
   conversation_name     text NOT NULL DEFAULT '',
   -- '' posts at the conversation's top level (a direct message's).
   thread_id             text NOT NULL DEFAULT '',
-  task_key              text NOT NULL,
-  task_title            text NOT NULL,
+  -- A task's key (BIL-12), or an epic's project key (BIL), as the UI labels it.
+  subject_key           text NOT NULL,
+  subject_title         text NOT NULL,
   detail                text NOT NULL DEFAULT '' CHECK (length(detail) <= 2000),
   created_at            timestamptz NOT NULL DEFAULT now(),
   attempts              integer NOT NULL DEFAULT 0,
@@ -29,7 +34,11 @@ CREATE TABLE chat_notices (
   -- scrubbed it.
   gave_up_at            timestamptz,
   last_error            text CHECK (last_error IS NULL OR length(last_error) <= 2000),
-  UNIQUE (task_id, kind)
+  -- Exactly one subject, and an epic's kinds only on an epic.
+  CONSTRAINT chat_notices_one_subject CHECK (num_nonnulls(task_id, epic_id) = 1
+    AND (epic_id IS NOT NULL) = (kind LIKE 'epic\_%')),
+  UNIQUE (task_id, kind),
+  UNIQUE (epic_id, kind)
 );
 -- The loop's pending rows, across tenants, due first.
 CREATE INDEX chat_notices_pending_idx ON chat_notices (next_attempt_at, id)

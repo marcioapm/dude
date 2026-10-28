@@ -29,7 +29,7 @@ var noticeOfStatus = map[string]string{"running": NoticeStarted, "done": NoticeD
 // OFFSET 0 keeps the session origin to one lookup, not one per reference.
 func recordNoticeTx(ctx context.Context, tx pgx.Tx, taskID, kind, detail string) error {
 	_, err := tx.Exec(ctx, `INSERT INTO chat_notices (id, organization_id, task_id, kind, provider, external_workspace_id,
-			conversation_id, conversation_name, thread_id, task_key, task_title, detail)
+			conversation_id, conversation_name, thread_id, subject_key, subject_title, detail)
 		SELECT $1, t.organization_id, t.id, $3, o.origin->>'provider', COALESCE(o.origin->>'workspaceId', ''),
 			o.origin->>'conversationId', COALESCE(o.origin->>'conversationName', ''),
 			CASE WHEN o.origin->>'conversationKind' = 'dm' AND COALESCE((o.origin->>'topLevel')::boolean, false) THEN ''

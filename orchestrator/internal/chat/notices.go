@@ -102,7 +102,7 @@ func (s *Service) postNotice(ctx context.Context, d dueNotice) (bool, error) {
 			FROM organizations o, tasks t WHERE c.id = $1 AND o.id = c.organization_id AND t.id = c.task_id
 			  AND c.posted_at IS NULL AND c.gave_up_at IS NULL AND c.next_attempt_at <= now()
 			RETURNING c.id, c.kind, c.provider, c.external_workspace_id, c.conversation_id, c.thread_id,
-				c.task_id, c.task_key, c.task_title, c.detail, o.slug, c.attempts, t.project_id, c.conversation_name,
+				c.task_id, c.subject_key, c.subject_title, c.detail, o.slug, c.attempts, t.project_id, c.conversation_name,
 				c.created_at <= now() - $3::interval`, d.ID, claimLease.String(), noticeWindow.String()).
 			Scan(&n.ID, &n.Kind, &n.Provider, &n.Workspace, &n.Conversation, &n.Thread, &n.TaskID, &n.Key, &n.Title, &n.Detail, &n.Slug,
 				&n.Attempts, &n.Project, &n.ConversationName, &n.Expired)

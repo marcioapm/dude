@@ -1831,49 +1831,77 @@ test("210 adds organisation secrets, turns automation picks into project refs, a
   }
 }, 120_000);
 
-test("219 keeps one chat notice per task and kind, each tenant's alone, and the sweeper reads only what is due", async () => {
+test("219 keeps one chat notice per task or epic and kind, each tenant's alone, and the sweeper reads only what is due", async () => {
   const { url, sql } = await migratedBefore("219");
   try {
     await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_a', 'Acme', 'acme'), ('org_b', 'Other', 'other')`;
     await sql`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_a', 'org_a', 'Billing', 'bil', 'BIL'),
       ('prj_b', 'org_b', 'Other', 'oth', 'OTH')`;
+    await sql`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('epc_a', 'org_a', 'prj_a', 'Exports'), ('epc_b', 'org_b', 'prj_b', 'Other')`;
     await sql`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_a', 'org_a', 'prj_a', 1, 'T'), ('wi_b', 'org_b', 'prj_b', 1, 'U')`;
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["219_chat_notices.sql"]);
     const refusal = async (q: () => Promise<unknown>) => q().then(() => "", (err: Error) => err.message);
-    const notice = (id: string, org: string, task: string, kind: string, detail = "") => sql`INSERT INTO chat_notices (id, organization_id,
-      task_id, kind, provider, external_workspace_id, conversation_id, task_key, task_title, detail)
-      VALUES (${id}, ${org}, ${task}, ${kind}, 'slack', 'T1', 'C1', 'BIL-1', 'T', ${detail})`;
-    await notice("chn_1", "org_a", "wi_a", "started");
-    await notice("chn_2", "org_b", "wi_b", "done");
-    expect(await refusal(async () => await notice("chn_3", "org_a", "wi_a", "started"))).toContain("chat_notices_task_id_kind_key");
-    expect(await refusal(async () => await notice("chn_4", "org_a", "wi_a", "merged"))).toContain("chat_notices_kind_check");
-    expect(await refusal(async () => await notice("chn_5", "org_a", "wi_a", "failed", "x".repeat(2001)))).toContain("chat_notices_detail_check");
+    const notice = (id: string, org: string, task: string | null, epic: string | null, kind: string, detail = "") => sql`INSERT INTO chat_notices
+      (id, organization_id, task_id, epic_id, kind, provider, external_workspace_id, conversation_id, subject_key, subject_title, detail)
+      VALUES (${id}, ${org}, ${task}, ${epic}, ${kind}, 'slack', 'T1', 'C1', 'BIL-1', 'T', ${detail})`;
+    await notice("chn_1", "org_a", "wi_a", null, "started");
+    await notice("chn_2", "org_b", "wi_b", null, "done");
+    await notice("chn_e1", "org_a", null, "epc_a", "epic_started");
+    await notice("chn_e2", "org_a", null, "epc_a", "epic_finished", "1 done");
+    await notice("chn_e3", "org_b", null, "epc_b", "epic_pr_opened");
+    expect(await refusal(async () => await notice("chn_3", "org_a", "wi_a", null, "started"))).toContain("chat_notices_task_id_kind_key");
+    expect(await refusal(async () => await notice("chn_3e", "org_a", null, "epc_a", "epic_started"))).toContain("chat_notices_epic_id_kind_key");
+    expect(await refusal(async () => await notice("chn_4", "org_a", "wi_a", null, "merged"))).toContain("chat_notices_kind_check");
+    expect(await refusal(async () => await notice("chn_5", "org_a", "wi_a", null, "failed", "x".repeat(2001)))).toContain("chat_notices_detail_check");
+    // Exactly one subject, and an epic's kinds only on an epic.
+    expect(await refusal(async () => await notice("chn_7", "org_a", "wi_a", "epc_a", "started"))).toContain("chat_notices_one_subject");
+    expect(await refusal(async () => await notice("chn_8", "org_a", null, null, "started"))).toContain("chat_notices_one_subject");
+    expect(await refusal(async () => await notice("chn_9", "org_a", null, "epc_a", "done"))).toContain("chat_notices_one_subject");
+    expect(await refusal(async () => await notice("chn_10", "org_a", "wi_a", null, "epic_finished"))).toContain("chat_notices_one_subject");
 
     const seen = await sql.begin(async (tx) => {
       await tx`SET LOCAL ROLE dude_app`;
       await tx`SELECT set_config('app.organization_id', 'org_b', true)`;
       return [...await tx`SELECT id FROM chat_notices ORDER BY id`];
     });
-    expect(seen).toEqual([{ id: "chn_2" }]);
+    expect(seen).toEqual([{ id: "chn_2" }, { id: "chn_e3" }]);
     expect(await refusal(async () => await sql.begin(async (tx) => {
       await tx`SET LOCAL ROLE dude_app`;
       await tx`SELECT set_config('app.organization_id', 'org_b', true)`;
-      await tx`INSERT INTO chat_notices (id, organization_id, task_id, kind, provider, external_workspace_id, conversation_id, task_key, task_title)
+      await tx`INSERT INTO chat_notices (id, organization_id, task_id, kind, provider, external_workspace_id, conversation_id, subject_key, subject_title)
         VALUES ('chn_6', 'org_a', 'wi_a', 'done', 'slack', 'T1', 'C1', 'BIL-1', 'T')`;
     }))).toContain("row-level security");
+    // An epic's row is its tenant's alone too.
+    expect(await refusal(async () => await sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE dude_app`;
+      await tx`SELECT set_config('app.organization_id', 'org_b', true)`;
+      await tx`INSERT INTO chat_notices (id, organization_id, epic_id, kind, provider, external_workspace_id, conversation_id, subject_key, subject_title)
+        VALUES ('chn_6e', 'org_a', 'epc_a', 'epic_pr_opened', 'slack', 'T1', 'C1', 'BIL', 'Exports')`;
+    }))).toContain("row-level security");
+    const seenEpic = await sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE dude_app`;
+      await tx`SELECT set_config('app.organization_id', 'org_b', true)`;
+      return [...await tx`SELECT id FROM chat_notices WHERE epic_id = 'epc_a'`];
+    });
+    expect(seenEpic).toEqual([]);
     // The sweeper finds what is due across tenants, and reads none of what it says.
     const due = await sql.begin(async (tx) => {
       await tx`SET LOCAL ROLE dude_sweeper`;
       return [...await tx`SELECT id, organization_id FROM chat_notices WHERE posted_at IS NULL AND gave_up_at IS NULL ORDER BY next_attempt_at, id`];
     });
-    expect(due.map((r) => r.id).sort()).toEqual(["chn_1", "chn_2"]);
-    expect(await refusal(async () => await sql.begin(async (tx) => {
-      await tx`SET LOCAL ROLE dude_sweeper`;
-      return [...await tx`SELECT task_title FROM chat_notices`];
-    }))).toContain("permission denied");
+    expect(due.map((r) => r.id).sort()).toEqual(["chn_1", "chn_2", "chn_e1", "chn_e2", "chn_e3"]);
+    for (const column of ["subject_title", "epic_id", "task_id", "detail"]) {
+      expect(await refusal(async () => await sql.begin(async (tx) => {
+        await tx`SET LOCAL ROLE dude_sweeper`;
+        return [...await tx`SELECT ${tx(column)} FROM chat_notices`];
+      }))).toContain("permission denied");
+    }
 
     await sql`DELETE FROM tasks WHERE id = 'wi_a'`;
+    expect([...await sql`SELECT id FROM chat_notices WHERE organization_id = 'org_a' ORDER BY id`]).toEqual([{ id: "chn_e1" }, { id: "chn_e2" }]);
+    await sql`DELETE FROM epics WHERE id = 'epc_a'`;
     expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_a'`]).toEqual([{ n: 0 }]);
+    expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_b'`]).toEqual([{ n: 2 }]);
   } finally {
     await sql.end();
   }
