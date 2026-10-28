@@ -25,7 +25,7 @@ const (
 	repliesPerTurn = 3
 	// replyTextMax is one thread post's length, in characters: what one
 	// Block Kit section takes.
-	replyTextMax = blockMax
+	replyTextMax = 3000
 	// EvThreadReplied records a post the session's agent made in its thread.
 	EvThreadReplied = "chat.reply.posted"
 	// EvThreadReplyRefused records a thread post refused after its checks
