@@ -426,7 +426,7 @@ func loadSettings(ctx context.Context, tx pgx.Tx, projectID string, out *Preview
 // primaryRepoName is the repository the preview's servers run in: the
 // first of its task's, else of its project's.
 func (p *Previews) primaryRepoName(ctx context.Context, r wakeRun) (string, error) {
-	refs, err := p.refs(ctx, r.previewRun)
+	refs, err := p.repositoryMetadata(ctx, r.previewRun)
 	if err != nil || len(refs) == 0 {
 		return "", err
 	}

@@ -283,26 +283,51 @@ type previewRef struct{ Name, URL, Ref, Setup string }
 // forge has it, else its default branch. Read afresh each time: a branch
 // published or pushed since is what a wake syncs to.
 func (p *Previews) refs(ctx context.Context, r previewRun) ([]previewRef, error) {
+	repos, err := p.repositoryMetadata(ctx, r)
+	if err != nil || r.Branch == "" {
+		return repos, err
+	}
+	return p.resolveBranchRefs(ctx, r, repos)
+}
+
+// repositoryMetadata does not resolve refs: credentials, setup and server
+// placement need names and URLs, not another round of forge requests.
+func (p *Previews) repositoryMetadata(ctx context.Context, r previewRun) ([]previewRef, error) {
 	var repos []previewRef
 	err := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
 		repos, err = taskRefs(ctx, tx, r)
 		return err
 	})
-	if err != nil || r.Branch == "" {
-		return repos, err
-	}
-	return p.branchRefs(ctx, r.Org, r.Branch, repos)
+	return repos, err
 }
 
-// branchRefs moves each of a project's repositories (at their default
-// branches) to branch where the forge has it. A repository the forge cannot
-// say about (none connected, a local URL) stays at its default branch; a
-// forge error is returned, so the caller tries again rather than serving
-// the wrong code.
+var errPrimaryBranchGone = errors.New("primary preview branch is gone")
+
+// Resolve outside transactions; definite absence ends this run ID, never a
+// replacement preview of the same branch. The normal sweep cleans up lux.
+func (p *Previews) resolveBranchRefs(ctx context.Context, r previewRun, repos []previewRef) ([]previewRef, error) {
+	refs, err := p.branchRefs(ctx, r.Org, r.Branch, repos)
+	if errors.Is(err, errPrimaryBranchGone) {
+		if e := p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, e := endPreviewTx(ctx, tx, r.Org, r.ProjectID, "", r.ID, "branch deleted", ledger.ActorSystem, r.ID)
+			return e
+		}); e != nil {
+			return nil, e
+		}
+		p.kick()
+	}
+	return refs, err
+}
+
+// branchRefs requires the primary branch. Only secondary repositories may
+// fall back to their defaults. Uncertain forge visibility is always retried.
 func (p *Previews) branchRefs(ctx context.Context, org, branch string, repos []previewRef) ([]previewRef, error) {
 	gh, err := p.forge(ctx, org)
-	if err != nil || gh == nil {
-		return repos, err
+	if err != nil {
+		return nil, err
+	}
+	if gh == nil || len(repos) == 0 || forge.SlugFromURL(repos[0].URL) == "" {
+		return nil, errors.New("no forge holds the primary repository")
 	}
 	for i, rp := range repos {
 		slug := forge.SlugFromURL(rp.URL)
@@ -315,6 +340,16 @@ func (p *Previews) branchRefs(ctx context.Context, org, branch string, repos []p
 		}
 		if sha != "" {
 			repos[i].Ref = branch
+		} else if i == 0 {
+			gone, err := gh.BranchGone(ctx, slug, branch)
+			if err != nil {
+				return nil, err
+			}
+			if gone {
+				return nil, errPrimaryBranchGone
+			}
+			// It reappeared between reads. Retry instead of using the default.
+			return nil, errors.New("primary branch changed during resolution")
 		}
 	}
 	return repos, nil
@@ -426,7 +461,7 @@ func (p *Previews) spec(ctx context.Context, r previewRun) (lux.Spec, string, *d
 	}
 	if r.Branch != "" {
 		var err error
-		if repos, err = p.branchRefs(ctx, r.Org, r.Branch, repos); err != nil {
+		if repos, err = p.resolveBranchRefs(ctx, r, repos); err != nil {
 			return lux.Spec{}, "", nil, nil, err
 		}
 	}
@@ -549,7 +584,7 @@ func previewSetups(refs []previewRef) []phases.Setup {
 // the submit has expired by the next wake; and the setup manifest of its
 // repositories as they are now, when it declares one (lux keeps no value).
 func (p *Previews) resumeRepoSecrets(ctx context.Context, r previewRun, stored lux.StoredSpec) ([]lux.Secret, error) {
-	refs, err := p.refs(ctx, r)
+	refs, err := p.repositoryMetadata(ctx, r)
 	if err != nil {
 		return nil, err
 	}
@@ -572,7 +607,7 @@ func (p *Previews) operationCredentials(ctx context.Context, r wakeRun) (map[str
 	if err != nil || gh == nil {
 		return nil, err
 	}
-	refs, err := p.refs(ctx, r.previewRun)
+	refs, err := p.repositoryMetadata(ctx, r.previewRun)
 	if err != nil {
 		return nil, err
 	}

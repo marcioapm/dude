@@ -1574,7 +1574,7 @@ func (g *GitHub) BranchSHA(ctx context.Context, slug, branch string) (string, er
 			SHA string `json:"sha"`
 		} `json:"object"`
 	}
-	err := g.do(ctx, "GET", "/repos/"+slug+"/git/ref/heads/"+branch, nil, &ref)
+	err := g.do(ctx, "GET", "/repos/"+slug+"/git/ref/heads/"+url.PathEscape(branch), nil, &ref)
 	var e *Error
 	if asError(err, &e) && e.NotFound() {
 		return "", nil
