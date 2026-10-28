@@ -3,11 +3,11 @@ package phases
 import (
 	"context"
 	"errors"
+	"strings"
+	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
-	"strings"
-	"testing"
 )
 
 // Replacement before the unread round directive arrives must carry the

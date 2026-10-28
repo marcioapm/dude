@@ -17,9 +17,12 @@ Scope: three owner-note lifecycle findings only; queued base-sync excluded. Work
 - Clean targeted: `go test -count=1 -json ./internal/delivery ./internal/phases ./internal/api`, owner-targeted.json: 1,791 test/subtest passes, 4 failures, 3 optional real-harness skips, zero missing-DB skips. Delivery and API passed. Phases failed only TestARunsInitWritesItsInstructionsThenRunsItsSetup, TestASetupScriptRunsBeforeTheWorkloadAndOnARepositoryAResumeAdds, TestAFailingSetupScriptFailsTheRunBeforeItsWorkload, TestAHookASetupScriptInstallsRunsOnALaterCommit. All four reproduce at pinned base (owner-base-setup.json); isolated setup retry also failed. No out-of-scope setup fix attempted.
 - `go build ./...`, `go vet ./...`, `bun run typecheck`: passed (owner-build/owner-vet/owner-typecheck logs and exit files).
 - Runtime collected-test-ID diff: `go test -list . ./internal/delivery ./internal/phases ./internal/api` at base and HEAD, 949 -> 952 IDs, only the 3 new regressions added, none removed; both collection commands exited 0.
-- Full root gate `scripts/go-test.sh` started detached after mutations were restored; pending.
-
+- Full root gate `scripts/go-test.sh` (detached, RUNNER_TEMP/TMPDIR/GOTMPDIR/GOCACHE under /workspace/tmp), owner-full-gate.log: exit 1. Root shards had 1,474 top-level results and no failures; there were no missing-DB skips. The others process failed 15 top-level tests across 4 packages: automations (4), fakelux (3), images (1), phases (the same 4 setup tests). The full log contains 5,479 PASS, 13 SKIP and 31 FAIL lines, counting subtests. The 11 non-phases failures were re-run at the pinned base (owner-base-other-failures.json) and failed there too, with the same readiness/podman/workspace symptoms. The phases setup failures also reproduce at base. Owner-note gates are green, but the full root gate is not green.
+- Final regression run after the one-shot downstream assertion: owner-final-regression.json, 27 test/subtest passes, exit 0, zero skips. The final import grouping in rounds_keep_test.go is format-only and was re-verified in the final focused run below (`owner-final-head.json`: 27 test/subtest passes, exit 0, zero skips; package vet passed). Note: the full root gate began before the 643efd71f test assertion and the import regrouping, so it may not cover those last test-only edits.
 
 ## Commits
 - 65ff460c5 plan and initial report.
 - eada7af50 DB regressions (red).
+- 0f4add780 owner-note fixes.
+- 643efd71f mutation evidence and later-Run no-repeat assertion.
+- Final report/import-format commit: this commit.
