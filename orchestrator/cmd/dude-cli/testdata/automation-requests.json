@@ -512,5 +512,19 @@
       "wi_12"
     ],
     "route": "POST /v1/tasks/:id/done-without-pull-request"
+  },
+  {
+    "args": [
+      "preview",
+      "start",
+      "ABS",
+      "feature/login",
+      "--wait",
+      "0"
+    ],
+    "route": "POST /v1/projects/:id/branch-previews",
+    "body": {
+      "branch": "feature/login"
+    }
   }
 ]

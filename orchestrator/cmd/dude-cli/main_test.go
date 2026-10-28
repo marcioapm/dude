@@ -65,6 +65,12 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 			io.WriteString(w, `{"versions":[{"id":"apv_2","number":2,"current":true},{"id":"apv_1","number":1,"current":false}]}`)
 		case r.URL.Path == "/v1/projects/prj_1/automations":
 			io.WriteString(w, `{"automations":[{"id":"aut_p","name":"Triage","kind":"agent","enabled":true,"owner":{"id":"per_1","name":"Ana"},"agent":{}}],"alsoRunningHere":[]}`)
+		case r.URL.Path == "/v1/projects/prj_1/branch-previews" && r.Method == "POST":
+			io.WriteString(w, `{"id":"run_bp","branch":"feature/login","status":"pending","servers":[]}`)
+		case r.URL.Path == "/v1/projects/prj_1/branch-previews" && r.Method == "GET":
+			io.WriteString(w, `{"previews":[{"id":"run_bp","branch":"feature/login","status":"paused","servers":[{"name":"web","url":"https://web-feature-login-abs.preview.example.com"}]}]}`)
+		case r.URL.Path == "/v1/branch-previews/run_bp" && r.Method == "GET":
+			io.WriteString(w, `{"id":"run_bp","branch":"feature/login","status":"paused","servers":[{"name":"web","url":"https://web-feature-login-abs.preview.example.com"}]}`)
 		case r.URL.Path == "/v1/nope":
 			w.WriteHeader(404)
 			io.WriteString(w, `{"error":"no route for GET /v1/nope"}`)
@@ -144,6 +150,25 @@ func TestTaskRefsUseOneLookup(t *testing.T) {
 		if len(*calls) != want || (*calls)[0].path != first {
 			t.Fatalf("%v: calls %+v", args, *calls)
 		}
+	}
+}
+
+// preview start prints the server URLs, read again once the preview's
+// servers are made; preview stop PROJECT BRANCH finds the live one's id.
+func TestPreviewStartPrintsItsURLs(t *testing.T) {
+	srv, calls := fakeDude(t)
+	out, err := runCLI(t, srv, "", "preview", "start", "ABS", "feature/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "https://web-feature-login-abs.preview.example.com") || !strings.Contains(out, `"id": "run_bp"`) {
+		t.Fatalf("printed %s", out)
+	}
+	if _, err := runCLI(t, srv, "", "preview", "stop", "ABS", "feature/nope"); err == nil || !strings.Contains(err.Error(), "no live preview of feature/nope") {
+		t.Fatalf("stopping a branch with no preview: %v", err)
+	}
+	if c := last(*calls); c.method != "GET" {
+		t.Errorf("a stop with no preview sent %s %s", c.method, c.path)
 	}
 }
 
