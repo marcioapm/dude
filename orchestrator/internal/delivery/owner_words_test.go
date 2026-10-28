@@ -295,6 +295,17 @@ func TestOwnerWaiverSurvivesPendingFixerWakes(t *testing.T) {
 				if st.PersonSaid != "" {
 					t.Fatal("note remains after full fan-out")
 				}
+				later, err := w.phase(h.ctx, sc, st, PhaseTest, "later_without_note", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var laterNote string
+				if err := h.owner.QueryRow(h.ctx, `SELECT COALESCE(person_note,'') FROM runs WHERE id=$1`, later).Scan(&laterNote); err != nil {
+					t.Fatal(err)
+				}
+				if laterNote != "" {
+					t.Fatalf("note repeated on later work: %q", laterNote)
+				}
 			})
 		}
 	}
