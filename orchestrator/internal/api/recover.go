@@ -519,6 +519,12 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 		}
 	} else {
 		rc.Step = t.retryStep()
+		// The step's new Runs lead with what the person said.
+		said, err := delivery.PersonSaidTx(ctx, tx, st.TaskID, person, note)
+		if err != nil {
+			return err
+		}
+		st.PersonSaid = said
 	}
 	st.Recover = rc
 	next, _ := json.Marshal(st)

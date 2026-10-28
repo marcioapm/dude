@@ -224,7 +224,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
 		return err
 	}
-	e.Decided = &HumanDecision{At: at, Action: in.Action, Note: note, QuestionID: in.QuestionID, AnsweredBy: in.AnsweredBy,
+	e.Decided = &HumanDecision{At: at, Action: in.Action, Note: note, Said: said, QuestionID: in.QuestionID, AnsweredBy: in.AnsweredBy,
 		Conductor: in.Conductor, Person: in.Person, Scope: scope}
 	next, _ := json.Marshal(st)
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, status = CASE WHEN status = 'completed'

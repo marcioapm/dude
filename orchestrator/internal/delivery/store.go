@@ -149,6 +149,10 @@ type PhaseRun struct {
 	// A restart (RestartRunTx): what its agent is told of why, and the
 	// model tier it runs on in place of its role's, "" for the role's.
 	RestartNote, Tier string
+	// A person's words on the decision the Run is started for, marked as
+	// theirs (State.PersonSaid): its prompt, or a resumed round's message,
+	// leads with them.
+	PersonNote string
 	// A review limited to a range of commits; nil reviews the whole branch.
 	ReviewRange *ReviewRange
 	// A fresh Run keeps ReviewRange: the range names the loop the review's
@@ -304,14 +308,15 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
 		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override,
-		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how, check_logs)
+		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how, check_logs, person_note)
 		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23, $24::jsonb)`,
+		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23, $24::jsonb, $25)`,
 		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
 		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier),
-		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs), continues, how, checkLogs); err != nil {
+		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs), continues, how, checkLogs,
+		db.Nullable(strings.TrimSpace(in.PersonNote))); err != nil {
 		return "", err
 	}
 	if in.CountAttempts && len(in.FindingIDs) > 0 {

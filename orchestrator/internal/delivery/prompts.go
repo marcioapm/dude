@@ -75,6 +75,9 @@ type PromptInput struct {
 	ConductorNote string
 	// Why this Run replaces one restarted in its step (RestartRunTx).
 	RestartNote string
+	// A person's words on the decision this Run was started for, marked
+	// as theirs (runs.person_note): first, after a replay.
+	PersonNote string
 	// The images the Run is given with its prompt, in the order lux gets
 	// them (TaskImages): each reference in the goal and criteria is
 	// written as its place in this list.
@@ -334,6 +337,9 @@ func Prompt(phase string, in PromptInput) string {
 	in = in.withImages()
 	if in.Replay != "" {
 		add(in.Replay)
+	}
+	if n := strings.TrimSpace(in.PersonNote); n != "" {
+		add(n)
 	}
 
 	switch phase {

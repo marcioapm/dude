@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // The notes ABS-30's owner gave with Retry, which its fixer never saw.
@@ -112,5 +114,74 @@ func TestTheConductorHearsTheNoteOfABannerDecision(t *testing.T) {
 	}
 	if want := oneLine(absNote); !strings.Contains(line, want) || !strings.Contains(line, "Ola Nordmann") {
 		t.Fatalf("the conductor's wake lacks the owner's note %q:\n%q", want, line)
+	}
+}
+
+// A stuck loop retried with the owner's direction: the decide step hands
+// the marked note to the next fix, whose Run records it for its prompt,
+// and it is spent once the step waits on that Run.
+func TestARetrysNoteGoesToTheNextFixRun(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE tasks SET status = 'awaiting_input' WHERE id = 'wi_h'`)
+	h.exec(`UPDATE workflow_runs SET step = 'decide', state = state || '{"escalation":{"reason":"stuck","step":"fix","detail":{"reason":"stuck","findingIds":["f"]}}}'
+		WHERE id = 'wf_h'`)
+	h.decideAs("per_ola", EscalationDecision{Action: "retry", Note: absNote})
+	var raw []byte
+	if err := h.owner.QueryRow(h.ctx, `SELECT state FROM workflow_runs WHERE id = 'wf_h'`).Scan(&raw); err != nil {
+		h.t.Fatal(err)
+	}
+	w := &steps{s: &Store{DB: h.app}}
+	res, err := w.decide(h.ctx, workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw})
+	if err != nil || res.Next != "fix" {
+		t.Fatalf("decided: %q %v", res.Next, err)
+	}
+	st := res.State.(*State)
+	want := "The task's owner, Ola Nordmann, said:\n\n" + absNote
+	if st.PersonSaid != want {
+		t.Fatalf("the state hands on %q", st.PersonSaid)
+	}
+	id, err := w.phase(h.ctx, workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org}, st, PhaseFix, "k_fix", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := h.owner.QueryRow(h.ctx, `SELECT COALESCE(person_note, '') FROM runs WHERE id = $1`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("the fix Run's person_note %q", got)
+	}
+	if park("awaitFix", st, []string{id}); st.PersonSaid != "" {
+		t.Fatalf("the words outlive the Runs they were for: %q", st.PersonSaid)
+	}
+}
+
+// A system decision's note (dude's own) is no one's words: nothing is
+// handed on.
+func TestDudesOwnDecisionHandsOnNoWords(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.escalate("run_held")
+	if err := h.app.InOrg(h.ctx, h.org, func(tx pgx.Tx) error {
+		return DecideEscalationTx(h.ctx, tx, h.org, "wi_h", EscalationDecision{Action: "retry", Note: "dude says", ActorType: "system", ActorID: "forge"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.directives("run_held"); len(got) != 1 || got[0] != "held" {
+		t.Fatalf("directives %q", got)
+	}
+}
+
+// A fresh Run's prompt leads with the person's words (after a replay);
+// a resumed round's message does too.
+func TestAPersonsNoteLeadsThePromptAndTheRoundMessage(t *testing.T) {
+	said := "The task's owner, Ola Nordmann, said:\n\nSync to main."
+	for _, phase := range []string{PhaseImplement, PhaseFix, PhaseReview, PhaseTest, PhaseSimplify} {
+		p := Prompt(phase, PromptInput{Title: "T", Goal: "G", PersonNote: said})
+		if !strings.HasPrefix(p, said+"\n\n") {
+			t.Errorf("%s's prompt does not lead with the words:\n%s", phase, p)
+		}
+	}
+	if p := Prompt(PhaseFix, PromptInput{Title: "T", Goal: "G"}); strings.Contains(p, "said:") {
+		t.Errorf("a prompt with no words has some:\n%s", p)
 	}
 }

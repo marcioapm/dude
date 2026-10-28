@@ -72,6 +72,11 @@ type State struct {
 
 	// Phase Runs being waited for.
 	PendingRunIDs []string `json:"pendingRunIds,omitempty"`
+	// A person's note on the decision the delivery goes on from (an
+	// escalation's, a pick-up's), marked as their words (PersonSaidTx):
+	// the next phase Runs started carry it (runs.person_note), then it is
+	// spent (park).
+	PersonSaid string `json:"personSaid,omitempty"`
 	// The review round's Runs, every one, while it is waited for: each
 	// must have finished for the round to be complete. Empty in a round
 	// started before it was kept: ReviewRound finds them.
@@ -408,6 +413,9 @@ type HumanDecision struct {
 	Action string `json:"action"`
 	// What they said, for the agents from here on.
 	Note string `json:"note,omitempty"`
+	// Note as the next agent reads it, marked as the person's words
+	// (PersonSaidTx); "" for none, and for dude's own decisions.
+	Said string `json:"said,omitempty"`
 	// Taken on the owner's answer to the conductor's question about the
 	// escalation: the question, and the person who answered.
 	QuestionID string `json:"questionId,omitempty"`
@@ -588,6 +596,8 @@ func settle(st *State, sc workflow.StepContext) []string {
 
 func park(next string, st *State, pending []string) workflow.Result {
 	st.PendingRunIDs = pending
+	// The Runs waited on were started with the person's words: spent.
+	st.PersonSaid = ""
 	return workflow.Result{Next: next, State: st, AwaitSignals: []string{SignalPhaseFinished}}
 }
 
@@ -615,7 +625,8 @@ func (w *steps) phase(ctx context.Context, sc workflow.StepContext, st *State, p
 			return "", err
 		}
 	}
-	in := PhaseRun{TaskID: st.TaskID, Phase: phase, WorkflowID: sc.WorkflowRunID, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt}
+	in := PhaseRun{TaskID: st.TaskID, Phase: phase, WorkflowID: sc.WorkflowRunID, BaseRefs: st.Heads, ParentRunID: st.HeadRunID, Key: k, Attempt: st.Attempt,
+		PersonNote: st.PersonSaid}
 	if st.Candidate != nil && Publishes[phase] {
 		in.Branch = st.Candidate.Branch
 	}
@@ -3104,7 +3115,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")
 	}
-	// Going on: working again, whichever step takes it up.
+	// Going on: working again, whichever step takes it up. The next Runs
+	// it starts are told what the person said with it.
+	st.PersonSaid = d.Said
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
 	}
@@ -3160,7 +3173,8 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if d.Action == "resume" {
 		// The Run that failed was taken back up with the decision (the API
 		// does it, where it can say if it no longer can): the step that
-		// waited on it waits on it again.
+		// waited on it waits on it again. It was sent the note itself.
+		st.PersonSaid = ""
 		st.PendingRunIDs = e.RunIDs()
 		return resumeEscalationAt(st, e), nil
 	}
@@ -3281,6 +3295,8 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 // waitForPR waits on the task's pull requests: what the forge says of
 // them, a person's decision, or a person's feedback in dude.
 func waitForPR(st *State) workflow.Result {
+	// Words for the Runs a decision started are not for a later round.
+	st.PersonSaid = ""
 	if len(st.PendingConflicts) > 0 || st.handingOver {
 		return workflow.Result{Next: "awaitPullRequest", State: st}
 	}

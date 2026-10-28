@@ -1412,7 +1412,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var raised delivery.Raises
 	var recorded *delivery.Machine
 	var conductorIn delivery.PromptInput
-	var briefing, conductorNote, restartNote, tierOverride, ranOn, conductorPrompt, orgName, coordination, replay string
+	var briefing, conductorNote, restartNote, personNote, tierOverride, ranOn, conductorPrompt, orgName, coordination, replay string
 	var projectSecrets []lux.Secret
 	var tier delivery.Tier
 	var noTier string
@@ -1430,12 +1430,12 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
-				COALESCE(r.prompt, ''), COALESCE(r.conductor_note, ''), COALESCE(r.restart_note, ''), COALESCE(r.tier_override, ''),
+				COALESCE(r.prompt, ''), COALESCE(r.conductor_note, ''), COALESCE(r.restart_note, ''), COALESCE(r.person_note, ''), COALESCE(r.tier_override, ''),
 				o.agent_egress, p.agent_egress, p.agent_egress_mode, o.name, r.review_range
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			JOIN runs r ON r.id = $2
 			WHERE w.id = $1`, r.TaskID, r.ID).
-			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote, &restartNote, &tierOverride,
+			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote, &restartNote, &personNote, &tierOverride,
 				&orgEgress, &projectEgress, &egressMode, &orgName, &reviewRange); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
@@ -1646,7 +1646,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Findings: findings, PRFeedback: feedback, Feedback: peopleFeedback, BlockingSeverities: r.BlockingSeverities, Context: settings.Context,
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
-		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, Images: delivery.PromptImages(taskImages),
+		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
 		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh,
 	}
