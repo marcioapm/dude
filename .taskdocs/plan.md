@@ -2,6 +2,21 @@
 
 Branch: `fix/owner-notes-and-queued-resolve` (from origin/main a7419dce8).
 
+## Session outcome
+
+Bug 1 implemented and committed; validation has environment/pre-existing
+failures detailed in `/workspace/out/report.md`. Bug 2 was investigated but
+is NOT implemented: busy Resolve conflicts still refuses, and #327 remains.
+No PR was opened. The design below records the initial plan, not a claim
+that Bug 2 exists.
+
+Audit correction: both checks waiver scopes now carry the marked note in
+State.PersonSaid to the next phase Runs; no directive is forced into the
+waived Run. Decided escalation wakes retain multiline text without the
+machine-fact clipping bound. Answer-derived escalation notes retain the
+full answer instead of flattening/clipping it.
+
+
 ## Bug 1: a decision's note is dropped
 
 Root cause: `settleChecksTx` (delivery/checks_escalation.go) queues the

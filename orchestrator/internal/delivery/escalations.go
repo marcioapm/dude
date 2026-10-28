@@ -207,7 +207,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	}
 	if in.Action == "resume" {
 		// The Run that failed, taken back up now; the workflow waits on it.
-		if err := ResumeKeptTx(ctx, tx, org, projectID, taskID, e.RunIDs(), said); err != nil {
+		if err := ResumeKeptTx(ctx, tx, org, projectID, taskID, e.RunIDs(), valueOr(said, note)); err != nil {
 			return err
 		}
 	} else if in.Action != "stop" {
