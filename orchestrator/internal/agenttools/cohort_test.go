@@ -17,9 +17,11 @@ import (
 
 func TestReadRunSerializedBudget(t *testing.T) {
 	for _, tc := range []struct {
-		name, report, artifact          string
-		metadata, irreducible           bool
-		reportClipped, artifactsClipped bool
+		name, report, artifact            string
+		metadata, irreducible             bool
+		reportClipped, artifactsClipped   bool
+		artifactName, artifactDescription string
+		largeResult                       bool
 	}{
 		{name: "html", report: strings.Repeat("<", 16000), reportClipped: true},
 		{name: "control", report: strings.Repeat("\x01", 16000), reportClipped: true},
@@ -27,7 +29,13 @@ func TestReadRunSerializedBudget(t *testing.T) {
 		{name: "multibyte", report: strings.Repeat("界", 17000), reportClipped: true},
 		{name: "artifact-html", report: "normal report", artifact: "<", reportClipped: true, artifactsClipped: true},
 		{name: "artifact-quotes-backslashes", report: strings.Repeat("\"\\", 8000), artifact: "\"\\", reportClipped: true},
-		{name: "metadata", report: "normal report", metadata: true, reportClipped: true},
+		{name: "metadata", report: "normal report", metadata: true},
+		{name: "large-result", report: strings.Repeat("r", 16000), artifactName: "artifact", metadata: true, largeResult: true},
+		{name: "name-at-cap", report: "ok", artifactName: strings.Repeat("n", 200)},
+		{name: "name-over-cap", report: "ok", artifactName: strings.Repeat("n", 201), artifactsClipped: true},
+		{name: "description-at-cap", report: "ok", artifactDescription: strings.Repeat("d", 1000)},
+		{name: "description-over-cap", report: "ok", artifactDescription: strings.Repeat("d", 1001), artifactsClipped: true},
+		{name: "artifact-multibyte", report: "ok", artifactName: strings.Repeat("界", 67), artifactsClipped: true},
 		{name: "irreducible", report: "normal report", irreducible: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,19 +53,36 @@ func TestReadRunSerializedBudget(t *testing.T) {
 					mustExec(t, f.owner, `INSERT INTO artifacts(id,organization_id,run_id,kind,name,description,storage_key,sha256) VALUES ($1,$2,'inspection_child','report',$3,$4,$1,'hash')`, fmt.Sprintf("artifact_%02d", i), f.org, strings.Repeat(tc.artifact, 100), strings.Repeat(tc.artifact, 500))
 				}
 			}
+			if tc.artifactName != "" || tc.artifactDescription != "" {
+				mustExec(t, f.owner, `INSERT INTO artifacts(id,organization_id,run_id,kind,name,description,storage_key,sha256) VALUES ('literal',$1,'inspection_child','report',$2,$3,'literal','hash')`, f.org, tc.artifactName, tc.artifactDescription)
+			}
 			if tc.metadata {
 				mustExec(t, f.owner, `UPDATE runs SET heads=jsonb_build_object('repo',$1::text) WHERE id='inspection_child'`, strings.Repeat("<", 16000))
 			}
 			if tc.irreducible {
 				mustExec(t, f.owner, `INSERT INTO artifacts(id,organization_id,run_id,kind,name,storage_key,sha256) VALUES ('large_kind',$1,'inspection_child',$2,'name','key','hash')`, f.org, strings.Repeat("<", 16000))
 			}
+			if tc.largeResult {
+				mustExec(t, f.owner, `UPDATE child_results SET verify=jsonb_build_object('large',$1::text) WHERE child_run_id='inspection_child'`, strings.Repeat("x", 2*1024*1024))
+			}
+			encodings := agenttools.CountInspectionMetadataEncodings(t)
 			var raw json.RawMessage
 			code := f.postAs(t, token, "read_run", `{"run":"inspection_child","limit":20}`, &raw)
 			if tc.irreducible {
-				if code != 422 {
+				if code != 422 || !json.Valid(raw) || len(raw) > 64000 {
 					t.Fatalf("irreducible inspection: status %d, %d bytes", code, len(raw))
 				}
+				var refused struct{ Error string }
+				if err := json.Unmarshal(raw, &refused); err != nil {
+					t.Fatal(err)
+				}
+				if refused.Error != "child Run inspection exceeds 64000 bytes even after clipping; request fewer artifacts" {
+					t.Fatalf("unexpected refusal: %q", refused.Error)
+				}
 				return
+			}
+			if tc.largeResult && *encodings != 1 {
+				t.Fatalf("metadata encoded %d times, want once", *encodings)
 			}
 			if code != 200 || !json.Valid(raw) || !utf8.Valid(raw) || len(raw) > 64000 {
 				t.Fatalf("inspection: status %d, valid JSON %v, %d bytes", code, json.Valid(raw), len(raw))
@@ -73,14 +98,72 @@ func TestReadRunSerializedBudget(t *testing.T) {
 			if out.ReportClipped != tc.reportClipped || out.ArtifactsClipped != tc.artifactsClipped || out.MetadataClipped != tc.metadata {
 				t.Fatalf("clipping: report=%v artifacts=%v metadata=%v", out.ReportClipped, out.ArtifactsClipped, out.MetadataClipped)
 			}
-			texts := []string{out.Report}
-			for _, a := range out.Artifacts {
-				texts = append(texts, a.Name, a.Description)
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
 			}
-			for _, text := range texts {
-				if !strings.HasPrefix(text, "⟦external ") || !strings.Contains(text, "⟦/external ") || !utf8.ValidString(text) {
-					t.Fatal("inspection text lost its external wrapper or UTF-8 boundary")
+			for _, key := range []string{"recordedHeads", "result"} {
+				if _, present := fields[key]; present == out.MetadataClipped {
+					t.Fatalf("%s presence disagrees with metadataClipped", key)
 				}
+			}
+			loss := func(text, original string) bool {
+				t.Helper()
+				payload := ""
+				if text != "" {
+					rest, ok := strings.CutPrefix(text, "⟦external ")
+					id, body, marked := strings.Cut(rest, "⟧")
+					var closed bool
+					payload, _, closed = strings.Cut(body, "⟦/external "+id+"⟧")
+					if !ok || !marked || id == "" || !closed {
+						t.Fatal("missing external wrapper")
+					}
+				} else if original != "" {
+					t.Fatal("nonempty text lost its wrapper")
+				}
+				if strings.ContainsRune(payload, '\uFFFD') || !strings.HasPrefix(original, payload) {
+					t.Fatal("payload is not an intact prefix of original")
+				}
+				return payload != original
+			}
+			if out.ReportClipped != loss(out.Report, tc.report) {
+				t.Fatal("report flag disagrees with actual loss")
+			}
+			wantArtifacts := 0
+			if tc.artifact != "" {
+				wantArtifacts = 20
+			} else if tc.artifactName != "" || tc.artifactDescription != "" {
+				wantArtifacts = 1
+			}
+			if len(out.Artifacts) != wantArtifacts {
+				t.Fatalf("artifacts: got %d want %d", len(out.Artifacts), wantArtifacts)
+			}
+			artifactLoss := false
+			for _, a := range out.Artifacts {
+				name, description := tc.artifactName, tc.artifactDescription
+				if tc.artifact != "" {
+					name, description = strings.Repeat(tc.artifact, 100), strings.Repeat(tc.artifact, 500)
+				}
+				nameLoss, descriptionLoss := loss(a.Name, name), loss(a.Description, description)
+				artifactLoss = artifactLoss || nameLoss || descriptionLoss
+				if tc.artifact == "" && !tc.largeResult {
+					for _, field := range []struct {
+						text, original string
+						cap            int
+					}{{a.Name, name, 200}, {a.Description, description, 1000}} {
+						want := field.original
+						for len(want) > field.cap {
+							_, size := utf8.DecodeLastRuneInString(want)
+							want = want[:len(want)-size]
+						}
+						if want != "" && !strings.Contains(field.text, "⟧"+want+"⟦/external ") {
+							t.Fatal("artifact did not retain the payload up to its initial byte cap")
+						}
+					}
+				}
+			}
+			if out.ArtifactsClipped != artifactLoss {
+				t.Fatal("artifact flag disagrees with actual loss")
 			}
 		})
 	}

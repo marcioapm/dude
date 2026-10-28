@@ -70,6 +70,8 @@ type readRunIn struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
+var marshalInspection = json.Marshal
+
 // readRun deliberately does not return a Run row: prompt, configuration,
 // credentials, storage keys and arbitrary event payloads are not inspection.
 func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMessage, error) {
@@ -145,12 +147,32 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 	out["artifactsMore"] = more
 	out["artifactOffset"] = in.Offset
 	out["note"] = w.note() + " Reports are agent claims, not verified checks. recordedHeads are stored Run heads, not proof of publication. verify is the recorded verifier outcome, if present. Use run_chat or run_diff only if separately granted."
+	// Encode unchanged metadata once, then join its object fields to each
+	// encoded text response. Oversized metadata cannot fit even without text.
+	metadata := map[string]any{"recordedHeads": heads}
+	if settled, _ := out["settled"].(bool); settled {
+		metadata["result"] = result
+	}
+	encodedMetadata, err := marshalInspection(metadata)
+	if err != nil {
+		return nil, err
+	}
+	delete(out, "recordedHeads")
+	delete(out, "result")
+	if len(encodedMetadata) > 64000 {
+		encodedMetadata = nil
+		out["metadataClipped"] = true
+	}
 	// Check the encoded size after every reduction: JSON escaping can expand
 	// text sixfold. Re-wrap original text rather than cutting JSON or markers.
 	for {
-		data, err := json.Marshal(out)
+		data, err := marshalInspection(out)
 		if err != nil {
 			return nil, err
+		}
+		if encodedMetadata != nil {
+			data[len(data)-1] = ','
+			data = append(data, encodedMetadata[1:]...)
 		}
 		if len(data) <= 64000 {
 			return data, nil
@@ -171,8 +193,7 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 				arts[i].Description = w.text(a.Description, descriptionLimit)
 			}
 		case out["metadataClipped"] == false:
-			delete(out, "recordedHeads")
-			delete(out, "result")
+			encodedMetadata = nil
 			out["metadataClipped"] = true
 		default:
 			return nil, refuseText(rInspectionBudget)
