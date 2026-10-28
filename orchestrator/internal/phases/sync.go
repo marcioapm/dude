@@ -112,6 +112,9 @@ type Syncer struct {
 	// For tests: called as a publish looks up its Run's git.merge_attempted
 	// (mergeAttempted).
 	MergeAttemptLookup func()
+	// For tests: called in a fresh writer's queued base-sync claim
+	// transaction once it has read what its prompt carries.
+	BaseSyncClaim func(ctx context.Context, tx pgx.Tx, runID string)
 	// How long a turn lux's stop broke waits for lux's reason, and a
 	// move for lux to run the Run again (luxstop.go); zero takes heldWait
 	// and moveWait.
@@ -1687,6 +1690,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 			var err error
 			queued, err = delivery.PendingBaseSyncPrompt(ctx, tx, r.TaskID)
+			if err == nil && s.BaseSyncClaim != nil {
+				s.BaseSyncClaim(ctx, tx, r.ID)
+			}
 			if err == nil && queued != "" {
 				_, err = tx.Exec(ctx, `UPDATE base_sync_requests SET writer_run_id=$2 WHERE task_id=$1 AND completed_at IS NULL`, r.TaskID, r.ID)
 			}
