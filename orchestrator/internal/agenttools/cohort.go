@@ -31,7 +31,7 @@ func startAgents(ctx context.Context, tx pgx.Tx, c Caller, in startAgentsIn) (st
 		if r.Key != "" {
 			return out, refuseText(rCohortMemberKey)
 		}
-		total += len(r.Prompt) + len(r.Note) + len(r.Tier) + len(r.Profile) + len(r.Key)
+		total += len(r.Prompt) + len(r.Note) + len(r.Tier) + len(r.Profile)
 		phase := delivery.PhaseForPromptRole(r.Profile)
 		if phase == "" || r.Profile == "conductor" || r.Profile == "brainstorm" {
 			return out, refuseText(rChildProfileRequired)
@@ -94,7 +94,7 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 		return nil, err
 	}
 	w := newWrapper()
-	out := map[string]any{"run": in.Run, "profile": profile, "status": status, "generation": generation, "replacedBy": replaced, "stopReason": stop, "recordedHeads": heads, "reportPresent": false, "reportClipped": false, "settled": false, "artifacts": []any{}}
+	out := map[string]any{"run": in.Run, "profile": profile, "status": status, "generation": generation, "replacedBy": replaced, "stopReason": stop, "reportPresent": false, "reportClipped": false, "settled": false}
 	// Report only after settlement: terminal transport drain must finish first.
 	var result json.RawMessage
 	var report string
@@ -106,7 +106,6 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 	}
 	if err == nil {
 		out["settled"] = true
-		out["result"] = result
 		report, err = delivery.ChildInspectionReportTx(ctx, tx, in.Run)
 		if err != nil {
 			return nil, err
@@ -157,8 +156,6 @@ func readRun(ctx context.Context, tx pgx.Tx, c Caller, in readRunIn) (json.RawMe
 	if err != nil {
 		return nil, err
 	}
-	delete(out, "recordedHeads")
-	delete(out, "result")
 	if len(encodedMetadata) > 64000 {
 		encodedMetadata = nil
 		out["metadataClipped"] = true

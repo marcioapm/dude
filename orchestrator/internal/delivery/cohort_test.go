@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -10,16 +9,23 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestCohortDeliveryRollbackAndReplay(t *testing.T) {
-	w := newChildWorld(t)
+func (w *childWorld) startCohort(t *testing.T, key string, runs ...StartChildInput) (string, []string) {
+	t.Helper()
+	var cohort string
 	var members []string
 	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
 		var err error
-		_, members, err = StartCohortTx(w.ctx, tx, w.in.Parent, "crash", []StartChildInput{w.in})
+		cohort, members, err = StartCohortTx(w.ctx, tx, w.in.Parent, key, runs)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return cohort, members
+}
+
+func TestCohortDeliveryRollbackAndReplay(t *testing.T) {
+	w := newChildWorld(t)
+	_, members := w.startCohort(t, "crash", w.in)
 	if _, err := w.s.SettleChild(w.ctx, w.org, members[0], ChildOutcome{Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
@@ -49,14 +55,7 @@ func TestCohortDeliveryRollbackAndReplay(t *testing.T) {
 
 func TestCohortRejectsZeroRowConsume(t *testing.T) {
 	w := newChildWorld(t)
-	var members []string
-	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		var err error
-		_, members, err = StartCohortTx(w.ctx, tx, w.in.Parent, "receipt", []StartChildInput{w.in})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	_, members := w.startCohort(t, "receipt", w.in)
 	if _, err := w.s.SettleChild(w.ctx, w.org, members[0], ChildOutcome{Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
@@ -74,14 +73,7 @@ func TestCohortRejectsZeroRowConsume(t *testing.T) {
 
 func TestCohortEndedParentDoesNotNotifyReplacement(t *testing.T) {
 	w := newChildWorld(t)
-	var members []string
-	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		var err error
-		_, members, err = StartCohortTx(w.ctx, tx, w.in.Parent, "ended", []StartChildInput{w.in, w.in})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	_, members := w.startCohort(t, "ended", w.in, w.in)
 	w.exec(`UPDATE runs SET status='completed' WHERE id='run_parent'`)
 	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES('replacement',$1,'prj_life','wi_life',3,'conductor','running')`, w.org)
 	for _, id := range members {
@@ -129,17 +121,7 @@ func TestCohortReportBoundAndQuote(t *testing.T) {
 
 func TestCohortStaggeredResults(t *testing.T) {
 	w := newChildWorld(t)
-	var cohort string
-	var members []string
-	err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		runs := []StartChildInput{w.in, w.in, w.in}
-		var err error
-		cohort, members, err = StartCohortTx(w.ctx, tx, w.in.Parent, "batch", runs)
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cohort, members := w.startCohort(t, "batch", w.in, w.in, w.in)
 	for i, status := range []string{"completed", "failed", "aborted"} {
 		if _, err := w.s.SettleChild(w.ctx, w.org, members[i], ChildOutcome{Status: status}); err != nil {
 			t.Fatal(err)
@@ -200,15 +182,7 @@ func TestCohortAtomicRefusal(t *testing.T) {
 
 func TestCohortRestartTracksReplacement(t *testing.T) {
 	w := newChildWorld(t)
-	var members []string
-	err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		var err error
-		_, members, err = StartCohortTx(w.ctx, tx, w.in.Parent, "restart", []StartChildInput{w.in, w.in})
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, members := w.startCohort(t, "restart", w.in, w.in)
 	replacement, err := w.s.RestartChild(w.ctx, w.org, "wi_life", members[0], "again")
 	if err != nil {
 		t.Fatal(err)
@@ -234,6 +208,6 @@ func TestCohortRestartTracksReplacement(t *testing.T) {
 		t.Fatal("replacement did not close cohort")
 	}
 	if _, err := w.s.RestartChild(w.ctx, w.org, "wi_life", replacement, "late"); !IsRefusal(err) {
-		t.Fatal(fmt.Sprintf("restart after close: %v", err))
+		t.Fatalf("restart after close: %v", err)
 	}
 }

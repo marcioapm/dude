@@ -68,6 +68,9 @@ func TestReadRunSerializedBudget(t *testing.T) {
 			encodings := agenttools.CountInspectionMetadataEncodings(t)
 			var raw json.RawMessage
 			code := f.postAs(t, token, "read_run", `{"run":"inspection_child","limit":20}`, &raw)
+			if *encodings != 1 {
+				t.Fatalf("metadata encoded %d times, want once", *encodings)
+			}
 			if tc.irreducible {
 				if code != 422 || !json.Valid(raw) || len(raw) > 64000 {
 					t.Fatalf("irreducible inspection: status %d, %d bytes", code, len(raw))
@@ -80,9 +83,6 @@ func TestReadRunSerializedBudget(t *testing.T) {
 					t.Fatalf("unexpected refusal: %q", refused.Error)
 				}
 				return
-			}
-			if tc.largeResult && *encodings != 1 {
-				t.Fatalf("metadata encoded %d times, want once", *encodings)
 			}
 			if code != 200 || !json.Valid(raw) || !utf8.Valid(raw) || len(raw) > 64000 {
 				t.Fatalf("inspection: status %d, valid JSON %v, %d bytes", code, json.Valid(raw), len(raw))
