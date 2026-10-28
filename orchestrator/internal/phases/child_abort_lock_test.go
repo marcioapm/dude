@@ -261,16 +261,19 @@ func TestAParentEndingBesideItsChildsLifecycleBatchDoesNotDeadlock(t *testing.T)
 		name    string
 		session bool
 		// before runs ahead of the race, on the fixture.
-		before func(w *resumeWorld)
-		op     func(ctx context.Context, app *db.DB, w *resumeWorld) error
-		reason string
+		before        func(w *resumeWorld)
+		op            func(ctx context.Context, app *db.DB, w *resumeWorld) error
+		reason        string
+		parentStatus  string
+		parentControl string
+		parentKeep    bool
 	}{
 		{"stop", false, nil, func(ctx context.Context, app *db.DB, w *resumeWorld) error {
 			return app.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
 				_, err := delivery.StopAllTx(ctx, tx, w.run.Org, w.run.TaskID, "a person stopped the task", true, nil)
 				return err
 			})
-		}, "aborted"},
+		}, "aborted", "aborted", "abort", true},
 		{"conductor abort", false, nil, func(ctx context.Context, app *db.DB, w *resumeWorld) error {
 			return app.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
 				if err := delivery.LockChat(ctx, tx, w.run.TaskID); err != nil {
@@ -282,17 +285,17 @@ func TestAParentEndingBesideItsChildsLifecycleBatchDoesNotDeadlock(t *testing.T)
 				}
 				return delivery.MarkChildParentEndedTx(ctx, tx, w.run.TaskID, "run_parent")
 			})
-		}, "parent-ended"},
+		}, "parent-ended", "aborted", "abort", false},
 		{"end task child parent", false, func(w *resumeWorld) {
 			w.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE id = 'run_parent'`)
 		}, func(ctx context.Context, app *db.DB, w *resumeWorld) error {
 			return (&delivery.Store{DB: app}).EndChildParent(ctx, w.run.Org, w.run.TaskID, "run_parent")
-		}, "parent-ended"},
+		}, "parent-ended", "completed", "none", false},
 		{"end session child parent", true, func(w *resumeWorld) {
 			w.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE id = 'run_parent'`)
 		}, func(ctx context.Context, app *db.DB, w *resumeWorld) error {
 			return (&delivery.Store{DB: app}).EndChildParent(ctx, w.run.Org, "", "run_parent")
-		}, "parent-ended"},
+		}, "parent-ended", "completed", "none", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newResumeWorld(t)
@@ -300,6 +303,19 @@ func TestAParentEndingBesideItsChildsLifecycleBatchDoesNotDeadlock(t *testing.T)
 			if c.before != nil {
 				c.before(w)
 			}
+			snapshot := func() string {
+				var raw string
+				if err := w.owner.QueryRow(w.ctx, `SELECT jsonb_build_object(
+					't', (SELECT status FROM tasks WHERE id = $1),
+					'w', (SELECT jsonb_build_object('status', status, 'step', step, 'state', state, 'attempt', attempt)
+						FROM workflow_runs WHERE task_id = $1),
+					'attempts', (SELECT jsonb_object_agg(id, attempt) FROM runs WHERE id IN ('run_parent', 'run_child', 'run_sibling')))::text`,
+					w.run.TaskID).Scan(&raw); err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			before := snapshot()
 			batchErr, opErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error { return c.op(ctx, app, w) })
 			if err != nil {
 				t.Fatalf("race: %v (batch %v, %s %v)", err, batchErr, c.name, opErr)
@@ -312,6 +328,20 @@ func TestAParentEndingBesideItsChildsLifecycleBatchDoesNotDeadlock(t *testing.T)
 				t.Errorf("the child: control %s, stop reason %q, keep %v; want abort, %s, not kept", control, reason, keep, c.reason)
 			}
 			assertBatchCommitted(t, w)
+			if control, reason, keep := childStop(t, w, "run_sibling"); control != "abort" || reason != c.reason || keep {
+				t.Errorf("the sibling: control %s, stop reason %q, keep %v; want abort, %s, not kept", control, reason, keep, c.reason)
+			}
+			var status string
+			if err := w.owner.QueryRow(w.ctx, `SELECT status::text FROM runs WHERE id = 'run_parent'`).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			if control, reason, keep := childStop(t, w, "run_parent"); status != c.parentStatus || control != c.parentControl || reason != "" || keep != c.parentKeep {
+				t.Errorf("the parent: status %s, control %s, stop reason %q, keep %v; want %s, %s, no child stop reason, keep %v",
+					status, control, reason, keep, c.parentStatus, c.parentControl, c.parentKeep)
+			}
+			if after := snapshot(); after != before {
+				t.Errorf("the task, its delivery or family attempts changed:\nbefore %s\nafter  %s", before, after)
+			}
 		})
 	}
 }
