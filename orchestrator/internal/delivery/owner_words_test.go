@@ -470,3 +470,93 @@ func TestAWaitNoteEndsAtAwaitRead(t *testing.T) {
 		t.Fatalf("awaitRead kept the wait's note: %q", said)
 	}
 }
+
+// Each step that starts a phase Run hands it the owner's words once and
+// spends them: the next phase Run starts with none. A genuine wait on
+// the pull requests spends them too, starting nothing.
+func TestOwnerNoteIsSpentByEachPhaseStart(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		step  func(*steps) workflow.Step
+		state func(*State)
+		await string
+	}{
+		{"implementRun", func(w *steps) workflow.Step { return w.implementRun }, func(st *State) { st.Retries = 1 }, "awaitImplement"},
+		{"simplify", func(w *steps) workflow.Step { return w.simplify }, func(*State) {}, "awaitSimplify"},
+		{"test", func(w *steps) workflow.Step { return w.test }, func(*State) {}, "awaitTest"},
+		{"waitForPR", func(w *steps) workflow.Step { return w.decide }, func(st *State) {
+			st.PullRequestIDs = []string{"pr_open"}
+			st.Escalation = &Escalation{Reason: "pull_request_conflict", Decided: &HumanDecision{Action: "wait", Said: ownerSaid}}
+		}, "awaitPullRequest"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := ownedHeldTask(t)
+			h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+			if c.name == "waitForPR" {
+				h.ownerPRs()
+			}
+			st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"api": "aaa"},
+				PersonSaid: ownerSaid}
+			c.state(st)
+			raw, _ := json.Marshal(st)
+			w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+			sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: c.name, State: raw}
+			res, err := c.step(w)(h.ctx, sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Next != c.await {
+				t.Fatalf("next %q, want %q", res.Next, c.await)
+			}
+			st = res.State.(*State)
+			if c.name == "waitForPR" {
+				if len(st.PendingRunIDs) != 0 {
+					t.Fatalf("the wait started %v", st.PendingRunIDs)
+				}
+			} else {
+				if len(st.PendingRunIDs) != 1 {
+					t.Fatalf("started %v, want one Run", st.PendingRunIDs)
+				}
+				h.assertOwnerNoteOnRun(st.PendingRunIDs[0], ownerSaid)
+			}
+			if st.PersonSaid != "" {
+				t.Fatalf("%s kept the note: %q", c.name, st.PersonSaid)
+			}
+			later, err := w.phase(h.ctx, sc, st, PhaseReview, "later_"+c.name, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.assertOwnerNoteOnRun(later, "")
+		})
+	}
+}
+
+// A review round that warrants no reviewer and no gate starts no Run:
+// the words wait for the next Run that does start.
+func TestAReviewWithNoReviewersKeepsTheOwnersNote(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+	policy := DefaultPolicy()
+	policy.RequiredReviewers, policy.AlwaysReviewers, policy.ConditionalReviewers = nil, nil, nil
+	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: policy, Heads: map[string]string{"api": "aaa"},
+		PersonSaid: ownerSaid}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "review", State: raw}
+	res, err := w.review(h.ctx, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = res.State.(*State)
+	if res.Next != "awaitReview" || len(st.PendingRunIDs) != 0 || len(st.ReviewRunIDs) != 0 {
+		t.Fatalf("review started reviewers: %q %v %v", res.Next, st.PendingRunIDs, st.ReviewRunIDs)
+	}
+	if st.PersonSaid != ownerSaid {
+		t.Fatalf("no reviewer started, yet the note is %q", st.PersonSaid)
+	}
+	next, err := w.phase(h.ctx, sc, st, PhaseTest, "next_after_empty_review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.assertOwnerNoteOnRun(next, ownerSaid)
+}
