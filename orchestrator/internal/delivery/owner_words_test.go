@@ -469,6 +469,71 @@ func TestAWaitNoteEndsAtAwaitRead(t *testing.T) {
 	if said := res.State.(*State).PersonSaid; said != "" {
 		t.Fatalf("awaitRead kept the wait's note: %q", said)
 	}
+	// Feedback later: the fixer it starts is not given the wait's words.
+	fixer := h.readFeedbackFix(sc, res.State.(*State), "fb_after_wait")
+	h.assertOwnerNoteOnRun(fixer, "")
+}
+
+// readFeedbackFix gives the person's feedback on work ready to read (id)
+// and runs awaitRead's step, then the fix it routes to: the fixer started.
+func (h heldTask) readFeedbackFix(sc workflow.StepContext, st *State, id string) string {
+	h.t.Helper()
+	h.exec(`INSERT INTO feedback_batches(id,organization_id,task_id,attempt,author_person_id,submission_key) VALUES($2,$1,'wi_h',1,'per_ola',$2)`, h.org, "batch_"+id)
+	h.exec(`INSERT INTO feedback_items(id,organization_id,task_id,attempt,batch_id,author_person_id,body,anchor_kind,anchor,status,submitted_at)
+		VALUES($2,$1,'wi_h',1,$3,'per_ola','Rename it','general','{"kind":"general"}','open',now())`, h.org, id, "batch_"+id)
+	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	sc.Step = "awaitRead"
+	sc.Signals = []workflow.Signal{{Name: SignalHumanFeedback}}
+	sc.State, _ = json.Marshal(st)
+	res, err := w.awaitRead(h.ctx, sc)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if res.Next != "fix" {
+		h.t.Fatalf("feedback on work ready to read went to %q", res.Next)
+	}
+	sc.Step, sc.Signals = "fix", nil
+	sc.State, _ = json.Marshal(res.State)
+	if res, err = w.fix(h.ctx, sc); err != nil {
+		h.t.Fatal(err)
+	}
+	pending := res.State.(*State).PendingRunIDs
+	if len(pending) != 1 {
+		h.t.Fatalf("the fix started %v", pending)
+	}
+	return pending[0]
+}
+
+// A checks waiver taken while the work waited to be read resumes at
+// awaitRead with its note for the next Run: a wake of that step with no
+// feedback does not spend it, and the fixer later feedback starts has it.
+func TestAWaiverNoteAtAwaitReadSurvivesAnEmptyWake(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"target": "abc"},
+		Escalation: &Escalation{Reason: ReasonChecksUnverified, At: "awaitRead", AtSignals: []string{SignalHumanFeedback},
+			Decided: &HumanDecision{Action: ActionWaive, Said: ownerSaid}}}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+	res, err := w.decide(h.ctx, sc)
+	if err != nil || res.Next != "awaitRead" {
+		t.Fatalf("decided: %q %v", res.Next, err)
+	}
+	if said := res.State.(*State).PersonSaid; said != ownerSaid {
+		t.Fatalf("the waiver's note is %q", said)
+	}
+	// The step wakes with nothing to read (no feedback yet): it waits again.
+	sc.Step = "awaitRead"
+	sc.State, _ = json.Marshal(res.State)
+	if res, err = w.awaitRead(h.ctx, sc); err != nil || res.Next != "awaitRead" {
+		t.Fatalf("an empty wake: %q %v", res.Next, err)
+	}
+	if said := res.State.(*State).PersonSaid; said != ownerSaid {
+		t.Fatalf("an empty wake spent the waiver's note: %q", said)
+	}
+	fixer := h.readFeedbackFix(sc, res.State.(*State), "fb_after_waiver")
+	h.assertOwnerNoteOnRun(fixer, ownerSaid)
 }
 
 // Each step that starts a phase Run hands it the owner's words once and

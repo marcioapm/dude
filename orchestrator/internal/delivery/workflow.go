@@ -1651,6 +1651,11 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		// Nothing changed in any repository: the work is what the agents
 		// published. A person reads it and says when it is done, or gives
 		// it feedback, which takes the delivery up again (awaitRead).
+		// As waitForPR: words for the Runs a decision started (a Before-PR
+		// integration waited past) are not for the fixer a person's later
+		// feedback starts. Only here: a checks waiver resumed at awaitRead
+		// keeps its note for that fixer, however often the step wakes empty.
+		st.PersonSaid = ""
 		return awaitRead(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "ready to read")
 	}
 	// Waiting on people now: the agents are done until someone asks.
@@ -3322,9 +3327,6 @@ func waitForPR(st *State) workflow.Result {
 // awaitRead waits on a person reading work that opened no pull request:
 // their feedback takes it up again; marking it done ends it.
 func awaitRead(st *State) workflow.Result {
-	// As waitForPR: words for the Runs a decision started are not for the
-	// fixer a person's later feedback starts.
-	st.PersonSaid = ""
 	return workflow.Result{Next: "awaitRead", State: st, AwaitSignals: []string{SignalHumanFeedback}}
 }
 
