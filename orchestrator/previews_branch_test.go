@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -61,6 +62,14 @@ func TestABranchPreviewServesItsBranchWhereEachRepositoryHasIt(t *testing.T) {
 	sv, _ := w.lux.TenantServer(w.serverID(runID, "web"))
 	if sv.Inject != "" || sv.Labels["dude.task"] != "" || sv.Labels["dude.project"] != w.project {
 		t.Errorf("server inject %q labels %v", sv.Inject, sv.Labels)
+	}
+	// lux's own expiry is past the 30-day reap, so dude's reaper ends it.
+	var expiry struct {
+		ExpireAfter any `json:"expireAfter"`
+	}
+	_ = json.Unmarshal(sv.Raw, &expiry)
+	if got := fmt.Sprint(expiry.ExpireAfter); got != "1080h0m0s" {
+		t.Errorf("the server expires after %v", expiry.ExpireAfter)
 	}
 
 	w.open(w.serverID(runID, "web"))

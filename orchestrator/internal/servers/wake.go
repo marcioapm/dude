@@ -42,6 +42,8 @@ import (
 const (
 	// lux's own expiry, the safety net behind dude's reaper.
 	previewExpireAfter = "720h"
+	// A branch preview's: past its 30-day reap (reapAfter).
+	branchExpireAfter = "1080h"
 	// A wake another orchestrator claimed and has not finished is taken
 	// over after this.
 	wakeClaimFor = 2 * time.Minute
@@ -343,14 +345,15 @@ func (p *Previews) createServer(ctx context.Context, r wakeRun, of PreviewOf, in
 	labels := ownerLabels(r.previewRun, map[string]string{lux.AppLabel: lux.App, "dude.org": r.Org, "dude.project": r.ProjectID,
 		"dude.preview": r.ID, "dude.kind": KindPreview})
 	// The comment overlay files feedback on a task: a branch preview has
-	// none to file it on, and carries no inject.
-	inject := ""
+	// none to file it on, and carries no inject. Its lux expiry is past its
+	// 30-day reap, so the reaper ends it first.
+	inject, expire := "", branchExpireAfter
 	if r.TaskID != "" {
-		inject = p.inject()
+		inject, expire = p.inject(), previewExpireAfter
 	}
 	body := lux.CreateServer{Name: in.Name, Port: in.Port, Command: in.Command, Workdir: in.Workdir, Env: in.Env,
 		Labels: labels, Wake: "request", Lifetime: "owner", IdleAfter: idleAfter(settings.IdleTimeoutMinutes),
-		WakeTimeout: wakeTimeout.String(), ExpireAfter: previewExpireAfter, Inject: inject}
+		WakeTimeout: wakeTimeout.String(), ExpireAfter: expire, Inject: inject}
 	domain := p.PreviewDomain
 	if p.PreviewRelative {
 		domain = ""

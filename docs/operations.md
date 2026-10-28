@@ -410,6 +410,16 @@ added keep their old labels until they are replaced.
   aborted has its lux servers deleted — their URLs then say "This preview
   is gone" — and then its Run cancelled. lux's own 30-day expiry is the
   safety net; a server lux expires or someone deletes ends its preview.
+- **A branch preview** (`dude preview start PROJECT BRANCH`, no task)
+  ends when its branch is deleted (GitHub's `push` with `deleted`, or
+  `delete`, on the project's first repository; a daily check asks GitHub
+  as the backstop and ends it only on a definite not-found), when stopped,
+  or after 30 days unused (`previews.reap_after` does not apply); lux's
+  expiry for its servers is 45 days. It needs the repository webhook (or
+  the GitHub App) to deliver `push` and `delete`: the reconciler's webhook
+  repair updates hooks registered before dude asked for them, a few
+  repositories per pass; an App's subscriptions are its owner's to change
+  ([github](github.md#github-app)).
 
 **Wake timeouts (Project settings → Servers → Branch previews).**
 `firstWakeTimeoutMinutes` defaults to **15** until any server of the preview
