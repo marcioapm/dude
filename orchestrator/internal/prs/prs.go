@@ -60,7 +60,7 @@ type Syncer struct {
 	// What a push to (or the deletion of) a branch of a repository does
 	// outside pull requests: branch previews follow it
 	// (servers.Service.BranchEvent). Nil: nothing.
-	BranchMoved func(ctx context.Context, org, slug, branch string, deleted bool) error
+	BranchMoved func(ctx context.Context, org, slug, branch string, deleted bool, receivedAt time.Time) error
 }
 
 // DefaultCIGrace: how long CI may take to show up on a new head.
@@ -909,6 +909,7 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 		ID, Org, Event string
 		Payload        json.RawMessage
 		Attempts       int
+		ReceivedAt     time.Time
 	}
 	var batch []delivery
 	// push and delete only when something follows branches (BranchMoved).
@@ -926,7 +927,7 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 		}
 		// A failed delivery waits before its next try, longer each time, so
 		// a forge that is briefly down is not asked ten times in a second.
-		rows, err := tx.Query(ctx, `SELECT id, organization_id, event, payload, attempts FROM webhook_deliveries
+		rows, err := tx.Query(ctx, `SELECT id, organization_id, event, payload, attempts, received_at FROM webhook_deliveries
 			WHERE processed_at IS NULL AND attempts < 10
 			  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
 			ORDER BY received_at LIMIT 20`)
@@ -939,7 +940,7 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	for _, d := range batch {
-		err := s.process(ctx, d.Org, d.Event, d.Payload)
+		err := s.process(ctx, d.Org, d.Event, d.Payload, d.ReceivedAt)
 		if err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
 			if err == nil {
 				_, e := tx.Exec(ctx, `UPDATE webhook_deliveries SET processed_at = now(), last_error = NULL WHERE id = $1`, d.ID)
@@ -960,9 +961,9 @@ func (s *Syncer) ProcessDeliveries(ctx context.Context) (int, error) {
 
 // process syncs every tracked PR a delivery is about; a push or a delete
 // of a branch goes to BranchMoved.
-func (s *Syncer) process(ctx context.Context, org, event string, payload json.RawMessage) error {
+func (s *Syncer) process(ctx context.Context, org, event string, payload json.RawMessage, receivedAt time.Time) error {
 	if event == "push" || event == "delete" {
-		return s.branchEvent(ctx, org, event, payload)
+		return s.branchEvent(ctx, org, event, payload, receivedAt)
 	}
 	var p struct {
 		Repository struct {

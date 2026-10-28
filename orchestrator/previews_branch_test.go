@@ -8,9 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/servers"
 )
@@ -94,7 +100,7 @@ func TestABranchPreviewServesItsBranchWhereEachRepositoryHasIt(t *testing.T) {
 
 	// The branch reaches web too: the next sync takes it there.
 	w.web.Branch("feature/login", "main", "web side")
-	if err := w.previews.BranchEvent(context.Background(), w.org, "acme/web", "feature/login", false); err != nil {
+	if err := w.previews.BranchEvent(context.Background(), w.org, "acme/web", "feature/login", false, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w.until("the running preview to sync", func() bool { return len(runs[0].Syncs) == 1 })
@@ -131,6 +137,169 @@ func TestStartingABranchPreviewChecksTheBranchAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestConcurrentBranchPreviewStartsConverge(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.gh.Branch("feature/race", "main", "race")
+	arrived, release := make(chan struct{}, 2), make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/git/ref/heads/") {
+			arrived <- struct{}{}
+			<-release
+		}
+		w.gh.Handler().ServeHTTP(rw, r)
+	}))
+	defer srv.Close()
+	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "example", APIBaseURL: srv.URL})
+	var results [2]servers.BranchPreview
+	var errs [2]error
+	var wg sync.WaitGroup
+	for i := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i], errs[i] = w.previews.StartBranchPreview(context.Background(), gh, w.org, w.project, "feature/race", "")
+		}()
+	}
+	<-arrived
+	<-arrived
+	close(release)
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil || results[0].ID != results[1].ID || results[0].Created == results[1].Created {
+		t.Fatalf("concurrent starts: %+v errors %v", results, errs)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE project_id = $1 AND preview_branch = 'feature/race'`, w.project); n != 1 {
+		t.Fatalf("created %d runs", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created'`, results[0].ID); n != 1 {
+		t.Fatalf("created %d run.created events", n)
+	}
+}
+
+func TestDeletedPrimaryBranchNeverWakesDefaultCode(t *testing.T) {
+	for _, previouslyWoken := range []bool{false, true} {
+		t.Run(fmt.Sprint(previouslyWoken), func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.recipe("web", 3000, "npm run dev", "", nil, true)
+			w.gh.Branch("feature/gone", "main", "gone")
+			id := w.startBranch("feature/gone")
+			if previouslyWoken {
+				w.open(w.serverID(id, "web"))
+				w.until("running", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, id) == 1 })
+				w.lux.Idle(w.serverID(id, "web"))
+				w.until("sleeping", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, id) == 1 })
+			}
+			if err := w.gh.DeleteBranch("feature/gone"); err != nil {
+				t.Fatal(err)
+			}
+			w.lux.RequestServer(w.serverID(id, "web"), "/")
+			w.until("ended safely", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND lux_stop_reason = 'cancel'`, id) == 1
+			})
+			want := 0
+			if previouslyWoken {
+				want = 1
+			}
+			if got := len(w.luxRuns()); got != want {
+				t.Fatalf("submitted %d lux runs, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestUnavailablePrimaryBranchRetriesWithoutDefaultCode(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.gh.Branch("feature/retry", "main", "retry")
+	id := w.startBranch("feature/retry")
+	w.gh.RefStatus = map[string]int{"feature/retry": 502}
+	w.lux.RequestServer(w.serverID(id, "web"), "/")
+	w.until("retry scheduled", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND next_attempt_at IS NOT NULL`, id) == 1 })
+	if len(w.luxRuns()) != 0 || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND ended_at IS NULL AND next_attempt_at IS NOT NULL`, id) != 1 {
+		t.Fatalf("unavailable forge did not preserve a retryable preview: %s", w.describeRuns())
+	}
+	w.gh.RefStatus = nil
+	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = NULL WHERE id = $1`, id)
+	w.until("retry running", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, id) == 1 })
+}
+
+func TestDeletionReceiptsCannotEndRecreatedPreviews(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.gh.Branch("feature/recreated", "main", "old")
+	old := w.startBranch("feature/recreated")
+	cutoff := time.Now()
+	if err := w.gh.DeleteBranch("feature/recreated"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := w.previews.BranchEvent(ctx, w.org, "acme/target", "feature/recreated", true, cutoff); err != nil {
+		t.Fatal(err)
+	}
+	w.until("old preview ended", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, old) == 1
+	})
+	w.gh.Branch("feature/recreated", "main", "new")
+	fresh := w.startBranch("feature/recreated")
+	// A previously received deletion cannot touch a newer preview, even if
+	// the forge is down. A later-received duplicate must verify absence.
+	w.gh.RefStatus = map[string]int{"feature/recreated": 502}
+	if err := w.previews.BranchEvent(ctx, w.org, "acme/target", "feature/recreated", true, cutoff); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.previews.BranchEvent(ctx, w.org, "acme/target", "feature/recreated", true, time.Now()); err == nil {
+		t.Fatal("uncertain deletion must retry")
+	}
+	w.gh.RefStatus = nil
+	for _, event := range []string{"push", "delete", "push"} {
+		payload := map[string]any{"ref": "feature/recreated", "ref_type": "branch", "deleted": true, "repository": map[string]any{"full_name": "acme/target"}}
+		if event == "push" {
+			payload["ref"] = "refs/heads/feature/recreated"
+		}
+		w.webhook(event, payload)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, fresh); n != 1 {
+		t.Fatalf("duplicate/out-of-order deletion ended recreated preview: %s", w.describeRuns())
+	}
+	// The cutoff, independently of forge visibility, fences a new preview
+	// whose branch is later removed again.
+	if err := w.gh.DeleteBranch("feature/recreated"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.previews.BranchEvent(ctx, w.org, "acme/target", "feature/recreated", true, cutoff); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, fresh); n != 1 {
+		t.Fatal("old receipt ended new incarnation")
+	}
+}
+
+func TestDailyBranchChecksDrainHealthyPages(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	// Same healthy branch across independent projects: no need for 51 git
+	// branches or wake sweeps to exercise the global scheduling contract.
+	for i := range 51 {
+		project := fmt.Sprintf("prj_page_%d", i)
+		mustExec(t, w.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, $1, $1, $3)`, project, w.org, fmt.Sprintf("P%d", i))
+		mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch) VALUES ($1, $2, $3, 'target', 'https://github.com/acme/target.git', 'main')`, "repo_"+project, w.org, project)
+		mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, preview_branch, attempt, kind, status, wakeable) VALUES ($1, $2, $3, 'main', 1, 'preview', 'paused', true)`, "run_"+project, w.org, project)
+	}
+	for pass, want := range []int{50, 1, 0} {
+		if n, err := w.previews.CheckBranches(context.Background()); err != nil || n != want {
+			t.Fatalf("pass %d: processed %d err=%v, want %d", pass, n, err, want)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND preview_branch = 'main' AND preview_branch_checked_at > now() - interval '1 hour' AND status = 'paused'`, w.org); n != 51 {
+		t.Fatalf("checked %d healthy previews, want 51", n)
+	}
+}
+
 // A push to the branch syncs only that project's preview of that branch;
 // its deletion (a push with deleted, or a delete delivery) ends it.
 func TestBranchEventsSyncAndEndOnlyTheirPreview(t *testing.T) {
@@ -142,7 +311,7 @@ func TestBranchEventsSyncAndEndOnlyTheirPreview(t *testing.T) {
 	w.gh.Branch("feature/b", "main", "b")
 	a, b := w.startBranch("feature/a"), w.startBranch("feature/b")
 
-	if err := w.previews.BranchEvent(ctx, w.org, "acme/target", "feature/a", false); err != nil {
+	if err := w.previews.BranchEvent(ctx, w.org, "acme/target", "feature/a", false, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND sync_wanted_at IS NOT NULL`, a); n != 1 {
@@ -152,14 +321,17 @@ func TestBranchEventsSyncAndEndOnlyTheirPreview(t *testing.T) {
 		t.Errorf("a push to feature/a asked feature/b's preview to sync")
 	}
 	// Another repository's branch of the same name: not this project's.
-	if err := w.previews.BranchEvent(ctx, w.org, "acme/elsewhere", "feature/b", true); err != nil {
+	if err := w.previews.BranchEvent(ctx, w.org, "acme/elsewhere", "feature/b", true, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, b); n != 1 {
 		t.Errorf("another repository's deletion ended feature/b's preview")
 	}
 	web := w.serverID(b, "web")
-	if err := w.previews.BranchEvent(ctx, w.org, "acme/target", "feature/b", true); err != nil {
+	if err := w.gh.DeleteBranch("feature/b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.previews.BranchEvent(ctx, w.org, "acme/target", "feature/b", true, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w.until("feature/b's preview to end", func() bool {
@@ -206,6 +378,11 @@ func TestPushAndDeleteDeliveriesReachBranchPreviews(t *testing.T) {
 		t.Errorf("%d deliveries left unprocessed", n)
 	}
 
+	for _, branch := range []string{"feature/p", "feature/q"} {
+		if err := w.gh.DeleteBranch(branch); err != nil {
+			t.Fatal(err)
+		}
+	}
 	w.webhook("push", map[string]any{"ref": "refs/heads/feature/p", "deleted": true, "repository": repo})
 	w.webhook("delete", map[string]any{"ref": "feature/q", "ref_type": "branch", "repository": repo})
 	w.until("both previews to end in lux", func() bool {
@@ -290,8 +467,8 @@ func TestTheDailyCheckEndsOnlyOnAMissingBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.gh.RefStatus = map[string]int{"feature/c": 502}
-	if n, err := w.previews.CheckBranches(ctx); err != nil || n != 0 {
-		t.Fatalf("a forge error: ended %d, %v", n, err)
+	if n, err := w.previews.CheckBranches(ctx); err != nil || n != 1 {
+		t.Fatalf("a forge error: processed %d, %v", n, err)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'
 		AND preview_branch_checked_at < now() - interval '22 hours'`, runID); n != 1 {

@@ -49,12 +49,20 @@ def test_a_branch_preview_follows_its_branch_and_ends_with_it(client: ApiClient,
     assert "dude.task" not in spec["labels"], spec["labels"]
 
     # A push to the branch: GitHub's push webhook syncs the running preview.
-    fake_github.commit_file("feature/login", "login.txt", "second\n", "Login page, again")
+    expected_sha = fake_github.commit_file("feature/login", "login.txt", "second\n", "Login page, again")
     assert fake_github.send_webhook("push", {"ref": "refs/heads/feature/login", "deleted": False}) in (200, 202)
-    wait_until(lambda: any(e["type"] == "git.sync" for e in lux_events(env, lux_run)), timeout=60,
-               message="the push never synced the running preview")
-    [sync] = [e for e in lux_events(env, lux_run) if e["type"] == "git.sync"][-1:]
-    assert sync["data"]["repo"] == "greeter", sync
+    def pushed_commit_synced():
+        return any(
+            e["type"] == "git.sync"
+            and e["data"].get("repo") == "greeter"
+            and e["data"].get("ref") == "feature/login"
+            and e["data"].get("status") == "fast-forward"
+            and e["data"].get("to") == expected_sha
+            for e in lux_events(env, lux_run)
+        )
+
+    wait_until(pushed_commit_synced, timeout=60,
+               message="the push never synced the preview to the exact pushed branch and commit")
 
     # The branch deleted: GitHub's delete webhook ends it.
     fake_github._git_out("update-ref", "-d", "refs/heads/feature/login")

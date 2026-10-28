@@ -135,7 +135,7 @@ func RegisterWebhooks(ctx context.Context, d *db.DB, gh *forge.GitHub, org strin
 // branchEvent passes a push or delete delivery about a branch on to
 // BranchMoved: a push to refs/heads/<b> (deleted when the push says so),
 // or a delete of ref_type branch. Tags and others are nothing.
-func (s *Syncer) branchEvent(ctx context.Context, org, event string, payload json.RawMessage) error {
+func (s *Syncer) branchEvent(ctx context.Context, org, event string, payload json.RawMessage, receivedAt time.Time) error {
 	if s.BranchMoved == nil {
 		return nil
 	}
@@ -167,7 +167,7 @@ func (s *Syncer) branchEvent(ctx context.Context, org, event string, payload jso
 	if branch == "" || p.Repository.FullName == "" {
 		return nil
 	}
-	return s.BranchMoved(ctx, org, p.Repository.FullName, branch, deleted)
+	return s.BranchMoved(ctx, org, p.Repository.FullName, branch, deleted, receivedAt)
 }
 
 // RepairPerPass is how many repositories the repair asks GitHub about in

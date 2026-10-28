@@ -272,45 +272,92 @@ func (s *Service) StopBranchPreview(ctx context.Context, org, id, actor string, 
 // sweep's sync_wanted_at path); a deletion in the project's primary
 // repository ends them. A deletion elsewhere is a push: that repository
 // goes back to its default branch at the next sync.
-func (s *Service) BranchEvent(ctx context.Context, org, slug, branch string, deleted bool) error {
-	acted := false
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT r.id, r.project_id, rp.url,
-				(SELECT p.url FROM repositories p WHERE p.project_id = r.project_id ORDER BY p.name LIMIT 1)
-			FROM runs r JOIN repositories rp ON rp.project_id = r.project_id
-			WHERE r.preview_branch = $1 AND `+livePreview, branch)
+func (s *Service) BranchEvent(ctx context.Context, org, slug, branch string, deleted bool, receivedAt time.Time) error {
+	type hit struct {
+		ID, ProjectID string
+		Primary       bool
+	}
+	var hits []hit
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		// Filter repository identities first, preserving SlugFromURL's URL
+		// variants without multiplying every live preview by its repositories.
+		rows, err := tx.Query(ctx, `SELECT project_id, url FROM repositories ORDER BY project_id, name`)
 		if err != nil {
 			return err
 		}
-		type hit struct{ ID, ProjectID, URL, Primary string }
-		hits, err := pgx.CollectRows(rows, pgx.RowToStructByPos[hit])
+		type repo struct{ ProjectID, URL string }
+		repos, err := pgx.CollectRows(rows, pgx.RowToStructByPos[repo])
 		if err != nil {
 			return err
 		}
-		for _, h := range hits {
-			if !strings.EqualFold(forge.SlugFromURL(h.URL), slug) {
-				continue
+		projects := []string{}
+		primary := map[string]bool{}
+		last := ""
+		for _, rp := range repos {
+			first := rp.ProjectID != last
+			last = rp.ProjectID
+			if strings.EqualFold(forge.SlugFromURL(rp.URL), slug) {
+				projects = append(projects, rp.ProjectID)
+				primary[rp.ProjectID] = primary[rp.ProjectID] || first
 			}
-			if deleted && h.URL == h.Primary {
+		}
+		if len(projects) == 0 {
+			return nil
+		}
+		rows, err = tx.Query(ctx, `SELECT r.id, r.project_id FROM runs r
+			WHERE r.project_id = ANY($1) AND r.preview_branch = $2 AND `+livePreview+`
+			AND (NOT $3 OR r.created_at <= $4)`, projects, branch, deleted, receivedAt)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var h hit
+			if err := rows.Scan(&h.ID, &h.ProjectID); err != nil {
+				rows.Close()
+				return err
+			}
+			h.Primary = primary[h.ProjectID]
+			hits = append(hits, h)
+		}
+		return rows.Err()
+	}); err != nil {
+		return err
+	}
+	acted := false
+	for _, h := range hits {
+		gone := false
+		if deleted && h.Primary {
+			// Receipt time fences backlog, not deletion time. A delayed receipt
+			// or duplicate can describe a branch that has already been recreated.
+			var err error
+			gone, err = (&Previews{Service: s, Forges: forge.Resolver{DB: s.DB}}).branchGone(ctx, org, h.ProjectID, branch)
+			if err != nil {
+				return err
+			}
+		}
+		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+			if gone {
 				ended, err := endPreviewTx(ctx, tx, org, h.ProjectID, "", h.ID, "branch deleted", ledger.ActorSystem, h.ID)
 				if err != nil {
 					return err
 				}
 				acted = acted || ended
-				continue
+				return nil
 			}
 			tag, err := tx.Exec(ctx, `UPDATE runs r SET sync_wanted_at = now() WHERE r.id = $1 AND r.wakeable AND `+livePreview, h.ID)
 			if err != nil {
 				return err
 			}
 			acted = acted || tag.RowsAffected() > 0
+			return nil
+		}); err != nil {
+			return err
 		}
-		return nil
-	})
-	if err == nil && acted {
+	}
+	if acted {
 		s.kick()
 	}
-	return err
+	return nil
 }
 
 // branchCheckEvery: how often each live branch preview's branch is looked
@@ -321,6 +368,8 @@ const branchCheckEvery = 24 * time.Hour
 // definitely no longer has in the project's primary repository
 // (forge.BranchGone), once per branchCheckEvery each. Any error, or no
 // forge to ask, leaves the preview as it is, to be asked again in an hour.
+// The returned processed count is scheduling progress, not the ended count:
+// healthy full pages must drain without waiting for unrelated loop kicks.
 func (p *Previews) CheckBranches(ctx context.Context) (int, error) {
 	type due struct{ ID, Org, ProjectID, Branch string }
 	var list []due
@@ -360,13 +409,13 @@ func (p *Previews) CheckBranches(ctx context.Context) (int, error) {
 				d.ID, back.Seconds())
 			return uerr
 		}); err != nil {
-			return ended, err
+			return 0, err
 		}
 	}
 	if ended > 0 {
 		p.kick()
 	}
-	return ended, nil
+	return len(list), nil
 }
 
 // branchGone: the forge definitely has no branch in the project's primary

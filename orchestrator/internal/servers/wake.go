@@ -220,6 +220,12 @@ func (p *Previews) sweepWakeable(ctx context.Context) (int, error) {
 		go func() {
 			defer func() { <-slots; wg.Done() }()
 			did, err := p.advanceWakeable(ctx, r)
+			if errors.Is(err, errPrimaryBranchGone) {
+				// Ref resolution already ended this exact run. Drain its normal
+				// cleanup immediately, rather than backing off an ended preview.
+				acted.Add(1)
+				return
+			}
 			if err != nil {
 				p.Log.Warn("wakeable preview sync failed", "run", r.ID, "error", err)
 				if rerr := p.retryLater(ctx, r.previewRun); rerr != nil {
