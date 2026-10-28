@@ -31,6 +31,7 @@ export function fixtureScenario(): FixtureScenario | null {
   // Both read before either is taken off the address.
   const fixtures = remember("fixtures", KEY);
   const run = remember("run", RUN_KEY);
+  remember("step", "dude.fixtures.automationStep");
   // The parameters have done their work; the hash is the app's own.
   if (fixtures || run) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
   const stored = localStorage.getItem(KEY);

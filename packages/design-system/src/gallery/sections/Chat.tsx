@@ -23,6 +23,7 @@ import { DeciderField, type NextDecider } from "../../components/DeciderField.ts
 import { AttemptDivider, EarlierTurns } from "../../components/AttemptDivider.tsx";
 import { ImagesBlock } from "./ChatImages.tsx";
 import { Button, IconButton } from "../../primitives/Button.tsx";
+import { Icon } from "../../icons/index.tsx";
 import { ACTIVITY_KINDS, ACTIVITY_SPECS } from "../../tokens/activity.ts";
 import { at } from "../fixtures.tsx";
 import {
@@ -441,6 +442,23 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
             <div style={{ border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-control)", overflow: "hidden" }}>
               <ChatComposer mode="chat" sentAs="Márcio" to={<>To <b>Conductor</b> · read-only</>} onSubmit={() => undefined} />
             </div>
+          </Col>
+        </Panes>
+      </Block>
+
+      <Block
+        id="ch-role-label"
+        title="An agent that is no role: roleLabel"
+        note="An automation's turn is kind agent with a face of the app's own (avatar) and its name; roleLabel puts the muted word after the name in place of its role's: Automation, not a role it does not have. Without roleLabel the role's word stays."
+      >
+        <Panes mode={mode} surface>
+          <Col>
+            <ChatMessage role="investigator" name="Weekly PR digest" roleLabel="Automation" startedAt={at(0)}
+              avatar={<span role="img" aria-label="Automation" style={{ display: "grid", placeItems: "center", width: "100%", height: "100%",
+                background: "var(--ds-color-sunken)", border: "1px solid var(--ds-color-border-subtle)", borderRadius: "var(--ds-radius-face-agent)" }}>
+                <Icon name="zap" size={14} /></span>}
+              content="Getting this week's numbers from `pr-stats` first, then I'll write the digest for #engineering." />
+            <ChatMessage role="investigator" name="Weekly PR digest" startedAt={at(4_000)} content="Without roleLabel: the role's word." />
           </Col>
         </Panes>
       </Block>

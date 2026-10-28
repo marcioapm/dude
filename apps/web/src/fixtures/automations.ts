@@ -7,7 +7,8 @@
 import type { Automation, AutomationInput, AutomationPromptVersion, AutomationRun, AutomationRunDetail, AutomationRunsResponse, AutomationToolCall, EventSubscriptions, EventVerdict, NewAutomation, PastDelivery, RunNow } from "@dude/domain";
 import { automationDefaults, parseCron, repoFilterAllows } from "@dude/domain";
 import { ORG, PEOPLE, PROJECT } from "./data.ts";
-import { ALERT_RUNS, alertRunDetail, deliveriesOf, evaluateIncomingFixture, FIXTURE_SECRET, incomingAutomations } from "./incoming.ts";
+import { ALERT_RUNS, alertRunDetail, alertSentBodies, deliveriesOf, evaluateIncomingFixture, FIXTURE_SECRET, incomingAutomations } from "./incoming.ts";
+import { ACTIVITY_RUNS, scheduledFor, serverRun } from "./automationActivity.ts";
 
 const promptOf = (agent: Automation["agent"]): string | null => (!agent ? null : "own" in agent ? agent.own.prompt : agent.brief);
 
@@ -103,12 +104,16 @@ const RUNS: Record<string, AutomationRun[]> = {
       runId: null, startedBy: null, costUsd: null, createdAt: iso(14 * MIN), startedAt: null, endedAt: iso(14 * MIN), event: "pull_request", action: "opened", payloadCount: 1 },
   ],
   aut_audit: [
+    ...ACTIVITY_RUNS["aut_audit"]!,
     { id: "arn_a1", automationId: "aut_audit", status: "failed", reason: "the agent's turn failed: the registry did not answer", source: "schedule",
       session: "resumed", runId: null, startedBy: null, costUsd: 0.84, createdAt: iso(21 * 60 * MIN), startedAt: iso(21 * 60 * MIN),
       endedAt: iso(21 * 60 * MIN - 6 * MIN), event: null, action: null, payloadCount: 0 },
   ],
   aut_alert: ALERT_RUNS,
+  aut_cost: ACTIVITY_RUNS["aut_cost"]!,
+  aut_changelog: ACTIVITY_RUNS["aut_changelog"]!,
   aut_digest: [
+    ...ACTIVITY_RUNS["aut_digest"]!,
     { id: "arn_d1", automationId: "aut_digest", status: "succeeded", reason: null, source: "schedule", session: "ephemeral", runId: null,
       startedBy: null, costUsd: 0.44, createdAt: iso(DIGEST_AGO), startedAt: iso(DIGEST_AGO), endedAt: iso(DIGEST_AGO - 4 * MIN), event: null,
       action: null, payloadCount: 0 },
@@ -301,10 +306,19 @@ export class FixtureAutomations {
   run(id: string, runId: string): AutomationRunDetail {
     const r = (this.runs[id] ?? []).find((x) => x.id === runId);
     if (!r) throw new Error(`no run ${runId}`);
-    if (id === "aut_alert") return alertRunDetail(r);
+    const facts = { scheduledFor: scheduledFor(r) };
+    if (id === "aut_alert") return { ...alertRunDetail(r), ...facts, sentBodies: alertSentBodies(r) };
+    // A run's detail with nothing recorded beyond its row.
+    const bare = { ...r, ...facts, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
+      stopReason: null, requests: [], toolCalls: [], failedCallId: null };
     if (id === "aut_digest") {
-      return { ...r, payloads: [], payloadsPurged: false, logTail: null, exitCode: null, containerStartedAt: null, containerStoppedAt: null,
-        stopReason: null, requests: [], toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null };
+      return { ...bare, toolCalls: DIGEST_CALLS[runId] ?? [], failedCallId: runId === "arn_d0" ? "evt_d0" : null,
+        ...(runId === "arn_d3" && localStorage.getItem("dude.fixtures.automationStep") === "posted"
+          ? { live: { message: "Posted this week's digest to #engineering: 41 merged (+5 on last week), median time to merge", output: {} } } : {}) };
+    }
+    if (id === "aut_cost" || id === "aut_audit") return bare;
+    if (id === "aut_changelog") {
+      return { ...bare, ...serverRun(runId), payloads: [{ deliveryId: "d6f2a1c0-0101", event: "pull_request", action: "closed", body: { action: "closed", number: 214 } }] };
     }
     return { ...r, payloads: [{ deliveryId: DELIVERIES[0]!.id, event: "pull_request", action: "opened", body: DELIVERIES[0]!.body }],
       payloadsPurged: false, logTail: "Labelled #214: area/checkout.", exitCode: null, containerStartedAt: null, containerStoppedAt: null,

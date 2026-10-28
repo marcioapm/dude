@@ -185,6 +185,17 @@ func (sv *server) logf(stream, format string, a ...any) {
 	sv.log = append(sv.log, logLine{T: time.Now().UnixMilli(), Stream: stream, Text: fmt.Sprintf(format, a...)})
 }
 
+// ServerPrint is a Run's server writing text to its log now, as its process would.
+func (s *Server) ServerPrint(runID, name, stream, text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[runID]; run != nil {
+		if sv := run.server(name); sv != nil {
+			sv.logf(stream, "%s", text)
+		}
+	}
+}
+
 // startServer starts a server in the Run's current placement: "starting",
 // then ready or exited as its command says. Callers hold s.mu.
 func (s *Server) startServer(run *Run, sv *server) {

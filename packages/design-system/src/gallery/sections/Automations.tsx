@@ -16,8 +16,13 @@ import {
   type RepoFilterValue,
 } from "../../components/Automations.tsx";
 import { ConditionRows, DeliveryVerdict, IncomingVerdictPanel, type TriggerCondition } from "../../components/Incoming.tsx";
+import { FeedDelivery } from "../../components/FeedDelivery.tsx";
 import { CodeWell } from "../../components/CodeWell.tsx";
 import { SettingRow } from "../../components/Settings.tsx";
+
+const FEED_AT = "2026-10-27T12:04:00Z";
+const FEED_BODY = { status: "resolved", groupKey: "{}:{alertname=\"HighErrorRate\"}",
+  commonLabels: { alertname: "HighErrorRate", service: "checkout-api", severity: "critical" } };
 
 /*
  * Automations' pieces with made-up names: Acme's projects and people. The
@@ -196,6 +201,22 @@ export function AutomationsSection({ mode }: { readonly mode: PaneMode }) {
             <Label>CodeWell: a curl, and a URL inline</Label>
             <CodeWell>{"curl -X POST https://dude.example.com/v1/hooks/hk_7f3a9c21e4b04d18 \\\n  -H 'Content-Type: application/json' \\\n  --data '{\"status\":\"firing\"}'"}</CodeWell>
             <span>POST to <CodeWell inline>https://dude.example.com/v1/hooks/hk_7f3a9c21e4b04d18</CodeWell></span>
+          </Col>
+        </Panes>
+      </Block>
+      <Block id="au-feed-delivery" title="FeedDelivery" note="A delivery sent to a running agent, in its transcript where it arrived: the info tint and rail, what it was, its id (a button when it opens the delivery), the time; the chevron shows the delivery's body. Below 480px of its container the id hides.">
+        <Panes mode={mode} surface>
+          <Col>
+            <Label>Folded</Label>
+            <FeedDelivery at={FEED_AT} deliveryId="dlv_9Wm3PzQ1" summary="resolved · HighErrorRate · checkout-api" body={FEED_BODY} source="incoming" onOpen={() => undefined} />
+            <Label>Open</Label>
+            <FeedDelivery at={FEED_AT} deliveryId="dlv_9Wm3PzQ1" summary="resolved · HighErrorRate · checkout-api" body={FEED_BODY} source="incoming" onOpen={() => undefined} defaultOpen />
+            <Label>Without onOpen (a GitHub event)</Label>
+            <FeedDelivery at={FEED_AT} deliveryId="5c2b7e10-a3f1" summary="pull_request synchronize" body={{ action: "synchronize", number: 4182 }} source="github" />
+            <Label>At 390px</Label>
+            <div style={{ width: 390 }}>
+              <FeedDelivery at={FEED_AT} deliveryId="dlv_9Wm3PzQ1" summary="resolved · HighErrorRate · checkout-api" body={FEED_BODY} source="incoming" onOpen={() => undefined} />
+            </div>
           </Col>
         </Panes>
       </Block>

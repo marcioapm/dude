@@ -28,6 +28,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 )
@@ -506,7 +507,73 @@ func holdFollowUp(ctx context.Context, tx pgx.Tx, runID string, p Payload) (bool
 	ref, _ := json.Marshal([]Payload{{DeliveryID: p.DeliveryID, Event: p.Event, GroupKey: p.GroupKey}})
 	tag, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb
 		WHERE id = $1 AND jsonb_array_length(payloads) < $3`, runID, ref, FollowUpCap)
-	return tag.RowsAffected() == 1, err
+	if err != nil || tag.RowsAffected() == 0 {
+		return false, err
+	}
+	return true, followUpArrived(ctx, tx, runID, p)
+}
+
+// EvFollowUp is a delivery added to a running run, in its activity where
+// it arrived: {deliveryId, source (incoming|github), event, action, groupKey, summary}.
+// The body is not copied: the page reads it from the delivery.
+const EvFollowUp = "automation.delivery.sent"
+
+// followUpArrived records p reaching runID while it runs; a run still
+// queued starts with it and records nothing.
+func followUpArrived(ctx context.Context, tx pgx.Tx, runID string, p Payload) error {
+	var org, project string
+	err := tx.QueryRow(ctx, `SELECT r.organization_id, COALESCE(a.project_id, '') FROM automation_runs r JOIN automations a ON a.id = r.automation_id
+		WHERE r.id = $1 AND r.status = 'running'`, runID).Scan(&org, &project)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	source := "github"
+	if p.Event == EventIncoming {
+		source = "incoming"
+	}
+	payload := map[string]any{"deliveryId": p.DeliveryID, "source": source, "event": p.Event, "summary": followUpSummary(p)}
+	if p.Action != "" {
+		payload["action"] = p.Action
+	}
+	if p.GroupKey != "" {
+		payload["groupKey"] = p.GroupKey
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvFollowUp, OrganizationID: org, ProjectID: project, AutomationRunID: runID,
+		ActorType: ledger.ActorIntegration, ActorID: p.DeliveryID, Source: "orchestrator", Payload: payload})
+	return err
+}
+
+// followUpSummary is what a delivery was, in a few words: an alert's
+// status, name and service, or the GitHub event and action.
+func followUpSummary(p Payload) string {
+	if p.Event != EventIncoming {
+		return strings.TrimSpace(p.Event + " " + p.Action)
+	}
+	var b struct {
+		Status string `json:"status"`
+		Alerts []struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"alerts"`
+		CommonLabels map[string]string `json:"commonLabels"`
+	}
+	_ = json.Unmarshal(p.Body, &b)
+	labels := b.CommonLabels
+	if len(b.Alerts) > 0 && len(labels) == 0 {
+		labels = b.Alerts[0].Labels
+	}
+	var parts []string
+	for _, s := range []string{b.Status, labels["alertname"], cmp.Or(labels["service"], labels["job"])} {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return cmp.Or(p.GroupKey, "a delivery")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // resolveIncoming reads the bodies of the incoming deliveries a run holds by

@@ -349,7 +349,7 @@ describe("runs", () => {
     const { body: a } = await create("ana", { name: "Weekly PR digest" });
     await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_d', ${ORG}, ${a.id}, 'succeeded', 'schedule')`;
     const ev = (id: string, type: string, at: string, payload: Record<string, unknown>) =>
-      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, automation_run_id, payload)
         VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_d', 'orchestrator', ${at}::timestamptz, 'arn_d', ${{ ...payload, automationRunId: "arn_d" }})`;
     await ev("evt_d1", "agent.tool.dude", "2026-10-23T15:00:05Z", { tool: "github_comment", arguments: { issue: 12, body: "Looks good" }, result: {} });
     await ev("evt_d2", "agent.tool.attempted", "2026-10-23T15:03:12Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" } });
@@ -360,8 +360,9 @@ describe("runs", () => {
     await ev("evt_d4a", "agent.tool.attempted", "2026-10-23T15:03:59.700Z", { tool: "post_to_chat", arguments: { channel: "#random", text: "x" } });
     await ev("evt_d5", "slack.message.refused", "2026-10-23T15:04:00Z", { tool: "post_to_chat", channel: "#random",
       error: "dude's Slack bot is not in #random: ask someone in the channel to run /invite @dude" });
-    // Another run's event is not this run's, whatever its payload says: calls are read by run_id.
-    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+    // Another run's event is not this run's, whatever its payload says: calls are read by automation_run_id.
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES ('arn_x', ${ORG}, ${a.id}, 'succeeded', 'schedule')`;
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, automation_run_id, payload)
       VALUES ('evt_x1', ${ORG}, 'agent.tool.dude', 'agent', 'arn_x', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_x',
         ${{ tool: "github_search", arguments: {}, result: {}, automationRunId: "arn_d" }})`;
     const run = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_d`));
@@ -375,17 +376,43 @@ describe("runs", () => {
     expect(run.failedCallId).toBeNull();
   });
 
+  test("a refused call is one failed call: its own refusal event stands for it, and a refusal with none is failed with its error", async () => {
+    const { body: a } = await create("ana", { name: "Refusals once" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES
+      ('arn_rf', ${ORG}, ${a.id}, 'failed', 'post_to_chat failed: Slack is not connected for Acme', 'schedule')`;
+    const ev = (id: string, type: string, at: string, payload: Record<string, unknown>) =>
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, automation_run_id, payload)
+        VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_rf', 'orchestrator', ${at}::timestamptz, 'arn_rf', ${{ ...payload, automationRunId: "arn_rf" }})`;
+    // What agenttools writes for a refused post: its refusal, then the call's record naming it.
+    await ev("evt_rf1", "slack.message.refused", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
+      reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app" });
+    await ev("evt_rf2", "agent.tool.dude", "2026-10-23T15:03:00.010Z", { tool: "post_to_chat", arguments: { channel: "#engineering", text: "*Digest*" },
+      error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app", attempted: true, refusalEventId: "evt_rf1" });
+    // A call refused with no event of its own: only its record says so.
+    await ev("evt_rf3", "agent.tool.dude", "2026-10-23T15:04:00Z", { tool: "github_comment", arguments: { issue: 3, body: "x" },
+      error: "automation run is no longer active or the tool is outside its scope", attempted: true });
+    await ev("evt_rf4", "automation.run.failed_on_post", "2026-10-23T15:05:00Z", { automationId: a.id, automationRunId: "arn_rf", eventId: "evt_rf1" });
+    const run = await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_rf`));
+    expect(run.toolCalls).toEqual([
+      { id: "evt_rf1", tool: "post_to_chat", at: "2026-10-23T15:03:00.000Z", status: "failed", args: { channel: "#engineering" }, durationMs: null,
+        error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app", posted: null },
+      { id: "evt_rf3", tool: "github_comment", at: "2026-10-23T15:04:00.000Z", status: "failed", args: { issue: 3 }, durationMs: null,
+        error: "automation run is no longer active or the tool is outside its scope", posted: null },
+    ]);
+    expect(run.failedCallId).toBe("evt_rf1");
+  });
+
   test("a run failed on a post without Slack names the call it failed on; a refusal the agent could fix names none", async () => {
     const { body: a } = await create("ana", { name: "Digest without Slack" });
     await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source) VALUES
       ('arn_ns', ${ORG}, ${a.id}, 'failed', 'post_to_chat failed: Slack is not connected for Acme', 'schedule'),
       ('arn_fx', ${ORG}, ${a.id}, 'failed', 'the agent gave up', 'schedule')`;
     const ev = (id: string, run: string, at: string, payload: Record<string, unknown>) =>
-      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, automation_run_id, payload)
         VALUES (${id}, ${ORG}, 'slack.message.refused', 'agent', ${run}, 'orchestrator', ${at}::timestamptz, ${run}, ${{ ...payload, automationRunId: run }})`;
     await ev("evt_ns1", "arn_ns", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
       reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme: an organisation admin adds dude's Slack app" });
-    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, automation_run_id, payload)
       VALUES ('evt_ns2', ${ORG}, 'agent.tool.dude', 'agent', 'arn_ns', 'orchestrator', '2026-10-23T15:04:00Z', 'arn_ns',
         ${{ tool: "github_search", arguments: { q: "is:pr" }, result: {}, automationRunId: "arn_ns" }})`;
     await ev("evt_fx1", "arn_fx", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#nowhere", error: "there is no channel #nowhere" });
@@ -394,12 +421,12 @@ describe("runs", () => {
       ('arn_lt', ${ORG}, ${a.id}, 'failed', 'the agent gave up', 'schedule')`;
     await ev("evt_lt1", "arn_lt", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
       reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme" });
-    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, automation_run_id, payload)
       VALUES ('evt_lt2', ${ORG}, 'slack.message.posted', 'agent', 'arn_lt', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_lt',
         ${{ channel: "#engineering", permalink: "https://acme.slack.com/archives/C1/p2", automationRunId: "arn_lt" }})`;
     expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_lt`))).failedCallId).toBeNull();
     // The orchestrator records the refusal it failed the run on; the page names that one.
-    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, run_id, payload)
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, occurred_at, automation_run_id, payload)
       VALUES ('evt_ns3', ${ORG}, 'automation.run.failed_on_post', 'system', 'dude', 'orchestrator', '2026-10-23T15:05:00Z', 'arn_ns',
         ${{ automationId: a.id, automationRunId: "arn_ns", eventId: "evt_ns1" }})`;
     expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_ns`))).failedCallId).toBe("evt_ns1");
@@ -410,6 +437,54 @@ describe("runs", () => {
     await ev("evt_to1", "arn_to", "2026-10-23T15:03:00Z", { tool: "post_to_chat", channel: "#engineering", code: "not_connected",
       reason: "Slack is not connected for Acme", error: "Slack is not connected for Acme" });
     expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_to`))).failedCallId).toBeNull();
+  });
+
+  test("a running row's now: is its newest call not finished, and goes when that call completes", async () => {
+    const { body: a } = await create("ana", { name: "Now line" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source, started_at) VALUES
+      ('arn_now', ${ORG}, ${a.id}, 'running', 'schedule', now())`;
+    const ev = (id: string, type: string, payload: Record<string, unknown>) =>
+      owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, automation_run_id, payload)
+        VALUES (${id}, ${ORG}, ${type}, 'agent', 'arn_now', 'runner', 'arn_now', ${payload})`;
+    const open = (ids: string[]) => owner`UPDATE automation_runs SET feed_state = ${{ open: ids }} WHERE id = 'arn_now'`;
+    const now = async () => (await body(await call("bo", "GET", `/v1/automations/${a.id}/runs`))).runs.find((r: { id: string }) => r.id === "arn_now").now;
+    expect(await now()).toBeNull();
+    await ev("evt_n1", "agent.tool.called", { tool: "read", callId: "c1", input: { filePath: "go.mod" } });
+    await ev("evt_n2", "agent.tool.called", { tool: "bash", callId: "c2", input: { command: "pr-stats --org acme --since 7d --format json" } });
+    await open(["c1", "c2"]);
+    expect(await now()).toEqual({ tool: "bash", args: { command: "pr-stats --org acme --since 7d --format json" } });
+    await ev("evt_n3", "agent.tool.completed", { tool: "bash", callId: "c2", status: "completed" });
+    await open(["c1"]);
+    expect(await now()).toEqual({ tool: "read", args: { filePath: "go.mod" } });
+    await owner`UPDATE automation_runs SET feed_state = ${{ open: ["c1"], message: "Grouping by",
+      harness: { partialTools: { c1: { output: { head: "{\"merged\": 12" } } } } }} WHERE id = 'arn_now'`;
+    const [{ newest }] = await owner`SELECT max(cursor)::int AS newest FROM events WHERE automation_run_id = 'arn_now'`;
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_now`))).live)
+      .toEqual({ message: "Grouping by", output: { c1: { output: { head: "{\"merged\": 12" } } }, cursor: newest });
+    await owner`UPDATE automation_runs SET status='succeeded' WHERE id='arn_now'`;
+    expect((await body(await call("bo", "GET", `/v1/automations/${a.id}/runs/arn_now`))).live).toBeNull();
+    await open(["c1"]);
+    expect(await now()).toBeNull();
+    await open([]);
+    expect(await now()).toBeNull();
+  });
+
+  test("an automation run's activity: by cursor, only that run's, and not another organisation's", async () => {
+    const { body: a } = await create("ana", { name: "Activity" });
+    await owner`INSERT INTO automation_runs (id, organization_id, automation_id, status, source) VALUES
+      ('arn_f1', ${ORG}, ${a.id}, 'running', 'schedule'), ('arn_f2', ${ORG}, ${a.id}, 'running', 'schedule')`;
+    await owner`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, automation_run_id, payload) VALUES
+      ('evt_f1', ${ORG}, 'agent.message', 'agent', 'arn_f1', 'runner', 'arn_f1', '{"text":"Getting the numbers."}'),
+      ('evt_f2', ${ORG}, 'agent.message', 'agent', 'arn_f2', 'runner', 'arn_f2', '{"text":"another run"}'),
+      ('evt_f3', ${ORG}, 'agent.tool.called', 'agent', 'arn_f1', 'runner', 'arn_f1', '{"tool":"bash","callId":"c1"}')`;
+    const read = await body(await call("bo", "GET", "/v1/events?automationRunId=arn_f1"));
+    expect(read.events.map((e: { eventId: string; automationRunId: string }) => [e.eventId, e.automationRunId]))
+      .toEqual([["evt_f1", "arn_f1"], ["evt_f3", "arn_f1"]]);
+    const after = await body(await call("bo", "GET", `/v1/events?automationRunId=arn_f1&after=${read.events[0].cursor}`));
+    expect(after.events.map((e: { eventId: string }) => e.eventId)).toEqual(["evt_f3"]);
+    // Another organisation's member is told there is no such run, on the history and on the stream.
+    expect((await call("di", "GET", "/v1/events?automationRunId=arn_f1")).status).toBe(404);
+    expect((await call("di", "GET", "/v1/events/stream?automationRunId=arn_f1")).status).toBe(404);
   });
 
   test("Run now, test-event evaluation and Start fresh go to the orchestrator as the person; members who neither edit nor own it are refused", async () => {

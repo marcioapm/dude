@@ -914,17 +914,61 @@ their creator.
   that failed for another reason (timed out, crashed, cancelled) has none.
   The page's Tools card shows the attention callout on post_to_chat's row,
   linking Organisation settings → Chat.
-- **A run's tool calls.** `GET /v1/automations/:id/runs/:runId` carries
-  `toolCalls`, read by the run's `run_id` from its ledger events
+- **A run's activity** (migrations 217–218; `phases/automation_feed.go`,
+  `screens/automationFeed.tsx`). An automation run's ledger rows are keyed
+  by `events.automation_run_id`, never with a `run_id`, `session_id` or
+  `task_id` beside it (`events_automation_run_scope`), indexed
+  `(automation_run_id, cursor)`; the tool server writes its records there
+  too. An agent's lux frames go through the Run's translator
+  (`phases.AutomationFeed` wraps it: the same `agent.message`,
+  `agent.thought`, `agent.tool.called` / `agent.tool.completed` and
+  payloads, tool output capped head/tail as a Run's); the Run-only parts —
+  turn state, resume timing, failing a turn — are the automations loop's.
+  What it holds between batches is `automation_runs.feed_state`. A
+  completion of one of dude's tools carries the tool server's record as
+  `dude {eventId, result, posted, error}`. Records match the tool and exact
+  normalized JSON arguments, with consumed record ids kept independently
+  of completion order. MCP request ids are not harness call ids; calls
+  without matching arguments never consume a record. Refusals carry their
+  arguments too; a refused post's completion is `error`. When the
+  lux Run ends, a call still open is completed `aborted` with a `note`
+  ("Stopped by the time limit."). A command's stdout and stderr become
+  `automation.log.line {stream, text}` (one a line, cut at 4 KB) and its
+  end `automation.log.exited {exitCode}`; a server's container log is read
+  each pass and its lines recorded once (`server: true`, at the line's
+  time). A delivery added to a running run (its group's, Merge, Send) is
+  `automation.delivery.sent {deliveryId, source, event, action, groupKey,
+  summary}` at its arrival; its body stays on the delivery. `log_tail` is
+  still written as before: the CLI and older runs read it. A firing that
+  queues a run records `automation.run.queued`, and the run's start (its
+  lux Run claimed) `automation.run.started`, each `{automationId,
+  automationRunId}`: the runs list re-reads on them for a run it has not read.
+  `GET /v1/events?automationRunId=` and its stream (`/v1/events/stream`)
+  read one run's activity, for whoever reads the run (another
+  organisation's run is a 404). `GET …/runs/:runId` also carries
+  `scheduledFor` and `sentBodies` (what each sent delivery gave the agent);
+  `GET …/runs` gives a running row `now: {tool, args}`, its newest call
+  still open (`feed_state.open`). The page: the Run section's trigger is
+  one line (a schedule's due time and how late it started; an incoming
+  delivery, its conditions and "N later deliveries sent to this run",
+  group key and payload folded); an agent's Activity is a headerless
+  `ChatTranscript` drawn by the Run page's renderer
+  (`screens/transcriptTurns.tsx`: `renderTurn`, `asides`), signed with the
+  automation's name, "Automation" (`ChatMessage roleLabel`) and its face
+  (`AutomationFace`); a post's card says "Posted to #channel · Open the
+  message in Slack"; deliveries are `FeedDelivery` rows where they arrived.
+  Live, it follows the tail in a scroller of its own; ended, it flows with
+  the page. A command's Output and a server's Container log are a
+  `LogStream`, live. A run from before 216 shows its `log_tail`.
+- **A run's tool calls.** `GET /v1/automations/:id/runs/:runId` still carries
+  `toolCalls`, read by `automation_run_id` from its ledger events
   (`agent.tool.dude`, the attempt before it for its duration, and the
   post/refusal events above), and `failedCallId`, the refusal the run failed
   on (that event's `eventId`, else null); a post's text is never repeated
-  there. The run detail shows them under Log, each a `ToolCallCard` beside
-  its time (`ToolCallRow`): a post with `icon="slack"`, its answer when
-  opened, and "Posted to **#channel** · Open the message in Slack", a refused
-  call with its error; the call named by `failedCallId` gets a danger callout
-  under Run, saying "Nothing was posted" when no call on the run posted and
-  "That message was not posted" otherwise. The Tools card's list is
+  there. The call named by `failedCallId` gets a danger callout under Run,
+  saying "Nothing was posted" when no call on the run posted and "That
+  message was not posted" otherwise; any other failure's reason is the
+  same callout. The Tools card's list is
   the app's copy of the orchestrator's (`tool-lists-automation.golden.md`).
 - **Prompt editor and history.** Own prompt and preset brief both use
   `MarkdownDocument`, `{{ }}` inserting `AUTOMATION_PROMPT_VARIABLES`.
@@ -1079,7 +1123,9 @@ their creator.
     against the conditions (`test-event/evaluate` answers per condition).
     A run's detail names the delivery that started it, its group, and the
     later deliveries sent to it.
-- **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90;
+- **Retention.** Deliveries and runs' payloads are kept 30 days, run logs 90
+  — a run's activity (its `automation_run_id` events) with its log: the
+  events go first, in batches, then `log_tail` once none is left;
   an incoming delivery's body and headers 30 days (then its row is deleted
   unless a run holds it), a refused one's row 7 and the per-hour refusal
   counts 7 (`automations.Retain`, hourly).
@@ -1556,7 +1602,8 @@ In rough priority order.
 | Change what an agent is told | `orchestrator/internal/delivery/agents/` (its README), composed by `prompts.go` |
 | Change what lux is asked to run | `orchestrator/internal/phases/spec.go` |
 | Change what a branch preview runs, or when it parks | `orchestrator/internal/servers/previews.go` |
-| Change what an agent's output becomes in the ledger | `orchestrator/internal/phases/translate.go` |
+| Change what an agent's output becomes in the ledger | `orchestrator/internal/phases/translate.go` (a Run's and, through `automation_feed.go`, an automation run's) |
+| Change how a transcript's turns are drawn | `apps/web/src/screens/transcriptTurns.tsx` (Run page, sessions, an automation run's activity) |
 | Change how a finished phase is collected | `finish` and `publish` in `orchestrator/internal/phases/sync.go` |
 | Change what wakes an agent on a PR | `orchestrator/internal/forge/classify.go` |
 | Change how findings are parsed | `orchestrator/internal/delivery/findings.go` |

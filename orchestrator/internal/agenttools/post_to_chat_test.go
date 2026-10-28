@@ -129,6 +129,15 @@ func TestPostToChatWithoutSlackSaysItIsNotConnected(t *testing.T) {
 		!strings.HasPrefix(said, "Slack is not connected for Acme") || code != agenttools.PostNotConnected || reason != "Slack is not connected for Acme" {
 		t.Errorf("the refusal on the run: %q %q %q %v", said, code, reason, err)
 	}
+	// The call's own record names that refusal, so a reader lists the call once.
+	var refusals, records int
+	if err := c.owner.QueryRow(context.Background(), `SELECT
+		  (SELECT count(*) FROM events WHERE event_type = $1 AND automation_run_id = 'arn_digest'),
+		  (SELECT count(*) FROM events d WHERE d.event_type = $2 AND d.automation_run_id = 'arn_digest'
+		     AND d.payload->>'refusalEventId' = (SELECT id FROM events WHERE event_type = $1 AND automation_run_id = 'arn_digest'))`,
+		agenttools.EvSlackPostRefused, agenttools.EventType).Scan(&refusals, &records); err != nil || refusals != 1 || records != 1 {
+		t.Errorf("refusals %d, records naming it %d: %v", refusals, records, err)
+	}
 }
 
 func TestPostToChatOutsideTheBotsChannelsSaysHowToInviteIt(t *testing.T) {
@@ -308,7 +317,7 @@ func TestPostToChatWithARevokedInstallationSaysItIsNotConnected(t *testing.T) {
 			}
 			var code, reason string
 			if err := c.owner.QueryRow(context.Background(), `SELECT payload->>'code', payload->>'reason' FROM events WHERE event_type = $1
-				AND run_id = 'arn_digest'`, agenttools.EvSlackPostRefused).Scan(&code, &reason); err != nil ||
+				AND automation_run_id = 'arn_digest'`, agenttools.EvSlackPostRefused).Scan(&code, &reason); err != nil ||
 				code != agenttools.PostNotConnected || reason != "Slack is not connected for Acme" {
 				t.Errorf("the refusal on the run: %q %q %v", code, reason, err)
 			}
@@ -449,7 +458,7 @@ func TestPostToChatSaysToTryAgainWhenSlackIsBusy(t *testing.T) {
 		t.Fatalf("rate-limited: %d %v", status, out)
 	}
 	var attempts int
-	if err := c.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE run_id = 'arn_digest' AND event_type = $1
+	if err := c.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE automation_run_id = 'arn_digest' AND event_type = $1
 		AND payload->>'tool' = 'post_to_chat'`, agenttools.AttemptEventType).Scan(&attempts); err != nil || attempts != 1 {
 		t.Errorf("attempts recorded: %d %v", attempts, err)
 	}
@@ -504,13 +513,52 @@ func TestPostToChatLookupRefusalsCountTowardTheMinutesCalls(t *testing.T) {
 func TestPostToChatCountsAPostSlackRefusedOnceTowardTheMinute(t *testing.T) {
 	c := setupChat(t, true)
 	for i := range 30 {
-		mustExec(t, c.owner, `INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, run_id, payload) VALUES
+		mustExec(t, c.owner, `INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, automation_run_id, payload) VALUES
 			($1, $3, $4, 'agent', 'arn_digest', 'orchestrator', 'arn_digest', '{"tool":"github_comment"}'),
 			($2, $3, $5, 'agent', 'arn_digest', 'orchestrator', 'arn_digest', '{"tool":"post_to_chat","channel":"#engineering"}')`,
 			fmt.Sprintf("evt_att%02d", i), fmt.Sprintf("evt_ref%02d", i), c.org, agenttools.AttemptEventType, agenttools.EvSlackPostRefused)
 	}
 	if status, out := c.postToChat(t, "#engineering", "30 calls this minute"); status != 200 {
 		t.Fatalf("after 30 calls and their 30 refusals: %d %v", status, out)
+	}
+}
+
+// Calls past the run's ten posts are refused, and recorded, until they have
+// spent the run's 60 calls a minute; past those they write nothing.
+func TestPostToChatRefusedPastTenPostsSpendTheMinutesCalls(t *testing.T) {
+	c := setupChat(t, true)
+	for i := range 10 {
+		if status, out := c.postToChat(t, "#engineering", fmt.Sprintf("post %d", i+1)); status != 200 {
+			t.Fatalf("post %d: %d %v", i+1, status, out)
+		}
+	}
+	perRun, limited := 0, 0
+	for i := range 120 {
+		status, out := c.postToChat(t, "#engineering", fmt.Sprintf("more %d", i))
+		said := fmt.Sprint(out["error"])
+		switch {
+		case status == 422 && strings.HasPrefix(said, "post_to_chat is limited to 10 messages per run"):
+			perRun++
+		case status == 422 && strings.HasPrefix(said, "too many calls: at most 60 a minute"):
+			limited++
+		default:
+			t.Fatalf("call %d past the ten: %d %v", i, status, out)
+		}
+	}
+	var refusals, records int
+	if err := c.owner.QueryRow(context.Background(), `SELECT
+		count(*) FILTER (WHERE event_type = $1),
+		count(*) FILTER (WHERE event_type = $2 AND payload->>'attempted' = 'true' AND payload ? 'error')
+		FROM events WHERE automation_run_id = 'arn_digest' AND occurred_at > now() - interval '1 minute'`,
+		agenttools.EvSlackPostRefused, agenttools.EventType).Scan(&refusals, &records); err != nil {
+		t.Fatal(err)
+	}
+	if perRun+10 > 60 || limited != 120-perRun || refusals != perRun || records != perRun {
+		t.Fatalf("120 calls past the ten: %d refused per run, %d for the budget; %d refusals and %d records written",
+			perRun, limited, refusals, records)
+	}
+	if n := len(c.fake.BotMessages()); n != 10 {
+		t.Errorf("%d messages reached Slack, want 10", n)
 	}
 }
 

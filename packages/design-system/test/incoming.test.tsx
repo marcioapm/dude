@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describeCondition } from "@dude/domain";
 import { ConditionRows, conditionWords, DeliveryVerdict, IncomingVerdictPanel, type TriggerCondition } from "../src/components/Incoming.tsx";
 import { CodeWell } from "../src/components/CodeWell.tsx";
+import { FeedDelivery } from "../src/components/FeedDelivery.tsx";
 import { SettingsDisclosure } from "../src/components/Settings.tsx";
 import { TriggerSummary } from "../src/components/Automations.tsx";
 import { KeyShownOnce } from "../src/components/KeyShownOnce.tsx";
@@ -160,5 +161,30 @@ describe("KeyShownOnce", () => {
     expect(el).toBeTruthy();
     await act(async () => root!.render(<TooltipProvider><KeyShownOnce title="New key" secret="k_x" onClose={() => undefined} /></TooltipProvider>));
     expect(document.querySelector('[data-testid="key-done"]')!.textContent).toBe("Done");
+  });
+});
+
+describe("FeedDelivery", () => {
+  const body = { status: "resolved", commonLabels: { alertname: "HighErrorRate" } };
+  test("says what reached the run, opens the delivery by its id, and shows the body on its toggle", async () => {
+    let opened = 0;
+    const el = await mount(<FeedDelivery at="2026-10-27T12:04:00Z" deliveryId="dlv_9Wm" summary="resolved · HighErrorRate" body={body}
+      source="incoming" onOpen={() => { opened++; }} />);
+    expect(el.textContent).toContain("Sent to this run");
+    expect(el.textContent).toContain("resolved · HighErrorRate");
+    expect(el.querySelector("pre")).toBeNull();
+    await act(async () => (el.querySelector('[aria-label="Open delivery dlv_9Wm"]') as HTMLButtonElement).click());
+    expect(opened).toBe(1);
+    const toggle = el.querySelector(`[aria-label="Show the delivery's body"]`) as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle.click());
+    expect(JSON.parse(el.querySelector("pre")!.textContent!)).toEqual(body);
+    expect(el.querySelector(`[aria-label="Hide the delivery's body"]`)!.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("without onOpen its id is text, not a button", () => {
+    const h = renderToStaticMarkup(<FeedDelivery at="2026-10-27T12:04:00Z" deliveryId="5c2b" summary="pull_request synchronize" body={{}} source="github" />);
+    expect(h).toContain("5c2b");
+    expect(h).not.toContain("Open delivery");
   });
 });

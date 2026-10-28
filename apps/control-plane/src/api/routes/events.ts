@@ -10,6 +10,7 @@
 
 import type { PersistedEvent } from "@dude/domain";
 import { eventBus } from "../../events/bus.ts";
+import { withOrg } from "../../db/client.ts";
 import * as ledger from "../../events/ledger.ts";
 import { canSee, mayReadSession } from "../../events/visibility.ts";
 import { intParam, json, notFound } from "../http.ts";
@@ -22,7 +23,20 @@ function filtersFrom(url: URL) {
     runId: url.searchParams.get("runId") ?? undefined,
     taskId: url.searchParams.get("taskId") ?? undefined,
     projectId: url.searchParams.get("projectId") ?? undefined,
+    automationRunId: url.searchParams.get("automationRunId") ?? undefined,
   };
+}
+
+/**
+ * An automation run's activity is read by whoever reads its run (every
+ * member of its organisation, as GET /v1/automations/:id/runs/:runId): a
+ * run of another organisation is not found, as there.
+ */
+async function requireAutomationRun(principal: RequestContext["principal"], runId: string | undefined): Promise<void> {
+  if (runId === undefined) return;
+  const found = await withOrg(principal.organizationId, async (scope) =>
+    (await scope.sql`SELECT 1 FROM automation_runs WHERE id = ${runId}`).length > 0);
+  if (!found) throw notFound(`automation run ${runId} not found`);
 }
 
 /**
@@ -37,6 +51,7 @@ async function requireSession(principal: RequestContext["principal"], sessionId:
 async function listEvents({ url, principal }: RequestContext): Promise<Response> {
   const filters = filtersFrom(url);
   await requireSession(principal, filters.sessionId);
+  await requireAutomationRun(principal, filters.automationRunId);
   const events = await ledger.query(principal.organizationId, {
     ...filters,
     after: intParam(url, "after", { min: 0 }),
@@ -67,6 +82,7 @@ export const SESSION_STREAM_MS = 10 * 60_000;
 async function streamEvents({ url, principal, request }: RequestContext): Promise<Response> {
   const filter = { organizationId: principal.organizationId, ...filtersFrom(url) };
   await requireSession(principal, filter.sessionId);
+  await requireAutomationRun(principal, filter.automationRunId);
   /*
    * `after` is explicit; `Last-Event-ID` is what the browser sends by itself.
    *

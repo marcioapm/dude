@@ -138,6 +138,11 @@ export function alertRunDetail(run: AutomationRun): AutomationRunDetail {
     toolCalls: run.id === "arn_alert1" ? ALERT_CALLS : [], failedCallId: null };
 }
 
+/** What each later delivery sent to a run gave its agent, by delivery id. */
+export function alertSentBodies(run: AutomationRun): Record<string, unknown> {
+  return Object.fromEntries(ALERT_DELIVERIES.filter((d) => d.runId === run.id && d.verdict === "sent_to_run").map((d) => [d.id, d.body]));
+}
+
 /** A body against an incoming trigger, as the orchestrator answers the test dialog. */
 export function evaluateIncomingFixture(trigger: IncomingTrigger, body: Record<string, unknown>): IncomingVerdict {
   const results = trigger.conditions.map((c) => conditionHolds(c, body));

@@ -802,6 +802,7 @@ type Server struct {
 	beforeAssign        func(runID string)
 	afterPlacement      func(runID string, epoch int)
 	beforeCommandResult func(epoch int)
+	afterExited         func(runID string)
 	eventPages          func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
@@ -1252,6 +1253,16 @@ func (s *Server) BeforeEvent(fn func(runID string, eventID int64, typ string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.beforeEvent = fn
+}
+
+// AfterExited has a run-to-end workload's Run call fn once lux has
+// recorded its exited event and before the Run takes its terminal state,
+// without the fake's lock: while fn blocks, the Run is still running with
+// its exit code in its output. nil clears it.
+func (s *Server) AfterExited(fn func(runID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.afterExited = fn
 }
 
 // BeforeStart has every placement (a submit's, a resume's) call fn as it
@@ -2088,7 +2099,25 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		s.localCall(run, tool, args)
 		return http.StatusOK
 	}
+	var activityID string
+	var spec lux.Spec
+	_ = json.Unmarshal(run.Spec, &spec)
+	if spec.Labels["dude.kind"] == "automation" {
+		activityID = fmt.Sprintf("automation-tool-%d", len(run.records))
+		var input any
+		_ = json.Unmarshal([]byte(args), &input)
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": activityID, "title": tool,
+			"kind": "other", "status": "in_progress", "rawInput": input})
+	}
 	status, body, err := s.toolRequest(run, tool, args)
+	if activityID != "" {
+		outcome := "completed"
+		if err != nil || status >= 400 {
+			outcome = "failed"
+		}
+		s.agent(run, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": activityID, "title": tool,
+			"status": outcome, "rawOutput": map[string]any{"output": string(body)}})
+	}
 	if tool == "sync_base" {
 		// As an agent following sync_base's answers, it calls again while
 		// dude has not yet recorded its Run as running (refused), and while
@@ -2785,6 +2814,17 @@ func (s *Server) ReleasePushes() {
 	s.heldPushes = nil
 	for _, push := range held {
 		push()
+	}
+}
+
+// AgentSays records one ACP session update of a Run's agent (its
+// sessionUpdate names the kind), in the Run's harness dialect, as if the
+// agent had sent it now.
+func (s *Server) AgentSays(id string, update map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		s.agent(run, update)
 	}
 }
 

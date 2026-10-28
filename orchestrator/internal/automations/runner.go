@@ -151,6 +151,23 @@ func (r *Runner) dispatch(ctx context.Context, pool, key string, fn func(context
 	return true
 }
 
+// dispatchWhenFree is dispatch for work that must not be dropped: off the
+// caller, it waits until key is no longer in flight and pool has a worker,
+// then runs fn; it gives up only when ctx ends.
+func (r *Runner) dispatchWhenFree(ctx context.Context, pool, key string, fn func(context.Context)) {
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		for !r.dispatch(ctx, pool, key, fn) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}()
+}
+
 // Wait returns when the background work dispatch started has ended.
 func (r *Runner) Wait() { r.wg.Wait() }
 
@@ -292,6 +309,9 @@ type Fired struct {
 type Cancelled struct {
 	LuxRunID string
 	Keep     bool
+	// The cancelled run, read once more before its lux Run is stopped.
+	RunID      string
+	automation Automation
 }
 
 // Fire records one firing of an automation and decides what it does
@@ -322,7 +342,16 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 			return Fired{Action: Skip, Reason: followUpsFull}, nil
 		}
 		_, err := tx.Exec(ctx, `UPDATE automation_runs SET payloads = payloads || $2::jsonb WHERE id = $1`, d.Into, raw)
-		return fired, err
+		if err != nil {
+			return fired, err
+		}
+		followCtx := ledger.WithRedactors(ctx, ledger.Redactors{})
+		for _, p := range payloads {
+			if err := followUpArrived(followCtx, tx, d.Into, p); err != nil {
+				return fired, err
+			}
+		}
+		return fired, nil
 	case Skip:
 		fired.Run, fired.Reason = ids.New(ids.AutomationRun), d.Reason
 		_, err := tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
@@ -332,18 +361,27 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 	case CancelAndStart:
 		rows, err := tx.Query(ctx, `UPDATE automation_runs SET status = 'cancelled', reason = 'a newer event restarted it (Concurrency: cancel)',
 			ended_at = now() WHERE automation_id = $1 AND status IN ('queued', 'running') AND source <> 'test'
-			RETURNING COALESCE(lux_run_id, ''), COALESCE(session, '') IN ('new', 'resumed')`, a.ID)
+			RETURNING id, COALESCE(lux_run_id, ''), COALESCE(session, '') IN ('new', 'resumed')`, a.ID)
 		if err != nil {
 			return Fired{}, err
 		}
 		var c Cancelled
-		if _, err := pgx.ForEachRow(rows, []any{&c.LuxRunID, &c.Keep}, func() error {
+		var cancelledID string
+		var cancelledIDs []string
+		if _, err := pgx.ForEachRow(rows, []any{&cancelledID, &c.LuxRunID, &c.Keep}, func() error {
+			cancelledIDs = append(cancelledIDs, cancelledID)
 			if c.LuxRunID != "" {
+				c.RunID, c.automation = cancelledID, a
 				fired.Cancelled = append(fired.Cancelled, c)
 			}
 			return nil
 		}); err != nil {
 			return Fired{}, err
+		}
+		for _, id := range cancelledIDs {
+			if err := runEnded(ctx, tx, a, id, "cancelled", "cancelled", "a newer event restarted it (Concurrency: cancel)"); err != nil {
+				return Fired{}, err
+			}
 		}
 	}
 	fired.Run = ids.New(ids.AutomationRun)
@@ -354,15 +392,93 @@ func Fire(ctx context.Context, tx pgx.Tx, a Automation, source string, payloads 
 	_, err = tx.Exec(ctx, `INSERT INTO automation_runs (id, organization_id, automation_id, status, reason, source, payloads,
 		started_by, scheduled_for) VALUES ($1, $2, $3, 'queued', NULLIF($4, ''), $5, $6, NULLIF($7, ''), $8)`,
 		fired.Run, a.Org, a.ID, reason, source, raw, startedBy, scheduledFor)
-	return fired, err
+	if err != nil {
+		return fired, err
+	}
+	return fired, runEvent(ctx, tx, a, fired.Run, EvRunQueued)
+}
+
+// Events a run's list watches for: a run was queued, or it started.
+const (
+	EvRunQueued  = "automation.run.queued"
+	EvRunStarted = "automation.run.started"
+)
+
+// runEvent records that runID was queued or started, naming its automation
+// so a list of that automation's runs knows a run it has not read yet.
+func runEvent(ctx context.Context, tx pgx.Tx, a Automation, runID, typ string) error {
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: typ, OrganizationID: a.Org, ProjectID: a.ProjectID,
+		AutomationRunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner,
+		Payload: map[string]any{"automationId": a.ID, "automationRunId": runID}})
+	return err
+}
+
+// runEnded ends runID's activity, aborting its open calls with stopped as
+// their reason, and records the run's end with its status and reason.
+func runEnded(ctx context.Context, tx pgx.Tx, a Automation, runID, stopped, status, reason string) error {
+	if err := feedFrames(ctx, tx, a, runID, nil, true, stopped, nil); err != nil {
+		return err
+	}
+	_, err := ledger.Append(ctx, tx, ledger.Event{Type: "automation.run.ended", OrganizationID: a.Org, ProjectID: a.ProjectID,
+		AutomationRunID: runID, ActorType: ledger.ActorSystem, ActorID: runID, Source: ledger.SourceRunner,
+		Payload: map[string]any{"status": status, "reason": reason}})
+	return err
 }
 
 // EndCancelled ends the lux Runs of runs a firing cancelled: a kept
 // session's is stopped, so the new run resumes it; any other's is ended.
+// An agent's or command's output since its last follow pass is read first,
+// once, in the background under the run's follow key: after a follow pass
+// still in flight, never on the caller's sweep.
 func (r *Runner) EndCancelled(ctx context.Context, cancelled []Cancelled) {
 	for _, c := range cancelled {
-		r.stopOrCancel(ctx, c.LuxRunID, c.Keep)
+		if !c.readsLast() {
+			r.stopOrCancel(ctx, c.LuxRunID, c.Keep)
+			continue
+		}
+		r.dispatchWhenFree(ctx, poolFollow, "follow:"+c.RunID, func(ctx context.Context) {
+			if err := r.readCancelled(ctx, c); err != nil {
+				r.Log.Warn("reading a cancelled automation run's last output failed", "run", c.RunID, "error", err)
+			}
+			r.stopOrCancel(ctx, c.LuxRunID, c.Keep)
+		})
 	}
+}
+
+// readsLast says the cancelled run's lux output is read once more. A
+// server's log is read by followServer, not from this stream.
+func (c Cancelled) readsLast() bool {
+	return c.RunID != "" && (c.automation.Kind == "agent" || c.automation.Kind == "command")
+}
+
+// readCancelled reads an agent's or command's lux output past the run's
+// cursor into its activity and log_tail, and moves the cursor past it: a
+// resumed session's next run starts reading there. Fire already ended the
+// feed; ending it again, even with no frames, flushes and aborts what these
+// frames or a follow pass in flight at the cancel opened.
+func (r *Runner) readCancelled(ctx context.Context, c Cancelled) error {
+	a := c.automation
+	var cursor, prior string
+	var busy bool
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT COALESCE(lux_cursor, ''), busy_seen, COALESCE(log_tail, '') FROM automation_runs WHERE id = $1`,
+			c.RunID).Scan(&cursor, &busy, &prior)
+	}); err != nil {
+		return err
+	}
+	_, log, newCursor, _, frames, err := r.readOutput(ctx, a.Kind, c.LuxRunID, cursor, busy, prior)
+	if err != nil {
+		return err
+	}
+	return r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		// Another reader that moved the cursor since has these frames.
+		tag, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, log_tail = right(COALESCE(log_tail, '') || $3, 16000)
+			WHERE id = $1 AND COALESCE(lux_cursor, '') = $4`, c.RunID, newCursor, log, cursor)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		return feedFrames(ctx, tx, a, c.RunID, frames.list, true, "cancelled", nil)
+	})
 }
 
 func nonNil(p []Payload) []Payload {
@@ -750,6 +866,11 @@ func (r *Runner) start(ctx context.Context, org, runID string) (bool, error) {
 		_, err = tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', started_at = now(), reason = NULL,
 			session = CASE WHEN $2 = 'webhook' THEN 'ephemeral' END WHERE id = $1`, runID, a.Kind)
 		claimed = err == nil
+		// Any other kind's start is recorded once its lux Run is claimed
+		// (submit): this claim is undone while lux is unreachable or busy.
+		if claimed && a.Kind == "webhook" {
+			err = runEvent(ctx, tx, a, runID, EvRunStarted)
+		}
 		return err
 	}); err != nil {
 		if db.IsNotFound(err) {
@@ -868,6 +989,9 @@ func (r *Runner) submit(ctx context.Context, a Automation, runID, source string,
 			return err
 		}
 		claimed = true
+		if err := runEvent(ctx, tx, a, runID, EvRunStarted); err != nil {
+			return err
+		}
 		if resumable {
 			_, err = tx.Exec(ctx, `INSERT INTO automation_sessions (automation_id, organization_id, lux_run_id, last_run_at)
 				VALUES ($1, $2, $3, now()) ON CONFLICT (automation_id) DO UPDATE SET lux_run_id = EXCLUDED.lux_run_id, last_run_at = now()`,
@@ -1049,10 +1173,11 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 	}); err != nil {
 		return false, err
 	}
-	turnDone, log, newCursor, failed, err := r.readOutput(ctx, a.Kind, luxRunID, cursor, busy, prior)
+	turnDone, log, newCursor, failed, frames, err := r.readOutput(ctx, a.Kind, luxRunID, cursor, busy, prior)
 	if err != nil {
 		return false, err
 	}
+	ended := lux.Terminal(got.State)
 	// Events sent into the run while it works (Concurrency: send): each
 	// reaches its agent as input, and its turn is waited for afresh.
 	sent := 0
@@ -1061,13 +1186,33 @@ func (r *Runner) followRun(ctx context.Context, a Automation, runID, luxRunID, s
 			return false, err
 		}
 	}
+	moved := true
 	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, busy_seen = busy_seen OR $3,
-			inputs_sent = inputs_sent + $5, log_tail = right(COALESCE(log_tail, '') || $4, 16000) WHERE id = $1`,
-			runID, newCursor, turnDone.busy, log, sent)
-		return err
+		// A cancel's final read that moved the cursor since has these frames.
+		tag, err := tx.Exec(ctx, `UPDATE automation_runs SET lux_cursor = $2, busy_seen = busy_seen OR $3,
+			inputs_sent = inputs_sent + $5, log_tail = right(COALESCE(log_tail, '') || $4, 16000) WHERE id = $1 AND COALESCE(lux_cursor, '') = $6`,
+			runID, newCursor, turnDone.busy, log, sent, cursor)
+		if err != nil {
+			return err
+		}
+		if moved = tag.RowsAffected() > 0; !moved {
+			return nil
+		}
+		// The activity feed, with the cursor past the frames it came from.
+		var exit *int
+		if ended && a.Kind == "command" {
+			exit = frames.exit
+			if exit == nil && got.State == "succeeded" {
+				zero := 0
+				exit = &zero
+			}
+		}
+		return feedFrames(ctx, tx, a, runID, frames.list, ended, cmp.Or(got.StateReason, got.State), exit)
 	}); err != nil {
 		return false, err
+	}
+	if !moved {
+		return false, nil
 	}
 	if sent > 0 {
 		return true, nil
@@ -1157,6 +1302,68 @@ func (r *Runner) stopOrCancel(ctx context.Context, luxRunID string, keep bool) {
 
 type turnState struct{ busy, done bool }
 
+// readFrames are the frames one read took, for the activity feed, and the
+// workload's exit code when lux reported it.
+type readFrames struct {
+	list []lux.Frame
+	exit *int
+}
+
+// feedFrames translates one read's frames into the run's activity (an
+// agent's through phases.AutomationFeed; a command's or server's output
+// as lines), and, once its lux Run has ended, what it left open: a
+// call still running is aborted, saying why the run stopped.
+func feedFrames(ctx context.Context, tx pgx.Tx, a Automation, runID string, frames []lux.Frame, ended bool, reason string, exit *int) error {
+	if a.Kind == "webhook" || (len(frames) == 0 && !ended) {
+		return nil
+	}
+	// One redactor lookup for the whole transaction, as phase Runs do.
+	ctx = ledger.WithRedactors(ctx, ledger.Redactors{})
+	f, err := phases.LoadAutomationFeed(ctx, tx, phases.AutomationRunRef{ID: runID, Org: a.Org, ProjectID: a.ProjectID, Lines: a.Kind != "agent"})
+	if err != nil {
+		return err
+	}
+	for _, fr := range frames {
+		if err := f.Apply(ctx, tx, fr); err != nil {
+			return err
+		}
+	}
+	if ended {
+		var codes []int
+		if exit != nil {
+			codes = append(codes, *exit)
+		}
+		note := stoppedNote(reason)
+		if reason == "timeout" {
+			// The limit is the run's age when lux stopped it, in whole minutes.
+			var minutes int
+			if err := tx.QueryRow(ctx, `SELECT round(extract(epoch FROM now() - COALESCE(started_at, created_at)) / 60)::int
+				FROM automation_runs WHERE id = $1`, runID).Scan(&minutes); err != nil {
+				return err
+			}
+			if minutes > 0 {
+				note = fmt.Sprintf("Stopped by the time limit, when the run reached %d minutes.", minutes)
+			}
+		}
+		if err := f.End(ctx, tx, note, codes...); err != nil {
+			return err
+		}
+	}
+	return f.Save(ctx, tx)
+}
+
+// stoppedNote is what a call the run's end cut short says under it; the
+// page adds how long the call had run.
+func stoppedNote(reason string) string {
+	switch reason {
+	case "timeout":
+		return "Stopped by the time limit."
+	case "cancelled", "canceled":
+		return "Stopped: the run was cancelled."
+	}
+	return "Stopped when the run ended: " + reason + "."
+}
+
 // readOutput reads a Run's records since cursor without waiting for more:
 // the text the workload printed, and whether its agent went busy, then idle.
 // An agent's reply is read from its harness's message events (ACP chunks,
@@ -1164,19 +1371,30 @@ type turnState struct{ busy, done bool }
 // adapter also writes each reply as one stdout record: that copy is left
 // out, matched against the reply read so far and prior, the log before
 // this read; any other record, stderr included, is kept.
-func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, busy bool, prior string) (turnState, string, string, string, error) {
+func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, busy bool, prior string) (turnState, string, string, string, readFrames, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	state := turnState{busy: busy}
 	var log strings.Builder
+	var frames readFrames
 	failed := ""
 	err := r.Lux.Output(ctx, luxRunID, cursor, 0, func(f lux.Frame) error {
+		if f.Kind == "lux" && f.EventType == "exited" {
+			frames.list = append(frames.list, f)
+			var d struct {
+				ExitCode *int `json:"exitCode"`
+			}
+			if json.Unmarshal(f.EventData, &d) == nil && d.ExitCode != nil {
+				frames.exit = d.ExitCode
+			}
+		}
 		if f.Kind != "record" {
 			return nil
 		}
 		if f.Cursor != "" {
 			cursor = f.Cursor
 		}
+		frames.list = append(frames.list, f)
 		if f.Event == nil {
 			copied := strings.TrimSpace(f.Data)
 			// Assumes the copy directly follows the reply: a record between them leaves it logged twice.
@@ -1237,9 +1455,9 @@ func (r *Runner) readOutput(ctx context.Context, kind, luxRunID, cursor string, 
 		return nil
 	})
 	if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-		return state, log.String(), cursor, failed, err
+		return state, log.String(), cursor, failed, frames, err
 	}
-	return state, log.String(), cursor, failed, nil
+	return state, log.String(), cursor, failed, frames, nil
 }
 
 // cost is what lux has priced the Run at so far, nil when unknown.
@@ -1305,6 +1523,9 @@ func endIn(ctx context.Context, tx pgx.Tx, a Automation, runID, status, reason s
 		  AND ($5 <> 'inputs_sent' OR inputs_sent >= jsonb_array_length(payloads))`,
 		runID, status, reason, cost, all)
 	if err != nil || tag.RowsAffected() == 0 {
+		return false, err
+	}
+	if err := runEnded(ctx, tx, a, runID, cmp.Or(reason, status), status, reason); err != nil {
 		return false, err
 	}
 	if failedOn != "" {
@@ -1376,6 +1597,7 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 		return false, err
 	}
 	keep := a.SessionMode == "resumable" && source != SourceTest
+	r.serverLog(ctx, a, runID, luxRunID)
 	if got, err := r.Lux.Get(ctx, luxRunID); err == nil && lux.Terminal(got.State) {
 		r.forgetPreview(luxRunID)
 		return true, r.endServer(ctx, a, runID, "failed", "error", "its container ended: "+cmp.Or(got.StateReason, got.State))
@@ -1407,6 +1629,8 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	if failedReq {
 		status, reason = "failed", "a POST to the server failed"
 	}
+	// What the server printed since this pass's first read, before it stops.
+	r.serverLog(ctx, a, runID, luxRunID)
 	// Decided under the automation's lock Fire takes: an event sent into
 	// this run since payloads were read keeps it up, to be POSTed next pass.
 	ended := false
@@ -1426,6 +1650,38 @@ func (r *Runner) followServer(ctx context.Context, a Automation, runID, luxRunID
 	}
 	r.stopOrCancel(ctx, luxRunID, keep)
 	return true, nil
+}
+
+// serverLogTail is how many of a server's last log lines one pass reads.
+const serverLogTail = 500
+
+// serverLog records the server's container log lines it has not yet, in
+// the run's activity. A log lux cannot give (the server not started yet)
+// is read again next pass.
+func (r *Runner) serverLog(ctx context.Context, a Automation, runID, luxRunID string) {
+	raw, err := r.Lux.ServerLog(ctx, luxRunID, "automation", serverLogTail)
+	if err != nil {
+		return
+	}
+	var out struct {
+		Lines []phases.ServerLine `json:"lines"`
+	}
+	if json.Unmarshal(raw, &out) != nil || len(out.Lines) == 0 {
+		return
+	}
+	ctx = ledger.WithRedactors(ctx, ledger.Redactors{})
+	if err := r.DB.InOrg(ctx, a.Org, func(tx pgx.Tx) error {
+		f, err := phases.LoadAutomationFeed(ctx, tx, phases.AutomationRunRef{ID: runID, Org: a.Org, ProjectID: a.ProjectID, Lines: true})
+		if err != nil {
+			return err
+		}
+		if err := f.ServerLines(ctx, tx, out.Lines, serverLogTail); err != nil {
+			return err
+		}
+		return f.Save(ctx, tx)
+	}); err != nil {
+		r.Log.Warn("recording a server's log failed", "run", runID, "error", err)
+	}
 }
 
 func (r *Runner) endServer(ctx context.Context, a Automation, runID, status, stop, reason string) error {

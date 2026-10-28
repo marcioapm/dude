@@ -731,11 +731,6 @@ body {
 .incomingFilter {
   max-width: 256px;
 }
-.incomingSubHead {
-  margin: var(--ds-space-12) 0 var(--ds-space-8);
-  font-size: var(--ds-text-sm);
-  font-weight: var(--ds-weight-medium);
-}
 
 /* A tier naming no model yet: its Requests cell, in the attention tone. */
 .tierUnset {
@@ -2145,26 +2140,92 @@ body {
 .automationRunCost {
   color: var(--ds-color-text-muted);
 }
+.automationRunHead {
+  flex-wrap: wrap;
+  font-size: var(--ds-text-sm);
+}
+/* The run's trigger on one line; it wraps on a phone. */
+.automationTriggerLine {
+  display: inline;
+  font-size: var(--ds-text-sm);
+}
+/* An automation's face: the integration square (sunken, its border, the agent face's radius) with a zap. */
+.automationFace {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: var(--ds-color-sunken);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
+  border-radius: var(--ds-radius-face-agent);
+  color: var(--ds-color-text-secondary);
+}
+.automationFace[data-size="sm"] {
+  width: var(--ds-size-avatar-sm);
+  height: var(--ds-size-avatar-sm);
+}
+.automationFaceLive {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  box-shadow: 0 0 0 2px var(--ds-color-surface);
+}
+.liveMark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+/* A live run's activity is its own scroller filling the window under it. */
+.automationFeed[data-live] {
+  flex: none;
+  height: calc(100dvh - 360px);
+  min-height: 420px;
+}
+.automationStoppedNote {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-tone-attention-fg);
+}
+.runNowLine {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.runNowTool {
+  color: var(--ds-color-text-primary);
+}
+/* A log's title: its glyph and command on one line (every svg is display:block). */
+.logTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  white-space: nowrap;
+}
+.logToolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.logExit {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
+}
+.logExitBad {
+  color: var(--ds-tone-danger-fg);
+}
 .automationToolsCard {
   width: 100%;
-}
-/* A run's log: each call's time beside its card; the time stacks over the card below 720px. */
-.automationToolCalls {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--ds-space-6);
-}
-.automationToolCall {
-  display: grid;
-  grid-template-columns: 4.5rem minmax(0, 1fr);
-  column-gap: var(--ds-space-12);
-  align-items: start;
-}
-.automationToolCallAt {
-  padding-top: var(--ds-space-6);
 }
 .automationToolCallPosted {
   display: inline-flex;
@@ -2172,13 +2233,4 @@ body {
   align-items: center;
   gap: var(--ds-space-4);
   margin: 0;
-}
-@media (max-width: 719.98px) {
-  .automationToolCall {
-    grid-template-columns: minmax(0, 1fr);
-    row-gap: var(--ds-space-2);
-  }
-  .automationToolCallAt {
-    padding-top: 0;
-  }
 }
