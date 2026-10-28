@@ -605,7 +605,7 @@ func TestTheDailyCheckEndsOnlyOnAMissingBranch(t *testing.T) {
 	w.gh.RefStatus = nil
 	mustExec(t, w.owner, `UPDATE runs SET preview_branch_checked_at = now() - interval '25 hours' WHERE id = $1`, runID)
 	if n, err := w.previews.CheckBranches(ctx); err != nil || n != 1 {
-		t.Fatalf("a missing branch: ended %d, %v", n, err)
+		t.Fatalf("a missing branch: processed %d, %v", n, err)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, runID); n != 1 {
 		t.Error("the preview of a missing branch was kept")

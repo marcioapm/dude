@@ -279,9 +279,19 @@ func (s *Service) BranchEvent(ctx context.Context, org, slug, branch string, del
 	}
 	var hits []hit
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		// Filter repository identities first, preserving SlugFromURL's URL
-		// variants without multiplying every live preview by its repositories.
-		rows, err := tx.Query(ctx, `SELECT project_id, url FROM repositories ORDER BY project_id, name`)
+		rows, err := tx.Query(ctx, `SELECT DISTINCT project_id FROM runs r
+			WHERE r.preview_branch = $1 AND `+livePreview, branch)
+		if err != nil {
+			return err
+		}
+		candidates, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil || len(candidates) == 0 {
+			return err
+		}
+		// Only inspect repositories of projects previewing this branch,
+		// preserving SlugFromURL's URL variants and primary ordering.
+		rows, err = tx.Query(ctx, `SELECT project_id, url FROM repositories
+			WHERE project_id = ANY($1) ORDER BY project_id, name`, candidates)
 		if err != nil {
 			return err
 		}
