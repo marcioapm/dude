@@ -35,7 +35,7 @@ func setupChat(t *testing.T, installed bool) chatFixture {
 
 // chatOptions vary setupChat: conversations.list pages of pageSize channels
 // (0: as asked), more channels added before the fake serves, and the
-// server's BeforeCall hook.
+// server's BeforeCall hook and outgoing chat.postMessage arguments.
 type chatOptions struct {
 	pageSize   int
 	more       func(*fakeslack.Server)
@@ -313,7 +313,7 @@ func TestPostToChatRefusesTextOverSlacksLimit(t *testing.T) {
 	if n := len(c.fake.BotMessages()); n != 0 {
 		t.Errorf("%d messages reached Slack", n)
 	}
-	// At the limit it posts: past a block's 3,000 characters, as plain text.
+	// At Slack's message text limit it still posts without section blocks.
 	long := strings.Repeat("é", 40000)
 	if status, out := c.postToChat(t, "#engineering", long); status != 200 {
 		t.Fatalf("at the limit: %d %v", status, out)
