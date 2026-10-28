@@ -126,8 +126,10 @@ func waitOnPersonTx(ctx context.Context, tx pgx.Tx, runID string) error {
 // the Run, its work unpushed. A waiver of ScopeAttempt also records the
 // held report's reported failures (covers), which a later Run of the
 // attempt reporting the same command failing may carry once the judge
-// says it is the same failure (phases.judgeChecks).
-func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, e *Escalation, action, note, person, scope string) error {
+// says it is the same failure (phases.judgeChecks). said is the person's
+// note marked as their words (PersonSaidTx), "" for none: a retry's
+// send-back leads with it, so the agent acts on what the person said.
+func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, e *Escalation, action, note, said, person, scope string) error {
 	id := e.RunID()
 	ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: id}
 	decided := map[string]any{"action": action, "note": note}
@@ -157,7 +159,7 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 			Message string `json:"message"`
 		}
 		e.decode(&detail)
-		directiveID, _, err := QueueDirective(ctx, tx, ref, Directive{Text: detail.Message, Scope: "run"})
+		directiveID, _, err := QueueDirective(ctx, tx, ref, Directive{Text: withPersonSaid(said, detail.Message), Scope: "run"})
 		if err != nil {
 			return err
 		}

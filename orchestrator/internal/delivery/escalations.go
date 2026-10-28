@@ -180,19 +180,34 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		return escalationErr("bad_request", mNeedsNoteSayWhyTaskMay, in.Action,
 			map[string]string{"accept": "the criteria that failed", ActionWaive: "what could not be checked"}[in.Action])
 	}
+	// The note as the next agent reads it: the person's words, marked as
+	// theirs. A decision on an answer to the conductor's question carries
+	// a note that already says who said what (escalationNote), save an
+	// amend's, which is the owner's criteria text alone. dude's own
+	// decisions (system) are no one's words.
+	said := ""
+	switch {
+	case note == "" || in.ActorType == ledger.ActorSystem:
+	case in.QuestionID != "" && in.Action != "amend":
+		said = note
+	default:
+		if said, err = PersonSaidTx(ctx, tx, taskID, valueOr(in.AnsweredBy, in.Person), note); err != nil {
+			return err
+		}
+	}
 	if NeedsReason(e.Reason, in.Action) {
 		if err := SettleVerdictTx(ctx, tx, e, in.Action, valueOr(in.AnsweredBy, in.Person), note); err != nil {
 			return err
 		}
 	}
 	if e.Reason == ReasonChecksUnverified {
-		if err := settleChecksTx(ctx, tx, org, projectID, taskID, e, in.Action, note, valueOr(in.AnsweredBy, in.Person), scope); err != nil {
+		if err := settleChecksTx(ctx, tx, org, projectID, taskID, e, in.Action, note, said, valueOr(in.AnsweredBy, in.Person), scope); err != nil {
 			return err
 		}
 	}
 	if in.Action == "resume" {
 		// The Run that failed, taken back up now; the workflow waits on it.
-		if err := ResumeKeptTx(ctx, tx, org, projectID, taskID, e.RunIDs(), note); err != nil {
+		if err := ResumeKeptTx(ctx, tx, org, projectID, taskID, e.RunIDs(), said); err != nil {
 			return err
 		}
 	} else if in.Action != "stop" {
@@ -223,7 +238,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 			return err
 		}
 	}
-	if err := closeEscalationQuestionsTx(ctx, tx, org, projectID, taskID, EscalationKey(wfID, st.Escalations), in); err != nil {
+	if err := closeEscalationQuestionsTx(ctx, tx, org, projectID, taskID, EscalationKey(wfID, st.Escalations), in, st.conducted(), said); err != nil {
 		return err
 	}
 	// A decided escalation waits on no one; the workflow then moves the
@@ -301,7 +316,12 @@ const (
 // was open — and tells the conductor, so no card is left waiting on an
 // escalation that is over. A decision that came from an answer tells it
 // what that answer decided.
-func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, key string, in EscalationDecision) error {
+//
+// A person's note on the banner is told it too, as their words (said): on
+// a conducted task (conducted) the conductor hears it even when it had
+// asked nothing about the escalation.
+func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, key string, in EscalationDecision,
+	conducted bool, said string) error {
 	rows, err := tx.Query(ctx, `UPDATE questions SET status = 'cancelled' WHERE task_id = $1 AND escalation = $2
 		AND status = 'open' RETURNING id, run_id`, taskID, key)
 	if err != nil {
@@ -325,7 +345,9 @@ func closeEscalationQuestionsTx(ctx context.Context, tx pgx.Tx, org, projectID, 
 	case in.QuestionID != "":
 		line = escalationAnsweredLine(in.QuestionID, in.Action)
 	case len(closed) > 0:
-		line = escalationOnBannerLine(in.Action, closed[0].ID, in.ActorType == ledger.ActorSystem)
+		line = escalationOnBannerLine(in.Action, closed[0].ID, in.ActorType == ledger.ActorSystem, said)
+	case conducted && said != "" && in.ActorType != ledger.ActorSystem:
+		line = escalationOnBannerLine(in.Action, "", false, said)
 	default:
 		return nil
 	}
@@ -340,12 +362,13 @@ func escalationAnsweredLine(questionID, action string) string {
 }
 
 // escalationOnBannerLine tells the conductor the person (or dude, when
-// system) decided the escalation on the banner, closing its question about it.
-func escalationOnBannerLine(action, questionID string, system bool) string {
+// system) decided the escalation on the banner, closing its question about
+// it ("" for none), with the person's words (said) when they gave a note.
+func escalationOnBannerLine(action, questionID string, system bool, said string) string {
 	return render(escalationOnBannerTmpl, struct {
-		QuestionID, Action string
-		System             bool
-	}{questionID, action, system})
+		QuestionID, Action, Said string
+		System                   bool
+	}{questionID, action, said, system})
 }
 
 // EscalationAnswerTx decides the task's escalation when the owner's answer
@@ -677,9 +700,10 @@ func TaskOwner(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
 
 // ResumeKeptTx takes kept Runs back up: paused, for the syncer to resume as
 // it resumes any (phases.Syncer.whilePaused), the agent's conversation and
-// workspace as they stopped. Their next message is the note, if any, and —
-// what it asks for having changed since they stopped — the task as it is
-// now: an agent that goes on works to the task it has in mind.
+// workspace as they stopped. Their next message is the note, if any (a
+// person's, marked as their words by the caller: PersonSaidTx), and — what
+// it asks for having changed since they stopped — the task as it is now:
+// an agent that goes on works to the task it has in mind.
 func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, runIDs []string, note string) error {
 	var title, goal string
 	var criteria []byte
@@ -717,6 +741,44 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 		}
 	}
 	return nil
+}
+
+// PersonSaidTx is a person's note on a decision, verbatim, marked as their
+// words for the agent who acts on it next: "The task's owner, <name>,
+// said:" for the task's owner, the person's name otherwise. "" for no
+// note. person may be "" (a person not on record).
+func PersonSaidTx(ctx context.Context, tx pgx.Tx, taskID, person, note string) (string, error) {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return "", nil
+	}
+	name, err := PersonName(ctx, tx, person)
+	if err != nil {
+		return "", err
+	}
+	owner := false
+	if person != "" {
+		o, err := TaskOwner(ctx, tx, taskID)
+		if err != nil {
+			return "", err
+		}
+		owner = o == person
+	}
+	return render(personSaidTmpl, struct {
+		Owner      bool
+		Name, Note string
+	}{owner && name != "", strings.TrimSpace(name), note}), nil
+}
+
+// withPersonSaid puts a person's words ahead of text, a paragraph apart.
+func withPersonSaid(said, text string) string {
+	switch {
+	case said == "":
+		return text
+	case strings.TrimSpace(text) == "":
+		return said
+	}
+	return said + "\n\n" + text
 }
 
 // changedTask tells a resumed agent what its task asks for now.

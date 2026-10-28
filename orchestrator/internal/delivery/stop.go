@@ -213,7 +213,7 @@ func StopEscalationTx(ctx context.Context, tx pgx.Tx, org string, d *Delivery, a
 		return nil
 	}
 	if err := closeEscalationQuestionsTx(ctx, tx, org, d.State.ProjectID, d.State.TaskID, EscalationKey(d.WorkflowID, d.State.Escalations),
-		EscalationDecision{Action: "stop", ActorType: actorType, ActorID: actorID, Halting: true}); err != nil {
+		EscalationDecision{Action: "stop", ActorType: actorType, ActorID: actorID, Halting: true}, false, ""); err != nil {
 		return err
 	}
 	d.State.Stopped, d.State.Escalation = e, nil
