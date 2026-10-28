@@ -1371,8 +1371,12 @@ noted for the installation's health, never retried.
   running, `epic_pr_opened` on its first pull request (the epic's dude
   link), and `epic_finished` once it has a non-archived task and every
   non-archived task is done, failed or aborted, with the counts ("2 done, 1
-  failed, 0 cancelled"; never called a success). An empty epic never
-  finishes; reopening or adding tasks never repeats a notice. The epic's
+  failed, 0 cancelled"; never called a success). Finishing is
+  level-triggered: it is checked on each task's end and also when the last
+  unfinished task is archived or moved out of the epic. Finished is said
+  once, ever: a task reopened or retried after it posts only its own
+  notices, and adding tasks never repeats an epic notice. An empty epic
+  never finishes. The epic's
   display state (planned/active/done) plays no part. One SQL function,
   `chat_epic_notice` (migration 219, `SECURITY INVOKER`), holds the rule
   and records it: `RecordStatusTx` and `RecordPROpenedNoticeTx` call it
@@ -1382,8 +1386,9 @@ noted for the installation's health, never retried.
   at once see each other's move. The insert's foreign key then takes KEY
   SHARE on the epic's row, after the task's, so epic archive and unarchive
   lock the epic `FOR NO KEY UPDATE` (never `FOR UPDATE`) before its tasks.
-  A given-up epic notice is a `chat.notice`
-  on the epic's project, correlated with the epic.
+  A given-up epic notice is a `chat.notice` on the epic's project,
+  correlated with the epic, and a `thread_notice_failed` line in the Chat
+  of the task whose move or leaving recorded it (`trigger_task_id`).
 - *Where a notice goes* is the subject's origin: its own conversation, the
   session it was filed from (`via: session`), or, for a task a task's agent
   made (`via: task`), the parent's destination as resolved at creation and
