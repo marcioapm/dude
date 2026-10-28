@@ -3070,6 +3070,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	st.PersonSaid = d.Said
 	switch d.Action {
 	case "stop":
+		// The stop's words are for the record (its decision event), not
+		// for a Run a later pick-up starts: a resume never overwrites them.
+		st.PersonSaid = ""
 		// Kept, so the task can be picked back up where it stopped.
 		e.Decided = nil
 		st.Stopped = e
@@ -3083,6 +3086,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
 	case "done":
+		st.PersonSaid = ""
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
 	case "wait":
 		if e.Reason == "pull_request_closed" {
@@ -3318,6 +3322,9 @@ func waitForPR(st *State) workflow.Result {
 // awaitRead waits on a person reading work that opened no pull request:
 // their feedback takes it up again; marking it done ends it.
 func awaitRead(st *State) workflow.Result {
+	// As waitForPR: words for the Runs a decision started are not for the
+	// fixer a person's later feedback starts.
+	st.PersonSaid = ""
 	return workflow.Result{Next: "awaitRead", State: st, AwaitSignals: []string{SignalHumanFeedback}}
 }
 

@@ -290,7 +290,7 @@ func TestOwnerWaiverSurvivesPendingFixerWakes(t *testing.T) {
 					t.Fatalf("reviewers: %v", st.PendingRunIDs)
 				}
 				for _, id := range st.PendingRunIDs {
-					h.assertOwnerRunInput(id)
+					h.assertOwnerNoteOnRun(id, ownerSaid)
 				}
 				if st.PersonSaid != "" {
 					t.Fatal("note remains after full fan-out")
@@ -299,13 +299,7 @@ func TestOwnerWaiverSurvivesPendingFixerWakes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var laterNote string
-				if err := h.owner.QueryRow(h.ctx, `SELECT COALESCE(person_note,'') FROM runs WHERE id=$1`, later).Scan(&laterNote); err != nil {
-					t.Fatal(err)
-				}
-				if laterNote != "" {
-					t.Fatalf("note repeated on later work: %q", laterNote)
-				}
+				h.assertOwnerNoteOnRun(later, "")
 			})
 		}
 	}
@@ -319,16 +313,19 @@ func (h heldTask) ownerPRs() {
 	h.exec(`UPDATE workflow_runs SET state=state || '{"pullRequestIds":["pr_open","pr_sibling"]}' WHERE id='wf_h'`)
 }
 
-func (h heldTask) assertOwnerRunInput(id string) {
+// ownerSaid is absNote marked as Ola Nordmann's words (PersonSaidTx).
+const ownerSaid = "The task's owner, Ola Nordmann, said:\n\n" + absNote
+
+// assertOwnerNoteOnRun checks the Run's recorded person_note (what its
+// prompt leads with) is exactly want; "" for none.
+func (h heldTask) assertOwnerNoteOnRun(id, want string) {
 	h.t.Helper()
-	var note, phase string
-	if err := h.owner.QueryRow(h.ctx, `SELECT COALESCE(person_note,''), phase::text FROM runs WHERE id=$1`, id).Scan(&note, &phase); err != nil {
+	var note string
+	if err := h.owner.QueryRow(h.ctx, `SELECT COALESCE(person_note,'') FROM runs WHERE id=$1`, id).Scan(&note); err != nil {
 		h.t.Fatal(err)
 	}
-	want := "The task's owner, Ola Nordmann, said:\n\n" + absNote
-	input := Prompt(phase, PromptInput{PersonNote: note, Title: "H", Goal: "H"})
-	if !strings.HasPrefix(input, want+"\n\n") || strings.Count(input, absNote) != 1 {
-		h.t.Fatalf("Run %s input lost or duplicated note: %q", id, input)
+	if note != want {
+		h.t.Fatalf("Run %s person_note %q, want %q", id, note, want)
 	}
 }
 
@@ -365,6 +362,10 @@ func TestOwnerWaitDispatchHandsNoteToFixer(t *testing.T) {
 				if res.Next == "prFix" || len(res.State.(*State).PendingRunIDs) > 0 {
 					t.Fatal("note alone started work")
 				}
+				// No Run was started for the words: none may carry them later.
+				if said := res.State.(*State).PersonSaid; said != "" {
+					t.Fatalf("%s kept the note: %q", route, said)
+				}
 				return
 			}
 			if res.Next != "prFix" {
@@ -376,12 +377,10 @@ func TestOwnerWaitDispatchHandsNoteToFixer(t *testing.T) {
 				t.Fatal(err)
 			}
 			st = res.State.(*State)
-			for _, id := range st.PendingRunIDs {
-				h.assertOwnerRunInput(id)
-			}
 			if len(st.PendingRunIDs) != 1 || st.PersonSaid != "" {
 				t.Fatalf("handoff %+v", st)
 			}
+			h.assertOwnerNoteOnRun(st.PendingRunIDs[0], ownerSaid)
 		})
 	}
 }
@@ -398,5 +397,76 @@ func TestAPersonsNoteLeadsThePromptAndTheRoundMessage(t *testing.T) {
 	}
 	if p := Prompt(PhaseFix, PromptInput{Title: "T", Goal: "G"}); strings.Contains(p, "said:") {
 		t.Errorf("a prompt with no words has some:\n%s", p)
+	}
+}
+
+// A Stop's note is for the record, not a later Run: a resume pick-up
+// (which hands its own note to the kept Runs, never to State) leaves the
+// next phase Run with no person_note.
+func TestAStopsNoteDoesNotReachAPhaseAfterAResume(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE runs SET phase='fix', status='failed', ended_at=now() WHERE id='run_held'`)
+	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), PendingRunIDs: []string{"run_held"},
+		Escalation: &Escalation{Reason: "fix_failed", Step: "fix", At: "awaitFix", Detail: map[string]any{"runId": "run_held"},
+			Decided: &HumanDecision{Action: "stop", Said: ownerSaid}}}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+	res, err := w.decide(h.ctx, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = res.State.(*State)
+	if st.Stopped == nil {
+		t.Fatalf("not stopped: %+v", st)
+	}
+	// What the API's resume pick-up (api.pickUp) does to State.
+	st.Recover = &Recover{Action: "resume", At: "awaitFix"}
+	st.PendingRunIDs = []string{"run_held"}
+	h.exec(`UPDATE tasks SET status='running' WHERE id='wi_h'`)
+	sc.Step = "recover"
+	sc.State, _ = json.Marshal(st)
+	res, err = w.recover(h.ctx, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Next != "awaitFix" {
+		t.Fatalf("resumed at %q", res.Next)
+	}
+	st = res.State.(*State)
+	id, err := w.phase(h.ctx, sc, st, PhaseReview, "after_resume", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.assertOwnerNoteOnRun(id, "")
+}
+
+// A Before-PR integration waited past opens no pull request and waits on
+// a person reading the work: the wait's words were for no Run, and a
+// later fixer for read feedback does not get them.
+func TestAWaitNoteEndsAtAwaitRead(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+	st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), Heads: map[string]string{"target": "abc"},
+		Integration: &Integration{Repo: "api", BeforePR: true},
+		Escalation:  &Escalation{Reason: "pull_request_conflict", Decided: &HumanDecision{Action: "wait", Said: ownerSaid}}}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+	sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+	res, err := w.decide(h.ctx, sc)
+	if err != nil || res.Next != "openPullRequest" {
+		t.Fatalf("decided: %q %v", res.Next, err)
+	}
+	sc.Step = "openPullRequest"
+	sc.State, _ = json.Marshal(res.State)
+	res, err = w.openPullRequest(h.ctx, sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Next != "awaitRead" {
+		t.Fatalf("opened: %q", res.Next)
+	}
+	if said := res.State.(*State).PersonSaid; said != "" {
+		t.Fatalf("awaitRead kept the wait's note: %q", said)
 	}
 }
