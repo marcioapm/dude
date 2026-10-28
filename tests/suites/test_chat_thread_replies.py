@@ -30,6 +30,8 @@ from __future__ import annotations
 import json
 import os
 
+import requests
+
 from fake_github import FakeGitHub
 from helpers import ApiClient, provision_person, query, wait_until
 from suites.test_chat_providers import Slack, _oauth, _requests
@@ -68,6 +70,10 @@ def _thread(slack: Slack, channel: str, root: str) -> list[dict]:
 
 
 def test_a_brainstorm_answers_in_the_thread_the_mention_came_from(client: ApiClient, env, owner_dsn: str, org: dict):
+    # The fake Slack is shared across suites; exclude only messages already present.
+    state = requests.get(f"{env.fake_slack_url}/_fake/state", timeout=10)
+    assert state.ok, state.text
+    before_bots = {(m["Channel"], m["TS"]) for m in state.json()["messages"] or [] if m.get("Bot")}
     n = _installed(client, env)
     slack, channel = n["slack"], n["channel"]
     root = slack.mention(channel, "", n["u1"], "what time is it in Berlin?")
@@ -115,8 +121,11 @@ def test_a_brainstorm_answers_in_the_thread_the_mention_came_from(client: ApiCli
     assert len(thread) == before and thread[0]["Text"].startswith("Started a session"), thread
     assert "It is 22:16 in Berlin" not in [m["Text"] for m in thread], thread
     assert query(owner_dsn, "SELECT count(*) AS n FROM events WHERE session_id = %s AND event_type = 'chat.reply.posted'", (session,)) == [{"n": 1}]
-    # Nothing in any other conversation.
-    assert all(m["Channel"] == channel for m in slack.state()["messages"] or [] if m.get("Bot"))
+    # Include new posts in every workspace, not only this test's destination.
+    new_bots = [m for m in slack.state()["messages"] or []
+                if m.get("Bot") and (m["Channel"], m["TS"]) not in before_bots]
+    wrong_destination = [m for m in new_bots if m["Channel"] != channel]
+    assert not wrong_destination, {"expectedChannel": channel, "unexpectedBotMessages": wrong_destination}
 
 
 def test_a_task_routed_from_slack_tells_the_thread_it_started_opened_a_pull_request_and_is_done(
