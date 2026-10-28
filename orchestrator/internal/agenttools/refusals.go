@@ -5,6 +5,11 @@ package agenttools
 
 const (
 	rChildProfileRequired                  = "an existing phase profile is required"
+	rCohortSize                            = "runs must contain 1–8 members"
+	rCohortBriefs                          = "cohort briefs exceed 60000 bytes"
+	rCohortMemberKey                       = "per-member keys are unsupported; use the cohort key"
+	rInspectionPage                        = "artifact offset must be nonnegative and limit at most 20"
+	rInspectionScope                       = "unknown or inaccessible child Run"
 	rChildToolsReadOnly                    = "independent report children cannot mutate workflow or start Runs"
 	rYourContainerNotRunningAsLux          = "your container is not running as lux sees it; call sync_base again in a moment"
 	rThisRunHoldsNoRepositoryMay           = "this Run holds no repository it may change: there is no base to bring in"

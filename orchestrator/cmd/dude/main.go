@@ -121,7 +121,7 @@ func run(args []string, out io.Writer) error {
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" || cmd == "agent" ||
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") && (cmd == "task" || cmd == "epic" || cmd == "repo" || cmd == "memory" || cmd == "agent" || cmd == "run" ||
 		cmd == "phase" || cmd == "finding" || cmd == "pr" || cmd == "escalation" || cmd == "machine" || cmd == "git" || cmd == "limit" ||
 		cmd == "feedback" && (rest[0] == "reply" || rest[0] == "resolve")) {
 		cmd, rest = cmd+" "+rest[0], rest[1:]
@@ -138,6 +138,28 @@ func run(args []string, out io.Writer) error {
 		}
 		_, err = out.Write(raw)
 		return err
+	case "agent cohort":
+		runs := fs.String("runs-json", "", "array of complete child briefs")
+		key := fs.String("key", "", "cohort idempotency key")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		var briefs []json.RawMessage
+		if err := json.Unmarshal([]byte(*runs), &briefs); err != nil {
+			return errors.New("--runs-json must be a JSON array")
+		}
+		return show(out, *asJSON, call("start_agents", map[string]any{"runs": briefs, "key": *key}))
+	case "run inspect":
+		offset := fs.Int("offset", 0, "artifact offset")
+		limit := fs.Int("limit", 10, "artifact page size")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return errors.New("usage: dude run inspect RUN [--offset N] [--limit N]")
+		}
+		return show(out, *asJSON, call("read_run", map[string]any{"run": args[0], "offset": *offset, "limit": *limit}))
 	case "agent start":
 		prompt := fs.String("prompt", "", "child prompt")
 		note := fs.String("note", "", "conductor note")
@@ -958,7 +980,7 @@ func request(method, path string, body []byte) (json.RawMessage, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if path == "/tools/start_agent" {
+	if path == "/tools/start_agent" || path == "/tools/start_agents" {
 		req.Header.Set("X-Dude-Tool-Call-ID", rand.Text())
 	}
 	if token != "" {
