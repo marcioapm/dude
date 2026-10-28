@@ -280,6 +280,12 @@ def _chat_route(messages: list) -> str | None:
                  {"ref": "t3", "title": "Stream the CSV response", "goal": "g", "criteria": [], "blocked_by": ["t1"]}]
         return json.dumps({"route": "epic", "confidence": 0.9, "reasoning": "scripted: several pieces", "project": project,
                            "new_epic": {"title": "CSV exports", "description": "Make exports fast.", "tasks": tasks}})
+    if "open a small epic" in said and project:
+        # Two tasks neither blocks: both can be delivered at once.
+        tasks = [{"ref": "t1", "title": "Tidy the export page", "goal": "Tidy the export page.", "criteria": [], "blocked_by": []},
+                 {"ref": "t2", "title": "Tidy the import page", "goal": "Tidy the import page.", "criteria": [], "blocked_by": []}]
+        return json.dumps({"route": "epic", "confidence": 0.9, "reasoning": "scripted: two pieces", "project": project,
+                           "new_epic": {"title": "Tidy pages", "description": "Tidy the pages.", "tasks": tasks}})
     return json.dumps({"route": "brainstorm", "confidence": 0.85, "reasoning": "scripted: a discussion", "project": project,
                        "title": "Chat brainstorm"})
 

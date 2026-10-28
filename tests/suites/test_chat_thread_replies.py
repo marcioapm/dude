@@ -16,8 +16,13 @@ A mention routed to a task: dude itself posts the task's progress in the
 thread, once each and in order, as its fake delivery starts, opens a pull
 request on the fake GitHub, and is merged.
 
+A mention routed to an epic of two tasks: besides its tasks' own notices,
+dude posts the epic's, once each and in order: started with its first task,
+its first pull request, and finished with the counts once both have ended.
+
 Routing is tests/env.py's judge stub: "file a task" files one in the first
-project listed, anything else is a brainstorm.
+project listed, "open a small epic" opens one there with two tasks, anything
+else is a brainstorm.
 """
 
 from __future__ import annotations
@@ -141,3 +146,51 @@ def test_a_task_routed_from_slack_tells_the_thread_it_started_opened_a_pull_requ
     assert not [m for m in _thread(slack, channel, root) if pr["url"] in json.dumps(m)], _thread(slack, channel, root)
     rows = query(owner_dsn, "SELECT kind, attempts FROM chat_notices WHERE task_id = %s ORDER BY created_at", (task,))
     assert rows == [{"kind": "started", "attempts": 1}, {"kind": "pr_opened", "attempts": 1}, {"kind": "done", "attempts": 1}], rows
+
+
+def test_an_epic_routed_from_slack_tells_the_thread_it_started_opened_a_pull_request_and_finished(
+        client: ApiClient, env, owner_dsn: str, org: dict, forge_project: dict, fake_github: FakeGitHub):
+    n = _installed(client, env, forge_project)
+    slack, channel = n["slack"], n["channel"]
+    root = slack.mention(channel, "", n["u1"], "please open a small epic to tidy the pages")
+    [req] = _requests(n["marcia"], 1)
+    assert req["route"] == "epic" and req["result"]["kind"] == "epic", req
+    epic = req["result"]["id"]
+    tasks = {t["title"]: t["id"] for t in query(owner_dsn, "SELECT id, title FROM tasks WHERE epic_id = %s", (epic,))}
+    assert sorted(tasks) == ["Tidy the export page", "Tidy the import page"], tasks
+    key = query(owner_dsn, "SELECT p.key_prefix AS k FROM epics e JOIN projects p ON p.id = e.project_id WHERE e.id = %s", (epic,))[0]["k"]
+    wait_until(lambda: _thread(slack, channel, root), timeout=30, message="the routing reply")
+
+    # One delivered and merged, then the other delivered and its pull request closed unmerged.
+    for title, end in (("Tidy the export page", "done"), ("Tidy the import page", "aborted")):
+        task = tasks[title]
+        assert client.post(f"/v1/tasks/{task}/deliver").status_code == 201
+        pr = wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task}).json()["pullRequests"], timeout=90,
+                        message="the delivery never opened a pull request")[0]
+        if end == "done":
+            fake_github.merge(pr["number"])
+        else:
+            fake_github.close(pr["number"])
+        wait_until(lambda: client.get(f"/v1/tasks/{task}").json()["status"] == end, timeout=60, message=f"{title} never ended {end}")
+
+    prefix = ("Started the epic ", "Opened the first pull request for the epic ", "The epic ")
+
+    def epic_notices():
+        got = [m["Text"] for m in _thread(slack, channel, root) if m["Text"].startswith(prefix)]
+        return got if len(got) >= 3 else None
+    got = wait_until(epic_notices, timeout=30, message="dude's epic notices in the thread")
+    assert got == [f"Started the epic {key} › Tidy pages.", f"Opened the first pull request for the epic {key} › Tidy pages.",
+                   f"The epic {key} › Tidy pages finished: 1 done, 0 failed, 1 cancelled."], got
+    # In order among the tasks' own notices: the epic starts with its first
+    # task, and finishes after its last task's end.
+    texts = [m["Text"] for m in _thread(slack, channel, root)[1:]]
+    first = texts.index(got[0])
+    assert texts[first - 1].startswith("Started ") and "Tidy the export page" in texts[first - 1], texts
+    assert texts[-1] == got[2] and "Tidy the import page" in texts[-2], texts
+    # The epic's notices open the epic in dude, never a repository.
+    for m in _thread(slack, channel, root):
+        if m["Text"] in got:
+            assert f"epic/{epic}" in json.dumps(m["Blocks"]) and "github" not in json.dumps(m["Blocks"]).lower(), m
+    rows = query(owner_dsn, "SELECT kind, attempts FROM chat_notices WHERE epic_id = %s ORDER BY created_at", (epic,))
+    assert rows == [{"kind": "epic_started", "attempts": 1}, {"kind": "epic_pr_opened", "attempts": 1},
+                    {"kind": "epic_finished", "attempts": 1}], rows
