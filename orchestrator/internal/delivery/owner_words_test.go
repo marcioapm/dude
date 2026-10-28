@@ -112,7 +112,7 @@ func TestTheConductorHearsTheNoteOfABannerDecision(t *testing.T) {
 		Scan(&line); err != nil {
 		t.Fatal(err)
 	}
-	if want := oneLine(absNote); !strings.Contains(line, want) || !strings.Contains(line, "Ola Nordmann") {
+	if want := absNote; !strings.Contains(line, want) || !strings.Contains(line, "Ola Nordmann") {
 		t.Fatalf("the conductor's wake lacks the owner's note %q:\n%q", want, line)
 	}
 }
@@ -168,6 +168,52 @@ func TestDudesOwnDecisionHandsOnNoWords(t *testing.T) {
 	}
 	if got := h.directives("run_held"); len(got) != 1 || got[0] != "held" {
 		t.Fatalf("directives %q", got)
+	}
+}
+
+func TestAChecksWaiversNoteGoesToTheNextRun(t *testing.T) {
+	for _, scope := range []string{ScopeRun, ScopeAttempt} {
+		t.Run(scope, func(t *testing.T) {
+			h := ownedHeldTask(t)
+			h.exec(`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
+				VALUES ('ev_failure',$1,'run.checks.judged','run_held','wi_h','system','dude','test',
+				'{"turn":0,"verified":false,"checks":[{"command":"make test","result":"fail","reason":"hardware unavailable"}]}')`, h.org)
+			h.escalate("run_held")
+			h.decideAs("per_ola", EscalationDecision{Action: ActionWaive, Scope: scope, Note: absNote})
+			var raw []byte
+			if err := h.owner.QueryRow(h.ctx, `SELECT state FROM workflow_runs WHERE id = 'wf_h'`).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			res, err := (&steps{s: &Store{DB: h.app}}).decide(h.ctx, workflow.StepContext{OrganizationID: h.org, State: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := res.State.(*State).PersonSaid; !strings.Contains(got, absNote) || !strings.Contains(got, "Ola Nordmann") {
+				t.Fatalf("the next Run receives %q", got)
+			}
+		})
+	}
+}
+
+func TestEscalationAnswerPreservesTheOwnersWords(t *testing.T) {
+	note := strings.Repeat("Keep this exact line.\n", 100) + "Final direction."
+	if got := escalationNote("What next?", note, "Retry it."); !strings.Contains(got, note) {
+		t.Fatalf("the owner's answer was flattened or clipped: %q", got)
+	}
+}
+
+func TestALongBannerNoteReachesTheConductorVerbatim(t *testing.T) {
+	h := ownedHeldTask(t)
+	h.exec(`UPDATE workflow_runs SET state = state || '{"decider":"conductor"}' WHERE id = 'wf_h'`)
+	h.escalate("run_held")
+	note := strings.Repeat("Read this exact paragraph.\n", 100) + "The final instruction."
+	h.decideAs("per_ola", EscalationDecision{Action: "retry", Note: note})
+	var line string
+	if err := h.owner.QueryRow(h.ctx, `SELECT line FROM conductor_wakes WHERE task_id = 'wi_h' AND key LIKE '%:decided'`).Scan(&line); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(line, note) || !strings.Contains(WakeNote([]string{line}), note) {
+		t.Fatalf("the conductor's wake dropped words: %q", line)
 	}
 }
 
