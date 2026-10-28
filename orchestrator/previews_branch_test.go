@@ -203,6 +203,7 @@ func TestDeletedPrimaryBranchNeverWakesDefaultCode(t *testing.T) {
 	for _, previouslyWoken := range []bool{false, true} {
 		t.Run(fmt.Sprint(previouslyWoken), func(t *testing.T) {
 			w := newWorld(t)
+			w.previews.RetryBackOff = time.Hour
 			w.wakeable()
 			w.recipe("web", 3000, "npm run dev", "", nil, true)
 			w.gh.Branch("feature/gone", "main", "gone")
