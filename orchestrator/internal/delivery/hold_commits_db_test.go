@@ -52,10 +52,14 @@ func taskCommit(gh *fakegithub.Server, st *State, repo string, n int) {
 	}
 }
 
-// gitOn runs git in a fake's repository; its trimmed output.
+// gitOn runs git in a fake's repository; its trimmed output. It names an
+// identity, as CI runners have none for a commit it makes.
 func gitOn(t *testing.T, gh *fakegithub.Server, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", gh.Repo}, args...)...).CombinedOutput()
+	cmd := exec.Command("git", append([]string{"-C", gh.Repo}, args...)...)
+	cmd.Env = append(cmd.Environ(), "GIT_AUTHOR_NAME=Alice", "GIT_AUTHOR_EMAIL=alice@example.com",
+		"GIT_COMMITTER_NAME=Alice", "GIT_COMMITTER_EMAIL=alice@example.com")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v %s", args, err, out)
 	}
