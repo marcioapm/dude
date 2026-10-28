@@ -208,6 +208,65 @@ func TestPushAndDeleteDeliveriesReachBranchPreviews(t *testing.T) {
 	}
 }
 
+// The internal API's round trip: start (idempotent), list, show, wake by
+// starting a server with no browser, stop; refusals for a missing branch.
+func TestTheBranchPreviewAPIRoundTrip(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.gh.Branch("feature/api", "main", "api")
+	base := "/internal/projects/" + w.project + "/branch-previews"
+	if code, out := w.do("POST", base, map[string]any{"branch": "missing"}); code != 422 || out["error"].(map[string]any)["code"] != "branch_not_found" {
+		t.Fatalf("a missing branch: %d %v", code, out)
+	}
+	code, out := w.do("POST", base, map[string]any{"branch": "feature/api"})
+	if code != 201 || out["branch"] != "feature/api" {
+		t.Fatalf("start: %d %v", code, out)
+	}
+	id := out["id"].(string)
+	if code, again := w.do("POST", base, map[string]any{"branch": "feature/api"}); code != 200 || again["id"] != id {
+		t.Fatalf("second start: %d %v", code, again)
+	}
+	w.until("asleep, its server made", func() bool {
+		return w.count(`SELECT count(*) FROM runs r JOIN preview_servers s ON s.run_id = r.id WHERE r.id = $1 AND r.status = 'paused'`, id) == 1
+	})
+	code, list := w.do("GET", base, nil)
+	previews, _ := list["previews"].([]any)
+	if code != 200 || len(previews) != 1 {
+		t.Fatalf("list: %d %v", code, list)
+	}
+	first := previews[0].(map[string]any)
+	svs, _ := first["servers"].([]any)
+	if first["id"] != id || len(svs) != 1 || svs[0].(map[string]any)["url"] == nil {
+		t.Errorf("listed %v", first)
+	}
+
+	// Woken without a browser, as `dude preview` users do.
+	if code, out := w.do("POST", "/internal/runs/"+id+"/servers/web/start", nil); code != 200 {
+		t.Fatalf("start web: %d %v", code, out)
+	}
+	w.until("woken", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, id) == 1
+	})
+	if code, got := w.do("GET", "/internal/runs/"+id+"/servers", nil); code != 200 || got["run"] == nil {
+		t.Errorf("its servers: %d %v", code, got)
+	}
+
+	code, stopped := w.do("DELETE", "/internal/branch-previews/"+id, nil)
+	if code != 200 || stopped["status"] != "completed" {
+		t.Fatalf("stop: %d %v", code, stopped)
+	}
+	if code, shown := w.do("GET", "/internal/branch-previews/"+id, nil); code != 200 || shown["status"] != "completed" || shown["endedAt"] == nil {
+		t.Errorf("show after stop: %d %v", code, shown)
+	}
+	if _, list := w.do("GET", base, nil); len(list["previews"].([]any)) != 0 {
+		t.Errorf("a stopped preview is listed: %v", list)
+	}
+	if code, _ := w.do("GET", "/internal/branch-previews/run_nope", nil); code != 404 {
+		t.Errorf("an unknown id: %d", code)
+	}
+}
+
 // The daily check ends a preview only when GitHub says the branch is gone;
 // a failure to ask keeps it.
 func TestTheDailyCheckEndsOnlyOnAMissingBranch(t *testing.T) {
