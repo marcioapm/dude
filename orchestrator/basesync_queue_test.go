@@ -468,3 +468,74 @@ func TestASyncAndAWritersClaimDoNotDeadlock(t *testing.T) {
 		t.Fatalf("the contained base was not completed: %d", n)
 	}
 }
+
+// Resolve conflicts on a stopped conflict escalation decides it: requested,
+// the delivery acts now. The same request again, before the delivery has
+// moved on, finds it decided with that base queued: queued.
+func TestResolveConflictsOnAnEscalationSaysRequestedThenQueued(t *testing.T) {
+	w := newWorld(t)
+	w.toolsWithSync()
+	wi := w.reviewing()
+	w.tell()
+	w.conflictWithMovedBase()
+	w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	prID, owner := w.prOf(wi), w.person("owner")
+	code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+	if code != 200 || body["status"] != "requested" {
+		t.Fatalf("resolve on the escalation: %d %v; want requested", code, body)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND state->'escalation'->'decided' IS NOT NULL`, wi); n != 1 {
+		t.Fatalf("the escalation was not decided: %d", n)
+	}
+	code, body = w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+	if code != 200 || body["status"] != "queued" {
+		t.Fatalf("the repeat on the decided escalation: %d %v; want queued", code, body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action'
+		AND payload->>'action'='resolve-conflicts' AND payload->>'status'='queued'`, wi); n != 1 {
+		t.Fatalf("queued activity lines %d, want 1", n)
+	}
+}
+
+// A delivery waiting on the pull request whose writer is pending or paused
+// hands that writer the request as a directive, heard only once it runs:
+// queued. A running writer hears it now, and the delivery acts: requested.
+func TestResolveConflictsWithAWaitingWriterSaysQueued(t *testing.T) {
+	for _, c := range []struct{ writer, want string }{{"pending", "queued"}, {"paused", "queued"}, {"running", "requested"}} {
+		t.Run(c.writer, func(t *testing.T) {
+			w := newWorld(t)
+			wi, prID, owner := w.heldConflict()
+			mustExec(t, w.owner, `UPDATE workflow_runs SET step='awaitPullRequest' WHERE task_id=$1`, wi)
+			// Not picked up by a pump: no pump runs in this test.
+			mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,phase)
+				VALUES('run_waiting_writer',$1,$2,$3,1,$4::run_status,'implementer','agent','fix')`, w.org, w.project, wi, c.writer)
+			code, body := w.callAs(owner, "/internal/pull-requests/"+prID+"/resolve-conflicts", map[string]any{})
+			if code != 200 || body["status"] != c.want {
+				t.Fatalf("resolve with a %s writer: %d %v; want %s", c.writer, code, body, c.want)
+			}
+			if n := w.baseSyncDirectives("run_waiting_writer", body["baseSha"].(string)); n != 1 {
+				t.Fatalf("directives to the writer %d, want 1", n)
+			}
+		})
+	}
+}
+
+// Of two live writers the latest is the task's current one: a request
+// goes to it, not to the earlier one.
+func TestAQueuedRequestGoesToTheLatestOfTwoLiveWriters(t *testing.T) {
+	w := newWorld(t)
+	wi, prID, owner := w.heldConflict()
+	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,phase,created_at)
+		VALUES('run_earlier_writer',$1,$2,$3,1,'running','implementer','agent','fix',now()-interval '1 minute'),
+		('run_later_writer',$1,$2,$3,1,'running','implementer','agent','fix',now())`, w.org, w.project, wi)
+	sha := w.queueResolve(owner, prID)
+	if n := w.baseSyncDirectives("run_later_writer", sha); n != 1 {
+		t.Fatalf("directives to the later writer %d, want 1", n)
+	}
+	if n := w.baseSyncDirectives("run_earlier_writer", sha); n != 0 {
+		t.Fatalf("directives to the earlier writer %d, want 0", n)
+	}
+	if got := w.str(`SELECT writer_run_id FROM base_sync_requests WHERE pull_request_id=$1 AND base_sha=$2`, prID, sha); got != "run_later_writer" {
+		t.Fatalf("request marked as %s's", got)
+	}
+}

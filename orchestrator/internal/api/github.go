@@ -423,24 +423,23 @@ func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, i
 	if err != nil {
 		return err
 	}
-	// status: "queued" when the delivery was busy (its next capable writer
-	// integrates the base), "requested" when it acts on it now.
-	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo, "status": "requested", "baseSha": baseSHA}
+	// status: "requested" when the delivery acts on the request now,
+	// "queued" when it waits for a writer (resolveStatus).
+	out := map[string]any{"pullRequestId": id, "action": "resolve-conflicts", "number": number, "repo": repo, "baseSha": baseSHA}
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := ownerOnly(r.Context(), tx, taskID, p.Person, "resolve conflicts on"); err != nil {
 			return err
 		}
-		queued, err := delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head, baseSHA,
+		outcome, err := delivery.ResolveConflictsTx(r.Context(), tx, org, taskID, id, repo, number, head, baseSHA,
 			delivery.EscalationDecision{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})
 		if err := escalationFailure(err); err != nil {
 			return err
 		}
-		if queued {
-			out["status"] = "queued"
-		}
-		if err := delivery.QueueBaseSyncTx(r.Context(), tx, org, taskID, id, base, baseSHA); err != nil {
+		writerWaits, err := delivery.QueueBaseSyncTx(r.Context(), tx, org, taskID, id, base, baseSHA)
+		if err != nil {
 			return err
 		}
+		out["status"] = resolveStatus(outcome, writerWaits)
 		var projectID string
 		if err := tx.QueryRow(r.Context(), `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&projectID); err != nil {
 			return err
@@ -454,6 +453,29 @@ func (s *Server) resolveConflicts(w http.ResponseWriter, r *http.Request, org, i
 	s.kick()
 	write(w, http.StatusOK, out)
 	return nil
+}
+
+// resolveStatus words a Resolve conflicts for the person who asked:
+//   - ResolveQueued: the delivery is busy, or already decided with this
+//     base requested — "queued" for its next capable writer;
+//   - ResolveDecided: the conflict escalation was decided, retry or wait;
+//     both act now (wait returns to the pull request with the signal to
+//     integrate) — "requested";
+//   - ResolveNow: the delivery waits on the pull request and integrates
+//     now — "requested", unless the task's writer is pending or paused and
+//     was handed the request as a directive (writerWaits): that writer has
+//     it when it runs, so "queued".
+func resolveStatus(outcome delivery.ResolveOutcome, writerWaits bool) string {
+	switch {
+	case outcome == delivery.ResolveQueued:
+		return "queued"
+	case outcome == delivery.ResolveDecided:
+		return "requested"
+	case writerWaits:
+		return "queued"
+	default:
+		return "requested"
+	}
 }
 
 // forgeRefusal passes GitHub's refusal on as the person's answer: why it

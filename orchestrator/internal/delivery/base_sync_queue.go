@@ -28,27 +28,29 @@ const (
 // can need another integration when its base advances. Caller holds delivery.
 // The task's current writer hears it now: a live one, or one created whose
 // prompt may already be built (pending, scheduled), by directive, which waits
-// until it runs.
-func QueueBaseSyncTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, base, sha string) error {
-	_, err := tx.Exec(ctx, `INSERT INTO base_sync_requests(organization_id,task_id,pull_request_id,base,base_sha)
+// until it runs. waits says the writer that has it is not running yet
+// (pending, scheduled, starting) or is paused: the person's request is
+// queued for it, not acted on now.
+func QueueBaseSyncTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, base, sha string) (waits bool, err error) {
+	_, err = tx.Exec(ctx, `INSERT INTO base_sync_requests(organization_id,task_id,pull_request_id,base,base_sha)
  VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, org, taskID, prID, base, sha)
 	if err != nil {
-		return err
+		return false, err
 	}
-	var run, role, project string
-	err = tx.QueryRow(ctx, `SELECT id, role, project_id FROM runs WHERE task_id=$1 AND phase IN `+writerPhases+`
- AND status IN ('pending','scheduled','starting','running','paused') ORDER BY created_at DESC LIMIT 1`, taskID).Scan(&run, &role, &project)
+	var run, role, project, status string
+	err = tx.QueryRow(ctx, `SELECT id, role, project_id, status::text FROM runs WHERE task_id=$1 AND phase IN `+writerPhases+`
+  AND status IN ('pending','scheduled','starting','running','paused') ORDER BY created_at DESC LIMIT 1`, taskID).Scan(&run, &role, &project, &status)
 	if db.IsNotFound(err) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	grants, err := capabilities.Resolve(ctx, tx, capabilities.Agent{Role: role, Org: org, Project: project, Run: run})
 	if err != nil || !grants.Has(capabilities.BaseSync) {
-		return err
+		return false, err
 	}
-	return RouteBaseSyncTx(ctx, tx, RunRef{Org: org, ProjectID: project, TaskID: taskID, RunID: run})
+	return status != "running", RouteBaseSyncTx(ctx, tx, RunRef{Org: org, ProjectID: project, TaskID: taskID, RunID: run})
 }
 
 func baseSyncInstruction(repo, base, sha string) string {
