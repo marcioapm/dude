@@ -1901,23 +1901,38 @@ test("219 keeps one chat notice per task or epic and kind, each tenant's alone, 
     await sql`UPDATE chat_notices SET trigger_task_id = 'wi_a' WHERE id = 'chn_e1'`;
     // chat_epic_notice runs as its caller: another tenant's epic records nothing.
     await sql`UPDATE epics SET origin = '{"provider":"slack","workspaceId":"T1","conversationId":"C1","threadId":"1.0"}' WHERE id = 'epc_a'`;
-    const recordAs = (org: string) => sql.begin(async (tx) => {
+    const recordAs = (org: string, epic = "epc_a", kind = "epic_pr_opened", trigger: string | null = "wi_a") => sql.begin(async (tx) => {
       await tx`SET LOCAL ROLE dude_app`;
       await tx`SELECT set_config('app.organization_id', ${org}, true)`;
-      await tx`SELECT chat_epic_notice('epc_a', 'epic_pr_opened', NULL)`;
+      await tx`SELECT chat_epic_notice(${epic}, ${kind}, ${trigger})`;
     });
     await recordAs("org_b");
     expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE epic_id = 'epc_a' AND kind = 'epic_pr_opened'`]).toEqual([{ n: 0 }]);
     await recordAs("org_a");
     await recordAs("org_a");
-    expect([...await sql`SELECT subject_key, subject_title, thread_id FROM chat_notices WHERE epic_id = 'epc_a' AND kind = 'epic_pr_opened'`])
-      .toEqual([{ subject_key: "BIL", subject_title: "Exports", thread_id: "1.0" }]);
+    expect([...await sql`SELECT subject_key, subject_title, thread_id, trigger_task_id FROM chat_notices WHERE epic_id = 'epc_a' AND kind = 'epic_pr_opened'`])
+      .toEqual([{ subject_key: "BIL", subject_title: "Exports", thread_id: "1.0", trigger_task_id: "wi_a" }]);
+    // The trigger task is kept only when it is the epic's organisation's: another
+    // tenant's or an unknown id is recorded as no task, and the notice still is.
+    await sql`INSERT INTO epics (id, organization_id, project_id, title, origin) VALUES
+      ('epc_a2', 'org_a', 'prj_a', 'Imports', '{"provider":"slack","workspaceId":"T1","conversationId":"C1","threadId":"2.0"}'),
+      ('epc_a3', 'org_a', 'prj_a', 'Reports', '{"provider":"slack","workspaceId":"T1","conversationId":"C1","threadId":"3.0"}')`;
+    expect(await refusal(async () => await recordAs("org_a", "epc_a2", "epic_started", "wi_b"))).toBe("");
+    expect(await refusal(async () => await recordAs("org_a", "epc_a2", "epic_pr_opened", "wi_nope"))).toBe("");
+    // The table's owner sees every tenant's task; the organisation bound still holds.
+    expect(await refusal(async () => await sql`SELECT chat_epic_notice('epc_a3', 'epic_started', 'wi_b')`)).toBe("");
+    expect([...await sql`SELECT epic_id, kind, trigger_task_id FROM chat_notices WHERE epic_id IN ('epc_a2', 'epc_a3') ORDER BY epic_id, kind`])
+      .toEqual([
+        { epic_id: "epc_a2", kind: "epic_pr_opened", trigger_task_id: null },
+        { epic_id: "epc_a2", kind: "epic_started", trigger_task_id: null },
+        { epic_id: "epc_a3", kind: "epic_started", trigger_task_id: null },
+      ]);
 
     await sql`DELETE FROM tasks WHERE id = 'wi_a'`;
     expect([...await sql`SELECT id, trigger_task_id FROM chat_notices WHERE organization_id = 'org_a' AND id LIKE 'chn_e%' ORDER BY id`])
       .toEqual([{ id: "chn_e1", trigger_task_id: null }, { id: "chn_e2", trigger_task_id: null }]);
-    expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_a'`]).toEqual([{ n: 3 }]);
-    await sql`DELETE FROM epics WHERE id = 'epc_a'`;
+    expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_a'`]).toEqual([{ n: 6 }]);
+    await sql`DELETE FROM epics WHERE id IN ('epc_a', 'epc_a2', 'epc_a3')`;
     expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_a'`]).toEqual([{ n: 0 }]);
     expect([...await sql`SELECT count(*)::int AS n FROM chat_notices WHERE organization_id = 'org_b'`]).toEqual([{ n: 2 }]);
   } finally {

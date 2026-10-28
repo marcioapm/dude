@@ -106,7 +106,10 @@ BEGIN
   INSERT INTO chat_notices (id, organization_id, epic_id, trigger_task_id, kind, provider, external_workspace_id,
                             conversation_id, conversation_name, thread_id, subject_key, subject_title, detail, next_attempt_at)
   SELECT 'chn_' || lpad(v_b36, 9, '0') || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16),
-         e.organization_id, e.id, p_trigger_task_id, p_kind, v_dest->>'provider', COALESCE(v_dest->>'workspaceId', ''),
+         e.organization_id, e.id,
+         -- Only a task of the epic's organisation; a foreign or unknown id is stored as NULL.
+         (SELECT t.id FROM tasks t WHERE t.id = p_trigger_task_id AND t.organization_id = e.organization_id),
+         p_kind, v_dest->>'provider', COALESCE(v_dest->>'workspaceId', ''),
          v_dest->>'conversationId', COALESCE(v_dest->>'conversationName', ''),
          CASE WHEN v_dest->>'conversationKind' = 'dm' AND COALESCE((v_dest->>'topLevel')::boolean, false) THEN ''
               ELSE COALESCE(v_dest->>'threadId', '') END,
