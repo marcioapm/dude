@@ -225,7 +225,7 @@ func (w *steps) endLoop(ctx context.Context, sc workflow.StepContext, st *State,
 func withdrawEscalationTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, e *Escalation, action, why string) error {
 	if err := closeEscalationQuestionsTx(ctx, tx, sc.OrganizationID, st.ProjectID, st.TaskID,
 		EscalationKey(sc.WorkflowRunID, st.Escalations),
-		EscalationDecision{Action: action, ActorType: ledger.ActorSystem, ActorID: "forge"}); err != nil {
+		EscalationDecision{Action: action, ActorType: ledger.ActorSystem, ActorID: "forge"}, false, ""); err != nil {
 		return err
 	}
 	if err := ReleaseKeptTx(ctx, tx, st.TaskID); err != nil {

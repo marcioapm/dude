@@ -116,6 +116,11 @@ func TestResumingAnAbortedTaskContinuesTheSameAgent(t *testing.T) {
 	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "resume", "note": "Keep the API."}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
 	}
+	// The pick-up hands the note to the kept Runs only: the workflow's
+	// state, which a later phase Run's person_note is taken from, has none.
+	if said := w.str(`SELECT COALESCE(state->>'personSaid', '') FROM workflow_runs WHERE task_id = $1`, wi); said != "" {
+		t.Errorf("the resume put the note in the workflow's state: %q", said)
+	}
 	if s := w.taskStatus(wi); s != "running" {
 		t.Errorf("a resumed task is %s", s)
 	}
@@ -127,8 +132,8 @@ func TestResumingAnAbortedTaskContinuesTheSameAgent(t *testing.T) {
 	if r.Resumed != 1 || r.Cancelled {
 		t.Errorf("lux run resumed %d times, cancelled %v", r.Resumed, r.Cancelled)
 	}
-	if len(r.Inputs) == 0 || r.Inputs[0] != "Keep the API." {
-		t.Errorf("the note was not the agent's next message: %v", r.Inputs)
+	if len(r.Inputs) == 0 || r.Inputs[0] != "A person said:\n\nKeep the API." {
+		t.Errorf("the note, as the person's words, was not the agent's next message: %q", r.Inputs)
 	}
 	w.lux.HoldPushes = false
 	w.lux.ReleasePushes()
@@ -168,8 +173,8 @@ func TestRetryingAnAbortedTaskStartsANewAgentOnTheSameBranch(t *testing.T) {
 		t.Errorf("a retry is a new attempt")
 	}
 	w.until("the second implementer's lux run", func() bool { return len(w.lux.Runs()) == 2 })
-	if prompt := w.lux.Runs()[1].Prompt(); !strings.Contains(prompt, "Use the new API.") {
-		t.Errorf("the new implementer was not told the note:\n%s", prompt)
+	if prompt := w.lux.Runs()[1].Prompt(); !strings.Contains(prompt, "A person said:\n\nUse the new API.") {
+		t.Errorf("the new implementer was not told the note as the person's words:\n%s", prompt)
 	}
 }
 

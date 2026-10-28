@@ -125,7 +125,8 @@ Do it.
 
 ## escalation-note
 
-The conductor proposed: one more round
+The conductor proposed: one
+more round
 The owner answered: yes
 
 ## escalation-note-decided

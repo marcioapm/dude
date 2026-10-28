@@ -15,6 +15,10 @@ Also from {{with $.Name}}{{.}}{{else}}the person{{end}}:
 
 {{- define "notices/told/in-their-words"}}in their own words: {{printf "%q" .}}{{end}}
 
+{{- define "notices/told/person-said"}}{{if .Owner}}The task's owner, {{.Name}}, said:{{else if .Name}}{{.Name}}, not the task's owner, said:{{else}}A person said:{{end}}
+
+{{.Note}}{{end}}
+
 {{- define "notices/told/restarted"}}Restarted by {{if .ByDude}}dude{{else if .Conductor}}the conductor{{else}}a person{{end}}{{with .Note}}: {{.}}{{else}}.{{end}}{{end}}
 
 {{- define "notices/told/task-changed"}}While you were stopped, the task was changed. Work to it as it is now.

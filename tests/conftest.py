@@ -117,6 +117,9 @@ def browser_type_launch_args(browser_type_launch_args):
     (helpers.browser_channel).
     """
     args = {k: v for k, v in browser_type_launch_args.items() if k != "channel"}
+    executable = os.environ.get("DUDE_TEST_BROWSER_EXECUTABLE")
+    if executable:
+        return {**args, "executable_path": executable}
     return {**args, **browser_channel()}
 
 

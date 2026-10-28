@@ -42,6 +42,11 @@ describe("pull request actions", () => {
 
 describe("resolving conflicts", () => {
   const conflicting = pr({ mergeable: "conflicting", behindBy: 2, display: "conflict" });
+  const baseFacts = (p: PullRequest, client = {} as ApiClient) => (
+    <PullRequestActions client={client} pr={p} defaultMethod="squash" onChanged={() => {}}>
+      {({ facts }) => <div>{facts.base}</div>}
+    </PullRequestActions>
+  );
   const panel = async (client: ApiClient, changed: () => void) => {
     const { mount } = await import("./dom.ts");
     return mount(
@@ -62,6 +67,31 @@ describe("resolving conflicts", () => {
     const h = base(conflicting);
     expect(h).toContain('data-testid="pr-resolve-conflicts"');
     expect(h).not.toContain("pr-update-branch");
+  });
+
+  test("durable requests show queued, writer progress, and ancestry completion", () => {
+    for (const [status, words] of [["queued", "queued for the next writer"], ["resolving", "Writer integrating base"], ["complete", "integrated in the public PR"]] as const) {
+      const h = renderToStaticMarkup(baseFacts(pr({ baseSyncStatus: status })));
+      expect(h).toContain(words);
+      expect(h).not.toContain("pr-resolve-conflicts");
+    }
+  });
+
+  test("an earlier request's completion does not hide Update branch once the base moves again", async () => {
+    const behind = pr({ baseSyncStatus: "complete", mergeable: "behind", behindBy: 1 });
+    const h = renderToStaticMarkup(baseFacts(behind));
+    expect(h).toContain('data-testid="pr-update-branch"');
+    expect(h).not.toContain("integrated in the public PR");
+    const { mount, click, settle } = await import("./dom.ts");
+    const updated: string[] = [];
+    const client = { updatePullRequestBranch: async (id: string) => void updated.push(id) } as unknown as ApiClient;
+    const { container, unmount } = await mount(baseFacts(behind, client));
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="pr-update-branch"]')!;
+    expect(button.textContent).toBe("Update branch");
+    await click(button);
+    await settle();
+    expect(updated).toEqual(["pr_1"]);
+    await unmount();
   });
 
   test("asks the workflow once, disabled while asking, and reads the pull request back", async () => {

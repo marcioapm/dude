@@ -20,7 +20,7 @@ import requests
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub, PullRequest
-from helpers import ApiClient, query, sign_in, wait_for_escalation, wait_until
+from helpers import ApiClient, execute, query, sign_in, wait_for_escalation, wait_until
 
 
 def _pull_request(client: ApiClient, task_id: str) -> dict | None:
@@ -162,6 +162,41 @@ def test_a_conflict_after_another_task_merges_is_resolved_by_dude(
 ):
     _, b = conflicting("update")
     _assert_integrated(client, env, fake_github, b["id"])
+
+
+@pytest.mark.ui
+def test_busy_conflict_request_is_queued_for_next_writer(
+    page: Page, web_url: str, client: ApiClient, org: dict, env, fake_github: FakeGitHub, conflicting
+):
+    _, task = conflicting("tell")
+    wait_for_escalation(client, task["id"], timeout=60)
+    # Hold a busy review step on a signal; no writer is authorized by this click.
+    execute(env.owner_dsn, "UPDATE workflow_runs SET step='awaitReview', status='waiting', "
+            "awaiting_signals='[\"queue_test_hold\"]', wake_at=NULL, state=state-'escalation' WHERE task_id=%s",
+            (task["id"],))
+    pr = _pull_request(client, task["id"])
+    response = client.post(f"/v1/pull-requests/{pr['id']}/resolve-conflicts", {})
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "queued"
+    assert _pull_request(client, task["id"])["baseSyncStatus"] == "queued"
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}/#/task/{task['id']}")
+    expect(page.get_by_test_id("pr-base-sync-status")).to_contain_text("queued for the next writer", timeout=30_000)
+    assert _integrations(env, task["id"]) == 0
+    # A normal next writer gets the request in its submitted prompt; no reviewer writes.
+    execute(env.owner_dsn, "UPDATE workflow_runs SET step='awaitPullRequest', status='waiting', awaiting_signals='[\"pr.feedback\"]' WHERE task_id=%s",
+            (task["id"],))
+    def writer_instruction():
+        rows = query(env.owner_dsn, "SELECT lux_run_id FROM runs WHERE task_id=%s AND phase='fix' AND lux_run_id IS NOT NULL ORDER BY created_at DESC",
+                     (task["id"],))
+        if not rows:
+            return None
+        spec = requests.get(f"{env.fake_lux_url}/v1/runs/{rows[0]['lux_run_id']}",
+                            headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10).json()["spec"]
+        prompt = spec.get("labels", {}).get("dude.integration.prompt", spec.get("workload", {}).get("prompt", ""))
+        return prompt if "Queued conflict resolution" in prompt else None
+    prompt = wait_until(writer_instruction, timeout=90, message="next writer did not get queued instruction")
+    assert "call sync_base" in prompt and "merge lux/main" in prompt and "Do not rebase" in prompt
 
 
 @pytest.mark.ui

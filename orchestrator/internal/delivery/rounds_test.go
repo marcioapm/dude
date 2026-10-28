@@ -420,3 +420,21 @@ func TestAFixGoesOnFromTheLastFixerElseTheImplementer(t *testing.T) {
 		t.Fatalf("a review's predecessor: %+v %v", p, err)
 	}
 }
+
+// A resumed fixer started for a person's decision hears their words first.
+func TestAResumedFixerHearsThePersonsWordsFirst(t *testing.T) {
+	w := writerWorld(t)
+	said := "The task's owner, Ola Nordmann, said:\n\nSync to main."
+	id, err := (&delivery.Store{DB: w.app}).CreatePhaseRun(context.Background(), w.org, delivery.PhaseRun{
+		TaskID: w.task, Phase: delivery.PhaseFix, Key: "f1", Attempt: 1, PersonNote: said,
+		BaseRefs: map[string]string{"api": "bbb"}, Continue: &delivery.Continue{Predecessor: "run_im"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.str(t, `SELECT COALESCE(continues_how, '') FROM runs WHERE id = $1`, id); got != delivery.ContinuesResume {
+		t.Fatalf("the fix %s, want the implementer resumed", got)
+	}
+	if text := w.str(t, `SELECT text FROM directives WHERE run_id = $1`, id); !strings.HasPrefix(text, said+"\n\n") {
+		t.Fatalf("the round message does not lead with the person's words:\n%s", text)
+	}
+}
