@@ -1,11 +1,13 @@
 package delivery
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -214,6 +216,157 @@ func TestALongBannerNoteReachesTheConductorVerbatim(t *testing.T) {
 	}
 	if !strings.Contains(line, note) || !strings.Contains(WakeNote([]string{line}), note) {
 		t.Fatalf("the conductor's wake dropped words: %q", line)
+	}
+}
+
+// Re-parking on an existing fixer must not spend a waiver's words. A
+// delayed finish from a sibling and a sibling PR closing both wake waits.
+func TestOwnerWaiverSurvivesPendingFixerWakes(t *testing.T) {
+	for _, scope := range []string{ScopeRun, ScopeAttempt} {
+		for _, at := range []string{"awaitFix", "awaitPRFix"} {
+			t.Run(scope+"/"+at, func(t *testing.T) {
+				h := ownedHeldTask(t)
+				h.exec(`UPDATE runs SET phase='fix' WHERE id='run_held'`)
+				h.exec(`UPDATE workflow_runs SET step=$1, state=state || '{"pendingRunIds":["run_held"]}' WHERE id='wf_h'`, at)
+				if at == "awaitPRFix" {
+					h.ownerPRs()
+				}
+				h.exec(`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
+					VALUES ('ev_failure',$1,'run.checks.judged','run_held','wi_h','system','dude','test',
+					'{"turn":0,"verified":false,"checks":[{"command":"make test","result":"fail","reason":"hardware unavailable"}]}')`, h.org)
+				h.escalate("run_held")
+				h.decideAs("per_ola", EscalationDecision{Action: ActionWaive, Scope: scope, Note: absNote})
+				w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+				var raw []byte
+				if err := h.owner.QueryRow(h.ctx, `SELECT state FROM workflow_runs WHERE id='wf_h'`).Scan(&raw); err != nil {
+					t.Fatal(err)
+				}
+				sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, State: raw}
+				res, err := w.decide(h.ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sc.State, _ = json.Marshal(res.State)
+				sc.Step = at
+				sc.Signals = []workflow.Signal{{Name: SignalPhaseFinished, Payload: json.RawMessage(`{"runId":"run_other"}`)}}
+				wait := w.awaitFix
+				if at == "awaitPRFix" {
+					h.exec(`UPDATE pull_requests SET state='closed' WHERE id='pr_sibling'`)
+					sc.Signals = []workflow.Signal{{Name: SignalPullRequestEnded}}
+					wait = w.endable(w.awaitPRFix)
+				}
+				res, err = wait(h.ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sc.State, _ = json.Marshal(res.State)
+				if at == "awaitPRFix" {
+					pending := res.State.(*State)
+					pending.Candidate = &Candidate{From: map[string]string{"api": "aaa"}, Branch: "candidate"}
+					sc.State, _ = json.Marshal(pending)
+				}
+				h.exec(`UPDATE runs SET status='completed', ended_at=now(), heads='{"api":{"sha":"bbb","changedPaths":["main.go"],"base":"aaa"}}' WHERE id='run_held'`)
+				sc.Signals = []workflow.Signal{{Name: SignalPhaseFinished, Payload: json.RawMessage(`{"runId":"run_held"}`)}}
+				res, err = wait(h.ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st := res.State.(*State)
+				// Start real phase work after the finish; force two reviewers so
+				// consuming at the first creation cannot strand the second.
+				st.RetryCategories = []string{"correctness", "security"}
+				sc.State, _ = json.Marshal(st)
+				res, err = w.review(h.ctx, sc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st = res.State.(*State)
+				if len(st.PendingRunIDs) != 2 {
+					t.Fatalf("reviewers: %v", st.PendingRunIDs)
+				}
+				for _, id := range st.PendingRunIDs {
+					h.assertOwnerRunInput(id)
+				}
+				if st.PersonSaid != "" {
+					t.Fatal("note remains after full fan-out")
+				}
+			})
+		}
+	}
+}
+
+func (h heldTask) ownerPRs() {
+	h.exec(`INSERT INTO repositories(id,organization_id,project_id,name,url) VALUES('repo_owner',$1,'prj_h','api','https://github.com/acme/api')`, h.org)
+	h.exec(`INSERT INTO pull_requests(id,organization_id,project_id,task_id,repository_id,number,url,head_branch,base_branch,head_sha,title,state)
+		VALUES ('pr_open',$1,'prj_h','wi_h','repo_owner',1,'https://github.com/acme/api/pull/1','work','main','aaa','P','open'),
+		('pr_sibling',$1,'prj_h','wi_h','repo_owner',2,'https://github.com/acme/api/pull/2','other','main','aaa','S','open')`, h.org)
+	h.exec(`UPDATE workflow_runs SET state=state || '{"pullRequestIds":["pr_open","pr_sibling"]}' WHERE id='wf_h'`)
+}
+
+func (h heldTask) assertOwnerRunInput(id string) {
+	h.t.Helper()
+	var note, phase string
+	if err := h.owner.QueryRow(h.ctx, `SELECT COALESCE(person_note,''), phase::text FROM runs WHERE id=$1`, id).Scan(&note, &phase); err != nil {
+		h.t.Fatal(err)
+	}
+	want := "The task's owner, Ola Nordmann, said:\n\n" + absNote
+	input := Prompt(phase, PromptInput{PersonNote: note, Title: "H", Goal: "H"})
+	if !strings.HasPrefix(input, want+"\n\n") || strings.Count(input, absNote) != 1 {
+		h.t.Fatalf("Run %s input lost or duplicated note: %q", id, input)
+	}
+}
+
+func TestOwnerWaitDispatchHandsNoteToFixer(t *testing.T) {
+	for _, route := range []string{"conflict", "integration-feedback", "open-feedback", "waiting", "stop", "done"} {
+		t.Run(route, func(t *testing.T) {
+			h := ownedHeldTask(t)
+			h.ownerPRs()
+			h.exec(`UPDATE runs SET status='completed', ended_at=now() WHERE task_id='wi_h'`)
+			reason, action := "pull_request_conflict", "wait"
+			if route == "stop" || route == "done" {
+				reason, action = "pull_request_closed", route
+			}
+			st := &State{TaskID: "wi_h", ProjectID: "prj_h", Attempt: 1, Policy: DefaultPolicy(), PullRequestIDs: []string{"pr_open"}}
+			if route == "conflict" || route == "integration-feedback" {
+				st.PRFeedback = []forge.ActionableFeedback{{Repo: "api", Source: "review", Body: "Please fix this"}}
+			}
+			if route == "integration-feedback" || route == "open-feedback" {
+				st.Integration = &Integration{Repo: "api"}
+			}
+			if route == "open-feedback" {
+				h.exec(`INSERT INTO feedback_batches(id,organization_id,task_id,attempt,author_person_id,submission_key) VALUES('batch_owner',$1,'wi_h',1,'per_ola','owner')`, h.org)
+				h.exec(`INSERT INTO feedback_items(id,organization_id,task_id,attempt,batch_id,author_person_id,body,anchor_kind,anchor,status,submitted_at) VALUES('fb_owner',$1,'wi_h',1,'batch_owner','per_ola','Fix this','general','{"kind":"general"}','open',now())`, h.org)
+			}
+			st.Escalation = &Escalation{Reason: reason, Decided: &HumanDecision{Action: action, Said: "The task's owner, Ola Nordmann, said:\n\n" + absNote}}
+			raw, _ := json.Marshal(st)
+			w := &steps{s: &Store{DB: h.app}, forges: forgeOf{}}
+			sc := workflow.StepContext{WorkflowRunID: "wf_h", OrganizationID: h.org, Step: "decide", State: raw}
+			res, err := w.decide(h.ctx, sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if route == "waiting" || route == "stop" || route == "done" {
+				if res.Next == "prFix" || len(res.State.(*State).PendingRunIDs) > 0 {
+					t.Fatal("note alone started work")
+				}
+				return
+			}
+			if res.Next != "prFix" {
+				t.Fatalf("dispatch %q", res.Next)
+			}
+			sc.State, _ = json.Marshal(res.State)
+			res, err = w.prFix(h.ctx, sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st = res.State.(*State)
+			for _, id := range st.PendingRunIDs {
+				h.assertOwnerRunInput(id)
+			}
+			if len(st.PendingRunIDs) != 1 || st.PersonSaid != "" {
+				t.Fatalf("handoff %+v", st)
+			}
+		})
 	}
 }
 

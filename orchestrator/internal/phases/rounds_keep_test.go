@@ -1,10 +1,75 @@
 package phases
 
 import (
+	"context"
 	"errors"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"strings"
 	"testing"
 )
+
+// Replacement before the unread round directive arrives must carry the
+// current owner note, not replay that obsolete directive into a fresh round.
+func TestOwnerNoteSurvivesRoundReplacement(t *testing.T) {
+	for _, why := range []string{"unresumable session", "secret change"} {
+		t.Run(why, func(t *testing.T) {
+			w := timeLimitWorld(t, "resume", true)
+			ctx := context.Background()
+			note := "The task's owner, Ola Nordmann, said:\n\nUse this exact config:\n  backend: versitygw\nDo not use minio."
+			if _, err := w.owner.Exec(ctx, `UPDATE runs SET person_note=$2 WHERE id=$1`, w.run.ID, note); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.owner.Exec(ctx, `INSERT INTO directives(id,organization_id,run_id,text) VALUES('dir_owner',$1,$2,$3)`, w.run.Org, w.run.ID, note+"\nOBSOLETE ROUND BRIEF"); err != nil {
+				t.Fatal(err)
+			}
+			if why == "secret change" {
+				if _, err := w.owner.Exec(ctx, `INSERT INTO project_secrets(project_id,organization_id,name,value,hint,recipients) VALUES($1,$2,'NEW_TOKEN','secret','test','{tester}')`, w.run.ProjectID, w.run.Org); err != nil {
+					t.Fatal(err)
+				}
+				var cannot errCannotResume
+				if err := w.s.roundSecrets(ctx, w.run); !errors.As(err, &cannot) {
+					t.Fatalf("secret change: %v", err)
+				}
+			}
+			if replaced, err := w.s.replaceRound(ctx, w.run, why); err != nil || !replaced {
+				t.Fatalf("replace: %v %v", replaced, err)
+			}
+			var id string
+			if err := w.owner.QueryRow(ctx, `SELECT replaced_by FROM runs WHERE id=$1`, w.run.ID).Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+			w.s.Agent.ToolsURL = "http://tools.test"
+			w.s.Agent.ToolsService = true
+			if _, err := w.owner.Exec(ctx, `UPDATE model_tiers SET model='gpt-6-sol' WHERE organization_id=$1`, w.run.Org); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.owner.Exec(ctx, `UPDATE organizations SET default_agent_models=jsonb_build_object('qa_browser',jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org); err != nil {
+				t.Fatal(err)
+			}
+			r := w.run
+			r.ID, r.Phase, r.Role = id, delivery.PhaseTest, "qa_browser"
+			r.LuxRunID = ""
+			spec, _, _, _, err := w.s.spec(ctx, r, nil, chosenImage{Ref: "test/image:latest"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := spec.Workload.Prompt
+			if strings.Count(input, note) != 1 || strings.Contains(input, "OBSOLETE ROUND BRIEF") {
+				t.Fatalf("replacement input lost/duplicated note or copied stale directive: %q", input)
+			}
+			var failed bool
+			if err := w.owner.QueryRow(ctx, `SELECT failed_at IS NOT NULL AND delivered_at IS NULL FROM directives WHERE id='dir_owner'`).Scan(&failed); err != nil {
+				t.Fatal(err)
+			}
+			if !failed {
+				t.Fatal("abandoned directive remains deliverable")
+			}
+		})
+	}
+}
 
 // A continuing fixer whose phase was given a project secret after its row
 // was made (the implementer's lux Run has none of it) is refused its first
