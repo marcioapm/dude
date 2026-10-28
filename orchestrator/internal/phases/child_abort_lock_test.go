@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -97,11 +98,11 @@ func childFamily(w *resumeWorld, session bool) phaseRun {
 
 // raceLifecycleBatch has the syncer apply one batch of the child's frames
 // (state starting, then running, then a record with a cursor) in one
-// transaction, held after its first lifecycle UPDATE. It then runs op in a
-// transaction of its own, lets the batch go on once op waits on a lock the
-// batch holds (pg_blocking_pids), and returns both errors. Both goroutines
-// are joined before it returns; err is the harness's own failure.
-func raceLifecycleBatch(w *resumeWorld, child phaseRun, op func(context.Context, pgx.Tx) error) (batchErr, opErr, err error) {
+// transaction, held after its first lifecycle UPDATE. It then runs op on a
+// pool of its own, lets the batch go on once op waits on a lock the batch
+// holds (pg_blocking_pids), and returns both errors. Both goroutines are
+// joined before it returns; err is the harness's own failure.
+func raceLifecycleBatch(w *resumeWorld, child phaseRun, op func(context.Context, *db.DB) error) (batchErr, opErr, err error) {
 	w.t.Helper()
 	app := w.s.DB
 	gate := &lifecycleGate{entered: make(chan struct{}), release: make(chan struct{})}
@@ -140,7 +141,7 @@ func raceLifecycleBatch(w *resumeWorld, child phaseRun, op func(context.Context,
 	go func() {
 		defer wg.Done()
 		defer close(opDone)
-		opErr = app.InOrg(ctx, child.Org, func(tx pgx.Tx) error { return op(ctx, tx) })
+		opErr = op(ctx, app)
 	}()
 	for blocked := false; !blocked; {
 		if err := w.owner.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
@@ -217,8 +218,8 @@ func TestAChildAbortBesideItsLifecycleBatchDoesNotDeadlock(t *testing.T) {
 				return raw
 			}
 			before := snapshot()
-			batchErr, abortErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, tx pgx.Tx) error {
-				return delivery.AbortChildTx(ctx, tx, child.TaskID, child.ID)
+			batchErr, abortErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error {
+				return app.InOrg(ctx, child.Org, func(tx pgx.Tx) error { return delivery.AbortChildTx(ctx, tx, child.TaskID, child.ID) })
 			})
 			if err != nil {
 				t.Fatalf("race: %v (batch %v, abort %v)", err, batchErr, abortErr)
@@ -243,6 +244,73 @@ func TestAChildAbortBesideItsLifecycleBatchDoesNotDeadlock(t *testing.T) {
 			if after := snapshot(); after != before {
 				t.Errorf("the task or its delivery changed:\nbefore %s\nafter  %s", before, after)
 			}
+		})
+	}
+}
+
+// The other holders of a child's parent that then wait for the child's
+// row, each beside the child's lifecycle batch as above: a person's Stop
+// (StopAllTx: LockLiveWorkTx's conductor, then each child), a person's
+// abort of the conductor (AbortConductorTx, MarkChildParentEndedTx, as the
+// API and every conductor hand-over take them) and EndChildParent of an
+// ended task conductor or brainstorm. None is refused for a deadlock, the
+// batch commits whole, and the child is stopped as the holder stops it.
+func TestAParentEndingBesideItsChildsLifecycleBatchDoesNotDeadlock(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		session bool
+		// before runs ahead of the race, on the fixture.
+		before func(w *resumeWorld)
+		op     func(ctx context.Context, app *db.DB, w *resumeWorld) error
+		reason string
+	}{
+		{"stop", false, nil, func(ctx context.Context, app *db.DB, w *resumeWorld) error {
+			return app.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+				_, err := delivery.StopAllTx(ctx, tx, w.run.Org, w.run.TaskID, "a person stopped the task", true, nil)
+				return err
+			})
+		}, "aborted"},
+		{"conductor abort", false, nil, func(ctx context.Context, app *db.DB, w *resumeWorld) error {
+			return app.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+				if err := delivery.LockChat(ctx, tx, w.run.TaskID); err != nil {
+					return err
+				}
+				ref := delivery.RunRef{Org: w.run.Org, ProjectID: w.run.ProjectID, TaskID: w.run.TaskID, RunID: "run_parent"}
+				if err := delivery.AbortConductorTx(ctx, tx, ref, "a person aborted it", false); err != nil {
+					return err
+				}
+				return delivery.MarkChildParentEndedTx(ctx, tx, w.run.TaskID, "run_parent")
+			})
+		}, "parent-ended"},
+		{"end task child parent", false, func(w *resumeWorld) {
+			w.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE id = 'run_parent'`)
+		}, func(ctx context.Context, app *db.DB, w *resumeWorld) error {
+			return (&delivery.Store{DB: app}).EndChildParent(ctx, w.run.Org, w.run.TaskID, "run_parent")
+		}, "parent-ended"},
+		{"end session child parent", true, func(w *resumeWorld) {
+			w.exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE id = 'run_parent'`)
+		}, func(ctx context.Context, app *db.DB, w *resumeWorld) error {
+			return (&delivery.Store{DB: app}).EndChildParent(ctx, w.run.Org, "", "run_parent")
+		}, "parent-ended"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newResumeWorld(t)
+			child := childFamily(w, c.session)
+			if c.before != nil {
+				c.before(w)
+			}
+			batchErr, opErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error { return c.op(ctx, app, w) })
+			if err != nil {
+				t.Fatalf("race: %v (batch %v, %s %v)", err, batchErr, c.name, opErr)
+			}
+			if batchErr != nil || opErr != nil {
+				t.Fatalf("batch (deadlock %v): %v; %s (deadlock %v): %v",
+					isDeadlock(batchErr), batchErr, c.name, isDeadlock(opErr), opErr)
+			}
+			if control, reason, keep := childStop(t, w, "run_child"); control != "abort" || reason != c.reason || keep {
+				t.Errorf("the child: control %s, stop reason %q, keep %v; want abort, %s, not kept", control, reason, keep, c.reason)
+			}
+			assertBatchCommitted(t, w)
 		})
 	}
 }
