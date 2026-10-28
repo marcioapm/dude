@@ -43,23 +43,19 @@ func noticeDestSQL(o string) string {
 		(SELECT s.origin FROM sessions s WHERE %[1]s->>'via' = 'session' AND s.id = %[1]s->>'from'))`, o)
 }
 
-// noticeColumnsSQL is the destination d's columns of a chat_notices row,
-// from provider to thread_id. A direct message's top-level mention is
-// answered at the top level.
-const noticeColumnsSQL = `d.dest->>'provider', COALESCE(d.dest->>'workspaceId', ''),
-	d.dest->>'conversationId', COALESCE(d.dest->>'conversationName', ''),
-	CASE WHEN d.dest->>'conversationKind' = 'dm' AND COALESCE((d.dest->>'topLevel')::boolean, false) THEN ''
-	     ELSE COALESCE(d.dest->>'threadId', '') END`
-
 // recordNoticeTx snapshots a task's notice once per kind, where its origin
 // resolves to a conversation (noticeDestSQL). Tasks with none record
 // nothing. OFFSET 0 keeps the destination to one lookup, not one per
-// reference. clock_timestamp orders an epic's notice after its task's when
-// one move records both.
+// reference. A direct message's top-level mention is answered at the top
+// level. clock_timestamp orders an epic's notice after its task's when one
+// move records both.
 func recordNoticeTx(ctx context.Context, tx pgx.Tx, taskID, kind, detail string) error {
 	_, err := tx.Exec(ctx, `INSERT INTO chat_notices (id, organization_id, task_id, kind, provider, external_workspace_id,
 			conversation_id, conversation_name, thread_id, subject_key, subject_title, detail, next_attempt_at)
-		SELECT $1, t.organization_id, t.id, $3, `+noticeColumnsSQL+`,
+		SELECT $1, t.organization_id, t.id, $3, d.dest->>'provider', COALESCE(d.dest->>'workspaceId', ''),
+			d.dest->>'conversationId', COALESCE(d.dest->>'conversationName', ''),
+			CASE WHEN d.dest->>'conversationKind' = 'dm' AND COALESCE((d.dest->>'topLevel')::boolean, false) THEN ''
+			     ELSE COALESCE(d.dest->>'threadId', '') END,
 			p.key_prefix || '-' || t.number, t.title, $4, clock_timestamp()
 		FROM tasks t JOIN projects p ON p.id = t.project_id
 		CROSS JOIN LATERAL (SELECT `+noticeDestSQL("t.origin")+` AS dest OFFSET 0) d
