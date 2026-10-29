@@ -80,21 +80,49 @@ func TestChatAnUnsureResumeAsksAndContinueResumesTheSession(t *testing.T) {
 			t.Fatalf("a button's value %q names the session", v)
 		}
 	}
+	questionID, _, ok := strings.Cut(values[0], ":")
+	if !ok || questionID == "" {
+		t.Fatalf("invalid Continue value %q", values[0])
+	}
+	requestByID := func(id string) req {
+		t.Helper()
+		var r req
+		if err := w.owner.QueryRow(w.ctx, `SELECT route, COALESCE(asked_route, ''), COALESCE(result_kind, ''),
+			COALESCE(result_id, ''), reasoning FROM chat_requests WHERE organization_id = $1 AND id = $2`, w.org, id).
+			Scan(&r.Route, &r.AskedRoute, &r.ResultKind, &r.ResultID, &r.Reasoning); err != nil {
+			t.Fatalf("request %q: %v; all requests %+v", id, err, w.requests())
+		}
+		return r
+	}
 	got := w.requests()
-	if len(got) != 2 || got[1].Route != "clarify" || got[1].AskedRoute != "resume" || !strings.Contains(got[1].Reasoning, "under the 75% bar") {
-		t.Fatalf("requests %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("want exactly 2 requests before Continue, got %d: %+v", len(got), got)
+	}
+	ask := requestByID(questionID)
+	if ask.Route != "clarify" || ask.AskedRoute != "resume" || !strings.Contains(ask.Reasoning, "under the 75% bar") {
+		t.Fatalf("original ask %+v; all requests %+v", ask, got)
 	}
 	before := w.sessions()
 	w.click("Márcia", "C1", q.TS, q.ThreadTS, values[0])
 	got = w.requests()
-	if len(got) != 3 || got[2].Route != "resume" || got[2].ResultKind != "session" || got[2].ResultID != session {
-		t.Fatalf("requests %+v", got)
+	if len(got) != 3 {
+		t.Fatalf("want exactly 3 requests after Continue, got %d: %+v", len(got), got)
+	}
+	continuedID := w.one(`SELECT id FROM chat_requests WHERE organization_id = $1 AND event_id =
+		(SELECT answered_by_event FROM chat_requests WHERE organization_id = $1 AND id = $2)`, w.org, questionID)
+	continued := requestByID(continuedID)
+	if continued.Route != "resume" || continued.ResultKind != "session" || continued.ResultID != session {
+		t.Fatalf("Continue request %+v; all requests %+v", continued, got)
 	}
 	if w.sessions() != before {
 		t.Fatal("Continue started a new session")
 	}
 	if w.messagesInto(session, "fix the nightly workflow failure") != 1 {
 		t.Fatal("the message did not go into the session")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'chat.message'
+		AND payload->>'text' = $2`, session, "fix the nightly workflow failure"); n != 1 {
+		t.Fatalf("want exactly one event with the original message, got %d", n)
 	}
 	if u := w.fake.Updates(); len(u) != 1 || u[0].Text != "Márcia chose Continue Nightly workflow failure" {
 		t.Fatalf("updates %+v", u)
