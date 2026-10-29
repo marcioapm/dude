@@ -65,6 +65,8 @@ async function submit(ctx: RequestContext): Promise<Response> {
       const [a] = await scope.sql`SELECT id FROM attachments WHERE id = ${input.anchor.attachmentId}
         AND preview_run_id = ${id} AND preview_server_name = ${name} AND uploaded_by = ${author} FOR UPDATE`;
       if (!a) throw badRequest("screenshot is not your upload to this preview server");
+      // Make a sweeper waiting on this lock recheck its stale retention predicate.
+      await scope.sql`UPDATE attachments SET detached_at = clock_timestamp() WHERE id = ${a.id}`;
     }
     const [row] = await scope.sql`WITH f AS (INSERT INTO preview_feedback
       (id, organization_id, project_id, preview_run_id, preview_server_name, author_person_id, submission_key, body, anchor, capture_sha)
@@ -87,8 +89,10 @@ async function list(ctx: RequestContext): Promise<Response> {
     const [r] = await scope.sql`SELECT id FROM runs WHERE id = ${ctx.params.id!} AND preview_branch IS NOT NULL`;
     if (!r) throw notFound();
     const rows = await scope.sql`SELECT ${scope.sql.unsafe(SELECT)} FROM preview_feedback f
-      WHERE f.preview_run_id = ${r.id} AND (${server ?? null}::text IS NULL OR f.preview_server_name = ${server ?? null})
-      AND (${status} = 'all' OR f.status = ${status}) AND f.id > ${after} ORDER BY f.id LIMIT ${limit + 1}` as PreviewFeedbackItem[];
+      WHERE f.preview_run_id = ${r.id}
+      ${server == null ? scope.sql`` : scope.sql`AND f.preview_server_name = ${server}`}
+      ${status === "all" ? scope.sql`` : scope.sql`AND f.status = ${status}`}
+      AND f.id > ${after} ORDER BY f.id LIMIT ${limit + 1}` as PreviewFeedbackItem[];
     return { feedback: rows.slice(0, limit), nextCursor: rows.length > limit ? rows[limit - 1]!.id : null };
   });
   return json(out, 200, { "cache-control": "no-store" });

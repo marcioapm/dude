@@ -22,6 +22,9 @@ CREATE TABLE preview_feedback (
   CHECK ((status = 'resolved') = (resolved_by IS NOT NULL))
 );
 CREATE INDEX preview_feedback_list_idx ON preview_feedback (preview_run_id, id);
+CREATE INDEX preview_feedback_status_idx ON preview_feedback (preview_run_id, status, id);
+CREATE INDEX preview_feedback_server_status_idx ON preview_feedback (preview_run_id, preview_server_name, status, id);
+CREATE INDEX preview_feedback_server_idx ON preview_feedback (preview_run_id, preview_server_name, id);
 CREATE INDEX preview_feedback_attachment_idx ON preview_feedback ((anchor->>'attachmentId'));
 ALTER TABLE preview_feedback ENABLE ROW LEVEL SECURITY;
 ALTER TABLE preview_feedback FORCE ROW LEVEL SECURITY;

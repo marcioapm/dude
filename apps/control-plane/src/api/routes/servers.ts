@@ -385,7 +385,24 @@ async function lookupPreviewServer(ctx: RequestContext): Promise<Response> {
   throw notFound(`no task of yours has a preview at ${origin}`);
 }
 
+async function validatePreviewServer(ctx: RequestContext): Promise<Response> {
+  const origin = previewOrigin(ctx);
+  const found = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
+    const [row] = await sql`SELECT 'branch' AS kind, o.id AS "organizationId", o.slug AS "organizationSlug",
+      r.project_id AS "projectId", r.id AS "previewRunId", r.preview_branch AS branch, s.name AS server, s.url
+      FROM preview_servers s JOIN runs r ON r.id = s.run_id JOIN organizations o ON o.id = s.organization_id
+      WHERE s.run_id = ${ctx.params.id!} AND s.name = ${ctx.params.name!} AND s.deleted_at IS NULL
+        AND r.kind = 'preview' AND r.preview_branch IS NOT NULL
+        AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`;
+    return row;
+  });
+  if (!found || !URL.canParse(found.url) || new URL(found.url).origin !== origin) throw notFound();
+  const { url: _url, ...owner } = found;
+  return json(owner, 200, { "cache-control": "no-store" });
+}
+
 export function registerServerRoutes(router: Router): void {
+  router.get("/v1/branch-previews/:id/servers/:name/owner", validatePreviewServer);
   router.get("/v1/projects/:id/servers", listProjectServers);
   router.put("/v1/projects/:id/servers/:name", putProjectServer);
   router.delete("/v1/projects/:id/servers/:name", deleteProjectServer);
