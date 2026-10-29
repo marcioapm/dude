@@ -27,6 +27,9 @@ func (placedTwice) Servers(context.Context, string) ([]lux.Server, error) { retu
 func TestARunsMemoryLimitIsItsLatestPlacements(t *testing.T) {
 	s := &Service{Lux: placedTwice{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	out := s.view(context.Background(), &runRow{ID: "run_1", Kind: "agent", Phase: "implement", Status: "running", LuxRunID: "lr_1"}, nil)
+	if out.Run == nil || out.Run.Epoch != 2 {
+		t.Fatalf("epoch = %v, want the current live placement's epoch 2", out.Run)
+	}
 	if out.Run == nil || out.Run.MemoryLimit == nil || *out.Run.MemoryLimit != 16_320_875_520 {
 		t.Fatalf("memoryLimit = %v, want the second placement's 16320875520", out.Run.MemoryLimit)
 	}

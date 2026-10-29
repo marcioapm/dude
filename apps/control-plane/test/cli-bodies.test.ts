@@ -74,6 +74,7 @@ const bodies: Record<string, (r: Recorded) => ZodTypeAny[]> = {
   "PUT /v1/tasks/:id/pull-request-choice": () => [pullRequestChoiceInput],
   "POST /v1/tasks/:id/done-without-pull-request": () => [],
   "POST /v1/projects/:id/branch-previews": () => [branchPreviewInput],
+  "POST /v1/runs/:runId/servers/:name/start": () => [],
 };
 
 // dude CLI routes with a body that nothing here checks yet. It only shrinks:

@@ -101,16 +101,17 @@ def test_cli_branch_preview_lifecycle(client: ApiClient, forge_project: dict, fa
     recipe = {"name": "web", "port": 3000, "command": "npm run dev", "workdir": "", "env": [], "autostartInPreviews": True}
     assert client.put(f"/v1/projects/{pid}/servers/web", recipe).status_code == 200
     ids = []
+    assert client.put(f"/v1/projects/{pid}/servers/api", {**recipe, "name": "api", "port": 3001}).status_code == 200
     for branch in ("feature/acme-login", "feature/acme-settings"):
         fake_github.push_branch(branch)
-        started = cli("start", project, branch)
+        started = cli("create", project, branch)
         preview_id = started["id"]
         assert preview_id and preview_id not in ids, started
         ids.append(preview_id)
         assert started["branch"] == branch, started
-        [web] = started["servers"]
+        web = next(s for s in started["servers"] if s["name"] == "web")
         assert web["url"] and f"web-{branch.replace('/', '-')}-" in web["url"], web
-        again = cli("start", project, branch)
+        again = cli("create", project, branch)
         assert again["id"] == preview_id, again
 
         # A paused preview with servers proves the real orchestrator reconciled the CLI's request.
@@ -124,6 +125,20 @@ def test_cli_branch_preview_lifecycle(client: ApiClient, forge_project: dict, fa
         assert listed[0]["branch"] == branch and listed[0]["status"] == "paused", listed
         assert listed[0]["servers"] == shown["servers"], listed
 
+        live = client.get(f"/v1/runs/{preview_id}/servers").json()
+        assert live["run"]["asleep"] is True and not live["run"]["luxRunId"], live
+        assert all(s["state"] != "ready" for s in live["servers"]), live
+
+        # Both address forms wake the existing preview, never allocate a new one.
+        address = (preview_id,) if len(ids) == 1 else (project, branch)
+        waking = cli("start", *address)
+        assert waking["id"] == preview_id and "ready" in waking, waking
+        ready = cli("start", *address, "--wait", "30s")
+        assert ready["id"] == preview_id and ready["ready"] is True, ready
+        assert ready["run"]["asleep"] is False and ready["run"]["luxState"] == "running", ready
+        assert {s["name"] for s in ready["servers"] if s["state"] == "ready"} == {"web", "api"}, ready
+        assert all(s["serverState"] == "ready" for s in ready["servers"]), ready
+
         if len(ids) == 1:
             cli("stop", preview_id)
         else:
@@ -132,6 +147,28 @@ def test_cli_branch_preview_lifecycle(client: ApiClient, forge_project: dict, fa
                            timeout=60, message="the CLI stop never ended the preview")
         assert ended["id"] == preview_id and ended["branch"] == branch and ended["endedAt"], ended
         assert cli("list", project)["previews"] == []
+
+    fake_github.push_branch("feature/create-start")
+    ready = cli("create", project, "feature/create-start", "--start", "--wait", "30s")
+    assert ready["ready"] is True and ready["servers"][0]["state"] == "ready", ready
+    assert ready["servers"][0]["serverState"] == "ready", ready
+    cli("stop", ready["id"])
+
+    # The supported fakeLux never-ready recipe leaves a real running Run
+    # with allocated URLs. The actual CLI must still time out, not succeed.
+    assert client.put(f"/v1/projects/{pid}/servers/api", {**recipe, "name": "api", "port": 3001,
+                                                       "command": "fakelux-never-ready"}).status_code == 200
+    fake_github.push_branch("feature/not-ready")
+    pending = cli("create", project, "feature/not-ready", "--start")
+    preview_id = pending["id"]
+    wait_until(lambda: (s := client.get(f"/v1/runs/{preview_id}/servers").json())["run"]["luxState"] == "running"
+               and any(sv["name"] == "web" and sv["state"] == "ready" for sv in s["servers"]), timeout=30,
+               message="the fixture never reached one-ready/one-starting")
+    result = subprocess.run([str(binary), "preview", "start", preview_id, "--wait", "500ms"],
+                            cwd=tmp_path, env=cli_env, input="", capture_output=True, text=True, timeout=5)
+    assert result.returncode != 0 and preview_id in result.stderr and "api=starting" in result.stderr, result
+    assert "deadline" in result.stderr or "timed out" in result.stderr, result
+    cli("stop", preview_id)
 
 
 def lux_get(env, path: str) -> dict:

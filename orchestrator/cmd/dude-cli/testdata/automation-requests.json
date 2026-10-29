@@ -516,15 +516,21 @@
   {
     "args": [
       "preview",
-      "start",
+      "create",
       "ABS",
-      "feature/login",
-      "--wait",
-      "0"
+      "feature/login"
     ],
     "route": "POST /v1/projects/:id/branch-previews",
     "body": {
       "branch": "feature/login"
     }
+  },
+  {
+    "args": [
+      "preview",
+      "start",
+      "run_bp"
+    ],
+    "route": "POST /v1/runs/:runId/servers/:name/start"
   }
 ]

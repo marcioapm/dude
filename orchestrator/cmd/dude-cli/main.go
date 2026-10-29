@@ -12,6 +12,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -78,7 +79,7 @@ var nouns = []struct{ name, help string }{
 	{"feedback", "your review of a task's work, drafted and sent to its agents"},
 	{"project", "projects and their boards"},
 	{"repo", "a project's repositories, and agents' requests for another"},
-	{"preview", "a project branch's preview, with no task: start, list, show, stop"},
+	{"preview", "a project branch's preview, with no task: create, start, list, show, stop"},
 	{"epic", "epics: a project's tasks grouped, with their agents' conversations"},
 	{"note", "notes pinned on an epic, which every agent on it reads"},
 	{"brainstorm", "an agent to think something through with"},
@@ -178,6 +179,9 @@ func main() {
 }
 
 type cli struct {
+	ctx                      context.Context
+	previewPoll              time.Duration
+	previewAllocationTimeout time.Duration
 	// creds is the server and key for an organisation ("" for the current).
 	creds func(org string) (base, key string, err error)
 	// login and logout keep credentials; tests replace them.
@@ -241,7 +245,11 @@ func (c *cli) request(method, path string, body any) (any, error) {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.base+path, rd)
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
 	if err != nil {
 		return nil, err
 	}
