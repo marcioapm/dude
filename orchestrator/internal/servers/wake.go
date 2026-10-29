@@ -1108,12 +1108,14 @@ func (p *Previews) parkIfIdle(ctx context.Context, r wakeRun) (bool, error) {
 	}
 	if !allIdle {
 		return false, p.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `UPDATE runs SET park_checked_at = now() WHERE id = $1`, r.ID); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `UPDATE preview_servers SET idle_at = NULL, idle_last_request_at = NULL
 				WHERE run_id = $1 AND lux_server_id = ANY($2)`, r.ID, db.NonNil(used)); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE runs SET park_checked_at = now() WHERE id = $1`, r.ID)
-			return err
+			return nil
 		})
 	}
 	// Recorded before lux is asked, as every park is: lux's "stopped" is

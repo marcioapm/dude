@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -21,6 +22,8 @@ func (w *world) seedServerFeedback(id string) {
 		name, content_type, width, height, bytes, sha256, object_key, original_content_type, original_width, original_height, original_bytes, original_key)
 		VALUES ($1, $2, $3, 'web', $4, 'shot.png', 'image/png', 1, 1, 1, 'sha', $5, 'image/png', 1, 1, 1, $6)`,
 		"att_"+id, w.org, id, "per_feedback_"+id, "delivered-"+id, "original-"+id)
+	mustExec(w.t, w.owner, `UPDATE preview_feedback SET anchor = anchor || jsonb_build_object('attachmentId', $2::text)
+		WHERE preview_run_id = $1`, id, "att_"+id)
 }
 
 func (w *world) assertServerFeedback(id string, want int) {
@@ -34,6 +37,12 @@ func (w *world) assertServerFeedback(id string, want int) {
 		}
 		if got := w.count(`SELECT count(*) FROM attachment_object_deletions WHERE object_key = ANY($1)`, []string{"delivered-" + id, "original-" + id}); got != 2 {
 			w.t.Fatalf("queued %d screenshot blobs, want 2", got)
+		}
+	} else {
+		if got := w.count(`SELECT count(*) FROM attachments a WHERE a.preview_run_id = $1
+			AND a.id = 'att_' || $1 AND a.object_key = 'delivered-' || $1 AND a.original_key = 'original-' || $1
+			AND EXISTS (SELECT 1 FROM preview_feedback f WHERE f.anchor->>'attachmentId' = a.id)`, id); got != 1 {
+			w.t.Fatalf("live feedback lost its referenced screenshot: got %d", got)
 		}
 	}
 }
@@ -52,10 +61,12 @@ func TestServerFeedbackSurvivesSleepCrashReplacementAndPush(t *testing.T) {
 	w.until("sleep", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, id) == 1 })
 	w.assertServerFeedback(id, 2)
 	w.open(web)
+	w.assertServerFeedback(id, 2)
 	w.lux.Crash(w.luxRuns()[0].ID)
 	w.until("crashed preview asleep", func() bool { return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, id) == 1 })
 	w.assertServerFeedback(id, 2)
 	w.open(web)
+	w.assertServerFeedback(id, 2)
 	if err := w.previews.Lux.Cancel(context.Background(), w.luxRuns()[0].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +74,27 @@ func TestServerFeedbackSurvivesSleepCrashReplacementAndPush(t *testing.T) {
 	w.open(web)
 	w.until("new transport", func() bool { return len(w.luxRuns()) == 2 })
 	w.assertServerFeedback(id, 2)
+	sha := w.gh.AdvanceBase("feature/feedback", "advance feedback preview")
+	before := len(w.luxRuns()[1].Syncs)
 	if err := w.previews.BranchEvent(context.Background(), w.org, "acme/target", "feature/feedback", false, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	w.pump()
+	w.until("new branch SHA synced", func() bool {
+		if len(w.luxRuns()[1].Syncs) <= before {
+			return false
+		}
+		frames, err := w.previews.Lux.Events(context.Background(), w.luxRuns()[1].ID, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, frame := range frames {
+			var event map[string]any
+			if frame.EventType == "git.sync" && json.Unmarshal(frame.EventData, &event) == nil && event["to"] == sha {
+				return true
+			}
+		}
+		return false
+	})
 	w.assertServerFeedback(id, 2)
 }
 
