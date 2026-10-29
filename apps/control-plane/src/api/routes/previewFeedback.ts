@@ -10,15 +10,15 @@ const SELECT = `f.id, f.project_id AS "projectId", f.preview_run_id AS "previewR
   f.resolution_note AS "resolutionNote", f.history,
   (SELECT json_build_object('id', p.id, 'name', p.name) FROM people p WHERE p.id = f.author_person_id) AS author`;
 
-/** Shared lock order with the feed: server, then Run, before item/attachment. */
+/** Run first, matching wake/feed lifecycle transactions, then server and item. */
 export async function liveFeedbackServer(scope: OrgScope, id: string, name: string): Promise<{ projectId: string; url: string }> {
-  const [s] = await scope.sql`SELECT url FROM preview_servers WHERE run_id = ${id} AND name = ${name}
-    AND deleted_at IS NULL FOR SHARE` as Array<{ url: string }>;
-  if (!s) throw notFound();
   const [r] = await scope.sql`SELECT project_id AS "projectId" FROM runs WHERE id = ${id}
     AND kind = 'preview' AND preview_branch IS NOT NULL
     AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused') FOR SHARE` as Array<{ projectId: string }>;
   if (!r) throw notFound();
+  const [s] = await scope.sql`SELECT url FROM preview_servers WHERE run_id = ${id} AND name = ${name}
+    AND deleted_at IS NULL FOR SHARE` as Array<{ url: string }>;
+  if (!s) throw notFound();
   return { ...r, url: s.url };
 }
 

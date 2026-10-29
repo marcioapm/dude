@@ -204,6 +204,15 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 	}
 	kick := false
 	err = f.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		// Wake acknowledgements lock Run then servers. Feedback submissions
+		// share that order so a concurrent feed event cannot invert it.
+		var exists string
+		if err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE id = $1 FOR UPDATE`, runID).Scan(&exists); err != nil {
+			if db.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
 		switch e.Type {
 		case "server.wake_requested":
 			// One wake per event, however often it is seen: wake_event_id

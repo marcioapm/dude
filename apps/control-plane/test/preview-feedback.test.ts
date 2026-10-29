@@ -211,3 +211,19 @@ test("submit and resolve racing termination cannot leave feedback behind", async
     expect((await owner`SELECT 1 FROM preview_feedback WHERE preview_run_id = ${id}`).length).toBe(0);
   }
 });
+
+test("submission does not invert the wake transaction's Run then server locks", async () => {
+  const id = "run_pf_lock_order"; await preview(id);
+  let locked!: () => void, proceed!: () => void;
+  const ready = new Promise<void>((r) => { locked = r; }); const gate = new Promise<void>((r) => { proceed = r; });
+  const wake = owner.begin(async (tx) => {
+    await tx`SELECT id FROM runs WHERE id = ${id} FOR UPDATE`;
+    locked(); await gate;
+    await tx`UPDATE preview_servers SET idle_at = NULL WHERE run_id = ${id}`;
+  });
+  await ready;
+  const pending = submit(id);
+  await Bun.sleep(30); proceed();
+  await wake;
+  expect((await pending).status).toBe(201);
+});

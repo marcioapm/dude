@@ -55,19 +55,18 @@ $$;
 REVOKE ALL ON FUNCTION queue_preview_upload_cleanup(text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION queue_preview_upload_cleanup(text, text) TO dude_app;
 
--- Server first, then Run: feed tombstoning already uses this order. A Run
--- ending locks no server rows; its purge and these shared Run locks serialize.
+-- Run first, then server, matching wake and feed lifecycle transactions.
 CREATE FUNCTION require_live_feedback_server() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE owner_project text;
 BEGIN
   IF NEW.preview_run_id IS NULL THEN RETURN NEW; END IF;
-  PERFORM 1 FROM preview_servers s WHERE s.run_id = NEW.preview_run_id
-    AND s.name = NEW.preview_server_name AND s.organization_id = NEW.organization_id
-    AND s.deleted_at IS NULL FOR SHARE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'preview server not found' USING ERRCODE = '23503'; END IF;
   SELECT r.project_id INTO owner_project FROM runs r WHERE r.id = NEW.preview_run_id
     AND r.organization_id = NEW.organization_id AND r.preview_branch IS NOT NULL
     AND r.kind = 'preview' AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused') FOR SHARE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'preview server not found' USING ERRCODE = '23503'; END IF;
+  PERFORM 1 FROM preview_servers s WHERE s.run_id = NEW.preview_run_id
+    AND s.name = NEW.preview_server_name AND s.organization_id = NEW.organization_id
+    AND s.deleted_at IS NULL FOR SHARE;
   IF NOT FOUND THEN RAISE EXCEPTION 'preview server not found' USING ERRCODE = '23503'; END IF;
   IF TG_TABLE_NAME = 'preview_feedback' THEN
     IF NEW.project_id <> owner_project OR NOT EXISTS (SELECT 1 FROM people p
