@@ -91,6 +91,9 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 						return fail(e)
 					}
 					run, _ := view["run"].(obj)
+					status = str(run, "state")
+					preview["status"] = status
+					latest = "status=" + status
 					latest += " luxState=" + str(run, "luxState") + " stage=" + str(run, "previewStage")
 					switch str(run, "state") {
 					case "completed", "failed", "aborted":
@@ -160,7 +163,7 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 				}
 				poll := c.previewPoll
 				if poll <= 0 {
-					poll = 200 * time.Millisecond
+					poll = time.Second
 				}
 				timer := time.NewTimer(poll)
 				select {
@@ -169,9 +172,11 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 					return fail(fmt.Errorf("timed out waiting for preview: %w", ctx.Err()))
 				case <-timer.C:
 				}
-				preview, err = c.getObj("/v1/branch-previews/" + esc(id))
-				if err != nil {
-					return fail(err)
+				if !wake {
+					preview, err = c.getObj("/v1/branch-previews/" + esc(id))
+					if err != nil {
+						return fail(err)
+					}
 				}
 			}
 		}

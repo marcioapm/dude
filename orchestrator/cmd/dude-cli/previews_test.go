@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -179,6 +180,47 @@ func TestPreviewLifecycle(t *testing.T) {
 			}
 			if strings.Contains(strings.Join(tc.args, " "), "--wait") && !strings.Contains(out, `"ready": true`) {
 				t.Fatalf("not ready: %s", out)
+			}
+		})
+	}
+}
+
+func TestPreviewWakePolling(t *testing.T) {
+	for _, create := range []bool{false, true} {
+		t.Run(fmt.Sprint("create=", create), func(t *testing.T) {
+			views, previewReads := 0, 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.URL.Path == "/v1/projects":
+					fmt.Fprint(w, `{"projects":[{"id":"prj_1","key":"ABS"}]}`)
+				case strings.HasSuffix(r.URL.Path, "/servers"):
+					views++
+					fmt.Fprint(w, `{"run":{"state":"running","luxState":"running"},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":"https://web.test","state":"ready","serverState":"ready"}]}`)
+				case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/start"):
+					fmt.Fprint(w, `{}`)
+				default:
+					if r.Method == "GET" {
+						previewReads++
+					}
+					fmt.Fprint(w, `{"id":"run_bp","status":"pending","servers":[]}`)
+				}
+			}))
+			defer srv.Close()
+			var out bytes.Buffer
+			c := &cli{creds: func(string) (string, string, error) { return srv.URL, "key", nil }, http: srv.Client(), out: &out}
+			args := []string{"preview", "start", "run_bp", "--wait", "3s"}
+			if create {
+				args = []string{"preview", "create", "prj_1", "feature/login", "--start", "--wait", "3s"}
+			}
+			began := time.Now()
+			err := c.run(args)
+			wantReads := 1
+			if create {
+				wantReads = 0
+			}
+			if err != nil || views != 2 || previewReads != wantReads || !strings.Contains(out.String(), `"status": "running"`) || time.Since(began) < 900*time.Millisecond {
+				t.Fatalf("wake polling: views=%d previewReads=%d elapsed=%s out=%s err=%v", views, previewReads, time.Since(began), out.String(), err)
 			}
 		})
 	}
