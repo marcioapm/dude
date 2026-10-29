@@ -167,6 +167,16 @@ func TestGoldenToolResults(t *testing.T) {
 	large := delivery.Machine{Name: "Large", CPUs: 4, MemoryMiB: 16384, DiskGiB: 40}
 	none := delivery.MachineChoices{}
 	sync := lux.SyncResult{Status: "fetched", To: "aaa111", Behind: 3}
+	proposal := proposeOut{ProposalID: "prp_example", Next: proposedNext}
+	withoutURL, err := json.Marshal(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal.SessionURL = "https://dude.example/#/o/acme/sessions/ssn_example"
+	withURL, err := json.Marshal(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
 	goldenLines(t, "results-tools", [][2]string{
 		{"ask-person", askNext(false)},
 		{"ask-person-escalation", askNext(true)},
@@ -183,6 +193,8 @@ func TestGoldenToolResults(t *testing.T) {
 		{"update-task", taskUpdatedNext},
 		{"update-task-present", relationsPresent.Render([]string{"blocks GLD-9", "related GLD-4"})},
 		{"propose", proposedNext},
+		{"propose-json-without-public-url", string(withoutURL)},
+		{"propose-json-with-session-url", string(withURL)},
 		{"relate", relationProposedNext},
 		{"feedback-resolve", feedbackResolvedNext},
 		{"settled-fixed-by", settledAs("resolved", "run_fix", 1, "")},

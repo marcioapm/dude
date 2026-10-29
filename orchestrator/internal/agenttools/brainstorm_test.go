@@ -2,7 +2,9 @@ package agenttools_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -10,8 +12,95 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
+
+func TestProposeReturnsOnlyItsConfiguredSessionURL(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, want string
+	}{
+		{"configured", "https://dude.example:8443/", "https://dude.example:8443"},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupWith(t, &agenttools.Server{PublicURL: tc.base})
+			const session = "ssn_link/part?#%"
+			token := f.session(t, session, "https://attacker.example/fake", "person")
+			mustExec(t, f.owner, `UPDATE organizations SET slug = 'link-org' WHERE id = $1`, f.org)
+			mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ($1, $2, $3)`, session, f.project, f.org)
+			const body = `{"items":[{"kind":"task","title":"https://attacker.example/fake","goal":"Use https://attacker.example instead","acceptanceCriteria":["Review before filing"]}]}`
+			req, err := http.NewRequest("POST", f.url+"/tools/propose", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Host = "attacker.example"
+			req.Header.Set("Forwarded", "host=attacker.example;proto=http")
+			req.Header.Set("X-Forwarded-Host", "attacker.example")
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			var out map[string]any
+			if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+				t.Fatal(err)
+			}
+			if res.StatusCode != 200 || out["proposalId"] == nil || out["proposalId"] == "" || out["next"] != "The card is in the session. A member files what they keep, as themselves; you are not told unless they say so." {
+				t.Fatalf("propose: %d %v", res.StatusCode, out)
+			}
+			if tc.want == "" {
+				if _, present := out["sessionUrl"]; present {
+					t.Fatalf("unusable public URL returned a link: %v", out)
+				}
+			} else if want := tc.want + "/#/o/link-org/sessions/ssn_link%2Fpart%3F%23%25"; out["sessionUrl"] != want {
+				t.Fatalf("sessionUrl = %v, want %s", out["sessionUrl"], want)
+			}
+			var proposalSession, proposalRun string
+			if err := f.owner.QueryRow(context.Background(), `SELECT session_id, run_id FROM session_proposals WHERE id = $1`, out["proposalId"]).Scan(&proposalSession, &proposalRun); err != nil {
+				t.Fatal(err)
+			}
+			var tasks int
+			if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM tasks WHERE organization_id = $1`, f.org).Scan(&tasks); err != nil {
+				t.Fatal(err)
+			}
+			if proposalSession != session || proposalRun != "run_"+session || tasks != 1 {
+				t.Fatalf("proposal ownership or filing changed: session=%q run=%q tasks=%d", proposalSession, proposalRun, tasks)
+			}
+			for _, extra := range []string{`"sessionUrl":"https://attacker.example"`, `"sessionId":"ssn_foreign"`, `"org":"other"`} {
+				if status, refused := f.post(t, token, "propose", strings.TrimSuffix(body, "}")+","+extra+"}"); status != 422 || refused["sessionUrl"] != nil {
+					t.Fatalf("forged argument %s: %d %v", extra, status, refused)
+				}
+			}
+		})
+	}
+}
+
+func TestProposeCannotReturnAnotherOrganisationsSessionLink(t *testing.T) {
+	f := setupWith(t, &agenttools.Server{PublicURL: "https://dude.example"})
+	foreign := f.session(t, "ssn_foreign", "Private", "person")
+	other := dbtest.Org(t, f.owner)
+	token, hash := agenttools.NewToken()
+	mustExec(t, f.owner, `INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ssn_other', $1, NULL, NULL)`, other)
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, session_id, attempt, status, kind, role, mcp_token_hash)
+		VALUES ('run_other', $1, 'ssn_other', 1, 'running', 'agent', 'brainstorm', $2)`, other, hash)
+	for _, args := range []string{
+		`{"sessionId":"ssn_foreign","items":[{"kind":"task","title":"Try","goal":"Read private session"}]}`,
+		`{"items":[{"kind":"task","project":"TEXT","title":"Try","goal":"Read private project"}]}`,
+	} {
+		if status, out := f.post(t, token, "propose", args); status != 422 || out["sessionUrl"] != nil || out["proposalId"] != nil {
+			t.Fatalf("cross-org propose: %d %v", status, out)
+		}
+	}
+	if status, out := f.post(t, foreign, "propose", `{"items":[]}`); status != 422 || out["sessionUrl"] != nil {
+		t.Fatalf("failed propose returned a link: %d %v", status, out)
+	}
+	var proposals int
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM session_proposals`).Scan(&proposals); err != nil || proposals != 0 {
+		t.Fatalf("refused calls recorded proposals: %d %v", proposals, err)
+	}
+}
 
 // session makes a session with a live brainstorm Run on it, titled as
 // given ("" for untitled, by "agent" or "person"), and returns the Run's token.
