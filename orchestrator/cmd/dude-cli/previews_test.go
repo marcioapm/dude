@@ -366,14 +366,19 @@ func TestPreviewFailureFreshness(t *testing.T) {
 								luxState = "starting"
 							}
 						}
-						fmt.Fprintf(w, `{"run":{"state":"running","luxState":%q,"epoch":2},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":"https://web.test","state":%q,"serverState":%q,"epoch":%d}]}`, luxState, state, serverState, epoch)
+						server := obj{"name": "web", "url": "https://web.test", "state": state, "serverState": serverState, "epoch": epoch}
+						if serverState == "no answer" {
+							// An expired URL wake with no attached lux Run has no epoch.
+							luxState, server["state"], server["epoch"] = "stopped", "stopped", nil
+						}
+						json.NewEncoder(w).Encode(obj{"run": obj{"state": "running", "luxState": luxState, "epoch": 2}, "recipes": []obj{{"name": "web", "autostartInPreviews": true}}, "servers": []obj{server}})
 					default:
 						fmt.Fprint(w, `{"id":"run_bp","status":"running"}`)
 					}
 				}))
 				defer srv.Close()
 				out, err := runCLI(t, srv, "", "preview", "start", "run_bp", "--wait", "1s")
-				if mode == "current" {
+				if mode == "current" || (failure == "no answer" && mode != "pre-wake") {
 					if err == nil || !strings.Contains(err.Error(), "web failed") || views != 2 || posts != 1 {
 						t.Fatalf("current failure must fail fast: views=%d posts=%d err=%v", views, posts, err)
 					}
