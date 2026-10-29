@@ -179,6 +179,20 @@ export interface ToldTurn {
   at: string;
 }
 
+/** A settled cohort's digest, queued until its existing directive receipt arrives. */
+export interface CohortResultTurn {
+  kind: "cohortResult";
+  id: string;
+  cohortId: string;
+  parentRunId: string;
+  directiveId: string;
+  completed: number;
+  total: number;
+  members: Array<{ runId: string; status: "completed" | "failed" | "aborted" }>;
+  at: string;
+  deliveredAt: string | null;
+}
+
 /** A turn's token totals, when the turn ended on something other than a message. */
 export interface UsageTurn {
   kind: "usage";
@@ -398,7 +412,7 @@ function setupFailure(value: unknown): SetupFailure | null {
 
 export type Turn =
   | ToolTurn | MessageTurn | HumanTurn | ThoughtTurn | PromptTurn | ToldTurn | UsageTurn | QuestionTurn | EventTurn | ProgressTurn
-  | RepositoryRequestTurn | NoticeTurn | EndedTurn | PeerTurn | PeerWaitTurn | NoteToldTurn | DigestTurn;
+  | RepositoryRequestTurn | NoticeTurn | EndedTurn | PeerTurn | PeerWaitTurn | NoteToldTurn | DigestTurn | CohortResultTurn;
 
 /**
  * A message between this Run's task and a peer's (agent.message.sent on
@@ -708,6 +722,8 @@ export interface Projection {
   placeholderCalls: Set<ToolTurn>;
   /** Steers and answers by directive id, so a delivery marks the turn it belongs to. */
   steersByDirective: Map<string, HumanTurn>;
+  /** Run + directive scoped correlation, including receipts that precede their queued event. */
+  cohortDeliveries: Map<string, CohortResultTurn | string>;
   questionsById: Map<string, QuestionTurn>;
   repoRequestsById: Map<string, RepositoryRequestTurn>;
   /** Where the progress row is in `turns`, once there is one. */
@@ -823,6 +839,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     childToolsByCall: new Map(),
     placeholderCalls: new Set(),
     steersByDirective: new Map(),
+    cohortDeliveries: new Map(),
     questionsById: new Map(),
     repoRequestsById: new Map(),
     progressIndex: null,
@@ -1349,6 +1366,28 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case EventTypes.CohortQueued: {
+        if (payload.parentRunId !== event.runId || typeof payload.cohortId !== "string" || typeof payload.directiveId !== "string") break;
+        const key = `${event.runId}:${payload.directiveId}`;
+        const existing = state.cohortDeliveries.get(key);
+        if (typeof existing === "object") break;
+        const members: CohortResultTurn["members"] = [];
+        for (const value of Array.isArray(payload.members) ? payload.members.slice(0, 8) : []) {
+          if (value && typeof value === "object" && typeof value.runId === "string" && /^run_[a-zA-Z0-9_-]+$/.test(value.runId)
+            && (value.status === "completed" || value.status === "failed" || value.status === "aborted")) {
+            members.push({ runId: value.runId, status: value.status });
+          }
+        }
+        if (!members.length || payload.total !== members.length || payload.completed !== members.filter((m) => m.status === "completed").length) break;
+        const turn: CohortResultTurn = { kind: "cohortResult", id: `${event.runId}:${payload.cohortId}`,
+          cohortId: payload.cohortId, parentRunId: event.runId!, directiveId: payload.directiveId,
+          completed: Number(payload.completed), total: members.length, members, at: event.occurredAt,
+          deliveredAt: typeof existing === "string" ? existing : null };
+        state.cohortDeliveries.set(key, turn);
+        turns.push(turn);
+        break;
+      }
+
       case EventTypes.DirectiveAccepted: {
         const lands = landsOf(payload.lands);
         if (lands) state.lands = lands;
@@ -1361,6 +1400,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.DirectiveDelivered: {
+        if (typeof payload.directiveId === "string") {
+          const key = `${event.runId}:${payload.directiveId}`;
+          const cohort = state.cohortDeliveries.get(key);
+          if (typeof cohort === "object") cohort.deliveredAt ??= event.occurredAt;
+          else if (!cohort) state.cohortDeliveries.set(key, event.occurredAt);
+        }
         // A checks send-back is told where the agent received it. A failure leaves it waiting: a receipt after it
         // still delivers it, as for a steer.
         const send = state.checksSend;

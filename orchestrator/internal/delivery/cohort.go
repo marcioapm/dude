@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 const CohortMaxMembers = 8
@@ -136,6 +137,22 @@ func deliverCohortTx(ctx context.Context, tx pgx.Tx, p childClaim, c *lockedChil
 			return true, false, err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE child_cohorts SET directive_id=$2 WHERE id=$1`, cohort, directive); err != nil {
+			return true, false, err
+		}
+		// Only safe result metadata goes to the transcript; reports stay in the digest.
+		visible := make([]map[string]string, 0, len(members))
+		for _, m := range members {
+			visible = append(visible, map[string]string{"runId": m.ID, "status": m.Status})
+		}
+		var project string
+		if err := tx.QueryRow(ctx, `SELECT project_id FROM runs WHERE id=$1`, p.Parent).Scan(&project); err != nil {
+			return true, false, err
+		}
+		ref := RunRef{Org: p.Org, ProjectID: project, TaskID: c.TaskID, RunID: p.Parent}
+		if _, err := ledger.Append(ctx, tx, ref.Event("run.cohort.queued", ledger.ActorSystem, map[string]any{
+			"cohortId": cohort, "parentRunId": p.Parent, "directiveId": directive,
+			"completed": counts["completed"], "total": len(members), "members": visible,
+		})); err != nil {
 			return true, false, err
 		}
 		notified = true

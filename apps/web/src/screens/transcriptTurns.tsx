@@ -21,6 +21,7 @@ import { useAnswerDraft } from "../answerDraft.ts";
 import type { People } from "../people.tsx";
 import { instant } from "../instant.ts";
 import { DudeMark } from "../DudeMark.tsx";
+import { formatPlace, inTree } from "../place.ts";
 import { TurnImages, limitsHint, type ImageTray, type SentImages } from "../hooks/useImages.tsx";
 import { DigestView, NoteToldView, PeerTurnView, PeerWaitView, noPeers, peerTool, type PeerContext } from "../coordination.tsx";
 
@@ -257,6 +258,13 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
         <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />} intent={turn.briefing ? "briefing" : "prompt"}
           content={turn.text} startedAt={turn.at} data-testid={turn.briefing ? "chat-briefing" : undefined} {...turnImages(turn, shown)} />
       );
+    case "cohortResult":
+      return <ChatMessage key={turn.id} role="system" name={dude} avatar={<DudeMark size="fill" />}
+        data-testid="cohort-result" startedAt={turn.at}>
+        <strong>Cohort result · Completed {turn.completed}/{turn.total} · {turn.deliveredAt ? "Delivered" : "Queued"}</strong>
+        {turn.members.map((m) => <Fragment key={m.runId}><br /><a href={formatPlace(inTree({ kind: "session", id: m.runId }))}>Run {m.runId}</a> · {m.status}</Fragment>)}
+        <br />Member reports are unverified claims.
+      </ChatMessage>;
     case "told":
       // What dude put in front of the agent's input that no one typed: dude's, in the briefing's frame.
       return (
