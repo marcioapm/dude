@@ -380,6 +380,12 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
                 preview.keyboard.press("Control+Enter")
             _wait_ov(preview, "ov-saved")
             assert "Feedback submitted" in _ov(preview, "r => r.querySelector('[data-testid=ov-saved]').textContent")
+            if n == 0:
+                assert errors == [
+                    f"{relay.url}: Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+                    f"{relay.url}: Failed to load resource: the server responded with a status of 403 (Forbidden)",
+                ], errors
+                errors.clear()  # The two deliberately refused requests were checked above.
         assert len(submissions) == 5 and len(screenshot_uploads) == 3
         assert submissions[0] == submissions[1], submissions[:2]
         assert submissions[0]["submissionKey"] == submissions[1]["submissionKey"] == submissions[2]["submissionKey"], submissions[:3]
