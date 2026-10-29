@@ -532,5 +532,49 @@
       "run_bp"
     ],
     "route": "POST /v1/runs/:runId/servers/:name/start"
+  },
+  {
+    "args": [
+      "preview",
+      "resolve-feedback",
+      "pfb_1",
+      "--note",
+      "fixed"
+    ],
+    "route": "POST /v1/preview-feedback/:id/resolve",
+    "body": {
+      "note": "fixed"
+    }
+  },
+  {
+    "args": [
+      "preview",
+      "reopen-feedback",
+      "pfb_1",
+      "--note",
+      "still broken"
+    ],
+    "route": "POST /v1/preview-feedback/:id/reopen",
+    "body": {
+      "note": "still broken"
+    }
+  },
+  {
+    "args": [
+      "preview",
+      "resolve-feedback",
+      "pfb_1"
+    ],
+    "route": "POST /v1/preview-feedback/:id/resolve",
+    "body": {}
+  },
+  {
+    "args": [
+      "preview",
+      "reopen-feedback",
+      "pfb_1"
+    ],
+    "route": "POST /v1/preview-feedback/:id/reopen",
+    "body": {}
   }
 ]

@@ -109,6 +109,10 @@ func automationCases(t *testing.T) []automationCase {
 		{[]string{"preview", "create", "ABS", "feature/login"}, "", "POST", "/v1/projects/prj_1/branch-previews",
 			`{"branch":"feature/login"}`, ""},
 		{[]string{"preview", "start", "run_bp"}, "", "POST", "/v1/runs/run_bp/servers/web/start", ``, ""},
+		{[]string{"preview", "resolve-feedback", "pfb_1", "--note", "fixed"}, "", "POST", "/v1/preview-feedback/pfb_1/resolve", `{"note":"fixed"}`, ""},
+		{[]string{"preview", "reopen-feedback", "pfb_1", "--note", "still broken"}, "", "POST", "/v1/preview-feedback/pfb_1/reopen", `{"note":"still broken"}`, ""},
+		{[]string{"preview", "resolve-feedback", "pfb_1"}, "", "POST", "/v1/preview-feedback/pfb_1/resolve", `{}`, ""},
+		{[]string{"preview", "reopen-feedback", "pfb_1"}, "", "POST", "/v1/preview-feedback/pfb_1/reopen", `{}`, ""},
 	}
 }
 
