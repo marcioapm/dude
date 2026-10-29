@@ -179,8 +179,9 @@ func main() {
 }
 
 type cli struct {
-	ctx         context.Context
-	previewPoll time.Duration
+	ctx                      context.Context
+	previewPoll              time.Duration
+	previewAllocationTimeout time.Duration
 	// creds is the server and key for an organisation ("" for the current).
 	creds func(org string) (base, key string, err error)
 	// login and logout keep credentials; tests replace them.

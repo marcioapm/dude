@@ -73,7 +73,11 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 			}
 			started := map[string]bool{}
 			firstView, staleErr := true, ""
-			allocationDeadline := time.Now().Add(30 * time.Second)
+			allocationTimeout := c.previewAllocationTimeout
+			if allocationTimeout <= 0 {
+				allocationTimeout = 30 * time.Second
+			}
+			allocationDeadline := time.Now().Add(allocationTimeout)
 			for {
 				status := str(preview, "status")
 				switch status {

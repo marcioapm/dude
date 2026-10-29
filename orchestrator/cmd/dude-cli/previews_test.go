@@ -290,7 +290,7 @@ func TestPreviewRunErrorRecovery(t *testing.T) {
 }
 
 func TestPreviewWakeInProgress(t *testing.T) {
-	for _, mode := range []string{"waking", "conflict", "cold conflict"} {
+	for _, mode := range []string{"waking", "conflict", "cold conflict", "unallocated"} {
 		t.Run(mode, func(t *testing.T) {
 			views, posts := 0, 0
 			began := time.Now()
@@ -307,7 +307,11 @@ func TestPreviewWakeInProgress(t *testing.T) {
 					if mode == "waking" {
 						state = "waking"
 					}
-					fmt.Fprintf(w, `{"run":{"state":"starting","luxState":"starting"},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":"https://web.test","state":"starting","serverState":%q}]}`, state)
+					url := "https://web.test"
+					if mode == "unallocated" {
+						url = ""
+					}
+					fmt.Fprintf(w, `{"run":{"state":"starting","luxState":"starting"},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":%q,"state":"starting","serverState":%q}]}`, url, state)
 				default:
 					fmt.Fprint(w, `{"id":"run_bp","status":"starting"}`)
 				}
@@ -315,9 +319,26 @@ func TestPreviewWakeInProgress(t *testing.T) {
 			defer srv.Close()
 			args := []string{"preview", "start", "run_bp", "--wait", "0"}
 			if mode == "cold conflict" {
-				args[len(args)-1] = "31s"
+				args[len(args)-1] = "150ms"
 			}
-			out, err := runCLI(t, srv, "", args...)
+			if mode == "unallocated" {
+				args[len(args)-1] = "500ms"
+			}
+			var output bytes.Buffer
+			c := &cli{
+				previewPoll:              time.Millisecond,
+				previewAllocationTimeout: 50 * time.Millisecond,
+				creds:                    func(string) (string, string, error) { return srv.URL, "key", nil },
+				http:                     srv.Client(), out: &output,
+			}
+			err := c.run(args)
+			out := output.String()
+			if mode == "unallocated" {
+				if err == nil || !strings.Contains(err.Error(), "timed out allocating") || posts != 0 || views < 2 || time.Since(began) > 400*time.Millisecond {
+					t.Fatalf("allocation cap must still apply: views=%d posts=%d elapsed=%s err=%v", views, posts, time.Since(began), err)
+				}
+				return
+			}
 			if mode == "cold conflict" {
 				if err == nil || !strings.Contains(err.Error(), "deadline") || strings.Contains(err.Error(), "allocating") {
 					t.Fatalf("cold wake must use wait deadline, not allocation cap: %v", err)
