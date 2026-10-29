@@ -88,6 +88,9 @@ CREATE TABLE task_branch_capture_requests (
   next_attempt_at  timestamptz NOT NULL DEFAULT now(),
   requested_at     timestamptz NOT NULL DEFAULT now(),
   settled_at       timestamptz,
+  -- The snapshot the branch was last read at: the newest captured, or an
+  -- earlier one when the branch went back to its head (a reset).
+  snapshot_id      text REFERENCES task_branch_snapshots(id) ON DELETE SET NULL,
   PRIMARY KEY (task_id, attempt, repository_id)
 );
 CREATE INDEX task_branch_capture_due_idx ON task_branch_capture_requests (next_attempt_at) WHERE status = 'pending';

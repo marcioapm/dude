@@ -1,0 +1,291 @@
+package branchdiff_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/branchdiff"
+	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+)
+
+func TestMain(m *testing.M) { os.Exit(dbtest.Main(m)) }
+
+type oneForge struct{ gh *forge.GitHub }
+
+func (f oneForge) For(context.Context, string) (*forge.GitHub, error) { return f.gh, nil }
+
+// world is task wi_b (attempt 1) of Acme's api repository on a fake GitHub
+// backed by a real git repository: main, and the task branch with one
+// commit of the writer's.
+type world struct {
+	t      *testing.T
+	app    *db.DB
+	owner  *pgx.Conn
+	org    string
+	fake   *fakegithub.Server
+	origin string
+	cap    *branchdiff.Capturer
+	branch string
+}
+
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Sam", "GIT_AUTHOR_EMAIL=sam@example.com",
+		"GIT_COMMITTER_NAME=Sam", "GIT_COMMITTER_EMAIL=sam@example.com")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func newWorld(t *testing.T) *world {
+	t.Helper()
+	app, owner := dbtest.Open(t)
+	w := &world{t: t, app: app, owner: owner, org: dbtest.Org(t, owner), branch: "dude/wi_b/attempt-1"}
+	dir := t.TempDir()
+	w.origin = filepath.Join(dir, "origin.git")
+	git(t, dir, "init", "-q", "--bare", "-b", "main", w.origin)
+	work := filepath.Join(dir, "work")
+	git(t, dir, "init", "-q", "-b", "main", work)
+	if err := os.WriteFile(filepath.Join(work, "app.ts"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, work, "add", ".")
+	git(t, work, "commit", "-qm", "seed")
+	git(t, work, "push", "-q", w.origin, "main", "main:"+w.branch)
+	w.fake = fakegithub.New(w.origin, "acme/api")
+	// GitHub's patches, as git shows them (the fake's own are placeholders).
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.CompareAnswer = func(base, head string, answer map[string]any) {
+			for _, f := range answer["files"].([]any) {
+				m := f.(map[string]any)
+				if _, ok := m["patch"]; !ok {
+					continue
+				}
+				out, err := exec.Command("git", "-C", w.origin, "diff", base+"..."+head, "--", m["filename"].(string)).Output()
+				if err != nil {
+					continue
+				}
+				if i := strings.Index(string(out), "\n@@"); i >= 0 {
+					m["patch"] = strings.TrimSuffix(string(out[i+1:]), "\n")
+				}
+			}
+		}
+	})
+	srv := httptest.NewServer(w.fake.Handler())
+	t.Cleanup(srv.Close)
+	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp_x", APIBaseURL: srv.URL})
+	w.cap = &branchdiff.Capturer{DB: app, Forges: oneForge{gh}}
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_b', $1, 'Acme', 'acme', 'ACME')`)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_b', $1, 'prj_b', 1, 'T', 'G')`)
+	w.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_api', $1, 'prj_b', 'api', 'https://github.com/acme/api')`)
+	w.exec(`INSERT INTO task_repositories (task_id, repository_id, organization_id, access) VALUES ('wi_b', 'repo_api', $1, 'write')`)
+	return w
+}
+
+func (w *world) exec(sql string, args ...any) {
+	w.t.Helper()
+	if _, err := w.owner.Exec(context.Background(), sql, append([]any{w.org}, args...)...); err != nil {
+		w.t.Fatalf("%s: %v", sql, err)
+	}
+}
+
+// capture asks for a capture, as a trigger does, and runs the worker.
+func (w *world) capture() {
+	w.t.Helper()
+	w.exec(`SELECT want_branch_capture($1, 'wi_b', 1, 'repo_api', '')`)
+	if _, err := w.cap.Sweep(context.Background()); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+type snap struct {
+	ID, Relation, Previous, Head, MergeBase, Target, Status string
+	Files                                                   []struct {
+		Path      string `json:"path"`
+		Truncated bool   `json:"truncated"`
+		Binary    bool   `json:"binary"`
+		Hunks     []any  `json:"hunks"`
+	}
+	BinaryFiles int
+}
+
+func (w *world) snapshots() []snap {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT id, relation, COALESCE(previous_snapshot_id, ''), head_sha, merge_base_sha,
+		target_sha, status, files, binary_files FROM task_branch_snapshots WHERE task_id = 'wi_b' ORDER BY captured_at, id`)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	var out []snap
+	for rows.Next() {
+		var s snap
+		var files []byte
+		if err := rows.Scan(&s.ID, &s.Relation, &s.Previous, &s.Head, &s.MergeBase, &s.Target, &s.Status, &files, &s.BinaryFiles); err != nil {
+			w.t.Fatal(err)
+		}
+		if err := json.Unmarshal(files, &s.Files); err != nil {
+			w.t.Fatal(err)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func (w *world) request() (status, reason string) {
+	w.t.Helper()
+	if err := w.owner.QueryRow(context.Background(), `SELECT status, COALESCE(reason, '') FROM task_branch_capture_requests
+		WHERE task_id = 'wi_b'`).Scan(&status, &reason); err != nil {
+		w.t.Fatal(err)
+	}
+	return status, reason
+}
+
+// The lineage through the four relations, read from real git history: the
+// writer's first commit (initial), another (fast-forward), main merged in
+// (merged-target: the base moves to main's head), a rebase onto main
+// (rewritten). A move of main alone makes none; a head read again is the
+// snapshot it has.
+func TestALineageOfSnapshotsFollowsTheBranch(t *testing.T) {
+	w := newWorld(t)
+	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "one\n2\nthree\n"})
+	w.capture()
+	got := w.snapshots()
+	if len(got) != 1 || got[0].Relation != branchdiff.Initial || got[0].Previous != "" || got[0].Head != w.fake.SHA(w.branch) ||
+		got[0].MergeBase != w.fake.SHA("main") || got[0].Target != w.fake.SHA("main") {
+		t.Fatalf("first capture: %+v", got)
+	}
+	if len(got[0].Files) != 1 || got[0].Files[0].Path != "app.ts" || len(got[0].Files[0].Hunks) != 1 {
+		t.Fatalf("its files: %+v", got[0].Files)
+	}
+	if s, _ := w.request(); s != "done" {
+		t.Errorf("the request after a capture: %s", s)
+	}
+
+	// Idempotent: read again with nothing moved, and main alone moving, make none.
+	w.capture()
+	base0 := w.fake.SHA("main")
+	w.fake.CommitFiles("main", "elsewhere", map[string]string{"other.ts": "x\n"})
+	w.capture()
+	if n := len(w.snapshots()); n != 1 {
+		t.Fatalf("%d snapshots after the target alone moved, want 1", n)
+	}
+
+	w.fake.CommitFiles(w.branch, "second", map[string]string{"app.ts": "one\n2\n3\n"})
+	w.capture()
+	got = w.snapshots()
+	if len(got) != 2 || got[1].Relation != branchdiff.FastForward || got[1].Previous != got[0].ID || got[1].MergeBase != base0 {
+		t.Fatalf("after new commits: %+v", got)
+	}
+	// The target is recorded as it is at this capture.
+	if got[1].Target != w.fake.SHA("main") {
+		t.Errorf("target %s, want main's head %s", got[1].Target, w.fake.SHA("main"))
+	}
+
+	w.fake.MergeInto(w.branch, "main", nil)
+	w.capture()
+	got = w.snapshots()
+	if len(got) != 3 || got[2].Relation != branchdiff.MergedTarget || got[2].Previous != got[1].ID || got[2].MergeBase != w.fake.SHA("main") {
+		t.Fatalf("after main merged in: %+v", got)
+	}
+	// Only the branch's own change: main's other.ts is in the base now.
+	if len(got[2].Files) != 1 || got[2].Files[0].Path != "app.ts" {
+		t.Errorf("the merged branch's files: %+v", got[2].Files)
+	}
+
+	// Rebased: a new commit on main's head carrying the change; the old head is no ancestor.
+	w.fake.CommitFiles("main", "more", map[string]string{"third.ts": "y\n"})
+	git(t, w.origin, "update-ref", "refs/heads/"+w.branch, w.fake.SHA("main"))
+	w.fake.CommitFiles(w.branch, "rebased", map[string]string{"app.ts": "one\n2\n3\n"})
+	w.capture()
+	got = w.snapshots()
+	if len(got) != 4 || got[3].Relation != branchdiff.Rewritten || got[3].Previous != got[2].ID {
+		t.Fatalf("after a rebase: %+v", got)
+	}
+}
+
+// A binary file and a file GitHub gave no lines for are flagged, file by
+// file, and counted on the snapshot.
+func TestBinaryAndTooLargeFilesAreFlagged(t *testing.T) {
+	w := newWorld(t)
+	w.fake.CommitFiles(w.branch, "assets", map[string]string{"logo.png": "\x89PNG\x00\x01\x02", "big.lock": "a\nb\n", "app.ts": "1\ntwo\nthree\n"})
+	w.fake.Set(func(s *fakegithub.Server) {
+		prev := s.CompareAnswer
+		s.CompareAnswer = func(base, head string, answer map[string]any) {
+			prev(base, head, answer)
+			for _, f := range answer["files"].([]any) {
+				if m := f.(map[string]any); m["filename"] == "big.lock" {
+					delete(m, "patch") // GitHub: too large to show
+				}
+			}
+		}
+	})
+	w.capture()
+	got := w.snapshots()
+	if len(got) != 1 {
+		t.Fatalf("%+v", got)
+	}
+	by := map[string]int{}
+	for i, f := range got[0].Files {
+		by[f.Path] = i
+	}
+	if f := got[0].Files[by["logo.png"]]; !f.Binary || f.Truncated {
+		t.Errorf("the binary file: %+v", f)
+	}
+	if f := got[0].Files[by["big.lock"]]; !f.Truncated || f.Binary || len(f.Hunks) != 0 {
+		t.Errorf("the file shown without lines: %+v", f)
+	}
+	if f := got[0].Files[by["app.ts"]]; f.Truncated || f.Binary || len(f.Hunks) != 1 {
+		t.Errorf("the plain file: %+v", f)
+	}
+	var truncated bool
+	if err := w.owner.QueryRow(context.Background(), `SELECT truncated FROM task_branch_snapshots`).Scan(&truncated); err != nil || !truncated ||
+		got[0].BinaryFiles != 1 {
+		t.Errorf("the snapshot's flags: truncated %v binary %d (%v)", truncated, got[0].BinaryFiles, err)
+	}
+}
+
+// No branch yet: absent, no snapshot. A repository GitHub refuses:
+// unavailable, saying why.
+func TestAbsentAndUnavailableAreSaid(t *testing.T) {
+	w := newWorld(t)
+	git(t, w.origin, "update-ref", "-d", "refs/heads/"+w.branch)
+	w.capture()
+	if s, _ := w.request(); s != "absent" || len(w.snapshots()) != 0 {
+		t.Errorf("no branch: %s, %d snapshots", s, len(w.snapshots()))
+	}
+	git(t, w.origin, "update-ref", "refs/heads/"+w.branch, "refs/heads/main")
+	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "1\n"})
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/compare/") {
+				return 403
+			}
+			return 0
+		}
+	})
+	w.capture()
+	if s, reason := w.request(); s != "unavailable" || !strings.Contains(reason, "403") || len(w.snapshots()) != 0 {
+		t.Errorf("GitHub refusing: %s %q, %d snapshots", s, reason, len(w.snapshots()))
+	}
+	// Asked again (the branch moved), and GitHub answers: captured.
+	w.fake.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+	w.capture()
+	if s, _ := w.request(); s != "done" || len(w.snapshots()) != 1 {
+		t.Errorf("read again: %s, %d snapshots", s, len(w.snapshots()))
+	}
+}
