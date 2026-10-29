@@ -915,6 +915,9 @@ func (s *Service) clarify(ctx context.Context, org string, p Provider, inst Inst
 	for i, c := range d.Question.Choices {
 		cs = append(cs, Choice{Label: c.Label, Value: r.ID + ":" + strconv.Itoa(i)})
 	}
+	// A resume is continued only by the session its choice names, which
+	// the pick is checked against again (Choose, then Decide).
+	a.Session = ""
 	r.Question = asked{Question: *d.Question, Answer: a}
 	r.effects = []effect{{Kind: "question", Text: d.Question.Text, Choices: cs}, reactEffect(ReactionCleared)}
 	return s.commit(ctx, org, p, inst, r, pick, nil)

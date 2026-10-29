@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -391,6 +392,7 @@ type proposeIn struct {
 type proposeOut struct {
 	ProposalID string `json:"proposalId"`
 	Next       string `json:"next"`
+	SessionURL string `json:"sessionUrl,omitempty"`
 }
 
 // propose fills the session's proposal card. Each item is checked as a
@@ -572,8 +574,16 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 	if err := checkProposalRelations(ctx, tx, linkedIDs, items); err != nil {
 		return proposeOut{}, err
 	}
+	var sessionURL string
+	if base := strings.TrimRight(c.env.publicURL, "/"); base != "" {
+		slug, err := orgSlug(ctx, tx, c)
+		if err != nil {
+			return proposeOut{}, err
+		}
+		sessionURL = base + "/#/o/" + url.PathEscape(slug) + "/sessions/" + url.PathEscape(c.SessionID)
+	}
 	id, err := delivery.RecordProposal(ctx, tx, c.run(), items)
-	return proposeOut{ProposalID: id, Next: proposedNext}, err
+	return proposeOut{ProposalID: id, Next: proposedNext, SessionURL: sessionURL}, err
 }
 
 // checkProposalRelations holds a proposal's relations to what filing can

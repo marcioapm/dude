@@ -58,6 +58,14 @@ Already there, so nothing was written for it: this task blocks GLD-9, related GL
 
 The card is in the session. A member files what they keep, as themselves; you are not told unless they say so.
 
+## propose-json-without-public-url
+
+{"proposalId":"prp_example","next":"The card is in the session. A member files what they keep, as themselves; you are not told unless they say so."}
+
+## propose-json-with-session-url
+
+{"proposalId":"prp_example","next":"The card is in the session. A member files what they keep, as themselves; you are not told unless they say so.","sessionUrl":"https://dude.example/#/o/acme/sessions/ssn_example"}
+
 ## relate
 
 The relation is on a card in the session. A member files it, as themselves; you are not told unless they say so.

@@ -15,6 +15,9 @@ const (
 	ClarifyRounds  = 2
 	EpicTasksMax   = 12
 	resumeLookback = 14 // days of chat-born sessions offered to resume
+	// A resume choice's label clips the session's title to this many
+	// characters: Slack refuses a button text over 75.
+	resumeLabelMax = 60
 )
 
 // Routes the routing judgement may answer, and those a request is logged with.
@@ -114,7 +117,9 @@ type Asked struct {
 }
 
 // AskedChoice is one choice: where picking it routes. Truncate files only
-// the first EpicTasksMax tasks of a longer epic.
+// the first EpicTasksMax tasks of a longer epic. Session is the session a
+// resume choice continues; only dude's own question sets it, and the pick
+// is checked against the person's sessions again when it is made.
 type AskedChoice struct {
 	ID       string `json:"id"`
 	Label    string `json:"label"`
@@ -122,6 +127,7 @@ type AskedChoice struct {
 	Project  string `json:"project,omitempty"`
 	Epic     string `json:"epic,omitempty"`
 	Truncate bool   `json:"truncate,omitempty"`
+	Session  string `json:"session,omitempty"`
 }
 
 // ParseAnswer reads the routing judgement's object; a route it does not
@@ -229,6 +235,15 @@ func (w World) Resumable() []SessionRef {
 	return out
 }
 
+func (w World) session(id string) (SessionRef, bool) {
+	for _, s := range w.Sessions {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return SessionRef{}, false
+}
+
 func (w World) project(key string) (Project, bool) {
 	key = strings.TrimSpace(key)
 	for _, p := range w.Projects {
@@ -305,16 +320,13 @@ func (a Answer) problem(w World) string {
 			return p
 		}
 	case RouteResume:
-		for _, s := range w.Sessions {
-			if s.ID != a.Session {
-				continue
-			}
-			if !w.resumable(s) {
-				return fmt.Sprintf("session %q is not open to everyone in %s", a.Session, conversationWord(w.Kind))
-			}
-			return ""
+		s, ok := w.session(a.Session)
+		if !ok {
+			return fmt.Sprintf("session %q is not one the person can chat in", a.Session)
 		}
-		return fmt.Sprintf("session %q is not one the person can chat in", a.Session)
+		if !w.resumable(s) {
+			return fmt.Sprintf("session %q is not open to everyone in %s", a.Session, conversationWord(w.Kind))
+		}
 	case RouteClarify:
 		if a.Question == nil || len(a.Question.Choices) < 2 || len(a.Question.Choices) > 4 || strings.TrimSpace(a.Question.Text) == "" {
 			return "a clarifying question has 2 to 4 choices"
@@ -328,6 +340,9 @@ func (a Answer) problem(w World) string {
 			default:
 				// An epic or resume choice carries no epic or session to make.
 				return fmt.Sprintf("choice %q routes to %q", c.Label, c.Route)
+			}
+			if c.Session != "" {
+				return fmt.Sprintf("choice %q names a session", c.Label)
 			}
 		}
 	case RouteChannelProjects:
@@ -485,12 +500,27 @@ func made(a Answer, w World, text string) Decision {
 // choices are a clarifying question for an answer that could not be made
 // as it stood: the model's own question when it is a good one; for an epic
 // over the cap, the first 12 or a talk; for a project dude does not know,
-// the person's projects; under the bar, the route it guessed or a session.
-// Every set ends with a session for the person, and has 2 to 4 choices.
+// the person's projects; under the bar, the route it guessed or a session
+// (for a resume, a new one). Every set ends with a session for the person,
+// and has 2 to 4 choices.
 func choices(a Answer, w World) (*Asked, error) {
 	session := AskedChoice{ID: "session", Label: "A session for me", Route: RouteBrainstorm}
 	if a.Route == RouteClarify && a.problem(w) == "" {
 		return a.Question, nil
+	}
+	if a.Route == RouteResume {
+		// Only a session the person could resume from here is offered.
+		if a.problem(w) != "" {
+			return nil, errNoChoices
+		}
+		s, _ := w.session(a.Session)
+		label := "Continue the session"
+		if t := trimmed(s.Title); t != "" {
+			label = "Continue " + clip(t, resumeLabelMax)
+		}
+		return &Asked{Text: fmt.Sprintf("Continue %s, or start a new session?", quoteTitle(clip(trimmed(s.Title), 200))),
+			Choices: []AskedChoice{{ID: "continue", Label: label, Route: RouteResume, Session: s.ID},
+				{ID: "new", Label: "A new session", Route: RouteBrainstorm}}}, nil
 	}
 	if a.Route == RouteEpic && a.NewEpic != nil && len(a.NewEpic.Tasks) > EpicTasksMax {
 		if _, ok := w.project(a.Project); ok {
@@ -527,7 +557,7 @@ func choices(a Answer, w World) (*Asked, error) {
 }
 
 // Choose applies a picked choice to the answer the question was asked
-// about: its route, project and epic, and the cap when it truncates.
+// about: its route, project, epic and session, and the cap when it truncates.
 func Choose(a Answer, c AskedChoice) Answer {
 	a.Route = c.Route
 	if c.Project != "" {
@@ -535,6 +565,9 @@ func Choose(a Answer, c AskedChoice) Answer {
 	}
 	if c.Epic != "" {
 		a.Epic = c.Epic
+	}
+	if c.Session != "" {
+		a.Session = c.Session
 	}
 	if c.Truncate && a.NewEpic != nil && len(a.NewEpic.Tasks) > EpicTasksMax {
 		kept := map[string]bool{}
