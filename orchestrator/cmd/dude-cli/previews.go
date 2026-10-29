@@ -119,6 +119,9 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 							ready = false
 							continue
 						}
+						if str(s, "serverState") == "waking" {
+							started[name] = true
+						}
 						if !started[name] {
 							if _, e := c.post("/v1/runs/"+esc(id)+"/servers/"+esc(name)+"/start", nil); e != nil {
 								// Another server's wake can move the preview to scheduled
@@ -126,7 +129,7 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 								// by the same deadline; all other refusals are failures.
 								var he *httpError
 								if errors.As(e, &he) && he.status == 409 && (strings.Contains(he.body, `"not_running"`) || strings.Contains(he.body, "the preview is no longer asleep; try again")) {
-									allocated, ready = false, false
+									ready = false
 									continue
 								}
 								return fail(fmt.Errorf("starting %s: %w", name, e))

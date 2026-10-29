@@ -177,3 +177,49 @@ func TestPreviewLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestPreviewWakeInProgress(t *testing.T) {
+	for _, mode := range []string{"waking", "conflict", "cold conflict"} {
+		t.Run(mode, func(t *testing.T) {
+			views, posts := 0, 0
+			began := time.Now()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == "POST":
+					posts++
+					w.WriteHeader(409)
+					fmt.Fprint(w, `{"error":{"code":"not_running"}}`)
+				case strings.HasSuffix(r.URL.Path, "/servers"):
+					views++
+					state := "starting"
+					if mode == "waking" {
+						state = "waking"
+					}
+					fmt.Fprintf(w, `{"run":{"state":"starting","luxState":"starting"},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":"https://web.test","state":"starting","serverState":%q}]}`, state)
+				default:
+					fmt.Fprint(w, `{"id":"run_bp","status":"starting"}`)
+				}
+			}))
+			defer srv.Close()
+			args := []string{"preview", "start", "run_bp", "--wait", "0"}
+			if mode == "cold conflict" {
+				args[len(args)-1] = "31s"
+			}
+			out, err := runCLI(t, srv, "", args...)
+			if mode == "cold conflict" {
+				if err == nil || !strings.Contains(err.Error(), "deadline") || strings.Contains(err.Error(), "allocating") {
+					t.Fatalf("cold wake must use wait deadline, not allocation cap: %v", err)
+				}
+				return
+			}
+			wantPosts := 1
+			if mode == "waking" {
+				wantPosts = 0
+			}
+			if err != nil || views != 1 || posts != wantPosts || !strings.Contains(out, `"ready": false`) || time.Since(began) > time.Second {
+				t.Fatalf("wake already requested: views=%d posts=%d out=%s err=%v", views, posts, out, err)
+			}
+		})
+	}
+}
