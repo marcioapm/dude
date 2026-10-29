@@ -112,6 +112,7 @@
   "GET /v1/projects/:id/overview": "project overview",
   "GET /v1/projects/:id/secrets": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "GET /v1/projects/:id/servers": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
+  "GET /v1/projects/:id/servers/running": { "apiOnly": "browser-only: the web app's own plumbing (uploads, downloads, live streams, pickers, badges, push)" },
   "GET /v1/projects/:id/settings": { "apiOnly": "admin configuration: the settings UI or `dude api`" },
   "GET /v1/projects/:id/sources/repositories": { "apiOnly": "browser-only: the web app's own plumbing (uploads, downloads, live streams, pickers, badges, push)" },
   "GET /v1/projects/:id/sources/repositories/:repo/branches": { "apiOnly": "browser-only: the web app's own plumbing (uploads, downloads, live streams, pickers, badges, push)" },
