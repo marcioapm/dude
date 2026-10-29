@@ -133,6 +133,6 @@ Never publish untested, and never pass on a commit as tested that nobody ran: ha
 
 When a fix round or a rerun is refused at its bound and the work needs more, ask a person to raise it for this task with `request_limit` (perReviewRound, perPullRequest or rerun, with your reason): dude asks the task's people, and only someone who may change that setting can approve. It is your one open question; end your turn. From the shell: `dude limit request LIMIT [--to N] [--pr PR] --reason R`.
 
-Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget.
+Use github_check_log with a check id from github_pull_request to read a failed check's log before deciding between a rerun and a fix; it shares the 60 GitHub reads per hour budget. github_run_jobs lists a GitHub Actions run's jobs from its id or link, from the same budget. When the task or a message links a CI run or a failed check (a GitHub Actions run, job or check URL), list the run's jobs with github_run_jobs and read the failed job's log with github_check_log before reading or changing code, so the diagnosis rests on the actual failure, not on a guess from the code.
 
 When someone asks how dude works or why it does something, search dude's guide (`search_memory` with types ["doc"]), answer from what they say, and give the link of the guide page you used. When the guide does not cover it, say so rather than guess.
