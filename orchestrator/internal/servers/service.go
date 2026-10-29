@@ -81,8 +81,10 @@ type RunView struct {
 	Kind     string `json:"kind"`
 	Label    string `json:"label"`
 	// dude's status for it, and lux's state.
-	State     string     `json:"state"`
-	LuxState  string     `json:"luxState"`
+	State    string `json:"state"`
+	LuxState string `json:"luxState"`
+	// Current live placement, for rejecting process state from before a resume.
+	Epoch     int        `json:"epoch"`
 	Host      *string    `json:"host"`
 	StartedAt *time.Time `json:"startedAt"`
 	StartedBy *PersonRef `json:"startedBy"`
@@ -284,6 +286,7 @@ func (s *Service) view(ctx context.Context, r *runRow, recipes json.RawMessage) 
 		var err error
 		if luxRun, err = s.Lux.Get(ctx, r.LuxRunID); err == nil {
 			v.LuxState = luxRun.State
+			v.Epoch = luxRun.Epoch
 			v.Host = nonEmpty(luxRun.Host)
 			if n := len(luxRun.Placements); n > 0 && luxRun.Placements[n-1].Epoch >= r.SizeSince {
 				// Not a placement's from before a resize: not this size's.

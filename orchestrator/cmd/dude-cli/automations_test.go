@@ -106,8 +106,9 @@ func automationCases(t *testing.T) []automationCase {
 		{[]string{"task", "before-pr", "wi_12", "ask"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":"ask"}`, ""},
 		{[]string{"task", "before-pr", "wi_12", "project"}, "", "PUT", "/v1/tasks/wi_12/pull-request-choice", `{"choice":null}`, ""},
 		{[]string{"task", "done-without-pr", "wi_12"}, "", "POST", "/v1/tasks/wi_12/done-without-pull-request", ``, ""},
-		{[]string{"preview", "start", "ABS", "feature/login", "--wait", "0"}, "", "POST", "/v1/projects/prj_1/branch-previews",
+		{[]string{"preview", "create", "ABS", "feature/login"}, "", "POST", "/v1/projects/prj_1/branch-previews",
 			`{"branch":"feature/login"}`, ""},
+		{[]string{"preview", "start", "run_bp"}, "", "POST", "/v1/runs/run_bp/servers/web/start", ``, ""},
 	}
 }
 
@@ -140,6 +141,15 @@ func TestAutomationCommandsReachTheirRoutes(t *testing.T) {
 			t.Fatalf("%v: %v", tc.args, err)
 		}
 		c := last(*calls)
+		// Create re-reads URLs after its POST; record the mutation's body.
+		if tc.args[0] == "preview" && tc.args[1] == "create" {
+			for _, request := range *calls {
+				if request.method == "POST" && request.path == tc.path {
+					c = request
+					break
+				}
+			}
+		}
 		body := checkRequest(t, c, routeCase{tc.args, tc.method, tc.path, tc.body})
 		path, rawQuery, _ := strings.Cut(c.path, "?")
 		rec := recordedRequest{Args: tc.args, Route: routeKey(t, c.method, path), Scope: tc.scope}

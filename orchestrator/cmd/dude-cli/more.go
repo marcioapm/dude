@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"golang.org/x/term"
 )
@@ -376,20 +375,8 @@ var moreCommands = map[string]command{
 	}},
 
 	// Branch previews: a project's branch, with no task
-	"preview start": {"PROJECT BRANCH", "preview a project's branch (or show its live preview): its id and server URLs", func(fs *flag.FlagSet) doer {
-		wait := fs.Duration("wait", 30*time.Second, "how long to wait for its server URLs (0: not at all)")
-		return func(c *cli, a []string) (any, error) {
-			pid, err := c.projectID(a[0])
-			if err != nil {
-				return nil, err
-			}
-			got, err := c.request("POST", "/v1/projects/"+esc(pid)+"/branch-previews", obj{"branch": a[1]})
-			if err != nil {
-				return nil, err
-			}
-			return c.previewURLs(got, *wait), nil
-		}
-	}},
+	"preview create": {"PROJECT BRANCH", "create or reuse a branch preview and register its URLs; --start also wakes it", previewCommand(true)},
+	"preview start":  {"ID|PROJECT BRANCH?", "wake an existing branch preview; --wait waits for all preview servers to be ready", previewCommand(false)},
 	"preview list": {"PROJECT", "a project's live branch previews: branch, servers, status, last used, started by",
 		noFlags(func(c *cli, a []string) (any, error) {
 			pid, err := c.projectID(a[0])
@@ -670,28 +657,6 @@ var moreCommands = map[string]command{
 	}},
 }
 
-// previewURLs is a started branch preview once it has its server URLs: dude
-// makes its servers a moment after the start, so it is read again by id, at
-// most for wait. One that has them, has ended, or has no id is answered as it is.
-func (c *cli) previewURLs(got any, wait time.Duration) any {
-	deadline := time.Now().Add(wait)
-	for {
-		o, _ := got.(obj)
-		id := str(o, "id")
-		servers, _ := o["servers"].([]any)
-		status := str(o, "status")
-		if id == "" || len(servers) > 0 || (status != "pending" && status != "") || !time.Now().Before(deadline) {
-			return got
-		}
-		time.Sleep(time.Second)
-		again, err := c.request("GET", "/v1/branch-previews/"+esc(id), nil)
-		if err != nil {
-			return got
-		}
-		got = again
-	}
-}
-
 // branchPreviewID is the id of a project's live preview of branch.
 func (c *cli) branchPreviewID(project, branch string) (string, error) {
 	pid, err := c.projectID(project)
@@ -707,5 +672,5 @@ func (c *cli) branchPreviewID(project, branch string) (string, error) {
 			return str(p, "id"), nil
 		}
 	}
-	return "", fmt.Errorf("project %s has no live preview of %s; see dude preview list %s", project, branch, project)
+	return "", fmt.Errorf("not_found: project %s has no live preview of %s; see dude preview list %s", project, branch, project)
 }

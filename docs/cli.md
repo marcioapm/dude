@@ -320,15 +320,37 @@ project at that branch where it has it, else its default branch, on the
 servers marked to start in previews. It syncs on every push to the branch,
 and ends when the branch is deleted or after 30 days unused, independently
 of the task-preview setting `previews.reap_after`. Opening one
-of its URLs wakes it; without a browser, `dude api POST
-/v1/runs/ID/servers/NAME/start` does.
+of its URLs wakes it; without a browser, `dude preview start ID` does.
 
 | Command | Does |
 |---|---|
-| `preview start PROJECT BRANCH [--wait 30s]` | Starts it, or answers the live one of that branch; prints its id and server URLs. Refused when the project's first repository has no such branch |
+| `preview create PROJECT BRANCH [--start [--wait DURATION]]` | Creates or reuses the live preview and registers its server URLs, leaving a new preview asleep. `--start` also wakes all autostart preview servers. Refused when the project's first repository has no such branch |
+| `preview start ID [--wait DURATION]` / `preview start PROJECT BRANCH [--wait DURATION]` | Wakes an existing live preview, never creates one; missing previews fail with `not_found` |
 | `preview list PROJECT` | The project's live branch previews: branch, servers and URLs, status, last used, started by |
 | `preview show ID` | One branch preview, live or ended |
 | `preview stop ID` / `preview stop PROJECT BRANCH` | Ends it: its servers are deleted |
+
+`--wait` defaults to `0`: request startup without waiting for readiness.
+A positive duration such as `--wait 2m` waits for **every autostart preview
+recipe's live server process** to report `ready` through dude's authenticated
+run-servers API. Allocated URLs and a `running` Run are not readiness;
+unrelated dynamic servers do not block it. No anonymous preview URL requests
+are made (including through Cloudflare Access). Negative durations are errors,
+and `preview create --wait` requires `--start`, even with `--wait 0`.
+
+Creation waits up to 30 seconds for URL allocation without waking anything.
+Startup also polls for missing server allocation (at most 30 seconds); a
+positive `--wait` bounds the entire command, including resolution, allocation,
+startup requests and readiness. Without readiness waiting the command has a
+30-second orchestration bound. Output is a JSON snapshot with preview ID,
+URLs and status; startup includes live `run`/server state and an explicit
+`ready` boolean, not a promise of readiness. Failures and timeouts exit nonzero
+and identify the preview and latest observed state where available.
+
+Starting by ID addresses that exact preview; PROJECT BRANCH resolves only an
+existing live one and never creates it. Starting an already-ready preview is
+safe. `stop` **ends/deletes**, not parks: a later `create` makes a new preview.
+There is no compatibility alias for the former create-like `preview start`.
 
 ### epic
 

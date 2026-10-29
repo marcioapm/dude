@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // call is one request the fake server saw.
@@ -71,6 +72,8 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 			io.WriteString(w, `{"previews":[{"id":"run_bp","branch":"feature/login","status":"paused","servers":[{"name":"web","url":"https://web-feature-login-abs.preview.example.com"}]}]}`)
 		case r.URL.Path == "/v1/branch-previews/run_bp" && r.Method == "GET":
 			io.WriteString(w, `{"id":"run_bp","branch":"feature/login","status":"paused","servers":[{"name":"web","url":"https://web-feature-login-abs.preview.example.com"}]}`)
+		case r.URL.Path == "/v1/runs/run_bp/servers":
+			io.WriteString(w, `{"run":{"id":"run_bp","asleep":true,"state":"paused"},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":"https://web-feature-login-abs.preview.example.com","state":"stopped","serverState":"asleep"}]}`)
 		case r.URL.Path == "/v1/nope":
 			w.WriteHeader(404)
 			io.WriteString(w, `{"error":"no route for GET /v1/nope"}`)
@@ -89,11 +92,12 @@ func runCLI(t *testing.T, srv *httptest.Server, stdin string, args ...string) (s
 	var out bytes.Buffer
 	var sent []call
 	c := &cli{
-		creds: func(string) (string, string, error) { return srv.URL, "k3y", nil },
-		login: func(string, string, string, bool) (string, error) { return "test keystore", nil },
-		http:  apiClient(recorder{srv.Client().Transport, &sent}),
-		stdin: strings.NewReader(stdin),
-		out:   &out,
+		previewPoll: time.Millisecond,
+		creds:       func(string) (string, string, error) { return srv.URL, "k3y", nil },
+		login:       func(string, string, string, bool) (string, error) { return "test keystore", nil },
+		http:        apiClient(recorder{srv.Client().Transport, &sent}),
+		stdin:       strings.NewReader(stdin),
+		out:         &out,
 	}
 	err := c.run(args)
 	// Requests are checked against the command run resolved, a top-level one or
@@ -153,11 +157,11 @@ func TestTaskRefsUseOneLookup(t *testing.T) {
 	}
 }
 
-// preview start prints the server URLs, read again once the preview's
+// preview create prints the server URLs, read again once the preview's
 // servers are made; preview stop PROJECT BRANCH finds the live one's id.
-func TestPreviewStartPrintsItsURLs(t *testing.T) {
+func TestPreviewCreatePrintsItsURLs(t *testing.T) {
 	srv, calls := fakeDude(t)
-	out, err := runCLI(t, srv, "", "preview", "start", "ABS", "feature/login")
+	out, err := runCLI(t, srv, "", "preview", "create", "ABS", "feature/login")
 	if err != nil {
 		t.Fatal(err)
 	}
