@@ -318,6 +318,11 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
                 route.continue_()
                 return
             submissions.append(route.request.post_data_json)
+            if len(submissions) == 2:
+                route.fulfill(status=403, content_type="application/json", body=json.dumps({
+                    "error": { "code": "forbidden", "message": "Sign in again" },
+                }))
+                return
             response = route.fetch()
             assert response.status == 201
             if len(submissions) == 1:
@@ -355,11 +360,31 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
             if n == 0:
                 preview.wait_for_function("() => { const b = window.__ovRoot.querySelector('[data-testid=ov-save]'); return b && !b.disabled; }")
                 assert len(cli("list-feedback", rid)["feedback"]) == 2
+                # A later owner check fails after the unknown committed outcome.
+                def refuse_owner(route):
+                    route.fulfill(status=401, content_type="application/json", body=json.dumps({
+                        "error": { "code": "unauthorized", "message": "Sign in again" },
+                    }))
+
+                owner_route = f"**/v1/branch-previews/{rid}/servers/web/owner?*"
+                ctx.route(owner_route, refuse_owner)
+                relay.evaluate("() => { const now = Date.now; Date.now = () => now() + 30_001; }")
+                preview.evaluate("() => history.pushState({}, '', '/owner-check')")
+                preview.wait_for_function("() => window.__messages.some(m => m?.type === 'refused' && m.nonce === undefined)")
+                ctx.unroute(owner_route, refuse_owner)
+                relay.evaluate("() => { const now = Date.now; Date.now = () => now() + 30_001; }")
+                preview.evaluate("() => history.pushState({}, '', '/cart')")
+                expect(relay.get_by_test_id("preview-connect")).to_have_attribute("data-step", "connected", timeout=20_000)
+                preview.keyboard.press("Control+Enter")
+                preview.wait_for_function("() => window.__messages.some(m => m?.type === 'refused' && m.nonce !== undefined)")
                 preview.keyboard.press("Control+Enter")
             _wait_ov(preview, "ov-saved")
             assert "Feedback submitted" in _ov(preview, "r => r.querySelector('[data-testid=ov-saved]').textContent")
-        assert len(submissions) == 4 and len(screenshot_uploads) == 3
+        assert len(submissions) == 5 and len(screenshot_uploads) == 3
         assert submissions[0] == submissions[1], submissions[:2]
+        assert submissions[0]["submissionKey"] == submissions[1]["submissionKey"] == submissions[2]["submissionKey"], submissions[:3]
+        assert submissions[1] == submissions[2], submissions[:3]
+        assert submissions[0]["body"] == submissions[2]["body"]
         first = cli("list-feedback", rid, "--limit", "2")
         assert len(first["feedback"]) == 2 and first["nextCursor"]
         second = cli("list-feedback", rid, "--after", first["nextCursor"], "--limit", "2")

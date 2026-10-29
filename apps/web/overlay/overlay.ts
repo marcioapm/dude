@@ -500,17 +500,20 @@ export class Overlay {
         this.#toast = { drafts: this.#drafts, picture: m.picture, ...(this.#picture.state === "failed" ? { why: this.#picture.why } : {}) };
         this.#closeBox(false);
         break;
+      case "refused":
       case "retryable":
-        if (!this.#branch || (m.nonce !== this.#saving && m.nonce !== this.#late)) return;
-        this.#late = m.nonce;
+        if (m.nonce !== undefined && m.nonce !== this.#saving && m.nonce !== this.#late) return;
+        if (!this.#branch) {
+          if (m.type === "retryable") return;
+          this.#saveDone();
+          this.#problem = String(m.reason).slice(0, 500);
+          break;
+        }
+        // A later refusal cannot disprove an earlier branch submission's unknown outcome.
+        this.#late = m.nonce ?? this.#saving ?? this.#late;
         this.#lateSent = this.#sent ?? this.#lateSent;
         this.#saving = null;
         this.#win.clearTimeout(this.#saveTimer);
-        this.#problem = String(m.reason).slice(0, 500);
-        break;
-      case "refused":
-        if (m.nonce !== undefined && m.nonce !== this.#saving && m.nonce !== this.#late) return;
-        this.#saveDone();
         this.#problem = String(m.reason).slice(0, 500);
         break;
       case "highlight":
