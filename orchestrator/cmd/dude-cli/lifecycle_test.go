@@ -13,6 +13,10 @@ func TestLifecycleCommandsReachTheirRoutes(t *testing.T) {
 		path   string
 		body   string
 	}{
+		{[]string{"preview", "list-feedback", "run_old", "--server", "web", "--status", "all", "--after", "fbi_cursor", "--limit", "2"}, "GET", "/v1/branch-previews/run_old/feedback?after=fbi_cursor&limit=2&server=web&status=all", ``},
+		{[]string{"preview", "show-feedback", "fbi_1"}, "GET", "/v1/preview-feedback/fbi_1", ``},
+		{[]string{"preview", "resolve-feedback", "fbi_1", "--note", "fixed"}, "POST", "/v1/preview-feedback/fbi_1/resolve", `{"note":"fixed"}`},
+		{[]string{"preview", "reopen-feedback", "fbi_1", "--note", "still broken"}, "POST", "/v1/preview-feedback/fbi_1/reopen", `{"note":"still broken"}`},
 		{[]string{"feedback", "list", "wi_12", "--attempt", "2"}, "GET", "/v1/tasks/wi_12/feedback?attempt=2", ``},
 		{[]string{"feedback", "draft", "wi_12", "-"}, "POST", "/v1/tasks/wi_12/feedback/drafts",
 			`{"anchor":{"kind":"general"},"body":"from stdin"}`},

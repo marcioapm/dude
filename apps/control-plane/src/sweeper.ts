@@ -38,7 +38,8 @@ export async function sweepAttachments(now: Date = new Date(), budgetMs = DRAIN_
     // A task's image removed from its text is unsent again from then (detached_at, migration 074).
     // A feedback item's picture is kept while any item names it (migration 133).
     const rows = await sql`DELETE FROM attachments a WHERE a.attached_at IS NULL AND COALESCE(a.detached_at, a.created_at) < ${cutoff}
-      AND NOT EXISTS (SELECT 1 FROM feedback_items f WHERE f.anchor->>'attachmentId' = a.id) RETURNING a.id`;
+      AND NOT EXISTS (SELECT 1 FROM feedback_items f WHERE f.anchor->>'attachmentId' = a.id)
+      AND NOT EXISTS (SELECT 1 FROM preview_feedback f WHERE f.anchor->>'attachmentId' = a.id) RETURNING a.id`;
     return rows.length as number;
   });
   let deleted = 0;
