@@ -119,6 +119,7 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 							ready = false
 							continue
 						}
+						current := started[name] && s["epoch"] != nil && s["epoch"] == run["epoch"] && str(run, "luxState") == "running"
 						if str(s, "serverState") == "waking" {
 							started[name] = true
 						}
@@ -137,7 +138,7 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 							started[name] = true
 							ready = false // Only a fresh live read after the wake may establish readiness.
 						}
-						if state == "exited" || str(s, "serverState") == "no answer" {
+						if current && (state == "exited" || str(s, "serverState") == "no answer") {
 							return fail(fmt.Errorf("server %s failed: state=%s serverState=%s", name, state, str(s, "serverState")))
 						}
 						if state != "ready" || (str(s, "serverState") != "" && str(s, "serverState") != "ready") || (str(s, "runId") != "" && str(s, "runId") != str(run, "luxRunId")) || (s["epoch"] != nil && run["epoch"] != nil && s["epoch"] != run["epoch"]) {

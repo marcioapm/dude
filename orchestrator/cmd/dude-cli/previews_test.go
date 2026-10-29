@@ -104,6 +104,9 @@ func TestPreviewLifecycle(t *testing.T) {
 						run["error"] = "image failed"
 					}
 					servers := []obj{{"name": "web", "state": state, "serverState": serverState, "runId": attachment, "url": "https://web.test"}, {"name": "api", "state": "ready", "serverState": "ready", "runId": "lux_1", "url": "https://api.test"}, {"name": "unrelated", "state": "starting"}}
+					if tc.mode == "exited" {
+						servers[0]["epoch"] = 2
+					}
 					if tc.mode == "epoch" {
 						servers[0]["epoch"] = 1
 					}
@@ -221,5 +224,61 @@ func TestPreviewWakeInProgress(t *testing.T) {
 				t.Fatalf("wake already requested: views=%d posts=%d out=%s err=%v", views, posts, out, err)
 			}
 		})
+	}
+}
+
+func TestPreviewFailureFreshness(t *testing.T) {
+	for _, failure := range []string{"exited", "no answer"} {
+		for _, mode := range []string{"pre-wake", "old epoch", "lux starting", "current"} {
+			t.Run(failure+"/"+mode, func(t *testing.T) {
+				views, posts := 0, 0
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					switch {
+					case r.Method == "POST":
+						posts++
+						fmt.Fprint(w, `{}`)
+					case strings.HasSuffix(r.URL.Path, "/servers"):
+						views++
+						state, serverState, luxState, epoch := "ready", "ready", "running", 2
+						if views <= 2 || mode == "current" {
+							if failure == "exited" {
+								state = failure
+							} else {
+								serverState = failure
+							}
+						}
+						if views == 2 {
+							switch mode {
+							case "pre-wake":
+								state, serverState = "ready", "ready"
+							case "old epoch":
+								epoch = 1
+							case "lux starting":
+								luxState = "starting"
+							}
+						}
+						fmt.Fprintf(w, `{"run":{"state":"running","luxState":%q,"epoch":2},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":"https://web.test","state":%q,"serverState":%q,"epoch":%d}]}`, luxState, state, serverState, epoch)
+					default:
+						fmt.Fprint(w, `{"id":"run_bp","status":"running"}`)
+					}
+				}))
+				defer srv.Close()
+				out, err := runCLI(t, srv, "", "preview", "start", "run_bp", "--wait", "1s")
+				if mode == "current" {
+					if err == nil || !strings.Contains(err.Error(), "web failed") || views != 2 || posts != 1 {
+						t.Fatalf("current failure must fail fast: views=%d posts=%d err=%v", views, posts, err)
+					}
+					return
+				}
+				wantViews := 3
+				if mode == "pre-wake" {
+					wantViews = 2
+				}
+				if err != nil || views != wantViews || posts != 1 || !strings.Contains(out, `"ready": true`) {
+					t.Fatalf("stale failure must recover: views=%d posts=%d out=%s err=%v", views, posts, out, err)
+				}
+			})
+		}
 	}
 }
