@@ -1680,6 +1680,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		instructions := instructionsIn.InstructionsInput()
 		instructions.Grants = &grants
 		in.Instructions = delivery.Instructions(settingsRole, r.Category, instructions)
+		in.NetworkContext = true
 		// The failing checks' log files go in the init beside the
 		// instruction file, in what room it leaves; the prompt names them.
 		promptIn.PRFeedback, in.CheckLogs = checkLogsInit(workspaceDir, promptIn.PRFeedback, initRoom(s.Agent, in))

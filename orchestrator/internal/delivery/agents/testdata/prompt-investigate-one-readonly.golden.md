@@ -17,4 +17,4 @@ This work's checkout:
 
 - `docs` at `/workspace/repos/docs` — read only: for reference, do not change it — changes there are never kept
 
-Commit in each repository you change. Each changed repository gets its own pull request.
+Inspect the source and report what you find. Scratch experiments and report artifacts are allowed; task code edits, commits, and pull request publication are not authorized. Publish report artifacts through the existing reporting tools and deliver your findings in your reply.

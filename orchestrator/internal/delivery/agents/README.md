@@ -134,6 +134,13 @@ not checked. With `-update` and no database they fail instead.
   `/workspace`. lux runs init before the workload on every placement from the spec it keeps, so every
   placement of a Run, moves and resumes included, gets the same bytes; a new Run gets the current text.
   An init over 256 KiB is refused at submit.
+- **Network snapshot, task Runs.** After the spec resolves its final network,
+  `runSpec` prepends the fixed `instructions/network` section from that exact
+  policy, including required model, harness and tool hosts. It is outside saved
+  role replacements. The bounded, externally quoted list never contains endpoint
+  URLs or credentials. A resume sends no replacement init; old Runs retain their
+  original bytes, including Runs submitted before this section existed. Session
+  agents retain their separate web-reach contract and do not acquire project access.
 - **Not a secret.** lux registers every secret value with its redactor and would blank the
   instructions wherever an agent quotes them; the file goes in `init`, never `secrets`.
 
