@@ -334,7 +334,7 @@ async function startBranchPreview(ctx: RequestContext): Promise<Response> {
 }
 
 /** `origin` from the query: an https origin exactly as a browser writes one (no path, no trailing slash), or 400. */
-function previewOrigin(ctx: RequestContext): string {
+export function previewOrigin(ctx: RequestContext): string {
   const given = ctx.url.searchParams.get("origin") ?? "";
   let origin: string | null = null;
   try {

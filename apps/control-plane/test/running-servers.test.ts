@@ -93,6 +93,7 @@ beforeAll(async () => {
   // Another server's page, and a draft: neither counts on this row.
   await item("fbi_rs_t5", ana, "open", "https://elsewhere.preview.test/chat", "fbb_rs_a");
   await item("fbi_rs_t6", ana, "draft", `${TASK_URL}/chat`, null);
+  await item("fbi_rs_t7", bo, "draft", `${TASK_URL}/cart`, null);
 
   orchestratorServer = Bun.serve({ port: 0, fetch(req) {
     const url = new URL(req.url);
@@ -133,4 +134,22 @@ test("another organisation's project and an unknown one are 404s that never reac
   expect((await call(ana.key, "/v1/projects/prj_rs_other/servers/running")).status).toBe(404);
   expect((await call(ana.key, "/v1/projects/prj_nope/servers/running")).status).toBe(404);
   expect(asked.length).toBe(before);
+});
+
+test("one server's task feedback: everyone's submitted items on its origin, and only the caller's own drafts", async () => {
+  const read = async (who: Person) => {
+    const res = await call(who.key, `/v1/tasks/wi_rs/feedback?origin=${encodeURIComponent(TASK_URL)}`);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as Json).feedback.map((f: Json) => `${f.id}:${f.status}`);
+  };
+  const submitted = ["fbi_rs_t1:open", "fbi_rs_t2:delivered", "fbi_rs_t3:resolved", "fbi_rs_t4:replied"];
+  const forAna = await read(ana);
+  const forBo = await read(bo);
+  expect([...forAna].sort()).toEqual([...submitted, "fbi_rs_t6:draft"].sort());
+  expect([...forBo].sort()).toEqual([...submitted, "fbi_rs_t7:draft"].sort());
+  // Never the other person's draft, never another origin's page.
+  expect(forBo.some((s: string) => s.startsWith("fbi_rs_t6"))).toBe(false);
+  expect(forAna.some((s: string) => s.startsWith("fbi_rs_t7") || s.startsWith("fbi_rs_t5"))).toBe(false);
+  expect((await call(ana.key, "/v1/tasks/wi_rs/feedback?origin=https%3A%2F%2Fweb-wi.preview.test%2Fchat")).status).toBe(400);
+  expect((await call(cy.key, `/v1/tasks/wi_rs/feedback?origin=${encodeURIComponent(TASK_URL)}`)).status).toBe(404);
 });
