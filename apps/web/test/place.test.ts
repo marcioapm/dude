@@ -22,6 +22,12 @@ describe("places", () => {
     expect(formatPlace(place)).toBe("#/task/wi_1");
   });
 
+  test("a task's Changes tab has its own link, kept with an earlier attempt", () => {
+    const task = { kind: "task" as const, id: "wi_1" };
+    expect(parsePlace("#/task/wi_1/changes?attempt=1")).toEqual({ view: "tree", ref: task, tab: "changes", attempt: 1 });
+    expect(formatPlace(inTree(task, "changes", 1))).toBe("#/task/wi_1/changes?attempt=1");
+  });
+
   test("an epic's Coordination view has its own link; the board is the epic's own", () => {
     const place = parsePlace("#/epic/ep_1/coordination");
     expect(place).toEqual({ view: "tree", ref: { kind: "epic", id: "ep_1" }, epicView: "coordination" });

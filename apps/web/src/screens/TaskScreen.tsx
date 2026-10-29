@@ -5,8 +5,9 @@
  * The header says what it is and who it is for: where it sits, its title,
  * its pull requests' states, and its people (the owner with the agent
  * working for them on their face). Below it, tabs in the order a person
- * asks: Overview (the goal, the pipeline, time and cost, and the pull
- * requests beside them), Findings (every review finding), Sessions (every
+ * asks: Overview (what it is doing, what needs a person, what it cost, its
+ * pull requests and its branch: what a task opens on), Changes (the
+ * branch's changes), Chat, Findings (every review finding), Sessions (every
  * agent that ran down the left, the one open beside them: its conversation
  * and its changes), Files (what they left), and Activity (who did what, by
  * name).
@@ -110,6 +111,7 @@ import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFe
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
 import { OriginLine, TaskOrigin } from "../chatOrigin.tsx";
+import { ChangesTab } from "./ChangesTab.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -177,8 +179,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // A session's URL is the Sessions tab with it open, on its attempt; the
   // task's URL names the tab and the attempt when it is not the current
   // one. A tab or attempt picked here is written back. A URL naming no tab
-  // opens on Chat once someone has written in it, Overview until then
-  // (null: that default).
+  // opens on Overview, for a conductor's task too (null: that default).
   const [chosenTab, setTab] = useState<string | null>(openTab ?? null);
   // The attempt picked, null for the current one. Kept on Activity and
   // Servers, whose URLs never name one: back on a tab that shows one
@@ -505,8 +506,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // turn, and the latest takes the next message.
   const conductors = [...item.runs].filter(isConductor).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const conductor = conductors.at(-1) ?? null;
-  // A URL naming an attempt is an attempt's place, and Chat is the task's: with no tab, Overview.
-  const tab = asked ?? (conductor && urlAttempt === undefined ? "chat" : "overview");
+  // A task opens on its Overview, whoever decides it; a URL naming a tab, or a session, opens there.
+  const tab = asked ?? "overview";
 
   // Leaves any open session; the URL is replaced only for a tab change with none open.
   const show = (onTab: string, n: number, replace: boolean) => {
@@ -759,8 +760,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <Tabs value={tab} onValueChange={pickTab} fill className="taskTabs">
         <TabList aria-label="Task" className="tabsInset">
-          <Tab value="chat">Chat</Tab>
           <Tab value="overview">Overview</Tab>
+          <Tab value="changes" tooltip={many ? <>Attempt {shown}'s changes</> : undefined}>Changes</Tab>
+          <Tab value="chat">Chat</Tab>
           <Tab value="findings" count={mine.findings.length > 0 ? mine.findings.length : undefined}
             tooltip={many ? <>Attempt {shown}'s findings; {othersSaid("findings")}</> : undefined}>Findings</Tab>
           <Tab value="sessions" count={sessions.length > 0 ? sessions.length : undefined}
@@ -774,6 +776,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Tab value="activity" tooltip={many ? "Every attempt" : undefined}>Activity</Tab>
         </TabList>
 
+        <TabPanel value="changes">
+          <ChangesTab runs={sessions} onOpenRun={onOpenRun} />
+        </TabPanel>
+
         <TabPanel value="chat" fill>
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
             earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status, attempt: r.attempt }))} ledgers={endedLedgers}
@@ -784,7 +790,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
         <TabPanel value="overview" className="railPanel">
           <PageWithRail children={
-            <div className="taskMain taskPane">
+            <div className="taskMain taskPane" data-testid="task-overview">
               {item.goal ? (
                 <section className="taskBlock" aria-label="Goal">
                   <h2 className="ds-label">Goal</h2>

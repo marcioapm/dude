@@ -267,7 +267,7 @@ describe("the task page with a conductor", () => {
       const r = await events(params);
       return params.runId ? r : { ...r, events: [...r.events, waited] };
     };
-    const page = await taskPage(client);
+    const page = await taskPage(client, { tab: "chat" });
     const earlier = await until(() => page.querySelector<HTMLElement>(`[data-testid=earlier-conductor][data-run=${OLD}]`), "attempt 1's conductor");
     const decision = await until(() => earlier.querySelector<HTMLElement>("[data-testid=chat-decision]"), "attempt 1's decision line inside it");
     const ended = earlier.querySelector<HTMLElement>("[data-testid=earlier-conductor-ended]")!;
@@ -301,7 +301,7 @@ describe("the task page with a conductor", () => {
       const r = await events(params);
       return params.runId ? r : { ...r, events: [...r.events, ...waited] };
     };
-    const page = await taskPage(client);
+    const page = await taskPage(client, { tab: "chat" });
     const inA = await until(() => page.querySelector<HTMLElement>(`[data-testid=earlier-conductor][data-run=${A}]`), "the first conductor");
     const inB = await until(() => page.querySelector<HTMLElement>(`[data-testid=earlier-conductor][data-run=${B}]`), "its retry");
     await until(() => inA.querySelector("[data-testid=earlier-conductor-ended]") && inB.querySelector("[data-testid=earlier-conductor-ended]"), "both read");
@@ -330,14 +330,14 @@ describe("the task page with a conductor", () => {
   }
 
   test("Chat keeps attempt 1's decision line when its conductor's ledger cannot be read", async () => {
-    const page = await taskPage(oldLedgerRead(async () => { throw new Error("the ledger is unreachable"); }));
+    const page = await taskPage(oldLedgerRead(async () => { throw new Error("the ledger is unreachable"); }), { tab: "chat" });
     await until(() => page.querySelector("[data-testid=earlier-conductor-failed]"), "the failed read");
     await settle();
     expect(count(page, "[data-testid=chat-decision]")).toBe(1);
   });
 
   test("Chat shows attempt 1's decision line while its conductor's ledger is still being read", async () => {
-    const page = await taskPage(oldLedgerRead(() => new Promise<never>(() => {})));
+    const page = await taskPage(oldLedgerRead(() => new Promise<never>(() => {})), { tab: "chat" });
     await until(() => (count(page, "[data-testid=chat-decision]") === 1 ? true : null), "attempt 1's decision line, before the read answers");
     expect(count(page, "[data-testid=earlier-conductor-ended]")).toBe(0);
   });
@@ -437,7 +437,7 @@ describe("a conductor's session, from its URL", () => {
     await until(() => (page.querySelector("[role=tab][aria-selected=true]")?.textContent?.startsWith("Findings") ? true : null), "Findings");
     await act(async () => { window.location.hash = `#/task/${TASK_ID}`; });
     await settle(100);
-    expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Chat");
+    expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Overview");
   });
 
   test("a URL naming attempt 1 and no tab opens on Overview of attempt 1, not Chat", async () => {
@@ -448,12 +448,21 @@ describe("a conductor's session, from its URL", () => {
     expect(window.location.hash).toBe(`#/task/${TASK_ID}?attempt=1`);
   });
 
-  test("the task's own URL on a started-over task with a conductor opens on Chat", async () => {
+  test("the task's own URL on a started-over task with a conductor opens on Overview", async () => {
     const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}`);
     await until(() => picker(page), "the task page with its picker");
     await settle(50);
     expect(shown(page)).toBe("2");
+    expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Overview");
+  });
+
+  test("a Chat link on a task with a conductor still opens Chat, and a session link its session", async () => {
+    const page = await app(restartedWith(conductor(2)), `#/task/${TASK_ID}/chat`);
+    await until(() => picker(page), "the task page with its picker");
+    await settle(50);
     expect(page.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Chat");
+    await act(async () => { window.location.hash = `#/session/${COND}`; });
+    await until(() => (page.querySelector("[role=tab][aria-selected=true]")?.textContent?.startsWith("Sessions") ? true : null), "Sessions");
   });
 });
 

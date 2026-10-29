@@ -1977,7 +1977,7 @@ def test_a_dropped_stream_says_so_and_catches_up(
 def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    """Chat is the task's first tab: before anyone wrote, the task's history
+    """Chat is the task's third tab, after Overview and Changes: before anyone wrote, the task's history
     in a line over an empty composer; a message starts the conductor, whose
     briefing El Duderino signs and whose answer carries its own face."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
@@ -1990,8 +1990,8 @@ def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
     tabs = page.get_by_role("tablist", name="Task").get_by_role("tab")
-    expect(tabs.first).to_have_text("Chat")
-    tabs.first.click()
+    expect(tabs.nth(2)).to_have_text("Chat")
+    tabs.nth(2).click()
     history = page.get_by_test_id("chat-history")
     expect(history).to_contain_text("Delivered automatically")
     expect(history).to_contain_text("implementer → reviewer → fixer → reviewer → simplifier → reviewer → PR #")
@@ -2010,7 +2010,9 @@ def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     expect(answer).to_contain_text(task["id"])
     expect(answer).to_have_attribute("data-role", "conductor")
     expect(answer.get_by_role("img", name="Conductor")).to_be_visible()
-    # It lives on: the page opens on Chat from now on.
+    # It lives on, and the task still opens on its Overview; Chat's own link opens Chat.
     page.goto(f"{web_url}#/task/{task['id']}")
+    expect(page.get_by_role("tablist", name="Task").get_by_role("tab", selected=True)).to_have_text("Overview")
+    page.goto(f"{web_url}#/task/{task['id']}/chat")
     expect(page.get_by_role("tablist", name="Task").get_by_role("tab", selected=True)).to_have_text("Chat")
     assert console_errors == []

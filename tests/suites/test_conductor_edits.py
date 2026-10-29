@@ -128,7 +128,8 @@ def test_the_conductor_edits_publishes_and_is_reviewed(page: Page, web_url: str,
                timeout=60, message="the gate never asked after the review")
 
     sign_in(page, web_url, org["api_key"])
-    page.goto(f"{web_url}#/task/{task['id']}")
+    # A task opens on its Overview: Chat is its own link.
+    page.goto(f"{web_url}#/task/{task['id']}/chat")
     line = page.locator(f"[data-testid=chat-commit][data-sha='{moved[:7]}']")
     expect(line).to_contain_text("Conductor", timeout=30_000)
     expect(line).to_contain_text("README.md")
