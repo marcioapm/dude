@@ -417,6 +417,11 @@ func TestPreviewFailureFreshness(t *testing.T) {
 								serverState = failure
 							}
 						}
+						// Begin without no-answer so its post-request appearance is
+						// a new failure, not an unchanged pre-request observation.
+						if failure == "no answer" && mode != "pre-wake" && views == 1 {
+							state, serverState = "starting", "starting"
+						}
 						if views == 2 {
 							switch mode {
 							case "pre-wake":
@@ -454,5 +459,84 @@ func TestPreviewFailureFreshness(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPreviewNoAnswerAttempt(t *testing.T) {
+	for _, mode := range []string{"recovered", "unchanged", "failed after waking", "failed during startup", "joined wake failed", "new wake timestamp", "new wake count"} {
+		t.Run(mode, func(t *testing.T) {
+			views, posts := 0, 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == "POST":
+					posts++
+					fmt.Fprint(w, `{}`)
+				case strings.HasSuffix(r.URL.Path, "/servers"):
+					views++
+					run := obj{"state": "scheduled", "luxState": "stopped"}
+					s := obj{"name": "web", "url": "https://web.test", "state": "stopped", "serverState": "no answer"}
+					if mode == "joined wake failed" && views == 1 {
+						s["state"], s["serverState"] = "starting", "waking"
+					}
+					// POST only records an async wake. The old, unattached failure
+					// survives at least two subsequent reads before Lux transitions.
+					if views == 4 && mode != "unchanged" {
+						s["state"], s["serverState"] = "starting", "waking"
+						if mode == "failed during startup" {
+							s["serverState"], s["epoch"], run["epoch"], run["luxState"] = "starting", 2, 2, "running"
+						}
+					}
+					if views >= 5 && mode == "recovered" {
+						s["state"], s["serverState"], run["luxState"] = "ready", "ready", "running"
+					}
+					if mode == "new wake timestamp" {
+						s["wakeRequestedAt"] = "2026-10-29T00:00:00Z"
+						if views > 1 {
+							s["wakeRequestedAt"] = "2026-10-29T00:01:00Z"
+						}
+					}
+					if mode == "new wake count" {
+						s["wakes"] = 1
+						if views > 1 {
+							s["wakes"] = 2
+						}
+					}
+					json.NewEncoder(w).Encode(obj{"run": run, "recipes": []obj{{"name": "web", "autostartInPreviews": true}}, "servers": []obj{s}})
+				default:
+					fmt.Fprint(w, `{"id":"run_bp","status":"paused"}`)
+				}
+			}))
+			defer srv.Close()
+			var out bytes.Buffer
+			c := &cli{previewPoll: time.Millisecond, creds: func(string) (string, string, error) { return srv.URL, "key", nil }, http: srv.Client(), out: &out}
+			began := time.Now()
+			err := c.run([]string{"preview", "start", "run_bp", "--wait", "100ms"})
+			wantPosts := 1
+			if mode == "joined wake failed" {
+				wantPosts = 0
+			}
+			if posts != wantPosts {
+				t.Fatalf("must attempt recovery exactly once: posts=%d views=%d err=%v", posts, views, err)
+			}
+			switch mode {
+			case "recovered":
+				if err != nil || views != 5 || !strings.Contains(out.String(), `"ready": true`) {
+					t.Fatalf("old no-answer blocked recovery: views=%d out=%s err=%v", views, out.String(), err)
+				}
+			case "unchanged":
+				if err == nil || !strings.Contains(err.Error(), "deadline") || !strings.Contains(err.Error(), "servers=[web=stopped/no answer]") || views < 3 || time.Since(began) < 90*time.Millisecond {
+					t.Fatalf("old failure must await deadline with latest diagnostic: views=%d elapsed=%s err=%v", views, time.Since(began), err)
+				}
+			default:
+				wantViews := 5
+				if strings.HasPrefix(mode, "new wake") || mode == "joined wake failed" {
+					wantViews = 2
+				}
+				if err == nil || !strings.Contains(err.Error(), "web failed: state=stopped serverState=no answer") || views != wantViews {
+					t.Fatalf("new failure must fail without another poll: views=%d want=%d err=%v", views, wantViews, err)
+				}
+			}
+		})
 	}
 }

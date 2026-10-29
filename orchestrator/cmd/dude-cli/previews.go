@@ -72,6 +72,7 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 				return nil, fmt.Errorf("preview %s: %w (latest: %s); inspect dude preview show %s and dude api GET /v1/runs/%s/servers", id, err, latest, id, id)
 			}
 			started := map[string]bool{}
+			staleNoAnswer := map[string]obj{}
 			firstView, staleErr := true, ""
 			allocationTimeout := c.previewAllocationTimeout
 			if allocationTimeout <= 0 {
@@ -155,9 +156,20 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 								return fail(fmt.Errorf("starting %s: %w", name, e))
 							}
 							started[name] = true
+							if str(s, "serverState") == "no answer" {
+								// An accepted async wake need not change Lux's old failure yet.
+								staleNoAnswer[name] = s
+							}
 							ready = false // Only a fresh live read after the wake may establish readiness.
 						}
-						if (current && state == "exited") || (requested && str(s, "serverState") == "no answer") {
+						baseline := staleNoAnswer[name]
+						if str(s, "serverState") != "no answer" {
+							delete(staleNoAnswer, name)
+						}
+						freshNoAnswer := str(s, "serverState") == "no answer" && (baseline == nil ||
+							(str(s, "wakeRequestedAt") != "" && s["wakeRequestedAt"] != baseline["wakeRequestedAt"]) ||
+							(s["wakes"] != nil && s["wakes"] != baseline["wakes"]))
+						if (current && state == "exited") || (requested && freshNoAnswer) {
 							return fail(fmt.Errorf("server %s failed: state=%s serverState=%s", name, state, str(s, "serverState")))
 						}
 						if state != "ready" || (str(s, "serverState") != "" && str(s, "serverState") != "ready") || (str(s, "runId") != "" && str(s, "runId") != str(run, "luxRunId")) || (s["epoch"] != nil && run["epoch"] != nil && s["epoch"] != run["epoch"]) {
