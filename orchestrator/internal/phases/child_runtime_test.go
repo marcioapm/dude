@@ -628,6 +628,9 @@ func TestChildStitchedRoleRoundTrip(t *testing.T) {
 }
 
 func TestChildReportSpec(t *testing.T) {
+	if err := dbtest.Reachable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	for _, profile := range []string{"investigator", "reviewer", "qa_browser"} {
 		for _, access := range []string{"read", "write"} {
 			t.Run(profile+"-"+access, func(t *testing.T) {
