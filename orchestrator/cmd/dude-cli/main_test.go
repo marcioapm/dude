@@ -67,7 +67,7 @@ func fakeDude(t *testing.T) (*httptest.Server, *[]call) {
 		case r.URL.Path == "/v1/projects/prj_1/automations":
 			io.WriteString(w, `{"automations":[{"id":"aut_p","name":"Triage","kind":"agent","enabled":true,"owner":{"id":"per_1","name":"Ana"},"agent":{}}],"alsoRunningHere":[]}`)
 		case r.URL.Path == "/v1/projects/prj_1/branch-previews" && r.Method == "POST":
-			io.WriteString(w, `{"id":"run_bp","branch":"feature/login","status":"paused","servers":[{"name":"web","url":"https://web-feature-login-abs.preview.example.com"}]}`)
+			io.WriteString(w, `{"id":"run_bp","branch":"feature/login","status":"pending","servers":[]}`)
 		case r.URL.Path == "/v1/projects/prj_1/branch-previews" && r.Method == "GET":
 			io.WriteString(w, `{"previews":[{"id":"run_bp","branch":"feature/login","status":"paused","servers":[{"name":"web","url":"https://web-feature-login-abs.preview.example.com"}]}]}`)
 		case r.URL.Path == "/v1/branch-previews/run_bp" && r.Method == "GET":

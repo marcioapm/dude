@@ -168,6 +168,9 @@ func TestPreviewLifecycle(t *testing.T) {
 				}
 			}
 			if createOnly {
+				if !strings.Contains(out, "https://web.test") {
+					t.Fatalf("create printed no polled URL: %s", out)
+				}
 				if wakes != 0 || views != 0 || polls == 0 {
 					t.Fatalf("create lifecycle: posts=%v views=%d polls=%d", posts, views, polls)
 				}
