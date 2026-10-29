@@ -65,6 +65,37 @@ func (w *world) messagesInto(session, text string) int {
 		+ (SELECT count(*) FROM runs WHERE session_id = $1 AND prompt LIKE '%' || $2 || '%')`, session, text)
 }
 
+func (w *world) requestByID(id string) req {
+	w.t.Helper()
+	var r req
+	if err := w.owner.QueryRow(w.ctx, `SELECT route, COALESCE(asked_route, ''), COALESCE(result_kind, ''),
+		COALESCE(result_id, ''), reasoning FROM chat_requests WHERE organization_id = $1 AND id = $2`, w.org, id).
+		Scan(&r.Route, &r.AskedRoute, &r.ResultKind, &r.ResultID, &r.Reasoning); err != nil {
+		w.t.Fatalf("request %q: %v; all requests %+v", id, err, w.requests())
+	}
+	return r
+}
+
+func (w *world) answeringRequest(questionID string) req {
+	w.t.Helper()
+	var id string
+	if err := w.owner.QueryRow(w.ctx, `SELECT a.id FROM chat_requests q JOIN chat_requests a
+		ON a.organization_id = q.organization_id AND a.provider = q.provider AND a.event_id = q.answered_by_event
+		WHERE q.organization_id = $1 AND q.id = $2`, w.org, questionID).Scan(&id); err != nil {
+		w.t.Fatalf("answer to question %q: %v; all requests %+v", questionID, err, w.requests())
+	}
+	return w.requestByID(id)
+}
+
+func resumeQuestionID(t *testing.T, value string) string {
+	t.Helper()
+	id, _, ok := strings.Cut(value, ":")
+	if !ok || id == "" {
+		t.Fatalf("invalid choice value %q", value)
+	}
+	return id
+}
+
 // An unsure resume asks; picking Continue sends the message into the
 // session, and nothing new is started.
 func TestChatAnUnsureResumeAsksAndContinueResumesTheSession(t *testing.T) {
@@ -80,25 +111,12 @@ func TestChatAnUnsureResumeAsksAndContinueResumesTheSession(t *testing.T) {
 			t.Fatalf("a button's value %q names the session", v)
 		}
 	}
-	questionID, _, ok := strings.Cut(values[0], ":")
-	if !ok || questionID == "" {
-		t.Fatalf("invalid Continue value %q", values[0])
-	}
-	requestByID := func(id string) req {
-		t.Helper()
-		var r req
-		if err := w.owner.QueryRow(w.ctx, `SELECT route, COALESCE(asked_route, ''), COALESCE(result_kind, ''),
-			COALESCE(result_id, ''), reasoning FROM chat_requests WHERE organization_id = $1 AND id = $2`, w.org, id).
-			Scan(&r.Route, &r.AskedRoute, &r.ResultKind, &r.ResultID, &r.Reasoning); err != nil {
-			t.Fatalf("request %q: %v; all requests %+v", id, err, w.requests())
-		}
-		return r
-	}
+	questionID := resumeQuestionID(t, values[0])
 	got := w.requests()
 	if len(got) != 2 {
 		t.Fatalf("want exactly 2 requests before Continue, got %d: %+v", len(got), got)
 	}
-	ask := requestByID(questionID)
+	ask := w.requestByID(questionID)
 	if ask.Route != "clarify" || ask.AskedRoute != "resume" || !strings.Contains(ask.Reasoning, "under the 75% bar") {
 		t.Fatalf("original ask %+v; all requests %+v", ask, got)
 	}
@@ -108,9 +126,7 @@ func TestChatAnUnsureResumeAsksAndContinueResumesTheSession(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("want exactly 3 requests after Continue, got %d: %+v", len(got), got)
 	}
-	continuedID := w.one(`SELECT id FROM chat_requests WHERE organization_id = $1 AND event_id =
-		(SELECT answered_by_event FROM chat_requests WHERE organization_id = $1 AND id = $2)`, w.org, questionID)
-	continued := requestByID(continuedID)
+	continued := w.answeringRequest(questionID)
 	if continued.Route != "resume" || continued.ResultKind != "session" || continued.ResultID != session {
 		t.Fatalf("Continue request %+v; all requests %+v", continued, got)
 	}
@@ -133,16 +149,18 @@ func TestChatAnUnsureResumeAsksAndContinueResumesTheSession(t *testing.T) {
 func TestChatAnUnsureResumeAsksAndANewSessionStartsOne(t *testing.T) {
 	w, session := resumeSetup(t)
 	q, values := askResume(t, w, session, "C1")
+	questionID := resumeQuestionID(t, values[1])
 	before := w.sessions()
 	w.click("Márcia", "C1", q.TS, q.ThreadTS, values[1])
 	got := w.requests()
-	if len(got) != 3 || got[2].Route != "brainstorm" || got[2].ResultKind != "session" || got[2].ResultID == session {
-		t.Fatalf("requests %+v", got)
+	started := w.answeringRequest(questionID)
+	if len(got) != 3 || started.Route != "brainstorm" || started.ResultKind != "session" || started.ResultID == session {
+		t.Fatalf("new session request %+v; all requests %+v", started, got)
 	}
 	if w.sessions() != before+1 || w.messagesInto(session, "fix the nightly workflow failure") != 0 {
 		t.Fatal("A new session did not start one, or sent into the old one")
 	}
-	if title := w.one(`SELECT title FROM sessions WHERE id = $1`, got[2].ResultID); title != "Fix the nightly" {
+	if title := w.one(`SELECT title FROM sessions WHERE id = $1`, started.ResultID); title != "Fix the nightly" {
 		t.Fatalf("title %q", title)
 	}
 }
@@ -156,8 +174,10 @@ func TestChatAForgedOrStaleResumeChoiceNeverResumesThatSession(t *testing.T) {
 	// A private session Márcia owns, made in #design-private: not open to
 	// everyone in #support.
 	w.model.queue(answer(map[string]any{"route": "brainstorm", "confidence": 0.9, "reasoning": "private", "title": "Payroll"}))
-	w.mention("Márcia", "G1", "", "payroll talk")
-	private := w.requests()[1].ResultID
+	privateTS := w.mention("Márcia", "G1", "", "payroll talk")
+	privateRequestID := w.one(`SELECT id FROM chat_requests WHERE organization_id = $1 AND provider = 'slack'
+		AND conversation_id = 'G1' AND mention->>'messageId' = $2`, w.org, privateTS)
+	private := w.requestByID(privateRequestID).ResultID
 	// Another organisation's session.
 	other := dbtest.Org(t, w.owner)
 	foreign := "ses_foreign_" + other
@@ -172,17 +192,19 @@ func TestChatAForgedOrStaleResumeChoiceNeverResumesThatSession(t *testing.T) {
 
 	for _, target := range []string{private, foreign, elis, "ses_missing"} {
 		q, values := askResume(t, w, session, "C1")
+		questionID := resumeQuestionID(t, values[0])
 		// The stored question is rewritten to name target, as a forged or stale row would.
 		w.exec(`UPDATE chat_requests SET question = jsonb_set(question, '{question,choices,0,session}', to_jsonb($2::text))
-			WHERE organization_id = $1 AND route = 'clarify' AND answered_at IS NULL`, w.org, target)
+			WHERE organization_id = $1 AND id = $3 AND route = 'clarify' AND answered_at IS NULL`, w.org, target, questionID)
+		beforeRequests := len(w.requests())
 		before := w.sessions()
 		beforeEvents := w.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'chat.message'`, target)
 		w.click("Márcia", "C1", q.TS, q.ThreadTS, values[0])
 		got := w.requests()
-		last := got[len(got)-1]
-		if last.Route != "brainstorm" || last.AskedRoute != "resume" || last.ResultKind != "session" || last.ResultID == target ||
-			!strings.Contains(last.Reasoning, "chosen in the clarifying question") || !strings.Contains(last.Reasoning, target) {
-			t.Fatalf("%s: request %+v", target, last)
+		started := w.answeringRequest(questionID)
+		if len(got) != beforeRequests+1 || started.Route != "brainstorm" || started.AskedRoute != "resume" || started.ResultKind != "session" || started.ResultID == target ||
+			!strings.Contains(started.Reasoning, "chosen in the clarifying question") || !strings.Contains(started.Reasoning, target) {
+			t.Fatalf("%s: request %+v; want %d requests, all requests %+v", target, started, beforeRequests+1, got)
 		}
 		if w.sessions() != before+1 {
 			t.Fatalf("%s: no new session", target)
@@ -215,9 +237,11 @@ func TestChatAResumeChoiceWhoseAccessWasRevokedStartsANewSession(t *testing.T) {
 		t.Fatalf("session access %q, want private", access)
 	}
 	q, values := askResume(t, w, session, "D1")
+	questionID := resumeQuestionID(t, values[0])
 	got = w.requests()
-	if len(got) != 2 || got[1].Route != "clarify" || got[1].AskedRoute != "resume" {
-		t.Fatalf("requests %+v", got)
+	ask := w.requestByID(questionID)
+	if len(got) != 2 || ask.Route != "clarify" || ask.AskedRoute != "resume" {
+		t.Fatalf("original ask %+v; all requests %+v", ask, got)
 	}
 	// Transfer the existing owner row to retain exactly one owner while revoking access.
 	w.exec(`UPDATE session_people SET person_id = $2 WHERE session_id = $1 AND person_id = $3 AND role = 'owner'`,
@@ -238,10 +262,11 @@ func TestChatAResumeChoiceWhoseAccessWasRevokedStartsANewSession(t *testing.T) {
 	beforeSessions := w.sessions()
 	w.click("Márcia", "D1", q.TS, q.ThreadTS, values[0])
 	got = w.requests()
-	if len(got) != 3 || got[2].Route != "brainstorm" || got[2].AskedRoute != "resume" || got[2].ResultKind != "session" ||
-		got[2].ResultID == session || !strings.Contains(got[2].Reasoning, "chosen in the clarifying question") ||
-		!strings.Contains(got[2].Reasoning, session) || !strings.Contains(got[2].Reasoning, "not one the person can chat in") {
-		t.Errorf("requests %+v", got)
+	started := w.answeringRequest(questionID)
+	if len(got) != 3 || started.Route != "brainstorm" || started.AskedRoute != "resume" || started.ResultKind != "session" ||
+		started.ResultID == session || !strings.Contains(started.Reasoning, "chosen in the clarifying question") ||
+		!strings.Contains(started.Reasoning, session) || !strings.Contains(started.Reasoning, "not one the person can chat in") {
+		t.Errorf("new session request %+v; all requests %+v", started, got)
 	}
 	if after := w.sessions(); after != beforeSessions+1 {
 		t.Errorf("sessions changed from %d to %d, want exactly one new session", beforeSessions, after)
