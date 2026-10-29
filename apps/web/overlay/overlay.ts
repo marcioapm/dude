@@ -151,7 +151,7 @@ const openerOf = (w: Window): Window | null | undefined => {
 };
 
 // overlaySessionSchema's rules, by hand: the overlay bundles no zod.
-const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme", "dudeWindow"]);
+const SESSION_KEYS = new Set(["type", "v", "task", "url", "pins", "drafts", "showPins", "theme", "dudeWindow", "mode"]);
 const PIN_KEYS = new Set(["id", "n", "status", "author", "mine", "body", "selector", "when", "replies"]);
 const REPLY_KEYS = new Set(["who", "kind", "body"]);
 const PIN_STATUSES = new Set<unknown>(["draft", "open", "delivered", "resolved", "replied"]);
@@ -189,6 +189,7 @@ function validSession(value: unknown): value is Extract<DudeToOverlay, { type: "
     || !boundedString(value.task, 100) || !boundedString(value.url, 2_048)
     || !Array.isArray(value.pins) || value.pins.length > OVERLAY_LIMITS.pins
     || !wholeNumber(value.drafts, 0) || typeof value.showPins !== "boolean"
+    || (value.mode !== undefined && value.mode !== "branch")
     || (value.theme !== undefined && !OVERLAY_THEMES.includes(value.theme as OverlayTheme))
     || (value.dudeWindow !== undefined && !overlayWindowName(value.dudeWindow))) return false;
   try {
@@ -208,6 +209,7 @@ export class Overlay {
   readonly #opts: OverlayOptions;
   #connection: Connection = "waiting";
   #task = "";
+  #branch = false;
   #pins: OverlayPin[] = [];
   #drafts = 0;
   #showPins = true;
@@ -468,7 +470,8 @@ export class Overlay {
         this.#connection = "connected";
         this.#connect = null;
         this.#task = String(m.task).slice(0, 40);
-        this.#pins = Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
+        this.#branch = m.mode === "branch";
+        this.#pins = this.#branch ? [] : Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
         this.#drafts = Number(m.drafts) || 0;
         this.#showPins = m.showPins !== false;
         this.#dudeTheme = m.theme ?? null;
@@ -1080,11 +1083,11 @@ export class Overlay {
     const foot = this.#h("footer", { class: "foot" });
     const section = this.#h("section", { class: "box", role: "dialog", "aria-label": `Comment on ${name}`, "data-testid": "ov-comment-box" },
       this.#h("header", { class: "bh" }, this.#h("span", {}, "Comment on ", this.#h("b", { class: "mono" }, name)),
-        this.#h("span", { class: "dim" }, this.#g("lock", 11), " Private draft until you submit in dude")),
+        this.#h("span", { class: "dim" }, this.#g("lock", 11), this.#branch ? " Submit to this preview server" : " Private draft until you submit in dude")),
       this.#field!,
       this.#h("label", {}, attach, this.#h("span", {}, "Attach a picture of this element ", this.#h("span", { class: "dim" }, "(drawn from the page)"))),
       this.#h("details", { "data-testid": "ov-what-dude-sends" }, this.#h("summary", { "data-k": "sends" }, "What dude will send"), facts,
-        this.#h("p", { class: "dim" }, "Nothing leaves this page until you save. Then it is a draft only you see in dude.")),
+        this.#h("p", { class: "dim" }, this.#branch ? "Submit sends this comment to the preview server. Saved feedback is available only through the CLI and API." : "Nothing leaves this page until you save. Then it is a draft only you see in dude.")),
       foot);
     const picked = this.#h("div", { class: "hl picked", "data-testid": "ov-picked" });
     return { section, picked, attach, picLine, picDd, disconnected, problem, foot, keys, sp, cancel, copy, save, picKey: "" };
@@ -1136,7 +1139,7 @@ export class Overlay {
     this.#toggle(b.section, b.disconnected, !connected, b.foot);
     setText(b.problem, this.#problem ?? "");
     this.#toggle(b.section, b.problem, this.#problem !== null, b.foot);
-    setText(b.save, this.#saving ? "Saving…" : "Save draft");
+    setText(b.save, this.#saving ? "Saving…" : this.#branch ? "Submit feedback" : "Save draft");
     b.save.disabled = !(connected && !this.#saving && this.#field.value.trim() !== "");
     sync(b.foot, [narrow || !connected ? null : b.keys, b.sp, connected ? b.cancel : null, !connected || this.#unanswered ? b.copy : null, connected ? b.save : null]
       .filter((n): n is HTMLElement => n !== null));
@@ -1169,7 +1172,7 @@ export class Overlay {
         connected ? this.#h("button", { type: "button", class: this.#picking ? "on" : "primary", "aria-pressed": this.#picking ? "true" : "false",
           "data-testid": "ov-comment", "data-k": "comment", onclick: () => this.#setPicking(!this.#picking) },
           this.#g(this.#picking ? "check" : "pick"), this.#picking ? "Done" : "Comment") : null,
-        connected ? this.#h("button", { type: "button", class: this.#panel === "pins" ? "on" : "", "aria-expanded": this.#panel === "pins" ? "true" : "false",
+        connected && !this.#branch ? this.#h("button", { type: "button", class: this.#panel === "pins" ? "on" : "", "aria-expanded": this.#panel === "pins" ? "true" : "false",
           "data-testid": "ov-pins", "data-k": "pins", title: this.#showPins ? "Comments on this page" : "Pins are hidden",
           onclick: () => { this.#panel = this.#panel === "pins" ? null : "pins"; this.#focusGone = null; this.#render(); } },
           this.#g("pins"), narrow ? String(pinsHere) : `${pinsHere} on this page`, this.#g("chev", 12)) : null,
@@ -1237,6 +1240,10 @@ export class Overlay {
 
   #toastFor(t: Toast): HTMLElement {
     const pic = t.picture === "attached" ? "with its picture" : t.picture === "failed" ? "without its picture: dude couldn't keep it" : t.why ? `without a picture: ${t.why}` : "with no picture";
+    if (this.#branch) return this.#h("div", { class: "toast", role: "status", "data-testid": "ov-saved" },
+      this.#h("span", { class: "okc" }, this.#g("check")),
+      this.#h("span", { class: "tt" }, this.#h("b", {}, "Feedback submitted"),
+        this.#h("span", { class: "dim" }, `${pic}. Browse and manage saved feedback with the CLI or API.`)));
     return this.#h("div", { class: "toast", role: "status", "data-testid": "ov-saved" },
       this.#h("span", { class: "okc" }, this.#g("check")),
       this.#h("span", { class: "tt" }, this.#h("b", {}, "Saved to your drafts in dude"),

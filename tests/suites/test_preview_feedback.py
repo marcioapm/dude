@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import os
 import re
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -252,5 +254,95 @@ def test_a_comment_picked_on_the_preview_is_a_draft_in_dude_then_a_pin_for_a_col
         _shoot(pv2, "overlay-colleague-pin")
         assert errors2 == [], errors2
         ctx2.close()
+    finally:
+        browser.close()
+
+
+def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
+    browser_type: BrowserType, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github, env, tmp_path, access
+):
+    """Real overlay UI/postMessage -> authenticated relay -> API/storage -> actual CLI subprocess."""
+    pid = forge_project["id"]
+    assert client.put(f"/v1/projects/{pid}/servers/web", WEB).status_code == 200
+    fake_github.push_branch("feature/server-feedback")
+    made = client.post(f"/v1/projects/{pid}/branch-previews", {"branch": "feature/server-feedback"})
+    assert made.status_code == 201, made.text
+    rid = made.json()["id"]
+    asleep = wait_until(lambda: (p := client.get(f"/v1/branch-previews/{rid}").json())["servers"] and p,
+                        timeout=60, message="branch servers allocated")
+    assert client.post(f"/v1/runs/{rid}/servers/web/start").status_code == 200
+    ready = wait_until(lambda: (p := client.get(f"/v1/runs/{rid}/servers").json())["servers"]
+                       and p["servers"][0]["state"] == "ready" and p, timeout=60, message="branch preview ready")
+    web = ready["servers"][0]
+    email = f"preview-{rid}@example.com"
+    provision_person(client, env, "Ana Example", email)
+    binary = Path(__file__).resolve().parents[2] / "orchestrator" / "bin" / "dude-cli"
+    cli_env = {k: v for k, v in os.environ.items() if not k.startswith("DUDE_")}
+    cli_env.update(HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path), DUDE_URL=env.control_plane_url, DUDE_API_KEY=client.api_key)
+
+    def cli(*args):
+        result = subprocess.run([str(binary), "preview", *args], cwd=tmp_path, env=cli_env,
+                                capture_output=True, text=True, input="", timeout=30)
+        assert result.returncode == 0, (args, result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    browser = browser_type.launch(**browser_channel(), headless=True, args=LAUNCH_ARGS)
+    try:
+        ctx, errors = _context(browser, web, access.url, env)
+        login = ctx.new_page()
+        access.sign_in(login, email)
+        preview = ctx.new_page(); preview.goto(web["url"])
+        _wait_ov(preview, "ov-connect")
+        with ctx.expect_page() as opened:
+            _ov(preview, "r => r.querySelector('[data-testid=ov-connect]').click()")
+        relay = opened.value
+        expect(relay.get_by_test_id("preview-connect")).to_have_attribute("data-step", "connected", timeout=20_000)
+        preview.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')")
+        assert "preview-connect" in relay.url and "/task/" not in relay.url
+        # A valid account/token without organization membership is not preview authorization.
+        outsider = access.session(f"outsider-{rid}@example.com")
+        denied = outsider.get(f"/v1/preview-servers/lookup?origin={web['url'].rstrip('/')}")
+        assert denied.status_code == 403, denied.text
+        assert _ov(preview, "r => r.querySelectorAll('[data-testid=ov-pin], [data-testid=ov-pins]').length") == 0
+        for n in range(3):
+            _ov(preview, "r => r.querySelector('[data-testid=ov-comment]').click()")
+            preview.hover("button.pay")
+            box = preview.locator("button.pay").bounding_box()
+            preview.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            _wait_ov(preview, "ov-comment-box")
+            preview.wait_for_function("() => window.__ovRoot.querySelector('img.thumb')", timeout=15_000)
+            preview.keyboard.type(f"Server-only feedback {n}")
+            assert _ov(preview, "r => r.querySelector('[data-testid=ov-save]').textContent") == "Submit feedback"
+            preview.keyboard.press("Control+Enter"); _wait_ov(preview, "ov-saved")
+            assert "Feedback submitted" in _ov(preview, "r => r.querySelector('[data-testid=ov-saved]').textContent")
+        first = cli("list-feedback", rid, "--limit", "2")
+        assert len(first["feedback"]) == 2 and first["nextCursor"]
+        second = cli("list-feedback", rid, "--after", first["nextCursor"], "--limit", "2")
+        assert len(second["feedback"]) == 1 and second["nextCursor"] is None
+        item = cli("show-feedback", first["feedback"][0]["id"])
+        assert item["previewRunId"] == rid and item["serverName"] == "web" and item["captureSha"] is None
+        aid = item["anchor"]["attachmentId"]
+        picture = client.get(f"/v1/attachments/{aid}")
+        assert picture.status_code == 200 and picture.content[:4] == b"\x89PNG"
+        assert picture.headers["cache-control"] == "private, no-store"
+        cli("resolve-feedback", item["id"], "--note", "Checked on preview")
+        assert len(cli("list-feedback", rid)["feedback"]) == 2
+        assert len(cli("list-feedback", rid, "--status", "resolved", "--server", "web")["feedback"]) == 1
+        assert cli("list-feedback", rid, "--server", "api")["feedback"] == []
+        cli("reopen-feedback", item["id"], "--note", "Check again")
+        assert len(cli("list-feedback", rid)["feedback"]) == 3
+        assert len(cli("show-feedback", item["id"])["history"]) == 2
+        # A reload/reconnect does not load anyone's saved feedback into the overlay.
+        relay.reload()
+        expect(relay.get_by_test_id("preview-connect")).to_have_attribute("data-step", "connected", timeout=20_000)
+        assert _ov(preview, "r => r.querySelectorAll('[data-testid=ov-pin], [data-testid=ov-pins]').length") == 0
+        expect(relay.get_by_test_id("preview-connect")).not_to_contain_text("Server-only feedback")
+        _evil_posted(relay)
+        assert len(cli("list-feedback", rid)["feedback"]) == 3
+        cli("stop", rid)
+        assert cli("list-feedback", rid, "--status", "all")["feedback"] == []
+        assert client.get(f"/v1/attachments/{aid}").status_code == 404
+        assert errors == [], errors
+        ctx.close()
     finally:
         browser.close()

@@ -51,7 +51,7 @@ async function hello(origin: string, url: string, source: unknown = opener) {
   });
 }
 
-const FOUND: PreviewServerAt = { organizationSlug: "acme", taskId: "wi_7", taskKey: "SHOP-7", server: "web" };
+const FOUND = { organizationSlug: "acme", taskId: "wi_7", taskKey: "SHOP-7", server: "web" } as const;
 
 test("the opener's hello is looked up by the origin the browser gave it, and the tab goes to the task found, marked as arrived", async () => {
   const client = new LookupClient(async () => FOUND);
@@ -144,4 +144,17 @@ test("a lookup that lands after the page was left does nothing: no move to the t
   });
   expect(s.found).toEqual([]);
   expect(arrivedFromPreview(window, FOUND.taskId)).toBe(false);
+});
+
+test("a branch preview stays on the submission relay, never navigates to a task", async () => {
+  const client = new LookupClient(async () => ({ kind: "branch", organizationId: "org_acme", organizationSlug: "acme",
+    projectId: "prj_acme", previewRunId: "run_branch", branch: "feature/cart", server: "web" }));
+  // Keep all calls in the test client, rather than creating a network client.
+  client.inOrganization = () => client;
+  const s = await screen(client);
+  await hello(WEB, `${WEB}/cart`);
+  await until(() => s.step() === "connected" || null, "branch relay connected");
+  expect(s.found).toEqual([]);
+  expect(s.container.textContent).toContain("Saved feedback is available only through the CLI and API");
+  expect(arrivedFromPreview(window, "run_branch")).toBe(false);
 });

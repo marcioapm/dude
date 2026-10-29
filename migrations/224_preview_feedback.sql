@@ -71,7 +71,10 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'preview server not found' USING ERRCODE = '23503'; END IF;
   IF TG_TABLE_NAME = 'preview_feedback' THEN
     IF NEW.project_id <> owner_project OR NOT EXISTS (SELECT 1 FROM people p
-      WHERE p.id = NEW.author_person_id AND p.organization_id = NEW.organization_id AND p.removed_at IS NULL) THEN
+      WHERE p.id = NEW.author_person_id AND p.organization_id = NEW.organization_id
+        AND (TG_OP <> 'INSERT' OR p.removed_at IS NULL))
+      OR (NEW.resolved_by IS NOT NULL AND NOT EXISTS (SELECT 1 FROM people p
+        WHERE p.id = NEW.resolved_by AND p.organization_id = NEW.organization_id AND p.removed_at IS NULL)) THEN
       RAISE EXCEPTION 'preview owner mismatch' USING ERRCODE = '23503';
     END IF;
   END IF;

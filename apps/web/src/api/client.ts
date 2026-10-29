@@ -600,10 +600,21 @@ export interface Located {
 }
 
 /** Whose preview is served at an origin. `GET /v1/preview-servers/lookup`. */
-export interface PreviewServerAt {
+export type PreviewServerAt = {
+  kind?: "task";
   organizationSlug: string;
   taskId: string;
   taskKey: string;
+  server: string;
+} | BranchPreviewServerAt;
+
+export interface BranchPreviewServerAt {
+  kind: "branch";
+  organizationId: string;
+  organizationSlug: string;
+  projectId: string;
+  previewRunId: string;
+  branch: string;
   server: string;
 }
 
@@ -2058,6 +2069,27 @@ export class ApiClient {
   /** The task, among your organisations', whose live preview is served at an https origin; 404 when none is yours. */
   previewServerAt(origin: string): Promise<PreviewServerAt> {
     return this.#request("GET", `/v1/preview-servers/lookup?origin=${encodeURIComponent(origin)}`);
+  }
+
+  submitPreviewFeedback(runId: string, server: string, input: { body: string; anchor: import("@dude/domain").OverlayAnchor & { attachmentId?: string }; submissionKey: string }): Promise<import("@dude/domain").PreviewFeedbackItem> {
+    return this.#request("POST", `/v1/branch-previews/${encodeURIComponent(runId)}/servers/${encodeURIComponent(server)}/feedback`, input);
+  }
+
+  async uploadPreviewAttachment(runId: string, server: string, image: { bytes: Uint8Array; type: string }): Promise<string> {
+    const form = new FormData();
+    const blob = new Blob([image.bytes as BlobPart], { type: image.type });
+    for (const part of ["original", "delivered"]) {
+      form.set(part, blob, image.type === "image/png" ? "preview.png" : "preview.jpg");
+      form.set(`${part}Type`, image.type);
+    }
+    const response = await fetch(`${this.#baseUrl}/v1/branch-previews/${encodeURIComponent(runId)}/servers/${encodeURIComponent(server)}/attachments`, {
+      method: "POST", credentials: "include", redirect: "error", body: form,
+      headers: { ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}),
+        ...(this.#organizationId ? { "x-dude-organization": this.#organizationId } : {}) },
+    });
+    const body = await response.json() as { id?: string; error?: { message: string } };
+    if (!response.ok || !body.id) throw new ApiError(response.status, "upload_failed", body.error?.message ?? "screenshot upload failed");
+    return body.id;
   }
 
   /** Add a server to a run: one of the project's recipes by name, or a port and command just for this run. */

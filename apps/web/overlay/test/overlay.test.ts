@@ -127,6 +127,18 @@ test("it says hello to its opener, posted only to dude's origin, and connects on
   expect(count('[data-testid="ov-comment"]')).toBe(1);
 });
 
+test("branch mode offers direct submission, no feedback inbox, pins or task drafts", () => {
+  boot();
+  fromDude({ type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: [], drafts: 0, showPins: false });
+  expect(count('[data-testid="ov-pins"]')).toBe(0);
+  tid("ov-comment")!.click();
+  const button = sized(win.document.querySelector("button.pay")!); hover(button);
+  button.dispatchEvent(new win.MouseEvent("click", { bubbles: true, composed: true }));
+  expect(tid("ov-save")!.textContent).toBe("Submit feedback");
+  expect(tid("ov-comment-box")!.textContent).not.toContain("Private draft");
+  expect(tid("ov-comment-box")!.textContent).toContain("only through the CLI and API");
+});
+
 test("a message from another origin, or from a window other than its opener, is not heard", () => {
   boot();
   fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true }, "https://evil.example.test");

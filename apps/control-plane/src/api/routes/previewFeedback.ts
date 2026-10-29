@@ -41,16 +41,25 @@ async function submit(ctx: RequestContext): Promise<Response> {
     if (!owner.url || new URL(input.anchor.url).origin !== new URL(owner.url).origin) throw badRequest("feedback must name this preview server's origin");
     // Serialize retries by one author, including two tabs reconnecting at once.
     await scope.sql`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([id, name, author, input.submissionKey])}, 0))`;
-    const [existing] = await scope.sql`SELECT ${scope.sql.unsafe(SELECT)} FROM preview_feedback f
+    const [existing] = await scope.sql`SELECT ${scope.sql.unsafe(SELECT)},
+        ((f.anchor - 'attachmentId') = (${input.anchor}::jsonb - 'attachmentId')
+          AND f.body = ${input.body} AND f.capture_sha IS NOT DISTINCT FROM ${input.captureSha ?? null}) AS "sameContent"
+      FROM preview_feedback f
       WHERE f.preview_run_id = ${id} AND f.preview_server_name = ${name}
-      AND f.author_person_id = ${author} AND f.submission_key = ${input.submissionKey}` as PreviewFeedbackItem[];
+      AND f.author_person_id = ${author} AND f.submission_key = ${input.submissionKey}` as Array<PreviewFeedbackItem & { sameContent: boolean }>;
     if (existing) {
-      if (existing.body !== input.body || JSON.stringify(existing.anchor) !== JSON.stringify(input.anchor) || existing.captureSha !== (input.captureSha ?? null)) {
-        // jsonb's key order is not the request's; compare anchors in Postgres.
-        const [same] = await scope.sql`SELECT anchor = ${input.anchor}::jsonb AS same FROM preview_feedback WHERE id = ${existing.id}`;
-        if (!same.same || existing.body !== input.body || existing.captureSha !== (input.captureSha ?? null)) throw conflict("submission key already used for different feedback");
+      if (!existing.sameContent) throw conflict("submission key already used for different feedback");
+      if (existing.anchor.attachmentId !== input.anchor.attachmentId) {
+        const [same] = await scope.sql`SELECT
+          (anchor->>'attachmentId' IS NOT DISTINCT FROM ${input.anchor.attachmentId ?? null}
+            OR EXISTS (SELECT 1 FROM attachments a JOIN attachments b ON a.sha256 = b.sha256
+              WHERE a.id = anchor->>'attachmentId' AND b.id = ${input.anchor.attachmentId ?? null}
+                AND b.preview_run_id = ${id} AND b.preview_server_name = ${name} AND b.uploaded_by = ${author})) AS same
+          FROM preview_feedback WHERE id = ${existing.id}`;
+        if (!same.same) throw conflict("submission key already used for different feedback");
       }
-      return existing;
+      const { sameContent: _same, ...item } = existing;
+      return item;
     }
     if (input.anchor.attachmentId) {
       const [a] = await scope.sql`SELECT id FROM attachments WHERE id = ${input.anchor.attachmentId}

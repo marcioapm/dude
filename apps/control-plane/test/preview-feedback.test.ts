@@ -95,6 +95,27 @@ test("server feedback is idempotent, immutable and separate from task delivery",
   expect((await owner`SELECT 1 FROM events`).length).toBe(0);
 });
 
+test("reconnect retry with the same screenshot bytes is the same submission", async () => {
+  const id = "run_pf_picture_retry"; await preview(id);
+  const first = await (await upload(id)).json(); const second = await (await upload(id)).json();
+  expect(first.id).toMatch(/^att_/); expect(second.id).toMatch(/^att_/);
+  const a = await submit(id, input(id, "same-shot", { attachmentId: first.id }));
+  const b = await submit(id, input(id, "same-shot", { attachmentId: second.id }));
+  expect(a.status).toBe(201); expect(b.status).toBe(201);
+  expect((await a.json()).id).toBe((await b.json()).id);
+});
+
+test("branch origin lookup is scoped, live and discriminated without leaking saved feedback", async () => {
+  const id = "run_pf_lookup"; await preview(id);
+  const path = `/v1/preview-servers/lookup?origin=https://${id}-web.preview.test`;
+  const found = await call(ana.key, "GET", path); expect(found.status).toBe(200);
+  expect(await found.json()).toEqual({ kind: "branch", organizationId: "org_pf", organizationSlug: "org_pf",
+    projectId: "prj_pf", previewRunId: id, branch: id, server: "web" });
+  expect((await call(other.key, "GET", path)).status).toBe(404);
+  await owner`UPDATE runs SET status = 'completed' WHERE id = ${id}`;
+  expect((await call(ana.key, "GET", path)).status).toBe(404);
+});
+
 test("tenant RLS, project consistency, live server and screenshot ownership are enforced", async () => {
   await preview("run_pf_scope");
   const f = await (await submit("run_pf_scope")).json();
