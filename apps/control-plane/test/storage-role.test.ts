@@ -71,7 +71,7 @@ delete process.env.DUDE_S3_SECRET_KEY;
 const { useConfig, Config } = await import("../src/config.ts");
 // Settings are resolved once; each change to the variables above is read again.
 useConfig(null);
-const { putObject, getObject, deleteObject } = await import("../src/storage.ts");
+const { putObject, getObject, removeObject, deleteObject } = await import("../src/storage.ts");
 const { errorResponse } = await import("../src/api/http.ts");
 
 // A storage module with none of the cached credentials or clients of earlier imports.
@@ -302,6 +302,53 @@ test("explicit DUDE_S3 keys sign put, read and delete without any metadata reque
   expect(metadataCalls).toBe(0);
   expect(requests.map((r) => r.method)).toEqual(["PUT", "GET", "DELETE"]);
   for (const request of requests) signedWith(request, "FAKEEXPLICITKEY", "fakeExplicitSecret", null);
+});
+
+test("replacing Config sends every static storage operation only to the current store", async () => {
+  const stores = [0, 1].map(() => {
+    const requests: { method: string; url: string; headers: Headers }[] = [];
+    const objects = new Map<string, Uint8Array>();
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+      requests.push({ method: req.method, url: req.url, headers: new Headers(req.headers) });
+      const key = new URL(req.url).pathname;
+      if (req.method === "PUT") { objects.set(key, new Uint8Array(await req.arrayBuffer())); return new Response(null); }
+      if (req.method === "DELETE") { objects.delete(key); return new Response(null, { status: 204 }); }
+      return new Response(objects.get(key) ?? null, { status: objects.has(key) ? 200 : 404 });
+    } });
+    return { requests, objects, server };
+  });
+  const settings = stores.map(({ server }, i) => Config.load({ defaultPath: "/nonexistent/dude-storage.toml", env: {
+    DUDE_S3_BUCKET: `store-${i}`, DUDE_S3_ENDPOINT: `http://127.0.0.1:${server.port}`,
+    DUDE_S3_REGION: i ? "eu-west-3" : "us-east-1",
+    DUDE_S3_ACCESS_KEY: "FAKEEXPLICITKEY", DUDE_S3_SECRET_KEY: "fakeExplicitSecret",
+  } }));
+  const bytes = new Uint8Array([4, 5, 6]);
+  const calls = metadataCalls;
+  try {
+    for (const [i, store] of stores.entries()) {
+      useConfig(settings[i]!);
+      await putObject("image", bytes, "image/png");
+      expect(new Uint8Array((await getObject("image"))!)).toEqual(bytes);
+      await removeObject("image");
+      await putObject("best-effort", bytes, "image/png");
+      expect(await logged(() => deleteObject("best-effort"))).toBe("");
+      expect(store.objects.size).toBe(0);
+      expect(store.requests.map((r) => r.method)).toEqual(["PUT", "GET", "DELETE", "PUT", "DELETE"]);
+      expect(store.requests.map((r) => new URL(r.url).pathname)).toEqual([
+        `/store-${i}/image`, `/store-${i}/image`, `/store-${i}/image`, `/store-${i}/best-effort`, `/store-${i}/best-effort`,
+      ]);
+      for (const request of store.requests) {
+        expect(signingRegion(request)).toBe(i ? "eu-west-3" : "us-east-1");
+        signedWith(request, "FAKEEXPLICITKEY", "fakeExplicitSecret", null);
+      }
+      await store.server.stop(true);
+    }
+    expect(stores[0]!.requests.length).toBe(5);
+    expect(metadataCalls).toBe(calls);
+  } finally {
+    for (const store of stores) await store.server.stop(true);
+    useConfig(null);
+  }
 });
 
 test("one explicit DUDE_S3 key alone fails without falling back to IMDS", async () => {
