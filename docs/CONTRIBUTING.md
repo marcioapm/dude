@@ -1224,7 +1224,12 @@ built-in instructions, the organisation's, then the provider's, with the
 thread (non-members marked), the projects and epics and the person's chat
 sessions of 14 days → checks (project, epic, session, no cycle, at most 12
 tasks, 2–4 choices; under 75% or a failed check asks while choices can be
-built and fewer than 2 were asked, else a brainstorm, as any failed call)
+built and fewer than 2 were asked, else a brainstorm, as any failed call;
+an unsure resume of a session the person may resume from here asks
+"Continue “<title>”, or start a new session?", its Continue choice
+naming the session, which only dude's own question may, and which the
+pick checks again as any answer: one gone or no longer resumable starts a
+new session, the reasoning saying why)
 → make it (public: an organisation session; private or group: shared as
 chat with each connected member, the rest recorded skipped; DM: private,
 never bound; tasks in the Backlog, not started, with origin and blocked-by)
