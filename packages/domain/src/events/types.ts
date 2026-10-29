@@ -521,6 +521,14 @@ export const EventTypes = {
   FeedbackResolved: "feedback.resolved",
   FeedbackReopened: "feedback.reopened",
   FeedbackOutdated: "feedback.outdated",
+  /**
+   * Feedback on a branch preview's server (no task), project-scoped so the
+   * project's members' streams carry it. Payload: `{ feedbackId, previewRunId,
+   * server, status }`; the item is read through its route, never sent here.
+   */
+  PreviewFeedbackSubmitted: "preview_feedback.submitted",
+  PreviewFeedbackResolved: "preview_feedback.resolved",
+  PreviewFeedbackReopened: "preview_feedback.reopened",
 
   // Pull requests — the factory's output, and the state it waits on.
   PullRequestOpened: "pull_request.opened",

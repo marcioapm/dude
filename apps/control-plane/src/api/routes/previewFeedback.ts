@@ -1,8 +1,25 @@
 /** Server feedback is stored only: it never wakes agents or creates tasks. */
-import { newId, previewFeedbackSubmitSchema, previewFeedbackStatusSchema, type PreviewFeedbackItem } from "@dude/domain";
+import { EventTypes, newId, previewFeedbackSubmitSchema, previewFeedbackStatusSchema, type PreviewFeedbackItem } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
+import { appendInScope } from "../../events/ledger.ts";
 import { HttpError, badRequest, conflict, forbidden, intParam, json, notFound, parseBody, readCapped } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+
+/**
+ * Tells the project's members' streams that a server's feedback changed, in
+ * the write's transaction. Ids and status only: readers fetch the item.
+ */
+async function recordFeedbackEvent(scope: OrgScope, type: string, by: string,
+    item: { id: string; projectId: string; previewRunId: string; serverName: string; status: string }): Promise<void> {
+  await appendInScope(scope, {
+    eventType: type,
+    organizationId: scope.organizationId,
+    projectId: item.projectId,
+    actor: { type: "person", id: by },
+    source: "control-plane",
+    payload: { feedbackId: item.id, previewRunId: item.previewRunId, server: item.serverName, status: item.status },
+  });
+}
 
 const SELECT = `f.id, f.project_id AS "projectId", f.preview_run_id AS "previewRunId",
   f.preview_server_name AS "serverName", f.body, f.anchor, f.capture_sha AS "captureSha", f.status,
@@ -73,6 +90,7 @@ async function submit(ctx: RequestContext): Promise<Response> {
       VALUES (${newId("feedbackItem")}, ${scope.organizationId}, ${owner.projectId}, ${id}, ${name}, ${author},
         ${input.submissionKey}, ${input.body}, ${input.anchor}::jsonb, ${input.captureSha ?? null}) RETURNING *)
       SELECT ${scope.sql.unsafe(SELECT)} FROM f`;
+    await recordFeedbackEvent(scope, EventTypes.PreviewFeedbackSubmitted, author, row as PreviewFeedbackItem);
     return row;
   });
   return json(item, 201, { "cache-control": "no-store" });
@@ -123,7 +141,12 @@ function change(status: "open" | "resolved") {
         resolution_note = CASE WHEN ${status} = 'resolved' THEN ${input.note ?? ""} ELSE resolution_note END,
         history = history || jsonb_build_array(jsonb_build_object('status', ${status}::text, 'personId', ${by}::text,
           'note', ${input.note ?? ""}::text, 'at', now())) WHERE id = ${f.id}`;
-      return (await scope.sql`SELECT ${scope.sql.unsafe(SELECT)} FROM preview_feedback f WHERE f.id = ${f.id}`)[0];
+      const [changed] = await scope.sql`SELECT ${scope.sql.unsafe(SELECT)} FROM preview_feedback f WHERE f.id = ${f.id}` as PreviewFeedbackItem[];
+      if (f.status !== status) {
+        await recordFeedbackEvent(scope, status === "resolved" ? EventTypes.PreviewFeedbackResolved : EventTypes.PreviewFeedbackReopened,
+          by, changed!);
+      }
+      return changed;
     });
     return json(row, 200, { "cache-control": "no-store" });
   };

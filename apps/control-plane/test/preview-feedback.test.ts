@@ -205,7 +205,11 @@ test("server feedback is idempotent, immutable and separate from task delivery",
   expect(a).toMatchObject({ status: "open", captureSha: null, projectId: "prj_pf", serverName: "web", history: [] });
   expect((await submit("run_pf_idempotent", { ...payload, body: "different" })).status).toBe(409);
   expect((await owner`SELECT 1 FROM feedback_items`).length).toBe(0);
-  expect((await owner`SELECT 1 FROM events`).length).toBe(0);
+  // Separate from task delivery: one project-scoped event for the one item, nothing on a task or run.
+  const events = await owner`SELECT event_type, project_id, task_id, run_id, payload FROM events WHERE payload->>'previewRunId' = 'run_pf_idempotent'`;
+  expect(events.map((e: { event_type: string; project_id: string; task_id: string | null; run_id: string | null; payload: { feedbackId: string } }) =>
+    [e.event_type, e.project_id, e.task_id, e.run_id, e.payload.feedbackId])).toEqual([["preview_feedback.submitted", "prj_pf", null, null, a.id]]);
+  expect((await owner`SELECT 1 FROM events WHERE event_type NOT LIKE 'preview_feedback.%'`).length).toBe(0);
 });
 
 test("reconnect retry with the same screenshot bytes is the same submission", async () => {
