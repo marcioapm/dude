@@ -72,16 +72,17 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 				return nil, fmt.Errorf("preview %s: %w (latest: %s); inspect dude preview show %s and dude api GET /v1/runs/%s/servers", id, err, latest, id, id)
 			}
 			started := map[string]bool{}
+			firstView, staleErr := true, ""
 			allocationDeadline := time.Now().Add(30 * time.Second)
 			for {
 				status := str(preview, "status")
-				latest = "status=" + status
 				switch status {
 				case "pending", "scheduled", "starting", "running", "paused":
 				default:
 					return fail(fmt.Errorf("preview is not live (%s)", status))
 				}
 				if !wake {
+					latest = "status=" + status
 					if len(list(preview, "servers")) > 0 {
 						return preview, nil
 					}
@@ -99,8 +100,14 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 					case "completed", "failed", "aborted":
 						return fail(fmt.Errorf("preview run ended (%s): %s", str(run, "state"), str(run, "error")))
 					}
+					if firstView {
+						staleErr, firstView = str(run, "error"), false
+					}
 					if msg := str(run, "error"); msg != "" {
-						return fail(fmt.Errorf("startup failed: %s", msg))
+						latest += " error=" + msg
+						if len(started) > 0 && msg != staleErr {
+							return fail(fmt.Errorf("startup failed: %s", msg))
+						}
 					}
 					servers := map[string]obj{}
 					for _, s := range list(view, "servers") {

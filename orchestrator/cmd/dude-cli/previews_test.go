@@ -103,7 +103,7 @@ func TestPreviewLifecycle(t *testing.T) {
 						state = "starting"
 					}
 					run := obj{"id": "run_bp", "luxRunId": "lux_1", "state": "running", "luxState": "running", "asleep": false, "epoch": 2}
-					if tc.mode == "error" {
+					if tc.mode == "error" && reads > 1 {
 						run["error"] = "image failed"
 					}
 					servers := []obj{{"name": "web", "state": state, "serverState": serverState, "runId": attachment, "url": "https://web.test"}, {"name": "api", "state": "ready", "serverState": "ready", "runId": "lux_1", "url": "https://api.test"}, {"name": "unrelated", "state": "starting"}}
@@ -235,6 +235,55 @@ func TestPreviewWakePolling(t *testing.T) {
 			}
 			if err != nil || views != 2 || previewReads != wantReads || !strings.Contains(out.String(), `"status": "running"`) || time.Since(began) < 900*time.Millisecond {
 				t.Fatalf("wake polling: views=%d previewReads=%d elapsed=%s out=%s err=%v", views, previewReads, time.Since(began), out.String(), err)
+			}
+		})
+	}
+}
+
+func TestPreviewRunErrorRecovery(t *testing.T) {
+	for _, mode := range []string{"recovered", "same error", "fresh error"} {
+		t.Run(mode, func(t *testing.T) {
+			views, posts := 0, 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == "POST":
+					posts++
+					fmt.Fprint(w, `{}`)
+				case strings.HasSuffix(r.URL.Path, "/servers"):
+					views++
+					msg, state := "starting a server tries a new Run", "starting"
+					if views > 1 {
+						switch mode {
+						case "recovered":
+							msg, state = "", "ready"
+						case "fresh error":
+							msg = "new image failed"
+						}
+					}
+					fmt.Fprintf(w, `{"run":{"state":"running","luxState":"running","error":%q},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":"https://web.test","state":%q,"serverState":%q}]}`, msg, state, state)
+				default:
+					fmt.Fprint(w, `{"id":"run_bp","status":"paused"}`)
+				}
+			}))
+			defer srv.Close()
+			out, err := runCLI(t, srv, "", "preview", "start", "run_bp", "--wait", "100ms")
+			if posts != 1 || views < 2 {
+				t.Fatalf("must request wake before judging error: posts=%d views=%d err=%v", posts, views, err)
+			}
+			switch mode {
+			case "recovered":
+				if err != nil || !strings.Contains(out, `"ready": true`) {
+					t.Fatalf("stale error blocked recovery: out=%s err=%v", out, err)
+				}
+			case "same error":
+				if err == nil || !strings.Contains(err.Error(), "deadline") || !strings.Contains(err.Error(), "latest: status=running luxState=running stage= error=starting a server tries a new Run") {
+					t.Fatalf("same error must remain in deadline diagnostics: %v", err)
+				}
+			case "fresh error":
+				if err == nil || !strings.Contains(err.Error(), "startup failed: new image failed") || views != 2 {
+					t.Fatalf("fresh error must fail immediately: views=%d err=%v", views, err)
+				}
 			}
 		})
 	}
