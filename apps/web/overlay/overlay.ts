@@ -500,6 +500,14 @@ export class Overlay {
         this.#toast = { drafts: this.#drafts, picture: m.picture, ...(this.#picture.state === "failed" ? { why: this.#picture.why } : {}) };
         this.#closeBox(false);
         break;
+      case "retryable":
+        if (!this.#branch || (m.nonce !== this.#saving && m.nonce !== this.#late)) return;
+        this.#late = m.nonce;
+        this.#lateSent = this.#sent ?? this.#lateSent;
+        this.#saving = null;
+        this.#win.clearTimeout(this.#saveTimer);
+        this.#problem = String(m.reason).slice(0, 500);
+        break;
       case "refused":
         if (m.nonce !== undefined && m.nonce !== this.#saving && m.nonce !== this.#late) return;
         this.#saveDone();

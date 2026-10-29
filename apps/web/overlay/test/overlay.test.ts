@@ -139,6 +139,23 @@ test("branch mode offers direct submission, no feedback inbox, pins or task draf
   expect(tid("ov-comment-box")!.textContent).toContain("only through the CLI and API");
 });
 
+test("branch retryable outcome preserves the nonce for unchanged content", async () => {
+  boot();
+  fromDude({ type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: [], drafts: 0, showPins: false });
+  tid("ov-comment")!.click();
+  const button = sized(win.document.querySelector("button.pay")!); hover(button);
+  button.dispatchEvent(new win.MouseEvent("click", { bubbles: true, composed: true }));
+  await tick();
+  const field = root.querySelector("textarea")!; field.value = "The button overlaps";
+  field.dispatchEvent(new win.Event("input", { bubbles: true }));
+  tid("ov-save")!.click();
+  const first = sent().find((m) => m.type === "draft")!;
+  fromDude({ type: "retryable", v: 1, nonce: first.nonce, reason: "Response lost" });
+  tid("ov-save")!.click();
+  const drafts = sent().filter((m) => m.type === "draft");
+  expect(drafts).toHaveLength(2); expect(drafts[1]!.nonce).toBe(first.nonce);
+});
+
 test("a message from another origin, or from a window other than its opener, is not heard", () => {
   boot();
   fromDude({ type: "session", v: 1, task: "SHOP-1", url: PAGE, pins: [], drafts: 0, showPins: true }, "https://evil.example.test");

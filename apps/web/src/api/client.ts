@@ -2071,6 +2071,10 @@ export class ApiClient {
     return this.#request("GET", `/v1/preview-servers/lookup?origin=${encodeURIComponent(origin)}`);
   }
 
+  validatePreviewServer(runId: string, server: string, origin: string): Promise<BranchPreviewServerAt> {
+    return this.#request("GET", `/v1/branch-previews/${encodeURIComponent(runId)}/servers/${encodeURIComponent(server)}/owner?origin=${encodeURIComponent(origin)}`);
+  }
+
   submitPreviewFeedback(runId: string, server: string, input: { body: string; anchor: import("@dude/domain").OverlayAnchor & { attachmentId?: string }; submissionKey: string }): Promise<import("@dude/domain").PreviewFeedbackItem> {
     return this.#request("POST", `/v1/branch-previews/${encodeURIComponent(runId)}/servers/${encodeURIComponent(server)}/feedback`, input);
   }

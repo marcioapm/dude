@@ -87,6 +87,7 @@ export type DudeToOverlay =
   | { type: "session"; v: 1; task: string; url: string; pins: OverlayPin[]; drafts: number; showPins: boolean; theme?: OverlayTheme; dudeWindow?: string; mode?: "branch" }
   | { type: "saved"; v: 1; nonce: string; id: string; drafts: number; picture: "attached" | "none" | "failed" }
   | { type: "refused"; v: 1; nonce?: string; reason: string }
+  | { type: "retryable"; v: 1; nonce: string; reason: string }
   | { type: "highlight"; v: 1; itemId: string }
   | { type: "stop"; v: 1 };
 
