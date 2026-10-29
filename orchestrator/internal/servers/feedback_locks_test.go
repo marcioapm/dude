@@ -37,6 +37,7 @@ func TestFeedbackCompetitorsLockRunBeforeServer(t *testing.T) {
 				VALUES ('run_feedback', $1, 'prj_feedback', 'feature/feedback', 1, 'running', 'preview', true)`, org)
 			exec(`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url, idle_at)
 				VALUES ('run_feedback', $1, 'web', 'srv_feedback', 'feedback', 'https://feedback.example.test', now())`, org)
+			exec(`INSERT INTO people (id, organization_id, name) VALUES ('per_feedback', $1, 'Ana Example')`, org)
 			// This is the API's held Run SHARE, followed by its server SHARE.
 			tx, err := owner.Begin(ctx)
 			if err != nil {
@@ -86,6 +87,12 @@ func TestFeedbackCompetitorsLockRunBeforeServer(t *testing.T) {
 			if _, err := tx.Exec(ctx, `SELECT name FROM preview_servers WHERE run_id = 'run_feedback' FOR SHARE NOWAIT`); err != nil {
 				t.Fatalf("competitor locked server before Run: %v", err)
 			}
+			if _, err := tx.Exec(ctx, `INSERT INTO preview_feedback
+				(id, organization_id, project_id, preview_run_id, preview_server_name, author_person_id, submission_key, body, anchor)
+				VALUES ('fbi_feedback', $1, 'prj_feedback', 'run_feedback', 'web', 'per_feedback', 'example', 'Example feedback',
+				'{"kind":"preview","url":"https://feedback.example.test"}')`, org); err != nil {
+				t.Fatalf("held feedback submission failed: %v", err)
+			}
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -101,6 +108,16 @@ func TestFeedbackCompetitorsLockRunBeforeServer(t *testing.T) {
 			}
 			if path != "feed deleted" && count != 1 {
 				t.Fatal("live preview ended")
+			}
+			if err := owner.QueryRow(ctx, `SELECT count(*) FROM preview_feedback WHERE preview_run_id = 'run_feedback'`).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if path == "feed deleted" {
+				want = 0
+			}
+			if count != want {
+				t.Fatalf("feedback count %d after competitor, want %d", count, want)
 			}
 		})
 	}

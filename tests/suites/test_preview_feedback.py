@@ -63,7 +63,9 @@ HOLD_ROOT = """(() => {
 # In dude's tab: the origin of every message it is sent, heard before the app's own listener.
 HEARD = """(() => {
   window.__heard = [];
+  window.__messages = [];
   window.addEventListener('message', (e) => window.__heard.push(e.origin));
+  window.addEventListener('message', (e) => window.__messages.push(e.data));
 })()"""
 
 
@@ -274,6 +276,20 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
     ready = wait_until(lambda: (p := client.get(f"/v1/runs/{rid}/servers").json())["servers"]
                        and p["servers"][0]["state"] == "ready" and p, timeout=60, message="branch preview ready")
     web = ready["servers"][0]
+    png = bytes.fromhex("89504e470d0a1a0a0000000d494844520000000a0000000a000000000000000000")
+    uploaded = requests.post(f"{client.base_url}/v1/branch-previews/{rid}/servers/web/attachments",
+                              headers={"authorization": f"Bearer {client.api_key}"}, timeout=30,
+                              files={part: ("example.png", png, "image/png") for part in ["original", "delivered"]},
+                              data={"originalType": "image/png", "deliveredType": "image/png"})
+    assert uploaded.status_code == 201, uploaded.text
+    private_attachment = uploaded.json()["id"]
+    seeded = client.post(f"/v1/branch-previews/{rid}/servers/web/feedback", {
+        "submissionKey": "private-seeded", "body": "Colleague private saved feedback",
+        "anchor": {"kind": "preview", "url": web["url"].rstrip("/") + "/private", "selector": "#private-anchor",
+                   "attachmentId": private_attachment},
+    })
+    assert seeded.status_code == 201, seeded.text
+    private = seeded.json()
     email = f"preview-{rid}@example.com"
     provision_person(client, env, "Ana Example", email)
     binary = Path(__file__).resolve().parents[2] / "orchestrator" / "bin" / "dude-cli"
@@ -289,6 +305,28 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
     browser = browser_type.launch(**browser_channel(), headless=True, args=LAUNCH_ARGS)
     try:
         ctx, errors = _context(browser, web, access.url, env)
+        feedback_reads = []
+        submissions = []
+        screenshot_uploads = []
+        ctx.on("request", lambda r: feedback_reads.append(r.url) if r.method == "GET" and
+               ("/preview-feedback/" in r.url or re.search(r"/branch-previews/[^/]+/(?:servers/[^/]+/)?feedback", r.url)) else None)
+        ctx.on("request", lambda r: screenshot_uploads.append(r.url) if r.method == "POST" and
+               f"/branch-previews/{rid}/servers/web/attachments" in r.url else None)
+
+        def lose_committed_response(route):
+            if route.request.method != "POST":
+                route.continue_()
+                return
+            submissions.append(route.request.post_data_json)
+            response = route.fetch()
+            assert response.status == 201
+            if len(submissions) == 1:
+                # Commit happened, but the browser cannot decode the response body.
+                route.fulfill(status=201, content_type="application/json", body="{")
+            else:
+                route.fulfill(response=response)
+
+        ctx.route(f"**/v1/branch-previews/{rid}/servers/web/feedback", lose_committed_response)
         login = ctx.new_page()
         access.sign_in(login, email)
         preview = ctx.new_page(); preview.goto(web["url"])
@@ -313,32 +351,52 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
             preview.wait_for_function("() => window.__ovRoot.querySelector('img.thumb')", timeout=15_000)
             preview.keyboard.type(f"Server-only feedback {n}")
             assert _ov(preview, "r => r.querySelector('[data-testid=ov-save]').textContent") == "Submit feedback"
-            preview.keyboard.press("Control+Enter"); _wait_ov(preview, "ov-saved")
+            preview.keyboard.press("Control+Enter")
+            if n == 0:
+                preview.wait_for_function("() => { const b = window.__ovRoot.querySelector('[data-testid=ov-save]'); return b && !b.disabled; }")
+                assert len(cli("list-feedback", rid)["feedback"]) == 2
+                preview.keyboard.press("Control+Enter")
+            _wait_ov(preview, "ov-saved")
             assert "Feedback submitted" in _ov(preview, "r => r.querySelector('[data-testid=ov-saved]').textContent")
+        assert len(submissions) == 4 and len(screenshot_uploads) == 3
+        assert submissions[0] == submissions[1], submissions[:2]
         first = cli("list-feedback", rid, "--limit", "2")
         assert len(first["feedback"]) == 2 and first["nextCursor"]
         second = cli("list-feedback", rid, "--after", first["nextCursor"], "--limit", "2")
-        assert len(second["feedback"]) == 1 and second["nextCursor"] is None
-        item = cli("show-feedback", first["feedback"][0]["id"])
+        assert len(second["feedback"]) == 2 and second["nextCursor"] is None
+        item = cli("show-feedback", next(f["id"] for f in first["feedback"] + second["feedback"] if f["id"] != private["id"]))
         assert item["previewRunId"] == rid and item["serverName"] == "web" and item["captureSha"] is None
         aid = item["anchor"]["attachmentId"]
         picture = client.get(f"/v1/attachments/{aid}")
         assert picture.status_code == 200 and picture.content[:4] == b"\x89PNG"
         assert picture.headers["cache-control"] == "private, no-store"
         cli("resolve-feedback", item["id"], "--note", "Checked on preview")
-        assert len(cli("list-feedback", rid)["feedback"]) == 2
+        assert len(cli("list-feedback", rid)["feedback"]) == 3
         assert len(cli("list-feedback", rid, "--status", "resolved", "--server", "web")["feedback"]) == 1
         assert cli("list-feedback", rid, "--server", "api")["feedback"] == []
         cli("reopen-feedback", item["id"], "--note", "Check again")
-        assert len(cli("list-feedback", rid)["feedback"]) == 3
+        assert len(cli("list-feedback", rid)["feedback"]) == 4
         assert len(cli("show-feedback", item["id"])["history"]) == 2
         # A reload/reconnect does not load anyone's saved feedback into the overlay.
         relay.reload()
         expect(relay.get_by_test_id("preview-connect")).to_have_attribute("data-step", "connected", timeout=20_000)
         assert _ov(preview, "r => r.querySelectorAll('[data-testid=ov-pin], [data-testid=ov-pins]').length") == 0
         expect(relay.get_by_test_id("preview-connect")).not_to_contain_text("Server-only feedback")
+        preview.evaluate("() => history.pushState({}, '', '/next')")
+        preview.wait_for_function("() => (window.__messages ?? []).filter(m => m?.type === 'session').length >= 2")
+        messages_before_reload = preview.evaluate("() => window.__messages")
+        preview.reload()
+        _wait_ov(preview, "ov-connect")
+        _ov(preview, "r => r.querySelector('[data-testid=ov-connect]').click()")
+        preview.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')", timeout=15_000)
+        sessions = preview.evaluate("() => window.__messages.filter(m => m?.type === 'session').length")
+        preview.wait_for_function("n => window.__messages.filter(m => m?.type === 'session').length > n", arg=sessions, timeout=10_000)
+        messages = json.dumps(messages_before_reload + preview.evaluate("() => window.__messages"))
+        for secret in [private["id"], private["body"], "#private-anchor", "/private", private_attachment]:
+            assert secret not in messages, (secret, messages)
+        assert feedback_reads == [], feedback_reads
         _evil_posted(relay)
-        assert len(cli("list-feedback", rid)["feedback"]) == 3
+        assert len(cli("list-feedback", rid)["feedback"]) == 4
         cli("stop", rid)
         assert cli("list-feedback", rid, "--status", "all")["feedback"] == []
         assert client.get(f"/v1/attachments/{aid}").status_code == 404

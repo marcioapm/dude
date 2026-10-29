@@ -93,6 +93,13 @@ test("only definite 4xx submission refusals discard the retry identity", async (
   expect(opener.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "refused", nonce: draft.nonce }), ORIGIN);
 });
 
+test("5xx submission outcomes remain retryable", async () => {
+  const { client, opener, send } = setup();
+  client.submissions.mockImplementation(async () => { throw new ApiError(503, "unavailable", "Response unavailable"); });
+  send(draft); await tick();
+  expect(opener.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "retryable", nonce: draft.nonce }), ORIGIN);
+});
+
 test("heartbeats coalesce a slow known-owner check and never discover again or read saved feedback", async () => {
   const { client, opener, send } = setup();
   let release!: () => void;

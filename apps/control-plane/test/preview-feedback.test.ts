@@ -54,7 +54,8 @@ async function upload(id: string, key = ana.key, server = "web") {
   new DataView(bytes.buffer).setUint32(16, 10); new DataView(bytes.buffer).setUint32(20, 10);
   const form = new FormData();
   for (const part of ["original", "delivered"]) {
-    form.set(part, new File([bytes], "shot.png", { type: "image/png" })); form.set(`${part}Type`, "image/png");
+    const variant = bytes.slice(); variant[32] = part === "original" ? 1 : 2;
+    form.set(part, new File([variant], "shot.png", { type: "image/png" })); form.set(`${part}Type`, "image/png");
   }
   return router.handle(new Request(`http://dude.test/v1/branch-previews/${id}/servers/${server}/attachments`, {
     method: "POST", headers: { authorization: `Bearer ${key}` }, body: form })) as Promise<JsonResponse>;
@@ -97,6 +98,7 @@ async function readable(a: { id: string }) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     expect(bytes.length).toBe(33);
     expect([...bytes.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect(bytes[32]).toBe(suffix ? 1 : 2);
   }
 }
 
