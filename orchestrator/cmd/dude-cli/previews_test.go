@@ -35,6 +35,7 @@ func TestPreviewLifecycle(t *testing.T) {
 		{"poll HTTP error", []string{"create", "ABS", "feature/login"}, "pollError", "503"},
 		{"readiness HTTP error", []string{"start", "run_bp", "--wait", "1s"}, "viewError", "503"},
 		{"start HTTP error", []string{"start", "run_bp"}, "startError", "starting web"},
+		{"start conflict", []string{"start", "run_bp", "--wait", "1s"}, "conflict409", "starting web"},
 		{"blocked HTTP deadline", []string{"start", "run_bp", "--wait", "30ms"}, "blocked", "deadline"},
 		{"empty allocation", []string{"start", "run_bp", "--wait", "30ms"}, "empty", "deadline"},
 		{"missing recipe", []string{"start", "run_bp", "--wait", "30ms"}, "noRecipes", "no autostart"},
@@ -121,6 +122,11 @@ func TestPreviewLifecycle(t *testing.T) {
 					}
 					json.NewEncoder(w).Encode(obj{"run": run, "servers": servers, "recipes": recipes})
 				case "/v1/runs/run_bp/servers/web/start", "/v1/runs/run_bp/servers/api/start":
+					if tc.mode == "conflict409" {
+						w.WriteHeader(409)
+						fmt.Fprint(w, `{"error":{"code":"run_ended","message":"preview run ended"}}`)
+						return
+					}
 					if tc.mode == "race" && views == 1 {
 						w.WriteHeader(409)
 						fmt.Fprint(w, `{"error":{"code":"conflict","message":"the preview is no longer asleep; try again"}}`)
@@ -145,6 +151,9 @@ func TestPreviewLifecycle(t *testing.T) {
 				t.Fatal("HTTP call outlived wait deadline")
 			}
 			if tc.want != "" {
+				if tc.mode == "conflict409" && (len(posts) != 1 || views != 1 || time.Since(began) > 500*time.Millisecond) {
+					t.Fatalf("real conflict must fail without retry: posts=%v views=%d elapsed=%s err=%v", posts, views, time.Since(began), err)
+				}
 				switch tc.name {
 				case "missing branch", "missing id", "wait requires start", "negative wait", "create negative wait", "invalid duration", "unknown flag":
 					if len(posts) != 0 {
@@ -175,7 +184,7 @@ func TestPreviewLifecycle(t *testing.T) {
 				if wakes != 0 || views != 0 || polls == 0 {
 					t.Fatalf("create lifecycle: posts=%v views=%d polls=%d", posts, views, polls)
 				}
-			} else if wakes != 2 && !(tc.mode == "race" && wakes == 4) {
+			} else if want := map[bool]int{true: 4, false: 2}[tc.mode == "race"]; wakes != want {
 				t.Fatalf("must wake all expected servers: %v", posts)
 			}
 			if strings.Contains(strings.Join(tc.args, " "), "--wait") && !strings.Contains(out, `"ready": true`) {
