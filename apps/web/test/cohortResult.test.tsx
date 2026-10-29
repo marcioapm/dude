@@ -25,6 +25,8 @@ test("one queued cohort row becomes delivered in place, including reconnect and 
   let html = renderToStaticMarkup(renderTurn(row, "conductor", 0, false, noPeople, "dude"));
   expect(html).toContain("Completed 1/3");
   expect(html).toContain("Queued");
+  expect(html).not.toMatch(/\b(?:read|verified|passed|pass)\b/i);
+  expect(html).toContain("Member reports are unverified claims.");
   for (const m of metadata.members) {
     expect(html).toContain(m.runId);
     expect(html).toContain(`href="#/session/${m.runId}"`);
@@ -36,6 +38,8 @@ test("one queued cohort row becomes delivered in place, including reconnect and 
   expect(state.turns[0]).toBe(row);
   html = renderToStaticMarkup(renderTurn(row, "conductor", 0, false, noPeople, "dude"));
   expect(html).toContain("Delivered");
+  expect(html).not.toMatch(/\b(?:read|verified|passed|pass)\b/i);
+  expect(html).toContain("Member reports are unverified claims.");
   expect(project([queued, receipt], "paused").turns).toEqual(state.turns);
 });
 
@@ -46,5 +50,18 @@ test("receipt before queued event survives unrelated checks and only matches its
   const rows = project([receipt, checks, queued], "paused").turns;
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({ kind: "cohortResult", deliveredAt: receipt.occurredAt });
+  const wrongParentReceipt = event("run.directive.delivered", { directiveId: "dir_cohort" }, "run_other");
+  const wrongParentState = apply(emptyProjection(), [wrongParentReceipt, event("run.cohort.queued", metadata)]);
+  expect(wrongParentState.turns).toHaveLength(1);
+  expect(wrongParentState.turns[0]).toMatchObject({ kind: "cohortResult", deliveredAt: null });
+
+  const queuedFirstState = apply(emptyProjection(), [event("run.cohort.queued", metadata)]);
+  const row = queuedFirstState.turns[0]!;
+  expect(row).toMatchObject({ kind: "cohortResult", deliveredAt: null });
+  const matchingReceipt = event("run.directive.delivered", { directiveId: "dir_cohort" });
+  apply(queuedFirstState, [matchingReceipt]);
+  expect(queuedFirstState.turns).toHaveLength(1);
+  expect(queuedFirstState.turns[0]).toBe(row);
+  expect(row).toMatchObject({ kind: "cohortResult", deliveredAt: matchingReceipt.occurredAt });
   expect(project([event("run.cohort.queued", metadata, "run_other")], "running").turns).toEqual([]);
 });

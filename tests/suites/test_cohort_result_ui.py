@@ -1,6 +1,7 @@
 """Real cohort settlement and public-feed queued/delivered transcript, with a scripted model."""
 
 import os
+import re
 from pathlib import Path
 
 from playwright.sync_api import expect
@@ -52,6 +53,8 @@ def test_cohort_result_waits_for_answer_then_updates_one_row(
     row = page.get_by_test_id("cohort-result")
     expect(row).to_have_count(1)
     expect(row).to_contain_text("Completed 0/3 · Queued", timeout=30_000)
+    expect(row).not_to_contain_text(re.compile(r"\b(?:read|verified|passed|pass)\b", re.IGNORECASE))
+    expect(row).to_contain_text("Member reports are unverified claims.")
     expect(row.get_by_role("link")).to_have_count(3)
     for member in members:
         expect(row.get_by_role("link", name=f"Run {member['id']}")).to_have_attribute("href", f"#/session/{member['id']}")
@@ -82,6 +85,8 @@ def test_cohort_result_waits_for_answer_then_updates_one_row(
                         if e["eventType"] == "run.directive.delivered" and e["payload"].get("directiveId") == payload["directiveId"]], timeout=90)
     expect(row).to_have_count(1)
     expect(row).to_contain_text("Completed 0/3 · Delivered", timeout=30_000)
+    expect(row).not_to_contain_text(re.compile(r"\b(?:read|verified|passed|pass)\b", re.IGNORECASE))
+    expect(row).to_contain_text("Member reports are unverified claims.")
     screenshot("delivered")
     page.set_viewport_size({"width": 390, "height": 844})
     expect(row).to_be_visible()
