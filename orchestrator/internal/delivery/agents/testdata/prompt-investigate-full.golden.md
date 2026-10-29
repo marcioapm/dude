@@ -15,7 +15,7 @@ Acceptance criteria:
 
 This work spans these checkouts:
 
-- `api` at `/workspace/repos/api` — you may change it
-- `web` at `/workspace/repos/web` — you may change it
+- `api` at `/workspace/repos/api` — source for inspection and reporting; a writable mount does not authorize task code changes
+- `web` at `/workspace/repos/web` — source for inspection and reporting; a writable mount does not authorize task code changes
 
-Commit in each repository you change. Each changed repository gets its own pull request.
+Inspect the source and report what you find. Scratch experiments and report artifacts are allowed; task code edits, commits, and pull request publication are not authorized. Publish report artifacts through the existing reporting tools and deliver your findings in your reply.

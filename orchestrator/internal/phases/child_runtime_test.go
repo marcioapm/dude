@@ -628,59 +628,66 @@ func TestChildStitchedRoleRoundTrip(t *testing.T) {
 }
 
 func TestChildReportSpec(t *testing.T) {
+	if err := dbtest.Reachable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	for _, profile := range []string{"investigator", "reviewer", "qa_browser"} {
-		t.Run(profile, func(t *testing.T) {
-			w := newResumeWorld(t)
-			w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
-			w.s.Agent.ToolsURL = "http://tools.test"
-			w.s.Agent.ToolsService = true
-			w.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		for _, access := range []string{"read", "write"} {
+			t.Run(profile+"-"+access, func(t *testing.T) {
+				w := newResumeWorld(t)
+				w.exec(`UPDATE organizations SET name='Report fixture' WHERE id=$1`, w.run.Org)
+				w.s.Forges = forgeFor(func(context.Context, string) (*forge.GitHub, error) { return nil, nil })
+				w.s.Agent.ToolsURL = "http://tools.test"
+				w.s.Agent.ToolsService = true
+				w.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 				VALUES ('repo_report', $1, $2, 'report', 'https://github.com/test/report', 'main')`, w.run.Org, w.run.ProjectID)
-			w.exec(`INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
-				VALUES ($1, $2, 'repo_report', 'read')`, w.run.Org, w.run.TaskID)
-			phase := delivery.PhaseForPromptRole(profile)
-			w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,phase=$2::run_phase,role=$3::agent_role,
+				w.exec(`INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
+				VALUES ($1, $2, 'repo_report', $3)`, w.run.Org, w.run.TaskID, access)
+				phase := delivery.PhaseForPromptRole(profile)
+				w.exec(`UPDATE runs SET source_kind='task_conductor',parent_run_id=id,phase=$2::run_phase,role=$3::agent_role,
 			child_profile=$4,child_capabilities='{}',child_prompt='Investigate the exact regression.',lux_run_id=NULL WHERE id=$1`, w.run.ID, phase, delivery.RoleForPhase[phase], profile)
-			w.exec(`UPDATE model_tiers SET model='gpt-5.6-sol' WHERE organization_id=$1`, w.run.Org)
-			w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object($2::text,jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org, profile)
-			r := w.run
-			r.SourceKind = "task_conductor"
-			r.Phase = phase
-			r.Role = delivery.RoleForPhase[phase]
-			r.Attempt = 1
-			r.LuxRunID = ""
-			spec, _, _, _, err := w.s.spec(w.ctx, r, nil, chosenImage{Ref: "test/image:latest"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(spec.Workload.Prompt, "Investigate the exact regression.") {
-				t.Fatalf("override absent: %s", spec.Workload.Prompt)
-			}
-			if spec.Git != nil && spec.Git.Push != nil {
-				t.Fatal("report child got push authority")
-			}
-			agents := childInstructions(t, spec)
-			assertChildContract(t, agents)
-			if profile == "investigator" {
-				const toolParagraph = "Only your dude agent tools are limited to list_tasks, list_epics, list_repositories, search_memory, get_memory, run_diff, list_machine_sizes, and emit_event. The same read/report tools are available through the dude CLI."
-				const nativeParagraph = "This list does not restrict harness-native tools. Use the harness-native filesystem reads and shell available to your role to inspect code and run checks; their existing permissions, checkout access, and network restrictions still apply. This contract grants no additional tools or permissions."
-				if !strings.Contains(agents, "\n\n"+toolParagraph+"\n\n"+nativeParagraph+"\n\n") {
-					t.Fatalf("actual investigator instructions contradict native access:\n%s", agents)
+				w.exec(`UPDATE model_tiers SET model='gpt-5.6-sol' WHERE organization_id=$1`, w.run.Org)
+				w.exec(`UPDATE organizations SET default_agent_models=jsonb_build_object($2::text,jsonb_build_object('tier',(SELECT id FROM model_tiers WHERE organization_id=$1 LIMIT 1))) WHERE id=$1`, w.run.Org, profile)
+				r := w.run
+				r.SourceKind = "task_conductor"
+				r.Phase = phase
+				r.Role = delivery.RoleForPhase[phase]
+				r.Attempt = 1
+				r.LuxRunID = ""
+				spec, _, _, _, err := w.s.spec(w.ctx, r, nil, chosenImage{Ref: "test/image:latest"})
+				if err != nil {
+					t.Fatal(err)
 				}
-				if p := openCodePermission(t, spec); !reflect.DeepEqual(p, map[string]any{"*": "allow"}) {
-					t.Fatalf("investigator native permissions changed: %v", p)
+				if !strings.Contains(spec.Workload.Prompt, "Investigate the exact regression.") {
+					t.Fatalf("override absent: %s", spec.Workload.Prompt)
 				}
-				t.Logf("investigator native config: %s", spec.Env["OPENCODE_CONFIG_CONTENT"])
-				if spec.Env["OPENCODE_ENABLE_EXA"] != "1" || spec.Git == nil || len(spec.Git.Repositories) == 0 {
-					t.Fatalf("investigator lacks its granted search or checkout: env=%v git=%+v", spec.Env["OPENCODE_ENABLE_EXA"], spec.Git)
+				if spec.Git != nil && spec.Git.Push != nil {
+					t.Fatal("report child got push authority")
 				}
-			}
-			for _, forbidden := range []string{"ask_person", "request_repository", "request_machine", "create_task"} {
-				if strings.Contains(spec.Workload.Prompt, forbidden) {
-					t.Fatalf("child prompt advertises %s", forbidden)
+				agents := childInstructions(t, spec)
+				assertChildContract(t, agents)
+				if profile == "investigator" {
+					agentGolden(t, "investigator-startup-"+access, [][2]string{{"Startup", spec.Workload.Prompt}, {"Instructions", submittedInstructions(t, spec)}})
+					const toolParagraph = "Only your dude agent tools are limited to list_tasks, list_epics, list_repositories, search_memory, get_memory, run_diff, list_machine_sizes, and emit_event. The same read/report tools are available through the dude CLI."
+					const nativeParagraph = "This list does not restrict harness-native tools. Use the harness-native filesystem reads and shell available to your role to inspect code and run checks; their existing permissions, checkout access, and network restrictions still apply. This contract grants no additional tools or permissions."
+					if !strings.Contains(agents, "\n\n"+toolParagraph+"\n\n"+nativeParagraph+"\n\n") {
+						t.Fatalf("actual investigator instructions contradict native access:\n%s", agents)
+					}
+					if p := openCodePermission(t, spec); !reflect.DeepEqual(p, map[string]any{"*": "allow"}) {
+						t.Fatalf("investigator native permissions changed: %v", p)
+					}
+					t.Logf("investigator native config: %s", spec.Env["OPENCODE_CONFIG_CONTENT"])
+					if spec.Env["OPENCODE_ENABLE_EXA"] != "1" || spec.Git == nil || len(spec.Git.Repositories) == 0 {
+						t.Fatalf("investigator lacks its granted search or checkout: env=%v git=%+v", spec.Env["OPENCODE_ENABLE_EXA"], spec.Git)
+					}
 				}
-			}
-		})
+				for _, forbidden := range []string{"ask_person", "request_repository", "request_machine", "create_task"} {
+					if strings.Contains(spec.Workload.Prompt, forbidden) {
+						t.Fatalf("child prompt advertises %s", forbidden)
+					}
+				}
+			})
+		}
 	}
 }
 

@@ -140,13 +140,13 @@ type PromptRepo struct {
 
 // workspaceNote says where each checkout is: the agent starts in
 // /workspace, beside its instruction file, not in a repository. A reviewer
-// and a tester check work and change none of it, so neither is told to
-// commit.
+// and a tester check work; an investigator inspects and reports. None is
+// told to commit.
 func workspaceNote(repos []PromptRepo, phase string) string {
 	return render(workspaceTmpl, struct {
-		Repos        []PromptRepo
-		Review, Test bool
-	}{repos, phase == PhaseReview, phase == PhaseTest})
+		Repos                     []PromptRepo
+		Review, Test, Investigate bool
+	}{repos, phase == PhaseReview, phase == PhaseTest, phase == PhaseInvestigate})
 }
 
 // CriteriaList writes the criteria as a Markdown list, one item each. A

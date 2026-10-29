@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -74,6 +75,16 @@ func runSpec(c AgentConfig, in specInput) (lux.Spec, error) {
 	spec := buildSpec(c, in)
 	if in.Instructions == "" {
 		return spec, nil
+	}
+	if in.NetworkContext {
+		var rules []string
+		unrestricted := spec.Network == nil || spec.Network.Unrestricted
+		if spec.Network != nil {
+			for _, rule := range spec.Network.Egress {
+				rules = append(rules, rule.Host+rule.CIDR)
+			}
+		}
+		in.Instructions = delivery.NetworkInstructions(unrestricted, rules) + "\n\n" + in.Instructions
 	}
 	script, err := instructionsInit(workspaceDir, in.Instructions)
 	if err != nil {

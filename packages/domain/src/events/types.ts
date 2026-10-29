@@ -299,6 +299,8 @@ export const EventTypes = {
    * sent if they were already read); it is not a second read.
    */
   DirectiveDelivered: "run.directive.delivered",
+  /** One settled cohort digest queued atomically. Metadata only: `{ cohortId, parentRunId, directiveId, completed, total, members: { runId, status }[] }`. Delivery uses DirectiveDelivered. */
+  CohortQueued: "run.cohort.queued",
   /**
    * A steer will not reach the agent. Payload: `{ directiveId, error,
    * nextRunId? }`: `nextRunId` names the conductor a message to an ended

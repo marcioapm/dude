@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -42,6 +43,7 @@ func TestCohortDeliveryRollbackAndReplay(t *testing.T) {
 	if w.count("directives") != 0 {
 		t.Fatal("rollback retained digest")
 	}
+	w.assertQueuedEvents(0)
 	w.exec(`UPDATE child_result_outbox SET claimed_until=now()-interval '1 minute'`)
 	for i := 0; i < 2; i++ {
 		if _, err := w.s.EnqueueChildResults(w.ctx); err != nil {
@@ -50,6 +52,15 @@ func TestCohortDeliveryRollbackAndReplay(t *testing.T) {
 	}
 	if w.count("directives") != 1 {
 		t.Fatal("recovery must queue exactly one digest")
+	}
+	w.assertQueuedEvents(1)
+}
+
+func (w *childWorld) assertQueuedEvents(want int) {
+	w.t.Helper()
+	var got int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM events WHERE event_type='run.cohort.queued'`).Scan(&got); err != nil || got != want {
+		w.t.Fatalf("queued events %d want %d: %v", got, want, err)
 	}
 }
 
@@ -87,6 +98,7 @@ func TestCohortEndedParentDoesNotNotifyReplacement(t *testing.T) {
 	if w.count("directives") != 0 {
 		t.Fatal("ended parent or replacement received digest")
 	}
+	w.assertQueuedEvents(0)
 	var stale int
 	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM child_results WHERE stale`).Scan(&stale); err != nil || stale != 2 {
 		t.Fatalf("stale results %d: %v", stale, err)
@@ -108,6 +120,23 @@ func TestCohortWriterConflictRollsBackEarlierMember(t *testing.T) {
 	}
 }
 
+func TestCohortReplacedParentDoesNotQueueVisibleResult(t *testing.T) {
+	w := newChildWorld(t)
+	_, members := w.startCohort(t, "replaced", w.in)
+	w.exec(`INSERT INTO runs(id,organization_id,project_id,task_id,attempt,role,status) VALUES('replacement',$1,'prj_life','wi_life',3,'conductor','completed')`, w.org)
+	w.exec(`UPDATE runs SET replaced_by='replacement' WHERE id='run_parent'`)
+	if _, err := w.s.SettleChild(w.ctx, w.org, members[0], ChildOutcome{Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.s.EnqueueChildResults(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.assertQueuedEvents(0)
+	if w.count("directives") != 0 {
+		t.Fatal("replaced parent received digest")
+	}
+}
+
 func TestCohortReportBoundAndQuote(t *testing.T) {
 	report := boundedCohortReport(strings.Repeat("`", 30) + strings.Repeat("界", 20000))
 	if len(report) > 6000 || !utf8.ValidString(report) || !strings.Contains(report, "[report clipped;") {
@@ -122,6 +151,15 @@ func TestCohortReportBoundAndQuote(t *testing.T) {
 func TestCohortStaggeredResults(t *testing.T) {
 	w := newChildWorld(t)
 	cohort, members := w.startCohort(t, "batch", w.in, w.in, w.in)
+	w.exec(`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
+		VALUES ('evt_private_report',$1,'agent.message',$2,'wi_life','agent',$2,'test','{"text":"PRIVATE raw report credential=do-not-project"}')`, w.org, members[0])
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		_, err := AskTx(w.ctx, tx, w.in.Parent.Run, "May I proceed?", []string{"Yes", "No"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`UPDATE runs SET status='paused', dude_pause='person', waiting_since=now() WHERE id='run_parent'`)
 	for i, status := range []string{"completed", "failed", "aborted"} {
 		if _, err := w.s.SettleChild(w.ctx, w.org, members[i], ChildOutcome{Status: status}); err != nil {
 			t.Fatal(err)
@@ -135,6 +173,10 @@ func TestCohortStaggeredResults(t *testing.T) {
 		}
 		if got := w.count("directives"); got != want {
 			t.Fatalf("after %d: directives %d want %d", i+1, got, want)
+		}
+		var events int
+		if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM events WHERE event_type='run.cohort.queued'`).Scan(&events); err != nil || events != want {
+			t.Fatalf("after %d: queued events %d want %d: %v", i+1, events, want, err)
 		}
 	}
 	if _, err := w.s.EnqueueChildResults(w.ctx); err != nil {
@@ -157,6 +199,40 @@ func TestCohortStaggeredResults(t *testing.T) {
 	}
 	if w.count("child_results") != 3 {
 		t.Fatal("lost independent results")
+	}
+	var raw []byte
+	if err := w.owner.QueryRow(w.ctx, `SELECT payload FROM events WHERE event_type='run.cohort.queued' AND task_id='wi_life' AND run_id='run_parent' AND project_id='prj_life' AND organization_id=$1`, w.org).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || len(fields) != 6 {
+		t.Fatalf("unexpected public metadata fields: %s: %v", raw, err)
+	}
+	var payload struct {
+		CohortID, ParentRunID, DirectiveID string
+		Completed, Total                   int
+		Members                            []struct{ RunID, Status string }
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.CohortID != cohort || payload.ParentRunID != "run_parent" || payload.DirectiveID == "" || payload.Completed != 1 || payload.Total != 3 || len(payload.Members) != 3 {
+		t.Fatalf("queued metadata: %s", raw)
+	}
+	for _, m := range payload.Members {
+		found := false
+		for i, id := range members {
+			if m.RunID == id && m.Status == []string{"completed", "failed", "aborted"}[i] {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("unexpected public member: %+v", m)
+		}
+	}
+	var parked, unanswered bool
+	if err := w.owner.QueryRow(w.ctx, `SELECT status='paused' AND dude_pause='person', EXISTS(SELECT 1 FROM questions WHERE run_id=r.id AND status='open') FROM runs r WHERE id='run_parent'`).Scan(&parked, &unanswered); err != nil || !parked || !unanswered || w.count("runs") != 4 {
+		t.Fatalf("parent was moved: parked=%v unanswered=%v err=%v", parked, unanswered, err)
 	}
 }
 
