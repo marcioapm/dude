@@ -35,8 +35,8 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), limit)
 			defer cancel()
-			copy := *c
-			c = &copy
+			scoped := *c
+			c = &scoped
 			c.ctx = ctx
 			var preview obj
 			var err error
