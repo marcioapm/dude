@@ -26,8 +26,8 @@ type Step =
   | { kind: "looking"; origin: string }
   | { kind: "silent" }
   | { kind: "none"; origin: string }
-  | { kind: "failed"; why: string };
-type RelayStep = { kind: "connected" | "saving" | "saved"; branch: string };
+  | { kind: "failed"; why: string }
+  | { kind: "connected" | "saving" | "saved" };
 
 // null when there is no opener or reading it throws.
 function openerOf(win: Window): Window | null {
@@ -45,7 +45,7 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
   win?: Window;
   waitMs?: number;
 }) {
-  const [step, setStep] = useState<Step | RelayStep>(() => (openerOf(win) ? { kind: "waiting" } : { kind: "no-opener" }));
+  const [step, setStep] = useState<Step>(() => (openerOf(win) ? { kind: "waiting" } : { kind: "no-opener" }));
   const onFoundRef = useRef(onFound);
   onFoundRef.current = onFound;
   useEffect(() => {
@@ -73,9 +73,9 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
         if (found.kind === "branch") {
           stopRelay = branchPreviewRelay(win, opener, origin, found, client, (status, reason) => {
             if (!alive) return;
-            setStep(status === "failed" ? { kind: "failed", why: reason ?? "Submission failed" } : { kind: status, branch: found.branch });
+            setStep(status === "failed" ? { kind: "failed", why: reason ?? "Submission failed" } : { kind: status });
           });
-          setStep({ kind: "connected", branch: found.branch });
+          setStep({ kind: "connected" });
           return;
         }
         markPreviewArrival(win, found.taskId);
@@ -95,7 +95,7 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
     };
   }, [client, win, waitMs]);
 
-  const words: Record<Step["kind"] | RelayStep["kind"], { title: string; line: string }> = {
+  const words: Record<Step["kind"], { title: string; line: string }> = {
     connected: { title: "Connected to the preview", line: "Keep this tab open. Submit comments and screenshots from the preview. Saved feedback is available only through the CLI and API." },
     saving: { title: "Submitting feedback...", line: "Keep this tab open while the comment and screenshot are saved." },
     saved: { title: "Feedback submitted", line: "Return to the preview to submit another comment. Browse and manage saved feedback through the CLI or API." },
