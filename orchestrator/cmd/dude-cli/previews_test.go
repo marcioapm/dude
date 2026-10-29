@@ -22,6 +22,7 @@ func TestPreviewLifecycle(t *testing.T) {
 		{"create start", []string{"create", "ABS", "feature/login", "--start"}, "", ""},
 		{"create start wait", []string{"create", "ABS", "feature/login", "--start", "--wait", "1s"}, "", ""},
 		{"start id", []string{"start", "run_bp"}, "", ""},
+		{"start explicit zero", []string{"start", "run_bp", "--wait", "0"}, "", ""},
 		{"start branch", []string{"start", "ABS", "feature/login", "--wait", "1s"}, "", ""},
 		{"already ready", []string{"start", "run_bp", "--wait", "1s"}, "ready", ""},
 		{"wake allocation race", []string{"start", "run_bp", "--wait", "1s"}, "race", ""},
@@ -187,7 +188,11 @@ func TestPreviewLifecycle(t *testing.T) {
 			} else if want := map[bool]int{true: 4, false: 2}[tc.mode == "race"]; wakes != want {
 				t.Fatalf("must wake all expected servers: %v", posts)
 			}
-			if strings.Contains(strings.Join(tc.args, " "), "--wait") && !strings.Contains(out, `"ready": true`) {
+			noWait := !createOnly && (!strings.Contains(strings.Join(tc.args, " "), "--wait") || tc.name == "start explicit zero")
+			if noWait && (views != 2 || !strings.Contains(out, `"ready": false`)) {
+				t.Fatalf("--wait 0 must return the first post-wake snapshot: views=%d %s", views, out)
+			}
+			if !noWait && strings.Contains(strings.Join(tc.args, " "), "--wait") && !strings.Contains(out, `"ready": true`) {
 				t.Fatalf("not ready: %s", out)
 			}
 		})
