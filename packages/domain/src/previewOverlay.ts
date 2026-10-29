@@ -51,6 +51,7 @@ export const overlaySessionSchema = z.object({
   pins: z.array(overlayPinSchema).max(OVERLAY_LIMITS.pins), drafts: z.number().int().nonnegative(), showPins: z.boolean(),
   theme: z.enum(OVERLAY_THEMES as [OverlayTheme, ...OverlayTheme[]]).optional(),
   dudeWindow: z.string().refine(overlayWindowName, "a window name").optional(),
+  mode: z.literal("branch").optional(),
 }).strict();
 
 const MAX_ENTRIES = 2_000;

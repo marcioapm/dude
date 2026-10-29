@@ -20,6 +20,7 @@ import { EXTENSION, imageInfo, type ImageType } from "../../images.ts";
 import { deleteObject, getObject, putObject, storageConfigured } from "../../storage.ts";
 import { HttpError, badRequest, conflict, forbidden, json, noContent, notFound, readCapped } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+import { liveFeedbackServer } from "./previewFeedback.ts";
 
 /** The JSON shape of an attachment (AttachmentInfo), from a row of `attachments` aliased `a`. */
 const ATTACHMENT_JSON = `json_build_object(
@@ -69,15 +70,15 @@ async function imagePart(form: FormData, field: string): Promise<{ bytes: Uint8A
   return { bytes, ...info, fileName: part.name };
 }
 
-async function upload(ctx: RequestContext, target: "task" | "session"): Promise<Response> {
+async function upload(ctx: RequestContext, target: "task" | "session" | "preview"): Promise<Response> {
   // Before the body is read: nothing could be kept.
   if (!storageConfigured()) throw unconfigured();
   const id = ctx.params.id!;
   const { organizationId } = ctx.principal;
-  const owner = await withOrg(organizationId, async ({ sql }) =>
-    target === "task"
-      ? (await sql`SELECT id FROM tasks WHERE id = ${id}`)[0]
-      : (await sql`SELECT id, session_role(${id}, ${ctx.principal.personId}) AS role FROM sessions WHERE id = ${id}`)[0]);
+  const owner = await withOrg(organizationId, async (scope) =>
+    target === "preview" ? liveFeedbackServer(scope, id, ctx.params.name!) : target === "task"
+      ? (await scope.sql`SELECT id FROM tasks WHERE id = ${id}`)[0]
+      : (await scope.sql`SELECT id, session_role(${id}, ${ctx.principal.personId}) AS role FROM sessions WHERE id = ${id}`)[0]);
   if (!owner) throw notFound(`${target} ${id} not found`);
   if (target === "session") {
     const { role } = owner as { role: string | null };
@@ -111,25 +112,44 @@ async function upload(ctx: RequestContext, target: "task" | "session"): Promise<
   const prefix = `attachments/${organizationId}/${id}/${attachmentId}-${randomBytes(9).toString("base64url")}`;
   const objectKey = `${prefix}-delivered.${EXTENSION[delivered.type]}`;
   const originalKey = `${prefix}-original.${EXTENSION[original.type]}`;
-  await putObject(objectKey, delivered.bytes, delivered.type);
   try {
+    await putObject(objectKey, delivered.bytes, delivered.type);
     await putObject(originalKey, original.bytes, original.type);
   } catch (err) {
+    if (target === "preview") {
+      await withOrg(organizationId, async ({ sql }) => {
+        await sql`SELECT queue_preview_upload_cleanup(${objectKey}, ${originalKey})`;
+      });
+      throw err;
+    }
     await deleteObject(objectKey);
     throw err;
   }
   const sha256 = createHash("sha256").update(delivered.bytes).digest("hex");
   try {
-    const row = await withOrg(organizationId, async ({ sql }) => (await sql`
-      INSERT INTO attachments AS a (id, organization_id, task_id, session_id, uploaded_by, name,
+    const row = await withOrg(organizationId, async (scope) => {
+      if (target === "preview") await liveFeedbackServer(scope, id, ctx.params.name!);
+      const { sql } = scope;
+      return (await sql`
+      INSERT INTO attachments AS a (id, organization_id, task_id, session_id, preview_run_id, preview_server_name, uploaded_by, name,
         content_type, width, height, bytes, sha256, object_key,
         original_content_type, original_width, original_height, original_bytes, original_key)
-      VALUES (${attachmentId}, ${organizationId}, ${target === "task" ? id : null}, ${target === "session" ? id : null}, (SELECT id FROM people WHERE id = ${ctx.principal.personId}), ${name},
+      VALUES (${attachmentId}, ${organizationId}, ${target === "task" ? id : null}, ${target === "session" ? id : null},
+        ${target === "preview" ? id : null}, ${target === "preview" ? ctx.params.name! : null}, (SELECT id FROM people WHERE id = ${ctx.principal.personId}), ${name},
         ${delivered.type}, ${delivered.width}, ${delivered.height}, ${delivered.bytes.length}, ${sha256}, ${objectKey},
         ${original.type}, ${original.width}, ${original.height}, ${original.bytes.length}, ${originalKey})
-      RETURNING ${sql.unsafe(ATTACHMENT_JSON)} AS info`)[0] as { info: unknown });
+      RETURNING ${sql.unsafe(ATTACHMENT_JSON)} AS info`)[0] as { info: unknown };
+    });
     return json(row.info, 201);
   } catch (err) {
+    if (target === "preview") {
+      // The owner may have ended while S3 was writing. Queue both keys even
+      // when storage is unavailable; no attachment row is resurrected.
+      await withOrg(organizationId, async ({ sql }) => {
+        await sql`SELECT queue_preview_upload_cleanup(${objectKey}, ${originalKey})`;
+      });
+      throw err;
+    }
     await deleteObject(objectKey);
     await deleteObject(originalKey);
     throw err;
@@ -146,7 +166,8 @@ async function serve(ctx: RequestContext): Promise<Response> {
   const variant = ctx.url.searchParams.get("variant") ?? "delivered";
   if (variant !== "delivered" && variant !== "original") throw badRequest("variant is delivered or original");
   const row = await withOrg(ctx.principal.organizationId, async ({ sql }) => (await sql`
-    SELECT name, content_type, object_key, original_content_type, original_key, session_id IS NOT NULL AS in_session,
+    SELECT name, content_type, object_key, original_content_type, original_key,
+      (session_id IS NOT NULL OR preview_run_id IS NOT NULL) AS in_session,
       CASE WHEN session_id IS NULL THEN true ELSE session_role(session_id, ${ctx.principal.personId}) IS NOT NULL END AS visible
     FROM attachments WHERE id = ${ctx.params.id!}`)[0] as
     { name: string; content_type: string; object_key: string; original_content_type: string; original_key: string; in_session: boolean; visible: boolean } | undefined);
@@ -181,6 +202,8 @@ async function remove(ctx: RequestContext): Promise<Response> {
       { uploaded_by: string | null; attached_at: Date | null; visible: boolean } | undefined;
     if (!row || !row.visible) throw notFound("no such attachment");
     if (row.attached_at) throw conflict("this image was sent; it stays with its message");
+    const [used] = await sql`SELECT 1 FROM preview_feedback WHERE anchor->>'attachmentId' = ${id}`;
+    if (used) throw conflict("this image stays with its feedback");
     if (row.uploaded_by !== ctx.principal.personId) throw forbidden("only who uploaded it can remove it");
     // The trigger queues its objects for the sweeper.
     await sql`DELETE FROM attachments WHERE id = ${id}`;
@@ -236,6 +259,7 @@ export function registerAttachmentRoutes(router: Router): void {
   router.get("/v1/attachment-limits", limits);
   router.post("/v1/tasks/:id/attachments", (ctx) => upload(ctx, "task"));
   router.post("/v1/brainstorms/:id/attachments", (ctx) => upload(ctx, "session"));
+  router.post("/v1/branch-previews/:id/servers/:name/attachments", (ctx) => upload(ctx, "preview"));
   router.get("/v1/attachments/:id", serve);
   router.delete("/v1/attachments/:id", remove);
 }

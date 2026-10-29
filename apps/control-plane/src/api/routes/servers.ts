@@ -357,25 +357,52 @@ async function lookupPreviewServer(ctx: RequestContext): Promise<Response> {
   for (const m of memberships) {
     const found = await withOrg(m.organization_id, async ({ sql }) => {
       const rows = (await sql`
-        SELECT o.slug AS "organizationSlug", t.id AS "taskId", p.key_prefix || '-' || t.number AS "taskKey", s.name AS server, s.url
+        SELECT o.slug AS "organizationSlug", o.id AS "organizationId", p.id AS "projectId",
+          CASE WHEN r.task_id IS NULL THEN 'branch' ELSE 'task' END AS kind,
+          r.id AS "previewRunId", r.preview_branch AS branch,
+          t.id AS "taskId", p.key_prefix || '-' || t.number AS "taskKey", s.name AS server, s.url
         FROM preview_servers s
         JOIN runs r ON r.id = s.run_id
-        JOIN tasks t ON t.id = r.task_id
-        JOIN projects p ON p.id = t.project_id
+        LEFT JOIN tasks t ON t.id = r.task_id
+        JOIN projects p ON p.id = r.project_id
         JOIN organizations o ON o.id = s.organization_id
-        WHERE s.deleted_at IS NULL AND r.kind = 'preview' AND (s.url = ${origin} OR starts_with(s.url, ${`${origin}/`}))
-        ORDER BY s.created_at DESC`) as Array<{ organizationSlug: string; taskId: string; taskKey: string; server: string; url: string }>;
+        WHERE s.deleted_at IS NULL AND r.kind = 'preview'
+          AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
+          AND (r.task_id IS NOT NULL OR r.preview_branch IS NOT NULL)
+          AND (s.url = ${origin} OR starts_with(s.url, ${`${origin}/`}))
+        ORDER BY s.created_at DESC`) as Array<{ kind: "task" | "branch"; organizationId: string; organizationSlug: string;
+          projectId: string; previewRunId: string; branch: string | null; taskId: string | null; taskKey: string | null; server: string; url: string }>;
       return rows.find((r) => URL.canParse(r.url) && new URL(r.url).origin === origin) ?? null;
     });
     if (found) {
-      const { url: _url, ...out } = found;
-      return json(out);
+      // Keep the shipped task lookup shape; only branch ownership is new.
+      return json(found.kind === "task"
+        ? { organizationSlug: found.organizationSlug, taskId: found.taskId, taskKey: found.taskKey, server: found.server }
+        : { kind: "branch", organizationId: found.organizationId, organizationSlug: found.organizationSlug,
+          projectId: found.projectId, previewRunId: found.previewRunId, branch: found.branch, server: found.server });
     }
   }
   throw notFound(`no task of yours has a preview at ${origin}`);
 }
 
+async function validatePreviewServer(ctx: RequestContext): Promise<Response> {
+  const origin = previewOrigin(ctx);
+  const found = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
+    const [row] = await sql`SELECT 'branch' AS kind, o.id AS "organizationId", o.slug AS "organizationSlug",
+      r.project_id AS "projectId", r.id AS "previewRunId", r.preview_branch AS branch, s.name AS server, s.url
+      FROM preview_servers s JOIN runs r ON r.id = s.run_id JOIN organizations o ON o.id = s.organization_id
+      WHERE s.run_id = ${ctx.params.id!} AND s.name = ${ctx.params.name!} AND s.deleted_at IS NULL
+        AND r.kind = 'preview' AND r.preview_branch IS NOT NULL
+        AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`;
+    return row;
+  });
+  if (!found || !URL.canParse(found.url) || new URL(found.url).origin !== origin) throw notFound();
+  const { url: _url, ...owner } = found;
+  return json(owner, 200, { "cache-control": "no-store" });
+}
+
 export function registerServerRoutes(router: Router): void {
+  router.get("/v1/branch-previews/:id/servers/:name/owner", validatePreviewServer);
   router.get("/v1/projects/:id/servers", listProjectServers);
   router.put("/v1/projects/:id/servers/:name", putProjectServer);
   router.delete("/v1/projects/:id/servers/:name", deleteProjectServer);

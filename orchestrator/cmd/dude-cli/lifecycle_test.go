@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -13,6 +15,12 @@ func TestLifecycleCommandsReachTheirRoutes(t *testing.T) {
 		path   string
 		body   string
 	}{
+		{[]string{"preview", "list-feedback", "run_old", "--server", "web", "--status", "all", "--after", "fbi_cursor", "--limit", "2"}, "GET", "/v1/branch-previews/run_old/feedback?after=fbi_cursor&limit=2&server=web&status=all", ``},
+		{[]string{"preview", "show-feedback", "fbi_1"}, "GET", "/v1/preview-feedback/fbi_1", ``},
+		{[]string{"preview", "resolve-feedback", "fbi_1", "--note", "fixed"}, "POST", "/v1/preview-feedback/fbi_1/resolve", `{"note":"fixed"}`},
+		{[]string{"preview", "reopen-feedback", "fbi_1", "--note", "still broken"}, "POST", "/v1/preview-feedback/fbi_1/reopen", `{"note":"still broken"}`},
+		{[]string{"preview", "resolve-feedback", "fbi_1"}, "POST", "/v1/preview-feedback/fbi_1/resolve", `{}`},
+		{[]string{"preview", "reopen-feedback", "fbi_1"}, "POST", "/v1/preview-feedback/fbi_1/reopen", `{}`},
 		{[]string{"feedback", "list", "wi_12", "--attempt", "2"}, "GET", "/v1/tasks/wi_12/feedback?attempt=2", ``},
 		{[]string{"feedback", "draft", "wi_12", "-"}, "POST", "/v1/tasks/wi_12/feedback/drafts",
 			`{"anchor":{"kind":"general"},"body":"from stdin"}`},
@@ -62,6 +70,36 @@ func TestLifecycleCommandsReachTheirRoutes(t *testing.T) {
 			t.Errorf("%v: %s %s %s, want %s %s %s", tc.args, c.method, c.path, body, tc.method, tc.path, tc.body)
 		}
 	}
+}
+
+func TestPreviewFeedbackLocalValidationAndNotFound(t *testing.T) {
+	for _, args := range [][]string{
+		{"list-feedback", "run_example", "--status", "invalid"},
+		{"list-feedback", "run_example", "--limit", "0"},
+		{"list-feedback", "run_example", "--limit", "201"},
+		{"list-feedback", "run_example", "--limit", "1.5"},
+		{"list-feedback"}, {"list-feedback", "run_example", "extra"},
+		{"show-feedback"}, {"show-feedback", "fbi_example", "extra"},
+		{"resolve-feedback"}, {"resolve-feedback", "fbi_example", "extra"},
+		{"reopen-feedback"}, {"reopen-feedback", "fbi_example", "extra"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			srv, calls := fakeDude(t)
+			if _, err := runCLI(t, srv, "", append([]string{"preview"}, args...)...); err == nil {
+				t.Fatal("invalid arguments succeeded")
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("local validation made requests: %v", *calls)
+			}
+		})
+	}
+	t.Run("404 propagates", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, `{"error":{"message":"not found"}}`, 404) }))
+		defer srv.Close()
+		if _, err := runCLI(t, srv, "", "preview", "show-feedback", "fbi_missing"); err == nil || !strings.Contains(err.Error(), "404") {
+			t.Fatalf("404 must fail: %v", err)
+		}
+	})
 }
 
 func TestFeedbackSubmitSendsYourDrafts(t *testing.T) {

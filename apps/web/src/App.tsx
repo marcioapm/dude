@@ -498,6 +498,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   } else if (place?.view === "previewConnect") {
     // To the task in its organisation, in this tab (window.opener stays the preview), in place of this page.
     main = <PreviewConnectScreen client={client} onFound={(found) => {
+      if (found.kind === "branch") return;
       window.history.replaceState(null, "", inOrganization(found.organizationSlug, `#/task/${encodeURIComponent(found.taskId)}/servers`));
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     }} />;

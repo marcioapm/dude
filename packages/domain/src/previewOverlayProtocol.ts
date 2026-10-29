@@ -84,9 +84,10 @@ export const OVERLAY_THEMES: ReadonlyArray<OverlayTheme> = ["light", "dark"];
 export type DudeToOverlay =
   // `theme` is optional: an overlay or a dude from before it reads or sends none, and the overlay then follows the OS.
   // `dudeWindow` (dude's tab's window name) likewise: without it Go to dude falls back to the opener's focus().
-  | { type: "session"; v: 1; task: string; url: string; pins: OverlayPin[]; drafts: number; showPins: boolean; theme?: OverlayTheme; dudeWindow?: string }
+  | { type: "session"; v: 1; task: string; url: string; pins: OverlayPin[]; drafts: number; showPins: boolean; theme?: OverlayTheme; dudeWindow?: string; mode?: "branch" }
   | { type: "saved"; v: 1; nonce: string; id: string; drafts: number; picture: "attached" | "none" | "failed" }
   | { type: "refused"; v: 1; nonce?: string; reason: string }
+  | { type: "retryable"; v: 1; nonce: string; reason: string }
   | { type: "highlight"; v: 1; itemId: string }
   | { type: "stop"; v: 1 };
 

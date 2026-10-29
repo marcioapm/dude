@@ -190,6 +190,15 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 	if e.ServerID == "" {
 		return nil
 	}
+	switch e.Type {
+	case "server.wake_requested", "server.idle", "server.deleted", "server.expired":
+	case "server.state":
+		if e.Data["state"] != lux.ServerReady {
+			return nil
+		}
+	default:
+		return nil
+	}
 	var org, runID, projectID, taskID string
 	err := f.DB.InSystem(ctx, "lux-feed", func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT s.organization_id, s.run_id, r.project_id, COALESCE(r.task_id, '')
@@ -204,6 +213,15 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 	}
 	kick := false
 	err = f.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		// Wake acknowledgements lock Run then servers. Feedback submissions
+		// share that order so a concurrent feed event cannot invert it.
+		var exists string
+		if err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE id = $1 FOR UPDATE`, runID).Scan(&exists); err != nil {
+			if db.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
 		switch e.Type {
 		case "server.wake_requested":
 			// One wake per event, however often it is seen: wake_event_id
@@ -228,9 +246,6 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 		case "server.state":
 			// Its Run's stream says it to the browser (followEvents). Ready
 			// again is a new idle period.
-			if e.Data["state"] != lux.ServerReady {
-				return nil
-			}
 			if _, err := tx.Exec(ctx, `UPDATE preview_servers SET idle_at = NULL, idle_last_request_at = NULL
 				WHERE lux_server_id = $1 AND idle_event_id < $2`, e.ServerID, e.ID); err != nil {
 				return err

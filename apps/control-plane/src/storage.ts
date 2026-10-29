@@ -13,6 +13,7 @@ import { config } from "./config.ts";
 
 type Credentials = { accessKeyId: string; secretAccessKey: string; sessionToken: string; expires: number };
 let client: S3Client | undefined;
+let clientConfig: ReturnType<typeof config> | undefined;
 let roleCredentials: Credentials | undefined;
 let roleS3: S3Client | undefined;
 let refresh: Promise<void> | undefined;
@@ -187,28 +188,29 @@ async function roleClient(bucket: string): Promise<S3Client> {
   return roleS3!;
 }
 
-function location(): { region: string; endpoint?: string } {
-  const endpoint = config().string("DUDE_S3_ENDPOINT");
-  return { region: config().string("DUDE_S3_REGION")!, ...(endpoint ? { endpoint } : {}) };
+function location(current = config()): { region: string; endpoint?: string } {
+  const endpoint = current.string("DUDE_S3_ENDPOINT");
+  return { region: current.string("DUDE_S3_REGION")!, ...(endpoint ? { endpoint } : {}) };
 }
 
-function configured(bucket: string, accessKeyId: string, secretAccessKey: string): S3Client {
-  return client ??= new S3Client({
-    bucket,
-    ...location(),
-    accessKeyId,
-    secretAccessKey,
-  });
+function configured(current: ReturnType<typeof config>, bucket: string, accessKeyId: string, secretAccessKey: string): S3Client {
+  // A replacement Config must not reuse the previous startup's static client.
+  if (!client || clientConfig !== current) {
+    client = new S3Client({ bucket, ...location(current), accessKeyId, secretAccessKey });
+    clientConfig = current;
+  }
+  return client;
 }
 
 async function required(): Promise<S3Client> {
-  const bucket = config().string("DUDE_S3_BUCKET");
+  const current = config();
+  const bucket = current.string("DUDE_S3_BUCKET");
   if (!bucket) throw new HttpError(503, "photo storage is not configured (DUDE_S3_BUCKET)", "storage_unconfigured");
-  const accessKeyId = config().string("DUDE_S3_ACCESS_KEY");
-  const secretAccessKey = config().string("DUDE_S3_SECRET_KEY");
+  const accessKeyId = current.string("DUDE_S3_ACCESS_KEY");
+  const secretAccessKey = current.string("DUDE_S3_SECRET_KEY");
   if (accessKeyId || secretAccessKey) {
     if (!accessKeyId || !secretAccessKey) throw new Failure("CredentialsIncomplete");
-    return configured(bucket, accessKeyId, secretAccessKey);
+    return configured(current, bucket, accessKeyId, secretAccessKey);
   }
   return roleClient(bucket);
 }

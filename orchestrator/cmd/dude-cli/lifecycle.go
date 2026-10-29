@@ -101,6 +101,35 @@ func (s sourceFlags) body(repoID string) (obj, error) {
 }
 
 var lifecycleCommands = map[string]command{
+	"preview list-feedback": {"PREVIEW", "list a preview ID's server feedback (default: open)", func(fs *flag.FlagSet) doer {
+		server := fs.String("server", "", "only this logical server's feedback")
+		status := fs.String("status", "open", "open, resolved or all")
+		after := fs.String("after", "", "continue after this cursor")
+		limit := fs.Int("limit", 50, "page size (1-200)")
+		return func(c *cli, a []string) (any, error) {
+			if err := oneOf("--status", *status, "open", "resolved", "all"); err != nil {
+				return nil, err
+			}
+			if *limit < 1 || *limit > 200 {
+				return nil, errors.New("--limit must be between 1 and 200")
+			}
+			return c.request("GET", "/v1/branch-previews/"+esc(a[0])+"/feedback"+query(
+				"server", *server, "status", *status, "after", *after, "limit", strconv.Itoa(*limit)), nil)
+		}
+	}},
+	"preview show-feedback": {"ITEM", "show one server feedback item", noFlags(func(c *cli, a []string) (any, error) {
+		return c.request("GET", "/v1/preview-feedback/"+esc(a[0]), nil)
+	})},
+	"preview resolve-feedback": {"ITEM", "mark server feedback resolved", func(fs *flag.FlagSet) doer {
+		return withNote(fs, func(c *cli, a []string, note string) (any, error) {
+			return c.post("/v1/preview-feedback/"+esc(a[0])+"/resolve", setIf(obj{}, "note", note))
+		})
+	}},
+	"preview reopen-feedback": {"ITEM", "reopen server feedback", func(fs *flag.FlagSet) doer {
+		return withNote(fs, func(c *cli, a []string, note string) (any, error) {
+			return c.post("/v1/preview-feedback/"+esc(a[0])+"/reopen", setIf(obj{}, "note", note))
+		})
+	}},
 	// Feedback: people's review comments on a task's work, delivered to its
 	// agents in batches.
 	"feedback list": {"TASK", "feedback on a task's work: everyone's submitted items and your drafts", func(fs *flag.FlagSet) doer {

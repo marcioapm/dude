@@ -15,6 +15,7 @@ import { ApiError, type ApiClient, type PreviewServerAt } from "../api/client.ts
 import { DudeMark } from "../DudeMark.tsx";
 import { errorText } from "../hooks/useSave.tsx";
 import { httpsOriginOf, markPreviewArrival } from "../previewComment.ts";
+import { branchPreviewRelay } from "../branchPreviewRelay.ts";
 
 /** How long the preview has to say hello before this page says it didn't. */
 export const PREVIEW_HELLO_WAIT_MS = 10_000;
@@ -25,7 +26,8 @@ type Step =
   | { kind: "looking"; origin: string }
   | { kind: "silent" }
   | { kind: "none"; origin: string }
-  | { kind: "failed"; why: string };
+  | { kind: "failed"; why: string }
+  | { kind: "connected" | "saving" | "saved" };
 
 // null when there is no opener or reading it throws.
 function openerOf(win: Window): Window | null {
@@ -52,6 +54,7 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
     let done = false;
     // False once this page is left: a lookup landing later moves nothing and marks nothing.
     let alive = true;
+    let stopRelay: (() => void) | undefined;
     const timer = win.setTimeout(() => {
       if (!done) setStep({ kind: "silent" });
     }, waitMs);
@@ -67,6 +70,14 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
       setStep({ kind: "looking", origin });
       client.previewServerAt(origin).then((found) => {
         if (!alive) return;
+        if (found.kind === "branch") {
+          stopRelay = branchPreviewRelay(win, opener, origin, found, client, (status, reason) => {
+            if (!alive) return;
+            setStep(status === "failed" ? { kind: "failed", why: reason ?? "Submission failed" } : { kind: status });
+          });
+          setStep({ kind: "connected" });
+          return;
+        }
         markPreviewArrival(win, found.taskId);
         onFoundRef.current(found);
       }, (err: unknown) => {
@@ -80,10 +91,14 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
       alive = false;
       win.clearTimeout(timer);
       win.removeEventListener("message", onMessage);
+      stopRelay?.();
     };
   }, [client, win, waitMs]);
 
   const words: Record<Step["kind"], { title: string; line: string }> = {
+    connected: { title: "Connected to the preview", line: "Keep this tab open. Submit comments and screenshots from the preview. Saved feedback is available only through the CLI and API." },
+    saving: { title: "Submitting feedback...", line: "Keep this tab open while the comment and screenshot are saved." },
+    saved: { title: "Feedback submitted", line: "Return to the preview to submit another comment. Browse and manage saved feedback through the CLI or API." },
     "no-opener": { title: "Open this from a preview's Connect to dude button", line: "This page connects a preview's comment tool to dude: it works only in the tab a preview's Connect to dude opens." },
     waiting: { title: "Connecting to the preview…", line: "Waiting for the preview's page to say which preview it is." },
     looking: { title: "Finding the preview's task…", line: step.kind === "looking" ? step.origin : "" },

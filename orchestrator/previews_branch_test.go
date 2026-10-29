@@ -48,11 +48,11 @@ func refusedCode(err error) string {
 
 // A branch preview serves the primary repository at its branch, every
 // other repository at the branch where it has it and its default branch
-// where not; its servers are named by the branch and carry no overlay.
+// where not; its servers are named by the branch and carry the overlay.
 func TestABranchPreviewServesItsBranchWhereEachRepositoryHasIt(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
-	w.previews.PublicURL, w.previews.ServerInject = "https://dude.example.com", true
+	w.commenting(true, "https://dude.example.com")
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main')`, "repo_web_"+w.org, w.org, w.project)
@@ -66,7 +66,7 @@ func TestABranchPreviewServesItsBranchWhereEachRepositoryHasIt(t *testing.T) {
 		t.Fatalf("lux has %v, want %s", hosts, want)
 	}
 	sv, _ := w.lux.TenantServer(w.serverID(runID, "web"))
-	if sv.Inject != "" || sv.Labels["dude.task"] != "" || sv.Labels["dude.project"] != w.project {
+	if sv.Inject != servers.OverlaySnippet(w.previews.PublicURL) || sv.Labels["dude.task"] != "" || sv.Labels["dude.project"] != w.project {
 		t.Errorf("server inject %q labels %v", sv.Inject, sv.Labels)
 	}
 	// lux's own expiry is past the 30-day reap, so dude's reaper ends it.

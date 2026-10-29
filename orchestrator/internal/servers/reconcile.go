@@ -197,7 +197,7 @@ func (p *Previews) updateServer(ctx context.Context, r wakeRun, cur lux.TenantSe
 		patch.Env = &env
 		changed = append(changed, "env")
 	}
-	if inject := p.injectPatch(cur); inject != nil && r.TaskID != "" {
+	if inject := p.injectPatch(cur); inject != nil {
 		patch.Inject = inject
 		changed = append(changed, "inject")
 	}
