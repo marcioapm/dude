@@ -18,6 +18,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/prs"
 )
 
 func TestMain(m *testing.M) { os.Exit(dbtest.Main(m)) }
@@ -287,5 +288,44 @@ func TestAbsentAndUnavailableAreSaid(t *testing.T) {
 	w.capture()
 	if s, _ := w.request(); s != "done" || len(w.snapshots()) != 1 {
 		t.Errorf("read again: %s, %d snapshots", s, len(w.snapshots()))
+	}
+}
+
+// Someone else pushes to the pull request's branch: the pull request sync
+// (a webhook's or the reconciler's, prs.Syncer.Sync) records the new head,
+// which asks for a capture; the worker captures it, its relation read from
+// the history. No new poller: the sync that already reads the head.
+func TestAPushBySomeoneElseSeenByThePullRequestSyncIsCaptured(t *testing.T) {
+	w := newWorld(t)
+	n := w.fake.OpenAsPerson("dude-bot", w.branch, "main", "Fix VAT")
+	w.exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+		VALUES ('pr_b', $1, 'prj_b', 'wi_b', 'repo_api', $2, 'https://github.com/acme/api/pull/1', $3, 'main', $4, 'Fix VAT')`,
+		n, w.branch, w.fake.SHA(w.branch))
+	if _, err := w.cap.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.snapshots(); len(got) != 1 || got[0].Relation != branchdiff.Initial {
+		t.Fatalf("the pull request opened: %+v", got)
+	}
+	w.fake.CommitFiles(w.branch, "Priya's fix", map[string]string{"app.ts": "one\ntwo\nthree\nfour\n"})
+	syncer := &prs.Syncer{DB: w.app, Forges: oneForge{w.cap.Forges.(oneForge).gh},
+		Signal: func(context.Context, string, string, string, any, string) error { return nil }}
+	if err := syncer.Sync(context.Background(), w.org, "pr_b"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := w.request(); s != "pending" {
+		t.Fatalf("after the sync read a new head: %s, want a capture asked for", s)
+	}
+	if _, err := w.cap.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := w.snapshots()
+	if len(got) != 2 || got[1].Relation != branchdiff.FastForward || got[1].Head != w.fake.SHA(w.branch) {
+		t.Fatalf("after someone else's push: %+v", got)
+	}
+	var prHead string
+	if err := w.owner.QueryRow(context.Background(), `SELECT pr_head_sha FROM task_branch_snapshots WHERE id = $1`, got[1].ID).Scan(&prHead); err != nil ||
+		prHead != got[1].Head {
+		t.Errorf("the published head at capture: %q (%v)", prHead, err)
 	}
 }
