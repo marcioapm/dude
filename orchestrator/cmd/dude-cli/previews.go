@@ -114,6 +114,7 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 						servers[str(s, "name")] = s
 					}
 					expected, allocated, ready := 0, true, true
+					wakeRequested := true
 					states := []string{}
 					for _, recipe := range list(view, "recipes") {
 						if recipe["autostartInPreviews"] != true {
@@ -141,6 +142,9 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 								// by the same deadline; all other refusals are failures.
 								var he *httpError
 								if errors.As(e, &he) && he.status == 409 && (strings.Contains(he.body, `"not_running"`) || strings.Contains(he.body, "the preview is no longer asleep; try again")) {
+									if status != "scheduled" && status != "starting" {
+										wakeRequested = false
+									}
 									ready = false
 									continue
 								}
@@ -160,7 +164,7 @@ func previewCommand(create bool) func(*flag.FlagSet) doer {
 					if expected == 0 {
 						return fail(errors.New("no autostart preview server recipes configured"))
 					}
-					if allocated && (*wait == 0 || (ready && run["asleep"] != true && str(run, "luxState") == "running")) {
+					if allocated && ((*wait == 0 && wakeRequested) || (ready && run["asleep"] != true && str(run, "luxState") == "running")) {
 						preview["servers"], preview["run"] = view["servers"], run
 						preview["ready"] = ready && run["asleep"] != true && str(run, "luxState") == "running"
 						return preview, nil

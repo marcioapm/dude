@@ -335,6 +335,46 @@ func TestPreviewWakeInProgress(t *testing.T) {
 	}
 }
 
+func TestPreviewZeroWaitConflict(t *testing.T) {
+	for _, status := range []string{"scheduled", "starting", "running", "paused"} {
+		t.Run(status, func(t *testing.T) {
+			views, posts := 0, 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == "POST":
+					posts++
+					if views == 1 {
+						w.WriteHeader(409)
+						fmt.Fprint(w, `{"error":{"code":"not_running"}}`)
+						return
+					}
+					fmt.Fprint(w, `{}`)
+				case strings.HasSuffix(r.URL.Path, "/servers"):
+					views++
+					state := status
+					if views > 1 {
+						state = "paused"
+					}
+					fmt.Fprintf(w, `{"run":{"state":%q,"luxState":"stopped"},"recipes":[{"name":"web","autostartInPreviews":true}],"servers":[{"name":"web","url":"https://web.test","state":"stopped","serverState":"asleep"}]}`, state)
+				default:
+					fmt.Fprint(w, `{"id":"run_bp","status":"running"}`)
+				}
+			}))
+			defer srv.Close()
+			began := time.Now()
+			out, err := runCLI(t, srv, "", "preview", "start", "run_bp", "--wait", "0")
+			want := 1
+			if status == "running" || status == "paused" {
+				want = 2
+			}
+			if err != nil || views != want || posts != want || !strings.Contains(out, `"ready": false`) || time.Since(began) > time.Second {
+				t.Fatalf("zero-wait conflict: views=%d posts=%d want=%d out=%s err=%v", views, posts, want, out, err)
+			}
+		})
+	}
+}
+
 func TestPreviewFailureFreshness(t *testing.T) {
 	for _, failure := range []string{"exited", "no answer"} {
 		for _, mode := range []string{"pre-wake", "old epoch", "lux starting", "current"} {
