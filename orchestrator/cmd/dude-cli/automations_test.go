@@ -141,6 +141,15 @@ func TestAutomationCommandsReachTheirRoutes(t *testing.T) {
 			t.Fatalf("%v: %v", tc.args, err)
 		}
 		c := last(*calls)
+		// Create re-reads URLs after its POST; record the mutation's body.
+		if tc.args[0] == "preview" && tc.args[1] == "create" {
+			for _, request := range *calls {
+				if request.method == "POST" && request.path == tc.path {
+					c = request
+					break
+				}
+			}
+		}
 		body := checkRequest(t, c, routeCase{tc.args, tc.method, tc.path, tc.body})
 		path, rawQuery, _ := strings.Cut(c.path, "?")
 		rec := recordedRequest{Args: tc.args, Route: routeKey(t, c.method, path), Scope: tc.scope}
