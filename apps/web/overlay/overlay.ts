@@ -184,6 +184,10 @@ function validPin(value: unknown): value is OverlayPin {
     && Array.isArray(value.replies) && value.replies.length <= OVERLAY_LIMITS.replies && value.replies.every(validReply);
 }
 
+/** dude's `claim`, exactly: nothing else rides on it. */
+const isClaim = (value: unknown): boolean => strictObject(value, CLAIM_KEYS) && value.type === "claim" && value.v === OVERLAY_PROTOCOL;
+const CLAIM_KEYS = new Set(["type", "v"]);
+
 function validSession(value: unknown): value is Extract<DudeToOverlay, { type: "session" }> {
   if (!strictObject(value, SESSION_KEYS) || value.type !== "session" || value.v !== OVERLAY_PROTOCOL
     || !boundedString(value.task, 100) || !boundedString(value.url, 2_048)
@@ -458,6 +462,18 @@ export class Overlay {
   }
 
   readonly #onMessage = (e: MessageEvent): void => {
+    if (e.origin === this.#opts.dudeOrigin && e.source !== null && e.source !== this.#dude() && isClaim(e.data)) {
+      // Another of this person's dude tabs reached this window by its name (only a window of this browser can):
+      // the old one is told it left, and the claiming one is said hello to.
+      const before = this.#dude();
+      if (before) before.postMessage({ type: "left", v: OVERLAY_PROTOCOL } satisfies OverlayToDude, this.#opts.dudeOrigin);
+      this.#connectWin = e.source as Window;
+      this.#connection = "waiting";
+      this.#quietBeats = 0;
+      if (this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href, ...(before ? { moved: true as const } : {}) })) this.#saidHello = true;
+      this.#render();
+      return;
+    }
     if (e.origin !== this.#opts.dudeOrigin || e.source !== this.#dude() || e.source === null) return;
     const m = e.data as DudeToOverlay;
     if (!m || typeof m !== "object" || m.v !== OVERLAY_PROTOCOL) return;
@@ -471,7 +487,7 @@ export class Overlay {
         this.#connect = null;
         this.#task = String(m.task).slice(0, 40);
         this.#branch = m.mode === "branch";
-        this.#pins = this.#branch ? [] : Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
+        this.#pins = Array.isArray(m.pins) ? m.pins.slice(0, OVERLAY_LIMITS.pins) : [];
         this.#drafts = Number(m.drafts) || 0;
         this.#showPins = m.showPins !== false;
         this.#dudeTheme = m.theme ?? null;
@@ -989,9 +1005,11 @@ export class Overlay {
       this.#h("p", { class: "body" }, p.body),
       ...p.replies.map((x) => this.#h("div", { class: "entry" }, this.#h("b", {}, x.who), this.#h("span", { class: "dim" },
         x.kind === "resolve" ? " resolved it" : x.kind === "reopen" ? " reopened it" : " answered"), x.body ? this.#h("p", {}, x.body) : null)),
-      this.#h("footer", { class: "foot" }, this.#h("span", { class: "dim" }, p.status === "draft" ? "Edit or delete it in dude" : "Reply or resolve it in dude"),
+      this.#h("footer", { class: "foot" }, this.#h("span", { class: "dim" }, this.#branch ? "Resolved and reopened in dude's CLI and API" : p.status === "draft" ? "Edit or delete it in dude" : "Reply or resolve it in dude"),
         this.#h("span", { class: "sp" }),
-        this.#h("button", { type: "button", "data-k": "open-in-dude", onclick: () => this.#openInDude(p.id) }, this.#g("link", 12), "Open in dude")));
+        this.#branch
+          ? this.#h("button", { type: "button", "data-k": "view-in-dude", "data-testid": "ov-view-dude", onclick: () => this.#goToDude() }, this.#g("link", 12), "View in dude")
+          : this.#h("button", { type: "button", "data-k": "open-in-dude", onclick: () => this.#openInDude(p.id) }, this.#g("link", 12), "Open in dude")));
   }
 
   #openInDude(id: string): void {
@@ -1098,7 +1116,7 @@ export class Overlay {
       this.#field!,
       this.#h("label", {}, attach, this.#h("span", {}, "Attach a picture of this element ", this.#h("span", { class: "dim" }, "(drawn from the page)"))),
       this.#h("details", { "data-testid": "ov-what-dude-sends" }, this.#h("summary", { "data-k": "sends" }, "What dude will send"), facts,
-        this.#h("p", { class: "dim" }, this.#branch ? "Submit sends this comment to the preview server. Saved feedback is available only through the CLI and API." : "Nothing leaves this page until you save. Then it is a draft only you see in dude.")),
+        this.#h("p", { class: "dim" }, this.#branch ? "Submit sends this comment to the preview server at once. Everyone in the project sees it in dude, and on this page as a pin." : "Nothing leaves this page until you save. Then it is a draft only you see in dude.")),
       foot);
     const picked = this.#h("div", { class: "hl picked", "data-testid": "ov-picked" });
     return { section, picked, attach, picLine, picDd, disconnected, problem, foot, keys, sp, cancel, copy, save, picKey: "" };
@@ -1183,7 +1201,7 @@ export class Overlay {
         connected ? this.#h("button", { type: "button", class: this.#picking ? "on" : "primary", "aria-pressed": this.#picking ? "true" : "false",
           "data-testid": "ov-comment", "data-k": "comment", onclick: () => this.#setPicking(!this.#picking) },
           this.#g(this.#picking ? "check" : "pick"), this.#picking ? "Done" : "Comment") : null,
-        connected && !this.#branch ? this.#h("button", { type: "button", class: this.#panel === "pins" ? "on" : "", "aria-expanded": this.#panel === "pins" ? "true" : "false",
+        connected ? this.#h("button", { type: "button", class: this.#panel === "pins" ? "on" : "", "aria-expanded": this.#panel === "pins" ? "true" : "false",
           "data-testid": "ov-pins", "data-k": "pins", title: this.#showPins ? "Comments on this page" : "Pins are hidden",
           onclick: () => { this.#panel = this.#panel === "pins" ? null : "pins"; this.#focusGone = null; this.#render(); } },
           this.#g("pins"), narrow ? String(pinsHere) : `${pinsHere} on this page`, this.#g("chev", 12)) : null,
@@ -1254,7 +1272,8 @@ export class Overlay {
     if (this.#branch) return this.#h("div", { class: "toast", role: "status", "data-testid": "ov-saved" },
       this.#h("span", { class: "okc" }, this.#g("check")),
       this.#h("span", { class: "tt" }, this.#h("b", {}, "Feedback submitted"),
-        this.#h("span", { class: "dim" }, `${pic}. Browse and manage saved feedback with the CLI or API.`)));
+        this.#h("span", { class: "dim" }, `${pic}. It shows in dude on the project's Servers page, and here as a pin.`)),
+      this.#h("button", { type: "button", "data-k": "go-dude", "data-testid": "ov-go-dude", onclick: () => this.#goToDude() }, this.#g("link", 12), "View in dude"));
     return this.#h("div", { class: "toast", role: "status", "data-testid": "ov-saved" },
       this.#h("span", { class: "okc" }, this.#g("check")),
       this.#h("span", { class: "tt" }, this.#h("b", {}, "Saved to your drafts in dude"),
@@ -1271,7 +1290,7 @@ export class Overlay {
         isGone ? this.#h("span", { class: "warnLine" }, this.#g("warn", 12), " Couldn't find this on the page — it may have changed.") : null,
         this.#h("span", {}, this.#h("b", {}, p.mine ? "You" : p.author), ` ${p.body.slice(0, 160)}`),
         isGone ? this.#h("span", { class: "mono dim" }, `was ${p.selector}`) : this.#h("span", { class: "dim" }, STATUS[p.status]?.label ?? "")),
-      isGone ? this.#h("button", { type: "button", "data-k": `open-${p.id}`, onclick: () => this.#openInDude(p.id) }, this.#g("link", 12), "Open in dude")
+      isGone ? this.#h("button", { type: "button", "data-k": `open-${p.id}`, onclick: () => (this.#branch ? this.#goToDude() : this.#openInDude(p.id)) }, this.#g("link", 12), this.#branch ? "View in dude" : "Open in dude")
         : this.#h("button", { type: "button", "data-k": `show-${p.id}`, onclick: () => { this.#panel = null; this.#popover = { id: p.id }; this.#render(); } }, "Show"));
     return this.#h("div", { class: "panel", "data-testid": "ov-pins-panel" },
       this.#h("div", { class: "ph" }, this.#h("b", {}, "On this page"),

@@ -268,6 +268,47 @@ export interface TaskServers {
   preview: null | { id: string; luxRunId: string; state: string };
 }
 
+/**
+ * Feedback on one running server, counted for its row: a branch preview's
+ * open / resolved; a task's submitted items on this server's origin, open
+ * (open, delivered, resolved not yet published) / done (resolved, replied).
+ * `authors` is how many people submitted any of it.
+ */
+export interface RunningServerFeedback {
+  open: number;
+  resolved: number;
+  authors: number;
+}
+
+/** One server of a running Run, as the project's Servers page lists it. */
+export interface RunningServer {
+  name: string;
+  port: number;
+  url: string | null;
+  state: ServerState;
+  serverState?: WakeableServerState | null;
+  since: string | null;
+  readySince: string | null;
+  commenting?: Commenting;
+  feedback: RunningServerFeedback;
+}
+
+/** A live Run of a project with servers: `GET /v1/projects/:id/servers/running`. */
+export interface RunningRun {
+  id: string;
+  kind: "task" | "preview";
+  task: { id: string; key: string; title: string } | null;
+  branch: string | null;
+  state: string;
+  startedAt: string | null;
+  startedBy: { id: string; name: string } | null;
+  servers: RunningServer[];
+}
+
+export interface ProjectRunningServers {
+  runs: RunningRun[];
+}
+
 /** What a person adds to a Run: a recipe, or a server of their own. */
 export const addServerSchema = z.union([
   z.object({ recipe: serverNameSchema }).strict(),

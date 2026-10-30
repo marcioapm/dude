@@ -25,6 +25,8 @@ export interface UseEventStreamOptions {
   runId?: string | undefined;
   sessionId?: string | undefined;
   taskId?: string | undefined;
+  /** A project's events: every member of its organisation reads them. */
+  projectId?: string | undefined;
   /** An automation run's activity. */
   automationRunId?: string | undefined;
   /** Every event in the organization. For panels that watch everything. */
@@ -52,7 +54,7 @@ const RETRY_MIN_MS = 1_000;
 const RETRY_MAX_MS = 30_000;
 
 export function useEventStream(options: UseEventStreamOptions): EventStreamState {
-  const { client, runId, sessionId, taskId, automationRunId, all, limit = DEFAULT_LIMIT, live = all } = options;
+  const { client, runId, sessionId, taskId, projectId, automationRunId, all, limit = DEFAULT_LIMIT, live = all } = options;
 
   const [events, setEvents] = useState<PersistedEvent[]>([]);
   const [status, setStatus] = useState<StreamStatus>("connecting");
@@ -70,10 +72,10 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
   const reportRefused = useRef(onRefused);
   reportRefused.current = onRefused;
   const retryDelay = useRef(RETRY_MIN_MS);
-  const key = [runId, sessionId, taskId, automationRunId, all, live, limit].join("|");
+  const key = [runId, sessionId, taskId, projectId, automationRunId, all, live, limit].join("|");
 
   useEffect(() => {
-    if (!runId && !sessionId && !taskId && !automationRunId && !all) return;
+    if (!runId && !sessionId && !taskId && !projectId && !automationRunId && !all) return;
 
     // A new scope is a new history: keeping the previous run's events would
     // show its transcript under this run's header. The same scope reopened
@@ -93,7 +95,7 @@ export function useEventStream(options: UseEventStreamOptions): EventStreamState
 
     // An organization-wide stream, or one only watched for change, starts
     // from now rather than replaying the ledger.
-    const source = new EventSource(client.streamUrl({ runId, sessionId, taskId, automationRunId, live, after }));
+    const source = new EventSource(client.streamUrl({ runId, sessionId, taskId, projectId, automationRunId, live, after }));
 
     source.onopen = () => {
       retryDelay.current = RETRY_MIN_MS;

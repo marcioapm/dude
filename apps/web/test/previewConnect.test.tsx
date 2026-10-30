@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ApiClient, ApiError, type PreviewServerAt } from "../src/api/client.ts";
 import { arrivedFromPreview } from "../src/previewComment.ts";
+import { serverLanding } from "../src/serverWindows.ts";
 import { PreviewConnectScreen } from "../src/screens/PreviewConnectScreen.tsx";
 import { act, mount, until } from "./dom.ts";
 
@@ -146,15 +147,31 @@ test("a lookup that lands after the page was left does nothing: no move to the t
   expect(arrivedFromPreview(window, FOUND.taskId)).toBe(false);
 });
 
-test("a branch preview stays on the submission relay, never navigates to a task", async () => {
-  const client = new LookupClient(async () => ({ kind: "branch", organizationId: "org_acme", organizationSlug: "acme",
-    projectId: "prj_acme", previewRunId: "run_branch", branch: "feature/cart", server: "web" }));
-  // Keep all calls in the test client, rather than creating a network client.
-  client.inOrganization = () => client;
+test("a branch preview goes to its project's Servers page, marked as landed there so the page adopts this tab's opener", async () => {
+  const BRANCH = { kind: "branch", organizationId: "org_acme", organizationSlug: "acme",
+    projectId: "prj_acme", previewRunId: "run_branch", branch: "feature/cart", server: "web" } as const;
+  const client = new LookupClient(async () => BRANCH);
   const s = await screen(client);
   await hello(WEB, `${WEB}/cart`);
-  await until(() => s.step() === "connected" || null, "branch relay connected");
-  expect(s.found).toEqual([]);
-  expect(s.container.textContent).toContain("Saved feedback is available only through the CLI and API");
+  await until(() => s.found.length > 0 || null, "the branch preview found");
+  expect(s.found).toEqual([BRANCH]);
+  // Never the old hand-off screen's words, and no task marked as arrived.
+  expect(s.container.textContent).not.toContain("only through the CLI and API");
   expect(arrivedFromPreview(window, "run_branch")).toBe(false);
+  expect(serverLanding("prj_acme")).toEqual({ projectId: "prj_acme", runId: "run_branch", server: "web", branch: "feature/cart", origin: WEB });
+  expect(serverLanding("prj_other")).toBeNull();
+});
+
+test("a branch preview's landing is not taken from a lookup that landed after the page was left", async () => {
+  let land!: (found: PreviewServerAt) => void;
+  const client = new LookupClient(() => new Promise((r) => { land = r; }));
+  const s = await screen(client);
+  await hello(WEB, `${WEB}/`);
+  await unmounts.pop()!();
+  await act(async () => {
+    land({ kind: "branch", organizationId: "o", organizationSlug: "o", projectId: "prj_acme", previewRunId: "run_b", branch: "b", server: "web" });
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  expect(s.found).toEqual([]);
+  expect(serverLanding("prj_acme")).toBeNull();
 });

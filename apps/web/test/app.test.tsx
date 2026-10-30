@@ -9,8 +9,8 @@ import { ThemeProvider } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { click, emitForTest, mount, settle, until } from "./dom.ts";
 import { EventTypes, type SessionsList } from "@dude/domain";
-import { FixtureClient } from "../src/fixtures/client.ts";
-import { EPIC, PROJECT, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
+import { FixtureClient, emit } from "../src/fixtures/client.ts";
+import { EPIC, ORG, PROJECT, RUN_ID, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { ApiError, type RunDetail } from "../src/api/client.ts";
 import { App } from "../src/App.tsx";
 import { PeopleProvider } from "../src/people.tsx";
@@ -49,6 +49,81 @@ async function onServers(page: HTMLElement) {
   const panel = await until(() => page.querySelector<HTMLElement>("[role=tabpanel][data-state=active]"), "the selected panel");
   await until(() => panel.querySelector("[data-testid=servers-panel]"), "the servers in the selected panel");
 }
+
+describe("a project's Servers page", () => {
+  test("the board says Servers · N between New epic and Settings, and it opens the project's Servers page", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    const button = await until(() => {
+      const b = page.querySelector<HTMLElement>("[data-testid=servers-button]");
+      return b?.textContent === "Servers · 6" ? b : null;
+    }, "Servers · 6");
+    const order = [...page.querySelectorAll<HTMLElement>("[data-testid=new-epic], [data-testid=servers-button], [data-testid=project-settings-button]")]
+      .map((b) => b.dataset.testid);
+    expect(order).toEqual(["new-epic", "servers-button", "project-settings-button"]);
+    await click(button);
+    expect(window.location.hash).toBe(`#/project/${PROJECT.id}/servers`);
+    await until(() => page.querySelector("[data-testid=servers-page] [data-testid=server-group]"), "the page's groups");
+    expect(document.title).toStartWith(`${PROJECT.name} · Servers`);
+  });
+
+  test("a branch lookup lands on the project's Servers hash inside its organization", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "opener");
+    const preview = {};
+    Object.defineProperty(window, "opener", { configurable: true, value: preview });
+    const client = new FixtureClient("a");
+    client.previewServerAt = async () => ({ kind: "branch", organizationId: ORG.id, organizationSlug: "acme", projectId: PROJECT.id,
+      previewRunId: "run_pv_checkout", server: "web", branch: "feat/checkout-polish" });
+    try {
+      await app("#/preview-connect", client);
+      await act(async () => window.dispatchEvent(new window.MessageEvent("message", { origin: "https://web.preview.test",
+        source: preview as MessageEventSource, data: { type: "hello", v: 1, url: "https://web.preview.test/cart" } })));
+      await until(() => window.location.hash === `#/o/acme/project/${PROJECT.id}/servers`, "the organization-prefixed Servers hash");
+      expect(window.location.hash).toBe(`#/o/acme/project/${PROJECT.id}/servers`);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "opener", descriptor);
+      else delete (window as { opener?: unknown }).opener;
+      sessionStorage.clear();
+    }
+  });
+
+  test("the board count reads only on mount and this project's server lifecycle events, not tree reloads", async () => {
+    class Counting extends FixtureClient {
+      counts = 0;
+      trees = 0;
+      override async runningServers(id: string) { this.counts++; return super.runningServers(id); }
+      override async navigation() { this.trees++; return super.navigation(); }
+    }
+    const client = new Counting("a");
+    const page = await app(`#/project/${PROJECT.id}`, client);
+    await until(() => page.querySelector("[data-testid=servers-button]")?.textContent === "Servers · 6", "the count");
+    const initial = client.counts;
+    const tree = client.trees;
+    await emitForTest(EventTypes.TaskUpdated);
+    await until(() => client.trees > tree, "an unrelated tree reload");
+    await settle(500);
+    expect(client.counts).toBe(initial);
+    await act(async () => emit({ eventType: EventTypes.ServersChanged, occurredAt: new Date().toISOString(), organizationId: ORG.id,
+      projectId: "prj_other", taskId: null, runId: null, sessionId: null, workflowRunId: null, actor: { type: "system", id: "dude" },
+      source: "control-plane", correlationId: null, causationId: null, payload: {} }));
+    await settle(500);
+    expect(client.counts).toBe(initial);
+    for (const eventType of [EventTypes.ServersChanged, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed, EventTypes.RunAborted]) {
+      const before = client.counts;
+      await emitForTest(eventType);
+      await until(() => client.counts > before, eventType);
+      await settle(500);
+      expect(client.counts - before).toBe(1);
+    }
+  }, 15_000);
+
+  test("while the count is unknown the button says Servers", async () => {
+    const client = new FixtureClient("a");
+    client.runningServers = () => new Promise(() => {});
+    const page = await app(`#/project/${PROJECT.id}`, client);
+    const button = await until(() => page.querySelector<HTMLElement>("[data-testid=servers-button]"), "the button");
+    expect(button.textContent).toBe("Servers");
+  });
+});
 
 describe("Waiting routes and sidebar", () => {
   test("the others deep link selects its tab; the sidebar has no others row and its Waiting on you stays current", async () => {

@@ -26,8 +26,12 @@ import {
   secretHint,
   secretNameProblem,
   serverNameSchema,
+  type ProjectRunningServers,
   type ProjectSecret,
   type PreviewSettings,
+  type RunningRun,
+  type RunningServer,
+  type RunningServerFeedback,
   type Recipe,
   type RecipeEnvNames,
 } from "@dude/domain";
@@ -330,7 +334,7 @@ async function startBranchPreview(ctx: RequestContext): Promise<Response> {
 }
 
 /** `origin` from the query: an https origin exactly as a browser writes one (no path, no trailing slash), or 400. */
-function previewOrigin(ctx: RequestContext): string {
+export function previewOrigin(ctx: RequestContext): string {
   const given = ctx.url.searchParams.get("origin") ?? "";
   let origin: string | null = null;
   try {
@@ -401,7 +405,63 @@ async function validatePreviewServer(ctx: RequestContext): Promise<Response> {
   return json(owner, 200, { "cache-control": "no-store" });
 }
 
+/** An origin as a browser writes it, or null: the key feedback anchors and server URLs are matched on. */
+function originOf(url: string | null | undefined): string | null {
+  if (!url || !URL.canParse(url)) return null;
+  return new URL(url).origin;
+}
+
+/**
+ * Every live Run of the project with servers, everyone's, with each
+ * server's feedback counted so its row needs no other read. The Runs are
+ * the orchestrator's (it asks lux); the counts are read here, under the
+ * caller's organisation.
+ */
+async function runningServers(ctx: RequestContext): Promise<Response> {
+  const projectId = ctx.params.id!;
+  await withOrg(ctx.principal.organizationId, async ({ sql }) => {
+    const [project] = await sql`SELECT 1 FROM projects WHERE id = ${projectId}`;
+    if (!project) throw notFound(`project ${projectId} not found`);
+  });
+  const res = await forward(ctx, "GET", `/internal/projects/${encodeURIComponent(projectId)}/servers/running`);
+  if (res.status !== 200) return res;
+  const { runs } = (await res.json()) as { runs: Array<Omit<RunningRun, "servers"> & { servers: Array<Omit<RunningServer, "feedback">> }> };
+  const counts = await withOrg(ctx.principal.organizationId, async ({ sql }) => {
+    const previewIds = runs.filter((r) => r.kind === "preview").map((r) => r.id);
+    const taskIds = [...new Set(runs.flatMap((r) => (r.kind === "task" && r.task ? [r.task.id] : [])))];
+    const preview = (await sql`
+      SELECT preview_run_id AS run, preview_server_name AS server,
+        count(*) FILTER (WHERE status = 'open')::int AS open, count(*) FILTER (WHERE status = 'resolved')::int AS resolved,
+        count(DISTINCT author_person_id)::int AS authors
+      FROM preview_feedback WHERE project_id = ${projectId} AND preview_run_id = ANY(${sql.array(previewIds, "text")}::text[])
+      GROUP BY 1, 2`) as Array<{ run: string; server: string; open: number; resolved: number; authors: number }>;
+    // A task's submitted preview items of its current attempt, by the origin of the page each is on.
+    const task = (await sql`
+      SELECT f.task_id AS task, lower(substring(f.anchor->>'url' from '^(https?://[^/?#]+)')) AS origin,
+        count(*) FILTER (WHERE f.status IN ('open', 'delivered') OR (f.status = 'resolved' AND f.resolved_verified_at IS NULL))::int AS open,
+        count(*) FILTER (WHERE f.status = 'replied' OR (f.status = 'resolved' AND f.resolved_verified_at IS NOT NULL))::int AS resolved,
+        count(DISTINCT f.author_person_id)::int AS authors
+      FROM feedback_items f
+      WHERE f.task_id = ANY(${sql.array(taskIds, "text")}::text[]) AND f.anchor_kind = 'preview' AND f.status <> 'draft'
+        AND f.attempt = task_attempt(f.task_id)
+      GROUP BY 1, 2`) as Array<{ task: string; origin: string | null; open: number; resolved: number; authors: number }>;
+    return { preview, task };
+  });
+  const none: RunningServerFeedback = { open: 0, resolved: 0, authors: 0 };
+  const out: RunningRun[] = runs.map((r) => ({
+    ...r,
+    servers: r.servers.map((s) => {
+      const found = r.kind === "preview"
+        ? counts.preview.find((c) => c.run === r.id && c.server === s.name)
+        : counts.task.find((c) => c.task === r.task?.id && c.origin !== null && c.origin === originOf(s.url));
+      return { ...s, feedback: found ? { open: found.open, resolved: found.resolved, authors: found.authors } : none };
+    }),
+  }));
+  return json({ runs: out } satisfies ProjectRunningServers, 200, { "cache-control": "no-store" });
+}
+
 export function registerServerRoutes(router: Router): void {
+  router.get("/v1/projects/:id/servers/running", runningServers);
   router.get("/v1/branch-previews/:id/servers/:name/owner", validatePreviewServer);
   router.get("/v1/projects/:id/servers", listProjectServers);
   router.put("/v1/projects/:id/servers/:name", putProjectServer);

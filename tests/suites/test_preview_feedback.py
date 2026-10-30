@@ -42,7 +42,7 @@ LAUNCH_ARGS = ["--disable-features=LocalNetworkAccessChecks,BlockInsecurePrivate
 
 APP = """<!doctype html><html><head><meta charset="utf-8"><title>Shop</title>
 <style>* { color: rgb(200, 0, 0) !important; } button { background: #1f7a5a; padding: 12px 22px; border: 0; border-radius: 8px; }</style></head>
-<body><main><h1>Checkout</h1><form id="checkout"><button type="button" class="pay">Pay now</button></form></main>
+<body><main><h1>Checkout</h1><form id="checkout"><button type="button" class="pay">Pay now</button></form><p id="private-anchor">Notes</p></main>
 %TAG%</body></html>"""
 
 EVIL = """<!doctype html><script>
@@ -161,6 +161,14 @@ def _back_to_the_preview(client: ApiClient, env, task: dict, item_id: str) -> di
                       timeout=60, message="the preview never woke after the delivery")
     [web] = read["servers"]
     return web
+
+
+def _frame_url(request) -> str:
+    """The URL of the page that made `request`: whose origin asked."""
+    try:
+        return request.frame.url
+    except Exception:  # noqa: BLE001 - a request with no frame is no page's
+        return ""
 
 
 def _evil_posted(page: Page) -> None:
@@ -291,7 +299,7 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
     assert seeded.status_code == 201, seeded.text
     private = seeded.json()
     email = f"preview-{rid}@example.com"
-    provision_person(client, env, "Ana Example", email)
+    ana, _ = provision_person(client, env, "Ana Example", email)
     binary = Path(__file__).resolve().parents[2] / "orchestrator" / "bin" / "dude-cli"
     cli_env = {k: v for k, v in os.environ.items() if not k.startswith("DUDE_")}
     cli_env.update(HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path), DUDE_URL=env.control_plane_url, DUDE_API_KEY=client.api_key)
@@ -305,10 +313,10 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
     browser = browser_type.launch(**browser_channel(), headless=True, args=LAUNCH_ARGS)
     try:
         ctx, errors = _context(browser, web, access.url, env)
-        feedback_reads = []
+        feedback_reads: list[tuple[str, str]] = []
         submissions = []
         screenshot_uploads = []
-        ctx.on("request", lambda r: feedback_reads.append(r.url) if r.method == "GET" and
+        ctx.on("request", lambda r: feedback_reads.append((r.url, _frame_url(r))) if r.method == "GET" and
                ("/preview-feedback/" in r.url or re.search(r"/branch-previews/[^/]+/(?:servers/[^/]+/)?feedback", r.url)) else None)
         ctx.on("request", lambda r: screenshot_uploads.append(r.url) if r.method == "POST" and
                f"/branch-previews/{rid}/servers/web/attachments" in r.url else None)
@@ -339,14 +347,22 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
         with ctx.expect_page() as opened:
             _ov(preview, "r => r.querySelector('[data-testid=ov-connect]').click()")
         relay = opened.value
-        expect(relay.get_by_test_id("preview-connect")).to_have_attribute("data-step", "connected", timeout=20_000)
+        # A branch preview lands on its project's Servers page, connected to this tab.
+        expect(relay.get_by_test_id("servers-landed")).to_be_visible(timeout=20_000)
         preview.wait_for_function("() => window.__ovRoot?.querySelector('[data-connection=connected]')")
-        assert "preview-connect" in relay.url and "/task/" not in relay.url
+        assert re.search(rf"#/o/[^/]+/project/{re.escape(pid)}/servers$", relay.url), relay.url
+        expect(relay.locator(f"[data-testid=project-server][data-key='{rid}/web']")).to_be_visible()
         # A valid account/token without organization membership is not preview authorization.
         outsider = access.session(f"outsider-{rid}@example.com")
         denied = outsider.get(f"/v1/preview-servers/lookup?origin={web['url'].rstrip('/')}")
         assert denied.status_code == 403, denied.text
-        assert _ov(preview, "r => r.querySelectorAll('[data-testid=ov-pin], [data-testid=ov-pins]').length") == 0
+        # The colleague's saved item is a pin on its own page, and only there.
+        assert _ov(preview, "r => r.querySelectorAll('[data-testid=ov-pin]').length") == 0
+        preview.evaluate("() => history.pushState({}, '', '/private')")
+        _wait_ov(preview, "ov-pin")
+        assert _ov(preview, "r => [...r.querySelectorAll('[data-testid=ov-pin]')].map(p => p.dataset.id)") == [private["id"]]
+        preview.evaluate("() => history.pushState({}, '', '/')")
+        preview.wait_for_function("() => window.__ovRoot.querySelectorAll('[data-testid=ov-pin]').length === 0")
         for n in range(3):
             _ov(preview, "r => r.querySelector('[data-testid=ov-comment]').click()")
             preview.hover("button.pay")
@@ -374,7 +390,7 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
                 ctx.unroute(owner_route, refuse_owner)
                 relay.evaluate("() => { const now = Date.now; Date.now = () => now() + 30_001; }")
                 preview.evaluate("() => history.pushState({}, '', '/cart')")
-                expect(relay.get_by_test_id("preview-connect")).to_have_attribute("data-step", "connected", timeout=20_000)
+                preview.wait_for_function("() => window.__messages.some(m => m?.type === 'session' && m.url.endsWith('/cart'))", timeout=20_000)
                 preview.keyboard.press("Control+Enter")
                 preview.wait_for_function("() => window.__messages.some(m => m?.type === 'refused' && m.nonce !== undefined)")
                 preview.keyboard.press("Control+Enter")
@@ -408,11 +424,13 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
         cli("reopen-feedback", item["id"], "--note", "Check again")
         assert len(cli("list-feedback", rid)["feedback"]) == 4
         assert len(cli("show-feedback", item["id"])["history"]) == 2
-        # A reload/reconnect does not load anyone's saved feedback into the overlay.
+        # A reload of dude's tab reconnects the same window to its Servers page, and its pins come back from there.
         relay.reload()
-        expect(relay.get_by_test_id("preview-connect")).to_have_attribute("data-step", "connected", timeout=20_000)
-        assert _ov(preview, "r => r.querySelectorAll('[data-testid=ov-pin], [data-testid=ov-pins]').length") == 0
-        expect(relay.get_by_test_id("preview-connect")).not_to_contain_text("Server-only feedback")
+        expect(relay.get_by_test_id("servers-landed")).to_be_visible(timeout=20_000)
+        expect(relay.get_by_test_id("servers-moved")).to_have_count(0)
+        preview.evaluate("() => history.pushState({}, '', '/private')")
+        preview.wait_for_function("id => [...window.__ovRoot.querySelectorAll('[data-testid=ov-pin]')].some(p => p.dataset.id === id)",
+                                  arg=private["id"], timeout=20_000)
         preview.evaluate("() => history.pushState({}, '', '/next')")
         preview.wait_for_function("() => (window.__messages ?? []).filter(m => m?.type === 'session').length >= 2")
         messages_before_reload = preview.evaluate("() => window.__messages")
@@ -423,14 +441,104 @@ def test_taskless_preview_connect_overlay_screenshot_then_cli_management(
         sessions = preview.evaluate("() => window.__messages.filter(m => m?.type === 'session').length")
         preview.wait_for_function("n => window.__messages.filter(m => m?.type === 'session').length > n", arg=sessions, timeout=10_000)
         messages = json.dumps(messages_before_reload + preview.evaluate("() => window.__messages"))
-        for secret in [private["id"], private["body"], "#private-anchor", "/private", private_attachment]:
-            assert secret not in messages, (secret, messages)
-        assert feedback_reads == [], feedback_reads
+        # Pins carry words and where they point; never an attachment, a person or the project.
+        assert private["body"] in messages and "#private-anchor" in messages, messages
+        for secret in [private_attachment, aid, (private.get("author") or {}).get("id"), ana["id"], pid]:
+            assert secret and secret not in messages, (secret, messages)
+        # Every feedback read is the dude tab's; the preview page asks for none.
+        preview_origin = web["url"].rstrip("/")
+        assert feedback_reads, "the dude tab never read the server's feedback for its pins"
+        assert all(frame.startswith(access.url) for _, frame in feedback_reads), feedback_reads
+        assert not any(frame.startswith(preview_origin) for _, frame in feedback_reads), feedback_reads
         _evil_posted(relay)
         assert len(cli("list-feedback", rid)["feedback"]) == 4
+        # A stopped preview drops its pins.
+        preview.evaluate("() => history.pushState({}, '', '/private')")
+        _wait_ov(preview, "ov-pin")
         cli("stop", rid)
+        # The run's end on the project stream re-checks the server at once; a heartbeat past the 30 s check would too.
+        relay.evaluate("() => { const now = Date.now; Date.now = () => now() + 30_001; }")
+        preview.wait_for_function("() => window.__ovRoot.querySelectorAll('[data-testid=ov-pin]').length === 0", timeout=30_000)
         assert cli("list-feedback", rid, "--status", "all")["feedback"] == []
         assert client.get(f"/v1/attachments/{aid}").status_code == 404
+        # The ended preview's owner check is refused (404), which the browser logs: that, and nothing else.
+        assert all(e.startswith(f"{relay.url}: Failed to load resource: the server responded with a status of 404") for e in errors), errors
+        ctx.close()
+    finally:
+        browser.close()
+
+
+def test_two_people_on_one_project_servers_page_see_each_others_submits_live_and_never_each_others_drafts(
+    browser_type: BrowserType, web_url: str, client: ApiClient, forge_project: dict, fake_github, env
+):
+    """Two people of one organisation: A's submit on a branch server reaches B's open fold without a reload; A's task draft never does."""
+    pid = forge_project["id"]
+    task, task_web = _ready_preview(client, env, forge_project, "Servers page for two")
+    fake_github.push_branch("feature/two-people")
+    made = client.post(f"/v1/projects/{pid}/branch-previews", {"branch": "feature/two-people"})
+    assert made.status_code == 201, made.text
+    rid = made.json()["id"]
+    wait_until(lambda: client.get(f"/v1/branch-previews/{rid}").json()["servers"], timeout=60, message="branch servers allocated")
+    assert client.post(f"/v1/runs/{rid}/servers/web/start").status_code == 200
+    branch_web = wait_until(lambda: (p := client.get(f"/v1/runs/{rid}/servers").json())["servers"]
+                            and p["servers"][0]["state"] == "ready" and p["servers"][0], timeout=60, message="branch preview ready")
+    branch_origin, task_origin = branch_web["url"].rstrip("/"), task_web["url"].rstrip("/")
+    _, a = provision_person(client, env, "Ana Alves", f"ana-{rid}@example.com")
+    _, b = provision_person(client, env, "Bo Brito", f"bo-{rid}@example.com")
+
+    def submit(who: ApiClient, key: str, body: str) -> dict:
+        res = who.post(f"/v1/branch-previews/{rid}/servers/web/feedback", {"submissionKey": key, "body": body,
+                       "anchor": {"kind": "preview", "url": f"{branch_origin}/cart", "selector": "button.pay"}})
+        assert res.status_code == 201, res.text
+        return res.json()
+
+    def draft(who: ApiClient, body: str) -> dict:
+        res = who.post(f"/v1/tasks/{task['id']}/feedback/drafts", {"body": body,
+                       "anchor": {"kind": "preview", "url": f"{task_origin}/cart", "selector": "button.pay"}})
+        assert res.status_code == 201, res.text
+        return res.json()
+
+    submit(b, "bo-1", "Bo: the total is cut off")
+    draft(a, "Ana's private task draft")
+    mine = draft(b, "Bo's own task draft")
+    running = client.get(f"/v1/projects/{pid}/servers/running").json()["runs"]
+    task_run = next(r for r in running if (r.get("task") or {}).get("id") == task["id"])
+
+    browser = browser_type.launch(**browser_channel(), headless=True)
+    try:
+        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page = ctx.new_page()
+        page.on("console", lambda m: m.type == "error" and errors.append(m.text))
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        sign_in(page, web_url, b.api_key, at=f"#/project/{pid}/servers")
+        branch_row = page.locator(f"[data-testid=project-server][data-key='{rid}/web']")
+        task_row = page.locator(f"[data-testid=project-server][data-key='{task_run['id']}/web']")
+        expect(branch_row).to_be_visible(timeout=20_000)
+        expect(branch_row.get_by_test_id("commenting-count")).to_have_count(0)
+
+        # B's fold on the branch server: B's own submit, read once.
+        branch_row.get_by_test_id("server-fold-toggle").click()
+        branch_fold = page.locator(f"[data-testid=server-group][data-run='{rid}'] [data-testid=server-fold]")
+        expect(branch_fold.get_by_test_id("fold-item")).to_have_count(1, timeout=15_000)
+        expect(branch_fold.get_by_test_id("new-item")).to_have_count(0)
+
+        # B's fold on the task server: B's own draft, never A's.
+        task_row.get_by_test_id("server-fold-toggle").click()
+        task_fold = page.locator(f"[data-testid=server-group][data-run='{task_run['id']}'] [data-testid=server-fold]")
+        expect(task_fold.get_by_test_id("my-draft")).to_have_count(1, timeout=15_000)
+        expect(task_fold.get_by_test_id("my-draft")).to_contain_text(mine["body"])
+        expect(task_fold).not_to_contain_text("Ana's private task draft")
+
+        # A submits on the branch server: B's open fold shows it as New, and the row counts two people, without a reload.
+        url_before = page.url
+        submit(a, "ana-1", "Ana: Pay now should say the total")
+        expect(branch_fold.get_by_test_id("new-item")).to_have_count(1, timeout=15_000)
+        expect(branch_fold.get_by_test_id("new-item")).to_contain_text("Ana: Pay now should say the total")
+        expect(branch_fold.get_by_test_id("live-note")).to_have_text("Updated just now")
+        expect(branch_row.get_by_test_id("commenting-count")).to_contain_text("2 people commenting", timeout=15_000)
+        assert page.url == url_before
+        expect(task_fold).not_to_contain_text("Ana's private task draft")
         assert errors == [], errors
         ctx.close()
     finally:

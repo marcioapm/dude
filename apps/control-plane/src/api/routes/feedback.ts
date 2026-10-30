@@ -20,6 +20,7 @@ import type { ZodType } from "zod";
 import { type OrgScope, withOrg } from "../../db/client.ts";
 import { HttpError, badRequest, conflict, forbidden, intParam, json, noContent, notFound, readCapped } from "../http.ts";
 import { orchestrator } from "../../orchestrator/client.ts";
+import { previewOrigin } from "./servers.ts";
 import type { RequestContext, Router } from "../router.ts";
 
 /** A draft's body is at most 16,000 characters; a preview anchor adds 20 KB or so. */
@@ -209,6 +210,8 @@ async function list(ctx: RequestContext): Promise<Response> {
   const person = author(ctx);
   const taskId = ctx.params.id!;
   const asked = intParam(ctx.url, "attempt", { min: 1, max: 2_147_483_647 }) ?? null;
+  // One server's pages: preview items whose page is on this origin (the project's Servers page).
+  const origin = ctx.url.searchParams.has("origin") ? previewOrigin(ctx) : null;
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const task = await taskOf(scope, taskId);
     const attempt = asked ?? task.attempt;
@@ -216,6 +219,8 @@ async function list(ctx: RequestContext): Promise<Response> {
       SELECT ${scope.sql.unsafe(ITEM_SELECT)} FROM feedback_items f
       WHERE f.task_id = ${taskId} AND f.attempt = ${attempt}
         AND (f.status <> 'draft' OR f.author_person_id = ${person})
+        ${origin === null ? scope.sql`` : scope.sql`AND f.anchor_kind = 'preview'
+          AND lower(substring(f.anchor->>'url' from '^(https?://[^/?#]+)')) = ${origin}`}
       ORDER BY f.status = 'draft', COALESCE(f.submitted_at, f.created_at), f.id
       LIMIT 500`;
     const [{ blocking }] = (await scope.sql`

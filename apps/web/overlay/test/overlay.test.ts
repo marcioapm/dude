@@ -11,8 +11,9 @@ import type { DudeToOverlay, OverlayPin, OverlayTheme, OverlayToDude } from "@du
 import { OVERLAY_LIMITS } from "@dude/domain/previewOverlayProtocol";
 import { Overlay } from "../overlay.ts";
 import { PictureError } from "../picture.ts";
+import type { RunningRun } from "@dude/domain";
 import { ApiClient, ApiError, type BranchPreviewServerAt } from "../../src/api/client.ts";
-import { branchPreviewRelay } from "../../src/branchPreviewRelay.ts";
+import { ServerWindows, markServerLanding } from "../../src/serverWindows.ts";
 
 // happy-dom's Window, from the window the repo's preload (packages/design-system/test/dom.ts) made: a fresh one per test.
 const Window = (globalThis.window as unknown as { constructor: new (o: object) => object }).constructor;
@@ -129,16 +130,79 @@ test("it says hello to its opener, posted only to dude's origin, and connects on
   expect(count('[data-testid="ov-comment"]')).toBe(1);
 });
 
-test("branch mode offers direct submission, no feedback inbox, pins or task drafts", () => {
+test("branch mode offers direct submission and the server's saved feedback as pins, no task drafts", () => {
   boot();
   fromDude({ type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: [], drafts: 0, showPins: false });
-  expect(count('[data-testid="ov-pins"]')).toBe(0);
+  expect(count('[data-testid="ov-pins"]')).toBe(1);
   tid("ov-comment")!.click();
   const button = sized(win.document.querySelector("button.pay")!); hover(button);
   button.dispatchEvent(new win.MouseEvent("click", { bubbles: true, composed: true }));
   expect(tid("ov-save")!.textContent).toBe("Submit feedback");
   expect(tid("ov-comment-box")!.textContent).not.toContain("Private draft");
-  expect(tid("ov-comment-box")!.textContent).toContain("only through the CLI and API");
+  expect(tid("ov-comment-box")!.textContent).not.toContain("only through the CLI and API");
+  expect(tid("ov-comment-box")!.textContent).toContain("Everyone in the project sees it in dude");
+});
+
+test("branch mode pins the page's saved feedback, open and resolved, with the resolution, and View in dude goes to dude's tab", () => {
+  page(CART);
+  boot();
+  sized(win.document.querySelector("button.pay")!);
+  const pins: OverlayPin[] = [
+    { id: "fbi_1", n: 1, status: "open", author: "Ana", mine: false, body: "Too close", selector: "button.pay", when: "submitted 4 min ago", replies: [] },
+    { id: "fbi_2", n: 2, status: "resolved", author: "Tom", mine: false, body: "Hard to read", selector: "p.other", when: "submitted 31 min ago",
+      replies: [{ who: "Márcio", kind: "resolve", body: "More contrast" }] },
+  ];
+  sized(win.document.querySelector("p.other")!, 100, 300);
+  fromDude({ type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins, drafts: 0, showPins: true });
+  expect([...root.querySelectorAll('[data-testid="ov-pin"]')].map((p) => (p as HTMLElement).dataset.status)).toEqual(["open", "resolved"]);
+  tid("ov-pins")!.click();
+  expect(count('[data-testid="ov-row"]')).toBe(2);
+  (root.querySelector('[data-testid="ov-pin"][data-id="fbi_2"]') as HTMLElement).click();
+  expect(tid("ov-popover")!.textContent).toContain("resolved it");
+  expect(tid("ov-popover")!.textContent).toContain("More contrast");
+  expect(count('[data-k="open-in-dude"]')).toBe(0);
+  tid("ov-view-dude")!.click();
+  // View in dude never asks dude to open a task item.
+  expect(sent().some((m) => m.type === "open")).toBe(false);
+});
+
+test("an oversize or malformed branch session is refused: no pins, nothing connected", () => {
+  boot();
+  const pin = { id: "fbi_1", n: 1, status: "open", author: "Ana", mine: false, body: "x", selector: "button.pay", when: "now", replies: [] };
+  for (const bad of [
+    { type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: Array.from({ length: 201 }, (_, i) => ({ ...pin, id: `p${i}`, n: i + 1 })), drafts: 0, showPins: true },
+    { type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: [{ ...pin, body: "x".repeat(601) }], drafts: 0, showPins: true },
+    { type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: [{ ...pin, extra: 1 }], drafts: 0, showPins: true },
+    { type: "session", v: 1, mode: "other", task: "feature/cart", url: PAGE, pins: [], drafts: 0, showPins: true },
+  ]) fromDude(bad as unknown as DudeToOverlay);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-pin"]')).toBe(0);
+});
+
+test("a claim from another dude tab tells the old one it left and says hello to the new one; anything with it is ignored", () => {
+  boot();
+  connect();
+  const other = { postMessage: mock(() => {}), closed: false, focus: () => {} };
+  // Wrong origin, or extra keys: nothing happens.
+  fromDude({ type: "claim", v: 1 } as DudeToOverlay, "https://evil.example.test", other);
+  fromDude({ type: "claim", v: 1, url: "x" } as unknown as DudeToOverlay, DUDE, other);
+  expect(other.postMessage).not.toHaveBeenCalled();
+  fromDude({ type: "claim", v: 1 } as DudeToOverlay, DUDE, other);
+  expect(sent().at(-1)).toEqual({ type: "left", v: 1 });
+  expect(other.postMessage).toHaveBeenCalledWith({ type: "hello", v: 1, url: PAGE, moved: true }, DUDE);
+  // Now the claiming tab is dude: its session connects, the old one's is not heard.
+  fromDude({ type: "session", v: 1, task: "OLD", url: PAGE, pins: [], drafts: 0, showPins: true });
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  fromDude({ type: "session", v: 1, task: "NEW", url: PAGE, pins: [], drafts: 0, showPins: true }, DUDE, other);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("a claim reaching a window no dude tab had is answered with a plain hello, not moved", () => {
+  page(CART, false);
+  boot();
+  const tab = { postMessage: mock(() => {}), closed: false, focus: () => {} };
+  fromDude({ type: "claim", v: 1 } as DudeToOverlay, DUDE, tab);
+  expect(tab.postMessage).toHaveBeenCalledWith({ type: "hello", v: 1, url: PAGE }, DUDE);
 });
 
 test("branch retryable outcome preserves the nonce for unchanged content", async () => {
@@ -158,7 +222,7 @@ test("branch retryable outcome preserves the nonce for unchanged content", async
   expect(drafts).toHaveLength(2); expect(drafts[1]!.nonce).toBe(first.nonce);
 });
 
-test.each([401, 403])("branch relay owner %i and later POST refusal preserve a committed submission's identity", async (status) => {
+test.each([401, 403])("a branch server's owner %i and a later POST refusal, across dude tab reloads, preserve a committed submission's identity", async (status) => {
   const owner: BranchPreviewServerAt = { kind: "branch", organizationId: "org_acme", organizationSlug: "acme",
     projectId: "prj_acme", previewRunId: "run_first", branch: "feature/cart", server: "web" };
   const items = new Map<string, string>();
@@ -166,11 +230,11 @@ test.each([401, 403])("branch relay owner %i and later POST refusal preserve a c
   let ownerDenied = false;
   const upload = mock(async () => "att_shot");
   class Client extends ApiClient {
-    override inOrganization() { return this; }
     override async validatePreviewServer() {
       if (ownerDenied) throw new ApiError(status, "unauthorized", "Sign in again");
       return owner;
     }
+    override async previewFeedback() { return { feedback: [], nextCursor: null }; }
     override uploadPreviewAttachment = upload;
     override async submitPreviewFeedback(_run: string, _server: string, input: Parameters<ApiClient["submitPreviewFeedback"]>[2]) {
       keys.push(input.submissionKey);
@@ -180,34 +244,43 @@ test.each([401, 403])("branch relay owner %i and later POST refusal preserve a c
       return { id: items.get(input.submissionKey)! } as Awaited<ReturnType<ApiClient["submitPreviewFeedback"]>>;
     }
   }
-  const relayWin = new Window({ url: DUDE }) as globalThis.Window;
+  const origin = new URL(PAGE).origin;
+  // The dude tab Connect to dude opened: its opener is the preview, and it arrived from it.
+  const dudeWin = new Window({ url: DUDE }) as globalThis.Window;
   const preview = { closed: false, postMessage: (data: DudeToOverlay) => queueMicrotask(() => fromDude(data)) };
-  const start = () => branchPreviewRelay(relayWin, preview as unknown as globalThis.Window, new URL(PAGE).origin,
-    owner, new Client({}), () => {});
+  Object.defineProperty(dudeWin, "opener", { configurable: true, get: () => preview });
+  markServerLanding(dudeWin, { projectId: "prj_acme", runId: "run_first", server: "web", branch: "feature/cart", origin });
+  const run: RunningRun = { id: "run_first", kind: "preview", task: null, branch: "feature/cart", state: "running", startedAt: null, startedBy: null,
+    servers: [{ name: "web", port: 3000, url: origin, state: "ready", since: null, readySince: null, feedback: { open: 0, resolved: 0, authors: 0 } }] };
+  const start = () => {
+    const w = new ServerWindows(dudeWin, new Client({}), { you: null, name: () => "x" }, () => {});
+    w.expect(run, "web");
+    return () => w.dispose();
+  };
   let stop = start();
-  opener!.postMessage.mockImplementation((data: OverlayToDude) => queueMicrotask(() => relayWin.dispatchEvent(
-    new win.MessageEvent("message", { data, origin: new URL(PAGE).origin, source: preview }))));
+  opener!.postMessage.mockImplementation((data: OverlayToDude) => queueMicrotask(() => dudeWin.dispatchEvent(
+    new win.MessageEvent("message", { data, origin, source: preview }))));
   try {
-    boot(); await tick();
+    boot(); await tick(); await tick(10);
     await writeOnPay("The button overlaps");
-    tid("ov-save")!.click(); await tick();
+    tid("ov-save")!.click(); await tick(10);
     const first = sent().find((m) => m.type === "draft")!;
     expect(first.picture).toBe("data:image/png;base64,iVBORw0KGgo=");
-    // Reload the relay, then its real owner check refuses without a nonce.
+    // The dude tab reloads; its check of the server refuses without a nonce.
     stop(); ownerDenied = true; stop = start();
-    opener!.postMessage({ type: "hello", v: 1, url: PAGE }, DUDE); await tick();
+    opener!.postMessage({ type: "hello", v: 1, url: PAGE }, DUDE); await tick(10);
     expect(tid("ov-problem")!.textContent).toContain("Sign in again");
     expect(keys).toHaveLength(1);
     stop(); ownerDenied = false; stop = start();
-    opener!.postMessage({ type: "hello", v: 1, url: PAGE }, DUDE); await tick();
-    tid("ov-save")!.click(); await tick();
+    opener!.postMessage({ type: "hello", v: 1, url: PAGE }, DUDE); await tick(10);
+    tid("ov-save")!.click(); await tick(10);
     expect(tid("ov-problem")!.textContent).toContain("Sign in again");
-    tid("ov-save")!.click(); await tick();
+    tid("ov-save")!.click(); await tick(10);
     expect(keys).toEqual([first.nonce, first.nonce, first.nonce]);
     expect(items.size).toBe(1);
     expect(sent().filter((m) => m.type === "draft").every((m) => m.picture === first.picture)).toBe(true);
-    expect(upload).toHaveBeenCalledTimes(2); // The reloaded relay uploads once, then reuses it.
-    expect(tid("ov-comment-box")).toBeNull();
+    expect(upload).toHaveBeenCalledTimes(2); // The reloaded tab uploads once, then reuses it.
+    expect(count('[data-testid="ov-comment-box"]')).toBe(0);
   } finally { stop(); }
 });
 

@@ -101,6 +101,8 @@ import type {
   RecipeInput,
   RunServer,
   TaskServers,
+  ProjectRunningServers,
+  PreviewFeedbackList,
   SettingsPatch,
   RefusedName,
   SettingsResponse,
@@ -879,6 +881,11 @@ export class ApiClient {
   /** The attempt's submitted feedback and your own drafts on it; the current attempt unless named. */
   feedback(taskId: string, attempt?: number): Promise<FeedbackList> {
     return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/feedback${qs({ attempt })}`);
+  }
+
+  /** The current attempt's submitted feedback on pages at `origin` (one preview server's), and your own drafts there. */
+  serverFeedback(taskId: string, origin: string): Promise<FeedbackList> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/feedback${qs({ origin })}`);
   }
 
   createFeedbackDraft(taskId: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
@@ -2101,6 +2108,20 @@ export class ApiClient {
 
   validatePreviewServer(runId: string, server: string, origin: string): Promise<BranchPreviewServerAt> {
     return this.#request("GET", `/v1/branch-previews/${encodeURIComponent(runId)}/servers/${encodeURIComponent(server)}/owner?origin=${encodeURIComponent(origin)}`);
+  }
+
+  /** Every live Run of a project with servers, everyone's, each server with its feedback counted. */
+  runningServers(projectId: string): Promise<ProjectRunningServers> {
+    return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/servers/running`);
+  }
+
+  /**
+   * One branch-preview server's feedback, a page at a time: oldest first by
+   * default (`after`: the last page's cursor), newest first with `order:
+   * "desc"` (`before`: the last page's cursor).
+   */
+  previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; before?: string; order?: "asc" | "desc"; limit?: number } = {}): Promise<PreviewFeedbackList> {
+    return this.#request("GET", `/v1/branch-previews/${encodeURIComponent(runId)}/servers/${encodeURIComponent(server)}/feedback${qs(params)}`);
   }
 
   submitPreviewFeedback(runId: string, server: string, input: { body: string; anchor: import("@dude/domain").OverlayAnchor & { attachmentId?: string }; submissionKey: string }): Promise<import("@dude/domain").PreviewFeedbackItem> {

@@ -16,6 +16,9 @@ const KEY = "dude.fixtures";
  */
 export const RUN_KEY = `${KEY}.run`;
 
+/** The project Servers page's read (`?servers=`): none (nothing running), failed, loading (never answers), live (Kai submits after a moment). */
+export const SERVERS_KEY = `${KEY}.servers`;
+
 /**
  * The scenario asked for: `?fixtures=b` (remembered), or what was remembered; `?fixtures=off` forgets. Null for the real API.
  * `?run=aborted` (failed, restarted, paused, preview, stalled, refused, peers, asks; `off` forgets) puts the task's run in that state, remembered too.
@@ -34,6 +37,7 @@ export function fixtureScenario(): FixtureScenario | null {
   const fixtures = remember("fixtures", KEY);
   const run = remember("run", RUN_KEY);
   remember("step", "dude.fixtures.automationStep");
+  remember("servers", SERVERS_KEY);
   // The task's Changes (branch snapshot) state: fixtures/branchDiff.ts BRANCH_STATES.
   const branch = remember("branch", "dude.fixtures.branch");
   // Live sessions' checkout reads in Pending: populated, empty or error.
