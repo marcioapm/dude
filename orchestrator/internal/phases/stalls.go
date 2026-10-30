@@ -64,6 +64,7 @@ type stallRow struct {
 	Call, Files, Silent, Conducted                                    bool
 	Iteration                                                         int
 	Now                                                               time.Time
+	SourceKind                                                        string // a child agent's parent kind, "" for a phase Run
 }
 
 // reportStalls reports each Run due a report (noProgress, stallDue).
@@ -78,7 +79,7 @@ func (s *Syncer) reportStalls(ctx context.Context) error {
 				`+stalledCall+`, `+stalledFiles+`, `+stalledSilent+`, lc.conducted,
 				COALESCE((SELECT (w.state->>'iteration')::int FROM workflow_runs w WHERE w.task_id = r.task_id
 					ORDER BY w.created_at DESC LIMIT 1), 0),
-				now()
+				now(), COALESCE(r.source_kind, '')
 			FROM `+stalledRuns+`
 			ORDER BY r.created_at LIMIT $3`, delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds(), stallBatch)
 		if err != nil {
@@ -159,7 +160,8 @@ func (s *Syncer) reportStall(ctx, luxCtx context.Context, r stallRow) error {
 			return err
 		}
 		ref := delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}
-		return delivery.RecordStallTx(ctx, tx, ref, stall, r.Conducted, r.Fingerprint, usage, r.ReportedAt)
+		return delivery.RecordStallTx(ctx, tx, ref, stall, r.Conducted, r.SourceKind == string(delivery.ChildParentTaskConductor),
+			r.Fingerprint, usage, r.ReportedAt)
 	})
 }
 

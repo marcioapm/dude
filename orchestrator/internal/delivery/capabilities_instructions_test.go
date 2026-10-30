@@ -154,6 +154,19 @@ func TestGoldenInstructionsWithoutSettingsRead(t *testing.T) {
 	}
 }
 
+// The conductor's instruction file without conduct.stop, as a golden: the
+// Runs in progress and tools wording a conductor reads that cannot stop
+// its children.
+func TestGoldenInstructionsConductorWithoutStop(t *testing.T) {
+	less := capabilities.Default(RoleConductor).Without(capabilities.RunStop)
+	in := goldenTask()
+	in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+	in.Repositories = readOnlyRepos()
+	ii := in.InstructionsInput()
+	ii.Grants = &less
+	golden(t, "instructions-conductor-without-stop", Instructions(RoleConductor, "correctness", ii))
+}
+
 // A brainstorm whose session a member named, as a golden: Resolve gives it
 // no session.name, so its file has no naming paragraph.
 func TestGoldenInstructionsBrainstormMemberNamed(t *testing.T) {
@@ -203,7 +216,7 @@ var toolCommands = map[string][]string{
 	"note": {"dude note"}, "feedback": {"dude feedback"}, "feedback_reply": {"dude feedback reply"},
 	"feedback_resolve": {"dude feedback resolve"}, "reply_on_pull_request": {"dude pr reply"}, "findings": {"dude findings"},
 	"pull_requests": {"dude prs"}, "start_phase": {"dude phase start"}, "start_agent": {"dude agent start"}, "start_agents": {"dude agent cohort"}, "read_run": {"dude run inspect"},
-	"steer": {"dude steer"}, "restart_run": {"dude restart"}, "decide": {"dude decide"},
+	"steer": {"dude steer"}, "restart_run": {"dude restart"}, "stop_run": {"dude stop"}, "decide": {"dude decide"},
 	"dismiss_finding": {"dude finding dismiss"}, "decide_escalation": {"dude escalation decide"},
 	"update_task": {"dude task update"}, "publish": {"dude publish --message"}, "relate": {"dude relate"},
 	"refresh_pull_requests": {"dude prs --refresh", "--refresh"}, "run_chat": {"dude chat"}, "limits": {"dude limits"},

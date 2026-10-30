@@ -1,6 +1,6 @@
 ---
 title: The conductor
-covers: [tool:start_phase, tool:start_agent, tool:start_agents, tool:read_run, tool:steer, tool:restart_run, tool:decide, tool:decide_escalation, tool:update_task, tool:publish]
+covers: [tool:start_phase, tool:start_agent, tool:start_agents, tool:read_run, tool:steer, tool:restart_run, tool:stop_run, tool:decide, tool:decide_escalation, tool:update_task, tool:publish]
 ---
 Every task has a conductor: an agent you talk to in the task's Chat. This page explains what it does, how it takes over a task's decisions, and how you steer, pause and resume agents.
 
@@ -63,6 +63,8 @@ You can **steer** any running agent: type a message to it in its Chat. It reads 
 The conductor can steer its task's running agents too, with `steer`, whoever decides. It is woken when the agent reads the message, or if it never will.
 
 To start an agent over instead, the conductor uses `restart_run`: a fresh Run of the same phase, from the task's current commit, told a note. The old Run's uncommitted work and its context are lost. It can put the new Run on another model tier.
+
+A child agent the conductor started (with `start_agent`, `start_agents` or `verify`) that is stuck or no longer needed it stops with `stop_run`, giving a reason shown in Chat. The child is aborted and its result comes back to the conductor as aborted; its uncommitted work is lost. The conductor never stops a phase Run the delivery waits on: it restarts it, and stopping a step is a person's **Stop**.
 
 ## Pausing and resuming
 

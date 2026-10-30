@@ -224,17 +224,26 @@ func (s *Store) AbortChild(ctx context.Context, org, taskID, childID string) err
 }
 
 func AbortChildTx(ctx context.Context, tx pgx.Tx, taskID, childID string) error {
+	_, _, err := abortChildTx(ctx, tx, taskID, childID, "child aborted")
+	return err
+}
+
+// abortChildTx asks a live child of taskID to abort, saying why
+// (control_reason), under lockChild's locks. Says whether this call asked
+// it (false for a child already stopping or ended) and the child's status
+// as locked.
+func abortChildTx(ctx context.Context, tx pgx.Tx, taskID, childID, why string) (bool, string, error) {
 	c, err := lockChild(ctx, tx, childID)
 	if err != nil {
-		return err
+		return false, "", err
 	}
 	if c.TaskID != taskID {
-		return refuseText(rChildWrongTask)
+		return false, "", refuseText(rChildWrongTask)
 	}
-	_, err = tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(),
-			child_stop_reason = 'aborted', control_reason = 'child aborted', keep = false
-			WHERE id = $1 AND child_stop_reason IS NULL AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, childID)
-	return err
+	tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(),
+			child_stop_reason = 'aborted', control_reason = $2, keep = false
+			WHERE id = $1 AND child_stop_reason IS NULL AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, childID, why)
+	return err == nil && tag.RowsAffected() == 1, c.Status, err
 }
 
 func (s *Store) RestartChild(ctx context.Context, org, taskID, childID, key string) (string, error) {

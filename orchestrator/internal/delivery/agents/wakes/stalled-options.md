@@ -1,1 +1,1 @@
-Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier).
+{{if .Child}}Leave it, steer it (interrupt to stop its turn), or stop it with stop_run and start another.{{else}}Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier).{{end}}

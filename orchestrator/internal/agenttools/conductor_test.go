@@ -98,14 +98,14 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 		"github_check_log,github_issue,github_pull_request,github_run_jobs,github_search,"+
 		"limits,list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,read_run,refresh_pull_requests,remember,reply_on_pull_request,"+
 		"request_limit,request_machine,request_repository,request_review,rerun_failed_checks,resolve_thread,"+
-		"restart_run,run_chat,run_diff,search_memory,settings,start_agent,start_agents,start_phase,steer,sync_base,update_task,verify,wait_for_reply" {
+		"restart_run,run_chat,run_diff,search_memory,settings,start_agent,start_agents,start_phase,steer,stop_run,sync_base,update_task,verify,wait_for_reply" {
 		t.Errorf("a conductor sees %s", got)
 	}
 	// Nobody else has them.
 	token := f.run(t, "run_impl", "implementer", "running")
 	var out map[string]any
 	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "decide_escalation", "dismiss_finding", "answer_review_question", "update_task", "steer",
-		"restart_run", "publish", "request_review", "mark_ready", "rerun_failed_checks", "limits", "run_chat", "refresh_pull_requests",
+		"restart_run", "stop_run", "publish", "request_review", "mark_ready", "rerun_failed_checks", "limits", "run_chat", "refresh_pull_requests",
 		"request_limit", "verify", "settings",
 		"github_search", "github_issue", "github_pull_request", "github_check_log", "github_run_jobs"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
