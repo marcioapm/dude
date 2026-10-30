@@ -294,6 +294,32 @@ test("a burst of events re-reads each target once, and one's own submit is read 
   expect(client.reads.length - readsBefore).toBe(1);
 });
 
+test("saved branch pictures leave the retry cache; ambiguous submits reuse their upload and the cache stays small", async () => {
+  const me = tab();
+  let succeeds = false;
+  const upload = mock(async () => "att_pic");
+  const c = new PreviewCommenting({ win: me as unknown as Window, taskId: "pic", mode: "branch",
+    read: () => ({ origins: new Set([WEB]), items: [], drafts: 0, taskKey: "branch", you: null, name: () => "Ana" }),
+    verify: async () => {}, upload, submit: async () => { if (!succeeds) throw new Error("connection lost"); return { id: "fbi_pic" }; },
+    createDraft: async () => ({ id: "", drafts: 0 }), onSaved: () => {}, onOpenItem: () => {}, onChange: () => {} });
+  c.listen(); disposers.push(() => c.dispose());
+  c.open(`${WEB}/cart`, "web");
+  const p = named.get("dude-preview-pic")!;
+  say(me, { type: "hello", v: 1, url: `${WEB}/cart` }, WEB, p); await tick();
+  const send = (nonce: string) => say(me, { type: "draft", v: 1, nonce, body: "Picture", picture: "data:image/png;base64,iVBORw0KGgo=",
+    anchor: { kind: "preview", url: `${WEB}/cart`, selector: "#pay" } }, WEB, p);
+  send("one"); await tick();
+  expect(c.pendingUploads).toBe(1);
+  succeeds = true; send("one"); await tick();
+  expect(upload).toHaveBeenCalledTimes(1);
+  expect(c.pendingUploads).toBe(0);
+  send("one"); await tick();
+  expect(upload).toHaveBeenCalledTimes(1);
+  succeeds = false;
+  for (let i = 0; i < 8; i++) { send(`retry${i}`); await tick(); }
+  expect(c.pendingUploads).toBeLessThanOrEqual(4);
+});
+
 /** A window of `name` already open in this browser, showing `url` (another origin's page), opened by `opener`. */
 function existing(name: string, url: string, opener: unknown = null): Popup {
   const w = Object.assign(popup(), { foreign: true, at: url, opener });

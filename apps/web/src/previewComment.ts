@@ -443,6 +443,11 @@ export class PreviewCommenting {
     return this.#panes.map((p) => p.win);
   }
 
+  /** Pictures retained only for retries whose submit has not yet been saved. */
+  get pendingUploads(): number {
+    return this.#panes.reduce((n, p) => n + p.uploads.size, 0);
+  }
+
   #emit(): void {
     this.#d.onChange(this.view);
   }
@@ -866,12 +871,13 @@ export class PreviewCommenting {
         const kept = pane.uploads.get(msg.nonce);
         attachmentId = kept?.picture === msg.picture ? kept.id : await this.#d.upload({ ...image, name: "preview" });
         pane.uploads.set(msg.nonce, { picture: msg.picture, id: attachmentId });
-        if (pane.uploads.size > 50) pane.uploads.delete(pane.uploads.keys().next().value!);
+        if (pane.uploads.size > 4) pane.uploads.delete(pane.uploads.keys().next().value!);
       }
       const item = await submit({ ...msg.anchor, ...(attachmentId ? { attachmentId } : {}) }, msg.body, msg.nonce);
       pane.saved++;
       const saved: DudeToOverlay = { type: "saved", v: OVERLAY_PROTOCOL, nonce: msg.nonce, id: item.id, drafts: 0, picture: attachmentId ? "attached" : "none" };
       pane.answered.set(msg.nonce, saved);
+      pane.uploads.delete(msg.nonce);
       if (pane.answered.size > 50) pane.answered.delete(pane.answered.keys().next().value!);
       this.#post(pane, saved);
       this.#d.onSaved(item.id);
