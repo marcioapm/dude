@@ -415,6 +415,36 @@ func TestTwoEvaluatorsRacingOnOneWaitRecordOneWake(t *testing.T) {
 	}
 }
 
+// An open wait that neither holds nor is due is read, not locked: its
+// evaluation does not wait on the task's Chat lock or on its row.
+func TestEvaluatingAnIdleWaitTakesNoLock(t *testing.T) {
+	w := newWaitWorld(t)
+	w.phaseRun("run_a", "review")
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{runsEnded("run_a")}, Deadline: "1h"})
+	holder, err := w.owner.Begin(w.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(w.ctx) }()
+	if err := LockChat(w.ctx, holder, "wi_life"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(w.ctx, `SELECT 1 FROM conductor_waits WHERE id = $1 FOR UPDATE`, opened.WaitID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(w.ctx, 3*time.Second)
+	defer cancel()
+	if err := w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		ended, err := EvaluateWaitTx(ctx, tx, w.org, "wi_life", opened.WaitID)
+		if ended {
+			t.Error("an idle wait ended")
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("an idle evaluation waited on a lock: %v", err)
+	}
+}
+
 func TestEndWakesEndsOpenWaits(t *testing.T) {
 	w := newWaitWorld(t)
 	opened := w.mustWait("c1", WaitAsk{Deadline: "1h"})

@@ -472,71 +472,95 @@ func renderWaitDigest(ev waitEval, id string, deadline, now bool, meanwhile []wa
 	}{id, deadline, now, !ev.waitedAll, ev.held, ev.of, ev.items, meanwhile, strings.TrimSpace(note)})
 }
 
-// EvaluateWaitTx evaluates one open wait under the task's Chat lock, its
-// row locked: once it holds or its deadline passed, its wake reason is
-// recorded and it ends, in tx, so a crash before the commit evaluates it
-// again and one after leaves the reason pending. A wait on a task that
-// ended (closed, not stopped for a pick-up) ends with no wake. Returns
-// whether it ended.
+// EvaluateWaitTx evaluates one open wait: once it holds or its deadline
+// passed, its wake reason is recorded and it ends, in tx, so a crash
+// before the commit evaluates it again and one after leaves the reason
+// pending. A wait on a task that ended (closed, not stopped for a pick-up)
+// ends with no wake. It is first read with no locks, and only one that
+// would end is read again under the task's Chat lock, its row locked, and
+// ended from that reading. Returns whether it ended.
 func EvaluateWaitTx(ctx context.Context, tx pgx.Tx, org, taskID, waitID string) (bool, error) {
+	if v, err := readWaitTx(ctx, tx, taskID, waitID, false); err != nil || v.by == "" {
+		return false, err
+	}
 	if err := LockChat(ctx, tx, taskID); err != nil {
 		return false, err
 	}
-	var w struct {
-		conductor, note string
-		raw             []byte
-		all, due        bool
-		since           int64
+	v, err := readWaitTx(ctx, tx, taskID, waitID, true)
+	if err != nil || v.by == "" {
+		return false, err
 	}
-	err := tx.QueryRow(ctx, `SELECT conductor_run_id, COALESCE(note, ''), conditions, wake_all, deadline_at <= now(), since_cursor
-		FROM conductor_waits WHERE id = $1 AND ended_at IS NULL FOR UPDATE`, waitID).
-		Scan(&w.conductor, &w.note, &w.raw, &w.all, &w.due, &w.since)
-	if db.IsNotFound(err) {
-		return false, nil
+	if v.by == WaitTaskEnded {
+		return true, endWaitTx(ctx, tx, org, taskID, waitID, v.conductor, WaitTaskEnded, waitEval{}, "")
 	}
+	meanwhile, err := meanwhileTx(ctx, tx, taskID, v.since)
 	if err != nil {
 		return false, err
 	}
+	digest := renderWaitDigest(v.ev, waitID, v.by == WaitDeadline, false, meanwhile, v.note)
+	if _, err := RecordWakeTx(ctx, tx, org, taskID, WakeWait, "wait:"+waitID, digest); err != nil {
+		return false, err
+	}
+	return true, endWaitTx(ctx, tx, org, taskID, waitID, v.conductor, v.by, v.ev, digest)
+}
+
+// waitReading is an open wait as read now: how it would end (by, "" for
+// not now) and what ending it needs.
+type waitReading struct {
+	conductor, note, by string
+	since               int64
+	ev                  waitEval
+}
+
+// readWaitTx reads one open wait and how it would end now, its row locked
+// (FOR UPDATE) when lock is set. A wait that is not open reads as not now.
+func readWaitTx(ctx context.Context, tx pgx.Tx, taskID, waitID string, lock bool) (waitReading, error) {
+	var v waitReading
+	var raw []byte
+	var all, due bool
+	q := `SELECT conductor_run_id, COALESCE(note, ''), conditions, wake_all, deadline_at <= now(), since_cursor
+		FROM conductor_waits WHERE id = $1 AND ended_at IS NULL`
+	if lock {
+		q += ` FOR UPDATE`
+	}
+	err := tx.QueryRow(ctx, q, waitID).Scan(&v.conductor, &v.note, &raw, &all, &due, &v.since)
+	if db.IsNotFound(err) {
+		return v, nil
+	}
+	if err != nil {
+		return v, err
+	}
 	var status string
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, taskID).Scan(&status); err != nil {
-		return false, err
+		return v, err
 	}
 	if Ended(status) {
 		halted, err := HaltedTx(ctx, tx, taskID)
 		if err != nil {
-			return false, err
+			return v, err
 		}
 		if !halted {
-			return true, endWaitTx(ctx, tx, org, taskID, waitID, w.conductor, WaitTaskEnded, waitEval{}, "")
+			v.by = WaitTaskEnded
+			return v, nil
 		}
 	}
 	var conds []waitCond
-	if err := json.Unmarshal(w.raw, &conds); err != nil {
-		return false, err
+	if err := json.Unmarshal(raw, &conds); err != nil {
+		return v, err
 	}
-	ev := waitEval{waitedAll: w.all}
+	v.ev = waitEval{waitedAll: all}
 	if len(conds) > 0 {
-		if ev, err = evaluateConditionsTx(ctx, tx, conds, w.all); err != nil {
-			return false, err
+		if v.ev, err = evaluateConditionsTx(ctx, tx, conds, all); err != nil {
+			return v, err
 		}
 	}
-	by := WaitHeld
 	switch {
-	case len(conds) > 0 && ev.holds:
-	case w.due:
-		by = WaitDeadline
-	default:
-		return false, nil
+	case len(conds) > 0 && v.ev.holds:
+		v.by = WaitHeld
+	case due:
+		v.by = WaitDeadline
 	}
-	meanwhile, err := meanwhileTx(ctx, tx, taskID, w.since)
-	if err != nil {
-		return false, err
-	}
-	digest := renderWaitDigest(ev, waitID, by == WaitDeadline, false, meanwhile, w.note)
-	if _, err := RecordWakeTx(ctx, tx, org, taskID, WakeWait, "wait:"+waitID, digest); err != nil {
-		return false, err
-	}
-	return true, endWaitTx(ctx, tx, org, taskID, waitID, w.conductor, by, ev, digest)
+	return v, nil
 }
 
 // endWaitTx ends one open wait, recording how.
