@@ -250,6 +250,45 @@ func TestALineageOfSnapshotsFollowsTheBranch(t *testing.T) {
 	if strings.Join(said, "\n") != strings.Join(want, "\n") {
 		t.Errorf("events %q, want %q", said, want)
 	}
+	rows.Close()
+	// The previous head has vanished from GitHub. The lineage request is
+	// cheap, and a 404 still means rewritten (not a fabricated descent).
+	oldHead := got[3].Head
+	lineageReads := 0
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/compare/"+oldHead+"...") {
+				lineageReads++
+				if r.URL.Query().Get("per_page") != "1" {
+					t.Error("lineage compare did not request its minimum page")
+				}
+				return 404
+			}
+			return 0
+		}
+	})
+	w.fake.CommitFiles(w.branch, "after collection", map[string]string{"app.ts": "collected\n"})
+	w.capture()
+	got = w.snapshots()
+	if lineageReads != 1 || len(got) != 5 || got[4].Relation != branchdiff.Rewritten {
+		t.Fatalf("vanished previous head: reads %d snapshots %+v", lineageReads, got)
+	}
+	// A 5xx is not evidence of a rewrite. Leave the snapshot uncaptured
+	// and retry rather than telling the UI that a rebase happened.
+	oldHead = got[4].Head
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/compare/"+oldHead+"...") {
+				return 502
+			}
+			return 0
+		}
+	})
+	w.fake.CommitFiles(w.branch, "after outage", map[string]string{"app.ts": "outage\n"})
+	w.capture()
+	if len(w.snapshots()) != 5 || w.requestOf("wi_b", 1).failures != 1 {
+		t.Fatal("a lineage outage was recorded as a snapshot")
+	}
 }
 
 func short(s string) string { return s[:min(len(s), 7)] }

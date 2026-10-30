@@ -209,7 +209,7 @@ func (c *Capturer) read(ctx context.Context, r Request, t target) (snapshot, err
 	descends := false
 	if t.prevHead != "" {
 		// prev...head: behind_by 0 is the previous head an ancestor of this one.
-		lineage, err := gh.Compare(ctx, slug, t.prevHead, s.head)
+		lineage, err := gh.CompareLineage(ctx, slug, t.prevHead, s.head)
 		var fe *forge.Error
 		switch {
 		case errors.As(err, &fe) && fe.NotFound():

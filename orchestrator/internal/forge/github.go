@@ -1455,6 +1455,14 @@ func (g *GitHub) Compare(ctx context.Context, slug, base, head string) (Comparis
 	return cmp, err
 }
 
+// CompareLineage reads ancestry counts with the minimum commit page. Unlike
+// Compare, callers do not need file patches or the full commit list.
+func (g *GitHub) CompareLineage(ctx context.Context, slug, base, head string) (Comparison, error) {
+	var cmp Comparison
+	err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/compare/%s...%s?per_page=1", slug, base, head), nil, &cmp)
+	return cmp, err
+}
+
 // FileAt is path's content at ref (a commit), read raw from GitHub's
 // contents API. Content over limit bytes is an *Error with Refusal
 // RefusalTooLarge, read no further; a path absent at ref is GitHub's 404.
