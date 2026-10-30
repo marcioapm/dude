@@ -208,6 +208,8 @@ def test_a_task_is_edited_and_moved_from_its_screen(
 
     screen = page.get_by_test_id("task-screen")
     expect(screen.get_by_role("heading", level=1)).to_have_text("Greet by full name")
+    # The goal and criteria are folded under the Overview's summary.
+    open_overview_section(page, "goal-criteria")
     expect(screen.get_by_role("list", name="Acceptance criteria")).to_contain_text("Uses the full name")
     saved = client.get(f"/v1/tasks/{item['id']}").json()
     assert saved["epicId"] == epic["id"]
@@ -285,6 +287,8 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
 
     # The task shows what the preview showed: the goal's heading, each criterion.
     screen = page.get_by_test_id("task-screen")
+    # The goal and criteria are folded under the Overview's summary.
+    open_overview_section(page, "goal-criteria")
     expect(screen.get_by_role("heading", name="What exists today")).to_be_visible()
     # Set as it was previewed: the same size and the same space above it.
     assert screen.get_by_role("heading", name="What exists today").evaluate(heading_style) == previewed
@@ -337,6 +341,8 @@ def test_a_single_newline_a_person_types_is_a_line_break_in_preview_read_and_on_
     page.get_by_test_id("task-save").click()
     screen = page.get_by_test_id("task-screen")
     expect(screen).to_be_visible()
+    # The goal and criteria are folded under the Overview's summary.
+    open_overview_section(page, "goal-criteria")
     goal = screen.get_by_role("region", name="Goal").locator(first_paragraph)
     expect(goal.locator("br")).to_have_count(1)
     assert goal.evaluate(lines) == ["Keep SEPA at checkout.", "Keep Invoice for annual plans."]
