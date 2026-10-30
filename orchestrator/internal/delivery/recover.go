@@ -46,9 +46,12 @@ type RecoverAsk struct {
 }
 
 // Recovery is what recover_run answers: the recovery, new or the one
-// already asked for the same Run and branch.
+// already asked for the same Run and branch; Ended, with its Error, when
+// that one has ended.
 type Recovery struct {
 	ID, Run, Branch, Status string
+	Ended                   bool
+	Error                   string
 }
 
 // ConductRecoverTx is recover_run: the task's live conductor asks for the
@@ -142,8 +145,8 @@ func ConductRecoverTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask RecoverAsk
 		return Recovery{}, err
 	}
 	if tag.RowsAffected() == 0 {
-		err := tx.QueryRow(ctx, `SELECT id, status FROM run_recoveries WHERE run_id = $1 AND branch = $2`, runID, branch).
-			Scan(&out.ID, &out.Status)
+		err := tx.QueryRow(ctx, `SELECT id, status, ended_at IS NOT NULL, COALESCE(error, '') FROM run_recoveries
+			WHERE run_id = $1 AND branch = $2`, runID, branch).Scan(&out.ID, &out.Status, &out.Ended, &out.Error)
 		return out, err
 	}
 	return out, nil

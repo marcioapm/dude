@@ -13,6 +13,7 @@ var (
 	machineMoved            = delivery.MustText("results/machine-moved")
 	syncBaseResult          = delivery.MustText("results/sync-base")
 	relationsPresent        = delivery.MustText("results/update-task-present")
+	recoverEndedResult      = delivery.MustText("results/recover-run-ended")
 
 	replyCameNext        = delivery.MustText("results/wait-for-reply-came").Render(nil)
 	steerNext            = delivery.MustText("results/steer").Render(nil)

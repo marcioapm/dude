@@ -46,6 +46,14 @@ Its result comes back to you as aborted, or with its cohort's digest; its uncomm
 
 You are woken when its commits are on the branch, or why not. Uncommitted work is never recovered; the branch is not the task's: start a writer to merge it.
 
+## recover-run-ended-failed
+
+This recovery has already ended, failed: lux kept no checkpoint of its checkouts; you were woken when it did, and are not woken again. It pushed nothing: to try again, ask with another branch under dude/wi_1/recovered-.
+
+## recover-run-ended-done
+
+This recovery has already ended, done; you were woken when it did, and are not woken again. Its commits are on the branch; the branch is not the task's: start a writer to merge it.
+
 ## wait-for
 
 End your turn now; you are woken once, when it holds or at 2026-10-30T14:45:00Z. dude's own wakes (decisions, escalations, child results) still come as they do; a new wait_for replaces this one.

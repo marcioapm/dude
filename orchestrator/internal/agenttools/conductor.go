@@ -496,7 +496,18 @@ func recoverRun(ctx context.Context, tx pgx.Tx, c Caller, in recoverRunIn) (map[
 	if c.env.kick != nil {
 		c.env.kick()
 	}
+	if rec.Ended {
+		return map[string]any{"recoveryId": rec.ID, "run": rec.Run, "branch": rec.Branch, "status": rec.Status, "ended": true,
+			"error": rec.Error, "next": recoverEndedNext(rec.Status, rec.Error, delivery.RecoveredBranchPrefix(c.TaskID))}, nil
+	}
 	return map[string]any{"recoveryId": rec.ID, "run": rec.Run, "branch": rec.Branch, "status": rec.Status, "next": recoverNext}, nil
+}
+
+// recoverEndedNext is recover_run's answer for a recovery asked again
+// after it ended: how it ended, and, when it pushed nothing, where another
+// try must go. Its wake was the conductor's already.
+func recoverEndedNext(status, why, prefix string) string {
+	return recoverEndedResult.Render(struct{ Status, Error, Prefix string }{status, why, prefix})
 }
 
 type replyIn struct {
