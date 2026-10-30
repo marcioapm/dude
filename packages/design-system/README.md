@@ -1387,7 +1387,12 @@ here.
   happened (new commits, target merged in with the base move, or
   rewritten), with Refresh, refused with its reason while an editor holds
   unsaved text. On a phone the bar wraps to two rows. Pending session work
-  is a separate choice, never merged in.
+  is a separate choice, never merged in. The snapshot line, the *PR at*
+  mark and the slim line are a screen composition in `apps/web`, not DS
+  primitives: `Button` has no quiet inline mono face (its variants are
+  labelled actions at control height), and a one-off variant for one bar
+  would not be shared; the snapshot line and mark are bare buttons in the
+  bar's mono text with the DS focus ring and hover wash.
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
   agent session started from, uncommitted work included. Its toolbar reads
   *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
