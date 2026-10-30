@@ -131,6 +131,37 @@ describe("the Changes tab: the branch", () => {
     expect([...tab.querySelectorAll("button")].filter((b) => /^(Reply|Resolve|Reopen|Edit|Delete)$/.test(b.textContent ?? ""))).toEqual([]);
   });
 
+  test("Pending reads checkout changes without commit heads, distinguishes empty/error, retries and refreshes on events", async () => {
+    const client = fx("populated");
+    const task = client.getTask.bind(client);
+    client.getTask = async (id) => { const t = await task(id); return { ...t, runs: t.runs.map((r) => ({ ...r, heads: {} })) }; };
+    const original = client.runDiff.bind(client);
+    let calls = 0;
+    let state = "populated";
+    client.runDiff = async (id) => {
+      calls++;
+      if (state === "error") throw new Error("Read denied");
+      const diff = await original(id);
+      return { ...diff, files: state === "empty" ? [] : diff.files };
+    };
+    const { tab } = await changes(client);
+    expect(calls).toBe(0);
+    await click([...q(tab, "changes-scope")!.querySelectorAll("button")].find((b) => b.textContent === "Pending work")!);
+    await until(() => q(tab, "checkout-summary")?.textContent?.includes("2 files"), "checkout counts without heads");
+    expect(tab.textContent).toContain("Session checkout changes (uncommitted work included)");
+    state = "empty";
+    await emitForTest("run.diff.updated", { checksum: "empty" });
+    await until(() => q(tab, "checkout-summary")?.textContent?.includes("No checkout changes recorded"), "empty checkout event refresh");
+    state = "error";
+    await emitForTest("run.diff.updated", { checksum: "error" });
+    await until(() => q(tab, "checkout-summary")?.textContent?.includes("Checkout changes unavailable"), "honest read error");
+    expect(tab.textContent).not.toContain("No checkout changes recorded");
+    state = "populated";
+    await click([...tab.querySelectorAll("button")].find((b) => b.textContent === "Retry")!);
+    await until(() => q(tab, "checkout-summary")?.textContent?.includes("2 files"), "retry succeeded");
+    expect(calls).toBeGreaterThanOrEqual(4);
+  });
+
   test("Pending work lists the live sessions, each to its own Changes; never in the branch view", async () => {
     const opened: string[] = [];
     const { tab } = await changes(fx("populated"), { onOpenRun: (id) => opened.push(id) });

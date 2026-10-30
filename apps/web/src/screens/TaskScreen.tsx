@@ -313,6 +313,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const [relationsVersion, setRelationsVersion] = useState(0);
   // Feedback is re-read on its own events and on a Run starting or ending (which moves where a batch goes), not on every reload.
   const stream = useReloadOnEvents({ client, taskId }, () => void load(true), undefined, (e) => {
+    if (e.eventType === EventTypes.RunDiffUpdated) {
+      setVersion((v) => v + 1);
+      return true;
+    }
     if (FEEDBACK_EVENTS.has(e.eventType)) feedbackDirty.current = true;
     if (e.eventType === EventTypes.ServersChanged) {
       setServersVersion((v) => v + 1);

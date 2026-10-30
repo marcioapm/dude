@@ -15,7 +15,7 @@ import {
 import { Button, Callout, EmptyState, IconButton, RefusedButton, SearchField, Select, Tooltip } from "@dude/design-system/primitives";
 import { Icon, plural } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, FEEDBACK_LIMITS, runLabel, type FeedbackItem, type TaskBranchDiff, type TaskBranchSnapshot } from "@dude/domain";
-import type { ApiClient, Run } from "../api/client.ts";
+import type { ApiClient, Run, RunDiff } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { FEEDBACK_FULL, cardItem, threadOf, useTaskFeedback, type FeedbackOnDiff } from "../feedback.tsx";
 import { runStatusLabel, runStatusShown } from "../runPresentation.tsx";
@@ -28,8 +28,54 @@ const LIVE: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "
 
 /** The attempt's live sessions, newest first: their checkouts are the pending work. */
 export function pendingSessions(runs: readonly Run[]): Run[] {
-  return runs.filter((r) => LIVE.has(r.status) && r.kind !== "preview" && Object.keys(r.heads ?? {}).length > 0)
+  return runs.filter((r) => LIVE.has(r.status) && r.kind !== "preview")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** Read only while Pending is mounted, with at most three checkout reads in flight. */
+function PendingWork({ client, runs, version, attempt, onOpenRunChanges }: Pick<ChangesTabProps, "client" | "runs" | "version" | "attempt" | "onOpenRunChanges">) {
+  const pending = pendingSessions(runs);
+  const ids = pending.map((r) => r.id).join("\u0000");
+  const [reads, setReads] = useState<Record<string, { diff?: RunDiff; problem?: string }>>({});
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const queue = ids ? ids.split("\u0000") : [];
+    setReads({});
+    const worker = async () => {
+      while (!cancelled && queue.length) {
+        const id = queue.shift()!;
+        try {
+          const diff = await client.runDiff(id);
+          if (!cancelled) setReads((was) => ({ ...was, [id]: { diff } }));
+        } catch (err) {
+          if (!cancelled) setReads((was) => ({ ...was, [id]: { problem: errorText(err) } }));
+        }
+      }
+    };
+    void Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
+    return () => { cancelled = true; };
+  }, [client, ids, version, retry]);
+  return <section className="changesRegion" data-testid="changes-pending" aria-label="Pending work">
+    <p className="muted">Session checkout changes (uncommitted work included). Committed changes since each session's base are included too; these are separate from the branch snapshot.</p>
+    {pending.length ? <ul className="changesSessions" aria-label="Sessions at work">
+      {pending.map((r) => {
+        const read = reads[r.id];
+        const files = read?.diff?.files;
+        return <li key={r.id} data-testid="changes-session" data-run={r.id}>
+          <AgentAvatar role={r.role ?? DEFAULT_RUN_ROLE} size="sm" live={r.status === "running"} />
+          <span className="changesSessionLabel">{runLabel(r)}</span>
+          <StatusMark status={runStatusShown(r)} label={runStatusLabel(r)} size="sm" />
+          <span data-testid="checkout-summary" role="status">
+            {read?.problem ? <>Checkout changes unavailable: {read.problem} <Button size="sm" variant="quiet" onClick={() => setRetry((n) => n + 1)}>Retry</Button></>
+              : files ? files.length ? <>{plural(files.length, "file")} <DiffStat additions={files.reduce((n, f) => n + f.additions, 0)} deletions={files.reduce((n, f) => n + f.deletions, 0)} /></>
+                : "No checkout changes recorded" : "Reading checkout changes…"}
+          </span>
+          <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={() => onOpenRunChanges(r.id)}>Open its Changes</Button>
+        </li>;
+      })}
+    </ul> : <p data-testid="changes-pending-none">No live sessions on attempt {attempt}.</p>}
+  </section>;
 }
 
 /** Whether the viewport is at least `px` wide, following it as it changes. */
@@ -463,23 +509,8 @@ function ChangesReview({ client, taskId, attempt, current, runs, version, fb, yo
     </div>
   ) : null;
 
-  const pending = pendingSessions(runs);
   const body = scope === "pending" ? (
-    <section className="changesRegion" data-testid="changes-pending" aria-label="Pending work">
-      <p className="muted">Each live session's own checkout, uncommitted work included: separate from the committed branch above, with its own comments on its lines.</p>
-      {pending.length > 0 ? (
-        <ul className="changesSessions" aria-label="Sessions at work">
-          {pending.map((r) => (
-            <li key={r.id} data-testid="changes-session" data-run={r.id}>
-              <AgentAvatar role={r.role ?? DEFAULT_RUN_ROLE} size="sm" live={r.status === "running"} />
-              <span className="changesSessionLabel">{runLabel(r)}</span>
-              <StatusMark status={runStatusShown(r)} label={runStatusLabel(r)} size="sm" />
-              <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={() => onOpenRunChanges(r.id)}>Open its Changes</Button>
-            </li>
-          ))}
-        </ul>
-      ) : <p data-testid="changes-pending-none">No session is at work on attempt {attempt}: there is no pending work beside the branch.</p>}
-    </section>
+    <PendingWork client={client} runs={runs} version={version} attempt={attempt} onOpenRunChanges={onOpenRunChanges} />
   ) : read.problem && !diff ? (
     <Callout tone="danger" data-testid="changes-problem">Could not read the branch: {read.problem}</Callout>
   ) : !diff ? (

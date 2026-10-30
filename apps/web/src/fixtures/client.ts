@@ -1292,8 +1292,12 @@ export class FixtureClient extends ApiClient {
   override abort(_runId?: string, _reason?: string): ReturnType<ApiClient["abort"]> {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
-  override runDiff(): Promise<never> {
-    return Promise.reject(new ApiError(404, "not_found", "No diff in the fixtures."));
+  override runDiff(runId: string): ReturnType<ApiClient["runDiff"]> {
+    const state = localStorage.getItem("dude.fixtures.checkout") ?? new URLSearchParams(location.search).get("checkout");
+    if (state === "error") return Promise.reject(new ApiError(503, "unavailable", "Fixture checkout could not be read."));
+    const snapshot = snapshots(this.#currentAttempt()).tbs_fx_web!;
+    return Promise.resolve({ base: snapshot.mergeBaseSha, files: state === "empty" ? [] : snapshot.files.slice(0, 2),
+      checksum: `checkout-${runId}-${state ?? "populated"}`, final: false, updatedAt: new Date().toISOString() });
   }
 
   // -- automations ------------------------------------------------------------
