@@ -217,7 +217,28 @@ func TestALineageOfSnapshotsFollowsTheBranch(t *testing.T) {
 	if len(got) != 4 || got[3].Relation != branchdiff.Rewritten || got[3].Previous != got[2].ID {
 		t.Fatalf("after a rebase: %+v", got)
 	}
+	// One event per snapshot, carrying its id and relation; none for a read that made none.
+	rows, err := w.owner.Query(context.Background(), `SELECT payload->>'snapshotId', payload->>'relation', payload->>'previousHeadSha'
+		FROM events WHERE task_id = 'wi_b' AND event_type = $1 ORDER BY cursor`, branchdiff.EvSnapshotCaptured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var said []string
+	for rows.Next() {
+		var id, rel, prev string
+		if err := rows.Scan(&id, &rel, &prev); err != nil {
+			t.Fatal(err)
+		}
+		said = append(said, id+" "+rel+" "+short(prev))
+	}
+	want := []string{got[0].ID + " initial ", got[1].ID + " fast-forward " + short(got[0].Head),
+		got[2].ID + " merged-target " + short(got[1].Head), got[3].ID + " rewritten " + short(got[2].Head)}
+	if strings.Join(said, "\n") != strings.Join(want, "\n") {
+		t.Errorf("events %q, want %q", said, want)
+	}
 }
+
+func short(s string) string { return s[:min(len(s), 7)] }
 
 // A binary file and a file GitHub gave no lines for are flagged, file by
 // file, and counted on the snapshot.

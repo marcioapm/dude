@@ -14,7 +14,12 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
+
+// EvSnapshotCaptured is the ledger event of a new task branch snapshot
+// (task.branch_snapshot.captured in the domain's catalogue).
+const EvSnapshotCaptured = "task.branch_snapshot.captured"
 
 // Capturer takes due capture requests (task_branch_capture_requests) and
 // captures a snapshot for each whose branch head is new. The requests are
@@ -301,6 +306,7 @@ func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, 
 			id, r.Org, r.TaskID, r.Attempt, r.RepoID, t.repoName, t.branch, t.targetRef, s.targetSHA, s.mergeBase, s.head,
 			files, s.checksum, stats, s.stats.TruncatedFiles > 0 || s.reason != "", s.stats.BinaryFiles, status, s.reason, Source,
 			validSHA(t.prHead), prev, s.relation).Scan(&id)
+		created := err == nil
 		if db.IsNotFound(err) {
 			err = tx.QueryRow(ctx, `SELECT id FROM task_branch_snapshots WHERE task_id = $1 AND attempt = $2
 				AND repository_id = $3 AND head_sha = $4 AND merge_base_sha = $5`,
@@ -308,6 +314,20 @@ func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, 
 		}
 		if err != nil {
 			return err
+		}
+		// Once per snapshot: the task's watchers word "New changes available" from it.
+		if created {
+			var project string
+			if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, r.TaskID).Scan(&project); err != nil {
+				return err
+			}
+			if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvSnapshotCaptured, OrganizationID: r.Org, ProjectID: project,
+				TaskID: r.TaskID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator, CorrelationID: r.TaskID,
+				Payload: map[string]any{"snapshotId": id, "attempt": r.Attempt, "repository": t.repoName, "relation": s.relation,
+					"previousSnapshotId": t.prevID, "mergeBaseSha": s.mergeBase, "headSha": s.head,
+					"previousMergeBaseSha": t.prevMB, "previousHeadSha": t.prevHead}}); err != nil {
+				return err
+			}
 		}
 		return mark("done", "", id)
 	})
