@@ -42,6 +42,10 @@ The new Run starts fresh from the task's head in the same slot; the delivery wai
 
 Its result comes back to you as aborted, or with its cohort's digest; its uncommitted work is lost.
 
+## recover-run
+
+You are woken when its commits are on the branch, or why not. Uncommitted work is never recovered; the branch is not the task's: start a writer to merge it.
+
 ## wait-for
 
 End your turn now; you are woken once, when it holds or at 2026-10-30T14:45:00Z. dude's own wakes (decisions, escalations, child results) still come as they do; a new wait_for replaces this one.

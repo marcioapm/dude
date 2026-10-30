@@ -479,6 +479,26 @@ func stopRun(ctx context.Context, tx pgx.Tx, c Caller, in stopRunIn) (map[string
 	return map[string]any{"stopped": in.Run, "status": status, "next": stopNext}, nil
 }
 
+type recoverRunIn struct {
+	Run    string `json:"run"`
+	Branch string `json:"branch,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
+// recoverRun is recover_run: the conductor asks for an ended Run's
+// committed work to be pushed to a branch of its own; the recovery worker
+// does it and wakes the conductor.
+func recoverRun(ctx context.Context, tx pgx.Tx, c Caller, in recoverRunIn) (map[string]any, error) {
+	rec, err := delivery.ConductRecoverTx(ctx, tx, c.run(), delivery.RecoverAsk{Run: in.Run, Branch: in.Branch, Note: in.Note})
+	if err != nil {
+		return conducted[map[string]any](nil, err)
+	}
+	if c.env.kick != nil {
+		c.env.kick()
+	}
+	return map[string]any{"recoveryId": rec.ID, "run": rec.Run, "branch": rec.Branch, "status": rec.Status, "next": recoverNext}, nil
+}
+
 type replyIn struct {
 	PR        string `json:"pr"`
 	Text      string `json:"text"`

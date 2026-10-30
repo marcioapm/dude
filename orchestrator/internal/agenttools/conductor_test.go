@@ -96,7 +96,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	}
 	if got := strings.Join(names, ","); got != "answer_review_question,ask_person,create_task,decide,decide_escalation,dismiss_finding,emit_event,feedback,feedback_reply,findings,get_memory,"+
 		"github_check_log,github_issue,github_pull_request,github_run_jobs,github_search,"+
-		"limits,list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,read_run,refresh_pull_requests,remember,reply_on_pull_request,"+
+		"limits,list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,read_run,recover_run,refresh_pull_requests,remember,reply_on_pull_request,"+
 		"request_limit,request_machine,request_repository,request_review,rerun_failed_checks,resolve_thread,"+
 		"restart_run,run_chat,run_diff,search_memory,settings,start_agent,start_agents,start_phase,steer,stop_run,sync_base,update_task,verify,wait_for,wait_for_reply" {
 		t.Errorf("a conductor sees %s", got)
@@ -106,7 +106,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	var out map[string]any
 	for _, tool := range []string{"findings", "pull_requests", "start_phase", "decide", "decide_escalation", "dismiss_finding", "answer_review_question", "update_task", "steer",
 		"restart_run", "stop_run", "publish", "request_review", "mark_ready", "rerun_failed_checks", "limits", "run_chat", "refresh_pull_requests",
-		"request_limit", "verify", "settings", "wait_for",
+		"request_limit", "verify", "settings", "wait_for", "recover_run",
 		"github_search", "github_issue", "github_pull_request", "github_check_log", "github_run_jobs"} {
 		if status := f.postAs(t, token, tool, `{}`, &out); status != 404 {
 			t.Errorf("an implementer's %s: %d", tool, status)
