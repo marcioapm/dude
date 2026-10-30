@@ -241,8 +241,9 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	}
 	raw, _ := json.Marshal(chosen)
 	return s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		// Its publisher's cost is read from now on (Costs), as a Run's is.
 		tag, err := tx.Exec(ctx, `UPDATE run_recoveries SET status = 'submitted', publisher_lux_run_id = $3, checkpoints = $4::jsonb,
-				dirty = $5, stepped_at = now(), next_attempt_at = now() + $6::interval, failures = 0, claim_token = NULL, claimed_until = NULL
+				dirty = $5, stepped_at = now(), lux_cost_next_at = now(), next_attempt_at = now() + $6::interval, failures = 0, claim_token = NULL, claimed_until = NULL
 			WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, c.ID, c.Claim, run.ID, raw, dirty, recoveryEvery.String())
 		if err == nil && tag.RowsAffected() == 0 {
 			return delivery.ErrClaimLost

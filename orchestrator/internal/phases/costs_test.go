@@ -123,8 +123,10 @@ func (f *costFixture) sweep() {
 	if _, err := f.costs.Sweep(f.ctx); err != nil {
 		f.t.Fatal(err)
 	}
-	if _, err := f.owner.Exec(f.ctx, `UPDATE runs SET lux_cost_next_at = now() - interval '1 second' WHERE lux_cost_next_at IS NOT NULL`); err != nil {
-		f.t.Fatal(err)
+	for _, table := range []string{"runs", "run_recoveries"} {
+		if _, err := f.owner.Exec(f.ctx, `UPDATE `+table+` SET lux_cost_next_at = now() - interval '1 second' WHERE lux_cost_next_at IS NOT NULL`); err != nil {
+			f.t.Fatal(err)
+		}
 	}
 }
 
