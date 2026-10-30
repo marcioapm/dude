@@ -374,3 +374,46 @@ func TestPruneSkipsASnapshotAWriterHolds(t *testing.T) {
 		t.Errorf("h3: %q", got)
 	}
 }
+
+// Another pruner holding rows (FOR UPDATE, as its own candidates): one
+// whose child it holds, or whose children's new previous it holds, is
+// skipped, never waited on; the rest of the lineage still goes.
+func TestPruneSkipsALineageAnotherCallerHolds(t *testing.T) {
+	f := newPruneFixture(t)
+	f.chain("h", 1, "repo_api", 4, 48)
+	f.chain("k", 1, "repo_web", 3, 48)
+	ctx := context.Background()
+	other, err := f.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Rollback(ctx)
+	if _, err := other.Exec(ctx, `SELECT id FROM task_branch_snapshots WHERE id IN ('h1', 'k2') FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := f.app.InSystem(ctx, "test", func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '2s'`); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT prune_branch_snapshots(100)`).Scan(&n)
+	}); err != nil {
+		t.Fatalf("the pruner waited on another: %v", err)
+	}
+	if err := other.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// h2 would rewire h3 onto h1 (held): skipped; h3 goes, h4 onto h2.
+	// k1's child k2 is held: k1 stays; k2 itself is held.
+	if n != 1 {
+		t.Errorf("pruned %d, want 1", n)
+	}
+	f.want("h1", "h2", "h4", "k1", "k2", "k3")
+	if got := f.link("h4"); got != "h2 fast-forward 2" {
+		t.Errorf("h4: %q", got)
+	}
+	if n := f.prune(100); n != 4 {
+		t.Errorf("the next pass pruned %d, want 4", n)
+	}
+	f.want("h4", "k3")
+}
