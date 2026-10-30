@@ -411,7 +411,7 @@ export class PreviewCommenting {
     this.#claims.clear();
     for (const p of this.#panes) {
       this.#d.win.clearTimeout(p.helloTimer);
-      if (this.#tabHeld.get(p.win) === this) this.#tabHeld.delete(p.win);
+      this.#unhold(p.win);
     }
   }
 
@@ -422,6 +422,16 @@ export class PreviewCommenting {
   // The windows this dude tab holds, across its commenting targets.
   get #tabHeld(): Map<Window, PreviewCommenting> {
     return heldIn(this.#d.win);
+  }
+
+  #unhold(w: Window): void {
+    if (this.#tabHeld.get(w) === this) this.#tabHeld.delete(w);
+  }
+
+  // Another target of this tab holds `w` live: that one answers it.
+  #heldLiveElsewhere(w: Window): boolean {
+    const holder = this.#tabHeld.get(w);
+    return holder !== undefined && holder !== this && holder.#holdsLive(w);
   }
 
   get #branch(): boolean {
@@ -488,7 +498,7 @@ export class PreviewCommenting {
   #drop(pane: Pane): void {
     this.#d.win.clearTimeout(pane.helloTimer);
     this.#panes = this.#panes.filter((p) => p !== pane);
-    if (this.#tabHeld.get(pane.win) === this) this.#tabHeld.delete(pane.win);
+    this.#unhold(pane.win);
   }
 
   // Another target of this tab took the window: it is that one's now.
@@ -585,8 +595,7 @@ export class PreviewCommenting {
       return true;
     }
     // Held live by another target of this tab (the task page's, or a page that named its window so): left to it, brought forward.
-    const holder = this.#tabHeld.get(w);
-    if (holder && holder !== this && holder.#holdsLive(w)) {
+    if (this.#heldLiveElsewhere(w)) {
       focusWin(w);
       return true;
     }
@@ -756,7 +765,7 @@ export class PreviewCommenting {
       if (held && held.state !== "moved") {
         held.state = "moved";
         this.#d.win.clearTimeout(held.helloTimer);
-        if (this.#tabHeld.get(held.win) === this) this.#tabHeld.delete(held.win);
+        this.#unhold(held.win);
         this.#emit();
       }
       return;
@@ -914,9 +923,7 @@ export class PreviewCommenting {
    * window is never let go for a newcomer.
    */
   #adopt(source: Window, url: string, claim: { server: string | null; moved: boolean } | null = null): Pane | null {
-    // Held by another target of this tab: that one answers it.
-    const holder = this.#tabHeld.get(source);
-    if (holder && holder !== this && holder.#holdsLive(source)) return null;
+    if (this.#heldLiveElsewhere(source)) return null;
     const pane = this.#add(source, url, claim?.server ?? null);
     if (pane && claim) {
       this.#named = source;
