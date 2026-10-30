@@ -209,7 +209,7 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 		}
 	}
 	dead, err := s.Lux.Get(ctx, c.DeadLux)
-	if le, ok := lux.AsError(err); err != nil && !lux.IsNotFound(err) && (!ok || le.Retryable()) {
+	if err != nil && !lux.IsNotFound(err) {
 		return err
 	} else if err == nil && !lux.Terminal(dead.State) {
 		if c.StepLong {

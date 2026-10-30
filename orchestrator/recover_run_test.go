@@ -638,3 +638,59 @@ func TestARecoveryPastItsGiveUpOnARunLuxStillRunsEndsUnpushed(t *testing.T) {
 		t.Errorf("a publisher %s was submitted", pub.ID)
 	}
 }
+
+// deniedOnceLux refuses dude once (401) on the dead Run, on the Get and on
+// any read that follows it in the same pass, then answers normally.
+type deniedOnceLux struct {
+	lux.Client
+	dead            string
+	denied, refused *bool
+}
+
+func (c deniedOnceLux) Get(ctx context.Context, runID string) (lux.Run, error) {
+	if runID == c.dead {
+		if !*c.refused {
+			*c.refused, *c.denied = true, true
+			return lux.Run{}, &lux.Error{Status: 401, Code: "unauthorized", Message: "bad key"}
+		}
+		*c.denied = false
+	}
+	return c.Client.Get(ctx, runID)
+}
+
+func (c deniedOnceLux) Checkpoints(ctx context.Context, runID string) ([]lux.Checkpoint, error) {
+	if runID == c.dead && *c.denied {
+		*c.denied = false
+		return nil, &lux.Error{Status: 401, Code: "unauthorized", Message: "bad key"}
+	}
+	return c.Client.Checkpoints(ctx, runID)
+}
+
+// lux refusing dude once (a 401 on the dead Run) is not lux having lost
+// it: the recovery is tried again and pushes the Run's commits.
+func TestARecoveryRefusedOnceByLuxIsRetried(t *testing.T) {
+	w := conducting(t)
+	task, run, commit := w.deadWriter("WIP.md", "half of it\n")
+	var denied, refused bool
+	w.syncer.Lux = deniedOnceLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), denied: &denied, refused: &refused}
+	w.noRecoveries = true
+	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !refused {
+		t.Fatal("lux was never asked for the dead Run")
+	}
+	if s := w.recoveryStatus(id); s != "requested" {
+		t.Fatalf("after the refused pass the recovery is %s", s)
+	}
+	mustExec(t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+	w.noRecoveries = false
+	w.until("the recovery ended", func() bool { s := w.recoveryStatus(id); return s == "done" || s == "failed" || s == "refused" })
+	if s := w.recoveryStatus(id); s != "done" {
+		t.Fatalf("the recovery is %s: %s", s, w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id))
+	}
+	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != commit {
+		t.Errorf("the recovered branch is at %q, want %s", got, commit)
+	}
+}
