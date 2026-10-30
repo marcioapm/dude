@@ -119,6 +119,24 @@ func TestBranchSnapshotsAreUniqueScopedAndAskedForWhenTheBranchMoves(t *testing.
 	if got := requests(); got["repo_api@2"] != sha("4")+":pending" || got["repo_web@2"] != sha("3")+":done" {
 		t.Errorf("after a conductor's publish: %v", got)
 	}
+	// A delivery from before attempts were kept publishes with attempt 0:
+	// the publish settles, and asks for the task's current attempt.
+	mustExec(t, owner, `UPDATE task_branch_capture_requests SET status = 'done', settled_at = now()`)
+	mustExec(t, owner, `INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, attempt, status)
+		VALUES ('cpb_0', $1, 'wi_s', 'run_s', 'req_0', 0, 'moving')`, org)
+	mustExec(t, owner, `UPDATE conductor_publishes SET status = 'published', heads = jsonb_build_object('web', jsonb_build_object('sha', $1::text))
+		WHERE id = 'cpb_0'`, sha("5"))
+	if got := requests(); len(got) != 2 || got["repo_web@2"] != sha("5")+":pending" {
+		t.Errorf("after an attempt-0 publish: %v", got)
+	}
+	// An ask that cannot be made is skipped, never raised: no attempt, or
+	// a task or repository not of the organization named.
+	for _, args := range [][]any{{org, "wi_s", 0, "repo_api"}, {other, "wi_s", 2, "repo_api"}, {org, "wi_s", 3, "repo_nope"}} {
+		mustExec(t, owner, `SELECT want_branch_capture($1, $2, $3, $4, '')`, args...)
+	}
+	if got := requests(); len(got) != 2 {
+		t.Errorf("asks that cannot be made made requests: %v", got)
+	}
 
 	// A code item names a Run's diff or a snapshot, never both.
 	mustExec(t, owner, `INSERT INTO people (id, organization_id, name) VALUES ('per_s', $1, 'Sam')`, org)

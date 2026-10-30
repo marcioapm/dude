@@ -109,13 +109,25 @@ GRANT UPDATE (next_attempt_at) ON task_branch_capture_requests TO dude_sweeper;
 -- Asks for a capture of (task, attempt, repository): pending again, due
 -- now, whatever it was. The worker reads the branch; a head it already
 -- has a snapshot of makes none.
+--
+-- Called from triggers inside other writes (a publish, a PR sync): an ask
+-- it cannot make — no attempt yet, a task or repository not of p_org — is
+-- skipped, never raised, so it can never fail the write that moved the
+-- branch.
 CREATE FUNCTION want_branch_capture(p_org text, p_task text, p_attempt integer, p_repo text, p_head text)
-  RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF p_attempt IS NULL OR p_attempt < 1
+     OR NOT EXISTS (SELECT 1 FROM tasks WHERE id = p_task AND organization_id = p_org)
+     OR NOT EXISTS (SELECT 1 FROM repositories WHERE id = p_repo AND organization_id = p_org) THEN
+    RETURN;
+  END IF;
   INSERT INTO task_branch_capture_requests (organization_id, task_id, attempt, repository_id, head_sha)
   VALUES (p_org, p_task, p_attempt, p_repo, NULLIF(p_head, ''))
   ON CONFLICT (task_id, attempt, repository_id) DO UPDATE
     SET status = 'pending', head_sha = EXCLUDED.head_sha, reason = NULL, failures = 0,
-        next_attempt_at = now(), requested_at = now(), settled_at = NULL
+        next_attempt_at = now(), requested_at = now(), settled_at = NULL;
+END
 $$;
 REVOKE ALL ON FUNCTION want_branch_capture(text, text, integer, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION want_branch_capture(text, text, integer, text, text) TO dude_app;
@@ -139,10 +151,11 @@ CREATE TRIGGER runs_branch_capture
     AND NEW.heads IS DISTINCT FROM OLD.heads AND NEW.heads <> '{}'::jsonb)
   EXECUTE FUNCTION runs_want_branch_capture();
 
--- A conductor's publish moved the task branch (delivery.PublishedTx).
+-- A conductor's publish moved the task branch (delivery.PublishedTx). A
+-- delivery from before attempts were kept records attempt 0: the task's.
 CREATE FUNCTION publishes_want_branch_capture() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
-  PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, COALESCE(NEW.attempt, task_attempt(NEW.task_id)), r.id,
+  PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, COALESCE(NULLIF(NEW.attempt, 0), task_attempt(NEW.task_id)), r.id,
     h.value->>'sha')
   FROM jsonb_each(COALESCE(NEW.heads, '{}'::jsonb)) h
   JOIN repositories r ON r.name = h.key
