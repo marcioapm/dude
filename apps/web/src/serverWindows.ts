@@ -108,14 +108,29 @@ export interface WindowsContext {
 
 interface Target {
   commenting: PreviewCommenting;
-  readonly run: RunningRun;
+  // The latest Run this target was opened for; a task's target also keeps every live Run of the task it was opened for.
+  run: RunningRun;
+  readonly runs: Map<string, RunningRun>;
   // A branch server's saved feedback, or a task's items, for pins: read when its window opens and on events.
   items: ReadonlyArray<PreviewFeedbackItem> | ReadonlyArray<FeedbackItem>;
-  states: Map<string, CommentingState>;
 }
 
 /** Connected to this tab: a window open, waiting for its hello, or not answering yet. */
 const LIVE: ReadonlySet<CommentingState> = new Set(["open", "waiting", "silent"]);
+
+/** The server of a target's Runs a window is on: by its page's origin, else by the server it was opened for. */
+function refOf(t: Target, url: string | null | undefined, server: string | null): ServerRef | null {
+  const origin = httpsOriginOf(url);
+  const runs = [...t.runs.values()].reverse();
+  if (origin !== null) {
+    for (const r of runs) {
+      const s = r.servers.find((x) => httpsOriginOf(x.url) === origin);
+      if (s) return { runId: r.id, server: s.name };
+    }
+  }
+  const named = server === null ? undefined : runs.find((r) => r.servers.some((s) => s.name === server));
+  return named && server !== null ? { runId: named.id, server } : null;
+}
 
 export class ServerWindows {
   readonly #targets = new Map<string, Target>();
@@ -146,8 +161,11 @@ export class ServerWindows {
   /** The servers connected to this tab now. */
   connected(): ReadonlySet<string> {
     const out = new Set<string>();
-    for (const [key, t] of this.#targets) {
-      for (const [server, state] of t.states) if (LIVE.has(state)) out.add(t.run.kind === "task" ? `${t.run.id}/${server}` : key);
+    for (const t of this.#targets.values()) {
+      for (const p of t.commenting.panes) {
+        const ref = LIVE.has(p.state) ? refOf(t, p.url, p.server) : null;
+        if (ref) out.add(serverKey(ref));
+      }
     }
     return out;
   }
@@ -167,10 +185,12 @@ export class ServerWindows {
     const on = this.connected();
     const runs = new Map<string, RunningRun>();
     for (const t of this.#targets.values()) {
-      const servers = t.run.servers.filter((s) => on.has(`${t.run.id}/${s.name}`));
-      if (servers.length === 0) continue;
-      const had = runs.get(t.run.id);
-      runs.set(t.run.id, { ...t.run, servers: [...(had?.servers ?? []), ...servers.filter((s) => !had?.servers.includes(s))] });
+      for (const run of t.runs.values()) {
+        const servers = run.servers.filter((s) => on.has(`${run.id}/${s.name}`));
+        if (servers.length === 0) continue;
+        const had = runs.get(run.id);
+        runs.set(run.id, { ...run, servers: [...(had?.servers ?? []), ...servers.filter((s) => !had?.servers.some((h) => h.name === s.name))] });
+      }
     }
     return [...runs.values()];
   }
@@ -205,13 +225,20 @@ export class ServerWindows {
   #target(run: RunningRun, server: string): Target {
     const key = run.kind === "task" ? `task:${run.task?.id ?? run.id}` : serverKey({ runId: run.id, server });
     const found = this.#targets.get(key);
-    if (found) return found;
+    if (found) {
+      // Another live Run of the same task (its agent Run and its preview Run): its servers' origins join the target's.
+      found.runs.delete(run.id);
+      found.runs.set(run.id, run);
+      found.run = run;
+      return found;
+    }
     const ref = { runId: run.id, server };
     const branch = run.kind === "preview";
-    const origins = new Set(run.servers.filter((s) => (branch ? s.name === server : s.commenting?.available !== false))
-      .flatMap((s) => httpsOriginOf(s.url) ?? []));
+    const target: Target = { run, runs: new Map([[run.id, run]]), items: [], commenting: undefined as unknown as PreviewCommenting };
+    const origins = (): Set<string> => new Set([...target.runs.values()].flatMap((r) => r.servers
+      .filter((s) => (branch ? s.name === server : s.commenting?.available !== false))
+      .flatMap((s) => httpsOriginOf(s.url) ?? [])));
     const scoped = this.#client;
-    const target: Target = { run, items: [], states: new Map(), commenting: undefined as unknown as PreviewCommenting };
     const taskId = run.task?.id ?? run.id;
     const commenting = new PreviewCommenting({
       win: this.#win,
@@ -220,7 +247,7 @@ export class ServerWindows {
       claimable: true,
       ...(branch ? { windowName: branchWindowName(ref) } : {}),
       read: () => ({
-        origins,
+        origins: origins(),
         items: branch ? [] : target.items as FeedbackItem[],
         drafts: branch ? 0 : (target.items as FeedbackItem[]).filter((i) => i.status === "draft" && i.author?.id === this.#ctx.you).length,
         taskKey: branch ? (run.branch ?? "") : (run.task?.key ?? ""),
@@ -249,7 +276,7 @@ export class ServerWindows {
         }
       },
       verify: async () => {
-        const origin = [...origins][0] ?? "";
+        const origin = [...origins()][0] ?? "";
         try {
           const found = await scoped.validatePreviewServer(ref.runId, ref.server, origin);
           if (found.kind !== "branch" || found.previewRunId !== ref.runId || found.server !== ref.server) {
@@ -263,9 +290,7 @@ export class ServerWindows {
       onSaved: () => undefined,
       onOpenItem: () => undefined,
       onChange: (view) => {
-        const name = view.server ?? server;
-        const at = serverKey({ runId: run.id, server: name });
-        target.states.set(name, view.state);
+        const at = serverKey(refOf(target, view.url, view.server) ?? { runId: run.id, server: view.server ?? server });
         if (view.state === "moved") {
           this.#moved.add(at);
           this.#claimed.delete(at);

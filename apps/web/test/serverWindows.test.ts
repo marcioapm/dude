@@ -18,9 +18,9 @@ const WEB = "https://web-pv.preview.example.test";
 const ADMIN = "https://admin-pv.preview.example.test";
 const TASK = "https://web-wi.preview.example.test";
 
-type Popup = { postMessage: ReturnType<typeof mock>; closed: boolean; focus: () => void; foreign: boolean; readonly location: { href: string } };
+type Popup = { postMessage: ReturnType<typeof mock>; closed: boolean; focus: () => void; foreign: boolean; at: string; readonly location: { href: string } };
 const popup = (): Popup => ({
-  postMessage: mock(() => {}), closed: false, focus: () => {}, foreign: false,
+  postMessage: mock(() => {}), closed: false, focus: () => {}, foreign: false, at: "about:blank",
   get location() {
     if (this.foreign) throw new DOMException("cross-origin", "SecurityError");
     return { href: "about:blank" };
@@ -42,7 +42,10 @@ function tab(): Tab {
         w = popup();
         if (name) named.set(name, w);
       }
-      if (url) w.foreign = true;
+      if (url) {
+        w.foreign = true;
+        w.at = url;
+      }
       return w;
     },
   });
@@ -201,4 +204,51 @@ test("at the cap of live windows a new one is refused, never an open one let go"
   live[2]!.closed = true;
   expect(c.open(`${TASK}/`, "web")).toBe(true);
   expect(c.windows).not.toContain(live[2] as unknown as Window);
+});
+
+const API = "https://api-wi.preview.example.test";
+const TASK_PV = "https://web-wi-pv.preview.example.test";
+const twoServers: RunningRun = { ...taskRun, servers: [taskRun.servers[0]!,
+  { name: "api", port: 8080, url: API, state: "ready", since: null, readySince: null, commenting: { available: true }, feedback: { open: 0, resolved: 0, authors: 0 } }] };
+
+test("Preview on a task Run's second server opens that server in the task's window, not the first one's", async () => {
+  const me = tab();
+  const { w } = windows(me);
+  expect(w.open(twoServers, twoServers.servers[0]!)).toBe(true);
+  const win = named.get("dude-preview-wi_1")!;
+  say(me, { type: "hello", v: 1, url: `${TASK}/chat` }, TASK, win);
+  await tick();
+  expect([...w.connected()]).toEqual(["run_wi/web"]);
+  expect(w.open(twoServers, twoServers.servers[1]!)).toBe(true);
+  expect(win.at).toBe(API);
+  say(me, { type: "hello", v: 1, url: `${API}/` }, API, win);
+  await tick();
+  expect([...w.connected()]).toEqual(["run_wi/api"]);
+  // Preview on the first again goes back to it.
+  expect(w.open(twoServers, twoServers.servers[0]!)).toBe(true);
+  expect(win.at).toBe(TASK);
+});
+
+test("Preview on a task's second live Run opens that Run's server, and the row connected is that Run's", async () => {
+  const me = tab();
+  const { w } = windows(me);
+  const previewRun: RunningRun = { ...taskRun, id: "run_wi_pv",
+    servers: [{ ...taskRun.servers[0]!, url: TASK_PV }] };
+  const renamed: RunningRun = { ...taskRun, id: "run_wi_pv2", servers: [{ ...taskRun.servers[0]!, name: "site", url: "https://site-wi.preview.example.test" }] };
+  w.open(taskRun, taskRun.servers[0]!);
+  const win = named.get("dude-preview-wi_1")!;
+  say(me, { type: "hello", v: 1, url: `${TASK}/` }, TASK, win);
+  await tick();
+  // The same server name on the other Run: its own origin, not the first Run's window focused.
+  expect(w.open(previewRun, previewRun.servers[0]!)).toBe(true);
+  expect(win.at).toBe(TASK_PV);
+  say(me, { type: "hello", v: 1, url: `${TASK_PV}/` }, TASK_PV, win);
+  await tick();
+  expect([...w.connected()]).toEqual(["run_wi_pv/web"]);
+  // Another name on a third Run: opened too, never refused.
+  expect(w.open(renamed, renamed.servers[0]!)).toBe(true);
+  expect(win.at).toBe("https://site-wi.preview.example.test");
+  say(me, { type: "hello", v: 1, url: "https://site-wi.preview.example.test/" }, "https://site-wi.preview.example.test", win);
+  await tick();
+  expect([...w.connected()]).toEqual(["run_wi_pv2/site"]);
 });

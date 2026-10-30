@@ -203,6 +203,8 @@ export interface CommentingView {
   readonly state: CommentingState;
   /** The server whose page that window was opened on. */
   readonly server: string | null;
+  /** The page that window is on, as it last said (or was opened at). */
+  readonly url?: string | null;
   /** Drafts saved from the task's windows since each was opened or adopted. */
   readonly saved: number;
   /** That window was claimed from another of this person's dude tabs. */
@@ -412,8 +414,13 @@ export class PreviewCommenting {
 
   get view(): CommentingView {
     const pick = this.#latest((p) => p.state === "open") ?? this.#latest((p) => p.state === "waiting") ?? this.#latest((p) => p.state !== "idle");
-    return { state: pick?.state ?? "idle", server: pick?.server ?? null, saved: this.#panes.reduce((n, p) => n + p.saved, 0),
+    return { state: pick?.state ?? "idle", server: pick?.server ?? null, url: pick?.url ?? null, saved: this.#panes.reduce((n, p) => n + p.saved, 0),
       ...(pick?.claimed ? { claimed: true } : {}) };
+  }
+
+  /** Every window held now: its server, its page and its state. */
+  get panes(): ReadonlyArray<{ readonly server: string | null; readonly url: string | null; readonly state: CommentingState }> {
+    return this.#panes.map((p) => ({ server: p.server, url: p.url, state: p.state }));
   }
 
   // The window last opened, adopted or heard from among those that `fits`.
@@ -546,6 +553,8 @@ export class PreviewCommenting {
     if (!foreignPage(w)) return null;
     const held = this.#paneOf(w);
     if (held && held.state !== "moved" && held.state !== "closed") {
+      // This target's own window, on another of its servers: navigated to this one.
+      if (held.url !== null && httpsOriginOf(held.url) !== origin) return null;
       this.#focus(held);
       return true;
     }
@@ -574,8 +583,9 @@ export class PreviewCommenting {
    * half-written comment stay; the named window opened at `url` otherwise.
    */
   comment(url: string, server: string): boolean {
-    // By origin, not only server name: an adopted window knows its page, not its server.
-    const at = this.#live((p) => p.server === server || p.server === null && httpsOriginOf(p.url) !== null && httpsOriginOf(p.url) === httpsOriginOf(url), "open", "waiting");
+    // By origin: two servers (or two Runs' servers) may share a name, and an adopted window knows its page, not its server.
+    const origin = httpsOriginOf(url);
+    const at = this.#live((p) => origin !== null && httpsOriginOf(p.url) === origin, "open", "waiting");
     if (at) {
       this.#focus(at);
       return true;
