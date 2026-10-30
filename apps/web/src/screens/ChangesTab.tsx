@@ -46,6 +46,9 @@ const PENDING_READS = 3;
 const ID_SEP = "\u0000";
 const splitIds = (ids: string): string[] => (ids ? ids.split(ID_SEP) : []);
 
+/** A session's checkout read: what it gave, or why it failed. */
+type PendingRead = { diff?: RunDiff; problem?: string };
+
 /**
  * Read only while Pending is mounted, with at most three checkout reads in
  * flight: every session on mount (and Retry), then only the session an
@@ -55,7 +58,7 @@ function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick
   const pending = pendingSessions(runs);
   // Joined, so the effects below rerun only when the set of sessions changes.
   const ids = pending.map((r) => r.id).join(ID_SEP);
-  const [reads, setReads] = useState<Record<string, { diff?: RunDiff; problem?: string }>>({});
+  const [reads, setReads] = useState<Record<string, PendingRead>>({});
   const [retry, setRetry] = useState(0);
   const queue = useRef<string[]>([]);
   // Read now, and asked again meanwhile: one run is never read twice at once, and what was asked after a read began is read after it.
@@ -120,23 +123,28 @@ function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick
   return <section className="changesRegion" data-testid="changes-pending" aria-label="Pending work">
     <p className="muted">Session checkout changes (uncommitted work included). Committed changes since each session's base are included too; these are separate from the branch snapshot.</p>
     {pending.length ? <ul className="changesSessions" aria-label="Sessions at work">
-      {pending.map((r) => {
-        const read = reads[r.id];
-        const files = read?.diff?.files;
-        return <li key={r.id} data-testid="changes-session" data-run={r.id}>
+      {pending.map((r) => (
+        <li key={r.id} data-testid="changes-session" data-run={r.id}>
           <AgentAvatar role={r.role ?? DEFAULT_RUN_ROLE} size="sm" live={r.status === "running"} />
           <span className="changesSessionLabel">{runLabel(r)}</span>
           <StatusMark status={runStatusShown(r)} label={runStatusLabel(r)} size="sm" />
           <span data-testid="checkout-summary" role="status">
-            {read?.problem ? <>Checkout changes unavailable: {read.problem} <Button size="sm" variant="quiet" onClick={() => setRetry((n) => n + 1)}>Retry</Button></>
-              : files ? files.length ? <>{plural(files.length, "file")} <DiffStat additions={files.reduce((n, f) => n + f.additions, 0)} deletions={files.reduce((n, f) => n + f.deletions, 0)} /></>
-                : "No checkout changes recorded" : "Reading checkout changes…"}
+            <CheckoutSummary read={reads[r.id]} onRetry={() => setRetry((n) => n + 1)} />
           </span>
           <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={() => onOpenRunChanges(r.id)}>Open its Changes</Button>
-        </li>;
-      })}
+        </li>
+      ))}
     </ul> : <p data-testid="changes-pending-none">No live sessions on attempt {attempt}.</p>}
   </section>;
+}
+
+/** One session's checkout, as last read: its counts, none, why it could not be read, or that it is being read. */
+function CheckoutSummary({ read, onRetry }: { read: PendingRead | undefined; onRetry: () => void }) {
+  if (read?.problem) return <>Checkout changes unavailable: {read.problem} <Button size="sm" variant="quiet" onClick={onRetry}>Retry</Button></>;
+  const files = read?.diff?.files;
+  if (!files) return <>Reading checkout changes…</>;
+  if (!files.length) return <>No checkout changes recorded</>;
+  return <>{plural(files.length, "file")} <DiffStat additions={files.reduce((n, f) => n + f.additions, 0)} deletions={files.reduce((n, f) => n + f.deletions, 0)} /></>;
 }
 
 /** Whether the viewport is at least `px` wide, following it as it changes. */
