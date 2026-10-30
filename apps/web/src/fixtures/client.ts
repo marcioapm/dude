@@ -338,6 +338,11 @@ export class FixtureClient extends ApiClient {
 
   /** The fixture task, when its preview's web server is at `origin`. */
   override async previewServerAt(origin: string) {
+    // A branch preview of the project Servers page's world.
+    for (const run of runningRuns()) {
+      const at = run.kind === "preview" ? run.servers.find((s) => s.url && new URL(s.url).origin === origin) : undefined;
+      if (at) return { kind: "branch" as const, organizationId: ORG.id, organizationSlug: ORG.id, projectId: PROJECT.id, previewRunId: run.id, branch: run.branch ?? "", server: at.name };
+    }
     const web = this.#servers.servers.find((s) => s.name === "web" && s.url && new URL(s.url).origin === origin);
     if (this.#servers.run?.kind !== "preview" || !web) throw new ApiError(404, "not_found", `no task of yours has a preview at ${origin}`);
     // The fixtures' organisation has no slug: its id stands for one, as membershipsOf reads it.
