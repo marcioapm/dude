@@ -96,14 +96,15 @@ function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick
     while (active.current < PENDING_READS && queue.current.length > 0) void worker();
   }, [client]);
   // Every session on mount; then, as sessions start or end, only those new to the list.
-  const known = useRef(new Set<string>());
+  // A new `ask` (another client) has read nothing yet: it starts from every session again.
+  const known = useRef<{ ask: typeof ask; ids: Set<string> } | null>(null);
   const idsRef = useRef(ids);
   idsRef.current = ids;
   useEffect(() => {
     const now = splitIds(ids);
-    const fresh = now.filter((id) => !known.current.has(id));
-    known.current = new Set(now);
-    ask(fresh);
+    const was = known.current?.ask === ask ? known.current.ids : new Set<string>();
+    known.current = { ask, ids: new Set(now) };
+    ask(now.filter((id) => !was.has(id)));
   }, [ask, ids]);
   // Retry: every session again.
   useEffect(() => {
