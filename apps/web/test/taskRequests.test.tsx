@@ -184,4 +184,48 @@ describe("what the task page reads on its stream", () => {
     expect(c.runDiffs).toEqual([RUN_ID]);
     expect(withFiles(c.branch)).toEqual([]);
   });
+
+  test("Pending: an event for a session being read reads it again after that read, never beside it; the newer answer is shown", async () => {
+    const c = counted("populated", ["run_pending_b"]);
+    const base = await c.client.runDiff(RUN_ID);
+    expect(base.files.length).toBeGreaterThan(1);
+    const view = await page(c, "changes");
+    await click([...view.querySelector("[data-testid=changes-scope]")!.querySelectorAll("button")].find((b) => b.textContent === "Pending work")!);
+    await until(() => (c.runDiffs.length >= 3 ? c.runDiffs : null), "both sessions read");
+    await settle(100);
+    c.reset();
+    // Each read answered by hand.
+    const held: Array<(d: typeof base) => void> = [];
+    c.client.runDiff = (id) => { c.runDiffs.push(id); return new Promise((r) => held.push(r)); };
+    await event("run.diff.updated", { checksum: "x" }, RUN_ID);
+    await settle(RUN_DIFF_EVERY_MS + 200);
+    expect(c.runDiffs).toEqual([RUN_ID]);
+    await event("run.diff.updated", { checksum: "y" }, RUN_ID);
+    await settle(RUN_DIFF_EVERY_MS + 200);
+    // Asked again while it is read: not read beside it.
+    expect(c.runDiffs).toEqual([RUN_ID]);
+    await act(async () => held[0]!({ ...base, files: base.files.slice(0, 1) }));
+    await settle(100);
+    expect(c.runDiffs).toEqual([RUN_ID, RUN_ID]);
+    await act(async () => held[1]!({ ...base, files: base.files.slice(0, 2) }));
+    await settle(100);
+    const row = view.querySelector(`[data-testid=changes-session][data-run="${RUN_ID}"] [data-testid=checkout-summary]`)!;
+    expect(row.textContent).toContain("2 files");
+    expect(c.runDiffs).toEqual([RUN_ID, RUN_ID]);
+  });
+
+  test("Pending: a session joining reads that session alone", async () => {
+    const live = ["run_pending_b"];
+    const c = counted("populated", live);
+    const view = await page(c, "changes");
+    await click([...view.querySelector("[data-testid=changes-scope]")!.querySelectorAll("button")].find((b) => b.textContent === "Pending work")!);
+    await until(() => (view.querySelectorAll("[data-testid=changes-session]").length === 2 && c.runDiffs.length >= 2 ? c.runDiffs : null), "both sessions read");
+    await settle(200);
+    c.reset();
+    live.push("run_pending_c");
+    await event("task.updated", {});
+    await until(() => (view.querySelectorAll("[data-testid=changes-session]").length === 3 ? true : null), "the third session");
+    await settle(300);
+    expect(c.runDiffs).toEqual(["run_pending_c"]);
+  });
 });

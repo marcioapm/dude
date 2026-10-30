@@ -54,6 +54,9 @@ function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick
   const [reads, setReads] = useState<Record<string, { diff?: RunDiff; problem?: string }>>({});
   const [retry, setRetry] = useState(0);
   const queue = useRef<string[]>([]);
+  // Read now, and asked again meanwhile: one run is never read twice at once, and what was asked after a read began is read after it.
+  const inFlight = useRef(new Set<string>());
+  const again = useRef(new Set<string>());
   const active = useRef(0);
   const alive = useRef(true);
   useEffect(() => {
@@ -61,17 +64,24 @@ function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick
     return () => { alive.current = false; };
   }, []);
   const ask = useCallback((wanted: readonly string[]) => {
-    for (const id of wanted) if (!queue.current.includes(id)) queue.current.push(id);
+    for (const id of wanted) {
+      if (inFlight.current.has(id)) again.current.add(id);
+      else if (!queue.current.includes(id)) queue.current.push(id);
+    }
     const worker = async () => {
       active.current++;
       try {
         while (alive.current && queue.current.length) {
           const id = queue.current.shift()!;
+          inFlight.current.add(id);
           try {
             const diff = await client.runDiff(id);
             if (alive.current) setReads((was) => ({ ...was, [id]: { diff } }));
           } catch (err) {
             if (alive.current) setReads((was) => ({ ...was, [id]: { problem: errorText(err) } }));
+          } finally {
+            inFlight.current.delete(id);
+            if (again.current.delete(id) && !queue.current.includes(id)) queue.current.push(id);
           }
         }
       } finally {
@@ -81,9 +91,20 @@ function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick
     // A worker takes its first id before it first waits: each started here holds one read.
     while (active.current < PENDING_READS && queue.current.length > 0) void worker();
   }, [client]);
+  // Every session on mount; then, as sessions start or end, only those new to the list.
+  const known = useRef(new Set<string>());
+  const idsRef = useRef(ids);
+  idsRef.current = ids;
   useEffect(() => {
-    ask(ids ? ids.split("\u0000") : []);
-  }, [ask, ids, retry]);
+    const now = ids ? ids.split("\u0000") : [];
+    const fresh = now.filter((id) => !known.current.has(id));
+    known.current = new Set(now);
+    ask(fresh);
+  }, [ask, ids]);
+  // Retry: every session again.
+  useEffect(() => {
+    if (retry > 0) ask(idsRef.current ? idsRef.current.split("\u0000") : []);
+  }, [ask, retry]);
   const seen = useRef(runDiffs.n);
   useEffect(() => {
     if (seen.current === runDiffs.n) return;
