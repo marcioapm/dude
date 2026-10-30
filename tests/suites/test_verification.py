@@ -18,7 +18,7 @@ import requests
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, sign_in, wait_for_escalation, wait_until
+from helpers import ApiClient, create_api_key, open_overview_section, sign_in, wait_for_escalation, wait_until
 
 CRITERIA = ["The page greets the visitor by name", "The page says goodbye on the way out"]
 
@@ -268,6 +268,7 @@ def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
+    open_overview_section(page, "pipeline")
     expect(page.get_by_test_id("phase").filter(has_text="of the pull request's fix").first).to_be_visible()
     page.get_by_role("tab", name="Findings").click()
     section = page.get_by_test_id("verification")

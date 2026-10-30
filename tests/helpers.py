@@ -357,6 +357,14 @@ def open_help(page) -> None:
     open_profile_item(page, "help")
 
 
+def open_overview_section(page, name: str) -> None:
+    """Opens one of a task Overview's folded sections (`pipeline`, `goal-criteria`, `relations`,
+    `servers`, `time-cost`), whatever it was: setting `open` is idempotent, a click would toggle."""
+    section = page.get_by_test_id(f"overview-{name}")
+    section.wait_for(state="attached")
+    section.evaluate("d => { d.open = true; }")
+
+
 def toast(page, text: str):
     """A toast, by its text: the design system marks each one (data-toast),
     since Radix also renders a hidden copy of the text for a second."""

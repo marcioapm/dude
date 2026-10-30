@@ -18,7 +18,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, open_my_settings, open_org_settings, sign_in, toast, wait_for_escalation, wait_until
+from helpers import ApiClient, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -140,6 +140,8 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # The PR appears as the last step, linked to the forge, and its one
     # state is a chip in the header that links there too.
     tabs.get_by_role("tab", name="Overview").click()
+    # The pipeline is folded under the Overview's summary.
+    open_overview_section(page, "pipeline")
     expect(page.get_by_test_id("pr-step")).to_be_visible(timeout=180_000)
     chip = page.get_by_test_id("pr-link")
     expect(chip).to_have_attribute("data-pr-state", "awaiting")
@@ -162,6 +164,7 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     tabs.get_by_role("tab", name="Overview").click()
     expect(page).to_have_url(re.compile(r"#/task/"))
     # From a session's URL, going to its task (the breadcrumb, Back) is the overview.
+    open_overview_section(page, "pipeline")
     page.get_by_test_id("phase").nth(1).click()
     expect(tabs.get_by_role("tab", name="Sessions")).to_have_attribute("aria-selected", "true")
     page.go_back()
@@ -642,6 +645,7 @@ def test_a_task_saves_from_read_and_a_locked_task_reads_too(
     assert client.post(f"/v1/tasks/{task_id}/deliver").status_code == 201
     page.reload()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
+    open_overview_section(page, "pipeline")
     expect(page.get_by_test_id("phase").first).to_be_visible(timeout=30_000)
     page.get_by_test_id("edit-task").click()
     dialog = page.get_by_role("dialog", name="Edit task")
@@ -1618,6 +1622,9 @@ def test_a_tasks_time_and_cost_show_on_its_page_and_its_epics(
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
+    # The task's spend is in the Overview's figures; every tile and the run table under Time & cost.
+    expect(page.get_by_test_id("overview-spend")).to_contain_text("model + machine")
+    open_overview_section(page, "time-cost")
     metrics = page.get_by_test_id("task-metrics")
     expect(metrics).to_contain_text("Agents working")
     expect(metrics).to_contain_text("Cost")

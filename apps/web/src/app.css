@@ -898,18 +898,161 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* Overview: an operational grid, no rail. The pane, not the window, decides
+   its two columns: the container is the Overview's own box (`taskoverview`). */
+.taskOverviewPane {
+  container: taskoverview / inline-size;
+  min-width: 0;
+}
 .taskOverview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-20);
+  min-width: 0;
+  padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-32);
+}
+/* Its notices sit inside its padding, not under the header's. */
+.taskOverview > .taskNotices {
+  padding: 0;
+}
+.overviewSummary {
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+}
+.overviewGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
-  gap: var(--ds-space-32);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--ds-space-20);
   align-items: start;
 }
-.taskOverview:not(:has(.taskAside)) {
-  grid-template-columns: minmax(0, 1fr);
+@container taskoverview (min-width: 1000px) {
+  .overviewGrid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  }
 }
-@media (max-width: 1200px) {
+.overviewColumn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-20);
+  min-width: 0;
+}
+/* Running now and Changes: raised surfaces (shadow in light, as raised things are). */
+.overviewRegion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  padding: var(--ds-space-16);
+  background: var(--ds-color-raised);
+}
+[data-theme="light"] .overviewRegion {
+  box-shadow: var(--ds-shadow-1);
+}
+.overviewRegionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ds-space-4) var(--ds-space-12);
+}
+.overviewRegionHead > h2,
+.overviewPullRequests > h2 {
+  margin: 0;
+  font-size: var(--ds-text-lg);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.overviewRegionHead > .muted {
+  font-size: var(--ds-text-sm);
+}
+.overviewRegion p {
+  margin: 0;
+}
+.overviewRegionFoot {
+  display: flex;
+  justify-content: flex-end;
+}
+.overviewBranches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ds-text-sm);
+}
+.overviewBranches > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  min-width: 0;
+}
+.overviewBranches code {
+  overflow-wrap: anywhere;
+}
+.overviewBranchRepo {
+  color: var(--ds-color-text-secondary);
+}
+.overviewPullRequests {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  padding: var(--ds-space-16);
+  background: var(--ds-color-chrome);
+}
+.overviewPullRequests > p {
+  margin: 0;
+}
+.overviewMilestones {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.overviewMilestones > p {
+  margin: 0;
+}
+.overviewDetails {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.overviewFacts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-20);
+  min-width: 0;
+}
+/* Needs you: the question quoted, who can answer, the way there at its end (under it when narrow). */
+.needsYou {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-12) var(--ds-space-20);
+}
+.needsYouText {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.needsYouText > p {
+  margin: 0;
+}
+.needsYouWho {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+}
+.needsYouAsk {
+  margin-top: var(--ds-space-4);
+  font-size: var(--ds-text-lg);
+  color: var(--ds-color-text-strong);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
   .taskOverview {
-    grid-template-columns: minmax(0, 1fr);
+    padding: var(--ds-space-12) var(--ds-space-16) var(--ds-space-24);
   }
 }
 .taskMain {
@@ -939,6 +1082,12 @@ body {
   color: var(--ds-color-text-strong);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A pull request step's state, inside its row's link: words in the row's muted ink. */
+.prStepState {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-secondary);
   white-space: nowrap;
 }
 /* Changes, until the branch review: the sessions that changed files, one row each. */

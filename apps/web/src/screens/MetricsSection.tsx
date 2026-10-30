@@ -42,7 +42,30 @@ function CostTile({ cost, tokens, activeMs, sub }: { cost: CostSplit; tokens: nu
   );
 }
 
-export function TaskMetricsSection({ client, taskId, attempt, setAside, live, done, version }: {
+/**
+ * A task's figures, one attempt's or (none) the whole task's, read again when
+ * `version` changes. Null until read, and while another attempt's are all
+ * there is: those are never shown for this one.
+ */
+export function useTaskMetrics(client: ApiClient, taskId: string, attempt: number | undefined, version: number, skip = false): TaskMetrics | null {
+  const [read, setRead] = useState<{ attempt: number | undefined; metrics: TaskMetrics } | null>(null);
+  useEffect(() => {
+    if (skip) return;
+    let current = true;
+    void client.taskMetrics(taskId, attempt).then((metrics) => current && setRead({ attempt, metrics }), () => {});
+    return () => {
+      current = false;
+    };
+  }, [client, taskId, attempt, version, skip]);
+  return read && read.attempt === attempt ? read.metrics : null;
+}
+
+/** What the lead time tile says under it: how far it runs. */
+export function leadTimeSub(setAside: boolean | undefined, done: boolean): string {
+  return setAside ? "start to set aside" : done ? "asked to done" : "so far";
+}
+
+export function TaskMetricsSection({ client, taskId, attempt, setAside, live, done, version, titled = true, metrics }: {
   client: ApiClient; taskId: string;
   /** One attempt's figures alone; none, the whole task's. */
   attempt?: number | undefined;
@@ -52,22 +75,18 @@ export function TaskMetricsSection({ client, taskId, attempt, setAside, live, do
   /** Finished (done, failed or aborted): its lead time is whole, not so far. */
   done: boolean;
   version: number;
+  /** Its own "Time & cost" heading; off where a disclosure already names it. */
+  titled?: boolean | undefined;
+  /** The figures its page already read for `attempt`: given, it reads none of its own. */
+  metrics?: TaskMetrics | null | undefined;
 }) {
-  const [read, setRead] = useState<{ attempt: number | undefined; metrics: TaskMetrics } | null>(null);
-  useEffect(() => {
-    let current = true;
-    void client.taskMetrics(taskId, attempt).then((metrics) => current && setRead({ attempt, metrics }), () => {});
-    return () => {
-      current = false;
-    };
-  }, [client, taskId, attempt, version]);
-  // Another attempt's figures are never shown for this one, even for the moment before its own arrive.
-  if (!read || read.attempt !== attempt || read.metrics.runs.length === 0) return null;
-  const m = read.metrics;
+  const own = useTaskMetrics(client, taskId, attempt, version, metrics !== undefined);
+  const m = metrics !== undefined ? metrics : own;
+  if (!m || m.runs.length === 0) return null;
   return (
-    <Section title="Time & cost" data-testid="task-metrics">
+    <Section title={titled ? "Time & cost" : undefined} data-testid="task-metrics">
       <MetricGroup joined fill>
-        <MetricTile size="sm" label="Lead time" value={m.leadMs} unit="ms" live={live} sub={setAside ? "start to set aside" : done ? "asked to done" : "so far"} />
+        <MetricTile size="sm" label="Lead time" value={m.leadMs} unit="ms" live={live} sub={leadTimeSub(setAside, done)} />
         <MetricTile size="sm" label="Agents working" value={m.activeMs} unit="ms" live={live} />
         <MetricTile size="sm" label="Waiting on people" value={m.humanWaitMs} unit="ms" />
         <MetricTile size="sm" label="In review" value={m.reviewMs} unit="ms" />
