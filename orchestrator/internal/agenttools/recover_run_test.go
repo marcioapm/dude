@@ -1,6 +1,7 @@
 package agenttools_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
@@ -9,7 +10,7 @@ import (
 
 // Asking again for a recovery that has ended answers that recovery, as it
 // ended: its status and why, and — as it pushed nothing — that another try
-// needs another branch; never a wake, which it already had.
+// needs another branch; never a wake of its own: its end has one.
 func TestRecoverRunAskedAgainAfterItEndedSaysSo(t *testing.T) {
 	f := setup(t)
 	token := f.conductor(t)
@@ -33,5 +34,22 @@ func TestRecoverRunAskedAgainAfterItEndedSaysSo(t *testing.T) {
 	// Its words are the golden's (results-tools, recover-run-ended-failed).
 	if next, _ := out["next"].(string); next != agenttools.RecoverEndedNext("failed", why, prefix) || next == agenttools.RecoverNext {
 		t.Errorf("an ended recovery's next: %v", out["next"])
+	}
+}
+
+// A recovery refused for a secret is not to be asked again with another
+// branch (recover_run refuses the Run until a person removes it), and no
+// ended recovery claims its wake has already come: the wake is recorded at
+// the end and delivered between turns.
+func TestAnEndedRecoverysWordsAreTrue(t *testing.T) {
+	prefix := "dude/wi_1/recovered-"
+	refused := agenttools.RecoverEndedNext("refused", "a secret", prefix)
+	if strings.Contains(refused, "another branch") || !strings.Contains(refused, "person") {
+		t.Errorf("a refused recovery's next: %s", refused)
+	}
+	for _, status := range []string{"done", "failed", "refused"} {
+		if next := agenttools.RecoverEndedNext(status, "", prefix); strings.Contains(next, "you were woken") {
+			t.Errorf("%s: %s", status, next)
+		}
 	}
 }

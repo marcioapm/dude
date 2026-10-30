@@ -193,6 +193,7 @@ func TestGoldenToolResults(t *testing.T) {
 		{"recover-run", recoverNext},
 		{"recover-run-ended-failed", recoverEndedNext("failed", "lux kept no checkpoint of its checkouts", "dude/wi_1/recovered-")},
 		{"recover-run-ended-done", recoverEndedNext("done", "", "dude/wi_1/recovered-")},
+		{"recover-run-ended-refused", recoverEndedNext("refused", "its work contains the project secret API_TOKEN in config/app.toml; a person must remove it", "dude/wi_1/recovered-")},
 		{"wait-for", waitForNext(false, time.Date(2026, 10, 30, 14, 45, 0, 0, time.UTC), "")},
 		{"wait-for-at-a-decision", waitForNext(false, time.Date(2026, 10, 30, 14, 45, 0, 0, time.UTC), "after_review")},
 		{"wait-for-holds", waitForNext(true, time.Time{}, "")},

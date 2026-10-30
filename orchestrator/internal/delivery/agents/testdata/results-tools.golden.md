@@ -48,11 +48,15 @@ You are woken when its commits are on the branch, or why not. Uncommitted work i
 
 ## recover-run-ended-failed
 
-This recovery has already ended, failed: lux kept no checkpoint of its checkouts; you were woken when it did, and are not woken again. It pushed nothing: to try again, ask with another branch under dude/wi_1/recovered-.
+This recovery has already ended, failed: lux kept no checkpoint of its checkouts; how it ended reaches you once, by its own wake, if it has not already. It pushed nothing: to try again, ask with another branch under dude/wi_1/recovered-.
 
 ## recover-run-ended-done
 
-This recovery has already ended, done; you were woken when it did, and are not woken again. Its commits are on the branch; the branch is not the task's: start a writer to merge it.
+This recovery has already ended, done; how it ended reaches you once, by its own wake, if it has not already. Its commits are on the branch; the branch is not the task's: start a writer to merge it.
+
+## recover-run-ended-refused
+
+This recovery has already ended, refused: its work contains the project secret API_TOKEN in config/app.toml; a person must remove it; how it ended reaches you once, by its own wake, if it has not already. It pushed nothing: a person must remove the secret from the Run's commits; recover_run refuses this Run until then.
 
 ## wait-for
 
