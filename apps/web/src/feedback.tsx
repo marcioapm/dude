@@ -28,8 +28,9 @@ const LIVE_RUN: ReadonlySet<string> = new Set(["pending", "scheduled", "starting
  * A slower, older read never replaces a newer one.
  */
 export function useTaskFeedback(client: ApiClient, taskId: string, attempt: number | undefined, version: number) {
-  const [list, setList] = useState<FeedbackList | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+  const key = `${taskId}:${attempt ?? "current"}`;
+  const [result, setResult] = useState<{ key: string; list: FeedbackList } | null>(null);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const reads = useRef(0);
   const read = useCallback(async () => {
     const seq = ++reads.current;
@@ -37,17 +38,19 @@ export function useTaskFeedback(client: ApiClient, taskId: string, attempt: numb
       const got = await client.feedback(taskId, attempt);
       if (seq === reads.current) {
         // The same answer keeps its identity: what draws it is not redrawn for a read that changed nothing.
-        setList((was) => (was && JSON.stringify(was) === JSON.stringify(got) ? was : got));
-        setProblem(null);
+        setResult((was) => (was?.key === key && JSON.stringify(was.list) === JSON.stringify(got) ? was : { key, list: got }));
+        setFailure(null);
       }
     } catch (err) {
-      if (seq === reads.current) setProblem(err instanceof Error ? err.message : String(err));
+      if (seq === reads.current) setFailure({ key, message: err instanceof Error ? err.message : String(err) });
     }
-  }, [client, taskId, attempt]);
+  }, [client, taskId, attempt, key]);
   useEffect(() => {
     void read();
+    return () => { ++reads.current; };
   }, [read, version]);
-  return { list: list ?? EMPTY_FEEDBACK, loaded: list !== null, problem, reload: read };
+  return { list: result?.key === key ? result.list : EMPTY_FEEDBACK, loaded: result?.key === key,
+    problem: failure?.key === key ? failure.message : null, reload: read };
 }
 
 /**

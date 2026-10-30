@@ -17,7 +17,7 @@ import { Icon, plural } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, FEEDBACK_LIMITS, runLabel, type FeedbackItem, type TaskBranchDiff, type TaskBranchSnapshot } from "@dude/domain";
 import type { ApiClient, Run } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
-import { FEEDBACK_FULL, cardItem, threadOf, type FeedbackOnDiff } from "../feedback.tsx";
+import { FEEDBACK_FULL, cardItem, threadOf, useTaskFeedback, type FeedbackOnDiff } from "../feedback.tsx";
 import { runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import {
   REFRESH_REFUSED, branchAnchorInput, commentsByFile, marksLabel, newerWords, nextComment, placeBranchItems, refreshedWords, short,
@@ -96,7 +96,7 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   cursor: Readonly<Record<string, number>>; onFileComments: (path: string) => void;
 }): BranchComments {
   const snapshot = diff?.snapshot ?? null;
-  const placed = useMemo(() => (diff && snapshot && !diff.readOnly ? placeBranchItems(fb.items, { placements: diff.placements, snapshot }) : []),
+  const placed = useMemo(() => (diff && snapshot ? placeBranchItems(fb.items, { placements: diff.placements, snapshot }) : []),
     [fb.items, diff, snapshot]);
   const byFile = useMemo(() => commentsByFile(placed), [placed]);
   const { byLine, heads } = useMemo(() => {
@@ -143,11 +143,11 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
       onInput={() => setCardUnsaved(true)} onClick={(e) => { if ((e.target as HTMLElement).closest("button")?.textContent === "Cancel") setCardUnsaved(false); }}>
       <FeedbackCard inline placement={placement} item={cardItem(item, fb.people, fb.runs)} thread={threadOf(item, fb.people, fb.runs)}
         onEditingChange={(on) => { if (!on) setCardUnsaved(false); }}
-        readOnly={fb.readOnly && item.status !== "draft"} maxLength={FEEDBACK_LIMITS.body}
+        readOnly={!!diff?.readOnly || (fb.readOnly && item.status !== "draft")} maxLength={FEEDBACK_LIMITS.body}
         onReply={async (b) => { const out = await fb.reply(item.id, b); setCardUnsaved(false); return out; }} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
         onSaveDraft={async (b) => { const out = await fb.saveDraft(item, b, null); setCardUnsaved(false); return out; }} onDelete={() => fb.deleteDraft(item.id)} />
     </div>
-  ), [fb]);
+  ), [fb, diff?.readOnly]);
   const renderAfterLine = useCallback((path: string, side: DiffSide, line: number) => {
     const here = byLine.get(lineKey(path, side, line));
     const editor = snapshot && editorAt && editorAt.path === path && editorAt.side === side && editorAt.endLine === line;
@@ -255,7 +255,25 @@ function listNote(snapshot: TaskBranchSnapshot): ReactNode {
 }
 
 /** The tab: the bar, at most one slim line, then the diff (or what stands in its place, truthfully). */
-export function ChangesTab({ client, taskId, attempt, current, runs, version, fb, you, onOpenRunChanges }: ChangesTabProps) {
+export function ChangesTab(props: ChangesTabProps) {
+  // A separately mounted reader avoids a current-attempt fetch/cache flashing in history.
+  return props.attempt !== props.current ? <HistoricalChanges key={`${props.taskId}:${props.attempt}`} {...props} /> : <ChangesReview {...props} />;
+}
+
+function HistoricalChanges(props: ChangesTabProps) {
+  const read = useTaskFeedback(props.client, props.taskId, props.attempt, props.version);
+  const refuse = async () => { throw new Error(`Attempt ${props.attempt} is read-only.`); };
+  const fb: FeedbackOnDiff = { ...props.fb, items: read.list.feedback, readOnly: true,
+    closed: `Attempt ${props.attempt} is read-only.`, createDraft: refuse, saveDraft: refuse,
+    deleteDraft: refuse, reply: refuse, resolve: refuse, reopen: refuse, focus: null, openOnTab: () => {} };
+  return <>
+    {read.problem ? <Callout tone="danger" data-testid="historical-feedback-problem">Could not read attempt {props.attempt}'s feedback: {read.problem}
+      <Button size="sm" onClick={() => void read.reload()}>Retry</Button></Callout> : !read.loaded ? <p role="status">Reading earlier feedback…</p> : null}
+    <ChangesReview {...props} fb={fb} />
+  </>;
+}
+
+function ChangesReview({ client, taskId, attempt, current, runs, version, fb, you, onOpenRunChanges }: ChangesTabProps) {
   // The words "General feedback" from 1600px; its icon below, so the bar stays one row at 1440.
   const wide = useWide(1600);
   const desktopDiff = useWide(641);

@@ -195,7 +195,7 @@ export function branchComments(people: ReadonlyArray<{ id: string; name: string 
     routedTo: submitted ? "workflow" : null, submittedAt: submitted ? at(minutesAgo) : null, createdAt: at(minutesAgo), updatedAt: at(minutesAgo),
     history: [],
   });
-  return [
+  const items = [
     item("fbi_fx_b1", "u_ana", "The invoice option is annual-only: say so on the radio, not only in the docs.",
       branchAnchor(current, "tbs_fx_web", "src/checkout/PaymentStep.tsx", "new", 8, 8), true, 30),
     item("fbi_fx_b2", "u_tom", "Billing first, then payment: keep the step names the funnel already reports.",
@@ -207,6 +207,19 @@ export function branchComments(people: ReadonlyArray<{ id: string; name: string 
     item("fbi_fx_b5", "u_ana", "Also cover a monthly plan: no invoice offered.",
       branchAnchor(current, "tbs_fx_web", "src/checkout/PaymentStep.test.tsx", "new", 4, 6), true, 25),
   ];
+  if (current > 1) {
+    for (const [id, line, submitted, body] of [
+      ["fbi_fx_old1", 8, true, "Earlier attempt: keep annual invoice wording."],
+      ["fbi_fx_old2", 9, false, "Earlier draft: preserve the plan event."],
+    ] as const) {
+      items.push({ ...item(id, submitted ? "u_ana" : "u_marcio", body,
+        branchAnchor(current, "tbs_fx_attempt1", "src/checkout/PaymentStep.tsx", "new", line, line), submitted, 300), attempt: 1 });
+    }
+    items.push({ ...items.find((i) => i.id === "fbi_fx_old1")!, id: "fbi_fx_old3", body: "Earlier comment: these lines have changed.",
+      anchor: { ...branchAnchor(current, "tbs_fx_attempt1", "src/checkout/PaymentStep.tsx", "new", 8, 8),
+        snapshotId: "tbs_fx_attempt1_previous", diffChecksum: "older-checksum" }, outdated: true });
+  }
+  return items;
 }
 
 /** The newest snapshot of web-console's attempt 2 in each state; the page's (latest unless refreshed) is tbs_fx_web. */

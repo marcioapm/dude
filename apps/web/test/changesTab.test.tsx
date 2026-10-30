@@ -119,7 +119,16 @@ describe("the Changes tab: the branch", () => {
     expect(tab.dataset["snapshot"]).toBe("tbs_fx_attempt1");
     expect(q(tab, "gutter-add")).toBeNull();
     expect(q(tab, "changes-general")).toBeNull();
-    expect(q(tab, "comment-mark")).toBeNull();
+    expect(headMark(tab, "src/checkout/PaymentStep.tsx")).not.toBeNull();
+    expect(tab.textContent).toContain("Earlier attempt: keep annual invoice wording.");
+    expect(tab.textContent).toContain("Earlier draft: preserve the plan event.");
+    expect(tab.textContent).not.toContain("Would a missing plan id");
+    await click(headMark(tab, "src/checkout/PaymentStep.tsx")!);
+    expect(document.activeElement?.getAttribute("data-fb-item")).toBe("fbi_fx_old3");
+    await click(headMark(tab, "src/checkout/PaymentStep.tsx")!);
+    expect(document.activeElement?.getAttribute("data-fb-item")).toBe("fbi_fx_old1");
+    expect(tab.querySelector("textarea")).toBeNull();
+    expect([...tab.querySelectorAll("button")].filter((b) => /^(Reply|Resolve|Reopen|Edit|Delete)$/.test(b.textContent ?? ""))).toEqual([]);
   });
 
   test("Pending work lists the live sessions, each to its own Changes; never in the branch view", async () => {

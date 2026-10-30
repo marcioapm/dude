@@ -786,7 +786,7 @@ export class FixtureClient extends ApiClient {
     if (this.#branchSeeded) return;
     this.#branchSeeded = true;
     const state = branchState();
-    if (state === "populated" || state === "updated" || state === "rebased") {
+    if (state === "populated" || state === "updated" || state === "rebased" || state === "older") {
       this.feedbackItems.push(...branchComments(PEOPLE, this.#currentAttempt()));
     }
   }
