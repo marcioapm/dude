@@ -283,6 +283,10 @@ describe("LiveDiff: comment marks and the page's scope", () => {
     expect(html).toContain('data-testid="filtered-out-file" data-path="docs/c.md"');
     expect(html).toContain("Comment 1 of 1 on docs/c.md — show next");
     expect(renderToStaticMarkup(<LiveDiff base="b" files={files} commenting={commenting()} />)).not.toContain("hidden by the filter");
+    // Even zero matches must leave hidden commented paths reachable.
+    const noMatches = renderToStaticMarkup(<LiveDiff base="b" files={[]} filteredOut={["docs/c.md"]} commenting={commenting()} />);
+    expect(noMatches).toContain("With comments, hidden by the filter");
+    expect(noMatches).toContain("Comment 1 of 1 on docs/c.md — show next");
   });
 
 });

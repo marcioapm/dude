@@ -43,6 +43,8 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly onOpenFile?: ((path: string) => void) | undefined;
   /** Side by side or one column; unified until the person picks. */
   readonly defaultView?: LiveDiffView | undefined;
+  /** A page may hold the view (for example, unified only on a phone). */
+  readonly view?: LiveDiffView | undefined;
   /**
    * The file shown alone, null for all of them. Give it (with
    * `onSelectedChange`) to pick one from outside — a list of changed files
@@ -253,8 +255,9 @@ const NONE: ReadonlyArray<string> = [];
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, commenting, scopeLabel, filteredOut = NONE, listNote, className, ...rest }: LiveDiffProps) {
-  const [view, setView] = useState<LiveDiffView>(defaultView);
+export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", view: heldView, selected: given, onSelectedChange, fileList = true, commenting, scopeLabel, filteredOut = NONE, listNote, className, ...rest }: LiveDiffProps) {
+  const [ownView, setView] = useState<LiveDiffView>(defaultView);
+  const view = heldView ?? ownView;
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
   const [own, setOwn] = useState<string | null>(null);
@@ -434,7 +437,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
           {tools}
         </div>
       )}
-      {files.length === 0 ? (
+      {files.length === 0 && filteredOut.length === 0 ? (
         <div className={styles["empty"]}>
           {last}
           {emptyMessage ?? "No changes yet."}
@@ -508,6 +511,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
           ) : null}
           <div className={cx(styles["diffs"], commenting && styles["commentable"], dragging && styles["dragging"])} ref={scroller} data-testid="diffs" {...pointer}>
             {fileList ? null : last}
+            {files.length === 0 ? <div className={styles["empty"]}>{emptyMessage ?? "No changes yet."}</div> : null}
             {shown.map((f) => (
               <section key={f.path} className={styles["section"]} data-testid="diff-section" data-path={f.path}>
                 <header className={styles["fileHead"]}>
