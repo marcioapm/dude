@@ -91,4 +91,10 @@ test("the Overview gallery section draws each block in both themes and densities
   for (const words of ["2 agents", "Needs Sam Rivera", "Ready to merge", "Not started", "Attempt 1 · set aside", "Not reported", "$0.00"]) {
     expect(states).toContain(words);
   }
+  // Composed as the app composes them: StartChoice's cards, the needs-you action, each Run's action a DS Button named for it; no raw button.
+  const block = page.querySelector("#ov-states")!;
+  expect(block.querySelectorAll("[aria-label='How to start'] section[data-option]").length).toBeGreaterThan(0);
+  expect([...block.querySelectorAll("button")].some((b) => b.textContent === "Answer in Chat")).toBe(true);
+  expect([...block.querySelectorAll("button")].filter((b) => b.textContent === "Open session").every((b) => /^Open .+'s session$/.test(b.getAttribute("aria-label") ?? ""))).toBe(true);
+  expect([...page.querySelectorAll("section#overview button")].every((b) => b.hasAttribute("data-variant") || b.closest("details") !== null || b.closest("[role=group]") !== null)).toBe(true);
 });

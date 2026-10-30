@@ -6,6 +6,7 @@ import { Disclosure } from "../../components/Disclosure.tsx";
 import { Duration } from "../../components/Numbers.tsx";
 import { MetricGroup, MetricTile } from "../../components/MetricTile.tsx";
 import { RunningList, RunningRow } from "../../components/RunningRow.tsx";
+import { StartChoice } from "../../components/StartChoice.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
 import { Button } from "../../primitives/Button.tsx";
 import { Callout } from "../../primitives/Layout.tsx";
@@ -51,18 +52,36 @@ function Figures({ state }: { readonly state: State }) {
   );
 }
 
+/** The two ways to start, as the app offers them in Running now's place: StartChoice's equal cards, no default. */
+function Start() {
+  return (
+    <StartChoice options={[
+      { id: "talk", icon: "message", title: "Talk it through",
+        description: "The conductor reads the task and the code, asks what it needs, proposes a plan, and starts the agents when you agree.",
+        points: ["Nothing is built until you agree", "It asks you before the pull request"], foot: "The conductor, in Chat",
+        action: <Button size="sm">Talk it through</Button> },
+      { id: "deliver", icon: "zap", title: "Deliver",
+        description: "The automatic pipeline: an implementer, reviewers, a fixer if they find problems, a simplifier, then a pull request. Nobody needs to be here.",
+        points: ["Stops only on a question or an escalation", "You can write in Chat later and take over"], foot: "The project's pipeline",
+        action: <Button size="sm">Deliver</Button> },
+    ]} />
+  );
+}
+
 function Running({ state }: { readonly state: State }) {
-  const words: Record<Exclude<State, "active">, ReactNode> = {
+  const words: Record<Exclude<State, "active" | "not-started">, ReactNode> = {
     "needs-you": "Waiting on Sam Rivera to answer.",
     ready: <><StatusMark status="ready_to_merge" size="sm" /> Ready to merge: nothing is running.</>,
-    "not-started": "Not started: choose how it begins.",
     ended: "Attempt 1 · set aside: nothing in it runs again, and its records are only to read.",
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--ds-space-12)", padding: "var(--ds-space-16)", background: "var(--ds-color-raised)" }}>
-      <strong>Running now{state === "active" ? " · 2 agents" : ""}</strong>
-      {state === "active" ? <Reviewers /> : <span style={{ color: "var(--ds-color-text-muted)" }}>{words[state]}</span>}
-      {state === "not-started" ? <div style={{ display: "flex", gap: "var(--ds-space-8)" }}><Button size="sm" variant="secondary">Talk it through</Button><Button size="sm" variant="secondary">Deliver</Button></div> : null}
+      {/* As the app's region head: the title, and the count right-aligned and muted. */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "var(--ds-space-12)" }}>
+        <strong>Running now</strong>
+        <span style={{ color: "var(--ds-color-text-muted)" }}>{state === "active" ? "2 agents · attempt 2" : "No agent at work"}</span>
+      </div>
+      {state === "active" ? <Reviewers /> : state === "not-started" ? <Start /> : <span style={{ color: "var(--ds-color-text-muted)" }}>{words[state]}</span>}
     </div>
   );
 }
@@ -72,9 +91,15 @@ function OverviewState({ state }: { readonly state: State }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--ds-space-12)", minWidth: 0 }}>
       {state === "needs-you" ? (
+        // The app's needs-you region: the question quoted, who can answer, and the way to where it is answered.
         <Callout tone="attention" fill>
-          <strong>Needs Sam Rivera · Conductor asks</strong>
-          <div>Should retries stop after 5 attempts or after 24 hours?</div>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "var(--ds-space-12) var(--ds-space-20)" }}>
+            <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+              <strong>Needs Sam Rivera · Conductor asks</strong>
+              <div>Should retries stop after 5 attempts or after 24 hours?</div>
+            </div>
+            <Button variant="primary" size="sm" trailingIcon="arrow-right">Answer in Chat</Button>
+          </div>
         </Callout>
       ) : null}
       <div style={{ padding: "var(--ds-space-12) var(--ds-space-16)", background: "var(--ds-color-chrome)" }}><Figures state={state} /></div>
