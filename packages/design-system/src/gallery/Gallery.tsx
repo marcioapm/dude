@@ -27,12 +27,14 @@ import { ImagesGallerySection } from "./sections/Images.tsx";
 import { WelcomeSection } from "./sections/Welcome.tsx";
 import { StartingSection } from "./sections/Starting.tsx";
 import { PageRailSection } from "./sections/PageRails.tsx";
+import { OverviewSection } from "./sections/Overview.tsx";
 import { AccountsSection } from "./sections/Accounts.tsx";
 import { AutomationsSection } from "./sections/Automations.tsx";
 import { ChatProvidersSection } from "./sections/ChatProviders.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["Page rails", [["rail-populated", "Layout + facets"], ["rail-empty", "Empty"], ["rail-narrow", "Narrow controls"]]],
+  ["Task overview", [["ov-running", "RunningRow"], ["ov-disclosure", "Disclosure"], ["ov-states", "Overview states · costs"], ["ov-phone", "Phone"]]],
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
   [
     "Welcome",
@@ -444,6 +446,7 @@ function Shell() {
           <ServersSection mode={panes} />
           <BrainstormSection mode={panes} />
           <PageRailSection mode={panes} />
+          <OverviewSection mode={panes} />
           <AccountsSection mode={panes} />
           <ChatProvidersSection mode={panes} />
         </PaneDensityContext.Provider>

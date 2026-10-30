@@ -5,8 +5,9 @@
  * The header says what it is and who it is for: where it sits, its title,
  * its pull requests' states, and its people (the owner with the agent
  * working for them on their face). Below it, tabs in the order a person
- * asks: Overview (the goal, the pipeline, time and cost, and the pull
- * requests beside them), Findings (every review finding), Sessions (every
+ * asks: Overview (what it is doing, what needs a person, what it cost, its
+ * pull requests and its branch: what a task opens on), Changes (the
+ * branch's changes), Chat, Findings (every review finding), Sessions (every
  * agent that ran down the left, the one open beside them: its conversation
  * and its changes), Files (what they left), and Activity (who did what, by
  * name).
@@ -45,6 +46,8 @@ import {
   PlanMeter,
   PrChip,
   PullRequestPanel,
+  prSpecOf,
+  prStateOf,
   SessionItemContent,
   SearchSelector,
   type SearchSelectorProps,
@@ -74,7 +77,6 @@ import { VerificationSection } from "./VerificationSection.tsx";
 import { inFacet, withCounts } from "./facets.ts";
 import { EscalationPanel } from "./EscalationPanel.tsx";
 import { StalledPanel, stalledForOwner } from "./StalledPanel.tsx";
-import { TaskMetricsSection } from "./MetricsSection.tsx";
 import { NotFound } from "./NotFound.tsx";
 import { DudeMark, dudeName } from "../DudeMark.tsx";
 import { RunScreen, type StoppedRun } from "./RunScreen.tsx";
@@ -110,6 +112,8 @@ import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFe
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
 import { OriginLine, TaskOrigin } from "../chatOrigin.tsx";
+import { ChangesTab } from "./ChangesTab.tsx";
+import { NeedsYou, TaskOverview, openAgentQuestions } from "./TaskOverview.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -177,8 +181,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // A session's URL is the Sessions tab with it open, on its attempt; the
   // task's URL names the tab and the attempt when it is not the current
   // one. A tab or attempt picked here is written back. A URL naming no tab
-  // opens on Chat once someone has written in it, Overview until then
-  // (null: that default).
+  // opens on Overview, for a conductor's task too (null: that default).
   const [chosenTab, setTab] = useState<string | null>(openTab ?? null);
   // The attempt picked, null for the current one. Kept on Activity and
   // Servers, whose URLs never name one: back on a tab that shows one
@@ -224,6 +227,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // The task's ended conductors' ledgers, read once while its page is open.
   const endedLedgers = useMemo(() => new EndedLedgers(client), [client, taskId]); // eslint-disable-line react-hooks/exhaustive-deps -- one per task
   const [delivering, setDelivering] = useState(false);
+  // Overview's open disclosures, kept while the page is: back on Overview they are as they were left.
+  const [overviewOpen, setOverviewOpen] = useState<ReadonlySet<string>>(() => new Set());
   const [editing, setEditing] = useState(false);
   const people = usePeople();
   // What the open session shows of its task: the owner, the same object while
@@ -280,8 +285,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       if (err instanceof ApiError && err.status === 404) setMissing(true);
       else setProblem(err instanceof Error ? err.message : String(err));
     }
+    // What the ledger holds once this read is in, not before: an overlapping load may have added the same events meanwhile.
+    const fetched = await more;
     const last = ledger.current.at(-1)?.cursor ?? 0;
-    const unseen = (await more).filter((e) => e.cursor > last);
+    const unseen = fetched.filter((e) => e.cursor > last);
     if (unseen.length > 0) {
       ledger.current = [...ledger.current, ...unseen];
       setEvents(ledger.current);
@@ -496,6 +503,13 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     return out;
   }, [phases, events]);
 
+  // The agents' questions still open, read once per change of the ledger (not per frame of the stream).
+  const agentQuestions = useMemo(() => openAgentQuestions(events), [events]);
+  // Overview's milestones: Activity's own lines, worked out only while Overview shows.
+  const onOverview = (asked ?? "overview") === "overview";
+  const recentLines = useMemo(() => (item && onOverview ? activityLines(events, people, item.runs, allPrs, attempts[0] ?? 1, item.key ?? null, item.source ?? null) : []),
+    [item, onOverview, events, people, allPrs, attempts]);
+
   if (missing) return <NotFound what="task" onBack={onBack} />;
   if (!item) {
     return <div className="centered">{problem ?? <Spinner label="Loading…" />}</div>;
@@ -505,8 +519,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // turn, and the latest takes the next message.
   const conductors = [...item.runs].filter(isConductor).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const conductor = conductors.at(-1) ?? null;
-  // A URL naming an attempt is an attempt's place, and Chat is the task's: with no tab, Overview.
-  const tab = asked ?? (conductor && urlAttempt === undefined ? "chat" : "overview");
+  // A task opens on its Overview, whoever decides it; a URL naming a tab, or a session, opens there.
+  const tab = asked ?? "overview";
 
   // Leaves any open session; the URL is replaced only for a tab change with none open.
   const show = (onTab: string, n: number, replace: boolean) => {
@@ -612,6 +626,208 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   const openQuestions = parts.mine.questions.filter((q) => q.status === "open").length;
   const heldByQuestions = !earlier && item.heldByQuestions && openQuestions > 0;
 
+  // An agent's question still open on the current attempt: Overview's one needs-you region.
+  const asking = earlier ? undefined : agentQuestions.find((q) => byId.has(q.runId) && attemptOfRun(byId.get(q.runId)!, current) === current);
+  const askingRun = asking ? byId.get(asking.runId) : undefined;
+  const needsYou = asking && tab === "overview" ? (
+    <NeedsYou question={asking} run={askingRun}
+      who={asking.toName ?? (owner ? owner.name : "a person")}
+      onAnswer={() => (askingRun && isConductor(askingRun) ? pickTab("chat") : onOpenRun(asking.runId))} />
+  ) : null;
+  // Every notice the task has now, in one place: above the tabs, and on Overview above its figures.
+  const notices = needsYou || item.escalation || stop || aside || problem || blocked || held || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+    <div className="taskNotices" data-testid="task-notices">
+      {needsYou}
+      {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
+      {!earlier ? lifecycle.notice : null}
+      {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
+      {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
+      {held ? (
+        <HeldPanel client={client} task={item} you={people.you} runs={phases} findings={mine.findings}
+          verification={parts.verifications.find((v) => !v.stale) ?? null} feedback={feedback.items}
+          preview={heldPreview}
+          onFindings={() => pickTab("findings")} onFiles={() => pickTab("files")} onFeedback={() => pickTab("feedback")}
+          onChanges={(repo) => {
+            const run = phases.find((r) => r.status === "completed" && r.heads && repo in r.heads);
+            if (run) onOpenRun(run.id);
+          }}
+          onDone={() => void load()} />
+      ) : null}
+      {heldByQuestions ? (
+        <Callout tone="attention" data-testid="questions-hold">
+          <div className="escalation">
+            <p>
+              <strong>{openQuestions === 1 ? "A reviewer's question holds" : `${openQuestions} reviewers' questions hold`} the pull request.</strong>{" "}
+              {yours ? "Answer or withdraw each on Findings" : `Waiting for ${owner ? firstName(owner.name) : "the owner"} to answer or withdraw each`}
+              {item.decider === "conductor" ? ", or the conductor answers what it can establish" : ""}; then delivery goes on.
+            </p>
+            {tab !== "findings" ? (
+              <div className="escalationActions">
+                <Button size="sm" variant="secondary" onClick={() => pickTab("findings")} data-testid="questions-hold-open">Show the questions</Button>
+              </div>
+            ) : null}
+          </div>
+        </Callout>
+      ) : null}
+      {item.escalation && !earlier ? (
+        <EscalationPanel client={client} findings={mine.findings} task={{ ...item, escalation: item.escalation }} you={people.you}
+          youAdmin={people.me?.role === "admin"} onOpenRun={onOpenRun} onDecided={() => void load()} />
+      ) : null}
+      {!earlier && !item.escalation ? stalledForOwner(item.runs).map((r) => (
+        <StalledPanel key={r.id} client={client} run={{ ...r, stalled: r.stalled! }} owner={item.owner} you={people.you}
+          onOpenRun={onOpenRun} onDone={() => void load()} />
+      )) : null}
+      {stop ? (
+        <StoppedNotice task={item} stop={stop} options={recovery} owner={owner?.name ?? null} you={yours}
+          pullRequests={openPrs} onOpenRun={onOpenRun} onChoose={setPickingUp} />
+      ) : null}
+      {problem ? <Callout tone="danger">{problem}</Callout> : null}
+      {commentingNotices}
+    </div>
+  ) : null;
+
+  // -- Overview's parts, from the same reads as the rest of the page ----------
+  // In Running now's place before work starts: the two ways to start, blocked, planning, or not started.
+  const overviewIdle = phases.length > 0 ? null : blocked ? (
+    <div data-testid="pipeline-blocked">
+      <EmptyState compact icon="lock" title="Waiting on its blockers"
+        description="Nothing starts until what it waits on is merged. A person can start it anyway; an agent can't." />
+    </div>
+  ) : startable ? (
+    <StartChoice data-testid="start-choice" options={[
+      { id: "talk", icon: "message", title: "Talk it through",
+        description: "The conductor reads the task and the code, asks what it needs, proposes a plan, and starts the agents when you agree.",
+        points: ["Nothing is built until you agree", "It asks you before the pull request"],
+        foot: "The conductor, in Chat",
+        action: <Button size="sm" onClick={() => void talk()} disabled={delivering} data-testid="start-talk">Talk it through</Button> },
+      { id: "deliver", icon: "zap", title: "Deliver",
+        description: `The automatic pipeline: ${deliverSteps}. Nobody needs to be here.`,
+        points: ["Stops only on a question or an escalation", "You can write in Chat later and take over"],
+        foot: "The project's pipeline",
+        action: <Button size="sm" onClick={() => void deliver()} disabled={delivering} data-testid="start-deliver">Deliver</Button> },
+    ]} />
+  ) : item.decider === "conductor" && !earlier ? (
+    sessions.some((r) => isConductor(r) && !TERMINAL_RUN_STATUSES.includes(r.status)) ? null : (
+      <EmptyState compact icon="conductor" title="Planning with the conductor"
+        description="Nothing is built until the conductor and you agree: talk it through in Chat." />
+    )
+  ) : (
+    <EmptyState compact icon="git-pr" title="Not started"
+      description={source === null ? "Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request."
+        : `Deliver runs ${deliverSteps}.`} />
+  );
+  // Nothing at work: what it waits on, from the recorded state alone.
+  const waitingWords = earlier ? `Attempt ${shown} was set aside: nothing in it runs again, and its records are only to read.`
+    : asking ? `Waiting on ${asking.toName ?? (owner ? firstName(owner.name) : "a person")} to answer.`
+    : item.escalation ? "Waiting on a person's decision, above."
+    : held ? "Held before the pull request, above."
+    : item.status === "review" ? (prs.length > 0 ? "Nothing is running: the pull request waits on its review and checks." : "Nothing is running: the work waits to be read.")
+    : item.status === "done" ? "Done: nothing runs." : ["failed", "aborted"].includes(item.status) ? "Stopped: nothing runs."
+    : item.awaitingDecision ? "Waiting on a decision."
+    : "No agent is at work right now.";
+  // The branch, per repository the attempt's sessions committed to: its name, the pull request's base, the last head recorded.
+  const branches = (() => {
+    const out = new Map<string, { repository: string; branch: string; target: string | null; head: string | null; at: string }>();
+    for (const r of sessions) {
+      for (const [repo, sha] of Object.entries(r.heads ?? {})) {
+        const pr = prs.find((x) => x.repositoryName === repo || x.repositoryName.endsWith(`/${repo}`));
+        const was = out.get(repo);
+        if (!was || r.createdAt > was.at) out.set(repo, { repository: repo, branch: r.branch ?? pr?.headBranch ?? "", target: pr?.baseBranch ?? null, head: sha, at: r.createdAt });
+      }
+    }
+    return [...out.values()].filter((b) => b.branch).map(({ at: _at, ...b }) => b);
+  })();
+  // The attempt's pull requests, as the rail drew them: read-only on an earlier attempt.
+  const prPanels = prs.map((pr) => earlier ? (
+    // An earlier attempt's pull request is only to read: no Merge, no requests.
+    <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}
+      // Recovery never closes the adopted pull request, so its close is never read as Start over's.
+      note={isAdoptedPr(pr, source) ? <span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>
+        : pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} /> : undefined}
+      actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
+  ) : (
+    <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}
+      // Until people load, not refused: the owner or an admin sees no flash of disabled buttons; the orchestrator still refuses.
+      resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name} notAllowed={people.me ? notYours(item, people) : undefined}
+      feedbackHolds={feedback.loaded ? feedback.blocking : undefined} onShowFeedback={() => pickTab("feedback")}>
+      {(actions) => (
+        <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
+          factActions={actions.facts} factUnder={actions.under} conflict={actions.conflict}
+          note={isAdoptedPr(pr, source) ? <><span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>{actions.note ? <><br />{actions.note}</> : null}</> : actions.note}
+          diagnosticAction={<a href={formatPlace({ view: "orgSettings", page: "github" })}>GitHub settings</a>}
+          actions={
+            <>
+              {actions.merge}
+              <LinkButton href={pr.url}>Open on GitHub</LinkButton>
+            </>
+          } />
+      )}
+    </PullRequestActions>
+  ));
+  // The newest few of Activity's own lines, of the attempt shown (and the task's own, attempt-less ones).
+  const milestones = recentLines.filter((l) => !many || l.attempt === null || l.attempt === shown).slice(0, 4);
+  const goalAndCriteria = (
+    <div className="taskMain">
+      {item.goal ? (
+        <section className="taskBlock" aria-label="Goal">
+          <h3 className="ds-label">Goal</h3>
+          <div className="taskGoal">
+            {/* Written in Markdown in the task dialog: shown as its preview showed it. */}
+            <Markdown data-testid="overview-goal" source={item.goal} breaks unmeasured attachmentImage={taskImages.attachmentImage} />
+          </div>
+        </section>
+      ) : <p className="muted">No goal written.</p>}
+      {item.origin ? <TaskOrigin origin={item.origin} names={(id) => people.byId.get(id) ?? null} /> : null}
+      {item.acceptanceCriteria.length > 0 ? (
+        <section className="taskBlock" aria-label="Acceptance criteria">
+          <h3 className="ds-label">Acceptance criteria</h3>
+          <ul aria-label="Acceptance criteria" className="taskGoal taskCriteria">
+            {item.acceptanceCriteria.map((c, i) => (
+              <li key={i}><Markdown data-testid="overview-criterion" source={c} breaks unmeasured attachmentImage={taskImages.attachmentImage} /></li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {taskImages.viewer}
+    </div>
+  );
+  const pipeline = phases.length > 0 || prs.length > 0 ? (
+    <StepList data-testid="pipeline">
+      {phases.map((run, index) => (
+        <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents, createdFor.get(run.id))}
+          nothingAdded={nothingAdded.has(run.id)}
+          findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
+      ))}
+      {prs.map((pr) => (
+        <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} adopted={isAdoptedPr(pr, source)} />
+      ))}
+    </StepList>
+  ) : <p className="muted">No pipeline has started{many ? ` in attempt ${shown}` : ""}.</p>;
+  const serversAndFacts = (
+    <div className="overviewFacts">
+      <section className="taskBlock" aria-label="This task">
+        <h3 className="ds-label">This task</h3>
+        <KeyValueList data-testid="task-facts" items={[
+          ...(owner ? [{ label: "Owner", value: owner.name }] : []),
+          // Filed from a chat thread: where, linked to it.
+          ...(item.origin ? [{ label: "From", value: <OriginLine origin={item.origin} testId="task-origin" /> }] : []),
+          // Existing work it took over: GitHub's pull request (linked once recorded) or the branch, and its base.
+          ...(source ? [{ label: "Starts from", value: <span data-testid="task-source-fact">
+            <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} />
+            <span data-testid="task-source-mode-fact"> · {continues ? "Continue the work" : "Review it as is"}</span></span> }] : []),
+          // A task never started over names no attempt anywhere.
+          ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
+        ]} />
+        {!earlier ? <BeforePullRequestControl client={client} task={item} you={people.you} onChanged={() => void load()} /> : null}
+      </section>
+      <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
+      {showServers ? (
+        <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => pickTab("servers")} linkFor={commenting.linkFor}
+          commentingOff={commenting.offer.kind === "unavailable" ? <CommentingUnavailable reason={commenting.offer.reason} /> : null} />
+      ) : <p className="muted">{earlier ? "Servers are the current attempt's." : "Nothing serves this branch."}</p>}
+    </div>
+  );
+
   return (
     // On Sessions the page holds still and the session scrolls inside it.
     <div className={tab === "sessions" || tab === "chat" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen" data-attempt={shown}>
@@ -680,55 +896,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <DriverConfirmation control={driverControl} />
       {driverControl.problem ? <Callout tone="danger" data-testid="driver-problem">{driverControl.problem}</Callout> : null}
-      {item.escalation || stop || aside || problem || blocked || held || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
-        <div className="taskNotices">
-          {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
-          {!earlier ? lifecycle.notice : null}
-          {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
-          {blocked && relations ? <BlockedNotice client={client} taskId={taskId} relations={relations} you={people.you} onChanged={reloadRelations} /> : null}
-          {held ? (
-            <HeldPanel client={client} task={item} you={people.you} runs={phases} findings={mine.findings}
-              verification={parts.verifications.find((v) => !v.stale) ?? null} feedback={feedback.items}
-              preview={heldPreview}
-              onFindings={() => pickTab("findings")} onFiles={() => pickTab("files")} onFeedback={() => pickTab("feedback")}
-              onChanges={(repo) => {
-                const run = phases.find((r) => r.status === "completed" && r.heads && repo in r.heads);
-                if (run) onOpenRun(run.id);
-              }}
-              onDone={() => void load()} />
-          ) : null}
-          {heldByQuestions ? (
-            <Callout tone="attention" data-testid="questions-hold">
-              <div className="escalation">
-                <p>
-                  <strong>{openQuestions === 1 ? "A reviewer's question holds" : `${openQuestions} reviewers' questions hold`} the pull request.</strong>{" "}
-                  {yours ? "Answer or withdraw each on Findings" : `Waiting for ${owner ? firstName(owner.name) : "the owner"} to answer or withdraw each`}
-                  {item.decider === "conductor" ? ", or the conductor answers what it can establish" : ""}; then delivery goes on.
-                </p>
-                {tab !== "findings" ? (
-                  <div className="escalationActions">
-                    <Button size="sm" variant="secondary" onClick={() => pickTab("findings")} data-testid="questions-hold-open">Show the questions</Button>
-                  </div>
-                ) : null}
-              </div>
-            </Callout>
-          ) : null}
-          {item.escalation && !earlier ? (
-            <EscalationPanel client={client} findings={mine.findings} task={{ ...item, escalation: item.escalation }} you={people.you}
-              youAdmin={people.me?.role === "admin"} onOpenRun={onOpenRun} onDecided={() => void load()} />
-          ) : null}
-          {!earlier && !item.escalation ? stalledForOwner(item.runs).map((r) => (
-            <StalledPanel key={r.id} client={client} run={{ ...r, stalled: r.stalled! }} owner={item.owner} you={people.you}
-              onOpenRun={onOpenRun} onDone={() => void load()} />
-          )) : null}
-          {stop ? (
-            <StoppedNotice task={item} stop={stop} options={recovery} owner={owner?.name ?? null} you={yours}
-              pullRequests={openPrs} onOpenRun={onOpenRun} onChoose={setPickingUp} />
-          ) : null}
-          {problem ? <Callout tone="danger">{problem}</Callout> : null}
-          {commentingNotices}
-        </div>
-      ) : null}
+      {tab !== "overview" ? notices : null}
 
       {editing ? (
         <TaskDialog client={client} projectId={item.projectId} onClose={() => setEditing(false)} existing={existingTask(item, started, people.you)} onSaved={() => void load()} />
@@ -759,8 +927,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
       <Tabs value={tab} onValueChange={pickTab} fill className="taskTabs">
         <TabList aria-label="Task" className="tabsInset">
-          <Tab value="chat">Chat</Tab>
           <Tab value="overview">Overview</Tab>
+          <Tab value="changes" tooltip={many ? <>Attempt {shown}'s changes</> : undefined}>Changes</Tab>
+          <Tab value="chat">Chat</Tab>
           <Tab value="findings" count={mine.findings.length > 0 ? mine.findings.length : undefined}
             tooltip={many ? <>Attempt {shown}'s findings; {othersSaid("findings")}</> : undefined}>Findings</Tab>
           <Tab value="sessions" count={sessions.length > 0 ? sessions.length : undefined}
@@ -774,6 +943,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Tab value="activity" tooltip={many ? "Every attempt" : undefined}>Activity</Tab>
         </TabList>
 
+        <TabPanel value="changes">
+          <ChangesTab runs={sessions} onOpenRun={onOpenRun} />
+        </TabPanel>
+
         <TabPanel value="chat" fill>
           <ChatSection client={client} task={item} conductorId={conductor?.id ?? null}
             earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status, attempt: r.attempt }))} ledgers={endedLedgers}
@@ -782,128 +955,30 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             driverControl={driverControl} canSwitchDriver={yours && !earlier} />
         </TabPanel>
 
-        <TabPanel value="overview" className="railPanel">
-          <PageWithRail children={
-            <div className="taskMain taskPane">
-              {item.goal ? (
-                <section className="taskBlock" aria-label="Goal">
-                  <h2 className="ds-label">Goal</h2>
-                  <div className="taskGoal">
-                    {/* Written in Markdown in the task dialog: shown as its preview showed it. */}
-                    <Markdown data-testid="overview-goal" source={item.goal} breaks unmeasured attachmentImage={taskImages.attachmentImage} />
-                  </div>
-                </section>
-              ) : null}
-              {item.origin ? <TaskOrigin origin={item.origin} names={(id) => people.byId.get(id) ?? null} /> : null}
-              {item.acceptanceCriteria.length > 0 ? (
-                <section className="taskBlock" aria-label="Acceptance criteria">
-                  <h2 className="ds-label">Acceptance criteria</h2>
-                  <ul aria-label="Acceptance criteria" className="taskGoal taskCriteria">
-                    {item.acceptanceCriteria.map((c, i) => (
-                      <li key={i}><Markdown data-testid="overview-criterion" source={c} breaks unmeasured attachmentImage={taskImages.attachmentImage} /></li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              {taskImages.viewer}
-
-              {relations && item.key ? (
-                <TaskRelationsSection client={client} taskId={taskId} taskKey={item.key} relations={relations} tree={tree ?? []}
-                  here={{ projectId: item.projectId, epicId: item.epicId ?? null }} onChanged={reloadRelations} onOpen={onOpenTask} />
-              ) : null}
-              <section className="taskBlock" aria-label="Pipeline">
-                <h2 className="ds-label">Pipeline{many ? ` · attempt ${shown}` : ""}</h2>
-                {phases.length > 0 ? (
-                  <StepList data-testid="pipeline">
-                    {phases.map((run, index) => (
-                      <PhaseStep key={run.id} run={run} plan={plans.get(run.id)} why={whyItRan(run, index, phases, findings, prEvents, createdFor.get(run.id))}
-                        nothingAdded={nothingAdded.has(run.id)}
-                        findings={findings.filter((f) => f.runId === run.id)} onOpen={() => onOpenRun(run.id)} />
-                    ))}
-                    {prs.map((pr) => (
-                      <PullRequestStep key={pr.id} pr={pr} named={prs.length > 1} adopted={isAdoptedPr(pr, source)} />
-                    ))}
-                  </StepList>
-                ) : blocked ? (
-                  <div data-testid="pipeline-blocked">
-                    <EmptyState compact icon="lock" title="Waiting on its blockers"
-                      description="Nothing starts until what it waits on is merged. A person can start it anyway; an agent can't." />
-                  </div>
-                ) : startable ? (
-                  <StartChoice data-testid="start-choice" options={[
-                    { id: "talk", icon: "message", title: "Talk it through",
-                      description: "The conductor reads the task and the code, asks what it needs, proposes a plan, and starts the agents when you agree.",
-                      points: ["Nothing is built until you agree", "It asks you before the pull request"],
-                      foot: "The conductor, in Chat",
-                      action: <Button size="sm" onClick={() => void talk()} disabled={delivering} data-testid="start-talk">Talk it through</Button> },
-                    { id: "deliver", icon: "zap", title: "Deliver",
-                      description: `The automatic pipeline: ${deliverSteps}. Nobody needs to be here.`,
-                      points: ["Stops only on a question or an escalation", "You can write in Chat later and take over"],
-                      foot: "The project's pipeline",
-                      action: <Button size="sm" onClick={() => void deliver()} disabled={delivering} data-testid="start-deliver">Deliver</Button> },
-                  ]} />
-                ) : item.decider === "conductor" ? (
-                  <EmptyState compact icon="conductor" title="Planning with the conductor"
-                    description="Nothing is built until the conductor and you agree: talk it through in Chat." />
-                ) : (
-                  <EmptyState compact icon="git-pr" title="Not started"
-                    description={source === null ? "Deliver runs an implementer, reviewers, a fixer if they find problems, a simplifier, and opens a pull request."
-                      : `Deliver runs ${deliverSteps}.`} />
-                )}
-              </section>
-
-              <TaskMetricsSection client={client} taskId={taskId} attempt={many ? shown : undefined} setAside={earlier}
-                live={!earlier && item.status === "running"}
-                done={["done", "failed", "aborted"].includes(item.status)} version={version} />
-            </div>
-          } rail={
-              <PageRail aria-label="Pull requests, machines and servers">
-                <PageRailBlock label="This task"><KeyValueList data-testid="task-facts" items={[
-                  ...(owner ? [{ label: "Owner", value: owner.name }] : []),
-                  // Filed from a chat thread: where, linked to it.
-                  ...(item.origin ? [{ label: "From", value: <OriginLine origin={item.origin} testId="task-origin" /> }] : []),
-                  // Existing work it took over: GitHub's pull request (linked once recorded) or the branch, and its base.
-                  ...(source ? [{ label: "Starts from", value: <span data-testid="task-source-fact">
-                    <SourceLine source={source} href={allPrs.find((pr) => isAdoptedPr(pr, source))?.url} />
-                    <span data-testid="task-source-mode-fact"> · {continues ? "Continue the work" : "Review it as is"}</span></span> }] : []),
-                  // A task never started over names no attempt anywhere.
-                  ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
-                ]} />
-                  {!earlier ? <BeforePullRequestControl client={client} task={item} you={people.you} onChanged={() => void load()} /> : null}
-                </PageRailBlock>
-                <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
-                {prs.map((pr) => earlier ? (
-                  // An earlier attempt's pull request is only to read: no Merge, no requests.
-                  <PullRequestPanel key={pr.id} pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                    // Recovery never closes the adopted pull request, so its close is never read as Start over's.
-                    note={isAdoptedPr(pr, source) ? <span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>
-                      : pr.state === "closed" && aside?.at ? <ClosedNote pr={pr} events={events} at={aside.at} by={aside.by} attempt={shown} taskId={taskId} /> : undefined}
-                    actions={<LinkButton href={pr.url}>Open on GitHub</LinkButton>} />
-                ) : (
-                  <PullRequestActions key={pr.id} client={client} pr={pr} defaultMethod={mergeMethod} onChanged={() => void load()}
-                    // Until people load, not refused: the owner or an admin sees no flash of disabled buttons; the orchestrator still refuses.
-                    resolving={resolving.has(pr.id)} waitingFor={yours ? undefined : owner?.name} notAllowed={people.me ? notYours(item, people) : undefined}
-                    feedbackHolds={feedback.loaded ? feedback.blocking : undefined} onShowFeedback={() => pickTab("feedback")}>
-                    {(actions) => (
-                      <PullRequestPanel pr={pr} data-testid="pr-panel" data-pr={pr.id}
-                        factActions={actions.facts} factUnder={actions.under} conflict={actions.conflict}
-                        note={isAdoptedPr(pr, source) ? <><span data-testid="pr-adopted-note">{ADOPTED_PR_NOTE}</span>{actions.note ? <><br />{actions.note}</> : null}</> : actions.note}
-                        diagnosticAction={<a href={formatPlace({ view: "orgSettings", page: "github" })}>GitHub settings</a>}
-                        actions={
-                          <>
-                            {actions.merge}
-                            <LinkButton href={pr.url}>Open on GitHub</LinkButton>
-                          </>
-                        } />
-                    )}
-                  </PullRequestActions>
-                ))}
-                {showServers ? (
-                  <ServersAside client={client} taskId={taskId} servers={servers} onAll={() => pickTab("servers")} linkFor={commenting.linkFor}
-                    commentingOff={commenting.offer.kind === "unavailable" ? <CommentingUnavailable reason={commenting.offer.reason} /> : null} />
-                ) : null}
-              </PageRail>
-          } />
+        <TabPanel value="overview">
+          <TaskOverview client={client} taskId={taskId} version={version} notices={notices}
+            many={many} shown={shown} current={current} earlier={earlier}
+            live={!earlier && item.status === "running"} done={["done", "failed", "aborted"].includes(item.status)}
+            runs={sessions} events={events} onOpenRun={onOpenRun}
+            openFindings={mine.findings.filter((f) => f.status === "open").length}
+            feedbackHolds={!earlier && feedback.loaded ? feedback.blocking : undefined}
+            idle={overviewIdle} waiting={waitingWords}
+            branches={branches} onChanges={() => pickTab("changes")}
+            pullRequests={prs.length > 0 ? prPanels : null} prCount={prs.length}
+            milestones={milestones} onActivity={() => pickTab("activity")}
+            goal={goalAndCriteria} criteria={item.acceptanceCriteria.length}
+            relations={relations && item.key ? (
+              <TaskRelationsSection client={client} taskId={taskId} taskKey={item.key} relations={relations} tree={tree ?? []}
+                here={{ projectId: item.projectId, epicId: item.epicId ?? null }} onChanged={reloadRelations} onOpen={onOpenTask} />
+            ) : null}
+            relationCount={relations ? relations.blockedBy.length + relations.blocks.length + relations.related.length : null}
+            pipeline={pipeline} pipelineMeta={many ? `attempt ${shown} of ${attempts.length}` : phases.length > 0 ? plural(phases.length, "step") : "not started"}
+            servers={serversAndFacts}
+            open={overviewOpen} onOpenChange={(id, o) => setOverviewOpen((was) => {
+              const next = new Set(was);
+              if (o) next.add(id); else next.delete(id);
+              return next;
+            })} />
         </TabPanel>
 
         <TabPanel value="findings" className="railPanel">
@@ -1337,7 +1412,8 @@ function PullRequestStep({ pr, named, adopted }: { pr: PullRequest; named: boole
       avatar={<DudeMark size={32} />}
       label={label}
       note={pr.title}
-      status={<PrChip pr={pr} size="sm" showNumber={false} tabIndex={-1} />}
+      // The row is the link to GitHub already: its state is a mark, not a second link inside it.
+      status={<span className="prStepState ds-cap" data-pr-state={prStateOf(pr)}>{prSpecOf(pr).label}</span>}
       meta={pr.headBranch}
     />
   );

@@ -86,10 +86,11 @@ class DecisionsClient extends FixtureClient {
   refuse: ApiError | null = null;
 }
 
-async function page(client: DecisionsClient, opened: string[] = []) {
+/** The task's page: on Overview, as its own URL opens it, or on `tab` (Chat, as its Chat link opens it). */
+async function page(client: DecisionsClient, opened: string[] = [], tab?: "chat") {
   const { container, unmount } = await mount(
     <ToastProvider><PeopleProvider client={client}>
-      <TaskScreen client={client} taskId={TASK_ID} onOpenRun={(id) => opened.push(id)} onBack={() => {}} />
+      <TaskScreen client={client} taskId={TASK_ID} onOpenRun={(id) => opened.push(id)} onBack={() => {}} tab={tab} />
     </PeopleProvider></ToastProvider>,
   );
   mounted.push(unmount);
@@ -199,7 +200,7 @@ describe("a conducted task's Chat", () => {
 
   test("who decides, what it waits on, and Let Deliver finish it: the header and Chat agree after", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: { point: "after_review" } }, events());
-    const p = await page(client);
+    const p = await page(client, [], "chat");
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     expect(line.textContent).toContain("The conductor decides · waiting on it: what to do with the review's findings");
     await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
@@ -210,7 +211,7 @@ describe("a conducted task's Chat", () => {
   test("at the pull request gate, Deliver opens it only once the person confirms", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: { point: "before_pull_request" } }, events());
     client.refuse = new ApiError(409, "pull_request_gate", "Deliver will open the pull request now");
-    const p = await page(client);
+    const p = await page(client, [], "chat");
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
     const open = await until(() => document.querySelector<HTMLButtonElement>("[data-testid=hand-back-open]"), "the confirmation");
@@ -226,7 +227,7 @@ describe("a conducted task's Chat", () => {
   test("at the gate, keeping deciding in Chat asks nothing more and changes nothing", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: { point: "before_pull_request" } }, events());
     client.refuse = new ApiError(409, "pull_request_gate", "Deliver will open the pull request now");
-    const p = await page(client);
+    const p = await page(client, [], "chat");
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
     await click(await until(() => document.querySelector<HTMLButtonElement>("[data-testid=hand-back-keep]"), "Keep deciding in Chat"));
@@ -245,7 +246,7 @@ describe("a conducted task's Chat", () => {
       const client = new DecisionsClient({ status: "running", decider: "policy", handedBack: true, runs: held,
         awaitingDecision: { point: "before_pull_request" } }, events());
       client.refuse = new ApiError(409, "pull_request_gate", "Deliver will open the pull request now");
-      const p = await page(client);
+      const p = await page(client, [], "chat");
       const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "the gate's line");
       expect(line.textContent).toContain("Deliver decides · waiting on the person: whether to open the pull request");
       expect(p.querySelector("[data-testid=composer-to]")?.textContent).toBe("To Conductor · answers only, Deliver decides");
@@ -260,7 +261,7 @@ describe("a conducted task's Chat", () => {
 
   test("handed back, Chat says messages are answered and take nothing back, and offers the decisions to the conductor", async () => {
     const client = new DecisionsClient({ status: "running", decider: "policy", handedBack: true, runs, awaitingDecision: null }, events());
-    const p = await page(client);
+    const p = await page(client, [], "chat");
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     expect(line.textContent).toContain("Deliver decides · messages here are answered, and take no decisions back");
     expect(p.querySelector("[data-testid=composer-to]")?.textContent).toBe("To Conductor · answers only, Deliver decides");
@@ -272,7 +273,7 @@ describe("a conducted task's Chat", () => {
 
   test("the header's switch and Chat's are one: switching from the header moves Chat too", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: null }, events());
-    const p = await page(client);
+    const p = await page(client, [], "chat");
     const chip = await until(() => headerDriver(p), "the chip");
     expect(chip.getAttribute("data-switchable")).toBe("true");
     await openSwitch(chip);
@@ -286,7 +287,7 @@ describe("a conducted task's Chat", () => {
   test("a switch that fails leaves both as they were and says why", async () => {
     const client = new DecisionsClient({ status: "running", decider: "policy", runs, awaitingDecision: null }, events());
     client.refuse = new ApiError(409, "conflict", "task has no delivery in progress");
-    const p = await page(client);
+    const p = await page(client, [], "chat");
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     expect(line.textContent).toContain("a message from you gives it the decisions");
     await click(line.querySelector<HTMLButtonElement>("[data-testid=give-to-conductor]")!);
@@ -303,7 +304,7 @@ describe("a conducted task's Chat", () => {
       const client = new DecisionsClient({ status: "running", decider: "policy", handedBack: false,
         ...(unassigned ? { owner: null } : {}),
         runs: [run({ id: "run_only_phase", status: "running" })], awaitingDecision: null });
-      const p = await page(client);
+      const p = await page(client, [], "chat");
       const chip = await until(() => headerDriver(p), "Deliver");
       expect(chip.getAttribute("data-driver")).toBe("deliver");
       expect(chip.getAttribute("data-switchable")).toBe("true");
@@ -324,7 +325,7 @@ describe("a conducted task's Chat", () => {
   test("someone else's task: the same chip, no switch, and Chat offers no switch either", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs, awaitingDecision: null,
       owner: { id: "u_ana", name: "Ana Ribeiro" } as TaskDetail["owner"] }, events());
-    const p = await page(client);
+    const p = await page(client, [], "chat");
     const chip = await until(() => headerDriver(p), "the chip");
     expect(chip.getAttribute("data-switchable")).toBe("false");
     expect(chip.getAttribute("aria-label")).toContain("Only the owner can change who decides. Ana owns this task.");
@@ -335,7 +336,7 @@ describe("a conducted task's Chat", () => {
   test("a hand-back that fails says why", async () => {
     const client = new DecisionsClient({ status: "running", decider: "conductor", runs }, events());
     client.refuse = new ApiError(403, "forbidden", "only the task's owner decides");
-    const p = await page(client);
+    const p = await page(client, [], "chat");
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=decider-line]"), "who decides");
     await click(line.querySelector<HTMLButtonElement>("[data-testid=let-deliver-finish]")!);
     const problem = await until(() => p.querySelector<HTMLElement>("[data-testid=driver-problem]"), "the problem");
@@ -344,7 +345,7 @@ describe("a conducted task's Chat", () => {
 
   test("each Run it started is a line that opens its session; the decision waited on and an approval are dude's notices", async () => {
     const opened: string[] = [];
-    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs }, events()), opened);
+    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs }, events()), opened, "chat");
     const lines = await until(() => {
       const l = [...p.querySelectorAll<HTMLElement>("[data-testid=chat-run]")];
       return l.length === 2 ? l : null;
@@ -376,7 +377,7 @@ describe("a conducted task's Chat", () => {
 
   test("Sessions: the conductor's Runs under it, Deliver's under Delivered automatically", async () => {
     const before = run({ id: "run_auto", createdAt: at(-100) });
-    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs: [...runs, before] }));
+    const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs: [...runs, before] }), [], "chat");
     expect(await sessionTree(p)).toEqual(["top", "conductor", "conductor", "— Delivered automatically", "delivered"]);
   });
 
@@ -386,7 +387,7 @@ describe("a conducted task's Chat", () => {
     const steer = { ...ev("run.steered", { directiveId: "dir_auto", text: "Use staging.", scope: "run", interrupt: false, by: "conductor",
       conductorRunId: CONDUCTOR }, 95, "run_auto"), actor: { type: "agent", id: CONDUCTOR } } as PersistedEvent;
     const p = await page(new DecisionsClient({ status: "running", decider: "conductor", runs: [run({ id: CONDUCTOR, phase: null,
-      role: "conductor", status: "running", createdAt: at(0) }), auto] }, [steer]));
+      role: "conductor", status: "running", createdAt: at(0) }), auto] }, [steer]), [], "chat");
     const line = await until(() => p.querySelector<HTMLElement>("[data-testid=chat-run][data-run=run_auto]"), "the steered Run's line");
     expect(line.querySelector("[data-testid=conductor-steer]")?.getAttribute("data-directive")).toBe("dir_auto");
     expect(line.textContent).toContain("Use staging.");

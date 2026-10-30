@@ -1,0 +1,80 @@
+/*
+ * Agents at work now: rows on their surface, no frame. A row is a flex
+ * line — face · words · figures and the way in — whose figures wrap
+ * under the words when the row is narrow (the words keep at least 220px),
+ * so the same row reads in a wide column and on a phone.
+ */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--ds-space-6) var(--ds-space-12);
+  min-width: 0;
+}
+.avatar {
+  display: inline-flex;
+  flex: none;
+}
+.what {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  min-width: 0;
+}
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--ds-space-8);
+  min-width: 0;
+}
+.label {
+  font-size: var(--ds-text-md);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+  overflow-wrap: anywhere;
+}
+.detail {
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-muted);
+  overflow-wrap: anywhere;
+}
+.activity {
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+  line-height: var(--ds-leading-normal);
+  overflow-wrap: anywhere;
+}
+.end {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  margin-left: auto;
+  min-width: 0;
+}
+.figure {
+  font-size: var(--ds-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.elapsed {
+  color: var(--ds-color-text-muted);
+}
+.action {
+  display: inline-flex;
+}

@@ -284,10 +284,11 @@ async function write(page: HTMLElement, text: string): Promise<HTMLTextAreaEleme
   return composer;
 }
 
+/** The task's page on its Chat tab, as `#/task/<id>/chat` opens it; `tab: undefined` is the task's own URL. */
 async function chatPage(client: ChatClient, props: Partial<Parameters<typeof TaskScreen>[0]> = {}) {
   const { container, unmount } = await mount(
     <ToastProvider><PeopleProvider client={client}>
-      <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} {...props} />
+      <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} tab="chat" {...props} />
     </PeopleProvider></ToastProvider>,
   );
   mounted.push(unmount);
@@ -310,10 +311,10 @@ const pickTab = async (page: HTMLElement, name: string) => {
 };
 
 describe("the Chat tab", () => {
-  test("is first; with no conductor the task opens on its Overview, and Chat shows the history and an empty composer", async () => {
+  test("is third, after Overview and Changes; the task opens on its Overview, and Chat shows the history and an empty composer", async () => {
     const client = new ChatClient(null);
-    const page = await chatPage(client);
-    expect(tabs(page)[0]).toBe("Chat");
+    const page = await chatPage(client, { tab: undefined });
+    expect(tabs(page).slice(0, 3)).toEqual(["Overview", "Changes", "Chat"]);
     expect(selected(page)).toBe("Overview");
 
     await pickTab(page, "Chat");
@@ -331,7 +332,14 @@ describe("the Chat tab", () => {
     expect(client.sent).toEqual([`${TASK_ID}:why 8s?`]);
   });
 
-  test("with a live conductor the task opens on Chat: dude's briefing, the conductor's answer with its face, the history above", async () => {
+  test("with a live conductor the task still opens on Overview", async () => {
+    const page = await chatPage(new ChatClient({ status: "running" }, conductorEvents()), { tab: undefined });
+    await until(() => page.querySelector("[data-testid=task-overview]"), "the Overview");
+    expect(selected(page)).toBe("Overview");
+    expect(page.querySelector("[data-testid=chat-briefing]")).toBeNull();
+  });
+
+  test("Chat with a live conductor: dude's briefing, the conductor's answer with its face, the history above", async () => {
     const page = await chatPage(new ChatClient({ status: "running" }, conductorEvents()));
     expect(selected(page)).toBe("Chat");
     const briefing = await until(() => page.querySelector("[data-testid=chat-briefing]"), "the briefing");
@@ -701,7 +709,7 @@ describe("the Chat tab", () => {
     for (const conductor of [null, { status: "running" as const }]) {
       const client = new ChatClient(conductor, conductor ? conductorEvents() : []);
       client.refuse = new ApiError(500, "internal", "the orchestrator is down");
-      const page = await chatPage(client, conductor ? {} : { tab: "chat" });
+      const page = await chatPage(client);
       if (conductor) await until(() => page.querySelector("[data-testid=chat-briefing]"), "the briefing");
       const composer = await write(page, "and the tests?");
       expect(client.sent).toEqual([`${TASK_ID}:and the tests?`]);

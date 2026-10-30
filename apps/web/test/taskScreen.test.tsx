@@ -505,6 +505,24 @@ describe("the task page's tab from its URL", () => {
     const page = await taskPage(new FixtureClient("a"));
     expect(selectedTab(page)).toBe("Overview");
   });
+
+  test("the tabs run Overview, Changes, Chat, Findings, Sessions, Feedback, Files, Servers, Activity", async () => {
+    const page = await taskPage(new FixtureClient("d"));
+    const names = [...page.querySelectorAll("[role=tab]")].map((t) => t.textContent?.replace(/\d+$/, ""));
+    expect(names).toEqual(["Overview", "Changes", "Chat", "Findings", "Sessions", "Feedback", "Files", "Servers", "Activity"]);
+  });
+
+  test("Changes, for now, says the branch review is coming and opens each session that changed files", async () => {
+    const opened: string[] = [];
+    const page = await taskPage(new FixtureClient("d"), { tab: "changes", onOpenRun: (id) => opened.push(id) });
+    const tab = await until(() => page.querySelector("[data-testid=changes-tab]"), "the Changes tab");
+    expect(tab.querySelector("[data-testid=changes-coming]")?.textContent).toContain("whole-branch review is coming");
+    // Scenario d's five Runs each recorded a head; newest first.
+    const rows = [...tab.querySelectorAll("[data-testid=changes-session]")];
+    expect(rows.map((r) => r.getAttribute("data-run"))).toEqual(["run_d5", "run_d4", "run_d3", "run_d2", "run_d1"]);
+    await click([...rows[0]!.querySelectorAll("button")].find((b) => b.textContent === "Open session")!);
+    expect(opened).toEqual(["run_d5"]);
+  });
 });
 
 describe("the task header's owner", () => {
