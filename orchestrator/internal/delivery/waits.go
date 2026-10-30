@@ -534,13 +534,20 @@ func readWaitTx(ctx context.Context, tx pgx.Tx, taskID, waitID string, lock bool
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, taskID).Scan(&status); err != nil {
 		return v, err
 	}
+	// A task a person stopped (Halt) ends its wait at the deadline alone:
+	// the Runs its Stop kept read aborted until a Resume brings them back.
+	// Its conditions are still read then, for the digest.
+	halted := false
 	if Ended(status) {
-		halted, err := HaltedTx(ctx, tx, taskID)
-		if err != nil {
+		var err error
+		if halted, err = HaltedTx(ctx, tx, taskID); err != nil {
 			return v, err
 		}
 		if !halted {
 			v.by = WaitTaskEnded
+			return v, nil
+		}
+		if !due {
 			return v, nil
 		}
 	}
@@ -555,7 +562,7 @@ func readWaitTx(ctx context.Context, tx pgx.Tx, taskID, waitID string, lock bool
 		}
 	}
 	switch {
-	case len(conds) > 0 && v.ev.holds:
+	case len(conds) > 0 && v.ev.holds && !halted:
 		v.by = WaitHeld
 	case due:
 		v.by = WaitDeadline

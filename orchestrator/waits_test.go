@@ -168,6 +168,66 @@ func TestAWaitOnAStoppedTaskWakesOnlyAfterThePickUp(t *testing.T) {
 	})
 }
 
+// A person's Stop keeps the implementer a wait is on, aborted for the
+// pick-up: that is not its end. The wait stays open through the Stop and
+// the Resume that brings the Run back, and holds once the Run completes.
+func TestAStopDoesNotEndTheRunsAWaitIsOn(t *testing.T) {
+	w := conducting(t)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			// At work until ended here, the resume included.
+			b.Hang, b.NeverWake = true, true
+		}
+		return b
+	}
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	conductor := w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	var implementer string
+	w.until("the implementer running", func() bool {
+		implementer = w.str(`SELECT COALESCE(max(id), '') FROM runs WHERE task_id = $1 AND phase = 'implement'
+			AND status = 'running' AND lux_state = 'running'`, task)
+		return implementer != ""
+	})
+	waitID, _ := w.must(task, "wait_for", `{"conditions":[{"runsEnded":["`+implementer+`"]}],"deadline":"1h"}`)["waitId"].(string)
+	if waitID == "" {
+		t.Fatal("no wait opened")
+	}
+	open := func() bool {
+		return w.str(`SELECT COALESCE(ended_by, '') FROM conductor_waits WHERE id = $1`, waitID) == ""
+	}
+	w.stop(ana, task, map[string]any{"note": "hold on"})
+	w.until("the conductor and the implementer kept", func() bool { return w.keptRun(conductor) && w.keptRun(implementer) })
+	for range 3 {
+		w.sweep()
+		w.pump()
+	}
+	if !open() {
+		t.Fatalf("the Stop ended the wait: %q", w.str(`SELECT ended_by FROM conductor_waits WHERE id = $1`, waitID))
+	}
+	w.pickUp(ana, task, map[string]any{"action": "resume", "note": "Go on."})
+	w.until("the implementer running again", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, implementer) == 1
+	})
+	w.sweep()
+	if !open() {
+		t.Fatalf("the Resume ended the wait: %q", w.str(`SELECT ended_by FROM conductor_waits WHERE id = $1`, waitID))
+	}
+	w.until("the wait held", func() bool {
+		w.lux.EndTurn(w.luxRunOf(implementer))
+		return w.str(`SELECT COALESCE(ended_by, '') FROM conductor_waits WHERE id = $1`, waitID) == delivery.WaitHeld
+	})
+	if s := w.str(`SELECT status::text FROM runs WHERE id = $1`, implementer); s != "completed" {
+		t.Fatalf("the implementer is %s", s)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'wait'`, task); n != 1 {
+		t.Fatalf("%d wait reasons, want 1", n)
+	}
+}
+
 // A person stopping the conductor alone ends its wait: no note starts the
 // conductor they just stopped.
 func TestAbortingTheConductorEndsItsWait(t *testing.T) {
