@@ -69,7 +69,9 @@ func TestRecoverRunRefusesABranchOutsideItsNamespaceOrThePullRequests(t *testing
 	}
 	w.recoverRefused(task, `{"run":"run_dead","branch":"`+prefix+`pr"}`, "an open pull request's")
 	// Named well, it is asked; asked again, it is the same recovery; another
-	// branch for the same Run is refused while the first stands.
+	// branch for the same Run is refused while the first stands (left to
+	// stand: the worker would fail it at once, this Run never ran on lux).
+	w.noRecoveries = true
 	first := w.must(task, "recover_run", `{"run":"run_dead","branch":"`+prefix+`mine"}`)
 	again := w.must(task, "recover_run", `{"run":"run_dead","branch":"`+prefix+`mine"}`)
 	if first["recoveryId"] != again["recoveryId"] || first["branch"] != prefix+"mine" {

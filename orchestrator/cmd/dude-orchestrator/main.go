@@ -235,6 +235,9 @@ func run(log *slog.Logger) error {
 		// Conductors' publishes, apart from the phase sweep: a slow forge
 		// holds this loop, never the Runs.
 		{"conductor-publishes", time.Second, syncer.SettlePublishes},
+		// Conductors' recover_run: an ended Run's commits pushed from lux's
+		// checkpoint, apart from the phase sweep too.
+		{"run-recoveries", time.Second, syncer.SettleRecoveries},
 		// Completed Runs terminated in lux, apart from the phase sweep too.
 		// 30 s: a backlog still drains back to back, as the loop repeats while
 		// it retires, and a lux outage costs at most 8 calls per 30 s.
