@@ -35,10 +35,11 @@ CREATE INDEX task_branch_capture_requests_snapshot_idx ON task_branch_capture_re
 
 -- Up to p_limit snapshots no rule keeps, oldest first; returns how many
 -- went. Never waits: a row another caller holds (FOR UPDATE SKIP LOCKED),
--- a lineage another caller is rewiring (an advisory lock tried, per task,
--- attempt and repository), or a child someone holds, is skipped for the
--- next pass. A capture inserting a child of a row holds it (the foreign
--- key's KEY SHARE), so a lineage never gains a child while it is rewired.
+-- or one whose children or whose previous (the children's new one) someone
+-- holds, is skipped for the next pass. Every row a rewire writes is held
+-- first, so two callers never rewire one lineage at once. A capture
+-- inserting a child of a row holds it (the foreign key's KEY SHARE), so a
+-- lineage never gains a child while it is rewired.
 CREATE FUNCTION prune_branch_snapshots(p_limit integer) RETURNS integer
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp AS $$
@@ -70,9 +71,13 @@ BEGIN
     FOR UPDATE OF s SKIP LOCKED) x;
   FOREACH c IN ARRAY COALESCE(candidates, '{}') LOOP
     -- Read again: an older one pruned in this call rewired it.
-    SELECT s.id, s.task_id, s.attempt, s.repository_id, s.previous_snapshot_id, s.relation, s.steps INTO m
+    SELECT s.id, s.previous_snapshot_id, s.relation, s.steps INTO m
       FROM task_branch_snapshots s WHERE s.id = c;
-    IF NOT pg_try_advisory_xact_lock(hashtext('branch_snapshots_prune:' || m.task_id || ':' || m.attempt || ':' || m.repository_id)) THEN
+    -- Named since the candidates were read (committed before the lock
+    -- above was had): kept. Once held, nothing new can name it: a writer's
+    -- foreign key waits on the lock.
+    IF EXISTS (SELECT 1 FROM task_branch_capture_requests q WHERE q.snapshot_id = m.id)
+       OR EXISTS (SELECT 1 FROM feedback_items f WHERE f.branch_snapshot_id = m.id) THEN
       CONTINUE;
     END IF;
     SELECT count(*) INTO children FROM task_branch_snapshots WHERE previous_snapshot_id = m.id;
