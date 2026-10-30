@@ -162,8 +162,13 @@ export function OverviewSummary({ all, attempt, many, shown, current, earlier, l
         {...(ran(own) ? { value: own!.leadMs, unit: "ms" as const, live: live && !earlier, sub: leadTimeSub(earlier, done) } : { value: own ? "Not started" : "—" })} />
       <MetricTile label="Active agents" data-testid="overview-active" value={active} unit="count"
         sub={earlier ? `attempt ${shown} · set aside` : active === 0 ? "none at work" : many ? `attempt ${shown}` : "at work now"} />
-      <MetricTile label="Unresolved" data-testid="overview-unresolved" value={unresolved} unit="count"
-        sub={unresolved === 0 ? "nothing open" : parts.join(" · ")} />
+      {/* Never a partial total: on the current attempt the feedback holding the merge is part of it, and until read the total is not known. */}
+      {!earlier && feedbackHolds === undefined ? (
+        <MetricTile label="Unresolved" data-testid="overview-unresolved" value="—" sub="Reading feedback…" />
+      ) : (
+        <MetricTile label="Unresolved" data-testid="overview-unresolved" value={unresolved} unit="count"
+          sub={unresolved === 0 ? "nothing open" : parts.join(" · ")} />
+      )}
     </MetricGroup>
   );
 }

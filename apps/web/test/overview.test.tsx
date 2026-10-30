@@ -296,3 +296,25 @@ describe("the fixtures' Overview states", () => {
     expect(page.querySelector("[data-testid=overview-changes-none]")).not.toBeNull();
   });
 });
+
+describe("the Unresolved tile", () => {
+  const summary = async (feedbackHolds: number | undefined, earlier = false) => {
+    const { OverviewSummary } = await import("../src/screens/TaskOverview.tsx");
+    const { container, unmount } = await mount(
+      <TooltipProvider><OverviewSummary all={null} attempt={null} many={false} shown={1} current={1} earlier={earlier}
+        live={false} done={false} active={0} openFindings={2} feedbackHolds={feedbackHolds} /></TooltipProvider>);
+    mounted.push(unmount);
+    return text(container.querySelector("[data-testid=overview-unresolved]"));
+  };
+  test("while the current attempt's feedback is unread: no total, never the findings alone", async () => {
+    const reading = await summary(undefined);
+    expect(reading).toContain("—");
+    expect(reading).toContain("Reading feedback…");
+    expect(reading).not.toContain("2");
+  });
+  test("once read, findings and feedback holding together; an earlier attempt counts its findings", async () => {
+    expect(await summary(1)).toContain("3");
+    expect(await summary(1)).toContain("2 open findings · 1 feedback holding");
+    expect(await summary(undefined, true)).toContain("2 open findings");
+  });
+});
