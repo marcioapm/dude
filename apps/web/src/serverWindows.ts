@@ -235,6 +235,11 @@ export class ServerWindows {
     return t.reloading;
   }
 
+  /** A branch preview's Run ended or its servers changed: each of its windows here is checked again now. */
+  recheck(runId: string): void {
+    for (const t of this.#targets.values()) if (t.run.kind === "preview" && t.run.id === runId) t.commenting.recheck();
+  }
+
   #target(run: RunningRun, server: string): Target {
     const key = run.kind === "task" ? `task:${run.task?.id ?? run.id}` : serverKey({ runId: run.id, server });
     const found = this.#targets.get(key);

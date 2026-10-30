@@ -195,3 +195,25 @@ test("without the landing this tab arrived with, its opener is not adopted", asy
   expect(opener.postMessage).not.toHaveBeenCalled();
   expect(client.checks).not.toHaveBeenCalled();
 });
+
+test("a preview that stopped drops its pins: its Run's end re-checks at once, and a refusal sends a session with no pins", async () => {
+  const { client, send, windows } = setup();
+  await connected(send);
+  const sessions = () => told().filter((m): m is { type: "session"; pins: unknown[] } & { type: string } => m.type === "session") as Array<{ type: string; pins: unknown[] }>;
+  expect(sessions().at(-1)!.pins.length).toBe(1);
+  client.checks.mockImplementation(async () => { throw new ApiError(404, "not_found", "This preview ended."); });
+  // Within the 30 s the check is cached for: the Run's end on the stream re-checks now, not at the next heartbeat after it.
+  windows.recheck("run_first");
+  await tick();
+  expect(client.checks).toHaveBeenCalledTimes(2);
+  expect(sessions().at(-1)!.pins).toEqual([]);
+  expect(told().at(-1)).toMatchObject({ type: "refused", reason: "This preview ended." });
+  // Nothing brings them back while the server is refused: a feedback event's reload sends no pins.
+  const before = sessions().length;
+  await windows.reload({ runId: "run_first", server: "web" });
+  expect(sessions().length).toBe(before);
+  // Another Run's end re-checks nothing here.
+  windows.recheck("run_other");
+  await tick();
+  expect(client.checks).toHaveBeenCalledTimes(2);
+});

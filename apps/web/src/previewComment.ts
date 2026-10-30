@@ -668,6 +668,8 @@ export class PreviewCommenting {
 
   /** Each open page's pins and dude's theme again, after the list or the theme changed (a save, a submit, an agent's reply, the person's theme). */
   refresh(): void {
+    // A branch server the dude tab no longer vouches for gets no pins.
+    if (this.#branch && !this.#valid) return;
     for (const p of this.#panes) if (p.state === "open" && p.url) this.#post(p, this.#session(p.url));
   }
 
@@ -681,9 +683,9 @@ export class PreviewCommenting {
     this.#post(pane, { type: "refused", v: OVERLAY_PROTOCOL, ...(nonce !== undefined ? { nonce } : {}), reason });
   }
 
-  #session(url: string): DudeToOverlay {
+  #session(url: string, withPins = true): DudeToOverlay {
     const s = this.#d.read();
-    const pins = s.pins ? s.pins(url).slice(0, OVERLAY_LIMITS.pins) : pinsFor(s.items, url, s.you, s.name);
+    const pins = !withPins ? [] : s.pins ? s.pins(url).slice(0, OVERLAY_LIMITS.pins) : pinsFor(s.items, url, s.you, s.name);
     return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey.slice(0, 100), url, pins, drafts: this.#branch ? 0 : s.drafts,
       showPins: this.#showPins(), ...(this.#branch ? { mode: "branch" as const } : {}),
       ...(s.theme ? { theme: s.theme } : {}), ...(this.#tab ? { dudeWindow: this.#tab } : {}) };
@@ -791,10 +793,26 @@ export class PreviewCommenting {
       this.#valid = true;
       if (p.url === url) this.#connected(p, url);
     }, (err: unknown) => {
+      const was = this.#valid;
       this.#valid = false;
       // A transport failure leaves the window waiting; only the API's refusal is told to the page.
-      if ((err as { definite?: boolean } | null)?.definite) this.#refuse(p, err instanceof Error ? err.message : "This preview ended.", undefined);
+      if ((err as { definite?: boolean } | null)?.definite) {
+        // Every page of this server that was sent pins loses them: an ended preview's feedback is shown no more.
+        const reason = err instanceof Error ? err.message : "This preview ended.";
+        for (const q of this.#panes) {
+          if (q !== p && (q.state !== "open" || !q.url)) continue;
+          if (was && q.url) this.#post(q, this.#session(q.url, false));
+          this.#refuse(q, reason, undefined);
+        }
+      }
     }).finally(() => { this.#checking = null; });
+  }
+
+  /** Branch mode: the server is checked again now (its Run ended or its servers changed), for every window on a page. */
+  recheck(): void {
+    if (!this.#branch) return;
+    this.#checkedAt = 0;
+    for (const p of this.#panes) if (p.state === "open" && p.url) this.#verified(p, p.url);
   }
 
   /** Branch mode: submitted at once with the overlay's nonce as its key, so a resend is the same item. */

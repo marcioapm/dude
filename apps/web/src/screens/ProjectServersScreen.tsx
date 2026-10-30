@@ -61,6 +61,9 @@ const LIST_EVENTS: ReadonlySet<string> = new Set([EventTypes.ServersChanged, Eve
   EventTypes.PreviewFeedbackReopened, EventTypes.FeedbackSubmitted, EventTypes.FeedbackResolved, EventTypes.FeedbackReopened,
   EventTypes.FeedbackReplied, EventTypes.FeedbackDelivered]);
 
+/** The events after which a branch preview's windows are checked again at once: its Run ended, or its servers changed. */
+const RECHECK_EVENTS: ReadonlySet<string> = new Set([EventTypes.ServersChanged, EventTypes.RunCompleted, EventTypes.RunFailed, EventTypes.RunAborted]);
+
 /** The one read, and again on a change the project's stream says (and once when the stream comes back). */
 export function useRunningServers(client: ApiClient, projectId: string) {
   const [read, setRead] = useState<Read>({ state: "loading" });
@@ -156,7 +159,7 @@ export function ProjectServersScreen({ client, projectId, projectName, landing, 
     if (landingRun && landing) windows.expect(landingRun, landing.server);
   }, [windows, landingRun, landing]);
 
-  // A server's feedback changed: an open window's pins follow.
+  // A server's feedback changed: an open window's pins follow. A branch preview's Run ended or its servers changed: its windows are checked again.
   const pinned = useRef(0);
   useEffect(() => {
     for (const e of events) {
@@ -164,6 +167,7 @@ export function ProjectServersScreen({ client, projectId, projectName, landing, 
       pinned.current = e.cursor;
       const p = e.payload as { previewRunId?: string; server?: string };
       if (e.eventType.startsWith("preview_feedback.") && p.previewRunId && p.server) void windows.reload({ runId: p.previewRunId, server: p.server });
+      if (e.runId && RECHECK_EVENTS.has(e.eventType)) windows.recheck(e.runId);
     }
   }, [events, windows]);
 
