@@ -34,6 +34,8 @@ export const taskDone = (i: Pick<FeedbackItem, "status" | "resolutionPending">) 
   (i.status === "resolved" && !i.resolutionPending) || i.status === "replied";
 
 const PAGE = 20;
+// The list route's largest `limit`.
+const ROUTE_MAX = 200;
 
 type Shown = { id: string; open: boolean; card: FeedbackCardItem; thread: FeedbackThreadEntry[]; draft: boolean };
 
@@ -91,6 +93,8 @@ export function ServerFeedback({ client, run, server, events, reconnects = 0, on
   peopleRef.current = people;
   const [filter, setFilter] = useState<FoldFilter>("all");
   const [read, setRead] = useState<Read>({ state: "loading" });
+  const loaded = useRef(0);
+  loaded.current = read.state === "ok" ? read.items.length : 0;
   // Ids seen at the first read: anything after them arrived while the fold was open.
   const known = useRef<Set<string> | null>(null);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
@@ -114,10 +118,19 @@ export function ServerFeedback({ client, run, server, events, reconnects = 0, on
         // Your drafts first, then everyone's submitted, newest first.
         shown = [...items.filter((i) => i.draft), ...items.filter((i) => !i.draft).sort((a, b) => b.card.at.localeCompare(a.card.at))];
       } else {
-        // Newest first: the first page is the latest feedback, Load more goes back in time.
-        const got = await client.previewFeedback(run.id, server.name, { status: "all", order: "desc", limit: PAGE });
-        next = got.nextCursor;
-        shown = got.feedback.map((i) => fromPreview(i, peopleRef.current));
+        // Newest first: the first page is the latest feedback, Load more goes back in time. A live
+        // read covers every loaded card, so a resolve or reopen on an older page lands too.
+        const depth = live ? Math.max(PAGE, loaded.current) : PAGE;
+        const got: PreviewFeedbackItem[] = [];
+        let before: string | undefined;
+        do {
+          const page = await client.previewFeedback(run.id, server.name,
+            { status: "all", order: "desc", limit: Math.min(ROUTE_MAX, depth - got.length), ...(before ? { before } : {}) });
+          got.push(...page.feedback);
+          next = page.nextCursor;
+          before = next ?? undefined;
+        } while (next !== null && got.length < depth);
+        shown = got.map((i) => fromPreview(i, peopleRef.current));
         gap = next !== null && shown.every((s) => !known.current?.has(s.id));
       }
       if (n !== reads.current) return;

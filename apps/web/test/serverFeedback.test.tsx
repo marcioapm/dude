@@ -72,10 +72,15 @@ test("a long list shows the newest first and pages back with Load more, never cu
   class Many extends FixtureClient {
     base: PreviewFeedbackItem | null = null;
     extra: PreviewFeedbackItem[] = [];
+    // Someone else's resolve/reopen, by item id: its status and thread as the API now returns them.
+    changed = new Map<string, Pick<PreviewFeedbackItem, "status" | "history">>();
     override async previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; before?: string; order?: "asc" | "desc"; limit?: number } = {}) {
-      this.base ??= (await super.previewFeedback("run_pv_checkout", "web", { status: "all" })).feedback[0]!;
-      const b = this.base;
-      const all = Array.from({ length: 45 }, (_, i) => ({ ...b, id: `fbi_m${String(i).padStart(2, "0")}`, body: `Item ${i}`, createdAt: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString() }));
+      this.base ??= (await super.previewFeedback("run_pv_checkout", "web", { status: "all" })).feedback.find((i) => i.status === "open")!;
+      const b = { ...this.base, status: "open" as const, history: [] };
+      const all = Array.from({ length: 45 }, (_, i) => {
+        const id = `fbi_m${String(i).padStart(2, "0")}`;
+        return { ...b, id, body: `Item ${i}`, createdAt: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(), ...this.changed.get(id) };
+      });
       void runId; void server;
       return pagePreviewFeedback([...all, ...this.extra], params);
     }
@@ -99,6 +104,36 @@ test("a long list shows the newest first and pages back with Load more, never cu
   expect(fresh.textContent).toContain("Newest");
   expect(bodies()[0]).toBe("Newest");
   expect(fold.querySelectorAll('[data-testid="fold-item"]').length).toBe(40);
+  // Someone resolves Item 24, on the second page: its card, thread and filter move, in place, not New.
+  const item = (n: number) => [...fold.querySelectorAll<HTMLElement>('[data-testid="fold-item"], [data-testid="new-item"]')]
+    .find((e) => /Item \d+/.exec(e.textContent ?? "")?.[0] === `Item ${n}`) ?? null;
+  const listedIn = async (which: string) => { await click(option(fold, which)); const has = item(24) !== null; await click(option(fold, "All")); return has; };
+  const at = new Date(Date.UTC(2026, 9, 3)).toISOString();
+  const resolved = { status: "resolved" as const, history: [{ status: "resolved" as const, personId: "u_kai", note: "Adjusted spacing", at }] };
+  const change = (eventType: string, status: string) => act(async () => event(eventType,
+    { payload: { feedbackId: "fbi_m24", previewRunId: "run_pv_checkout", server: "web", status } }));
+  client.changed.set("fbi_m24", resolved);
+  await change(EventTypes.PreviewFeedbackResolved, "resolved");
+  await until(() => (item(24)?.dataset.status === "resolved" ? true : null), "Item 24 resolved");
+  expect(item(24)!.dataset.testid).toBe("fold-item");
+  expect(item(24)!.textContent).toContain("Adjusted spacing");
+  expect(bodies()[21]).toBe("Item 24");
+  expect(await listedIn("Open")).toBe(false);
+  expect(await listedIn("Resolved")).toBe(true);
+  // And reopens it.
+  client.changed.set("fbi_m24", { status: "open", history: [...resolved.history, { status: "open", personId: "u_kai", note: "Still tight", at }] });
+  await change(EventTypes.PreviewFeedbackReopened, "open");
+  await until(() => (item(24)?.dataset.status === "open" ? true : null), "Item 24 reopened");
+  expect(item(24)!.textContent).toContain("Still tight");
+  expect(await listedIn("Open")).toBe(true);
+  expect(await listedIn("Resolved")).toBe(false);
+  // Refresh alone reconciles every loaded card, with no event at all.
+  client.changed.set("fbi_m24", resolved);
+  await click(tid(fold, "fold-refresh")!);
+  await until(() => (item(24)?.dataset.status === "resolved" ? true : null), "Item 24 after Refresh");
+  expect(fold.querySelectorAll('[data-testid="fold-item"]').length).toBe(40);
+  expect(bodies()[0]).toBe("Newest");
+  expect(fold.querySelectorAll('[data-testid="new-item"]').length).toBe(1);
   await click(tid(fold, "fold-more")!);
   await until(() => (fold.querySelectorAll('[data-testid="fold-item"]').length === 45 ? true : null), "the last page");
   expect(bodies().at(-1)).toBe("Item 0");
