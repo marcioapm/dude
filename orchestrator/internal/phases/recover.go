@@ -102,34 +102,14 @@ func (s *Syncer) SettleRecoveries(ctx context.Context) (int, error) {
 // carryRecovery carries one claimed recovery a step on, renewing its claim
 // meanwhile, and lets the claim go once done.
 func (s *Syncer) carryRecovery(ctx context.Context, c recoveryRow) {
-	done := make(chan struct{})
-	renewed := make(chan struct{})
-	go func() {
-		defer close(renewed)
-		t := time.NewTicker(recoveryClaim / 3)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				_ = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-					_, err := tx.Exec(ctx, `UPDATE run_recoveries SET claimed_until = now() + $3::interval
-						WHERE id = $1 AND claim_token = $2`, c.ID, c.Claim, recoveryClaim.String())
-					return err
-				})
-			}
-		}
-	}()
+	release := s.renewClaim(ctx, "run_recoveries", c.Org, c.ID, c.Claim, recoveryClaim)
 	err := s.settleRecovery(ctx, c)
-	close(done)
-	<-renewed
+	release()
 	switch {
 	case errors.Is(err, delivery.ErrClaimLost):
 	case err != nil:
 		s.Log.Warn("a recovery failed", "recovery", c.ID, "error", err)
-		wait := min(publishBackoffBase<<min(c.Failures, 16), publishBackoffMax)
-		s.recoveryAt(ctx, c, wait, true)
+		s.recoveryAt(ctx, c, claimBackoff(c.Failures), true)
 	}
 }
 

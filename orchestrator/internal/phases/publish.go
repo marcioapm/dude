@@ -149,30 +149,9 @@ func (s *Syncer) SettlePublishes(ctx context.Context) (int, error) {
 // carryClaimed carries one claimed publish on, renewing its claim
 // meanwhile, and lets the claim go once done.
 func (s *Syncer) carryClaimed(ctx context.Context, p publishRow) {
-	done := make(chan struct{})
-	renewed := make(chan struct{})
-	go func() {
-		defer close(renewed)
-		t := time.NewTicker(publishClaim / 3)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				// A failed renewal is not fatal: every write is guarded on
-				// the claim, so losing it makes them no-ops.
-				_ = s.DB.InOrg(ctx, p.Org, func(tx pgx.Tx) error {
-					_, err := tx.Exec(ctx, `UPDATE conductor_publishes SET claimed_until = now() + $3::interval
-						WHERE id = $1 AND claim_token = $2`, p.ID, p.Claim, publishClaim.String())
-					return err
-				})
-			}
-		}
-	}()
+	release := s.renewClaim(ctx, "conductor_publishes", p.Org, p.ID, p.Claim, publishClaim)
 	err := s.settlePublish(ctx, p)
-	close(done)
-	<-renewed
+	release()
 	switch {
 	case errors.Is(err, delivery.ErrClaimLost):
 	case err != nil:
@@ -181,6 +160,42 @@ func (s *Syncer) carryClaimed(ctx context.Context, p publishRow) {
 	default:
 		s.release(ctx, p)
 	}
+}
+
+// renewClaim renews the worker's claim on table's row id every third of
+// claim, until the func it returns is called, which waits for the renewal
+// to stop. A failed renewal is not fatal: every write is guarded on the
+// claim, so losing it makes them no-ops.
+func (s *Syncer) renewClaim(ctx context.Context, table, org, id, token string, claim time.Duration) func() {
+	done := make(chan struct{})
+	renewed := make(chan struct{})
+	go func() {
+		defer close(renewed)
+		t := time.NewTicker(claim / 3)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				_ = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+					_, err := tx.Exec(ctx, `UPDATE `+table+` SET claimed_until = now() + $3::interval
+						WHERE id = $1 AND claim_token = $2`, id, token, claim.String())
+					return err
+				})
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-renewed
+	}
+}
+
+// claimBackoff is the wait after as many transient failures in a row:
+// doubling from publishBackoffBase, capped at publishBackoffMax.
+func claimBackoff(failures int) time.Duration {
+	return min(publishBackoffBase<<min(failures, 16), publishBackoffMax)
 }
 
 // release lets the worker's claim on the publish go, when it still holds it.
@@ -197,8 +212,7 @@ func (s *Syncer) release(ctx context.Context, p publishRow) {
 // publishLater schedules a publish after a failure that may pass: a
 // back-off doubling with each in a row, or what the forge asked for.
 func (s *Syncer) publishLater(ctx context.Context, p publishRow, cause error) {
-	wait := min(publishBackoffBase<<min(p.Failures, 16), publishBackoffMax)
-	wait = max(wait, forge.RetryAfter(cause))
+	wait := max(claimBackoff(p.Failures), forge.RetryAfter(cause))
 	s.publishAt(ctx, p, wait, true)
 }
 
