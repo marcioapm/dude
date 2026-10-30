@@ -70,6 +70,62 @@ func TestARecoverysCostIsTheDeadRunsAndTheTasks(t *testing.T) {
 	if n := len(f.reported("run_dead")); n != 1 {
 		t.Errorf("%d run.cost.reported on the dead Run, want its own 1", n)
 	}
+	// Two more recoveries of the Run, each its own publisher, priced and
+	// repriced in turn: the Run counts every recovery's cost, not the
+	// latest one's, and is settled only once each is final.
+	if _, err := f.owner.Exec(f.ctx, `INSERT INTO run_recoveries (id, organization_id, task_id, run_id, branch, status,
+			publisher_lux_run_id, lux_cost_next_at)
+		VALUES ('rcv_a', $1, 'wi_'||$1, 'run_dead', 'dude/x/recovered-a', 'done', 'lux_pub_a', now()),
+		       ('rcv_b', $1, 'wi_'||$1, 'run_dead', 'dude/x/recovered-b', 'done', 'lux_pub_b', now())`, f.org); err != nil {
+		t.Fatal(err)
+	}
+	priced := func(ai, compute lux.Decimal, final bool) lux.RunCost {
+		status := lux.CostPending
+		if final {
+			status = lux.CostFinal
+		}
+		return lux.RunCost{Status: status, Final: final, ByFamily: []lux.FamilyCost{usd(lux.FamilyAI, ai), usd(lux.FamilyCompute, compute)}}
+	}
+	type kept struct {
+		AI, Compute float64
+		Unsettled   int
+	}
+	for _, step := range []struct {
+		what           string
+		a, b           lux.RunCost
+		model, machine float64
+		final          bool
+	}{
+		{"both pending", priced("0.1", "0.2", false), priced("0.01", "0.02", false),
+			1.25 + 0.000123 + 0.1 + 0.01, 0.5 + 0.0125 + 0.2 + 0.02, false},
+		{"A repriced", priced("0.3", "0.4", false), priced("0.01", "0.02", false),
+			1.25 + 0.000123 + 0.3 + 0.01, 0.5 + 0.0125 + 0.4 + 0.02, false},
+		{"A final", priced("0.5", "0.6", true), priced("0.01", "0.02", false),
+			1.25 + 0.000123 + 0.5 + 0.01, 0.5 + 0.0125 + 0.6 + 0.02, false},
+		{"B final", priced("0.5", "0.6", true), priced("0.05", "0.06", true),
+			1.25 + 0.000123 + 0.5 + 0.05, 0.5 + 0.0125 + 0.6 + 0.06, true},
+	} {
+		f.lux.set("lux_pub_a", step.a)
+		f.lux.set("lux_pub_b", step.b)
+		f.sweep()
+		if g := read(); g.Model != step.model || g.RunModel != step.model || g.RunMachine != step.machine ||
+			g.TaskMachine != step.machine || g.Final != step.final {
+			t.Errorf("%s: %+v, want model %v, machine %v, final %v", step.what, g, step.model, step.machine, step.final)
+		}
+		var onRun, summed kept
+		if err := f.owner.QueryRow(f.ctx, `SELECT COALESCE(recovery_ai_usd, 0)::float8, COALESCE(recovery_compute_usd, 0)::float8,
+				recoveries_unsettled FROM runs WHERE id = 'run_dead'`).Scan(&onRun.AI, &onRun.Compute, &onRun.Unsettled); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.owner.QueryRow(f.ctx, `SELECT COALESCE(sum(lux_ai_usd), 0)::float8, COALESCE(sum(lux_compute_usd), 0)::float8,
+				count(*) FILTER (WHERE publisher_lux_run_id IS NOT NULL AND lux_cost_status IS DISTINCT FROM 'final')::int
+			FROM run_recoveries WHERE run_id = 'run_dead'`).Scan(&summed.AI, &summed.Compute, &summed.Unsettled); err != nil {
+			t.Fatal(err)
+		}
+		if onRun != summed {
+			t.Errorf("%s: the Run keeps %+v, its recoveries sum to %+v", step.what, onRun, summed)
+		}
+	}
 }
 
 // run_model_usd and run_cost_origin stay functions of the row alone, as
