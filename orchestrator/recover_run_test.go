@@ -8,6 +8,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,9 +93,11 @@ func (w *world) publisherOf(recovery string) *fakelux.Run {
 	return nil
 }
 
-// pushesOf counts the publisher's git.push results that moved a branch.
-func (w *world) pushesOf(luxID string) int {
-	n := 0
+// pushesOf is the set of request ids the publisher's pushes were asked
+// under, as lux reported them (git.push): one push asked twice under the
+// same id is the same push, whatever each reported.
+func (w *world) pushesOf(luxID string) map[string]bool {
+	ids := map[string]bool{}
 	frames, err := w.syncer.Lux.Events(context.Background(), luxID, 0)
 	if err != nil {
 		w.t.Fatal(err)
@@ -104,13 +107,9 @@ func (w *world) pushesOf(luxID string) int {
 		if f.EventType != "git.push" || json.Unmarshal(f.EventData, &p) != nil {
 			continue
 		}
-		for _, r := range p.Results {
-			if r.Status == "pushed" {
-				n++
-			}
-		}
+		ids[p.RequestID] = true
 	}
-	return n
+	return ids
 }
 
 func (w *world) recoveryStatus(id string) string {
@@ -290,8 +289,8 @@ func TestRecoverRunIsIdempotentAndSurvivesAWorkerCrash(t *testing.T) {
 	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != commit {
 		t.Errorf("the branch is at %q, want %s", got, commit)
 	}
-	if n := w.pushesOf(pub.ID); n != 1 {
-		t.Errorf("the branch was pushed %d times", n)
+	if got := w.pushesOf(pub.ID); !maps.Equal(got, map[string]bool{id: true}) {
+		t.Errorf("the publisher was asked to push under %v, want only the recovery's id %s", slices.Sorted(maps.Keys(got)), id)
 	}
 	if n := w.recoveredWakes(task); n != 1 {
 		t.Errorf("%d recovered wakes", n)
