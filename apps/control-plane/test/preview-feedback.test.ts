@@ -205,7 +205,11 @@ test("server feedback is idempotent, immutable and separate from task delivery",
   expect(a).toMatchObject({ status: "open", captureSha: null, projectId: "prj_pf", serverName: "web", history: [] });
   expect((await submit("run_pf_idempotent", { ...payload, body: "different" })).status).toBe(409);
   expect((await owner`SELECT 1 FROM feedback_items`).length).toBe(0);
-  expect((await owner`SELECT 1 FROM events`).length).toBe(0);
+  // Separate from task delivery: one project-scoped event for the one item, nothing on a task or run.
+  const events = await owner`SELECT event_type, project_id, task_id, run_id, payload FROM events WHERE payload->>'previewRunId' = 'run_pf_idempotent'`;
+  expect(events.map((e: { event_type: string; project_id: string; task_id: string | null; run_id: string | null; payload: { feedbackId: string } }) =>
+    [e.event_type, e.project_id, e.task_id, e.run_id, e.payload.feedbackId])).toEqual([["preview_feedback.submitted", "prj_pf", null, null, a.id]]);
+  expect((await owner`SELECT 1 FROM events WHERE event_type NOT LIKE 'preview_feedback.%'`).length).toBe(0);
 });
 
 test("reconnect retry with the same screenshot bytes is the same submission", async () => {
@@ -270,6 +274,24 @@ test("bounded pagination, default open filter and idempotent resolve/reopen reta
   expect(next.feedback.map((f: { id: string }) => f.id)).toEqual(ids.slice(2, 4));
   expect((await (await call(ana.key, "GET", `${base}?server=api`)).json()).feedback).toEqual([]);
   for (const q of ["limit=0", "limit=201", "status=solved", "after=invalid"]) expect((await call(ana.key, "GET", `${base}?${q}`)).status).toBe(400);
+});
+
+test("newest first: order=desc pages back with before, and a newer item is on the first page", async () => {
+  const id = "run_pf_desc"; await preview(id);
+  const ids: string[] = [];
+  for (let i = 0; i < 5; i++) { ids.push((await (await submit(id)).json()).id); await Bun.sleep(2); }
+  const base = `/v1/branch-previews/${id}/servers/web/feedback?status=all&order=desc&limit=2`;
+  const listed = async (q = "") => (await (await call(ana.key, "GET", `${base}${q}`)).json()) as { feedback: Array<{ id: string }>; nextCursor: string | null };
+  const first = await listed();
+  expect(first.feedback.map((f) => f.id)).toEqual(ids.slice(3, 5).reverse());
+  const second = await listed(`&before=${first.nextCursor}`);
+  expect(second.feedback.map((f) => f.id)).toEqual(ids.slice(1, 3).reverse());
+  const last = await listed(`&before=${second.nextCursor}`);
+  expect(last.feedback.map((f) => f.id)).toEqual(ids.slice(0, 1));
+  expect(last.nextCursor).toBeNull();
+  const newer = (await (await submit(id)).json()).id as string;
+  expect((await listed()).feedback[0]!.id).toBe(newer);
+  for (const q of ["order=up", "before=invalid"]) expect((await call(ana.key, "GET", `/v1/branch-previews/${id}/feedback?${q}`)).status).toBe(400);
 });
 
 test("generic filtered cursor plans seek sparse open feedback using ordered indexes", async () => {

@@ -15,6 +15,7 @@ import type { PersistedEvent } from "@dude/domain";
 export interface EventFilter {
   organizationId: string;
   sessionId?: string | undefined;
+  projectId?: string | undefined;
   runId?: string | undefined;
   taskId?: string | undefined;
   automationRunId?: string | undefined;
@@ -30,6 +31,7 @@ interface Subscription {
 function matches(filter: EventFilter, event: PersistedEvent): boolean {
   if (event.organizationId !== filter.organizationId) return false;
   if (filter.sessionId && event.sessionId !== filter.sessionId) return false;
+  if (filter.projectId && event.projectId !== filter.projectId) return false;
   if (filter.runId && event.runId !== filter.runId) return false;
   if (filter.taskId && event.taskId !== filter.taskId) return false;
   if (filter.automationRunId && event.automationRunId !== filter.automationRunId) return false;

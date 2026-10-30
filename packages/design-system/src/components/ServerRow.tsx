@@ -68,6 +68,8 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
   readonly logs?: ServerLogs | undefined;
   /** An action is in flight: the buttons wait. */
   readonly busy?: boolean | undefined;
+  /** Allow long details and actions to wrap within the row. */
+  readonly wrap?: boolean | undefined;
 }
 
 /**
@@ -77,7 +79,7 @@ export interface ServerRowProps extends Omit<HTMLAttributes<HTMLLIElement>, "tit
  * Its log folds open under the row, titled `server:<name>`.
  */
 export function ServerRow({
-  name, port, state, stateLabel, mark, detail, error, url, urlSlot, onStart, onStop, onRestart, menu, onOpen, openLabel, logs, busy, className, ...rest
+  name, port, state, stateLabel, mark, detail, error, url, urlSlot, onStart, onStop, onRestart, menu, onOpen, openLabel, logs, busy, wrap, className, ...rest
 }: ServerRowProps) {
   const live = state === "ready";
   const href = safeServerUrl(url);
@@ -85,7 +87,7 @@ export function ServerRow({
   const custom = open ? openLabel : undefined;
   return (
     <li className={className} {...rest}>
-      <div className={cx(styles["row"], logs?.open && styles["open"])} data-server={name} data-state={state}>
+      <div className={cx(styles["row"], wrap && styles["wrap"], logs?.open && styles["open"])} data-server={name} data-state={state}>
         <div className={styles["name"]}>
           <span className={styles["nameText"]}>{name}</span>
           <span className={styles["port"]}>:{port}</span>

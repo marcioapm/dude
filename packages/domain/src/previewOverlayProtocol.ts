@@ -55,11 +55,14 @@ export const OVERLAY_LIMITS = {
 export type OverlayAnchor = Omit<FeedbackPreviewAnchor, "attachmentId">;
 
 export type OverlayToDude =
-  | { type: "hello"; v: 1; url: string }
+  // `moved`: the first hello after a `claim` that took the window from another dude tab (which was told `left`).
+  | { type: "hello"; v: 1; url: string; moved?: true }
   | { type: "navigated"; v: 1; url: string }
   | { type: "draft"; v: 1; nonce: string; body: string; anchor: OverlayAnchor; picture?: string }
   | { type: "prefs"; v: 1; showPins: boolean }
-  | { type: "open"; v: 1; itemId: string };
+  | { type: "open"; v: 1; itemId: string }
+  // The window was claimed by another dude tab (`claim`): this one is no longer answered by it.
+  | { type: "left"; v: 1 };
 
 /** One item on the page, as the overlay pins it: never more than it shows. */
 export interface OverlayPin {
@@ -89,7 +92,14 @@ export type DudeToOverlay =
   | { type: "refused"; v: 1; nonce?: string; reason: string }
   | { type: "retryable"; v: 1; nonce: string; reason: string }
   | { type: "highlight"; v: 1; itemId: string }
-  | { type: "stop"; v: 1 };
+  | { type: "stop"; v: 1 }
+  /**
+   * Another of the person's dude tabs takes the window over: it reached it by
+   * name with window.open("", name) from a click, which only a window of this
+   * browser's can do. The overlay tells its old dude tab `left` and says
+   * hello to the claiming one.
+   */
+  | { type: "claim"; v: 1 };
 
 /**
  * Whether `value` may be sent and taken as `dudeWindow`: 1 to

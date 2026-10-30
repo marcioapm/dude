@@ -35,6 +35,8 @@ import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { ConnectScreen } from "./screens/ConnectScreen.tsx";
 import { PreviewConnectScreen } from "./screens/PreviewConnectScreen.tsx";
+import { ProjectServersScreen, RUN_SERVER_EVENTS } from "./screens/ProjectServersScreen.tsx";
+import { serverLanding } from "./serverWindows.ts";
 import { EpicOrigin, OriginLead } from "./chatOrigin.tsx";
 
 /** A chat-born card's lead: defined once, so the memoised cards keep their props. */
@@ -496,10 +498,13 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     main = <ConnectScreen client={client} provider={place.provider} state={place.state} onSettings={() => go({ view: "mySettings" })}
       me={people.me ? { ...people.me, organisation: account?.current.name } : null} onSignOut={onSignOut} />;
   } else if (place?.view === "previewConnect") {
-    // To the task in its organisation, in this tab (window.opener stays the preview), in place of this page.
+    // To the task's Servers tab, or a branch preview's project Servers page, in its organisation, in this tab
+    // (window.opener stays the preview), in place of this page.
     main = <PreviewConnectScreen client={client} onFound={(found) => {
-      if (found.kind === "branch") return;
-      window.history.replaceState(null, "", inOrganization(found.organizationSlug, `#/task/${encodeURIComponent(found.taskId)}/servers`));
+      const hash = found.kind === "branch"
+        ? `#/project/${encodeURIComponent(found.projectId)}/servers`
+        : `#/task/${encodeURIComponent(found.taskId)}/servers`;
+      window.history.replaceState(null, "", inOrganization(found.organizationSlug, hash));
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     }} />;
   } else if (place?.view === "help") {
@@ -542,6 +547,14 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         ) : undefined}
       />
     );
+  } else if (place?.view === "projectServers") {
+    const project = projects.find((p) => p.id === place.projectId);
+    main = project ? (
+      <ProjectServersScreen key={place.projectId} client={client} projectId={place.projectId} projectName={project.name}
+        landing={serverLanding(place.projectId)}
+        onBoard={() => go(inTree({ kind: "project", id: place.projectId }))}
+        onTaskFeedback={(taskId) => go(inTree({ kind: "task", id: taskId }, "feedback"))} />
+    ) : <NotFound what="project" onBack={toBoard} />;
   } else if (place?.view === "projectSettings") {
     main = (
       <ProjectSettingsScreen
@@ -620,6 +633,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
               onClick={() => act({ kind: "newEpic", projectId: project.id })}>
               New epic
             </Button>
+            <ServersButton client={client} projectId={project.id}
+              onOpen={() => go({ view: "projectServers", projectId: project.id })} />
             <Button size="sm" variant="quiet" leadingIcon="settings" data-testid="project-settings-button"
               onClick={() => go({ view: "projectSettings", projectId: project.id })}>
               Settings
@@ -892,6 +907,32 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   );
 }
 
+/**
+ * The board's way to the project's Servers page: "Servers · N" once the
+ * running servers are read, plain "Servers" until then or if the read fails.
+ */
+function ServersButton({ client, projectId, onOpen }: { client: ApiClient; projectId: string; onOpen: () => void }) {
+  const [count, setCount] = useState<number | null>(null);
+  const [revision, setRevision] = useState(0);
+  useReloadOnEvents({ client, projectId }, () => setRevision((n) => n + 1), 300,
+    (e) => e.projectId !== projectId || !RUN_SERVER_EVENTS.has(e.eventType));
+  useEffect(() => {
+    let current = true;
+    client.runningServers(projectId).then(
+      ({ runs }) => current && setCount(runs.reduce((n, r) => n + r.servers.length, 0)),
+      () => current && setCount(null),
+    );
+    return () => {
+      current = false;
+    };
+  }, [client, projectId, revision]);
+  return (
+    <Button size="sm" variant="quiet" leadingIcon="globe" data-testid="servers-button" onClick={onOpen}>
+      {count === null ? "Servers" : `Servers · ${count}`}
+    </Button>
+  );
+}
+
 /** How many of an epic's agents wait on a peer's reply now: the Coordination switch's count, none at zero. */
 function OpenWaits({ client, epicId, version }: { client: ApiClient; epicId: string; version: number }) {
   const [waiting, setWaiting] = useState(0);
@@ -933,6 +974,8 @@ function placeTitle(place: Place | null, projects: readonly NavProject[] | null)
       return "Connect a preview";
     case "projectSettings":
       return [projects?.find((p) => p.id === place.projectId)?.name, "Settings"].filter(Boolean).join(" · ");
+    case "projectServers":
+      return [projects?.find((p) => p.id === place.projectId)?.name, "Servers"].filter(Boolean).join(" · ");
     case "tree": {
       if (!projects) return "";
       const { ref } = place;

@@ -111,6 +111,11 @@ func (s *Server) serverRoutes(mux *http.ServeMux) {
 		out, err := s.Servers.BranchPreviews(r.Context(), org, r.PathValue("id"))
 		return answer(w, http.StatusOK, map[string]any{"previews": out}, err)
 	}))
+	// Every live Run of the project with servers, task Runs and branch previews alike.
+	mux.Handle("GET /internal/projects/{id}/servers/running", h(func(w http.ResponseWriter, r *http.Request, org string) error {
+		out, err := s.Servers.Running(r.Context(), org, r.PathValue("id"))
+		return answer(w, http.StatusOK, map[string]any{"runs": out}, err)
+	}))
 	mux.Handle("GET /internal/branch-previews/{id}", h(func(w http.ResponseWriter, r *http.Request, org string) error {
 		out, err := s.Servers.BranchPreview(r.Context(), org, r.PathValue("id"))
 		return answer(w, http.StatusOK, out, err)

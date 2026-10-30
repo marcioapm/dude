@@ -22,6 +22,16 @@
   margin: 0 calc(-1 * var(--ds-space-8));
   border-radius: var(--ds-radius-control);
 }
+.wrap .state,
+.wrap .actions {
+  flex-wrap: wrap;
+  row-gap: var(--ds-space-4);
+}
+.wrap .since,
+.wrap .err {
+  white-space: normal;
+  min-width: 0;
+}
 .row:hover {
   background: var(--ds-color-row-hover);
 }

@@ -21,7 +21,7 @@ export const overlayPictureSchema = z.string().max(OVERLAY_LIMITS.picture)
   .regex(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/, "a PNG or JPEG data URL");
 
 export const overlayMessageSchema: z.ZodType<OverlayToDude> = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("hello"), v: v1, url: pageUrl }).strict(),
+  z.object({ type: z.literal("hello"), v: v1, url: pageUrl, moved: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal("navigated"), v: v1, url: pageUrl }).strict(),
   z.object({
     type: z.literal("draft"), v: v1, nonce: z.string().min(1).max(100),
@@ -31,6 +31,7 @@ export const overlayMessageSchema: z.ZodType<OverlayToDude> = z.discriminatedUni
   }).strict(),
   z.object({ type: z.literal("prefs"), v: v1, showPins: z.boolean() }).strict(),
   z.object({ type: z.literal("open"), v: v1, itemId: z.string().min(1).max(100) }).strict(),
+  z.object({ type: z.literal("left"), v: v1 }).strict(),
 ]) as z.ZodType<OverlayToDude>;
 
 const overlayPinSchema = z.object({
