@@ -17,7 +17,7 @@ import {
 } from "@dude/design-system/components";
 import { Button, Callout, KeyValueList, Tooltip, useToast } from "@dude/design-system/primitives";
 import { Icon, plural } from "@dude/design-system";
-import { FEEDBACK_LIMITS, type FeedbackAnchorInput, type FeedbackItem } from "@dude/domain";
+import { FEEDBACK_LIMITS, isBranchAnchor, type FeedbackAnchorInput, type FeedbackItem } from "@dude/domain";
 import type { ApiClient, PullRequest, TaskDetail } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { heldAtGate, sentBackFromGate } from "../beforePullRequest.ts";
@@ -79,10 +79,10 @@ export function useTaskFeedbackPage({ client, taskId, task, current, version, pe
     saveDraft: async (item: FeedbackItem, body: string, viewed: ViewedRunDiff | null) => {
       // A code draft keeps its lines where they are now in its own Run's diff: the one on screen
       // only when it is that Run's, else read; another Run's numbers and checksum are not its own.
-      const anchor: FeedbackAnchorInput = item.anchor.kind === "code"
-        ? draftAnchorInput(item.anchor, viewed && viewed.runId === item.anchor.runId
-          ? viewed.diff : await client.runDiff(item.anchor.runId).catch(() => null))
-        : item.anchor;
+      const a = item.anchor;
+      const anchor: FeedbackAnchorInput = a.kind !== "code" ? a
+        : isBranchAnchor(a) ? draftAnchorInput(a, null)
+        : draftAnchorInput(a, viewed && viewed.runId === a.runId ? viewed.diff : await client.runDiff(a.runId).catch(() => null));
       return after(client.updateFeedbackDraft(item.id, { body, anchor }));
     },
     deleteDraft: (id: string) => after(client.deleteFeedbackDraft(id)),
@@ -148,7 +148,7 @@ export function FeedbackTray({ client, task, fb, current, prs, openBlockers }: {
 
   const jump = (id: string) => {
     const d = fb.drafts.find((x) => x.id === id);
-    if (d?.anchor.kind === "code") fb.showInDiff(d.anchor.runId, id);
+    if (d?.anchor.kind === "code" && !isBranchAnchor(d.anchor)) fb.showInDiff(d.anchor.runId, id);
     else fb.onDiff.openOnTab(id);
   };
   return (
@@ -257,7 +257,7 @@ export function FeedbackTab({ task, fb, items, loaded, problem: readProblem, ear
 
   const card = (i: FeedbackItem) => {
     const a = i.anchor;
-    const jump = a.kind === "code" ? () => fb.showInDiff(a.runId, i.id)
+    const jump = a.kind === "code" && !isBranchAnchor(a) ? () => fb.showInDiff(a.runId, i.id)
       : a.kind === "preview" && preview && !earlier && preview.canShow(i) ? () => preview.show(i) : undefined;
     return (
       <FeedbackCard key={i.id} item={cardItem(i, d.people, d.runs)} thread={threadOf(i, d.people, d.runs)} readOnly={readOnly && i.status !== "draft"}

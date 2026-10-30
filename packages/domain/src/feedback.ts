@@ -34,8 +34,16 @@ const line = z.number().int().positive().max(1_000_000);
 
 const generalAnchorInput = z.object({ kind: z.literal("general") }).strict();
 
+/** One range on one side: start not after end, at most FEEDBACK_LIMITS.lines lines. */
+const ordered = (a: { startLine: number; endLine: number }) => a.startLine <= a.endLine;
+const bounded = (a: { startLine: number; endLine: number }) => a.endLine - a.startLine < FEEDBACK_LIMITS.lines;
+const ORDERED = { message: "startLine must not be after endLine", path: ["endLine"] };
+const BOUNDED = { message: `a code item spans at most ${FEEDBACK_LIMITS.lines} lines`, path: ["endLine"] };
+
+/** Lines of a Run's diff (a session's Changes): the default when `scope` is absent. */
 const codeAnchorInput = z.object({
   kind: z.literal("code"),
+  scope: z.literal("run").optional(),
   runId: z.string().min(1).max(100),
   /** The file as the Run's diff names it (repository-prefixed with several). */
   path: z.string().min(1).max(1_000),
@@ -44,9 +52,27 @@ const codeAnchorInput = z.object({
   endLine: line,
   /** The snapshot the person was looking at: refused if the stored one has moved on. */
   diffChecksum: z.string().min(1).max(200).optional(),
-}).strict().refine((a) => a.startLine <= a.endLine, { message: "startLine must not be after endLine", path: ["endLine"] })
-  .refine((a) => a.endLine - a.startLine < FEEDBACK_LIMITS.lines,
-    { message: `a code item spans at most ${FEEDBACK_LIMITS.lines} lines`, path: ["endLine"] });
+}).strict().refine(ordered, ORDERED).refine(bounded, BOUNDED);
+
+/**
+ * Lines of a task branch snapshot (`GET /v1/tasks/:id/branch-diff`): the
+ * snapshot of this task's current attempt, a file of it by its path in the
+ * repository, a side and a line range. The repository, merge base, head,
+ * checksum and excerpt are read from the snapshot, never taken from the client.
+ */
+const branchAnchorInput = z.object({
+  kind: z.literal("code"),
+  scope: z.literal("branch"),
+  snapshotId: z.string().min(1).max(100),
+  /** The repository the person was looking at, by name: refused if it is not the snapshot's. */
+  repository: z.string().min(1).max(255).optional(),
+  path: z.string().min(1).max(1_000),
+  side: z.enum(["old", "new"]),
+  startLine: line,
+  endLine: line,
+  /** The snapshot's checksum as the person read it: refused if it differs. */
+  diffChecksum: z.string().min(1).max(200),
+}).strict().refine(ordered, ORDERED).refine(bounded, BOUNDED);
 
 // Exported for the preview overlay's messages (previewOverlay.ts), which carry the same anchor.
 export const previewAnchorInput = z.object({
@@ -64,7 +90,7 @@ export const previewAnchorInput = z.object({
   attachmentId: z.string().min(1).max(100).optional(),
 }).strict();
 
-export const feedbackAnchorInputSchema = z.union([generalAnchorInput, codeAnchorInput, previewAnchorInput]);
+export const feedbackAnchorInputSchema = z.union([generalAnchorInput, codeAnchorInput, branchAnchorInput, previewAnchorInput]);
 export type FeedbackAnchorInput = z.infer<typeof feedbackAnchorInputSchema>;
 
 export const feedbackDraftSchema = z.object({
@@ -92,9 +118,14 @@ export interface FeedbackExcerptLine {
   text: string;
 }
 
-/** A code anchor, as kept. `headSha` null: the lines were uncommitted work of a Run not published. */
+/**
+ * A code anchor on a Run's diff, as kept. `headSha` null: the lines were
+ * uncommitted work of a Run not published. Every anchor kept before branch
+ * anchors has no `scope`: absent is "run".
+ */
 export interface FeedbackCodeAnchor {
   kind: "code";
+  scope?: "run";
   runId: string;
   repo: string;
   path: string;
@@ -107,8 +138,40 @@ export interface FeedbackCodeAnchor {
   excerpt: FeedbackExcerptLine[];
 }
 
+/**
+ * A code anchor on a task branch snapshot, as kept: the snapshot it was
+ * written on (of `attempt`), its repository by name, the file's path in it,
+ * the merge base (`baseSha`) and committed head, the snapshot's checksum and
+ * the lines as the snapshot showed them.
+ */
+export interface FeedbackBranchAnchor {
+  kind: "code";
+  scope: "branch";
+  snapshotId: string;
+  attempt: number;
+  repo: string;
+  path: string;
+  side: "old" | "new";
+  startLine: number;
+  endLine: number;
+  /** The snapshot's merge base: the diff's old side. */
+  baseSha: string;
+  headSha: string;
+  targetRef: string;
+  diffChecksum: string;
+  excerpt: FeedbackExcerptLine[];
+}
+
+/** Either kind of code anchor: lines of a Run's diff, or of a branch snapshot. */
+export type FeedbackLineAnchor = FeedbackCodeAnchor | FeedbackBranchAnchor;
+
+/** Whether a code anchor is on a branch snapshot (else a Run's diff, the default). */
+export function isBranchAnchor(a: FeedbackLineAnchor): a is FeedbackBranchAnchor {
+  return a.scope === "branch";
+}
+
 export type FeedbackPreviewAnchor = Extract<FeedbackAnchorInput, { kind: "preview" }>;
-export type FeedbackAnchor = { kind: "general" } | FeedbackCodeAnchor | FeedbackPreviewAnchor;
+export type FeedbackAnchor = { kind: "general" } | FeedbackCodeAnchor | FeedbackBranchAnchor | FeedbackPreviewAnchor;
 
 export interface FeedbackHistoryEntry {
   id: string;

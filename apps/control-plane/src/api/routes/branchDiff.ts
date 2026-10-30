@@ -11,7 +11,7 @@
  * capture.
  */
 
-import { spanRelation, type BranchRelation, type TaskBranchAvailability, type TaskBranchCapture, type TaskBranchDiff,
+import { relocateCodeAnchor, spanRelation, type BranchRelation, type FeedbackBranchAnchor, type TaskBranchPlacement, type TaskBranchAvailability, type TaskBranchCapture, type TaskBranchDiff,
   type TaskBranchNewer, type TaskBranchPullRequest, type TaskBranchRepository, type TaskBranchSnapshot } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { badRequest, intParam, json, notFound } from "../http.ts";
@@ -114,7 +114,7 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
     };
     if (!repo) {
       return { ...base, repository: null, availability: { state: "none", reason: "This task changes no repository." },
-        snapshot: null, newer: null, pullRequest: null, capture: null };
+        snapshot: null, newer: null, pullRequest: null, capture: null, placements: [] };
     }
 
     const links = (await scope.sql`SELECT s.id, s.previous_snapshot_id AS "previousSnapshotId", s.relation,
@@ -155,6 +155,18 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
         AND (${(shown?.branchRef as string | undefined) ?? null}::text IS NULL OR pr.head_branch = ${(shown?.branchRef as string | undefined) ?? null}::text)
       ORDER BY pr.state IN ('open', 'draft') DESC, pr.created_at DESC LIMIT 1`) as Array<Omit<TaskBranchPullRequest, "syncedAt"> & { syncedAt: Date | null }>;
 
+    // The attempt's branch items on this repository the reader may see: submitted ones, and their own drafts.
+    let placements: TaskBranchPlacement[] = [];
+    if (shown) {
+      const items = (await scope.sql`SELECT f.id, f.anchor FROM feedback_items f
+        WHERE f.task_id = ${taskId} AND f.attempt = ${attempt} AND f.anchor_kind = 'code' AND f.anchor->>'scope' = 'branch'
+          AND f.anchor->>'repo' = ${repo.name} AND (f.status <> 'draft' OR f.author_person_id = ${ctx.principal.personId ?? null})
+        ORDER BY f.created_at, f.id LIMIT 500`) as Array<{ id: string; anchor: FeedbackBranchAnchor }>;
+      const viewed = { snapshotId: shown.id as string, attempt, repository: repo.name, checksum: shown.checksum as string,
+        files: shown.files as TaskBranchSnapshot["files"] };
+      placements = items.map((i) => ({ itemId: i.id, snapshotId: i.anchor.snapshotId, at: relocateCodeAnchor(i.anchor, viewed) }));
+    }
+
     const capture: TaskBranchCapture | null = requested && requested.status !== "done"
       ? { state: requested.status, reason: requested.reason, requestedAt: requested.requestedAt.toISOString() } : null;
     return {
@@ -162,7 +174,7 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
       snapshot: shown ? snapshotOut(shown) : null,
       newer: shown && latestId ? newerThan(shown.id as string, latestId, links) : null,
       pullRequest: pr ? { ...pr, syncedAt: pr.syncedAt ? pr.syncedAt.toISOString() : null } : null,
-      capture,
+      capture, placements,
     };
   });
   if (!out) throw notFound(`task ${ref} not found`);

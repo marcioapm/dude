@@ -201,6 +201,29 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     await owner`UPDATE task_branch_capture_requests SET status = 'done' WHERE task_id = 'wi_bd' AND repository_id = 'repo_api'`;
   });
 
+  test("branch items are placed on the snapshot asked for: on their lines, or outdated where their lines changed", async () => {
+    const author = ana.personId;
+    await owner`INSERT INTO people (id, organization_id, name) VALUES ('per_bo_bd', ${ORG}, 'Bo')`;
+    const anchor = (over: Record<string, unknown>) => ({ kind: "code", scope: "branch", snapshotId: "tbs_b", attempt: 2, repo: "api",
+      path: "src/vat.ts", side: "new", startLine: 11, endLine: 12, baseSha: sha("a"), headSha: sha("c"), targetRef: "main",
+      diffChecksum: "sum-tbs_b", excerpt: [{ kind: "+", old: null, new: 11, text: "  const rate = 0.23;" },
+        { kind: "+", old: null, new: 12, text: "  return n * rate;" }], ...over });
+    await owner`INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id,
+        anchor, status, batch_id, submitted_at) VALUES
+      ('fbi_on', ${ORG}, 'wi_bd', 2, ${author}, 'on its lines', 'code', 'tbs_b', ${anchor({})}::jsonb, 'draft', NULL, NULL),
+      ('fbi_gone', ${ORG}, 'wi_bd', 2, ${author}, 'lines changed', 'code', 'tbs_b',
+        ${anchor({ excerpt: [{ kind: "+", old: null, new: 11, text: "  const rate = 0.25;" }], endLine: 11 })}::jsonb, 'draft', NULL, NULL),
+      ('fbi_bo', ${ORG}, 'wi_bd', 2, 'per_bo_bd', 'private', 'code', 'tbs_b', ${anchor({})}::jsonb, 'draft', NULL, NULL)`;
+    const { body } = await get(ana.key, "/v1/tasks/wi_bd/branch-diff");
+    // In the order written (created_at, then id).
+    expect(body.placements).toEqual([
+      { itemId: "fbi_gone", snapshotId: "tbs_b", at: { kind: "outdated", path: "src/vat.ts", reason: "changed" } },
+      { itemId: "fbi_on", snapshotId: "tbs_b", at: { kind: "lines", path: "src/vat.ts", side: "new", startLine: 11, endLine: 12 } },
+    ]);
+    // Another person's draft is never placed, nor told.
+    expect(JSON.stringify(body)).not.toContain("fbi_bo");
+  });
+
   test("another organization's task, snapshot or a bad parameter is refused", async () => {
     expect((await get(cy.key, "/v1/tasks/wi_bd/branch-diff")).status).toBe(404);
     expect((await get(ana.key, "/v1/tasks/wi_o/branch-diff")).status).toBe(404);

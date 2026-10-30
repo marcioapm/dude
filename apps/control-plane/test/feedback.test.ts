@@ -353,3 +353,74 @@ describe("a code anchor is pinned to the Run's stored diff", () => {
     expect(excerptOf(file, "new", 9, 10)).toBeNull();
   });
 });
+
+describe("a branch anchor is pinned to the stored snapshot", () => {
+  const sha = (c: string) => c.repeat(40);
+  const snap = async (id: string, task: string, attempt: number, checksum: string) => {
+    await owner`INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref,
+        target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, relation)
+      VALUES (${id}, ${ORG}, ${task}, ${attempt}, 'repo_fb_br', 'billing', ${`dude/${task}/attempt-${attempt}`}, 'main', ${sha("f")},
+        ${sha("b")}, ${sha("c")}, ${DIFF}::jsonb, ${checksum}, '{}'::jsonb, 'initial')`;
+  };
+  const branch = (over: Record<string, unknown> = {}) => ({ body: "use the rate table", anchor: {
+    kind: "code", scope: "branch", snapshotId: "tbs_fb", repository: "billing", path: "src/vat.ts", side: "new", startLine: 11, endLine: 12,
+    diffChecksum: "sum-tbs_fb", ...over } });
+
+  beforeAll(async () => {
+    await owner`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
+      ('repo_fb_br', ${ORG}, 'prj_fb', 'billing', 'https://github.com/acme/billing')`;
+    await owner`INSERT INTO task_repositories (task_id, repository_id, organization_id, access) VALUES ('wi_fb', 'repo_fb_br', ${ORG}, 'write')`;
+    await snap("tbs_fb", "wi_fb", 2, "sum-tbs_fb");
+    await snap("tbs_fb_old", "wi_fb", 1, "sum-old");
+    await snap("tbs_fb_other", "wi_fb2", 1, "sum-other");
+  });
+
+  test("its repository, merge base, head, checksum and excerpt come from the snapshot, not the client", async () => {
+    const res = await draft(ana.key, "wi_fb", branch());
+    expect(res.status).toBe(201);
+    const item = await res.json() as Json;
+    expect(item.anchor).toEqual({ kind: "code", scope: "branch", snapshotId: "tbs_fb", attempt: 2, repo: "billing", path: "src/vat.ts",
+      side: "new", startLine: 11, endLine: 12, baseSha: sha("b"), headSha: sha("c"), targetRef: "main", diffChecksum: "sum-tbs_fb", excerpt: [
+        { kind: "+", old: null, new: 11, text: "  const rate = 0.23;" },
+        { kind: "+", old: null, new: 12, text: "  return n * rate;" }] });
+    const [row] = await owner`SELECT anchor_kind, run_id, branch_snapshot_id FROM feedback_items WHERE id = ${item.id}`;
+    expect(row).toEqual({ anchor_kind: "code", run_id: null, branch_snapshot_id: "tbs_fb" });
+    // Edited, it stays on its snapshot; moved to a Run's lines, it names the Run instead.
+    const edited = await call(ana.key, "PATCH", `/v1/feedback/${item.id}`, branch({ startLine: 10, endLine: 10 }));
+    expect(edited.status).toBe(200);
+    expect(((await edited.json()) as Json).anchor).toMatchObject({ scope: "branch", startLine: 10, excerpt: [{ text: "export function vat(n) {" }] });
+    const onRun = await call(ana.key, "PATCH", `/v1/feedback/${item.id}`, { body: "x", anchor: {
+      kind: "code", runId: "run_live", path: "src/vat.ts", side: "new", startLine: 11, endLine: 11 } });
+    expect(onRun.status).toBe(200);
+    const [after] = await owner`SELECT run_id, branch_snapshot_id FROM feedback_items WHERE id = ${item.id}`;
+    expect(after).toEqual({ run_id: "run_live", branch_snapshot_id: null });
+    expect((await call(ana.key, "DELETE", `/v1/feedback/${item.id}`)).status).toBe(204);
+  });
+
+  test("another task's, organization's or attempt's snapshot, another repository, a checksum not read, or lines not in it are refused", async () => {
+    expect((await draft(ana.key, "wi_fb", branch({ snapshotId: "tbs_fb_other" }))).status).toBe(400);
+    expect((await draft(ana.key, "wi_fb", branch({ snapshotId: "tbs_nope" }))).status).toBe(400);
+    expect((await draft(ana.key, "wi_fb", branch({ snapshotId: "tbs_fb_old", diffChecksum: "sum-old" }))).status).toBe(409);
+    expect((await draft(ana.key, "wi_fb", branch({ repository: "api" }))).status).toBe(400);
+    expect((await draft(ana.key, "wi_fb", branch({ diffChecksum: "stale" }))).status).toBe(409);
+    expect((await draft(ana.key, "wi_fb", branch({ diffChecksum: undefined }))).status).toBe(400);
+    expect((await draft(ana.key, "wi_fb", branch({ path: "src/nope.ts" }))).status).toBe(400);
+    expect((await draft(ana.key, "wi_fb", branch({ startLine: 11, endLine: 40 }))).status).toBe(400);
+    expect((await draft(ana.key, "wi_fb", branch({ side: "old", startLine: 12, endLine: 13 }))).status).toBe(400);
+    expect((await draft(ana.key, "wi_fb", branch({ runId: "run_live" }))).status).toBe(400);
+    expect((await draft(ana.key, "wi_fb", branch({ headSha: sha("9") }))).status).toBe(400);
+    expect((await draft(cy.key, "wi_fb", branch())).status).toBe(404);
+    const [{ n }] = await owner`SELECT count(*)::int AS n FROM feedback_items WHERE branch_snapshot_id IS NOT NULL`;
+    expect(n).toBe(0);
+  });
+
+  test("a branch-anchored draft is listed and submitted like any other", async () => {
+    const item = await (await draft(ana.key, "wi_fb", branch())).json() as Json;
+    expect((await listed(ana.key, "wi_fb")).feedback.find((f: Json) => f.id === item.id)?.anchor.scope).toBe("branch");
+    expect((await listed(bo.key, "wi_fb")).feedback.some((f: Json) => f.id === item.id)).toBe(false);
+    forwarded.length = 0;
+    expect((await call(ana.key, "POST", "/v1/tasks/wi_fb/feedback/submit", { draftIds: [item.id], submissionKey: "k-branch" })).status).toBe(201);
+    expect(forwarded).toEqual([{ path: "/internal/tasks/wi_fb/feedback/submit", person: ana.personId,
+      body: { draftIds: [item.id], submissionKey: "k-branch" } }]);
+  });
+});

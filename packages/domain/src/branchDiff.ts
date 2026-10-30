@@ -9,6 +9,7 @@
  * it. `GET /v1/tasks/:id/branch-diff`.
  */
 
+import type { RelocatedAnchor } from "./feedbackAnchor.ts";
 import type { RunDiffFile } from "./live.ts";
 
 /**
@@ -141,6 +142,22 @@ export interface TaskBranchDiff {
   newer: TaskBranchNewer | null;
   pullRequest: TaskBranchPullRequest | null;
   capture: TaskBranchCapture | null;
+  /**
+   * Where each branch-anchored item of this attempt and repository the
+   * reader may see (submitted ones, and their own drafts) sits on the
+   * returned snapshot: `relocateCodeAnchor`, run here. `lines` is on its
+   * lines (or on its own snapshot), `outdated` under its file's header with
+   * its original excerpt, `unchanged` outside every hunk, `absent` when its
+   * file is not in this snapshot. Empty unless availability is ok.
+   */
+  placements: TaskBranchPlacement[];
+}
+
+export interface TaskBranchPlacement {
+  itemId: string;
+  /** The snapshot the item was written on. */
+  snapshotId: string;
+  at: RelocatedAnchor;
 }
 
 /**

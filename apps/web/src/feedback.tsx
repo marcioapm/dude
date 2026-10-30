@@ -14,7 +14,7 @@ import { AgentAvatar, PersonAvatar, type FeedbackCardItem, type FeedbackThreadEn
 import { firstName } from "@dude/design-system";
 import {
   FEEDBACK_LIMITS, NOT_STARTED_STATUSES, anchorFile, isConductor, relocateCodeAnchor, runDoer, runLabel,
-  type FeedbackAnchorInput, type FeedbackCodeAnchor, type FeedbackItem, type FeedbackList, type RunDiff, type TaskStatus,
+  isBranchAnchor, type FeedbackAnchorInput, type FeedbackLineAnchor, type FeedbackItem, type FeedbackList, type RunDiff, type TaskStatus,
 } from "@dude/domain";
 import type { ApiClient, FeedbackSubmitted, Run, TaskDetail } from "./api/client.ts";
 import type { People } from "./people.tsx";
@@ -148,7 +148,12 @@ export function threadOf(item: FeedbackItem, people: People, runs: ReadonlyMap<s
  * checksum; otherwise as kept, whose checksum the API refuses once the
  * diff has moved — never re-quoted at numbers whose text changed.
  */
-export function draftAnchorInput(anchor: FeedbackCodeAnchor, diff: Pick<RunDiff, "checksum" | "files"> | null): FeedbackAnchorInput {
+export function draftAnchorInput(anchor: FeedbackLineAnchor, diff: Pick<RunDiff, "checksum" | "files"> | null): FeedbackAnchorInput {
+  // A branch snapshot is pinned: its draft is written again on the lines and snapshot it names.
+  if (isBranchAnchor(anchor)) {
+    return { kind: "code", scope: "branch", snapshotId: anchor.snapshotId, repository: anchor.repo, path: anchor.path, side: anchor.side,
+      startLine: anchor.startLine, endLine: anchor.endLine, diffChecksum: anchor.diffChecksum };
+  }
   const kept = { kind: "code" as const, runId: anchor.runId, path: anchor.path, side: anchor.side, startLine: anchor.startLine,
     endLine: anchor.endLine, diffChecksum: anchor.diffChecksum };
   if (!diff) return kept;
