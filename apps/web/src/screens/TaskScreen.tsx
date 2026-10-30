@@ -1088,7 +1088,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       {/* The reader's drafts on the current attempt, on every tab while there are some. */}
       {feedback.drafts.length > 0 ? (
         <FeedbackTray client={client} task={item} fb={feedback} current={current} prs={allPrs.filter((pr) => prInAttempt(pr, current, byId, current, source))}
-          openBlockers={relations ? openBlockers(relations).length : 0} />
+          openBlockers={relations ? openBlockers(relations).length : 0}
+          refusedHere={earlier && tab === "changes" ? `Attempt ${shown} is read-only. Return to the current attempt to submit; your drafts are kept.` : undefined} />
       ) : null}
     </div>
   );

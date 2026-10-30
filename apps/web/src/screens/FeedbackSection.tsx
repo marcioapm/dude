@@ -109,8 +109,10 @@ export function useTaskFeedbackPage({ client, taskId, task, current, version, pe
 // ---------------------------------------------------------------------------
 
 /** The drafts tray at the foot of the page, and the confirmation its Submit opens. */
-export function FeedbackTray({ client, task, fb, current, prs, openBlockers }: {
+export function FeedbackTray({ client, task, fb, current, prs, openBlockers, refusedHere }: {
   client: ApiClient; task: TaskDetail; fb: TaskFeedbackController; current: number; prs: ReadonlyArray<PullRequest>; openBlockers: number;
+  /** Why the page shown takes no submit (an earlier attempt's branch), beside the task's own refusals. */
+  refusedHere?: string | undefined;
 }) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -120,7 +122,7 @@ export function FeedbackTray({ client, task, fb, current, prs, openBlockers }: {
   // One per page: a retry of the same drafts keeps its key.
   const submitter = useMemo(() => new Submitter(client), [client]);
   const destination = feedbackDestination(task, current, openBlockers);
-  const refused = submitRefusal(task.status) ?? undefined;
+  const refused = submitRefusal(task.status) ?? refusedHere;
   const rows: DraftsTrayRow[] = fb.drafts.map((d) => ({ id: d.id, anchor: d.anchor, body: d.body }));
   const openPrs = prs.filter((pr) => pr.state === "open" || pr.state === "draft");
   const holds = openPrs.length > 0

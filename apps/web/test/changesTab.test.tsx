@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { FeedbackDraftInput } from "../src/api/client.ts";
-import { act, click, mount, settle, type, until } from "./dom.ts";
+import { act, click, emitForTest, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { BRANCH_KEY } from "../src/fixtures/branchDiff.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
@@ -131,5 +131,191 @@ describe("the Changes tab: the branch", () => {
     expect(rows.length).toBeGreaterThan(0);
     await click([...rows[0]!.querySelectorAll("button")].find((b) => b.textContent === "Open its Changes")!);
     expect(opened).toEqual([rows[0]!.dataset["run"]!]);
+  });
+});
+
+describe("the Changes tab: a pinned snapshot and an explicit refresh", () => {
+  test("updated: the snapshot shown stays on re-reads; the notice names the merge with the target's name; Refresh moves it", async () => {
+    const client = fx("updated");
+    const asked: Array<string | undefined> = [];
+    const read = client.taskBranchDiff.bind(client);
+    client.taskBranchDiff = (id, o = {}) => {
+      asked.push(o.snapshot);
+      return read(id, o);
+    };
+    const { tab } = await changes(client);
+    expect(tab.dataset["snapshot"]).toBe("tbs_fx_web");
+    expect(q(tab, "changes-newer-words")!.textContent).toBe("main was merged in — base moved 2be91c7 → 8c1d0e4");
+    // A re-read of the page (its stream) asks for the snapshot shown, by id.
+    await emitForTest("task.branch_snapshot.captured", { snapshotId: "tbs_fx_merged" });
+    await until(() => (asked.length > 1 ? asked : null), "the page's re-read");
+    expect(asked.at(-1)).toBe("tbs_fx_web");
+    expect(tab.dataset["snapshot"]).toBe("tbs_fx_web");
+    await click(q(tab, "changes-refresh")!);
+    await until(() => (tab.dataset["snapshot"] === "tbs_fx_merged" ? tab : null), "the newer snapshot");
+    expect(asked.at(-1)).toBe("tbs_fx_merged");
+    expect(q(tab, "changes-newer")).toBeNull();
+    expect(q(tab, "changes-refreshed")!.textContent).toContain("Now at 3e7a2b9 · base moved 2be91c7 → 8c1d0e4");
+    expect(q(tab, "snapshot-line")!.textContent).toContain("8c1d0e4…3e7a2b9");
+  });
+
+  test("a captured snapshot re-reads the page but never replaces the snapshot shown: only the notice comes", async () => {
+    const client = fx("populated");
+    // The API once a newer snapshot is captured: the latest with no `snapshot`, `newer` beside a named one.
+    let captured = false;
+    const read = client.taskBranchDiff.bind(client);
+    client.taskBranchDiff = async (id, o = {}) => {
+      if (!captured) return read(id, o);
+      localStorage.setItem(BRANCH_KEY, "updated");
+      try {
+        return await read(id, { ...o, snapshot: o.snapshot ?? "tbs_fx_merged" });
+      } finally {
+        localStorage.setItem(BRANCH_KEY, "populated");
+      }
+    };
+    const { tab } = await changes(client);
+    expect(tab.dataset["snapshot"]).toBe("tbs_fx_web");
+    expect(q(tab, "changes-newer")).toBeNull();
+    captured = true;
+    await emitForTest("task.branch_snapshot.captured", { snapshotId: "tbs_fx_merged", attempt: 1, repository: "web-console", relation: "merged-target" });
+    await until(() => q(tab, "changes-newer"), "the notice");
+    expect(tab.dataset["snapshot"]).toBe("tbs_fx_web");
+    expect(q(tab, "snapshot-line")!.textContent).toContain("2be91c7…7ac42e1");
+  });
+
+  test("rebased: the notice says rewritten; Refresh is refused while a comment editor holds words", async () => {
+    const { tab } = await changes(fx("rebased"));
+    expect(q(tab, "changes-newer-words")!.textContent).toBe(
+      "Branch was rewritten (rebase or force-push) — earlier comments are kept, marked outdated where their lines moved");
+    const editor = await pickLine(tab, "src/checkout/PaymentStep.tsx", 2);
+    await typeText(editor, "Keep the old import until the funnel moves.");
+    const refused = q(tab, "changes-refresh")!;
+    expect(refused.getAttribute("aria-disabled")).toBe("true");
+    expect(refused.textContent).toContain("Save or cancel your open comment first. It stays on the snapshot it was written on.");
+    await click(refused);
+    expect(tab.dataset["snapshot"]).toBe("tbs_fx_web");
+    expect(tab.textContent).not.toContain("Now at");
+    // Cancelled, Refresh is offered again.
+    await click([...tab.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!);
+    const ok = q(tab, "changes-refresh")! as HTMLButtonElement;
+    expect(ok.disabled).toBe(false);
+    await click(ok);
+    await until(() => (tab.dataset["snapshot"] === "tbs_fx_rebased" ? tab : null), "the rebased snapshot");
+  });
+});
+
+describe("the Changes tab: feedback on the branch", () => {
+  test("a line comment is a branch draft carrying the snapshot's id and checksum, submitted from the tray with the rest", async () => {
+    const client = fx("populated");
+    const sent: FeedbackDraftInput[] = [];
+    const create = client.createFeedbackDraft.bind(client);
+    client.createFeedbackDraft = (id, d) => { sent.push(d); return create(id, d); };
+    const { page, tab } = await changes(client);
+    const editor = await pickLine(tab, "src/flags.ts", 13);
+    await typeText(editor, "Say when the flag goes.");
+    await click([...tab.querySelectorAll("button")].find((b) => b.textContent === "Save draft")!);
+    await until(() => (sent.length ? sent : null), "the draft");
+    expect(sent[0]!.anchor).toEqual({ kind: "code", scope: "branch", snapshotId: "tbs_fx_web", repository: "web-console", path: "src/flags.ts",
+      side: "new", startLine: 13, endLine: 13, diffChecksum: "sum-tbs_fx_web" });
+    // Drawn under its line, marked on its file.
+    await until(() => headMark(tab, "src/flags.ts"), "the mark on flags.ts");
+    expect(tab.querySelector('[data-testid=diff-section][data-path="src/flags.ts"]')!.textContent).toContain("Say when the flag goes.");
+    // General feedback from the bar: a general draft in the same model.
+    await click(q(tab, "changes-general")!);
+    await typeText(q(tab, "changes-general-editor")!.querySelector("textarea")!, "Ship it behind the flag.");
+    await click([...q(tab, "changes-general-editor")!.querySelectorAll("button")].find((b) => b.textContent === "Save draft")!);
+    await until(() => (sent.length === 2 ? sent : null), "the general draft");
+    expect(sent[1]!.anchor).toEqual({ kind: "general" });
+    // The tray submits them (and the seeded draft) in one batch, with its confirmation.
+    await click(await until(() => page.querySelector("[data-testid=fb-submit]"), "Submit"));
+    const confirm = await until(() => document.querySelector<HTMLElement>("[data-testid=fb-confirm]"), "the confirmation");
+    expect(confirm.textContent).toBe("Submit 3");
+  });
+
+  test("an older attempt refuses a submit with its reason", async () => {
+    const client = fx("older");
+    await client.createFeedbackDraft(TASK_ID, { body: "On the current attempt.", anchor: { kind: "general" } });
+    const { page, tab } = await changes(client, { attempt: 1 });
+    await until(() => q(tab, "changes-read-only"), "read-only");
+    expect(q(tab, "gutter-add")).toBeNull();
+    const refused = await until(() => page.querySelector("[data-testid=fb-submit-refused]"), "the refused Submit");
+    expect(refused.querySelector("button")!.disabled).toBe(true);
+    expect(page.querySelector("[data-testid=fb-submit]")).toBeNull();
+  });
+});
+
+describe("the Changes tab: comment marks and cycling", () => {
+  const PAY = "src/checkout/PaymentStep.tsx";
+  const TEST = "src/checkout/PaymentStep.test.tsx";
+
+  test("a mark on each commented file's header and list entry, in words; cycling visits outdated first, then by line, and wraps", async () => {
+    const { tab } = await changes(fx("populated"));
+    const mark = (await until(() => headMark(tab, PAY), "the mark"));
+    expect(mark.getAttribute("aria-label")).toBe("4 comments on src/checkout/PaymentStep.tsx — show next");
+    expect(listMark(tab, PAY)).not.toBeNull();
+    expect(listMark(tab, TEST)!.getAttribute("aria-label")).toBe("1 comment on src/checkout/PaymentStep.test.tsx — show next");
+    expect(headMark(tab, "src/flags.ts")).toBeNull();
+    const order: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      await click(headMark(tab, PAY)!);
+      await settle(10);
+      order.push((document.activeElement as HTMLElement).dataset["fbItem"]!);
+      expect(document.activeElement!.hasAttribute("data-flash")).toBe(true);
+    }
+    // Lin's outdated one under the header, then lines 2–3, 8, 9; then round again.
+    expect(order).toEqual(["fbi_fx_b4", "fbi_fx_b2", "fbi_fx_b1", "fbi_fx_b3", "fbi_fx_b4"]);
+    expect(headMark(tab, PAY)!.textContent).toBe("1 / 4");
+    expect(headMark(tab, PAY)!.getAttribute("aria-label")).toBe("Comment 1 of 4 on src/checkout/PaymentStep.tsx — show next");
+  });
+
+  test("a commented file hidden by the filter stays listed; its mark clears the filter and moves to its comment", async () => {
+    const { tab } = await changes(fx("populated"));
+    await type(q(tab, "changes-filter")!, "flags");
+    expect(sections(tab)).toEqual(["src/flags.ts"]);
+    const hidden = qa(tab, "filtered-out-file").map((r) => r.dataset["path"]);
+    expect(hidden.sort()).toEqual([TEST, PAY].sort());
+    await click(listMark(tab, TEST)!);
+    expect((q(tab, "changes-filter") as HTMLInputElement).value).toBe("");
+    expect(sections(tab)).toContain(TEST);
+    expect((document.activeElement as HTMLElement).dataset["fbItem"]).toBe("fbi_fx_b5");
+  });
+
+  test("with another file shown alone, the mark shows its own file alone", async () => {
+    const { tab } = await changes(fx("populated"));
+    await click(tab.querySelector('[data-testid=diff-file][data-path="src/flags.ts"]')!);
+    expect(sections(tab)).toEqual(["src/flags.ts"]);
+    await click(listMark(tab, PAY)!);
+    expect(sections(tab)).toEqual([PAY]);
+  });
+
+  test("the cycle restarts after a refresh", async () => {
+    const { tab } = await changes(fx("updated"));
+    await click(await until(() => headMark(tab, PAY), "the mark"));
+    expect(headMark(tab, PAY)!.textContent).toContain("1 / ");
+    await click(q(tab, "changes-refresh")!);
+    await until(() => (tab.dataset["snapshot"] === "tbs_fx_merged" ? tab : null), "the newer snapshot");
+    expect(headMark(tab, PAY)!.textContent).not.toContain("/");
+  });
+});
+
+describe("the branch review's words", () => {
+  test("each relation's notice, and the line after a refresh", () => {
+    const n = { id: "x", fromMergeBaseSha: "aaaaaaa1", fromHeadSha: "bbbbbbb1", mergeBaseSha: "ccccccc1", headSha: "ddddddd1", capturedAt: "", count: 1 };
+    expect(newerWords({ ...n, relation: "fast-forward" }, "main")).toBe("New commits on the branch — head bbbbbbb → ddddddd");
+    expect(newerWords({ ...n, relation: "merged-target" }, "develop")).toBe("develop was merged in — base moved aaaaaaa → ccccccc");
+    expect(refreshedWords({ mergeBaseSha: "aaaaaaa1", headSha: "b" }, { mergeBaseSha: "aaaaaaa1", headSha: "ddddddd1", relation: "fast-forward" }))
+      .toStartWith("Now at ddddddd. ");
+    expect(nextComment(undefined, 3)).toBe(0);
+    expect(nextComment(2, 3)).toBe(0);
+  });
+
+  test("the mark's tooltip tells submitted, drafts and outdated apart", () => {
+    const item = (id: string, author: string, status: "open" | "draft", line: number | null) => ({
+      item: { id, status, author: { id: author, name: author === "me" ? "Me" : `${author} Silva` }, createdAt: id } as never,
+      path: "a", at: line === null ? { head: "outdated" as const } : { side: "new" as const, startLine: line, endLine: line },
+    });
+    const list = commentsByFile([item("1", "ana", "open", 8), item("2", "me", "draft", 3), item("3", "tom", "open", null)]).get("a")!;
+    expect(list.map((p) => p.item.id)).toEqual(["3", "2", "1"]);
+    expect(marksLabel(list, "me")).toBe("2 submitted by tom Silva, ana Silva · 1 your draft · 1 outdated · lines changed since");
   });
 });
