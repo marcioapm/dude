@@ -633,7 +633,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
               onClick={() => act({ kind: "newEpic", projectId: project.id })}>
               New epic
             </Button>
-            <ServersButton client={client} projectId={project.id} version={version}
+            <ServersButton client={client} projectId={project.id}
               onOpen={() => go({ view: "projectServers", projectId: project.id })} />
             <Button size="sm" variant="quiet" leadingIcon="settings" data-testid="project-settings-button"
               onClick={() => go({ view: "projectSettings", projectId: project.id })}>
@@ -907,12 +907,18 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   );
 }
 
+const SERVER_COUNT_EVENTS: ReadonlySet<string> = new Set([EventTypes.ServersChanged, EventTypes.RunCreated,
+  EventTypes.RunCompleted, EventTypes.RunFailed, EventTypes.RunAborted]);
+
 /**
  * The board's way to the project's Servers page: "Servers · N" once the
  * running servers are read, plain "Servers" until then or if the read fails.
  */
-function ServersButton({ client, projectId, version, onOpen }: { client: ApiClient; projectId: string; version: number; onOpen: () => void }) {
+function ServersButton({ client, projectId, onOpen }: { client: ApiClient; projectId: string; onOpen: () => void }) {
   const [count, setCount] = useState<number | null>(null);
+  const [revision, setRevision] = useState(0);
+  useReloadOnEvents({ client, projectId }, () => setRevision((n) => n + 1), 300,
+    (e) => e.projectId !== projectId || !SERVER_COUNT_EVENTS.has(e.eventType));
   useEffect(() => {
     let current = true;
     client.runningServers(projectId).then(
@@ -922,7 +928,7 @@ function ServersButton({ client, projectId, version, onOpen }: { client: ApiClie
     return () => {
       current = false;
     };
-  }, [client, projectId, version]);
+  }, [client, projectId, revision]);
   return (
     <Button size="sm" variant="quiet" leadingIcon="globe" data-testid="servers-button" onClick={onOpen}>
       {count === null ? "Servers" : `Servers · ${count}`}
