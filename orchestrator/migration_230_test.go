@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -147,4 +148,86 @@ func TestBranchSnapshotsAreUniqueScopedAndAskedForWhenTheBranchMoves(t *testing.
 	}
 	mustExec(t, owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
 		VALUES ('fbi_s', $1, 'wi_s', 1, 'per_s', 'b', 'code', 'tbs_1', '{}')`, org)
+}
+
+// A publish recording its pull requests' heads (in Go's sort order of the
+// repository names, phases/publish.go) and a Run recording the same heads
+// at once ask for the same capture requests: both take them in that one
+// order, so neither waits on the other in a cycle. jsonb lists "web"
+// before "api-gateway" (shorter keys first), the opposite of that order.
+func TestTwoWritersAskingForTheSameCapturesNeverDeadlock(t *testing.T) {
+	_, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	sha := func(c string) string { return strings.Repeat(c, 40) }
+	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_d', $1, 'P', 'p', 'P')`, org)
+	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_d', $1, 'prj_d', 1, 'T', 'G')`, org)
+	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
+		('repo_gw', $1, 'prj_d', 'api-gateway', 'https://github.com/acme/api-gateway'), ('repo_web', $1, 'prj_d', 'web', 'https://github.com/acme/web')`, org)
+	mustExec(t, owner, `INSERT INTO task_repositories (task_id, repository_id, organization_id, access) VALUES
+		('wi_d', 'repo_gw', $1, 'write'), ('wi_d', 'repo_web', $1, 'write')`, org)
+	mustExec(t, owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind, status)
+		VALUES ('run_d', $1, 'prj_d', 'wi_d', 1, 'agent', 'running')`, org)
+	mustExec(t, owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+		VALUES ('pr_gw', $1, 'prj_d', 'wi_d', 'repo_gw', 1, 'https://github.com/acme/api-gateway/pull/1', 'dude/wi_d/attempt-1', 'main', $2, 'T'),
+		       ('pr_web', $1, 'prj_d', 'wi_d', 'repo_web', 2, 'https://github.com/acme/web/pull/2', 'dude/wi_d/attempt-1', 'main', $2, 'T')`, org, sha("1"))
+
+	connect := func() *pgx.Conn {
+		c, err := pgx.ConnectConfig(ctx, owner.Config().Copy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close(context.Background()) })
+		mustExec(t, c, `SET lock_timeout = '5s'`)
+		return c
+	}
+	publish, run := connect(), connect()
+	var runPID uint32 = run.PgConn().PID()
+
+	// The publish: api-gateway's pull request first.
+	tx, err := publish.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $1 WHERE id = 'pr_gw'`, sha("2")); err != nil {
+		t.Fatal(err)
+	}
+	// The Run records both heads meanwhile, and waits on the publish.
+	ran := make(chan error, 1)
+	go func() {
+		_, err := run.Exec(ctx, `UPDATE runs SET heads = jsonb_build_object('web', jsonb_build_object('sha', $1::text),
+			'api-gateway', jsonb_build_object('sha', $1::text)) WHERE id = 'run_d'`, sha("3"))
+		ran <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for waiting := false; !waiting; {
+		if time.Now().After(deadline) {
+			t.Fatal("the Run never waited on the publish")
+		}
+		select {
+		case err := <-ran:
+			t.Fatalf("the Run did not wait on the publish: %v", err)
+		default:
+		}
+		if err := owner.QueryRow(ctx, `SELECT coalesce(wait_event_type = 'Lock', false) FROM pg_stat_activity WHERE pid = $1`, runPID).
+			Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The publish goes on to web's pull request, and commits.
+	if _, err := tx.Exec(ctx, `UPDATE pull_requests SET head_sha = $1 WHERE id = 'pr_web'`, sha("2")); err != nil {
+		t.Fatalf("the publish's second pull request: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-ran; err != nil {
+		t.Fatalf("the Run's heads: %v", err)
+	}
+	var n int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM task_branch_capture_requests WHERE task_id = 'wi_d' AND status = 'pending'
+		AND head_sha = $1`, sha("3")).Scan(&n); err != nil || n != 2 {
+		t.Errorf("%d requests at the Run's heads (%v), want 2", n, err)
+	}
 }

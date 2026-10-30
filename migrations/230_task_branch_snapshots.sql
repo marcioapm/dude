@@ -136,12 +136,22 @@ GRANT EXECUTE ON FUNCTION want_branch_capture(text, text, integer, text, text) T
 -- its repositories' branch may have moved — a phase's publish, a merge of
 -- the target an agent made after sync_base, a promotion's head.
 CREATE FUNCTION runs_want_branch_capture() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  h record;
 BEGIN
-  PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, NEW.attempt, r.id, h.value->>'sha')
-  FROM jsonb_each(NEW.heads) h
-  JOIN repositories r ON r.name = h.key
-  JOIN task_repositories tr ON tr.repository_id = r.id AND tr.task_id = NEW.task_id
-  WHERE jsonb_typeof(h.value) = 'object';
+  -- One at a time in byte order of the repository's name, the order a
+  -- publish's pull request updates take (Go's sort, phases/publish.go):
+  -- two writers asking for the same rows never wait on each other in a
+  -- cycle.
+  FOR h IN SELECT r.id, x.value->>'sha' AS sha
+    FROM jsonb_each(NEW.heads) x
+    JOIN repositories r ON r.name = x.key
+    JOIN task_repositories tr ON tr.repository_id = r.id AND tr.task_id = NEW.task_id
+    WHERE jsonb_typeof(x.value) = 'object'
+    ORDER BY r.name COLLATE "C"
+  LOOP
+    PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, NEW.attempt, h.id, h.sha);
+  END LOOP;
   RETURN NULL;
 END
 $$;
@@ -154,13 +164,20 @@ CREATE TRIGGER runs_branch_capture
 -- A conductor's publish moved the task branch (delivery.PublishedTx). A
 -- delivery from before attempts were kept records attempt 0: the task's.
 CREATE FUNCTION publishes_want_branch_capture() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  h record;
 BEGIN
-  PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, COALESCE(NULLIF(NEW.attempt, 0), task_attempt(NEW.task_id)), r.id,
-    h.value->>'sha')
-  FROM jsonb_each(COALESCE(NEW.heads, '{}'::jsonb)) h
-  JOIN repositories r ON r.name = h.key
-  JOIN task_repositories tr ON tr.repository_id = r.id AND tr.task_id = NEW.task_id
-  WHERE jsonb_typeof(h.value) = 'object';
+  -- In byte order of the name, as runs_want_branch_capture.
+  FOR h IN SELECT r.id, x.value->>'sha' AS sha
+    FROM jsonb_each(COALESCE(NEW.heads, '{}'::jsonb)) x
+    JOIN repositories r ON r.name = x.key
+    JOIN task_repositories tr ON tr.repository_id = r.id AND tr.task_id = NEW.task_id
+    WHERE jsonb_typeof(x.value) = 'object'
+    ORDER BY r.name COLLATE "C"
+  LOOP
+    PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, COALESCE(NULLIF(NEW.attempt, 0), task_attempt(NEW.task_id)),
+      h.id, h.sha);
+  END LOOP;
   RETURN NULL;
 END
 $$;
