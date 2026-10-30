@@ -371,6 +371,42 @@ describe("the Changes tab: comment marks and cycling", () => {
     expect(sections(tab)).toEqual([PAY]);
   });
 
+  // Picks repository `name` in the bar's Select through its listbox, by role, as a person would.
+  async function pickRepository(tab: HTMLElement, name: string) {
+    const trigger = q(tab, "changes-repo")!;
+    await act(async () => void trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    const option = await until(() => [...document.querySelectorAll<HTMLElement>("[role=listbox] [role=option]")].find((o) => o.textContent === name), `the ${name} option`);
+    await click(option);
+  }
+
+  test("a repository change shows that repository's snapshot, clears the filter and restarts the cycle", async () => {
+    const { tab } = await changes(fx("populated"));
+    await click(await until(() => headMark(tab, PAY), "the mark"));
+    expect(headMark(tab, PAY)!.textContent).toBe("1 / 4");
+    await type(q(tab, "changes-filter")!, "Payment");
+    await pickRepository(tab, "sdk-js");
+    await until(() => (tab.dataset["snapshot"] === "tbs_fx_sdk" ? tab : null), "the sdk-js snapshot");
+    expect((q(tab, "changes-filter") as HTMLInputElement).value).toBe("");
+    expect(sections(tab)).toEqual(["src/checkout.ts"]);
+    expect(q(tab, "snapshot-line")!.textContent).toContain("a17b9e0");
+    await pickRepository(tab, "web-console");
+    await until(() => (tab.dataset["snapshot"] === "tbs_fx_web" ? tab : null), "back on web-console");
+    const mark = await until(() => headMark(tab, PAY), "the mark again");
+    expect(mark.textContent).toBe("4");
+    expect(mark.textContent!.includes("/")).toBe(false);
+  });
+
+  test("while an editor holds words, the repository cannot change", async () => {
+    const { tab } = await changes(fx("populated"));
+    const editor = await pickLine(tab, PAY, 2);
+    await typeText(editor, "Keep this before switching.");
+    expect((q(tab, "changes-repo") as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => void q(tab, "changes-repo")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
+    await settle(50);
+    expect(document.querySelectorAll("[role=listbox] [role=option]").length).toBe(0);
+    expect(tab.dataset["snapshot"]).toBe("tbs_fx_web");
+  });
+
   test("the cycle restarts after a refresh", async () => {
     const { tab } = await changes(fx("updated"));
     await click(await until(() => headMark(tab, PAY), "the mark"));
