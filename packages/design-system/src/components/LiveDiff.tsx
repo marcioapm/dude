@@ -5,6 +5,7 @@ import { cx } from "../util/cx.ts";
 import { plural } from "../util/format.ts";
 import { Icon } from "../icons/index.tsx";
 import { IconButton } from "../primitives/Button.tsx";
+import { Tooltip } from "../primitives/Tooltip.tsx";
 import { DiffStat } from "./DiffStat.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { Switch } from "./Settings.tsx";
@@ -42,6 +43,8 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly onOpenFile?: ((path: string) => void) | undefined;
   /** Side by side or one column; unified until the person picks. */
   readonly defaultView?: LiveDiffView | undefined;
+  /** A page may hold the view (for example, unified only on a phone). */
+  readonly view?: LiveDiffView | undefined;
   /**
    * The file shown alone, null for all of them. Give it (with
    * `onSelectedChange`) to pick one from outside — a list of changed files
@@ -54,6 +57,25 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly fileList?: boolean | undefined;
   /** Comments on lines: a gutter "+", a range picked by press and drag, and rows under a line. */
   readonly commenting?: LiveDiffCommenting | undefined;
+  /**
+   * Replaces the toolbar's "Since abc1234 · N files" summary; `null` leaves
+   * it out, for a page that draws its own scope in its bar.
+   */
+  readonly scopeLabel?: ReactNode;
+  /**
+   * Paths a page's filter hides that still have comments: listed after the
+   * matches, each with its comment mark, so a filter never hides feedback.
+   */
+  readonly filteredOut?: ReadonlyArray<string> | undefined;
+  /** Under the file list: what the diff is ("Uncommitted work counts…" for an agent's checkout, the default). */
+  readonly listNote?: ReactNode;
+}
+
+/** A file's comments, for its mark: how many, the breakdown in words, and the one shown last while cycling (1-based). */
+export interface FileComments {
+  readonly count: number;
+  readonly label: string;
+  readonly position?: number | undefined;
 }
 
 export type LiveDiffView = "unified" | "split";
@@ -78,10 +100,48 @@ export interface LiveDiffCommenting {
   readonly onSelectionChange: (range: DiffRange | null, done: boolean) => void;
   /** Under the line numbered `line` on `side`: what was written there, the editor. Called for every line: keep it cheap. */
   readonly renderAfterLine?: ((path: string, side: DiffSide, line: number) => ReactNode) | undefined;
+  /**
+   * `renderAfterLine` for one file, in its place: a function that keeps its
+   * identity while what goes under that file's lines is unchanged, so a
+   * comment on another file redraws none of this one's hunks.
+   */
+  readonly renderAfterLineFor?: ((path: string) => ((path: string, side: DiffSide, line: number) => ReactNode) | undefined) | undefined;
   /** Under a file's header, before its first hunk: what no longer has lines in it. */
   readonly renderFileHead?: ((path: string) => ReactNode) | undefined;
   /** After a file's name in the list: how many comments it has. */
   readonly fileMark?: ((path: string) => ReactNode) | undefined;
+  /**
+   * A file's comments (drafts and submitted, outdated included), null for
+   * none: draws the comment mark on its sticky header and its list entry.
+   */
+  readonly fileComments?: ((path: string) => FileComments | null) | undefined;
+  /** The mark activated: the page shows the file and moves to its next comment. */
+  readonly onFileComments?: ((path: string) => void) | undefined;
+}
+
+/** The accessible name of a file's comment mark. */
+export function commentMarkName(path: string, info: FileComments): string {
+  return info.position
+    ? `Comment ${info.position} of ${info.count} on ${path} — show next`
+    : `${plural(info.count, "comment")} on ${path} — show next`;
+}
+
+/**
+ * A file's comment mark: the `message` glyph in secondary ink with a
+ * tabular count ("2 / 3" while cycling), no tone; its tooltip says in
+ * words what the comments are. A button of its own, beside — never inside —
+ * the file's entry.
+ */
+function CommentMark({ path, info, onShow, where }: { path: string; info: FileComments; onShow?: ((path: string) => void) | undefined; where: "head" | "list" }) {
+  return (
+    <Tooltip content={info.label}>
+      <button type="button" className={styles["commentMark"]} aria-label={commentMarkName(path, info)} data-testid="comment-mark" data-path={path} data-where={where}
+        onClick={(e) => { e.stopPropagation(); onShow?.(path); }}>
+        <Icon name="message" size={14} />
+        <span className={styles["commentCount"]}>{info.position ? `${info.position} / ${info.count}` : info.count}</span>
+      </button>
+    </Tooltip>
+  );
 }
 
 /** A line's "+" and numbers carry where they are, so one handler on the diff serves all of them. */
@@ -185,6 +245,7 @@ export function splitRows(lines: ReadonlyArray<LiveDiffLine>): SplitRow[] {
 }
 
 const SIGN = { "+": "+", "-": "−", " ": "" } as const;
+const NONE: ReadonlyArray<string> = [];
 
 /**
  * A working agent's checkout against where it started, as it changes: the
@@ -200,18 +261,28 @@ const SIGN = { "+": "+", "-": "−", " ": "" } as const;
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, commenting, className, ...rest }: LiveDiffProps) {
-  const [view, setView] = useState<LiveDiffView>(defaultView);
+export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", view: heldView, selected: given, onSelectedChange, fileList = true, commenting, scopeLabel, filteredOut = NONE, listNote, className, ...rest }: LiveDiffProps) {
+  const [ownView, setView] = useState<LiveDiffView>(defaultView);
+  const view = heldView ?? ownView;
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
   const [own, setOwn] = useState<string | null>(null);
   // A file that is gone is no longer shown alone.
   const picked = given !== undefined ? given : own;
   const selected = picked && files.some((f) => f.path === picked) ? picked : null;
-  const select = (path: string | null) => {
-    if (given === undefined) setOwn(path);
-    onSelectedChange?.(path);
-  };
+  // One function for the diff's life (it reads the latest props), so a file's entry is not redrawn for it.
+  const latestSelect = useRef({ given, onSelectedChange });
+  latestSelect.current = { given, onSelectedChange };
+  const select = useCallback((path: string | null) => {
+    if (latestSelect.current.given === undefined) setOwn(path);
+    latestSelect.current.onSelectedChange?.(path);
+  }, []);
+  const latestOpen = useRef(onOpenFile);
+  latestOpen.current = onOpenFile;
+  const openFile = useCallback((path: string) => latestOpen.current?.(path), []);
+  const latestShow = useRef(commenting?.onFileComments);
+  latestShow.current = commenting?.onFileComments;
+  const showComments = useCallback((path: string) => latestShow.current?.(path), []);
   // Picked, here or outside: the person has taken over.
   const [lastSelected, setLastSelected] = useState(selected);
   if (selected !== lastSelected) {
@@ -345,7 +416,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
   const selection = commenting?.selection ?? null;
   const tools = (
     <>
-        {files.length > 0 ? (
+        {scopeLabel !== undefined ? scopeLabel : files.length > 0 ? (
           <span className={styles["since"]} title={base ? `The agent's checkout against ${base}: the commit it started from, or the latest one of others' it brought in. Uncommitted work included.` : undefined}>
             {base ? (
               <>
@@ -368,7 +439,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
           />
         ) : null}
         {files.length > 0 ? (
-          <Segmented label="Show the diff" size="sm" value={view} onChange={setView} data-testid="diff-view"
+          <Segmented label="Show the diff" size={toolbarIn ? "toolbar" : "sm"} value={view} onChange={setView} data-testid="diff-view"
             options={[{ value: "unified", label: "Unified" }, { value: "split", label: "Split" }]} />
         ) : null}
     </>
@@ -381,7 +452,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
           {tools}
         </div>
       )}
-      {files.length === 0 ? (
+      {files.length === 0 && filteredOut.length === 0 ? (
         <div className={styles["empty"]}>
           {last}
           {emptyMessage ?? "No changes yet."}
@@ -398,56 +469,40 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
                 </span>
                 <span className={styles["counts"]}>{files.length}</span>
               </button>
-              {files.map((f) => {
-                const slash = f.path.lastIndexOf("/");
+              {files.map((f) => (
+                <FileEntry key={f.path} file={f} marked={commenting?.fileComments?.(f.path) ?? null} current={selected === f.path}
+                  touched={fresh.paths.has(f.path)} onSelect={select} onShow={showComments} fileMark={commenting?.fileMark} />
+              ))}
+              {filteredOut.length > 0 ? <p className={styles["note"]} data-testid="filtered-out-note">With comments, hidden by the filter</p> : null}
+              {filteredOut.map((path) => {
+                const marked = commenting?.fileComments?.(path) ?? null;
+                if (!marked) return null;
                 return (
-                  <button
-                    type="button"
-                    key={f.path}
-                    className={cx(styles["file"], selected === f.path && styles["current"], fresh.paths.has(f.path) && styles["touched"])}
-                    aria-pressed={selected === f.path}
-                    title={`${f.path} · ${STATUS_WORD[f.status]}`}
-                    onClick={() => select(f.path)}
-                    data-testid="diff-file"
-                    data-path={f.path}
-                  >
-                    <StatusGlyph status={f.status} />
-                    <span className={styles["path"]}>
-                      {slash >= 0 ? <span className={styles["dir"]}>{f.path.slice(0, slash + 1)}</span> : null}
-                      <b>{f.path.slice(slash + 1)}</b>
+                  <div key={path} className={cx(styles["fileRow"], styles["filteredOut"])} data-testid="filtered-out-file" data-path={path}>
+                    <span className={styles["file"]} title={`${path} · hidden by the filter`}>
+                      <span />
+                      <ListPath path={path} />
                     </span>
-                    <span className={styles["fileTail"]}>
-                      {commenting?.fileMark?.(f.path)}
-                      <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
-                    </span>
-                  </button>
+                    <CommentMark path={path} info={marked} onShow={commenting?.onFileComments} where="list" />
+                  </div>
                 );
               })}
-              <p className={styles["note"]}>Uncommitted work counts: this is the agent's checkout now, not what it has pushed.</p>
+              <p className={styles["note"]}>{listNote !== undefined ? listNote : "Uncommitted work counts: this is the agent's checkout now, not what it has pushed."}</p>
             </nav>
           ) : null}
           <div className={cx(styles["diffs"], commenting && styles["commentable"], dragging && styles["dragging"])} ref={scroller} data-testid="diffs" {...pointer}>
             {fileList ? null : last}
+            {files.length === 0 ? <div className={styles["empty"]}>{emptyMessage ?? "No changes yet."}</div> : null}
             {shown.map((f) => (
               <section key={f.path} className={styles["section"]} data-testid="diff-section" data-path={f.path}>
-                <header className={styles["fileHead"]}>
-                  <StatusGlyph status={f.status} />
-                  <b className={styles["mono"]}>{f.path}</b>
-                  {f.status === "A" ? <span className={styles["muted"]}>new file</span> : null}
-                  {f.status === "D" ? <span className={styles["muted"]}>deleted</span> : null}
-                  <span className={styles["spacer"]} />
-                  <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
-                  {onOpenFile && f.status !== "D" ? (
-                    <IconButton icon="external" label="Open in the viewer" size="sm" onClick={() => onOpenFile(f.path)} data-testid="diff-open" />
-                  ) : null}
-                </header>
+                <FileHeader file={f} marked={commenting?.fileComments?.(f.path) ?? null} onShow={showComments} onOpen={onOpenFile ? openFile : undefined} />
                 {commenting?.renderFileHead ? <FileHead node={commenting.renderFileHead(f.path)} /> : null}
                 {f.binary ? <div className={styles["empty"]}>Binary file not shown.</div> : null}
                 {f.hunks.map((h, hi) => (
                   <Hunk key={hi} path={f.path} hunk={h} index={hi} view={view} rows={split?.get(f.path)?.[hi] ?? null} fresh={fresh.lines}
                     commentable={Boolean(commenting)} canStart={canStart} maxLines={commenting?.maxLines ?? 0}
                     selection={touches(h, f.path, selection) ? selection : null} dragging={dragging && touches(h, f.path, selection)}
-                    renderAfterLine={commenting?.renderAfterLine} onPlus={pickByKey} />
+                    renderAfterLine={commenting?.renderAfterLineFor ? commenting.renderAfterLineFor(f.path) : commenting?.renderAfterLine} onPlus={pickByKey} />
                 ))}
                 {f.truncated ? <div className={styles["empty"]}>Longer than shown: the rest of this file is left out.</div> : null}
               </section>
@@ -458,6 +513,74 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     </div>
   );
 }
+
+/** A path in the file list: its directory muted, its name bold. */
+function ListPath({ path }: { path: string }) {
+  const slash = path.lastIndexOf("/");
+  return (
+    <span className={styles["path"]}>
+      {slash >= 0 ? <span className={styles["dir"]}>{path.slice(0, slash + 1)}</span> : null}
+      <b>{path.slice(slash + 1)}</b>
+    </span>
+  );
+}
+
+/** A file's entry in the list: its button, and beside it (never inside) its comment mark. Redrawn only when what it shows changes. */
+const FileEntry = memo(function FileEntry({ file: f, marked, current, touched, onSelect, onShow, fileMark }: {
+  file: LiveDiffFile; marked: FileComments | null; current: boolean; touched: boolean;
+  onSelect: (path: string) => void; onShow: ((path: string) => void) | undefined; fileMark: ((path: string) => ReactNode) | undefined;
+}) {
+  const entry = (
+    <button
+      type="button"
+      className={cx(styles["file"], !marked && current && styles["current"], !marked && touched && styles["touched"])}
+      aria-pressed={current}
+      title={`${f.path} · ${STATUS_WORD[f.status]}`}
+      onClick={() => onSelect(f.path)}
+      data-testid="diff-file"
+      data-path={f.path}
+    >
+      <StatusGlyph status={f.status} />
+      <ListPath path={f.path} />
+      <span className={styles["fileTail"]}>
+        {fileMark?.(f.path)}
+        <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
+      </span>
+    </button>
+  );
+  // With a mark, the entry and the mark are two buttons side by side in one row: a button cannot hold a button.
+  return marked ? (
+    <div className={cx(styles["fileRow"], current && styles["current"], touched && styles["touched"])} data-testid="diff-file-row" data-path={f.path}>
+      {entry}
+      <CommentMark path={f.path} info={marked} onShow={onShow} where="list" />
+    </div>
+  ) : entry;
+}, (a, b) => a.file === b.file && a.current === b.current && a.touched === b.touched && a.onSelect === b.onSelect
+  && a.onShow === b.onShow && a.fileMark === b.fileMark && sameMark(a.marked, b.marked));
+
+/** A file's sticky header: status, path, its comment mark, counts and the way to the viewer. Redrawn only when those change. */
+const FileHeader = memo(function FileHeader({ file: f, marked, onShow, onOpen }: {
+  file: LiveDiffFile; marked: FileComments | null; onShow: ((path: string) => void) | undefined; onOpen: ((path: string) => void) | undefined;
+}) {
+  return (
+    <header className={styles["fileHead"]}>
+      <StatusGlyph status={f.status} />
+      <b className={styles["mono"]}>{f.path}</b>
+      {f.status === "A" ? <span className={styles["muted"]}>new file</span> : null}
+      {f.status === "D" ? <span className={styles["muted"]}>deleted</span> : null}
+      <span className={styles["spacer"]} />
+      {marked ? <CommentMark path={f.path} info={marked} onShow={onShow} where="head" /> : null}
+      <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
+      {onOpen && f.status !== "D" ? (
+        <IconButton icon="external" label="Open in the viewer" size="sm" onClick={() => onOpen(f.path)} data-testid="diff-open" />
+      ) : null}
+    </header>
+  );
+}, (a, b) => a.file === b.file && a.onShow === b.onShow && a.onOpen === b.onOpen && sameMark(a.marked, b.marked));
+
+/** Two marks say the same: the same count, words and place in the cycle. */
+const sameMark = (a: FileComments | null, b: FileComments | null) =>
+  a === b || (a !== null && b !== null && a.count === b.count && a.label === b.label && a.position === b.position);
 
 /** Whether range `r` is on lines of hunk `h` of `path`: the one hunk a picked range can be in. */
 const touches = (h: LiveDiffHunk, path: string, r: DiffRange | null) =>

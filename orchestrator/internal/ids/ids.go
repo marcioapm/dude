@@ -55,6 +55,8 @@ const (
 	ChatRequest      = "chr"
 	// A notice dude posts in a task's chat thread (migration 222).
 	ChatNotice = "chn"
+	// A task attempt's branch, pinned (migration 230).
+	BranchSnapshot = "tbs"
 )
 
 // New returns `<prefix>_<base36 millis, 9 wide><16 hex>`.

@@ -1,0 +1,16 @@
+{
+  "kind": "code",
+  "scope": "branch",
+  "snapshotId": "tbs_1",
+  "attempt": 1,
+  "repo": "api",
+  "path": "src/vat.ts",
+  "side": "new",
+  "startLine": 11,
+  "endLine": 11,
+  "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "targetRef": "main",
+  "diffChecksum": "s1",
+  "excerpt": [{ "kind": "+", "old": null, "new": 11, "text": "  const rate = 0.23;" }]
+}

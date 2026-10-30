@@ -21,6 +21,7 @@ import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY, SERVERS_KEY } from "./scenario.ts";
 import { KAI_SUBMIT, TASK_WEB, previewFeedbackFor, runningRuns, taskServerFeedback } from "./projectServers.ts";
+import { branchComments, branchDiffFor, branchState, snapshots } from "./branchDiff.ts";
 import { FixtureAutomations } from "./automations.ts";
 import { automationActivity, automationLater } from "./automationActivity.ts";
 import { FixtureOrgSecrets } from "./orgSecrets.ts";
@@ -30,7 +31,7 @@ import type { ChatProvider, ChatRequestRow } from "@dude/domain";
 import { ORG_SESSIONS, openSessionsList, orgSessionEvents, orgSessionsList } from "./orgSessions.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, READY_FOR_REVIEW_WAITING, type Artifact, type AttachmentLimits, type DeliveryFilter, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type StopRequest, type StopResult, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
-import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
+import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, OVERVIEW_VIEWS, conductorMove, eventsFor, logsFor, overviewEvents, overviewMetrics, overviewPullRequests, overviewRuns, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type OverviewView, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; automationRunId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
@@ -173,12 +174,15 @@ export class FixtureClient extends ApiClient {
       if (as === "preview") this.#events = this.#events.filter((e) => e.runId !== RUN_ID || e.eventType === "run.created" || e.eventType === "run.started");
     }
     if (as === "aborted" || as === "failed" || as === "restarted") this.#stop(as);
+    // An earlier attempt's branch to read: the task started over (as `restarted`).
+    else if (branchState() === "older") this.#stop("restarted");
     if (as === "stalled") this.#stall();
     if (as === "refused") this.#refuse();
     if (as !== null && MACHINE_RUNS.includes(as)) this.#raise(as);
     if (as === "peers") this.#coordinate();
     if (as === "comment" || as === "comment-restart" || as === "comment-off") this.#commentable(as);
     if (as !== null && HELD_RUNS.includes(as)) this.#hold(as);
+    if (as !== null && (OVERVIEW_VIEWS as readonly string[]).includes(as)) this.#overview(as as OverviewView);
     this.#nav = navigationFor(scenario);
     if (as === "asks") this.#nav = withViewerAsks(this.#nav);
     if (this.#held) this.#nav = this.#nav.map((p) => ({ ...p, epics: p.epics?.map((e) => ({ ...e,
@@ -477,6 +481,22 @@ export class FixtureClient extends ApiClient {
   #held = false;
 
   /**
+   * `dude.fixtures.run` = reviewing | question | ready | new: the Overview's
+   * states. reviewing: the pipeline done to the simplifier, #482 open with
+   * checks running, two reviewers at work on its head. question: the
+   * implementer at work asks Márcio a question. ready: #482 approved, its
+   * checks passing, nothing running. new: a policy task nothing has started.
+   */
+  #overview(view: OverviewView) {
+    this.#view = view;
+    const status: TaskDetail["status"] = view === "new" ? "queued" : view === "question" ? "awaiting_input" : view === "ready" ? "ready_to_merge" : "review";
+    this.#task = { ...this.#task, status, runs: overviewRuns(view), pullRequestOpened: view === "reviewing" || view === "ready" };
+    this.#events = overviewEvents(view, this.#events[0]!);
+  }
+
+  #view: OverviewView | null = null;
+
+  /**
    * `dude.fixtures.run` = refused: the implementer's `uv sync` failed on a
    * host lux refused it, which the Run says (agent.network.refused): the
    * call carries the note with Allow.
@@ -705,6 +725,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ blockedBy: [], blocks: [], related: [], duplicateOf: [], duplicatedBy: [], autoStart: null, owner: null });
   }
   override recentPullRequests() {
+    if (this.#view) return Promise.resolve({ pullRequests: overviewPullRequests(this.#view) });
     return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" && !this.#held ? [PULL_REQUEST] : [] });
   }
   // No workflow waits in the mockups' world: the request is accepted and nothing changes.
@@ -728,11 +749,15 @@ export class FixtureClient extends ApiClient {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
   override listPullRequests(taskId: string) {
+    if (this.#view) return Promise.resolve({ pullRequests: taskId === TASK_ID ? overviewPullRequests(this.#view) : [] });
     if (this.#restarted) return Promise.resolve({ pullRequests: taskId === TASK_ID ? RESTARTED_PULL_REQUESTS : [] });
     return Promise.resolve({ pullRequests: this.#scenario === "d" && taskId === TASK_ID && !this.#held ? [PULL_REQUEST] : [] });
   }
   override getTask(id: string): Promise<TaskDetail> {
-    return id === TASK_ID ? Promise.resolve(this.#task) : Promise.reject(new ApiError(404, "not_found", "No such task."));
+    if (id !== TASK_ID) return Promise.reject(new ApiError(404, "not_found", "No such task."));
+    // Pending checkout fixtures model a first writer before its first commit: no commit heads.
+    return Promise.resolve(localStorage.getItem("dude.fixtures.checkout")
+      ? { ...this.#task, runs: this.#task.runs.map((r) => ({ ...r, heads: {} })) } : this.#task);
   }
   override getRun(id: string): Promise<RunDetail> {
     const detail = runDetailFor(this.#scenario);
@@ -755,6 +780,10 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ events, nextCursor: events.at(-1)?.cursor ?? params.after ?? 0 });
   }
   override listFindings(taskId: string) {
+    // The reviewers' findings on the pipeline the Overview's views ran; ready, the open note was accepted.
+    if (this.#view === "reviewing" || this.#view === "ready") {
+      return Promise.resolve({ findings: taskId !== TASK_ID ? [] : this.#view === "ready" ? FINDINGS.map((f) => (f.status === "open" ? { ...f, status: "accepted" as const } : f)) : FINDINGS });
+    }
     if (this.#restarted) return Promise.resolve({ findings: taskId === TASK_ID ? RESTARTED_FINDINGS : [] });
     return Promise.resolve({ findings: this.#scenario === "d" && taskId === TASK_ID ? FINDINGS : [] });
   }
@@ -783,12 +812,14 @@ export class FixtureClient extends ApiClient {
     return Math.max(1, ...this.#task.runs.map((r) => r.attempt));
   }
   override feedback(taskId: string, attempt?: number): Promise<FeedbackList> {
+    this.#seedBranchComments();
     const n = attempt ?? this.#currentAttempt();
     const feedback = this.feedbackItems.filter((i) => i.taskId === taskId && i.attempt === n && (i.status !== "draft" || i.author?.id === YOU));
     const blocking = feedback.filter((i) => feedbackHolds(i.status, i.resolutionPending)).length;
     return Promise.resolve({ feedback, blocking });
   }
   override async createFeedbackDraft(taskId: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
+    if (draft.anchor.kind === "code" && draft.anchor.scope === "branch") return this.#branchDraft(taskId, draft);
     if (draft.anchor.kind === "code") throw new ApiError(400, "bad_request", "No diff in the fixtures.");
     const now = new Date().toISOString();
     const me = PEOPLE.find((p) => p.id === YOU)!;
@@ -798,6 +829,42 @@ export class FixtureClient extends ApiClient {
     this.feedbackItems.push(item);
     return item;
   }
+  /** Fixture feedback writes use the same in-memory items as the reads and branch placements. */
+  override async updateFeedbackDraft(id: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
+    const item = this.feedbackItems.find((i) => i.id === id && i.status === "draft" && i.author?.id === YOU);
+    if (!item) throw new ApiError(404, "not_found", "Draft not found");
+    item.body = draft.body;
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+  override async deleteFeedbackDraft(id: string): Promise<void> {
+    this.feedbackItems = this.feedbackItems.filter((i) => i.id !== id || i.status !== "draft" || i.author?.id !== YOU);
+  }
+  #feedbackBatches = new Map<string, Awaited<ReturnType<ApiClient["submitFeedback"]>>>();
+  override async submitFeedback(taskId: string, draftIds: ReadonlyArray<string>, key: string): ReturnType<ApiClient["submitFeedback"]> {
+    const prior = this.#feedbackBatches.get(key);
+    if (prior) return { ...prior, repeated: true };
+    const items = draftIds.map((id) => this.feedbackItems.find((i) => i.id === id && i.taskId === taskId && i.author?.id === YOU && i.status === "draft"));
+    if (items.some((i) => !i)) throw new ApiError(409, "conflict", "Some drafts are no longer available");
+    const routedTo = this.#task.decider === "conductor" ? "conductor" as const : "workflow" as const;
+    const batchId = `fbt_fixture_${this.#feedbackBatches.size + 1}`;
+    for (const item of items) Object.assign(item!, { status: "open", batchId, routedTo, submittedAt: new Date().toISOString() });
+    const out = { batchId, itemIds: [...draftIds], routedTo };
+    this.#feedbackBatches.set(key, out);
+    return out;
+  }
+  #feedbackAction(id: string, action: "reply" | "resolve" | "reopen", body = ""): Awaited<ReturnType<ApiClient["replyFeedback"]>> {
+    const item = this.feedbackItems.find((i) => i.id === id);
+    if (!item) throw new ApiError(404, "not_found", "Feedback not found");
+    item.status = action === "resolve" ? "resolved" : action === "reopen" ? "open" : "replied";
+    item.updatedAt = new Date().toISOString();
+    item.history.push({ id: `fbh_fixture_${item.history.length}`, kind: action, body, commit: null, createdAt: item.updatedAt, personId: YOU, runId: null });
+    return { itemId: id, action };
+  }
+  override async replyFeedback(id: string, body: string): ReturnType<ApiClient["replyFeedback"]> { return this.#feedbackAction(id, "reply", body); }
+  override async resolveFeedback(id: string, note?: string): ReturnType<ApiClient["resolveFeedback"]> { return this.#feedbackAction(id, "resolve", note); }
+  override async reopenFeedback(id: string, body?: string): ReturnType<ApiClient["reopenFeedback"]> { return this.#feedbackAction(id, "reopen", body); }
+
   override listArtifacts(): Promise<{ artifacts: Artifact[] }> {
     return Promise.resolve({ artifacts: this.#restarted ? RESTARTED_ARTIFACTS : [] });
   }
@@ -807,7 +874,67 @@ export class FixtureClient extends ApiClient {
   override listSessionArtifacts(): Promise<{ artifacts: Artifact[] }> {
     return Promise.resolve({ artifacts: [] });
   }
+  // -- the task's branch (fixtures/branchDiff.ts; `?branch=`) ---------------------
+  #branchSeeded = false;
+  #seedBranchComments() {
+    if (this.#branchSeeded) return;
+    this.#branchSeeded = true;
+    const state = branchState();
+    if (state === "populated" || state === "updated" || state === "rebased" || state === "older") {
+      this.feedbackItems.push(...branchComments(PEOPLE, this.#currentAttempt()));
+    }
+  }
+  override taskBranchDiff(taskId: string, options: Parameters<ApiClient["taskBranchDiff"]>[1] = {}): ReturnType<ApiClient["taskBranchDiff"]> {
+    this.#seedBranchComments();
+    if (taskId !== TASK_ID) return Promise.reject(new ApiError(404, "not_found", `task ${taskId} not found`));
+    try {
+      const visible = this.feedbackItems.filter((i) => i.taskId === taskId && (i.status !== "draft" || i.author?.id === YOU));
+      // A task no agent has worked on has pushed no branch: nothing to show, as the API says.
+      if (this.#task.runs.length === 0) {
+        const none = branchDiffFor(branchState(), 1, options, []);
+        return Promise.resolve({ ...none, snapshot: null, newer: null, placements: [], pullRequest: null,
+          availability: { state: "none", reason: "No branch yet. It is recorded once an agent commits." } });
+      }
+      const out = branchDiffFor(branchState(), this.#currentAttempt(), options, visible);
+      if (options.files !== false) return Promise.resolve(out);
+      // As the API with `files=0`: the snapshot without its files, no placements.
+      const { placements: _placements, ...metadata } = out;
+      const snapshot = out.snapshot ? (({ files: _files, ...rest }) => rest)(out.snapshot) : null;
+      return Promise.resolve({ ...metadata, snapshot } as unknown as Awaited<ReturnType<ApiClient["taskBranchDiff"]>>);
+    } catch (e) {
+      const err = e as { status?: number; code?: string; message: string };
+      return Promise.reject(new ApiError(err.status ?? 500, err.code ?? "fixtures", err.message));
+    }
+  }
+  /** A draft on a branch snapshot, its anchor read from the snapshot as the API does. */
+  #branchDraft(taskId: string, draft: FeedbackDraftInput): FeedbackItem {
+    const a = draft.anchor;
+    if (a.kind !== "code" || a.scope !== "branch") throw new ApiError(400, "bad_request", "not a branch anchor");
+    const current = this.#currentAttempt();
+    const snap = snapshots(current)[a.snapshotId];
+    if (!snap) throw new ApiError(400, "bad_request", `snapshot ${a.snapshotId} is not a branch snapshot of this task`);
+    if (snap.attempt !== current) throw new ApiError(409, "conflict", `snapshot ${a.snapshotId} is of attempt ${snap.attempt}, which is read-only`);
+    if (a.diffChecksum !== snap.checksum) throw new ApiError(409, "conflict", `snapshot ${a.snapshotId} is not the diff you read: read it again`);
+    const f = snap.files.find((x) => x.path === a.path);
+    const lines = f?.hunks.find((h) => h.lines.some((l) => (a.side === "old" ? l.old : l.new) === a.startLine))?.lines ?? [];
+    const n = (l: { old: number | null; new: number | null }) => (a.side === "old" ? l.old : l.new);
+    const first = lines.findIndex((l) => n(l) === a.startLine);
+    const last = lines.findIndex((l) => n(l) === a.endLine);
+    if (!f || first < 0 || last < first) throw new ApiError(400, "bad_request", `lines ${a.startLine}-${a.endLine} (${a.side}) are not one range of ${a.path}'s diff`);
+    const now = new Date().toISOString();
+    const me = PEOPLE.find((p) => p.id === YOU)!;
+    const item: FeedbackItem = { id: `fbk_${this.feedbackItems.length + 1}`, taskId, attempt: current, batchId: null,
+      author: { id: me.id, name: me.name }, body: draft.body, status: "draft", deliveredRunId: null, resolvedCommit: null,
+      resolutionPending: false, outdated: false, routedTo: null, submittedAt: null, createdAt: now, updatedAt: now, history: [],
+      anchor: { kind: "code", scope: "branch", snapshotId: snap.id, attempt: snap.attempt, repo: snap.repository, path: a.path, side: a.side,
+        startLine: a.startLine, endLine: a.endLine, baseSha: snap.mergeBaseSha, headSha: snap.headSha, targetRef: snap.targetRef,
+        diffChecksum: snap.checksum, excerpt: lines.slice(first, last + 1).map((l) => ({ ...l })) } };
+    this.feedbackItems.push(item);
+    return item;
+  }
+
   override taskMetrics(_taskId: string, attempt?: number): Promise<TaskMetrics> {
+    if (this.#view) return Promise.resolve(overviewMetrics(this.#view));
     return Promise.resolve(this.#restarted ? restartedMetrics(attempt) : METRICS);
   }
   override githubSettings() {
@@ -1264,8 +1391,12 @@ export class FixtureClient extends ApiClient {
   override abort(_runId?: string, _reason?: string): ReturnType<ApiClient["abort"]> {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
-  override runDiff(): Promise<never> {
-    return Promise.reject(new ApiError(404, "not_found", "No diff in the fixtures."));
+  override runDiff(runId: string): ReturnType<ApiClient["runDiff"]> {
+    const state = localStorage.getItem("dude.fixtures.checkout");
+    if (state === "error") return Promise.reject(new ApiError(503, "unavailable", "Fixture checkout could not be read."));
+    const snapshot = snapshots(this.#currentAttempt()).tbs_fx_web!;
+    return Promise.resolve({ base: snapshot.mergeBaseSha, files: state === "empty" ? [] : snapshot.files.slice(0, 2),
+      checksum: `checkout-${runId}-${state ?? "populated"}`, final: false, updatedAt: new Date().toISOString() });
   }
 
   // -- automations ------------------------------------------------------------

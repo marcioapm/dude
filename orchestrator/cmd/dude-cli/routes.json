@@ -132,6 +132,7 @@
   "GET /v1/tasks": "task list",
   "GET /v1/tasks/:id": ["task raw", "task show"],
   "GET /v1/tasks/:id/artifacts.zip": { "apiOnly": "browser-only: the web app's own plumbing (uploads, downloads, live streams, pickers, badges, push)" },
+  "GET /v1/tasks/:id/branch-diff": "task branch-diff",
   "GET /v1/tasks/:id/feedback": ["feedback list", "feedback submit"],
   "GET /v1/tasks/:id/metrics": "task metrics",
   "GET /v1/tasks/:id/recover": "task recover",

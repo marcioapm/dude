@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { relocateCodeAnchor, type FeedbackCodeAnchor, type FeedbackExcerptLine, type RunDiffFile, type RunDiffHunk, type RunDiffLine } from "../src/index.ts";
+import { feedbackDraftSchema, relocateCodeAnchor, type FeedbackBranchAnchor, type FeedbackCodeAnchor, type FeedbackExcerptLine, type RunDiffFile, type RunDiffHunk, type RunDiffLine } from "../src/index.ts";
 
 /** A hunk from unified lines (" ", "+", "-" first), numbered from its starts. */
 function hunk(oldStart: number, newStart: number, body: string): RunDiffHunk {
@@ -257,5 +257,82 @@ describe("relocateCodeAnchor", () => {
   test("a repository checked out under a hashed name is not found under another repository's directory", () => {
     const a = anchorOn(WRITTEN, "new", 11, 12, { repo: "Web", path: "src/app.ts" });
     expect(relocateCodeAnchor(a, later([file("api/src/app.ts", WRITTEN.hunks)]))).toEqual({ kind: "absent" });
+  });
+});
+
+/** A branch anchor on `f` as the API keeps it, written on snapshot tbs_1 (checksum s1) of attempt 2's web. */
+function branchOn(f: RunDiffFile, side: "old" | "new", start: number, end: number, over: Partial<FeedbackBranchAnchor> = {}): FeedbackBranchAnchor {
+  return { kind: "code", scope: "branch", snapshotId: "tbs_1", attempt: 2, repo: "web", path: f.path, side, startLine: start, endLine: end,
+    baseSha: "b0", headSha: "h1", targetRef: "main", diffChecksum: "s1", excerpt: excerpt(f, side, start, end), ...over };
+}
+
+const snapshotOf = (files: RunDiffFile[], over: Partial<{ snapshotId: string; attempt: number; repository: string; checksum: string }> = {}) =>
+  ({ snapshotId: "tbs_2", attempt: 2, repository: "web", checksum: "s2", files, ...over });
+
+describe("relocateCodeAnchor on branch snapshots", () => {
+  test("on the snapshot it was written on, it is on its own lines", () => {
+    const a = branchOn(WRITTEN, "new", 11, 12);
+    expect(relocateCodeAnchor(a, snapshotOf([WRITTEN], { snapshotId: "tbs_1", checksum: "s1" })))
+      .toEqual({ kind: "lines", path: "src/app.ts", side: "new", startLine: 11, endLine: 12 });
+  });
+
+  test("on a newer snapshot of its attempt and repository, a simple shift follows the lines (main merged in above)", () => {
+    const a = branchOn(WRITTEN, "new", 11, 12);
+    const merged = file("src/app.ts", [hunk(13, 13, ` const a = 1;
+-const b = 2;
++const b = 3;
++const c = b * 2;
+ export { a, b };`)]);
+    expect(relocateCodeAnchor(a, snapshotOf([merged]))).toEqual({ kind: "lines", path: "src/app.ts", side: "new", startLine: 14, endLine: 15 });
+  });
+
+  test("its lines changed on the newer snapshot (rewritten): outdated, never moved onto other text", () => {
+    const a = branchOn(WRITTEN, "new", 11, 12);
+    const rewritten = file("src/app.ts", [hunk(10, 10, ` const a = 1;
+-const b = 2;
++const b = 4;
++const c = b * 2;
+ export { a, b };`)]);
+    expect(relocateCodeAnchor(a, snapshotOf([rewritten]))).toEqual({ kind: "outdated", path: "src/app.ts", reason: "changed" });
+  });
+
+  test("the same id with another checksum is not its own snapshot: relocated by the rule", () => {
+    const a = branchOn(WRITTEN, "new", 11, 12);
+    const edited = file("src/app.ts", [hunk(10, 10, ` const a = 1;
++const c = b * 3;`)]);
+    expect(relocateCodeAnchor(a, snapshotOf([edited], { snapshotId: "tbs_1", checksum: "other" }))).toEqual({ kind: "outdated", path: "src/app.ts", reason: "changed" });
+  });
+
+  test("another attempt's or repository's snapshot, or a Run's diff, places nothing", () => {
+    const a = branchOn(WRITTEN, "new", 11, 12);
+    expect(relocateCodeAnchor(a, snapshotOf([WRITTEN], { attempt: 3 }))).toEqual({ kind: "absent" });
+    expect(relocateCodeAnchor(a, snapshotOf([WRITTEN], { repository: "api" }))).toEqual({ kind: "absent" });
+    expect(relocateCodeAnchor(a, { runId: "run_a", checksum: "s1", files: [WRITTEN] })).toEqual({ kind: "absent" });
+  });
+
+  test("a Run's anchor places nothing on a branch snapshot; with no scope it is a Run's, as every anchor kept before", () => {
+    const run = anchorOn(WRITTEN, "new", 11, 12);
+    expect(run.scope).toBeUndefined();
+    expect(relocateCodeAnchor(run, snapshotOf([WRITTEN]))).toEqual({ kind: "absent" });
+    expect(relocateCodeAnchor({ ...run, scope: "run" }, later([WRITTEN]))).toEqual({ kind: "lines", path: "src/app.ts", side: "new", startLine: 11, endLine: 12 });
+  });
+});
+
+describe("the draft schema", () => {
+  const base = { body: "Use the rate table", anchor: { kind: "code", path: "src/vat.ts", side: "new", startLine: 11, endLine: 12 } };
+  test("a code anchor with no scope is a Run's, as before", () => {
+    expect(feedbackDraftSchema.safeParse({ ...base, anchor: { ...base.anchor, runId: "run_1" } }).success).toBe(true);
+    expect(feedbackDraftSchema.safeParse({ ...base, anchor: { ...base.anchor, runId: "run_1", scope: "run" } }).success).toBe(true);
+    expect(feedbackDraftSchema.safeParse(base).success).toBe(false);
+  });
+  test("a branch anchor names its snapshot and the checksum read; never a Run, never lines backwards or too many", () => {
+    const branch = { ...base.anchor, scope: "branch", snapshotId: "tbs_1", diffChecksum: "s1", repository: "web" };
+    expect(feedbackDraftSchema.safeParse({ ...base, anchor: branch }).success).toBe(true);
+    const { diffChecksum: _, ...unread } = branch;
+    expect(feedbackDraftSchema.safeParse({ ...base, anchor: unread }).success).toBe(false);
+    expect(feedbackDraftSchema.safeParse({ ...base, anchor: { ...branch, runId: "run_1" } }).success).toBe(false);
+    expect(feedbackDraftSchema.safeParse({ ...base, anchor: { ...branch, startLine: 13 } }).success).toBe(false);
+    expect(feedbackDraftSchema.safeParse({ ...base, anchor: { ...branch, endLine: 400 } }).success).toBe(false);
+    expect(feedbackDraftSchema.safeParse({ ...base, anchor: { ...branch, headSha: "x" } }).success).toBe(false);
   });
 });

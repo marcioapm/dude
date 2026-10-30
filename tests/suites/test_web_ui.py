@@ -18,7 +18,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, open_my_settings, open_org_settings, sign_in, toast, wait_for_escalation, wait_until
+from helpers import ApiClient, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -140,6 +140,8 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     # The PR appears as the last step, linked to the forge, and its one
     # state is a chip in the header that links there too.
     tabs.get_by_role("tab", name="Overview").click()
+    # The pipeline is folded under the Overview's summary.
+    open_overview_section(page, "pipeline")
     expect(page.get_by_test_id("pr-step")).to_be_visible(timeout=180_000)
     chip = page.get_by_test_id("pr-link")
     expect(chip).to_have_attribute("data-pr-state", "awaiting")
@@ -162,6 +164,7 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     tabs.get_by_role("tab", name="Overview").click()
     expect(page).to_have_url(re.compile(r"#/task/"))
     # From a session's URL, going to its task (the breadcrumb, Back) is the overview.
+    open_overview_section(page, "pipeline")
     page.get_by_test_id("phase").nth(1).click()
     expect(tabs.get_by_role("tab", name="Sessions")).to_have_attribute("aria-selected", "true")
     page.go_back()
@@ -205,6 +208,8 @@ def test_a_task_is_edited_and_moved_from_its_screen(
 
     screen = page.get_by_test_id("task-screen")
     expect(screen.get_by_role("heading", level=1)).to_have_text("Greet by full name")
+    # The goal and criteria are folded under the Overview's summary.
+    open_overview_section(page, "goal-criteria")
     expect(screen.get_by_role("list", name="Acceptance criteria")).to_contain_text("Uses the full name")
     saved = client.get(f"/v1/tasks/{item['id']}").json()
     assert saved["epicId"] == epic["id"]
@@ -282,6 +287,8 @@ def test_a_task_is_written_in_markdown_and_its_criteria_are_the_list_items(
 
     # The task shows what the preview showed: the goal's heading, each criterion.
     screen = page.get_by_test_id("task-screen")
+    # The goal and criteria are folded under the Overview's summary.
+    open_overview_section(page, "goal-criteria")
     expect(screen.get_by_role("heading", name="What exists today")).to_be_visible()
     # Set as it was previewed: the same size and the same space above it.
     assert screen.get_by_role("heading", name="What exists today").evaluate(heading_style) == previewed
@@ -334,6 +341,8 @@ def test_a_single_newline_a_person_types_is_a_line_break_in_preview_read_and_on_
     page.get_by_test_id("task-save").click()
     screen = page.get_by_test_id("task-screen")
     expect(screen).to_be_visible()
+    # The goal and criteria are folded under the Overview's summary.
+    open_overview_section(page, "goal-criteria")
     goal = screen.get_by_role("region", name="Goal").locator(first_paragraph)
     expect(goal.locator("br")).to_have_count(1)
     assert goal.evaluate(lines) == ["Keep SEPA at checkout.", "Keep Invoice for annual plans."]
@@ -642,6 +651,7 @@ def test_a_task_saves_from_read_and_a_locked_task_reads_too(
     assert client.post(f"/v1/tasks/{task_id}/deliver").status_code == 201
     page.reload()
     expect(page.get_by_test_id("task-screen")).to_be_visible()
+    open_overview_section(page, "pipeline")
     expect(page.get_by_test_id("phase").first).to_be_visible(timeout=30_000)
     page.get_by_test_id("edit-task").click()
     dialog = page.get_by_role("dialog", name="Edit task")
@@ -1618,6 +1628,14 @@ def test_a_tasks_time_and_cost_show_on_its_page_and_its_epics(
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
+    # The task's spend is in the Overview's figures; every tile and the run table under Time & cost.
+    expect(page.get_by_test_id("overview-spend")).to_contain_text("model + machine")
+    # Opened as a person opens it: a click on its summary, the fold found by its role (a <details> is a group;
+    # its summary has no role of its own) and its title. Elsewhere, open_overview_section.
+    time_cost = page.get_by_role("group").filter(has=page.locator("summary", has_text=re.compile(r"^Time & cost")))
+    expect(time_cost).not_to_have_attribute("open", "")
+    time_cost.locator("summary").click()
+    expect(time_cost).to_have_attribute("open", "")
     metrics = page.get_by_test_id("task-metrics")
     expect(metrics).to_contain_text("Agents working")
     expect(metrics).to_contain_text("Cost")
@@ -1977,7 +1995,7 @@ def test_a_dropped_stream_says_so_and_catches_up(
 def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    """Chat is the task's first tab: before anyone wrote, the task's history
+    """Chat is the task's third tab, after Overview and Changes: before anyone wrote, the task's history
     in a line over an empty composer; a message starts the conductor, whose
     briefing El Duderino signs and whose answer carries its own face."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
@@ -1990,8 +2008,8 @@ def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
     tabs = page.get_by_role("tablist", name="Task").get_by_role("tab")
-    expect(tabs.first).to_have_text("Chat")
-    tabs.first.click()
+    expect(tabs.nth(2)).to_have_text("Chat")
+    tabs.nth(2).click()
     history = page.get_by_test_id("chat-history")
     expect(history).to_contain_text("Delivered automatically")
     expect(history).to_contain_text("implementer → reviewer → fixer → reviewer → simplifier → reviewer → PR #")
@@ -2010,7 +2028,9 @@ def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     expect(answer).to_contain_text(task["id"])
     expect(answer).to_have_attribute("data-role", "conductor")
     expect(answer.get_by_role("img", name="Conductor")).to_be_visible()
-    # It lives on: the page opens on Chat from now on.
+    # It lives on, and the task still opens on its Overview; Chat's own link opens Chat.
     page.goto(f"{web_url}#/task/{task['id']}")
+    expect(page.get_by_role("tablist", name="Task").get_by_role("tab", selected=True)).to_have_text("Overview")
+    page.goto(f"{web_url}#/task/{task['id']}/chat")
     expect(page.get_by_role("tablist", name="Task").get_by_role("tab", selected=True)).to_have_text("Chat")
     assert console_errors == []

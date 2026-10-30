@@ -139,7 +139,8 @@ def test_a_mention_on_the_pull_request_is_answered_there(page: Page, web_url: st
 
     # Chat: gus's question, signed by his login and linked; the conductor's reply.
     sign_in(page, web_url, org["api_key"])
-    page.goto(f"{web_url}#/task/{task['id']}")
+    # A task opens on its Overview: Chat is its own link.
+    page.goto(f"{web_url}#/task/{task['id']}/chat")
     question = page.locator("[data-testid=human-turn][data-by=github]")
     expect(question).to_contain_text("gus (GitHub)", timeout=30_000)
     expect(question).to_contain_text("@dude why greet()?")

@@ -86,7 +86,8 @@ def test_the_conductor_steers_its_running_implementer(page: Page, web_url: str, 
     expect(turn).to_contain_text("read")
     expect(turn).to_have_attribute("data-role", "conductor")
     # The conductor's Chat: under the implementer's line, read.
-    page.goto(f"{web_url}#/task/{task['id']}")
+    # A task opens on its Overview: Chat is its own link.
+    page.goto(f"{web_url}#/task/{task['id']}/chat")
     line = page.locator(f"[data-testid=chat-run][data-run='{implementer['id']}']")
     steer = line.get_by_test_id("conductor-steer")
     expect(steer).to_contain_text(words, timeout=30_000)

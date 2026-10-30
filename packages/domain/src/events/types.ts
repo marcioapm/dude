@@ -473,6 +473,15 @@ export const EventTypes = {
    */
   RunDiffUpdated: "run.diff.updated",
   /**
+   * A task attempt's branch moved and a new snapshot of one repository was
+   * captured (`GET /v1/tasks/:id/branch-diff`). On the task, once per
+   * snapshot. Payload: `{ snapshotId, attempt, repository, relation,
+   * previousSnapshotId, mergeBaseSha, headSha, previousMergeBaseSha,
+   * previousHeadSha }` (the previous ones "" for the first) — enough to word
+   * "New changes available" without reading the diff.
+   */
+  TaskBranchSnapshotCaptured: "task.branch_snapshot.captured",
+  /**
    * A task's servers, or its branch preview, changed: lux reported a
    * server.* event on the Run, or the preview moved on (created, submitted,
    * lux state, parked, waking, resumed, stopped, failed). Read

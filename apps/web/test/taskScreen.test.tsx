@@ -505,6 +505,20 @@ describe("the task page's tab from its URL", () => {
     const page = await taskPage(new FixtureClient("a"));
     expect(selectedTab(page)).toBe("Overview");
   });
+
+  test("the tabs run Overview, Changes, Chat, Findings, Sessions, Feedback, Files, Servers, Activity", async () => {
+    const page = await taskPage(new FixtureClient("d"));
+    const names = [...page.querySelectorAll("[role=tab]")].map((t) => t.textContent?.replace(/\d+$/, ""));
+    expect(names).toEqual(["Overview", "Changes", "Chat", "Findings", "Sessions", "Feedback", "Files", "Servers", "Activity"]);
+  });
+
+  test("Changes is the whole-branch review: its bar, the snapshot, the diff", async () => {
+    const page = await taskPage(new FixtureClient("d"), { tab: "changes" });
+    const tab = await until(() => page.querySelector("[data-testid=changes-tab]"), "the Changes tab");
+    await until(() => tab.querySelector("[data-testid=snapshot-line]"), "the snapshot line");
+    expect(tab.querySelector("[data-testid=changes-coming]")).toBeNull();
+    expect(tab.querySelectorAll("[data-testid=diff-section]").length).toBeGreaterThan(0);
+  });
 });
 
 describe("the task header's owner", () => {

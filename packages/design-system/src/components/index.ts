@@ -29,8 +29,8 @@ export type { EventRowProps, EventStreamProps, EventActor, EventSeverity } from 
 export { SessionTreeNode, SessionTree } from "./SessionTreeNode.tsx";
 export type { SessionTreeNodeProps, SessionTreeProps, SessionNodeData } from "./SessionTreeNode.tsx";
 export { DiffView, DiffFile, parseUnifiedDiff } from "./DiffView.tsx";
-export { LiveDiff, stretchRange } from "./LiveDiff.tsx";
-export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine, LastChange, LiveDiffCommenting, DiffRange, DiffSide } from "./LiveDiff.tsx";
+export { LiveDiff, stretchRange, commentMarkName } from "./LiveDiff.tsx";
+export type { LiveDiffProps, LiveDiffFile, LiveDiffHunk, LiveDiffLine, LastChange, LiveDiffCommenting, DiffRange, DiffSide, FileComments } from "./LiveDiff.tsx";
 export {
   CommentEditor, DraftsTray, FeedbackAnchorLine, FeedbackCard, FeedbackEmpty, FeedbackExcerpt, FeedbackPreview, FeedbackStatusBadge, FeedbackThread,
   SubmitFeedbackDialog, feedbackHolds, feedbackStatusSpec, lineWords,
@@ -240,3 +240,7 @@ export type {
   ChatMadeRoute, ChatProvider, ChatRoute, ConnectionCardProps, ExternalMessage, ExternalThreadProps, FactListProps, IdentityPairProps, InstructionLayer,
   InstructionStackProps, OriginFactProps, PromptTextProps, ProviderGlyphProps, ProviderListProps, RouteBadgeProps, RoutingLineProps,
 } from "./Chat.tsx";
+export { Disclosure } from "./Disclosure.tsx";
+export type { DisclosureProps } from "./Disclosure.tsx";
+export { RunningList, RunningRow } from "./RunningRow.tsx";
+export type { RunningRowProps } from "./RunningRow.tsx";

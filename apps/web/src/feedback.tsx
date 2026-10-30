@@ -14,13 +14,14 @@ import { AgentAvatar, PersonAvatar, type FeedbackCardItem, type FeedbackThreadEn
 import { firstName } from "@dude/design-system";
 import {
   FEEDBACK_LIMITS, NOT_STARTED_STATUSES, anchorFile, isConductor, relocateCodeAnchor, runDoer, runLabel,
-  type FeedbackAnchorInput, type FeedbackCodeAnchor, type FeedbackItem, type FeedbackList, type RunDiff, type TaskStatus,
+  isBranchAnchor, type FeedbackAnchorInput, type FeedbackLineAnchor, type FeedbackItem, type FeedbackList, type RunDiff, type TaskStatus,
 } from "@dude/domain";
 import type { ApiClient, FeedbackSubmitted, Run, TaskDetail } from "./api/client.ts";
 import type { People } from "./people.tsx";
 
 const EMPTY_FEEDBACK: FeedbackList = { feedback: [], blocking: 0 };
-const LIVE_RUN: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
+/** A Run still at work (or about to be): its checkout may still change. */
+export const LIVE_RUN: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
 
 /**
  * The attempt's feedback, read on mount, when `version` changes (the task
@@ -28,8 +29,9 @@ const LIVE_RUN: ReadonlySet<string> = new Set(["pending", "scheduled", "starting
  * A slower, older read never replaces a newer one.
  */
 export function useTaskFeedback(client: ApiClient, taskId: string, attempt: number | undefined, version: number) {
-  const [list, setList] = useState<FeedbackList | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+  const key = `${taskId}:${attempt ?? "current"}`;
+  const [result, setResult] = useState<{ key: string; list: FeedbackList } | null>(null);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const reads = useRef(0);
   const read = useCallback(async () => {
     const seq = ++reads.current;
@@ -37,17 +39,19 @@ export function useTaskFeedback(client: ApiClient, taskId: string, attempt: numb
       const got = await client.feedback(taskId, attempt);
       if (seq === reads.current) {
         // The same answer keeps its identity: what draws it is not redrawn for a read that changed nothing.
-        setList((was) => (was && JSON.stringify(was) === JSON.stringify(got) ? was : got));
-        setProblem(null);
+        setResult((was) => (was?.key === key && JSON.stringify(was.list) === JSON.stringify(got) ? was : { key, list: got }));
+        setFailure(null);
       }
     } catch (err) {
-      if (seq === reads.current) setProblem(err instanceof Error ? err.message : String(err));
+      if (seq === reads.current) setFailure({ key, message: err instanceof Error ? err.message : String(err) });
     }
-  }, [client, taskId, attempt]);
+  }, [client, taskId, attempt, key]);
   useEffect(() => {
     void read();
+    return () => { ++reads.current; };
   }, [read, version]);
-  return { list: list ?? EMPTY_FEEDBACK, loaded: list !== null, problem, reload: read };
+  return { list: result?.key === key ? result.list : EMPTY_FEEDBACK, loaded: result?.key === key,
+    problem: failure?.key === key ? failure.message : null, reload: read };
 }
 
 /**
@@ -148,7 +152,12 @@ export function threadOf(item: FeedbackItem, people: People, runs: ReadonlyMap<s
  * checksum; otherwise as kept, whose checksum the API refuses once the
  * diff has moved — never re-quoted at numbers whose text changed.
  */
-export function draftAnchorInput(anchor: FeedbackCodeAnchor, diff: Pick<RunDiff, "checksum" | "files"> | null): FeedbackAnchorInput {
+export function draftAnchorInput(anchor: FeedbackLineAnchor, diff: Pick<RunDiff, "checksum" | "files"> | null): FeedbackAnchorInput {
+  // A branch snapshot is pinned: its draft is written again on the lines and snapshot it names.
+  if (isBranchAnchor(anchor)) {
+    return { kind: "code", scope: "branch", snapshotId: anchor.snapshotId, repository: anchor.repo, path: anchor.path, side: anchor.side,
+      startLine: anchor.startLine, endLine: anchor.endLine, diffChecksum: anchor.diffChecksum };
+  }
   const kept = { kind: "code" as const, runId: anchor.runId, path: anchor.path, side: anchor.side, startLine: anchor.startLine,
     endLine: anchor.endLine, diffChecksum: anchor.diffChecksum };
   if (!diff) return kept;

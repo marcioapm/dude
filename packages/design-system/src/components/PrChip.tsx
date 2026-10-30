@@ -90,6 +90,12 @@ export interface PrChipProps extends Omit<HTMLAttributes<HTMLAnchorElement>, "ch
   /** The glyph alone (a tree row): the word moves to the tooltip and the accessible name. */
   readonly iconOnly?: boolean | undefined;
   readonly size?: "sm" | "md" | undefined;
+  /**
+   * `span`: the same glyph, tone and word as a mark, not a link — inside
+   * something that is already the link to GitHub (a link cannot hold a
+   * link). No tooltip: the row around it says the rest.
+   */
+  readonly as?: "a" | "span" | undefined;
 }
 
 /**
@@ -97,9 +103,20 @@ export interface PrChipProps extends Omit<HTMLAttributes<HTMLAnchorElement>, "ch
  * number, as a link to GitHub. The tooltip lists everything else that is
  * true of it. A task with two pull requests shows two chips.
  */
-export function PrChip({ pr, showNumber = true, iconOnly, size = "md", className, ...rest }: PrChipProps) {
+export function PrChip({ pr, showNumber = true, iconOnly, size = "md", as = "a", className, ...rest }: PrChipProps) {
   const state = prStateOf(pr);
   const spec = prSpecOf(pr, state);
+  const glyph = <Icon name={spec.glyph} size={size === "sm" ? 12 : 13} strokeWidth={1.75} className={styles["glyph"]} />;
+  if (as === "span") {
+    return (
+      <span className={cx(styles["root"], styles[state], styles["mark"], size === "sm" && styles["sm"], className)} data-pr-state={state}
+        {...(rest as HTMLAttributes<HTMLSpanElement>)}>
+        {glyph}
+        <span className={cx(styles["word"], "ds-cap")}>{spec.label}</span>
+        {showNumber ? <span className={cx(styles["number"], "ds-cap")}>#{pr.number}</span> : null}
+      </span>
+    );
+  }
   const where = pr.repositoryName ? `${pr.repositoryName}#${pr.number}` : `#${pr.number}`;
   const tip: ReactNode = (
     <span className={styles["tip"]}>
@@ -125,7 +142,7 @@ export function PrChip({ pr, showNumber = true, iconOnly, size = "md", className
         aria-label={`${spec.label}, pull request ${where} (opens on GitHub)`}
         {...rest}
       >
-        <Icon name={spec.glyph} size={size === "sm" ? 12 : 13} strokeWidth={1.75} className={styles["glyph"]} />
+        {glyph}
         {iconOnly ? null : <span className={cx(styles["word"], "ds-cap")}>{spec.label}</span>}
         {showNumber && !iconOnly ? <span className={cx(styles["number"], "ds-cap")}>#{pr.number}</span> : null}
       </a>

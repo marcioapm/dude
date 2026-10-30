@@ -40,7 +40,8 @@ export function placeItems(items: ReadonlyArray<FeedbackItem>, runId: string, di
   return out;
 }
 
-const lineKey = (path: string, side: DiffSide, line: number) => `${path}\u0000${side}\u0000${line}`;
+/** A diff line's key: its file, side and number. */
+export const lineKey = (path: string, side: DiffSide, line: number) => `${path}\u0000${side}\u0000${line}`;
 
 /**
  * The editor under a picked range, with its own text: a keystroke re-renders it alone, not the diff.

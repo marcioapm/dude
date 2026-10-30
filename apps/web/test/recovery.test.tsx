@@ -250,7 +250,11 @@ describe("a task started over", () => {
     await pick(page, 1);
     return page;
   }
-  const pipelineHead = (page: HTMLElement) => [...page.querySelectorAll("h2")].find((h) => h.textContent?.startsWith("Pipeline"))?.textContent;
+  // Overview's pipeline disclosure: its title and which attempt it shows.
+  const pipelineHead = (page: HTMLElement) => {
+    const summary = page.querySelector("[data-testid=overview-pipeline] summary");
+    return summary ? [...summary.children].map((c) => c.textContent).filter(Boolean).join(" · ") : undefined;
+  };
   /** The Activity line that says `text`, once it is there. */
   const activityLine = (page: HTMLElement, text: string) =>
     until(() => [...page.querySelectorAll<HTMLElement>("[data-testid=activity-item]")].find((l) => l.textContent?.includes(text)), text);
@@ -364,7 +368,7 @@ describe("a task started over", () => {
     // The page is attempt 2's: its branch, its pull request, its pipeline.
     expect(page.querySelector("[data-testid=branch]")?.textContent).toBe("dude/task_wc214/attempt-2");
     expect(texts(page, "[data-testid=pr-link]").join()).toContain("483");
-    expect(pipelineHead(page)).toBe("Pipeline · attempt 2");
+    expect(pipelineHead(page)).toBe("Attempts & pipeline · attempt 2 of 2");
     expect(count(page, "[data-testid=earlier-bar]")).toBe(0);
     await press(trigger);
     const options = await until(() => {
@@ -396,7 +400,7 @@ describe("a task started over", () => {
     expect(page.querySelector("[data-testid=branch]")?.textContent).toBe("dude/task_wc214/attempt-1");
     expect(texts(page, "[data-testid=pr-link]")).toHaveLength(1);
     expect(texts(page, "[data-testid=pr-link]")[0]).toContain("478");
-    expect(pipelineHead(page)).toBe("Pipeline · attempt 1");
+    expect(pipelineHead(page)).toBe("Attempts & pipeline · attempt 1 of 2");
     expect([...page.querySelectorAll("[data-testid=pipeline] [data-testid=phase]")].map((p) => p.getAttribute("data-phase")))
       .toEqual(["implement", "review", "simplify", "fix"]);
     expect([...page.querySelectorAll("[data-testid=pr-step]")].map((p) => p.textContent)).toEqual([expect.stringContaining("#478")]);
@@ -705,7 +709,7 @@ describe("a task started over", () => {
     expect(section.querySelectorAll("[data-testid=run-metrics] tbody tr").length).toBe(4);
   });
 
-  test("the page reads attempt 2's figures alone; the picker reads each attempt's cost when it opens", async () => {
+  test("the page reads the whole task's figures and attempt 2's, once each; the picker reads each attempt's cost when it opens", async () => {
     const client = restarted();
     const reads: Array<number | undefined> = [];
     const metrics = client.taskMetrics.bind(client);
@@ -716,24 +720,25 @@ describe("a task started over", () => {
     const page = await taskPage(client);
     await until(() => page.querySelector("[data-testid=task-metrics]"), "attempt 2's figures");
     await settle(100);
-    expect(reads).toStrictEqual([2]);
-    // A reload the stream causes reads attempt 2's again, and not the whole task's.
+    // The task's spend over every attempt, and attempt 2's (its tiles and its run table share the one read).
+    expect(reads).toStrictEqual([undefined, 2]);
+    // A reload the stream causes reads both again, once each.
     await act(async () => emit({ eventType: "task.status_changed", occurredAt: new Date().toISOString(), organizationId: ORG.id, projectId: PROJECT.id,
       taskId: TASK_ID, runId: null, sessionId: null, workflowRunId: null, actor: { type: "system", id: "dude" }, source: "control-plane",
       correlationId: null, causationId: null, payload: { status: "running" } } as never));
-    await until(() => (reads.length === 2 ? true : null), "the reload's read");
+    await until(() => (reads.length === 4 ? true : null), "the reload's reads");
     await settle(400);
-    expect(reads).toStrictEqual([2, 2]);
+    expect(reads).toStrictEqual([undefined, 2, undefined, 2]);
     await press(picker(page)!);
     const option = await until(() => document.querySelector<HTMLElement>('[role=option][data-value="1"]'), "attempt 1 in the picker");
     await until(() => (option.textContent?.includes("$13.40") ? true : null), "attempt 1's cost");
     // Strict: `toEqual` takes a trailing undefined as absent, so it would not see a fourth read.
-    expect(reads).toStrictEqual([2, 2, undefined]);
+    expect(reads).toStrictEqual([undefined, 2, undefined, 2, undefined]);
     // Closing the list reads nothing.
     await click(document.querySelector<HTMLElement>('[role=option][data-value="2"]')!);
     await until(() => (document.querySelector("[role=option]") ? null : true), "the list closed");
     await settle(100);
-    expect(reads).toStrictEqual([2, 2, undefined]);
+    expect(reads).toStrictEqual([undefined, 2, undefined, 2, undefined]);
   });
 
   test("a cost read that answers late does not replace the one that answered after it", async () => {

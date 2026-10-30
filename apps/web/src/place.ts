@@ -39,9 +39,9 @@ export type Place =
   // Where a preview's Connect to dude lands (`#/preview-connect`): finds the preview's task and goes to it.
   | { view: "previewConnect" };
 
-/** The task tabs a URL can name; Overview is the task's own URL. */
-export type TaskTab = "chat" | "findings" | "sessions" | "feedback" | "files" | "servers" | "activity";
-const TASK_TABS: ReadonlyArray<TaskTab> = ["chat", "findings", "sessions", "feedback", "files", "servers", "activity"];
+/** The task tabs a URL can name; Overview is the task's own URL, and what a task opens on. */
+export type TaskTab = "changes" | "chat" | "findings" | "sessions" | "feedback" | "files" | "servers" | "activity";
+const TASK_TABS: ReadonlyArray<TaskTab> = ["changes", "chat", "findings", "sessions", "feedback", "files", "servers", "activity"];
 
 /** An epic's page shows its board, or how its tasks' agents coordinate. */
 export type EpicView = "board" | "coordination";

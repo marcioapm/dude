@@ -55,6 +55,8 @@ export const ID_PREFIXES = {
   incomingDelivery: "dlv",
   chatInstallation: "chi",
   chatRequest: "chr",
+  /** A task attempt's branch, pinned (migration 230). */
+  branchSnapshot: "tbs",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

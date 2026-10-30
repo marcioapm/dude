@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { BIG_TICKET_TOKENS, DENSITIES, LARGE_LAYOUT_TOKENS, densityTokens, isDensity, type DensityToken } from "../src/tokens/density.ts";
 import { fontSize, lineHeight, size, space } from "../src/tokens/scale.ts";
 
@@ -115,5 +116,21 @@ describe("badges and chips", () => {
   ];
   test("heights fit their text with at least 2px either side", () => {
     for (const [name, h, fs] of pairs) expect(h - fs, name).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("the 28px floor for a control standing on its own", () => {
+  // `control-sm` is not a density token, so it is 28 in both densities: a rule on it holds in both.
+  const rule = (file: string, selector: string) => {
+    const css = readFileSync(new URL(`../src/components/${file}`, import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const at = css.indexOf(`${selector} {`);
+    return at < 0 ? "" : css.slice(at, css.indexOf("}", at));
+  };
+  test("LiveDiff's comment mark is control-sm tall, never a literal px height", () => {
+    expect(size.controlSm).toBe(28);
+    expect(keys as string[]).not.toContain("size-control-sm");
+    const mark = rule("LiveDiff.module.css", ".commentMark");
+    expect(mark).toMatch(/\bheight:\s*var\(--ds-size-control-sm\)/);
+    expect(mark).not.toMatch(/\bheight:\s*\d+px/);
   });
 });

@@ -49,7 +49,8 @@ def test_cohort_result_waits_for_answer_then_updates_one_row(
     other = client.create_task(forge_project["id"], "Unrelated task")
     assert not [e for e in client.events(taskId=other["id"], limit=1000) if e["eventType"] == "run.cohort.queued"]
     page.set_viewport_size({"width": 1920, "height": 1080})
-    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}")
+    # The cohort's row is a turn of the task's Chat; the task opens on Overview.
+    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}/chat")
     row = page.get_by_test_id("cohort-result")
     expect(row).to_have_count(1)
     expect(row).to_contain_text("Completed 0/3 · Queued", timeout=30_000)
