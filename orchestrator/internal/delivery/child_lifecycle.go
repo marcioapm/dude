@@ -224,24 +224,21 @@ func (s *Store) AbortChild(ctx context.Context, org, taskID, childID string) err
 }
 
 func AbortChildTx(ctx context.Context, tx pgx.Tx, taskID, childID string) error {
-	_, _, err := abortChildTx(ctx, tx, taskID, childID, "", "child aborted")
+	_, _, err := abortChildTx(ctx, tx, taskID, childID, "child aborted")
 	return err
 }
 
 // abortChildTx asks a live child of taskID to abort, saying why
-// (control_reason), under lockChild's locks; parent, when given, must be
-// the child's parent as locked. Says whether this call asked it (false for
-// a child already stopping or ended) and the child's status as locked.
-func abortChildTx(ctx context.Context, tx pgx.Tx, taskID, childID, parent, why string) (bool, string, error) {
+// (control_reason), under lockChild's locks. Says whether this call asked
+// it (false for a child already stopping or ended) and the child's status
+// as locked.
+func abortChildTx(ctx context.Context, tx pgx.Tx, taskID, childID, why string) (bool, string, error) {
 	c, err := lockChild(ctx, tx, childID)
 	if err != nil {
 		return false, "", err
 	}
 	if c.TaskID != taskID {
 		return false, "", refuseText(rChildWrongTask)
-	}
-	if parent != "" && c.ParentID != parent {
-		return false, "", refusef(rNotYourChildStop, childID)
 	}
 	tag, err := tx.Exec(ctx, `UPDATE runs SET control = 'abort', control_requested_at = now(),
 			child_stop_reason = 'aborted', control_reason = $2, keep = false

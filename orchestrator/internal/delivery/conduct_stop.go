@@ -82,7 +82,7 @@ func ConductStopRunTx(ctx context.Context, tx pgx.Tx, ref RunRef, runID, reason 
 	if !runLive(rstatus) {
 		return "", refusef(rHasEndedNothingStop, runID, rstatus)
 	}
-	asked, locked, err := abortChildTx(ctx, tx, ref.TaskID, runID, ref.RunID, reason)
+	asked, locked, err := abortChildTx(ctx, tx, ref.TaskID, runID, reason)
 	if err != nil {
 		return "", err
 	}
