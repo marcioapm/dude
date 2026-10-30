@@ -78,7 +78,9 @@ func TestTheSweepEvaluatesOpenWaitsAndWakesTheConductorOnce(t *testing.T) {
 }
 
 // More open waits than one sweep took up before (wakeBatch): the newest,
-// its deadline passed, ends in the first sweep all the same.
+// its deadline passed, ends in the first sweep all the same; and so does
+// one whose deadline is later than every other's but whose Run already
+// completed, which neither the oldest nor the nearest deadlines reach.
 func TestTheSweepEvaluatesEveryOpenWait(t *testing.T) {
 	w := &wakeWorld{newReceiptWorld(t)}
 	w.s.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -93,6 +95,14 @@ func TestTheSweepEvaluatesEveryOpenWait(t *testing.T) {
 			FROM generate_series(1, ` + itoa(n) + `) i`,
 		`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, deadline_at, since_cursor, call_key)
 			VALUES ('cwt_newest', $1, 'wi_'||$1, 'run_'||$1, 1, '[]', now() - interval '1 second', 0, 'c')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_'||$1||'_late', $1, 'prj_'||$1, 99, 'T', 'G')`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt) VALUES ('run_'||$1||'_late', $1, 'prj_'||$1, 'wi_'||$1||'_late', 1)`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status)
+			VALUES ('done_'||$1||'_late', $1, 'prj_'||$1, 'wi_'||$1||'_late', 2, 'completed')`,
+		`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, deadline_at, since_cursor, call_key)
+			VALUES ('cwt_late', $1, 'wi_'||$1||'_late', 'run_'||$1||'_late', 1,
+				jsonb_build_array(jsonb_build_object('kind', 'runs_ended', 'runs', jsonb_build_array('done_'||$1||'_late'))),
+				now() + interval '2 hours', 0, 'c')`,
 	} {
 		w.exec(q)
 	}
@@ -101,6 +111,9 @@ func TestTheSweepEvaluatesEveryOpenWait(t *testing.T) {
 	}
 	if by := w.count(`SELECT count(*) FROM conductor_waits WHERE organization_id = $1 AND id = 'cwt_newest' AND ended_by = 'deadline'`); by != 1 {
 		t.Fatal("the newest wait, its deadline passed, was not evaluated")
+	}
+	if by := w.count(`SELECT count(*) FROM conductor_waits WHERE organization_id = $1 AND id = 'cwt_late' AND ended_by = 'held'`); by != 1 {
+		t.Fatal("the wait with the latest deadline, its Run completed, was not evaluated")
 	}
 	if open := w.count(`SELECT count(*) FROM conductor_waits WHERE organization_id = $1 AND ended_at IS NULL`); open != n {
 		t.Fatalf("%d waits open, want %d", open, n)
