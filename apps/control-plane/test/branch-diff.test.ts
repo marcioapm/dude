@@ -176,6 +176,9 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     expect(newerThan("s1", "s3", links)?.relation).toBe("rewritten");
     expect(newerThan("s3", "s3", links)).toBeNull();
     expect(newerThan("s3", "s2", links)).toMatchObject({ relation: "rewritten", count: 2 });
+    // A partial lineage need not contain an initial/rewrite relation that
+    // would independently classify the span as rewritten.
+    expect(newerThan("s3", "s2", links.slice(1))).toMatchObject({ relation: "rewritten", count: 1 });
   });
 
   test("a branch reset follows the request's snapshot, not the last capture time", async () => {
