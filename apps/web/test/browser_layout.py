@@ -163,6 +163,23 @@ class PageHoldsStill(unittest.TestCase):
             self.assertEqual(at["columns"], 1, f"{width}: {at}")
             self.assertEqual(at["overflow"], 0, f"{width}: {at}")
 
+    def test_the_overview_tightens_in_compact_density(self):
+        # Main-pane padding and the panel gap follow the density table: 24 → 12 and 24 → 16.
+        seen = {}
+        for density in ("comfortable", "compact"):
+            context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+            page.get_by_test_id("overview-summary").wait_for()
+            page.evaluate("d => document.documentElement.setAttribute('data-density', d)", density)
+            seen[density] = page.evaluate("""() => {
+              const o = getComputedStyle(document.querySelector('.taskOverview'));
+              return { pad: o.paddingLeft, gap: o.rowGap, grid: getComputedStyle(document.querySelector('.overviewGrid')).columnGap };
+            }""")
+        self.assertEqual(seen["comfortable"], {"pad": "24px", "gap": "24px", "grid": "24px"}, seen)
+        self.assertEqual(seen["compact"], {"pad": "12px", "gap": "16px", "grid": "16px"}, seen)
+
     def test_rail_notes_use_muted_ink(self):
         context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
         self.addCleanup(context.close)

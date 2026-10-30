@@ -911,9 +911,10 @@ body {
 .taskOverview {
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-20);
+  gap: var(--ds-space-panel-gap);
   min-width: 0;
-  padding: var(--ds-space-16) var(--ds-space-24) var(--ds-space-32);
+  /* The main pane's padding and panel gap: both follow the density (24 → 12, 24 → 16). */
+  padding: var(--ds-space-16) var(--ds-space-main-pad) var(--ds-space-32);
 }
 /* Its notices sit inside its padding, not under the header's. */
 .taskOverview > .taskNotices {
@@ -926,7 +927,7 @@ body {
 .overviewGrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--ds-space-20);
+  gap: var(--ds-space-panel-gap);
   align-items: start;
 }
 @container taskoverview (min-width: 1000px) {
@@ -937,7 +938,7 @@ body {
 .overviewColumn {
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-20);
+  gap: var(--ds-space-panel-gap);
   min-width: 0;
 }
 /* Running now and Changes: raised surfaces (shadow in light, as raised things are). */
