@@ -291,3 +291,64 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     }
   });
 });
+
+// Migration 231's retention sweep, as the orchestrator's loop calls it.
+async function prune(): Promise<number> {
+  return await owner.begin(async (tx) => {
+    await tx`SET LOCAL ROLE dude_sweeper`;
+    const [{ n }] = await tx`SELECT prune_branch_snapshots(1000) AS n`;
+    return n as number;
+  });
+}
+
+describe("GET /v1/tasks/:id/branch-diff after a retention sweep", () => {
+  test("newer for an older kept snapshot is what it was, over the snapshots pruned between", async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status) VALUES ('wi_pr', ${ORG}, 'prj_bd', 4, 'Pruned', 'running')`;
+    await owner`INSERT INTO task_repositories (task_id, repository_id, organization_id, access) VALUES ('wi_pr', 'repo_api', ${ORG}, 'write')`;
+    const old = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+    // p1 (an item names it) ← p2 ← p3 (main merged in) ← p4 ← p5 (the latest, 30 hours old: p4 was superseded over a day ago).
+    await snapshot("tbs_p1", 1, "repo_api", sha("a"), sha("1"), "initial", null, old(80), ORG, "wi_pr");
+    await snapshot("tbs_p2", 1, "repo_api", sha("a"), sha("2"), "fast-forward", "tbs_p1", old(70), ORG, "wi_pr");
+    await snapshot("tbs_p3", 1, "repo_api", sha("d"), sha("3"), "merged-target", "tbs_p2", old(60), ORG, "wi_pr");
+    await snapshot("tbs_p4", 1, "repo_api", sha("d"), sha("4"), "fast-forward", "tbs_p3", old(50), ORG, "wi_pr");
+    await snapshot("tbs_p5", 1, "repo_api", sha("d"), sha("5"), "fast-forward", "tbs_p4", old(30), ORG, "wi_pr");
+    await owner`INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
+      VALUES ('fbi_pr', ${ORG}, 'wi_pr', 1, ${ana.personId}, 'kept', 'code', 'tbs_p1', '{}')`;
+    const read = async (q: string) => (await get(ana.key, `/v1/tasks/wi_pr/branch-diff?${q}`)).body;
+    const before = await read("snapshot=tbs_p1");
+    expect(before.newer).toMatchObject({ id: "tbs_p5", relation: "merged-target", count: 4 });
+
+    expect(await prune()).toBeGreaterThanOrEqual(3);
+    const kept = await owner`SELECT id FROM task_branch_snapshots WHERE task_id = 'wi_pr' ORDER BY id`;
+    expect(kept.map((r: { id: string }) => r.id)).toEqual(["tbs_p1", "tbs_p5"]);
+    const after = await read("snapshot=tbs_p1");
+    expect(after.newer).toEqual(before.newer);
+    expect(after.snapshot.id).toBe("tbs_p1");
+    // The latest now follows p1 directly, over the four captures since.
+    expect((await read("")).snapshot).toMatchObject({ id: "tbs_p5", previousSnapshotId: "tbs_p1", relation: "merged-target" });
+    expect((await read("")).repositories[0]).toMatchObject({ name: "api", snapshots: 2 });
+  });
+
+  test("a pruned snapshot asked for by id answers as any unknown snapshot", async () => {
+    const pruned = await get(ana.key, "/v1/tasks/wi_pr/branch-diff?snapshot=tbs_p3");
+    const unknown = await get(ana.key, "/v1/tasks/wi_pr/branch-diff?snapshot=tbs_never");
+    expect(pruned.status).toBe(404);
+    expect(unknown.status).toBe(404);
+    expect(pruned.body.error?.message ?? pruned.body.message).toBe("snapshot tbs_p3 is not one of this task's");
+    expect(JSON.stringify(pruned.body).replaceAll("tbs_p3", "X")).toBe(JSON.stringify(unknown.body).replaceAll("tbs_never", "X"));
+  });
+
+  test("newer counts the captures a pruned link spans", () => {
+    const at = (h: number) => new Date(Date.UTC(2026, 9, 28, h));
+    const links = [
+      { id: "s1", previousSnapshotId: null, relation: "initial" as const, mergeBaseSha: "a", headSha: "b", capturedAt: at(1) },
+      { id: "s4", previousSnapshotId: "s1", relation: "fast-forward" as const, mergeBaseSha: "a", headSha: "c", capturedAt: at(4), steps: 3 },
+      { id: "s5", previousSnapshotId: "s4", relation: "fast-forward" as const, mergeBaseSha: "a", headSha: "d", capturedAt: at(5), steps: 1 },
+      { id: "s7", previousSnapshotId: "s5", relation: "fast-forward" as const, mergeBaseSha: "a", headSha: "e", capturedAt: at(7), steps: 2 },
+    ];
+    expect(newerThan("s1", "s5", links)).toMatchObject({ relation: "fast-forward", count: 4 });
+    expect(newerThan("s4", "s5", links)).toMatchObject({ relation: "fast-forward", count: 1 });
+    // A walk over several pruned links sums every one: 2 + 1 + 3.
+    expect(newerThan("s1", "s7", links)).toMatchObject({ relation: "fast-forward", count: 6 });
+  });
+});

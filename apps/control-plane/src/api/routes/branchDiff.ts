@@ -23,9 +23,13 @@ const SNAPSHOT_COLUMNS = `s.id, s.task_id AS "taskId", s.attempt, s.repository_i
   s.head_sha AS "headSha", s.checksum, s.source, s.captured_at AS "capturedAt", s.stats, s.truncated, s.status,
   s.reason, s.pr_head_sha AS "prHeadSha", s.previous_snapshot_id AS "previousSnapshotId", s.relation`;
 
-/** A snapshot's lineage entry: enough to walk back from the newest. */
+/**
+ * A snapshot's lineage entry: enough to walk back from the newest. steps is
+ * how many captures its link spans (migration 231: more than 1 once the
+ * snapshots between were pruned, its relation then over the whole span).
+ */
 interface Link { id: string; previousSnapshotId: string | null; relation: BranchRelation; mergeBaseSha: string;
-  headSha: string; capturedAt: Date }
+  headSha: string; capturedAt: Date; steps?: number }
 
 function snapshotOut(row: Record<string, unknown>): TaskBranchSnapshot {
   return { ...(row as unknown as TaskBranchSnapshot), capturedAt: (row.capturedAt as Date).toISOString() };
@@ -43,6 +47,7 @@ export function newerThan(fromId: string, latestId: string, links: ReadonlyArray
   const latest = byId.get(latestId);
   if (!from || !latest) return null;
   const steps: BranchRelation[] = [];
+  let count = 0;
   let at: Link | undefined = latest;
   let reached = false;
   for (let guard = 0; at && guard <= links.length; guard++) {
@@ -51,9 +56,9 @@ export function newerThan(fromId: string, latestId: string, links: ReadonlyArray
       break;
     }
     steps.push(at.relation);
+    count += at.steps ?? 1;
     at = at.previousSnapshotId ? byId.get(at.previousSnapshotId) : undefined;
   }
-  const count = steps.length;
   if (!reached) steps.push("rewritten");
   return {
     id: latest.id, relation: spanRelation(steps, from.mergeBaseSha, latest.mergeBaseSha),
@@ -124,7 +129,7 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
     }
 
     const links = (await scope.sql`SELECT s.id, s.previous_snapshot_id AS "previousSnapshotId", s.relation,
-        s.merge_base_sha AS "mergeBaseSha", s.head_sha AS "headSha", s.captured_at AS "capturedAt"
+        s.merge_base_sha AS "mergeBaseSha", s.head_sha AS "headSha", s.captured_at AS "capturedAt", s.steps
       FROM task_branch_snapshots s WHERE s.task_id = ${taskId} AND s.attempt = ${attempt} AND s.repository_id = ${repo.id}
       ORDER BY s.captured_at, s.id`) as Link[];
     const readRequest = async () => ((await scope.sql`SELECT status, reason, requested_at AS "requestedAt", snapshot_id AS "snapshotId"

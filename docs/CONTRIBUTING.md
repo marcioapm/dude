@@ -57,6 +57,7 @@ loops (`cmd/dude-orchestrator/main.go`):
 | `previews` | Drives branch previews on lux: creates a wakeable preview's lux servers, wakes it (resume with a sync, or submit and attach) when lux's feed says someone opened it, stops it when every server is idle, syncs a running one when its branch moves, reaps unused ones, deletes the servers and cancels the Run of an ended one. Previews from before lux#41 keep the old park-after-idle path. |
 | `lux-feed` (goroutine) | Follows lux's tenant event feed (`GET /v1/events`) from the cursor in `lux_feed`, recording wakes, idleness and gone servers of wakeable previews (`servers.Feed`). |
 | `branch-snapshots` | Claims due task branch capture requests, reads committed branch diffs from GitHub, and stores pinned snapshots with lineage and availability. |
+| `branch-snapshots-prune` | Every 10 minutes: deletes task branch snapshots nothing can still read (`prune_branch_snapshots`, migration 231), in batches of 200 until one comes back short. It keeps each attempt and repository's latest, any a capture request or feedback item names, and any that was the latest within the last 24 hours (one goes only once a newer one is itself over a day old). A kept snapshot's lineage is rewired past what went, so `newer` reads the same. |
 | `pr-reconciler` | Re-reads open pull requests not seen for 15 minutes — the backstop for webhooks GitHub never sent. |
 
 **lux** is the runtime (`~/git/lux`, its own repository and docs). It runs

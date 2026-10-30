@@ -263,6 +263,11 @@ func run(log *slog.Logger) error {
 		// branch made (dude's publishes and promotions, a pull request's
 		// head moving, migration 230's triggers), or a read that found none.
 		{"branch-snapshots", 2 * time.Second, (&branchdiff.Capturer{DB: database, Forges: forges, Log: log}).Sweep},
+		// Migration 231's retention (branchdiff.Prune says what goes, and
+		// why a finished pass reports 0).
+		{"branch-snapshots-prune", 10 * time.Minute, func(ctx context.Context) (int, error) {
+			return branchdiff.Prune(ctx, database, log)
+		}},
 		// Automations: schedules due, deliveries matched, runs started and
 		// followed, Server containers fed and stopped, kept sessions expired.
 		{"automations", time.Second, automationRunner.Sweep},
@@ -486,6 +491,12 @@ type loop struct {
 }
 
 func (l loop) run(ctx context.Context, log *slog.Logger, wake <-chan struct{}) {
+	l.runWaiting(ctx, log, wake, time.After)
+}
+
+// runWaiting is run with its wait for the interval given: time.After, or a
+// test's that sees what the loop chose to wait for.
+func (l loop) runWaiting(ctx context.Context, log *slog.Logger, wake <-chan struct{}, wait func(time.Duration) <-chan time.Time) {
 	for ctx.Err() == nil {
 		n, err := l.sweep(ctx)
 		if err != nil && ctx.Err() == nil {
@@ -499,7 +510,7 @@ func (l loop) run(ctx context.Context, log *slog.Logger, wake <-chan struct{}) {
 		select {
 		case <-ctx.Done():
 		case <-wake:
-		case <-time.After(l.interval):
+		case <-wait(l.interval):
 		}
 	}
 }
