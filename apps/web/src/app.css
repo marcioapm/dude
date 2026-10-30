@@ -807,6 +807,7 @@ body {
 }
 @media (max-height: 639px) {
   .taskSessions,
+  .changesTab,
   .taskChat {
     min-height: 560px;
   }
@@ -825,6 +826,8 @@ body {
 }
 .taskTop {
   display: flex;
+  /* The page scrolls, not the header: shrunk, its wrapped actions would draw over the title. */
+  flex-shrink: 0;
   align-items: center;
   gap: var(--ds-space-12);
   min-height: 60px;
@@ -845,6 +848,7 @@ body {
 }
 .taskHead {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   align-items: flex-start;
   gap: var(--ds-space-16) var(--ds-space-24);
@@ -898,18 +902,162 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* Overview: an operational grid, no rail. The pane, not the window, decides
+   its two columns: the container is the Overview's own box (`taskoverview`). */
+.taskOverviewPane {
+  container: taskoverview / inline-size;
+  min-width: 0;
+}
 .taskOverview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-panel-gap);
+  min-width: 0;
+  /* The main pane's padding and panel gap: both follow the density (24 → 12, 24 → 16). */
+  padding: var(--ds-space-16) var(--ds-space-main-pad) var(--ds-space-32);
+}
+/* Its notices sit inside its padding, not under the header's. */
+.taskOverview > .taskNotices {
+  padding: 0;
+}
+.overviewSummary {
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-chrome);
+}
+.overviewGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
-  gap: var(--ds-space-32);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--ds-space-panel-gap);
   align-items: start;
 }
-.taskOverview:not(:has(.taskAside)) {
-  grid-template-columns: minmax(0, 1fr);
+@container taskoverview (min-width: 1000px) {
+  .overviewGrid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  }
 }
-@media (max-width: 1200px) {
+.overviewColumn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-panel-gap);
+  min-width: 0;
+}
+/* Running now and Changes: raised surfaces (shadow in light, as raised things are). */
+.overviewRegion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  padding: var(--ds-space-16);
+  background: var(--ds-color-raised);
+}
+[data-theme="light"] .overviewRegion {
+  box-shadow: var(--ds-shadow-1);
+}
+.overviewRegionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ds-space-4) var(--ds-space-12);
+}
+.overviewRegionHead > h2,
+.overviewPullRequests > h2 {
+  margin: 0;
+  font-size: var(--ds-text-lg);
+  font-weight: var(--ds-weight-semibold);
+  color: var(--ds-color-text-strong);
+}
+.overviewRegionHead > .muted {
+  font-size: var(--ds-text-sm);
+}
+.overviewRegion p {
+  margin: 0;
+}
+.overviewRegionFoot {
+  display: flex;
+  justify-content: flex-end;
+}
+.overviewBranches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ds-text-sm);
+}
+.overviewBranches > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ds-space-4) var(--ds-space-8);
+  min-width: 0;
+}
+.overviewBranches code {
+  overflow-wrap: anywhere;
+}
+.overviewBranchRepo {
+  color: var(--ds-color-text-secondary);
+}
+.overviewPullRequests {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  min-width: 0;
+  padding: var(--ds-space-16);
+  background: var(--ds-color-chrome);
+}
+.overviewPullRequests > p {
+  margin: 0;
+}
+.overviewMilestones {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.overviewMilestones > p {
+  margin: 0;
+}
+.overviewDetails {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-8);
+  min-width: 0;
+}
+.overviewFacts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-20);
+  min-width: 0;
+}
+/* Needs you: the question quoted, who can answer, the way there at its end (under it when narrow). */
+.needsYou {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-12) var(--ds-space-20);
+}
+.needsYouText {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.needsYouText > p {
+  margin: 0;
+}
+.needsYouWho {
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+}
+.needsYouAsk {
+  margin-top: var(--ds-space-4);
+  font-size: var(--ds-text-lg);
+  color: var(--ds-color-text-strong);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
   .taskOverview {
-    grid-template-columns: minmax(0, 1fr);
+    padding: var(--ds-space-12) var(--ds-space-16) var(--ds-space-24);
   }
 }
 .taskMain {
@@ -940,6 +1088,27 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Changes, until the branch review: the sessions that changed files, one row each. */
+.changesSessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  margin: var(--ds-space-12) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.changesSessions > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-12);
+  min-height: var(--ds-size-row-default);
+  font-size: var(--ds-text-sm);
+}
+.changesSessionLabel {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
 }
 /* Sessions: selection lives in the open session's title. */
 .taskSessions {
@@ -2233,4 +2402,184 @@ body {
   align-items: center;
   gap: var(--ds-space-4);
   margin: 0;
+}
+
+/* -- Changes: the whole-branch review --------------------------------- */
+/* The bar, at most one slim line, then the diff: nothing else above it. */
+.changesTab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: var(--ds-space-8) var(--ds-space-24) var(--ds-space-16);
+  gap: var(--ds-space-8);
+}
+.changesBar {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: 36px;
+  padding: var(--ds-space-2) var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+}
+.changesSpacer {
+  flex: 1;
+}
+.changesTools {
+  display: flex;
+  align-items: center;
+}
+.changesFilter {
+  width: 136px;
+  height: var(--ds-size-control-sm);
+}
+.changesFilterIcon {
+  display: none;
+}
+.snapshotLine,
+.prMark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  height: var(--ds-size-control-sm);
+  padding: 0 var(--ds-space-6);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.snapshotLine:hover,
+.prMark:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.snapshotLine:focus-visible,
+.prMark:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.snapshotRef {
+  color: var(--ds-color-text-strong);
+}
+.prMark {
+  font-family: inherit;
+}
+.snapshotPopover {
+  position: absolute;
+  top: calc(100% + var(--ds-space-4));
+  left: var(--ds-space-8);
+  z-index: var(--ds-z-popover);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--ds-space-8);
+  max-width: min(560px, calc(100vw - 32px));
+  padding: var(--ds-space-12);
+  border-radius: var(--ds-radius-float);
+  background: var(--ds-color-overlay);
+  box-shadow: var(--ds-shadow-2);
+}
+.snapshotFacts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--ds-space-4) var(--ds-space-12);
+  margin: 0;
+  font-size: var(--ds-text-sm);
+}
+.snapshotFacts dt {
+  color: var(--ds-color-text-muted);
+}
+.snapshotFacts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* One slim neutral line under the bar: never a card, no tone. */
+.slimLine {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: 32px;
+  padding: 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-control);
+  background: var(--ds-color-chrome);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.slimText {
+  flex: 1;
+  min-width: 0;
+}
+.slimText b {
+  color: var(--ds-color-text-strong);
+  font-weight: var(--ds-weight-medium);
+}
+.changesRegion h2 {
+  margin: var(--ds-space-8) 0;
+  font-size: var(--ds-text-md);
+}
+.changesDiff {
+  flex: 1;
+  min-height: 0;
+}
+.changesUnseen {
+  display: block;
+  margin-top: var(--ds-space-4);
+}
+/* The comment the mark moved to: flashed once. */
+.branchComment:focus {
+  outline: none;
+}
+.branchComment[data-flash] {
+  animation: ds-flash var(--ds-duration-deliberate) var(--ds-ease-exit) 1;
+}
+/* A phone: the bar wraps to two rows, unified only, no totals (the file list has each file's). */
+@media (max-width: 640px) {
+  .changesTab {
+    padding: var(--ds-space-8) var(--ds-space-12) var(--ds-space-16);
+  }
+  .snapshotTotals,
+  .snapshotRef,
+  .changesTools {
+    display: none;
+  }
+  .changesFilter {
+    display: none;
+  }
+  .changesFilterIcon {
+    display: inline-flex;
+  }
+  .changesBar[data-filtering] .changesFilter {
+    display: flex;
+    order: 10;
+    flex: 1 1 100%;
+    width: auto;
+  }
+  .changesBar[data-filtering] .changesFilterIcon,
+  .changesBar[data-filtering] .snapshotLine {
+    display: none;
+  }
+  .changesRepo {
+    max-width: 40vw;
+  }
+}
+/* Overview's Changes: the snapshot's files, counts and base…head on one line. */
+.overviewSnapshot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ds-space-4) var(--ds-space-12);
+  margin: 0;
+  font-variant-numeric: tabular-nums;
 }

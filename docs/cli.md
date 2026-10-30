@@ -197,6 +197,7 @@ noun is what it acts on.
 | `task raw TASK` | The task as the API returns it |
 | `task relations TASK` | What blocks it, what it blocks, what it relates to |
 | `task metrics TASK` | Cost and time |
+| `task branch-diff TASK [--attempt N] [--repo NAME] [--snapshot ID]` | What its branch changes against its target: the latest snapshot (committed work only), its lineage and whether a newer one exists |
 | `task events TASK [--run RUN] [--after N] [--limit N]` | Event history; pass `nextCursor` as `--after` for the next page |
 | `task artifacts TASK` | Files its agents published |
 | `task servers TASK` | Its dev servers and preview |

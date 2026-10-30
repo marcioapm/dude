@@ -55,6 +55,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/api"
 	"github.com/marciomartins/dude/orchestrator/internal/automations"
+	"github.com/marciomartins/dude/orchestrator/internal/branchdiff"
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
 	"github.com/marciomartins/dude/orchestrator/internal/chat/slack"
 	"github.com/marciomartins/dude/orchestrator/internal/config"
@@ -258,6 +259,10 @@ func run(log *slog.Logger) error {
 		// loop only looks for the ones due.
 		{"lux-cost", 15 * time.Second, (&phases.Costs{DB: database, Lux: luxClient, Log: log, Every: set.LuxCostEvery}).Sweep},
 		{"webhooks", time.Second, pullRequests.ProcessDeliveries},
+		// Task branch snapshots: the capture requests a move of a task
+		// branch made (dude's publishes and promotions, a pull request's
+		// head moving, migration 230's triggers), or a read that found none.
+		{"branch-snapshots", 2 * time.Second, (&branchdiff.Capturer{DB: database, Forges: forges, Log: log}).Sweep},
 		// Automations: schedules due, deliveries matched, runs started and
 		// followed, Server containers fed and stopped, kept sessions expired.
 		{"automations", time.Second, automationRunner.Sweep},

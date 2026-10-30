@@ -12,7 +12,7 @@
  * `unchanged` (not shown by this diff), not outdated and not placed.
  */
 
-import type { FeedbackCodeAnchor } from "./feedback.ts";
+import type { FeedbackBranchAnchor, FeedbackCodeAnchor } from "./feedback.ts";
 import type { RunDiffFile, RunDiffLine } from "./live.ts";
 
 export type CodeSide = "old" | "new";
@@ -26,13 +26,43 @@ export type RelocatedAnchor =
 
 export type OutdatedReason = "changed" | "ambiguous" | "renamed" | "removed";
 
-export interface ViewedDiff {
+/** A Run's diff, as a session's Changes shows it. */
+export interface ViewedRunDiff {
   readonly runId: string;
   readonly checksum: string;
   readonly files: ReadonlyArray<RunDiffFile>;
 }
 
-type Anchor = Pick<FeedbackCodeAnchor, "runId" | "repo" | "path" | "side" | "startLine" | "endLine" | "diffChecksum" | "excerpt">;
+/** A task branch snapshot (`GET /v1/tasks/:id/branch-diff`): one repository of one attempt. */
+export interface ViewedBranchDiff {
+  readonly snapshotId: string;
+  readonly attempt: number;
+  /** The snapshot's repository, by name. */
+  readonly repository: string;
+  readonly checksum: string;
+  readonly files: ReadonlyArray<RunDiffFile>;
+}
+
+export type ViewedDiff = ViewedRunDiff | ViewedBranchDiff;
+
+type Lines = "repo" | "path" | "side" | "startLine" | "endLine" | "diffChecksum" | "excerpt";
+type Anchor = Pick<FeedbackCodeAnchor, "runId" | "scope" | Lines> | Pick<FeedbackBranchAnchor, "scope" | "snapshotId" | "attempt" | Lines>;
+
+/**
+ * Whether `diff` is the very one `anchor` was written on, or one its lines
+ * may be followed into (`later`). A Run's anchor follows into Run diffs; a
+ * branch anchor into the snapshots of its own attempt and repository. Any
+ * other pairing places nothing (the item is not on this diff).
+ */
+function pairing(anchor: Anchor, diff: ViewedDiff): "same" | "later" | null {
+  if (anchor.scope === "branch") {
+    if (!("snapshotId" in diff)) return null;
+    if (anchor.snapshotId === diff.snapshotId && anchor.diffChecksum === diff.checksum) return "same";
+    return anchor.attempt === diff.attempt && anchor.repo === diff.repository ? "later" : null;
+  }
+  if (!("runId" in diff)) return null;
+  return anchor.runId === diff.runId && anchor.diffChecksum === diff.checksum ? "same" : "later";
+}
 
 const onSide = (l: Pick<RunDiffLine, "kind">, side: CodeSide) => (side === "old" ? l.kind !== "+" : l.kind !== "-");
 const numberOn = (l: Pick<RunDiffLine, "old" | "new">, side: CodeSide) => (side === "old" ? l.old : l.new);
@@ -82,13 +112,21 @@ export function anchoredText(anchor: Pick<FeedbackCodeAnchor, "side" | "excerpt"
   return anchor.excerpt.filter((l) => onSide(l, anchor.side)).map((l) => l.text);
 }
 
-/** Where `anchor` sits in `diff`; see the module comment for the rule. */
+/**
+ * Where `anchor` sits in `diff`; see the module comment for the rule. A
+ * branch anchor (`scope: "branch"`) is keyed by its snapshot as a Run's is
+ * by its Run: on its own snapshot (id and checksum) it is where it was; on
+ * another snapshot of the same attempt and repository its lines follow by
+ * the same rule; on anything else it is absent.
+ */
 export function relocateCodeAnchor(anchor: Anchor, diff: ViewedDiff): RelocatedAnchor {
+  const pair = pairing(anchor, diff);
+  if (!pair) return { kind: "absent" };
   const file = anchorFile(anchor, diff.files);
   if (!file) return { kind: "absent" };
   const { side } = anchor;
   // On the very diff it was written on, its lines are where they were.
-  if (anchor.runId === diff.runId && anchor.diffChecksum === diff.checksum) {
+  if (pair === "same") {
     return { kind: "lines", path: file.path, side, startLine: anchor.startLine, endLine: anchor.endLine };
   }
   if (file.status === "R") return { kind: "outdated", path: file.path, reason: "renamed" };

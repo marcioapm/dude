@@ -26,6 +26,10 @@
   text-decoration: none;
   filter: brightness(0.97);
 }
+/* A mark (`as="span"`): not a link, so no hover response of its own. */
+.mark:hover {
+  filter: none;
+}
 .root:focus-visible {
   outline: none;
   box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);

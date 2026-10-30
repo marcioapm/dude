@@ -694,3 +694,83 @@ export const REVIEWERS: ReviewerCandidate[] = [
   { kind: "user", login: "ananya-k", name: "Ananya Krishnan" },
   { kind: "team", login: "acme/platform", name: "Platform", members: 7 },
 ];
+
+// -- The Overview's states (`dude.fixtures.run` = reviewing | question | ready | new) ----
+
+/** What the Overview shows: two reviewers at work, an agent's open question, ready to merge, not started. */
+export type OverviewView = "reviewing" | "question" | "ready" | "new";
+export const OVERVIEW_VIEWS: readonly OverviewView[] = ["reviewing", "question", "ready", "new"];
+
+/** The task's Runs for a view: the pipeline done to the simplifier, then (reviewing) two reviewers at work on its head. */
+export function overviewRuns(view: OverviewView): Run[] {
+  if (view === "new") return [];
+  if (view === "question") return [RUN_IMPLEMENT];
+  if (view === "ready") return RUNS_REVIEW;
+  const head = "c91f7e2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f";
+  return [
+    ...RUNS_REVIEW,
+    run({ id: "run_ov_quality", phase: "review", role: "reviewer", category: "quality", status: "running", model: "claude-opus-5-5",
+      createdAt: iso(6 * MIN), startedAt: iso(6 * MIN), heads: { "web-console": head } }),
+    run({ id: "run_ov_security", phase: "review", role: "reviewer", category: "security", status: "running", model: "gpt-5",
+      createdAt: iso(5 * MIN), startedAt: iso(5 * MIN), heads: { "web-console": head } }),
+  ];
+}
+
+/** The task's figures for a view's Runs: each Run's cost from its role, a reviewer's still being settled by lux. */
+export function overviewMetrics(view: OverviewView): TaskMetrics {
+  const runs = overviewRuns(view);
+  const price = (r: Run) => (r.phase === "implement" ? 1.62 : r.phase === "fix" ? 0.48 : r.phase === "simplify" ? 0.31 : 0.4);
+  const rows = runs.map((r) => {
+    const total = price(r);
+    const live = r.status === "running";
+    return {
+      id: r.id, phase: r.phase, role: r.role, category: r.category, status: r.status,
+      activeMs: Date.parse(r.endedAt ?? new Date().toISOString()) - Date.parse(r.startedAt ?? r.createdAt), parkedMs: 0, costUsd: total,
+      cost: { totalUsd: total, tokensUsd: total - 0.06, machineUsd: 0.06, origin: { tokens: "lux" as const, machine: "lux" as const, settled: !live } },
+      tokens: { input: Math.round(total * 120_000), output: Math.round(total * 9_000) },
+    };
+  });
+  const sum = (f: (x: (typeof rows)[number]) => number) => rows.reduce((n, x) => n + f(x), 0);
+  return {
+    // Asked ten minutes before its first Run was created.
+    leadMs: runs.length ? Date.now() - Math.min(...runs.map((r) => Date.parse(r.createdAt))) + 10 * MIN : 0,
+    activeMs: sum((x) => x.activeMs), humanWaitMs: view === "question" ? 4 * MIN : 0, reviewMs: view === "ready" ? 30 * MIN : 0,
+    costUsd: sum((x) => x.cost.tokensUsd),
+    cost: { totalUsd: sum((x) => x.cost.totalUsd), tokensUsd: sum((x) => x.cost.tokensUsd), machineUsd: sum((x) => x.cost.machineUsd),
+      origin: { tokens: "lux", machine: "lux", settled: !rows.some((x) => x.status === "running") } },
+    tokens: { input: sum((x) => x.tokens.input), output: sum((x) => x.tokens.output) },
+    runs: rows,
+  };
+}
+
+/** The pull request for a view: checks running while reviewers work; approved and passing when ready. */
+export function overviewPullRequests(view: OverviewView): PullRequest[] {
+  if (view === "reviewing") return [PULL_REQUEST];
+  if (view !== "ready") return [];
+  return [{ ...PULL_REQUEST, checkState: "passing", review: "approved", display: "ready",
+    checks: PULL_REQUEST.checks.map((c) => ({ ...c, status: "completed", conclusion: "success", durationMs: c.durationMs ?? 141_000 })),
+    reviews: [{ login: "ana-ribeiro", state: "APPROVED", submittedAt: iso(12 * MIN) }, { login: "tom-okafor", state: "APPROVED", submittedAt: iso(9 * MIN) }] }];
+}
+
+/** The ledger for a view, after the task's creation: what each Run started and did, and the question asked. */
+export function overviewEvents(view: OverviewView, created: PersistedEvent): PersistedEvent[] {
+  if (view === "new") return [created];
+  let n = 0;
+  const at = (eventType: string, payload: Record<string, unknown>, runId: string | null, minAgo: number, actor: PersistedEvent["actor"] = runId ? { type: "agent", id: runId } : dude) =>
+    ({ ...created, cursor: 30_000 + ++n, eventId: `evt_ov_${n}`, eventType, occurredAt: iso(minAgo * MIN), runId, sessionId: runId ? `${runId}-s` : null, actor, payload });
+  if (view === "question") {
+    return [...eventsFor("a"), at(EventTypes.QuestionAsked, { kind: "agent", questionId: "q_invoice", toName: "Márcio Martins", to: YOU,
+      prompt: "Should the Invoice option stay hidden on monthly plans, or show disabled with a note?" }, RUN_ID, 0.2)];
+  }
+  const runs = overviewRuns(view);
+  const out = [created, ...runs.map((r) => at(EventTypes.RunCreated, { phase: r.phase, role: r.role, ...(r.category ? { category: r.category } : {}) }, r.id, (Date.now() - Date.parse(r.createdAt)) / MIN, dude))];
+  out.push(at(EventTypes.PullRequestOpened, { number: 482, repo: "example/web-console", url: PULL_REQUEST.url, title: PULL_REQUEST.title }, null, 100));
+  if (view === "reviewing") {
+    out.push(
+      at(EventTypes.PlanUpdated, { todos: [{ content: "Read the split form state", status: "completed" }, { content: "Check retry of the payment step against concurrent submits", status: "in_progress" }, { content: "Report", status: "pending" }] }, "run_ov_quality", 3),
+      at(EventTypes.ToolCalled, { tool: "bash", callId: "c_sec", title: "rg -n \"invoice\" apps/web/src/checkout", input: { command: "rg -n invoice apps/web/src/checkout" } }, "run_ov_security", 1),
+    );
+  }
+  if (view === "ready") out.push(at("pull_request.reviewed", { number: 482, repo: "example/web-console", author: "tom-okafor", state: "APPROVED" }, null, 9));
+  return out.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt)).map((e, i) => ({ ...e, cursor: 30_000 + i }));
+}

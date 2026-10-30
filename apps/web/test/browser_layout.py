@@ -5,7 +5,7 @@ happy-dom does not lay out, so this needs Chrome.
 Against the fixture client; no backend or external network required.
 
 Run with: python3 apps/web/test/browser_layout.py
-Requires installed Playwright and system Chrome.
+Requires installed Playwright and system Chrome (DUDE_TEST_BROWSER_CHANNEL= for Playwright's Chromium).
 """
 import os
 import unittest
@@ -60,7 +60,9 @@ class PageHoldsStill(unittest.TestCase):
         cls.addClassCleanup(stop_vite, cls.server)
         cls.playwright = sync_playwright().start()
         cls.addClassCleanup(cls.playwright.stop)
-        cls.browser = cls.playwright.chromium.launch(channel="chrome", headless=True)
+        # System Chrome, as CI's e2e runs; DUDE_TEST_BROWSER_CHANNEL set but empty is Playwright's bundled Chromium (tests/helpers.py).
+        channel = os.environ.get("DUDE_TEST_BROWSER_CHANNEL", "chrome")
+        cls.browser = cls.playwright.chromium.launch(**({"channel": channel} if channel else {}), headless=True)
         cls.addClassCleanup(cls.browser.close)
 
     def page_overflow(self, scenario, box):
@@ -83,24 +85,41 @@ class PageHoldsStill(unittest.TestCase):
         # The rail's terminal link says, in an sr-only word, that it opens a new tab.
         self.assertEqual(self.page_overflow("a", ".runRail"), 0)
 
-    def test_relations_metrics_and_timeline_fill_the_rail_pages_main_column(self):
+    def test_the_overview_fills_its_pane_and_its_folds_their_box(self):
+        # Overview has no rail: two columns once its own pane is 1000px wide, one below; its
+        # figures spread evenly across the summary, and relations, the full metrics, the goal
+        # and each criterion, opened, span their fold.
         context = self.browser.new_context(viewport={"width": 1920, "height": 1200}, service_workers="block")
         self.addCleanup(context.close)
         page = context.new_page()
-        page.goto(f"{URL}/?fixtures=d#/task/{TASK}/overview")
+        page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+        page.get_by_test_id("overview-summary").wait_for()
+        for fold in ("time-cost", "goal-criteria", "relations"):
+            page.get_by_test_id(f"overview-{fold}").evaluate("d => { d.open = true; }")
         page.get_by_test_id("task-metrics").wait_for()
+        columns = page.evaluate("""() => {
+          const grid = document.querySelector('.overviewGrid');
+          return getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+        }""")
+        self.assertEqual(columns, 2)
+        self.assertIsNone(page.query_selector("[data-testid=task-overview] .railPanel, [data-testid=task-overview] [aria-label='Pull requests, machines and servers']"))
         widths = page.evaluate("""() => {
-          const relations = document.querySelector('[data-testid=relations]');
-          const tiles = [...document.querySelectorAll('[data-testid=task-metrics] [class*="_group_"] > div')];
+          const tiles = [...document.querySelectorAll('[data-testid=overview-summary] > div')];
           const group = tiles[0].parentElement;
+          const relations = document.querySelector('[data-testid=relations]');
+          const metrics = [...document.querySelectorAll('[data-testid=task-metrics] [class*="_group_"] > div')];
           return { relations: relations.getBoundingClientRect().width, parent: relations.parentElement.getBoundingClientRect().width,
-            group: group.getBoundingClientRect().width, tiles: tiles.map(t => t.getBoundingClientRect().width),
-            right: tiles.at(-1).getBoundingClientRect().right, edge: group.getBoundingClientRect().right };
+            tiles: tiles.map(t => t.getBoundingClientRect().width), right: tiles.at(-1).getBoundingClientRect().right,
+            edge: group.getBoundingClientRect().right,
+            metricTiles: metrics.map(t => t.getBoundingClientRect().width),
+            metricsRight: metrics.at(-1).getBoundingClientRect().right, metricsEdge: metrics[0].parentElement.getBoundingClientRect().right };
         }""")
         self.assertGreater(widths["parent"], 820)
         self.assertAlmostEqual(widths["relations"], widths["parent"], delta=1)
         self.assertAlmostEqual(widths["right"], widths["edge"], delta=1)
         self.assertLess(max(widths["tiles"]) - min(widths["tiles"]), 1)
+        self.assertAlmostEqual(widths["metricsRight"], widths["metricsEdge"], delta=1)
+        self.assertLess(max(widths["metricTiles"]) - min(widths["metricTiles"]), 1)
         # The Goal's and each criterion's Markdown span their box: no measure cap stops them short.
         markdown = page.evaluate("""() => {
           const content = (el) => { const s = getComputedStyle(el);
@@ -127,6 +146,69 @@ class PageHoldsStill(unittest.TestCase):
         }""")
         self.assertGreater(sizes[1], 820)
         self.assertAlmostEqual(sizes[0], sizes[1], delta=1)
+
+    def test_the_overview_is_two_columns_at_desktop_sizes(self):
+        # Brackets the pane's 1000px threshold from above: 1440 (pane 1140) and 1920 (pane 1620) are two columns.
+        for width, height in ((1440, 900), (1920, 1200)):
+            context = self.browser.new_context(viewport={"width": width, "height": height}, service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+            page.get_by_test_id("overview-summary").wait_for()
+            at = page.evaluate("""() => ({
+              columns: getComputedStyle(document.querySelector('.overviewGrid')).gridTemplateColumns.split(' ').length,
+              pane: document.querySelector('.taskOverviewPane').getBoundingClientRect().width })""")
+            self.assertGreaterEqual(at["pane"], 1000, f"{width}: {at}")
+            self.assertEqual(at["columns"], 2, f"{width}: {at}")
+
+    def test_the_overview_raises_its_regions_with_a_shadow_in_light_theme(self):
+        context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+        page.get_by_test_id("overview-summary").wait_for()
+        page.evaluate("() => document.documentElement.setAttribute('data-theme', 'light')")
+        shadows = page.evaluate("""() => ({
+          token: getComputedStyle(document.documentElement).getPropertyValue('--ds-shadow-1').trim(),
+          regions: [...document.querySelectorAll('.overviewRegion')].map(r => getComputedStyle(r).boxShadow) })""")
+        self.assertNotEqual(shadows["token"], "")
+        self.assertGreater(len(shadows["regions"]), 0)
+        for shadow in shadows["regions"]:
+            self.assertNotEqual(shadow, "none", shadows)
+
+    def test_the_overview_stacks_when_its_pane_is_narrow_and_never_overflows_a_phone(self):
+        # 1280 with the sidebar open leaves a 980px pane: just under the threshold, one column.
+        for width, height in ((1280, 900), (1100, 900), (390, 844)):
+            context = self.browser.new_context(viewport={"width": width, "height": height}, service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+            page.get_by_test_id("overview-summary").wait_for()
+            at = page.evaluate("""() => ({
+              columns: getComputedStyle(document.querySelector('.overviewGrid')).gridTemplateColumns.split(' ').length,
+              overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+              pane: document.querySelector('.taskOverviewPane').getBoundingClientRect().width })""")
+            # At 1280 and 1100 the sidebar leaves the pane under 1000px: the pane decides, not the window.
+            self.assertLess(at["pane"], 1000, f"{width}: {at}")
+            self.assertEqual(at["columns"], 1, f"{width}: {at}")
+            self.assertEqual(at["overflow"], 0, f"{width}: {at}")
+
+    def test_the_overview_tightens_in_compact_density(self):
+        # Main-pane padding and the panel gap follow the density table: 24 → 12 and 24 → 16.
+        seen = {}
+        for density in ("comfortable", "compact"):
+            context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+            page.get_by_test_id("overview-summary").wait_for()
+            page.evaluate("d => document.documentElement.setAttribute('data-density', d)", density)
+            seen[density] = page.evaluate("""() => {
+              const o = getComputedStyle(document.querySelector('.taskOverview'));
+              return { pad: o.paddingLeft, gap: o.rowGap, grid: getComputedStyle(document.querySelector('.overviewGrid')).columnGap };
+            }""")
+        self.assertEqual(seen["comfortable"], {"pad": "24px", "gap": "24px", "grid": "24px"}, seen)
+        self.assertEqual(seen["compact"], {"pad": "12px", "gap": "16px", "grid": "16px"}, seen)
 
     def test_rail_notes_use_muted_ink(self):
         context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")

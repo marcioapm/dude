@@ -27,12 +27,14 @@ import { ImagesGallerySection } from "./sections/Images.tsx";
 import { WelcomeSection } from "./sections/Welcome.tsx";
 import { StartingSection } from "./sections/Starting.tsx";
 import { PageRailSection } from "./sections/PageRails.tsx";
+import { OverviewSection } from "./sections/Overview.tsx";
 import { AccountsSection } from "./sections/Accounts.tsx";
 import { AutomationsSection } from "./sections/Automations.tsx";
 import { ChatProvidersSection } from "./sections/ChatProviders.tsx";
 
 const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
   ["Page rails", [["rail-populated", "Layout + facets"], ["rail-empty", "Empty"], ["rail-narrow", "Narrow controls"]]],
+  ["Task overview", [["ov-running", "RunningRow"], ["ov-disclosure", "Disclosure"], ["ov-states", "Overview states · costs"], ["ov-phone", "Phone"]]],
   ["App shell", [["shell-session", "Sidebar + transcript"]]],
   [
     "Welcome",
@@ -269,6 +271,8 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     "People's feedback",
     [
       ["fb-diff", "Commenting on a diff"],
+      ["fb-marks", "Comment marks on a branch review"],
+      ["fb-branch-states", "Branch review state matrix"],
       ["fb-cards", "FeedbackCard"],
       ["fb-editor", "CommentEditor"],
       ["fb-tray", "DraftsTray / Submit"],
@@ -444,6 +448,7 @@ function Shell() {
           <ServersSection mode={panes} />
           <BrainstormSection mode={panes} />
           <PageRailSection mode={panes} />
+          <OverviewSection mode={panes} />
           <AccountsSection mode={panes} />
           <ChatProvidersSection mode={panes} />
         </PaneDensityContext.Provider>

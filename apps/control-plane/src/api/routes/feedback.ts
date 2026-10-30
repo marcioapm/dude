@@ -12,7 +12,8 @@
 
 import {
   FEEDBACK_LIMITS, feedbackDraftSchema, feedbackReopenSchema, feedbackReplySchema, feedbackResolveSchema, feedbackSubmitSchema,
-  newId, type FeedbackAnchor, type FeedbackAnchorInput, type FeedbackCodeAnchor, type FeedbackExcerptLine, type RunDiffFile,
+  newId, type FeedbackAnchor, type FeedbackAnchorInput, type FeedbackBranchAnchor, type FeedbackCodeAnchor, type FeedbackExcerptLine,
+  type RunDiffFile,
 } from "@dude/domain";
 import { SQL } from "bun";
 import type { ZodType } from "zod";
@@ -117,17 +118,53 @@ function anchorRefused(err: unknown): never {
  * diff (a Run of this task's current attempt), a preview's attachment must
  * be this person's upload on this task.
  */
-async function buildAnchor(scope: OrgScope, task: TaskRow, person: string, input: FeedbackAnchorInput):
-    Promise<{ kind: FeedbackAnchor["kind"]; runId: string | null; anchor: FeedbackAnchor }> {
-  if (input.kind === "general") return { kind: "general", runId: null, anchor: { kind: "general" } };
+interface BuiltAnchor { kind: FeedbackAnchor["kind"]; runId: string | null; snapshotId: string | null; anchor: FeedbackAnchor }
+
+/**
+ * A branch anchor, read from the stored snapshot (task_branch_snapshots)
+ * as a Run's is from its diff: a snapshot of this task's current attempt
+ * (an earlier attempt's is read-only), of the repository named if one is,
+ * at the checksum the person read, and lines that are one range of the
+ * file's diff on that side.
+ */
+async function buildBranchAnchor(scope: OrgScope, task: TaskRow, input: Extract<FeedbackAnchorInput, { scope: "branch" }>):
+    Promise<BuiltAnchor> {
+  const [snap] = (await scope.sql`
+    SELECT s.attempt, s.repository, s.target_ref AS "targetRef", s.merge_base_sha AS "mergeBaseSha", s.head_sha AS "headSha",
+      s.files, s.checksum
+    FROM task_branch_snapshots s WHERE s.id = ${input.snapshotId} AND s.task_id = ${task.id}`) as Array<{
+      attempt: number; repository: string; targetRef: string; mergeBaseSha: string; headSha: string; files: RunDiffFile[]; checksum: string }>;
+  if (!snap) throw badRequest(`snapshot ${input.snapshotId} is not a branch snapshot of this task`);
+  if (snap.attempt !== task.attempt) throw conflict(`snapshot ${input.snapshotId} is of attempt ${snap.attempt}, which is read-only`);
+  if (input.repository !== undefined && input.repository !== snap.repository) {
+    throw badRequest(`snapshot ${input.snapshotId} is of ${snap.repository}, not ${input.repository}`);
+  }
+  if (input.diffChecksum !== snap.checksum) {
+    throw conflict(`snapshot ${input.snapshotId} is not the diff you read (its checksum differs): read it again`);
+  }
+  const file = snap.files.find((f) => f.path === input.path);
+  if (!file) throw badRequest(`${input.path} is not in snapshot ${input.snapshotId}`);
+  const excerpt = excerptOf(file, input.side, input.startLine, input.endLine);
+  if (!excerpt) throw badRequest(`lines ${input.startLine}-${input.endLine} (${input.side}) are not one range of ${input.path}'s diff`);
+  const anchor: FeedbackBranchAnchor = {
+    kind: "code", scope: "branch", snapshotId: input.snapshotId, attempt: snap.attempt, repo: snap.repository, path: input.path,
+    side: input.side, startLine: input.startLine, endLine: input.endLine, baseSha: snap.mergeBaseSha, headSha: snap.headSha,
+    targetRef: snap.targetRef, diffChecksum: snap.checksum, excerpt,
+  };
+  return { kind: "code", runId: null, snapshotId: input.snapshotId, anchor };
+}
+
+async function buildAnchor(scope: OrgScope, task: TaskRow, person: string, input: FeedbackAnchorInput): Promise<BuiltAnchor> {
+  if (input.kind === "general") return { kind: "general", runId: null, snapshotId: null, anchor: { kind: "general" } };
   if (input.kind === "preview") {
     if (input.attachmentId) {
       const [att] = (await scope.sql`SELECT 1 FROM attachments
         WHERE id = ${input.attachmentId} AND task_id = ${task.id} AND uploaded_by = ${person}`) as unknown[];
       if (!att) throw badRequest(`attachment ${input.attachmentId} is not one you uploaded to this task`);
     }
-    return { kind: "preview", runId: null, anchor: input };
+    return { kind: "preview", runId: null, snapshotId: null, anchor: input };
   }
+  if (input.scope === "branch") return buildBranchAnchor(scope, task, input);
   const [run] = (await scope.sql`
     SELECT r.status::text AS status, r.attempt, r.base_shas AS "baseShas", r.heads, d.base, d.files, d.checksum
     FROM runs r LEFT JOIN run_diffs d ON d.run_id = r.id
@@ -165,7 +202,7 @@ async function buildAnchor(scope: OrgScope, task: TaskRow, person: string, input
     kind: "code", runId: input.runId, repo, path, side: input.side, startLine: input.startLine, endLine: input.endLine,
     baseSha: run.baseShas?.[specRepo] ?? run.base ?? "", headSha: head, diffChecksum: run.checksum, excerpt,
   };
-  return { kind: "code", runId: input.runId, anchor };
+  return { kind: "code", runId: input.runId, snapshotId: null, anchor };
 }
 
 async function list(ctx: RequestContext): Promise<Response> {
@@ -203,9 +240,10 @@ async function createDraft(ctx: RequestContext): Promise<Response> {
     const built = await buildAnchor(scope, task, person, input.anchor);
     const [row] = await scope.sql`
       WITH f AS (
-        INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, run_id, anchor)
+        INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, run_id,
+                                    branch_snapshot_id, anchor)
         VALUES (${newId("feedbackItem")}, ${scope.organizationId}, ${taskId}, ${task.attempt}, ${person}, ${input.body},
-                ${built.kind}, ${built.runId}, ${built.anchor}::jsonb)
+                ${built.kind}, ${built.runId}, ${built.snapshotId}, ${built.anchor}::jsonb)
         RETURNING *)
       SELECT ${scope.sql.unsafe(ITEM_SELECT)} FROM f`.catch(anchorRefused);
     return row;
@@ -235,7 +273,7 @@ async function updateDraft(ctx: RequestContext): Promise<Response> {
     const [row] = await scope.sql`
       WITH f AS (
         UPDATE feedback_items SET body = ${input.body}, anchor_kind = ${built.kind}, run_id = ${built.runId},
-          anchor = ${built.anchor}::jsonb, updated_at = now()
+          branch_snapshot_id = ${built.snapshotId}, anchor = ${built.anchor}::jsonb, updated_at = now()
         WHERE id = ${id} AND author_person_id = ${person} AND status = 'draft'
         RETURNING *)
       SELECT ${scope.sql.unsafe(ITEM_SELECT)} FROM f`.catch(anchorRefused);

@@ -3,6 +3,7 @@ package delivery_test
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -587,5 +588,113 @@ func TestTheFixPromptCarriesTheOriginalWords(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the fix prompt lacks %q", want)
 		}
+	}
+}
+
+// An item on a task branch snapshot (anchor scope "branch", migration 230)
+// goes the way a Run-anchored one does: submitted once for its key, routed
+// to who drives, holding the merge until it is resolved — by an agent's
+// commit in the anchor's repository, held once published — and its fix
+// prompt quotes the snapshot's lines at its committed head.
+func TestABranchAnchoredItemIsSubmittedHeldAndResolvedLikeAnyOther(t *testing.T) {
+	w := newFeedbackWorld(t)
+	w.delivery(t, "awaitFix", "policy", `["phase.finished"]`)
+	ref := w.run(t, "run_fix", "ABS-1", "fix", "implementer", "running")
+	w.exec(t, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
+		('repo_'||$1, $1, $2, 'api', 'https://github.com/acme/api'), ('repo_w'||$1, $1, $2, 'web', 'https://github.com/acme/web')`, w.org, w.project)
+	w.exec(t, `INSERT INTO task_repositories (task_id, repository_id, organization_id, access) VALUES
+		($1, 'repo_'||$2, $2, 'write'), ($1, 'repo_w'||$2, $2, 'write')`, w.task, w.org)
+	head := strings.Repeat("c", 40)
+	w.exec(t, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref, target_ref,
+			target_sha, merge_base_sha, head_sha, files, checksum, stats, relation)
+		VALUES ('tbs_1', $1, $2, 1, 'repo_'||$1, 'api', 'dude/x/attempt-1', 'main', $3, $3, $4, '[]', 's1', '{}', 'initial')`,
+		w.org, w.task, strings.Repeat("b", 40), head)
+	anchor, err := os.ReadFile("../../../packages/domain/test/branch-feedback-anchor.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.exec(t, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
+		VALUES ('fbi_branch', $1, $2, 1, $3, 'Use the rate table, not a literal.', 'code', 'tbs_1', $4::jsonb)`,
+		w.org, w.task, w.ana, string(anchor))
+
+	first, err := w.submit(t, w.ana, "k-branch", "fbi_branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := w.submit(t, w.ana, "k-branch", "fbi_branch")
+	if err != nil || again.BatchID != first.BatchID || !again.Repeated {
+		t.Fatalf("the same key again: %+v %v", again, err)
+	}
+	if first.RoutedTo != "steer" || first.RunID != "run_fix" {
+		t.Errorf("routed %+v, want the working fixer steered", first)
+	}
+	blocking := func() int {
+		var n int
+		w.in(t, func(tx pgx.Tx) (err error) {
+			n, err = delivery.BlockingFeedbackTx(context.Background(), tx, w.task, 0)
+			return err
+		})
+		return n
+	}
+	if n := blocking(); n != 1 || w.status(t, "fbi_branch") == "draft" {
+		t.Fatalf("submitted: %d blocking, status %s", n, w.status(t, "fbi_branch"))
+	}
+
+	// The fix prompt quotes the snapshot's lines at its committed head, never as a Run's uncommitted work.
+	var items []delivery.FeedbackItem
+	w.in(t, func(tx pgx.Tx) (err error) {
+		items, err = delivery.FeedbackItemsTx(context.Background(), tx, w.task, []string{"fbi_branch"})
+		return err
+	})
+	got := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{Title: "T", Feedback: items, CLI: true})
+	for _, want := range []string{"On `api/src/vat.ts:11 (new side)` at commit cccccc", "+  const rate = 0.23;", "> Use the rate table, not a literal."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the fix prompt lacks %q", want)
+		}
+	}
+	if strings.Contains(got, "uncommitted work") {
+		t.Error("a branch item quoted as uncommitted work")
+	}
+
+	// Resolved by the fixer: the commit is in the anchor's repository, another is refused.
+	var fe delivery.FeedbackError
+	err = w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		_, err := delivery.AgentResolveTx(context.Background(), tx, ref, delivery.Resolution{ItemID: "fbi_branch", Commit: "abcdef1234", Repo: "web"})
+		return err
+	})
+	if !errors.As(err, &fe) || fe.Kind != "bad_request" {
+		t.Errorf("resolving in another repository: %v", err)
+	}
+	var repo string
+	w.in(t, func(tx pgx.Tx) (err error) {
+		repo, err = delivery.AgentResolveTx(context.Background(), tx, ref, delivery.Resolution{ItemID: "fbi_branch", Commit: "abcdef1234"})
+		return err
+	})
+	if repo != "api" {
+		t.Errorf("resolved in %q, want the anchor's api", repo)
+	}
+	if n := blocking(); n != 1 {
+		t.Fatalf("resolved, unpublished: %d blocking, want 1", n)
+	}
+	w.in(t, func(tx pgx.Tx) error {
+		return delivery.SettleResolutionsTx(context.Background(), tx, w.org, "run_fix", map[string]bool{"fbi_branch": true})
+	})
+	if n := blocking(); n != 0 || w.status(t, "fbi_branch") != "resolved" {
+		t.Errorf("published: %d blocking, status %s", n, w.status(t, "fbi_branch"))
+	}
+	// A person reopens it, and resolves it again: the history keeps each.
+	act := delivery.PersonAction{Org: w.org, ItemID: "fbi_branch", Person: w.bo, Body: "Not yet",
+		Writer: delivery.Writer{ActorType: "person", ActorID: w.bo, Person: w.bo}}
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.PersonReopenTx(context.Background(), tx, &noStarter{}, act)
+		return err
+	})
+	if n := blocking(); n != 1 {
+		t.Errorf("reopened: %d blocking", n)
+	}
+	act.Body = ""
+	w.in(t, func(tx pgx.Tx) error { return delivery.PersonResolveTx(context.Background(), tx, act) })
+	if n := blocking(); n != 0 || w.count(t, `SELECT count(*) FROM feedback_replies WHERE item_id = 'fbi_branch'`) != 3 {
+		t.Errorf("resolved again: %d blocking", n)
 	}
 }

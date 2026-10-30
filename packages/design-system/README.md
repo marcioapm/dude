@@ -23,15 +23,21 @@ The operator has one screen, many agents, and five questions: **what is
 running, what is stuck, what needs me, what did it cost, what did the agent
 do**. Every decision below serves those questions.
 
-The screen they have open all day is the **chat transcript** of an agent
-session (`ChatTranscript` and friends): the agent's narrative, its tool calls, the
-subagents it delegates to, its plan, and the composer through which a human
-answers or steers. Beside it, always, is the **sidebar** (`Sidebar`,
-`NavTree`): what exists, what is active, what needs a person, who is on
-what. Selecting a project or an epic there opens the **board** (`Board`)
-in place of the transcript: the same tasks by lifecycle lane. The
-event ledger (`EventRow`) and `LogStream` are the debugging and audit tools
-behind all of these, reached when something looks off.
+Selecting a task opens its **Overview**, for conductor and policy tasks
+alike: a concise operational summary of recorded state, attention, active
+work, PR health, branch changes and task spend. Explicit transcript,
+session, attention and question links still open their named destination.
+Overview is the first task tab and Changes the second; Chat, Findings,
+Sessions, Feedback, Files, Servers and Activity remain available.
+Agent-session transcripts retain their current grammar: the **chat
+transcript** of an agent session (`ChatTranscript` and friends) is the
+agent's narrative, its tool calls, the subagents it delegates to, its plan,
+and the composer through which a human answers or steers. Beside it,
+always, is the **sidebar** (`Sidebar`, `NavTree`): what exists, what is
+active, what needs a person, who is on what. Selecting a project or an
+epic there opens the **board** (`Board`): the same tasks by lifecycle
+lane. The event ledger (`EventRow`) and `LogStream` are the debugging and
+audit tools behind all of these, reached when something looks off.
 
 1. **Calm under load.** Readable is the goal; noise is the enemy. Readable
    means 15px UI body, 16/22px transcript text, 1.5 for long-form Markdown,
@@ -1090,7 +1096,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 ### Board (the overview)
 
 - `Board` is what the main pane shows when the sidebar selection is a
-  project or an epic; a task or agent session opens the transcript. It takes
+  project or an epic; a task opens its Overview, and an agent session its
+  transcript. It takes
   the same `NavProject` / `NavEpic` the sidebar takes — `boardScope` maps a
   `NavRef` to one or the other — so the two can never disagree about what
   exists or what needs you.
@@ -1363,6 +1370,29 @@ here.
   transcript's edge. Inside it every row starts on the column and insets
   its glyph 8px, so a thought, an event and a tool call line up.
 - The task Sessions selector anchors under the header and sizes to the viewport.
+- **A session's Changes is not the task's.** A session's Changes remains
+  its checkout against its recorded starting commit and may include
+  unpublished work. Task Changes reviews one repository of one attempt's
+  cumulative committed branch, as a pinned snapshot whose base is
+  merge-base(target, head) recomputed at every capture. The diff starts
+  directly under the tabs: one `chrome` toolbar row holds the repository
+  `Select` (more than one repository), `Segmented size="toolbar"` Branch ·
+  Pending work, the snapshot as a mono line *main 2be91c7…7ac42e1 · 3 files
+  +18 −2* that opens its details (target, merge base, head, checksum,
+  source, as-of, published PR head, uncommitted work excluded), a neutral
+  *PR at 5f891b4* mark whenever the published PR head differs, the file
+  filter, General feedback, and LiveDiff's own Unified / Split through
+  `toolbarIn` with `scopeLabel={null}`. No heading or card above the diff.
+  A new snapshot is one slim neutral line under the bar naming what
+  happened (new commits, target merged in with the base move, or
+  rewritten), with Refresh, refused with its reason while an editor holds
+  unsaved text. On a phone the bar wraps to two rows. Pending session work
+  is a separate choice, never merged in. The snapshot line, the *PR at*
+  mark and the slim line are a screen composition in `apps/web`, not DS
+  primitives: `Button` has no quiet inline mono face (its variants are
+  labelled actions at control height), and a one-off variant for one bar
+  would not be shared; the snapshot line and mark are bare buttons in the
+  bar's mono text with the DS focus ring and hover wash.
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
   agent session started from, uncommitted work included. Its toolbar reads
   *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
@@ -1947,7 +1977,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   (or `"for this session"`): the arrow and words follow the spec and are in
   its accessible name. The tooltip names the requesting Run, role, time and
   reason, the settings' size, and where Reset is available. No approval or price.
-- **MachineRaises** is the Overview aside's Machines panel, on the chrome
+- **MachineRaises** is the Machines panel in the Overview's "Servers,
+  previews & machines" disclosure, on the chrome
   shade in ServersSummary's grammar. Controlled `raises` carry role, label,
   size, settings, detail and optional `onReset`/`busy`. A following role
   (`follows="implementer"`) has no independent Reset. Empty draws nothing;
@@ -2551,12 +2582,16 @@ MarkdownCheatsheet.
   it changes (the rules are under *Agent sessions*): files with status and
   counts, sticky file headers, Unified / Split (`splitRows` pairs each
   removed run with the added run after it), fresh lines flashing, Follow
-  the agent, `leading` for the page's controls first in its toolbar, `toolbarIn` to draw its controls into a bar the page keeps mounted,
+  the agent, `leading` for the page's controls first in its toolbar, `toolbarIn` to draw its controls into a bar the page keeps mounted (its
+  Segmented then at `toolbar` size), `scopeLabel` to replace the *Since*
+  summary (null when the page shows its own), `filteredOut` for commented
+  files a page filter hides, `listNote` for the line under the file list,
   `lastChange` as `{ face, tool, path, when }` (the face stays whole; the
   tool gives way before the file name), `onOpenFile` for the viewer,
   `selected` / `onSelectedChange`
   to pick the file shown alone from outside, `fileList={false}` for one
-  file on its own, and `commenting` for people's feedback on its lines (see
+  file on its own, and `commenting` for people's feedback on its lines,
+  with `fileComments` / `onFileComments` for the comment mark (see
   *People's feedback*).
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
@@ -2583,7 +2618,8 @@ MarkdownCheatsheet.
   the row's end. Under 560px each repository's refs and Done without take
   their own lines.
 - **BeforePullRequestFact**: a task's delivery choice that can still
-  change, under the task's facts in the Overview rail. The owner gets a
+  change, under the task's facts in the Overview's "Servers, previews &
+  machines" disclosure. The owner gets a
   compact `Select` with when it is read ("Read when Deliver reaches the
   pull request."). Once a pull request is open it is disabled, with the
   reason under it: "The pull request is already open." Anyone else reads
@@ -2856,6 +2892,27 @@ scrolling; the layout imposes no fixed height or independent width cap. In a
 flex-column host it grows to the remaining height, so the desktop rail's shade
 reaches the foot of the page however short its blocks are.
 
+`Disclosure` is a section folded on the chrome shade, opened in place: a
+real `<details>` whose summary is a chevron, the `title` and a muted
+tabular `meta` ("6 criteria"), over a body at its full length, labelled
+by the title as a region. Uncontrolled (`defaultOpen`) or controlled
+(`open`, `onOpenChange`, said once per change); `lazy` mounts the body only
+while open. No border, no radius: structure is square. For the details
+under a page's summary, never for what someone must see to act.
+`SettingsDisclosure` stays the settings pages' (320px scroll, "Show").
+
+`RunningRow` is one agent at work now, in a `RunningList` named for
+assistive technology ("Running now"): `avatar` (an `AgentAvatar` with
+`live`), `label`, `detail` (model · status), `activity` (its plan's
+current step or latest tool call, as recorded: never a summary made up for
+the row), `cost` (a `Cost`; omitted when not reported, never $0.00),
+`elapsed` (a live `Duration`) and `action` (Open session, named for the
+Run). Rows are told apart by space, not frames; the figures and the action
+wrap under the words when the row is narrow. Gallery `#ov-running`,
+`#ov-disclosure`, `#ov-states` (active, needs you, ready, not started,
+ended; costs settling, zero, missing) and `#ov-phone`, in both themes and
+densities.
+
 Rail pages pass `RelationList wide` and `Timeline wide` to remove their default
 820px measure, and `MetricGroup joined fill` to spread tiles evenly across the
 main column; callers without those props keep their existing measure.
@@ -2879,10 +2936,27 @@ disabled, interactive focus and action states in both themes and densities.
 
 ### Task tab data mapping
 
-The app opts Overview, Findings, Files and Activity into `PageWithRail`; Servers
+Overview does not reserve the permanent 360px PageWithRail column. Its
+operational group aligns Running now and Changes beside PullRequestPanel:
+two columns when the Overview's own pane is ≥1000px; stacked below,
+without hiding controls (a container query on that pane, `taskoverview`:
+the pane, not the window, decides, so with the sidebar open a 1280px
+window, whose pane is 980px, stacks).
+The sidebar keeps its existing width and responsive behavior. Summary
+precedes details in DOM and focus order. Task spend is prominent and
+labeled all attempts; selected-attempt cost and all detailed metrics
+remain available (a `Disclosure` holds the full Time & cost: every tile
+and the run table). Findings, Files, Servers and Activity retain existing
+rail rules. This is a deliberate Overview-only amendment, not a new shell.
+On Overview every task notice (escalation, stalled, held, blocked,
+stopped, lifecycle, the earlier attempt) renders in one region above the
+figures, the needs-you `Callout` (attention) first; raised regions on it
+(Running now, Changes) take `shadow-1` in light.
+
+The app opts Findings, Files and Activity into `PageWithRail`; Servers
 moves its serving-run facts and bulk actions into the same rail. PR panels retain
 checks, reviewers and permission-aware actions. Overview facts use the real task
-owner and decider and the header's selected attempt; cost stays in Time & cost.
+owner and decider and the header's selected attempt.
 Finding status/severity counts use all findings in the header-selected attempt,
 before composing filters. Status vocabulary is Open, Resolved, Superseded and
 Accepted (there is no separate dismissed status); Note is a severity. Expanded
@@ -2902,7 +2976,7 @@ including every attempt. Empty selections mean all; dimensions compose with AND,
 multiple values within one dimension with OR.
 
 A task that took over existing work says so with the components already
-here. Overview's "This task" block adds **Starts from**: "#12 Greet in
+here. Overview's "This task" block (under Servers, previews & machines) adds **Starts from**: "#12 Greet in
 Portuguese · `feature/greet` → `main`", the pull request a link to GitHub,
 or for a branch "`stack/top` → `stack/base`"; new work has no such line.
 Its pipeline starts at Review: no Implement step is drawn, not even as
@@ -2950,8 +3024,10 @@ Before dude answers, the overlay follows `prefers-color-scheme` and updates when
 
 
 `src/components/FeedbackCard.tsx`, and `LiveDiff`'s `commenting` prop.
-Gallery: *People's feedback* (`#fb-diff`, `#fb-cards`, `#fb-editor`,
-`#fb-tray`).
+Gallery: *People's feedback* (`#fb-diff`, `#fb-marks`, `#fb-branch-states`, `#fb-cards`, `#fb-editor`,
+`#fb-tray`). `#fb-branch-states` is representative component composition for
+populated, fast-forward, merged-target, rewritten, empty, preparing, unavailable,
+partial/truncated, binary and older-attempt branch review; apps own API reads.
 
 In the web app, commenting lives on the task page: a Run's Changes take
 comments when opened there, never on the standalone Run page.
@@ -2970,7 +3046,11 @@ comments when opened there, never on the standalone Run page.
   bar; while dragging a line under it says how many and the cap. What
   `renderAfterLine` returns sits on the chrome shade under that line —
   in Split, under that side's column — and a unified context line asks for
-  both its sides.
+  both its sides. `renderAfterLineFor(path)` gives `renderAfterLine` one
+  file at a time: return the same function while what goes under that
+  file's lines is unchanged, and none of its hunks is redrawn when another
+  file's comments change. When it is given, `renderAfterLine` is ignored;
+  an `undefined` return draws nothing under that file's lines.
 - **`FeedbackCard`** is one item: author, when, where its batch went, its
   status (`feedbackStatusSpec`: tone, glyph and words — never hue alone),
   and what it holds (`holds`: the merge, or, while a delivery is held
@@ -3000,6 +3080,26 @@ comments when opened there, never on the standalone Run page.
   and **Submit N…**. At `max` it says so. `submitRefused` turns Submit off
   with the API's reason. **`SubmitFeedbackDialog`** says what goes, where,
   and what it holds until handled; Keep as drafts, Submit N.
+- **Feedback on a task's branch.** Task branch snapshots use LiveDiff
+  commenting and the existing task feedback drafts, submission, routing
+  and merge-hold model. A file with any feedback (drafts and submitted,
+  anyone's, outdated included) carries a comment mark on its sticky header
+  and in the file list: the `message` glyph in secondary ink with a
+  tabular count, no tone; drafts, submitted and outdated are told apart in
+  its tooltip, in words. In the list the mark is a sibling button of the
+  file's entry in one row (a button cannot hold a button). Its name is
+  "3 comments on <path> — show next", while cycling "Comment 2 of 3 on
+  <path> — show next". Activating it shows the file (clearing a filter
+  that hides it; picking it when another is shown alone, which turns
+  Follow off) and moves focus to its next comment in line order, outdated
+  ones first under the file header, with a one-shot `ds-flash`; the mark
+  reads *2 / 3* while cycling and wraps. Commented files a filter hides
+  stay listed under "With comments, hidden by the filter" (`filteredOut`).
+  Branch anchors carry the snapshot id; on a later snapshot they follow
+  their lines only on an exact simple shift (`relocateCodeAnchor`),
+  otherwise they are outdated with their original excerpt, never silently
+  moved. Confirmation says where the batch goes and that holds apply to
+  merging from dude and marking done, not a fabricated GitHub review.
 - **Holding the merge is not needs-you.** Nothing here is attention-toned:
   an item waits on an agent or on its author, not on the reader.
 

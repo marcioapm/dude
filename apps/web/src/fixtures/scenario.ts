@@ -11,13 +11,15 @@ const KEY = "dude.fixtures";
 /**
  * The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted, stalled, refused; or peers, its epic's
  * agents coordinating; asks, two of the viewer's tasks waiting on them; machine moves: raised, refused-platform, refused-largest, refused-moves, conductor, session, start-over;
- * and a delivery held before its pull request: held, held-other, held-feedback, held-round-2.
+ * and a delivery held before its pull request: held, held-other, held-feedback, held-round-2;
+ * and the Overview's states: reviewing (two reviewers at work), question (an agent asks you), ready (ready to merge), new (not started).
  */
 export const RUN_KEY = `${KEY}.run`;
 
 /**
  * The scenario asked for: `?fixtures=b` (remembered), or what was remembered; `?fixtures=off` forgets. Null for the real API.
  * `?run=aborted` (failed, restarted, paused, preview, stalled, refused, peers, asks; `off` forgets) puts the task's run in that state, remembered too.
+ * `?branch=populated` (updated, rebased, empty, unavailable, preparing, older; `off` forgets) is the task branch's snapshot state.
  */
 export function fixtureScenario(): FixtureScenario | null {
   const params = new URLSearchParams(window.location.search);
@@ -32,8 +34,12 @@ export function fixtureScenario(): FixtureScenario | null {
   const fixtures = remember("fixtures", KEY);
   const run = remember("run", RUN_KEY);
   remember("step", "dude.fixtures.automationStep");
+  // The task's Changes (branch snapshot) state: fixtures/branchDiff.ts BRANCH_STATES.
+  const branch = remember("branch", "dude.fixtures.branch");
+  // Live sessions' checkout reads in Pending: populated, empty or error.
+  const checkout = remember("checkout", "dude.fixtures.checkout");
   // The parameters have done their work; the hash is the app's own.
-  if (fixtures || run) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+  if (fixtures || run || branch || checkout) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
   const stored = localStorage.getItem(KEY);
   return stored && (SCENARIOS as readonly string[]).includes(stored) ? (stored as FixtureScenario) : null;
 }

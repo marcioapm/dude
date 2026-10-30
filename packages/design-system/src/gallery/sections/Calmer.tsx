@@ -164,6 +164,11 @@ export function CalmerSection({ mode }: { readonly mode: PaneMode }) {
                 <PrChip key={s} pr={pr(s, 50 + i)} iconOnly size="sm" />
               ))}
             </Row>
+            <Label>As a mark inside a link (as="span": a pipeline step's state, the row being the link)</Label>
+            <Row>
+              <PrChip pr={pr("ci_red", 41)} as="span" size="sm" showNumber={false} />
+              <PrChip pr={pr("ready", 12)} as="span" size="sm" showNumber={false} />
+            </Row>
           </Col>
         </Panes>
       </Block>

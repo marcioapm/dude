@@ -25,3 +25,15 @@ test("the gallery's preview draft shows its picture and Show on preview, in each
     expect(card.querySelectorAll("[data-testid=fb-show-on-preview]").length).toBe(1);
   }
 });
+
+test("the branch review state matrix renders every approved state with marks", async () => {
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => root!.render(<TooltipProvider><PaneDensityContext.Provider value="both"><FeedbackSection mode="both" /></PaneDensityContext.Provider></TooltipProvider>));
+  const states = [...host.querySelectorAll<HTMLElement>("[data-testid=branch-state]")].map((x) => x.dataset["state"]);
+  for (const s of ["populated", "fast-forward", "merged-target", "rewritten", "empty", "preparing", "unavailable", "partial", "binary", "older"]) {
+    expect(states).toContain(s);
+  }
+  expect(host.querySelectorAll("[data-testid=branch-state] [data-testid=comment-mark]").length).toBeGreaterThan(0);
+});
