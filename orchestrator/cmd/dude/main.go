@@ -44,6 +44,8 @@
 //	dude agent start PROFILE [--prompt P] [--note N] [--tier T] [--key K]
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
 //	dude restart RUN NOTE [--tier T]      a conductor's: a fresh Run in its slot
+//	dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]
+//	                                      a conductor's: be woken once when it holds or at D
 //	dude decide ACTION [--note N]         a conductor's: the decision waited on
 //	dude finding dismiss ID --reason R    a conductor's: leave a finding as it is
 //	dude escalation decide ACTION [--note N]
@@ -653,6 +655,42 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("restart_run", map[string]any{"run": args[0], "note": strings.Join(args[1:], " "),
 			"tier": *tier}))
+	case "wait-for":
+		var runs, prs many
+		fs.Var(&runs, "run", "a Run of this task to wait on to end (repeatable)")
+		fs.Var(&prs, "pr", "a pull request (12 or repo#12) whose checks to wait on, @HEAD to pin a head (repeatable)")
+		deadline := fs.String("deadline", "", "required: a duration (45m, 2h) or a time, at most 24 hours ahead")
+		anyOne := fs.Bool("any", false, "wake on the first condition that holds, not all")
+		note := fs.String("note", "", "what you mean to do then, told back to you")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 0 || *deadline == "" {
+			return errors.New("usage: dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]")
+		}
+		body := map[string]any{"deadline": *deadline}
+		var conditions []any
+		if len(runs) > 0 {
+			conditions = append(conditions, map[string]any{"runsEnded": []string(runs)})
+		}
+		for _, p := range prs {
+			pr := map[string]any{"pr": p}
+			if name, head, ok := strings.Cut(p, "@"); ok {
+				pr["pr"], pr["head"] = name, head
+			}
+			conditions = append(conditions, map[string]any{"prChecksFinal": pr})
+		}
+		if len(conditions) > 0 {
+			body["conditions"] = conditions
+		}
+		if *anyOne {
+			body["wake"] = "any"
+		}
+		if *note != "" {
+			body["note"] = *note
+		}
+		return show(out, *asJSON, call("wait_for", body))
 	case "decide":
 		note := fs.String("note", "", "why; for ask_person, the question")
 		args, err := parse(fs, rest)
@@ -1110,6 +1148,10 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude restart RUN NOTE [--tier T]           a conductor's: restart a phase Run in its slot, fresh
                                              something, read at its next step (--interrupt stops
                                              its turn: only when its current work is wasted)
+  dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]
+                                             a conductor's: be woken once, when the Runs have ended or
+                                             the pull request's checks are final (or at D, at most 24h);
+                                             no conditions is a timer; end your turn after
   dude decide ACTION [--note N]              a conductor's: next, ask_person, wait or
                                              open_pull_request (after the person answered Open)
   dude finding dismiss ID --reason R         a conductor's: leave an open finding as it is

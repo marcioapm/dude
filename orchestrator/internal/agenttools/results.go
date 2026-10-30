@@ -8,6 +8,7 @@ var (
 	sessionAskResult        = delivery.MustText("results/session-ask")
 	requestRepositoryResult = delivery.MustText("results/request-repository")
 	waitResult              = delivery.MustText("results/wait-for-reply")
+	waitForResult           = delivery.MustText("results/wait-for")
 	findingsSettled         = delivery.MustText("results/findings-settled")
 	machineMoved            = delivery.MustText("results/machine-moved")
 	syncBaseResult          = delivery.MustText("results/sync-base")

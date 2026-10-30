@@ -38,6 +38,18 @@ Queued for the Run. You are woken when it has read it, or if it never will.
 
 The new Run starts fresh from the task's head in the same slot; the delivery waits for it. You are woken at the next decision.
 
+## wait-for
+
+End your turn now; you are woken once, when it holds or at 2026-10-30T14:45:00Z. dude's own wakes (decisions, escalations, child results) still come as they do; a new wait_for replaces this one.
+
+## wait-for-at-a-decision
+
+End your turn now; you are woken once, when it holds or at 2026-10-30T14:45:00Z. dude's own wakes (decisions, escalations, child results) still come as they do; a new wait_for replaces this one. The delivery still waits on your decision at after_review; waiting decides nothing.
+
+## wait-for-holds
+
+It holds already: carry on.
+
 ## publish
 
 lux pushes your checkout, then dude moves the task branch to it. You are woken when it is published, or why it was refused.

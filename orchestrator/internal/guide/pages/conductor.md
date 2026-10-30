@@ -1,6 +1,6 @@
 ---
 title: The conductor
-covers: [tool:start_phase, tool:start_agent, tool:start_agents, tool:read_run, tool:steer, tool:restart_run, tool:decide, tool:decide_escalation, tool:update_task, tool:publish]
+covers: [tool:start_phase, tool:start_agent, tool:start_agents, tool:read_run, tool:steer, tool:restart_run, tool:decide, tool:decide_escalation, tool:update_task, tool:publish, tool:wait_for]
 ---
 Every task has a conductor: an agent you talk to in the task's Chat. This page explains what it does, how it takes over a task's decisions, and how you steer, pause and resume agents.
 
@@ -63,6 +63,12 @@ You can **steer** any running agent: type a message to it in its Chat. It reads 
 The conductor can steer its task's running agents too, with `steer`, whoever decides. It is woken when the agent reads the message, or if it never will.
 
 To start an agent over instead, the conductor uses `restart_run`: a fresh Run of the same phase, from the task's current commit, told a note. The old Run's uncommitted work and its context are lost. It can put the new Run on another model tier.
+
+## Waiting for something
+
+When its next step waits on something, the conductor says what with `wait_for` and ends its turn: Runs of the task ending, a pull request's checks finishing on a head, or just a time. dude checks it in its own cycle, from what it already reads from lux and GitHub, and wakes the conductor once: when it holds, or at the deadline every wait has (at most 24 hours). The note it is woken with says what held, what did not and what else happened meanwhile.
+
+Waiting decides nothing. dude's other reasons to wake the conductor still come as they do: a decision, an escalation, a child agent's result. A wait ends when the task is closed or started over, when you stop the conductor, and when you pick a stopped task up with Try again.
 
 ## Pausing and resuming
 

@@ -33,6 +33,7 @@ const (
 	Conduct         Key = "conduct"
 	Cohorts         Key = "conduct.cohorts"
 	ChildInspect    Key = "conduct.inspect"
+	Wait            Key = "conduct.wait"
 	Session         Key = "session"
 	SessionName     Key = "session.name"
 	SessionAgents   Key = "session.agents"
@@ -101,6 +102,8 @@ var All = []Capability{
 			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
 	{Key: Cohorts, Description: "Start an atomic cohort of independent child agents and receive one completion digest.", Tools: []string{"start_agents"}},
 	{Key: ChildInspect, Description: "Inspect own in-task child Runs' stored results and bounded reports.", Tools: []string{"read_run"}},
+	{Key: Wait, Description: "Declare what you are waiting on — Runs ending, a pull request's checks finishing, a time — and be woken once when it holds or the deadline passes.",
+		Tools: []string{"wait_for"}},
 	{Key: Session, Description: "Propose tasks, relations and projects to link for a member to file.",
 		Tools: []string{"propose", "relate"}},
 	{Key: SessionName, Description: "Name the session, until a member names it.",
@@ -135,7 +138,7 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, Cohorts, ChildInspect, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, Cohorts, ChildInspect, Wait, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
 	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, RunsRead,
 		PRRefresh, SettingsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,

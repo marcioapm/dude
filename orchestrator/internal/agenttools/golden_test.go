@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -188,6 +189,9 @@ func TestGoldenToolResults(t *testing.T) {
 		{"wait-for-reply-came", replyCameNext},
 		{"steer", steerNext},
 		{"restart-run", restartNext},
+		{"wait-for", waitForNext(false, time.Date(2026, 10, 30, 14, 45, 0, 0, time.UTC), "")},
+		{"wait-for-at-a-decision", waitForNext(false, time.Date(2026, 10, 30, 14, 45, 0, 0, time.UTC), "after_review")},
+		{"wait-for-holds", waitForNext(true, time.Time{}, "")},
 		{"publish", publishNext},
 		{"update-task-relations", relationsWrittenNext},
 		{"update-task", taskUpdatedNext},
