@@ -77,8 +77,9 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"review-question-answered", reviewQuestionAnsweredLine("rvq_1", "In UTC.\nAlways.", false)},
 		{"review-question-withdrawn", reviewQuestionAnsweredLine("rvq_1", "the code is gone", true)},
 		{"base-moved", baseMovedLine("main", "GLD-8", 14)},
-		{"stalled", goldenStall().Text(ConductorOptions)},
-		{"stalled-quiet", goldenQuietStall().Text(ConductorOptions)},
+		{"stalled", goldenStall().Text(ConductorOptions(false))},
+		{"stalled-quiet", goldenQuietStall().Text(ConductorOptions(false))},
+		{"stalled-child", goldenStall().Text(ConductorOptions(true))},
 		{"note-one", WakeNote([]string{"A decision waits."})},
 		{"note-many", WakeNote([]string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"})},
 	})
