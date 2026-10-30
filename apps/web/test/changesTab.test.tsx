@@ -71,6 +71,8 @@ describe("the Changes tab: the branch", () => {
     expect(q(bar, "changes-scope")!.textContent).toBe("BranchPending work");
     expect(q(bar, "snapshot-line")!.textContent).toContain("main 2be91c7…7ac42e1");
     expect(q(bar, "snapshot-line")!.textContent).toContain("5 files");
+    // The pull request is at the branch head shown: no "PR at" mark.
+    expect(q(bar, "pr-mark") === null).toBe(true);
     // Unified / Split is LiveDiff's own, drawn into the bar.
     expect(q(bar, "diff-view")).not.toBeNull();
     expect(sections(tab)).toContain("src/checkout/PaymentStep.tsx");
@@ -224,6 +226,11 @@ describe("the Changes tab: a pinned snapshot and an explicit refresh", () => {
     expect(q(tab, "changes-newer")).toBeNull();
     expect(q(tab, "changes-refreshed")!.textContent).toContain("Now at 3e7a2b9 · base moved 2be91c7 → 8c1d0e4");
     expect(q(tab, "snapshot-line")!.textContent).toContain("8c1d0e4…3e7a2b9");
+    // The pull request is still at 7ac42e1: the mark says so, and the details tell whose checks they are.
+    expect(q(tab, "pr-mark")!.textContent).toBe("PR at 7ac42e1");
+    await click(q(tab, "pr-mark")!);
+    expect(q(tab, "snapshot-details")!.textContent).toContain("#482 head 7ac42e1");
+    expect(q(tab, "snapshot-details")!.textContent).toContain("not the branch head reviewed here: its checks apply to 7ac42e1");
   });
 
   test("a captured snapshot re-reads the page but never replaces the snapshot shown: only the notice comes", async () => {
