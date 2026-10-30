@@ -1,10 +1,14 @@
 package branchdiff_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/branchdiff"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
@@ -49,7 +53,7 @@ func TestPruneTakesEveryBatchOfABacklog(t *testing.T) {
 		left != "tbs_pr7" || steps != 7 {
 		t.Errorf("left %q with steps %d (%v), want tbs_pr7 over 7", left, steps, err)
 	}
-	if n, err := branchdiff.Prune(ctx, app); err != nil || n != 0 {
+	if n, err := branchdiff.Prune(ctx, app, nil); err != nil || n != 0 {
 		t.Errorf("a pass with nothing to prune: %d (%v)", n, err)
 	}
 }
@@ -127,5 +131,56 @@ func TestPruneReportsAFailure(t *testing.T) {
 	})
 	if n, err := branchdiff.PruneUpTo(ctx, app, 2); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("pruned %d with EXECUTE revoked: err %v, want permission denied", n, err)
+	}
+}
+
+// A pass over a backlog logs how many went and reports 0, so the loop
+// waits its interval instead of running a pass at once that finds nothing.
+func TestPruneLogsThePassAndReportsItDone(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	seedChain(t, owner, org, 4)
+	var out bytes.Buffer
+	n, err := branchdiff.Prune(ctx, app, slog.New(slog.NewTextHandler(&out, nil)))
+	if err != nil || n != 0 {
+		t.Errorf("a finished pass: %d (%v), want 0", n, err)
+	}
+	if !strings.Contains(out.String(), "branch snapshots pruned") || !strings.Contains(out.String(), "pruned=3") {
+		t.Errorf("log %q, want the 3 pruned", out.String())
+	}
+	var left int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM task_branch_snapshots`).Scan(&left); err != nil || left != 1 {
+		t.Errorf("left %d (%v), want the latest", left, err)
+	}
+}
+
+// seedChain records n snapshots of one lineage, a day apart, the newest
+// two days old.
+func seedChain(t *testing.T, owner *pgx.Conn, org string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_lg', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_lg', $1, 'prj_lg', 1, 'T', 'G')`,
+		`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_lg', $1, 'prj_lg', 'api', 'https://example.com/acme/api')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prev := any(nil)
+	for i := 1; i <= n; i++ {
+		id, rel := fmt.Sprintf("tbs_lg%d", i), "fast-forward"
+		if i == 1 {
+			rel = "initial"
+		}
+		if _, err := owner.Exec(ctx, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref,
+			target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, relation, previous_snapshot_id, captured_at)
+			VALUES ($1, $2, 'wi_lg', 1, 'repo_lg', 'api', 'dude/wi_lg', 'main', $3, $3, $4, '[]', 'c', '{}', $5, $6,
+			now() - make_interval(days => 2 + $7::int))`, id, org, fmt.Sprintf("%040x", 1), fmt.Sprintf("%040x", 200+i), rel, prev, n-i); err != nil {
+			t.Fatal(err)
+		}
+		prev = id
 	}
 }
