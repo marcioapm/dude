@@ -157,6 +157,12 @@ func parked(ctx context.Context, tx pgx.Tx, ref RunRef) (*Delivery, error) {
 // the check with them: a call from a conductor superseded since it was
 // authenticated is refused.
 func liveConductor(ctx context.Context, tx pgx.Tx, ref RunRef) error {
+	return liveConductorOr(ctx, tx, ref, rYouAreNoLongerThisTask)
+}
+
+// liveConductorOr is liveConductor refusing with refusal, a tool's own
+// words for "another took over".
+func liveConductorOr(ctx context.Context, tx pgx.Tx, ref RunRef, refusal string) error {
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
 		return err
 	}
@@ -166,7 +172,7 @@ func liveConductor(ctx context.Context, tx pgx.Tx, ref RunRef) error {
 		return err
 	}
 	if !live {
-		return refuseText(rYouAreNoLongerThisTask)
+		return refuseText(refusal)
 	}
 	return nil
 }

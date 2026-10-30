@@ -30,19 +30,8 @@ const (
 // conductor restarts one (restart_run); stopping a step is a person's.
 // Locks: Chat, then lockChild's order; nothing before Chat.
 func ConductStopRunTx(ctx context.Context, tx pgx.Tx, ref RunRef, runID, reason string) (string, error) {
-	// As ConductSteerFeedback: the Chat lock serialises the check with a
-	// conductor's end or replacement, so a superseded conductor's late call
-	// does nothing.
-	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
+	if err := liveConductorOr(ctx, tx, ref, rYouAreNoLongerThisTaskStop); err != nil {
 		return "", err
-	}
-	var live bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
-		AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
-		return "", err
-	}
-	if !live {
-		return "", refuseText(rYouAreNoLongerThisTaskStop)
 	}
 	var status string
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, ref.TaskID).Scan(&status); err != nil {
