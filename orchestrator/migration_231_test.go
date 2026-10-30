@@ -496,3 +496,22 @@ func TestPruneLetsWritersOnTheRewiredLatestGoAhead(t *testing.T) {
 		t.Errorf("h4: %q", got)
 	}
 }
+
+// A child whose own link already spans several captures adds them to its
+// pruned parent's: 3 over 2 reads as 5.
+func TestPruneAddsTheChildsSpanToTheParents(t *testing.T) {
+	f := newPruneFixture(t)
+	f.snap("k1", 1, "repo_api", 50, "", "initial", 1)
+	f.snap("m2", 1, "repo_api", 40, "k1", "fast-forward", 1)
+	f.snap("c3", 1, "repo_api", 30, "m2", "fast-forward", 1)
+	mustExec(t, f.owner, `UPDATE task_branch_snapshots SET steps = CASE id WHEN 'm2' THEN 2 ELSE 3 END WHERE id IN ('m2', 'c3')`)
+	mustExec(t, f.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
+		VALUES ('fbi_k1', $1, 'wi_p', 1, 'per_p', 'b', 'code', 'k1', '{}')`, f.org)
+	if n := f.prune(100); n != 1 {
+		t.Errorf("pruned %d, want 1", n)
+	}
+	f.want("k1", "c3")
+	if got := f.link("c3"); got != "k1 fast-forward 5" {
+		t.Errorf("c3: %q, want k1 fast-forward 5", got)
+	}
+}
