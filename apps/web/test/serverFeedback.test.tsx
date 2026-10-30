@@ -13,6 +13,7 @@ import { FixtureClient, emit, pagePreviewFeedback } from "../src/fixtures/client
 import { SERVERS_KEY } from "../src/fixtures/scenario.ts";
 import { ORG, PROJECT, TASK_ID } from "../src/fixtures/data.ts";
 import { ProjectServersScreen } from "../src/screens/ProjectServersScreen.tsx";
+import { FOLD_READ_MS } from "../src/screens/ServerFeedback.tsx";
 import { resetTabWindows } from "../src/serverWindows.ts";
 import { act, click, mount, settle, until } from "./dom.ts";
 
@@ -198,14 +199,49 @@ test("another server's events leave this fold as it is", async () => {
   const { container } = await page(client);
   const fold = await unfold(container, "run_pv_checkout/web");
   const before = client.preview;
+  const timers = foldTimers();
   await act(async () => emit({ eventType: EventTypes.PreviewFeedbackSubmitted, occurredAt: new Date().toISOString(), organizationId: ORG.id,
     projectId: PROJECT.id, taskId: null, runId: null, sessionId: null, workflowRunId: null, actor: { type: "person", id: "u_kai" },
     source: "control-plane", correlationId: null, causationId: null, payload: { feedbackId: "x", previewRunId: "run_pv_checkout", server: "admin", status: "open" } }));
-  // The same fold's matching event is the positive control: the listener really is live.
+  // A whole debounce window passes on its own: the sibling server's event read nothing.
+  await timers.advance();
+  expect(client.preview).toBe(before);
+  expect(tid(fold, "live-note")).toBeNull();
+  // The same fold's matching event, in a window of its own, is the positive control: the listener really is live.
   await act(async () => event(EventTypes.PreviewFeedbackSubmitted, { payload: { feedbackId: "y", previewRunId: "run_pv_checkout", server: "web", status: "open" } }));
+  await timers.advance();
   await until(() => tid(fold, "live-note"), "the matching server event");
   expect(client.preview - before).toBe(1);
+  expect(tid(fold, "live-note")!.textContent).toBe("Updated just now");
 });
+
+/**
+ * The folds' debounce timers (FOLD_READ_MS), held by the test until `advance` runs them; every
+ * other timer runs as usual. Restored after each test.
+ */
+function foldTimers() {
+  const held = new Map<number, () => void>();
+  const [real, realClear] = [globalThis.setTimeout, globalThis.clearTimeout];
+  let id = 1_000_000_000;
+  globalThis.setTimeout = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms !== FOLD_READ_MS) return real(fn, ms, ...rest);
+    held.set(++id, fn);
+    return id;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((t?: number) => { if (!held.delete(t as number)) realClear(t); }) as typeof clearTimeout;
+  restores.push(() => { globalThis.setTimeout = real; globalThis.clearTimeout = realClear; });
+  return {
+    /** Past the debounce window: run what is held, then let the reads it starts settle. */
+    async advance() {
+      const due = [...held.values()];
+      held.clear();
+      await act(async () => { for (const fn of due) fn(); });
+      await settle(60);
+    },
+  };
+}
+const restores: Array<() => void> = [];
+afterEach(() => { for (const r of restores.splice(0)) r(); });
 
 /** A preview_feedback.* or feedback.* event on the project's stream, as the backend sends it. */
 const event = (eventType: string, over: { taskId?: string | null; payload?: Record<string, unknown> } = {}) => emit({ eventType,
@@ -224,11 +260,18 @@ test("a task fold reacts only to its own task's feedback events", async () => {
   const { container } = await page(client);
   const fold = await unfold(container, "run_web142/web");
   const before = client.task;
+  const timers = foldTimers();
   await act(async () => event(EventTypes.FeedbackSubmitted, { taskId: "task_other" }));
-  // A matching event is the positive control: its read must be the only one.
+  // A whole debounce window passes on its own: another task's event read nothing.
+  await timers.advance();
+  expect(client.task).toBe(before);
+  expect(tid(fold, "live-note")).toBeNull();
+  // A matching event, in a window of its own, is the positive control: its read is the only one.
   await act(async () => event(EventTypes.FeedbackSubmitted, { taskId: TASK_ID }));
+  await timers.advance();
   await until(() => tid(fold, "live-note"), "the matching task event");
   expect(client.task - before).toBe(1);
+  expect(tid(fold, "live-note")!.textContent).toBe("Updated just now");
 });
 
 test("a burst of ten events reads each open fold once or twice, not ten times; a stream that comes back reads it once", async () => {
