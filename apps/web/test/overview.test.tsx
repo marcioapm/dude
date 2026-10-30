@@ -213,7 +213,8 @@ describe("the branch, the pull request and the details", () => {
     const page = await overview(fx(undefined, "d"));
     await until(() => page.querySelector("[data-testid=overview-snapshot]"), "the snapshot");
     expect(page.querySelector("[data-testid=overview-pull-requests]")).not.toBeNull();
-    expect(page.querySelector("[data-testid=overview-pr-head]")).toBeNull();
+    // A boolean: a failing toBeNull() on a mounted element does not fail in this harness.
+    expect(page.querySelector("[data-testid=overview-pr-head]") === null).toBe(true);
   });
 
   test("the Changes card says preparing and unavailable as they are, never as no changes", async () => {
