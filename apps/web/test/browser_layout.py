@@ -147,8 +147,38 @@ class PageHoldsStill(unittest.TestCase):
         self.assertGreater(sizes[1], 820)
         self.assertAlmostEqual(sizes[0], sizes[1], delta=1)
 
+    def test_the_overview_is_two_columns_at_desktop_sizes(self):
+        # Brackets the pane's 1000px threshold from above: 1440 (pane 1140) and 1920 (pane 1620) are two columns.
+        for width, height in ((1440, 900), (1920, 1200)):
+            context = self.browser.new_context(viewport={"width": width, "height": height}, service_workers="block")
+            self.addCleanup(context.close)
+            page = context.new_page()
+            page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+            page.get_by_test_id("overview-summary").wait_for()
+            at = page.evaluate("""() => ({
+              columns: getComputedStyle(document.querySelector('.overviewGrid')).gridTemplateColumns.split(' ').length,
+              pane: document.querySelector('.taskOverviewPane').getBoundingClientRect().width })""")
+            self.assertGreaterEqual(at["pane"], 1000, f"{width}: {at}")
+            self.assertEqual(at["columns"], 2, f"{width}: {at}")
+
+    def test_the_overview_raises_its_regions_with_a_shadow_in_light_theme(self):
+        context = self.browser.new_context(viewport={"width": 1440, "height": 900}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.goto(f"{URL}/?fixtures=d#/task/{TASK}")
+        page.get_by_test_id("overview-summary").wait_for()
+        page.evaluate("() => document.documentElement.setAttribute('data-theme', 'light')")
+        shadows = page.evaluate("""() => ({
+          token: getComputedStyle(document.documentElement).getPropertyValue('--ds-shadow-1').trim(),
+          regions: [...document.querySelectorAll('.overviewRegion')].map(r => getComputedStyle(r).boxShadow) })""")
+        self.assertNotEqual(shadows["token"], "")
+        self.assertGreater(len(shadows["regions"]), 0)
+        for shadow in shadows["regions"]:
+            self.assertNotEqual(shadow, "none", shadows)
+
     def test_the_overview_stacks_when_its_pane_is_narrow_and_never_overflows_a_phone(self):
-        for width, height in ((1100, 900), (390, 844)):
+        # 1280 with the sidebar open leaves a 980px pane: just under the threshold, one column.
+        for width, height in ((1280, 900), (1100, 900), (390, 844)):
             context = self.browser.new_context(viewport={"width": width, "height": height}, service_workers="block")
             self.addCleanup(context.close)
             page = context.new_page()
@@ -158,7 +188,7 @@ class PageHoldsStill(unittest.TestCase):
               columns: getComputedStyle(document.querySelector('.overviewGrid')).gridTemplateColumns.split(' ').length,
               overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
               pane: document.querySelector('.taskOverviewPane').getBoundingClientRect().width })""")
-            # At 1100 the sidebar leaves the pane under 1000px: the pane decides, not the window.
+            # At 1280 and 1100 the sidebar leaves the pane under 1000px: the pane decides, not the window.
             self.assertLess(at["pane"], 1000, f"{width}: {at}")
             self.assertEqual(at["columns"], 1, f"{width}: {at}")
             self.assertEqual(at["overflow"], 0, f"{width}: {at}")
