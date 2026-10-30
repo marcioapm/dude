@@ -47,12 +47,9 @@ func (s *Server) recordCheckpoints(run *Run) {
 	_ = json.Unmarshal(run.Spec, &spec)
 	for _, repo := range specRepos(spec) {
 		cp := checkpoint{Checkpoint: lux.Checkpoint{Repo: repo.Name}, url: repo.URL}
-		bare := s.repoPath(repo.URL)
 		work := ""
 		if run.workspace != "" {
 			work = filepath.Join(run.workspace, "repos", repo.Name)
-		}
-		if work != "" {
 			git := func(args ...string) string {
 				out, _ := exec.Command("git", append([]string{"-C", work}, args...)...).Output()
 				return strings.TrimSpace(string(out))
@@ -67,23 +64,24 @@ func (s *Server) recordCheckpoints(run *Run) {
 		if cp.Head == "" {
 			continue
 		}
-		if !s.notUploaded[run.ID] {
-			ref := "refs/checkpoints/" + run.ID + "/" + repo.Name
-			var err error
-			if work != "" {
-				_, err = exec.Command("git", "-C", work, "push", "-q", "--force", bare, "HEAD:"+ref).CombinedOutput()
-			} else {
-				_, err = exec.Command("git", "-C", bare, "update-ref", ref, cp.Head).CombinedOutput()
-			}
-			if err == nil {
-				cp.Uploaded = true
-			}
-		}
+		cp.Uploaded = !s.notUploaded[run.ID] && uploadCheckpoint(run.ID, repo.Name, s.repoPath(repo.URL), work, cp.Head)
 		if run.checkpoints == nil {
 			run.checkpoints = map[string]checkpoint{}
 		}
 		run.checkpoints[repo.Name] = cp
 	}
+}
+
+// uploadCheckpoint fetches head into the bare repository under
+// refs/checkpoints/<run>/<repo>: pushed from the checkout work, or, with
+// none, pointed at in the bare repository where the clone left it.
+func uploadCheckpoint(runID, repo, bare, work, head string) bool {
+	ref := "refs/checkpoints/" + runID + "/" + repo
+	cmd := exec.Command("git", "-C", bare, "update-ref", ref, head)
+	if work != "" {
+		cmd = exec.Command("git", "-C", work, "push", "-q", "--force", bare, "HEAD:"+ref)
+	}
+	return cmd.Run() == nil
 }
 
 // listCheckpoints is GET /v1/runs/{id}/checkpoints.
