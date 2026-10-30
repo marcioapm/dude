@@ -121,6 +121,11 @@ export function NeedsYou({ question, run, who, onAnswer }: {
   );
 }
 
+/** What a task, an attempt or a Run cost, from its recorded figures. */
+function FiguresCost({ figures: f, large = false }: { figures: Pick<TaskMetrics, "cost" | "tokens" | "activeMs">; large?: boolean }) {
+  return <CostOf cost={f.cost} tokens={f.tokens.input + f.tokens.output} activeMs={f.activeMs} {...(large ? { size: "lg" as const } : {})} />;
+}
+
 /**
  * The figures above the fold: the task's spend over every attempt (the
  * prominent one), the attempt's when there are several, lead time, agents at
@@ -151,11 +156,11 @@ export function OverviewSummary({ all, attempt, many, shown, current, earlier, l
   return (
     <MetricGroup joined fill className="overviewFigures" data-testid="overview-summary">
       <MetricTile label="Task spend" data-testid="overview-spend"
-        value={ran(all) ? <CostOf cost={all!.cost} tokens={all!.tokens.input + all!.tokens.output} activeMs={all!.activeMs} size="lg" /> : notReported}
+        value={ran(all) ? <FiguresCost figures={all!} large /> : notReported}
         sub={ran(all) ? `${many ? "all attempts" : "this task"} · model + machine` : all ? "no runs yet" : undefined} />
       {many ? (
         <MetricTile label={`Attempt ${shown} spend`} data-testid="overview-attempt-spend"
-          value={ran(attempt) ? <CostOf cost={attempt!.cost} tokens={attempt!.tokens.input + attempt!.tokens.output} activeMs={attempt!.activeMs} size="lg" /> : notReported}
+          value={ran(attempt) ? <FiguresCost figures={attempt!} large /> : notReported}
           sub={shown === current ? "current attempt" : "set aside"} />
       ) : null}
       <MetricTile label="Lead time" data-testid="overview-lead"
@@ -185,7 +190,7 @@ export function RunningNowRow({ run, events, metrics, onOpen }: {
       label={runLabel(run)}
       detail={<>{run.model ?? run.harness ?? "agent"} · <StatusMark status={runStatusShown(run)} label={runStatusLabel(run)} size="sm" /></>}
       activity={activity}
-      cost={figures ? <CostOf cost={figures.cost} tokens={figures.tokens.input + figures.tokens.output} activeMs={figures.activeMs} /> : undefined}
+      cost={figures ? <FiguresCost figures={figures} /> : undefined}
       elapsed={run.startedAt ? <Duration since={run.startedAt} live={run.status === "running"} tone="muted" /> : undefined}
       action={<Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={onOpen} aria-label={`Open ${runLabel(run)}'s session`}>Open session</Button>} />
   );
