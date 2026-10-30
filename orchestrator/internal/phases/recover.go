@@ -175,14 +175,8 @@ func (s *Syncer) endRequested(ctx context.Context, c recoveryRow, why string, re
 		} else if err != nil {
 			return err
 		}
-		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-			tag, err := tx.Exec(ctx, `UPDATE run_recoveries SET publisher_lux_run_id = $3, lux_cost_next_at = now()
-				WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, c.ID, c.Claim, run.ID)
-			if err == nil && tag.RowsAffected() == 0 {
-				return delivery.ErrClaimLost
-			}
-			return err
-		}); err != nil {
+		if err := s.updateClaimed(ctx, c, `UPDATE run_recoveries SET publisher_lux_run_id = $3, lux_cost_next_at = now()
+			WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, run.ID); err != nil {
 			return err
 		}
 		c.Publisher = run.ID
@@ -276,14 +270,8 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	// The checkpoints chosen are recorded before lux is asked: a pass that
 	// ends this recovery still requested looks for a publisher only then.
 	raw, _ := json.Marshal(chosen)
-	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE run_recoveries SET checkpoints = $3::jsonb
-			WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, c.ID, c.Claim, raw)
-		if err == nil && tag.RowsAffected() == 0 {
-			return delivery.ErrClaimLost
-		}
-		return err
-	}); err != nil {
+	if err := s.updateClaimed(ctx, c, `UPDATE run_recoveries SET checkpoints = $3::jsonb
+		WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, raw); err != nil {
 		return err
 	}
 	run, err := s.Lux.Submit(ctx, spec, "recover:"+c.ID)
@@ -293,11 +281,17 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 		}
 		return err
 	}
+	// Its publisher's cost is read from now on (Costs), as a Run's is.
+	return s.updateClaimed(ctx, c, `UPDATE run_recoveries SET status = 'submitted', publisher_lux_run_id = $3, checkpoints = $4::jsonb,
+			dirty = $5, stepped_at = now(), lux_cost_next_at = now(), next_attempt_at = now() + $6::interval, failures = 0, claim_token = NULL, claimed_until = NULL
+		WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, run.ID, raw, dirty, recoveryEvery.String())
+}
+
+// updateClaimed runs sql, whose $1 and $2 are the recovery's id and this
+// worker's claim, with args from $3 on: ErrClaimLost when it changed no row.
+func (s *Syncer) updateClaimed(ctx context.Context, c recoveryRow, sql string, args ...any) error {
 	return s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		// Its publisher's cost is read from now on (Costs), as a Run's is.
-		tag, err := tx.Exec(ctx, `UPDATE run_recoveries SET status = 'submitted', publisher_lux_run_id = $3, checkpoints = $4::jsonb,
-				dirty = $5, stepped_at = now(), lux_cost_next_at = now(), next_attempt_at = now() + $6::interval, failures = 0, claim_token = NULL, claimed_until = NULL
-			WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, c.ID, c.Claim, run.ID, raw, dirty, recoveryEvery.String())
+		tag, err := tx.Exec(ctx, sql, append([]any{c.ID, c.Claim}, args...)...)
 		if err == nil && tag.RowsAffected() == 0 {
 			return delivery.ErrClaimLost
 		}
@@ -409,15 +403,9 @@ func (s *Syncer) scanAndPush(ctx context.Context, c recoveryRow) error {
 		}
 		return err
 	}
-	return s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE run_recoveries SET status = 'asked', stepped_at = now(), failures = 0,
-				next_attempt_at = now() + $3::interval, claim_token = NULL, claimed_until = NULL
-			WHERE id = $1 AND claim_token = $2 AND status = 'submitted'`, c.ID, c.Claim, recoveryEvery.String())
-		if err == nil && tag.RowsAffected() == 0 {
-			return delivery.ErrClaimLost
-		}
-		return err
-	})
+	return s.updateClaimed(ctx, c, `UPDATE run_recoveries SET status = 'asked', stepped_at = now(), failures = 0,
+			next_attempt_at = now() + $3::interval, claim_token = NULL, claimed_until = NULL
+		WHERE id = $1 AND claim_token = $2 AND status = 'submitted'`, recoveryEvery.String())
 }
 
 // scanRecovery finds the dead Run's secrets in what the push would send:
