@@ -12,8 +12,12 @@
 --     and the capturer's "latest", even after a reset);
 --   - one a feedback item names stays (branch_snapshot_id): its anchor
 --     resolves;
---   - one captured in the last 24 hours stays: a Changes tab pinned to it
---     (?snapshot=) keeps reading while the person has it open.
+--   - one that was the latest in the last 24 hours stays: a Changes tab
+--     pinned to it (?snapshot=) keeps reading while the person has it open.
+--     The 24 hours count from when it stopped being the latest, read as
+--     when its successor was captured: it goes only once a newer one is
+--     itself over a day old (a branch quiet for days, then pushed, keeps
+--     what the open tab shows).
 --
 -- Lineage: newer.count and newer.relation are walked along
 -- previous_snapshot_id (control plane, newerThan). A deleted snapshot's
@@ -45,7 +49,8 @@ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp AS $$
 DECLARE
   -- A Changes tab pinned to a snapshot reads it by id while it is open:
-  -- one captured in the last 24 hours is kept, whatever else holds.
+  -- one captured, or superseded, in the last 24 hours is kept, whatever
+  -- else holds.
   keep_recent constant interval := interval '24 hours';
   candidates text[];
   c text;
@@ -63,7 +68,8 @@ BEGIN
     SELECT s.id, s.captured_at FROM task_branch_snapshots s
     WHERE s.captured_at < now() - keep_recent
       AND EXISTS (SELECT 1 FROM task_branch_snapshots n WHERE n.task_id = s.task_id AND n.attempt = s.attempt
-                  AND n.repository_id = s.repository_id AND (n.captured_at, n.id) > (s.captured_at, s.id))
+                  AND n.repository_id = s.repository_id AND (n.captured_at, n.id) > (s.captured_at, s.id)
+                  AND n.captured_at < now() - keep_recent)
       AND NOT EXISTS (SELECT 1 FROM task_branch_capture_requests q WHERE q.snapshot_id = s.id)
       AND NOT EXISTS (SELECT 1 FROM feedback_items f WHERE f.branch_snapshot_id = s.id)
     ORDER BY s.captured_at, s.id

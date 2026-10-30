@@ -306,12 +306,12 @@ describe("GET /v1/tasks/:id/branch-diff after a retention sweep", () => {
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status) VALUES ('wi_pr', ${ORG}, 'prj_bd', 4, 'Pruned', 'running')`;
     await owner`INSERT INTO task_repositories (task_id, repository_id, organization_id, access) VALUES ('wi_pr', 'repo_api', ${ORG}, 'write')`;
     const old = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
-    // p1 (an item names it) ← p2 ← p3 (main merged in) ← p4 ← p5 (the latest, an hour old).
+    // p1 (an item names it) ← p2 ← p3 (main merged in) ← p4 ← p5 (the latest, 30 hours old: p4 was superseded over a day ago).
     await snapshot("tbs_p1", 1, "repo_api", sha("a"), sha("1"), "initial", null, old(80), ORG, "wi_pr");
     await snapshot("tbs_p2", 1, "repo_api", sha("a"), sha("2"), "fast-forward", "tbs_p1", old(70), ORG, "wi_pr");
     await snapshot("tbs_p3", 1, "repo_api", sha("d"), sha("3"), "merged-target", "tbs_p2", old(60), ORG, "wi_pr");
     await snapshot("tbs_p4", 1, "repo_api", sha("d"), sha("4"), "fast-forward", "tbs_p3", old(50), ORG, "wi_pr");
-    await snapshot("tbs_p5", 1, "repo_api", sha("d"), sha("5"), "fast-forward", "tbs_p4", old(1), ORG, "wi_pr");
+    await snapshot("tbs_p5", 1, "repo_api", sha("d"), sha("5"), "fast-forward", "tbs_p4", old(30), ORG, "wi_pr");
     await owner`INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
       VALUES ('fbi_pr', ${ORG}, 'wi_pr', 1, ${ana.personId}, 'kept', 'code', 'tbs_p1', '{}')`;
     const read = async (q: string) => (await get(ana.key, `/v1/tasks/wi_pr/branch-diff?${q}`)).body;

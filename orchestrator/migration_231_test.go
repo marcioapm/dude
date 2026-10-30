@@ -143,11 +143,25 @@ func TestPruneKeepsWhatACaptureRequestNames(t *testing.T) {
 	f.want("a2", "a4")
 }
 
-// One captured in the last 24 hours stays: a tab pinned to it reads it.
+// One that was the latest in the last 24 hours stays: a tab pinned to it
+// reads it. The day counts from when it was superseded, not captured.
 func TestPruneKeepsTheLastDay(t *testing.T) {
 	f := newPruneFixture(t)
 	f.snap("old", 1, "repo_api", 24.5, "", "initial", 1)
 	f.snap("day", 1, "repo_api", 23.5, "old", "fast-forward", 1)
+	f.snap("now", 1, "repo_api", 0, "day", "fast-forward", 1)
+	if n := f.prune(100); n != 0 {
+		t.Errorf("pruned %d, want 0: old was the latest 23.5 hours ago", n)
+	}
+	f.want("old", "day", "now")
+}
+
+// One superseded more than a day ago goes; its child, itself superseded
+// within the day, stays.
+func TestPruneTakesWhatWasSupersededOverADayAgo(t *testing.T) {
+	f := newPruneFixture(t)
+	f.snap("old", 1, "repo_api", 26, "", "initial", 1)
+	f.snap("day", 1, "repo_api", 24.5, "old", "fast-forward", 1)
 	f.snap("now", 1, "repo_api", 0, "day", "fast-forward", 1)
 	if n := f.prune(100); n != 1 {
 		t.Errorf("pruned %d, want 1", n)
@@ -157,6 +171,18 @@ func TestPruneKeepsTheLastDay(t *testing.T) {
 	if got := f.link("day"); got != "- fast-forward 2" {
 		t.Errorf("day after its initial went: %q", got)
 	}
+}
+
+// A branch quiet for two days, then pushed: the snapshot a Changes tab has
+// pinned stays, though captured long ago, until its successor is a day old.
+func TestPruneKeepsOneJustSuperseded(t *testing.T) {
+	f := newPruneFixture(t)
+	f.snap("tbs_old", 1, "repo_api", 48, "", "initial", 1)
+	f.snap("tbs_new", 1, "repo_api", 1.0/60, "tbs_old", "fast-forward", 1)
+	if n := f.prune(100); n != 0 {
+		t.Errorf("pruned %d, want 0", n)
+	}
+	f.want("tbs_new", "tbs_old")
 }
 
 // An older attempt keeps its latest per repository and what its feedback
