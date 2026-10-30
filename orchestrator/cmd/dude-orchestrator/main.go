@@ -263,6 +263,12 @@ func run(log *slog.Logger) error {
 		// branch made (dude's publishes and promotions, a pull request's
 		// head moving, migration 230's triggers), or a read that found none.
 		{"branch-snapshots", 2 * time.Second, (&branchdiff.Capturer{DB: database, Forges: forges, Log: log}).Sweep},
+		// The snapshots nothing can still read (migration 231): not a
+		// lineage's latest, named by no capture request or feedback item,
+		// over a day old. In batches until one comes back short.
+		{"branch-snapshots-prune", 10 * time.Minute, func(ctx context.Context) (int, error) {
+			return branchdiff.Prune(ctx, database)
+		}},
 		// Automations: schedules due, deliveries matched, runs started and
 		// followed, Server containers fed and stopped, kept sessions expired.
 		{"automations", time.Second, automationRunner.Sweep},
