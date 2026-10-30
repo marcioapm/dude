@@ -53,12 +53,13 @@ export function newerThan(fromId: string, latestId: string, links: ReadonlyArray
     steps.push(at.relation);
     at = at.previousSnapshotId ? byId.get(at.previousSnapshotId) : undefined;
   }
+  const count = steps.length;
   if (!reached) steps.push("rewritten");
   return {
     id: latest.id, relation: spanRelation(steps, from.mergeBaseSha, latest.mergeBaseSha),
     fromMergeBaseSha: from.mergeBaseSha, fromHeadSha: from.headSha,
     mergeBaseSha: latest.mergeBaseSha, headSha: latest.headSha, capturedAt: latest.capturedAt.toISOString(),
-    count: links.filter((l) => l.capturedAt > from.capturedAt).length,
+    count,
   };
 }
 

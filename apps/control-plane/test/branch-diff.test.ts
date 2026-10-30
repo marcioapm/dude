@@ -175,6 +175,19 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     expect(newerThan("s1", "s2", links)?.relation).toBe("fast-forward");
     expect(newerThan("s1", "s3", links)?.relation).toBe("rewritten");
     expect(newerThan("s3", "s3", links)).toBeNull();
+    expect(newerThan("s3", "s2", links)).toMatchObject({ relation: "rewritten", count: 2 });
+  });
+
+  test("a branch reset follows the request's snapshot, not the last capture time", async () => {
+    await owner`UPDATE task_branch_capture_requests SET snapshot_id = 'tbs_b' WHERE task_id = 'wi_bd' AND repository_id = 'repo_api'`;
+    try {
+      expect((await get(ana.key, "/v1/tasks/wi_bd/branch-diff")).body.snapshot.id).toBe("tbs_b");
+      expect((await get(ana.key, "/v1/tasks/wi_bd/branch-diff?snapshot=tbs_c")).body.newer).toMatchObject({
+        id: "tbs_b", relation: "rewritten", count: 2,
+      });
+    } finally {
+      await owner`UPDATE task_branch_capture_requests SET snapshot_id = 'tbs_c' WHERE task_id = 'wi_bd' AND repository_id = 'repo_api'`;
+    }
   });
 
   test("an earlier attempt is read-only with its recorded snapshots, and asks for nothing", async () => {

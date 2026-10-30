@@ -353,6 +353,28 @@ func TestTheFileCapIsStoredAsPartialWithItsReason(t *testing.T) {
 	}
 }
 
+func TestResettingTheBranchReusesItsFirstSnapshotWithoutAnEvent(t *testing.T) {
+	w := newWorld(t)
+	first := w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "first\n"})
+	w.capture()
+	w.fake.CommitFiles(w.branch, "second", map[string]string{"app.ts": "second\n"})
+	w.capture()
+	got := w.snapshots()
+	git(t, w.origin, "update-ref", "refs/heads/"+w.branch, first)
+	w.capture()
+	if len(w.snapshots()) != 2 {
+		t.Fatal("reset made a new snapshot")
+	}
+	var id, status string
+	var events int
+	if err := w.owner.QueryRow(context.Background(), `SELECT snapshot_id, status FROM task_branch_capture_requests WHERE task_id = 'wi_b'`).Scan(&id, &status); err != nil || id != got[0].ID || status != "done" {
+		t.Fatalf("reset request: %s %s (%v)", id, status, err)
+	}
+	if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = 'wi_b' AND event_type = $1`, branchdiff.EvSnapshotCaptured).Scan(&events); err != nil || events != 2 {
+		t.Fatalf("reset emitted an event: %d (%v)", events, err)
+	}
+}
+
 func short(s string) string { return s[:min(len(s), 7)] }
 
 // A binary file and a file GitHub gave no lines for are flagged, file by
