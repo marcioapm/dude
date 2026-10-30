@@ -1433,7 +1433,7 @@ function PullRequestStep({ pr, named, adopted }: { pr: PullRequest; named: boole
       label={label}
       note={pr.title}
       // The row is the link to GitHub already: its state is a mark, not a second link inside it.
-      status={<span className="prStepState ds-cap" data-pr-state={prStateOf(pr)}>{prSpecOf(pr).label}</span>}
+      status={<PrChip pr={pr} as="span" size="sm" showNumber={false} />}
       meta={pr.headBranch}
     />
   );

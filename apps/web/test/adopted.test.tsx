@@ -114,6 +114,14 @@ describe("the pipeline of adopted work", () => {
     const page = await taskPage(new AdoptedClient({ source: null }, [PULL_REQUEST]));
     expect(phases(page)).toEqual(["implement", "review", "fix", "review", "simplify"]);
     expect(text(page.querySelector("[data-testid=pr-step]"))).toStartWith("Pull request #482");
+    // Its state is PrChip's own glyph, tone and word, as a mark: the step is the one link.
+    const step = page.querySelector("[data-testid=pr-step]")!;
+    const mark = step.querySelector("span[data-pr-state]");
+    expect(mark === null).toBe(false);
+    expect(mark!.querySelector("svg[data-icon]") === null).toBe(false);
+    // No link inside a link.
+    expect(step.querySelectorAll("a a").length).toBe(0);
+    expect(mark!.tagName).toBe("SPAN");
   });
 
   test("work to continue keeps its Implement step, which reads nothing to add when it committed nothing", async () => {

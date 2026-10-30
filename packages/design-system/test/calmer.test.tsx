@@ -96,6 +96,15 @@ describe("PrChip", () => {
     expect(h).toContain('data-pr-state="ci_red"');
     expect(text(h)).toBe("CI failing#41");
   });
+  test("as a mark inside a link: the same glyph, tone and word, no link and no number when asked", () => {
+    const h = html(<PrChip pr={pr({ checks: "failing", review: "changes_requested" })} as="span" size="sm" showNumber={false} />);
+    expect(h.startsWith("<span")).toBe(true);
+    expect(h).not.toContain("<a");
+    expect(h).not.toContain("href=");
+    expect(h).toContain('data-pr-state="ci_red"');
+    expect(h).toContain(`data-icon="${PR_DISPLAY_SPECS.ci_red.glyph}"`);
+    expect(text(h)).toBe("CI failing");
+  });
   test("the API's display wins when it sends one", () => {
     expect(html(<PrChip pr={pr({ display: "conflict" as PrDisplayState })} />)).toContain('data-pr-state="conflict"');
   });
