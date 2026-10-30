@@ -127,3 +127,23 @@ test("a second person's project stream hears the first person's submit, resolve 
   const rows = await owner`SELECT event_type FROM events WHERE project_id = 'prj_pfe' AND event_type LIKE 'preview_feedback.%' ORDER BY cursor`;
   expect(rows.map((r: { event_type: string }) => r.event_type)).toEqual(types(seen));
 });
+
+test("a project's live stream never hears another project's submit in the same organisation", async () => {
+  await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_pfe_b', 'org_pfe', 'Docs', 'docs', 'PFB')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, preview_branch, attempt, status, kind, wakeable)
+    VALUES ('run_pfe_b', 'org_pfe', 'prj_pfe_b', 'feat/y', 1, 'running', 'preview', true)`;
+  await owner`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
+    VALUES ('run_pfe_b', 'org_pfe', 'web', 'lux_web_b', 'web-b', 'https://web-pfe-b.preview.test')`;
+  const submitted = (s: Frame[]) => s.filter((f) => f.eventType === "preview_feedback.submitted");
+  const onA = watch(bo.key, "/v1/events/stream?live=1&projectId=prj_pfe", (s) => submitted(s).length >= 1);
+  const onB = watch(bo.key, "/v1/events/stream?live=1&projectId=prj_pfe_b", (s) => submitted(s).length >= 1);
+  await Promise.all([onA.opened, onB.opened]);
+
+  const onBranch = (run: string, origin: string, key: string) => post(ana.key, `/v1/branch-previews/${run}/servers/web/feedback`,
+    { body: "Spacing", submissionKey: key, anchor: { kind: "preview", url: `${origin}/`, selector: "main" } });
+  expect((await onBranch("run_pfe_b", "https://web-pfe-b.preview.test", "kb1")).status).toBe(201);
+  // B's stream hearing its own submit proves the B event was published before A's arrives.
+  expect(submitted(await onB.done).map((f) => f.projectId)).toEqual(["prj_pfe_b"]);
+  expect((await onBranch("run_pfe", "https://web-pfe.preview.test", "ka1")).status).toBe(201);
+  expect(submitted(await onA.done).map((f) => f.projectId)).toEqual(["prj_pfe"]);
+});

@@ -46,7 +46,8 @@ const CHAT_BUILT_IN = "You route a message someone wrote to dude, a software-del
  * would — so the screens re-read through the same path they do for real.
  */
 const streams = new Set<QuietEventSource>();
-const SCOPES = ["runId", "taskId", "sessionId", "projectId", "automationRunId"] as const;
+// The same scope fields, in the same order, as the control plane's live `EventFilter` (events/bus.ts).
+const SCOPES = ["sessionId", "projectId", "runId", "taskId", "automationRunId"] as const;
 let streamCursor = 1_000_000;
 let ledger: ((params: LedgerQuery) => PersistedEvent[]) | null = null;
 class QuietEventSource extends EventTarget {
