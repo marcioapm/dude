@@ -87,12 +87,12 @@ func TestTheSweepEvaluatesEveryOpenWait(t *testing.T) {
 	n := wakeBatch + 5
 	for _, q := range []string{
 		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
-			SELECT 'wi_'||$1||'_'||i, $1, 'prj_'||$1, 100 + i, 'T', 'G' FROM generate_series(1, ` + itoa(n) + `) i`,
+			SELECT 'wi_'||$1||'_'||i, $1, 'prj_'||$1, 100 + i, 'T', 'G' FROM generate_series(1, ` + strconv.Itoa(n) + `) i`,
 		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt)
-			SELECT 'run_'||$1||'_'||i, $1, 'prj_'||$1, 'wi_'||$1||'_'||i, 1 FROM generate_series(1, ` + itoa(n) + `) i`,
+			SELECT 'run_'||$1||'_'||i, $1, 'prj_'||$1, 'wi_'||$1||'_'||i, 1 FROM generate_series(1, ` + strconv.Itoa(n) + `) i`,
 		`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, deadline_at, since_cursor, call_key, created_at)
 			SELECT 'cwt_'||i, $1, 'wi_'||$1||'_'||i, 'run_'||$1||'_'||i, 1, '[]', now() + interval '1 hour', 0, 'c', now() - interval '1 hour'
-			FROM generate_series(1, ` + itoa(n) + `) i`,
+			FROM generate_series(1, ` + strconv.Itoa(n) + `) i`,
 		`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, deadline_at, since_cursor, call_key)
 			VALUES ('cwt_newest', $1, 'wi_'||$1, 'run_'||$1, 1, '[]', now() - interval '1 second', 0, 'c')`,
 		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_'||$1||'_late', $1, 'prj_'||$1, 99, 'T', 'G')`,
@@ -119,5 +119,3 @@ func TestTheSweepEvaluatesEveryOpenWait(t *testing.T) {
 		t.Fatalf("%d waits open, want %d", open, n)
 	}
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }

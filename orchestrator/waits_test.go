@@ -286,8 +286,7 @@ func TestTryingAgainEndsTheStoppedConductorsWait(t *testing.T) {
 func (w *world) waitReasonsLeft(task string) (pending, told int) {
 	w.t.Helper()
 	pending = w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'wait' AND delivered_at IS NULL`, task)
-	told = w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken' AND payload->'reasons' ? 'wait'`, task)
-	return pending, told
+	return pending, w.waitNotes(task)
 }
 
 // A wait whose deadline passed while the task was stopped has its reason

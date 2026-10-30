@@ -22,13 +22,7 @@ func TestWaitForOpensAWaitAndRefusesWhatItCannotWaitOn(t *testing.T) {
 		VALUES ('wi_wf_other', $1, $2, 2, 'Other', 'running')`, f.org, f.project)
 	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, phase)
 		VALUES ('run_wf_other', $1, $2, 'wi_wf_other', 1, 'running', 'reviewer', 'review')`, f.org, f.project)
-	waits := func() int {
-		var n int
-		if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM conductor_waits`).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
+	waits := func() int { return f.count(t, `SELECT count(*) FROM conductor_waits`) }
 	for name, body := range map[string]string{
 		"no deadline":          `{"conditions":[{"runsEnded":["run_wf_impl"]}]}`,
 		"deadline over a day":  `{"deadline":"25h"}`,
