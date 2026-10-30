@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -428,18 +427,9 @@ func (s *Syncer) scanRecovery(ctx context.Context, c recoveryRow, chosen []recov
 	}
 	ctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	history, err := s.execChecked(ctx, phaseRun{ID: c.RunID, LuxRunID: c.Publisher}, historyCommand(bases, nil), "the history")
-	exit := execExit{}
-	switch {
-	case errors.As(err, &exit) && exit.code == 4:
-		return nil, errUnchecked{exit.Error()}
-	case errors.As(err, &exit) && exit.code == 5, err == nil && len(history) > historyLimit:
-		return nil, errUnchecked{fmt.Sprintf("the commits to push are over %d MiB, more than dude reads", historyLimit>>20)}
-	case err != nil:
+	history, err := s.readHistory(ctx, phaseRun{ID: c.RunID, LuxRunID: c.Publisher}, bases, nil)
+	if err != nil {
 		return nil, err
-	}
-	if missing := missingHistory(history, bases); len(missing) > 0 {
-		return nil, errUnchecked{"no history was read for " + strings.Join(missing, ", ")}
 	}
 	var found hits
 	found.scanHistory(red, history)
