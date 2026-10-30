@@ -272,6 +272,7 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     [
       ["fb-diff", "Commenting on a diff"],
       ["fb-marks", "Comment marks on a branch review"],
+      ["fb-branch-states", "Branch review state matrix"],
       ["fb-cards", "FeedbackCard"],
       ["fb-editor", "CommentEditor"],
       ["fb-tray", "DraftsTray / Submit"],

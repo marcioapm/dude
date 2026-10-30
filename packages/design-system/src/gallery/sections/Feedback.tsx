@@ -10,6 +10,10 @@ import {
 import { Icon } from "../../icons/index.tsx";
 import { ReadyForReview, ReviewEvidence, type EvidenceChip } from "../../components/ReadyForReview.tsx";
 import { BeforePullRequestFact } from "../../components/BeforePullRequestFact.tsx";
+import { Button } from "../../primitives/Button.tsx";
+import { EmptyState } from "../../primitives/Feedback.tsx";
+import { Callout } from "../../primitives/Layout.tsx";
+import { Segmented } from "../../components/ScreenHeader.tsx";
 
 const ana = { id: "p_ana", name: "Ana Ribeiro" };
 const marcio = { id: "p_marcio", name: "Márcio Martins" };
@@ -124,6 +128,43 @@ function MarksDemo({ filter = "", position, bar = false }: { readonly filter?: s
   );
 }
 
+type BranchState = "populated" | "fast-forward" | "merged-target" | "rewritten" | "empty" | "preparing" | "unavailable" | "partial" | "binary" | "older";
+const BRANCH_STATES: ReadonlyArray<readonly [BranchState, string, string]> = [
+  ["populated", "Populated", "main 2be91c7…7ac42e1 · 2 files"],
+  ["fast-forward", "Fast-forward update", "New commits are available · Refresh"],
+  ["merged-target", "Merged target", "main was merged in · base moved 2be91c7 → 8c1d0e4"],
+  ["rewritten", "Rewritten", "Rebase or force-push · earlier comments may be outdated"],
+  ["empty", "Empty", "No committed changes between merge base and head"],
+  ["preparing", "Preparing", "Reading the branch; this is not an empty diff"],
+  ["unavailable", "Unavailable", "GitHub refused the read · Try again"],
+  ["partial", "Partial / truncated", "File list may be incomplete; large file lines omitted"],
+  ["binary", "Binary", "Binary file listed; its lines are not shown"],
+  ["older", "Older attempt", "Read-only · comments navigable, no actions"],
+];
+const BINARY: RunDiffFile = { path: "public/card-icons.png", status: "M", additions: 0, deletions: 0, binary: true, hunks: [] };
+const TRUNCATED: RunDiffFile = { ...SECOND, path: "package-lock.json", additions: 1200, deletions: 840, truncated: true };
+
+/** A branch review state as composed in Changes, without any API data or app logic. */
+function BranchStateDemo({ state, label, line }: { readonly state: BranchState; readonly label: string; readonly line: string }) {
+  const [at, setAt] = useState<number | undefined>();
+  const files = state === "binary" ? [FILE, BINARY] : state === "partial" ? [FILE, TRUNCATED] : [FILE, SECOND];
+  const body = state === "empty" ? <LiveDiff files={[]} base="2be91c7a" emptyMessage="No committed changes between 2be91c7 and 2be91c7." />
+    : state === "preparing" ? <EmptyState compact icon="clock" title="Preparing the branch snapshot" description="This is not an empty diff: it appears once captured." />
+      : state === "unavailable" ? <Callout tone="danger">Snapshot unavailable · Resource not accessible by integration. <Button size="sm" variant="secondary">Try again</Button></Callout>
+        : <LiveDiff files={files} base="2be91c7a" listNote={state === "partial" ? "Partial: GitHub listed at most 300 files." : "Committed changes only · pinned branch snapshot."}
+          commenting={{ canStart: state !== "older", maxLines: 20, selection: null, onSelectionChange: () => {},
+            fileComments: (p) => (p === FILE.path ? { count: 2, label: "1 submitted · 1 outdated", position: at } : null),
+            onFileComments: () => setAt((n) => ((n ?? 0) % 2) + 1),
+            renderFileHead: (p) => p === FILE.path ? <FeedbackCard inline placement="outdated" item={item({ status: "open" })} readOnly={state === "older"} onReply={ok} onResolve={ok} /> : null }} />;
+  return <div data-testid="branch-state" data-state={state} style={{ minHeight: 260, display: "grid", gap: 8 }}>
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <Segmented label={`${label} review scope`} size="toolbar" value="branch" onChange={() => {}} options={[{ value: "branch", label: "Branch" }, { value: "pending", label: "Pending work" }]} />
+      <b>{label}</b><span className="ds-mono">{line}</span>
+    </div>
+    {body}
+  </div>;
+}
+
 function TrayDemo({ full = false }: { readonly full?: boolean }) {
   const [open, setOpen] = useState(!full);
   const [confirm, setConfirm] = useState(false);
@@ -160,6 +201,9 @@ export function FeedbackSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}><MarksDemo filter="acp.go" /></Panes>
         <div style={{ height: 8 }} />
         <Panes mode={mode}><MarksDemo bar /></Panes>
+      </Block>
+      <Block id="fb-branch-states" title="Branch review state matrix" note="Representative compositions of the approved whole-branch Changes states. The app owns snapshot data and API reads; these compose the real LiveDiff, comment marks/cycling, FeedbackCard, EmptyState and Callout so every state inherits theme and density.">
+        <Panes mode={mode}><Col>{BRANCH_STATES.map(([state, label, line]) => <BranchStateDemo key={state} state={state} label={label} line={line} />)}</Col></Panes>
       </Block>
       <Block id="fb-cards" title="FeedbackCard" note="Who, when, where it went, its status (tone, glyph and words), what it is on, its words and thread, and the actions its status allows: Reply and Resolve while it needs handling; Reopen once answered or resolved; Confirm resolved while its commit is unpublished. A draft carries the dashed bar of something not sent.">
         <Panes mode={mode}>

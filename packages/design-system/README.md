@@ -3016,8 +3016,10 @@ Before dude answers, the overlay follows `prefers-color-scheme` and updates when
 
 
 `src/components/FeedbackCard.tsx`, and `LiveDiff`'s `commenting` prop.
-Gallery: *People's feedback* (`#fb-diff`, `#fb-marks`, `#fb-cards`, `#fb-editor`,
-`#fb-tray`).
+Gallery: *People's feedback* (`#fb-diff`, `#fb-marks`, `#fb-branch-states`, `#fb-cards`, `#fb-editor`,
+`#fb-tray`). `#fb-branch-states` is representative component composition for
+populated, fast-forward, merged-target, rewritten, empty, preparing, unavailable,
+partial/truncated, binary and older-attempt branch review; apps own API reads.
 
 In the web app, commenting lives on the task page: a Run's Changes take
 comments when opened there, never on the standalone Run page.
