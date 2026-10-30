@@ -397,3 +397,60 @@
     padding-left: var(--ds-space-8);
   }
 }
+
+/* An entry and its comment mark side by side: two buttons, one row, one wash. */
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  border-radius: var(--ds-radius-control);
+}
+.fileRow > .file {
+  flex: 1;
+  min-width: 0;
+}
+.fileRow:hover {
+  background: var(--ds-color-hover-wash);
+}
+.fileRow > .file:hover {
+  background: none;
+}
+.fileRow.current {
+  background: var(--ds-color-active-wash);
+}
+.filteredOut .path,
+.filteredOut .path b {
+  color: var(--ds-color-text-muted);
+}
+/* The comment mark: neutral ink, a tabular count, level with the header's counts. */
+.commentMark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  flex: none;
+  height: 22px;
+  padding: 0 var(--ds-space-6);
+  border: 0;
+  border-radius: var(--ds-radius-control);
+  background: none;
+  color: var(--ds-color-text-secondary);
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  line-height: 1;
+  cursor: pointer;
+}
+.commentMark:hover {
+  background: var(--ds-color-hover-wash);
+  color: var(--ds-color-text-primary);
+}
+.commentMark:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-color-focus-ring);
+}
+.commentMark svg {
+  display: block;
+}
+.commentCount {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ds-weight-medium);
+}

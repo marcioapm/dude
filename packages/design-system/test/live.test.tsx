@@ -228,4 +228,61 @@ describe("artifactKind", () => {
     expect(artifactKind("text/html", "x")).toBe("html");
     expect(artifactKind("", "coverage.html")).toBe("html");
   });
+
+});
+
+describe("LiveDiff: comment marks and the page's scope", () => {
+  const files = [file("src/a.ts", "M", [["-", "old"], ["+", "new"]]), file("src/b.ts", "A", [["+", "hi"]])];
+  const marks = (path: string) => (path === "src/a.ts" ? { count: 3, label: "2 submitted by Ana Silva · 1 your draft" }
+    : path === "docs/c.md" ? { count: 1, label: "1 outdated", position: 1 } : null);
+  const commenting = (onFileComments = (_: string) => {}) => ({ maxLines: 20, selection: null, onSelectionChange: () => {}, fileComments: marks, onFileComments });
+
+  test("scopeLabel replaces the Since summary; null leaves it out", () => {
+    expect(renderToStaticMarkup(<LiveDiff base="b" files={files} scopeLabel={<i data-x="scope" />} />)).toContain('data-x="scope"');
+    const none = renderToStaticMarkup(<LiveDiff base="b" files={files} scopeLabel={null} />);
+    expect(none).not.toContain("Since");
+    expect(none).not.toContain("2 files");
+    expect(renderToStaticMarkup(<LiveDiff base="b" files={files} />)).toContain("Since");
+  });
+
+  test("a marked file carries its mark on the header and beside — not inside — its list entry", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const shown: string[] = [];
+    try {
+      act(() => root.render(<LiveDiff base="b" files={files} commenting={commenting((p) => shown.push(p))} />));
+      const all = [...host.querySelectorAll<HTMLButtonElement>('[data-testid="comment-mark"]')];
+      expect(all.map((m) => `${m.dataset["where"]}:${m.dataset["path"]}`).sort()).toEqual(["head:src/a.ts", "list:src/a.ts"]);
+      for (const m of all) {
+        expect(m.closest('[data-testid="diff-file"]')).toBeNull();
+        expect(m.getAttribute("aria-label")).toBe("3 comments on src/a.ts — show next");
+        expect(m.textContent).toBe("3");
+      }
+      // No button holds a button.
+      expect(host.querySelectorAll("button button").length).toBe(0);
+      all[0]!.click();
+      expect(shown).toEqual(["src/a.ts"]);
+      // An unmarked file stays one button.
+      expect(host.querySelector('[data-testid="diff-file"][data-path="src/b.ts"]')!.parentElement!.tagName).toBe("NAV");
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
+  test("while cycling the mark reads k / N and names the comment", () => {
+    const html = renderToStaticMarkup(<LiveDiff base="b" files={files} commenting={{ ...commenting(), fileComments: (p: string) => (p === "src/a.ts" ? { count: 3, label: "x", position: 2 } : null) }} />);
+    expect(html).toContain("Comment 2 of 3 on src/a.ts — show next");
+    expect(html).toContain("2 / 3");
+  });
+
+  test("commented files the page's filter hides are listed with their marks", () => {
+    const html = renderToStaticMarkup(<LiveDiff base="b" files={files} filteredOut={["docs/c.md"]} commenting={commenting()} />);
+    expect(html).toContain("With comments, hidden by the filter");
+    expect(html).toContain('data-testid="filtered-out-file" data-path="docs/c.md"');
+    expect(html).toContain("Comment 1 of 1 on docs/c.md — show next");
+    expect(renderToStaticMarkup(<LiveDiff base="b" files={files} commenting={commenting()} />)).not.toContain("hidden by the filter");
+  });
+
 });

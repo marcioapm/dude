@@ -93,6 +93,37 @@ function DiffDemo({ view }: { readonly view: "unified" | "split" }) {
   );
 }
 
+const SECOND: RunDiffFile = { path: "orchestrator/internal/shim/acp_test.go", status: "A", additions: 3, deletions: 0,
+  hunks: [{ header: "@@ -0,0 +1,3 @@", lines: [l("+", null, 1, "func TestToolTracker(t *testing.T) {"), l("+", null, 2, "\tt.Parallel()"), l("+", null, 3, "}")] }] };
+
+/**
+ * A branch review's comment marks: a count on the file's header and beside
+ * its list entry; activating one moves through its comments ("2 / 3"),
+ * wrapping. `filter` hides a commented file, which stays listed.
+ */
+function MarksDemo({ filter = "", position, bar = false }: { readonly filter?: string; readonly position?: number; readonly bar?: boolean }) {
+  const [at, setAt] = useState<number | undefined>(position);
+  const [tools, setTools] = useState<HTMLElement | null>(null);
+  const all = [FILE, SECOND];
+  const files = all.filter((f) => f.path.includes(filter));
+  const marks = (path: string) => path === FILE.path ? { count: 3, label: "1 submitted by Ana Ribeiro · 1 your draft · 1 outdated · lines changed since", position: at }
+    : path === SECOND.path ? { count: 1, label: "1 submitted by Ana Ribeiro" } : null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: 380 }}>
+      {bar ? <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", background: "var(--ds-color-chrome)" }}>
+        <span style={{ fontFamily: "var(--ds-font-mono)", fontSize: "var(--ds-text-sm)" }}>main 2be91c7…7ac42e1</span>
+        <span style={{ flex: 1 }} /><span ref={setTools} style={{ display: "flex" }} />
+      </div> : null}
+      <LiveDiff files={files} base="2be91c7a" toolbarIn={bar ? tools : undefined} scopeLabel={bar ? null : undefined}
+        filteredOut={all.filter((f) => !files.includes(f) && marks(f.path)).map((f) => f.path)}
+        listNote="Committed changes only · pinned branch snapshot." commenting={{
+          canStart: true, maxLines: 20, selection: null, onSelectionChange: () => {},
+          fileComments: marks, onFileComments: (p) => { if (p === FILE.path) setAt((n) => ((n ?? 0) % 3) + 1); },
+        }} />
+    </div>
+  );
+}
+
 function TrayDemo({ full = false }: { readonly full?: boolean }) {
   const [open, setOpen] = useState(!full);
   const [confirm, setConfirm] = useState(false);
@@ -120,6 +151,15 @@ export function FeedbackSection({ mode }: { readonly mode: PaneMode }) {
         <Panes mode={mode}><DiffDemo view="unified" /></Panes>
         <div style={{ height: 8 }} />
         <Panes mode={mode}><DiffDemo view="split" /></Panes>
+      </Block>
+      <Block id="fb-marks" title="Comment marks on a branch review" note="fileComments / onFileComments: the message glyph in secondary ink with a tabular count on the sticky header and beside the list entry (two sibling buttons, never one inside the other); the tooltip says drafts, submitted and outdated in words. Activating it cycles the file's comments, reading 2 / 3, and wraps. A commented file the page's filter hides stays listed (filteredOut). Drawn into a page's bar (toolbarIn), Unified / Split is toolbar size and scopeLabel={null} leaves the scope to the page.">
+        <Panes mode={mode}><MarksDemo /></Panes>
+        <div style={{ height: 8 }} />
+        <Panes mode={mode}><MarksDemo position={2} /></Panes>
+        <div style={{ height: 8 }} />
+        <Panes mode={mode}><MarksDemo filter="acp.go" /></Panes>
+        <div style={{ height: 8 }} />
+        <Panes mode={mode}><MarksDemo bar /></Panes>
       </Block>
       <Block id="fb-cards" title="FeedbackCard" note="Who, when, where it went, its status (tone, glyph and words), what it is on, its words and thread, and the actions its status allows: Reply and Resolve while it needs handling; Reopen once answered or resolved; Confirm resolved while its commit is unpublished. A draft carries the dashed bar of something not sent.">
         <Panes mode={mode}>

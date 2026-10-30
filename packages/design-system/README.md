@@ -1370,6 +1370,24 @@ here.
   transcript's edge. Inside it every row starts on the column and insets
   its glyph 8px, so a thought, an event and a tool call line up.
 - The task Sessions selector anchors under the header and sizes to the viewport.
+- **A session's Changes is not the task's.** A session's Changes remains
+  its checkout against its recorded starting commit and may include
+  unpublished work. Task Changes reviews one repository of one attempt's
+  cumulative committed branch, as a pinned snapshot whose base is
+  merge-base(target, head) recomputed at every capture. The diff starts
+  directly under the tabs: one `chrome` toolbar row holds the repository
+  `Select` (more than one repository), `Segmented size="toolbar"` Branch ·
+  Pending work, the snapshot as a mono line *main 2be91c7…7ac42e1 · 3 files
+  +18 −2* that opens its details (target, merge base, head, checksum,
+  source, as-of, published PR head, uncommitted work excluded), a neutral
+  *PR at 5f891b4* mark whenever the published PR head differs, the file
+  filter, General feedback, and LiveDiff's own Unified / Split through
+  `toolbarIn` with `scopeLabel={null}`. No heading or card above the diff.
+  A new snapshot is one slim neutral line under the bar naming what
+  happened (new commits, target merged in with the base move, or
+  rewritten), with Refresh, refused with its reason while an editor holds
+  unsaved text. On a phone the bar wraps to two rows. Pending session work
+  is a separate choice, never merged in.
 - **Changes is `LiveDiff`**: the agent's checkout against the commit the
   agent session started from, uncommitted work included. Its toolbar reads
   *Since abc1234 · N files +a −d*, then *Follow the agent* and Unified /
@@ -2558,12 +2576,16 @@ MarkdownCheatsheet.
   it changes (the rules are under *Agent sessions*): files with status and
   counts, sticky file headers, Unified / Split (`splitRows` pairs each
   removed run with the added run after it), fresh lines flashing, Follow
-  the agent, `leading` for the page's controls first in its toolbar, `toolbarIn` to draw its controls into a bar the page keeps mounted,
+  the agent, `leading` for the page's controls first in its toolbar, `toolbarIn` to draw its controls into a bar the page keeps mounted (its
+  Segmented then at `toolbar` size), `scopeLabel` to replace the *Since*
+  summary (null when the page shows its own), `filteredOut` for commented
+  files a page filter hides, `listNote` for the line under the file list,
   `lastChange` as `{ face, tool, path, when }` (the face stays whole; the
   tool gives way before the file name), `onOpenFile` for the viewer,
   `selected` / `onSelectedChange`
   to pick the file shown alone from outside, `fileList={false}` for one
-  file on its own, and `commenting` for people's feedback on its lines (see
+  file on its own, and `commenting` for people's feedback on its lines,
+  with `fileComments` / `onFileComments` for the comment mark (see
   *People's feedback*).
 - **DiffStat** — "+12 −3" in the diff's colours; every count of lines
   added and removed.
@@ -2994,7 +3016,7 @@ Before dude answers, the overlay follows `prefers-color-scheme` and updates when
 
 
 `src/components/FeedbackCard.tsx`, and `LiveDiff`'s `commenting` prop.
-Gallery: *People's feedback* (`#fb-diff`, `#fb-cards`, `#fb-editor`,
+Gallery: *People's feedback* (`#fb-diff`, `#fb-marks`, `#fb-cards`, `#fb-editor`,
 `#fb-tray`).
 
 In the web app, commenting lives on the task page: a Run's Changes take
@@ -3044,6 +3066,26 @@ comments when opened there, never on the standalone Run page.
   and **Submit N…**. At `max` it says so. `submitRefused` turns Submit off
   with the API's reason. **`SubmitFeedbackDialog`** says what goes, where,
   and what it holds until handled; Keep as drafts, Submit N.
+- **Feedback on a task's branch.** Task branch snapshots use LiveDiff
+  commenting and the existing task feedback drafts, submission, routing
+  and merge-hold model. A file with any feedback (drafts and submitted,
+  anyone's, outdated included) carries a comment mark on its sticky header
+  and in the file list: the `message` glyph in secondary ink with a
+  tabular count, no tone; drafts, submitted and outdated are told apart in
+  its tooltip, in words. In the list the mark is a sibling button of the
+  file's entry in one row (a button cannot hold a button). Its name is
+  "3 comments on <path> — show next", while cycling "Comment 2 of 3 on
+  <path> — show next". Activating it shows the file (clearing a filter
+  that hides it; picking it when another is shown alone, which turns
+  Follow off) and moves focus to its next comment in line order, outdated
+  ones first under the file header, with a one-shot `ds-flash`; the mark
+  reads *2 / 3* while cycling and wraps. Commented files a filter hides
+  stay listed under "With comments, hidden by the filter" (`filteredOut`).
+  Branch anchors carry the snapshot id; on a later snapshot they follow
+  their lines only on an exact simple shift (`relocateCodeAnchor`),
+  otherwise they are outdated with their original excerpt, never silently
+  moved. Confirmation says where the batch goes and that holds apply to
+  merging from dude and marking done, not a fabricated GitHub review.
 - **Holding the merge is not needs-you.** Nothing here is attention-toned:
   an item waits on an agent or on its author, not on the reader.
 

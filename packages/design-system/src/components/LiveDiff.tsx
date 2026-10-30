@@ -5,6 +5,7 @@ import { cx } from "../util/cx.ts";
 import { plural } from "../util/format.ts";
 import { Icon } from "../icons/index.tsx";
 import { IconButton } from "../primitives/Button.tsx";
+import { Tooltip } from "../primitives/Tooltip.tsx";
 import { DiffStat } from "./DiffStat.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { Switch } from "./Settings.tsx";
@@ -54,6 +55,25 @@ export interface LiveDiffProps extends Omit<HTMLAttributes<HTMLDivElement>, "chi
   readonly fileList?: boolean | undefined;
   /** Comments on lines: a gutter "+", a range picked by press and drag, and rows under a line. */
   readonly commenting?: LiveDiffCommenting | undefined;
+  /**
+   * Replaces the toolbar's "Since abc1234 · N files" summary; `null` leaves
+   * it out, for a page that draws its own scope in its bar.
+   */
+  readonly scopeLabel?: ReactNode;
+  /**
+   * Paths a page's filter hides that still have comments: listed after the
+   * matches, each with its comment mark, so a filter never hides feedback.
+   */
+  readonly filteredOut?: ReadonlyArray<string> | undefined;
+  /** Under the file list: what the diff is ("Uncommitted work counts…" for an agent's checkout, the default). */
+  readonly listNote?: ReactNode;
+}
+
+/** A file's comments, for its mark: how many, the breakdown in words, and the one shown last while cycling (1-based). */
+export interface FileComments {
+  readonly count: number;
+  readonly label: string;
+  readonly position?: number | undefined;
 }
 
 export type LiveDiffView = "unified" | "split";
@@ -82,6 +102,38 @@ export interface LiveDiffCommenting {
   readonly renderFileHead?: ((path: string) => ReactNode) | undefined;
   /** After a file's name in the list: how many comments it has. */
   readonly fileMark?: ((path: string) => ReactNode) | undefined;
+  /**
+   * A file's comments (drafts and submitted, outdated included), null for
+   * none: draws the comment mark on its sticky header and its list entry.
+   */
+  readonly fileComments?: ((path: string) => FileComments | null) | undefined;
+  /** The mark activated: the page shows the file and moves to its next comment. */
+  readonly onFileComments?: ((path: string) => void) | undefined;
+}
+
+/** The accessible name of a file's comment mark. */
+export function commentMarkName(path: string, info: FileComments): string {
+  return info.position
+    ? `Comment ${info.position} of ${info.count} on ${path} — show next`
+    : `${plural(info.count, "comment")} on ${path} — show next`;
+}
+
+/**
+ * A file's comment mark: the `message` glyph in secondary ink with a
+ * tabular count ("2 / 3" while cycling), no tone; its tooltip says in
+ * words what the comments are. A button of its own, beside — never inside —
+ * the file's entry.
+ */
+function CommentMark({ path, info, onShow, where }: { path: string; info: FileComments; onShow?: ((path: string) => void) | undefined; where: "head" | "list" }) {
+  return (
+    <Tooltip content={info.label}>
+      <button type="button" className={styles["commentMark"]} aria-label={commentMarkName(path, info)} data-testid="comment-mark" data-path={path} data-where={where}
+        onClick={(e) => { e.stopPropagation(); onShow?.(path); }}>
+        <Icon name="message" size={14} />
+        <span className={styles["commentCount"]}>{info.position ? `${info.position} / ${info.count}` : info.count}</span>
+      </button>
+    </Tooltip>
+  );
 }
 
 /** A line's "+" and numbers carry where they are, so one handler on the diff serves all of them. */
@@ -185,6 +237,7 @@ export function splitRows(lines: ReadonlyArray<LiveDiffLine>): SplitRow[] {
 }
 
 const SIGN = { "+": "+", "-": "−", " ": "" } as const;
+const NONE: ReadonlyArray<string> = [];
 
 /**
  * A working agent's checkout against where it started, as it changes: the
@@ -200,7 +253,7 @@ const SIGN = { "+": "+", "-": "−", " ": "" } as const;
  * the new. Changes are told apart by sign and gutter as well as tint
  * (+, −), so the diff reads without colour.
  */
-export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, commenting, className, ...rest }: LiveDiffProps) {
+export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, emptyMessage, onOpenFile, defaultView = "unified", selected: given, onSelectedChange, fileList = true, commenting, scopeLabel, filteredOut = NONE, listNote, className, ...rest }: LiveDiffProps) {
   const [view, setView] = useState<LiveDiffView>(defaultView);
   // Keep the latest change in view: on while live, until the person picks a file.
   const [follow, setFollow] = useState(live ?? false);
@@ -345,7 +398,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
   const selection = commenting?.selection ?? null;
   const tools = (
     <>
-        {files.length > 0 ? (
+        {scopeLabel !== undefined ? scopeLabel : files.length > 0 ? (
           <span className={styles["since"]} title={base ? `The agent's checkout against ${base}: the commit it started from, or the latest one of others' it brought in. Uncommitted work included.` : undefined}>
             {base ? (
               <>
@@ -368,7 +421,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
           />
         ) : null}
         {files.length > 0 ? (
-          <Segmented label="Show the diff" size="sm" value={view} onChange={setView} data-testid="diff-view"
+          <Segmented label="Show the diff" size={toolbarIn ? "toolbar" : "sm"} value={view} onChange={setView} data-testid="diff-view"
             options={[{ value: "unified", label: "Unified" }, { value: "split", label: "Split" }]} />
         ) : null}
     </>
@@ -400,11 +453,12 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
               </button>
               {files.map((f) => {
                 const slash = f.path.lastIndexOf("/");
-                return (
+                const marked = commenting?.fileComments?.(f.path) ?? null;
+                const entry = (
                   <button
                     type="button"
                     key={f.path}
-                    className={cx(styles["file"], selected === f.path && styles["current"], fresh.paths.has(f.path) && styles["touched"])}
+                    className={cx(styles["file"], !marked && selected === f.path && styles["current"], !marked && fresh.paths.has(f.path) && styles["touched"])}
                     aria-pressed={selected === f.path}
                     title={`${f.path} · ${STATUS_WORD[f.status]}`}
                     onClick={() => select(f.path)}
@@ -422,8 +476,34 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
                     </span>
                   </button>
                 );
+                // With a mark, the entry and the mark are two buttons side by side in one row: a button cannot hold a button.
+                return marked ? (
+                  <div key={f.path} className={cx(styles["fileRow"], selected === f.path && styles["current"], fresh.paths.has(f.path) && styles["touched"])}
+                    data-testid="diff-file-row" data-path={f.path}>
+                    {entry}
+                    <CommentMark path={f.path} info={marked} onShow={commenting?.onFileComments} where="list" />
+                  </div>
+                ) : entry;
               })}
-              <p className={styles["note"]}>Uncommitted work counts: this is the agent's checkout now, not what it has pushed.</p>
+              {filteredOut.length > 0 ? <p className={styles["note"]} data-testid="filtered-out-note">With comments, hidden by the filter</p> : null}
+              {filteredOut.map((path) => {
+                const marked = commenting?.fileComments?.(path) ?? null;
+                if (!marked) return null;
+                const slash = path.lastIndexOf("/");
+                return (
+                  <div key={path} className={cx(styles["fileRow"], styles["filteredOut"])} data-testid="filtered-out-file" data-path={path}>
+                    <span className={styles["file"]} title={`${path} · hidden by the filter`}>
+                      <span />
+                      <span className={styles["path"]}>
+                        {slash >= 0 ? <span className={styles["dir"]}>{path.slice(0, slash + 1)}</span> : null}
+                        <b>{path.slice(slash + 1)}</b>
+                      </span>
+                    </span>
+                    <CommentMark path={path} info={marked} onShow={commenting?.onFileComments} where="list" />
+                  </div>
+                );
+              })}
+              <p className={styles["note"]}>{listNote !== undefined ? listNote : "Uncommitted work counts: this is the agent's checkout now, not what it has pushed."}</p>
             </nav>
           ) : null}
           <div className={cx(styles["diffs"], commenting && styles["commentable"], dragging && styles["dragging"])} ref={scroller} data-testid="diffs" {...pointer}>
@@ -436,6 +516,10 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
                   {f.status === "A" ? <span className={styles["muted"]}>new file</span> : null}
                   {f.status === "D" ? <span className={styles["muted"]}>deleted</span> : null}
                   <span className={styles["spacer"]} />
+                  {(() => {
+                    const marked = commenting?.fileComments?.(f.path) ?? null;
+                    return marked ? <CommentMark path={f.path} info={marked} onShow={commenting?.onFileComments} where="head" /> : null;
+                  })()}
                   <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
                   {onOpenFile && f.status !== "D" ? (
                     <IconButton icon="external" label="Open in the viewer" size="sm" onClick={() => onOpenFile(f.path)} data-testid="diff-open" />
