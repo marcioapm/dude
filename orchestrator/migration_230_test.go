@@ -72,6 +72,13 @@ func TestBranchSnapshotsAreUniqueScopedAndAskedForWhenTheBranchMoves(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("the app changing a snapshot: %v", err)
 	}
+	err = app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM task_branch_snapshots`)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("the app deleting a snapshot: %v", err)
+	}
 
 	requests := func() map[string]string {
 		t.Helper()
