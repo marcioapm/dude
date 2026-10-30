@@ -1089,7 +1089,6 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* A pull request step's state, inside its row's link: words in the row's muted ink. */
 /* Changes, until the branch review: the sessions that changed files, one row each. */
 .changesSessions {
   display: flex;
