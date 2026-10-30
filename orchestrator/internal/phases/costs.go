@@ -144,18 +144,12 @@ func (c *Costs) read(ctx context.Context, r costRun) (luxErr, dbErr error) {
 
 // putOff schedules the next read of a Run lux did not answer for.
 func (c *Costs) putOff(ctx context.Context, r costRun, wait time.Duration) error {
+	table := "runs"
 	if r.Recovery {
-		return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE run_recoveries SET lux_cost_next_at = CASE
-					WHEN ended_at < now() - make_interval(secs => $3) THEN NULL
-					ELSE now() + make_interval(secs => $2) END
-				WHERE id = $1`,
-				r.ID, wait.Seconds(), costPatience.Seconds())
-			return err
-		})
+		table = "run_recoveries"
 	}
 	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_cost_next_at = CASE
+		_, err := tx.Exec(ctx, `UPDATE `+table+` SET lux_cost_next_at = CASE
 				WHEN ended_at < now() - make_interval(secs => $3) THEN NULL
 				ELSE now() + make_interval(secs => $2) END
 			WHERE id = $1`,
