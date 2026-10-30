@@ -479,6 +479,50 @@ func TestAStoppedTasksRecoveriesDoNotHoldUpAClosedTasksBranch(t *testing.T) {
 	}
 }
 
+// A worker whose publisher lux took, and which died before it recorded it:
+// the next pass, finding the recovery still requested, ends it (lux has
+// lost the dead Run meanwhile). The publisher it never recorded is found
+// by its idempotency key, cancelled, and its cost read with the recovery.
+func TestARecoveryEndedBeforeItRecordedItsPublisherCancelsIt(t *testing.T) {
+	w := conducting(t)
+	task, run, _ := w.deadWriter("WIP.md", "half of it\n")
+	deadLux := w.luxRunOf(run)
+	w.noRecoveries = true
+	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	ctx := context.Background()
+	mustExec(t, w.owner, `CREATE FUNCTION lose_submitted() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'the worker died'; END $$`)
+	mustExec(t, w.owner, `CREATE TRIGGER lose_submitted BEFORE UPDATE ON run_recoveries FOR EACH ROW
+		WHEN (NEW.status = 'submitted') EXECUTE FUNCTION lose_submitted()`)
+	if _, err := w.syncer.SettleRecoveries(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pub := w.publisherOf(id)
+	if pub == nil || w.recoveryStatus(id) != "requested" {
+		t.Fatalf("after the lost update: publisher %v, recovery %s", pub, w.recoveryStatus(id))
+	}
+	mustExec(t, w.owner, `DROP TRIGGER lose_submitted ON run_recoveries`)
+	w.lux.ForgetRun(deadLux)
+	mustExec(t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+	if _, err := w.syncer.SettleRecoveries(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s := w.recoveryStatus(id); s != "failed" {
+		t.Fatalf("the recovery is %s", s)
+	}
+	if n := w.luxCalls(pub.ID, "cancel"); n == 0 {
+		t.Errorf("the publisher %s was never cancelled", pub.ID)
+	}
+	if got := w.str(`SELECT COALESCE(publisher_lux_run_id, '') FROM run_recoveries WHERE id = $1`, id); got != pub.ID {
+		t.Errorf("the recovery's publisher is %q, want %s: its cost is never read", got, pub.ID)
+	}
+	for _, r := range w.lux.Runs() {
+		if r != nil && r.ID != pub.ID && submitted(t, r).Labels["dude.recovery"] == id {
+			t.Errorf("a second publisher %s was submitted", r.ID)
+		}
+	}
+}
+
 // The recovered branch is the task's, as its per-Run branches are: kept
 // while a Stop waits on a pick-up, deleted from GitHub once the task ends.
 func TestARecoveredBranchIsDeletedWithTheTasksPerRunBranches(t *testing.T) {

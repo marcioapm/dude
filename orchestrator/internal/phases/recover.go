@@ -56,6 +56,9 @@ type recoveryRow struct {
 	StepLong                                          bool
 	Failures                                          int
 	Claim                                             string
+	// The worker before this one let its claim lapse: it may have died
+	// anywhere, a submitted publisher unrecorded included.
+	Lapsed bool
 }
 
 // recovered is one checkpoint chosen: its repository, head, and the commit
@@ -72,15 +75,15 @@ func (s *Syncer) SettleRecoveries(ctx context.Context) (int, error) {
 	var todo []recoveryRow
 	if err := s.DB.InSystem(ctx, "run-recoveries", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `WITH due AS (
-				SELECT id FROM run_recoveries
+				SELECT id, claim_token IS NOT NULL AS lapsed FROM run_recoveries
 				WHERE ended_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= now())
 				  AND (claimed_until IS NULL OR claimed_until <= now())
 				ORDER BY next_attempt_at NULLS FIRST, created_at LIMIT $1 FOR UPDATE SKIP LOCKED),
 			claimed AS (UPDATE run_recoveries c SET claim_token = gen_random_uuid()::text, claimed_until = now() + $2::interval
-				FROM due WHERE c.id = due.id RETURNING c.*)
+				FROM due WHERE c.id = due.id RETURNING c.*, due.lapsed)
 			SELECT c.id, c.organization_id, COALESCE(r.project_id, ''), c.task_id, c.run_id, c.branch, c.status,
 				COALESCE(r.lux_run_id, ''), COALESCE(c.publisher_lux_run_id, ''), COALESCE(r.image->>'ref', ''), r.base_shas,
-				c.checkpoints, COALESCE(c.dirty, '{}'), c.events_after, c.stepped_at < now() - $3::interval, c.failures, c.claim_token
+				c.checkpoints, COALESCE(c.dirty, '{}'), c.events_after, c.stepped_at < now() - $3::interval, c.failures, c.claim_token, c.lapsed
 			FROM claimed c JOIN runs r ON r.id = c.run_id ORDER BY c.created_at`,
 			recoverySlots, recoveryClaim.String(), recoveryStartGiveUp.String())
 		if err != nil {
@@ -173,6 +176,38 @@ func (s *Syncer) endRecovery(ctx context.Context, c recoveryRow, status, why str
 	})
 }
 
+// endRequested ends a recovery still requested, failed for why. A pass
+// before this one that failed or died may have had lux take its publisher
+// and not recorded it: asked again under its idempotency key, lux answers
+// that Run, which is recorded (its cost is read) and cancelled with the end.
+func (s *Syncer) endRequested(ctx context.Context, c recoveryRow, why string, results []delivery.RecoveredRepo) error {
+	if c.Failures > 0 || c.Lapsed {
+		spec, err := s.recoveryShell(ctx, c)
+		if err != nil {
+			return err
+		}
+		run, err := s.Lux.Submit(ctx, spec, "recover:"+c.ID)
+		if le, ok := lux.AsError(err); ok && !le.Retryable() {
+			// Refused, not answered with a Run: lux holds none under the key.
+			return s.endRecovery(ctx, c, delivery.RecoveryFailed, why, results)
+		} else if err != nil {
+			return err
+		}
+		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			tag, err := tx.Exec(ctx, `UPDATE run_recoveries SET publisher_lux_run_id = $3, lux_cost_next_at = now()
+				WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, c.ID, c.Claim, run.ID)
+			if err == nil && tag.RowsAffected() == 0 {
+				return delivery.ErrClaimLost
+			}
+			return err
+		}); err != nil {
+			return err
+		}
+		c.Publisher = run.ID
+	}
+	return s.endRecovery(ctx, c, delivery.RecoveryFailed, why, results)
+}
+
 // submitRecovery reads lux's checkpoints of the dead Run and submits the
 // publisher Run cloned from those with commits beyond the Run's start, in
 // the repositories the task may change.
@@ -202,7 +237,7 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	cps, err := s.Lux.Checkpoints(ctx, c.DeadLux)
 	if err != nil {
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
-			return s.endRecovery(ctx, c, delivery.RecoveryFailed, "lux has no checkpoint of it: "+le.Message, nil)
+			return s.endRequested(ctx, c, "lux has no checkpoint of it: "+le.Message, nil)
 		}
 		return err
 	}
@@ -242,12 +277,12 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 		} else if len(notUploaded) > 0 {
 			why = "lux's checkpoint of " + strings.Join(notUploaded, ", ") + " was never uploaded"
 		}
-		return s.endRecovery(ctx, c, delivery.RecoveryFailed, why, nil)
+		return s.endRequested(ctx, c, why, nil)
 	}
 	spec, err := s.recoverySpec(ctx, c, chosen, byName)
 	if err != nil {
 		if forge.Refused(err) {
-			return s.endRecovery(ctx, c, delivery.RecoveryFailed, "GitHub would not give dude a token to push: "+err.Error(), nil)
+			return s.endRequested(ctx, c, "GitHub would not give dude a token to push: "+err.Error(), nil)
 		}
 		return err
 	}
@@ -288,6 +323,27 @@ func (s *Syncer) recoverySpec(ctx context.Context, c recoveryRow, chosen []recov
 	if err != nil {
 		return lux.Spec{}, err
 	}
+	spec, err := s.recoveryShell(ctx, c)
+	if err != nil {
+		return lux.Spec{}, err
+	}
+	spec.Workload.Workdir = RepoPath(chosen[0].Repo)
+	spec.Git = &lux.Git{Push: &lux.Push{Branch: c.Branch}}
+	for _, cp := range chosen {
+		spec.Git.Repositories = append(spec.Git.Repositories, lux.Repository{Name: cp.Repo, Path: RepoPath(cp.Repo),
+			From: &lux.RepositoryFrom{Run: c.DeadLux, Repo: cp.Repo}, Credential: names[cp.Repo]})
+	}
+	for _, t := range tokens {
+		t.As = "none"
+		spec.Secrets = append(spec.Secrets, t)
+	}
+	return spec, nil
+}
+
+// recoveryShell is the publisher Run without its repositories: what
+// endRequested asks lux for again, by its idempotency key, to learn the
+// publisher lux took.
+func (s *Syncer) recoveryShell(ctx context.Context, c recoveryRow) (lux.Spec, error) {
 	image := c.Image
 	if image == "" {
 		image = s.Agent.DefaultImage
@@ -296,20 +352,11 @@ func (s *Syncer) recoverySpec(ctx context.Context, c recoveryRow, chosen []recov
 		Name:         "recover " + c.RunID,
 		Labels:       map[string]string{lux.AppLabel: lux.App, "dude.org": c.Org, "dude.task": c.TaskID, "dude.kind": "recovery", "dude.recovery": c.ID, "dude.run": c.RunID},
 		Image:        lux.Image{Ref: image},
-		Workload:     lux.Workload{Adapter: "generic", Command: []string{"sleep", "infinity"}, Workdir: RepoPath(chosen[0].Repo)},
+		Workload:     lux.Workload{Adapter: "generic", Command: []string{"sleep", "infinity"}},
 		Volumes:      []lux.Volume{{Name: "workspace", Path: workspaceDir, Kind: "state"}},
 		Timeout:      recoveryTimeout,
 		Network:      egress(s.Agent, nil, nil),
 		ResumePolicy: "never",
-		Git:          &lux.Git{Push: &lux.Push{Branch: c.Branch}},
-	}
-	for _, cp := range chosen {
-		spec.Git.Repositories = append(spec.Git.Repositories, lux.Repository{Name: cp.Repo, Path: RepoPath(cp.Repo),
-			From: &lux.RepositoryFrom{Run: c.DeadLux, Repo: cp.Repo}, Credential: names[cp.Repo]})
-	}
-	for _, t := range tokens {
-		t.As = "none"
-		spec.Secrets = append(spec.Secrets, t)
 	}
 	login, err := LoginFor(ctx, s.Registry, image, nil)
 	if err != nil {
