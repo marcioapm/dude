@@ -120,6 +120,9 @@ class CockpitGaps(unittest.TestCase):
         # A click outside closes it.
         line.click()
         expect(details).to_be_visible()
+        # A click on its text (focus leaves Close for nothing focusable) keeps it open.
+        details.locator("dd").first.click()
+        expect(details).to_be_visible()
         page.get_by_test_id("diff-section").first.click(position={"x": 400, "y": 60})
         expect(details).to_have_count(0)
 

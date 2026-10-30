@@ -548,9 +548,10 @@ function ChangesReview({ client, taskId, attempt, current, runs, version, runDif
       ) : null}
       <span className="changesTools" ref={setToolbar} />
       {details && snapshot && diff ? (
-        <div className="snapshotPopover" role="dialog" aria-label="Snapshot details" data-testid="snapshot-details"
+        <div className="snapshotPopover" role="dialog" aria-label="Snapshot details" data-testid="snapshot-details" tabIndex={-1}
           onKeyDown={(e) => { if (e.key === "Escape") { setDetails(false); detailsButton.current?.focus(); } }}
           // Focus leaving it (Tab past Close, Shift+Tab out) closes it: a popover nobody is in does not stay open over the diff.
+          // Focusable itself, a click on its text keeps focus in it (else the page's focusable ancestor takes it, and it closed).
           onBlur={(e) => {
             const to = e.relatedTarget as Element | null;
             if (to && !e.currentTarget.contains(to) && !to.closest(".snapshotLine, .prMark")) setDetails(false);
