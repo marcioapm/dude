@@ -129,16 +129,71 @@ test("it says hello to its opener, posted only to dude's origin, and connects on
   expect(count('[data-testid="ov-comment"]')).toBe(1);
 });
 
-test("branch mode offers direct submission, no feedback inbox, pins or task drafts", () => {
+test("branch mode offers direct submission and the server's saved feedback as pins, no task drafts", () => {
   boot();
   fromDude({ type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: [], drafts: 0, showPins: false });
-  expect(count('[data-testid="ov-pins"]')).toBe(0);
+  expect(count('[data-testid="ov-pins"]')).toBe(1);
   tid("ov-comment")!.click();
   const button = sized(win.document.querySelector("button.pay")!); hover(button);
   button.dispatchEvent(new win.MouseEvent("click", { bubbles: true, composed: true }));
   expect(tid("ov-save")!.textContent).toBe("Submit feedback");
   expect(tid("ov-comment-box")!.textContent).not.toContain("Private draft");
-  expect(tid("ov-comment-box")!.textContent).toContain("only through the CLI and API");
+  expect(tid("ov-comment-box")!.textContent).not.toContain("only through the CLI and API");
+  expect(tid("ov-comment-box")!.textContent).toContain("Everyone in the project sees it in dude");
+});
+
+test("branch mode pins the page's saved feedback, open and resolved, with the resolution, and View in dude goes to dude's tab", () => {
+  page(CART);
+  boot();
+  sized(win.document.querySelector("button.pay")!);
+  const pins: OverlayPin[] = [
+    { id: "fbi_1", n: 1, status: "open", author: "Ana", mine: false, body: "Too close", selector: "button.pay", when: "submitted 4 min ago", replies: [] },
+    { id: "fbi_2", n: 2, status: "resolved", author: "Tom", mine: false, body: "Hard to read", selector: "p.other", when: "submitted 31 min ago",
+      replies: [{ who: "Márcio", kind: "resolve", body: "More contrast" }] },
+  ];
+  sized(win.document.querySelector("p.other")!, 100, 300);
+  fromDude({ type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins, drafts: 0, showPins: true });
+  expect([...root.querySelectorAll('[data-testid="ov-pin"]')].map((p) => (p as HTMLElement).dataset.status)).toEqual(["open", "resolved"]);
+  tid("ov-pins")!.click();
+  expect(count('[data-testid="ov-row"]')).toBe(2);
+  (root.querySelector('[data-testid="ov-pin"][data-id="fbi_2"]') as HTMLElement).click();
+  expect(tid("ov-popover")!.textContent).toContain("resolved it");
+  expect(tid("ov-popover")!.textContent).toContain("More contrast");
+  expect(count('[data-k="open-in-dude"]')).toBe(0);
+  tid("ov-view-dude")!.click();
+  // View in dude never asks dude to open a task item.
+  expect(sent().some((m) => m.type === "open")).toBe(false);
+});
+
+test("an oversize or malformed branch session is refused: no pins, nothing connected", () => {
+  boot();
+  const pin = { id: "fbi_1", n: 1, status: "open", author: "Ana", mine: false, body: "x", selector: "button.pay", when: "now", replies: [] };
+  for (const bad of [
+    { type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: Array.from({ length: 201 }, (_, i) => ({ ...pin, id: `p${i}`, n: i + 1 })), drafts: 0, showPins: true },
+    { type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: [{ ...pin, body: "x".repeat(601) }], drafts: 0, showPins: true },
+    { type: "session", v: 1, mode: "branch", task: "feature/cart", url: PAGE, pins: [{ ...pin, extra: 1 }], drafts: 0, showPins: true },
+    { type: "session", v: 1, mode: "other", task: "feature/cart", url: PAGE, pins: [], drafts: 0, showPins: true },
+  ]) fromDude(bad as unknown as DudeToOverlay);
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  expect(count('[data-testid="ov-pin"]')).toBe(0);
+});
+
+test("a claim from another dude tab tells the old one it left and says hello to the new one; anything with it is ignored", () => {
+  boot();
+  connect();
+  const other = { postMessage: mock(() => {}), closed: false, focus: () => {} };
+  // Wrong origin, or extra keys: nothing happens.
+  fromDude({ type: "claim", v: 1 } as DudeToOverlay, "https://evil.example.test", other);
+  fromDude({ type: "claim", v: 1, url: "x" } as unknown as DudeToOverlay, DUDE, other);
+  expect(other.postMessage).not.toHaveBeenCalled();
+  fromDude({ type: "claim", v: 1 } as DudeToOverlay, DUDE, other);
+  expect(sent().at(-1)).toEqual({ type: "left", v: 1 });
+  expect(other.postMessage).toHaveBeenCalledWith({ type: "hello", v: 1, url: PAGE }, DUDE);
+  // Now the claiming tab is dude: its session connects, the old one's is not heard.
+  fromDude({ type: "session", v: 1, task: "OLD", url: PAGE, pins: [], drafts: 0, showPins: true });
+  expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
+  fromDude({ type: "session", v: 1, task: "NEW", url: PAGE, pins: [], drafts: 0, showPins: true }, DUDE, other);
+  expect(tid("ov-conn")!.textContent).toBe("connected to dude");
 });
 
 test("branch retryable outcome preserves the nonce for unchanged content", async () => {
