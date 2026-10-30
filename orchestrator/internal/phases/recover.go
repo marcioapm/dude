@@ -162,7 +162,7 @@ func (s *Syncer) endRecovery(ctx context.Context, c recoveryRow, status, why str
 //
 // It is asked for with the shell, not the spec submitted: that spec holds
 // tokens minted for that submit, which no later one can send again.
-func (s *Syncer) endRequested(ctx context.Context, c recoveryRow, why string, results []delivery.RecoveredRepo) error {
+func (s *Syncer) endRequested(ctx context.Context, c recoveryRow, why string) error {
 	if c.Checkpoints != nil {
 		spec, err := s.recoveryShell(ctx, c)
 		if err != nil {
@@ -171,7 +171,7 @@ func (s *Syncer) endRequested(ctx context.Context, c recoveryRow, why string, re
 		run, err := s.Lux.Submit(ctx, spec, "recover:"+c.ID)
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
 			// Refused, not answered with a Run: lux holds none under the key.
-			return s.endRecovery(ctx, c, delivery.RecoveryFailed, why, results)
+			return s.endRecovery(ctx, c, delivery.RecoveryFailed, why, nil)
 		} else if err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func (s *Syncer) endRequested(ctx context.Context, c recoveryRow, why string, re
 		}
 		c.Publisher = run.ID
 	}
-	return s.endRecovery(ctx, c, delivery.RecoveryFailed, why, results)
+	return s.endRecovery(ctx, c, delivery.RecoveryFailed, why, nil)
 }
 
 // submitRecovery reads lux's checkpoints of the dead Run and submits the
@@ -218,7 +218,7 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	cps, err := s.Lux.Checkpoints(ctx, c.DeadLux)
 	if err != nil {
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
-			return s.endRequested(ctx, c, "lux has no checkpoint of it: "+le.Message, nil)
+			return s.endRequested(ctx, c, "lux has no checkpoint of it: "+le.Message)
 		}
 		return err
 	}
@@ -258,12 +258,12 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 		} else if len(notUploaded) > 0 {
 			why = "lux's checkpoint of " + strings.Join(notUploaded, ", ") + " was never uploaded"
 		}
-		return s.endRequested(ctx, c, why, nil)
+		return s.endRequested(ctx, c, why)
 	}
 	spec, err := s.recoverySpec(ctx, c, chosen, byName)
 	if err != nil {
 		if forge.Refused(err) {
-			return s.endRequested(ctx, c, "GitHub would not give dude a token to push: "+err.Error(), nil)
+			return s.endRequested(ctx, c, "GitHub would not give dude a token to push: "+err.Error())
 		}
 		return err
 	}
