@@ -297,7 +297,9 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   const commenting = useMemo<LiveDiffCommenting | undefined>(() => (snapshot ? {
     canStart, maxLines: FEEDBACK_LIMITS.lines, selection, onSelectionChange, renderAfterLineFor, renderFileHead, fileComments, onFileComments,
   } : undefined), [snapshot, canStart, selection, onSelectionChange, renderAfterLineFor, renderFileHead, fileComments, onFileComments]);
-  return { commenting, byFile, unsaved: unsaved || Object.values(cardUnsaved).some(Boolean) };
+  // Only cards still placed count: an item gone from the snapshot's comments took its card's words with it.
+  const cardDirty = placed.some((p) => cardUnsaved[p.item.id]);
+  return { commenting, byFile, unsaved: unsaved || cardDirty };
 }
 
 export interface ChangesTabProps {

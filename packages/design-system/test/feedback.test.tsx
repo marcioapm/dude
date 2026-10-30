@@ -383,6 +383,17 @@ describe("FeedbackCard", () => {
     expect(told).toEqual([true, false, true, false]);
   });
 
+  test("a card unmounted while holding words tells the page it holds none", async () => {
+    const told: boolean[] = [];
+    const el = await mount(<FeedbackCard item={item({ status: "open" })} {...all} onDirtyChange={(d) => told.push(d)} />);
+    await fire(byRole(el, "button", "Reply"), mouse("click"));
+    await typeInto(byRole<HTMLTextAreaElement>(el, "textbox", "Reply"), "Gone with the card");
+    expect(told).toEqual([true]);
+    await act(async () => root!.unmount());
+    root = null;
+    expect(told).toEqual([true, false]);
+  });
+
   test("a refused action keeps the card and says why", async () => {
     const el = await mount(<FeedbackCard item={item({ status: "open" })} onResolve={async () => { throw new Error("this task is done"); }} />);
     await fire(byRole(el, "button", "Resolve"), mouse("click"));

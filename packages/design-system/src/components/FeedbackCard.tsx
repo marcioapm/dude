@@ -366,6 +366,10 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
     told.current = dirty;
     latestDirty.current?.(dirty);
   }, [dirty]);
+  // Gone while holding words: they went with it, so the page is told it holds none.
+  useEffect(() => () => {
+    if (told.current) latestDirty.current?.(false);
+  }, []);
   const a = item.anchor;
   const showOnPreview = onJump && a.kind === "preview"
     ? <Button size="sm" variant="quiet" leadingIcon="eye" onClick={onJump} data-testid="fb-show-on-preview">Show on preview</Button> : null;

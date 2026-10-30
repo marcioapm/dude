@@ -326,6 +326,22 @@ describe("the Changes tab: a pinned snapshot and an explicit refresh", () => {
     expect((q(tab, "changes-refresh") as HTMLButtonElement).disabled).toBe(false);
     expect(q(tab, "changes-refresh")!.getAttribute("aria-disabled") === "true").toBe(false);
   });
+
+  test("a reply typed in a card that leaves the screen (another file shown alone) does not lock Refresh or the repository", async () => {
+    const { tab } = await changes(fx("rebased"));
+    const replyButton = await until(() => tab.querySelector<HTMLElement>("[data-fb-item] [data-testid=fb-reply]"), "a Reply");
+    const path = replyButton.closest<HTMLElement>("[data-testid=diff-section]")!.dataset["path"]!;
+    await click(replyButton);
+    const box = await until(() => tab.querySelector<HTMLTextAreaElement>("[data-fb-item] textarea[aria-label=Reply]"), "the reply box");
+    await typeText(box, "Typed, then left.");
+    expect(q(tab, "changes-refresh")!.getAttribute("aria-disabled")).toBe("true");
+    const another = [...tab.querySelectorAll<HTMLElement>("[data-testid=diff-file]")].find((b) => b.dataset["path"] !== path)!;
+    await click(another);
+    await click([...tab.querySelectorAll("button")].find((b) => b.textContent?.startsWith("All files"))!);
+    expect(tab.querySelectorAll("textarea").length).toBe(0);
+    expect(q(tab, "changes-refresh")!.getAttribute("aria-disabled") === "true").toBe(false);
+    expect((q(tab, "changes-repo") as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 
 describe("the Changes tab: feedback on the branch", () => {
