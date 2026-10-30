@@ -335,6 +335,11 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			}
 			if body.Action != "resume" {
 				if decider == delivery.DeciderConductor {
+					// The stopped conductor's wait ends with it: the next
+					// one is briefed afresh.
+					if err := delivery.EndWaitsTx(r.Context(), tx, taskID, delivery.WaitConductorEnded); err != nil {
+						return err
+					}
 					if err := endLiveConductorTx(r.Context(), tx, org, t.ProjectID, taskID, live, "a person tried again"); err != nil {
 						return err
 					}
