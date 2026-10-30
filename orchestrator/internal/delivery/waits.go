@@ -536,7 +536,6 @@ func readWaitTx(ctx context.Context, tx pgx.Tx, taskID, waitID string, lock bool
 	// Its conditions are still read then, for the digest.
 	halted := false
 	if Ended(status) {
-		var err error
 		if halted, err = HaltedTx(ctx, tx, taskID); err != nil {
 			return v, err
 		}
@@ -559,7 +558,7 @@ func readWaitTx(ctx context.Context, tx pgx.Tx, taskID, waitID string, lock bool
 		}
 	}
 	switch {
-	case len(conds) > 0 && v.ev.holds && !halted:
+	case v.ev.holds && !halted:
 		v.by = WaitHeld
 	case due:
 		v.by = WaitDeadline
