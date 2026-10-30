@@ -12,7 +12,7 @@ import type { FeedbackDraftInput } from "../src/api/client.ts";
 import { act, click, emitForTest, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { BRANCH_KEY } from "../src/fixtures/branchDiff.ts";
-import { TASK_ID } from "../src/fixtures/data.ts";
+import { RUN_ID as RUN_ID_FX, TASK_ID } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { commentsByFile, marksLabel, newerWords, nextComment, refreshedWords } from "../src/branchReview.ts";
@@ -187,7 +187,45 @@ describe("the Changes tab: the branch", () => {
     state = "populated";
     await click([...tab.querySelectorAll("button")].find((b) => b.textContent === "Retry")!);
     await until(() => q(tab, "checkout-summary")?.textContent?.includes("2 files"), "retry succeeded");
-    expect(calls).toBeGreaterThanOrEqual(4);
+    // One live session: one read on opening, one per event, one on Retry.
+    expect(calls).toBe(4);
+  });
+
+  test("Pending keeps at most three checkout reads in flight, and reads each of five sessions once", async () => {
+    const client = fx("populated");
+    const task = client.getTask.bind(client);
+    const extra = ["run_p2", "run_p3", "run_p4", "run_p5"];
+    client.getTask = async (id) => {
+      const t = await task(id);
+      const first = t.runs.find((r) => r.status === "running")!;
+      return { ...t, runs: [...t.runs, ...extra.map((r) => ({ ...first, id: r }))] };
+    };
+    const original = client.runDiff.bind(client);
+    const asked: string[] = [];
+    const waiting: Array<() => void> = [];
+    let inFlight = 0;
+    let most = 0;
+    client.runDiff = async (id) => {
+      asked.push(id);
+      most = Math.max(most, ++inFlight);
+      await new Promise<void>((r) => waiting.push(r));
+      inFlight--;
+      return original(RUN_ID_FX);
+    };
+    const { tab } = await changes(client);
+    await click([...q(tab, "changes-scope")!.querySelectorAll("button")].find((b) => b.textContent === "Pending work")!);
+    await until(() => (asked.length === 3 ? asked : null), "three reads");
+    await settle(50);
+    expect(asked.length).toBe(3);
+    expect(most).toBe(3);
+    while (asked.length < 5 || waiting.length) {
+      await act(async () => { waiting.shift()?.(); });
+      await settle(10);
+    }
+    await until(() => (qa(tab, "checkout-summary").every((s) => s.textContent?.includes("2 files")) ? tab : null), "every session read");
+    expect(most).toBe(3);
+    expect([...asked].sort()).toEqual([...new Set(asked)].sort());
+    expect(asked.length).toBe(5);
   });
 
   test("Pending work lists the live sessions, each to its own Changes; never in the branch view", async () => {
