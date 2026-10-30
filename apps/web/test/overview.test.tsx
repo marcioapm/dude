@@ -238,6 +238,8 @@ describe("the fixtures' Overview states", () => {
     expect(text(rows[0])).toContain("Check retry of the payment step against concurrent submits · step 2 of 3");
     expect(text(rows[1])).toContain("bash · rg -n \"invoice\" apps/web/src/checkout");
     expect(page.querySelector("[data-testid=overview-pull-requests] [data-testid=pr-panel]")).not.toBeNull();
+    // Lead time runs from before the first Run (200 minutes before the fixtures loaded), not from the newest (6).
+    expect(text(tile(page, "overview-lead"))).toMatch(/Lead time3h 3\dm/);
   });
 
   test("question: the implementer's question is the needs-you region, and its row says it waits on the answer", async () => {

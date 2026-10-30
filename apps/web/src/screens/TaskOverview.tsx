@@ -327,7 +327,7 @@ export function TaskOverview(p: TaskOverviewProps) {
           </div>
           {p.milestones.length > 0 ? (
             <Timeline wide>
-              {p.milestones.map((m) => <TimelineItem key={m.id} who={m.who} when={ago(m.at)} data-testid="overview-milestone">{m.text}</TimelineItem>)}
+              {p.milestones.map((m, i) => <TimelineItem key={`${m.id}:${i}`} who={m.who} when={ago(m.at)} data-testid="overview-milestone">{m.text}</TimelineItem>)}
             </Timeline>
           ) : <p className="muted">Nothing recorded yet beyond the task itself.</p>}
         </section>

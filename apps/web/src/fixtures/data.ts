@@ -732,7 +732,8 @@ export function overviewMetrics(view: OverviewView): TaskMetrics {
   });
   const sum = (f: (x: (typeof rows)[number]) => number) => rows.reduce((n, x) => n + f(x), 0);
   return {
-    leadMs: runs.length ? Date.now() - Date.parse(runs.at(-1)!.createdAt) + 10 * MIN : 0,
+    // Asked ten minutes before its first Run was created.
+    leadMs: runs.length ? Date.now() - Math.min(...runs.map((r) => Date.parse(r.createdAt))) + 10 * MIN : 0,
     activeMs: sum((x) => x.activeMs), humanWaitMs: view === "question" ? 4 * MIN : 0, reviewMs: view === "ready" ? 30 * MIN : 0,
     costUsd: sum((x) => x.cost.tokensUsd),
     cost: { totalUsd: sum((x) => x.cost.totalUsd), tokensUsd: sum((x) => x.cost.tokensUsd), machineUsd: sum((x) => x.cost.machineUsd),
