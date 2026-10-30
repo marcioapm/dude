@@ -337,3 +337,40 @@ func TestPruneIsTheSweepersAlone(t *testing.T) {
 	}
 	f.want("a1", "a2")
 }
+
+// A snapshot someone is writing a feedback item on (the item's foreign key
+// holds it, not yet committed) is skipped, never waited on, and kept once
+// the item commits.
+func TestPruneSkipsASnapshotAWriterHolds(t *testing.T) {
+	f := newPruneFixture(t)
+	f.chain("h", 1, "repo_api", 3, 48)
+	ctx := context.Background()
+	writer, err := f.app.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback(ctx)
+	if _, err := writer.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, f.org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Exec(ctx, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
+		VALUES ('fbi_h', $1, 'wi_p', 1, 'per_p', 'b', 'code', 'h1', '{}')`, f.org); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := f.app.InSystem(ctx, "test", func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '2s'`); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT prune_branch_snapshots(100)`).Scan(&n)
+	}); err != nil {
+		t.Fatalf("the pruner waited on the writer: %v", err)
+	}
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.want("h1", "h3")
+	if got := f.link("h3"); got != "h1 fast-forward 2" {
+		t.Errorf("h3: %q", got)
+	}
+}
