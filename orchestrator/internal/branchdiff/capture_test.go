@@ -178,12 +178,26 @@ func TestALineageOfSnapshotsFollowsTheBranch(t *testing.T) {
 	}
 
 	// Idempotent: read again with nothing moved, and main alone moving, make none.
+	compares := func() int {
+		n := 0
+		for _, r := range w.fake.Requests() {
+			if strings.Contains(r, "/compare/") {
+				n++
+			}
+		}
+		return n
+	}
+	before := compares()
 	w.capture()
 	base0 := w.fake.SHA("main")
 	w.fake.CommitFiles("main", "elsewhere", map[string]string{"other.ts": "x\n"})
 	w.capture()
 	if n := len(w.snapshots()); n != 1 {
 		t.Fatalf("%d snapshots after the target alone moved, want 1", n)
+	}
+	// The branch head read is enough: nothing compared for a head it has.
+	if n := compares() - before; n != 0 {
+		t.Errorf("%d compares for an unchanged head", n)
 	}
 
 	w.fake.CommitFiles(w.branch, "second", map[string]string{"app.ts": "one\n2\n3\n"})
