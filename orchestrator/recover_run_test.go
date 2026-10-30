@@ -590,3 +590,39 @@ func TestARecoveryStopsWaitingOnARunsControlAfterItsGiveUp(t *testing.T) {
 	}
 	w.until("the conductor woken", func() bool { return w.recoveredWakes(task) == 1 })
 }
+
+// A recovery that failed once before it ever asked lux for a publisher
+// (a transient error reading lux, say) and then finds nothing committed
+// ends with no publisher: none is submitted to be cancelled, none recorded.
+func TestARecoveryThatFailedBeforeItsSubmitEndsWithNoPublisher(t *testing.T) {
+	w := conducting(t)
+	w.hangingWriters()
+	task := w.task()
+	w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	var run, luxID string
+	w.until("the implementer at work", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(lux_run_id, '') FROM runs WHERE task_id = $1
+			AND phase = 'implement' AND lux_state = 'running' AND base_shas ? 'target'`, task).Scan(&run, &luxID)
+		return luxID != ""
+	})
+	w.lux.Timeout(luxID)
+	w.until("the implementer failed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND lux_stop_reason = 'cancel'`, run) == 1
+	})
+	w.noRecoveries = true
+	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	// What a pass that failed on a transient error leaves: a failure counted.
+	mustExec(t, w.owner, `UPDATE run_recoveries SET failures = 1 WHERE id = $1`, id)
+	w.noRecoveries = false
+	w.until("the recovery failed", func() bool { return w.recoveryStatus(id) == "failed" })
+	if why := w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id); !strings.Contains(why, "nothing committed") {
+		t.Errorf("failed saying %q", why)
+	}
+	if pub := w.publisherOf(id); pub != nil {
+		t.Errorf("a publisher %s was submitted for nothing", pub.ID)
+	}
+	if got := w.str(`SELECT COALESCE(publisher_lux_run_id, '') FROM run_recoveries WHERE id = $1`, id); got != "" {
+		t.Errorf("a publisher %s is recorded", got)
+	}
+}

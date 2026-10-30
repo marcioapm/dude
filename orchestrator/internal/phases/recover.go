@@ -56,9 +56,6 @@ type recoveryRow struct {
 	StepLong                                          bool
 	Failures                                          int
 	Claim                                             string
-	// The worker before this one let its claim lapse: it may have died
-	// anywhere, a submitted publisher unrecorded included.
-	Lapsed bool
 }
 
 // recovered is one checkpoint chosen: its repository, head, and the commit
@@ -75,15 +72,15 @@ func (s *Syncer) SettleRecoveries(ctx context.Context) (int, error) {
 	var todo []recoveryRow
 	if err := s.DB.InSystem(ctx, "run-recoveries", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `WITH due AS (
-				SELECT id, claim_token IS NOT NULL AS lapsed FROM run_recoveries
+				SELECT id FROM run_recoveries
 				WHERE ended_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= now())
 				  AND (claimed_until IS NULL OR claimed_until <= now())
 				ORDER BY next_attempt_at NULLS FIRST, created_at LIMIT $1 FOR UPDATE SKIP LOCKED),
 			claimed AS (UPDATE run_recoveries c SET claim_token = gen_random_uuid()::text, claimed_until = now() + $2::interval
-				FROM due WHERE c.id = due.id RETURNING c.*, due.lapsed)
+				FROM due WHERE c.id = due.id RETURNING c.*)
 			SELECT c.id, c.organization_id, COALESCE(r.project_id, ''), c.task_id, c.run_id, c.branch, c.status,
 				COALESCE(r.lux_run_id, ''), COALESCE(c.publisher_lux_run_id, ''), COALESCE(r.image->>'ref', ''), r.base_shas,
-				c.checkpoints, COALESCE(c.dirty, '{}'), c.events_after, c.stepped_at < now() - $3::interval, c.failures, c.claim_token, c.lapsed
+				c.checkpoints, COALESCE(c.dirty, '{}'), c.events_after, c.stepped_at < now() - $3::interval, c.failures, c.claim_token
 			FROM claimed c JOIN runs r ON r.id = c.run_id ORDER BY c.created_at`,
 			recoverySlots, recoveryClaim.String(), recoveryStartGiveUp.String())
 		if err != nil {
@@ -177,11 +174,16 @@ func (s *Syncer) endRecovery(ctx context.Context, c recoveryRow, status, why str
 }
 
 // endRequested ends a recovery still requested, failed for why. A pass
-// before this one that failed or died may have had lux take its publisher
-// and not recorded it: asked again under its idempotency key, lux answers
-// that Run, which is recorded (its cost is read) and cancelled with the end.
+// before this one that asked lux for its publisher (its checkpoints were
+// recorded first) may have had lux take it and not recorded it: asked
+// again under its idempotency key, lux answers that Run, which is recorded
+// (its cost is read) and cancelled with the end. A recovery that never
+// asked has no publisher to find, and none is asked for.
+//
+// It is asked for with the shell, not the spec submitted: that spec holds
+// tokens minted for that submit, which no later one can send again.
 func (s *Syncer) endRequested(ctx context.Context, c recoveryRow, why string, results []delivery.RecoveredRepo) error {
-	if c.Failures > 0 || c.Lapsed {
+	if c.Checkpoints != nil {
 		spec, err := s.recoveryShell(ctx, c)
 		if err != nil {
 			return err
@@ -291,6 +293,19 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 		}
 		return err
 	}
+	// The checkpoints chosen are recorded before lux is asked: a pass that
+	// ends this recovery still requested looks for a publisher only then.
+	raw, _ := json.Marshal(chosen)
+	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE run_recoveries SET checkpoints = $3::jsonb
+			WHERE id = $1 AND claim_token = $2 AND status = 'requested'`, c.ID, c.Claim, raw)
+		if err == nil && tag.RowsAffected() == 0 {
+			return delivery.ErrClaimLost
+		}
+		return err
+	}); err != nil {
+		return err
+	}
 	run, err := s.Lux.Submit(ctx, spec, "recover:"+c.ID)
 	if err != nil {
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {
@@ -298,7 +313,6 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 		}
 		return err
 	}
-	raw, _ := json.Marshal(chosen)
 	return s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		// Its publisher's cost is read from now on (Costs), as a Run's is.
 		tag, err := tx.Exec(ctx, `UPDATE run_recoveries SET status = 'submitted', publisher_lux_run_id = $3, checkpoints = $4::jsonb,
