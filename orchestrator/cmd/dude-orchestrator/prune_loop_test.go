@@ -44,27 +44,23 @@ func TestThePruneLoopWaitsAfterAPassOverABacklog(t *testing.T) {
 		prev = id
 	}
 	var calls atomic.Int32
-	first := make(chan struct{})
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	l := loop{"branch-snapshots-prune", time.Hour, func(ctx context.Context) (int, error) {
-		n, err := branchdiff.Prune(ctx, app, log)
-		if calls.Add(1) == 1 {
-			close(first)
-		}
-		return n, err
+		calls.Add(1)
+		return branchdiff.Prune(ctx, app, log)
 	}}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		l.run(ctx, log, nil)
-	}()
-	<-first
-	// A second pass at once would take a few milliseconds; give it far more.
-	time.Sleep(500 * time.Millisecond)
-	cancel()
-	<-done
-	if n := calls.Load(); n != 1 {
-		t.Errorf("%d passes, want 1 then a wait for the interval", n)
+	// The loop's wait: what it chose to wait for, after how many passes;
+	// then it is stopped, so no second pass can follow.
+	var waits []time.Duration
+	var passesBefore int32
+	l.runWaiting(ctx, log, nil, func(d time.Duration) <-chan time.Time {
+		waits = append(waits, d)
+		passesBefore = calls.Load()
+		cancel()
+		return nil
+	})
+	if len(waits) != 1 || waits[0] != time.Hour || passesBefore != 1 {
+		t.Errorf("waited %v after %d passes, want the interval (1h) after 1", waits, passesBefore)
 	}
 	var left int
 	if err := owner.QueryRow(context.Background(), `SELECT count(*) FROM task_branch_snapshots`).Scan(&left); err != nil || left != 1 {

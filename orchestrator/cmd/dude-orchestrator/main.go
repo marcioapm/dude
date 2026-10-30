@@ -493,6 +493,12 @@ type loop struct {
 }
 
 func (l loop) run(ctx context.Context, log *slog.Logger, wake <-chan struct{}) {
+	l.runWaiting(ctx, log, wake, time.After)
+}
+
+// runWaiting is run with its wait for the interval given: time.After, or a
+// test's that sees what the loop chose to wait for.
+func (l loop) runWaiting(ctx context.Context, log *slog.Logger, wake <-chan struct{}, wait func(time.Duration) <-chan time.Time) {
 	for ctx.Err() == nil {
 		n, err := l.sweep(ctx)
 		if err != nil && ctx.Err() == nil {
@@ -506,7 +512,7 @@ func (l loop) run(ctx context.Context, log *slog.Logger, wake <-chan struct{}) {
 		select {
 		case <-ctx.Done():
 		case <-wake:
-		case <-time.After(l.interval):
+		case <-wait(l.interval):
 		}
 	}
 }
