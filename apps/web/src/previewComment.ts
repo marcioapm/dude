@@ -333,6 +333,8 @@ interface Pane {
   touched: number;
   // Reached by name in another of this person's dude tabs and claimed from it.
   claimed: boolean;
+  // Branch mode: the page holds pins this tab sent it, until an empty session takes them back.
+  pinned: boolean;
 }
 
 /**
@@ -476,7 +478,7 @@ export class PreviewCommenting {
     const before = this.#tabHeld.get(win);
     if (before && before !== this) before.#release(win);
     const pane: Pane = { win, url, server, state: "waiting", saved: 0, pendingHighlight: null, inFlight: null, answered: new Map(),
-      uploads: new Map(), helloTimer: 0, touched: ++this.#clock, claimed: false };
+      uploads: new Map(), helloTimer: 0, touched: ++this.#clock, claimed: false, pinned: false };
     this.#panes.push(pane);
     this.#tabHeld.set(win, this);
     this.#watchClosed();
@@ -709,6 +711,7 @@ export class PreviewCommenting {
     const origin = httpsOriginOf(pane.url);
     if (closedOrGone(pane.win) || !origin) return;
     pane.win.postMessage(msg, origin);
+    if (msg.type === "session") pane.pinned = msg.pins.length > 0;
   }
 
   #refuse(pane: Pane, reason: string, nonce: string | undefined): void {
@@ -837,15 +840,14 @@ export class PreviewCommenting {
       this.#valid = true;
       if (p.url === url) this.#connected(p, url);
     }, (err: unknown) => {
-      const was = this.#valid;
       this.#valid = false;
       // A transport failure leaves the window waiting; only the API's refusal is told to the page.
       if ((err as { definite?: boolean } | null)?.definite) {
-        // Every page of this server that was sent pins loses them: an ended preview's feedback is shown no more.
+        // Every page of this server still holding pins loses them, even after a transport failure in between.
         const reason = err instanceof Error ? err.message : "This preview ended.";
         for (const q of this.#panes) {
           if (q !== p && (q.state !== "open" || !q.url)) continue;
-          if (was && q.url) this.#post(q, this.#session(q.url, false));
+          if (q.pinned && q.url) this.#post(q, this.#session(q.url, false));
           this.#refuse(q, reason, undefined);
         }
       }

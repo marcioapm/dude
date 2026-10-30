@@ -218,3 +218,22 @@ test("a preview that stopped drops its pins: its Run's end re-checks at once, an
   await tick();
   expect(client.checks).toHaveBeenCalledTimes(2);
 });
+
+test("a transport failure between the pins and the refusal still drops the pins", async () => {
+  const { client, send, windows } = setup();
+  await connected(send);
+  const sessions = () => told().filter((m) => m.type === "session") as Array<{ type: string; pins: unknown[] }>;
+  expect(sessions().at(-1)!.pins.length).toBe(1);
+  client.checks.mockImplementation(async () => { throw new TypeError("network down"); });
+  windows.recheck("run_first");
+  await tick();
+  // Retryable: the page hears nothing and keeps what it has.
+  expect(client.checks).toHaveBeenCalledTimes(2);
+  expect(sessions().at(-1)!.pins.length).toBe(1);
+  client.checks.mockImplementation(async () => { throw new ApiError(404, "not_found", "This preview ended."); });
+  windows.recheck("run_first");
+  await tick();
+  expect(client.checks).toHaveBeenCalledTimes(3);
+  expect(told().at(-1)).toMatchObject({ type: "refused", reason: "This preview ended." });
+  expect(sessions().at(-1)!.pins).toEqual([]);
+});
