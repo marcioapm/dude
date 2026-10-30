@@ -759,6 +759,12 @@ export class FixtureClient extends ApiClient {
     if (taskId !== TASK_ID) return Promise.reject(new ApiError(404, "not_found", `task ${taskId} not found`));
     try {
       const visible = this.feedbackItems.filter((i) => i.taskId === taskId && (i.status !== "draft" || i.author?.id === YOU));
+      // A task no agent has worked on has pushed no branch: nothing to show, as the API says.
+      if (this.#task.runs.length === 0) {
+        const none = branchDiffFor(branchState(), 1, options, []);
+        return Promise.resolve({ ...none, snapshot: null, newer: null, placements: [], pullRequest: null,
+          availability: { state: "none", reason: "No branch yet. It is recorded once an agent commits." } });
+      }
       return Promise.resolve(branchDiffFor(branchState(), this.#currentAttempt(), options, visible));
     } catch (e) {
       const err = e as { status?: number; code?: string; message: string };

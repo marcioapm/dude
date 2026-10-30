@@ -186,14 +186,25 @@ describe("needs you", () => {
 });
 
 describe("the branch, the pull request and the details", () => {
-  test("the Changes card names the branch, its target and the last head, and leads to Changes; no counts it cannot read", async () => {
+  test("the Changes card shows the latest snapshot: files, counts, base…head, whole branch; and leads to Changes", async () => {
     const page = await overview(fx(undefined, "d"));
-    const card = page.querySelector("[data-testid=overview-changes]")!;
-    const branch = card.querySelector("[data-testid=overview-branch]")!;
-    expect(text(branch)).toBe("dude/tsk_01j9x4kq/checkout-v2-split-payment→ mainat c91f7e2");
-    expect(text(card)).not.toMatch(/\d+ files?/);
+    const card = await until(() => page.querySelector("[data-testid=overview-changes]:has([data-testid=overview-snapshot])"), "the snapshot");
+    expect(text(card)).toContain("Committed · whole branch");
+    expect(text(card.querySelector("[data-testid=overview-snapshot]"))).toMatch(/5 files.*\+\d+.*main 2be91c7…7ac42e1/);
     await click(card.querySelector("[data-testid=overview-review-changes]")!);
     expect(selectedTab(page)).toBe("Changes");
+  });
+
+  test("the Changes card says preparing and unavailable as they are, never as no changes", async () => {
+    localStorage.setItem("dude.fixtures.branch", "preparing");
+    const preparing = await overview(fx(undefined, "d"));
+    await until(() => preparing.querySelector("[data-testid=overview-snapshot-preparing]"), "preparing");
+    for (const unmount of mounted) await unmount();
+    mounted = [];
+    localStorage.setItem("dude.fixtures.branch", "unavailable");
+    const unavailable = await overview(fx(undefined, "d"));
+    const line = await until(() => unavailable.querySelector("[data-testid=overview-snapshot-unavailable]"), "unavailable");
+    expect(text(line)).toContain("Resource not accessible");
   });
 
   test("the pull request's panel sits in its own column with its actions", async () => {

@@ -830,7 +830,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
   return (
     // On Sessions the page holds still and the session scrolls inside it.
-    <div className={tab === "sessions" || tab === "chat" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen" data-attempt={shown}>
+    <div className={tab === "sessions" || tab === "chat" || tab === "changes" ? "screen taskScreen fixed" : "screen taskScreen"} data-testid="task-screen" data-attempt={shown}>
       <header className="taskTop">
         <div className="taskCrumbs">{breadcrumb}</div>
         <span className="taskTopActions">
@@ -943,8 +943,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <Tab value="activity" tooltip={many ? "Every attempt" : undefined}>Activity</Tab>
         </TabList>
 
-        <TabPanel value="changes">
-          <ChangesTab runs={sessions} onOpenRun={onOpenRun} />
+        <TabPanel value="changes" fill>
+          <ChangesTab client={client} taskId={taskId} attempt={shown} current={current} runs={sessions} version={version}
+            fb={sessionFeedback} you={people.you} onOpenRunChanges={(id) => feedback.showInDiff(id, "")} />
         </TabPanel>
 
         <TabPanel value="chat" fill>

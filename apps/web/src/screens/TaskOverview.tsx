@@ -13,13 +13,14 @@
  */
 
 import { type ReactNode } from "react";
-import { AgentAvatar, Disclosure, Duration, MetricGroup, MetricTile, RunningList, RunningRow, StatusMark, Timeline, TimelineItem, planProgress } from "@dude/design-system/components";
+import { AgentAvatar, DiffStat, Disclosure, Duration, MetricGroup, MetricTile, RunningList, RunningRow, StatusMark, Timeline, TimelineItem, planProgress } from "@dude/design-system/components";
 import { Button, Callout } from "@dude/design-system/primitives";
 import { plural } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent, type TaskBranchDiff } from "@dude/domain";
 import type { ApiClient, PullRequest, Run, TaskMetrics } from "../api/client.ts";
 import { planFrom } from "../api/conversation.ts";
 import { runStatusLabel, runStatusShown } from "../runPresentation.tsx";
+import { useBranchDiff } from "../branchReview.ts";
 import { CostOf, TaskMetricsSection, leadTimeSub, useTaskMetrics } from "./MetricsSection.tsx";
 
 /** A question an agent put to a person that nobody has answered or closed yet. */
@@ -204,21 +205,37 @@ export interface BranchFact {
 }
 
 /**
- * The branch's changes, as far as dude records them today: which branch,
- * against what, at which head, and the way to Changes. No file counts: the
- * branch's own diff is not read here (a session's diff is not the
- * branch's), so none is shown.
+ * The branch's changes: the latest snapshot of the attempt's first
+ * repository (files, +/−, `main base…head`, committed · whole branch), or
+ * what stands in its place — being prepared, unavailable and why, none —
+ * and the way to Changes. Without a snapshot read, the branches recorded.
  */
-export function ChangesCard({ branches, onReview }: { branches: readonly BranchFact[]; onReview: () => void }) {
+export function ChangesCard({ branches, branch, onReview }: { branches: readonly BranchFact[]; branch?: TaskBranchDiff | null | undefined; onReview: () => void }) {
+  const snap = branch?.availability.state === "ok" ? branch.snapshot : null;
+  const state = branch?.availability;
   return (
     <section className="overviewRegion" aria-labelledby="overview-changes-title" data-testid="overview-changes">
       <div className="overviewRegionHead">
         <h2 id="overview-changes-title">Changes</h2>
-        <span className="muted">Committed · the branch</span>
+        <span className="muted">Committed · whole branch</span>
       </div>
-      {branches.length === 0 ? (
+      {snap ? (
+        <p className="overviewSnapshot" data-testid="overview-snapshot">
+          {(branch?.repositories.length ?? 0) > 1 ? <span className="overviewBranchRepo">{snap.repository}</span> : null}
+          <span>{plural(snap.stats.files, "file")}</span>
+          <DiffStat additions={snap.stats.additions} deletions={snap.stats.deletions} />
+          <code title={`merge base ${snap.mergeBaseSha} … branch head ${snap.headSha}`}>{snap.targetRef} {snap.mergeBaseSha.slice(0, 7)}…{snap.headSha.slice(0, 7)}</code>
+        </p>
+      ) : state?.state === "preparing" ? (
+        <p className="muted" data-testid="overview-snapshot-preparing">Preparing the branch snapshot: it shows here once captured.</p>
+      ) : state?.state === "unavailable" ? (
+        <p className="muted" data-testid="overview-snapshot-unavailable">Snapshot unavailable: {state.reason}</p>
+      ) : state?.state === "none" && branches.length === 0 ? (
+        <p className="muted" data-testid="overview-changes-none">{state.reason}</p>
+      ) : branches.length === 0 ? (
         <p className="muted" data-testid="overview-changes-none">No branch yet. It is recorded once an agent commits.</p>
-      ) : (
+      ) : null}
+      {branches.length > 0 && !snap ? (
         <ul className="overviewBranches">
           {branches.map((b) => (
             <li key={b.repository} data-testid="overview-branch" data-repository={b.repository}>
@@ -229,7 +246,8 @@ export function ChangesCard({ branches, onReview }: { branches: readonly BranchF
             </li>
           ))}
         </ul>
-      )}
+      ) : null}
+      {snap ? <p className="muted overviewBranchName" data-testid="overview-branch-ref"><code>{snap.branchRef}</code></p> : null}
       <div className="overviewRegionFoot">
         <Button size="sm" variant="secondary" trailingIcon="arrow-right" onClick={onReview} data-testid="overview-review-changes">Review changes</Button>
       </div>
@@ -284,6 +302,8 @@ export function TaskOverview(p: TaskOverviewProps) {
   const all = useTaskMetrics(p.client, p.taskId, undefined, p.version);
   const own = useTaskMetrics(p.client, p.taskId, p.many ? p.shown : undefined, p.version);
   const live = liveRuns(p.runs);
+  // The latest snapshot, never pinned: the Overview always says where the branch is now.
+  const branch = useBranchDiff(p.client, p.taskId, p.shown, null, p.version, { pin: false });
   const ago = (at: string) => <Duration ms={Math.max(0, Date.now() - Date.parse(at))} format="age" tone="muted" />;
   const fold = (id: string) => ({ open: p.open.has(id), onOpenChange: (o: boolean) => p.onOpenChange(id, o) });
   return (
@@ -313,7 +333,7 @@ export function TaskOverview(p: TaskOverviewProps) {
                 </RunningList>
               ) : <p className="muted" data-testid="overview-waiting">{p.waiting}</p>)}
             </section>
-            <ChangesCard branches={p.branches} onReview={p.onChanges} />
+            <ChangesCard branches={p.branches} branch={branch.diff} onReview={p.onChanges} />
           </div>
           <section className="overviewPullRequests" aria-labelledby="overview-pr-title" data-testid="overview-pull-requests">
             <h2 id="overview-pr-title">{p.prCount > 1 ? "Pull requests" : "Pull request"}</h2>
