@@ -2,6 +2,7 @@ package branchdiff
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -68,5 +69,42 @@ func TestTheCapturesReadOfAnExistingSnapshotKeepsItFromThePruner(t *testing.T) {
 	var left int
 	if err := owner.QueryRow(ctx, `SELECT count(*) FROM task_branch_snapshots WHERE id = 'tbs_ksx'`).Scan(&left); err != nil || left != 1 {
 		t.Errorf("tbs_ksx rows %d (%v), want 1", left, err)
+	}
+}
+
+// existing_branch_snapshot is a definer, past row-level security: another
+// organization's caller neither reads nor locks a snapshot, even with its
+// exact tuple.
+func TestExistingSnapshotIsOnlyTheCallersOrganizations(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	orgA, orgB := dbtest.Org(t, owner), dbtest.Org(t, owner)
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_eo', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_eo', $1, 'prj_eo', 1, 'T', 'G')`,
+		`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_eo', $1, 'prj_eo', 'api', 'https://example.com/acme/api')`,
+	} {
+		if _, err := owner.Exec(ctx, q, orgA); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, head := fmt.Sprintf("%040x", 1), fmt.Sprintf("%040x", 501)
+	if _, err := owner.Exec(ctx, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref,
+		target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, relation)
+		VALUES ('tbs_eo', $1, 'wi_eo', 1, 'repo_eo', 'api', 'dude/wi_eo', 'main', $2, $2, $3, '[]', 'c', '{}', 'initial')`, orgA, base, head); err != nil {
+		t.Fatal(err)
+	}
+	read := func(org string) (string, error) {
+		var id string
+		err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, existingSnapshot, "wi_eo", 1, "repo_eo", head, base, "main").Scan(&id)
+		})
+		return id, err
+	}
+	if id, err := read(orgA); err != nil || id != "tbs_eo" {
+		t.Fatalf("its own organization read %q (%v), want tbs_eo", id, err)
+	}
+	if id, err := read(orgB); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("another organization read %q (%v), want no rows", id, err)
 	}
 }
