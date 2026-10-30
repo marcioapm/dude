@@ -2863,8 +2863,11 @@ func (s *Syncer) releaseRecoveredBranches(ctx context.Context) error {
 	type recovered struct{ ID, Org, TaskID, Branch string }
 	var todo []recovered
 	if err := s.DB.InSystem(ctx, "recovered-branches", func(tx pgx.Tx) error {
+		// A stopped task's are left out here, not skipped after: however
+		// many it has, they never fill the batch.
 		rows, err := tx.Query(ctx, `SELECT c.id, c.organization_id, c.task_id, c.branch FROM run_recoveries c JOIN tasks t ON t.id = c.task_id
 			WHERE c.ended_at IS NOT NULL AND c.branch_released_at IS NULL AND t.status IN ('done', 'failed', 'aborted')
+			  AND NOT `+delivery.HaltedSQL("c.task_id")+`
 			ORDER BY c.ended_at LIMIT $1`, retireBatch)
 		if err != nil {
 			return err
@@ -2876,14 +2879,6 @@ func (s *Syncer) releaseRecoveredBranches(ctx context.Context) error {
 	}
 	var errs []error
 	for _, c := range todo {
-		var halted bool
-		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) (err error) {
-			halted, err = delivery.HaltedTx(ctx, tx, c.TaskID)
-			return err
-		}); err != nil || halted {
-			errs = append(errs, err)
-			continue
-		}
 		s.releaseBranch(ctx, c.Org, c.TaskID, c.Branch)
 		errs = append(errs, s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE run_recoveries SET branch_released_at = now() WHERE id = $1`, c.ID)

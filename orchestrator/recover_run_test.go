@@ -441,6 +441,44 @@ func TestRecoverRunWaitsForLuxToEndTheRunBeforeReadingItsCheckpoints(t *testing.
 	}
 }
 
+// A task a person stopped keeps its recovered branches, however many: they
+// never hold up the release of a closed task's, which goes in the same pass.
+func TestAStoppedTasksRecoveriesDoNotHoldUpAClosedTasksBranch(t *testing.T) {
+	w := conducting(t)
+	stopped, deadRun, _ := w.deadWriter("WIP.md", "half of it\n")
+	ana := w.ownedBy(stopped, "Ana")
+	conductor, _, _ := w.conductor(stopped)
+	w.stop(ana, stopped, map[string]any{"note": "hold on"})
+	w.until("the conductor to be kept", func() bool { return w.keptRun(conductor) })
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'halt'`, stopped); n != 1 {
+		t.Fatalf("the stopped task's delivery is not halted (%d)", n)
+	}
+	// More ended recoveries on it than one pass releases, all older.
+	mustExec(t, w.owner, `INSERT INTO run_recoveries (id, organization_id, task_id, run_id, branch, status, ended_at)
+		SELECT 'rcv_held_'||g, $1, $2, $3, 'dude/'||$2||'/recovered-held-'||g, 'failed', now() - interval '1 day'
+		FROM generate_series(1, 101) g`, w.org, stopped, deadRun)
+	closed, run, commit := w.deadWriter("WIP.md", "half of it\n")
+	id, _ := w.must(closed, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	branch := "dude/" + closed + "/recovered-" + run
+	w.until("the recovery done", func() bool { return w.recoveryStatus(id) == "done" })
+	if got := w.branchAt(branch); got != commit {
+		t.Fatalf("%s is at %q", branch, got)
+	}
+	bob := w.ownedBy(closed, "Bob")
+	if status, body := w.callAs(bob, "/internal/tasks/"+closed+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	if _, err := w.syncer.RetireCompleted(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.branchAt(branch); got != "" {
+		t.Errorf("the closed task's recovered branch is still at %s after a pass", got)
+	}
+	if n := w.count(`SELECT count(*) FROM run_recoveries WHERE task_id = $1 AND branch_released_at IS NOT NULL`, stopped); n != 0 {
+		t.Errorf("%d of the stopped task's recovered branches released", n)
+	}
+}
+
 // The recovered branch is the task's, as its per-Run branches are: kept
 // while a Stop waits on a pick-up, deleted from GitHub once the task ends.
 func TestARecoveredBranchIsDeletedWithTheTasksPerRunBranches(t *testing.T) {
