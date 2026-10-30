@@ -158,6 +158,17 @@ function BranchCommentEditor({ fb, snapshot, range, initial, onText, onDone }: {
   );
 }
 
+type AfterLine = (path: string, side: DiffSide, line: number) => ReactNode;
+/** One file's `renderAfterLine`, with what it was made from. */
+interface AfterLines {
+  readonly sig: string;
+  readonly card: unknown;
+  readonly editor: DiffRange | null;
+  readonly snapshot: TaskBranchSnapshot | null;
+  readonly fb: FeedbackOnDiff | null;
+  readonly fn: AfterLine;
+}
+
 interface BranchComments {
   readonly commenting: LiveDiffCommenting | undefined;
   readonly byFile: Map<string, PlacedComment[]>;
@@ -175,8 +186,11 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   cursor: Readonly<Record<string, number>>; onFileComments: (path: string) => void;
 }): BranchComments {
   const snapshot = diff?.snapshot ?? null;
-  const placed = useMemo(() => (diff && snapshot ? placeBranchItems(fb.items, { placements: diff.placements, snapshot }) : []),
-    [fb.items, diff, snapshot]);
+  // Placements and the snapshot are kept by reference on a re-read that moved only metadata (the PR's sync, `newer`):
+  // keyed on them, never on the whole read, such a re-read redraws no hunk.
+  const placements = diff?.placements;
+  const placed = useMemo(() => (placements && snapshot ? placeBranchItems(fb.items, { placements, snapshot }) : []),
+    [fb.items, placements, snapshot]);
   const byFile = useMemo(() => commentsByFile(placed), [placed]);
   const { byLine, heads } = useMemo(() => {
     const byLine = new Map<string, FeedbackItem[]>();
@@ -218,26 +232,51 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   }, []);
   const editorAt = editing ? selection : null;
 
+  // The card's actions read the latest `fb`: a feedback re-read (a new `fb`) redraws only the cards whose item changed.
+  const latestFb = useRef(fb);
+  latestFb.current = fb;
   const card = useCallback((item: FeedbackItem, placement?: "outdated" | "unchanged") => (
     <div key={item.id} data-fb-item={item.id} tabIndex={-1} className="branchComment">
       <FeedbackCard inline placement={placement} item={cardItem(item, fb.people, fb.runs)} thread={threadOf(item, fb.people, fb.runs)}
         onDirtyChange={(dirty) => setCardUnsaved((was) => ({ ...was, [item.id]: dirty }))}
         readOnly={!!diff?.readOnly || (fb.readOnly && item.status !== "draft")} maxLength={FEEDBACK_LIMITS.body}
-        onReply={(b) => fb.reply(item.id, b)} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
-        onSaveDraft={(b) => fb.saveDraft(item, b, null)} onDelete={() => fb.deleteDraft(item.id)} />
+        onReply={(b) => latestFb.current.reply(item.id, b)} onResolve={() => latestFb.current.resolve(item.id)} onReopen={() => latestFb.current.reopen(item.id)}
+        onSaveDraft={(b) => latestFb.current.saveDraft(item, b, null)} onDelete={() => latestFb.current.deleteDraft(item.id)} />
     </div>
-  ), [fb, diff?.readOnly]);
-  const renderAfterLine = useCallback((path: string, side: DiffSide, line: number) => {
-    const here = byLine.get(lineKey(path, side, line));
-    const editor = snapshot && editorAt && editorAt.path === path && editorAt.side === side && editorAt.endLine === line;
-    if (!here && !editor) return null;
-    return (
-      <>
-        {here?.map((i) => card(i))}
-        {editor ? <BranchCommentEditor fb={fb} snapshot={snapshot} range={editorAt} initial={text.current} onText={onText} onDone={close} /> : null}
-      </>
-    );
-  }, [byLine, card, fb, snapshot, editorAt, onText, close]);
+  ), [fb.people, fb.runs, fb.readOnly, diff?.readOnly]);
+  // What goes under one file's lines, as one function per file: kept while that file's items (by content), the
+  // editor on it and the card are as they were, so a comment on another file redraws none of this file's hunks.
+  const perPath = useRef(new Map<string, AfterLines>());
+  const afterLines = useMemo(() => {
+    const items = new Map<string, Array<{ item: FeedbackItem; at: PlacedComment["at"] }>>();
+    for (const p of placed) if (!("head" in p.at)) items.set(p.path, [...(items.get(p.path) ?? []), { item: p.item, at: p.at }]);
+    const editorPath = snapshot && editorAt ? editorAt.path : null;
+    const next = new Map<string, AfterLine>();
+    const kept = new Map<string, AfterLines>();
+    for (const path of new Set([...items.keys(), ...(editorPath ? [editorPath] : [])])) {
+      const sig = JSON.stringify(items.get(path) ?? []);
+      const editor = path === editorPath ? editorAt : null;
+      const edFb = editor ? fb : null;
+      const was = perPath.current.get(path);
+      const same = was && was.sig === sig && was.card === card && was.editor === editor && was.snapshot === snapshot && was.fb === edFb;
+      const fn: AfterLine = same ? was.fn : (p: string, side: DiffSide, line: number) => {
+        const here = byLine.get(lineKey(p, side, line));
+        const ed = snapshot && editor && editor.side === side && editor.endLine === line;
+        if (!here && !ed) return null;
+        return (
+          <>
+            {here?.map((i) => card(i))}
+            {ed ? <BranchCommentEditor fb={fb} snapshot={snapshot} range={editor} initial={text.current} onText={onText} onDone={close} /> : null}
+          </>
+        );
+      };
+      kept.set(path, same ? was : { sig, card, editor, snapshot, fb: edFb, fn });
+      next.set(path, fn);
+    }
+    perPath.current = kept;
+    return next;
+  }, [placed, byLine, card, fb, snapshot, editorAt, onText, close]);
+  const renderAfterLineFor = useCallback((path: string) => afterLines.get(path), [afterLines]);
   const renderFileHead = useCallback((path: string) => {
     const off = heads.get(path);
     if (!off) return null;
@@ -256,8 +295,8 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   }, [byFile, cursor, you]);
 
   const commenting = useMemo<LiveDiffCommenting | undefined>(() => (snapshot ? {
-    canStart, maxLines: FEEDBACK_LIMITS.lines, selection, onSelectionChange, renderAfterLine, renderFileHead, fileComments, onFileComments,
-  } : undefined), [snapshot, canStart, selection, onSelectionChange, renderAfterLine, renderFileHead, fileComments, onFileComments]);
+    canStart, maxLines: FEEDBACK_LIMITS.lines, selection, onSelectionChange, renderAfterLineFor, renderFileHead, fileComments, onFileComments,
+  } : undefined), [snapshot, canStart, selection, onSelectionChange, renderAfterLineFor, renderFileHead, fileComments, onFileComments]);
   return { commenting, byFile, unsaved: unsaved || Object.values(cardUnsaved).some(Boolean) };
 }
 

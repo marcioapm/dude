@@ -100,6 +100,12 @@ export interface LiveDiffCommenting {
   readonly onSelectionChange: (range: DiffRange | null, done: boolean) => void;
   /** Under the line numbered `line` on `side`: what was written there, the editor. Called for every line: keep it cheap. */
   readonly renderAfterLine?: ((path: string, side: DiffSide, line: number) => ReactNode) | undefined;
+  /**
+   * `renderAfterLine` for one file, in its place: a function that keeps its
+   * identity while what goes under that file's lines is unchanged, so a
+   * comment on another file redraws none of this one's hunks.
+   */
+  readonly renderAfterLineFor?: ((path: string) => ((path: string, side: DiffSide, line: number) => ReactNode) | undefined) | undefined;
   /** Under a file's header, before its first hunk: what no longer has lines in it. */
   readonly renderFileHead?: ((path: string) => ReactNode) | undefined;
   /** After a file's name in the list: how many comments it has. */
@@ -500,7 +506,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
                   <Hunk key={hi} path={f.path} hunk={h} index={hi} view={view} rows={split?.get(f.path)?.[hi] ?? null} fresh={fresh.lines}
                     commentable={Boolean(commenting)} canStart={canStart} maxLines={commenting?.maxLines ?? 0}
                     selection={touches(h, f.path, selection) ? selection : null} dragging={dragging && touches(h, f.path, selection)}
-                    renderAfterLine={commenting?.renderAfterLine} onPlus={pickByKey} />
+                    renderAfterLine={commenting?.renderAfterLineFor ? commenting.renderAfterLineFor(f.path) : commenting?.renderAfterLine} onPlus={pickByKey} />
                 ))}
                 {f.truncated ? <div className={styles["empty"]}>Longer than shown: the rest of this file is left out.</div> : null}
               </section>

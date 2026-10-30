@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient, emit } from "../src/fixtures/client.ts";
-import { BRANCH_KEY } from "../src/fixtures/branchDiff.ts";
+import { BRANCH_KEY, branchAnchor } from "../src/fixtures/branchDiff.ts";
 import { ORG, PROJECT, RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
 import type { TaskBranchDiffQuery } from "../src/api/client.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -120,6 +120,45 @@ describe("what the task page reads on its stream", () => {
     await until(() => [...view.querySelectorAll("[data-fb-item]")].find((el) => el.textContent?.includes("Inline without a full read.")), "the new comment inline");
     await settle(500);
     expect(withFiles(c.branch)).toEqual([]);
+  });
+
+  test("Changes: a re-read that moves only metadata redraws no hunk; a comment on one file redraws none of another's", async () => {
+    const c = counted("populated");
+    const view = await page(c, "changes");
+    const main = "src/checkout/PaymentStep.tsx";
+    const other = "src/checkout/PaymentStep.test.tsx";
+    expect(view.querySelector(`[data-testid=diff-section][data-path="${other}"] [data-fb-item]`) !== null).toBe(true);
+    // Each hunk drawn asks what goes under each of its lines (a lookup by "path, side, line"): counted per file.
+    const drawn = new Map<string, number>();
+    const get = Map.prototype.get;
+    Map.prototype.get = function (this: Map<unknown, unknown>, key: unknown) {
+      if (typeof key === "string") {
+        const m = /^(.+)\u0000(old|new)\u0000\d+$/.exec(key);
+        // Only the lookups a hunk makes as it draws (LiveDiff asking under its lines), not the page building its index.
+        if (m && new Error().stack?.includes("LiveDiff.tsx")) drawn.set(m[1]!, (drawn.get(m[1]!) ?? 0) + 1);
+      }
+      return get.call(this, key);
+    };
+    try {
+      // The PR's sync time moves on every read (as a poll moves it): the read is new, its snapshot and placements are not.
+      await event("task.updated", {});
+      await settle(500);
+      expect(c.branch.filter((o) => o.files === false).length).toBeGreaterThan(0);
+      expect([...drawn.entries()]).toEqual([]);
+      // A comment written on one file (elsewhere) redraws that file's hunks only.
+      await c.client.createFeedbackDraft(TASK_ID, { body: "On the test file only.", anchor: (() => {
+        const a = branchAnchor(1, "tbs_fx_web", other, "new", 4, 4);
+        return { kind: "code", scope: "branch", snapshotId: a.snapshotId, repository: a.repo, path: a.path, side: a.side, startLine: 4, endLine: 4, diffChecksum: a.diffChecksum };
+      })() });
+      // Feedback is re-read on its own events (there is no "feedback.item.created"; submitted is one).
+      await event("feedback.submitted", {});
+      await until(() => [...view.querySelectorAll("[data-fb-item]")].find((el) => el.textContent?.includes("On the test file only.")), "the new comment");
+      await settle(300);
+      expect(drawn.get(other) ?? 0).toBeGreaterThan(0);
+      expect(drawn.get(main) ?? 0).toBe(0);
+    } finally {
+      Map.prototype.get = get;
+    }
   });
 
   test("Pending: an event for one session re-reads that session alone, keeping what was read meanwhile", async () => {
