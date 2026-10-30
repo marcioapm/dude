@@ -376,6 +376,26 @@ describe("the Changes tab: feedback on the branch", () => {
     expect(tab.querySelector('[data-testid=diff-section][data-path="src/flags.ts"]')!.textContent).toContain("Say when the flag goes.");
   });
 
+  test("a reply and a resolve on a placed comment, read on their events, redraw its card under the line", async () => {
+    const client = fx("populated");
+    // Each read its own objects, as from the wire: the fixture changes its items in place.
+    const read = client.feedback.bind(client);
+    client.feedback = async (id, attempt) => structuredClone(await read(id, attempt));
+    const { tab } = await changes(client);
+    const card = () => tab.querySelector<HTMLElement>('[data-testid=diff-section] [data-fb-item="fbi_fx_b1"]');
+    await until(() => card(), "the placed comment");
+    expect(card()!.textContent).not.toContain("Moved the note onto the radio.");
+    // Another person's reply, recorded by the server: only its event tells the page.
+    await client.replyFeedback("fbi_fx_b1", "Moved the note onto the radio.");
+    await emitForTest("feedback.replied", { itemId: "fbi_fx_b1" });
+    await until(() => (card()?.textContent?.includes("Moved the note onto the radio.") ? true : null), "the reply in the card's thread");
+    const before = card()!.textContent;
+    await client.resolveFeedback("fbi_fx_b1");
+    await emitForTest("feedback.resolved", { itemId: "fbi_fx_b1" });
+    await until(() => (card()?.textContent !== before ? true : null), "the card redrawn as resolved");
+    expect(card()!.textContent).toMatch(/resolved/i);
+  });
+
   test("an older attempt refuses a submit with its reason", async () => {
     const client = fx("older");
     await client.createFeedbackDraft(TASK_ID, { body: "On the current attempt.", anchor: { kind: "general" } });
