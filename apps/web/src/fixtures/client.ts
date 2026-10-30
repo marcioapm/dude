@@ -663,7 +663,10 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ pullRequests: this.#scenario === "d" && taskId === TASK_ID && !this.#held ? [PULL_REQUEST] : [] });
   }
   override getTask(id: string): Promise<TaskDetail> {
-    return id === TASK_ID ? Promise.resolve(this.#task) : Promise.reject(new ApiError(404, "not_found", "No such task."));
+    if (id !== TASK_ID) return Promise.reject(new ApiError(404, "not_found", "No such task."));
+    // Pending checkout fixtures model a first writer before its first commit: no commit heads.
+    return Promise.resolve(localStorage.getItem("dude.fixtures.checkout")
+      ? { ...this.#task, runs: this.#task.runs.map((r) => ({ ...r, heads: {} })) } : this.#task);
   }
   override getRun(id: string): Promise<RunDetail> {
     const detail = runDetailFor(this.#scenario);
@@ -1293,7 +1296,7 @@ export class FixtureClient extends ApiClient {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
   override runDiff(runId: string): ReturnType<ApiClient["runDiff"]> {
-    const state = localStorage.getItem("dude.fixtures.checkout") ?? new URLSearchParams(location.search).get("checkout");
+    const state = localStorage.getItem("dude.fixtures.checkout");
     if (state === "error") return Promise.reject(new ApiError(503, "unavailable", "Fixture checkout could not be read."));
     const snapshot = snapshots(this.#currentAttempt()).tbs_fx_web!;
     return Promise.resolve({ base: snapshot.mergeBaseSha, files: state === "empty" ? [] : snapshot.files.slice(0, 2),

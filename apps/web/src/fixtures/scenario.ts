@@ -36,8 +36,10 @@ export function fixtureScenario(): FixtureScenario | null {
   remember("step", "dude.fixtures.automationStep");
   // The task's Changes (branch snapshot) state: fixtures/branchDiff.ts BRANCH_STATES.
   const branch = remember("branch", "dude.fixtures.branch");
+  // Live sessions' checkout reads in Pending: populated, empty or error.
+  const checkout = remember("checkout", "dude.fixtures.checkout");
   // The parameters have done their work; the hash is the app's own.
-  if (fixtures || run || branch) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+  if (fixtures || run || branch || checkout) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
   const stored = localStorage.getItem(KEY);
   return stored && (SCENARIOS as readonly string[]).includes(stored) ? (stored as FixtureScenario) : null;
 }
