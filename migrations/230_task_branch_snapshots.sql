@@ -101,8 +101,10 @@ CREATE POLICY tenant_isolation ON task_branch_capture_requests
   USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE ON task_branch_capture_requests TO dude_app;
--- The worker finds due rows across organizations, then works in each.
+-- The worker claims due rows across organizations (pushing next_attempt_at
+-- ahead, committed before it reads anything), then works in each.
 GRANT SELECT ON task_branch_capture_requests TO dude_sweeper;
+GRANT UPDATE (next_attempt_at) ON task_branch_capture_requests TO dude_sweeper;
 
 -- Asks for a capture of (task, attempt, repository): pending again, due
 -- now, whatever it was. The worker reads the branch; a head it already

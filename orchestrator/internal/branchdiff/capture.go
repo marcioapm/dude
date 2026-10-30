@@ -45,19 +45,27 @@ const claimFor = 2 * time.Minute
 // maxFailures transient failures in a row make a request unavailable.
 const maxFailures = 8
 
-// Request is one (task, attempt, repository) to capture.
+// Request is one claimed (task, attempt, repository) to capture, and when
+// it was last asked for.
 type Request struct {
 	Org, TaskID string
 	Attempt     int
 	RepoID      string
+	RequestedAt time.Time
 }
 
-// Sweep captures what is due; how many requests it took.
+// Sweep claims what is due and captures it; how many captures succeeded.
+// The claim (next_attempt_at pushed claimFor ahead) is committed on its own
+// before anything is read, so a request whose reads fail keeps it and is
+// backed off, never taken again at once; and a pass in which none
+// succeeded says 0, so the loop waits before the next.
 func (c *Capturer) Sweep(ctx context.Context) (int, error) {
 	var due []Request
 	if err := c.DB.InSystem(ctx, "branch-snapshots", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT organization_id, task_id, attempt, repository_id FROM task_branch_capture_requests
-			WHERE status = 'pending' AND next_attempt_at <= now() ORDER BY next_attempt_at LIMIT $1`, batch)
+		rows, err := tx.Query(ctx, `UPDATE task_branch_capture_requests SET next_attempt_at = now() + make_interval(secs => $2)
+			WHERE (task_id, attempt, repository_id) IN (SELECT task_id, attempt, repository_id FROM task_branch_capture_requests
+				WHERE status = 'pending' AND next_attempt_at <= now() ORDER BY next_attempt_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+			RETURNING organization_id, task_id, attempt, repository_id, requested_at`, batch, claimFor.Seconds())
 		if err != nil {
 			return err
 		}
@@ -66,15 +74,19 @@ func (c *Capturer) Sweep(ctx context.Context) (int, error) {
 	}); err != nil {
 		return 0, err
 	}
+	ok := 0
 	for _, r := range due {
-		if err := c.Capture(ctx, r); err != nil {
-			if ctx.Err() != nil {
-				return 0, ctx.Err()
-			}
-			c.log().Warn("capturing a branch snapshot failed", "task", r.TaskID, "attempt", r.Attempt, "repository", r.RepoID, "error", err)
+		err := c.Capture(ctx, r)
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
 		}
+		if err != nil {
+			c.log().Warn("capturing a branch snapshot failed", "task", r.TaskID, "attempt", r.Attempt, "repository", r.RepoID, "error", err)
+			continue
+		}
+		ok++
 	}
-	return len(due), nil
+	return ok, nil
 }
 
 func (c *Capturer) log() *slog.Logger {
@@ -93,27 +105,16 @@ type target struct {
 	prHead                   string
 }
 
-// Capture takes one request if it is still due, reads the branch and
-// settles the request: done (a snapshot captured, or its head already has
-// one), absent (no branch yet), unavailable (why), or due again later
-// after a transient failure.
+// Capture reads the branch of a request Sweep claimed and settles the
+// request: done (a snapshot captured, or its head already has one), absent
+// (no branch yet), unavailable (why), or due again later after a failure —
+// of GitHub's, or of the reads before it — counted and backed off.
 func (c *Capturer) Capture(ctx context.Context, r Request) error {
-	var t target
-	claimed := false
+	t := target{requestedAt: r.RequestedAt}
 	if err := c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `UPDATE task_branch_capture_requests SET next_attempt_at = now() + make_interval(secs => $4)
-			WHERE task_id = $1 AND attempt = $2 AND repository_id = $3 AND status = 'pending' AND next_attempt_at <= now()
-			RETURNING requested_at`, r.TaskID, r.Attempt, r.RepoID, claimFor.Seconds()).Scan(&t.requestedAt)
-		if db.IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		claimed = true
 		if err := tx.QueryRow(ctx, `SELECT name, url, default_branch FROM repositories WHERE id = $1`, r.RepoID).
 			Scan(&t.repoName, &t.repoURL, &t.targetRef); err != nil {
-			return err
+			return fmt.Errorf("read the repository: %w", err)
 		}
 		tb, err := delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
 		if err != nil {
@@ -142,8 +143,11 @@ func (c *Capturer) Capture(ctx context.Context, r Request) error {
 			return nil
 		}
 		return err
-	}); err != nil || !claimed {
-		return err
+	}); err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		return c.failed(ctx, r, t, "The task branch", err)
 	}
 	snap, err := c.read(ctx, r, t)
 	return c.settle(ctx, r, t, snap, err)
@@ -235,54 +239,88 @@ func retryAfter(n int, asked time.Duration) time.Duration {
 	return min(d, 15*time.Minute)
 }
 
-// settle records what read found, in one transaction, only if the request
-// was not asked for again meanwhile (requested_at unchanged): a newer ask
-// stays pending for the next pass.
-func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, readErr error) error {
-	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		mark := func(status, reason, snapshotID string) error {
-			tag, err := tx.Exec(ctx, `UPDATE task_branch_capture_requests SET status = $4, reason = NULLIF($5, ''), failures = 0,
-				settled_at = now(), snapshot_id = COALESCE(NULLIF($7, ''), snapshot_id)
-				WHERE task_id = $1 AND attempt = $2 AND repository_id = $3 AND requested_at = $6`,
-				r.TaskID, r.Attempt, r.RepoID, status, clip(reason), t.requestedAt, snapshotID)
-			if err != nil || tag.RowsAffected() > 0 {
-				return err
-			}
-			// Asked again while this one read: still pending, due now.
-			_, err = tx.Exec(ctx, `UPDATE task_branch_capture_requests SET failures = 0, next_attempt_at = now(),
-				snapshot_id = COALESCE(NULLIF($4, ''), snapshot_id)
-				WHERE task_id = $1 AND attempt = $2 AND repository_id = $3`, r.TaskID, r.Attempt, r.RepoID, snapshotID)
+// mark settles the request as status, only if it was not asked for again
+// since it was claimed (requested_at unchanged); a newer ask stays pending,
+// due now.
+func mark(ctx context.Context, tx pgx.Tx, r Request, t target, status, reason, snapshotID string) error {
+	tag, err := tx.Exec(ctx, `UPDATE task_branch_capture_requests SET status = $4, reason = NULLIF($5, ''), failures = 0,
+		settled_at = now(), snapshot_id = COALESCE(NULLIF($7, ''), snapshot_id)
+		WHERE task_id = $1 AND attempt = $2 AND repository_id = $3 AND requested_at = $6`,
+		r.TaskID, r.Attempt, r.RepoID, status, clip(reason), t.requestedAt, snapshotID)
+	if err != nil || tag.RowsAffected() > 0 {
+		return err
+	}
+	// Asked again while this one read: still pending, due now.
+	_, err = tx.Exec(ctx, `UPDATE task_branch_capture_requests SET failures = 0, next_attempt_at = now(),
+		snapshot_id = COALESCE(NULLIF($4, ''), snapshot_id)
+		WHERE task_id = $1 AND attempt = $2 AND repository_id = $3`, r.TaskID, r.Attempt, r.RepoID, snapshotID)
+	return err
+}
+
+// retryable is a read failure worth trying again: not one of the outcomes
+// settle records as they are.
+func retryable(err error) bool {
+	var un unavailable
+	var fe *forge.Error
+	switch {
+	case err == nil, errors.Is(err, errAbsent), errors.Is(err, errSame), errors.As(err, &un):
+		return false
+	case errors.As(err, &fe) && !forge.Transient(err) && fe.Status >= 400 && fe.Status < 500:
+		return false
+	}
+	return true
+}
+
+// failed counts a failure of the request's capture — GitHub's, or of the
+// reads before it — in a transaction of its own: due again after the
+// back-off, or unavailable after maxFailures in a row. The claim stays in
+// place if even this cannot be written. Returns cause.
+func (c *Capturer) failed(ctx context.Context, r Request, t target, what string, cause error) error {
+	err := c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var failures int
+		if err := tx.QueryRow(ctx, `UPDATE task_branch_capture_requests SET failures = failures + 1
+			WHERE task_id = $1 AND attempt = $2 AND repository_id = $3 RETURNING failures`,
+			r.TaskID, r.Attempt, r.RepoID).Scan(&failures); err != nil {
 			return err
 		}
+		if failures >= maxFailures {
+			return mark(ctx, tx, r, t, "unavailable", what+" could not be read: "+cause.Error(), "")
+		}
+		var asked time.Duration
+		var fe *forge.Error
+		if errors.As(cause, &fe) {
+			asked = fe.RetryAfter
+		}
+		_, err := tx.Exec(ctx, `UPDATE task_branch_capture_requests SET next_attempt_at = now() + make_interval(secs => $4)
+			WHERE task_id = $1 AND attempt = $2 AND repository_id = $3`,
+			r.TaskID, r.Attempt, r.RepoID, retryAfter(failures, asked).Seconds())
+		return err
+	})
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("recording the failure: %w", err))
+	}
+	return cause
+}
+
+// settle records what read found, in one transaction, only if the request
+// was not asked for again meanwhile (requested_at unchanged): a newer ask
+// stays pending for the next pass. A failure is counted (failed).
+func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, readErr error) error {
+	if retryable(readErr) {
+		return c.failed(ctx, r, t, "GitHub", readErr)
+	}
+	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var un unavailable
 		var fe *forge.Error
 		switch {
 		case errors.Is(readErr, errAbsent):
-			return mark("absent", "", "")
+			return mark(ctx, tx, r, t, "absent", "", "")
 		case errors.Is(readErr, errSame):
-			return mark("done", "", t.prevID)
+			return mark(ctx, tx, r, t, "done", "", t.prevID)
 		case errors.As(readErr, &un):
-			return mark("unavailable", un.reason, "")
-		case errors.As(readErr, &fe) && !forge.Transient(readErr) && fe.Status >= 400 && fe.Status < 500:
-			return mark("unavailable", fmt.Sprintf("GitHub refused the read (%d): %s", fe.Status, fe.Message), "")
-		case readErr != nil:
-			var failures int
-			if err := tx.QueryRow(ctx, `UPDATE task_branch_capture_requests SET failures = failures + 1
-				WHERE task_id = $1 AND attempt = $2 AND repository_id = $3 RETURNING failures`,
-				r.TaskID, r.Attempt, r.RepoID).Scan(&failures); err != nil {
-				return err
-			}
-			if failures >= maxFailures {
-				return mark("unavailable", "GitHub could not be read: "+readErr.Error(), "")
-			}
-			var asked time.Duration
-			if fe != nil {
-				asked = fe.RetryAfter
-			}
-			_, err := tx.Exec(ctx, `UPDATE task_branch_capture_requests SET next_attempt_at = now() + make_interval(secs => $4)
-				WHERE task_id = $1 AND attempt = $2 AND repository_id = $3`,
-				r.TaskID, r.Attempt, r.RepoID, retryAfter(failures, asked).Seconds())
-			return err
+			return mark(ctx, tx, r, t, "unavailable", un.reason, "")
+		case errors.As(readErr, &fe):
+			return mark(ctx, tx, r, t, "unavailable", fmt.Sprintf("GitHub refused the read (%d): %s", fe.Status, fe.Message), "")
 		}
 		files, _ := json.Marshal(s.files)
 		stats, _ := json.Marshal(s.stats)
@@ -329,7 +367,7 @@ func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, 
 				return err
 			}
 		}
-		return mark("done", "", id)
+		return mark(ctx, tx, r, t, "done", "", id)
 	})
 }
 
