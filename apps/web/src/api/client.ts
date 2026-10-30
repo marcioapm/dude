@@ -2087,8 +2087,12 @@ export class ApiClient {
     return this.#request("GET", `/v1/projects/${encodeURIComponent(projectId)}/servers/running`);
   }
 
-  /** One branch-preview server's feedback, oldest first, a page at a time (`after`: the last page's cursor). */
-  previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; limit?: number } = {}): Promise<PreviewFeedbackList> {
+  /**
+   * One branch-preview server's feedback, a page at a time: oldest first by
+   * default (`after`: the last page's cursor), newest first with `order:
+   * "desc"` (`before`: the last page's cursor).
+   */
+  previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; before?: string; order?: "asc" | "desc"; limit?: number } = {}): Promise<PreviewFeedbackList> {
     return this.#request("GET", `/v1/branch-previews/${encodeURIComponent(runId)}/servers/${encodeURIComponent(server)}/feedback${qs(params)}`);
   }
 

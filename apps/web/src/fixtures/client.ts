@@ -110,6 +110,25 @@ export function installFixtureStream(): void {
   (window as unknown as { EventSource: unknown }).EventSource = QuietEventSource;
 }
 
+/**
+ * A page of preview feedback as the list route returns it: ordered by id,
+ * which the API's ids follow in time (newId), so the fixtures order by
+ * createdAt; ascending with `after`, or newest first (`order: "desc"`) with
+ * `before`; the cursor is the page's last id.
+ */
+export function pagePreviewFeedback(items: ReadonlyArray<PreviewFeedbackItem>,
+    params: { status?: "open" | "resolved" | "all"; after?: string; before?: string; order?: "asc" | "desc"; limit?: number }) {
+  const status = params.status ?? "open";
+  const asc = [...items].filter((i) => status === "all" || i.status === status)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const listed = params.order === "desc" ? asc.reverse() : asc;
+  const cursor = params.order === "desc" ? params.before : params.after;
+  const from = cursor ? listed.findIndex((i) => i.id === cursor) + 1 : 0;
+  const limit = params.limit ?? 50;
+  const page = listed.slice(from, from + limit);
+  return { feedback: page, nextCursor: from + limit < listed.length ? page.at(-1)!.id : null };
+}
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const later = (fn: () => void, ms: number) => void setTimeout(fn, ms);
 
@@ -367,7 +386,7 @@ export class FixtureClient extends ApiClient {
   #kaiSubmitted = false;
   #kaiScheduled = false;
 
-  override async previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; limit?: number } = {}) {
+  override async previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; before?: string; order?: "asc" | "desc"; limit?: number } = {}) {
     await wait(120);
     // `?servers=live`: Kai submits from his own window a moment after the list is first read, and the stream says so.
     if (localStorage.getItem(SERVERS_KEY) === "live" && !this.#kaiScheduled && runId === "run_pv_checkout" && server === "web") {
@@ -379,14 +398,9 @@ export class FixtureClient extends ApiClient {
           correlationId: null, causationId: null, payload: { feedbackId: "fbi_pf_new", previewRunId: runId, server, status: "open" } });
       }, 1200);
     }
-    const all = [...this.#submitted.filter((i) => i.previewRunId === runId && i.serverName === server).reverse(),
+    const all = [...this.#submitted.filter((i) => i.previewRunId === runId && i.serverName === server),
       ...(this.#kaiSubmitted && runId === "run_pv_checkout" && server === "web" ? [KAI_SUBMIT()] : []), ...previewFeedbackFor(runId, server)];
-    const status = params.status ?? "open";
-    const listed = all.filter((i) => status === "all" || i.status === status);
-    const from = params.after ? listed.findIndex((i) => i.id === params.after) + 1 : 0;
-    const limit = params.limit ?? 50;
-    const page = listed.slice(from, from + limit);
-    return { feedback: page, nextCursor: from + limit < listed.length ? page.at(-1)!.id : null };
+    return pagePreviewFeedback(all, params);
   }
 
   override async serverFeedback(taskId: string, origin: string) {

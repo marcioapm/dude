@@ -7,9 +7,9 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { EventTypes } from "@dude/domain";
+import { EventTypes, type PreviewFeedbackItem } from "@dude/domain";
 import { ApiError, type ApiClient } from "../src/api/client.ts";
-import { FixtureClient, emit } from "../src/fixtures/client.ts";
+import { FixtureClient, emit, pagePreviewFeedback } from "../src/fixtures/client.ts";
 import { SERVERS_KEY } from "../src/fixtures/scenario.ts";
 import { ORG, PROJECT, TASK_ID } from "../src/fixtures/data.ts";
 import { ProjectServersScreen } from "../src/screens/ProjectServersScreen.tsx";
@@ -67,24 +67,41 @@ test("a branch preview server's feedback: everyone's, open and resolved, with th
   expect(fold.querySelectorAll('[data-testid="task-feedback-link"], [data-testid="my-draft"]').length).toBe(0);
 });
 
-test("a long list is paged with Load more, never cut short", async () => {
+test("a long list shows the newest first and pages back with Load more, never cut short", async () => {
+  // The real route's order: by id (time-ordered), ascending unless order=desc.
   class Many extends FixtureClient {
-    override async previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; limit?: number } = {}) {
-      const base = (await super.previewFeedback("run_pv_checkout", "web", { status: "all" })).feedback[0]!;
-      const all = Array.from({ length: 45 }, (_, i) => ({ ...base, id: `fbi_m${String(i).padStart(2, "0")}`, createdAt: new Date(Date.now() - i * 60_000).toISOString() }));
+    base: PreviewFeedbackItem | null = null;
+    extra: PreviewFeedbackItem[] = [];
+    override async previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; before?: string; order?: "asc" | "desc"; limit?: number } = {}) {
+      this.base ??= (await super.previewFeedback("run_pv_checkout", "web", { status: "all" })).feedback[0]!;
+      const b = this.base;
+      const all = Array.from({ length: 45 }, (_, i) => ({ ...b, id: `fbi_m${String(i).padStart(2, "0")}`, body: `Item ${i}`, createdAt: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString() }));
       void runId; void server;
-      const from = params.after ? all.findIndex((i) => i.id === params.after) + 1 : 0;
-      const page = all.slice(from, from + (params.limit ?? 50));
-      return { feedback: page, nextCursor: from + page.length < all.length ? page.at(-1)!.id : null };
+      return pagePreviewFeedback([...all, ...this.extra], params);
     }
   }
-  const { container } = await page(new Many("a"));
+  const client = new Many("a");
+  const { container } = await page(client);
   const fold = await unfold(container, "run_pv_checkout/web");
+  const bodies = () => [...fold.querySelectorAll('[data-testid="fold-item"], [data-testid="new-item"]')].map((e) => /Item \d+|Newest/.exec(e.textContent ?? "")?.[0]);
   expect(fold.querySelectorAll('[data-testid="fold-item"]').length).toBe(20);
+  expect(bodies()[0]).toBe("Item 44");
+  expect(bodies()[19]).toBe("Item 25");
   await click(tid(fold, "fold-more")!);
   await until(() => (fold.querySelectorAll('[data-testid="fold-item"]').length === 40 ? true : null), "the second page");
+  expect(bodies()[20]).toBe("Item 24");
+  // Someone submits while 40 are loaded: it is at the top, New, and the 40 stay.
+  client.extra = [{ ...client.base!, id: "fbi_n00", body: "Newest", createdAt: new Date(Date.UTC(2026, 9, 2)).toISOString() }];
+  await act(async () => emit({ eventType: EventTypes.PreviewFeedbackSubmitted, occurredAt: new Date().toISOString(), organizationId: ORG.id,
+    projectId: PROJECT.id, taskId: null, runId: null, sessionId: null, workflowRunId: null, actor: { type: "person", id: "u_kai" },
+    source: "control-plane", correlationId: null, causationId: null, payload: { feedbackId: "fbi_n00", previewRunId: "run_pv_checkout", server: "web", status: "open" } }));
+  const fresh = await until(() => tid(fold, "new-item"), "the new item");
+  expect(fresh.textContent).toContain("Newest");
+  expect(bodies()[0]).toBe("Newest");
+  expect(fold.querySelectorAll('[data-testid="fold-item"]').length).toBe(40);
   await click(tid(fold, "fold-more")!);
   await until(() => (fold.querySelectorAll('[data-testid="fold-item"]').length === 45 ? true : null), "the last page");
+  expect(bodies().at(-1)).toBe("Item 0");
   expect(fold.querySelectorAll('[data-testid="fold-more"]').length).toBe(0);
 });
 

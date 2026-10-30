@@ -62,7 +62,7 @@ export function previewFeedbackFor(runId: string, server: string): PreviewFeedba
     pf("fbi_pf_4", KAI, 40, `${CHECKOUT_ADMIN}/orders`, "#status-filter", "Status filter resets after opening an order.",
       { by: ME, note: "The filter is kept in the URL now." }),
   ];
-  // Newest first, as the page lists them.
+  // Newest first; the list route's order is the fixture client's to apply (pagePreviewFeedback).
   return all.filter((i) => i.serverName === server).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 

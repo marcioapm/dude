@@ -104,17 +104,26 @@ var lifecycleCommands = map[string]command{
 	"preview list-feedback": {"PREVIEW", "list a preview ID's server feedback (default: open)", func(fs *flag.FlagSet) doer {
 		server := fs.String("server", "", "only this logical server's feedback")
 		status := fs.String("status", "open", "open, resolved or all")
-		after := fs.String("after", "", "continue after this cursor")
+		after := fs.String("after", "", "continue after this cursor (oldest first)")
+		before := fs.String("before", "", "continue before this cursor (with --order desc)")
+		order := fs.String("order", "asc", "asc (oldest first) or desc (newest first)")
 		limit := fs.Int("limit", 50, "page size (1-200)")
 		return func(c *cli, a []string) (any, error) {
 			if err := oneOf("--status", *status, "open", "resolved", "all"); err != nil {
 				return nil, err
 			}
+			if err := oneOf("--order", *order, "asc", "desc"); err != nil {
+				return nil, err
+			}
 			if *limit < 1 || *limit > 200 {
 				return nil, errors.New("--limit must be between 1 and 200")
 			}
+			ord := *order
+			if ord == "asc" {
+				ord = ""
+			}
 			return c.request("GET", "/v1/branch-previews/"+esc(a[0])+"/feedback"+query(
-				"server", *server, "status", *status, "after", *after, "limit", strconv.Itoa(*limit)), nil)
+				"server", *server, "status", *status, "after", *after, "before", *before, "order", ord, "limit", strconv.Itoa(*limit)), nil)
 		}
 	}},
 	"preview show-feedback": {"ITEM", "show one server feedback item", noFlags(func(c *cli, a []string) (any, error) {

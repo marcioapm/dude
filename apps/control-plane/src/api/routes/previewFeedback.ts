@@ -100,17 +100,26 @@ async function list(ctx: RequestContext): Promise<Response> {
   const status = ctx.url.searchParams.get("status") ?? "open";
   if (!["open", "resolved", "all"].includes(status)) throw badRequest("status is open, resolved or all");
   const limit = intParam(ctx.url, "limit", { min: 1, max: 200 }) ?? 50;
-  const after = ctx.url.searchParams.get("after") ?? "";
-  if (after.length > 100 || (after && !/^fbi_[a-zA-Z0-9_-]+$/.test(after))) throw badRequest("invalid cursor");
+  const order = ctx.url.searchParams.get("order") ?? "asc";
+  if (order !== "asc" && order !== "desc") throw badRequest("order is asc or desc");
+  const cursor = (name: "after" | "before") => {
+    const v = ctx.url.searchParams.get(name) ?? "";
+    if (v.length > 100 || (v && !/^fbi_[a-zA-Z0-9_-]+$/.test(v))) throw badRequest("invalid cursor");
+    return v;
+  };
+  const after = cursor("after"), before = cursor("before");
   const server = ctx.params.name ?? ctx.url.searchParams.get("server");
   const out = await withOrg(ctx.principal.organizationId, async (scope) => {
     const [r] = await scope.sql`SELECT id FROM runs WHERE id = ${ctx.params.id!} AND preview_branch IS NOT NULL`;
     if (!r) throw notFound();
+    // Ids are time-ordered (newId): desc is newest first, and its next page is `before` the last id returned.
     const rows = await scope.sql`SELECT ${scope.sql.unsafe(SELECT)} FROM preview_feedback f
       WHERE f.preview_run_id = ${r.id}
       ${server == null ? scope.sql`` : scope.sql`AND f.preview_server_name = ${server}`}
       ${status === "all" ? scope.sql`` : scope.sql`AND f.status = ${status}`}
-      AND f.id > ${after} ORDER BY f.id LIMIT ${limit + 1}` as PreviewFeedbackItem[];
+      AND f.id > ${after}
+      ${before ? scope.sql`AND f.id < ${before}` : scope.sql``}
+      ORDER BY f.id ${order === "desc" ? scope.sql`DESC` : scope.sql`ASC`} LIMIT ${limit + 1}` as PreviewFeedbackItem[];
     return { feedback: rows.slice(0, limit), nextCursor: rows.length > limit ? rows[limit - 1]!.id : null };
   });
   return json(out, 200, { "cache-control": "no-store" });

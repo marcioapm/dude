@@ -276,6 +276,24 @@ test("bounded pagination, default open filter and idempotent resolve/reopen reta
   for (const q of ["limit=0", "limit=201", "status=solved", "after=invalid"]) expect((await call(ana.key, "GET", `${base}?${q}`)).status).toBe(400);
 });
 
+test("newest first: order=desc pages back with before, and a newer item is on the first page", async () => {
+  const id = "run_pf_desc"; await preview(id);
+  const ids: string[] = [];
+  for (let i = 0; i < 5; i++) { ids.push((await (await submit(id)).json()).id); await Bun.sleep(2); }
+  const base = `/v1/branch-previews/${id}/servers/web/feedback?status=all&order=desc&limit=2`;
+  const listed = async (q = "") => (await (await call(ana.key, "GET", `${base}${q}`)).json()) as { feedback: Array<{ id: string }>; nextCursor: string | null };
+  const first = await listed();
+  expect(first.feedback.map((f) => f.id)).toEqual(ids.slice(3, 5).reverse());
+  const second = await listed(`&before=${first.nextCursor}`);
+  expect(second.feedback.map((f) => f.id)).toEqual(ids.slice(1, 3).reverse());
+  const last = await listed(`&before=${second.nextCursor}`);
+  expect(last.feedback.map((f) => f.id)).toEqual(ids.slice(0, 1));
+  expect(last.nextCursor).toBeNull();
+  const newer = (await (await submit(id)).json()).id as string;
+  expect((await listed()).feedback[0]!.id).toBe(newer);
+  for (const q of ["order=up", "before=invalid"]) expect((await call(ana.key, "GET", `/v1/branch-previews/${id}/feedback?${q}`)).status).toBe(400);
+});
+
 test("generic filtered cursor plans seek sparse open feedback using ordered indexes", async () => {
   const id = "run_pf_sparse"; await preview(id);
   await owner`INSERT INTO preview_feedback (id, organization_id, project_id, preview_run_id, preview_server_name,

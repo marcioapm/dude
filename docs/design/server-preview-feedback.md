@@ -53,8 +53,10 @@ behind the credential, as existing feedback does.
 
 Lists accept `server`, `status=open|resolved|all` (default `open`), `after`
 (opaque item-ID cursor) and `limit` (1-200, default 50), returning
-`{feedback, nextCursor}`. Ordering is stable by sortable item ID. IDs are never
-silently resolved by branch name. Missing and cross-tenant items return 404.
+`{feedback, nextCursor}`. Ordering is stable by sortable item ID, oldest first;
+`order=desc` lists newest first, and its next page is `before=<nextCursor>`
+(the Servers page's fold reads this way, so new feedback is on its first page).
+IDs are never silently resolved by branch name. Missing and cross-tenant items return 404.
 
 Submissions take `{body, anchor, submissionKey, captureSha?}`. `anchor` reuses
 the bounded preview-anchor schema, with a screenshot attachment owned by the
@@ -70,6 +72,7 @@ Resolve/reopen repeats do not append duplicate history or replace prior notes.
 ```sh
 dude preview list-feedback PREVIEW --server web --status open --limit 50
 dude preview list-feedback PREVIEW --after CURSOR
+dude preview list-feedback PREVIEW --order desc --before CURSOR
 dude preview show-feedback ITEM
 dude preview resolve-feedback ITEM --note 'Checked on the preview'
 dude preview reopen-feedback ITEM --note 'Still reproducible'

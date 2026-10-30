@@ -3,8 +3,8 @@
  * everyone's, read-only, All / Open / Resolved with Refresh.
  *
  * - A branch preview's server: its saved feedback (`GET
- *   /v1/branch-previews/:id/servers/:name/feedback`), newest first, a page
- *   at a time with Load more; the resolution is the thread's resolve entry.
+ *   /v1/branch-previews/:id/servers/:name/feedback?order=desc`), newest
+ *   first, older pages with Load more; the resolution is the thread's resolve entry.
  * - A task's server: that task's submitted items on this server's pages,
  *   with the task's statuses, and the reader's own drafts first ("Draft ·
  *   only you"); the API lists nobody else's. Acting on them is the task's
@@ -100,6 +100,7 @@ export function ServerFeedback({ client, run, server, events, onTaskFeedback }: 
     try {
       let shown: Shown[];
       let next: string | null = null;
+      let gap = false;
       if (task) {
         if (!origin) throw new Error("this server has no https URL to match its feedback by");
         const { feedback } = await client.serverFeedback(task.id, origin);
@@ -107,9 +108,11 @@ export function ServerFeedback({ client, run, server, events, onTaskFeedback }: 
         // Your drafts first, then everyone's submitted, newest first.
         shown = [...items.filter((i) => i.draft), ...items.filter((i) => !i.draft).sort((a, b) => b.card.at.localeCompare(a.card.at))];
       } else {
-        const got = await client.previewFeedback(run.id, server.name, { status: "all", limit: PAGE });
+        // Newest first: the first page is the latest feedback, Load more goes back in time.
+        const got = await client.previewFeedback(run.id, server.name, { status: "all", order: "desc", limit: PAGE });
         next = got.nextCursor;
-        shown = got.feedback.map((i) => fromPreview(i, peopleRef.current)).sort((a, b) => b.card.at.localeCompare(a.card.at));
+        shown = got.feedback.map((i) => fromPreview(i, peopleRef.current));
+        gap = next !== null && shown.every((s) => !known.current?.has(s.id));
       }
       if (n !== reads.current) return;
       if (known.current === null) known.current = new Set(shown.map((s) => s.id));
@@ -119,7 +122,14 @@ export function ServerFeedback({ client, run, server, events, onTaskFeedback }: 
         for (const id of arrived) known.current.add(id);
         setUpdated(true);
       }
-      setRead({ state: "ok", items: shown, next, more: next !== null });
+      setRead((prev) => {
+        // A branch fold's re-read is merged into the pages already loaded, by id; a whole page of new items may hide a gap, so it starts over.
+        if (task || !live || prev.state !== "ok" || gap) return { state: "ok", items: shown, next, more: next !== null };
+        const byId = new Map(shown.map((s) => [s.id, s]));
+        const kept = prev.items.map((s) => byId.get(s.id) ?? s);
+        const added = shown.filter((s) => !prev.items.some((p) => p.id === s.id));
+        return { state: "ok", items: [...added, ...kept], next: prev.next, more: prev.more };
+      });
     } catch (err) {
       if (n === reads.current) setRead({ state: "failed", why: errorText(err) });
     }
@@ -142,8 +152,8 @@ export function ServerFeedback({ client, run, server, events, onTaskFeedback }: 
   const more = async () => {
     if (read.state !== "ok" || !read.next) return;
     try {
-      const got = await client.previewFeedback(run.id, server.name, { status: "all", limit: PAGE, after: read.next });
-      const added = got.feedback.map((i) => fromPreview(i, peopleRef.current));
+      const got = await client.previewFeedback(run.id, server.name, { status: "all", order: "desc", limit: PAGE, before: read.next });
+      const added = got.feedback.map((i) => fromPreview(i, peopleRef.current)).filter((a) => !read.items.some((s) => s.id === a.id));
       for (const a of added) known.current?.add(a.id);
       setRead({ state: "ok", items: [...read.items, ...added], next: got.nextCursor, more: got.nextCursor !== null });
     } catch (err) {

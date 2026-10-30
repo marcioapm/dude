@@ -16,6 +16,7 @@ func TestLifecycleCommandsReachTheirRoutes(t *testing.T) {
 		body   string
 	}{
 		{[]string{"preview", "list-feedback", "run_old", "--server", "web", "--status", "all", "--after", "fbi_cursor", "--limit", "2"}, "GET", "/v1/branch-previews/run_old/feedback?after=fbi_cursor&limit=2&server=web&status=all", ``},
+		{[]string{"preview", "list-feedback", "run_old", "--order", "desc", "--before", "fbi_cursor"}, "GET", "/v1/branch-previews/run_old/feedback?before=fbi_cursor&limit=50&order=desc&status=open", ``},
 		{[]string{"preview", "show-feedback", "fbi_1"}, "GET", "/v1/preview-feedback/fbi_1", ``},
 		{[]string{"preview", "resolve-feedback", "fbi_1", "--note", "fixed"}, "POST", "/v1/preview-feedback/fbi_1/resolve", `{"note":"fixed"}`},
 		{[]string{"preview", "reopen-feedback", "fbi_1", "--note", "still broken"}, "POST", "/v1/preview-feedback/fbi_1/reopen", `{"note":"still broken"}`},
@@ -78,6 +79,7 @@ func TestPreviewFeedbackLocalValidationAndNotFound(t *testing.T) {
 		{"list-feedback", "run_example", "--limit", "0"},
 		{"list-feedback", "run_example", "--limit", "201"},
 		{"list-feedback", "run_example", "--limit", "1.5"},
+		{"list-feedback", "run_example", "--order", "newest"},
 		{"list-feedback"}, {"list-feedback", "run_example", "extra"},
 		{"show-feedback"}, {"show-feedback", "fbi_example", "extra"},
 		{"resolve-feedback"}, {"resolve-feedback", "fbi_example", "extra"},
