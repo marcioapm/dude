@@ -464,6 +464,41 @@ describe("a conductor's session, from its URL", () => {
     await act(async () => { window.location.hash = `#/session/${COND}`; });
     await until(() => (page.querySelector("[role=tab][aria-selected=true]")?.textContent?.startsWith("Sessions") ? true : null), "Sessions");
   });
+
+  test("the conductor's open question on Overview answers in Chat: the link keeps its destination", async () => {
+    const client = restartedWith(conductor(2));
+    const events = client.events.bind(client);
+    const asked = { eventId: "evt_cond_q", cursor: 99_000, eventType: "question.asked", occurredAt: at(1), organizationId: "org", projectId: "prj",
+      taskId: TASK_ID, runId: COND, sessionId: null, workflowRunId: null, actor: { type: "agent", id: COND }, source: "harness",
+      correlationId: null, causationId: null, payload: { kind: "agent", questionId: "q_cond", prompt: "Ship behind a flag?", toName: "Ana Ribeiro" } } as PersistedEvent;
+    client.events = async (params) => {
+      const r = await events(params);
+      return params.runId || (params.after ?? 0) >= asked.cursor ? r : { events: [...r.events, asked], nextCursor: Math.max(r.nextCursor, asked.cursor) };
+    };
+    const page = await app(client, `#/task/${TASK_ID}`);
+    const answer = await until(() => page.querySelector<HTMLElement>("[data-testid=needs-you-answer]"), "the needs-you action");
+    expect(answer.textContent).toBe("Answer in Chat");
+    await click(answer);
+    await until(() => (page.querySelector("[role=tab][aria-selected=true]")?.textContent === "Chat" ? true : null), "Chat");
+    expect(window.location.hash).toBe(`#/task/${TASK_ID}/chat`);
+  });
+
+  test("a reviewer's question holding the task opens Findings from its notice", async () => {
+    const client = restartedWith(conductor(2));
+    const getTask = client.getTask.bind(client);
+    client.getTask = async (id) => ({ ...(await getTask(id)), heldByQuestions: true });
+    const reviewQuestions = client.reviewQuestions.bind(client);
+    client.reviewQuestions = async (id) => {
+      const r = await reviewQuestions(id);
+      return r.questions.length ? r : { questions: [{ id: "rvq_x", taskId: TASK_ID, runId: "run_a2_fix", category: "correctness", findingId: null,
+        question: "Is the legacy path still used?", context: "", status: "open", createdAt: at(5) } as unknown as typeof r.questions[number]] };
+    };
+    const page = await app(client, `#/task/${TASK_ID}`);
+    const open = await until(() => page.querySelector<HTMLElement>("[data-testid=questions-hold-open]"), "Show the questions");
+    await click(open);
+    await until(() => (page.querySelector("[role=tab][aria-selected=true]")?.textContent?.startsWith("Findings") ? true : null), "Findings");
+    expect(window.location.hash).toBe(`#/task/${TASK_ID}/findings`);
+  });
 });
 
 describe("a conductor's session on an earlier attempt", () => {
