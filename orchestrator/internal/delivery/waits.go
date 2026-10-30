@@ -440,13 +440,14 @@ type waitCount struct {
 // only, no text.
 func meanwhileTx(ctx context.Context, tx pgx.Tx, taskID string, since int64) ([]waitCount, error) {
 	var commented, reviewed, feedback, messages int
+	// A person in Chat: signed in ('person') or by API key ('human').
 	if err := tx.QueryRow(ctx, `SELECT
 			count(*) FILTER (WHERE event_type = $3),
 			count(*) FILTER (WHERE event_type = $4),
 			count(*) FILTER (WHERE event_type = $5),
-			count(*) FILTER (WHERE event_type = $6 AND actor_type = $7)
+			count(*) FILTER (WHERE event_type = $6 AND actor_type IN ('person', 'human'))
 		FROM events WHERE task_id = $1 AND cursor > $2 AND event_type IN ($3, $4, $5, $6)`,
-		taskID, since, EvPullRequestCommented, EvPullRequestReviewed, EvFeedbackSubmitted, EvChatMessage, ledger.ActorHuman).
+		taskID, since, EvPullRequestCommented, EvPullRequestReviewed, EvFeedbackSubmitted, EvChatMessage).
 		Scan(&commented, &reviewed, &feedback, &messages); err != nil {
 		return nil, err
 	}

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // The conductor's waits (waits.go), over newChildWorld's task: its live
@@ -442,6 +444,38 @@ func TestEvaluatingAnIdleWaitTakesNoLock(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatalf("an idle evaluation waited on a lock: %v", err)
+	}
+}
+
+// "Meanwhile" counts people's Chat messages, a signed-in person's and an
+// API key's alike, and pull request comments; an agent's message is not
+// counted.
+func TestAWaitsDigestCountsWhatPeopleDidMeanwhile(t *testing.T) {
+	w := newWaitWorld(t)
+	opened := w.mustWait("c1", WaitAsk{Deadline: "1h"})
+	ref := RunRef{Org: w.org, ProjectID: "prj_life", TaskID: "wi_life", RunID: "run_parent"}
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		for _, e := range []struct{ typ, actor string }{
+			{EvChatMessage, "person"}, {EvChatMessage, ledger.ActorHuman}, {EvChatMessage, ledger.ActorAgent},
+			{EvPullRequestCommented, ledger.ActorIntegration},
+		} {
+			if _, err := ledger.Append(w.ctx, tx, ref.Event(e.typ, e.actor, map[string]any{"text": "x"})); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`UPDATE conductor_waits SET deadline_at = now() - interval '1 second'`)
+	w.evaluate()
+	var digest string
+	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(digest, '') FROM conductor_waits WHERE id = $1`, opened.WaitID).Scan(&digest); err != nil {
+		t.Fatal(err)
+	}
+	want := "Your wait " + opened.WaitID + " reached its deadline: it was a timer. Meanwhile: 1 pull request comment, 2 messages from people in Chat."
+	if digest != want {
+		t.Fatalf("digest\n %q\nwant\n %q", digest, want)
 	}
 }
 
