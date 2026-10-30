@@ -944,7 +944,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </TabList>
 
         <TabPanel value="changes" fill>
-          <ChangesTab client={client} taskId={taskId} attempt={shown} current={current} runs={sessions} version={version}
+          <ChangesTab key={`${taskId}:${shown}`} client={client} taskId={taskId} attempt={shown} current={current} runs={sessions} version={version}
             fb={sessionFeedback} you={people.you} onOpenRunChanges={(id) => feedback.showInDiff(id, "")} />
         </TabPanel>
 

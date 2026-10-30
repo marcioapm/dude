@@ -41,7 +41,7 @@ export function useBranchDiff(client: ApiClient, taskId: string, attempt: number
   const [pinned, setPinned] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   // Another attempt or repository starts from its latest.
-  const scope = `${attempt ?? ""}\u0000${repository ?? ""}`;
+  const scope = `${taskId}\u0000${attempt ?? ""}\u0000${repository ?? ""}`;
   const was = useRef(scope);
   const pinRef = useRef<string | null>(null);
   if (was.current !== scope) {
@@ -62,6 +62,7 @@ export function useBranchDiff(client: ApiClient, taskId: string, attempt: number
       }, (err: unknown) => {
         if (seq === reads.current) setProblem(err instanceof Error ? err.message : String(err));
       });
+    return () => { if (seq === reads.current) ++reads.current; };
   }, [client, taskId, attempt, repository, version, tick, pin, scope]);
   // Being prepared: asked again until it is captured (the captured event re-reads sooner).
   const preparing = diff?.availability.state === "preparing";

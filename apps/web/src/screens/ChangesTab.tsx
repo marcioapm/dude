@@ -144,8 +144,8 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
       <FeedbackCard inline placement={placement} item={cardItem(item, fb.people, fb.runs)} thread={threadOf(item, fb.people, fb.runs)}
         onEditingChange={(on) => { if (!on) setCardUnsaved(false); }}
         readOnly={fb.readOnly && item.status !== "draft"} maxLength={FEEDBACK_LIMITS.body}
-        onReply={(b) => fb.reply(item.id, b)} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
-        onSaveDraft={(b) => fb.saveDraft(item, b, null)} onDelete={() => fb.deleteDraft(item.id)} />
+        onReply={async (b) => { const out = await fb.reply(item.id, b); setCardUnsaved(false); return out; }} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
+        onSaveDraft={async (b) => { const out = await fb.saveDraft(item, b, null); setCardUnsaved(false); return out; }} onDelete={() => fb.deleteDraft(item.id)} />
     </div>
   ), [fb]);
   const renderAfterLine = useCallback((path: string, side: DiffSide, line: number) => {
@@ -266,6 +266,21 @@ export function ChangesTab({ client, taskId, attempt, current, runs, version, fb
   const filterField = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
+  const detailsButton = useRef<HTMLButtonElement>(null);
+  const detailsClose = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!details) return;
+    detailsClose.current?.focus();
+    const closeOutside = (e: MouseEvent) => {
+      if (!(e.target as Element).closest(".snapshotPopover, .snapshotLine, .prMark")) setDetails(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setDetails(false); detailsButton.current?.focus(); }
+    };
+    document.addEventListener("mousedown", closeOutside);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("mousedown", closeOutside); document.removeEventListener("keydown", escape); };
+  }, [details]);
   const [toolbar, setToolbar] = useState<HTMLElement | null>(null);
   const [cursor, setCursor] = useState<Record<string, number>>({});
   const [target, setTarget] = useState<{ id: string; n: number } | null>(null);
@@ -356,12 +371,12 @@ export function ChangesTab({ client, taskId, attempt, current, runs, version, fb
     <div className="changesBar" data-testid="changes-bar" data-filtering={filterOpen || filter !== "" || undefined}>
       {repositories.length > 1 ? (
         <Select size="sm" className="changesRepo" aria-label="Repository" value={diff?.repository ?? repositories[0]!.name}
-          onValueChange={pickRepo} options={repositories.map((r) => ({ value: r.name, label: r.name }))} data-testid="changes-repo" />
+            onValueChange={(r) => { if (!unsaved) pickRepo(r); }} options={repositories.map((r) => ({ value: r.name, label: r.name }))} disabled={unsaved} data-testid="changes-repo" />
       ) : null}
       <Segmented label="Review scope" size="toolbar" value={scope} onChange={(s: Scope) => setScope(s)} data-testid="changes-scope"
         options={[{ value: "branch", label: "Branch" }, { value: "pending", label: "Pending work" }]} />
       {snapshot && scope === "branch" ? (
-        <button type="button" className="snapshotLine" data-testid="snapshot-line" aria-expanded={details} aria-haspopup="dialog"
+        <button ref={detailsButton} type="button" className="snapshotLine" data-testid="snapshot-line" aria-expanded={details} aria-haspopup="dialog"
           aria-label={`Snapshot ${snapshot.targetRef} ${short(snapshot.mergeBaseSha)} to ${short(snapshot.headSha)}, ${plural(snapshot.stats.files, "file")}, +${snapshot.stats.additions} −${snapshot.stats.deletions}. Show details`}
           onClick={() => setDetails((d) => !d)}>
           <span className="snapshotRef">{snapshot.targetRef} </span>
@@ -382,7 +397,7 @@ export function ChangesTab({ client, taskId, attempt, current, runs, version, fb
       {scope === "branch" && snapshot && all.length > 0 ? (
         <>
           <SearchField className="changesFilter" label="Filter files" placeholder="Filter files" value={filter} data-testid="changes-filter"
-            onValueChange={(v) => { setFilter(v); setSelected(null); }} onBlur={() => { if (!filter) setFilterOpen(false); }} ref={filterField} />
+            onValueChange={(v) => { setFilter(v); setSelected(null); }} disabled={unsaved} onBlur={() => { if (!filter) setFilterOpen(false); }} ref={filterField} />
           <IconButton className="changesFilterIcon" icon="search" size="sm" label="Filter files" aria-expanded={filterOpen}
             onClick={() => { setFilterOpen(true); requestAnimationFrame(() => filterField.current?.focus()); }} />
         </>
@@ -396,7 +411,7 @@ export function ChangesTab({ client, taskId, attempt, current, runs, version, fb
         <div className="snapshotPopover" role="dialog" aria-label="Snapshot details" data-testid="snapshot-details"
           onKeyDown={(e) => { if (e.key === "Escape") setDetails(false); }}>
           <SnapshotDetails diff={diff} snapshot={snapshot} />
-          <Button size="sm" variant="quiet" onClick={() => setDetails(false)} autoFocus>Close</Button>
+          <Button ref={detailsClose} size="sm" variant="quiet" onClick={() => { setDetails(false); detailsButton.current?.focus(); }}>Close</Button>
         </div>
       ) : null}
     </div>
