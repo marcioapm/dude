@@ -735,6 +735,42 @@ export class FixtureClient extends ApiClient {
     this.feedbackItems.push(item);
     return item;
   }
+  /** Fixture feedback writes use the same in-memory items as the reads and branch placements. */
+  override async updateFeedbackDraft(id: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
+    const item = this.feedbackItems.find((i) => i.id === id && i.status === "draft" && i.author?.id === YOU);
+    if (!item) throw new ApiError(404, "not_found", "Draft not found");
+    item.body = draft.body;
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+  override async deleteFeedbackDraft(id: string): Promise<void> {
+    this.feedbackItems = this.feedbackItems.filter((i) => i.id !== id || i.status !== "draft" || i.author?.id !== YOU);
+  }
+  #feedbackBatches = new Map<string, Awaited<ReturnType<ApiClient["submitFeedback"]>>>();
+  override async submitFeedback(taskId: string, draftIds: ReadonlyArray<string>, key: string): ReturnType<ApiClient["submitFeedback"]> {
+    const prior = this.#feedbackBatches.get(key);
+    if (prior) return { ...prior, repeated: true };
+    const items = draftIds.map((id) => this.feedbackItems.find((i) => i.id === id && i.taskId === taskId && i.author?.id === YOU && i.status === "draft"));
+    if (items.some((i) => !i)) throw new ApiError(409, "conflict", "Some drafts are no longer available");
+    const routedTo = this.#task.decider === "conductor" ? "conductor" as const : "workflow" as const;
+    const batchId = `fbt_fixture_${this.#feedbackBatches.size + 1}`;
+    for (const item of items) Object.assign(item!, { status: "open", batchId, routedTo, submittedAt: new Date().toISOString() });
+    const out = { batchId, itemIds: [...draftIds], routedTo };
+    this.#feedbackBatches.set(key, out);
+    return out;
+  }
+  #feedbackAction(id: string, action: "reply" | "resolve" | "reopen", body = ""): Awaited<ReturnType<ApiClient["replyFeedback"]>> {
+    const item = this.feedbackItems.find((i) => i.id === id);
+    if (!item) throw new ApiError(404, "not_found", "Feedback not found");
+    item.status = action === "resolve" ? "resolved" : action === "reopen" ? "open" : "replied";
+    item.updatedAt = new Date().toISOString();
+    item.history.push({ id: `fbh_fixture_${item.history.length}`, kind: action, body, commit: null, createdAt: item.updatedAt, personId: YOU, runId: null });
+    return { itemId: id, action };
+  }
+  override async replyFeedback(id: string, body: string): ReturnType<ApiClient["replyFeedback"]> { return this.#feedbackAction(id, "reply", body); }
+  override async resolveFeedback(id: string, note?: string): ReturnType<ApiClient["resolveFeedback"]> { return this.#feedbackAction(id, "resolve", note); }
+  override async reopenFeedback(id: string, body?: string): ReturnType<ApiClient["reopenFeedback"]> { return this.#feedbackAction(id, "reopen", body); }
+
   override listArtifacts(): Promise<{ artifacts: Artifact[] }> {
     return Promise.resolve({ artifacts: this.#restarted ? RESTARTED_ARTIFACTS : [] });
   }

@@ -7,7 +7,7 @@
  * session's own Changes; it is never merged into the branch view.
  */
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentAvatar, CommentEditor, DiffStat, FeedbackCard, LiveDiff, Segmented, StatusMark, lineWords,
   type DiffRange, type DiffSide, type FileComments, type LiveDiffCommenting,
@@ -28,7 +28,7 @@ const LIVE: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "
 
 /** The attempt's live sessions, newest first: their checkouts are the pending work. */
 export function pendingSessions(runs: readonly Run[]): Run[] {
-  return runs.filter((r) => LIVE.has(r.status) && r.kind !== "preview")
+  return runs.filter((r) => LIVE.has(r.status) && r.kind !== "preview" && Object.keys(r.heads ?? {}).length > 0)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -115,6 +115,7 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   const [selection, setSelection] = useState<DiffRange | null>(null);
   const [editing, setEditing] = useState(false);
   const [unsaved, setUnsaved] = useState(false);
+  const [cardUnsaved, setCardUnsaved] = useState(false);
   const text = useRef("");
   const onText = useCallback((t: string) => {
     text.current = t;
@@ -126,6 +127,7 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
     setEditing(false);
     setSelection(null);
   }, []);
+  useEffect(() => { close(); setCardUnsaved(false); }, [snapshot?.id, close]);
   // A range picked while the open editor holds words keeps the editor where it is.
   const unsavedRef = useRef(unsaved);
   unsavedRef.current = unsaved;
@@ -137,8 +139,10 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   const editorAt = editing ? selection : null;
 
   const card = useCallback((item: FeedbackItem, placement?: "outdated" | "unchanged") => (
-    <div key={item.id} data-fb-item={item.id} tabIndex={-1} className="branchComment">
+    <div key={item.id} data-fb-item={item.id} tabIndex={-1} className="branchComment"
+      onInput={() => setCardUnsaved(true)} onClick={(e) => { if ((e.target as HTMLElement).closest("button")?.textContent === "Cancel") setCardUnsaved(false); }}>
       <FeedbackCard inline placement={placement} item={cardItem(item, fb.people, fb.runs)} thread={threadOf(item, fb.people, fb.runs)}
+        onEditingChange={(on) => { if (!on) setCardUnsaved(false); }}
         readOnly={fb.readOnly && item.status !== "draft"} maxLength={FEEDBACK_LIMITS.body}
         onReply={(b) => fb.reply(item.id, b)} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
         onSaveDraft={(b) => fb.saveDraft(item, b, null)} onDelete={() => fb.deleteDraft(item.id)} />
@@ -175,7 +179,7 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   const commenting = useMemo<LiveDiffCommenting | undefined>(() => (snapshot ? {
     canStart, maxLines: FEEDBACK_LIMITS.lines, selection, onSelectionChange, renderAfterLine, renderFileHead, fileComments, onFileComments,
   } : undefined), [snapshot, canStart, selection, onSelectionChange, renderAfterLine, renderFileHead, fileComments, onFileComments]);
-  return { commenting, byFile, unsaved };
+  return { commenting, byFile, unsaved: unsaved || cardUnsaved };
 }
 
 export interface ChangesTabProps {
@@ -254,6 +258,7 @@ function listNote(snapshot: TaskBranchSnapshot): ReactNode {
 export function ChangesTab({ client, taskId, attempt, current, runs, version, fb, you, onOpenRunChanges }: ChangesTabProps) {
   // The words "General feedback" from 1600px; its icon below, so the bar stays one row at 1440.
   const wide = useWide(1600);
+  const desktopDiff = useWide(641);
   const [repo, setRepo] = useState<string | null>(null);
   const [scope, setScope] = useState<Scope>("branch");
   const [filter, setFilter] = useState("");
@@ -350,7 +355,7 @@ export function ChangesTab({ client, taskId, attempt, current, runs, version, fb
   const bar = (
     <div className="changesBar" data-testid="changes-bar" data-filtering={filterOpen || filter !== "" || undefined}>
       {repositories.length > 1 ? (
-        <Select size="sm" className="changesRepo" label="Repository" aria-label="Repository" value={diff?.repository ?? repositories[0]!.name}
+        <Select size="sm" className="changesRepo" aria-label="Repository" value={diff?.repository ?? repositories[0]!.name}
           onValueChange={pickRepo} options={repositories.map((r) => ({ value: r.name, label: r.name }))} data-testid="changes-repo" />
       ) : null}
       <Segmented label="Review scope" size="toolbar" value={scope} onChange={(s: Scope) => setScope(s)} data-testid="changes-scope"
@@ -464,7 +469,7 @@ export function ChangesTab({ client, taskId, attempt, current, runs, version, fb
     </section>
   ) : snapshot ? (
     <LiveDiff className="changesDiff" data-testid="branch-diff" files={visible} base={snapshot.mergeBaseSha} toolbarIn={toolbar} scopeLabel={null}
-      filteredOut={filteredOut} selected={selected} onSelectedChange={setSelected} commenting={comments.commenting} listNote={listNote(snapshot)}
+      view={desktopDiff ? undefined : "unified"} filteredOut={filteredOut} selected={selected} onSelectedChange={setSelected} commenting={comments.commenting} listNote={listNote(snapshot)}
       emptyMessage={needle && all.length > 0
         ? <span data-testid="changes-no-match">No files match “{filter}”. <Button size="sm" variant="quiet" onClick={() => setFilter("")}>Clear the filter</Button></span>
         : <span data-testid="changes-empty">No committed changes between the merge base <code>{short(snapshot.mergeBaseSha)}</code> and the branch head <code>{short(snapshot.headSha)}</code>.</span>} />

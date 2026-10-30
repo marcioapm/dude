@@ -231,6 +231,10 @@ describe("the Changes tab: feedback on the branch", () => {
     await click(await until(() => page.querySelector("[data-testid=fb-submit]"), "Submit"));
     const confirm = await until(() => document.querySelector<HTMLElement>("[data-testid=fb-confirm]"), "the confirmation");
     expect(confirm.textContent).toBe("Submit 3");
+    await click(confirm);
+    await until(() => (client.feedbackItems.filter((i) => i.status === "draft").length === 0 ? true : null), "the batch submitted");
+    expect(client.feedbackItems.filter((i) => i.batchId?.startsWith("fbt_fixture_")).length).toBe(3);
+    expect(tab.querySelector('[data-testid=diff-section][data-path="src/flags.ts"]')!.textContent).toContain("Say when the flag goes.");
   });
 
   test("an older attempt refuses a submit with its reason", async () => {
