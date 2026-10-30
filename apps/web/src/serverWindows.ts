@@ -181,7 +181,7 @@ export class ServerWindows {
     const runs = new Map<string, RunningRun>();
     for (const t of this.#targets.values()) {
       for (const run of t.runs.values()) {
-        const servers = run.servers.filter((s) => on.has(`${run.id}/${s.name}`));
+        const servers = run.servers.filter((s) => on.has(serverKey({ runId: run.id, server: s.name })));
         if (servers.length === 0) continue;
         const had = runs.get(run.id);
         runs.set(run.id, { ...run, servers: [...(had?.servers ?? []), ...servers.filter((s) => !had?.servers.some((h) => h.name === s.name))] });
@@ -246,7 +246,7 @@ export class ServerWindows {
     const origins = (): Set<string> => new Set([...target.runs.values()].flatMap((r) => r.servers
       .filter((s) => (branch ? s.name === server : s.commenting?.available !== false))
       .flatMap((s) => httpsOriginOf(s.url) ?? [])));
-    const scoped = this.#client;
+    const client = this.#client;
     const taskId = run.task?.id ?? run.id;
     const commenting = new PreviewCommenting({
       win: this.#win,
@@ -266,19 +266,19 @@ export class ServerWindows {
         ...(branch ? { pins: (url: string) => branchPins(target.items as PreviewFeedbackItem[], url, this.#ctx.you, this.#ctx.name) } : {}),
       }),
       upload: async ({ bytes, type, name }) => {
-        if (branch) return scoped.uploadPreviewAttachment(ref.runId, ref.server, { bytes, type });
+        if (branch) return client.uploadPreviewAttachment(ref.runId, ref.server, { bytes, type });
         const blob = new Blob([bytes as BlobPart], { type });
-        return (await scoped.uploadAttachment(taskId, { name, original: blob, delivered: blob })).id;
+        return (await client.uploadAttachment(taskId, { name, original: blob, delivered: blob })).id;
       },
       createDraft: async (anchor, body) => {
-        const item = await scoped.createFeedbackDraft(taskId, { body, anchor });
+        const item = await client.createFeedbackDraft(taskId, { body, anchor });
         await this.#load(target, server);
         return { id: item.id, drafts: (target.items as FeedbackItem[]).filter((i) => i.status === "draft").length };
       },
       // Its pins follow from the submit's own preview_feedback.submitted event (reload), not a read here.
       submit: async (anchor, body, key) => {
         try {
-          return await scoped.submitPreviewFeedback(ref.runId, ref.server, { body, anchor, submissionKey: key });
+          return await client.submitPreviewFeedback(ref.runId, ref.server, { body, anchor, submissionKey: key });
         } catch (err) {
           throw definite(err);
         }
@@ -286,7 +286,7 @@ export class ServerWindows {
       verify: async () => {
         const origin = [...origins()][0] ?? "";
         try {
-          const found = await scoped.validatePreviewServer(ref.runId, ref.server, origin);
+          const found = await client.validatePreviewServer(ref.runId, ref.server, origin);
           if (found.kind !== "branch" || found.previewRunId !== ref.runId || found.server !== ref.server) {
             throw new ApiError(404, "not_found", "This preview ended. Open the new preview and connect again.");
           }
