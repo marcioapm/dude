@@ -145,6 +145,17 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     expect((await get(ana.key, "/v1/tasks/BILL-1/branch-diff")).body.snapshot.id).toBe("tbs_c");
   });
 
+  test("a partial snapshot keeps the file-cap status and reason", async () => {
+    await owner`UPDATE task_branch_snapshots SET status = 'partial', reason = 'GitHub lists at most 300 files', truncated = true WHERE id = 'tbs_c'`;
+    try {
+      expect((await get(ana.key, "/v1/tasks/wi_bd/branch-diff")).body.snapshot).toMatchObject({
+        status: "partial", reason: "GitHub lists at most 300 files", truncated: true,
+      });
+    } finally {
+      await owner`UPDATE task_branch_snapshots SET status = 'complete', reason = NULL, truncated = false WHERE id = 'tbs_c'`;
+    }
+  });
+
   test("a named older snapshot says what is newer and how it relates over the span", async () => {
     const a = (await get(ana.key, "/v1/tasks/wi_bd/branch-diff?snapshot=tbs_a")).body;
     expect(a.snapshot.id).toBe("tbs_a");

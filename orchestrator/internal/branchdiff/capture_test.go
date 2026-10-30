@@ -332,6 +332,27 @@ func TestTheTargetRefComesFromDeliveryThenPullRequestAndRetargetingCaptures(t *t
 	}
 }
 
+func TestTheFileCapIsStoredAsPartialWithItsReason(t *testing.T) {
+	w := newWorld(t)
+	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "1\n"})
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.CompareAnswer = func(base, head string, answer map[string]any) {
+			files := answer["files"].([]any)
+			for len(files) < 300 {
+				files = append(files, files[0])
+			}
+			answer["files"] = files
+		}
+	})
+	w.capture()
+	var status, reason string
+	var truncated bool
+	if err := w.owner.QueryRow(context.Background(), `SELECT status, reason, truncated FROM task_branch_snapshots`).
+		Scan(&status, &reason, &truncated); err != nil || status != "partial" || !strings.Contains(reason, "300") || !truncated {
+		t.Fatalf("file cap: %s %q truncated=%v (%v)", status, reason, truncated, err)
+	}
+}
+
 func short(s string) string { return s[:min(len(s), 7)] }
 
 // A binary file and a file GitHub gave no lines for are flagged, file by
