@@ -9,8 +9,9 @@
 -- branch: asking again is the same recovery.
 --
 -- The publisher Run is not a runs row: its lux cost is kept here, read by
--- the cost sweep (phases.Costs) as a Run's is, and counted for the dead
--- Run by run_model_usd, run_metrics and run_cost_origin below.
+-- the cost sweep (phases.Costs) as a Run's is, summed onto the dead Run's
+-- row, and counted for it by run_model_usd, run_metrics and
+-- run_cost_origin below.
 -- branch_released_at: when the branch was deleted with the task's other
 -- per-Run branches, once the task ended (phases.RetireCompleted).
 CREATE TABLE run_recoveries (
@@ -71,20 +72,56 @@ ALTER TABLE conductor_wakes ADD CONSTRAINT conductor_wakes_kind_check
                   'published', 'publish_refused', 'publish_stalled', 'checkout', 'stalled', 'unblocked', 'feedback', 'wait',
                   'recovered'));
 -- A Run's cost counts its recoveries' publishers (061's rule for each half:
--- lux's figure once reported). Reading run_recoveries makes them STABLE.
+-- lux's figure once reported), kept on the dead Run's row so the cost
+-- functions stay functions of the row, inlined into a list of every Run:
+-- the sums of its recoveries' AI and compute cost, and how many of them
+-- have a publisher whose cost is not yet final. Kept by the trigger below
+-- in the transaction that stores a recovery's cost or submits its
+-- publisher, by difference, so two recoveries of one Run never race.
+ALTER TABLE runs ADD COLUMN recovery_ai_usd numeric,
+  ADD COLUMN recovery_compute_usd numeric,
+  ADD COLUMN recoveries_unsettled int NOT NULL DEFAULT 0;
+
+CREATE FUNCTION count_run_recovery_cost() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  ai numeric := COALESCE(NEW.lux_ai_usd, 0);
+  compute numeric := COALESCE(NEW.lux_compute_usd, 0);
+  unsettled int := CASE WHEN NEW.publisher_lux_run_id IS NOT NULL AND NEW.lux_cost_status IS DISTINCT FROM 'final' THEN 1 ELSE 0 END;
+  priced boolean := NEW.lux_ai_usd IS NOT NULL;
+  computed boolean := NEW.lux_compute_usd IS NOT NULL;
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    IF (NEW.lux_ai_usd, NEW.lux_compute_usd, NEW.lux_cost_status, NEW.publisher_lux_run_id)
+       IS NOT DISTINCT FROM (OLD.lux_ai_usd, OLD.lux_compute_usd, OLD.lux_cost_status, OLD.publisher_lux_run_id) THEN
+      RETURN NULL;
+    END IF;
+    ai := ai - COALESCE(OLD.lux_ai_usd, 0);
+    compute := compute - COALESCE(OLD.lux_compute_usd, 0);
+    unsettled := unsettled - CASE WHEN OLD.publisher_lux_run_id IS NOT NULL AND OLD.lux_cost_status IS DISTINCT FROM 'final' THEN 1 ELSE 0 END;
+  END IF;
+  IF ai = 0 AND compute = 0 AND unsettled = 0 AND NOT priced AND NOT computed THEN
+    RETURN NULL;
+  END IF;
+  UPDATE runs SET recovery_ai_usd = CASE WHEN priced OR recovery_ai_usd IS NOT NULL THEN COALESCE(recovery_ai_usd, 0) + ai END,
+                  recovery_compute_usd = CASE WHEN computed OR recovery_compute_usd IS NOT NULL THEN COALESCE(recovery_compute_usd, 0) + compute END,
+                  recoveries_unsettled = recoveries_unsettled + unsettled
+  WHERE id = NEW.run_id;
+  RETURN NULL;
+END $$;
+CREATE TRIGGER run_recoveries_cost AFTER INSERT OR UPDATE OF lux_ai_usd, lux_compute_usd, lux_cost_status, publisher_lux_run_id
+  ON run_recoveries FOR EACH ROW EXECUTE FUNCTION count_run_recovery_cost();
+
+-- 061's, with the recoveries' AI cost added.
 CREATE OR REPLACE FUNCTION run_model_usd(r runs) RETURNS numeric
-LANGUAGE sql STABLE AS $$
-  SELECT COALESCE(r.lux_ai_usd, r.agent_cost_usd, 0)
-       + COALESCE((SELECT sum(c.lux_ai_usd) FROM run_recoveries c WHERE c.run_id = r.id), 0)
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT COALESCE(r.lux_ai_usd, r.agent_cost_usd, 0) + COALESCE(r.recovery_ai_usd, 0)
 $$;
 
 -- Settled only once every recovery's cost is too.
 CREATE OR REPLACE FUNCTION run_cost_origin(r runs, OUT lux_ai boolean, OUT lux_compute boolean, OUT lux_final boolean)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql IMMUTABLE AS $$
   SELECT r.lux_ai_usd IS NOT NULL, r.lux_compute_usd IS NOT NULL,
-         r.lux_cost_status IS NOT DISTINCT FROM 'final'
-         AND NOT EXISTS (SELECT 1 FROM run_recoveries c WHERE c.run_id = r.id AND c.publisher_lux_run_id IS NOT NULL
-                           AND c.lux_cost_status IS DISTINCT FROM 'final')
+         r.lux_cost_status IS NOT DISTINCT FROM 'final' AND r.recoveries_unsettled = 0
 $$;
 
 -- 061's, with the recoveries' compute added to the machine half.
@@ -100,20 +137,21 @@ LANGUAGE sql STABLE AS $$
                      WHERE u.run_id = p.run_id AND u.event_type = 'run.unparked' AND u.cursor > p.cursor),
                     (SELECT ended_at FROM r), now()) AS to_at
     FROM events p WHERE p.run_id = p_run AND p.event_type = 'run.parked'),
-  recovered AS (SELECT COALESCE(sum(c.lux_compute_usd), 0) AS usd FROM run_recoveries c WHERE c.run_id = p_run),
   m AS (
     SELECT
       GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(r.ended_at, now()) - r.started_at))
                   - COALESCE((SELECT sum(EXTRACT(EPOCH FROM (to_at - from_at))) FROM parks), 0)) AS active_seconds,
       COALESCE((SELECT sum(EXTRACT(EPOCH FROM (to_at - from_at))) FROM parks), 0) AS parked_seconds,
-      run_model_usd(r) AS model_usd, r.lux_compute_usd, r.input_tokens, r.output_tokens, r.machine_usd_per_hour
+      run_model_usd(r) AS model_usd, r.lux_compute_usd, r.input_tokens, r.output_tokens, r.machine_usd_per_hour,
+      r.recovery_compute_usd
     FROM r WHERE r.started_at IS NOT NULL
     UNION ALL
-    SELECT 0, 0, run_model_usd(r), r.lux_compute_usd, r.input_tokens, r.output_tokens, r.machine_usd_per_hour
+    SELECT 0, 0, run_model_usd(r), r.lux_compute_usd, r.input_tokens, r.output_tokens, r.machine_usd_per_hour,
+           r.recovery_compute_usd
     FROM r WHERE r.started_at IS NULL)
   SELECT active_seconds::double precision, parked_seconds::double precision,
          model_usd::double precision, input_tokens, output_tokens,
          (COALESCE(lux_compute_usd, active_seconds / 3600 * COALESCE(machine_usd_per_hour, 0))
-          + (SELECT usd FROM recovered))::double precision
+          + COALESCE(recovery_compute_usd, 0))::double precision
   FROM m
 $$;

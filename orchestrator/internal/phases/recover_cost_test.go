@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -68,5 +69,46 @@ func TestARecoverysCostIsTheDeadRunsAndTheTasks(t *testing.T) {
 	// Not the Run's own lux cost: nothing reported as if lux priced it anew.
 	if n := len(f.reported("run_dead")); n != 1 {
 		t.Errorf("%d run.cost.reported on the dead Run, want its own 1", n)
+	}
+}
+
+// run_model_usd and run_cost_origin stay functions of the row alone, as
+// 061 made them: IMMUTABLE single expressions, so a list over every Run
+// (the board's cost) inlines run_model_usd and never runs a query per row.
+func TestTheRunCostFunctionsAreInlined(t *testing.T) {
+	f := newCostFixture(t)
+	for _, fn := range []string{"run_model_usd", "run_cost_origin"} {
+		var volatility, src string
+		if err := f.owner.QueryRow(f.ctx, `SELECT provolatile::text, prosrc FROM pg_proc WHERE proname = $1`, fn).
+			Scan(&volatility, &src); err != nil {
+			t.Fatal(err)
+		}
+		if volatility != "i" {
+			t.Errorf("%s is provolatile %q, want IMMUTABLE (i)", fn, volatility)
+		}
+		if n := strings.Count(strings.ToUpper(src), "SELECT"); n != 1 {
+			t.Errorf("%s reads %d SELECTs, want its one expression: %s", fn, n, src)
+		}
+	}
+	// run_cost_origin returns a record, which Postgres never inlines (061's
+	// was not either): its one row-only SELECT above is what keeps it cheap.
+	for _, q := range []string{`SELECT sum(run_model_usd(r)) FROM runs r`} {
+		rows, err := f.owner.Query(f.ctx, `EXPLAIN (VERBOSE, FORMAT TEXT) `+q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lines []string
+		for rows.Next() {
+			var l string
+			if err := rows.Scan(&l); err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, l)
+		}
+		rows.Close()
+		whole := strings.Join(lines, "\n")
+		if strings.Contains(whole, "run_model_usd") || strings.Contains(whole, "run_cost_origin") || strings.Contains(whole, "SubPlan") {
+			t.Errorf("%s is not inlined:\n%s", q, whole)
+		}
 	}
 }
