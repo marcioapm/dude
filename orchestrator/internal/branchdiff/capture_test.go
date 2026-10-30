@@ -375,6 +375,26 @@ func TestResettingTheBranchReusesItsFirstSnapshotWithoutAnEvent(t *testing.T) {
 	}
 }
 
+func TestAnInsertConflictReusesTheSnapshotWithoutAnotherEvent(t *testing.T) {
+	w := newWorld(t)
+	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "first\n"})
+	w.capture()
+	w.fake.CommitFiles(w.branch, "second", map[string]string{"app.ts": "second\n"})
+	w.capture()
+	got := w.snapshots()
+	// Point away from this head so the read reaches INSERT, not errSame.
+	w.exec(`UPDATE task_branch_capture_requests SET snapshot_id = $2 WHERE organization_id = $1`, got[0].ID)
+	w.capture()
+	var id, status string
+	var events int
+	if err := w.owner.QueryRow(context.Background(), `SELECT snapshot_id, status FROM task_branch_capture_requests WHERE task_id = 'wi_b'`).Scan(&id, &status); err != nil || id != got[1].ID || status != "done" {
+		t.Fatalf("conflict request: %s %s (%v)", id, status, err)
+	}
+	if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = 'wi_b' AND event_type = $1`, branchdiff.EvSnapshotCaptured).Scan(&events); err != nil || events != 2 || len(w.snapshots()) != 2 {
+		t.Fatalf("conflict emitted an event or snapshot: %d (%v)", events, err)
+	}
+}
+
 func short(s string) string { return s[:min(len(s), 7)] }
 
 // A binary file and a file GitHub gave no lines for are flagged, file by
