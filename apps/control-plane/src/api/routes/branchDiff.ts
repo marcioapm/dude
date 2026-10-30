@@ -186,8 +186,8 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
   });
   if (!out) throw notFound(`task ${ref} not found`);
   if (!includeFiles) {
-    const metadata = { ...out };
-    delete (metadata as Partial<TaskBranchDiff>).placements;
+    // Metadata only: placements are read against a snapshot's files.
+    const { placements: _placements, ...metadata } = out;
     return json(metadata);
   }
   return json(out);
