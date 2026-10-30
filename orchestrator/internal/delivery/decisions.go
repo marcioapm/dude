@@ -676,6 +676,9 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 	case WakeStalled:
 		// A stall's facts, which the conductor decides on without a tool.
 		limit = stalledLineChars
+	case WakeWait:
+		// A wait's digest: what held and what did not, worst first.
+		limit = waitLineChars
 	case "escalation":
 		// The findings it names and the direction the person must give.
 		limit = escalationLineChars

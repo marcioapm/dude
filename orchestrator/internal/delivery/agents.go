@@ -100,6 +100,7 @@ var (
 	steerReadTmpl              = mustTemplate("wakes/steer-read")
 	unblockedTmpl              = mustTemplate("wakes/unblocked")
 	wakeNoteTmpl               = mustTemplate("wakes/note")
+	waitTmpl                   = mustTemplate("wakes/wait")
 
 	alreadyAnsweredTmpl = mustTemplate("notices/already-answered")
 	messageTmpl         = mustTemplate("notices/message")

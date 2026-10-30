@@ -385,6 +385,10 @@ func EndWakesTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 	if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now() WHERE task_id = $1 AND delivered_at IS NULL`, taskID); err != nil {
 		return err
 	}
+	// Its conductor's open wait ends with it, waking no one.
+	if err := EndWaitsTx(ctx, tx, taskID, WaitTaskEnded); err != nil {
+		return err
+	}
 	// With no attempts left, a note this end outlived puts nothing back
 	// when it fails later (requeueTx), and its receipt settles nothing.
 	_, err := tx.Exec(ctx, `DELETE FROM conductor_wake_attempts o USING conductor_wakes c WHERE o.wake_id = c.id AND c.task_id = $1`, taskID)
