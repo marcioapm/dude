@@ -428,7 +428,8 @@
   align-items: center;
   gap: var(--ds-space-4);
   flex: none;
-  height: 22px;
+  /* A control standing on its own: the 28px floor in both densities, so a tap cannot miss it for the file beside it. */
+  height: var(--ds-size-control-sm);
   padding: 0 var(--ds-space-6);
   border: 0;
   border-radius: var(--ds-radius-control);
