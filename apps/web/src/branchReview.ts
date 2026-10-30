@@ -48,22 +48,39 @@ export function useBranchDiff(client: ApiClient, taskId: string, attempt: number
     was.current = scope;
     pinRef.current = null;
   }
+  // The last read with files, of this scope: its snapshot's files and placements stand until another snapshot is shown.
+  const full = useRef<{ scope: string; diff: TaskBranchDiff } | null>(null);
   const reads = useRef(0);
   useEffect(() => {
     const seq = ++reads.current;
     const snapshot = pin ? pinRef.current : null;
-    const query = { ...(attempt !== undefined ? { attempt } : {}), ...(repository ? { repository } : {}), ...(snapshot ? { snapshot } : {}) };
-    client.taskBranchDiff(taskId, query)
-      .then(async (got) => (!pin && got.newer ? client.taskBranchDiff(taskId, { ...query, snapshot: got.newer.id }) : got))
-      .then((got) => {
-        if (seq !== reads.current) return;
-        if (pin && !pinRef.current && got.snapshot) pinRef.current = got.snapshot.id;
-        setPinned(pin ? pinRef.current : got.snapshot?.id ?? null);
-        setDiff((old) => (old && JSON.stringify(old) === JSON.stringify(got) ? old : got));
-        setProblem(null);
-      }, (err: unknown) => {
-        if (seq === reads.current) setProblem(err instanceof Error ? err.message : String(err));
-      });
+    const query = { ...(attempt !== undefined ? { attempt } : {}), ...(repository ? { repository } : {}) };
+    const held = pin && full.current?.scope === scope && full.current.diff.snapshot && full.current.diff.snapshot.id === snapshot
+      ? full.current.diff : null;
+    const read = async (): Promise<TaskBranchDiff> => {
+      if (!pin) {
+        // The Overview's card: the latest, metadata only (it shows stats and heads, never files).
+        const got = await client.taskBranchDiff(taskId, { ...query, files: false });
+        return got.newer ? client.taskBranchDiff(taskId, { ...query, snapshot: got.newer.id, files: false }) : got;
+      }
+      if (held) {
+        // The snapshot shown is read: only what moves around it (newer, the PR, the repositories, availability).
+        const got = await client.taskBranchDiff(taskId, { ...query, snapshot: held.snapshot!.id, files: false });
+        if (got.snapshot?.id === held.snapshot!.id) return { ...got, snapshot: held.snapshot, placements: held.placements };
+      }
+      const got = await client.taskBranchDiff(taskId, { ...query, ...(snapshot ? { snapshot } : {}) });
+      if (got.snapshot) full.current = { scope, diff: got };
+      return got;
+    };
+    read().then((got) => {
+      if (seq !== reads.current) return;
+      if (pin && !pinRef.current && got.snapshot) pinRef.current = got.snapshot.id;
+      setPinned(pin ? pinRef.current : got.snapshot?.id ?? null);
+      setDiff((old) => (old && sameRead(old, got) ? old : got));
+      setProblem(null);
+    }, (err: unknown) => {
+      if (seq === reads.current) setProblem(err instanceof Error ? err.message : String(err));
+    });
     return () => { if (seq === reads.current) ++reads.current; };
   }, [client, taskId, attempt, repository, version, tick, pin, scope]);
   // Being prepared: asked again until it is captured (the captured event re-reads sooner).
@@ -83,6 +100,24 @@ export function useBranchDiff(client: ApiClient, taskId: string, attempt: number
   // A read for another scope is not this one's.
   const mine = diff && (attempt === undefined || diff.attempt === attempt) && (!repository || diff.repository === repository) ? diff : null;
   return { diff: mine, problem, pinned, refresh, reload };
+}
+
+/**
+ * Two reads say the same: the same snapshot (id and checksum), the same
+ * newer one, the same availability, pull request head and repositories —
+ * compared by identity, never by serialising a snapshot's files.
+ */
+export function sameRead(a: TaskBranchDiff, b: TaskBranchDiff): boolean {
+  const repos = (d: TaskBranchDiff) => d.repositories.map((r) => `${r.id}:${r.snapshots}:${r.access}`).join(",");
+  const avail = (d: TaskBranchDiff) => `${d.availability.state}:${"reason" in d.availability ? d.availability.reason : ""}`;
+  return a.attempt === b.attempt && a.repository === b.repository && a.readOnly === b.readOnly
+    && (a.snapshot?.id ?? null) === (b.snapshot?.id ?? null) && (a.snapshot?.checksum ?? null) === (b.snapshot?.checksum ?? null)
+    && (a.snapshot?.status ?? null) === (b.snapshot?.status ?? null)
+    && (a.newer?.id ?? null) === (b.newer?.id ?? null) && (a.newer?.count ?? null) === (b.newer?.count ?? null)
+    && avail(a) === avail(b) && (a.capture?.state ?? null) === (b.capture?.state ?? null)
+    && (a.pullRequest?.number ?? null) === (b.pullRequest?.number ?? null) && (a.pullRequest?.headSha ?? null) === (b.pullRequest?.headSha ?? null)
+    && (a.pullRequest?.syncedAt ?? null) === (b.pullRequest?.syncedAt ?? null)
+    && a.placements === b.placements && repos(a) === repos(b);
 }
 
 /** "New changes available · …": what happened between the snapshot shown and the newer one. */

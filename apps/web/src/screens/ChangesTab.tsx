@@ -32,30 +32,66 @@ export function pendingSessions(runs: readonly Run[]): Run[] {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-/** Read only while Pending is mounted, with at most three checkout reads in flight. */
-function PendingWork({ client, runs, version, attempt, onOpenRunChanges }: Pick<ChangesTabProps, "client" | "runs" | "version" | "attempt" | "onOpenRunChanges">) {
+/** At most once per this many ms, Pending work re-reads the sessions whose checkout moved. */
+export const RUN_DIFF_EVERY_MS = 500;
+
+/** `run.diff.updated`, coalesced: which sessions moved, counted so each batch is read once. */
+export interface RunDiffsMoved {
+  readonly n: number;
+  readonly runs: readonly string[];
+}
+
+/** How many checkout reads Pending work has in flight at most. */
+const PENDING_READS = 3;
+
+/**
+ * Read only while Pending is mounted, with at most three checkout reads in
+ * flight: every session on mount (and Retry), then only the session an
+ * event names. What was read stays shown while it is read again.
+ */
+function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick<ChangesTabProps, "client" | "runs" | "runDiffs" | "attempt" | "onOpenRunChanges">) {
   const pending = pendingSessions(runs);
   const ids = pending.map((r) => r.id).join("\u0000");
   const [reads, setReads] = useState<Record<string, { diff?: RunDiff; problem?: string }>>({});
   const [retry, setRetry] = useState(0);
+  const queue = useRef<string[]>([]);
+  const active = useRef(0);
+  const alive = useRef(true);
   useEffect(() => {
-    let cancelled = false;
-    const queue = ids ? ids.split("\u0000") : [];
-    setReads({});
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+  const ask = useCallback((wanted: readonly string[]) => {
+    for (const id of wanted) if (!queue.current.includes(id)) queue.current.push(id);
     const worker = async () => {
-      while (!cancelled && queue.length) {
-        const id = queue.shift()!;
-        try {
-          const diff = await client.runDiff(id);
-          if (!cancelled) setReads((was) => ({ ...was, [id]: { diff } }));
-        } catch (err) {
-          if (!cancelled) setReads((was) => ({ ...was, [id]: { problem: errorText(err) } }));
+      active.current++;
+      try {
+        while (alive.current && queue.current.length) {
+          const id = queue.current.shift()!;
+          try {
+            const diff = await client.runDiff(id);
+            if (alive.current) setReads((was) => ({ ...was, [id]: { diff } }));
+          } catch (err) {
+            if (alive.current) setReads((was) => ({ ...was, [id]: { problem: errorText(err) } }));
+          }
         }
+      } finally {
+        active.current--;
       }
     };
-    void Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
-    return () => { cancelled = true; };
-  }, [client, ids, version, retry]);
+    // A worker takes its first id before it first waits: each started here holds one read.
+    while (active.current < PENDING_READS && queue.current.length > 0) void worker();
+  }, [client]);
+  useEffect(() => {
+    ask(ids ? ids.split("\u0000") : []);
+  }, [ask, ids, retry]);
+  const seen = useRef(runDiffs.n);
+  useEffect(() => {
+    if (seen.current === runDiffs.n) return;
+    seen.current = runDiffs.n;
+    const live = new Set(ids ? ids.split("\u0000") : []);
+    ask(runDiffs.runs.filter((id) => live.has(id)));
+  }, [ask, ids, runDiffs]);
   return <section className="changesRegion" data-testid="changes-pending" aria-label="Pending work">
     <p className="muted">Session checkout changes (uncommitted work included). Committed changes since each session's base are included too; these are separate from the branch snapshot.</p>
     {pending.length ? <ul className="changesSessions" aria-label="Sessions at work">
@@ -238,6 +274,8 @@ export interface ChangesTabProps {
   readonly runs: readonly Run[];
   /** The page's re-read: moves `newer`, never the snapshot shown. */
   readonly version: number;
+  /** Sessions whose checkout moved (`run.diff.updated`, coalesced): Pending work re-reads those alone. */
+  readonly runDiffs: RunDiffsMoved;
   readonly fb: FeedbackOnDiff;
   readonly you: string | null;
   /** Open a session on its own Changes. */
@@ -319,7 +357,7 @@ function HistoricalChanges(props: ChangesTabProps) {
   </>;
 }
 
-function ChangesReview({ client, taskId, attempt, current, runs, version, fb, you, onOpenRunChanges }: ChangesTabProps) {
+function ChangesReview({ client, taskId, attempt, current, runs, version, runDiffs, fb, you, onOpenRunChanges }: ChangesTabProps) {
   // The words "General feedback" from 1600px; its icon below, so the bar stays one row at 1440.
   const wide = useWide(1600);
   const desktopDiff = useWide(641);
@@ -510,7 +548,7 @@ function ChangesReview({ client, taskId, attempt, current, runs, version, fb, yo
   ) : null;
 
   const body = scope === "pending" ? (
-    <PendingWork client={client} runs={runs} version={version} attempt={attempt} onOpenRunChanges={onOpenRunChanges} />
+    <PendingWork client={client} runs={runs} runDiffs={runDiffs} attempt={attempt} onOpenRunChanges={onOpenRunChanges} />
   ) : read.problem && !diff ? (
     <Callout tone="danger" data-testid="changes-problem">Could not read the branch: {read.problem}</Callout>
   ) : !diff ? (

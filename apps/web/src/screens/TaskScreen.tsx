@@ -112,7 +112,7 @@ import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFe
 import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
 import { OriginLine, TaskOrigin } from "../chatOrigin.tsx";
-import { ChangesTab } from "./ChangesTab.tsx";
+import { ChangesTab, RUN_DIFF_EVERY_MS, type RunDiffsMoved } from "./ChangesTab.tsx";
 import { NeedsYou, TaskOverview, openAgentQuestions } from "./TaskOverview.tsx";
 
 export interface TaskScreenProps {
@@ -311,10 +311,24 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // servers too: they may have moved while nothing could say so.
   const [serversVersion, setServersVersion] = useState(0);
   const [relationsVersion, setRelationsVersion] = useState(0);
+  // Sessions whose checkout moved since Pending work last re-read them; never the page's `version`.
+  const [runDiffs, setRunDiffs] = useState<RunDiffsMoved>({ n: 0, runs: [] });
+  const diffRuns = useRef(new Set<string>());
+  const diffTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(diffTimer.current), []);
   // Feedback is re-read on its own events and on a Run starting or ending (which moves where a batch goes), not on every reload.
   const stream = useReloadOnEvents({ client, taskId }, () => void load(true), undefined, (e) => {
+    // A session's checkout moved: only Pending work reads it, for that session alone, coalesced.
     if (e.eventType === EventTypes.RunDiffUpdated) {
-      setVersion((v) => v + 1);
+      if (e.runId) diffRuns.current.add(e.runId);
+      if (diffTimer.current === undefined) {
+        diffTimer.current = setTimeout(() => {
+          diffTimer.current = undefined;
+          const runs = [...diffRuns.current];
+          diffRuns.current.clear();
+          setRunDiffs((was) => ({ n: was.n + 1, runs }));
+        }, RUN_DIFF_EVERY_MS);
+      }
       return true;
     }
     if (FEEDBACK_EVENTS.has(e.eventType)) feedbackDirty.current = true;
@@ -948,7 +962,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         </TabList>
 
         <TabPanel value="changes" fill>
-          <ChangesTab key={`${taskId}:${shown}`} client={client} taskId={taskId} attempt={shown} current={current} runs={sessions} version={version}
+          <ChangesTab key={`${taskId}:${shown}`} client={client} taskId={taskId} attempt={shown} current={current} runs={sessions} version={version} runDiffs={runDiffs}
             fb={sessionFeedback} you={people.you} onOpenRunChanges={(id) => feedback.showInDiff(id, "")} />
         </TabPanel>
 

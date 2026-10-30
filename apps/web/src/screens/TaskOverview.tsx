@@ -300,7 +300,9 @@ export interface TaskOverviewProps {
 
 export function TaskOverview(p: TaskOverviewProps) {
   const all = useTaskMetrics(p.client, p.taskId, undefined, p.version);
-  const own = useTaskMetrics(p.client, p.taskId, p.many ? p.shown : undefined, p.version);
+  // One attempt: its figures are the task's, read once.
+  const attemptRead = useTaskMetrics(p.client, p.taskId, p.shown, p.version, !p.many);
+  const own = p.many ? attemptRead : all;
   const live = liveRuns(p.runs);
   // The latest snapshot, never pinned: the Overview always says where the branch is now.
   const branch = useBranchDiff(p.client, p.taskId, p.shown, null, p.version, { pin: false });

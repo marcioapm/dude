@@ -804,7 +804,12 @@ export class FixtureClient extends ApiClient {
         return Promise.resolve({ ...none, snapshot: null, newer: null, placements: [], pullRequest: null,
           availability: { state: "none", reason: "No branch yet. It is recorded once an agent commits." } });
       }
-      return Promise.resolve(branchDiffFor(branchState(), this.#currentAttempt(), options, visible));
+      const out = branchDiffFor(branchState(), this.#currentAttempt(), options, visible);
+      if (options.files !== false) return Promise.resolve(out);
+      // As the API with `files=0`: the snapshot without its files, no placements.
+      const { placements: _placements, ...metadata } = out;
+      const snapshot = out.snapshot ? (({ files: _files, ...rest }) => rest)(out.snapshot) : null;
+      return Promise.resolve({ ...metadata, snapshot } as unknown as Awaited<ReturnType<ApiClient["taskBranchDiff"]>>);
     } catch (e) {
       const err = e as { status?: number; code?: string; message: string };
       return Promise.reject(new ApiError(err.status ?? 500, err.code ?? "fixtures", err.message));
