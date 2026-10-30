@@ -1,12 +1,42 @@
-import { afterEach, expect, mock, test } from "bun:test";
+/**
+ * A branch preview's window adopted by the dude tab its Connect to dude
+ * opened (the project Servers page's ServerWindows, branch mode): the
+ * strict checks the submission relay had, kept — origin and source,
+ * schema, the server's identity checked by the dude tab, one submit per
+ * nonce, a screenshot never silently dropped, 4xx refused and the rest
+ * retryable, checks bounded in time — and now the server's saved feedback
+ * sent as pins, a bounded projection with nothing private in it.
+ */
+
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import type { PreviewFeedbackItem, RunningRun } from "@dude/domain";
+import { overlaySessionSchema } from "@dude/domain";
 import { ApiClient, ApiError, type BranchPreviewServerAt } from "../src/api/client.ts";
-import { branchPreviewRelay } from "../src/branchPreviewRelay.ts";
+import { ServerWindows, markServerLanding } from "../src/serverWindows.ts";
 
 const ORIGIN = "https://branch.preview.example.test";
 const owner: BranchPreviewServerAt = { kind: "branch", organizationId: "org_acme", organizationSlug: "acme",
   projectId: "prj_acme", previewRunId: "run_first", branch: "feature/cart", server: "web" };
+const run: RunningRun = { id: "run_first", kind: "preview", task: null, branch: "feature/cart", state: "running", startedAt: null, startedBy: null,
+  servers: [{ name: "web", port: 3000, url: ORIGIN, state: "ready", since: null, readySince: null, feedback: { open: 0, resolved: 0, authors: 0 } }] };
+const saved: PreviewFeedbackItem = { id: "fbi_old", projectId: "prj_acme", previewRunId: "run_first", serverName: "web",
+  author: { id: "u_ana", name: "Ana Ribeiro" }, body: "older feedback",
+  anchor: { kind: "preview", url: `${ORIGIN}/cart`, selector: "#pay", attachmentId: "att_private" }, captureSha: null, status: "open",
+  createdAt: new Date().toISOString(), resolvedAt: null, resolvedBy: null, resolutionNote: "", history: [] };
+
 let stop: (() => void) | undefined;
-afterEach(() => stop?.());
+const own = Object.getOwnPropertyDescriptor(window, "opener");
+let opener: { closed: boolean; postMessage: ReturnType<typeof mock> };
+beforeEach(() => {
+  sessionStorage.clear();
+  opener = { closed: false, postMessage: mock(() => {}) };
+  Object.defineProperty(window, "opener", { configurable: true, get: () => opener });
+});
+afterEach(() => {
+  stop?.();
+  if (own) Object.defineProperty(window, "opener", own);
+  else delete (window as { opener?: unknown }).opener;
+});
 
 class Client extends ApiClient {
   constructor() { super({}); }
@@ -15,68 +45,83 @@ class Client extends ApiClient {
   submissions = mock(async (..._args: Parameters<ApiClient["submitPreviewFeedback"]>) => ({ id: "fbi_saved" }) as Awaited<ReturnType<ApiClient["submitPreviewFeedback"]>>);
   discoveries = mock(async () => this.owner);
   checks = mock(async () => this.owner);
-  reads = mock(async () => ({ feedback: [{ id: "fbi_private", body: "private feedback", anchor: { attachmentId: "att_private" } }] }));
-  override inOrganization(org: string) { expect(org).toBe("org_acme"); return this; }
+  reads = mock(async () => ({ feedback: [saved], nextCursor: null }));
   override previewServerAt = this.discoveries;
   override async validatePreviewServer() { return this.checks(); }
-  override async feedback() { return await this.reads() as unknown as Awaited<ReturnType<ApiClient["feedback"]>>; }
+  override async previewFeedback() { return this.reads(); }
   override uploadPreviewAttachment = this.uploads;
   override submitPreviewFeedback = this.submissions;
 }
-function setup() {
-  const client = new Client();
-  const opener = { closed: false, postMessage: mock(() => {}) };
-  const statuses: string[] = [];
-  stop = branchPreviewRelay(window, opener as unknown as Window, ORIGIN, owner, client, (s) => statuses.push(s));
+
+/** The dude tab a branch preview's Connect to dude opened, on its project's Servers page. */
+function setup(client = new Client()) {
+  markServerLanding(window, { projectId: "prj_acme", runId: "run_first", server: "web", branch: "feature/cart", origin: ORIGIN });
+  const windows = new ServerWindows(window as unknown as Window, client, { you: "u_me", name: () => "Ana" }, () => {});
+  windows.expect(run, "web");
+  stop = () => windows.dispose();
   const send = (data: unknown, origin = ORIGIN, source: unknown = opener) => window.dispatchEvent(
     new window.MessageEvent("message", { data, origin, source: source as MessageEventSource }));
-  return { client, opener, statuses, send };
+  return { client, windows, send };
 }
 const draft = { type: "draft", v: 1, nonce: "retry", body: "Button overlaps", anchor: { kind: "preview", url: `${ORIGIN}/cart`, selector: "#pay" } };
 const tick = () => new Promise((r) => setTimeout(r, 10));
+const told = () => opener.postMessage.mock.calls.map((c) => c[0] as { type: string });
+async function connected(send: ReturnType<typeof setup>["send"]) {
+  send({ type: "hello", v: 1, url: `${ORIGIN}/cart` });
+  await tick();
+}
 
-test("branch relay rejects spoofed origin/source and sends no saved feedback or task navigation", async () => {
-  const { client, opener, send } = setup();
+test("spoofed origin or source, another site's anchor and task navigation are ignored; the session is branch mode with its pins", async () => {
+  const { client, send, windows } = setup();
   send(draft, "https://evil.test"); send(draft, ORIGIN, {});
   send({ ...draft, anchor: { ...draft.anchor, url: "https://elsewhere.test" } });
   send({ type: "open", v: 1, itemId: "wi_not_a_task" });
   expect(client.submissions).not.toHaveBeenCalled();
-  send({ type: "hello", v: 1, url: `${ORIGIN}/cart` }); await tick();
-  expect(opener.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "session", mode: "branch", pins: [], drafts: 0, showPins: false }), ORIGIN);
+  await connected(send);
+  const session = told().find((m) => m.type === "session")!;
+  expect(overlaySessionSchema.safeParse(session).success).toBe(true);
+  expect(session).toMatchObject({ type: "session", mode: "branch", task: "feature/cart", drafts: 0, pins: [expect.objectContaining({ id: "fbi_old", status: "open" })] });
+  expect(opener.postMessage.mock.calls[0]![1]).toBe(ORIGIN);
   expect(client.uploads).not.toHaveBeenCalled();
+  expect([...windows.connected()]).toEqual(["run_first/web"]);
 });
 
-test("branch relay submits once on doubled messages and acknowledges only the originating window", async () => {
-  const { client, opener, statuses, send } = setup();
+test("doubled messages submit once, and only the originating window is answered", async () => {
+  const { client, send } = setup();
+  await connected(send);
   send(draft); send(draft); await tick(); send(draft); await tick();
   expect(client.submissions).toHaveBeenCalledTimes(1);
   expect(client.submissions).toHaveBeenCalledWith("run_first", "web", { body: draft.body, anchor: draft.anchor, submissionKey: "retry" });
   expect(opener.postMessage).toHaveBeenCalledWith({ type: "saved", v: 1, nonce: "retry", id: "fbi_saved", drafts: 0, picture: "none" }, ORIGIN);
-  expect(statuses).toContain("saved");
 });
 
-test("a reused URL never retargets the relay across preview incarnations", async () => {
-  const { client, opener, send } = setup(); client.owner = { ...owner, previewRunId: "run_second" };
+test("a reused URL never retargets the window across preview incarnations", async () => {
+  const client = new Client(); client.owner = { ...owner, previewRunId: "run_second" };
+  const { send } = setup(client);
   send({ type: "hello", v: 1, url: ORIGIN }); await tick();
   expect(opener.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "refused", reason: expect.stringContaining("ended") }), ORIGIN);
+  expect(told().some((m) => m.type === "session")).toBe(false);
+  send(draft); await tick();
   expect(client.submissions).not.toHaveBeenCalled();
 });
 
-test("requested screenshot upload failure refuses submission instead of silently dropping it", async () => {
-  const { client, opener, send } = setup(); client.uploads.mockImplementation(async () => { throw new Error("storage unavailable"); });
+test("a requested screenshot's upload failure refuses the submission instead of silently dropping it", async () => {
+  const { client, send } = setup(); client.uploads.mockImplementation(async () => { throw new Error("storage unavailable"); });
+  await connected(send);
   send({ ...draft, picture: "data:image/png;base64,iVBORw0KGgo=" }); await tick();
   expect(client.uploads).toHaveBeenCalledTimes(1); expect(client.submissions).not.toHaveBeenCalled();
   expect(opener.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "retryable", reason: "storage unavailable" }), ORIGIN);
 });
 
-test("ambiguous committed POST retries the same key and screenshot without duplicating the item", async () => {
-  const { client, opener, send } = setup();
+test("an ambiguous committed POST retries the same key and screenshot without duplicating the item", async () => {
+  const { client, send } = setup();
   const items = new Map<string, string>(); const keys: string[] = [];
   client.submissions.mockImplementation(async (_run: string, _server: string, input: { submissionKey: string }) => {
     keys.push(input.submissionKey); items.set(input.submissionKey, "fbi_committed");
     if (keys.length === 1) throw new TypeError("response body aborted after commit");
     return { id: items.get(input.submissionKey)! } as Awaited<ReturnType<ApiClient["submitPreviewFeedback"]>>;
   });
+  await connected(send);
   const picture = { ...draft, picture: "data:image/png;base64,iVBORw0KGgo=" };
   send(picture); await tick();
   expect(opener.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "retryable", nonce: draft.nonce }), ORIGIN);
@@ -87,21 +132,23 @@ test("ambiguous committed POST retries the same key and screenshot without dupli
 });
 
 test("only definite 4xx submission refusals discard the retry identity", async () => {
-  const { client, opener, send } = setup();
+  const { client, send } = setup();
   client.submissions.mockImplementation(async () => { throw new ApiError(404, "not_found", "Preview ended"); });
+  await connected(send);
   send(draft); await tick();
   expect(opener.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "refused", nonce: draft.nonce }), ORIGIN);
 });
 
 test("5xx submission outcomes remain retryable", async () => {
-  const { client, opener, send } = setup();
+  const { client, send } = setup();
   client.submissions.mockImplementation(async () => { throw new ApiError(503, "unavailable", "Response unavailable"); });
+  await connected(send);
   send(draft); await tick();
   expect(opener.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "retryable", nonce: draft.nonce }), ORIGIN);
 });
 
-test("heartbeats coalesce a slow known-owner check and never discover again or read saved feedback", async () => {
-  const { client, opener, send } = setup();
+test("heartbeats coalesce a slow server check and never look the preview up again", async () => {
+  const { client, send } = setup();
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   client.checks.mockImplementation(async () => { await gate; return owner; });
@@ -111,12 +158,11 @@ test("heartbeats coalesce a slow known-owner check and never discover again or r
   release(); await tick();
   for (let i = 0; i < 20; i++) send({ type: "navigated", v: 1, url: `${ORIGIN}/next` });
   await tick();
-  expect(client.checks).toHaveBeenCalledTimes(1); expect(client.reads).not.toHaveBeenCalled();
-  expect(JSON.stringify(opener.postMessage.mock.calls)).not.toMatch(/fbi_private|private feedback|att_private/);
+  expect(client.checks).toHaveBeenCalledTimes(1);
 });
 
-test("known-owner checks are bounded even when transport fails and do not refuse pending saves", async () => {
-  const { client, opener, send } = setup();
+test("server checks are bounded even when transport fails, and a transport failure says nothing to the page", async () => {
+  const { client, send } = setup();
   const clock = Date.now; let now = clock(); Date.now = () => now;
   try {
     client.checks.mockImplementation(async () => { throw new TypeError("network down"); });
@@ -130,24 +176,22 @@ test("known-owner checks are bounded even when transport fails and do not refuse
   } finally { Date.now = clock; }
 });
 
-test("even successful feedback read responses are forbidden on the submission-only relay", async () => {
-  const original = globalThis.fetch;
-  const requests: string[] = [];
-  globalThis.fetch = mock(async (url: string | URL | Request) => {
-    requests.push(String(url));
-    return Response.json(String(url).includes("/owner?") ? owner : {
-      feedback: [{ id: "fbi_private", body: "private feedback", anchor: { selector: "#private", attachmentId: "att_private" } }],
-    });
-  }) as unknown as typeof fetch;
-  const opener = { closed: false, postMessage: mock(() => {}) };
-  stop = branchPreviewRelay(window, opener as unknown as Window, ORIGIN, owner, new ApiClient({}), () => {});
-  try {
-    for (const type of ["hello", "hello", "navigated"]) window.dispatchEvent(new window.MessageEvent("message", {
-      data: { type, v: 1, url: `${ORIGIN}/cart` }, origin: ORIGIN, source: opener as unknown as MessageEventSource,
-    }));
-    await tick();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toContain("/servers/web/owner?");
-    expect(JSON.stringify(opener.postMessage.mock.calls)).not.toMatch(/fbi_private|private feedback|#private|att_private/);
-  } finally { globalThis.fetch = original; }
+test("pins are a bounded projection: no attachment id, capture or person id reaches the page", async () => {
+  const { send } = setup();
+  await connected(send);
+  const all = JSON.stringify(opener.postMessage.mock.calls);
+  expect(all).toContain("older feedback");
+  expect(all).not.toMatch(/att_private|u_ana|captureSha|prj_acme/);
+});
+
+test("without the landing this tab arrived with, its opener is not adopted", async () => {
+  const client = new Client();
+  const windows = new ServerWindows(window as unknown as Window, client, { you: null, name: () => "x" }, () => {});
+  windows.expect(run, "web");
+  stop = () => windows.dispose();
+  window.dispatchEvent(new window.MessageEvent("message", { data: { type: "hello", v: 1, url: `${ORIGIN}/cart` }, origin: ORIGIN,
+    source: opener as unknown as MessageEventSource }));
+  await tick();
+  expect(opener.postMessage).not.toHaveBeenCalled();
+  expect(client.checks).not.toHaveBeenCalled();
 });

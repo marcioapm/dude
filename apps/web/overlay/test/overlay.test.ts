@@ -11,8 +11,9 @@ import type { DudeToOverlay, OverlayPin, OverlayTheme, OverlayToDude } from "@du
 import { OVERLAY_LIMITS } from "@dude/domain/previewOverlayProtocol";
 import { Overlay } from "../overlay.ts";
 import { PictureError } from "../picture.ts";
+import type { RunningRun } from "@dude/domain";
 import { ApiClient, ApiError, type BranchPreviewServerAt } from "../../src/api/client.ts";
-import { branchPreviewRelay } from "../../src/branchPreviewRelay.ts";
+import { ServerWindows, markServerLanding } from "../../src/serverWindows.ts";
 
 // happy-dom's Window, from the window the repo's preload (packages/design-system/test/dom.ts) made: a fresh one per test.
 const Window = (globalThis.window as unknown as { constructor: new (o: object) => object }).constructor;
@@ -213,7 +214,7 @@ test("branch retryable outcome preserves the nonce for unchanged content", async
   expect(drafts).toHaveLength(2); expect(drafts[1]!.nonce).toBe(first.nonce);
 });
 
-test.each([401, 403])("branch relay owner %i and later POST refusal preserve a committed submission's identity", async (status) => {
+test.each([401, 403])("a branch server's owner %i and a later POST refusal, across dude tab reloads, preserve a committed submission's identity", async (status) => {
   const owner: BranchPreviewServerAt = { kind: "branch", organizationId: "org_acme", organizationSlug: "acme",
     projectId: "prj_acme", previewRunId: "run_first", branch: "feature/cart", server: "web" };
   const items = new Map<string, string>();
@@ -221,11 +222,11 @@ test.each([401, 403])("branch relay owner %i and later POST refusal preserve a c
   let ownerDenied = false;
   const upload = mock(async () => "att_shot");
   class Client extends ApiClient {
-    override inOrganization() { return this; }
     override async validatePreviewServer() {
       if (ownerDenied) throw new ApiError(status, "unauthorized", "Sign in again");
       return owner;
     }
+    override async previewFeedback() { return { feedback: [], nextCursor: null }; }
     override uploadPreviewAttachment = upload;
     override async submitPreviewFeedback(_run: string, _server: string, input: Parameters<ApiClient["submitPreviewFeedback"]>[2]) {
       keys.push(input.submissionKey);
@@ -235,34 +236,43 @@ test.each([401, 403])("branch relay owner %i and later POST refusal preserve a c
       return { id: items.get(input.submissionKey)! } as Awaited<ReturnType<ApiClient["submitPreviewFeedback"]>>;
     }
   }
-  const relayWin = new Window({ url: DUDE }) as globalThis.Window;
+  const origin = new URL(PAGE).origin;
+  // The dude tab Connect to dude opened: its opener is the preview, and it arrived from it.
+  const dudeWin = new Window({ url: DUDE }) as globalThis.Window;
   const preview = { closed: false, postMessage: (data: DudeToOverlay) => queueMicrotask(() => fromDude(data)) };
-  const start = () => branchPreviewRelay(relayWin, preview as unknown as globalThis.Window, new URL(PAGE).origin,
-    owner, new Client({}), () => {});
+  Object.defineProperty(dudeWin, "opener", { configurable: true, get: () => preview });
+  markServerLanding(dudeWin, { projectId: "prj_acme", runId: "run_first", server: "web", branch: "feature/cart", origin });
+  const run: RunningRun = { id: "run_first", kind: "preview", task: null, branch: "feature/cart", state: "running", startedAt: null, startedBy: null,
+    servers: [{ name: "web", port: 3000, url: origin, state: "ready", since: null, readySince: null, feedback: { open: 0, resolved: 0, authors: 0 } }] };
+  const start = () => {
+    const w = new ServerWindows(dudeWin, new Client({}), { you: null, name: () => "x" }, () => {});
+    w.expect(run, "web");
+    return () => w.dispose();
+  };
   let stop = start();
-  opener!.postMessage.mockImplementation((data: OverlayToDude) => queueMicrotask(() => relayWin.dispatchEvent(
-    new win.MessageEvent("message", { data, origin: new URL(PAGE).origin, source: preview }))));
+  opener!.postMessage.mockImplementation((data: OverlayToDude) => queueMicrotask(() => dudeWin.dispatchEvent(
+    new win.MessageEvent("message", { data, origin, source: preview }))));
   try {
-    boot(); await tick();
+    boot(); await tick(); await tick(10);
     await writeOnPay("The button overlaps");
-    tid("ov-save")!.click(); await tick();
+    tid("ov-save")!.click(); await tick(10);
     const first = sent().find((m) => m.type === "draft")!;
     expect(first.picture).toBe("data:image/png;base64,iVBORw0KGgo=");
-    // Reload the relay, then its real owner check refuses without a nonce.
+    // The dude tab reloads; its check of the server refuses without a nonce.
     stop(); ownerDenied = true; stop = start();
-    opener!.postMessage({ type: "hello", v: 1, url: PAGE }, DUDE); await tick();
+    opener!.postMessage({ type: "hello", v: 1, url: PAGE }, DUDE); await tick(10);
     expect(tid("ov-problem")!.textContent).toContain("Sign in again");
     expect(keys).toHaveLength(1);
     stop(); ownerDenied = false; stop = start();
-    opener!.postMessage({ type: "hello", v: 1, url: PAGE }, DUDE); await tick();
-    tid("ov-save")!.click(); await tick();
+    opener!.postMessage({ type: "hello", v: 1, url: PAGE }, DUDE); await tick(10);
+    tid("ov-save")!.click(); await tick(10);
     expect(tid("ov-problem")!.textContent).toContain("Sign in again");
-    tid("ov-save")!.click(); await tick();
+    tid("ov-save")!.click(); await tick(10);
     expect(keys).toEqual([first.nonce, first.nonce, first.nonce]);
     expect(items.size).toBe(1);
     expect(sent().filter((m) => m.type === "draft").every((m) => m.picture === first.picture)).toBe(true);
-    expect(upload).toHaveBeenCalledTimes(2); // The reloaded relay uploads once, then reuses it.
-    expect(tid("ov-comment-box")).toBeNull();
+    expect(upload).toHaveBeenCalledTimes(2); // The reloaded tab uploads once, then reuses it.
+    expect(count('[data-testid="ov-comment-box"]')).toBe(0);
   } finally { stop(); }
 });
 

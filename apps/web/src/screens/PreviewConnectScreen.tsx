@@ -1,10 +1,11 @@
 /**
  * Where a preview's Connect to dude lands (`#/preview-connect`), in a tab
  * the preview opened with an opener. It waits for the preview's hello (the
- * overlay says one every two seconds), asks which of the person's tasks
- * has a live preview at the origin the browser gives that message, and goes
- * to that task in this same tab, so window.opener is still the preview and
- * the task page adopts it. Nothing here answers the preview: the task page does.
+ * overlay says one every two seconds), asks which of the person's tasks or
+ * branch previews is live at the origin the browser gives that message,
+ * and goes there in this same tab, so window.opener is still the preview:
+ * a task's Servers tab, or a branch preview's project Servers page, which
+ * adopts the page. Nothing here answers the preview.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -15,7 +16,7 @@ import { ApiError, type ApiClient, type PreviewServerAt } from "../api/client.ts
 import { DudeMark } from "../DudeMark.tsx";
 import { errorText } from "../hooks/useSave.tsx";
 import { httpsOriginOf, markPreviewArrival } from "../previewComment.ts";
-import { branchPreviewRelay } from "../branchPreviewRelay.ts";
+import { markServerLanding } from "../serverWindows.ts";
 
 /** How long the preview has to say hello before this page says it didn't. */
 export const PREVIEW_HELLO_WAIT_MS = 10_000;
@@ -26,8 +27,7 @@ type Step =
   | { kind: "looking"; origin: string }
   | { kind: "silent" }
   | { kind: "none"; origin: string }
-  | { kind: "failed"; why: string }
-  | { kind: "connected" | "saving" | "saved" };
+  | { kind: "failed"; why: string };
 
 // null when there is no opener or reading it throws.
 function openerOf(win: Window): Window | null {
@@ -54,7 +54,6 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
     let done = false;
     // False once this page is left: a lookup landing later moves nothing and marks nothing.
     let alive = true;
-    let stopRelay: (() => void) | undefined;
     const timer = win.setTimeout(() => {
       if (!done) setStep({ kind: "silent" });
     }, waitMs);
@@ -71,11 +70,9 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
       client.previewServerAt(origin).then((found) => {
         if (!alive) return;
         if (found.kind === "branch") {
-          stopRelay = branchPreviewRelay(win, opener, origin, found, client, (status, reason) => {
-            if (!alive) return;
-            setStep(status === "failed" ? { kind: "failed", why: reason ?? "Submission failed" } : { kind: status });
-          });
-          setStep({ kind: "connected" });
+          // To the project's Servers page, connected: it adopts this tab's opener, as a task page does.
+          markServerLanding(win, { projectId: found.projectId, runId: found.previewRunId, server: found.server, branch: found.branch, origin });
+          onFoundRef.current(found);
           return;
         }
         markPreviewArrival(win, found.taskId);
@@ -91,14 +88,10 @@ export function PreviewConnectScreen({ client, onFound, win = window, waitMs = P
       alive = false;
       win.clearTimeout(timer);
       win.removeEventListener("message", onMessage);
-      stopRelay?.();
     };
   }, [client, win, waitMs]);
 
   const words: Record<Step["kind"], { title: string; line: string }> = {
-    connected: { title: "Connected to the preview", line: "Keep this tab open. Submit comments and screenshots from the preview. Saved feedback is available only through the CLI and API." },
-    saving: { title: "Submitting feedback...", line: "Keep this tab open while the comment and screenshot are saved." },
-    saved: { title: "Feedback submitted", line: "Return to the preview to submit another comment. Browse and manage saved feedback through the CLI or API." },
     "no-opener": { title: "Open this from a preview's Connect to dude button", line: "This page connects a preview's comment tool to dude: it works only in the tab a preview's Connect to dude opens." },
     waiting: { title: "Connecting to the preview…", line: "Waiting for the preview's page to say which preview it is." },
     looking: { title: "Finding the preview's task…", line: step.kind === "looking" ? step.origin : "" },
