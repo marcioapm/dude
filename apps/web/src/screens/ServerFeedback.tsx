@@ -125,6 +125,7 @@ export function ServerFeedback({ client, run, server, events, reconnects = 0, on
         do {
           const page = await client.previewFeedback(run.id, server.name,
             { status: "all", order: "desc", limit: Math.min(ROUTE_MAX, depth - got.length), ...(before ? { before } : {}) });
+          if (n !== reads.current) return;
           got.push(...page.feedback);
           next = page.nextCursor;
           before = next ?? undefined;

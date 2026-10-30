@@ -141,6 +141,41 @@ test("a long list shows the newest first and pages back with Load more, never cu
   expect(fold.querySelectorAll('[data-testid="fold-more"]').length).toBe(0);
 });
 
+test("a live read that a newer one supersedes stops paging", async () => {
+  // Pages of at most 10, so reading the loaded 20 again takes two requests.
+  class Paged extends FixtureClient {
+    base: PreviewFeedbackItem | null = null;
+    reads = 0;
+    hold: Promise<void> | null = null;
+    override async previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; before?: string; order?: "asc" | "desc"; limit?: number } = {}) {
+      this.base ??= (await super.previewFeedback("run_pv_checkout", "web", { status: "all" })).feedback[0]!;
+      if (params.order === "desc") this.reads++;
+      const held = this.hold;
+      this.hold = null;
+      if (held) await held;
+      const all = Array.from({ length: 45 }, (_, i) => ({ ...this.base!, id: `fbi_p${String(i).padStart(2, "0")}`, body: `Item ${i}`,
+        createdAt: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString() }));
+      void runId; void server;
+      return pagePreviewFeedback(all, { ...params, limit: Math.min(params.limit ?? 50, 10) });
+    }
+  }
+  const client = new Paged("a");
+  const { container } = await page(client);
+  const fold = await unfold(container, "run_pv_checkout/web");
+  expect(fold.querySelectorAll('[data-testid="fold-item"]').length).toBe(20);
+  let release!: () => void;
+  client.hold = new Promise<void>((r) => { release = r; });
+  // The first Refresh waits on its first page; the second supersedes it and reads both pages.
+  await click(tid(fold, "fold-refresh")!);
+  await click(tid(fold, "fold-refresh")!);
+  await settle(100);
+  const reads = client.reads;
+  await act(async () => release());
+  await settle(100);
+  expect(client.reads).toBe(reads);
+  expect(fold.querySelectorAll('[data-testid="fold-item"]').length).toBe(20);
+});
+
 test("a failed read is an error with Try again, never an empty list", async () => {
   class Down extends FixtureClient {
     down = true;
