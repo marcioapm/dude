@@ -83,11 +83,12 @@ describe("the Changes tab: the branch", () => {
     for (const words of ["Merge base", "2be91c7", "7ac42e1", "sum-tbs_fx_web", "uncommitted work excluded", "GitHub compare"]) expect(details).toContain(words);
   });
 
-  test("the repository Select shows only with more than one repository", async () => {
-    const client = fx("populated");
-    expect(q((await changes(client)).tab, "changes-repo")).not.toBeNull();
-    for (const unmount of mounted) await unmount();
-    mounted = [];
+  test("the repository Select shows with more than one repository", async () => {
+    const { tab } = await changes(fx("populated"));
+    expect(tab.querySelectorAll("[data-testid=changes-repo]").length).toBe(1);
+  });
+
+  test("with one repository there is no repository Select", async () => {
     const one = fx("populated");
     const read = one.taskBranchDiff.bind(one);
     one.taskBranchDiff = async (id, o) => {
@@ -95,8 +96,8 @@ describe("the Changes tab: the branch", () => {
       return { ...d, repositories: d.repositories.slice(0, 1) };
     };
     const { tab } = await changes(one);
-    expect(q(tab, "snapshot-line")).not.toBeNull();
-    expect(q(tab, "changes-repo")).toBeNull();
+    await until(() => q(tab, "snapshot-line"), "the snapshot line");
+    expect(tab.querySelectorAll("[data-testid=changes-repo]").length).toBe(0);
   });
 
   test("empty, unavailable, preparing and none say so; never an empty diff that looks like success", async () => {
