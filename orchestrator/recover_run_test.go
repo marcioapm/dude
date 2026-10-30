@@ -243,6 +243,28 @@ func TestRecoverRunScansForSecretsBeforePushing(t *testing.T) {
 		t.Errorf("the wake says %q", line)
 	}
 	w.assertTaskHoldsNo(task, implToken)
+
+	// Clean commits, the secret in the branch's name: refused as well, the
+	// branch named where it was found, nothing on GitHub.
+	t.Run("in the branch name", func(t *testing.T) {
+		w := conducting(t)
+		const value = "BranchSecret_0123456789"
+		w.grant("BRANCH_TOKEN", value, "implementer")
+		task, run, _ := w.deadWriter("WIP.md", "half of it\n")
+		branch := "dude/" + task + "/recovered-" + value
+		id, _ := w.must(task, "recover_run", `{"run":"`+run+`","branch":"`+branch+`"}`)["recoveryId"].(string)
+		w.until("the recovery refused", func() bool { return w.recoveryStatus(id) == "refused" })
+		if got := w.branchAt(branch); got != "" {
+			t.Errorf("the recovered branch reached GitHub at %s", got)
+		}
+		if pub := w.publisherOf(id); pub == nil || len(pub.PushCredentials) != 0 {
+			t.Errorf("lux was asked to push the publisher: %v", pub)
+		}
+		if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.push.refused'
+			AND payload->'secrets' = '["BRANCH_TOKEN"]' AND payload->'files' = '["the branch name"]' AND payload->>'recoveryId' = $2`, run, id); n != 1 {
+			t.Errorf("%d run.push.refused naming the secret and the branch name", n)
+		}
+	})
 }
 
 // A worker that asked lux to push and died before it recorded that: its
