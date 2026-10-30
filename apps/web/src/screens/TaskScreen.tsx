@@ -523,8 +523,10 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
 
   // The agents' questions still open, read once per change of the ledger (not per frame of the stream).
   const agentQuestions = useMemo(() => openAgentQuestions(events), [events]);
+  // A task opens on its Overview, whoever decides it; a URL naming a tab, or a session, opens there.
+  const tab = asked ?? "overview";
   // Overview's milestones: Activity's own lines, worked out only while Overview shows.
-  const onOverview = (asked ?? "overview") === "overview";
+  const onOverview = tab === "overview";
   const recentLines = useMemo(() => (item && onOverview ? activityLines(events, people, item.runs, allPrs, attempts[0] ?? 1, item.key ?? null, item.source ?? null) : []),
     [item, onOverview, events, people, allPrs, attempts]);
 
@@ -537,8 +539,6 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // turn, and the latest takes the next message.
   const conductors = [...item.runs].filter(isConductor).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const conductor = conductors.at(-1) ?? null;
-  // A task opens on its Overview, whoever decides it; a URL naming a tab, or a session, opens there.
-  const tab = asked ?? "overview";
 
   // Leaves any open session; the URL is replaced only for a tab change with none open.
   const show = (onTab: string, n: number, replace: boolean) => {
