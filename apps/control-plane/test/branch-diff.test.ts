@@ -344,8 +344,11 @@ describe("GET /v1/tasks/:id/branch-diff after a retention sweep", () => {
       { id: "s1", previousSnapshotId: null, relation: "initial" as const, mergeBaseSha: "a", headSha: "b", capturedAt: at(1) },
       { id: "s4", previousSnapshotId: "s1", relation: "fast-forward" as const, mergeBaseSha: "a", headSha: "c", capturedAt: at(4), steps: 3 },
       { id: "s5", previousSnapshotId: "s4", relation: "fast-forward" as const, mergeBaseSha: "a", headSha: "d", capturedAt: at(5), steps: 1 },
+      { id: "s7", previousSnapshotId: "s5", relation: "fast-forward" as const, mergeBaseSha: "a", headSha: "e", capturedAt: at(7), steps: 2 },
     ];
     expect(newerThan("s1", "s5", links)).toMatchObject({ relation: "fast-forward", count: 4 });
     expect(newerThan("s4", "s5", links)).toMatchObject({ relation: "fast-forward", count: 1 });
+    // A walk over several pruned links sums every one: 2 + 1 + 3.
+    expect(newerThan("s1", "s7", links)).toMatchObject({ relation: "fast-forward", count: 6 });
   });
 });

@@ -115,7 +115,8 @@ BEGIN
       steps = ch.steps + m.steps,
       relation = CASE
         WHEN m.previous_snapshot_id IS NULL THEN ch.relation
-        WHEN ch.relation = 'rewritten' OR m.relation IN ('rewritten', 'initial') THEN 'rewritten'
+        -- m 'initial' cannot reach here: an initial has no previous (230's CHECK).
+        WHEN ch.relation = 'rewritten' OR m.relation = 'rewritten' THEN 'rewritten'
         WHEN (SELECT p.merge_base_sha FROM task_branch_snapshots p WHERE p.id = m.previous_snapshot_id) = ch.merge_base_sha
           THEN 'fast-forward'
         ELSE 'merged-target' END
