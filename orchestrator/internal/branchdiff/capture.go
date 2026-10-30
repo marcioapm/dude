@@ -351,19 +351,29 @@ func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, 
 		}
 		id := ids.New(ids.BranchSnapshot)
 		// Idempotent on (head, merge base): a head read again is the snapshot it already has.
-		err := tx.QueryRow(ctx, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository,
-				branch_ref, target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, truncated, binary_files,
-				status, reason, source, pr_head_sha, previous_snapshot_id, relation)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15, $16, $17, NULLIF($18, ''), $19,
-				NULLIF($20, ''), $21, $22)
-			ON CONFLICT (task_id, attempt, repository_id, head_sha, merge_base_sha, target_ref) DO NOTHING
-			RETURNING id`,
-			id, r.Org, r.TaskID, r.Attempt, r.RepoID, t.repoName, t.branch, t.targetRef, s.targetSHA, s.mergeBase, s.head,
-			files, s.checksum, stats, s.stats.TruncatedFiles > 0 || s.reason != "", s.stats.BinaryFiles, status, s.reason, Source,
-			validSHA(t.prHead), prev, s.relation).Scan(&id)
+		insert := func() error {
+			return tx.QueryRow(ctx, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository,
+					branch_ref, target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, truncated, binary_files,
+					status, reason, source, pr_head_sha, previous_snapshot_id, relation)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15, $16, $17, NULLIF($18, ''), $19,
+					NULLIF($20, ''), $21, $22)
+				ON CONFLICT (task_id, attempt, repository_id, head_sha, merge_base_sha, target_ref) DO NOTHING
+				RETURNING id`,
+				id, r.Org, r.TaskID, r.Attempt, r.RepoID, t.repoName, t.branch, t.targetRef, s.targetSHA, s.mergeBase, s.head,
+				files, s.checksum, stats, s.stats.TruncatedFiles > 0 || s.reason != "", s.stats.BinaryFiles, status, s.reason, Source,
+				validSHA(t.prHead), prev, s.relation).Scan(&id)
+		}
+		err := insert()
 		created := err == nil
 		if db.IsNotFound(err) {
 			err = tx.QueryRow(ctx, existingSnapshot, r.TaskID, r.Attempt, r.RepoID, s.head, s.mergeBase, t.targetRef).Scan(&id)
+			if db.IsNotFound(err) {
+				// The pruner held it (its candidate lock) and deleted it
+				// while this waited: the head has none now. Captured anew,
+				// once; a conflict again is a capture's of the same head.
+				err = insert()
+				created = err == nil
+			}
 		}
 		if err != nil {
 			return err
