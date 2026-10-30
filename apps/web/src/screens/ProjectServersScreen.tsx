@@ -99,7 +99,7 @@ export function useRunningServers(client: ApiClient, projectId: string) {
     if (stream.reconnects > 0) void load();
   }, [stream.reconnects, load]);
   useEffect(() => () => clearTimeout(timer.current), []);
-  return { read, retry, events: stream.events };
+  return { read, retry, events: stream.events, reconnects: stream.reconnects };
 }
 
 /** A server as describeServer reads one: what the page has of lux's object. */
@@ -124,7 +124,7 @@ export function ProjectServersScreen({ client, projectId, projectName, landing, 
 }) {
   const people = usePeople();
   const theme = useResolvedTheme();
-  const { read, retry, events } = useRunningServers(client, projectId);
+  const { read, retry, events, reconnects } = useRunningServers(client, projectId);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<ServersFilter>("all");
   const [folds, setFolds] = useState<ReadonlySet<string>>(new Set());
@@ -233,7 +233,7 @@ export function ProjectServersScreen({ client, projectId, projectName, landing, 
               } />,
             open ? (
               <li key={`${k}-fold`} className="serverFoldItem">
-                <ServerFeedback client={client} run={run} server={s} events={events} you={people.you}
+                <ServerFeedback client={client} run={run} server={s} events={events} reconnects={reconnects}
                   onTaskFeedback={run.task ? () => onTaskFeedback(run.task!.id) : undefined} />
               </li>
             ) : null,

@@ -74,12 +74,16 @@ type Read = { state: "loading" } | { state: "failed"; why: string } | { state: "
 const CHANGES: ReadonlySet<string> = new Set([EventTypes.PreviewFeedbackSubmitted, EventTypes.PreviewFeedbackResolved, EventTypes.PreviewFeedbackReopened,
   EventTypes.FeedbackSubmitted, EventTypes.FeedbackResolved, EventTypes.FeedbackReopened, EventTypes.FeedbackReplied, EventTypes.FeedbackDelivered]);
 
-export function ServerFeedback({ client, run, server, events, onTaskFeedback }: {
+/** How long a fold waits after a matching event for the rest of its burst before reading again. */
+export const FOLD_READ_MS = 300;
+
+export function ServerFeedback({ client, run, server, events, reconnects = 0, onTaskFeedback }: {
   client: ApiClient;
   run: RunningRun;
   server: RunningServer;
   events: ReadonlyArray<PersistedEvent>;
-  you: string | null;
+  /** The project stream's reconnect count: a change reads the fold again (what it missed while away). */
+  reconnects?: number;
   onTaskFeedback?: (() => void) | undefined;
 }) {
   const people = usePeople();
@@ -93,6 +97,8 @@ export function ServerFeedback({ client, run, server, events, onTaskFeedback }: 
   const [updated, setUpdated] = useState(false);
   const reads = useRef(0);
   const task = run.kind === "task" ? run.task : null;
+  // By id: the list re-read gives a new Run object each time, which must not read the fold again.
+  const taskId = task?.id ?? null;
   const origin = httpsOriginOf(server.url);
 
   const load = useCallback(async (live = false) => {
@@ -101,9 +107,9 @@ export function ServerFeedback({ client, run, server, events, onTaskFeedback }: 
       let shown: Shown[];
       let next: string | null = null;
       let gap = false;
-      if (task) {
+      if (taskId) {
         if (!origin) throw new Error("this server has no https URL to match its feedback by");
-        const { feedback } = await client.serverFeedback(task.id, origin);
+        const { feedback } = await client.serverFeedback(taskId, origin);
         const items = feedback.map((i) => fromTask(i, peopleRef.current));
         // Your drafts first, then everyone's submitted, newest first.
         shown = [...items.filter((i) => i.draft), ...items.filter((i) => !i.draft).sort((a, b) => b.card.at.localeCompare(a.card.at))];
@@ -124,7 +130,7 @@ export function ServerFeedback({ client, run, server, events, onTaskFeedback }: 
       }
       setRead((prev) => {
         // A branch fold's re-read is merged into the pages already loaded, by id; a whole page of new items may hide a gap, so it starts over.
-        if (task || !live || prev.state !== "ok" || gap) return { state: "ok", items: shown, next, more: next !== null };
+        if (taskId || !live || prev.state !== "ok" || gap) return { state: "ok", items: shown, next, more: next !== null };
         const byId = new Map(shown.map((s) => [s.id, s]));
         const kept = prev.items.map((s) => byId.get(s.id) ?? s);
         const added = shown.filter((s) => !prev.items.some((p) => p.id === s.id));
@@ -133,21 +139,33 @@ export function ServerFeedback({ client, run, server, events, onTaskFeedback }: 
     } catch (err) {
       if (n === reads.current) setRead({ state: "failed", why: errorText(err) });
     }
-  }, [client, task, origin, run.id, server.name]);
+  }, [client, taskId, origin, run.id, server.name]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  // The project's stream: this server's feedback changed.
+  // The project's stream: this server's feedback changed. One re-read per burst (FOLD_READ_MS), and one when the stream comes back.
   const heard = useRef(events.at(-1)?.cursor ?? 0);
+  const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const soon = useCallback(() => {
+    if (pending.current !== undefined) return;
+    pending.current = setTimeout(() => { pending.current = undefined; void load(true); }, FOLD_READ_MS);
+  }, [load]);
+  useEffect(() => () => clearTimeout(pending.current), []);
   useEffect(() => {
-    const mine = events.filter((e) => e.cursor > heard.current && CHANGES.has(e.eventType) && (task
-      ? e.taskId === task.id
+    const mine = events.filter((e) => e.cursor > heard.current && CHANGES.has(e.eventType) && (taskId
+      ? e.taskId === taskId
       : (e.payload as { previewRunId?: string; server?: string }).previewRunId === run.id && (e.payload as { server?: string }).server === server.name));
     if (events.length) heard.current = Math.max(heard.current, events.at(-1)!.cursor);
-    if (mine.length) void load(true);
-  }, [events, task, run.id, server.name, load]);
+    if (mine.length) soon();
+  }, [events, taskId, run.id, server.name, soon]);
+  const reconnected = useRef(reconnects);
+  useEffect(() => {
+    if (reconnects === reconnected.current) return;
+    reconnected.current = reconnects;
+    soon();
+  }, [reconnects, soon]);
 
   const more = async () => {
     if (read.state !== "ok" || !read.next) return;

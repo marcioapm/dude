@@ -167,3 +167,45 @@ test("another server's events leave this fold as it is", async () => {
   await settle(400);
   expect(fold.querySelectorAll('[data-testid="live-note"]').length).toBe(0);
 });
+
+/** A preview_feedback.* or feedback.* event on the project's stream, as the backend sends it. */
+const event = (eventType: string, over: { taskId?: string | null; payload?: Record<string, unknown> } = {}) => emit({ eventType,
+  occurredAt: new Date().toISOString(), organizationId: ORG.id, projectId: PROJECT.id, taskId: over.taskId ?? null, runId: null, sessionId: null,
+  workflowRunId: null, actor: { type: "person", id: "u_kai" }, source: "control-plane", correlationId: null, causationId: null, payload: over.payload ?? {} });
+
+class Counting extends FixtureClient {
+  preview = 0;
+  task = 0;
+  override async previewFeedback(...a: Parameters<FixtureClient["previewFeedback"]>) { this.preview++; return super.previewFeedback(...a); }
+  override async serverFeedback(...a: Parameters<FixtureClient["serverFeedback"]>) { this.task++; return super.serverFeedback(...a); }
+}
+
+test("a burst of ten events reads each open fold once or twice, not ten times; a stream that comes back reads it once", async () => {
+  const client = new Counting("a");
+  const { container } = await page(client);
+  const branch = await unfold(container, "run_pv_checkout/web");
+  await unfold(container, "run_web142/web");
+  await settle(350);
+  const [p0, t0] = [client.preview, client.task];
+  await act(async () => {
+    for (let i = 0; i < 10; i++) {
+      event(EventTypes.PreviewFeedbackSubmitted, { payload: { feedbackId: `x${i}`, previewRunId: "run_pv_checkout", server: "web", status: "open" } });
+      event(EventTypes.FeedbackDelivered, { taskId: TASK_ID });
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  });
+  await until(() => tid(branch, "live-note"), "the branch fold's re-read");
+  await settle(400);
+  expect(client.preview - p0).toBeGreaterThanOrEqual(1);
+  expect(client.preview - p0).toBeLessThanOrEqual(2);
+  expect(client.task - t0).toBeGreaterThanOrEqual(1);
+  expect(client.task - t0).toBeLessThanOrEqual(2);
+  // The stream drops and comes back: each fold reads once for what it may have missed.
+  const [p1, t1] = [client.preview, client.task];
+  await act(async () => { window.dispatchEvent(new Event("offline")); });
+  await act(async () => { window.dispatchEvent(new Event("online")); });
+  await until(() => (client.preview > p1 && client.task > t1 ? true : null), "the reads after the stream came back");
+  await settle(400);
+  expect(client.preview - p1).toBe(1);
+  expect(client.task - t1).toBe(1);
+});
