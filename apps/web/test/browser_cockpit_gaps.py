@@ -91,18 +91,23 @@ class CockpitGaps(unittest.TestCase):
                 self.shot(page, f"pending-{state}-{width}-{theme}")
 
     def test_phone_header_actions_do_not_overlap_the_title(self):
-        page = self.page(390, 844)
-        page.goto(f"{URL}/?fixtures=a#/task/{TASK}/changes")
-        boxes = page.evaluate("""() => {
-          const title = document.querySelector('h1')?.getBoundingClientRect();
-          const buttons = [...document.querySelectorAll('button')].filter(b => /^(Stop|Edit)$/.test(b.textContent.trim()))
-            .map(b => b.getBoundingClientRect());
-          return { title, buttons };
-        }""")
-        title = boxes["title"]
-        for b in boxes["buttons"]:
-            self.assertTrue(b["right"] <= title["left"] or b["left"] >= title["right"] or b["bottom"] <= title["top"] or b["top"] >= title["bottom"], boxes)
-        self.assertEqual(self.overflow(page), 0)
+        # Overview (where a task opens) and Findings scroll the whole page; Changes is a fixed pane.
+        for tab in ("", "/findings", "/changes"):
+            page = self.page(390, 844)
+            page.goto(f"{URL}/?fixtures=a#/task/{TASK}{tab}")
+            expect(page.get_by_test_id("edit-task")).to_be_visible()
+            boxes = page.evaluate("""() => {
+              const title = document.querySelector('h1')?.getBoundingClientRect();
+              const buttons = [...document.querySelectorAll('button')].filter(b => /^(Stop|Edit)$/.test(b.textContent.trim()))
+                .map(b => b.getBoundingClientRect());
+              return { title, buttons };
+            }""")
+            title = boxes["title"]
+            self.assertGreaterEqual(len(boxes["buttons"]), 2, (tab, boxes))
+            for b in boxes["buttons"]:
+                # The actions wrap onto their own line above the title: the title starts below them.
+                self.assertGreaterEqual(title["top"], b["bottom"], (tab, boxes))
+            self.assertEqual(self.overflow(page), 0)
 
 
 if __name__ == "__main__":
