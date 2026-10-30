@@ -49,7 +49,8 @@ CREATE TABLE task_branch_snapshots (
   previous_snapshot_id  text REFERENCES task_branch_snapshots(id) ON DELETE SET NULL,
   relation              text NOT NULL CHECK (relation IN ('initial', 'fast-forward', 'merged-target', 'rewritten')),
   captured_at           timestamptz NOT NULL DEFAULT clock_timestamp(),
-  UNIQUE (task_id, attempt, repository_id, head_sha, merge_base_sha),
+  CONSTRAINT task_branch_snapshots_task_id_attempt_repository_id_head_sh_key
+    UNIQUE (task_id, attempt, repository_id, head_sha, merge_base_sha, target_ref),
   -- A first has none before it (a later one's may be gone: SET NULL).
   CHECK (relation <> 'initial' OR previous_snapshot_id IS NULL),
   CHECK ((status = 'partial') = (reason IS NOT NULL))

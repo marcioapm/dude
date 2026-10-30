@@ -102,6 +102,7 @@ type target struct {
 	repoName, repoURL        string
 	branch, targetRef        string
 	prevID, prevHead, prevMB string
+	prevTargetRef            string
 	prHead                   string
 }
 
@@ -134,11 +135,11 @@ func (c *Capturer) Capture(ctx context.Context, r Request) error {
 			t.targetRef = *prBase
 		}
 		// The snapshot before: the one the branch was last read at, else the newest.
-		err = tx.QueryRow(ctx, `SELECT s.id, s.head_sha, s.merge_base_sha FROM task_branch_snapshots s
+		err = tx.QueryRow(ctx, `SELECT s.id, s.head_sha, s.merge_base_sha, s.target_ref FROM task_branch_snapshots s
 			LEFT JOIN task_branch_capture_requests q ON q.task_id = s.task_id AND q.attempt = s.attempt AND q.repository_id = s.repository_id
 			WHERE s.task_id = $1 AND s.attempt = $2 AND s.repository_id = $3
 			ORDER BY s.id = q.snapshot_id DESC NULLS LAST, s.captured_at DESC, s.id DESC LIMIT 1`,
-			r.TaskID, r.Attempt, r.RepoID).Scan(&t.prevID, &t.prevHead, &t.prevMB)
+			r.TaskID, r.Attempt, r.RepoID).Scan(&t.prevID, &t.prevHead, &t.prevMB, &t.prevTargetRef)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -192,7 +193,7 @@ func (c *Capturer) read(ctx context.Context, r Request, t target) (snapshot, err
 		return s, errAbsent
 	}
 	// The target moving alone changes nothing to show.
-	if s.head == t.prevHead {
+	if s.head == t.prevHead && t.targetRef == t.prevTargetRef {
 		return s, errSame
 	}
 	if s.targetSHA, err = gh.BranchSHA(ctx, slug, t.targetRef); err != nil {
@@ -346,7 +347,7 @@ func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, 
 				status, reason, source, pr_head_sha, previous_snapshot_id, relation)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15, $16, $17, NULLIF($18, ''), $19,
 				NULLIF($20, ''), $21, $22)
-			ON CONFLICT (task_id, attempt, repository_id, head_sha, merge_base_sha) DO NOTHING
+			ON CONFLICT (task_id, attempt, repository_id, head_sha, merge_base_sha, target_ref) DO NOTHING
 			RETURNING id`,
 			id, r.Org, r.TaskID, r.Attempt, r.RepoID, t.repoName, t.branch, t.targetRef, s.targetSHA, s.mergeBase, s.head,
 			files, s.checksum, stats, s.stats.TruncatedFiles > 0 || s.reason != "", s.stats.BinaryFiles, status, s.reason, Source,
@@ -354,8 +355,8 @@ func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, 
 		created := err == nil
 		if db.IsNotFound(err) {
 			err = tx.QueryRow(ctx, `SELECT id FROM task_branch_snapshots WHERE task_id = $1 AND attempt = $2
-				AND repository_id = $3 AND head_sha = $4 AND merge_base_sha = $5`,
-				r.TaskID, r.Attempt, r.RepoID, s.head, s.mergeBase).Scan(&id)
+				AND repository_id = $3 AND head_sha = $4 AND merge_base_sha = $5 AND target_ref = $6`,
+				r.TaskID, r.Attempt, r.RepoID, s.head, s.mergeBase, t.targetRef).Scan(&id)
 		}
 		if err != nil {
 			return err

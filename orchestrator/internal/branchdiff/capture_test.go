@@ -291,6 +291,47 @@ func TestALineageOfSnapshotsFollowsTheBranch(t *testing.T) {
 	}
 }
 
+func TestTheTargetRefComesFromDeliveryThenPullRequestAndRetargetingCaptures(t *testing.T) {
+	for _, source := range []string{"delivery", "pull request"} {
+		t.Run(source, func(t *testing.T) {
+			w := newWorld(t)
+			first := w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "1\n"})
+			git(t, w.origin, "update-ref", "refs/heads/release", first)
+			w.fake.CommitFiles("release", "release-only", map[string]string{"release.ts": "release\n"})
+			w.fake.CommitFiles(w.branch, "second", map[string]string{"app.ts": "2\n"})
+			w.capture() // default main
+			if source == "delivery" {
+				w.exec(`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
+					VALUES ('wf_b', $1, 'task.delivery', 'd', 'wi_b', 'running', 's', '{"bases":{"api":"release"}}')`)
+			} else {
+				w.exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+					VALUES ('pr_b', $1, 'prj_b', 'wi_b', 'repo_api', 1, 'https://github.com/acme/api/pull/1', $2, 'release', $3, 'T')`, w.branch, w.fake.SHA(w.branch))
+			}
+			w.capture() // same head, different target ref and merge base
+			got := w.snapshots()
+			var ref string
+			if len(got) != 2 || got[1].MergeBase != first || got[1].Relation != branchdiff.MergedTarget {
+				t.Fatalf("retargeted unchanged head: %+v", got)
+			}
+			if err := w.owner.QueryRow(context.Background(), `SELECT target_ref FROM task_branch_snapshots WHERE id = $1`, got[1].ID).Scan(&ref); err != nil || ref != "release" {
+				t.Fatalf("target ref %q (%v)", ref, err)
+			}
+			// Another ref with the same history still names a different target:
+			// the uniqueness/conflict path must not silently return release's row.
+			git(t, w.origin, "update-ref", "refs/heads/release-next", w.fake.SHA("release"))
+			if source == "delivery" {
+				w.exec(`UPDATE workflow_runs SET state = '{"bases":{"api":"release-next"}}' WHERE organization_id = $1`)
+			} else {
+				w.exec(`UPDATE pull_requests SET base_branch = 'release-next' WHERE organization_id = $1`)
+			}
+			w.capture()
+			if n := len(w.snapshots()); n != 3 {
+				t.Fatalf("same merge base, different target ref: %d snapshots", n)
+			}
+		})
+	}
+}
+
 func short(s string) string { return s[:min(len(s), 7)] }
 
 // A binary file and a file GitHub gave no lines for are flagged, file by
