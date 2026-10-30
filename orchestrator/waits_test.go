@@ -18,16 +18,22 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
-// waitNotes are the conductor's wake notes that carry a wait's reason.
-func (w *world) waitNotes(task string) []string {
+// waitNotes counts the conductor's wake notes that carry a wait's reason.
+func (w *world) waitNotes(task string) int {
 	w.t.Helper()
-	var out []string
-	for _, n := range w.woken(task) {
-		if strings.Contains(n, "Your wait cwt_") {
-			out = append(out, n)
-		}
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken' AND payload->'reasons' ? 'wait'`, task)
+}
+
+// waitWake is the wait's reason as recorded: delivered or not, its line,
+// and the digest the wait kept.
+func (w *world) waitWake(waitID string) (delivered bool, line, digest string) {
+	w.t.Helper()
+	if err := w.owner.QueryRow(context.Background(), `SELECT c.delivered_at IS NOT NULL, c.line, COALESCE(cw.digest, '')
+		FROM conductor_wakes c JOIN conductor_waits cw ON cw.id = $1
+		WHERE c.kind = 'wait' AND c.key = 'wait:' || cw.id`, waitID).Scan(&delivered, &line, &digest); err != nil {
+		w.t.Fatal(err)
 	}
-	return out
+	return delivered, line, digest
 }
 
 // reviewWaitedOn is a task in review on its pull request, its checks
@@ -68,8 +74,8 @@ func TestTheConductorWaitsForItsPullRequestsChecksAndIsWokenOnce(t *testing.T) {
 	for range 3 {
 		w.pump()
 	}
-	if got := w.waitNotes(task); len(got) != 0 {
-		t.Fatalf("woken while the checks are pending: %q", got)
+	if n := w.waitNotes(task); n != 0 {
+		t.Fatalf("woken %d times while the checks are pending", n)
 	}
 	head := w.str(`SELECT head_sha FROM pull_requests WHERE task_id = $1`, task)
 	w.gh.SetChecks("success")
@@ -77,10 +83,9 @@ func TestTheConductorWaitsForItsPullRequestsChecksAndIsWokenOnce(t *testing.T) {
 	if checks := w.str(`SELECT checks::text FROM pull_requests WHERE task_id = $1`, task); checks != "passing" {
 		t.Fatalf("the webhook left the checks %s", checks)
 	}
-	w.until("the wait's note", func() bool { return len(w.waitNotes(task)) == 1 })
-	note := w.waitNotes(task)[0]
-	if !strings.Contains(note, "target#1 checks passing at "+head[:7]) || !strings.Contains(note, "then ask for review") {
-		t.Errorf("the note:\n%s", note)
+	w.until("the wait's note", func() bool { return w.waitNotes(task) == 1 })
+	if delivered, line, digest := w.waitWake(waitID); !delivered || line == "" || line != digest {
+		t.Errorf("the wait's reason: delivered %v, line %q, digest %q", delivered, line, digest)
 	}
 	if by := w.str(`SELECT ended_by FROM conductor_waits WHERE id = $1`, waitID); by != delivery.WaitHeld {
 		t.Errorf("the wait ended %q", by)
@@ -88,8 +93,12 @@ func TestTheConductorWaitsForItsPullRequestsChecksAndIsWokenOnce(t *testing.T) {
 	for range 5 {
 		w.pump()
 	}
-	if got := w.waitNotes(task); len(got) != 1 {
-		t.Errorf("%d notes for one wait", len(got))
+	if n := w.waitNotes(task); n != 1 {
+		t.Errorf("%d notes for one wait", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events e, jsonb_array_elements_text(e.payload->'reasons') r
+		WHERE e.task_id = $1 AND e.event_type = 'conductor.woken' AND r = 'wait'`, task); n != 1 {
+		t.Errorf("the notes name the wait %d times", n)
 	}
 }
 
@@ -363,13 +372,10 @@ func TestASupersededConductorOpensNoWait(t *testing.T) {
 	task := w.task()
 	conductor := w.talk(task)
 	spec := w.conductorSpecOf(task)
-	done := make(chan string, 1)
+	done := make(chan int, 1)
 	go func() {
-		status, body := w.callTool(tools.URL, spec, "wait_for", `{"deadline":"30m"}`)
-		if status != 422 {
-			body = "status " + body
-		}
-		done <- body
+		status, _ := w.callTool(tools.URL, spec, "wait_for", `{"deadline":"30m"}`)
+		done <- status
 	}()
 	<-paused
 	mustExec(t, w.owner, `UPDATE runs SET lux_state = 'terminated' WHERE id = $1`, conductor)
@@ -380,10 +386,14 @@ func TestASupersededConductorOpensNoWait(t *testing.T) {
 		t.Fatal("no replacement conductor")
 	}
 	close(resume)
-	if body := <-done; !strings.Contains(body, "no longer this task's conductor") {
-		t.Fatalf("the replaced conductor's wait_for: %s", body)
+	// Refused: nothing written.
+	if status := <-done; status != 422 {
+		t.Fatalf("the replaced conductor's wait_for answered %d, want 422", status)
 	}
 	if n := w.count(`SELECT count(*) FROM conductor_waits WHERE task_id = $1`, task); n != 0 {
 		t.Fatalf("%d waits", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type IN ('conductor.waiting', 'conductor.wait_ended')`, task); n != 0 {
+		t.Fatalf("%d wait events", n)
 	}
 }
