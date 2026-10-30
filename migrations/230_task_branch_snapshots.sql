@@ -125,8 +125,10 @@ BEGIN
   INSERT INTO task_branch_capture_requests (organization_id, task_id, attempt, repository_id, head_sha)
   VALUES (p_org, p_task, p_attempt, p_repo, NULLIF(p_head, ''))
   ON CONFLICT (task_id, attempt, repository_id) DO UPDATE
-    SET status = 'pending', head_sha = EXCLUDED.head_sha, reason = NULL, failures = 0,
-        next_attempt_at = now(), requested_at = now(), settled_at = NULL;
+    SET status = 'pending', head_sha = EXCLUDED.head_sha, reason = NULL,
+        next_attempt_at = CASE WHEN task_branch_capture_requests.failures > 0
+          THEN GREATEST(now(), task_branch_capture_requests.next_attempt_at) ELSE now() END,
+        requested_at = clock_timestamp(), settled_at = NULL;
 END
 $$;
 REVOKE ALL ON FUNCTION want_branch_capture(text, text, integer, text, text) FROM PUBLIC;

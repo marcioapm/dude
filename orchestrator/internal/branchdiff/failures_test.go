@@ -3,8 +3,12 @@ package branchdiff_test
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
 // requestRow is one capture request, as the owner reads it.
@@ -86,6 +90,36 @@ func TestARequestWhoseReadsFailIsBackedOffAndNeverSpins(t *testing.T) {
 				t.Errorf("%d snapshots", n)
 			}
 		})
+	}
+}
+
+func TestReaskingKeepsBackoffButAnAskDuringAFailedReadStaysDue(t *testing.T) {
+	w := newWorld(t)
+	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "1\n"})
+	w.exec(`SELECT want_branch_capture($1, 'wi_b', 1, 'repo_api', '')`)
+	w.exec(`UPDATE task_branch_capture_requests SET failures = 2, next_attempt_at = now() + interval '1 hour' WHERE organization_id = $1`)
+	before := w.requestOf("wi_b", 1)
+	w.exec(`SELECT want_branch_capture($1, 'wi_b', 1, 'repo_api', 'new')`)
+	after := w.requestOf("wi_b", 1)
+	if after.failures != 2 || after.due || after.nextIn < before.nextIn-time.Second {
+		t.Fatalf("re-ask reset outage backoff: before %+v, after %+v", before, after)
+	}
+	// A deterministic re-ask from the server while this capture is reading.
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/compare/") {
+				w.exec(`SELECT want_branch_capture($1, 'wi_b', 1, 'repo_api', 'newer')`)
+				return 502
+			}
+			return 0
+		}
+	})
+	w.exec(`UPDATE task_branch_capture_requests SET next_attempt_at = now() WHERE organization_id = $1`)
+	if n := w.sweep(); n != 0 {
+		t.Fatalf("failed capture says more waiting: %d", n)
+	}
+	if r := w.requestOf("wi_b", 1); r.status != "pending" || !r.due || r.failures != 2 {
+		t.Fatalf("ask during the failed read was delayed or counted: %+v", r)
 	}
 }
 

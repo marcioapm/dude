@@ -279,8 +279,15 @@ func (c *Capturer) failed(ctx context.Context, r Request, t target, what string,
 	err := c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var failures int
 		if err := tx.QueryRow(ctx, `UPDATE task_branch_capture_requests SET failures = failures + 1
-			WHERE task_id = $1 AND attempt = $2 AND repository_id = $3 RETURNING failures`,
-			r.TaskID, r.Attempt, r.RepoID).Scan(&failures); err != nil {
+			WHERE task_id = $1 AND attempt = $2 AND repository_id = $3 AND requested_at = $4 RETURNING failures`,
+			r.TaskID, r.Attempt, r.RepoID, t.requestedAt).Scan(&failures); err != nil {
+			if db.IsNotFound(err) {
+				// A newer ask landed during the read. Do not delay it with this
+				// read's failure (nor erase earlier failures).
+				_, err = tx.Exec(ctx, `UPDATE task_branch_capture_requests SET next_attempt_at = now()
+					WHERE task_id = $1 AND attempt = $2 AND repository_id = $3`, r.TaskID, r.Attempt, r.RepoID)
+				return err
+			}
 			return err
 		}
 		if failures >= maxFailures {
