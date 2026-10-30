@@ -103,6 +103,16 @@ func TestBranchSnapshotsAreUniqueScopedAndAskedForWhenTheBranchMoves(t *testing.
 	}
 	// Settled, then the pull request moves (someone else's push): pending again with the new head.
 	mustExec(t, owner, `UPDATE task_branch_capture_requests SET status = 'done', settled_at = now()`)
+	mustExec(t, owner, `UPDATE runs SET heads = heads WHERE id = 'run_s'`)
+	if got := requests(); got["repo_api@2"] != sha("1")+":done" {
+		t.Errorf("unchanged heads rearmed capture: %v", got)
+	}
+	mustExec(t, owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind, status)
+		VALUES ('run_nonagent', $1, 'prj_s', 'wi_s', 2, 'preview', 'running')`, org)
+	mustExec(t, owner, `UPDATE runs SET heads = '{"web":{"sha":"ignored"}}' WHERE id = 'run_nonagent'`)
+	if got := requests(); len(got) != 1 {
+		t.Errorf("non-agent heads asked for capture: %v", got)
+	}
 	mustExec(t, owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
 		VALUES ('pr_s', $1, 'prj_s', 'wi_s', 'repo_web', 7, 'https://github.com/acme/web/pull/7', 'dude/wi_s/attempt-2', 'main', $2, 'T')`, org, sha("2"))
 	if got := requests(); got["repo_web@2"] != sha("2")+":pending" || got["repo_api@2"] != sha("1")+":done" {
@@ -111,6 +121,12 @@ func TestBranchSnapshotsAreUniqueScopedAndAskedForWhenTheBranchMoves(t *testing.
 	mustExec(t, owner, `UPDATE pull_requests SET head_sha = $1 WHERE id = 'pr_s'`, sha("3"))
 	if got := requests(); got["repo_web@2"] != sha("3")+":pending" {
 		t.Errorf("after its head moved: %v", got)
+	}
+	// Closed pull requests never ask, even when their head changes.
+	mustExec(t, owner, `UPDATE task_branch_capture_requests SET status = 'done', settled_at = now()`)
+	mustExec(t, owner, `UPDATE pull_requests SET state = 'closed', head_sha = $1 WHERE id = 'pr_s'`, sha("7"))
+	if got := requests(); got["repo_web@2"] != sha("3")+":done" {
+		t.Errorf("closed pull request rearmed capture: %v", got)
 	}
 	// A conductor's publish settling.
 	mustExec(t, owner, `UPDATE task_branch_capture_requests SET status = 'done', settled_at = now()`)
