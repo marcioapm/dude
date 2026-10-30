@@ -196,7 +196,7 @@ export function pinsFor(items: ReadonlyArray<FeedbackItem>, url: string, you: st
     }));
 }
 
-export type CommentingState = "idle" | "waiting" | "open" | "silent" | "closed";
+export type CommentingState = "idle" | "waiting" | "open" | "silent" | "closed" | "moved";
 
 export interface CommentingView {
   /** The most relevant window's: one open, else one waiting, else the latest. */
@@ -211,6 +211,13 @@ export interface CommentingDeps {
   /** dude's own window: where messages arrive and from which the preview is opened. */
   readonly win: Window;
   readonly taskId: string;
+  /** The window opened by name for this target; `dude-preview-<taskId>` by default. */
+  readonly windowName?: string;
+  /**
+   * `branch`: a branch preview's server, no task. A comment is submitted at
+   * once (`submit`), never a draft; the session says `mode: "branch"`.
+   */
+  readonly mode?: "task" | "branch";
   /** The latest of what the page shows, read at each message. */
   readonly read: () => {
     origins: ReadonlySet<string>;
@@ -221,11 +228,29 @@ export interface CommentingDeps {
     name: (personId: string | null | undefined) => string;
     /** dude's resolved theme, which the overlay follows once connected. */
     theme?: OverlayTheme;
+    /** A page's pins when they are not task items (a branch preview's saved feedback). */
+    pins?: (url: string) => OverlayPin[];
   };
   /** Uploads a picture as the task's attachment: its id. */
   readonly upload: (picture: { bytes: Uint8Array; type: string; name: string }) => Promise<string>;
   /** Creates the draft: its id, and the reader's drafts on the task after it. */
   readonly createDraft: (anchor: OverlayAnchor & { attachmentId?: string }, body: string) => Promise<{ id: string; drafts: number }>;
+  /**
+   * Branch mode: submits the comment with `key` as its submission key (a
+   * retry with the same key is the same item). A thrown error with
+   * `definite: true` is the API's refusal; any other may have landed.
+   */
+  readonly submit?: (anchor: OverlayAnchor & { attachmentId?: string }, body: string, key: string) => Promise<{ id: string }>;
+  /**
+   * Branch mode: the server is still the one this target names (the dude
+   * tab's check, never the page's word). Throws, `definite: true`, when not.
+   */
+  readonly verify?: () => Promise<void>;
+  /**
+   * Preview first looks for this target's window already open in this
+   * browser (another of this person's dude tabs may hold it) and claims it.
+   */
+  readonly claimable?: boolean;
   readonly onSaved: (id: string) => void;
   readonly onOpenItem: (id: string) => void;
   readonly onChange: (view: CommentingView) => void;
@@ -287,15 +312,43 @@ interface Pane {
   // The one save in flight (one draft from the window at a time), and the ones answered:
   // a nonce sent again (the overlay gave up waiting) is not saved twice.
   inFlight: string | null;
-  readonly answered: Map<string, Extract<DudeToOverlay, { type: "saved" }>>;
+  readonly answered: Map<string, DudeToOverlay>;
+  // Branch mode: a picture uploaded for a nonce, reused when the same save is sent again.
+  readonly uploads: Map<string, { picture: string; id: string }>;
   helloTimer: number;
   // When it was last opened, adopted or heard from: the view and the ways in prefer the latest.
   touched: number;
+  // Reached by name in another of this person's dude tabs and claimed from it.
+  claimed: boolean;
 }
+
+/**
+ * Every commenting window a dude tab holds, by whichever PreviewCommenting
+ * holds it: a window is answered by one of them only, so two (a task page's
+ * and the Servers page's) never both save one draft. Keyed by the dude tab's
+ * own window.
+ */
+const heldByTab = new WeakMap<Window, Map<Window, PreviewCommenting>>();
+const heldIn = (tab: Window): Map<Window, PreviewCommenting> => {
+  let m = heldByTab.get(tab);
+  if (!m) heldByTab.set(tab, (m = new Map()));
+  return m;
+};
 
 const closedOrGone = (w: Window): boolean => {
   try {
     return w.closed;
+  } catch {
+    return true;
+  }
+};
+
+/** A window showing another origin's page: its location can't be read. A blank one just opened can. */
+const foreignPage = (w: Window): boolean => {
+  if (closedOrGone(w)) return false;
+  try {
+    void w.location.href;
+    return false;
   } catch {
     return true;
   }
@@ -331,7 +384,23 @@ export class PreviewCommenting {
     this.#d.win.removeEventListener("message", this.onMessage);
     this.#d.win.clearInterval(this.#watch);
     this.#watch = 0;
-    for (const p of this.#panes) this.#d.win.clearTimeout(p.helloTimer);
+    for (const p of this.#panes) {
+      this.#d.win.clearTimeout(p.helloTimer);
+      if (this.#tabHeld.get(p.win) === this) this.#tabHeld.delete(p.win);
+    }
+  }
+
+  get #name(): string {
+    return this.#d.windowName ?? `dude-preview-${this.#d.taskId}`;
+  }
+
+  // The windows this dude tab holds, across its commenting targets.
+  get #tabHeld(): Map<Window, PreviewCommenting> {
+    return heldIn(this.#d.win);
+  }
+
+  get #branch(): boolean {
+    return this.#d.mode === "branch";
   }
 
   get view(): CommentingView {
@@ -357,14 +426,25 @@ export class PreviewCommenting {
     return source ? this.#panes.find((p) => p.win === source) ?? null : null;
   }
 
-  /** A window to hold: at the cap (reached only by open(); #adopt makes its own room), the oldest closed one makes room, else the oldest. */
-  #add(win: Window, url: string | null, server: string | null): Pane {
+  /**
+   * A window to hold. Another commenting target of this tab that held it
+   * lets it go: the newest opener answers it. At the cap only a closed,
+   * stopped or moved window makes room; a live one is never let go, and the
+   * window is not held (null).
+   */
+  #add(win: Window, url: string | null, server: string | null): Pane | null {
     if (this.#panes.length >= MAX_WINDOWS) {
-      const byAge = [...this.#panes].sort((a, b) => a.touched - b.touched);
-      this.#drop(byAge.find((p) => p.state === "closed" || closedOrGone(p.win)) ?? byAge[0]!);
+      const free = [...this.#panes].sort((a, b) => a.touched - b.touched)
+        .find((p) => p.state === "closed" || p.state === "idle" || p.state === "moved" || closedOrGone(p.win));
+      if (!free) return null;
+      this.#drop(free);
     }
-    const pane: Pane = { win, url, server, state: "waiting", saved: 0, pendingHighlight: null, inFlight: null, answered: new Map(), helloTimer: 0, touched: ++this.#clock };
+    const before = this.#tabHeld.get(win);
+    if (before && before !== this) before.#release(win);
+    const pane: Pane = { win, url, server, state: "waiting", saved: 0, pendingHighlight: null, inFlight: null, answered: new Map(),
+      uploads: new Map(), helloTimer: 0, touched: ++this.#clock, claimed: false };
     this.#panes.push(pane);
+    this.#tabHeld.set(win, this);
     this.#watchClosed();
     return pane;
   }
@@ -372,6 +452,16 @@ export class PreviewCommenting {
   #drop(pane: Pane): void {
     this.#d.win.clearTimeout(pane.helloTimer);
     this.#panes = this.#panes.filter((p) => p !== pane);
+    if (this.#tabHeld.get(pane.win) === this) this.#tabHeld.delete(pane.win);
+  }
+
+  // Another target of this tab took the window: it is that one's now.
+  #release(win: Window): void {
+    const pane = this.#paneOf(win);
+    if (!pane) return;
+    this.#drop(pane);
+    if (this.#named === win) this.#named = null;
+    this.#emit();
   }
 
   /** One check a second, for every window held: one closed says so. */
@@ -398,19 +488,32 @@ export class PreviewCommenting {
   open(url: string, server: string | null, highlight: string | null = null): boolean {
     const origin = httpsOriginOf(url);
     if (origin === null || !this.#d.read().origins.has(origin)) return false;
+    if (this.#d.claimable) {
+      const claimed = this.#claim(origin, server);
+      if (claimed !== null) return claimed;
+    }
     // Without noopener: the overlay talks to its opener, and only to it.
-    const w = this.#d.win.open(url, `dude-preview-${this.#d.taskId}`);
+    const w = this.#d.win.open(url, this.#name);
     if (!w) return false;
     // The name gave another window (the last one was closed): what the last one saved is not this one's.
     const before = this.#named && this.#named !== w ? this.#paneOf(this.#named) : null;
     if (before) this.#drop(before);
-    this.#named = w;
     const pane = this.#paneOf(w) ?? this.#add(w, url, server);
+    if (!pane) return false;
+    this.#named = w;
     pane.url = url;
     pane.server = server;
     pane.pendingHighlight = highlight;
     pane.state = "waiting";
+    pane.claimed = false;
     pane.touched = ++this.#clock;
+    this.#waitForHello(pane);
+    this.#focus(pane);
+    this.#emit();
+    return true;
+  }
+
+  #waitForHello(pane: Pane): void {
     this.#d.win.clearTimeout(pane.helloTimer);
     pane.helloTimer = this.#d.win.setTimeout(() => {
       if (pane.state === "waiting") {
@@ -418,6 +521,35 @@ export class PreviewCommenting {
         this.#emit();
       }
     }, this.#d.helloWaitMs ?? HELLO_WAIT_MS);
+  }
+
+  /**
+   * Reconnect-if-mine: the window of this name, reached from the click with
+   * window.open("", name). Only a window of this browser answers to it, so a
+   * page there already (its location unreadable: another origin) is one this
+   * person opened, connected to another of their dude tabs or none. It is
+   * told `claim` at the server's origin and held here, its page kept; the
+   * tab that had it is told `left` by the overlay. Null: no such window
+   * (the probe opened a blank one), so open() goes on to navigate it.
+   */
+  #claim(origin: string, server: string | null): boolean | null {
+    const w = this.#d.win.open("", this.#name);
+    if (!w) return false;
+    if (!foreignPage(w)) return null;
+    const held = this.#paneOf(w);
+    if (held && held.state !== "moved" && held.state !== "closed") {
+      this.#focus(held);
+      return true;
+    }
+    const pane = held ?? this.#add(w, null, server);
+    if (!pane) return false;
+    this.#named = w;
+    pane.server = server;
+    pane.state = "waiting";
+    pane.claimed = !held || held.state === "moved";
+    pane.touched = ++this.#clock;
+    w.postMessage({ type: "claim", v: OVERLAY_PROTOCOL } satisfies DudeToOverlay, origin);
+    this.#waitForHello(pane);
     this.#focus(pane);
     this.#emit();
     return true;
@@ -533,7 +665,9 @@ export class PreviewCommenting {
 
   #session(url: string): DudeToOverlay {
     const s = this.#d.read();
-    return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey, url, pins: pinsFor(s.items, url, s.you, s.name), drafts: s.drafts, showPins: this.#showPins(),
+    const pins = s.pins ? s.pins(url).slice(0, OVERLAY_LIMITS.pins) : pinsFor(s.items, url, s.you, s.name);
+    return { type: "session", v: OVERLAY_PROTOCOL, task: s.taskKey.slice(0, 100), url, pins, drafts: this.#branch ? 0 : s.drafts,
+      showPins: this.#showPins(), ...(this.#branch ? { mode: "branch" as const } : {}),
       ...(s.theme ? { theme: s.theme } : {}), ...(this.#tab ? { dudeWindow: this.#tab } : {}) };
   }
 
@@ -559,6 +693,17 @@ export class PreviewCommenting {
       return;
     }
     const msg = checked.msg;
+    if (msg.type === "left") {
+      // Claimed by another of this person's dude tabs: shown as moved, answered no more.
+      if (held && held.state !== "moved") {
+        held.state = "moved";
+        this.#d.win.clearTimeout(held.helloTimer);
+        if (this.#tabHeld.get(held.win) === this) this.#tabHeld.delete(held.win);
+        this.#emit();
+      }
+      return;
+    }
+    if (held?.state === "moved") return;
     const p = held ?? (msg.type === "hello" || msg.type === "navigated" ? this.#adopt(e.source as Window, msg.url) : null);
     if (!p) return;
     switch (msg.type) {
@@ -566,16 +711,11 @@ export class PreviewCommenting {
       case "navigated":
         p.url = msg.url;
         p.touched = ++this.#clock;
-        if (p.state !== "open") {
-          p.state = "open";
-          this.#d.win.clearTimeout(p.helloTimer);
-          this.#emit();
+        if (this.#branch) {
+          this.#verified(p, msg.url);
+          return;
         }
-        this.#post(p, this.#session(msg.url));
-        if (p.pendingHighlight) {
-          this.#post(p, { type: "highlight", v: OVERLAY_PROTOCOL, itemId: p.pendingHighlight });
-          p.pendingHighlight = null;
-        }
+        this.#connected(p, msg.url);
         return;
       case "prefs":
         this.#showPins(msg.showPins);
@@ -595,10 +735,82 @@ export class PreviewCommenting {
           return;
         }
         p.inFlight = msg.nonce;
-        void this.#save(p, msg).finally(() => { p.inFlight = null; });
+        void (this.#branch ? this.#submit(p, msg) : this.#save(p, msg)).finally(() => { p.inFlight = null; });
       }
     }
   };
+
+  #connected(p: Pane, url: string): void {
+    if (p.state !== "open") {
+      p.state = "open";
+      this.#d.win.clearTimeout(p.helloTimer);
+      this.#emit();
+    }
+    this.#post(p, this.#session(url));
+    if (p.pendingHighlight) {
+      this.#post(p, { type: "highlight", v: OVERLAY_PROTOCOL, itemId: p.pendingHighlight });
+      p.pendingHighlight = null;
+    }
+  }
+
+  // Branch mode: the dude tab asks the API whether the server is still this target's, at most every 30 s.
+  #checkedAt = 0;
+  #valid = false;
+  #checking: Promise<void> | null = null;
+  #verified(p: Pane, url: string): void {
+    const verify = this.#d.verify;
+    if (!verify) return this.#connected(p, url);
+    if (this.#checking) {
+      void this.#checking.then(() => { if (this.#valid && p.url === url) this.#connected(p, url); });
+      return;
+    }
+    if (Date.now() < this.#checkedAt) {
+      if (this.#valid) this.#connected(p, url);
+      return;
+    }
+    this.#checkedAt = Date.now() + 30_000;
+    this.#checking = verify().then(() => {
+      this.#valid = true;
+      if (p.url === url) this.#connected(p, url);
+    }, (err: unknown) => {
+      this.#valid = false;
+      // A transport failure leaves the window waiting; only the API's refusal is told to the page.
+      if ((err as { definite?: boolean } | null)?.definite) this.#refuse(p, err instanceof Error ? err.message : "This preview ended.", undefined);
+    }).finally(() => { this.#checking = null; });
+  }
+
+  /** Branch mode: submitted at once with the overlay's nonce as its key, so a resend is the same item. */
+  async #submit(pane: Pane, msg: Extract<OverlayToDude, { type: "draft" }>): Promise<void> {
+    const submit = this.#d.submit;
+    if (!submit || !this.#valid) {
+      this.#post(pane, { type: "retryable", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason: "dude hasn't confirmed this preview yet: try again in a moment." });
+      return;
+    }
+    try {
+      let attachmentId: string | undefined;
+      if (msg.picture) {
+        const image = pictureBytes(msg.picture);
+        // A requested screenshot is never silently dropped from a submission.
+        if (!image) throw Object.assign(new Error("The screenshot is not a PNG or JPEG image."), { definite: true });
+        const kept = pane.uploads.get(msg.nonce);
+        attachmentId = kept?.picture === msg.picture ? kept.id : await this.#d.upload({ ...image, name: "preview" });
+        pane.uploads.set(msg.nonce, { picture: msg.picture, id: attachmentId });
+        if (pane.uploads.size > 50) pane.uploads.delete(pane.uploads.keys().next().value!);
+      }
+      const item = await submit({ ...msg.anchor, ...(attachmentId ? { attachmentId } : {}) }, msg.body, msg.nonce);
+      pane.saved++;
+      const saved: DudeToOverlay = { type: "saved", v: OVERLAY_PROTOCOL, nonce: msg.nonce, id: item.id, drafts: 0, picture: attachmentId ? "attached" : "none" };
+      pane.answered.set(msg.nonce, saved);
+      if (pane.answered.size > 50) pane.answered.delete(pane.answered.keys().next().value!);
+      this.#post(pane, saved);
+      this.#d.onSaved(item.id);
+      this.#emit();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "Feedback submission failed";
+      const definite = (err as { definite?: boolean } | null)?.definite === true;
+      this.#post(pane, { type: definite ? "refused" : "retryable", v: OVERLAY_PROTOCOL, nonce: msg.nonce, reason });
+    }
+  }
 
   /**
    * Whether a window this tab holds no handle on is linked to this tab, as
@@ -619,11 +831,9 @@ export class PreviewCommenting {
    * window is never let go for a newcomer.
    */
   #adopt(source: Window, url: string): Pane | null {
-    if (this.#panes.length >= MAX_WINDOWS) {
-      const free = [...this.#panes].sort((a, b) => a.touched - b.touched).find((p) => p.state === "closed" || p.state === "idle" || closedOrGone(p.win));
-      if (!free) return null;
-      this.#drop(free);
-    }
+    // Held by another target of this tab: that one answers it.
+    const holder = this.#tabHeld.get(source);
+    if (holder && holder !== this) return null;
     return this.#add(source, url, null);
   }
 

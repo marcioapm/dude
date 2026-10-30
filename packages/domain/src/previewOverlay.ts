@@ -31,6 +31,7 @@ export const overlayMessageSchema: z.ZodType<OverlayToDude> = z.discriminatedUni
   }).strict(),
   z.object({ type: z.literal("prefs"), v: v1, showPins: z.boolean() }).strict(),
   z.object({ type: z.literal("open"), v: v1, itemId: z.string().min(1).max(100) }).strict(),
+  z.object({ type: z.literal("left"), v: v1 }).strict(),
 ]) as z.ZodType<OverlayToDude>;
 
 const overlayPinSchema = z.object({
