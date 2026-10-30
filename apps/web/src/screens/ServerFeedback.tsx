@@ -27,11 +27,9 @@ import { httpsOriginOf } from "../previewComment.ts";
 
 export type FoldFilter = "all" | "open" | "resolved";
 
-/** A task item's place in Open or Resolved: open = open, delivered and resolved-not-yet-published; resolved = resolved and replied. */
+/** A task item's place in Open (open, delivered, resolved-not-yet-published); every other submitted status is Resolved. */
 export const taskOpen = (i: Pick<FeedbackItem, "status" | "resolutionPending">) =>
   i.status === "open" || i.status === "delivered" || (i.status === "resolved" && i.resolutionPending);
-export const taskDone = (i: Pick<FeedbackItem, "status" | "resolutionPending">) =>
-  (i.status === "resolved" && !i.resolutionPending) || i.status === "replied";
 
 const PAGE = 20;
 // The list route's largest `limit`.
