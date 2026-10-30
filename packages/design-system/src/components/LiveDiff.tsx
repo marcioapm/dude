@@ -477,15 +477,11 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
               {filteredOut.map((path) => {
                 const marked = commenting?.fileComments?.(path) ?? null;
                 if (!marked) return null;
-                const slash = path.lastIndexOf("/");
                 return (
                   <div key={path} className={cx(styles["fileRow"], styles["filteredOut"])} data-testid="filtered-out-file" data-path={path}>
                     <span className={styles["file"]} title={`${path} · hidden by the filter`}>
                       <span />
-                      <span className={styles["path"]}>
-                        {slash >= 0 ? <span className={styles["dir"]}>{path.slice(0, slash + 1)}</span> : null}
-                        <b>{path.slice(slash + 1)}</b>
-                      </span>
+                      <ListPath path={path} />
                     </span>
                     <CommentMark path={path} info={marked} onShow={commenting?.onFileComments} where="list" />
                   </div>
@@ -518,12 +514,22 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
   );
 }
 
+/** A path in the file list: its directory muted, its name bold. */
+function ListPath({ path }: { path: string }) {
+  const slash = path.lastIndexOf("/");
+  return (
+    <span className={styles["path"]}>
+      {slash >= 0 ? <span className={styles["dir"]}>{path.slice(0, slash + 1)}</span> : null}
+      <b>{path.slice(slash + 1)}</b>
+    </span>
+  );
+}
+
 /** A file's entry in the list: its button, and beside it (never inside) its comment mark. Redrawn only when what it shows changes. */
 const FileEntry = memo(function FileEntry({ file: f, marked, current, touched, onSelect, onShow, fileMark }: {
   file: LiveDiffFile; marked: FileComments | null; current: boolean; touched: boolean;
   onSelect: (path: string) => void; onShow: ((path: string) => void) | undefined; fileMark: ((path: string) => ReactNode) | undefined;
 }) {
-  const slash = f.path.lastIndexOf("/");
   const entry = (
     <button
       type="button"
@@ -535,10 +541,7 @@ const FileEntry = memo(function FileEntry({ file: f, marked, current, touched, o
       data-path={f.path}
     >
       <StatusGlyph status={f.status} />
-      <span className={styles["path"]}>
-        {slash >= 0 ? <span className={styles["dir"]}>{f.path.slice(0, slash + 1)}</span> : null}
-        <b>{f.path.slice(slash + 1)}</b>
-      </span>
+      <ListPath path={f.path} />
       <span className={styles["fileTail"]}>
         {fileMark?.(f.path)}
         <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
