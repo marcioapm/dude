@@ -118,6 +118,10 @@ GRANT UPDATE (next_attempt_at) ON task_branch_capture_requests TO dude_sweeper;
 CREATE FUNCTION want_branch_capture(p_org text, p_task text, p_attempt integer, p_repo text, p_head text)
   RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
+  IF NULLIF(current_setting('app.organization_id', true), '') IS NOT NULL
+     AND p_org IS DISTINCT FROM current_setting('app.organization_id', true) THEN
+    RETURN;
+  END IF;
   IF p_attempt IS NULL OR p_attempt < 1
      OR NOT EXISTS (SELECT 1 FROM tasks WHERE id = p_task AND organization_id = p_org)
      OR NOT EXISTS (SELECT 1 FROM repositories WHERE id = p_repo AND organization_id = p_org) THEN

@@ -80,6 +80,20 @@ func TestBranchSnapshotsAreUniqueScopedAndAskedForWhenTheBranchMoves(t *testing.
 		t.Errorf("the app deleting a snapshot: %v", err)
 	}
 
+	// SECURITY DEFINER must not let an app scoped to another org ask for
+	// an otherwise valid task/repository pair. It silently skips the ask.
+	err = app.InOrg(ctx, other, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `SELECT want_branch_capture($1, 'wi_s', 9, 'repo_api', '')`, org)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("cross-org ask raised instead of skipping: %v", err)
+	}
+	var crossOrgRequests int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM task_branch_capture_requests WHERE task_id = 'wi_s' AND attempt = 9`).Scan(&crossOrgRequests); err != nil || crossOrgRequests != 0 {
+		t.Fatalf("cross-org ask wrote %d rows (%v)", crossOrgRequests, err)
+	}
+
 	requests := func() map[string]string {
 		t.Helper()
 		rows, err := owner.Query(ctx, `SELECT repository_id || '@' || attempt, COALESCE(head_sha, '') || ':' || status
