@@ -274,4 +274,20 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     // Their own task reads as theirs.
     expect((await get(cy.key, "/v1/tasks/wi_o/branch-diff")).body.snapshot.id).toBe("tbs_o");
   });
+
+  test("a closed pull request on the branch, none open, is no published head (as the capture reads it)", async () => {
+    await owner`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch,
+        base_branch, head_sha, title, state, last_polled_at)
+      VALUES ('pr_bd_closed', ${ORG}, 'prj_bd', 'wi_bd', 'repo_api', 39, 'https://github.com/acme/api/pull/39', 'dude/wi_bd/attempt-1',
+        'main', ${sha("8")}, 'Fix VAT, first try', 'closed', '2026-10-01T12:00:00Z')`;
+    try {
+      const { body } = await get(ana.key, "/v1/tasks/wi_bd/branch-diff?attempt=1");
+      expect(body.snapshot.id).toBe("tbs_old");
+      expect(body.pullRequest).toBe(null);
+      // The open one on the current attempt's branch still is.
+      expect((await get(ana.key, "/v1/tasks/wi_bd/branch-diff")).body.pullRequest).toMatchObject({ number: 41, state: "open" });
+    } finally {
+      await owner`DELETE FROM pull_requests WHERE id = 'pr_bd_closed'`;
+    }
+  });
 });

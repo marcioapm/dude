@@ -152,11 +152,12 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
       availability = { state: "preparing" };
     }
 
+    // The published head is an open (or draft) pull request's on this branch, as the capture reads it: a closed one publishes nothing.
     const [pr] = (await scope.sql`SELECT pr.number, pr.url, pr.state::text AS state, pr.head_sha AS "headSha",
         GREATEST(pr.last_polled_at, pr.head_seen_at) AS "syncedAt"
-      FROM pull_requests pr WHERE pr.task_id = ${taskId} AND pr.repository_id = ${repo.id}
+      FROM pull_requests pr WHERE pr.task_id = ${taskId} AND pr.repository_id = ${repo.id} AND pr.state IN ('open', 'draft')
         AND (${(shown?.branchRef as string | undefined) ?? null}::text IS NULL OR pr.head_branch = ${(shown?.branchRef as string | undefined) ?? null}::text)
-      ORDER BY pr.state IN ('open', 'draft') DESC, pr.created_at DESC LIMIT 1`) as Array<Omit<TaskBranchPullRequest, "syncedAt"> & { syncedAt: Date | null }>;
+      ORDER BY pr.created_at DESC LIMIT 1`) as Array<Omit<TaskBranchPullRequest, "syncedAt"> & { syncedAt: Date | null }>;
 
     // The attempt's branch items on this repository the reader may see: submitted ones, and their own drafts.
     let placements: TaskBranchPlacement[] = [];
