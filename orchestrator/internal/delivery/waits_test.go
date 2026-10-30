@@ -500,6 +500,29 @@ func TestAWaitsDigestCountsWhatPeopleDidMeanwhile(t *testing.T) {
 	}
 }
 
+// A wait's wake line is its whole digest, past the 300 characters other
+// reasons are clipped to: eight Runs each failed with a long error.
+func TestAWaitsWakeLineIsItsWholeDigest(t *testing.T) {
+	w := newWaitWorld(t)
+	var runs []string
+	for i := range WaitMaxRuns {
+		id := "run_long_" + string(rune('a'+i))
+		w.phaseRun(id, "review")
+		runs = append(runs, id)
+	}
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{runsEnded(runs...)}, Deadline: "1h"})
+	w.exec(`UPDATE runs SET status = 'failed', error = repeat('the build broke in a long way ', 10) WHERE id LIKE 'run_long_%'`)
+	w.evaluate()
+	var line, digest string
+	if err := w.owner.QueryRow(w.ctx, `SELECT c.line, COALESCE(w.digest, '') FROM conductor_wakes c
+		JOIN conductor_waits w ON w.id = $1 WHERE c.kind = 'wait' AND c.key = 'wait:' || w.id`, opened.WaitID).Scan(&line, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if len(line) <= 300 || line != digest {
+		t.Fatalf("line (%d chars) is not the digest (%d chars):\n%s", len(line), len(digest), line)
+	}
+}
+
 func TestEndWakesEndsOpenWaits(t *testing.T) {
 	w := newWaitWorld(t)
 	opened := w.mustWait("c1", WaitAsk{Deadline: "1h"})
