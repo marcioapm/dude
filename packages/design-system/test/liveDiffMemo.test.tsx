@@ -48,3 +48,34 @@ describe("LiveDiff's files on an unrelated render", () => {
     }
   });
 });
+
+describe("LiveDiff's renderAfterLineFor", () => {
+  test("a file whose function is kept does no lookups on a rerender; renderAfterLine is never asked when both are given", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const two = [files[0]!, files[1]!];
+    const lookups: Record<string, number> = {};
+    const lookup = () => (path: string) => { lookups[path] = (lookups[path] ?? 0) + 1; return null; };
+    let fallback = 0;
+    const renderAfterLine = () => { fallback++; return null; };
+    const forA = lookup();
+    const draw = (cls: string, forB: (path: string) => null) => act(() => root.render(
+      <LiveDiff base="b" files={two} className={cls} commenting={{ maxLines: 20, selection: null, onSelectionChange: () => {}, renderAfterLine,
+        renderAfterLineFor: (p: string) => (p === "src/f0.ts" ? forA : forB) }} />));
+    try {
+      draw("one", lookup());
+      expect(lookups["src/f0.ts"]).toBeGreaterThan(0);
+      expect(lookups["src/f1.ts"]).toBeGreaterThan(0);
+      for (const k of Object.keys(lookups)) delete lookups[k];
+      // A's function kept, B's replaced: only B's hunk looks up its lines again.
+      draw("two", lookup());
+      expect(lookups["src/f0.ts"] ?? 0).toBe(0);
+      expect(lookups["src/f1.ts"]).toBeGreaterThan(0);
+      expect(fallback).toBe(0);
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+});

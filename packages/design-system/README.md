@@ -3046,7 +3046,11 @@ comments when opened there, never on the standalone Run page.
   bar; while dragging a line under it says how many and the cap. What
   `renderAfterLine` returns sits on the chrome shade under that line —
   in Split, under that side's column — and a unified context line asks for
-  both its sides.
+  both its sides. `renderAfterLineFor(path)` gives `renderAfterLine` one
+  file at a time: return the same function while what goes under that
+  file's lines is unchanged, and none of its hunks is redrawn when another
+  file's comments change. When it is given, `renderAfterLine` is ignored;
+  an `undefined` return draws nothing under that file's lines.
 - **`FeedbackCard`** is one item: author, when, where its batch went, its
   status (`feedbackStatusSpec`: tone, glyph and words — never hue alone),
   and what it holds (`holds`: the merge, or, while a delivery is held
