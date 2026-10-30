@@ -280,6 +280,8 @@ var routeCases = []routeCase{
 	{[]string{"task", "raw", "wi_12"}, "GET", "/v1/tasks/wi_12", ``},
 	{[]string{"task", "relations", "wi_12"}, "GET", "/v1/tasks/wi_12/relations", ``},
 	{[]string{"task", "metrics", "wi_12"}, "GET", "/v1/tasks/wi_12/metrics", ``},
+	{[]string{"task", "branch-diff", "wi_12"}, "GET", "/v1/tasks/wi_12/branch-diff", ``},
+	{[]string{"task", "branch-diff", "wi_12", "--attempt", "1", "--repo", "api"}, "GET", "/v1/tasks/wi_12/branch-diff?attempt=1&repository=api", ``},
 	{[]string{"pr", "list", "wi_12"}, "GET", "/v1/pull-requests?taskId=wi_12", ``},
 	{[]string{"run", "show", "run_9"}, "GET", "/v1/runs/run_9", ``},
 	{[]string{"run", "diff", "run_9"}, "GET", "/v1/runs/run_9/diff", ``},

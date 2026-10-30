@@ -736,6 +736,15 @@ var commands = map[string]command{
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("GET", a[0], "/relations", nil) })},
 	"task metrics": {"TASK", "a task's cost and time",
 		noFlags(func(c *cli, a []string) (any, error) { return c.onTask("GET", a[0], "/metrics", nil) })},
+	"task branch-diff": {"TASK", "what a task's branch changes against its target: the latest snapshot, committed work only",
+		func(fs *flag.FlagSet) doer {
+			attempt := fs.String("attempt", "", "an earlier attempt's (default: the current one)")
+			repo := fs.String("repo", "", "this repository's (default: the first the task changes)")
+			snapshot := fs.String("snapshot", "", "this snapshot instead of the latest")
+			return func(c *cli, a []string) (any, error) {
+				return c.onTask("GET", a[0], "/branch-diff"+query("attempt", *attempt, "repository", *repo, "snapshot", *snapshot), nil)
+			}
+		}},
 	"pr list": {"TASK", "a task's pull requests", noFlags(func(c *cli, a []string) (any, error) {
 		id, err := c.taskID(a[0])
 		if err != nil {

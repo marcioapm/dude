@@ -453,7 +453,7 @@ async function listTasks(ctx: RequestContext): Promise<Response> {
  * A task's id from its id or its key (WEB-7, web-007), in the caller's
  * organisation, archived or not; the key match is relations.ts findTask's.
  */
-async function taskIdOf(scope: OrgScope, ref: string): Promise<string | null> {
+export async function taskIdOf(scope: OrgScope, ref: string): Promise<string | null> {
   // Two queries, not one OR: an OR across the join can't use either index.
   const byId = (await scope.sql`
     SELECT id FROM tasks WHERE organization_id = ${scope.organizationId} AND id = ${ref}`) as Array<{ id: string }>;

@@ -37,6 +37,7 @@ import { registerMetricsRoutes } from "./api/routes/metrics.ts";
 import { registerSettingsRoutes } from "./api/routes/settings.ts";
 import { registerProjectPageRoutes } from "./api/routes/projectPage.ts";
 import { registerLiveRoutes } from "./api/routes/live.ts";
+import { registerBranchDiffRoutes } from "./api/routes/branchDiff.ts";
 import { registerServerRoutes } from "./api/routes/servers.ts";
 import { registerOrgSecretRoutes } from "./api/routes/orgSecrets.ts";
 import { registerMemoryRoutes } from "./api/routes/memory.ts";
@@ -98,6 +99,7 @@ export function buildRouter(webDir = config().webDir, auth: RequestAuthenticator
   registerSettingsRoutes(router);
   registerProjectPageRoutes(router);
   registerLiveRoutes(router);
+  registerBranchDiffRoutes(router);
   registerServerRoutes(router);
   registerOrgSecretRoutes(router);
   registerAttachmentRoutes(router);
