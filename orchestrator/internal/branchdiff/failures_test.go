@@ -93,6 +93,32 @@ func TestARequestWhoseReadsFailIsBackedOffAndNeverSpins(t *testing.T) {
 	}
 }
 
+func TestEightTransientFailuresMakeTheCaptureUnavailable(t *testing.T) {
+	w := newWorld(t)
+	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "1\n"})
+	w.exec(`SELECT want_branch_capture($1, 'wi_b', 1, 'repo_api', '')`)
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/compare/") {
+				return 502
+			}
+			return 0
+		}
+	})
+	for i := 1; i <= 8; i++ {
+		w.sweep()
+		r := w.requestOf("wi_b", 1)
+		if i < 8 {
+			if r.status != "pending" || r.failures != i || r.due {
+				t.Fatalf("failure %d: %+v", i, r)
+			}
+		} else if r.status != "unavailable" || !strings.Contains(r.reason, "GitHub could not be read: github 502") {
+			t.Fatalf("eight failures must settle unavailable with why: %+v", r)
+		}
+		w.exec(`UPDATE task_branch_capture_requests SET next_attempt_at = now() WHERE organization_id = $1`)
+	}
+}
+
 func TestReaskingKeepsBackoffButAnAskDuringAFailedReadStaysDue(t *testing.T) {
 	w := newWorld(t)
 	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "1\n"})
