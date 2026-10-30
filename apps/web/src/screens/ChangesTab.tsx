@@ -433,6 +433,11 @@ function ChangesReview({ client, taskId, attempt, current, runs, version, runDif
   const [details, setDetails] = useState(false);
   const detailsButton = useRef<HTMLButtonElement>(null);
   const detailsClose = useRef<HTMLButtonElement>(null);
+  // Closed by the keyboard or its Close: focus goes back to the line that opened it.
+  const dismissDetails = () => {
+    setDetails(false);
+    detailsButton.current?.focus();
+  };
   useEffect(() => {
     if (!details) return;
     detailsClose.current?.focus();
@@ -440,7 +445,7 @@ function ChangesReview({ client, taskId, attempt, current, runs, version, runDif
       if (!(e.target as Element).closest(".snapshotPopover, .snapshotLine, .prMark")) setDetails(false);
     };
     const escape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setDetails(false); detailsButton.current?.focus(); }
+      if (e.key === "Escape") dismissDetails();
     };
     document.addEventListener("mousedown", closeOutside);
     document.addEventListener("keydown", escape);
@@ -574,7 +579,7 @@ function ChangesReview({ client, taskId, attempt, current, runs, version, runDif
       <span className="changesTools" ref={setToolbar} />
       {details && snapshot && diff ? (
         <div className="snapshotPopover" role="dialog" aria-label="Snapshot details" data-testid="snapshot-details" tabIndex={-1}
-          onKeyDown={(e) => { if (e.key === "Escape") { setDetails(false); detailsButton.current?.focus(); } }}
+          onKeyDown={(e) => { if (e.key === "Escape") dismissDetails(); }}
           // Focus leaving it (Tab past Close, Shift+Tab out) closes it: a popover nobody is in does not stay open over the diff.
           // Focusable itself, a click on its text keeps focus in it (else the page's focusable ancestor takes it, and it closed).
           onBlur={(e) => {
@@ -582,7 +587,7 @@ function ChangesReview({ client, taskId, attempt, current, runs, version, runDif
             if (to && !e.currentTarget.contains(to) && !to.closest(".snapshotLine, .prMark")) setDetails(false);
           }}>
           <SnapshotDetails diff={diff} snapshot={snapshot} />
-          <Button ref={detailsClose} size="sm" variant="quiet" onClick={() => { setDetails(false); detailsButton.current?.focus(); }}>Close</Button>
+          <Button ref={detailsClose} size="sm" variant="quiet" onClick={dismissDetails}>Close</Button>
         </div>
       ) : null}
     </div>
