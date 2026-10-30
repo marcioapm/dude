@@ -462,6 +462,23 @@ func restartRun(ctx context.Context, tx pgx.Tx, c Caller, in restartRunIn) (map[
 	return map[string]any{"restarted": in.Run, "run": id, "next": restartNext}, nil
 }
 
+type stopRunIn struct {
+	Run    string `json:"run"`
+	Reason string `json:"reason"`
+}
+
+// stopRun is stop_run: the conductor stops a child agent it started.
+func stopRun(ctx context.Context, tx pgx.Tx, c Caller, in stopRunIn) (map[string]any, error) {
+	status, err := delivery.ConductStopRunTx(ctx, tx, c.run(), strings.TrimSpace(in.Run), in.Reason)
+	if err != nil {
+		return conducted[map[string]any](nil, err)
+	}
+	if c.env.kick != nil {
+		c.env.kick()
+	}
+	return map[string]any{"stopped": in.Run, "status": status, "next": stopNext}, nil
+}
+
 type replyIn struct {
 	PR        string `json:"pr"`
 	Text      string `json:"text"`

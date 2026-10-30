@@ -1,6 +1,6 @@
 # steer
 
-Steer a running phase Run of this task (implement, review, fix, simplify, test) as a person would: your words reach it at its next step, without stopping the work it is doing. Steer an agent going the wrong way, or to add something the person just said; start another phase only once a Run has ended. interrupt stops its turn so it hears this now: only when its current work is wasted. You are woken when it reads it, or if it never will. Allowed whoever takes the decisions; refused for a Run that ended, another task's or an earlier attempt's.
+Steer a running Run of this task — a phase Run (implement, review, fix, simplify, test) or a child agent you started — as a person would: your words reach it at its next step, without stopping the work it is doing. Steer an agent going the wrong way, or to add something the person just said; start another phase only once a Run has ended. interrupt stops its turn so it hears this now: only when its current work is wasted. You are woken when it reads it, or if it never will. Allowed whoever takes the decisions; refused for a Run that ended, another task's, an earlier attempt's, or another conductor's child.
 
 ```json
 {
@@ -8,7 +8,7 @@ Steer a running phase Run of this task (implement, review, fix, simplify, test) 
   "properties": {
     "run": {
       "type": "string",
-      "description": "the phase Run to steer (run_…), one of this task's current attempt, still running"
+      "description": "the Run to steer (run_…): a phase Run of this task's current attempt, or your own child agent, still running"
     },
     "text": {
       "type": "string",

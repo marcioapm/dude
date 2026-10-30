@@ -54,6 +54,7 @@ var tools = []tool{
 	define("verify", verify).limit(verifiesPerRun),
 	define("steer", steer),
 	define("restart_run", restartRun),
+	define("stop_run", stopRun),
 	define("wait_for", waitFor),
 	define("decide", decide),
 	define("dismiss_finding", dismissFinding),

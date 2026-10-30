@@ -17,6 +17,7 @@ var (
 	replyCameNext        = delivery.MustText("results/wait-for-reply-came").Render(nil)
 	steerNext            = delivery.MustText("results/steer").Render(nil)
 	restartNext          = delivery.MustText("results/restart-run").Render(nil)
+	stopNext             = delivery.MustText("results/stop-run").Render(nil)
 	publishNext          = delivery.MustText("results/publish").Render(nil)
 	relationsWrittenNext = delivery.MustText("results/update-task-relations").Render(nil)
 	taskUpdatedNext      = delivery.MustText("results/update-task").Render(nil)

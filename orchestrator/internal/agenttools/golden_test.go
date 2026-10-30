@@ -189,6 +189,7 @@ func TestGoldenToolResults(t *testing.T) {
 		{"wait-for-reply-came", replyCameNext},
 		{"steer", steerNext},
 		{"restart-run", restartNext},
+		{"stop-run", stopNext},
 		{"wait-for", waitForNext(false, time.Date(2026, 10, 30, 14, 45, 0, 0, time.UTC), "")},
 		{"wait-for-at-a-decision", waitForNext(false, time.Date(2026, 10, 30, 14, 45, 0, 0, time.UTC), "after_review")},
 		{"wait-for-holds", waitForNext(true, time.Time{}, "")},

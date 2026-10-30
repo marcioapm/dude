@@ -443,4 +443,33 @@ describe("a branch anchor is pinned to the stored snapshot", () => {
     expect(forwarded).toEqual([{ path: "/internal/tasks/wi_fb/feedback/submit", person: ana.personId,
       body: { draftIds: [item.id], submissionKey: "k-branch" } }]);
   });
+
+  test("an anchor on an older snapshot still validates after a retention sweep (migration 231)", async () => {
+    const prune = () => owner.begin(async (tx) => {
+      await tx`SET LOCAL ROLE dude_sweeper`;
+      return (await tx`SELECT prune_branch_snapshots(1000) AS n`)[0].n as number;
+    });
+    // tbs_fb is three days old, superseded by tbs_fb_mid over two days ago,
+    // then by tbs_fb_new (two days old, the latest): only its item keeps it.
+    await owner`UPDATE task_branch_snapshots SET captured_at = now() - interval '3 days' WHERE id = 'tbs_fb'`;
+    await owner`INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref,
+        target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, relation, previous_snapshot_id, captured_at)
+      VALUES ('tbs_fb_mid', ${ORG}, 'wi_fb', 2, 'repo_fb_br', 'billing', 'dude/wi_fb/attempt-2', 'main', ${sha("f")},
+        ${sha("b")}, ${sha("e")}, ${DIFF}::jsonb, 'sum-mid', '{}'::jsonb, 'fast-forward', 'tbs_fb', now() - interval '60 hours'),
+             ('tbs_fb_new', ${ORG}, 'wi_fb', 2, 'repo_fb_br', 'billing', 'dude/wi_fb/attempt-2', 'main', ${sha("f")},
+        ${sha("b")}, ${sha("d")}, ${DIFF}::jsonb, 'sum-new', '{}'::jsonb, 'fast-forward', 'tbs_fb_mid', now() - interval '2 days')`;
+    const item = await (await draft(ana.key, "wi_fb", branch())).json() as Json;
+    // The sweep did prune something (tbs_fb_mid), so tbs_fb stays for its item, not by chance.
+    expect(await prune()).toBeGreaterThan(0);
+    const [{ mid }] = await owner`SELECT count(*)::int AS mid FROM task_branch_snapshots WHERE id = 'tbs_fb_mid'`;
+    expect(mid).toBe(0);
+    const [{ n }] = await owner`SELECT count(*)::int AS n FROM task_branch_snapshots WHERE id = 'tbs_fb'`;
+    expect(n).toBe(1);
+    // Edited after the sweep, its anchor is read from the snapshot again.
+    const edited = await call(ana.key, "PATCH", `/v1/feedback/${item.id}`, branch({ startLine: 10, endLine: 10 }));
+    expect(edited.status).toBe(200);
+    expect(((await edited.json()) as Json).anchor).toMatchObject({ snapshotId: "tbs_fb", diffChecksum: "sum-tbs_fb" });
+    const [row] = await owner`SELECT branch_snapshot_id FROM feedback_items WHERE id = ${item.id}`;
+    expect(row).toEqual({ branch_snapshot_id: "tbs_fb" });
+  });
 });

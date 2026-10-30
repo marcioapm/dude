@@ -189,8 +189,15 @@ func (s Stall) Text(options string) string {
 	return render(stalledTmpl, data)
 }
 
-// ConductorOptions is the conductor's options line; the owner's banner has buttons.
-var ConductorOptions = render(mustTemplate("wakes/stalled-options"), nil)
+// stalledOptionsTmpl is the conductor's options line for a stalled Run.
+var stalledOptionsTmpl = mustTemplate("wakes/stalled-options")
+
+// ConductorOptions is the conductor's options line; the owner's banner has
+// buttons. A child agent the conductor started is stopped (stop_run), a
+// phase Run the delivery waits on restarted (restart_run).
+func ConductorOptions(child bool) string {
+	return render(stalledOptionsTmpl, struct{ Child bool }{child})
+}
 
 // cutID is an id's first n characters.
 func cutID(id string, n int) string {
@@ -255,10 +262,11 @@ func toolCounts(m map[string]int) string {
 
 // RecordStallTx records a report of Run r: run.stalled with its facts, and
 // for a conducted task its conductor's stalled wake, keyed per report so
-// the batching window joins it to any wake already due. fingerprint and
+// the batching window joins it to any wake already due, with a child's
+// options when r is a child agent the conductor started. fingerprint and
 // usage are what the next report compares with; prev is when the Run was
 // last reported as the caller read it, so two sweeps report it once.
-func RecordStallTx(ctx context.Context, tx pgx.Tx, r RunRef, s Stall, conducted bool, fingerprint string, usage any,
+func RecordStallTx(ctx context.Context, tx pgx.Tx, r RunRef, s Stall, conducted, child bool, fingerprint string, usage any,
 	prev *time.Time) error {
 	tag, err := tx.Exec(ctx, `UPDATE runs SET stall_reported_at = now(), stall_reasons = $2, stall_fingerprint = $3,
 		stall_usage = $4 WHERE id = $1 AND status = 'running' AND stall_reported_at IS NOT DISTINCT FROM $5`,
@@ -274,7 +282,7 @@ func RecordStallTx(ctx context.Context, tx pgx.Tx, r RunRef, s Stall, conducted 
 	if err != nil || !conducted {
 		return err
 	}
-	_, err = RecordWakeTx(ctx, tx, r.Org, r.TaskID, WakeStalled, "stalled:"+id, s.Text(ConductorOptions))
+	_, err = RecordWakeTx(ctx, tx, r.Org, r.TaskID, WakeStalled, "stalled:"+id, s.Text(ConductorOptions(child)))
 	return err
 }
 

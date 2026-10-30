@@ -5,9 +5,12 @@ package orchestrator_test
 // child and what it waits on.
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // childFor gives a reviewer's open task call a child whose last event was
@@ -98,5 +101,26 @@ func TestAChildsNewLastEventIsChangedFacts(t *testing.T) {
 	w.sweep()
 	if n := w.stalls(id); n != 2 {
 		t.Errorf("a child's new last event is not changed facts (%d reports)", n)
+	}
+}
+
+// A child agent the conductor started, silent in an open call past the
+// window, is reported to the conductor with a child's options: stop_run,
+// which reaches it, rather than restart_run, which does not; a phase Run's
+// report keeps the phase Run's.
+func TestAStalledChildIsOfferedStopNotRestart(t *testing.T) {
+	w := conducting(t)
+	task, _, child := w.liveChild(taskCall)
+	w.until("the child in its open call", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND open_tool_calls_at <> '{}'`, child) == 1
+	})
+	w.openSince(child, 31*time.Minute)
+	w.wokenWith(task, "made no progress")
+	var line string
+	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'stalled'`, task).Scan(&line); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(line, delivery.ConductorOptions(true)) || strings.HasSuffix(line, delivery.ConductorOptions(false)) {
+		t.Errorf("a stalled child is offered a phase Run's options:\n%s", line)
 	}
 }

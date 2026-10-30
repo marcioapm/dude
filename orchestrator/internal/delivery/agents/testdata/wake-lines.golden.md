@@ -160,6 +160,10 @@ Your security implement Run run_impl (round 2, fast, running 90 min) has made no
 
 Your review Run run_rev (running 50 s) has made no progress for 2.0 h. Its agent has done nothing for 2.0 h: no output, no tool call. It has 1 tool call open: `bash` "x", for 2.0 h; whether `bash`'s command still runs is unknown. Processes: could not be read (ps: not found). lux reported no CPU or network figures. Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier).
 
+## stalled-child
+
+Your security implement Run run_impl (round 2, fast, running 90 min) has made no progress for 15 min. Its agent has done nothing for 14 min: no output, no tool call. It has 3 tool calls open: `bash` "go test ./...", for 15 min, `task` "explore", for 10 min, `bash` "sleep 999", for 30 s; `bash`'s command is running; `task` runs inside the agent: no separate process is expected; no process runs `bash`'s command. Its `task` call "explore" has a child (subagent · ses_child_01) whose last event was 5 min ago: asked to run make — waiting on a permission nothing can answer: bash for make *, rm *. Processes: go test ./... (99.5 % CPU, up 15:00); sh (0.0 % CPU, up 1:00). CPU over 15 min: 12 s; network: 3.0 MiB. Its files last changed at 10:15 UTC. Its tool calls in the window: 3 bash, 1 read, 0 edit. Its plan: write the export; test it. Its last message: "Running the tests.". Leave it, steer it (interrupt to stop its turn), or stop it with stop_run and start another.
+
 ## note-one
 
 dude woke you; one thing:

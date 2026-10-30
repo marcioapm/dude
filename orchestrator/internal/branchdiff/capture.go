@@ -310,6 +310,15 @@ func (c *Capturer) failed(ctx context.Context, r Request, t target, what string,
 	return cause
 }
 
+// existingSnapshot reads the snapshot a head read again already has (the
+// insert's ON CONFLICT DO NOTHING took no lock on it), FOR KEY SHARE
+// (migration 231's existing_branch_snapshot) until the request names it:
+// the pruner's candidate lock (FOR UPDATE SKIP LOCKED) skips it rather
+// than deleting it under the capture, which would fail mark's foreign key
+// and count a spurious failure. KEY SHARE deliberately does not hold off a
+// rewire of the snapshot named (its id stays).
+const existingSnapshot = `SELECT id FROM existing_branch_snapshot($1, $2, $3, $4, $5, $6)`
+
 // settle records what read found, in one transaction, only if the request
 // was not asked for again meanwhile (requested_at unchanged): a newer ask
 // stays pending for the next pass. A failure is counted (failed).
@@ -342,21 +351,29 @@ func (c *Capturer) settle(ctx context.Context, r Request, t target, s snapshot, 
 		}
 		id := ids.New(ids.BranchSnapshot)
 		// Idempotent on (head, merge base): a head read again is the snapshot it already has.
-		err := tx.QueryRow(ctx, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository,
-				branch_ref, target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, truncated, binary_files,
-				status, reason, source, pr_head_sha, previous_snapshot_id, relation)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15, $16, $17, NULLIF($18, ''), $19,
-				NULLIF($20, ''), $21, $22)
-			ON CONFLICT (task_id, attempt, repository_id, head_sha, merge_base_sha, target_ref) DO NOTHING
-			RETURNING id`,
-			id, r.Org, r.TaskID, r.Attempt, r.RepoID, t.repoName, t.branch, t.targetRef, s.targetSHA, s.mergeBase, s.head,
-			files, s.checksum, stats, s.stats.TruncatedFiles > 0 || s.reason != "", s.stats.BinaryFiles, status, s.reason, Source,
-			validSHA(t.prHead), prev, s.relation).Scan(&id)
+		insert := func() error {
+			return tx.QueryRow(ctx, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository,
+					branch_ref, target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, truncated, binary_files,
+					status, reason, source, pr_head_sha, previous_snapshot_id, relation)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15, $16, $17, NULLIF($18, ''), $19,
+					NULLIF($20, ''), $21, $22)
+				ON CONFLICT (task_id, attempt, repository_id, head_sha, merge_base_sha, target_ref) DO NOTHING
+				RETURNING id`,
+				id, r.Org, r.TaskID, r.Attempt, r.RepoID, t.repoName, t.branch, t.targetRef, s.targetSHA, s.mergeBase, s.head,
+				files, s.checksum, stats, s.stats.TruncatedFiles > 0 || s.reason != "", s.stats.BinaryFiles, status, s.reason, Source,
+				validSHA(t.prHead), prev, s.relation).Scan(&id)
+		}
+		err := insert()
 		created := err == nil
 		if db.IsNotFound(err) {
-			err = tx.QueryRow(ctx, `SELECT id FROM task_branch_snapshots WHERE task_id = $1 AND attempt = $2
-				AND repository_id = $3 AND head_sha = $4 AND merge_base_sha = $5 AND target_ref = $6`,
-				r.TaskID, r.Attempt, r.RepoID, s.head, s.mergeBase, t.targetRef).Scan(&id)
+			err = tx.QueryRow(ctx, existingSnapshot, r.TaskID, r.Attempt, r.RepoID, s.head, s.mergeBase, t.targetRef).Scan(&id)
+			if db.IsNotFound(err) {
+				// The pruner held it (its candidate lock) and deleted it
+				// while this waited: the head has none now. Captured anew,
+				// once; a conflict again is a capture's of the same head.
+				err = insert()
+				created = err == nil
+			}
 		}
 		if err != nil {
 			return err

@@ -98,8 +98,9 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"wait-timer", renderWaitDigest(waitEval{waitedAll: true}, "cwt_4", true, false, []waitCount{{"messages", 1}}, "check the deploy")},
 		{"wait-holds-now", renderWaitDigest(waitEval{held: 1, of: 1, waitedAll: true, items: []waitItem{
 			{Kind: "run", Who: "verifier", RunID: "run_ver", Status: "completed", Ended: true, rank: rankGood}}}, "", false, true, nil, "")},
-		{"stalled", goldenStall().Text(ConductorOptions)},
-		{"stalled-quiet", goldenQuietStall().Text(ConductorOptions)},
+		{"stalled", goldenStall().Text(ConductorOptions(false))},
+		{"stalled-quiet", goldenQuietStall().Text(ConductorOptions(false))},
+		{"stalled-child", goldenStall().Text(ConductorOptions(true))},
 		{"note-one", WakeNote([]string{"A decision waits."})},
 		{"note-many", WakeNote([]string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"})},
 	})

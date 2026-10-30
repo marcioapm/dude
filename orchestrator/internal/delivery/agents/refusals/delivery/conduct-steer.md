@@ -23,3 +23,5 @@
 {{- define "refusals/delivery/conduct-steer/run-feedback-goes-implementer-or-fixer"}}%s is a %s Run: feedback goes to an implementer or fixer, which can change the code{{end}}
 
 {{- define "refusals/delivery/conduct-steer/not-open-feedback-item-this-task"}}%s is not an open feedback item of this task's current attempt (feedback lists them){{end}}
+
+{{- define "refusals/delivery/conduct-steer/not-your-child"}}%s is not your child: steer only the child agents you started{{end}}

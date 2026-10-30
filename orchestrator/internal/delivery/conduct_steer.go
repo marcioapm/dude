@@ -12,7 +12,8 @@ import (
 )
 
 // ConductSteer is the steer tool: the task's live conductor steers a live
-// phase Run of its own task's current attempt, as a person would. Allowed
+// phase Run of its own task's current attempt, or a child agent it started
+// (start_agent, start_agents, verify), as a person would. Allowed
 // whoever decides: steering takes no delivery decision. Returns the
 // directive and where the Run's harness last said a steer lands ("" when
 // lux has not said yet).
@@ -52,7 +53,7 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 	if len(text) > SteerTextMax {
 		return Steered{}, "", refusef(rSteerAtMostKibText, SteerTextMax>>10)
 	}
-	var taskID, kind, phase, role, rstatus string
+	var taskID, kind, phase, role, rstatus, source, parent string
 	var current, ending bool
 	// Ending: being aborted, its work being collected (the push asked for),
 	// or its container stopped on its own: it would never read the words.
@@ -62,8 +63,9 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 			r.attempt = (SELECT max(k.attempt) FROM runs k WHERE k.task_id = r.task_id AND k.phase IS NOT NULL),
 			r.control = 'abort' OR r.push_request_id IS NOT NULL
 			  OR (COALESCE(r.lux_state, '') IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost') AND r.lux_stop_reason IS NULL
-			      AND r.control = 'none')
-		FROM runs r WHERE r.id = $1 FOR UPDATE`, runID).Scan(&taskID, &kind, &phase, &role, &rstatus, &current, &ending)
+			      AND r.control = 'none'),
+			COALESCE(r.source_kind, ''), COALESCE(r.parent_run_id, '')
+		FROM runs r WHERE r.id = $1 FOR UPDATE`, runID).Scan(&taskID, &kind, &phase, &role, &rstatus, &current, &ending, &source, &parent)
 	switch {
 	case db.IsNotFound(err) || err == nil && taskID != ref.TaskID:
 		return Steered{}, "", refusef(rNotRunYourTaskYouSteer, runID)
@@ -77,6 +79,11 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 		return Steered{}, "", refusef(rNotPhaseRun, runID)
 	case !current:
 		return Steered{}, "", refusef(rRunEarlierAttemptSteerOnlyCurrent, runID)
+	case source == string(ChildParentTaskConductor) && parent != ref.RunID:
+		// A child agent is its own conductor's to steer: one a conductor
+		// before this one started is aborted with its parent's end
+		// (MarkChildParentEndedTx); this says so wherever it is read.
+		return Steered{}, "", refusef(rNotYourChildSteer, runID)
 	}
 	switch rstatus {
 	case "pending", "scheduled", "starting", "running", "paused":

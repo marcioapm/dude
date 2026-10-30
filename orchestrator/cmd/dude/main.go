@@ -44,6 +44,7 @@
 //	dude agent start PROFILE [--prompt P] [--note N] [--tier T] [--key K]
 //	dude steer RUN TEXT [--interrupt]     a conductor's: steer a running phase Run
 //	dude restart RUN NOTE [--tier T]      a conductor's: a fresh Run in its slot
+//	dude stop RUN --reason R              a conductor's: stop a child agent it started
 //	dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]
 //	                                      a conductor's: be woken once when it holds or at D
 //	dude decide ACTION [--note N]         a conductor's: the decision waited on
@@ -655,6 +656,16 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("restart_run", map[string]any{"run": args[0], "note": strings.Join(args[1:], " "),
 			"tier": *tier}))
+	case "stop":
+		reason := fs.String("reason", "", "why it is stopped")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 || !runID.MatchString(args[0]) || strings.TrimSpace(*reason) == "" {
+			return errors.New(`usage: dude stop RUN --reason "why it is stopped"`)
+		}
+		return show(out, *asJSON, call("stop_run", map[string]any{"run": args[0], "reason": *reason}))
 	case "wait-for":
 		var runs, prs many
 		fs.Var(&runs, "run", "a Run of this task to wait on to end (repeatable)")
@@ -1148,6 +1159,8 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude restart RUN NOTE [--tier T]           a conductor's: restart a phase Run in its slot, fresh
                                              something, read at its next step (--interrupt stops
                                              its turn: only when its current work is wasted)
+  dude stop RUN --reason R                   a conductor's: stop a child agent you started (start_agent,
+                                             start_agents, verify); its result comes back as aborted
   dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]
                                              a conductor's: be woken once, when the Runs have ended or
                                              the pull request's checks are final (or at D, at most 24h);
