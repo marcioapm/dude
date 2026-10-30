@@ -10,9 +10,9 @@
  */
 
 import type { FeedbackItem, OverlayPin, OverlayTheme, PreviewFeedbackItem, RunningRun, RunningServer } from "@dude/domain";
-import { OVERLAY_LIMITS, overlayPage } from "@dude/domain";
+import { OVERLAY_LIMITS } from "@dude/domain";
 import { ApiError, type ApiClient } from "./api/client.ts";
-import { PreviewCommenting, arrivedFromPreview, httpsOriginOf, markPreviewArrival, previewArrival, type CommentingState } from "./previewComment.ts";
+import { ago, clip, pagePins, PreviewCommenting, arrivedFromPreview, httpsOriginOf, markPreviewArrival, previewArrival, type CommentingState } from "./previewComment.ts";
 
 /** A server a target was opened for, as the page names it. */
 export interface ServerRef {
@@ -66,8 +66,6 @@ export function serverLanding(projectId: string, win: Pick<Window, "sessionStora
   return found;
 }
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-
 /**
  * A branch preview server's saved feedback on one page as the overlay pins
  * it: open and resolved, the resolution as the thread's resolve entry,
@@ -75,9 +73,7 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
  */
 export function branchPins(items: ReadonlyArray<PreviewFeedbackItem>, url: string, you: string | null,
     name: (personId: string | null | undefined) => string): OverlayPin[] {
-  const page = overlayPage(url);
-  return items.filter((i) => overlayPage(i.anchor.url) === page && i.anchor.selector)
-    .slice(0, OVERLAY_LIMITS.pins)
+  return pagePins(items, url)
     .map((i, k) => ({
       id: i.id, n: k + 1, status: i.status, mine: i.author.id === you,
       author: clip(i.author.name.split(" ")[0] ?? "Someone", OVERLAY_LIMITS.name),
@@ -89,14 +85,6 @@ export function branchPins(items: ReadonlyArray<PreviewFeedbackItem>, url: strin
         body: clip(h.note, OVERLAY_LIMITS.replyBody),
       })),
     }));
-}
-
-function ago(at: string): string {
-  const min = Math.max(0, Math.round((Date.now() - Date.parse(at)) / 60_000));
-  if (min < 1) return "just now";
-  if (min < 60) return `${min} min ago`;
-  const h = Math.round(min / 60);
-  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
 }
 
 /** What a target reads at each message: the page's latest. */
@@ -307,6 +295,7 @@ export class ServerWindows {
         }
         await this.#load(target, server);
       },
+      // Saves from this page do not flash an item on the task page; its own feedback read supplies that view.
       onSaved: () => undefined,
       onOpenItem: () => undefined,
       onChange: (view) => {

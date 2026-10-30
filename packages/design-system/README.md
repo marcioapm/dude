@@ -2446,7 +2446,10 @@ MarkdownCheatsheet.
   Preview calls it, and true handles the click; false, a modified click or
   middle-click leaves it to the real `<a href>`. `openLabel` is the open
   icon's accessible name and title, and Preview's title, while `onOpen`
-  handles them; without it they say "in a new tab".
+  handles them; without it they say "in a new tab". `wrap` lets long
+  details and actions wrap within the row; use it for counts/badges beside
+  the state instead of styling the row's private markup. Put the list in
+  an inline-size container to stack rows below 560px.
 - **ServersRunLine / ServersPanel** — the run the servers live on as a
   line, and the panel: the task's Servers tab (a container: under 560px,
   a phone, its rows stack). An agent session has no servers panel; its servers

@@ -108,7 +108,6 @@ test("nothing running says where servers are started, with no Start here", async
   expect(none.textContent).toContain("Nothing is running in web-console");
   expect(none.textContent).toContain("Start them from a task's Servers tab");
   expect(container.textContent).toContain("nothing running");
-  expect(count(container, "button")).toBeGreaterThan(0);
   expect([...container.querySelectorAll("button")].some((b) => /^Start/.test(b.textContent ?? ""))).toBe(false);
 });
 

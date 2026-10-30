@@ -66,6 +66,26 @@ describe("a project's Servers page", () => {
     expect(document.title).toStartWith(`${PROJECT.name} · Servers`);
   });
 
+  test("a branch lookup lands on the project's Servers hash inside its organization", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "opener");
+    const preview = {};
+    Object.defineProperty(window, "opener", { configurable: true, value: preview });
+    const client = new FixtureClient("a");
+    client.previewServerAt = async () => ({ kind: "branch", organizationId: ORG.id, organizationSlug: "acme", projectId: PROJECT.id,
+      previewRunId: "run_pv_checkout", server: "web", branch: "feat/checkout-polish" });
+    try {
+      await app("#/preview-connect", client);
+      await act(async () => window.dispatchEvent(new window.MessageEvent("message", { origin: "https://web.preview.test",
+        source: preview as MessageEventSource, data: { type: "hello", v: 1, url: "https://web.preview.test/cart" } })));
+      await until(() => window.location.hash === `#/o/acme/project/${PROJECT.id}/servers`, "the organization-prefixed Servers hash");
+      expect(window.location.hash).toBe(`#/o/acme/project/${PROJECT.id}/servers`);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "opener", descriptor);
+      else delete (window as { opener?: unknown }).opener;
+      sessionStorage.clear();
+    }
+  });
+
   test("the board count reads only on mount and this project's server lifecycle events, not tree reloads", async () => {
     class Counting extends FixtureClient {
       counts = 0;

@@ -1,15 +1,21 @@
 # Server Preview Feedback
 
 Taskless branch previews accept feedback through the existing injected overlay.
-Connect to dude opens an authenticated, submission-only relay. The relay keeps
-the preview's exact window and origin, uses the person's normal organization
+Connect to dude opens an authenticated tab on the project's Servers page,
+connected to the preview's exact window and origin. The tab uses the person's normal organization
 membership, and binds to the looked-up preview Run ID and server name. An
 account without membership is not authorized. No credentials enter the preview
 snippet, and there are no new anonymous, invitation or CORS paths.
 
-Task feedback is unchanged. Server feedback never creates tasks, sends agent
-directives, or appears in a web inbox. Branch overlay sessions contain no saved
-feedback or pins. The connection page shows connection/submission state only.
+Server feedback never creates tasks or sends agent directives. The project's
+Servers page folds saved branch feedback inline, open and resolved, newest
+first with older pages available. Task servers show submitted feedback and only
+the current person's drafts, matched by server origin. The branch overlay gets
+bounded pins for its current page, including resolution history, but no person,
+project or attachment ids. All API reads stay in the dude tab. Preview can hold
+several server windows in one tab, or claim this browser's window from another
+of the person's dude tabs; connections are never stored or shared server-side.
+A stopped/deleted preview is re-verified and its pins are cleared.
 
 ## Identity And Lifetime
 
@@ -66,6 +72,15 @@ A reconnect may upload the same screenshot bytes under a new attachment ID;
 matching bytes and identical content remain the same submission. The unused
 retry upload is swept normally. Changed content with a reused key is 409.
 Resolve/reopen repeats do not append duplicate history or replace prior notes.
+
+## Live Events
+
+`preview_feedback.submitted`, `preview_feedback.resolved` and
+`preview_feedback.reopened` are written in the feedback transaction. They are
+project-scoped, carry only feedback id, preview Run id, server and status, and
+reach organization members through the project's event stream. Idempotent
+repeats write no event. Open folds and held windows coalesce re-reads per target;
+folds re-read once on reconnect. Task folds use their task's `feedback.*` events.
 
 ## CLI
 

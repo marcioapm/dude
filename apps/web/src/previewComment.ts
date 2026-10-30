@@ -162,9 +162,9 @@ export function pictureBytes(dataUrl: string): { bytes: Uint8Array; type: "image
   return null;
 }
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+export const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-function ago(at: string, now: number): string {
+export function ago(at: string, now = Date.now()): string {
   const min = Math.max(0, Math.round((now - Date.parse(at)) / 60_000));
   if (min < 1) return "just now";
   if (min < 60) return `${min} min ago`;
@@ -177,10 +177,14 @@ function ago(at: string, now: number): string {
  * path), submitted ones and the reader's own drafts — the list holds no
  * one else's — numbered in the list's order, never more than a pin shows.
  */
-export function pinsFor(items: ReadonlyArray<FeedbackItem>, url: string, you: string | null, name: (personId: string | null | undefined) => string, now = Date.now()): OverlayPin[] {
+export function pagePins<T extends { anchor: FeedbackItem["anchor"] }>(items: ReadonlyArray<T>, url: string): T[] {
   const page = overlayPage(url);
   return items.filter((i) => i.anchor.kind === "preview" && overlayPage(i.anchor.url) === page && i.anchor.selector)
-    .slice(0, OVERLAY_LIMITS.pins)
+    .slice(0, OVERLAY_LIMITS.pins);
+}
+
+export function pinsFor(items: ReadonlyArray<FeedbackItem>, url: string, you: string | null, name: (personId: string | null | undefined) => string, now = Date.now()): OverlayPin[] {
+  return pagePins(items, url)
     .map((i, k) => ({
       id: i.id,
       n: k + 1,

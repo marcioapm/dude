@@ -159,13 +159,17 @@ test("someone else's submit arrives without a reload: at the top, marked New, th
 });
 
 test("another server's events leave this fold as it is", async () => {
-  const { container } = await page();
+  const client = new Counting("a");
+  const { container } = await page(client);
   const fold = await unfold(container, "run_pv_checkout/web");
+  const before = client.preview;
   await act(async () => emit({ eventType: EventTypes.PreviewFeedbackSubmitted, occurredAt: new Date().toISOString(), organizationId: ORG.id,
     projectId: PROJECT.id, taskId: null, runId: null, sessionId: null, workflowRunId: null, actor: { type: "person", id: "u_kai" },
     source: "control-plane", correlationId: null, causationId: null, payload: { feedbackId: "x", previewRunId: "run_pv_checkout", server: "admin", status: "open" } }));
-  await settle(400);
-  expect(fold.querySelectorAll('[data-testid="live-note"]').length).toBe(0);
+  // The same fold's matching event is the positive control: the listener really is live.
+  await act(async () => event(EventTypes.PreviewFeedbackSubmitted, { payload: { feedbackId: "y", previewRunId: "run_pv_checkout", server: "web", status: "open" } }));
+  await until(() => tid(fold, "live-note"), "the matching server event");
+  expect(client.preview - before).toBe(1);
 });
 
 /** A preview_feedback.* or feedback.* event on the project's stream, as the backend sends it. */

@@ -2287,17 +2287,6 @@ body {
   padding: var(--ds-space-12) var(--ds-space-16);
   background: var(--ds-color-surface);
 }
-.serverGroup [data-server] > div:nth-child(2) > div:first-child {
-  flex-wrap: wrap;
-  row-gap: var(--ds-space-4);
-}
-.serverGroup [data-server] > div:nth-child(2) > div:first-child > span:not(:first-child) {
-  white-space: normal;
-  min-width: 0;
-}
-.serverGroup [data-server] > div:last-child {
-  flex-wrap: wrap;
-}
 .serverGroupHead {
   display: flex;
   flex-wrap: wrap;
@@ -2363,13 +2352,13 @@ body {
 .serverFoldNote {
   margin: 0;
   font-size: var(--ds-text-xs);
-  line-height: 1.5;
+  line-height: var(--ds-leading-normal);
   color: var(--ds-color-text-muted);
 }
 .serverFoldEmpty {
   margin: 0;
   font-size: var(--ds-text-sm);
-  line-height: 1.6;
+  line-height: var(--ds-leading-prose);
   color: var(--ds-color-text-muted);
 }
 .serverFoldNew {

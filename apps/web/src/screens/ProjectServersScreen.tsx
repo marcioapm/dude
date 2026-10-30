@@ -215,7 +215,7 @@ export function ProjectServersScreen({ client, projectId, projectName, landing, 
           const open = folds.has(k);
           const moved = !here && windows.moved().has(k);
           return [
-            <ServerRow key={k} name={s.name} port={s.port} state={words.state} stateLabel={words.label} url={s.url}
+            <ServerRow wrap key={k} name={s.name} port={s.port} state={words.state} stateLabel={words.label} url={s.url}
               className={k === first && here ? "serverLanded" : undefined} data-testid="project-server" data-key={k}
               detail={<>
                 {words.detail}
