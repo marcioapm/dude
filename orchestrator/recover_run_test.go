@@ -368,3 +368,33 @@ func TestARecoveryOfATaskThatEndsStillPushesAndWakesNobody(t *testing.T) {
 	}
 	_ = commit
 }
+
+// The recovered branch is the task's, as its per-Run branches are: kept
+// while a Stop waits on a pick-up, deleted from GitHub once the task ends.
+func TestARecoveredBranchIsDeletedWithTheTasksPerRunBranches(t *testing.T) {
+	w := conducting(t)
+	task, run, commit := w.deadWriter("WIP.md", "half of it\n")
+	ana := w.ownedBy(task, "Ana")
+	conductor, _, _ := w.conductor(task)
+	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	branch := "dude/" + task + "/recovered-" + run
+	w.until("the recovery done", func() bool { return w.recoveryStatus(id) == "done" })
+	if got := w.branchAt(branch); got != commit {
+		t.Fatalf("%s is at %q", branch, got)
+	}
+	w.stop(ana, task, map[string]any{"note": "hold on"})
+	w.until("the conductor to be kept", func() bool { return w.keptRun(conductor) })
+	for range 3 {
+		w.pump()
+	}
+	if got := w.branchAt(branch); got != commit {
+		t.Fatalf("a Stop waiting on its pick-up deleted the recovered branch: %q", got)
+	}
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	w.until("the recovered branch deleted", func() bool { return w.branchAt(branch) == "" })
+	if n := w.count(`SELECT count(*) FROM run_recoveries WHERE id = $1 AND branch_released_at IS NOT NULL`, id); n != 1 {
+		t.Errorf("the recovery does not record its branch released")
+	}
+}
