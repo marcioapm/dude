@@ -363,6 +363,26 @@ describe("FeedbackCard", () => {
     expect(allByRole(el, "textbox", "Reply").length).toBe(0);
   });
 
+  test("tells when it holds unsaved words: a changed draft or a typed reply, and again when they are saved, sent or cancelled", async () => {
+    const told: boolean[] = [];
+    const el = await mount(<FeedbackCard item={item({ status: "draft" })} {...all} onDirtyChange={(d) => told.push(d)} />);
+    await fire(byRole(el, "button", "Edit"), mouse("click"));
+    expect(told).toEqual([]);
+    const editor = el.querySelector("textarea")!;
+    await typeInto(editor, "Name the person, by role");
+    expect(told).toEqual([true]);
+    // Relabelled Cancel or not, leaving the editor is what is told.
+    await fire(byRole(el, "button", "Cancel"), mouse("click"));
+    expect(told).toEqual([true, false]);
+    const open = await rerender(<FeedbackCard item={item({ status: "open" })} {...all} onDirtyChange={(d) => told.push(d)} />);
+    await fire(byRole(open, "button", "Reply"), mouse("click"));
+    await typeInto(byRole<HTMLTextAreaElement>(open, "textbox", "Reply"), "Kept");
+    expect(told).toEqual([true, false, true]);
+    await fire(byRole<HTMLTextAreaElement>(open, "textbox", "Reply"), new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+    await act(async () => { await resolved; });
+    expect(told).toEqual([true, false, true, false]);
+  });
+
   test("a refused action keeps the card and says why", async () => {
     const el = await mount(<FeedbackCard item={item({ status: "open" })} onResolve={async () => { throw new Error("this task is done"); }} />);
     await fire(byRole(el, "button", "Resolve"), mouse("click"));

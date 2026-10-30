@@ -5,7 +5,7 @@
  * confirmation of a submit. The app fetches and acts; these draw and ask.
  */
 
-import { useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import type { FeedbackAnchor, FeedbackCodeAnchor, FeedbackPreviewAnchor, FeedbackStatus } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { plural } from "../util/format.ts";
@@ -324,6 +324,12 @@ export interface FeedbackCardProps extends Omit<HTMLAttributes<HTMLElement>, "ch
   /** A draft opens in its editor (the tray's Edit). */
   readonly editing?: boolean | undefined;
   readonly onEditingChange?: ((editing: boolean) => void) | undefined;
+  /**
+   * Whether the card holds words not yet saved: a draft's editor changed
+   * from its saved text, or a reply typed and not sent. Told when it turns,
+   * so a page can refuse what would lose them (a refresh).
+   */
+  readonly onDirtyChange?: ((dirty: boolean) => void) | undefined;
   readonly maxLength?: number | undefined;
   readonly now?: number | undefined;
   /** What an open item holds: the merge, or a held delivery's pull request opening. */
@@ -337,7 +343,7 @@ const PLACEMENT_WORDS = {
 
 /** One item: who wrote it and when, where it went, its status, what it is on, its words and thread, and what can be done with it. */
 export function FeedbackCard({ item, thread = [], inline, placement, readOnly, imageUrl, onOpenPage, onJump, onReply, onResolve, onReopen, onSaveDraft, onDelete,
-  editing: editingGiven, onEditingChange, maxLength, now = Date.now(), holds = "merge", className, ...rest }: FeedbackCardProps) {
+  editing: editingGiven, onEditingChange, onDirtyChange, maxLength, now = Date.now(), holds = "merge", className, ...rest }: FeedbackCardProps) {
   const [ownEditing, setOwnEditing] = useState(false);
   const editing = editingGiven ?? ownEditing;
   const setEditing = (on: boolean) => {
@@ -351,6 +357,15 @@ export function FeedbackCard({ item, thread = [], inline, placement, readOnly, i
   const [problem, setProblem] = useState<string | null>(null);
   const draft = item.status === "draft";
   const pending = item.status === "resolved" && item.resolutionPending;
+  const dirty = (draft && editing && text !== item.body) || (replying && reply.trim() !== "");
+  const latestDirty = useRef(onDirtyChange);
+  latestDirty.current = onDirtyChange;
+  const told = useRef(false);
+  useEffect(() => {
+    if (told.current === dirty) return;
+    told.current = dirty;
+    latestDirty.current?.(dirty);
+  }, [dirty]);
   const a = item.anchor;
   const showOnPreview = onJump && a.kind === "preview"
     ? <Button size="sm" variant="quiet" leadingIcon="eye" onClick={onJump} data-testid="fb-show-on-preview">Show on preview</Button> : null;

@@ -197,7 +197,8 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   const [selection, setSelection] = useState<DiffRange | null>(null);
   const [editing, setEditing] = useState(false);
   const [unsaved, setUnsaved] = useState(false);
-  const [cardUnsaved, setCardUnsaved] = useState(false);
+  // Cards holding unsaved words (a draft's editor, a reply), by item: told by FeedbackCard's onDirtyChange.
+  const [cardUnsaved, setCardUnsaved] = useState<Readonly<Record<string, boolean>>>({});
   const text = useRef("");
   const onText = useCallback((t: string) => {
     text.current = t;
@@ -209,7 +210,7 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
     setEditing(false);
     setSelection(null);
   }, []);
-  useEffect(() => { close(); setCardUnsaved(false); }, [snapshot?.id, close]);
+  useEffect(() => { close(); setCardUnsaved({}); }, [snapshot?.id, close]);
   // A range picked while the open editor holds words keeps the editor where it is.
   const unsavedRef = useRef(unsaved);
   unsavedRef.current = unsaved;
@@ -221,13 +222,12 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   const editorAt = editing ? selection : null;
 
   const card = useCallback((item: FeedbackItem, placement?: "outdated" | "unchanged") => (
-    <div key={item.id} data-fb-item={item.id} tabIndex={-1} className="branchComment"
-      onInput={() => setCardUnsaved(true)} onClick={(e) => { if ((e.target as HTMLElement).closest("button")?.textContent === "Cancel") setCardUnsaved(false); }}>
+    <div key={item.id} data-fb-item={item.id} tabIndex={-1} className="branchComment">
       <FeedbackCard inline placement={placement} item={cardItem(item, fb.people, fb.runs)} thread={threadOf(item, fb.people, fb.runs)}
-        onEditingChange={(on) => { if (!on) setCardUnsaved(false); }}
+        onDirtyChange={(dirty) => setCardUnsaved((was) => ({ ...was, [item.id]: dirty }))}
         readOnly={!!diff?.readOnly || (fb.readOnly && item.status !== "draft")} maxLength={FEEDBACK_LIMITS.body}
-        onReply={async (b) => { const out = await fb.reply(item.id, b); setCardUnsaved(false); return out; }} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
-        onSaveDraft={async (b) => { const out = await fb.saveDraft(item, b, null); setCardUnsaved(false); return out; }} onDelete={() => fb.deleteDraft(item.id)} />
+        onReply={(b) => fb.reply(item.id, b)} onResolve={() => fb.resolve(item.id)} onReopen={() => fb.reopen(item.id)}
+        onSaveDraft={(b) => fb.saveDraft(item, b, null)} onDelete={() => fb.deleteDraft(item.id)} />
     </div>
   ), [fb, diff?.readOnly]);
   const renderAfterLine = useCallback((path: string, side: DiffSide, line: number) => {
@@ -261,7 +261,7 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   const commenting = useMemo<LiveDiffCommenting | undefined>(() => (snapshot ? {
     canStart, maxLines: FEEDBACK_LIMITS.lines, selection, onSelectionChange, renderAfterLine, renderFileHead, fileComments, onFileComments,
   } : undefined), [snapshot, canStart, selection, onSelectionChange, renderAfterLine, renderFileHead, fileComments, onFileComments]);
-  return { commenting, byFile, unsaved: unsaved || cardUnsaved };
+  return { commenting, byFile, unsaved: unsaved || Object.values(cardUnsaved).some(Boolean) };
 }
 
 export interface ChangesTabProps {

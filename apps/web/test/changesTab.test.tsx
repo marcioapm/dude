@@ -269,6 +269,18 @@ describe("the Changes tab: a pinned snapshot and an explicit refresh", () => {
     await click(ok);
     await until(() => (tab.dataset["snapshot"] === "tbs_fx_rebased" ? tab : null), "the rebased snapshot");
   });
+
+  test("a reply typed in a comment's card refuses Refresh until it is cancelled (told by the card, not by its labels)", async () => {
+    const { tab } = await changes(fx("rebased"));
+    const replyButton = await until(() => tab.querySelector<HTMLElement>("[data-fb-item] [data-testid=fb-reply]"), "a Reply");
+    await click(replyButton);
+    const box = await until(() => tab.querySelector<HTMLTextAreaElement>("[data-fb-item] textarea[aria-label=Reply]"), "the reply box");
+    await typeText(box, "Agreed, but later.");
+    expect(q(tab, "changes-refresh")!.getAttribute("aria-disabled")).toBe("true");
+    await click([...box.closest("[data-fb-item]")!.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!);
+    expect((q(tab, "changes-refresh") as HTMLButtonElement).disabled).toBe(false);
+    expect(q(tab, "changes-refresh")!.getAttribute("aria-disabled") === "true").toBe(false);
+  });
 });
 
 describe("the Changes tab: feedback on the branch", () => {
