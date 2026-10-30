@@ -486,7 +486,6 @@ function fieldMessage(details: unknown): string | undefined {
   return first.toLowerCase().startsWith(field!.toLowerCase()) ? first : `${field}: ${first}`;
 }
 
-/** Query string for the defined params, or "" when there are none. */
 /** `ApiClient.taskBranchDiff`'s choice: an attempt, a repository (name or id) and a snapshot id, each optional. */
 export interface TaskBranchDiffQuery {
   attempt?: number | undefined;
@@ -496,6 +495,7 @@ export interface TaskBranchDiffQuery {
   files?: boolean | undefined;
 }
 
+/** Query string for the defined params, or "" when there are none. */
 function qs(params: Record<string, unknown>): string {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {

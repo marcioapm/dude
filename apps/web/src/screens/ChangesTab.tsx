@@ -17,18 +17,17 @@ import { Icon, plural } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, FEEDBACK_LIMITS, runLabel, type FeedbackItem, type TaskBranchDiff, type TaskBranchSnapshot } from "@dude/domain";
 import type { ApiClient, Run, RunDiff } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
-import { FEEDBACK_FULL, cardItem, threadOf, useTaskFeedback, type FeedbackOnDiff } from "../feedback.tsx";
+import { FEEDBACK_FULL, LIVE_RUN, cardItem, threadOf, useTaskFeedback, type FeedbackOnDiff } from "../feedback.tsx";
+import { lineKey } from "../diffComments.tsx";
 import { runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import {
   REFRESH_REFUSED, branchAnchorInput, commentsByFile, marksLabel, newerWords, nextComment, placeBranchItems, refreshedWords, short,
   useBranchDiff, type PlacedComment,
 } from "../branchReview.ts";
 
-const LIVE: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
-
 /** The attempt's live sessions, newest first: their checkouts are the pending work. */
 export function pendingSessions(runs: readonly Run[]): Run[] {
-  return runs.filter((r) => LIVE.has(r.status) && r.kind !== "preview")
+  return runs.filter((r) => LIVE_RUN.has(r.status) && r.kind !== "preview")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -128,8 +127,6 @@ function useWide(px: number): boolean {
   }, [query]);
   return wide;
 }
-
-const lineKey = (path: string, side: DiffSide, line: number) => `${path}\u0000${side}\u0000${line}`;
 
 /** The editor under a picked range: its own text, mirrored up so Refresh knows it is unsaved. */
 function BranchCommentEditor({ fb, snapshot, range, initial, onText, onDone }: {

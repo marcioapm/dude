@@ -20,7 +20,8 @@ import type { ApiClient, FeedbackSubmitted, Run, TaskDetail } from "./api/client
 import type { People } from "./people.tsx";
 
 const EMPTY_FEEDBACK: FeedbackList = { feedback: [], blocking: 0 };
-const LIVE_RUN: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
+/** A Run still at work (or about to be): its checkout may still change. */
+export const LIVE_RUN: ReadonlySet<string> = new Set(["pending", "scheduled", "starting", "running", "paused"]);
 
 /**
  * The attempt's feedback, read on mount, when `version` changes (the task
