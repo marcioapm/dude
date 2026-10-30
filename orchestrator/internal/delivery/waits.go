@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -284,15 +285,10 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCon
 			if head == "" {
 				head = now
 			}
-			out = append(out, waitCond{Kind: condPRChecksFinal, PR: prID, PRName: name + "#" + itoa(number), Head: head})
+			out = append(out, waitCond{Kind: condPRChecksFinal, PR: prID, PRName: name + "#" + strconv.Itoa(number), Head: head})
 		}
 	}
 	return out, nil
-}
-
-func itoa(n int) string {
-	b, _ := json.Marshal(n)
-	return string(b)
 }
 
 // waitItem is one fact a wait's digest tells: a Run (Kind "run") or a pull
