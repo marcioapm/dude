@@ -271,6 +271,27 @@ describe("LiveDiff: comment marks and the page's scope", () => {
     }
   });
 
+  test("a mark that shows its file alone turns Follow off: the person has taken over", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    // The page answers a mark by selecting its file, as the Changes tab does.
+    let selected: string | null = null;
+    const draw = () => root.render(<LiveDiff base="b" files={files} live selected={selected} onSelectedChange={(p) => { selected = p; }}
+      commenting={commenting((p) => { selected = p; act(draw); })} />);
+    try {
+      act(draw);
+      const follow = () => host.querySelector('[data-testid="follow"]')!.getAttribute("aria-checked");
+      expect(follow()).toBe("true");
+      act(() => host.querySelector<HTMLButtonElement>('[data-testid="comment-mark"][data-where="list"]')!.click());
+      expect(selected === "src/a.ts").toBe(true);
+      expect(follow()).toBe("false");
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
   test("while cycling the mark reads k / N and names the comment", () => {
     const html = renderToStaticMarkup(<LiveDiff base="b" files={files} commenting={{ ...commenting(), fileComments: (p: string) => (p === "src/a.ts" ? { count: 3, label: "x", position: 2 } : null) }} />);
     expect(html).toContain("Comment 2 of 3 on src/a.ts — show next");
