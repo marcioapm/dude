@@ -20,7 +20,7 @@ import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLa
 import type { ApiClient, PullRequest, Run, TaskMetrics } from "../api/client.ts";
 import { planFrom } from "../api/conversation.ts";
 import { runStatusLabel, runStatusShown } from "../runPresentation.tsx";
-import { useBranchDiff } from "../branchReview.ts";
+import { short, useBranchDiff } from "../branchReview.ts";
 import { CostOf, TaskMetricsSection, leadTimeSub, useTaskMetrics } from "./MetricsSection.tsx";
 
 /** A question an agent put to a person that nobody has answered or closed yet. */
@@ -224,7 +224,7 @@ export function ChangesCard({ branches, branch, onReview }: { branches: readonly
           {(branch?.repositories.length ?? 0) > 1 ? <span className="overviewBranchRepo">{snap.repository}</span> : null}
           <span>{plural(snap.stats.files, "file")}</span>
           <DiffStat additions={snap.stats.additions} deletions={snap.stats.deletions} />
-          <code title={`merge base ${snap.mergeBaseSha} … branch head ${snap.headSha}`}>{snap.targetRef} {snap.mergeBaseSha.slice(0, 7)}…{snap.headSha.slice(0, 7)}</code>
+          <code title={`merge base ${snap.mergeBaseSha} … branch head ${snap.headSha}`}>{snap.targetRef} {short(snap.mergeBaseSha)}…{short(snap.headSha)}</code>
         </p>
       ) : state?.state === "preparing" ? (
         <p className="muted" data-testid="overview-snapshot-preparing">Preparing the branch snapshot: it shows here once captured.</p>
@@ -242,7 +242,7 @@ export function ChangesCard({ branches, branch, onReview }: { branches: readonly
               {branches.length > 1 ? <span className="overviewBranchRepo">{b.repository}</span> : null}
               <code className="overviewBranchName">{b.branch}</code>
               {b.target ? <span className="muted">→ <code>{b.target}</code></span> : null}
-              {b.head ? <span className="muted" title={`The last head a session recorded: ${b.head}`}>at <code>{b.head.slice(0, 7)}</code></span> : null}
+              {b.head ? <span className="muted" title={`The last head a session recorded: ${b.head}`}>at <code>{short(b.head)}</code></span> : null}
             </li>
           ))}
         </ul>
@@ -252,6 +252,21 @@ export function ChangesCard({ branches, branch, onReview }: { branches: readonly
         <Button size="sm" variant="secondary" trailingIcon="arrow-right" onClick={onReview} data-testid="overview-review-changes">Review changes</Button>
       </div>
     </section>
+  );
+}
+
+/**
+ * One muted line when the published pull request is not at the branch head:
+ * its checks are of another commit than the branch's latest snapshot.
+ */
+export function PrHeadLine({ branch }: { branch: TaskBranchDiff | null | undefined }) {
+  const snap = branch?.availability.state === "ok" ? branch.snapshot : null;
+  const pr = branch?.pullRequest ?? null;
+  if (!snap || !pr || pr.headSha === snap.headSha) return null;
+  return (
+    <p className="muted" data-testid="overview-pr-head">
+      Pull request #{pr.number} is at <code>{short(pr.headSha)}</code>; the branch is at <code>{short(snap.headSha)}</code>. Its checks apply to <code>{short(pr.headSha)}</code>.
+    </p>
   );
 }
 
@@ -340,6 +355,7 @@ export function TaskOverview(p: TaskOverviewProps) {
           <section className="overviewPullRequests" aria-labelledby="overview-pr-title" data-testid="overview-pull-requests">
             <h2 id="overview-pr-title">{p.prCount > 1 ? "Pull requests" : "Pull request"}</h2>
             {p.pullRequests ?? <p className="muted">No pull request yet. It shows here once one is opened.</p>}
+            <PrHeadLine branch={branch.diff} />
           </section>
         </div>
         <section className="overviewMilestones" aria-labelledby="overview-milestones-title" data-testid="overview-milestones">

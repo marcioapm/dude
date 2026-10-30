@@ -203,6 +203,17 @@ describe("the branch, the pull request and the details", () => {
       return el?.textContent?.includes("8c1d0e4…3e7a2b9") ? el : null;
     }, "the latest branch snapshot");
     expect(text(snap)).not.toContain("2be91c7…7ac42e1");
+    // The pull request is still at the older head: one muted line in its column says so.
+    const prHead = page.querySelector("[data-testid=overview-pull-requests] [data-testid=overview-pr-head]");
+    expect(text(prHead)).toBe("Pull request #482 is at 7ac42e1; the branch is at 3e7a2b9. Its checks apply to 7ac42e1.");
+  });
+
+  test("with the pull request at the branch head, no line about it", async () => {
+    localStorage.setItem("dude.fixtures.branch", "populated");
+    const page = await overview(fx(undefined, "d"));
+    await until(() => page.querySelector("[data-testid=overview-snapshot]"), "the snapshot");
+    expect(page.querySelector("[data-testid=overview-pull-requests]")).not.toBeNull();
+    expect(page.querySelector("[data-testid=overview-pr-head]")).toBeNull();
   });
 
   test("the Changes card says preparing and unavailable as they are, never as no changes", async () => {
