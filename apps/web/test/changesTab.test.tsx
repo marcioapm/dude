@@ -131,6 +131,32 @@ describe("the Changes tab: the branch", () => {
     expect([...tab.querySelectorAll("button")].filter((b) => /^(Reply|Resolve|Reopen|Edit|Delete)$/.test(b.textContent ?? ""))).toEqual([]);
   });
 
+  test("historical feedback makes zero mutations, reports read errors, and switching current restores current comments", async () => {
+    const client = fx("older");
+    const calls: string[] = [];
+    for (const name of ["createFeedbackDraft", "updateFeedbackDraft", "deleteFeedbackDraft", "submitFeedback", "replyFeedback", "resolveFeedback", "reopenFeedback"] as const) {
+      const was = client[name].bind(client) as (...args: unknown[]) => unknown;
+      (client as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => { calls.push(name); return was(...args); };
+    }
+    const { page, tab } = await changes(client, { attempt: 1 });
+    await until(() => tab.textContent?.includes("Earlier draft: preserve the plan event.") ? tab : null, "historical items");
+    expect(calls).toEqual([]);
+    await click(q(page, "go-current")!);
+    await until(() => q(page, "changes-tab")?.textContent?.includes("Would a missing plan id") ? page : null, "current items");
+    expect(q(page, "changes-tab")!.textContent).not.toContain("Earlier draft: preserve the plan event.");
+    expect(calls).toEqual([]);
+  });
+
+  test("a failed historical feedback read is shown without current-attempt placements", async () => {
+    const client = fx("older");
+    const read = client.feedback.bind(client);
+    client.feedback = (id, attempt) => attempt === 1 ? Promise.reject(new Error("history unavailable")) : read(id, attempt);
+    const { tab, page } = await changes(client, { attempt: 1 });
+    await until(() => q(page, "historical-feedback-problem"), "the historical read problem");
+    expect(q(page, "historical-feedback-problem")!.textContent).toContain("history unavailable");
+    expect(tab.textContent).not.toContain("Would a missing plan id");
+  });
+
   test("Pending reads checkout changes without commit heads, distinguishes empty/error, retries and refreshes on events", async () => {
     const client = fx("populated");
     const task = client.getTask.bind(client);
