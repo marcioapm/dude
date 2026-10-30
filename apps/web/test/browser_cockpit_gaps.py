@@ -90,6 +90,30 @@ class CockpitGaps(unittest.TestCase):
                 self.assertEqual(self.overflow(page), 0)
                 self.shot(page, f"pending-{state}-{width}-{theme}")
 
+    def test_snapshot_details_close_on_escape_outside_click_and_focus_leaving(self):
+        page = self.page(1440, 900)
+        page.goto(f"{URL}/?fixtures=a&branch=populated#/task/{TASK}/changes")
+        line = page.get_by_test_id("snapshot-line")
+        details = page.get_by_test_id("snapshot-details")
+        # Escape closes it and gives focus back to the line.
+        line.focus()
+        line.press("Enter")
+        expect(details).to_be_visible()
+        expect(details.get_by_role("button", name="Close")).to_be_focused()
+        page.keyboard.press("Escape")
+        expect(details).to_have_count(0)
+        expect(line).to_be_focused()
+        # Tab past its last control closes it.
+        line.press("Enter")
+        expect(details.get_by_role("button", name="Close")).to_be_focused()
+        page.keyboard.press("Tab")
+        expect(details).to_have_count(0)
+        # A click outside closes it.
+        line.click()
+        expect(details).to_be_visible()
+        page.get_by_test_id("diff-section").first.click(position={"x": 400, "y": 60})
+        expect(details).to_have_count(0)
+
     def test_phone_header_actions_do_not_overlap_the_title(self):
         # Overview (where a task opens) and Findings scroll the whole page; Changes is a fixed pane.
         for tab in ("", "/findings", "/changes"):
