@@ -188,6 +188,7 @@ func TestGoldenToolResults(t *testing.T) {
 		{"wait-for-reply-came", replyCameNext},
 		{"steer", steerNext},
 		{"restart-run", restartNext},
+		{"stop-run", stopNext},
 		{"publish", publishNext},
 		{"update-task-relations", relationsWrittenNext},
 		{"update-task", taskUpdatedNext},
