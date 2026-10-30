@@ -93,10 +93,7 @@ BEGIN
       CONTINUE;
     END IF;
     SELECT count(*) INTO children FROM task_branch_snapshots WHERE previous_snapshot_id = m.id;
-    -- NO KEY UPDATE: the rewire never changes a child's id, so a capture
-    -- of the child's own child, or a feedback item on it (their foreign
-    -- keys' KEY SHARE), goes ahead while this batch is open; two pruners
-    -- still exclude each other.
+    -- NO KEY UPDATE, not FOR UPDATE: see the header.
     SELECT count(*) INTO held FROM (SELECT 1 FROM task_branch_snapshots WHERE previous_snapshot_id = m.id
       FOR NO KEY UPDATE SKIP LOCKED) x;
     IF held < children THEN
