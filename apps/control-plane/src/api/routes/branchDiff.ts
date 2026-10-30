@@ -65,6 +65,9 @@ export function newerThan(fromId: string, latestId: string, links: ReadonlyArray
 
 interface RepoRow { id: string; name: string; access: "write" | "read"; snapshots: number }
 
+/** A (task, attempt, repository)'s capture request, as the read needs it. */
+interface CaptureRequest { status: "pending" | "done" | "unavailable" | "absent"; reason: string | null; requestedAt: Date; snapshotId: string | null }
+
 /** The attempt's repositories: the task's, and any other its snapshots name (one since removed from the task). */
 async function repositoriesOf(scope: OrgScope, taskId: string, attempt: number): Promise<RepoRow[]> {
   return (await scope.sql`
@@ -124,9 +127,9 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
         s.merge_base_sha AS "mergeBaseSha", s.head_sha AS "headSha", s.captured_at AS "capturedAt"
       FROM task_branch_snapshots s WHERE s.task_id = ${taskId} AND s.attempt = ${attempt} AND s.repository_id = ${repo.id}
       ORDER BY s.captured_at, s.id`) as Link[];
-    const [request] = (await scope.sql`SELECT status, reason, requested_at AS "requestedAt", snapshot_id AS "snapshotId"
-      FROM task_branch_capture_requests WHERE task_id = ${taskId} AND attempt = ${attempt} AND repository_id = ${repo.id}`) as Array<{
-        status: "pending" | "done" | "unavailable" | "absent"; reason: string | null; requestedAt: Date; snapshotId: string | null }>;
+    const readRequest = async () => ((await scope.sql`SELECT status, reason, requested_at AS "requestedAt", snapshot_id AS "snapshotId"
+      FROM task_branch_capture_requests WHERE task_id = ${taskId} AND attempt = ${attempt} AND repository_id = ${repo.id}`) as CaptureRequest[])[0];
+    const request = await readRequest();
     // The branch is at the snapshot it was last read at; else the newest captured.
     const latestId = (request?.snapshotId && links.some((l) => l.id === request.snapshotId) ? request.snapshotId : links.at(-1)?.id) ?? null;
 
@@ -147,16 +150,16 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
     else {
       // Nothing yet for the current attempt: ask the orchestrator for one.
       await scope.sql`SELECT want_branch_capture(${scope.organizationId}, ${taskId}, ${attempt}, ${repo.id}, '')`;
-      [requested] = (await scope.sql`SELECT status, reason, requested_at AS "requestedAt", snapshot_id AS "snapshotId"
-        FROM task_branch_capture_requests WHERE task_id = ${taskId} AND attempt = ${attempt} AND repository_id = ${repo.id}`) as typeof request[];
+      requested = await readRequest();
       availability = { state: "preparing" };
     }
 
     // The published head is an open (or draft) pull request's on this branch, as the capture reads it: a closed one publishes nothing.
+    const branchRef = (shown?.branchRef as string | undefined) ?? null;
     const [pr] = (await scope.sql`SELECT pr.number, pr.url, pr.state::text AS state, pr.head_sha AS "headSha",
         GREATEST(pr.last_polled_at, pr.head_seen_at) AS "syncedAt"
       FROM pull_requests pr WHERE pr.task_id = ${taskId} AND pr.repository_id = ${repo.id} AND pr.state IN ('open', 'draft')
-        AND (${(shown?.branchRef as string | undefined) ?? null}::text IS NULL OR pr.head_branch = ${(shown?.branchRef as string | undefined) ?? null}::text)
+        AND (${branchRef}::text IS NULL OR pr.head_branch = ${branchRef}::text)
       ORDER BY pr.created_at DESC LIMIT 1`) as Array<Omit<TaskBranchPullRequest, "syncedAt"> & { syncedAt: Date | null }>;
 
     // The attempt's branch items on this repository the reader may see: submitted ones, and their own drafts.
