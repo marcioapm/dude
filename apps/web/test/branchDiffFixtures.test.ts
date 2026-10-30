@@ -140,10 +140,11 @@ describe("fixtures: the task's branch", () => {
     try {
       await real.taskBranchDiff("wi_1");
       await real.taskBranchDiff("wi 2", { attempt: 1, repository: "web-console", snapshot: "tbs_1" });
+      await real.taskBranchDiff("wi_1", { files: false });
     } finally {
       globalThis.fetch = was;
     }
     expect(asked.map((u) => u.replace("http://dude.test", ""))).toEqual(["/v1/tasks/wi_1/branch-diff",
-      "/v1/tasks/wi%202/branch-diff?attempt=1&repository=web-console&snapshot=tbs_1"]);
+      "/v1/tasks/wi%202/branch-diff?attempt=1&repository=web-console&snapshot=tbs_1", "/v1/tasks/wi_1/branch-diff?files=0"]);
   });
 });

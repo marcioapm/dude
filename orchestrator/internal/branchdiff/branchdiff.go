@@ -17,7 +17,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
@@ -157,11 +156,4 @@ func Checksum(mergeBase, head string, files []phases.DiffFile) string {
 // partialReason is why a snapshot at GitHub's file cap is partial.
 func partialReason(listed int) string {
 	return fmt.Sprintf("GitHub's compare lists at most %d files: %d listed, more may have changed", forge.CompareFileCap, listed)
-}
-
-func short(sha string) string {
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return strings.TrimSpace(sha)
 }

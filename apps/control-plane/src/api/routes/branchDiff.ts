@@ -20,7 +20,7 @@ import { taskIdOf } from "./work.ts";
 
 const SNAPSHOT_COLUMNS = `s.id, s.task_id AS "taskId", s.attempt, s.repository_id AS "repositoryId", s.repository,
   s.branch_ref AS "branchRef", s.target_ref AS "targetRef", s.target_sha AS "targetSha", s.merge_base_sha AS "mergeBaseSha",
-  s.head_sha AS "headSha", s.checksum, s.source, s.captured_at AS "capturedAt", s.files, s.stats, s.truncated, s.status,
+  s.head_sha AS "headSha", s.checksum, s.source, s.captured_at AS "capturedAt", s.stats, s.truncated, s.status,
   s.reason, s.pr_head_sha AS "prHeadSha", s.previous_snapshot_id AS "previousSnapshotId", s.relation`;
 
 /** A snapshot's lineage entry: enough to walk back from the newest. */
@@ -53,12 +53,13 @@ export function newerThan(fromId: string, latestId: string, links: ReadonlyArray
     steps.push(at.relation);
     at = at.previousSnapshotId ? byId.get(at.previousSnapshotId) : undefined;
   }
+  const count = steps.length;
   if (!reached) steps.push("rewritten");
   return {
     id: latest.id, relation: spanRelation(steps, from.mergeBaseSha, latest.mergeBaseSha),
     fromMergeBaseSha: from.mergeBaseSha, fromHeadSha: from.headSha,
     mergeBaseSha: latest.mergeBaseSha, headSha: latest.headSha, capturedAt: latest.capturedAt.toISOString(),
-    count: links.filter((l) => l.capturedAt > from.capturedAt).length,
+    count,
   };
 }
 
@@ -81,6 +82,8 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
   const askedAttempt = intParam(ctx.url, "attempt", { min: 1, max: 2_147_483_647 }) ?? null;
   const askedRepo = ctx.url.searchParams.get("repository") || null;
   const askedSnapshot = ctx.url.searchParams.get("snapshot") || null;
+  const includeFiles = ctx.url.searchParams.get("files") !== "0";
+  const snapshotColumns = SNAPSHOT_COLUMNS + (includeFiles ? ", s.files" : "");
   if (askedRepo && askedRepo.length > 255) throw badRequest("repository is at most 255 characters");
   if (askedSnapshot && askedSnapshot.length > 100) throw badRequest("snapshot is at most 100 characters");
 
@@ -91,7 +94,7 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
 
     let named: Record<string, unknown> | null = null;
     if (askedSnapshot) {
-      const [row] = (await scope.sql`SELECT ${scope.sql.unsafe(SNAPSHOT_COLUMNS)} FROM task_branch_snapshots s
+      const [row] = (await scope.sql`SELECT ${scope.sql.unsafe(snapshotColumns)} FROM task_branch_snapshots s
         WHERE s.id = ${askedSnapshot} AND s.task_id = ${taskId}`) as Array<Record<string, unknown>>;
       if (!row) throw notFound(`snapshot ${askedSnapshot} is not one of this task's`);
       if (askedAttempt !== null && askedAttempt !== row.attempt) throw badRequest(`snapshot ${askedSnapshot} is of attempt ${row.attempt}`);
@@ -129,7 +132,7 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
 
     let shown = named;
     if (!shown && latestId) {
-      const [latest] = (await scope.sql`SELECT ${scope.sql.unsafe(SNAPSHOT_COLUMNS)} FROM task_branch_snapshots s
+      const [latest] = (await scope.sql`SELECT ${scope.sql.unsafe(snapshotColumns)} FROM task_branch_snapshots s
         WHERE s.id = ${latestId}`) as Array<Record<string, unknown>>;
       shown = latest ?? null;
     }
@@ -157,7 +160,7 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
 
     // The attempt's branch items on this repository the reader may see: submitted ones, and their own drafts.
     let placements: TaskBranchPlacement[] = [];
-    if (shown) {
+    if (shown && includeFiles) {
       const items = (await scope.sql`SELECT f.id, f.anchor FROM feedback_items f
         WHERE f.task_id = ${taskId} AND f.attempt = ${attempt} AND f.anchor_kind = 'code' AND f.anchor->>'scope' = 'branch'
           AND f.anchor->>'repo' = ${repo.name} AND (f.status <> 'draft' OR f.author_person_id = ${ctx.principal.personId ?? null})
@@ -178,6 +181,11 @@ async function branchDiff(ctx: RequestContext): Promise<Response> {
     };
   });
   if (!out) throw notFound(`task ${ref} not found`);
+  if (!includeFiles) {
+    const metadata = { ...out };
+    delete (metadata as Partial<TaskBranchDiff>).placements;
+    return json(metadata);
+  }
   return json(out);
 }
 

@@ -414,6 +414,26 @@ describe("a branch anchor is pinned to the stored snapshot", () => {
     expect(n).toBe(0);
   });
 
+  test("the stored branch anchor matches the shared delivery lifecycle golden", async () => {
+    const golden = await Bun.file(join(ROOT, "packages/domain/test/branch-feedback-anchor.json")).json();
+    await owner`INSERT INTO repositories (id, organization_id, project_id, name, url)
+      VALUES ('repo_golden', ${ORG}, 'prj_fb', 'api', 'https://github.com/acme/api') ON CONFLICT (project_id, name) DO NOTHING`;
+    const [repo] = await owner`SELECT id FROM repositories WHERE project_id = 'prj_fb' AND name = 'api'`;
+    await owner`INSERT INTO task_repositories (task_id, repository_id, organization_id, access)
+      VALUES ('wi_fb2', ${repo.id}, ${ORG}, 'write') ON CONFLICT DO NOTHING`;
+    await owner`INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref,
+      target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, relation)
+      VALUES ('tbs_1', ${ORG}, 'wi_fb2', 1, ${repo.id}, 'api', 'dude/wi_fb2/attempt-1', 'main', ${sha("f")},
+        ${sha("b")}, ${sha("c")}, ${DIFF}::jsonb, 's1', '{}'::jsonb, 'initial')`;
+    const res = await draft(ana.key, "wi_fb2", branch({ snapshotId: "tbs_1", repository: "api", endLine: 11, diffChecksum: "s1" }));
+    expect(res.status).toBe(201);
+    const item = await res.json() as Json;
+    const [stored] = await owner`SELECT anchor FROM feedback_items WHERE id = ${item.id}`;
+    expect(item.anchor).toEqual(golden);
+    expect(stored.anchor).toEqual(golden);
+    await call(ana.key, "DELETE", `/v1/feedback/${item.id}`);
+  });
+
   test("a branch-anchored draft is listed and submitted like any other", async () => {
     const item = await (await draft(ana.key, "wi_fb", branch())).json() as Json;
     expect((await listed(ana.key, "wi_fb")).feedback.find((f: Json) => f.id === item.id)?.anchor.scope).toBe("branch");

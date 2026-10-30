@@ -250,6 +250,149 @@ func TestALineageOfSnapshotsFollowsTheBranch(t *testing.T) {
 	if strings.Join(said, "\n") != strings.Join(want, "\n") {
 		t.Errorf("events %q, want %q", said, want)
 	}
+	rows.Close()
+	// The previous head has vanished from GitHub. The lineage request is
+	// cheap, and a 404 still means rewritten (not a fabricated descent).
+	oldHead := got[3].Head
+	lineageReads := 0
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/compare/"+oldHead+"...") {
+				lineageReads++
+				if r.URL.Query().Get("per_page") != "1" {
+					t.Error("lineage compare did not request its minimum page")
+				}
+				return 404
+			}
+			return 0
+		}
+	})
+	w.fake.CommitFiles(w.branch, "after collection", map[string]string{"app.ts": "collected\n"})
+	w.capture()
+	got = w.snapshots()
+	if lineageReads != 1 || len(got) != 5 || got[4].Relation != branchdiff.Rewritten {
+		t.Fatalf("vanished previous head: reads %d snapshots %+v", lineageReads, got)
+	}
+	// A 5xx is not evidence of a rewrite. Leave the snapshot uncaptured
+	// and retry rather than telling the UI that a rebase happened.
+	oldHead = got[4].Head
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/compare/"+oldHead+"...") {
+				return 502
+			}
+			return 0
+		}
+	})
+	w.fake.CommitFiles(w.branch, "after outage", map[string]string{"app.ts": "outage\n"})
+	w.capture()
+	if len(w.snapshots()) != 5 || w.requestOf("wi_b", 1).failures != 1 {
+		t.Fatal("a lineage outage was recorded as a snapshot")
+	}
+}
+
+func TestTheTargetRefComesFromDeliveryThenPullRequestAndRetargetingCaptures(t *testing.T) {
+	for _, source := range []string{"delivery", "pull request"} {
+		t.Run(source, func(t *testing.T) {
+			w := newWorld(t)
+			first := w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "1\n"})
+			git(t, w.origin, "update-ref", "refs/heads/release", first)
+			w.fake.CommitFiles("release", "release-only", map[string]string{"release.ts": "release\n"})
+			w.fake.CommitFiles(w.branch, "second", map[string]string{"app.ts": "2\n"})
+			w.capture() // default main
+			if source == "delivery" {
+				w.exec(`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
+					VALUES ('wf_b', $1, 'task.delivery', 'd', 'wi_b', 'running', 's', '{"bases":{"api":"release"}}')`)
+			} else {
+				w.exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+					VALUES ('pr_b', $1, 'prj_b', 'wi_b', 'repo_api', 1, 'https://github.com/acme/api/pull/1', $2, 'release', $3, 'T')`, w.branch, w.fake.SHA(w.branch))
+			}
+			w.capture() // same head, different target ref and merge base
+			got := w.snapshots()
+			var ref string
+			if len(got) != 2 || got[1].MergeBase != first || got[1].Relation != branchdiff.MergedTarget {
+				t.Fatalf("retargeted unchanged head: %+v", got)
+			}
+			if err := w.owner.QueryRow(context.Background(), `SELECT target_ref FROM task_branch_snapshots WHERE id = $1`, got[1].ID).Scan(&ref); err != nil || ref != "release" {
+				t.Fatalf("target ref %q (%v)", ref, err)
+			}
+			// Another ref with the same history still names a different target:
+			// the uniqueness/conflict path must not silently return release's row.
+			git(t, w.origin, "update-ref", "refs/heads/release-next", w.fake.SHA("release"))
+			if source == "delivery" {
+				w.exec(`UPDATE workflow_runs SET state = '{"bases":{"api":"release-next"}}' WHERE organization_id = $1`)
+			} else {
+				w.exec(`UPDATE pull_requests SET base_branch = 'release-next' WHERE organization_id = $1`)
+			}
+			w.capture()
+			if n := len(w.snapshots()); n != 3 {
+				t.Fatalf("same merge base, different target ref: %d snapshots", n)
+			}
+		})
+	}
+}
+
+func TestTheFileCapIsStoredAsPartialWithItsReason(t *testing.T) {
+	w := newWorld(t)
+	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "1\n"})
+	w.fake.Set(func(s *fakegithub.Server) {
+		s.CompareAnswer = func(base, head string, answer map[string]any) {
+			files := answer["files"].([]any)
+			for len(files) < 300 {
+				files = append(files, files[0])
+			}
+			answer["files"] = files
+		}
+	})
+	w.capture()
+	var status, reason string
+	var truncated bool
+	if err := w.owner.QueryRow(context.Background(), `SELECT status, reason, truncated FROM task_branch_snapshots`).
+		Scan(&status, &reason, &truncated); err != nil || status != "partial" || !strings.Contains(reason, "300") || !truncated {
+		t.Fatalf("file cap: %s %q truncated=%v (%v)", status, reason, truncated, err)
+	}
+}
+
+func TestResettingTheBranchReusesItsFirstSnapshotWithoutAnEvent(t *testing.T) {
+	w := newWorld(t)
+	first := w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "first\n"})
+	w.capture()
+	w.fake.CommitFiles(w.branch, "second", map[string]string{"app.ts": "second\n"})
+	w.capture()
+	got := w.snapshots()
+	git(t, w.origin, "update-ref", "refs/heads/"+w.branch, first)
+	w.capture()
+	if len(w.snapshots()) != 2 {
+		t.Fatal("reset made a new snapshot")
+	}
+	var id, status string
+	var events int
+	if err := w.owner.QueryRow(context.Background(), `SELECT snapshot_id, status FROM task_branch_capture_requests WHERE task_id = 'wi_b'`).Scan(&id, &status); err != nil || id != got[0].ID || status != "done" {
+		t.Fatalf("reset request: %s %s (%v)", id, status, err)
+	}
+	if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = 'wi_b' AND event_type = $1`, branchdiff.EvSnapshotCaptured).Scan(&events); err != nil || events != 2 {
+		t.Fatalf("reset emitted an event: %d (%v)", events, err)
+	}
+}
+
+func TestAnInsertConflictReusesTheSnapshotWithoutAnotherEvent(t *testing.T) {
+	w := newWorld(t)
+	w.fake.CommitFiles(w.branch, "first", map[string]string{"app.ts": "first\n"})
+	w.capture()
+	w.fake.CommitFiles(w.branch, "second", map[string]string{"app.ts": "second\n"})
+	w.capture()
+	got := w.snapshots()
+	// Point away from this head so the read reaches INSERT, not errSame.
+	w.exec(`UPDATE task_branch_capture_requests SET snapshot_id = $2 WHERE organization_id = $1`, got[0].ID)
+	w.capture()
+	var id, status string
+	var events int
+	if err := w.owner.QueryRow(context.Background(), `SELECT snapshot_id, status FROM task_branch_capture_requests WHERE task_id = 'wi_b'`).Scan(&id, &status); err != nil || id != got[1].ID || status != "done" {
+		t.Fatalf("conflict request: %s %s (%v)", id, status, err)
+	}
+	if err := w.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE task_id = 'wi_b' AND event_type = $1`, branchdiff.EvSnapshotCaptured).Scan(&events); err != nil || events != 2 || len(w.snapshots()) != 2 {
+		t.Fatalf("conflict emitted an event or snapshot: %d (%v)", events, err)
+	}
 }
 
 func short(s string) string { return s[:min(len(s), 7)] }

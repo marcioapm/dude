@@ -145,6 +145,29 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     expect((await get(ana.key, "/v1/tasks/BILL-1/branch-diff")).body.snapshot.id).toBe("tbs_c");
   });
 
+  test("metadata-only reads omit files and placements on latest and named snapshots", async () => {
+    for (const query of ["files=0", "files=0&snapshot=tbs_a"]) {
+      const full = (await get(ana.key, `/v1/tasks/wi_bd/branch-diff?${query.replace("files=0", "files=1")}`)).body;
+      const metadata = (await get(ana.key, `/v1/tasks/wi_bd/branch-diff?${query}`)).body;
+      delete full.snapshot.files;
+      delete full.placements;
+      expect(metadata).toEqual(full);
+      expect(metadata.snapshot).not.toHaveProperty("files");
+      expect(metadata).not.toHaveProperty("placements");
+    }
+  });
+
+  test("a partial snapshot keeps the file-cap status and reason", async () => {
+    await owner`UPDATE task_branch_snapshots SET status = 'partial', reason = 'GitHub lists at most 300 files', truncated = true WHERE id = 'tbs_c'`;
+    try {
+      expect((await get(ana.key, "/v1/tasks/wi_bd/branch-diff")).body.snapshot).toMatchObject({
+        status: "partial", reason: "GitHub lists at most 300 files", truncated: true,
+      });
+    } finally {
+      await owner`UPDATE task_branch_snapshots SET status = 'complete', reason = NULL, truncated = false WHERE id = 'tbs_c'`;
+    }
+  });
+
   test("a named older snapshot says what is newer and how it relates over the span", async () => {
     const a = (await get(ana.key, "/v1/tasks/wi_bd/branch-diff?snapshot=tbs_a")).body;
     expect(a.snapshot.id).toBe("tbs_a");
@@ -164,6 +187,22 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     expect(newerThan("s1", "s2", links)?.relation).toBe("fast-forward");
     expect(newerThan("s1", "s3", links)?.relation).toBe("rewritten");
     expect(newerThan("s3", "s3", links)).toBeNull();
+    expect(newerThan("s3", "s2", links)).toMatchObject({ relation: "rewritten", count: 2 });
+    // A partial lineage need not contain an initial/rewrite relation that
+    // would independently classify the span as rewritten.
+    expect(newerThan("s3", "s2", links.slice(1))).toMatchObject({ relation: "rewritten", count: 1 });
+  });
+
+  test("a branch reset follows the request's snapshot, not the last capture time", async () => {
+    await owner`UPDATE task_branch_capture_requests SET snapshot_id = 'tbs_b' WHERE task_id = 'wi_bd' AND repository_id = 'repo_api'`;
+    try {
+      expect((await get(ana.key, "/v1/tasks/wi_bd/branch-diff")).body.snapshot.id).toBe("tbs_b");
+      expect((await get(ana.key, "/v1/tasks/wi_bd/branch-diff?snapshot=tbs_c")).body.newer).toMatchObject({
+        id: "tbs_b", relation: "rewritten", count: 2,
+      });
+    } finally {
+      await owner`UPDATE task_branch_capture_requests SET snapshot_id = 'tbs_c' WHERE task_id = 'wi_bd' AND repository_id = 'repo_api'`;
+    }
   });
 
   test("an earlier attempt is read-only with its recorded snapshots, and asks for nothing", async () => {

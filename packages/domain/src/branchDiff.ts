@@ -94,7 +94,7 @@ export interface TaskBranchNewer {
   mergeBaseSha: string;
   headSha: string;
   capturedAt: string;
-  /** Snapshots captured after the returned one. */
+  /** Steps walked from the current branch snapshot back toward the shown one; positive even after a reset. */
   count: number;
 }
 

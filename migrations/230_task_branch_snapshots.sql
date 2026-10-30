@@ -49,11 +49,13 @@ CREATE TABLE task_branch_snapshots (
   previous_snapshot_id  text REFERENCES task_branch_snapshots(id) ON DELETE SET NULL,
   relation              text NOT NULL CHECK (relation IN ('initial', 'fast-forward', 'merged-target', 'rewritten')),
   captured_at           timestamptz NOT NULL DEFAULT clock_timestamp(),
-  UNIQUE (task_id, attempt, repository_id, head_sha, merge_base_sha),
+  CONSTRAINT task_branch_snapshots_task_id_attempt_repository_id_head_sh_key
+    UNIQUE (task_id, attempt, repository_id, head_sha, merge_base_sha, target_ref),
   -- A first has none before it (a later one's may be gone: SET NULL).
   CHECK (relation <> 'initial' OR previous_snapshot_id IS NULL),
   CHECK ((status = 'partial') = (reason IS NOT NULL))
 );
+ALTER TABLE task_branch_snapshots ALTER COLUMN files SET COMPRESSION lz4;
 -- The latest of an attempt's repository, and the list in order.
 CREATE INDEX task_branch_snapshots_latest_idx ON task_branch_snapshots (task_id, attempt, repository_id, captured_at DESC, id DESC);
 CREATE INDEX task_branch_snapshots_previous_idx ON task_branch_snapshots (previous_snapshot_id) WHERE previous_snapshot_id IS NOT NULL;
@@ -101,19 +103,39 @@ CREATE POLICY tenant_isolation ON task_branch_capture_requests
   USING (organization_id = current_organization_id())
   WITH CHECK (organization_id = current_organization_id());
 GRANT SELECT, INSERT, UPDATE ON task_branch_capture_requests TO dude_app;
--- The worker finds due rows across organizations, then works in each.
+-- The worker claims due rows across organizations (pushing next_attempt_at
+-- ahead, committed before it reads anything), then works in each.
 GRANT SELECT ON task_branch_capture_requests TO dude_sweeper;
+GRANT UPDATE (next_attempt_at) ON task_branch_capture_requests TO dude_sweeper;
 
 -- Asks for a capture of (task, attempt, repository): pending again, due
 -- now, whatever it was. The worker reads the branch; a head it already
 -- has a snapshot of makes none.
+--
+-- Called from triggers inside other writes (a publish, a PR sync): an ask
+-- it cannot make — no attempt yet, a task or repository not of p_org — is
+-- skipped, never raised, so it can never fail the write that moved the
+-- branch.
 CREATE FUNCTION want_branch_capture(p_org text, p_task text, p_attempt integer, p_repo text, p_head text)
-  RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF NULLIF(current_setting('app.organization_id', true), '') IS NOT NULL
+     AND p_org IS DISTINCT FROM current_setting('app.organization_id', true) THEN
+    RETURN;
+  END IF;
+  IF p_attempt IS NULL OR p_attempt < 1
+     OR NOT EXISTS (SELECT 1 FROM tasks WHERE id = p_task AND organization_id = p_org)
+     OR NOT EXISTS (SELECT 1 FROM repositories WHERE id = p_repo AND organization_id = p_org) THEN
+    RETURN;
+  END IF;
   INSERT INTO task_branch_capture_requests (organization_id, task_id, attempt, repository_id, head_sha)
   VALUES (p_org, p_task, p_attempt, p_repo, NULLIF(p_head, ''))
   ON CONFLICT (task_id, attempt, repository_id) DO UPDATE
-    SET status = 'pending', head_sha = EXCLUDED.head_sha, reason = NULL, failures = 0,
-        next_attempt_at = now(), requested_at = now(), settled_at = NULL
+    SET status = 'pending', head_sha = EXCLUDED.head_sha, reason = NULL,
+        next_attempt_at = CASE WHEN task_branch_capture_requests.failures > 0
+          THEN GREATEST(now(), task_branch_capture_requests.next_attempt_at) ELSE now() END,
+        requested_at = clock_timestamp(), settled_at = NULL;
+END
 $$;
 REVOKE ALL ON FUNCTION want_branch_capture(text, text, integer, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION want_branch_capture(text, text, integer, text, text) TO dude_app;
@@ -122,12 +144,22 @@ GRANT EXECUTE ON FUNCTION want_branch_capture(text, text, integer, text, text) T
 -- its repositories' branch may have moved — a phase's publish, a merge of
 -- the target an agent made after sync_base, a promotion's head.
 CREATE FUNCTION runs_want_branch_capture() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  h record;
 BEGIN
-  PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, NEW.attempt, r.id, h.value->>'sha')
-  FROM jsonb_each(NEW.heads) h
-  JOIN repositories r ON r.name = h.key
-  JOIN task_repositories tr ON tr.repository_id = r.id AND tr.task_id = NEW.task_id
-  WHERE jsonb_typeof(h.value) = 'object';
+  -- One at a time in byte order of the repository's name, the order a
+  -- publish's pull request updates take (Go's sort, phases/publish.go):
+  -- two writers asking for the same rows never wait on each other in a
+  -- cycle.
+  FOR h IN SELECT r.id, x.value->>'sha' AS sha
+    FROM jsonb_each(NEW.heads) x
+    JOIN repositories r ON r.name = x.key
+    JOIN task_repositories tr ON tr.repository_id = r.id AND tr.task_id = NEW.task_id
+    WHERE jsonb_typeof(x.value) = 'object'
+    ORDER BY r.name COLLATE "C"
+  LOOP
+    PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, NEW.attempt, h.id, h.sha);
+  END LOOP;
   RETURN NULL;
 END
 $$;
@@ -137,15 +169,23 @@ CREATE TRIGGER runs_branch_capture
     AND NEW.heads IS DISTINCT FROM OLD.heads AND NEW.heads <> '{}'::jsonb)
   EXECUTE FUNCTION runs_want_branch_capture();
 
--- A conductor's publish moved the task branch (delivery.PublishedTx).
+-- A conductor's publish moved the task branch (delivery.PublishedTx). A
+-- delivery from before attempts were kept records attempt 0: the task's.
 CREATE FUNCTION publishes_want_branch_capture() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  h record;
 BEGIN
-  PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, COALESCE(NEW.attempt, task_attempt(NEW.task_id)), r.id,
-    h.value->>'sha')
-  FROM jsonb_each(COALESCE(NEW.heads, '{}'::jsonb)) h
-  JOIN repositories r ON r.name = h.key
-  JOIN task_repositories tr ON tr.repository_id = r.id AND tr.task_id = NEW.task_id
-  WHERE jsonb_typeof(h.value) = 'object';
+  -- In byte order of the name, as runs_want_branch_capture.
+  FOR h IN SELECT r.id, x.value->>'sha' AS sha
+    FROM jsonb_each(COALESCE(NEW.heads, '{}'::jsonb)) x
+    JOIN repositories r ON r.name = x.key
+    JOIN task_repositories tr ON tr.repository_id = r.id AND tr.task_id = NEW.task_id
+    WHERE jsonb_typeof(x.value) = 'object'
+    ORDER BY r.name COLLATE "C"
+  LOOP
+    PERFORM want_branch_capture(NEW.organization_id, NEW.task_id, COALESCE(NULLIF(NEW.attempt, 0), task_attempt(NEW.task_id)),
+      h.id, h.sha);
+  END LOOP;
   RETURN NULL;
 END
 $$;
