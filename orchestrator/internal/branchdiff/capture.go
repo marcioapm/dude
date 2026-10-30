@@ -313,9 +313,10 @@ func (c *Capturer) failed(ctx context.Context, r Request, t target, what string,
 // existingSnapshot reads the snapshot a head read again already has (the
 // insert's ON CONFLICT DO NOTHING took no lock on it), FOR KEY SHARE
 // (migration 231's existing_branch_snapshot) until the request names it:
-// the pruner (FOR UPDATE SKIP LOCKED) skips it rather than deleting it
-// under the capture, which would fail mark's foreign key and count a
-// spurious failure.
+// the pruner's candidate lock (FOR UPDATE SKIP LOCKED) skips it rather
+// than deleting it under the capture, which would fail mark's foreign key
+// and count a spurious failure. KEY SHARE deliberately does not hold off a
+// rewire of the snapshot named (its id stays).
 const existingSnapshot = `SELECT id FROM existing_branch_snapshot($1, $2, $3, $4, $5, $6)`
 
 // settle records what read found, in one transaction, only if the request

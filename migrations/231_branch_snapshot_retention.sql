@@ -132,12 +132,14 @@ GRANT EXECUTE ON FUNCTION prune_branch_snapshots(integer) TO dude_sweeper;
 
 -- The snapshot a capture's head already has (the branch went back to it:
 -- the insert's ON CONFLICT DO NOTHING took no lock), held FOR KEY SHARE
--- until the capture request names it, so the pruner (FOR UPDATE SKIP
--- LOCKED) skips it rather than deleting it under the capture, whose
--- request update would then fail its foreign key and count a spurious
--- failure. A definer, as dude_app may not lock a row of a table it may not
--- update (snapshots are never changed, 230); only the caller's
--- organization's rows.
+-- until the capture request names it, so the pruner's candidate lock (FOR
+-- UPDATE SKIP LOCKED) skips it rather than deleting it under the capture,
+-- whose request update would then fail its foreign key and count a
+-- spurious failure. KEY SHARE deliberately does not hold off a rewire (the
+-- children lock, FOR NO KEY UPDATE) of the snapshot named: a rewire keeps
+-- its id, and only a delete would fail the foreign key. A definer, as
+-- dude_app may not lock a row of a table it may not update (snapshots are
+-- never changed, 230); only the caller's organization's rows.
 CREATE FUNCTION existing_branch_snapshot(p_task text, p_attempt integer, p_repository text, p_head text,
     p_merge_base text, p_target_ref text) RETURNS TABLE (id text)
 LANGUAGE sql SECURITY DEFINER
