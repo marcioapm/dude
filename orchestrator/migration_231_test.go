@@ -118,10 +118,17 @@ func TestPruneKeepsEachLineagesLatest(t *testing.T) {
 	f := newPruneFixture(t)
 	f.chain("a", 1, "repo_api", 3, 48)
 	f.chain("w", 1, "repo_web", 1, 100)
+	// Another task's only snapshot, same attempt and repository, older
+	// than a3: wi_p's newer rows are not its successors.
+	mustExec(t, f.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_q', $1, 'prj_p', 2, 'Q', 'G')`, f.org)
+	mustExec(t, f.owner, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref,
+		target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, relation, captured_at)
+		VALUES ('q1', $1, 'wi_q', 1, 'repo_api', 'api', 'dude/wi_q', 'main', $2, $2, $3, '[]', 'c', '{}', 'initial', now() - interval '72 hours')`,
+		f.org, shaOf(1), shaOf(7001))
 	if n := f.prune(100); n != 2 {
 		t.Errorf("pruned %d, want 2", n)
 	}
-	f.want("a3", "w1")
+	f.want("a3", "q1", "w1")
 }
 
 // One a feedback item names stays, so its anchor resolves.
