@@ -1972,7 +1972,8 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
   (or `"for this session"`): the arrow and words follow the spec and are in
   its accessible name. The tooltip names the requesting Run, role, time and
   reason, the settings' size, and where Reset is available. No approval or price.
-- **MachineRaises** is the Overview aside's Machines panel, on the chrome
+- **MachineRaises** is the Machines panel in the Overview's "Servers,
+  previews & machines" disclosure, on the chrome
   shade in ServersSummary's grammar. Controlled `raises` carry role, label,
   size, settings, detail and optional `onReset`/`busy`. A following role
   (`follows="implementer"`) has no independent Reset. Empty draws nothing;
@@ -2612,7 +2613,8 @@ MarkdownCheatsheet.
   the row's end. Under 560px each repository's refs and Done without take
   their own lines.
 - **BeforePullRequestFact**: a task's delivery choice that can still
-  change, under the task's facts in the Overview rail. The owner gets a
+  change, under the task's facts in the Overview's "Servers, previews &
+  machines" disclosure. The owner gets a
   compact `Select` with when it is read ("Read when Deliver reaches the
   pull request."). Once a pull request is open it is disabled, with the
   reason under it: "The pull request is already open." Anyone else reads
@@ -2930,10 +2932,11 @@ disabled, interactive focus and action states in both themes and densities.
 ### Task tab data mapping
 
 Overview does not reserve the permanent 360px PageWithRail column. Its
-operational group aligns Running now and Changes beside PullRequestPanel,
-stacking below 1050px viewport without hiding controls (the app decides
-by a container query on the Overview's own pane, `taskoverview`, at 1000px:
-the pane, not the window, so a wide sidebar never squeezes two columns).
+operational group aligns Running now and Changes beside PullRequestPanel:
+two columns when the Overview's own pane is ≥1000px; stacked below,
+without hiding controls (a container query on that pane, `taskoverview`:
+the pane, not the window, decides, so with the sidebar open a 1280px
+window, whose pane is 980px, stacks).
 The sidebar keeps its existing width and responsive behavior. Summary
 precedes details in DOM and focus order. Task spend is prominent and
 labeled all attempts; selected-attempt cost and all detailed metrics
