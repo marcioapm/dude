@@ -33,26 +33,52 @@ func (w *world) hangingWriters() {
 	}
 }
 
-// deadWriter is a conducted task whose implementer committed content to
-// path in its checkout and was then stopped by lux at its time limit:
-// failed, not kept, its lux Run terminated. Returns the task, its
-// implementer and the commit, which nothing published.
-func (w *world) deadWriter(path, content string) (task, run, commit string) {
+// hangingWriter is a conducted task whose implementer is at work, hanging,
+// its checkout started. Returns the task, the implementer and its lux Run.
+func (w *world) hangingWriter() (task, run, luxID string) {
 	w.t.Helper()
 	w.hangingWriters()
 	task = w.task()
 	w.talk(task)
 	w.must(task, "start_phase", `{"phase":"implement"}`)
-	var luxID string
 	w.until("the implementer at work, its checkout started", func() bool {
 		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(lux_run_id, '') FROM runs WHERE task_id = $1
 			AND phase = 'implement' AND status = 'running' AND lux_state = 'running' AND base_shas ? 'target'`, task).Scan(&run, &luxID)
 		return luxID != ""
 	})
+	return task, run, luxID
+}
+
+// timedOut has lux stop the implementer at its time limit: failed, not
+// kept, its lux Run terminated.
+func (w *world) timedOut(run, luxID string) {
+	w.t.Helper()
+	w.lux.Timeout(luxID)
+	w.until("the implementer failed at its limit and its lux Run terminated", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND NOT keep AND lux_stop_reason = 'cancel'`, run) == 1
+	})
+}
+
+// deadWriter is a conducted task whose implementer committed content to
+// path in its checkout and was then stopped by lux at its time limit.
+// Returns the task, its implementer and the commit, which nothing
+// published.
+func (w *world) deadWriter(path, content string) (task, run, commit string) {
+	w.t.Helper()
+	task, run, luxID := w.hangingWriter()
 	work, err := w.lux.Checkout(luxID, "target")
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	commit = w.commit(work, path, content)
+	w.timedOut(run, luxID)
+	return task, run, commit
+}
+
+// commit commits content to path in the checkout, as the agent would, and
+// returns the commit.
+func (w *world) commit(work, path, content string) string {
+	w.t.Helper()
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(work, path)), 0o755); err != nil {
 		w.t.Fatal(err)
 	}
@@ -65,12 +91,7 @@ func (w *world) deadWriter(path, content string) (task, run, commit string) {
 		}
 	}
 	out, _ := exec.Command("git", "-C", work, "rev-parse", "HEAD").Output()
-	commit = strings.TrimSpace(string(out))
-	w.lux.Timeout(luxID)
-	w.until("the implementer failed at its limit and its lux Run terminated", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND NOT keep AND lux_stop_reason = 'cancel'`, run) == 1
-	})
-	return task, run, commit
+	return strings.TrimSpace(string(out))
 }
 
 // branchAt is where branch is in the fake GitHub's repository, "" when it
@@ -189,20 +210,8 @@ func TestRecoverRunPushesATimedOutWritersCommitsToItsOwnBranch(t *testing.T) {
 // conductor is told.
 func TestRecoverRunReportsNothingWhenTheRunCommittedNothing(t *testing.T) {
 	w := conducting(t)
-	w.hangingWriters()
-	task := w.task()
-	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	var run, luxID string
-	w.until("the implementer at work", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(lux_run_id, '') FROM runs WHERE task_id = $1
-			AND phase = 'implement' AND lux_state = 'running' AND base_shas ? 'target'`, task).Scan(&run, &luxID)
-		return luxID != ""
-	})
-	w.lux.Timeout(luxID)
-	w.until("the implementer failed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND lux_stop_reason = 'cancel'`, run) == 1
-	})
+	task, run, luxID := w.hangingWriter()
+	w.timedOut(run, luxID)
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	w.until("the recovery failed", func() bool { return w.recoveryStatus(id) == "failed" })
 	if why := w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id); !strings.Contains(why, "nothing committed") {
@@ -366,7 +375,7 @@ func TestARecoveryOfAStoppedTaskWakesOnlyAfterThePickUp(t *testing.T) {
 // is kept; nobody is woken, as nobody is left to tell.
 func TestARecoveryOfATaskThatEndsStillPushesAndWakesNobody(t *testing.T) {
 	w := conducting(t)
-	task, run, commit := w.deadWriter("WIP.md", "half of it\n")
+	task, run, _ := w.deadWriter("WIP.md", "half of it\n")
 	ana := w.ownedBy(task, "Ana")
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
@@ -387,23 +396,6 @@ func TestARecoveryOfATaskThatEndsStillPushesAndWakesNobody(t *testing.T) {
 	if n := w.recoveredWakes(task); n != 0 {
 		t.Errorf("%d recovered wakes for a closed task", n)
 	}
-	_ = commit
-}
-
-// commit commits content to path in the checkout, as the agent would, and
-// returns the commit.
-func (w *world) commit(work, path, content string) string {
-	w.t.Helper()
-	if err := os.WriteFile(filepath.Join(work, path), []byte(content), 0o644); err != nil {
-		w.t.Fatal(err)
-	}
-	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=agent", "-c", "user.email=a@x", "commit", "-q", "-m", "more work"}} {
-		if out, err := exec.Command("git", append([]string{"-C", work}, args...)...).CombinedOutput(); err != nil {
-			w.t.Fatalf("git %v: %v %s", args, err, out)
-		}
-	}
-	out, _ := exec.Command("git", "-C", work, "rev-parse", "HEAD").Output()
-	return strings.TrimSpace(string(out))
 }
 
 // A writer lux stopped once (a move: its checkpoint taken then) went on
@@ -412,16 +404,7 @@ func (w *world) commit(work, path, content string) string {
 // Run, and pushes its latest commit, never the earlier checkpoint's.
 func TestRecoverRunWaitsForLuxToEndTheRunBeforeReadingItsCheckpoints(t *testing.T) {
 	w := conducting(t)
-	w.hangingWriters()
-	task := w.task()
-	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	var run, luxID string
-	w.until("the implementer at work, its checkout started", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(lux_run_id, '') FROM runs WHERE task_id = $1
-			AND phase = 'implement' AND status = 'running' AND lux_state = 'running' AND base_shas ? 'target'`, task).Scan(&run, &luxID)
-		return luxID != ""
-	})
+	task, run, luxID := w.hangingWriter()
 	work, err := w.lux.Checkout(luxID, "target")
 	if err != nil {
 		t.Fatal(err)
@@ -596,20 +579,8 @@ func TestARecoveryStopsWaitingOnARunsControlAfterItsGiveUp(t *testing.T) {
 // ends with no publisher: none is submitted to be cancelled, none recorded.
 func TestARecoveryThatFailedBeforeItsSubmitEndsWithNoPublisher(t *testing.T) {
 	w := conducting(t)
-	w.hangingWriters()
-	task := w.task()
-	w.talk(task)
-	w.must(task, "start_phase", `{"phase":"implement"}`)
-	var run, luxID string
-	w.until("the implementer at work", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(lux_run_id, '') FROM runs WHERE task_id = $1
-			AND phase = 'implement' AND lux_state = 'running' AND base_shas ? 'target'`, task).Scan(&run, &luxID)
-		return luxID != ""
-	})
-	w.lux.Timeout(luxID)
-	w.until("the implementer failed", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'failed' AND lux_stop_reason = 'cancel'`, run) == 1
-	})
+	task, run, luxID := w.hangingWriter()
+	w.timedOut(run, luxID)
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	// What a pass that failed on a transient error leaves: a failure counted.
