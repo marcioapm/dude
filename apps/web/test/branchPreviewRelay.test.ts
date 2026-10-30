@@ -159,6 +159,7 @@ test("heartbeats coalesce a slow server check and never look the preview up agai
   for (let i = 0; i < 20; i++) send({ type: "navigated", v: 1, url: `${ORIGIN}/next` });
   await tick();
   expect(client.checks).toHaveBeenCalledTimes(1);
+  expect(client.reads).toHaveBeenCalledTimes(1);
 });
 
 test("server checks are bounded even when transport fails, and a transport failure says nothing to the page", async () => {

@@ -113,6 +113,7 @@ test("a second person's project stream hears the first person's submit, resolve 
   expect((await post(ana.key, "/v1/branch-previews/run_pfe/servers/web/feedback", { body: "Too close", submissionKey: "k1",
     anchor: { kind: "preview", url: "https://web-pfe.preview.test/cart", selector: "#pay" } })).status).toBe(201);
   expect((await post(bo.key, `/v1/preview-feedback/${item.id}/resolve`, { note: "done" })).status).toBe(200);
+  expect((await post(bo.key, `/v1/preview-feedback/${item.id}/resolve`, { note: "done again" })).status).toBe(200);
   expect((await post(ana.key, `/v1/preview-feedback/${item.id}/reopen`, {})).status).toBe(200);
 
   const seen = await boStream.done;

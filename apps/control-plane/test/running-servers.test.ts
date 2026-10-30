@@ -94,6 +94,8 @@ beforeAll(async () => {
   await item("fbi_rs_t5", ana, "open", "https://elsewhere.preview.test/chat", "fbb_rs_a");
   await item("fbi_rs_t6", ana, "draft", `${TASK_URL}/chat`, null);
   await item("fbi_rs_t7", bo, "draft", `${TASK_URL}/cart`, null);
+  const dee = await createApiKey({ organizationId: "org_rs", name: "Dee" });
+  await item("fbi_rs_t8", dee, "draft", `${TASK_URL}/chat`, null);
 
   orchestratorServer = Bun.serve({ port: 0, fetch(req) {
     const url = new URL(req.url);

@@ -326,7 +326,7 @@ export class ServerWindows {
     target.commenting = commenting;
     commenting.listen();
     this.#targets.set(key, target);
-    void this.#load(target, server);
+    if (!branch) void this.#load(target, server);
     return target;
   }
 

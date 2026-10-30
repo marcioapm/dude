@@ -180,6 +180,18 @@ class Counting extends FixtureClient {
   override async serverFeedback(...a: Parameters<FixtureClient["serverFeedback"]>) { this.task++; return super.serverFeedback(...a); }
 }
 
+test("a task fold reacts only to its own task's feedback events", async () => {
+  const client = new Counting("a");
+  const { container } = await page(client);
+  const fold = await unfold(container, "run_web142/web");
+  const before = client.task;
+  await act(async () => event(EventTypes.FeedbackSubmitted, { taskId: "task_other" }));
+  // A matching event is the positive control: its read must be the only one.
+  await act(async () => event(EventTypes.FeedbackSubmitted, { taskId: TASK_ID }));
+  await until(() => tid(fold, "live-note"), "the matching task event");
+  expect(client.task - before).toBe(1);
+});
+
 test("a burst of ten events reads each open fold once or twice, not ten times; a stream that comes back reads it once", async () => {
   const client = new Counting("a");
   const { container } = await page(client);

@@ -167,6 +167,8 @@ test("a read failing after servers are connected to this tab keeps listing them,
 test("arrange puts this tab's servers first, the landed one first of all, and search looks at every word it names", () => {
   const runs = runningRuns();
   const out = arrange(runs, new Set(["run_pv_returns/web", "run_web151/storybook"]), "", "all", "run_pv_returns/web");
+  expect(arrange(runs, new Set(["run_pv_checkout/web", "run_web151/storybook"]), "", "all", "run_web151/storybook")
+    .connected.map((g) => g.run.id)).toEqual(["run_web151", "run_pv_checkout"]);
   expect(out.connected.map((g) => g.run.id)).toEqual(["run_pv_returns", "run_web151"]);
   expect(out.connected[1]!.servers.map((s) => s.name)).toEqual(["storybook", "web"]);
   expect(out.others.map((g) => g.run.id)).toEqual(["run_pv_checkout", "run_web142"]);

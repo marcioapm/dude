@@ -294,6 +294,50 @@ test("a burst of events re-reads each target once, and one's own submit is read 
   expect(client.reads.length - readsBefore).toBe(1);
 });
 
+test("left from a different origin or with an extra key cannot move this tab's window", async () => {
+  const me = tab(); const { w } = windows(me);
+  w.open(branchRun, branchRun.servers[0]!);
+  const web = named.get(branchWindowName({ runId: "run_pv", server: "web" }))!;
+  say(me, { type: "hello", v: 1, url: `${WEB}/cart` }, WEB, web); await tick();
+  say(me, { type: "left", v: 1 }, "https://evil.example.test", web);
+  say(me, { type: "left", v: 1, extra: 1 }, WEB, web);
+  expect([...w.connected()]).toEqual(["run_pv/web"]);
+  expect([...w.moved()]).toEqual([]);
+  say(me, { type: "left", v: 1 }, WEB, web);
+  expect([...w.connected()]).toEqual([]);
+  expect([...w.moved()]).toEqual(["run_pv/web"]);
+});
+
+test("two commenting targets of one tab answer one window once and create only one draft", async () => {
+  const me = tab();
+  const createDraft = mock(async () => ({ id: "fbi_one", drafts: 1 }));
+  for (let i = 0; i < 2; i++) {
+    const c = new PreviewCommenting({ win: me as unknown as Window, taskId: "same",
+      read: () => ({ origins: new Set([TASK]), items: [], drafts: 0, taskKey: "T", you: null, name: () => "Ana" }),
+      upload: async () => "", createDraft, onSaved: () => {}, onOpenItem: () => {}, onChange: () => {} });
+    c.listen(); disposers.push(() => c.dispose());
+  }
+  const p = Object.assign(popup(), { opener: me });
+  say(me, { type: "hello", v: 1, url: `${TASK}/` }, TASK, p);
+  expect(sessions(p).length).toBe(1);
+  say(me, { type: "draft", v: 1, nonce: "one", body: "One draft", anchor: { kind: "preview", url: `${TASK}/`, selector: "main" } }, TASK, p);
+  await tick();
+  expect(createDraft).toHaveBeenCalledTimes(1);
+  expect(told(p).filter((m) => m.type === "saved").length).toBe(1);
+});
+
+test("branch pins follow only the current page, including a navigated message", async () => {
+  const me = tab(); const client = new Client();
+  client.previewFeedback = async () => ({ feedback: [saved, { ...saved, id: "fbi_other", anchor: { ...saved.anchor, url: `${WEB}/other` } }], nextCursor: null });
+  const { w } = windows(me, client);
+  w.open(branchRun, branchRun.servers[0]!);
+  const web = named.get(branchWindowName({ runId: "run_pv", server: "web" }))!;
+  say(me, { type: "hello", v: 1, url: `${WEB}/cart` }, WEB, web); await tick();
+  expect(sessions(web).at(-1)!.pins.map((p) => p.id)).toEqual([saved.id]);
+  say(me, { type: "navigated", v: 1, url: `${WEB}/other` }, WEB, web); await tick();
+  expect(sessions(web).at(-1)!.pins.map((p) => p.id)).toEqual(["fbi_other"]);
+});
+
 test("saved branch pictures leave the retry cache; ambiguous submits reuse their upload and the cache stays small", async () => {
   const me = tab();
   let succeeds = false;
