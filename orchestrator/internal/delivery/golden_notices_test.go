@@ -77,6 +77,24 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"review-question-answered", reviewQuestionAnsweredLine("rvq_1", "In UTC.\nAlways.", false)},
 		{"review-question-withdrawn", reviewQuestionAnsweredLine("rvq_1", "the code is gone", true)},
 		{"base-moved", baseMovedLine("main", "GLD-8", 14)},
+		{"wait-held", renderWaitDigest(waitEval{held: 2, of: 2, waitedAll: true, items: []waitItem{
+			{Kind: "run", Who: "review", RunID: "run_rev", Status: "failed", Ended: true, Error: "lux: the host\nwent away " + strings.Repeat("x", 130), rank: rankBad},
+			{Kind: "pr", PR: "api#12", Head: headA, State: "open", Checks: "failing", Failing: []string{"lint", "unit"}, rank: rankBad},
+			{Kind: "run", Who: "implement", RunID: "run_impl2", Was: "run_impl", Status: "completed", Ended: true, rank: rankGood},
+			{Kind: "pr", PR: "web#3", Head: headA, State: "open", Checks: "passing", rank: rankGood}}},
+			"cwt_1", false, false, nil, "")},
+		{"wait-deadline", renderWaitDigest(waitEval{held: 1, of: 2, waitedAll: true, items: []waitItem{
+			{Kind: "pr", PR: "api#12", Head: headA, State: "open", MovedTo: headB, rank: rankBad},
+			{Kind: "run", Who: "investigator", RunID: "run_inv", Status: "running", rank: rankWaiting},
+			{Kind: "pr", PR: "web#3", Head: headA, State: "open", Checks: "unknown", Polled: "2026-10-30T12:00:00Z", rank: rankWaiting}}},
+			"cwt_2", true, false, nil, "then decide")},
+		{"wait-any-meanwhile", renderWaitDigest(waitEval{held: 1, of: 2, items: []waitItem{
+			{Kind: "pr", PR: "api#12", Head: headA, State: "merged", rank: rankGood},
+			{Kind: "pr", PR: "web#3", Head: headA, State: "closed", rank: rankBad}}},
+			"cwt_3", false, false, []waitCount{{"commented", 2}, {"reviewed", 1}, {"feedback", 1}, {"messages", 3}}, "")},
+		{"wait-timer", renderWaitDigest(waitEval{waitedAll: true}, "cwt_4", true, false, []waitCount{{"messages", 1}}, "check the deploy")},
+		{"wait-holds-now", renderWaitDigest(waitEval{held: 1, of: 1, waitedAll: true, items: []waitItem{
+			{Kind: "run", Who: "verifier", RunID: "run_ver", Status: "completed", Ended: true, rank: rankGood}}}, "", false, true, nil, "")},
 		{"stalled", goldenStall().Text(ConductorOptions(false))},
 		{"stalled-quiet", goldenQuietStall().Text(ConductorOptions(false))},
 		{"stalled-child", goldenStall().Text(ConductorOptions(true))},

@@ -132,6 +132,26 @@ The person withdrew reviewer question rvq_1. Decide whether a review should weig
 
 `main` moved: GLD-8 merged (#14). Call sync_base if your work depends on it; while a pull request is open on the task branch, publish is refused, so use start_phase fix to bring it in instead.
 
+## wait-held
+
+Your wait cwt_1 held (2 of 2): review run_rev failed: lux: the host went away xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…; api#12 checks failing at aaaaaaa (lint, unit); implement run_impl2 (restarted from run_impl) completed; web#3 checks passing at aaaaaaa.
+
+## wait-deadline
+
+Your wait cwt_2 ended at its deadline (1 of 2 held): api#12's head moved to bbbbbbb: its checks will never finish on aaaaaaa; investigator run_inv not ended (running); web#3 checks not final at aaaaaaa (unknown, last read 2026-10-30T12:00:00Z). Your note: "then decide"
+
+## wait-any-meanwhile
+
+Your wait cwt_3 held (1 of 2, any one was enough): api#12 was merged; web#3 was closed. Meanwhile: 2 pull request comments, 1 pull request review, 1 feedback submission, 3 messages from people in Chat.
+
+## wait-timer
+
+Your wait cwt_4 reached its deadline: it was a timer. Meanwhile: 1 message from people in Chat. Your note: "check the deploy"
+
+## wait-holds-now
+
+It holds already (1 of 1): verifier run_ver completed.
+
 ## stalled
 
 Your security implement Run run_impl (round 2, fast, running 90 min) has made no progress for 15 min. Its agent has done nothing for 14 min: no output, no tool call. It has 3 tool calls open: `bash` "go test ./...", for 15 min, `task` "explore", for 10 min, `bash` "sleep 999", for 30 s; `bash`'s command is running; `task` runs inside the agent: no separate process is expected; no process runs `bash`'s command. Its `task` call "explore" has a child (subagent · ses_child_01) whose last event was 5 min ago: asked to run make — waiting on a permission nothing can answer: bash for make *, rm *. Processes: go test ./... (99.5 % CPU, up 15:00); sh (0.0 % CPU, up 1:00). CPU over 15 min: 12 s; network: 3.0 MiB. Its files last changed at 10:15 UTC. Its tool calls in the window: 3 bash, 1 read, 0 edit. Its plan: write the export; test it. Its last message: "Running the tests.". Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier).

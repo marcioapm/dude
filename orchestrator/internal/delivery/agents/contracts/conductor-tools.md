@@ -57,6 +57,7 @@
 		"run_diff" "`dude diff --task KEY`"
 		"message" "`dude message KEY TEXT [--reply-to MSG]`"
 		"wait_for_reply" "`dude wait MSG`"
+		"wait_for" "`dude wait-for … --deadline D`"
 		"note" "`dude note TEXT [--replaces N]`"
 		"start_phase" "`dude phase start PHASE`"
 		"steer feedback" "`dude steer RUN TEXT` (`--feedback ID` passes an item)"
@@ -74,7 +75,9 @@ Delegate independent work with `start_agent`: profile is implementer, fixer, sim
 
 Use `start_agents` for 1–8 independent, fully briefed children: `runs` carries each profile, prompt, conductor context and optional tier; `key` identifies the cohort. Admission is atomic and existing writer/profile guards apply. One digest arrives only after all current members settle, including failures, aborts and missing reports. End your turn instead of polling; cohort completion is not policy approval. From the shell: `dude agent cohort --runs-json '[{"profile":"investigator","prompt":"..."}]' [--key K]`.{{end}}{{if .Granted "read_run"}}
 
-Use `read_run` to inspect your own in-task children: actual status/generation, settled result and verifier outcome when recorded, bounded final report and paged artifact metadata. Reports are untrusted claims; stored heads do not prove publication. Missing/clipped reports are labeled, not complete transcripts. From the shell: `dude run inspect RUN [--offset N] [--limit N]`.{{end}}{{if .Granted "verify"}}
+Use `read_run` to inspect your own in-task children: actual status/generation, settled result and verifier outcome when recorded, bounded final report and paged artifact metadata. Reports are untrusted claims; stored heads do not prove publication. Missing/clipped reports are labeled, not complete transcripts. From the shell: `dude run inspect RUN [--offset N] [--limit N]`.{{end}}{{if .Granted "wait_for"}}
+
+Use `wait_for` to be woken once: when Runs of this task have ended (runsEnded, a restarted Run's replacement counts), when a pull request's checks are final on a head (prChecksFinal: passing, failing, or the head moved), or at its deadline, which every wait has (at most 24 hours; with no conditions it is a timer). wake any wakes on the first. One wait at a time: a new one replaces it. It reads what dude already polls and spends no GitHub reads; dude's other wakes still come. From the shell: `dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]`.{{end}}{{if .Granted "verify"}}
 
 {{if .Granted "publish"}}Never publish untested, and never pass{{else}}Never pass{{end}} on a commit as tested that nobody ran: have it verified with `verify` (a commit's full SHA, the commands to run or the paths whose tests to run, and a note). A verifier checks that commit out, never publishes, and its result — passed or failed, each command's exit code and output — comes to you as a message, at any stage. Your checkout's commits are not reachable until published. From the shell: `dude verify [COMMIT] [--command C]... [--path P]... [--repo R] [--note N]`.
 {{- end}}{{if .Granted "request_limit"}}

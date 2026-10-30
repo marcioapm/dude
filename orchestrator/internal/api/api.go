@@ -1054,6 +1054,11 @@ func (s *Server) abort(w http.ResponseWriter, r *http.Request, org string) error
 			if err := delivery.MarkChildParentEndedTx(r.Context(), tx, ri.TaskID, runID); err != nil {
 				return err
 			}
+			// Its wait ends with it: a wake would start the conductor the
+			// person just stopped.
+			if err := delivery.EndWaitsTx(r.Context(), tx, ri.TaskID, delivery.WaitConductorEnded); err != nil {
+				return err
+			}
 			return humanEvent(r.Context(), tx, org, runID, ri, "run.aborted", principalOf(r), map[string]any{"reason": db.Nullable(body.Reason)})
 		}
 		// The step it is part of stops with it — the reviewers beside it, the

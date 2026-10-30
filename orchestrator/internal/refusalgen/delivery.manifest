@@ -187,3 +187,14 @@ rVerifyNoSuchRepository                refusals/delivery/verify/no-such-reposito
 rVerifyCommitNotSHA                    refusals/delivery/verify/commit-not-sha
 rVerifyNoCommit                        refusals/delivery/verify/no-commit
 rAnswerOrWithdrawReviewQuestion         refusals/delivery/conduct/answer-or-withdraw-review-question
+rWaitDeadlineRequired                  refusals/delivery/waits/deadline-required
+rWaitDeadlineUnreadable                refusals/delivery/waits/deadline-unreadable
+rWaitDeadlineOutOfRange                refusals/delivery/waits/deadline-out-of-range
+rWaitWakeAllOrAny                      refusals/delivery/waits/wake-all-or-any
+rWaitNoteTooLong                       refusals/delivery/waits/note-too-long
+rWaitTooManyConditions                 refusals/delivery/waits/too-many-conditions
+rWaitOneKindPerCondition               refusals/delivery/waits/one-kind-per-condition
+rWaitRunsCount                         refusals/delivery/waits/runs-count
+rWaitNotRunOfThisTask                  refusals/delivery/waits/not-run-of-this-task
+rWaitHeadNotFullSHA                    refusals/delivery/waits/head-not-full-sha
+rWaitNotPullRequestOfThisTask          refusals/delivery/waits/not-pull-request-of-this-task

@@ -1422,3 +1422,47 @@ you are no longer this task's conductor: another took over from you. Stop nothin
 
 %s is not your child: steer only the child agents you started
 
+## refusals/delivery/waits/deadline-out-of-range
+
+deadline %q is out of range: from 1 minute to 24 hours ahead. A longer wait is waited again when you are woken
+
+## refusals/delivery/waits/deadline-required
+
+deadline is required: a duration (45m, 2h) or a time, from 1 minute to 24 hours ahead; with no conditions the wait is a timer
+
+## refusals/delivery/waits/deadline-unreadable
+
+%q is not a deadline: give a duration (45m, 2h) or an RFC 3339 time
+
+## refusals/delivery/waits/head-not-full-sha
+
+head %q is not a full commit SHA: give all 40 (or 64) characters, or leave it out for the pull request's head now
+
+## refusals/delivery/waits/not-pull-request-of-this-task
+
+%s is not a pull request of this task (pull_requests lists them)
+
+## refusals/delivery/waits/not-run-of-this-task
+
+%s is not a Run of this task: only this task's Runs are waited on
+
+## refusals/delivery/waits/note-too-long
+
+the note is at most %d characters
+
+## refusals/delivery/waits/one-kind-per-condition
+
+each condition is exactly one of runsEnded or prChecksFinal
+
+## refusals/delivery/waits/runs-count
+
+runsEnded names 1 to %d Runs
+
+## refusals/delivery/waits/too-many-conditions
+
+at most %d conditions to a wait
+
+## refusals/delivery/waits/wake-all-or-any
+
+wake %q is not all or any
+

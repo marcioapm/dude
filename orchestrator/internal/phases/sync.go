@@ -578,7 +578,7 @@ const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 // pending lets idle sweeps probe all pre-due selections in one round trip
 // instead of opening a transaction per step. A step whose probe found
 // nothing would have selected no rows. Probe failure runs every step.
-type pending struct{ brainstorms, silent, unheard, unheardBrainstorms, stalls, failed, wakes bool }
+type pending struct{ brainstorms, silent, unheard, unheardBrainstorms, stalls, waits, failed, wakes bool }
 
 // What each of those steps selects from (SQL), shared by its query and its
 // probe so the two cannot disagree.
@@ -588,6 +588,9 @@ var (
 	stalledRuns      = stallFrom + ` WHERE ` + noProgress + ` AND ` + stallDue
 	failedForWake    = `runs r WHERE r.source_kind IS NULL AND ` + delivery.FailedForConductor
 	wakeableWakes    = `conductor_wakes c WHERE ` + delivery.Wakeable
+	// Every open wait is evaluated each sweep: its conditions read Runs
+	// and pull requests, which change under it.
+	openWaits = `conductor_waits w WHERE w.ended_at IS NULL`
 )
 
 func (s *Syncer) pending(ctx context.Context) pending {
@@ -608,6 +611,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 			{delivery.Unheard, &p.unheard, nil},
 			{delivery.UnheardBrainstorm, &p.unheardBrainstorms, nil},
 			{stalledRuns, &p.stalls, []any{delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds()}},
+			{openWaits, &p.waits, nil},
 			{failedForWake, &p.failed, nil},
 			{wakeableWakes, &p.wakes, []any{window.Seconds()}},
 		} {
@@ -618,7 +622,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 	})
 	if err != nil {
 		s.Log.Warn("probing the sweep's steps failed; running them all", "error", err)
-		return pending{true, true, true, true, true, true, true}
+		return pending{true, true, true, true, true, true, true, true}
 	}
 	return p
 }
@@ -662,6 +666,13 @@ func (s *Syncer) beforeDue(ctx context.Context) error {
 		ran = true
 		if err := s.reportStalls(ctx); err != nil {
 			s.Log.Warn("reporting stalled runs failed", "error", err)
+		}
+	}
+	// Before the wakes too: a wait that holds joins the note due with it.
+	if p.waits || ran {
+		ran = true
+		if err := s.evaluateWaits(ctx); err != nil {
+			s.Log.Warn("evaluating conductors' waits failed", "error", err)
 		}
 	}
 	if p.failed || p.wakes || ran {
@@ -1100,6 +1111,36 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 		})
 		if err != nil {
 			s.Log.Warn("waking a conductor failed", "task", f.TaskID, "error", err)
+		}
+	}
+	return nil
+}
+
+// evaluateWaits evaluates conductors' open waits, nearest deadline first,
+// each in its own organization's transaction (delivery.EvaluateWaitTx):
+// one that holds, or whose deadline passed, records its reason to wake.
+// One that does not is only read, so every open wait is taken up.
+func (s *Syncer) evaluateWaits(ctx context.Context) error {
+	type open struct{ ID, Org, TaskID string }
+	var todo []open
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		// No limit: a task has at most one open wait.
+		rows, err := tx.Query(ctx, `SELECT w.id, w.organization_id, w.task_id FROM `+openWaits+`
+			ORDER BY w.deadline_at, w.id`)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[open])
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, o := range todo {
+		if err := s.DB.InOrg(ctx, o.Org, func(tx pgx.Tx) error {
+			_, err := delivery.EvaluateWaitTx(ctx, tx, o.Org, o.TaskID, o.ID)
+			return err
+		}); err != nil {
+			s.Log.Warn("evaluating a conductor's wait failed", "wait", o.ID, "task", o.TaskID, "error", err)
 		}
 	}
 	return nil

@@ -756,10 +756,22 @@ export const EventTypes = {
    * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
    * (decision, escalation, question, steer_read, steer_failed, pr_merged,
    * pr_closed, published, publish_refused, publish_stalled, checkout,
-   * stalled, unblocked; safety in older notes); `started` when no conductor was live
+   * stalled, unblocked, wait; safety in older notes); `started` when no conductor was live
    * and the note briefed a new one.
    */
   ConductorWoken: "conductor.woken",
+  /**
+   * A task's conductor said what it waits on (wait_for). On its Run.
+   * Payload: `{ waitId, conditions, wake, deadlineAt }`: conditions as
+   * stored, `runs_ended` (runs) or `pr_checks_final` (pr, prName, head).
+   */
+  ConductorWaiting: "conductor.waiting",
+  /**
+   * A conductor's wait ended. On the Run that opened it. Payload:
+   * `{ waitId, by, held, of }`: by `held`, `deadline`, `replaced`,
+   * `task_ended` or `conductor_ended`; held of of its conditions.
+   */
+  ConductorWaitEnded: "conductor.wait_ended",
   /**
    * What a conductor's digest told it of its epic, item by item, on its
    * Run, in the transaction that briefed or woke it. Payload: `{ since,
