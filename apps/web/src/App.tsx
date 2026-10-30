@@ -35,7 +35,7 @@ import { EpicMetricsSection } from "./screens/MetricsSection.tsx";
 import { MySettingsScreen } from "./screens/MySettingsScreen.tsx";
 import { ConnectScreen } from "./screens/ConnectScreen.tsx";
 import { PreviewConnectScreen } from "./screens/PreviewConnectScreen.tsx";
-import { ProjectServersScreen } from "./screens/ProjectServersScreen.tsx";
+import { ProjectServersScreen, RUN_SERVER_EVENTS } from "./screens/ProjectServersScreen.tsx";
 import { serverLanding } from "./serverWindows.ts";
 import { EpicOrigin, OriginLead } from "./chatOrigin.tsx";
 
@@ -907,9 +907,6 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   );
 }
 
-const SERVER_COUNT_EVENTS: ReadonlySet<string> = new Set([EventTypes.ServersChanged, EventTypes.RunCreated,
-  EventTypes.RunCompleted, EventTypes.RunFailed, EventTypes.RunAborted]);
-
 /**
  * The board's way to the project's Servers page: "Servers · N" once the
  * running servers are read, plain "Servers" until then or if the read fails.
@@ -918,7 +915,7 @@ function ServersButton({ client, projectId, onOpen }: { client: ApiClient; proje
   const [count, setCount] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
   useReloadOnEvents({ client, projectId }, () => setRevision((n) => n + 1), 300,
-    (e) => e.projectId !== projectId || !SERVER_COUNT_EVENTS.has(e.eventType));
+    (e) => e.projectId !== projectId || !RUN_SERVER_EVENTS.has(e.eventType));
   useEffect(() => {
     let current = true;
     client.runningServers(projectId).then(

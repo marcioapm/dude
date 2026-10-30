@@ -71,7 +71,8 @@ function fromTask(i: FeedbackItem, people: People): Shown {
 
 type Read = { state: "loading" } | { state: "failed"; why: string } | { state: "ok"; items: Shown[]; next: string | null; more: boolean };
 
-const CHANGES: ReadonlySet<string> = new Set([EventTypes.PreviewFeedbackSubmitted, EventTypes.PreviewFeedbackResolved, EventTypes.PreviewFeedbackReopened,
+/** The events that change a server's feedback: a branch preview's, or a task's. */
+export const FEEDBACK_EVENTS: ReadonlySet<string> = new Set([EventTypes.PreviewFeedbackSubmitted, EventTypes.PreviewFeedbackResolved, EventTypes.PreviewFeedbackReopened,
   EventTypes.FeedbackSubmitted, EventTypes.FeedbackResolved, EventTypes.FeedbackReopened, EventTypes.FeedbackReplied, EventTypes.FeedbackDelivered]);
 
 /** How long a fold waits after a matching event for the rest of its burst before reading again. */
@@ -165,7 +166,7 @@ export function ServerFeedback({ client, run, server, events, reconnects = 0, on
   }, [load]);
   useEffect(() => () => clearTimeout(pending.current), []);
   useEffect(() => {
-    const mine = events.filter((e) => e.cursor > heard.current && CHANGES.has(e.eventType) && (taskId
+    const mine = events.filter((e) => e.cursor > heard.current && FEEDBACK_EVENTS.has(e.eventType) && (taskId
       ? e.taskId === taskId
       : (e.payload as { previewRunId?: string; server?: string }).previewRunId === run.id && (e.payload as { server?: string }).server === server.name));
     if (events.length) heard.current = Math.max(heard.current, events.at(-1)!.cursor);

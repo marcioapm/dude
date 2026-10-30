@@ -17,7 +17,7 @@ import { usePeople } from "../people.tsx";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { serverKey, tabWindows, type ServerRef } from "../serverWindows.ts";
-import { ServerFeedback } from "./ServerFeedback.tsx";
+import { FEEDBACK_EVENTS, ServerFeedback } from "./ServerFeedback.tsx";
 
 export type ServersFilter = "all" | "preview" | "task";
 
@@ -55,11 +55,12 @@ export function arrange(runs: ReadonlyArray<RunningRun>, connected: ReadonlySet<
 
 type Read = { state: "loading" } | { state: "failed"; why: string } | { state: "ok"; runs: RunningRun[] };
 
+/** The events that change which servers run: a Run's servers, a Run started or ended. */
+export const RUN_SERVER_EVENTS: ReadonlySet<string> = new Set([EventTypes.ServersChanged, EventTypes.RunCreated, EventTypes.RunCompleted,
+  EventTypes.RunFailed, EventTypes.RunAborted]);
+
 /** The events that change the list: a Run's servers, a preview's feedback, a task's feedback. */
-const LIST_EVENTS: ReadonlySet<string> = new Set([EventTypes.ServersChanged, EventTypes.RunCreated, EventTypes.RunCompleted,
-  EventTypes.RunFailed, EventTypes.RunAborted, EventTypes.PreviewFeedbackSubmitted, EventTypes.PreviewFeedbackResolved,
-  EventTypes.PreviewFeedbackReopened, EventTypes.FeedbackSubmitted, EventTypes.FeedbackResolved, EventTypes.FeedbackReopened,
-  EventTypes.FeedbackReplied, EventTypes.FeedbackDelivered]);
+const LIST_EVENTS: ReadonlySet<string> = new Set([...RUN_SERVER_EVENTS, ...FEEDBACK_EVENTS]);
 
 /** The events after which a branch preview's windows are checked again at once: its Run ended, or its servers changed. */
 const RECHECK_EVENTS: ReadonlySet<string> = new Set([EventTypes.ServersChanged, EventTypes.RunCompleted, EventTypes.RunFailed, EventTypes.RunAborted]);
