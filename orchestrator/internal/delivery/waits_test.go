@@ -303,6 +303,27 @@ func TestWaitForRetriedCallIsTheSameWait(t *testing.T) {
 	}
 }
 
+// wait_for says the decision the delivery waits on from the conductor at
+// the call, for a new wait and for a retried call alike; none when it
+// waits on none.
+func TestWaitForSaysTheDecisionWaitedOn(t *testing.T) {
+	w := newWaitWorld(t)
+	if out := w.mustWait("c0", WaitAsk{Deadline: "1h"}); out.DecisionPoint != "" {
+		t.Fatalf("no decision: %q", out.DecisionPoint)
+	}
+	w.exec(`UPDATE workflow_runs SET status = 'waiting', step = 'conductorDecision',
+		state = state || jsonb_build_object('decision', jsonb_build_object('point', $1::text, 'policy', 'review'))
+		WHERE id = 'wf_life'`, PointImplemented)
+	opened := w.mustWait("c1", WaitAsk{Deadline: "1h"})
+	again := w.mustWait("c1", WaitAsk{Deadline: "1h"})
+	if opened.WaitID == "" || again.WaitID != opened.WaitID {
+		t.Fatalf("opened %+v, again %+v", opened, again)
+	}
+	if opened.DecisionPoint != PointImplemented || again.DecisionPoint != PointImplemented {
+		t.Fatalf("decision point: new %q, retried %q", opened.DecisionPoint, again.DecisionPoint)
+	}
+}
+
 func TestWaitForRefusals(t *testing.T) {
 	w := newWaitWorld(t)
 	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
