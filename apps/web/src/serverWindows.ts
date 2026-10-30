@@ -146,12 +146,14 @@ export class ServerWindows {
   // Servers whose window another of this person's dude tabs took over: shown as moved.
   readonly #moved = new Set<string>();
   readonly #claimed = new Set<string>();
+  readonly #helloWaitMs: number | undefined;
 
-  constructor(win: Window, client: ApiClient, ctx: WindowsContext, onChange: () => void) {
+  constructor(win: Window, client: ApiClient, ctx: WindowsContext, onChange: () => void, opts: { helloWaitMs?: number } = {}) {
     this.#win = win;
     this.#client = client;
     this.#ctx = ctx;
     this.#onChange = onChange;
+    this.#helloWaitMs = opts.helloWaitMs;
   }
 
   set context(ctx: WindowsContext) {
@@ -263,6 +265,7 @@ export class ServerWindows {
       taskId,
       mode: branch ? "branch" : "task",
       claimable: true,
+      ...(this.#helloWaitMs !== undefined ? { helloWaitMs: this.#helloWaitMs } : {}),
       ...(branch ? { windowName: branchWindowName(ref) } : {}),
       read: () => ({
         origins: origins(),

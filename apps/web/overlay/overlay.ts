@@ -470,7 +470,7 @@ export class Overlay {
       this.#connectWin = e.source as Window;
       this.#connection = "waiting";
       this.#quietBeats = 0;
-      this.#hello();
+      if (this.#post({ type: "hello", v: OVERLAY_PROTOCOL, url: this.#win.location.href, ...(before ? { moved: true as const } : {}) })) this.#saidHello = true;
       this.#render();
       return;
     }

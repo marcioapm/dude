@@ -363,6 +363,14 @@ const foreignPage = (w: Window): boolean => {
   }
 };
 
+const focusWin = (w: Window): void => {
+  try {
+    if (!closedOrGone(w)) w.focus();
+  } catch {
+    // Focus is the browser's to refuse.
+  }
+};
+
 /**
  * One task's commenting windows: opens the task's named one, adopts those
  * that reach this tab, hears them, answers each. A plain class (the task
@@ -393,6 +401,8 @@ export class PreviewCommenting {
     this.#d.win.removeEventListener("message", this.onMessage);
     this.#d.win.clearInterval(this.#watch);
     this.#watch = 0;
+    for (const c of this.#claims.values()) this.#d.win.clearTimeout(c.timer);
+    this.#claims.clear();
     for (const p of this.#panes) {
       this.#d.win.clearTimeout(p.helloTimer);
       if (this.#tabHeld.get(p.win) === this) this.#tabHeld.delete(p.win);
@@ -510,6 +520,11 @@ export class PreviewCommenting {
     // Without noopener: the overlay talks to its opener, and only to it.
     const w = this.#d.win.open(url, this.#name);
     if (!w) return false;
+    const claim = this.#claims.get(w);
+    if (claim) {
+      this.#d.win.clearTimeout(claim.timer);
+      this.#claims.delete(w);
+    }
     // The name gave another window (the last one was closed): what the last one saved is not this one's.
     const before = this.#named && this.#named !== w ? this.#paneOf(this.#named) : null;
     if (before) this.#drop(before);
@@ -553,23 +568,35 @@ export class PreviewCommenting {
     if (!foreignPage(w)) return null;
     const held = this.#paneOf(w);
     if (held && held.state !== "moved" && held.state !== "closed") {
-      // This target's own window, on another of its servers: navigated to this one.
-      if (held.url !== null && httpsOriginOf(held.url) !== origin) return null;
+      // This target's own window, on another of its servers, or one that stopped answering (it left the server): navigated.
+      if (held.state === "silent" || (held.url !== null && httpsOriginOf(held.url) !== origin)) return null;
       this.#focus(held);
       return true;
     }
-    const pane = held ?? this.#add(w, null, server);
-    if (!pane) return false;
-    this.#named = w;
-    pane.server = server;
-    pane.state = "waiting";
-    pane.claimed = !held || held.state === "moved";
-    pane.touched = ++this.#clock;
+    // Held live by another target of this tab (the task page's, or a page that named its window so): left to it, brought forward.
+    const holder = this.#tabHeld.get(w);
+    if (holder && holder !== this && holder.#holdsLive(w)) {
+      focusWin(w);
+      return true;
+    }
+    const pending = this.#claims.get(w);
+    // Claimed before and never answered from the server's origin: the window left it, so it is navigated back.
+    if (pending?.unanswered) return null;
+    if (pending) this.#d.win.clearTimeout(pending.timer);
+    const claim = { origin, server, unanswered: false, timer: 0 };
+    claim.timer = this.#d.win.setTimeout(() => { claim.unanswered = true; }, this.#d.helloWaitMs ?? HELLO_WAIT_MS);
+    this.#claims.set(w, claim);
     w.postMessage({ type: "claim", v: OVERLAY_PROTOCOL } satisfies DudeToOverlay, origin);
-    this.#waitForHello(pane);
-    this.#focus(pane);
-    this.#emit();
+    focusWin(w);
     return true;
+  }
+
+  // Windows told `claim` and not yet heard from: one is held only once a hello from its claim's origin arrives.
+  readonly #claims = new Map<Window, { origin: string; server: string | null; unanswered: boolean; timer: number }>();
+
+  #holdsLive(w: Window): boolean {
+    const p = this.#paneOf(w);
+    return p !== null && (p.state === "open" || p.state === "waiting" || p.state === "silent") && !closedOrGone(p.win);
   }
 
   /** The latest window held, in one of `states` and not closed, that `fits`. */
@@ -615,11 +642,7 @@ export class PreviewCommenting {
   }
 
   #focus(pane: Pane): void {
-    try {
-      if (!closedOrGone(pane.win)) pane.win.focus();
-    } catch {
-      // Focus is the browser's to refuse.
-    }
+    focusWin(pane.win);
   }
 
   /** Takes the overlay off every window's page; the windows stay and the drafts stay. */
@@ -701,10 +724,13 @@ export class PreviewCommenting {
   }
 
   readonly onMessage = (e: MessageEvent): void => {
-    const held = this.#paneOf(e.source);
+    let held = this.#paneOf(e.source);
     const origins = this.#d.read().origins;
-    const linked = held === null && origins.has(e.origin) && this.#linked(e.source as Window | null);
-    const checked = checkMessage(e, held !== null || linked, origins, httpsOriginOf(held?.url));
+    const claim = e.source ? this.#claims.get(e.source as Window) : undefined;
+    // A window this target told `claim`, now speaking from the server's origin it was claimed at.
+    const claimed = claim !== undefined && claim.origin === e.origin;
+    const linked = held === null && origins.has(e.origin) && (claimed || this.#linked(e.source as Window | null));
+    const checked = checkMessage(e, held !== null || linked || claimed, origins, httpsOriginOf(held?.url));
     if (!checked.ok) {
       if ("reason" in checked && held) {
         const nonce = (e.data as { nonce?: unknown } | null)?.nonce;
@@ -723,8 +749,17 @@ export class PreviewCommenting {
       }
       return;
     }
+    const hello = msg.type === "hello" || msg.type === "navigated";
+    if (claimed && hello) {
+      this.#d.win.clearTimeout(claim.timer);
+      this.#claims.delete(e.source as Window);
+      if (held?.state === "moved") {
+        this.#drop(held);
+        held = null;
+      }
+    }
     if (held?.state === "moved") return;
-    const p = held ?? (msg.type === "hello" || msg.type === "navigated" ? this.#adopt(e.source as Window, msg.url) : null);
+    const p = held ?? (hello ? this.#adopt(e.source as Window, msg.url, claimed ? { server: claim.server, moved: msg.type === "hello" && msg.moved === true } : null) : null);
     if (!p) return;
     switch (msg.type) {
       case "hello":
@@ -866,11 +901,18 @@ export class PreviewCommenting {
    * slot of the oldest window that is closed or stopped (`idle`): a live
    * window is never let go for a newcomer.
    */
-  #adopt(source: Window, url: string): Pane | null {
+  #adopt(source: Window, url: string, claim: { server: string | null; moved: boolean } | null = null): Pane | null {
     // Held by another target of this tab: that one answers it.
     const holder = this.#tabHeld.get(source);
-    if (holder && holder !== this) return null;
-    return this.#add(source, url, null);
+    if (holder && holder !== this && holder.#holdsLive(source)) return null;
+    const pane = this.#add(source, url, claim?.server ?? null);
+    if (pane && claim) {
+      this.#named = source;
+      // Moved from another dude tab only when the overlay says it told one `left`: a claim the overlay took from
+      // this same tab (a reload of it) it ignores, and the window's opener can't tell (window.open by name re-parents it).
+      pane.claimed = claim.moved;
+    }
+    return pane;
   }
 
   #reachesMe(source: Window): boolean {

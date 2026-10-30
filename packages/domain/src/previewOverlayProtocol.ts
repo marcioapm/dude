@@ -55,7 +55,8 @@ export const OVERLAY_LIMITS = {
 export type OverlayAnchor = Omit<FeedbackPreviewAnchor, "attachmentId">;
 
 export type OverlayToDude =
-  | { type: "hello"; v: 1; url: string }
+  // `moved`: the first hello after a `claim` that took the window from another dude tab (which was told `left`).
+  | { type: "hello"; v: 1; url: string; moved?: true }
   | { type: "navigated"; v: 1; url: string }
   | { type: "draft"; v: 1; nonce: string; body: string; anchor: OverlayAnchor; picture?: string }
   | { type: "prefs"; v: 1; showPins: boolean }

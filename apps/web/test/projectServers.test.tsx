@@ -216,8 +216,10 @@ test("Preview on a server whose window another of my dude tabs holds moves it he
     await click(tid(container.querySelector('[data-key="run_pv_checkout/admin"]')!, "server-preview")!);
     // The window was found by name, already showing the preview: it is claimed, not navigated.
     expect(held.postMessage.mock.calls[0]![0]).toEqual({ type: "claim", v: 1 });
+    expect(held.postMessage.mock.calls[0]![1]).toBe(ADMIN);
+    // The overlay told the other tab it left, and says hello here as moved.
     await act(async () => {
-      window.dispatchEvent(new window.MessageEvent("message", { data: { type: "hello", v: 1, url: `${ADMIN}/orders` }, origin: ADMIN,
+      window.dispatchEvent(new window.MessageEvent("message", { data: { type: "hello", v: 1, url: `${ADMIN}/orders`, moved: true }, origin: ADMIN,
         source: held as unknown as MessageEventSource }));
     });
     const moved = await until(() => tid(container, "servers-moved"), "the moved callout");

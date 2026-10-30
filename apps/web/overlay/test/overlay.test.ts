@@ -189,12 +189,20 @@ test("a claim from another dude tab tells the old one it left and says hello to 
   expect(other.postMessage).not.toHaveBeenCalled();
   fromDude({ type: "claim", v: 1 } as DudeToOverlay, DUDE, other);
   expect(sent().at(-1)).toEqual({ type: "left", v: 1 });
-  expect(other.postMessage).toHaveBeenCalledWith({ type: "hello", v: 1, url: PAGE }, DUDE);
+  expect(other.postMessage).toHaveBeenCalledWith({ type: "hello", v: 1, url: PAGE, moved: true }, DUDE);
   // Now the claiming tab is dude: its session connects, the old one's is not heard.
   fromDude({ type: "session", v: 1, task: "OLD", url: PAGE, pins: [], drafts: 0, showPins: true });
   expect(tid("ov-conn")!.textContent).toBe("reaching dude…");
   fromDude({ type: "session", v: 1, task: "NEW", url: PAGE, pins: [], drafts: 0, showPins: true }, DUDE, other);
   expect(tid("ov-conn")!.textContent).toBe("connected to dude");
+});
+
+test("a claim reaching a window no dude tab had is answered with a plain hello, not moved", () => {
+  page(CART, false);
+  boot();
+  const tab = { postMessage: mock(() => {}), closed: false, focus: () => {} };
+  fromDude({ type: "claim", v: 1 } as DudeToOverlay, DUDE, tab);
+  expect(tab.postMessage).toHaveBeenCalledWith({ type: "hello", v: 1, url: PAGE }, DUDE);
 });
 
 test("branch retryable outcome preserves the nonce for unchanged content", async () => {

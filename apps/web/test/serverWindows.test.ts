@@ -94,9 +94,9 @@ beforeEach(() => {
 });
 afterEach(() => { for (const d of disposers) d(); });
 
-function windows(t: Tab, client = new Client()) {
+function windows(t: Tab, client = new Client(), helloWaitMs?: number) {
   const changes = mock(() => {});
-  const w = new ServerWindows(t as unknown as Window, client, { you: "u_me", name: () => "Tom" }, changes);
+  const w = new ServerWindows(t as unknown as Window, client, { you: "u_me", name: () => "Tom" }, changes, helloWaitMs === undefined ? {} : { helloWaitMs });
   disposers.push(() => w.dispose());
   return { w, client, changes };
 }
@@ -165,7 +165,7 @@ test("Preview on a server whose window is connected to another of my dude tabs c
   expect(told(admin).at(-1)).toEqual({ type: "claim", v: 1 });
   // The overlay tells its old tab it left and says hello to the new one.
   say(before, { type: "left", v: 1 }, ADMIN, admin);
-  say(now, { type: "hello", v: 1, url: `${ADMIN}/orders` }, ADMIN, admin);
+  say(now, { type: "hello", v: 1, url: `${ADMIN}/orders`, moved: true }, ADMIN, admin);
   await tick();
   expect([...b.w.connected()]).toEqual(["run_pv/admin"]);
   expect([...a.w.connected()]).toEqual([]);
@@ -292,4 +292,69 @@ test("a burst of events re-reads each target once, and one's own submit is read 
   const burst = Array.from({ length: 10 }, () => w.reload({ runId: "run_pv", server: "web" }));
   await Promise.all(burst);
   expect(client.reads.length - readsBefore).toBe(1);
+});
+
+/** A window of `name` already open in this browser, showing `url` (another origin's page), opened by `opener`. */
+function existing(name: string, url: string, opener: unknown = null): Popup {
+  const w = Object.assign(popup(), { foreign: true, at: url, opener });
+  named.set(name, w);
+  return w;
+}
+
+test("a claimed window that never answers (it left the server) is navigated back by the next Preview, and held only once it says hello", async () => {
+  const me = tab();
+  const { w } = windows(me, new Client(), 20);
+  const web = existing(branchWindowName({ runId: "run_pv", server: "web" }), "https://github.com/x");
+  expect(w.open(branchRun, branchRun.servers[0]!)).toBe(true);
+  expect(told(web).at(-1)).toEqual({ type: "claim", v: 1 });
+  // Told claim, not yet heard: not connected here.
+  expect([...w.connected()]).toEqual([]);
+  await tick(40);
+  // The page there is not the server's (the claim was dropped): Preview navigates it.
+  expect(w.open(branchRun, branchRun.servers[0]!)).toBe(true);
+  expect(web.at).toBe(WEB);
+  say(me, { type: "hello", v: 1, url: `${WEB}/cart` }, WEB, web);
+  await tick();
+  expect([...w.connected()]).toEqual(["run_pv/web"]);
+  expect(w.claimed()).toEqual([]);
+});
+
+test("the moved Callout is only for a window the overlay moved from another dude tab: a reload of this tab reconnects quietly", async () => {
+  const me = tab();
+  const other = tab();
+  const { w } = windows(me);
+  // This tab before its reload opened it: its opener is this tab. The overlay had lost that tab, so it says a plain hello.
+  const web = existing(branchWindowName({ runId: "run_pv", server: "web" }), `${WEB}/cart`, me);
+  w.open(branchRun, branchRun.servers[0]!);
+  say(me, { type: "hello", v: 1, url: `${WEB}/cart` }, WEB, web);
+  await tick();
+  expect([...w.connected()]).toEqual(["run_pv/web"]);
+  expect(w.claimed()).toEqual([]);
+  // Another dude tab held this one: the overlay told it `left` and says hello as moved.
+  const admin = existing(branchWindowName({ runId: "run_pv", server: "admin" }), `${ADMIN}/orders`, other);
+  w.open(branchRun, branchRun.servers[1]!);
+  expect(admin.postMessage.mock.calls.at(-1)![1]).toBe(ADMIN);
+  say(me, { type: "hello", v: 1, url: `${ADMIN}/orders`, moved: true }, ADMIN, admin);
+  await tick();
+  expect(w.claimed()).toEqual(["run_pv/admin"]);
+});
+
+test("Preview never takes a window another of this tab's targets holds live, and a claimed window answering from another origin is not held", async () => {
+  const me = tab();
+  const { w } = windows(me);
+  // A task target's window whose page named itself as the branch server's window.
+  w.open(taskRun, taskRun.servers[0]!);
+  const task = named.get("dude-preview-wi_1")!;
+  say(me, { type: "hello", v: 1, url: `${TASK}/` }, TASK, task);
+  await tick();
+  named.set(branchWindowName({ runId: "run_pv", server: "web" }), task);
+  expect(w.open(branchRun, branchRun.servers[0]!)).toBe(true);
+  expect(told(task).some((m) => (m as { type: string }).type === "claim")).toBe(false);
+  expect([...w.connected()]).toEqual(["run_wi/web"]);
+  // A window claimed for web that answers from the task's origin is not web's.
+  const stray = existing(branchWindowName({ runId: "run_pv", server: "admin" }), `${TASK}/`);
+  w.open(branchRun, branchRun.servers[1]!);
+  say(me, { type: "hello", v: 1, url: `${TASK}/x` }, TASK, stray);
+  await tick();
+  expect([...w.connected()]).toEqual(["run_wi/web"]);
 });
