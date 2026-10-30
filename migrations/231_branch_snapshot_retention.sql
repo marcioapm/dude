@@ -128,3 +128,24 @@ END
 $$;
 REVOKE ALL ON FUNCTION prune_branch_snapshots(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION prune_branch_snapshots(integer) TO dude_sweeper;
+
+-- The snapshot a capture's head already has (the branch went back to it:
+-- the insert's ON CONFLICT DO NOTHING took no lock), held FOR KEY SHARE
+-- until the capture request names it, so the pruner (FOR UPDATE SKIP
+-- LOCKED) skips it rather than deleting it under the capture, whose
+-- request update would then fail its foreign key and count a spurious
+-- failure. A definer, as dude_app may not lock a row of a table it may not
+-- update (snapshots are never changed, 230); only the caller's
+-- organization's rows.
+CREATE FUNCTION existing_branch_snapshot(p_task text, p_attempt integer, p_repository text, p_head text,
+    p_merge_base text, p_target_ref text) RETURNS TABLE (id text)
+LANGUAGE sql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$
+  SELECT s.id FROM task_branch_snapshots s
+  WHERE s.organization_id = current_organization_id() AND s.task_id = p_task AND s.attempt = p_attempt
+    AND s.repository_id = p_repository AND s.head_sha = p_head AND s.merge_base_sha = p_merge_base
+    AND s.target_ref = p_target_ref
+  FOR KEY SHARE OF s
+$$;
+REVOKE ALL ON FUNCTION existing_branch_snapshot(text, integer, text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION existing_branch_snapshot(text, integer, text, text, text, text) TO dude_app;
