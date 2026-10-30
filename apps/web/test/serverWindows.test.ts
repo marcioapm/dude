@@ -75,7 +75,11 @@ const saved: PreviewFeedbackItem = { id: "fbi_1", projectId: "p", previewRunId: 
 class Client extends ApiClient {
   constructor() { super({}); }
   submits = mock(async (_run: string, _server: string, input: { submissionKey: string }) => ({ id: `fbi_${input.submissionKey}` }) as PreviewFeedbackItem);
-  override async previewFeedback() { return { feedback: [saved], nextCursor: null }; }
+  reads: string[] = [];
+  override async previewFeedback(_run: string, server: string) {
+    this.reads.push(server);
+    return { feedback: server === "web" ? [saved] : [{ ...saved, id: "fbi_admin", serverName: "admin", anchor: { ...saved.anchor, url: `${ADMIN}/cart` } }], nextCursor: null };
+  }
   override async feedback() { return { feedback: [] as FeedbackItem[], blocking: 0 }; }
   override async validatePreviewServer(runId: string, server: string): Promise<BranchPreviewServerAt> {
     return { kind: "branch", organizationId: "o", organizationSlug: "o", projectId: "p", previewRunId: runId, branch: "feat/checkout", server };
@@ -251,4 +255,41 @@ test("Preview on a task's second live Run opens that Run's server, and the row c
   say(me, { type: "hello", v: 1, url: "https://site-wi.preview.example.test/" }, "https://site-wi.preview.example.test", win);
   await tick();
   expect([...w.connected()]).toEqual(["run_wi_pv2/site"]);
+});
+
+const sessions = (w: Popup) => told(w).filter((m): m is Extract<DudeToOverlay, { type: "session" }> => m.type === "session");
+
+test("an event on a sibling server of a branch preview leaves web's window and its pins alone", async () => {
+  const me = tab();
+  const { w, client } = windows(me);
+  w.open(branchRun, branchRun.servers[0]!);
+  const web = named.get(branchWindowName({ runId: "run_pv", server: "web" }))!;
+  say(me, { type: "hello", v: 1, url: `${WEB}/cart` }, WEB, web);
+  await tick();
+  expect(sessions(web).at(-1)!.pins.map((p) => p.id)).toEqual(["fbi_1"]);
+  const readsBefore = client.reads.length;
+  await w.reload({ runId: "run_pv", server: "admin" });
+  expect(client.reads.length).toBe(readsBefore);
+  // A web event re-reads web's, and its window keeps its pin.
+  await w.reload({ runId: "run_pv", server: "web" });
+  expect(client.reads.slice(readsBefore)).toEqual(["web"]);
+  expect(sessions(web).at(-1)!.pins.map((p) => p.id)).toEqual(["fbi_1"]);
+});
+
+test("a burst of events re-reads each target once, and one's own submit is read once, by its event", async () => {
+  const me = tab();
+  const { w, client } = windows(me);
+  w.open(branchRun, branchRun.servers[0]!);
+  const web = named.get(branchWindowName({ runId: "run_pv", server: "web" }))!;
+  say(me, { type: "hello", v: 1, url: `${WEB}/cart` }, WEB, web);
+  await tick();
+  const readsBefore = client.reads.length;
+  say(me, { type: "draft", v: 1, nonce: "n1", body: "Hi", anchor: { kind: "preview", url: `${WEB}/cart`, selector: "#pay" } }, WEB, web);
+  await tick();
+  expect(client.submits).toHaveBeenCalledTimes(1);
+  // The submit itself reads nothing; its event, and nine others in the same burst, read once.
+  expect(client.reads.length).toBe(readsBefore);
+  const burst = Array.from({ length: 10 }, () => w.reload({ runId: "run_pv", server: "web" }));
+  await Promise.all(burst);
+  expect(client.reads.length - readsBefore).toBe(1);
 });

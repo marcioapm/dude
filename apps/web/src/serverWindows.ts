@@ -113,7 +113,12 @@ interface Target {
   readonly runs: Map<string, RunningRun>;
   // A branch server's saved feedback, or a task's items, for pins: read when its window opens and on events.
   items: ReadonlyArray<PreviewFeedbackItem> | ReadonlyArray<FeedbackItem>;
+  // The event-driven re-read waiting to run: every event until it runs shares it.
+  reloading: Promise<void> | null;
 }
+
+/** How long an event-driven re-read waits for the rest of its burst. */
+export const RELOAD_MS = 300;
 
 /** Connected to this tab: a window open, waiting for its hello, or not answering yet. */
 const LIVE: ReadonlySet<CommentingState> = new Set(["open", "waiting", "silent"]);
@@ -213,13 +218,21 @@ export class ServerWindows {
     this.#target(run, server);
   }
 
-  /** Pins follow the lists: a submit, a resolve or a reopen read again. */
-  async reload(ref: ServerRef): Promise<void> {
-    const key = serverKey(ref);
-    const t = this.#targets.get(key) ?? [...this.#targets.values()].find((x) => x.run.id === ref.runId);
-    if (!t) return;
-    await this.#load(t, ref.server);
-    t.commenting.refresh();
+  /**
+   * Pins follow the lists: a submit, a resolve or a reopen read again, once
+   * per target per burst. A branch server's event reaches only that
+   * server's target; a task's, the target of the task whose Run it names.
+   */
+  reload(ref: ServerRef): Promise<void> {
+    const t = this.#targets.get(serverKey(ref))
+      ?? [...this.#targets.values()].find((x) => x.run.kind === "task" && x.runs.has(ref.runId));
+    if (!t) return Promise.resolve();
+    t.reloading ??= new Promise<void>((done) => this.#win.setTimeout(done, RELOAD_MS)).then(async () => {
+      t.reloading = null;
+      await this.#load(t, ref.server);
+      t.commenting.refresh();
+    });
+    return t.reloading;
   }
 
   #target(run: RunningRun, server: string): Target {
@@ -234,7 +247,7 @@ export class ServerWindows {
     }
     const ref = { runId: run.id, server };
     const branch = run.kind === "preview";
-    const target: Target = { run, runs: new Map([[run.id, run]]), items: [], commenting: undefined as unknown as PreviewCommenting };
+    const target: Target = { run, runs: new Map([[run.id, run]]), items: [], reloading: null, commenting: undefined as unknown as PreviewCommenting };
     const origins = (): Set<string> => new Set([...target.runs.values()].flatMap((r) => r.servers
       .filter((s) => (branch ? s.name === server : s.commenting?.available !== false))
       .flatMap((s) => httpsOriginOf(s.url) ?? [])));
@@ -266,11 +279,10 @@ export class ServerWindows {
         await this.#load(target, server);
         return { id: item.id, drafts: (target.items as FeedbackItem[]).filter((i) => i.status === "draft").length };
       },
+      // Its pins follow from the submit's own preview_feedback.submitted event (reload), not a read here.
       submit: async (anchor, body, key) => {
         try {
-          const item = await scoped.submitPreviewFeedback(ref.runId, ref.server, { body, anchor, submissionKey: key });
-          void this.#load(target, server).then(() => commenting.refresh());
-          return item;
+          return await scoped.submitPreviewFeedback(ref.runId, ref.server, { body, anchor, submissionKey: key });
         } catch (err) {
           throw definite(err);
         }
