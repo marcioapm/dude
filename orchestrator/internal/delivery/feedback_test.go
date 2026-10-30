@@ -3,6 +3,7 @@ package delivery_test
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -608,12 +609,13 @@ func TestABranchAnchoredItemIsSubmittedHeldAndResolvedLikeAnyOther(t *testing.T)
 			target_sha, merge_base_sha, head_sha, files, checksum, stats, relation)
 		VALUES ('tbs_1', $1, $2, 1, 'repo_'||$1, 'api', 'dude/x/attempt-1', 'main', $3, $3, $4, '[]', 's1', '{}', 'initial')`,
 		w.org, w.task, strings.Repeat("b", 40), head)
+	anchor, err := os.ReadFile("../../../packages/domain/test/branch-feedback-anchor.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	w.exec(t, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
-		VALUES ('fbi_branch', $1, $2, 1, $3, 'Use the rate table, not a literal.', 'code', 'tbs_1',
-		  jsonb_build_object('kind', 'code', 'scope', 'branch', 'snapshotId', 'tbs_1', 'attempt', 1, 'repo', 'api', 'path', 'src/vat.ts',
-		    'side', 'new', 'startLine', 11, 'endLine', 11, 'baseSha', $4::text, 'headSha', $5::text, 'targetRef', 'main', 'diffChecksum', 's1',
-		    'excerpt', '[{"kind":"+","old":null,"new":11,"text":"  const rate = 0.23;"}]'::jsonb))`,
-		w.org, w.task, w.ana, strings.Repeat("b", 40), head)
+		VALUES ('fbi_branch', $1, $2, 1, $3, 'Use the rate table, not a literal.', 'code', 'tbs_1', $4::jsonb)`,
+		w.org, w.task, w.ana, string(anchor))
 
 	first, err := w.submit(t, w.ana, "k-branch", "fbi_branch")
 	if err != nil {
