@@ -522,3 +522,35 @@ func TestPruneAddsTheChildsSpanToTheParents(t *testing.T) {
 		t.Errorf("c3: %q, want k1 fast-forward 5", got)
 	}
 }
+
+// A feedback item that commits between the candidate read and the row
+// lock still keeps its snapshot: the re-check after the lock sees it. A
+// test-only trigger names c2 the moment c1 is deleted, inside the very
+// call that already holds c2 as a candidate.
+func TestPruneReChecksWhatNamesACandidateAfterTheLock(t *testing.T) {
+	f := newPruneFixture(t)
+	f.chain("c", 1, "repo_api", 3, 48)
+	ctx := context.Background()
+	mustExec(t, f.owner, `CREATE FUNCTION test_name_c2() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF OLD.id = 'c1' THEN
+				INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
+				VALUES ('fbi_c2', OLD.organization_id, 'wi_p', 1, 'per_p', 'b', 'code', 'c2', '{}');
+			END IF;
+			RETURN NULL;
+		END $$`)
+	mustExec(t, f.owner, `CREATE TRIGGER test_name_c2 AFTER DELETE ON task_branch_snapshots FOR EACH ROW EXECUTE FUNCTION test_name_c2()`)
+	t.Cleanup(func() {
+		_, _ = f.owner.Exec(ctx, `DROP TRIGGER IF EXISTS test_name_c2 ON task_branch_snapshots`)
+		_, _ = f.owner.Exec(ctx, `DROP FUNCTION IF EXISTS test_name_c2()`)
+	})
+	if n := f.prune(100); n != 1 {
+		t.Errorf("pruned %d, want 1 (c1)", n)
+	}
+	f.want("c2", "c3")
+	var named *string
+	if err := f.owner.QueryRow(ctx, `SELECT branch_snapshot_id FROM feedback_items WHERE id = 'fbi_c2'`).Scan(&named); err != nil ||
+		named == nil || *named != "c2" {
+		t.Errorf("fbi_c2 names %v (%v), want c2", named, err)
+	}
+}
