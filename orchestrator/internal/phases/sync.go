@@ -1116,15 +1116,17 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 	return nil
 }
 
-// evaluateWaits evaluates conductors' open waits, oldest first, each in
-// its own organization's transaction (delivery.EvaluateWaitTx): one that
-// holds, or whose deadline passed, records its reason to wake.
+// evaluateWaits evaluates conductors' open waits, nearest deadline first,
+// each in its own organization's transaction (delivery.EvaluateWaitTx):
+// one that holds, or whose deadline passed, records its reason to wake.
+// One that does not is only read, so every open wait is taken up.
 func (s *Syncer) evaluateWaits(ctx context.Context) error {
 	type open struct{ ID, Org, TaskID string }
 	var todo []open
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		// No limit: a task has at most one open wait.
 		rows, err := tx.Query(ctx, `SELECT w.id, w.organization_id, w.task_id FROM `+openWaits+`
-			ORDER BY w.created_at, w.id LIMIT $1`, wakeBatch)
+			ORDER BY w.deadline_at, w.id`)
 		if err != nil {
 			return err
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strconv"
 	"testing"
 	"time"
 
@@ -75,3 +76,35 @@ func TestTheSweepEvaluatesOpenWaitsAndWakesTheConductorOnce(t *testing.T) {
 		t.Fatalf("a later sweep sent another note: %d", woken())
 	}
 }
+
+// More open waits than one sweep took up before (wakeBatch): the newest,
+// its deadline passed, ends in the first sweep all the same.
+func TestTheSweepEvaluatesEveryOpenWait(t *testing.T) {
+	w := &wakeWorld{newReceiptWorld(t)}
+	w.s.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	n := wakeBatch + 5
+	for _, q := range []string{
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+			SELECT 'wi_'||$1||'_'||i, $1, 'prj_'||$1, 100 + i, 'T', 'G' FROM generate_series(1, ` + itoa(n) + `) i`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt)
+			SELECT 'run_'||$1||'_'||i, $1, 'prj_'||$1, 'wi_'||$1||'_'||i, 1 FROM generate_series(1, ` + itoa(n) + `) i`,
+		`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, deadline_at, since_cursor, call_key, created_at)
+			SELECT 'cwt_'||i, $1, 'wi_'||$1||'_'||i, 'run_'||$1||'_'||i, 1, '[]', now() + interval '1 hour', 0, 'c', now() - interval '1 hour'
+			FROM generate_series(1, ` + itoa(n) + `) i`,
+		`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, deadline_at, since_cursor, call_key)
+			VALUES ('cwt_newest', $1, 'wi_'||$1, 'run_'||$1, 1, '[]', now() - interval '1 second', 0, 'c')`,
+	} {
+		w.exec(q)
+	}
+	if err := w.s.evaluateWaits(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if by := w.count(`SELECT count(*) FROM conductor_waits WHERE organization_id = $1 AND id = 'cwt_newest' AND ended_by = 'deadline'`); by != 1 {
+		t.Fatal("the newest wait, its deadline passed, was not evaluated")
+	}
+	if open := w.count(`SELECT count(*) FROM conductor_waits WHERE organization_id = $1 AND ended_at IS NULL`); open != n {
+		t.Fatalf("%d waits open, want %d", open, n)
+	}
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
