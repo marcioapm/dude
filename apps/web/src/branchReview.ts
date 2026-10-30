@@ -52,7 +52,9 @@ export function useBranchDiff(client: ApiClient, taskId: string, attempt: number
   useEffect(() => {
     const seq = ++reads.current;
     const snapshot = pin ? pinRef.current : null;
-    client.taskBranchDiff(taskId, { ...(attempt !== undefined ? { attempt } : {}), ...(repository ? { repository } : {}), ...(snapshot ? { snapshot } : {}) })
+    const query = { ...(attempt !== undefined ? { attempt } : {}), ...(repository ? { repository } : {}), ...(snapshot ? { snapshot } : {}) };
+    client.taskBranchDiff(taskId, query)
+      .then(async (got) => (!pin && got.newer ? client.taskBranchDiff(taskId, { ...query, snapshot: got.newer.id }) : got))
       .then((got) => {
         if (seq !== reads.current) return;
         if (pin && !pinRef.current && got.snapshot) pinRef.current = got.snapshot.id;

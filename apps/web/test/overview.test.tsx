@@ -195,6 +195,16 @@ describe("the branch, the pull request and the details", () => {
     expect(selectedTab(page)).toBe("Changes");
   });
 
+  test("the Overview card follows the newest snapshot while Changes still offers the pinned one", async () => {
+    localStorage.setItem("dude.fixtures.branch", "updated");
+    const page = await overview(fx(undefined, "d"));
+    const snap = await until(() => {
+      const el = page.querySelector("[data-testid=overview-snapshot]");
+      return el?.textContent?.includes("8c1d0e4…3e7a2b9") ? el : null;
+    }, "the latest branch snapshot");
+    expect(text(snap)).not.toContain("2be91c7…7ac42e1");
+  });
+
   test("the Changes card says preparing and unavailable as they are, never as no changes", async () => {
     localStorage.setItem("dude.fixtures.branch", "preparing");
     const preparing = await overview(fx(undefined, "d"));
