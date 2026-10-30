@@ -1624,7 +1624,12 @@ def test_a_tasks_time_and_cost_show_on_its_page_and_its_epics(
     page.goto(f"{web_url}#/task/{task['id']}")
     # The task's spend is in the Overview's figures; every tile and the run table under Time & cost.
     expect(page.get_by_test_id("overview-spend")).to_contain_text("model + machine")
-    open_overview_section(page, "time-cost")
+    # Opened as a person opens it: a click on its summary, the fold found by its role (a <details> is a group;
+    # its summary has no role of its own) and its title. Elsewhere, open_overview_section.
+    time_cost = page.get_by_role("group").filter(has=page.locator("summary", has_text=re.compile(r"^Time & cost")))
+    expect(time_cost).not_to_have_attribute("open", "")
+    time_cost.locator("summary").click()
+    expect(time_cost).to_have_attribute("open", "")
     metrics = page.get_by_test_id("task-metrics")
     expect(metrics).to_contain_text("Agents working")
     expect(metrics).to_contain_text("Cost")
