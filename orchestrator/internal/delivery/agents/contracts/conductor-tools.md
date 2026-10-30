@@ -21,8 +21,9 @@
 		"answer_review_question" "answer_review_question answers a reviewer's question with a fact you established, or withdraws it as moot (a reviewer's question is for a person or for you, never for a fixer)") ". Each is refused, saying why, when it is not yours to take.")
 	"decide_escalation" "decide_escalation decides an escalation the owner handed you with a free answer to your question about it."
 	"" (.Wrap "" (.List "; " "; "
-		"steer" "steer tells a running phase Run of this task something, whoever decides"
-		"restart_run" "restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier)") ".")
+		"steer" "steer tells a running phase Run of this task, or one of your own child agents, something, whoever decides (interrupt stops its turn)"
+		"restart_run" "restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier)"
+		"stop_run" "stop_run stops a child agent you started, with your reason") ".")
 	"reply_on_pull_request" "reply_on_pull_request answers on one of the task's pull requests, whoever decides."
 	"github_search github_issue github_pull_request" (print "github_search, github_issue and github_pull_request read the project's repositories on GitHub (issues, any pull request, its conversation, reviews, threads, checks and diffs), at most 60 reads an hour" (.List "" "" "refresh_pull_requests" ", refresh_pull_requests included") "; reading another pull request lets you do nothing on it.")
 	"" .ExternalTextNote
@@ -61,6 +62,7 @@
 		"steer feedback" "`dude steer RUN TEXT` (`--feedback ID` passes an item)"
 		"steer !feedback" "`dude steer RUN TEXT`"
 		"restart_run" "`dude restart RUN NOTE`"
+		"stop_run" "`dude stop RUN --reason R`"
 		"decide" "`dude decide ACTION`"
 		"dismiss_finding" "`dude finding dismiss ID --reason R`"
 		"decide_escalation" "`dude escalation decide ACTION --note N`"

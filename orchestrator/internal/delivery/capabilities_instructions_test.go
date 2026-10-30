@@ -154,6 +154,19 @@ func TestGoldenInstructionsWithoutSettingsRead(t *testing.T) {
 	}
 }
 
+// The conductor's instruction file without conduct.stop, as a golden: the
+// Runs in progress and tools wording a conductor reads that cannot stop
+// its children.
+func TestGoldenInstructionsConductorWithoutStop(t *testing.T) {
+	less := capabilities.Default(RoleConductor).Without(capabilities.RunStop)
+	in := goldenTask()
+	in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+	in.Repositories = readOnlyRepos()
+	ii := in.InstructionsInput()
+	ii.Grants = &less
+	golden(t, "instructions-conductor-without-stop", Instructions(RoleConductor, "correctness", ii))
+}
+
 // A brainstorm whose session a member named, as a golden: Resolve gives it
 // no session.name, so its file has no naming paragraph.
 func TestGoldenInstructionsBrainstormMemberNamed(t *testing.T) {
