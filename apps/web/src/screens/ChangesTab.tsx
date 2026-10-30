@@ -43,6 +43,9 @@ export interface RunDiffsMoved {
 /** How many checkout reads Pending work has in flight at most. */
 const PENDING_READS = 3;
 
+const ID_SEP = "\u0000";
+const splitIds = (ids: string): string[] => (ids ? ids.split(ID_SEP) : []);
+
 /**
  * Read only while Pending is mounted, with at most three checkout reads in
  * flight: every session on mount (and Retry), then only the session an
@@ -50,7 +53,8 @@ const PENDING_READS = 3;
  */
 function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick<ChangesTabProps, "client" | "runs" | "runDiffs" | "attempt" | "onOpenRunChanges">) {
   const pending = pendingSessions(runs);
-  const ids = pending.map((r) => r.id).join("\u0000");
+  // Joined, so the effects below rerun only when the set of sessions changes.
+  const ids = pending.map((r) => r.id).join(ID_SEP);
   const [reads, setReads] = useState<Record<string, { diff?: RunDiff; problem?: string }>>({});
   const [retry, setRetry] = useState(0);
   const queue = useRef<string[]>([]);
@@ -96,20 +100,20 @@ function PendingWork({ client, runs, runDiffs, attempt, onOpenRunChanges }: Pick
   const idsRef = useRef(ids);
   idsRef.current = ids;
   useEffect(() => {
-    const now = ids ? ids.split("\u0000") : [];
+    const now = splitIds(ids);
     const fresh = now.filter((id) => !known.current.has(id));
     known.current = new Set(now);
     ask(fresh);
   }, [ask, ids]);
   // Retry: every session again.
   useEffect(() => {
-    if (retry > 0) ask(idsRef.current ? idsRef.current.split("\u0000") : []);
+    if (retry > 0) ask(splitIds(idsRef.current));
   }, [ask, retry]);
   const seen = useRef(runDiffs.n);
   useEffect(() => {
     if (seen.current === runDiffs.n) return;
     seen.current = runDiffs.n;
-    const live = new Set(ids ? ids.split("\u0000") : []);
+    const live = new Set(splitIds(ids));
     ask(runDiffs.runs.filter((id) => live.has(id)));
   }, [ask, ids, runDiffs]);
   return <section className="changesRegion" data-testid="changes-pending" aria-label="Pending work">
