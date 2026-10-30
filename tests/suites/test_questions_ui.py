@@ -88,7 +88,7 @@ def test_four_questions_are_answered_in_the_agents_turn_and_told_as_one_message(
 ):
     task, run = _asking(client, forge_project, "Checkout v2: split payment step", FOUR)
     page.set_viewport_size({"width": 1440, "height": 1000})
-    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}")
+    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}/chat")
     turn = page.get_by_test_id("question-turn").last
     expect(turn.get_by_role("tablist", name="Questions", exact=True)).to_be_visible(timeout=30_000)
     expect(page.get_by_test_id("composer-waiting")).to_contain_text("The conductor is waiting for your answer above.")
@@ -169,7 +169,7 @@ def test_one_question_is_answered_with_one_click(
 ):
     task, run = _asking(client, forge_project, "Retry on 4xx", ONE)
     page.set_viewport_size({"width": 1440, "height": 1000})
-    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}")
+    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}/chat")
     turn = page.get_by_test_id("question-turn").last
     expect(turn.get_by_role("radio", name="Retry 5xx and network only", exact=True)).to_be_visible(timeout=30_000)
     expect(turn.get_by_role("tablist")).to_have_count(0)
@@ -203,7 +203,7 @@ def test_open_question_is_visible_and_new_content_preserves_upward_reading(
     )
     task, run = _asking(client, forge_project, "Read context above the open question", ONE, context)
     page.set_viewport_size({"width": 1280, "height": 720})
-    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}")
+    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}/chat")
     turn = page.get_by_test_id("question-turn").last
     expect(turn.get_by_text(ONE["question"], exact=True)).to_be_in_viewport(timeout=30_000)
     for label in [*ONE["choices"], "Something else…"]:
@@ -245,7 +245,7 @@ def test_write_to_the_agent_instead_leaves_the_question_open(
 ):
     task, run = _asking(client, forge_project, "Ask, then a word aside", ONE)
     page.set_viewport_size({"width": 1440, "height": 1000})
-    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}")
+    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}/chat")
     page.get_by_test_id("write-instead").click()
     composer = page.get_by_placeholder("Ask about this task…")
     expect(composer).to_be_focused()
