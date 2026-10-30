@@ -1,4 +1,4 @@
--- 231_conductor_waits.sql — what the task's conductor waits on (wait_for).
+-- 232_conductor_waits.sql — what the task's conductor waits on (wait_for).
 --
 -- One open wait per task: a new wait_for ends the open one ('replaced') in
 -- the same transaction. The phase syncer evaluates open waits each sweep
