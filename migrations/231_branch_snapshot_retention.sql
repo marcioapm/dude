@@ -44,6 +44,12 @@ CREATE INDEX task_branch_capture_requests_snapshot_idx ON task_branch_capture_re
 -- first, so two callers never rewire one lineage at once. A capture
 -- inserting a child of a row holds it (the foreign key's KEY SHARE), so a
 -- lineage never gains a child while it is rewired.
+-- Nor does it make writers wait on the rows it keeps: the children it
+-- rewires are held FOR NO KEY UPDATE, which a foreign key's KEY SHARE does
+-- not conflict with, so a capture of their next child or a feedback item
+-- on them (usually the lineage's latest) goes ahead while the batch is
+-- open. Only the deleted rows themselves (FOR UPDATE) block a writer, and
+-- no rule keeps them.
 CREATE FUNCTION prune_branch_snapshots(p_limit integer) RETURNS integer
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp AS $$
@@ -87,8 +93,12 @@ BEGIN
       CONTINUE;
     END IF;
     SELECT count(*) INTO children FROM task_branch_snapshots WHERE previous_snapshot_id = m.id;
+    -- NO KEY UPDATE: the rewire never changes a child's id, so a capture
+    -- of the child's own child, or a feedback item on it (their foreign
+    -- keys' KEY SHARE), goes ahead while this batch is open; two pruners
+    -- still exclude each other.
     SELECT count(*) INTO held FROM (SELECT 1 FROM task_branch_snapshots WHERE previous_snapshot_id = m.id
-      FOR UPDATE SKIP LOCKED) x;
+      FOR NO KEY UPDATE SKIP LOCKED) x;
     IF held < children THEN
       CONTINUE;
     END IF;

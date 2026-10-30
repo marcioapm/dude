@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -442,4 +443,56 @@ func TestPruneSkipsALineageAnotherCallerHolds(t *testing.T) {
 		t.Errorf("the next pass pruned %d, want 4", n)
 	}
 	f.want("h4", "k3")
+}
+
+// While a batch is open, the children it rewired (usually the lineage's
+// latest) still take a capture's next child and a feedback item: the
+// pruner never makes those writers wait.
+func TestPruneLetsWritersOnTheRewiredLatestGoAhead(t *testing.T) {
+	f := newPruneFixture(t)
+	f.chain("h", 1, "repo_api", 3, 48)
+	ctx := context.Background()
+	var n int
+	err := f.app.InSystem(ctx, "test", func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT prune_branch_snapshots(100)`).Scan(&n); err != nil {
+			return err
+		}
+		// The batch is still open: another session writes on h3.
+		w, err := f.owner.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer w.Rollback(ctx)
+		if _, err := w.Exec(ctx, `SET LOCAL lock_timeout = '2s'`); err != nil {
+			return err
+		}
+		start := time.Now()
+		if _, err := w.Exec(ctx, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref,
+			target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, relation, previous_snapshot_id)
+			VALUES ('h4', $1, 'wi_p', 1, 'repo_api', 'api', 'dude/wi_p', 'main', $2, $2, $3, '[]', 'c', '{}', 'fast-forward', 'h3')`,
+			f.org, shaOf(1), shaOf(9004)); err != nil {
+			return fmt.Errorf("a capture of h3's child waited on the pruner: %w", err)
+		}
+		if _, err := w.Exec(ctx, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, branch_snapshot_id, anchor)
+			VALUES ('fbi_w', $1, 'wi_p', 1, 'per_p', 'b', 'code', 'h3', '{}')`, f.org); err != nil {
+			return fmt.Errorf("a feedback item on h3 waited on the pruner: %w", err)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Errorf("the writes took %v with the batch open", took)
+		}
+		return w.Commit(ctx)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("pruned %d, want 2", n)
+	}
+	f.want("h3", "h4")
+	if got := f.link("h3"); got != "- fast-forward 3" {
+		t.Errorf("h3: %q", got)
+	}
+	if got := f.link("h4"); got != "h3 fast-forward 1" {
+		t.Errorf("h4: %q", got)
+	}
 }
