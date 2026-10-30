@@ -43,6 +43,15 @@ class CockpitGaps(unittest.TestCase):
             Path(SHOTS).mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(Path(SHOTS) / f"{name}.png"))
 
+    def side_by_side(self, page):
+        """Whether the diff is split: an old line with a new line beside it on the same row."""
+        return page.evaluate("""() => {
+          const row = document.querySelector('[data-testid=diff-section] [data-cside=old][data-cline]');
+          const right = row && [...document.querySelectorAll('[data-testid=diff-section] [data-cside=new][data-cline]')]
+            .find(n => Math.abs(n.getBoundingClientRect().top - row.getBoundingClientRect().top) < 2 && n.getBoundingClientRect().left > row.getBoundingClientRect().left + 100);
+          return Boolean(right);
+        }""")
+
     def overflow(self, page):
         return page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
 
@@ -113,6 +122,43 @@ class CockpitGaps(unittest.TestCase):
         expect(details).to_be_visible()
         page.get_by_test_id("diff-section").first.click(position={"x": 400, "y": 60})
         expect(details).to_have_count(0)
+
+    def test_the_first_diff_header_is_near_the_top_at_1440(self):
+        # The bar, and the slim "New changes" line when there is one, are all that stand above the diff.
+        for state in ("populated", "updated"):
+            page = self.page(1440, 900)
+            page.goto(f"{URL}/?fixtures=a&branch={state}#/task/{TASK}/changes")
+            page.get_by_test_id("diff-section").first.wait_for()
+            if state == "updated":
+                expect(page.get_by_test_id("changes-newer")).to_be_visible()
+            top = page.get_by_test_id("diff-section").first.bounding_box()["y"]
+            self.assertLess(top, 420, state)
+
+    def test_phone_changes_are_unified_only_on_a_bar_of_at_most_two_rows(self):
+        page = self.page(390, 844)
+        page.goto(f"{URL}/?fixtures=a&branch=populated#/task/{TASK}/changes")
+        page.get_by_test_id("diff-section").first.wait_for()
+        bar = page.get_by_test_id("changes-bar")
+        expect(page.get_by_test_id("diff-view")).to_be_hidden()
+        self.assertFalse(self.side_by_side(page))
+        expect(bar.locator(".snapshotTotals")).to_be_hidden()
+        # Two rows of toolbar-sized controls at most: the Segmented's height is one row.
+        row = page.get_by_test_id("changes-scope").bounding_box()["height"]
+        self.assertLessEqual(bar.bounding_box()["height"], 2 * row + 24, (bar.bounding_box(), row))
+        self.assertEqual(self.overflow(page), 0)
+
+    def test_split_chosen_on_desktop_turns_unified_on_a_phone(self):
+        page = self.page(1440, 900)
+        page.goto(f"{URL}/?fixtures=a&branch=populated#/task/{TASK}/changes")
+        page.get_by_test_id("diff-view").get_by_role("button", name="Split").click()
+        split = "[data-testid=diff-section] [data-cside=old][data-cline]"
+        page.locator(split).first.wait_for()
+        self.assertTrue(self.side_by_side(page))
+        page.set_viewport_size({"width": 390, "height": 844})
+        expect(page.get_by_test_id("diff-view")).to_be_hidden()
+        page.wait_for_timeout(200)
+        self.assertFalse(self.side_by_side(page))
+        self.assertEqual(self.overflow(page), 0)
 
     def test_phone_header_actions_do_not_overlap_the_title(self):
         # Overview (where a task opens) and Findings scroll the whole page; Changes is a fixed pane.
