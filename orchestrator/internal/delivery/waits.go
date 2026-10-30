@@ -586,8 +586,21 @@ func waitEndedEvent(ctx context.Context, tx pgx.Tx, org, taskID, waitID, conduct
 
 // EndWaitsTx ends the task's open wait with no wake: by WaitTaskEnded as
 // the task closes or starts over (EndWakesTx), WaitConductorEnded as a
-// person ends its conductor (its abort, a pick-up's Try again).
+// person ends its conductor (its abort, a pick-up's Try again). The
+// conductor's end also settles the wait reasons recorded and not yet told
+// (held mid-turn or for a pick-up), as EndWakesTx settles its reasons:
+// nothing tells the next conductor of a wait it did not open.
 func EndWaitsTx(ctx context.Context, tx pgx.Tx, taskID, by string) error {
+	if by == WaitConductorEnded {
+		if _, err := tx.Exec(ctx, `DELETE FROM conductor_wake_attempts o USING conductor_wakes c
+			WHERE o.wake_id = c.id AND c.task_id = $1 AND c.kind = $2 AND c.delivered_at IS NULL`, taskID, WakeWait); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now()
+			WHERE task_id = $1 AND kind = $2 AND delivered_at IS NULL`, taskID, WakeWait); err != nil {
+			return err
+		}
+	}
 	return endOpenWaitsTx(ctx, tx, taskID, by)
 }
 

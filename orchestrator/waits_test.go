@@ -212,6 +212,81 @@ func TestTryingAgainEndsTheStoppedConductorsWait(t *testing.T) {
 	}
 }
 
+// waitReasonsLeft counts the task's wait reasons not yet settled, and
+// the notes the task's conductors were told carrying one.
+func (w *world) waitReasonsLeft(task string) (pending, told int) {
+	w.t.Helper()
+	pending = w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'wait' AND delivered_at IS NULL`, task)
+	told = w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken' AND payload->'reasons' ? 'wait'`, task)
+	return pending, told
+}
+
+// A wait whose deadline passed while the task was stopped has its reason
+// held for the pick-up; Try again ends that conductor, and the reason with
+// it: the new conductor is not told an old wait's digest.
+func TestTryingAgainSettlesTheStoppedConductorsHeldWaitReason(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	conductor := w.talk(task)
+	w.must(task, "wait_for", `{"deadline":"30m"}`)
+	w.stop(ana, task, map[string]any{"note": "wrong plan"})
+	w.until("the conductor to be kept", func() bool { return w.keptRun(conductor) })
+	mustExec(t, w.owner, `UPDATE conductor_waits SET deadline_at = now() - interval '1 second' WHERE task_id = $1`, task)
+	for range 3 {
+		w.pump()
+	}
+	if pending, _ := w.waitReasonsLeft(task); pending != 1 {
+		t.Fatalf("%d wait reasons held for the pick-up, want 1", pending)
+	}
+	w.pickUp(ana, task, map[string]any{"action": "retry", "note": "Ask me first."})
+	w.until("the new conductor", func() bool {
+		runs := w.conductorRuns(task)
+		return len(runs) == 2 && len(w.said(runs[1])) > 0
+	})
+	for range 3 {
+		w.pump()
+	}
+	if pending, told := w.waitReasonsLeft(task); pending != 0 || told != 0 {
+		t.Fatalf("after Try again: %d wait reasons pending, %d notes carrying one", pending, told)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wake_attempts o JOIN conductor_wakes c ON c.id = o.wake_id
+		WHERE c.task_id = $1 AND c.kind = 'wait'`, task); n != 0 {
+		t.Fatalf("the old wait's reason went out %d times", n)
+	}
+}
+
+// A wait whose deadline passed while its conductor was mid-turn has its
+// reason held for the turn's end; a person aborting the conductor settles
+// it: no next sweep starts a conductor for it.
+func TestAbortingTheConductorMidTurnSettlesItsHeldWaitReason(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	conductor := w.talk(task)
+	w.must(task, "wait_for", `{"deadline":"30m"}`)
+	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = NULL WHERE id = $1`, conductor)
+	mustExec(t, w.owner, `UPDATE conductor_waits SET deadline_at = now() - interval '1 second' WHERE task_id = $1`, task)
+	w.sweep()
+	if pending, told := w.waitReasonsLeft(task); pending != 1 || told != 0 {
+		t.Fatalf("mid-turn: %d wait reasons pending, %d told", pending, told)
+	}
+	if status, body := w.call("/internal/runs/"+conductor+"/abort", map[string]any{}); status != 200 {
+		t.Fatalf("abort the conductor: %d %v", status, body)
+	}
+	// Past the wake window: a reason left pending would be delivered now.
+	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '1 minute' WHERE task_id = $1`, task)
+	for range 3 {
+		w.sweep()
+		w.pump()
+	}
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Fatalf("a conductor started after the person stopped it: %v", got)
+	}
+	if pending, told := w.waitReasonsLeft(task); pending != 0 || told != 0 {
+		t.Fatalf("after the abort: %d wait reasons pending, %d notes carrying one", pending, told)
+	}
+}
+
 // A conductor replaced after its call was authenticated, before the tool
 // ran, opens no wait.
 func TestASupersededConductorOpensNoWait(t *testing.T) {
