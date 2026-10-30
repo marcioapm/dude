@@ -218,17 +218,20 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   const placed = useMemo(() => (placements && snapshot ? placeBranchItems(fb.items, { placements, snapshot }) : []),
     [fb.items, placements, snapshot]);
   const byFile = useMemo(() => commentsByFile(placed), [placed]);
-  const { byLine, heads } = useMemo(() => {
+  const { byLine, heads, onLines } = useMemo(() => {
     const byLine = new Map<string, FeedbackItem[]>();
     const heads = new Map<string, Array<{ item: FeedbackItem; head: "outdated" | "unchanged" }>>();
+    // Each file's items under its lines, with where: what decides whether its hunks are drawn again.
+    const onLines = new Map<string, Array<{ item: FeedbackItem; at: PlacedComment["at"] }>>();
     for (const p of placed) {
       if ("head" in p.at) heads.set(p.path, [...(heads.get(p.path) ?? []), { item: p.item, head: p.at.head }]);
       else {
         const key = lineKey(p.path, p.at.side, p.at.endLine);
         byLine.set(key, [...(byLine.get(key) ?? []), p.item]);
+        onLines.set(p.path, [...(onLines.get(p.path) ?? []), { item: p.item, at: p.at }]);
       }
     }
-    return { byLine, heads };
+    return { byLine, heads, onLines };
   }, [placed]);
 
   const [selection, setSelection] = useState<DiffRange | null>(null);
@@ -274,13 +277,11 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
   // editor on it and the card are as they were, so a comment on another file redraws none of this file's hunks.
   const perPath = useRef(new Map<string, AfterLines>());
   const afterLines = useMemo(() => {
-    const items = new Map<string, Array<{ item: FeedbackItem; at: PlacedComment["at"] }>>();
-    for (const p of placed) if (!("head" in p.at)) items.set(p.path, [...(items.get(p.path) ?? []), { item: p.item, at: p.at }]);
     const editorPath = snapshot && editorAt ? editorAt.path : null;
     const next = new Map<string, AfterLine>();
     const kept = new Map<string, AfterLines>();
-    for (const path of new Set([...items.keys(), ...(editorPath ? [editorPath] : [])])) {
-      const sig = JSON.stringify(items.get(path) ?? []);
+    for (const path of new Set([...onLines.keys(), ...(editorPath ? [editorPath] : [])])) {
+      const sig = JSON.stringify(onLines.get(path) ?? []);
       const editor = path === editorPath ? editorAt : null;
       const edFb = editor ? fb : null;
       const was = perPath.current.get(path);
@@ -301,7 +302,7 @@ function useBranchComments({ fb, diff, canStart, you, cursor, onFileComments }: 
     }
     perPath.current = kept;
     return next;
-  }, [placed, byLine, card, fb, snapshot, editorAt, onText, close]);
+  }, [onLines, byLine, card, fb, snapshot, editorAt, onText, close]);
   const renderAfterLineFor = useCallback((path: string) => afterLines.get(path), [afterLines]);
   const renderFileHead = useCallback((path: string) => {
     const off = heads.get(path);
