@@ -23,15 +23,21 @@ The operator has one screen, many agents, and five questions: **what is
 running, what is stuck, what needs me, what did it cost, what did the agent
 do**. Every decision below serves those questions.
 
-The screen they have open all day is the **chat transcript** of an agent
-session (`ChatTranscript` and friends): the agent's narrative, its tool calls, the
-subagents it delegates to, its plan, and the composer through which a human
-answers or steers. Beside it, always, is the **sidebar** (`Sidebar`,
-`NavTree`): what exists, what is active, what needs a person, who is on
-what. Selecting a project or an epic there opens the **board** (`Board`)
-in place of the transcript: the same tasks by lifecycle lane. The
-event ledger (`EventRow`) and `LogStream` are the debugging and audit tools
-behind all of these, reached when something looks off.
+Selecting a task opens its **Overview**, for conductor and policy tasks
+alike: a concise operational summary of recorded state, attention, active
+work, PR health, branch changes and task spend. Explicit transcript,
+session, attention and question links still open their named destination.
+Overview is the first task tab and Changes the second; Chat, Findings,
+Sessions, Feedback, Files, Servers and Activity remain available.
+Agent-session transcripts retain their current grammar: the **chat
+transcript** of an agent session (`ChatTranscript` and friends) is the
+agent's narrative, its tool calls, the subagents it delegates to, its plan,
+and the composer through which a human answers or steers. Beside it,
+always, is the **sidebar** (`Sidebar`, `NavTree`): what exists, what is
+active, what needs a person, who is on what. Selecting a project or an
+epic there opens the **board** (`Board`): the same tasks by lifecycle
+lane. The event ledger (`EventRow`) and `LogStream` are the debugging and
+audit tools behind all of these, reached when something looks off.
 
 1. **Calm under load.** Readable is the goal; noise is the enemy. Readable
    means 15px UI body, 16/22px transcript text, 1.5 for long-form Markdown,
@@ -1090,7 +1096,8 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 ### Board (the overview)
 
 - `Board` is what the main pane shows when the sidebar selection is a
-  project or an epic; a task or agent session opens the transcript. It takes
+  project or an epic; a task opens its Overview, and an agent session its
+  transcript. It takes
   the same `NavProject` / `NavEpic` the sidebar takes — `boardScope` maps a
   `NavRef` to one or the other — so the two can never disagree about what
   exists or what needs you.
@@ -2856,6 +2863,27 @@ scrolling; the layout imposes no fixed height or independent width cap. In a
 flex-column host it grows to the remaining height, so the desktop rail's shade
 reaches the foot of the page however short its blocks are.
 
+`Disclosure` is a section folded on the chrome shade, opened in place: a
+real `<details>` whose summary is a chevron, the `title` and a muted
+tabular `meta` ("6 criteria"), over a body at its full length, labelled
+by the title as a region. Uncontrolled (`defaultOpen`) or controlled
+(`open`, `onOpenChange`, said once per change); `lazy` mounts the body only
+while open. No border, no radius: structure is square. For the details
+under a page's summary, never for what someone must see to act.
+`SettingsDisclosure` stays the settings pages' (320px scroll, "Show").
+
+`RunningRow` is one agent at work now, in a `RunningList` named for
+assistive technology ("Running now"): `avatar` (an `AgentAvatar` with
+`live`), `label`, `detail` (model · status), `activity` (its plan's
+current step or latest tool call, as recorded: never a summary made up for
+the row), `cost` (a `Cost`; omitted when not reported, never $0.00),
+`elapsed` (a live `Duration`) and `action` (Open session, named for the
+Run). Rows are told apart by space, not frames; the figures and the action
+wrap under the words when the row is narrow. Gallery `#ov-running`,
+`#ov-disclosure`, `#ov-states` (active, needs you, ready, not started,
+ended; costs settling, zero, missing) and `#ov-phone`, in both themes and
+densities.
+
 Rail pages pass `RelationList wide` and `Timeline wide` to remove their default
 820px measure, and `MetricGroup joined fill` to spread tiles evenly across the
 main column; callers without those props keep their existing measure.
@@ -2879,10 +2907,26 @@ disabled, interactive focus and action states in both themes and densities.
 
 ### Task tab data mapping
 
-The app opts Overview, Findings, Files and Activity into `PageWithRail`; Servers
+Overview does not reserve the permanent 360px PageWithRail column. Its
+operational group aligns Running now and Changes beside PullRequestPanel,
+stacking below 1050px viewport without hiding controls (the app decides
+by a container query on the Overview's own pane, `taskoverview`, at 1000px:
+the pane, not the window, so a wide sidebar never squeezes two columns).
+The sidebar keeps its existing width and responsive behavior. Summary
+precedes details in DOM and focus order. Task spend is prominent and
+labeled all attempts; selected-attempt cost and all detailed metrics
+remain available (a `Disclosure` holds the full Time & cost: every tile
+and the run table). Findings, Files, Servers and Activity retain existing
+rail rules. This is a deliberate Overview-only amendment, not a new shell.
+On Overview every task notice (escalation, stalled, held, blocked,
+stopped, lifecycle, the earlier attempt) renders in one region above the
+figures, the needs-you `Callout` (attention) first; raised regions on it
+(Running now, Changes) take `shadow-1` in light.
+
+The app opts Findings, Files and Activity into `PageWithRail`; Servers
 moves its serving-run facts and bulk actions into the same rail. PR panels retain
 checks, reviewers and permission-aware actions. Overview facts use the real task
-owner and decider and the header's selected attempt; cost stays in Time & cost.
+owner and decider and the header's selected attempt.
 Finding status/severity counts use all findings in the header-selected attempt,
 before composing filters. Status vocabulary is Open, Resolved, Superseded and
 Accepted (there is no separate dismissed status); Note is a severity. Expanded
@@ -2902,7 +2946,7 @@ including every attempt. Empty selections mean all; dimensions compose with AND,
 multiple values within one dimension with OR.
 
 A task that took over existing work says so with the components already
-here. Overview's "This task" block adds **Starts from**: "#12 Greet in
+here. Overview's "This task" block (under Servers, previews & machines) adds **Starts from**: "#12 Greet in
 Portuguese · `feature/greet` → `main`", the pull request a link to GitHub,
 or for a branch "`stack/top` → `stack/base`"; new work has no such line.
 Its pipeline starts at Review: no Implement step is drawn, not even as

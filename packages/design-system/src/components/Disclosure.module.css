@@ -1,0 +1,48 @@
+/* A section folded on the chrome shade: no border, no radius (structure is square). */
+.root {
+  min-width: 0;
+  background: var(--ds-color-chrome);
+}
+.summary {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-height: var(--ds-size-row-comfortable);
+  padding: 0 var(--ds-space-16);
+  list-style: none;
+  font-size: var(--ds-text-sm);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-text-strong);
+}
+.summary::-webkit-details-marker {
+  display: none;
+}
+.summary:hover {
+  background: var(--ds-color-hover-wash);
+}
+.summary:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
+}
+.chevron {
+  flex: none;
+  color: var(--ds-color-text-muted);
+  transition: rotate var(--ds-duration-fast) var(--ds-ease-standard);
+}
+.root[open] > .summary .chevron {
+  rotate: 90deg;
+}
+.title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.meta {
+  min-width: 0;
+  font-weight: var(--ds-weight-regular);
+  color: var(--ds-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.body {
+  min-width: 0;
+  padding: var(--ds-space-4) var(--ds-space-16) var(--ds-space-16);
+}

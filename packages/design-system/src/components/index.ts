@@ -240,3 +240,7 @@ export type {
   ChatMadeRoute, ChatProvider, ChatRoute, ConnectionCardProps, ExternalMessage, ExternalThreadProps, FactListProps, IdentityPairProps, InstructionLayer,
   InstructionStackProps, OriginFactProps, PromptTextProps, ProviderGlyphProps, ProviderListProps, RouteBadgeProps, RoutingLineProps,
 } from "./Chat.tsx";
+export { Disclosure } from "./Disclosure.tsx";
+export type { DisclosureProps } from "./Disclosure.tsx";
+export { RunningList, RunningRow } from "./RunningRow.tsx";
+export type { RunningRowProps } from "./RunningRow.tsx";
