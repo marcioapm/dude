@@ -20,6 +20,8 @@ export type Place =
   | { view: "tree"; ref: NavRef; tab?: TaskTab; attempt?: number; epicView?: EpicView }
   // sub: deeper than a page, as the page reads it (Automations: "<automation>/runs/<run>").
   | { view: "projectSettings"; projectId: string; page?: string; sub?: string }
+  // A project's running servers, everyone's (`#/project/<id>/servers`).
+  | { view: "projectServers"; projectId: string }
   // sub: deeper than a page, as the page reads it (Images: "<image>/<tab>", "<image>/builds/<build>").
   | { view: "orgSettings"; page?: string; sub?: string }
   | { view: "mySettings" }
@@ -102,6 +104,7 @@ export function parsePlace(full: string): Place | null {
   }
   if (!kind || !id || !TREE_KINDS.includes(kind as NavRef["kind"])) return null;
   const decoded = decodeURIComponent(id);
+  if (kind === "project" && view === "servers" && !page) return { view: "projectServers", projectId: decoded };
   if (kind === "project" && view === "settings") {
     const sub = rest.filter((p): p is string => Boolean(p)).map((p) => decodeURIComponent(p)).join("/");
     if (!page) return { view: "projectSettings", projectId: decoded };
@@ -151,6 +154,8 @@ function bareHash(place: Place | null): string {
       return `#/help/${encodeURIComponent(place.page)}${place.section ? `/${encodeURIComponent(place.section)}` : ""}`;
     case "projectSettings":
       return `#/project/${encodeURIComponent(place.projectId)}/settings${place.page ? `/${place.page}` : ""}${place.page && place.sub ? `/${place.sub.split("/").map(encodeURIComponent).join("/")}` : ""}`;
+    case "projectServers":
+      return `#/project/${encodeURIComponent(place.projectId)}/servers`;
     case "tree":
       if (place.ref.kind === "epic" && place.epicView === "coordination") return `#/epic/${encodeURIComponent(place.ref.id)}/coordination`;
       return `#/${place.ref.kind}/${encodeURIComponent(place.ref.id)}${place.tab ? `/${place.tab}` : ""}${place.attempt ? `?attempt=${place.attempt}` : ""}`;

@@ -14,12 +14,13 @@ import type { ServerScenario } from "@dude/design-system/fixtures/servers";
 import { PREVIEW_DOMAIN, RUN_SUFFIX, previewEgress, previewRun, server, serverRecipes } from "@dude/design-system/fixtures/servers";
 import type { NavProject } from "@dude/design-system";
 import { canStart, canStop, feedbackHolds } from "@dude/design-system";
-import type { AddServer, AgentEgressMode, PersistedEvent, ProjectSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SecretRecipient, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
+import type { AddServer, AgentEgressMode, OverlayAnchor, PersistedEvent, PreviewFeedbackItem, ProjectSecret, PreviewSettings, Recipe, RecipeInput, RefusedName, RunServer, SecretRecipient, SessionDetail, SessionsList, SettingsPatch, SettingsResponse, TaskServers } from "@dude/domain";
 import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, DEFAULT_SECRET_RECIPIENTS, EPIC_NOTES_MAX, egressAllows, egressProblem, SECRET_RECIPIENTS_REQUIRED, secretHint, secretNameProblem } from "@dude/domain";
 import { EventTypes, TERMINAL_RUN_STATUSES, UNARCHIVE_FIRST, closedBy, lifecycleEnded } from "@dude/domain";
 import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
-import { RUN_KEY } from "./scenario.ts";
+import { RUN_KEY, SERVERS_KEY } from "./scenario.ts";
+import { KAI_SUBMIT, TASK_WEB, previewFeedbackFor, runningRuns, taskServerFeedback } from "./projectServers.ts";
 import { FixtureAutomations } from "./automations.ts";
 import { automationActivity, automationLater } from "./automationActivity.ts";
 import { FixtureOrgSecrets } from "./orgSecrets.ts";
@@ -45,7 +46,7 @@ const CHAT_BUILT_IN = "You route a message someone wrote to dude, a software-del
  * would — so the screens re-read through the same path they do for real.
  */
 const streams = new Set<QuietEventSource>();
-const SCOPES = ["runId", "taskId", "sessionId", "automationRunId"] as const;
+const SCOPES = ["runId", "taskId", "sessionId", "projectId", "automationRunId"] as const;
 let streamCursor = 1_000_000;
 let ledger: ((params: LedgerQuery) => PersistedEvent[]) | null = null;
 class QuietEventSource extends EventTarget {
@@ -341,6 +342,76 @@ export class FixtureClient extends ApiClient {
     if (this.#servers.run?.kind !== "preview" || !web) throw new ApiError(404, "not_found", `no task of yours has a preview at ${origin}`);
     // The fixtures' organisation has no slug: its id stands for one, as membershipsOf reads it.
     return { organizationSlug: ORG.id, taskId: TASK_ID, taskKey: this.#task.key ?? "", server: web.name };
+  }
+
+  /** The project Servers page's read: the mockup's Runs, or `?servers=` none, failed, loading. */
+  override async runningServers(_projectId: string) {
+    const as = localStorage.getItem(SERVERS_KEY);
+    await wait(150);
+    if (as === "loading") return new Promise<never>(() => {});
+    if (as === "failed") throw new ApiError(503, "unavailable", "the orchestrator did not answer");
+    const runs = as === "none" ? [] : runningRuns();
+    if (this.#kaiSubmitted) {
+      const web = runs[0]!.servers[0]!;
+      runs[0]!.servers[0] = { ...web, feedback: { ...web.feedback, open: web.feedback.open + 1, authors: web.feedback.authors + 1 } };
+    }
+    return { runs };
+  }
+
+  #kaiSubmitted = false;
+  #kaiScheduled = false;
+
+  override async previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; limit?: number } = {}) {
+    await wait(120);
+    // `?servers=live`: Kai submits from his own window a moment after the list is first read, and the stream says so.
+    if (localStorage.getItem(SERVERS_KEY) === "live" && !this.#kaiScheduled && runId === "run_pv_checkout" && server === "web") {
+      this.#kaiScheduled = true;
+      later(() => {
+        this.#kaiSubmitted = true;
+        emit({ eventType: EventTypes.PreviewFeedbackSubmitted, occurredAt: new Date().toISOString(), organizationId: ORG.id, projectId: PROJECT.id,
+          taskId: null, runId: null, sessionId: null, workflowRunId: null, actor: { type: "person", id: "u_kai" }, source: "control-plane",
+          correlationId: null, causationId: null, payload: { feedbackId: "fbi_pf_new", previewRunId: runId, server, status: "open" } });
+      }, 1200);
+    }
+    const all = [...this.#submitted.filter((i) => i.previewRunId === runId && i.serverName === server).reverse(),
+      ...(this.#kaiSubmitted && runId === "run_pv_checkout" && server === "web" ? [KAI_SUBMIT()] : []), ...previewFeedbackFor(runId, server)];
+    const status = params.status ?? "open";
+    const listed = all.filter((i) => status === "all" || i.status === status);
+    const from = params.after ? listed.findIndex((i) => i.id === params.after) + 1 : 0;
+    const limit = params.limit ?? 50;
+    const page = listed.slice(from, from + limit);
+    return { feedback: page, nextCursor: from + limit < listed.length ? page.at(-1)!.id : null };
+  }
+
+  override async serverFeedback(taskId: string, origin: string) {
+    await wait(120);
+    const feedback = taskId === TASK_ID && origin === TASK_WEB ? taskServerFeedback() : [];
+    return { feedback, blocking: feedback.filter((i) => feedbackHolds(i.status, i.resolutionPending)).length };
+  }
+
+  /** A branch preview server of the Servers page's world, when it is at `origin`. */
+  override async validatePreviewServer(runId: string, server: string, origin: string) {
+    const run = runningRuns().find((r) => r.id === runId && r.kind === "preview");
+    const at = run?.servers.find((s) => s.name === server && s.url && new URL(s.url).origin === origin);
+    if (!run || !at) throw new ApiError(404, "not_found", "This preview ended. Open the new preview and connect again.");
+    return { kind: "branch" as const, organizationId: ORG.id, organizationSlug: ORG.id, projectId: PROJECT.id, previewRunId: runId, branch: run.branch ?? "", server };
+  }
+
+  #submitted: PreviewFeedbackItem[] = [];
+  override async submitPreviewFeedback(runId: string, server: string, input: { body: string; anchor: OverlayAnchor & { attachmentId?: string }; submissionKey: string }) {
+    const known = this.#submitted.find((i) => i.id === `fbi_fx_${input.submissionKey}`);
+    if (known) return known;
+    const item: PreviewFeedbackItem = { id: `fbi_fx_${input.submissionKey}`, projectId: PROJECT.id, previewRunId: runId, serverName: server,
+      author: { id: YOU, name: PEOPLE[0]!.name }, body: input.body, anchor: input.anchor, captureSha: null, status: "open",
+      createdAt: new Date().toISOString(), resolvedAt: null, resolvedBy: null, resolutionNote: "", history: [] };
+    this.#submitted.push(item);
+    return item;
+  }
+
+  override async uploadPreviewAttachment(_runId: string, _server: string, image: { bytes: Uint8Array; type: string }) {
+    const id = `att_fx${this.#uploads.size + 1}`;
+    this.#uploads.set(id, new Blob([image.bytes as BlobPart], { type: image.type }));
+    return id;
   }
 
   /**

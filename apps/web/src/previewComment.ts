@@ -205,6 +205,8 @@ export interface CommentingView {
   readonly server: string | null;
   /** Drafts saved from the task's windows since each was opened or adopted. */
   readonly saved: number;
+  /** That window was claimed from another of this person's dude tabs. */
+  readonly claimed?: boolean;
 }
 
 export interface CommentingDeps {
@@ -287,10 +289,15 @@ let arrivedFor: string | null = null;
 
 /** Whether this tab arrived at `taskId` from a preview's Connect to dude. */
 export function arrivedFromPreview(win: Pick<Window, "sessionStorage">, taskId: string): boolean {
+  return previewArrival(win) === taskId;
+}
+
+/** What this tab arrived at from a preview's Connect to dude, or null. */
+export function previewArrival(win: Pick<Window, "sessionStorage">): string | null {
   try {
-    return win.sessionStorage.getItem(ARRIVAL_KEY) === taskId;
+    return win.sessionStorage.getItem(ARRIVAL_KEY);
   } catch {
-    return arrivedFor === taskId;
+    return arrivedFor;
   }
 }
 
@@ -405,7 +412,8 @@ export class PreviewCommenting {
 
   get view(): CommentingView {
     const pick = this.#latest((p) => p.state === "open") ?? this.#latest((p) => p.state === "waiting") ?? this.#latest((p) => p.state !== "idle");
-    return { state: pick?.state ?? "idle", server: pick?.server ?? null, saved: this.#panes.reduce((n, p) => n + p.saved, 0) };
+    return { state: pick?.state ?? "idle", server: pick?.server ?? null, saved: this.#panes.reduce((n, p) => n + p.saved, 0),
+      ...(pick?.claimed ? { claimed: true } : {}) };
   }
 
   // The window last opened, adopted or heard from among those that `fits`.

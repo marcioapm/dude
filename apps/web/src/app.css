@@ -2234,3 +2234,166 @@ body {
   gap: var(--ds-space-4);
   margin: 0;
 }
+
+/* A project's running servers: groups by Run, each a container so its rows stack on a phone. */
+.projectServersBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-16);
+  max-width: 1100px;
+}
+.projectServersTools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8) var(--ds-space-16);
+}
+.projectServersSearch {
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+.projectServersBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+}
+.projectServersBlock + .projectServersBlock {
+  margin-top: var(--ds-space-8);
+}
+.projectServersBlock > h2 {
+  margin: 0;
+}
+.projectServersCenter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-8);
+  padding: var(--ds-space-48) 0;
+}
+.projectServersFailed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-8);
+  width: 100%;
+}
+.serverGroup {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+  padding: var(--ds-space-12) var(--ds-space-16);
+  background: var(--ds-color-surface);
+}
+.serverGroup [data-server] > div:nth-child(2) > div:first-child {
+  flex-wrap: wrap;
+  row-gap: var(--ds-space-4);
+}
+.serverGroup [data-server] > div:nth-child(2) > div:first-child > span:not(:first-child) {
+  white-space: normal;
+  min-width: 0;
+}
+.serverGroup [data-server] > div:last-child {
+  flex-wrap: wrap;
+}
+.serverGroupHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+  min-width: 0;
+  font-size: var(--ds-text-sm);
+}
+.serverGroupBranch {
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-strong);
+  overflow-wrap: anywhere;
+}
+.serverGroupTitle {
+  flex: 1 1 120px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-muted);
+}
+.serverGroupGrow {
+  flex: 1 1 0;
+}
+.serverGroupWho {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  white-space: nowrap;
+  color: var(--ds-color-text-muted);
+}
+.serverMuted {
+  color: var(--ds-color-text-muted);
+}
+.serverLanded {
+  background: var(--ds-color-accent-subtle);
+}
+.serverFoldItem {
+  list-style: none;
+}
+.serverFold {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-12);
+  padding: var(--ds-space-12) 0 var(--ds-space-8) var(--ds-space-16);
+  margin-left: var(--ds-space-8);
+  box-shadow: inset 2px 0 0 var(--ds-color-border-subtle);
+}
+.serverFoldBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-8);
+}
+.serverFoldRight {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ds-space-8);
+}
+.serverFoldNote {
+  margin: 0;
+  font-size: var(--ds-text-xs);
+  line-height: 1.5;
+  color: var(--ds-color-text-muted);
+}
+.serverFoldEmpty {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  line-height: 1.6;
+  color: var(--ds-color-text-muted);
+}
+.serverFoldNew {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-6);
+}
+.serverFoldNew > :first-child {
+  align-self: flex-start;
+}
+@container (max-width: 520px) {
+  .serverGroupWho {
+    width: 100%;
+  }
+}
+@media (max-width: 700px) {
+  .projectServersBody {
+    padding: var(--ds-space-12) var(--ds-space-12) var(--ds-space-32);
+  }
+  .serverGroup {
+    padding: var(--ds-space-12);
+  }
+  .serverFold {
+    padding-left: var(--ds-space-8);
+    margin-left: 0;
+  }
+}

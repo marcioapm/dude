@@ -86,6 +86,15 @@ describe("places", () => {
       .toEqual({ view: "projectSettings", projectId: "prj_1", page: "automations", sub: "aut_1/runs" });
   });
 
+  test("a project's Servers page reads back, in an organisation too; it is not the project's board", () => {
+    expect(parsePlace("#/project/prj_1/servers")).toEqual({ view: "projectServers", projectId: "prj_1" });
+    expect(formatPlace({ view: "projectServers", projectId: "prj_1" })).toBe("#/project/prj_1/servers");
+    expect(parsePlace("#/o/acme/project/prj%201/servers")).toEqual({ view: "projectServers", projectId: "prj 1" });
+    expect(parsePlace(formatPlace({ view: "projectServers", projectId: "p/2" }))).toEqual({ view: "projectServers", projectId: "p/2" });
+    // Anything deeper is not a page of its own.
+    expect(parsePlace("#/project/prj_1/servers/x")).toEqual({ view: "tree", ref: { kind: "project", id: "prj_1" } });
+  });
+
   test("help, a guide page and a section of it read back, in an organisation as the guide links them", () => {
     for (const hash of ["#/help", "#/help/settings", "#/help/settings/delivery"]) {
       expect(formatPlace(parsePlace(hash))).toBe(hash);

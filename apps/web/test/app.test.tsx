@@ -50,6 +50,31 @@ async function onServers(page: HTMLElement) {
   await until(() => panel.querySelector("[data-testid=servers-panel]"), "the servers in the selected panel");
 }
 
+describe("a project's Servers page", () => {
+  test("the board says Servers · N between New epic and Settings, and it opens the project's Servers page", async () => {
+    const page = await app(`#/project/${PROJECT.id}`, new FixtureClient("a"));
+    const button = await until(() => {
+      const b = page.querySelector<HTMLElement>("[data-testid=servers-button]");
+      return b?.textContent === "Servers · 6" ? b : null;
+    }, "Servers · 6");
+    const order = [...page.querySelectorAll<HTMLElement>("[data-testid=new-epic], [data-testid=servers-button], [data-testid=project-settings-button]")]
+      .map((b) => b.dataset.testid);
+    expect(order).toEqual(["new-epic", "servers-button", "project-settings-button"]);
+    await click(button);
+    expect(window.location.hash).toBe(`#/project/${PROJECT.id}/servers`);
+    await until(() => page.querySelector("[data-testid=servers-page] [data-testid=server-group]"), "the page's groups");
+    expect(document.title).toStartWith(`${PROJECT.name} · Servers`);
+  });
+
+  test("while the count is unknown the button says Servers", async () => {
+    const client = new FixtureClient("a");
+    client.runningServers = () => new Promise(() => {});
+    const page = await app(`#/project/${PROJECT.id}`, client);
+    const button = await until(() => page.querySelector<HTMLElement>("[data-testid=servers-button]"), "the button");
+    expect(button.textContent).toBe("Servers");
+  });
+});
+
 describe("Waiting routes and sidebar", () => {
   test("the others deep link selects its tab; the sidebar has no others row and its Waiting on you stays current", async () => {
     const page = await app("#/waiting/others", new FixtureClient("a"));

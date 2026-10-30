@@ -12,7 +12,7 @@
 import type { FeedbackItem, OverlayPin, OverlayTheme, PreviewFeedbackItem, RunningRun, RunningServer } from "@dude/domain";
 import { OVERLAY_LIMITS, overlayPage } from "@dude/domain";
 import { ApiError, type ApiClient } from "./api/client.ts";
-import { PreviewCommenting, arrivedFromPreview, httpsOriginOf, pinsFor, type CommentingState } from "./previewComment.ts";
+import { PreviewCommenting, arrivedFromPreview, httpsOriginOf, markPreviewArrival, previewArrival, type CommentingState } from "./previewComment.ts";
 
 /** A server a target was opened for, as the page names it. */
 export interface ServerRef {
@@ -27,6 +27,44 @@ export const branchWindowName = (r: ServerRef): string => `dude-preview-${r.runI
 
 /** Where an arrival from a branch preview's Connect to dude is kept (previewComment's arrival key). */
 export const branchArrival = (r: ServerRef): string => `branch:${serverKey(r)}`;
+
+const LANDING_KEY = "dude-preview-landing";
+
+/** A branch preview's Connect to dude, as this tab keeps it while it is on the project's Servers page. */
+export interface ServerLanding extends ServerRef {
+  readonly projectId: string;
+  readonly branch: string;
+  readonly origin: string;
+}
+
+/**
+ * This tab came from a branch preview's Connect to dude: kept in the tab's
+ * sessionStorage, never the URL, with markPreviewArrival's key so the
+ * Servers page adopts this tab's own window.opener and nothing else.
+ */
+export function markServerLanding(win: Pick<Window, "sessionStorage">, landing: ServerLanding): void {
+  markPreviewArrival(win, branchArrival(landing));
+  try {
+    win.sessionStorage.setItem(LANDING_KEY, JSON.stringify(landing));
+  } catch {
+    memoryLanding = landing;
+  }
+}
+
+let memoryLanding: ServerLanding | null = null;
+
+/** The landing this tab arrived with on `projectId`'s Servers page, or null. */
+export function serverLanding(projectId: string, win: Pick<Window, "sessionStorage"> = window): ServerLanding | null {
+  let found: ServerLanding | null = memoryLanding;
+  try {
+    const raw = win.sessionStorage.getItem(LANDING_KEY);
+    found = raw ? (JSON.parse(raw) as ServerLanding) : found;
+  } catch {
+    // The module's copy.
+  }
+  if (!found || found.projectId !== projectId || previewArrival(win) !== branchArrival(found)) return null;
+  return found;
+}
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
@@ -87,6 +125,7 @@ export class ServerWindows {
   readonly #onChange: () => void;
   // Servers whose window another of this person's dude tabs took over: shown as moved.
   readonly #moved = new Set<string>();
+  readonly #claimed = new Set<string>();
 
   constructor(win: Window, client: ApiClient, ctx: WindowsContext, onChange: () => void) {
     this.#win = win;
@@ -116,6 +155,24 @@ export class ServerWindows {
   /** The servers whose window another of this person's dude tabs took. */
   moved(): ReadonlySet<string> {
     return this.#moved;
+  }
+
+  /** The servers whose window this tab claimed from another of this person's dude tabs, latest last. */
+  claimed(): ReadonlyArray<string> {
+    return [...this.#claimed];
+  }
+
+  /** What this tab knows of the Runs it has windows for, only their connected servers: listed when the read fails. */
+  connectedRuns(): RunningRun[] {
+    const on = this.connected();
+    const runs = new Map<string, RunningRun>();
+    for (const t of this.#targets.values()) {
+      const servers = t.run.servers.filter((s) => on.has(`${t.run.id}/${s.name}`));
+      if (servers.length === 0) continue;
+      const had = runs.get(t.run.id);
+      runs.set(t.run.id, { ...t.run, servers: [...(had?.servers ?? []), ...servers.filter((s) => !had?.servers.includes(s))] });
+    }
+    return [...runs.values()];
   }
 
   /**
@@ -206,9 +263,17 @@ export class ServerWindows {
       onSaved: () => undefined,
       onOpenItem: () => undefined,
       onChange: (view) => {
-        if (view.server) target.states.set(view.server, view.state);
-        else if (branch) target.states.set(server, view.state);
-        if (view.state === "moved") this.#moved.add(serverKey({ runId: run.id, server: view.server ?? server }));
+        const name = view.server ?? server;
+        const at = serverKey({ runId: run.id, server: name });
+        target.states.set(name, view.state);
+        if (view.state === "moved") {
+          this.#moved.add(at);
+          this.#claimed.delete(at);
+        }
+        if (view.state === "open" && view.claimed) {
+          this.#claimed.delete(at);
+          this.#claimed.add(at);
+        }
         this.#onChange();
       },
       openerArrived: () => arrivedFromPreview(this.#win, branchArrival(ref)),
@@ -240,6 +305,26 @@ export class ServerWindows {
       // Pins are a nicety beside commenting: kept as they were.
     }
   }
+}
+
+/** The one ServerWindows of this dude tab: its connections outlive the Servers page being left and opened again. */
+let tabs: { win: Window; client: ApiClient; windows: ServerWindows; listeners: Set<() => void> } | null = null;
+
+export function tabWindows(win: Window, client: ApiClient, ctx: WindowsContext): { windows: ServerWindows; subscribe: (fn: () => void) => () => void } {
+  if (!tabs || tabs.win !== win || tabs.client !== client) {
+    tabs?.windows.dispose();
+    const listeners = new Set<() => void>();
+    tabs = { win, client, listeners, windows: new ServerWindows(win, client, ctx, () => { for (const fn of listeners) fn(); }) };
+  }
+  const t = tabs;
+  t.windows.context = ctx;
+  return { windows: t.windows, subscribe: (fn) => { t.listeners.add(fn); return () => t.listeners.delete(fn); } };
+}
+
+/** For tests: forget the tab's windows. */
+export function resetTabWindows(): void {
+  tabs?.windows.dispose();
+  tabs = null;
 }
 
 /** The API's refusal (a 4xx) is definite; anything else may have landed and is retryable. */

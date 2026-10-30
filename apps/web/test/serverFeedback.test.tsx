@@ -1,0 +1,152 @@
+/**
+ * A server's feedback folded under its row: a branch preview's (open and
+ * resolved, paged honestly, a failed read with Try again) and a task's
+ * (its statuses, your own draft first, the Feedback tab link), and the
+ * project's stream moving it: a submit from someone else's window arrives
+ * marked New, the row's counts move, "Updated just now".
+ */
+
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { EventTypes } from "@dude/domain";
+import { ApiError, type ApiClient } from "../src/api/client.ts";
+import { FixtureClient, emit } from "../src/fixtures/client.ts";
+import { SERVERS_KEY } from "../src/fixtures/scenario.ts";
+import { ORG, PROJECT, TASK_ID } from "../src/fixtures/data.ts";
+import { ProjectServersScreen } from "../src/screens/ProjectServersScreen.tsx";
+import { resetTabWindows } from "../src/serverWindows.ts";
+import { act, click, mount, settle, until } from "./dom.ts";
+
+const unmounts: Array<() => Promise<void>> = [];
+beforeEach(() => {
+  localStorage.removeItem(SERVERS_KEY);
+  resetTabWindows();
+});
+afterEach(async () => {
+  for (const u of unmounts.splice(0)) await u();
+  localStorage.removeItem(SERVERS_KEY);
+  resetTabWindows();
+});
+
+async function page(client: ApiClient = new FixtureClient("a")) {
+  const opened: string[] = [];
+  const { container, unmount } = await mount(<ProjectServersScreen client={client} projectId={PROJECT.id} projectName="web-console"
+    onBoard={() => {}} onTaskFeedback={(id) => opened.push(id)} />);
+  unmounts.push(unmount);
+  await until(() => container.querySelector('[data-testid="server-group"]'), "the list");
+  return { container, opened };
+}
+
+const tid = (root: ParentNode, id: string) => root.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+const row = (root: ParentNode, key: string) => root.querySelector<HTMLElement>(`[data-key="${key}"]`)!;
+const option = (fold: HTMLElement, starts: string) => [...fold.querySelectorAll<HTMLButtonElement>('[data-testid="fold-filter"] button')].find((b) => b.textContent!.startsWith(starts))!;
+
+async function unfold(container: HTMLElement, key: string): Promise<HTMLElement> {
+  await click(tid(row(container, key), "server-fold-toggle")!);
+  const fold = await until(() => container.querySelector<HTMLElement>('[data-testid="server-fold"]'), "the fold");
+  await until(() => (fold.querySelector('[data-testid="fold-item"], .serverFoldEmpty, [data-testid="fold-error"]') ? fold : null), "its feedback");
+  return fold;
+}
+
+test("a branch preview server's feedback: everyone's, open and resolved, with the resolution as its thread", async () => {
+  const { container } = await page();
+  const toggle = tid(row(container, "run_pv_checkout/web"), "server-fold-toggle")!;
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  const fold = await unfold(container, "run_pv_checkout/web");
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(fold.dataset.kind).toBe("preview");
+  expect([...fold.querySelectorAll('[data-testid="fold-filter"] button')].map((b) => b.textContent)).toEqual(["All 3", "Open 2", "Resolved 1"]);
+  expect(fold.querySelectorAll('[data-testid="fold-item"]').length).toBe(3);
+  expect(fold.textContent).toContain("Ana Ribeiro");
+  expect(fold.textContent).toContain("Tom Okafor");
+  expect(fold.textContent).toContain("Increased the contrast and spacing around the delivery estimate.");
+  await click(option(fold, "Open"));
+  expect([...fold.querySelectorAll<HTMLElement>('[data-testid="fold-item"]')].map((i) => i.dataset.status)).toEqual(["open", "open"]);
+  await click(option(fold, "Resolved"));
+  expect([...fold.querySelectorAll<HTMLElement>('[data-testid="fold-item"]')].map((i) => i.dataset.status)).toEqual(["resolved"]);
+  // A preview server has no task: no Feedback tab link, no drafts.
+  expect(fold.querySelectorAll('[data-testid="task-feedback-link"], [data-testid="my-draft"]').length).toBe(0);
+});
+
+test("a long list is paged with Load more, never cut short", async () => {
+  class Many extends FixtureClient {
+    override async previewFeedback(runId: string, server: string, params: { status?: "open" | "resolved" | "all"; after?: string; limit?: number } = {}) {
+      const base = (await super.previewFeedback("run_pv_checkout", "web", { status: "all" })).feedback[0]!;
+      const all = Array.from({ length: 45 }, (_, i) => ({ ...base, id: `fbi_m${String(i).padStart(2, "0")}`, createdAt: new Date(Date.now() - i * 60_000).toISOString() }));
+      void runId; void server;
+      const from = params.after ? all.findIndex((i) => i.id === params.after) + 1 : 0;
+      const page = all.slice(from, from + (params.limit ?? 50));
+      return { feedback: page, nextCursor: from + page.length < all.length ? page.at(-1)!.id : null };
+    }
+  }
+  const { container } = await page(new Many("a"));
+  const fold = await unfold(container, "run_pv_checkout/web");
+  expect(fold.querySelectorAll('[data-testid="fold-item"]').length).toBe(20);
+  await click(tid(fold, "fold-more")!);
+  await until(() => (fold.querySelectorAll('[data-testid="fold-item"]').length === 40 ? true : null), "the second page");
+  await click(tid(fold, "fold-more")!);
+  await until(() => (fold.querySelectorAll('[data-testid="fold-item"]').length === 45 ? true : null), "the last page");
+  expect(fold.querySelectorAll('[data-testid="fold-more"]').length).toBe(0);
+});
+
+test("a failed read is an error with Try again, never an empty list", async () => {
+  class Down extends FixtureClient {
+    down = true;
+    override async previewFeedback(runId: string, server: string, params?: { status?: "open" | "resolved" | "all"; after?: string; limit?: number }) {
+      if (this.down) throw new ApiError(503, "unavailable", "the database is away");
+      return super.previewFeedback(runId, server, params);
+    }
+  }
+  const client = new Down("a");
+  const { container } = await page(client);
+  const fold = await unfold(container, "run_pv_checkout/web");
+  expect(tid(fold, "fold-error")!.textContent).toContain("Couldn't read this server's feedback");
+  expect(fold.querySelectorAll(".serverFoldEmpty").length).toBe(0);
+  client.down = false;
+  await click([...tid(fold, "fold-error")!.querySelectorAll("button")].find((b) => b.textContent?.includes("Try again"))!);
+  await until(() => (fold.querySelectorAll('[data-testid="fold-item"]').length === 3 ? true : null), "the list");
+  expect(fold.querySelectorAll('[data-testid="fold-error"]').length).toBe(0);
+});
+
+test("a task's server: its statuses, your own draft first as Draft · only you, and the task's Feedback tab", async () => {
+  const { container, opened } = await page();
+  const fold = await unfold(container, "run_web142/web");
+  expect(fold.dataset.kind).toBe("task");
+  const draft = tid(fold, "my-draft")!;
+  // Drafts come before every submitted item.
+  const order = [...fold.querySelectorAll('[data-testid="my-draft"], [data-testid="fold-item"]')].map((e) => (e as HTMLElement).dataset.testid);
+  expect(order[0]).toBe("my-draft");
+  expect(draft.textContent).toContain("Placeholder disappears too early");
+  expect([...fold.querySelectorAll('[data-testid="fold-filter"] button')].map((b) => b.textContent)).toEqual(["All 4", "Open 2", "Resolved 2"]);
+  await click(option(fold, "Open"));
+  expect([...fold.querySelectorAll<HTMLElement>('[data-testid="fold-item"]')].map((i) => i.dataset.status).sort()).toEqual(["delivered", "open"]);
+  await click(option(fold, "Resolved"));
+  expect([...fold.querySelectorAll<HTMLElement>('[data-testid="fold-item"]')].map((i) => i.dataset.status).sort()).toEqual(["replied", "resolved"]);
+  const link = tid(fold, "task-feedback-link")!;
+  expect(link.textContent).toBe("WEB-142 Feedback tab");
+  await click(link);
+  expect(opened).toEqual([TASK_ID]);
+});
+
+test("someone else's submit arrives without a reload: at the top, marked New, the row's counts moved, Updated just now", async () => {
+  localStorage.setItem(SERVERS_KEY, "live");
+  const { container } = await page();
+  const fold = await unfold(container, "run_pv_checkout/web");
+  expect(fold.querySelectorAll('[data-testid="new-item"]').length).toBe(0);
+  // The fixture's Kai submits a moment after the fold's first read, and the project stream says so.
+  const fresh = await until(() => tid(fold, "new-item"), "Kai's comment", 120);
+  expect(fresh.textContent).toContain("Total jumps when the delivery estimate loads");
+  expect(fold.querySelector('[data-testid="new-item"], [data-testid="fold-item"]')).toBe(fresh);
+  expect(tid(fold, "live-note")!.textContent).toBe("Updated just now");
+  await until(() => (tid(row(container, "run_pv_checkout/web"), "server-fold-toggle")!.textContent === "3 open · 1 resolved" ? true : null), "the counts");
+  expect(tid(row(container, "run_pv_checkout/web"), "commenting-count")!.textContent).toContain("3 people commenting");
+});
+
+test("another server's events leave this fold as it is", async () => {
+  const { container } = await page();
+  const fold = await unfold(container, "run_pv_checkout/web");
+  await act(async () => emit({ eventType: EventTypes.PreviewFeedbackSubmitted, occurredAt: new Date().toISOString(), organizationId: ORG.id,
+    projectId: PROJECT.id, taskId: null, runId: null, sessionId: null, workflowRunId: null, actor: { type: "person", id: "u_kai" },
+    source: "control-plane", correlationId: null, causationId: null, payload: { feedbackId: "x", previewRunId: "run_pv_checkout", server: "admin", status: "open" } }));
+  await settle(400);
+  expect(fold.querySelectorAll('[data-testid="live-note"]').length).toBe(0);
+});
