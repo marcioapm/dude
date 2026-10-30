@@ -264,10 +264,19 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
   // A file that is gone is no longer shown alone.
   const picked = given !== undefined ? given : own;
   const selected = picked && files.some((f) => f.path === picked) ? picked : null;
-  const select = (path: string | null) => {
-    if (given === undefined) setOwn(path);
-    onSelectedChange?.(path);
-  };
+  // One function for the diff's life (it reads the latest props), so a file's entry is not redrawn for it.
+  const latestSelect = useRef({ given, onSelectedChange });
+  latestSelect.current = { given, onSelectedChange };
+  const select = useCallback((path: string | null) => {
+    if (latestSelect.current.given === undefined) setOwn(path);
+    latestSelect.current.onSelectedChange?.(path);
+  }, []);
+  const latestOpen = useRef(onOpenFile);
+  latestOpen.current = onOpenFile;
+  const openFile = useCallback((path: string) => latestOpen.current?.(path), []);
+  const latestShow = useRef(commenting?.onFileComments);
+  latestShow.current = commenting?.onFileComments;
+  const showComments = useCallback((path: string) => latestShow.current?.(path), []);
   // Picked, here or outside: the person has taken over.
   const [lastSelected, setLastSelected] = useState(selected);
   if (selected !== lastSelected) {
@@ -454,40 +463,10 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
                 </span>
                 <span className={styles["counts"]}>{files.length}</span>
               </button>
-              {files.map((f) => {
-                const slash = f.path.lastIndexOf("/");
-                const marked = commenting?.fileComments?.(f.path) ?? null;
-                const entry = (
-                  <button
-                    type="button"
-                    key={f.path}
-                    className={cx(styles["file"], !marked && selected === f.path && styles["current"], !marked && fresh.paths.has(f.path) && styles["touched"])}
-                    aria-pressed={selected === f.path}
-                    title={`${f.path} · ${STATUS_WORD[f.status]}`}
-                    onClick={() => select(f.path)}
-                    data-testid="diff-file"
-                    data-path={f.path}
-                  >
-                    <StatusGlyph status={f.status} />
-                    <span className={styles["path"]}>
-                      {slash >= 0 ? <span className={styles["dir"]}>{f.path.slice(0, slash + 1)}</span> : null}
-                      <b>{f.path.slice(slash + 1)}</b>
-                    </span>
-                    <span className={styles["fileTail"]}>
-                      {commenting?.fileMark?.(f.path)}
-                      <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
-                    </span>
-                  </button>
-                );
-                // With a mark, the entry and the mark are two buttons side by side in one row: a button cannot hold a button.
-                return marked ? (
-                  <div key={f.path} className={cx(styles["fileRow"], selected === f.path && styles["current"], fresh.paths.has(f.path) && styles["touched"])}
-                    data-testid="diff-file-row" data-path={f.path}>
-                    {entry}
-                    <CommentMark path={f.path} info={marked} onShow={commenting?.onFileComments} where="list" />
-                  </div>
-                ) : entry;
-              })}
+              {files.map((f) => (
+                <FileEntry key={f.path} file={f} marked={commenting?.fileComments?.(f.path) ?? null} current={selected === f.path}
+                  touched={fresh.paths.has(f.path)} onSelect={select} onShow={showComments} fileMark={commenting?.fileMark} />
+              ))}
               {filteredOut.length > 0 ? <p className={styles["note"]} data-testid="filtered-out-note">With comments, hidden by the filter</p> : null}
               {filteredOut.map((path) => {
                 const marked = commenting?.fileComments?.(path) ?? null;
@@ -514,21 +493,7 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
             {files.length === 0 ? <div className={styles["empty"]}>{emptyMessage ?? "No changes yet."}</div> : null}
             {shown.map((f) => (
               <section key={f.path} className={styles["section"]} data-testid="diff-section" data-path={f.path}>
-                <header className={styles["fileHead"]}>
-                  <StatusGlyph status={f.status} />
-                  <b className={styles["mono"]}>{f.path}</b>
-                  {f.status === "A" ? <span className={styles["muted"]}>new file</span> : null}
-                  {f.status === "D" ? <span className={styles["muted"]}>deleted</span> : null}
-                  <span className={styles["spacer"]} />
-                  {(() => {
-                    const marked = commenting?.fileComments?.(f.path) ?? null;
-                    return marked ? <CommentMark path={f.path} info={marked} onShow={commenting?.onFileComments} where="head" /> : null;
-                  })()}
-                  <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
-                  {onOpenFile && f.status !== "D" ? (
-                    <IconButton icon="external" label="Open in the viewer" size="sm" onClick={() => onOpenFile(f.path)} data-testid="diff-open" />
-                  ) : null}
-                </header>
+                <FileHeader file={f} marked={commenting?.fileComments?.(f.path) ?? null} onShow={showComments} onOpen={onOpenFile ? openFile : undefined} />
                 {commenting?.renderFileHead ? <FileHead node={commenting.renderFileHead(f.path)} /> : null}
                 {f.binary ? <div className={styles["empty"]}>Binary file not shown.</div> : null}
                 {f.hunks.map((h, hi) => (
@@ -546,6 +511,67 @@ export function LiveDiff({ files, base, live, lastChange, leading, toolbarIn, em
     </div>
   );
 }
+
+/** A file's entry in the list: its button, and beside it (never inside) its comment mark. Redrawn only when what it shows changes. */
+const FileEntry = memo(function FileEntry({ file: f, marked, current, touched, onSelect, onShow, fileMark }: {
+  file: LiveDiffFile; marked: FileComments | null; current: boolean; touched: boolean;
+  onSelect: (path: string) => void; onShow: ((path: string) => void) | undefined; fileMark: ((path: string) => ReactNode) | undefined;
+}) {
+  const slash = f.path.lastIndexOf("/");
+  const entry = (
+    <button
+      type="button"
+      className={cx(styles["file"], !marked && current && styles["current"], !marked && touched && styles["touched"])}
+      aria-pressed={current}
+      title={`${f.path} · ${STATUS_WORD[f.status]}`}
+      onClick={() => onSelect(f.path)}
+      data-testid="diff-file"
+      data-path={f.path}
+    >
+      <StatusGlyph status={f.status} />
+      <span className={styles["path"]}>
+        {slash >= 0 ? <span className={styles["dir"]}>{f.path.slice(0, slash + 1)}</span> : null}
+        <b>{f.path.slice(slash + 1)}</b>
+      </span>
+      <span className={styles["fileTail"]}>
+        {fileMark?.(f.path)}
+        <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
+      </span>
+    </button>
+  );
+  // With a mark, the entry and the mark are two buttons side by side in one row: a button cannot hold a button.
+  return marked ? (
+    <div className={cx(styles["fileRow"], current && styles["current"], touched && styles["touched"])} data-testid="diff-file-row" data-path={f.path}>
+      {entry}
+      <CommentMark path={f.path} info={marked} onShow={onShow} where="list" />
+    </div>
+  ) : entry;
+}, (a, b) => a.file === b.file && a.current === b.current && a.touched === b.touched && a.onSelect === b.onSelect
+  && a.onShow === b.onShow && a.fileMark === b.fileMark && sameMark(a.marked, b.marked));
+
+/** A file's sticky header: status, path, its comment mark, counts and the way to the viewer. Redrawn only when those change. */
+const FileHeader = memo(function FileHeader({ file: f, marked, onShow, onOpen }: {
+  file: LiveDiffFile; marked: FileComments | null; onShow: ((path: string) => void) | undefined; onOpen: ((path: string) => void) | undefined;
+}) {
+  return (
+    <header className={styles["fileHead"]}>
+      <StatusGlyph status={f.status} />
+      <b className={styles["mono"]}>{f.path}</b>
+      {f.status === "A" ? <span className={styles["muted"]}>new file</span> : null}
+      {f.status === "D" ? <span className={styles["muted"]}>deleted</span> : null}
+      <span className={styles["spacer"]} />
+      {marked ? <CommentMark path={f.path} info={marked} onShow={onShow} where="head" /> : null}
+      <DiffStat className={styles["counts"]} additions={f.additions} deletions={f.deletions} />
+      {onOpen && f.status !== "D" ? (
+        <IconButton icon="external" label="Open in the viewer" size="sm" onClick={() => onOpen(f.path)} data-testid="diff-open" />
+      ) : null}
+    </header>
+  );
+}, (a, b) => a.file === b.file && a.onShow === b.onShow && a.onOpen === b.onOpen && sameMark(a.marked, b.marked));
+
+/** Two marks say the same: the same count, words and place in the cycle. */
+const sameMark = (a: FileComments | null, b: FileComments | null) =>
+  a === b || (a !== null && b !== null && a.count === b.count && a.label === b.label && a.position === b.position);
 
 /** Whether range `r` is on lines of hunk `h` of `path`: the one hunk a picked range can be in. */
 const touches = (h: LiveDiffHunk, path: string, r: DiffRange | null) =>
