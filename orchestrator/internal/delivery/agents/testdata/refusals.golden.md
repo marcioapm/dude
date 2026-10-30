@@ -1418,3 +1418,7 @@ this task is %s: you are read-only now and stop nothing
 
 you are no longer this task's conductor: another took over from you. Stop nothing
 
+## refusals/delivery/conduct-steer/not-your-child
+
+%s is not your child: steer only the child agents you started
+

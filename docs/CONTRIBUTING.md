@@ -571,8 +571,10 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   harness takes it while a tool runs and the model reads it before its
   next call, in the same turn, without cancelling the tool. A harness that
   reads messages only between turns takes it when the turn ends.
-  `interrupt: true` stops the turn so it is heard now; it is only ever a
-  person's explicit choice. lux answers each input once with a `lux.input`
+  `interrupt: true` stops the turn so it is heard now; it is a person's
+  explicit choice, or the conductor's `steer` with `interrupt`, which
+  reaches a phase Run of the current attempt or a child agent it started,
+  never another conductor's. lux answers each input once with a `lux.input`
   record, `{requestId, phase: "accepted", lands, receipt, text?}` or
   `{requestId, phase: "failed", error}` (never accepted); what follows an
   acceptance has record types of its own, `lux.input.consumed

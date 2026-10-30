@@ -47,6 +47,7 @@ rEndingWouldNeverReadSteerWait          refusals/delivery/conduct-steer/ending-w
 rHasEndedStartAnotherPhaseInstead       refusals/delivery/conduct-steer/has-ended-start-another-phase-instead
 rRunFeedbackGoesImplementerOrFixer      refusals/delivery/conduct-steer/run-feedback-goes-implementer-or-fixer
 rNotOpenFeedbackItemThisTask            refusals/delivery/conduct-steer/not-open-feedback-item-this-task
+rNotYourChildSteer                      refusals/delivery/conduct-steer/not-your-child
 rYouAreNoLongerThisTaskStop             refusals/delivery/conduct-stop/you-are-no-longer-this-task
 rThisTaskYouAreReadOnlyStop             refusals/delivery/conduct-stop/this-task-you-are-read-only
 rSayWhyReasonRequiredStop               refusals/delivery/conduct-stop/say-why-reason-required

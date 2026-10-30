@@ -51,6 +51,7 @@ const (
 	rHasEndedStartAnotherPhaseInstead       = "%s has ended (%s): start another phase instead of steering it"
 	rRunFeedbackGoesImplementerOrFixer      = "%s is a %s Run: feedback goes to an implementer or fixer, which can change the code"
 	rNotOpenFeedbackItemThisTask            = "%s is not an open feedback item of this task's current attempt (feedback lists them)"
+	rNotYourChildSteer                      = "%s is not your child: steer only the child agents you started"
 	rYouAreNoLongerThisTaskStop             = "you are no longer this task's conductor: another took over from you. Stop nothing"
 	rThisTaskYouAreReadOnlyStop             = "this task is %s: you are read-only now and stop nothing"
 	rSayWhyReasonRequiredStop               = "say why you stop it: reason is required"
