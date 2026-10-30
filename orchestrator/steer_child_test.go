@@ -59,12 +59,7 @@ func TestSteeringAnotherConductorsChildIsRefused(t *testing.T) {
 	w := conducting(t)
 	task, _, _ := w.liveChild()
 	spec := w.conductorSpecOf(task)
-	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role)
-		VALUES ('run_oldconductor', $1, $2, $3, 1, 'completed', 'conductor')`, w.org, w.project, task)
-	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, source_kind,
-		parent_run_id, conductor_run_id, child_profile, child_capabilities)
-		VALUES ('run_otherschild', $1, $2, $3, 1, 'running', 'investigate', 'investigator', 'task_conductor',
-		'run_oldconductor', 'run_oldconductor', 'investigator', '{}')`, w.org, w.project, task)
+	w.othersChild(task)
 	written := func() int {
 		return w.count(`SELECT (SELECT count(*) FROM directives WHERE task_id = $1)
 			+ (SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'run.steered')`, task)

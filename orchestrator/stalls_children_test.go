@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // childFor gives a reviewer's open task call a child whose last event was
@@ -111,17 +110,7 @@ func TestAChildsNewLastEventIsChangedFacts(t *testing.T) {
 // report keeps the phase Run's.
 func TestAStalledChildIsOfferedStopNotRestart(t *testing.T) {
 	w := conducting(t)
-	w.onModel("investigator", "fake/scripted")
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "investigate" {
-			return fakelux.Behaviour{Hang: true, OpenCalls: [][3]string{taskCall}}
-		}
-		return scripted(spec)
-	}
-	task := w.task()
-	w.talk(task)
-	child, _ := w.must(task, "start_agent", `{"profile":"investigator","prompt":"Look at the worker.","key":"look"}`)["runId"].(string)
+	task, _, child := w.liveChild(taskCall)
 	w.until("the child in its open call", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND open_tool_calls_at <> '{}'`, child) == 1
 	})

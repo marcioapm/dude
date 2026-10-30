@@ -17,23 +17,24 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
-// hangingChildren has every child investigator hang, so it is live to stop.
-func (w *world) hangingChildren() {
+// hangingChildren has every child investigator hang, so it is live to stop,
+// with calls open.
+func (w *world) hangingChildren(calls ...[3]string) {
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "investigate" {
-			return fakelux.Behaviour{Hang: true}
+			return fakelux.Behaviour{Hang: true, OpenCalls: calls}
 		}
 		return scripted(spec)
 	}
 }
 
 // liveChild is a conducted task (talk) and an investigator its conductor
-// started, running on lux.
-func (w *world) liveChild() (task, conductor, child string) {
+// started, running on lux, hanging with calls open.
+func (w *world) liveChild(calls ...[3]string) (task, conductor, child string) {
 	w.t.Helper()
 	w.onModel("investigator", "fake/scripted")
-	w.hangingChildren()
+	w.hangingChildren(calls...)
 	task = w.task()
 	conductor = w.talk(task)
 	child, _ = w.must(task, "start_agent", `{"profile":"investigator","prompt":"Look at the worker.","key":"look"}`)["runId"].(string)
@@ -70,6 +71,18 @@ func stopArgs(run, reason string) string {
 // stopEvents is how many run.aborted events the conductor wrote on run.
 func (w *world) stopEvents(run string) int {
 	return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.aborted' AND payload->>'by' = 'conductor'`, run)
+}
+
+// othersChild inserts run_otherschild, a running child of task's ended
+// conductor run_oldconductor, not yet told to abort.
+func (w *world) othersChild(task string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role)
+		VALUES ('run_oldconductor', $1, $2, $3, 1, 'completed', 'conductor')`, w.org, w.project, task)
+	mustExec(w.t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, source_kind,
+		parent_run_id, conductor_run_id, child_profile, child_capabilities)
+		VALUES ('run_otherschild', $1, $2, $3, 1, 'running', 'investigate', 'investigator', 'task_conductor',
+		'run_oldconductor', 'run_oldconductor', 'investigator', '{}')`, w.org, w.project, task)
 }
 
 // The conductor stops the investigator it started: the child is asked to
@@ -175,12 +188,7 @@ func TestStopRunRefusesPhaseRunsConductorsAndOthersChildren(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
 		VALUES ('run_reviewer', $1, $2, $3, 1, 'running', 'review', 'reviewer'),
 		       ('run_otherstask', $1, $2, $4, 1, 'running', 'implement', 'implementer')`, w.org, w.project, task, other)
-	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role)
-		VALUES ('run_oldconductor', $1, $2, $3, 1, 'completed', 'conductor')`, w.org, w.project, task)
-	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, source_kind,
-		parent_run_id, conductor_run_id, child_profile, child_capabilities)
-		VALUES ('run_otherschild', $1, $2, $3, 1, 'running', 'investigate', 'investigator', 'task_conductor',
-		'run_oldconductor', 'run_oldconductor', 'investigator', '{}')`, w.org, w.project, task)
+	w.othersChild(task)
 	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind)
 		VALUES ('run_preview', $1, $2, $3, 1, 'running', 'preview')`, w.org, w.project, task)
 	before := w.stopWritten(task)
