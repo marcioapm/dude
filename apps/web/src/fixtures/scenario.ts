@@ -18,6 +18,7 @@ export const RUN_KEY = `${KEY}.run`;
 /**
  * The scenario asked for: `?fixtures=b` (remembered), or what was remembered; `?fixtures=off` forgets. Null for the real API.
  * `?run=aborted` (failed, restarted, paused, preview, stalled, refused, peers, asks; `off` forgets) puts the task's run in that state, remembered too.
+ * `?branch=populated` (updated, rebased, empty, unavailable, preparing, older; `off` forgets) is the task branch's snapshot state.
  */
 export function fixtureScenario(): FixtureScenario | null {
   const params = new URLSearchParams(window.location.search);
@@ -32,8 +33,10 @@ export function fixtureScenario(): FixtureScenario | null {
   const fixtures = remember("fixtures", KEY);
   const run = remember("run", RUN_KEY);
   remember("step", "dude.fixtures.automationStep");
+  // The task's Changes (branch snapshot) state: fixtures/branchDiff.ts BRANCH_STATES.
+  const branch = remember("branch", "dude.fixtures.branch");
   // The parameters have done their work; the hash is the app's own.
-  if (fixtures || run) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+  if (fixtures || run || branch) window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
   const stored = localStorage.getItem(KEY);
   return stored && (SCENARIOS as readonly string[]).includes(stored) ? (stored as FixtureScenario) : null;
 }

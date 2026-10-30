@@ -72,6 +72,7 @@ import type {
   PersistedEvent,
   Run,
   RunDiff,
+  TaskBranchDiff,
   Session,
   Task,
   EpicState,
@@ -417,6 +418,10 @@ export interface RunDetail extends Run {
 }
 
 export type { CostSplit, RunDiff, RunDiffFile, RunDiffSummary } from "@dude/domain";
+export type {
+  BranchRelation, TaskBranchAvailability, TaskBranchCapture, TaskBranchDiff, TaskBranchNewer, TaskBranchPlacement, TaskBranchPullRequest,
+  TaskBranchRepository, TaskBranchSnapshot, TaskBranchStats,
+} from "@dude/domain";
 export type { FeedbackDraftInput, FeedbackItem, FeedbackList } from "@dude/domain";
 
 /** Where a submitted batch went (`POST /v1/tasks/:id/feedback/submit`): the orchestrator's answer. */
@@ -482,6 +487,13 @@ function fieldMessage(details: unknown): string | undefined {
 }
 
 /** Query string for the defined params, or "" when there are none. */
+/** `ApiClient.taskBranchDiff`'s choice: an attempt, a repository (name or id) and a snapshot id, each optional. */
+export interface TaskBranchDiffQuery {
+  attempt?: number | undefined;
+  repository?: string | undefined;
+  snapshot?: string | undefined;
+}
+
 function qs(params: Record<string, unknown>): string {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -827,6 +839,19 @@ export class ApiClient {
   /** A Run's checkout against where it started, uncommitted work included. */
   runDiff(runId: string): Promise<RunDiff> {
     return this.#request("GET", `/v1/runs/${encodeURIComponent(runId)}/diff`);
+  }
+
+  /**
+   * A task attempt's whole committed branch for one repository, as a pinned
+   * snapshot against its target (merge base recomputed at each capture),
+   * never uncommitted session work. All three optional: the current attempt,
+   * the first repository the task changes, the latest snapshot. Read its
+   * `availability` before `snapshot`; `newer` says a later snapshot exists
+   * (shown only on an explicit refresh, by asking for it with `snapshot`).
+   */
+  taskBranchDiff(taskId: string, options: TaskBranchDiffQuery = {}): Promise<TaskBranchDiff> {
+    return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/branch-diff${qs({
+      attempt: options.attempt, repository: options.repository, snapshot: options.snapshot })}`);
   }
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {

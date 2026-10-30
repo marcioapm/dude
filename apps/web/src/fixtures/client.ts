@@ -20,6 +20,7 @@ import { EventTypes, TERMINAL_RUN_STATUSES, UNARCHIVE_FIRST, closedBy, lifecycle
 import type { CloseDecision } from "@dude/design-system/components";
 import type { EpicNote, EpicNotes, EpicPeers, EpicThreads, FeedbackDraftInput, FeedbackItem, FeedbackList, NoteRecord, PinNoteInput, PinnedNote } from "@dude/domain";
 import { RUN_KEY } from "./scenario.ts";
+import { branchComments, branchDiffFor, branchState, snapshots } from "./branchDiff.ts";
 import { FixtureAutomations } from "./automations.ts";
 import { automationActivity, automationLater } from "./automationActivity.ts";
 import { FixtureOrgSecrets } from "./orgSecrets.ts";
@@ -152,6 +153,8 @@ export class FixtureClient extends ApiClient {
       if (as === "preview") this.#events = this.#events.filter((e) => e.runId !== RUN_ID || e.eventType === "run.created" || e.eventType === "run.started");
     }
     if (as === "aborted" || as === "failed" || as === "restarted") this.#stop(as);
+    // An earlier attempt's branch to read: the task started over (as `restarted`).
+    else if (branchState() === "older") this.#stop("restarted");
     if (as === "stalled") this.#stall();
     if (as === "refused") this.#refuse();
     if (as !== null && MACHINE_RUNS.includes(as)) this.#raise(as);
@@ -692,12 +695,14 @@ export class FixtureClient extends ApiClient {
     return Math.max(1, ...this.#task.runs.map((r) => r.attempt));
   }
   override feedback(taskId: string, attempt?: number): Promise<FeedbackList> {
+    this.#seedBranchComments();
     const n = attempt ?? this.#currentAttempt();
     const feedback = this.feedbackItems.filter((i) => i.taskId === taskId && i.attempt === n && (i.status !== "draft" || i.author?.id === YOU));
     const blocking = feedback.filter((i) => feedbackHolds(i.status, i.resolutionPending)).length;
     return Promise.resolve({ feedback, blocking });
   }
   override async createFeedbackDraft(taskId: string, draft: FeedbackDraftInput): Promise<FeedbackItem> {
+    if (draft.anchor.kind === "code" && draft.anchor.scope === "branch") return this.#branchDraft(taskId, draft);
     if (draft.anchor.kind === "code") throw new ApiError(400, "bad_request", "No diff in the fixtures.");
     const now = new Date().toISOString();
     const me = PEOPLE.find((p) => p.id === YOU)!;
@@ -716,6 +721,54 @@ export class FixtureClient extends ApiClient {
   override listSessionArtifacts(): Promise<{ artifacts: Artifact[] }> {
     return Promise.resolve({ artifacts: [] });
   }
+  // -- the task's branch (fixtures/branchDiff.ts; `?branch=`) ---------------------
+  #branchSeeded = false;
+  #seedBranchComments() {
+    if (this.#branchSeeded) return;
+    this.#branchSeeded = true;
+    const state = branchState();
+    if (state === "populated" || state === "updated" || state === "rebased") {
+      this.feedbackItems.push(...branchComments(PEOPLE, this.#currentAttempt()));
+    }
+  }
+  override taskBranchDiff(taskId: string, options: Parameters<ApiClient["taskBranchDiff"]>[1] = {}): ReturnType<ApiClient["taskBranchDiff"]> {
+    this.#seedBranchComments();
+    if (taskId !== TASK_ID) return Promise.reject(new ApiError(404, "not_found", `task ${taskId} not found`));
+    try {
+      const visible = this.feedbackItems.filter((i) => i.taskId === taskId && (i.status !== "draft" || i.author?.id === YOU));
+      return Promise.resolve(branchDiffFor(branchState(), this.#currentAttempt(), options, visible));
+    } catch (e) {
+      const err = e as { status?: number; code?: string; message: string };
+      return Promise.reject(new ApiError(err.status ?? 500, err.code ?? "fixtures", err.message));
+    }
+  }
+  /** A draft on a branch snapshot, its anchor read from the snapshot as the API does. */
+  #branchDraft(taskId: string, draft: FeedbackDraftInput): FeedbackItem {
+    const a = draft.anchor;
+    if (a.kind !== "code" || a.scope !== "branch") throw new ApiError(400, "bad_request", "not a branch anchor");
+    const current = this.#currentAttempt();
+    const snap = snapshots(current)[a.snapshotId];
+    if (!snap) throw new ApiError(400, "bad_request", `snapshot ${a.snapshotId} is not a branch snapshot of this task`);
+    if (snap.attempt !== current) throw new ApiError(409, "conflict", `snapshot ${a.snapshotId} is of attempt ${snap.attempt}, which is read-only`);
+    if (a.diffChecksum !== snap.checksum) throw new ApiError(409, "conflict", `snapshot ${a.snapshotId} is not the diff you read: read it again`);
+    const f = snap.files.find((x) => x.path === a.path);
+    const lines = f?.hunks.find((h) => h.lines.some((l) => (a.side === "old" ? l.old : l.new) === a.startLine))?.lines ?? [];
+    const n = (l: { old: number | null; new: number | null }) => (a.side === "old" ? l.old : l.new);
+    const first = lines.findIndex((l) => n(l) === a.startLine);
+    const last = lines.findIndex((l) => n(l) === a.endLine);
+    if (!f || first < 0 || last < first) throw new ApiError(400, "bad_request", `lines ${a.startLine}-${a.endLine} (${a.side}) are not one range of ${a.path}'s diff`);
+    const now = new Date().toISOString();
+    const me = PEOPLE.find((p) => p.id === YOU)!;
+    const item: FeedbackItem = { id: `fbk_${this.feedbackItems.length + 1}`, taskId, attempt: current, batchId: null,
+      author: { id: me.id, name: me.name }, body: draft.body, status: "draft", deliveredRunId: null, resolvedCommit: null,
+      resolutionPending: false, outdated: false, routedTo: null, submittedAt: null, createdAt: now, updatedAt: now, history: [],
+      anchor: { kind: "code", scope: "branch", snapshotId: snap.id, attempt: snap.attempt, repo: snap.repository, path: a.path, side: a.side,
+        startLine: a.startLine, endLine: a.endLine, baseSha: snap.mergeBaseSha, headSha: snap.headSha, targetRef: snap.targetRef,
+        diffChecksum: snap.checksum, excerpt: lines.slice(first, last + 1).map((l) => ({ ...l })) } };
+    this.feedbackItems.push(item);
+    return item;
+  }
+
   override taskMetrics(_taskId: string, attempt?: number): Promise<TaskMetrics> {
     return Promise.resolve(this.#restarted ? restartedMetrics(attempt) : METRICS);
   }
