@@ -180,6 +180,25 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	if c.DeadLux == "" {
 		return s.endRecovery(ctx, c, delivery.RecoveryFailed, "it never ran on lux: nothing was committed", nil)
 	}
+	// A Run stopped or restarted a moment ago is aborted in dude before the
+	// syncer has had lux end it: its checkpoints are those of its last stop,
+	// not of its end. Read them once lux has ended it.
+	var control string
+	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT control::text FROM runs WHERE id = $1`, c.RunID).Scan(&control)
+	}); err != nil {
+		return err
+	}
+	if control != "none" {
+		s.recoveryAt(ctx, c, recoveryEvery, false)
+		return nil
+	}
+	if run, err := s.Lux.Get(ctx, c.DeadLux); err != nil && !lux.IsNotFound(err) {
+		return err
+	} else if err == nil && !lux.Terminal(run.State) {
+		s.recoveryAt(ctx, c, recoveryEvery, false)
+		return nil
+	}
 	cps, err := s.Lux.Checkpoints(ctx, c.DeadLux)
 	if err != nil {
 		if le, ok := lux.AsError(err); ok && !le.Retryable() {

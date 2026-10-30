@@ -369,6 +369,78 @@ func TestARecoveryOfATaskThatEndsStillPushesAndWakesNobody(t *testing.T) {
 	_ = commit
 }
 
+// commit commits content to path in the checkout, as the agent would, and
+// returns the commit.
+func (w *world) commit(work, path, content string) string {
+	w.t.Helper()
+	if err := os.WriteFile(filepath.Join(work, path), []byte(content), 0o644); err != nil {
+		w.t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=agent", "-c", "user.email=a@x", "commit", "-q", "-m", "more work"}} {
+		if out, err := exec.Command("git", append([]string{"-C", work}, args...)...).CombinedOutput(); err != nil {
+			w.t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	out, _ := exec.Command("git", "-C", work, "rev-parse", "HEAD").Output()
+	return strings.TrimSpace(string(out))
+}
+
+// A writer lux stopped once (a move: its checkpoint taken then) went on
+// and committed more. The conductor restarts it and asks for its recovery
+// at once, before lux has ended it: the recovery waits for lux to end the
+// Run, and pushes its latest commit, never the earlier checkpoint's.
+func TestRecoverRunWaitsForLuxToEndTheRunBeforeReadingItsCheckpoints(t *testing.T) {
+	w := conducting(t)
+	w.hangingWriters()
+	task := w.task()
+	w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	var run, luxID string
+	w.until("the implementer at work, its checkout started", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(lux_run_id, '') FROM runs WHERE task_id = $1
+			AND phase = 'implement' AND status = 'running' AND lux_state = 'running' AND base_shas ? 'target'`, task).Scan(&run, &luxID)
+		return luxID != ""
+	})
+	work, err := w.lux.Checkout(luxID, "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	early := w.commit(work, "WIP.md", "half of it\n")
+	w.lux.Move(luxID, "preempt")
+	w.until("the implementer back at work after its move", func() bool { return w.lux.State(luxID) == "running" })
+	if work, err = w.lux.Checkout(luxID, "target"); err != nil {
+		t.Fatal(err)
+	}
+	latest := w.commit(work, "WIP.md", "all of it\n")
+	// Both asked with nothing swept between: the syncer has not yet told lux.
+	spec := w.conductorSpecOf(task)
+	w.noRecoveries = true
+	if status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "restart_run", `{"run":"`+run+`","note":"again"}`); status != 200 {
+		t.Fatalf("restart_run: %d %s", status, body)
+	}
+	status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "recover_run", `{"run":"`+run+`"}`)
+	var out map[string]any
+	_ = json.Unmarshal([]byte(body), &out)
+	id, _ := out["recoveryId"].(string)
+	if status != 200 || id == "" {
+		t.Fatalf("recover_run: %d %s", status, body)
+	}
+	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.noRecoveries = false
+	w.until("the recovery ended", func() bool { s := w.recoveryStatus(id); return s == "done" || s == "failed" })
+	branch := "dude/" + task + "/recovered-" + run
+	if got := w.branchAt(branch); got != latest {
+		which := "neither"
+		if got == early {
+			which = "the earlier checkpoint's"
+		}
+		t.Errorf("%s is at %q (%s), want the Run's latest commit %s; recovery %s: %s", branch, got, which, latest,
+			w.recoveryStatus(id), w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id))
+	}
+}
+
 // The recovered branch is the task's, as its per-Run branches are: kept
 // while a Stop waits on a pick-up, deleted from GitHub once the task ends.
 func TestARecoveredBranchIsDeletedWithTheTasksPerRunBranches(t *testing.T) {
