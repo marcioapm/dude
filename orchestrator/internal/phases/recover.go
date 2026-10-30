@@ -217,22 +217,27 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	}
 	// A Run stopped or restarted a moment ago is aborted in dude before the
 	// syncer has had lux end it: its checkpoints are those of its last stop,
-	// not of its end. Read them once lux has ended it.
-	var control string
-	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT control::text FROM runs WHERE id = $1`, c.RunID).Scan(&control)
-	}); err != nil {
-		return err
-	}
-	if control != "none" {
-		s.recoveryAt(ctx, c, recoveryEvery, false)
-		return nil
-	}
-	if run, err := s.Lux.Get(ctx, c.DeadLux); err != nil && !lux.IsNotFound(err) {
-		return err
-	} else if err == nil && !lux.Terminal(run.State) {
-		s.recoveryAt(ctx, c, recoveryEvery, false)
-		return nil
+	// not of its end. Read them once lux has ended it, or once the recovery
+	// has waited past its give-up: a control nothing clears, or a Run lux
+	// never ends, is not waited on for ever.
+	if !c.StepLong {
+		var control string
+		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT control::text FROM runs WHERE id = $1`, c.RunID).Scan(&control)
+		}); err != nil {
+			return err
+		}
+		if control != "none" {
+			s.recoveryAt(ctx, c, recoveryEvery, false)
+			return nil
+		}
+		run, err := s.Lux.Get(ctx, c.DeadLux)
+		if le, ok := lux.AsError(err); err != nil && !lux.IsNotFound(err) && (!ok || le.Retryable()) {
+			return err
+		} else if err == nil && !lux.Terminal(run.State) {
+			s.recoveryAt(ctx, c, recoveryEvery, false)
+			return nil
+		}
 	}
 	cps, err := s.Lux.Checkpoints(ctx, c.DeadLux)
 	if err != nil {

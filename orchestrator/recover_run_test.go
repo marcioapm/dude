@@ -573,3 +573,20 @@ func TestARecoveredBranchIsDeletedWithTheTasksPerRunBranches(t *testing.T) {
 		t.Errorf("the recovery does not record its branch released")
 	}
 }
+
+// A dead Run whose control nothing will clear (finish marked it completed
+// after a machine move asked for a pause): once the recovery has waited
+// past its give-up, it reads lux's checkpoints anyway, pushes, and wakes
+// the conductor, rather than waiting on lux for ever.
+func TestARecoveryStopsWaitingOnARunsControlAfterItsGiveUp(t *testing.T) {
+	w := conducting(t)
+	task, run, commit := w.deadWriter("WIP.md", "half of it\n")
+	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), status = 'completed' WHERE id = $1`, run)
+	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
+	w.until("the recovery done", func() bool { return w.recoveryStatus(id) == "done" })
+	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != commit {
+		t.Errorf("the recovered branch is at %q, want %s", got, commit)
+	}
+	w.until("the conductor woken", func() bool { return w.recoveredWakes(task) == 1 })
+}
