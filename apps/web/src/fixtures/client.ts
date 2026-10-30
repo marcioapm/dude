@@ -29,7 +29,7 @@ import type { ChatProvider, ChatRequestRow } from "@dude/domain";
 import { ORG_SESSIONS, openSessionsList, orgSessionEvents, orgSessionsList } from "./orgSessions.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, READY_FOR_REVIEW_WAITING, type Artifact, type AttachmentLimits, type DeliveryFilter, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type StopRequest, type StopResult, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
-import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, conductorMove, eventsFor, logsFor, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type RefusedMachineView } from "./data.ts";
+import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, OVERVIEW_VIEWS, conductorMove, eventsFor, logsFor, overviewEvents, overviewMetrics, overviewPullRequests, overviewRuns, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type OverviewView, type RefusedMachineView } from "./data.ts";
 
 type LedgerQuery = { runId?: string | undefined; taskId?: string | undefined; sessionId?: string | undefined; automationRunId?: string | undefined; after?: number | undefined };
 export type { LedgerQuery };
@@ -158,6 +158,7 @@ export class FixtureClient extends ApiClient {
     if (as === "peers") this.#coordinate();
     if (as === "comment" || as === "comment-restart" || as === "comment-off") this.#commentable(as);
     if (as !== null && HELD_RUNS.includes(as)) this.#hold(as);
+    if (as !== null && (OVERVIEW_VIEWS as readonly string[]).includes(as)) this.#overview(as as OverviewView);
     this.#nav = navigationFor(scenario);
     if (as === "asks") this.#nav = withViewerAsks(this.#nav);
     if (this.#held) this.#nav = this.#nav.map((p) => ({ ...p, epics: p.epics?.map((e) => ({ ...e,
@@ -384,6 +385,22 @@ export class FixtureClient extends ApiClient {
   }
 
   #held = false;
+
+  /**
+   * `dude.fixtures.run` = reviewing | question | ready | new: the Overview's
+   * states. reviewing: the pipeline done to the simplifier, #482 open with
+   * checks running, two reviewers at work on its head. question: the
+   * implementer at work asks Márcio a question. ready: #482 approved, its
+   * checks passing, nothing running. new: a policy task nothing has started.
+   */
+  #overview(view: OverviewView) {
+    this.#view = view;
+    const status: TaskDetail["status"] = view === "new" ? "queued" : view === "question" ? "awaiting_input" : view === "ready" ? "ready_to_merge" : "review";
+    this.#task = { ...this.#task, status, runs: overviewRuns(view), pullRequestOpened: view === "reviewing" || view === "ready" };
+    this.#events = overviewEvents(view, this.#events[0]!);
+  }
+
+  #view: OverviewView | null = null;
 
   /**
    * `dude.fixtures.run` = refused: the implementer's `uv sync` failed on a
@@ -614,6 +631,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ blockedBy: [], blocks: [], related: [], duplicateOf: [], duplicatedBy: [], autoStart: null, owner: null });
   }
   override recentPullRequests() {
+    if (this.#view) return Promise.resolve({ pullRequests: overviewPullRequests(this.#view) });
     return Promise.resolve({ pullRequests: this.#restarted ? RESTARTED_PULL_REQUESTS : this.#scenario === "d" && !this.#held ? [PULL_REQUEST] : [] });
   }
   // No workflow waits in the mockups' world: the request is accepted and nothing changes.
@@ -637,6 +655,7 @@ export class FixtureClient extends ApiClient {
     return Promise.reject(new ApiError(400, "fixtures", "Not in the fixtures."));
   }
   override listPullRequests(taskId: string) {
+    if (this.#view) return Promise.resolve({ pullRequests: taskId === TASK_ID ? overviewPullRequests(this.#view) : [] });
     if (this.#restarted) return Promise.resolve({ pullRequests: taskId === TASK_ID ? RESTARTED_PULL_REQUESTS : [] });
     return Promise.resolve({ pullRequests: this.#scenario === "d" && taskId === TASK_ID && !this.#held ? [PULL_REQUEST] : [] });
   }
@@ -664,6 +683,10 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ events, nextCursor: events.at(-1)?.cursor ?? params.after ?? 0 });
   }
   override listFindings(taskId: string) {
+    // The reviewers' findings on the pipeline the Overview's views ran; ready, the open note was accepted.
+    if (this.#view === "reviewing" || this.#view === "ready") {
+      return Promise.resolve({ findings: taskId !== TASK_ID ? [] : this.#view === "ready" ? FINDINGS.map((f) => (f.status === "open" ? { ...f, status: "accepted" as const } : f)) : FINDINGS });
+    }
     if (this.#restarted) return Promise.resolve({ findings: taskId === TASK_ID ? RESTARTED_FINDINGS : [] });
     return Promise.resolve({ findings: this.#scenario === "d" && taskId === TASK_ID ? FINDINGS : [] });
   }
@@ -717,6 +740,7 @@ export class FixtureClient extends ApiClient {
     return Promise.resolve({ artifacts: [] });
   }
   override taskMetrics(_taskId: string, attempt?: number): Promise<TaskMetrics> {
+    if (this.#view) return Promise.resolve(overviewMetrics(this.#view));
     return Promise.resolve(this.#restarted ? restartedMetrics(attempt) : METRICS);
   }
   override githubSettings() {

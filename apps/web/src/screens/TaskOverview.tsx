@@ -53,11 +53,26 @@ export function openAgentQuestions(events: readonly PersistedEvent[]): OpenQuest
   return [...open.values()];
 }
 
-/** What a live Run is doing, as its own record says: its plan's current step, else its latest tool call. Null when neither is recorded. */
+/**
+ * What a live Run is doing, as its own record says: waiting on the answer to
+ * its open question, else its plan's current step, else its latest tool
+ * call, whichever it recorded last. Null when none is recorded.
+ */
 export function recordedActivity(runId: string, events: readonly PersistedEvent[]): string | null {
+  // Questions answered or closed after they were asked: read newest first, so seen before their ask.
+  const settled = new Set<string>();
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
     if (e.runId !== runId) continue;
+    const questionId = typeof e.payload?.questionId === "string" ? e.payload.questionId : "";
+    if ((e.eventType === EventTypes.QuestionAnswered || e.eventType === EventTypes.QuestionClosed) && questionId) {
+      settled.add(questionId);
+      continue;
+    }
+    // Its own question still open: it is waiting on a person, not at its last tool.
+    if (e.eventType === EventTypes.QuestionAsked && e.payload?.kind === "agent" && questionId && !settled.has(questionId)) {
+      return typeof e.payload.toName === "string" && e.payload.toName ? `Asked ${e.payload.toName} a question · waiting for the answer` : "Asked a question · waiting for the answer";
+    }
     if (e.eventType === EventTypes.PlanUpdated) {
       const plan = planFrom(e.payload as Record<string, unknown>);
       if (!plan || plan.length === 0) continue;

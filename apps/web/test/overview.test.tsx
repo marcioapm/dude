@@ -134,6 +134,10 @@ describe("running now", () => {
     expect(recordedActivity(RUN_ID, [plan, tool])).toBe("bash · npm test");
     expect(recordedActivity(RUN_ID, [ev("agent.message", { text: "hi" })])).toBeNull();
     expect(recordedActivity("run_other", [plan])).toBeNull();
+    // Its own question open: waiting on the answer; once answered, back to what it does.
+    const ask = ev("question.asked", { kind: "agent", questionId: "q_9", toName: "Ana Ribeiro", prompt: "Which?" });
+    expect(recordedActivity(RUN_ID, [tool, ask])).toBe("Asked Ana Ribeiro a question · waiting for the answer");
+    expect(recordedActivity(RUN_ID, [tool, ask, ev("question.answered", { questionId: "q_9", answer: "A" })])).toBe("bash · npm test");
   });
 });
 
@@ -223,5 +227,37 @@ describe("the branch, the pull request and the details", () => {
     await act(async () => void tab("Overview").dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 })));
     await settle();
     expect(page.querySelector<HTMLDetailsElement>("[data-testid=overview-goal-criteria]")!.open).toBe(true);
+  });
+});
+
+describe("the fixtures' Overview states", () => {
+  test("reviewing: two reviewers at work on the open pull request, each with what it records", async () => {
+    const page = await overview(fx("reviewing"));
+    const rows = [...page.querySelectorAll("[data-testid=running-run]")];
+    expect(rows.map((r) => r.getAttribute("data-run"))).toEqual(["run_ov_quality", "run_ov_security"]);
+    expect(text(rows[0])).toContain("Check retry of the payment step against concurrent submits · step 2 of 3");
+    expect(text(rows[1])).toContain("bash · rg -n \"invoice\" apps/web/src/checkout");
+    expect(page.querySelector("[data-testid=overview-pull-requests] [data-testid=pr-panel]")).not.toBeNull();
+  });
+
+  test("question: the implementer's question is the needs-you region, and its row says it waits on the answer", async () => {
+    const page = await overview(fx("question"));
+    const region = await until(() => page.querySelector("[data-testid=needs-you]"), "the question");
+    expect(text(region)).toContain("Should the Invoice option stay hidden on monthly plans");
+    expect(text(page.querySelector("[data-testid=running-run]"))).toContain("Asked Márcio Martins a question · waiting for the answer");
+  });
+
+  test("ready: approved and passing, nothing running, nothing unresolved", async () => {
+    const page = await overview(fx("ready"));
+    expect(page.querySelectorAll("[data-testid=running-run]").length).toBe(0);
+    expect(text(page.querySelector("[data-testid=pr-panel]"))).toContain("Ready to merge");
+    expect(text(tile(page, "overview-unresolved"))).toContain("nothing open");
+  });
+
+  test("new: the two ways to start in Running now's place, no spend, no branch", async () => {
+    const page = await overview(fx("new"));
+    expect(page.querySelector("[data-testid=overview-running] [data-testid=start-choice]")).not.toBeNull();
+    expect(text(tile(page, "overview-spend"))).toContain("Not reported");
+    expect(page.querySelector("[data-testid=overview-changes-none]")).not.toBeNull();
   });
 });

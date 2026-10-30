@@ -11,7 +11,8 @@ const KEY = "dude.fixtures";
 /**
  * The fixture task's run's state (`?run=`): paused, preview, aborted, failed, restarted, stalled, refused; or peers, its epic's
  * agents coordinating; asks, two of the viewer's tasks waiting on them; machine moves: raised, refused-platform, refused-largest, refused-moves, conductor, session, start-over;
- * and a delivery held before its pull request: held, held-other, held-feedback, held-round-2.
+ * and a delivery held before its pull request: held, held-other, held-feedback, held-round-2;
+ * and the Overview's states: reviewing (two reviewers at work), question (an agent asks you), ready (ready to merge), new (not started).
  */
 export const RUN_KEY = `${KEY}.run`;
 
