@@ -416,6 +416,8 @@ describe("a branch anchor is pinned to the stored snapshot", () => {
 
   test("the stored branch anchor matches the shared delivery lifecycle golden", async () => {
     const golden = await Bun.file(join(ROOT, "packages/domain/test/branch-feedback-anchor.json")).json();
+    await owner`INSERT INTO repositories (id, organization_id, project_id, name, url)
+      VALUES ('repo_golden', ${ORG}, 'prj_fb', 'api', 'https://github.com/acme/api') ON CONFLICT (project_id, name) DO NOTHING`;
     const [repo] = await owner`SELECT id FROM repositories WHERE project_id = 'prj_fb' AND name = 'api'`;
     await owner`INSERT INTO task_repositories (task_id, repository_id, organization_id, access)
       VALUES ('wi_fb2', ${repo.id}, ${ORG}, 'write') ON CONFLICT DO NOTHING`;
