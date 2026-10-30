@@ -129,11 +129,19 @@ describe("what the task page reads on its stream", () => {
     await until(() => (c.runDiffs.length === 2 ? c.runDiffs : null), "both sessions read");
     await settle(100);
     c.reset();
+    // The re-read waits until released: what was read stays shown meanwhile.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const runDiff = c.client.runDiff;
+    c.client.runDiff = async (id) => { const out = runDiff(id); await gate; return out; };
     await event("run.diff.updated", { checksum: "x" }, RUN_ID);
     await event("run.diff.updated", { checksum: "y" }, RUN_ID);
+    await settle(RUN_DIFF_EVERY_MS + 200);
+    expect(c.runDiffs).toEqual([RUN_ID]);
     // Never back to "Reading…" while it is read again.
     expect(view.textContent).not.toContain("Reading checkout changes");
-    await settle(RUN_DIFF_EVERY_MS + 200);
+    await act(async () => release());
+    await settle(100);
     expect(c.runDiffs).toEqual([RUN_ID]);
     expect(withFiles(c.branch)).toEqual([]);
   });
