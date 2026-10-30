@@ -55,6 +55,7 @@ CREATE TABLE task_branch_snapshots (
   CHECK (relation <> 'initial' OR previous_snapshot_id IS NULL),
   CHECK ((status = 'partial') = (reason IS NOT NULL))
 );
+ALTER TABLE task_branch_snapshots ALTER COLUMN files SET COMPRESSION lz4;
 -- The latest of an attempt's repository, and the list in order.
 CREATE INDEX task_branch_snapshots_latest_idx ON task_branch_snapshots (task_id, attempt, repository_id, captured_at DESC, id DESC);
 CREATE INDEX task_branch_snapshots_previous_idx ON task_branch_snapshots (previous_snapshot_id) WHERE previous_snapshot_id IS NOT NULL;

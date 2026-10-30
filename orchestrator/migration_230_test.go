@@ -20,6 +20,10 @@ func TestBranchSnapshotsAreUniqueScopedAndAskedForWhenTheBranchMoves(t *testing.
 	other := dbtest.Org(t, owner)
 	ctx := context.Background()
 	sha := func(c string) string { return strings.Repeat(c, 40) }
+	var compression string
+	if err := owner.QueryRow(ctx, `SELECT attcompression::text FROM pg_attribute WHERE attrelid = 'task_branch_snapshots'::regclass AND attname = 'files'`).Scan(&compression); err != nil || compression != "l" {
+		t.Fatalf("snapshot files compression: %q (%v), want lz4", compression, err)
+	}
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_s', $1, 'P', 'p', 'P')`, org)
 	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_s', $1, 'prj_s', 1, 'T', 'G')`, org)
 	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES
