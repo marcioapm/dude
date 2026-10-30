@@ -145,6 +145,18 @@ describe("GET /v1/tasks/:id/branch-diff", () => {
     expect((await get(ana.key, "/v1/tasks/BILL-1/branch-diff")).body.snapshot.id).toBe("tbs_c");
   });
 
+  test("metadata-only reads omit files and placements on latest and named snapshots", async () => {
+    for (const query of ["files=0", "files=0&snapshot=tbs_a"]) {
+      const full = (await get(ana.key, `/v1/tasks/wi_bd/branch-diff?${query.replace("files=0", "files=1")}`)).body;
+      const metadata = (await get(ana.key, `/v1/tasks/wi_bd/branch-diff?${query}`)).body;
+      delete full.snapshot.files;
+      delete full.placements;
+      expect(metadata).toEqual(full);
+      expect(metadata.snapshot).not.toHaveProperty("files");
+      expect(metadata).not.toHaveProperty("placements");
+    }
+  });
+
   test("a partial snapshot keeps the file-cap status and reason", async () => {
     await owner`UPDATE task_branch_snapshots SET status = 'partial', reason = 'GitHub lists at most 300 files', truncated = true WHERE id = 'tbs_c'`;
     try {

@@ -492,6 +492,8 @@ export interface TaskBranchDiffQuery {
   attempt?: number | undefined;
   repository?: string | undefined;
   snapshot?: string | undefined;
+  /** False reads metadata only: snapshot.files and placements are omitted. */
+  files?: boolean | undefined;
 }
 
 function qs(params: Record<string, unknown>): string {
@@ -851,7 +853,8 @@ export class ApiClient {
    */
   taskBranchDiff(taskId: string, options: TaskBranchDiffQuery = {}): Promise<TaskBranchDiff> {
     return this.#request("GET", `/v1/tasks/${encodeURIComponent(taskId)}/branch-diff${qs({
-      attempt: options.attempt, repository: options.repository, snapshot: options.snapshot })}`);
+      attempt: options.attempt, repository: options.repository, snapshot: options.snapshot,
+      files: options.files === false ? 0 : undefined })}`);
   }
 
   listFindings(taskId: string): Promise<{ findings: Finding[] }> {
