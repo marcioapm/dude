@@ -217,8 +217,7 @@ func (w *steps) reviewFirst(ctx context.Context, sc workflow.StepContext, st *St
 	}); err != nil || len(pushes) == 0 {
 		return workflow.Result{}, false, err
 	}
-	st.PRFixAfter = &PRFixAfter{Repo: pushes[0].Repo, Head: pushes[0].Head, Directed: st.Directed,
-		Integration: st.Integration, Iteration: st.Iteration}
+	st.PRFixAfter = &PRFixAfter{Head: pushes[0].Head, Directed: st.Directed, Integration: st.Integration, Iteration: st.Iteration}
 	st.Directed, st.Integration, st.Iteration = nil, nil, 0
 	st.Heads = maps.Clone(st.Heads)
 	if st.Heads == nil {

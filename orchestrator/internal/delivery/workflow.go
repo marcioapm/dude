@@ -501,10 +501,10 @@ type PRFixCharge struct {
 }
 
 // PRFixAfter is a direct pull request fix held for the review of dude's
-// push it would start from (reviewFirst): that push, and what the fix step
-// had been told, given back to it once the review loop is done.
+// push it would start from (reviewFirst): that push's head (keying the
+// review's Runs apart), and what the fix step had been told, given back
+// to it once the review loop is done.
 type PRFixAfter struct {
-	Repo string `json:"repo"`
 	Head string `json:"head"`
 	// The conductor's direction for the fix, and the integration it is,
 	// kept from the review loop, which would take them as its own.
