@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -92,23 +93,46 @@ func WriterOutcome(reply string) (outcome, note string) {
 	}
 	// The two keys' lines alone, one scalar each: prose around an unfenced
 	// report cannot break the read, and the read is linear in the reply.
+	// A line that is no YAML on its own loses nothing already read: a note
+	// is its raw text, and an outcome is a value of its own (partial).
+	unreadOutcome := false
 	for _, line := range strings.Split(block, "\n") {
-		if !strings.HasPrefix(line, "outcome:") && !strings.HasPrefix(line, "outcome_note:") {
+		key, _, _ := strings.Cut(line, ":")
+		if key != "outcome" && key != "outcome_note" {
 			continue
 		}
-		if yaml.Unmarshal([]byte(line), &doc) != nil {
-			return OutcomeDone, ""
+		if yaml.Unmarshal([]byte(line), &doc) == nil {
+			continue
 		}
+		if key == "outcome" {
+			unreadOutcome = true
+			continue
+		}
+		doc.OutcomeNote = rawScalar(strings.TrimSpace(strings.TrimPrefix(line, key+":")))
 	}
-	switch o := strings.ToLower(strings.TrimSpace(doc.Outcome)); o {
-	case "", OutcomeDone:
+	switch o := strings.ToLower(strings.TrimSpace(doc.Outcome)); {
+	case unreadOutcome:
+		outcome = OutcomePartial
+	case o == "" || o == OutcomeDone:
 		outcome = OutcomeDone
-	case OutcomePartial, OutcomeBlocked:
+	case o == OutcomePartial || o == OutcomeBlocked:
 		outcome = o
 	default:
 		outcome = OutcomePartial
 	}
 	return outcome, strings.TrimSpace(doc.OutcomeNote)
+}
+
+// rawScalar is a value YAML would not read, as written: unquoted when the
+// whole of it is one quoted string, else the text itself.
+func rawScalar(s string) string {
+	if u, err := strconv.Unquote(s); err == nil && strings.HasPrefix(s, `"`) {
+		return u
+	}
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' && !strings.Contains(strings.ReplaceAll(s[1:len(s)-1], "''", ""), "'") {
+		return strings.ReplaceAll(s[1:len(s)-1], "''", "'")
+	}
+	return s
 }
 
 // outcomeBlock is the document of the reply's last outcome line: from it

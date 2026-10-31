@@ -60,6 +60,12 @@ func TestAWritersOutcomeIsReadFromItsChecksDocument(t *testing.T) {
 		{"```yaml\noutcome: DONE\nchecks: []\n```", "done", ""},
 		// Unfenced, after prose a YAML parse of the whole reply rejects.
 		{"I changed the greeting: half of it.\nNote: the rest - later: maybe\n\noutcome: partial\noutcome_note: the second greeting is left\nchecks: []\n", "partial", "the second greeting is left"},
+		// A note line that is no YAML on its own: its raw text, the
+		// outcome kept.
+		{"```yaml\noutcome: blocked\noutcome_note: needs a key: the deploy one\nchecks: []\n```", "blocked", "needs a key: the deploy one"},
+		{"```yaml\noutcome: partial\noutcome_note: \"half: the rest\" later\nchecks: []\n```", "partial", "\"half: the rest\" later"},
+		// An outcome line that is no YAML: partial, never done.
+		{"```yaml\noutcome: done: mostly\noutcome_note: the second endpoint is left\nchecks: []\n```", "partial", "the second endpoint is left"},
 	} {
 		if o, n := WriterOutcome(c.reply); o != c.outcome || n != c.note {
 			t.Errorf("%q: %q %q, want %q %q", c.reply, o, n, c.outcome, c.note)
