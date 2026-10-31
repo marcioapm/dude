@@ -44,6 +44,10 @@ type InstructionsInput struct {
 	// A fix on an open pull request goes to it directly, then is reviewed
 	// (Policy.DirectFixes); else it is checked on a candidate first.
 	DirectFixes bool
+	// The delivery's review loop is the conductor's (State.ConductedLoop)
+	// as the Run is submitted: a reviewer's severities are by outcome, and
+	// each finding at medium or above carries its evidence.
+	ConductedLoop bool
 }
 
 // Web is what a Run reaches of the web with its harness's own tools.
@@ -105,7 +109,7 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
 		Context:     in.Context,
 		Vars:        PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
-		DirectFixes: in.DirectFixes,
+		DirectFixes: in.DirectFixes, ConductedLoop: in.ConductedLoop,
 	}
 }
 

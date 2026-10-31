@@ -67,6 +67,9 @@ type PromptInput struct {
 	// The delivery's fixes reach its open pull requests directly
 	// (Policy.DirectFixes): its instruction file says so.
 	DirectFixes bool
+	// The review loop is the conductor's (State.ConductedLoop, at submit):
+	// a reviewer's instruction file asks for each finding's evidence.
+	ConductedLoop bool
 	// The existing pull request the task took over, when it did: its
 	// unresolved threads, changes requested and red checks are the
 	// reviewers' context.
@@ -212,7 +215,7 @@ func reviewScope(base map[string]string, of string, checkouts int) string {
 
 // reviewContract is how every reviewer works, whatever its saved prompts
 // say: the reviewer's "How you review".
-var reviewContract = render(mustTemplate("contracts/review"), nil)
+var reviewContract = render(mustTemplate("contracts/review"), InstructionsInput{}.data("reviewer"))
 
 // reviewSummary closes a review's reply. Its fields sit indented under
 // `review_summary:`, so ParseFindings reads the document as one untitled
@@ -222,6 +225,10 @@ var reviewSummary = render(mustTemplate("contracts/review-summary"), nil)
 // findingFormat is the reviewer's: only a reviewer is shown the last fix,
 // so only it is asked for caused_by_fix (the template keys on .Role).
 var findingFormat = render(mustTemplate("contracts/finding-format"), InstructionsInput{}.data("reviewer"))
+
+// conductedFindingFormat is findingFormat in a conducted loop: each
+// finding's evidence asked for (ConductedLoop).
+var conductedFindingFormat = render(mustTemplate("contracts/finding-format"), InstructionsInput{ConductedLoop: true}.data("reviewer"))
 
 // earlierFindings asks a re-review to judge what the last round raised.
 // Whether a finding was fixed is the reviewer's call, made by reading the

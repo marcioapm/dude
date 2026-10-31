@@ -271,6 +271,8 @@ type TaskBranch struct {
 	// Fixes reach its open pull requests directly (Policy.DirectFixes, as
 	// the delivery froze it).
 	Direct bool
+	// Its review loop is the conductor's now (State.ConductedLoop).
+	ConductedLoop bool
 }
 
 // TaskBranchTx is the task branch of the task's attempt: its delivery's
@@ -293,7 +295,8 @@ func TaskBranchTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (T
 	if st.Branch == "" {
 		st.Branch = BranchFor(taskID, attempt)
 	}
-	return TaskBranch{Branch: st.Branch, Bases: st.Bases, Source: st.Source, Direct: st.Policy.DirectFixes()}, nil
+	return TaskBranch{Branch: st.Branch, Bases: st.Bases, Source: st.Source, Direct: st.Policy.DirectFixes(),
+		ConductedLoop: st.ConductedLoop()}, nil
 }
 
 // TaskSource is the task's source, nil when it starts from new work.

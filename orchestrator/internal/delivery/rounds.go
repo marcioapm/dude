@@ -515,7 +515,18 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 				return "", err
 			}
 		}
-		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
+		// A reviewer of a conducted loop is asked for each finding's
+		// evidence, as the delivery reads now (its instruction file was
+		// its predecessor's).
+		var conducted bool
+		if in.Phase == PhaseReview {
+			tb, err := TaskBranchTx(ctx, tx, in.TaskID, in.Attempt)
+			if err != nil {
+				return "", err
+			}
+			conducted = tb.ConductedLoop
+		}
+		message = roundMessage(conducted, in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
 		if in.Phase == PhaseTest {
 			checks, err := WriterChecksTx(ctx, tx, in.TaskID, in.Attempt)
 			if err != nil {
@@ -629,16 +640,33 @@ func roundRanges(from, to map[string]string) []roundRange {
 // tester may carry criteria from ("" retests every one).
 func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
 	lastFix []FixRange, carry string) string {
+	return roundMessage(false, phase, from, to, reason, findings, questions, lastFix, carry)
+}
+
+// ConductedRoundMessage is RoundMessage for a reviewer of a conducted loop
+// (ConductedLoop): the format it reports in asks for each finding's
+// evidence, as its instruction file does.
+func ConductedRoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
+	lastFix []FixRange, carry string) string {
+	return roundMessage(true, phase, from, to, reason, findings, questions, lastFix, carry)
+}
+
+func roundMessage(conducted bool, phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
+	lastFix []FixRange, carry string) string {
 	list := ""
 	if len(findings) > 0 {
 		list = earlierFindings(findings)
+	}
+	format := findingFormat
+	if conducted {
+		format = conductedFindingFormat
 	}
 	return render(roundTmpl, struct {
 		Test                                 bool
 		Ranges                               []roundRange
 		Reason, Findings, Questions, LastFix string
 		Format, Summary, CarryFrom           string
-	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), findingFormat, reviewSummary, carry})
+	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), format, reviewSummary, carry})
 }
 
 // FixRange is what a fix Run published in one repository: its commits are
