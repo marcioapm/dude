@@ -87,6 +87,16 @@ type State struct {
 	// Review → fix cycles spent.
 	Iteration       int       `json:"iteration,omitempty"`
 	ConvergenceFrom time.Time `json:"convergenceFrom,omitzero"`
+	// The review rounds of the loop completed: 0 before its first. A loop
+	// starts anew at an implementation's first review, a simplifier's,
+	// and a pull request fix's narrow loop's (or an integration's). What
+	// the round's prompts say and narrow by (runs.review_round); never a
+	// bound, and never part of a Run's key (Iteration is).
+	Round int `json:"round,omitempty"`
+	// The heads the loop's last completed review round reviewed, by
+	// repository: where a conducted loop's next round starts
+	// (RangeFixRound). Nil before the loop's first round.
+	RoundHeads map[string]string `json:"roundHeads,omitempty"`
 	// PR feedback → fix cycles spent in this review round: a person's new
 	// review (not a comment, not CI failing again) starts another.
 	PRIteration int `json:"prIteration,omitempty"`
@@ -518,6 +528,9 @@ type PRFixAfter struct {
 	Directed    *Directed    `json:"directed,omitempty"`
 	Integration *Integration `json:"integration,omitempty"`
 	Iteration   int          `json:"iteration,omitempty"`
+	// The loop's round, and the heads it last reviewed (State.Round).
+	Round      int               `json:"round,omitempty"`
+	RoundHeads map[string]string `json:"roundHeads,omitempty"`
 }
 
 // PromotedRefresh is the after-promotion refresh still to do: the
@@ -734,6 +747,7 @@ func (w *steps) implementRun(ctx context.Context, sc workflow.StepContext) (work
 		return workflow.Result{}, err
 	}
 	st.Iteration = 0
+	st.newLoop()
 	st.PersonSaid = ""
 	return park("awaitImplement", st, []string{runID}), nil
 }
@@ -891,6 +905,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
 				p.ReviewRange, p.KeepRange = reviewRange, st.fixLoop()
+				p.Round = st.Round + 1
 				p.Continue = cont
 				d.apply(p)
 				if st.Integration != nil {
@@ -987,6 +1002,10 @@ func (st *State) reviewRange() *ReviewRange {
 // decides, weighs its own reviews' findings alone, and keeps its range.
 func (st *State) fixLoop() bool { return st.checkingCandidate() || len(st.FixRange) > 0 }
 
+// newLoop starts the review loop anew: its next review is round 1, of the
+// whole change the loop is over.
+func (st *State) newLoop() { st.Round, st.RoundHeads = 0, nil }
+
 // afterReview is the step a review loop that has nothing left to fix goes
 // to: the simplifier, then the test — for new work and for an open pull
 // request's fix on its candidate alike. A loop over the simplifier's own
@@ -1078,6 +1097,8 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 		return workflow.Result{}, err
 	}
 	st.Iteration++
+	st.Round++
+	st.RoundHeads = maps.Clone(st.Heads)
 	st.PendingRunIDs = nil
 	exit := w.loopExit(st, findings, conv)
 	if (exit == nil || exit.Reason == "clear") && !st.fixLoop() {
@@ -1397,6 +1418,8 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		// another simplification.
 		return workflow.Result{Next: "test", State: st}, nil
 	}
+	// The simplifier's diff is a loop of its own: its first review is round 1.
+	st.newLoop()
 	// Mechanics, whoever decides: code nobody reviewed never reaches the
 	// test or the pull request. The round's findings are the conductor's
 	// to triage, as any round's are (awaitReview).
@@ -2571,6 +2594,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		st.Integration.Published = true
 		st.Integration.MergeSHA = st.Heads[st.Integration.Repo]
 		st.Iteration = 0
+		st.newLoop()
 		st.ActingOnPR = true
 		return workflow.Result{Next: "review", State: st}, nil
 	}
@@ -2592,6 +2616,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		if bases := out.fixBases(from); len(bases) > 0 {
 			st.FixRange = bases
 			st.ChangedPaths, st.Iteration, st.TestFixRounds, st.TestFindingIDs = out.ChangedPaths, 0, 0, nil
+			st.newLoop()
 			w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
 			return workflow.Result{Next: "review", State: st}, nil
 		}
@@ -2608,6 +2633,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	// and against PRFixes, above.
 	st.Candidate.Base = out.fixBases(st.Candidate.From)
 	st.ChangedPaths, st.Iteration, st.TestFixRounds, st.TestFindingIDs = out.ChangedPaths, 0, 0, nil
+	st.newLoop()
 	// Mechanics, whoever decides: the conductor chose the fix; checking it
 	// before the pull request shows it is not a choice (checkingCandidate).
 	return workflow.Result{Next: "review", State: st}, nil

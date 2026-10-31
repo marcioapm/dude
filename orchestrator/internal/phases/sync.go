@@ -4126,9 +4126,9 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
 				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix,
-				trivial, introduced, evidence_kind, evidence, scenario, unverified)
+				trivial, introduced, evidence_kind, evidence, scenario, unverified, review_round)
 				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15,
-				$16, $17, $18, $19, $20, $21)`,
+				$16, $17, $18, $19, $20, $21, (SELECT review_round FROM runs WHERE id = $4))`,
 			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
 			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix,
 			db.Nullable(f.Acceptance), f.CausedByFix,
