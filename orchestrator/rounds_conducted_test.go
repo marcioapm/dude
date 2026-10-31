@@ -3,6 +3,8 @@ package orchestrator_test
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -45,7 +47,7 @@ func roundsWorld(t *testing.T) *world {
 		switch labels["dude.phase"] {
 		case "review":
 			if reviews++; reviews == 1 {
-				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: medium", "FACTORY.md says the wrong thing") + "```\n"}
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: high", "FACTORY.md says the wrong thing") + "```\n"}
 			}
 			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
 		case "fix", "simplify":
@@ -71,7 +73,7 @@ func TestTheReviewRoundCountsPerLoopAndStartsAgainForTheSimplifier(t *testing.T)
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
 	w.must(task, "decide", `{"action":"next"}`)
-	w.until("round 2", func() bool { return w.decisionAt(task) == delivery.PointReviewed && len(w.roundReviews(task)) > 0 })
+	w.until("round 2", func() bool { return w.decisionAt(task) == delivery.PointReviewed && len(w.roundReviews(task)) > 1 })
 	w.must(task, "start_phase", `{"phase":"simplify"}`)
 	w.until("the simplifier's review", func() bool {
 		rs := w.roundReviews(task)
@@ -121,5 +123,175 @@ func TestARestartedReviewerKeepsItsRound(t *testing.T) {
 	fresh, _ := out["run"].(string)
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND review_round = 3`, fresh); n != 1 {
 		t.Errorf("the replacement %s is not round 3", fresh)
+	}
+}
+
+// reviewedRange is one completed review's range in the task's one
+// repository: from its range's base (the branch's merge-base with main
+// when it reviews the whole branch) to the commit it checked out.
+func (w *world) reviewedRanges(task string) [][2]string {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT COALESCE(review_range->'base'->>'target', ''), base_refs->>'target'
+		FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND replaced_by IS NULL ORDER BY created_at`, task)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	pairs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) ([2]string, error) {
+		var p [2]string
+		return p, r.Scan(&p[0], &p[1])
+	})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return pairs
+}
+
+// git runs git in the fake GitHub's repository.
+func (w *world) gitLines(args ...string) []string {
+	w.t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", w.gh.Repo}, args...)...).Output()
+	if err != nil {
+		w.t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.Fields(string(out))
+}
+
+// unreviewed is every commit on the task's branch, from main to head, that
+// no completed review's range covered.
+func (w *world) unreviewed(task, head string) []string {
+	w.t.Helper()
+	covered := map[string]bool{}
+	for _, r := range w.reviewedRanges(task) {
+		base := r[0]
+		if base == "" {
+			base = w.gitLines("merge-base", "main", r[1])[0]
+		}
+		for _, c := range w.gitLines("rev-list", base+".."+r[1]) {
+			covered[c] = true
+		}
+	}
+	var missed []string
+	for _, c := range w.gitLines("rev-list", "main.."+head) {
+		if !covered[c] {
+			missed = append(missed, c)
+		}
+	}
+	return missed
+}
+
+// toRoundTwo is a conducted task taken through round 1 and its fix to the
+// conductor's decision after round 2; between, before the fix, between
+// runs: what lands on the branch besides the fix (a person's push).
+func (w *world) toRoundTwo(task string, between func()) {
+	w.t.Helper()
+	w.roundTwo(task, between, nil)
+}
+
+// toRoundTwoAfterFix is toRoundTwo with afterFix run at the decision after
+// the fix, before round 2 starts.
+func (w *world) toRoundTwoAfterFix(task string, afterFix func()) {
+	w.t.Helper()
+	w.roundTwo(task, nil, afterFix)
+}
+
+func (w *world) roundTwo(task string, between, afterFix func()) {
+	w.t.Helper()
+	w.talk(task)
+	w.implemented(task)
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	if between != nil {
+		between()
+	}
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	if afterFix != nil {
+		afterFix()
+	}
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 2", func() bool {
+		return w.decisionAt(task) == delivery.PointReviewed && w.count(`SELECT count(*) FROM runs WHERE task_id = $1
+			AND phase = 'review' AND status = 'completed' AND review_round = 2`, task) > 0
+	})
+}
+
+// A conducted round 2 reviews only what changed since round 1 reviewed
+// the branch (fix_round, from round 1's head), told why; every commit of
+// the branch falls in some round's range.
+func TestRoundTwoReviewsOnlyTheFixsCommits(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	w.toRoundTwo(task, nil)
+	rs := w.roundReviews(task)
+	first, second := rs[0], rs[len(rs)-1]
+	head1 := w.str(`SELECT base_refs->>'target' FROM runs WHERE id = $1`, first.ID)
+	if first.Of != "" || second.Round != 2 || second.Of != delivery.RangeFixRound || second.Base != head1 {
+		t.Errorf("round 1 %q; round %d %q from %q, want fix_round from round 1's head %s\n%s",
+			first.Of, second.Round, second.Of, second.Base, head1, w.describeRuns())
+	}
+	head := w.str(`SELECT base_refs->>'target' FROM runs WHERE id = $1`, second.ID)
+	if missed := w.unreviewed(task, head); len(missed) > 0 {
+		t.Errorf("commits no round reviewed: %v", missed)
+	}
+	if want := delivery.Prompt(delivery.PhaseReview, delivery.PromptInput{ReviewBase: map[string]string{"target": head1},
+		ReviewOf: delivery.RangeFixRound}); !strings.Contains(second.Prompt, strings.Split(want, "\n\n")[2]) {
+		t.Errorf("round 2's reviewer is not told its range:\n%s", second.Prompt)
+	}
+}
+
+// A commit that lands between rounds besides the fix — a person's push to
+// the task branch while the conductor triages round 1 — is in round 2's
+// range: no commit falls outside every round.
+func TestAPushBetweenRoundsIsInTheNextRoundsRange(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	var pushed string
+	w.toRoundTwo(task, func() {
+		branch := delivery.BranchFor(task, 1)
+		pushed = w.gh.CommitFiles(branch, "A person's own change", map[string]string{"NOTES.md": "mine\n"})
+		mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{heads,target}', to_jsonb($2::text)) WHERE task_id = $1`, task, pushed)
+	})
+	rs := w.roundReviews(task)
+	head := w.str(`SELECT base_refs->>'target' FROM runs WHERE id = $1`, rs[len(rs)-1].ID)
+	if missed := w.unreviewed(task, head); len(missed) > 0 {
+		t.Errorf("commits no round reviewed: %v (the person's %s)\n%s", missed, pushed, w.describeRuns())
+	}
+}
+
+// Two commits after round 1 — the fix's, and one more on top of it before
+// the next round starts (a second commit at the after-fix decision) — are
+// both round 2's.
+func TestTwoCommitsAfterARoundAreBothTheNextRounds(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	var fixHead string
+	w.toRoundTwoAfterFix(task, func() {
+		fixHead = w.str(`SELECT state->'heads'->>'target' FROM workflow_runs WHERE task_id = $1`, task)
+		pushed := w.gh.CommitFiles(delivery.BranchFor(task, 1), "A second commit", map[string]string{"NOTES.md": "more\n"})
+		mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{heads,target}', to_jsonb($2::text)) WHERE task_id = $1`, task, pushed)
+	})
+	rs := w.roundReviews(task)
+	second := rs[len(rs)-1]
+	head := w.str(`SELECT base_refs->>'target' FROM runs WHERE id = $1`, second.ID)
+	if n := len(w.gitLines("rev-list", second.Base+".."+head)); n < 2 || head == fixHead {
+		t.Errorf("round 2's range %s..%s has %d commits, want the fix's and the one after it", second.Base, head, n)
+	}
+	if missed := w.unreviewed(task, head); len(missed) > 0 {
+		t.Errorf("commits no round reviewed: %v\n%s", missed, w.describeRuns())
+	}
+}
+
+// A Deliver delivery's later round keeps today's range: the whole branch.
+func TestADeliverRoundTwoReviewsTheWholeBranch(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	w.deliver(task)
+	w.until("round 2", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND review_round = 2`, task) > 0
+	})
+	for _, r := range w.roundReviews(task) {
+		if r.Round <= 2 && r.Of != "" {
+			t.Errorf("Deliver's round %d reviews %q, want the whole branch", r.Round, r.Of)
+		}
 	}
 }

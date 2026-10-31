@@ -97,6 +97,11 @@ type State struct {
 	// repository: where a conducted loop's next round starts
 	// (RangeFixRound). Nil before the loop's first round.
 	RoundHeads map[string]string `json:"roundHeads,omitempty"`
+	// The heads the review round in flight checks out, set as its Runs
+	// are created: RoundHeads once it completes. Heads may move under it (a
+	// publish while the reviewers work), and what they did not see must
+	// fall in the next round's range.
+	ReviewingHeads map[string]string `json:"reviewingHeads,omitempty"`
 	// PR feedback → fix cycles spent in this review round: a person's new
 	// review (not a comment, not CI failing again) starts another.
 	PRIteration int `json:"prIteration,omitempty"`
@@ -845,7 +850,8 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if err := w.refreshPRWaitHeads(ctx, sc, st); err != nil {
 		return workflow.Result{}, err
 	}
-	reviewRange := st.reviewRange()
+	reviewRange := st.roundRange()
+	st.ReviewingHeads = maps.Clone(st.Heads)
 	// Each Run's creation key; the round's own is the key of no category.
 	runKey := func(c string) string {
 		switch {
@@ -904,7 +910,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
-				p.ReviewRange, p.KeepRange = reviewRange, st.fixLoop()
+				// A round's own range is kept for a fresh reviewer: a large
+				// change since is still all the round has to review.
+				p.ReviewRange, p.KeepRange = reviewRange, st.fixLoop() || reviewRange != nil && reviewRange.Of == RangeFixRound
 				p.Round = st.Round + 1
 				p.Continue = cont
 				d.apply(p)
@@ -996,6 +1004,38 @@ func (st *State) reviewRange() *ReviewRange {
 	return nil
 }
 
+// roundRange is the range the next review round's reviewers cover: the
+// loop's range (reviewRange), else, in a conducted loop's later round
+// (ConductedLoop, Round ≥ 1 done), only what changed since the round
+// before reviewed (RangeFixRound): from the heads it reviewed to the heads
+// now. Each round's base is the previous round's head, so the rounds
+// together cover every commit. Whenever that cannot be named for every
+// repository that moved — one the last round had no head for — or nothing
+// moved, the whole branch: a narrower range would leave commits unreviewed.
+// An integration's review is of its merge, whole.
+func (st *State) roundRange() *ReviewRange {
+	if r := st.reviewRange(); r != nil {
+		return r
+	}
+	if !st.ConductedLoop() || st.Round < 1 || st.Integration != nil || len(st.RoundHeads) == 0 {
+		return nil
+	}
+	base := map[string]string{}
+	for repo, head := range st.Heads {
+		from, ok := st.RoundHeads[repo]
+		switch {
+		case !ok || from == "":
+			return nil
+		case from != head:
+			base[repo] = from
+		}
+	}
+	if len(base) == 0 {
+		return nil
+	}
+	return &ReviewRange{Of: RangeFixRound, Base: base}
+}
+
 // fixLoop says the delivery's review loop is a pull request fix's own:
 // on its candidate (checkingCandidate), or over a fix pushed to the pull
 // request directly (FixRange). It goes on by the policy's rules whoever
@@ -1004,7 +1044,7 @@ func (st *State) fixLoop() bool { return st.checkingCandidate() || len(st.FixRan
 
 // newLoop starts the review loop anew: its next review is round 1, of the
 // whole change the loop is over.
-func (st *State) newLoop() { st.Round, st.RoundHeads = 0, nil }
+func (st *State) newLoop() { st.Round, st.RoundHeads, st.ReviewingHeads = 0, nil, nil }
 
 // afterReview is the step a review loop that has nothing left to fix goes
 // to: the simplifier, then the test — for new work and for an open pull
@@ -1098,7 +1138,12 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	}
 	st.Iteration++
 	st.Round++
-	st.RoundHeads = maps.Clone(st.Heads)
+	st.RoundHeads = st.ReviewingHeads
+	if st.RoundHeads == nil {
+		// A round created before its heads were kept: they were the heads.
+		st.RoundHeads = maps.Clone(st.Heads)
+	}
+	st.ReviewingHeads = nil
 	st.PendingRunIDs = nil
 	exit := w.loopExit(st, findings, conv)
 	if (exit == nil || exit.Reason == "clear") && !st.fixLoop() {

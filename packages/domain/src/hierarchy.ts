@@ -809,9 +809,11 @@ export const runSchema = z.object({
   /**
    * A review limited to a range: what it checks — "simplify" (the
    * simplifier's diff) or "pull_request_fix" (a fix for an open pull
-   * request, on its candidate branch). Null reviews the whole branch.
+   * request, on its candidate branch) or "fix_round" (a conducted loop's
+   * later round: what changed since the round before). Null reviews the
+   * whole branch.
    */
-  reviewOf: z.enum(["simplify", "pull_request_fix"]).nullable().catch(null).default(null),
+  reviewOf: z.enum(["simplify", "pull_request_fix", "fix_round"]).nullable().catch(null).default(null),
   /**
    * Where its start is while it starts, from its latest `run.stage`: lux's
    * stage, since when, and the placement's epoch. Null once lux reports it

@@ -189,11 +189,14 @@ var reviewFocus = agentTexts("aspects/reviewer/", reviewerOrder...)
 const (
 	RangeSimplify       = "simplify"
 	RangePullRequestFix = "pull_request_fix"
+	// A conducted loop's later round: what changed since the round before
+	// it reviewed (State.roundRange).
+	RangeFixRound = "fix_round"
 )
 
 // rangeReason says why a review covers only its range, by ReviewRange.Of:
 // agents/contracts/review-range/<of>.md.
-var rangeReason = agentTexts("contracts/review-range/", RangeSimplify, RangePullRequestFix, RangeSinceLastRound)
+var rangeReason = agentTexts("contracts/review-range/", RangeSimplify, RangePullRequestFix, RangeSinceLastRound, RangeFixRound)
 
 // reviewScope is what this review covers, in its first message: the whole
 // branch when base is empty, else the commits named, per repository, to
