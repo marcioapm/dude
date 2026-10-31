@@ -68,7 +68,7 @@ func TestDirectAPullRequestFixFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) 
 		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
 	})
 	e.feedbackToDecide()
-	e.must(e.task, "decide", `{"action":"next"}`)
+	e.must(e.task, "decide", `{"action":"next","note":"NOTE-XYZZY"}`)
 	e.until("the fix on the pull request, and waiting again", func() bool {
 		e.sync()
 		return e.fixes(e.task) == 1 && e.gh.SHA(e.branch) != published && e.waitingOnPR(e.task)
@@ -77,6 +77,45 @@ func TestDirectAPullRequestFixFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) 
 		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
 		AND f.phase = 'fix' AND f.pr_feedback <> '[]'::jsonb)`, e.task, published); n == 0 {
 		t.Fatalf("no review of the conductor's push %s before the fixer started from it\n%s", published, e.describeRuns())
+	}
+	// The fix was told what the conductor said, kept across the review.
+	if got := e.ids(`SELECT COALESCE(conductor_note, '') FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb ORDER BY created_at`, e.task); len(got) != 1 || got[0] != "NOTE-XYZZY" {
+		t.Errorf("the pull request fix's note: %q", got)
+	}
+}
+
+// The conductor publishes to the pull request, then the base moves into
+// a conflict and the conductor decides next: the publish is reviewed
+// first, then the integration it decided on runs, once.
+func TestDirectAnIntegrationFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
+	e := conductedDirect(t)
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nthe conductor's fix\n"})
+	id := e.publish()
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("publish %s: %s", status, why)
+	}
+	published := e.gh.SHA(e.branch)
+	e.until("the pull request read at the publish", func() bool {
+		e.sync()
+		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
+	})
+	e.conflictWithMovedBase()
+	e.until("the conflict to decide on", func() bool { e.sync(); return e.decisionAt(e.task) == delivery.PointPRFeedback })
+	e.must(e.task, "decide", `{"action":"next"}`)
+	e.until("the integration on the pull request", func() bool {
+		e.sync()
+		return e.count(integrationRuns+` AND status = 'completed'`, e.task) == 1
+	})
+	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
+		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
+		AND f.pr_feedback::text LIKE '%Base integration%')`, e.task, published); n == 0 {
+		t.Fatalf("no review of the conductor's push %s before the integration started from it\n%s", published, e.describeRuns())
+	}
+	e.syncRounds(3)
+	if n := e.count(integrationRuns, e.task); n != 1 {
+		t.Errorf("%d integration Runs\n%s", n, e.describeRuns())
 	}
 }
 
