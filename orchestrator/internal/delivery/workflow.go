@@ -1021,7 +1021,7 @@ func (st *State) roundRange() *ReviewRange {
 	if r := st.reviewRange(); r != nil {
 		return r
 	}
-	if !st.ConductedLoop() || st.Round < 1 || st.Integration != nil || len(st.RoundHeads) == 0 {
+	if !st.ConductedLoop() || st.Round < 1 || st.Integration != nil {
 		return nil
 	}
 	base := map[string]string{}
