@@ -142,6 +142,10 @@ type State struct {
 	// An open pull request's fix being checked on its candidate branch
 	// before the pull request shows it (prFix to promoteCandidate).
 	Candidate *Candidate `json:"candidate,omitempty"`
+	// A pull request's fix pushed to it directly (Policy.DirectFixes),
+	// while the narrow review loop over that push runs: where its range
+	// starts per repository the round changed. Nil outside that loop.
+	FixRange map[string]string `json:"fixRange,omitempty"`
 	// The after-promotion refresh of the task's open pull requests, while
 	// it is retried (refreshPromoted).
 	PromotedRefresh *PromotedRefresh `json:"promotedRefresh,omitempty"`
@@ -542,6 +546,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"awaitPRFix":        w.awaitPRFix,
 			"promoteCandidate":  w.promoteCandidate,
 			"refreshPromoted":   w.refreshPromoted,
+			"prFixDone":         w.prFixDone,
 			"decide":            w.decide,
 			"recover":           w.recover,
 		},
@@ -606,6 +611,9 @@ func park(next string, st *State, pending []string) workflow.Result {
 func key(sc workflow.StepContext, st *State, parts ...any) string {
 	if st.Candidate != nil {
 		parts = append(parts, ":candidate:", st.Candidate.Round)
+	}
+	if st.FixRange != nil {
+		parts = append(parts, ":prfix:", st.PRFixKey)
 	}
 	if st.Retries > 0 {
 		parts = append(parts, ":retry:", st.Retries)
@@ -850,7 +858,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
 				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
-				p.ReviewRange, p.KeepRange = reviewRange, st.checkingCandidate()
+				p.ReviewRange, p.KeepRange = reviewRange, st.fixLoop()
 				p.Continue = cont
 				d.apply(p)
 				if st.Integration != nil {
@@ -907,7 +915,7 @@ func (w *steps) roundReviewers(ctx context.Context, sc workflow.StepContext, st 
 // gate would send the delivery back to review for ever. RequiredReviewers
 // run, else the first round's reviewers; nil when no gate waits.
 func (w *steps) gateReviewers(ctx context.Context, sc workflow.StepContext, st *State) ([]string, map[string][]string, error) {
-	gated := st.Candidate != nil
+	gated := st.Candidate != nil || len(st.FixRange) > 0
 	if !gated {
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
 			gated, err = UntestedConductorHeadTx(ctx, tx, st.TaskID, st.Heads)
@@ -935,9 +943,17 @@ func (st *State) reviewRange() *ReviewRange {
 		return &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase}
 	case st.Candidate != nil && len(st.Candidate.Base) > 0:
 		return &ReviewRange{Of: RangePullRequestFix, Base: st.Candidate.Base}
+	case len(st.FixRange) > 0:
+		return &ReviewRange{Of: RangePullRequestFix, Base: st.FixRange}
 	}
 	return nil
 }
+
+// fixLoop says the delivery's review loop is a pull request fix's own:
+// on its candidate (checkingCandidate), or over a fix pushed to the pull
+// request directly (FixRange). It goes on by the policy's rules whoever
+// decides, weighs its own reviews' findings alone, and keeps its range.
+func (st *State) fixLoop() bool { return st.checkingCandidate() || len(st.FixRange) > 0 }
 
 // afterReview is the step a review loop that has nothing left to fix goes
 // to: the simplifier, then the test — for new work and for an open pull
@@ -945,6 +961,11 @@ func (st *State) reviewRange() *ReviewRange {
 // diff goes to the test: the simplifier is not run again after a fix of
 // its diff; that fix was reviewed by the loop, and the tester runs next.
 func (st *State) afterReview() string {
+	if len(st.FixRange) > 0 {
+		// A fix pushed to the pull request, reviewed: no simplifier and no
+		// tester after it; the pull request's CI is its test.
+		return "prFixDone"
+	}
 	if st.Policy.Simplify && len(st.SimplifyBase) == 0 {
 		return "simplify"
 	}
@@ -1023,7 +1044,7 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	st.Iteration++
 	st.PendingRunIDs = nil
 	exit := w.loopExit(st, findings, conv)
-	if (exit == nil || exit.Reason == "clear") && !st.checkingCandidate() {
+	if (exit == nil || exit.Reason == "clear") && !st.fixLoop() {
 		// Past a bound it escalates as the policy does; short of one, the
 		// round's findings are the conductor's to triage, if it decides as
 		// the transition commits (recheck).
@@ -1039,6 +1060,10 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *LoopExit {
 	policy := st.Policy
 	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
+	if len(st.FixRange) > 0 {
+		// Each cycle after a direct fix is a push its CI and reviewers see.
+		policy.MaxReviewIterations = st.Policy.prFixReviewBound()
+	}
 	return Exit(policy, findings, st.Iteration, conv)
 }
 
@@ -1061,7 +1086,7 @@ func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]Find
 // and integration loops weigh reviewers' findings alone; open feedback
 // returns to the PR fix loop.
 func (w *steps) withFeedback(ctx context.Context, org string, st *State, findings []FindingState) ([]FindingState, error) {
-	if st.checkingCandidate() || st.Integration != nil {
+	if st.fixLoop() || st.Integration != nil {
 		return findings, nil
 	}
 	feedback, err := w.s.FeedbackStates(ctx, org, st)
@@ -1247,7 +1272,7 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), out.ChangedPaths
 	// The tester's findings were sent; the next test judges them.
 	st.TestFindingIDs = nil
-	if st.checkingCandidate() {
+	if st.fixLoop() {
 		return workflow.Result{Next: "review", State: st}, nil
 	}
 	return w.next(ctx, sc, st, PointFixed, "review", out.line(runID, "fix"))
@@ -1940,13 +1965,14 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	}
 	// A new round's candidate: its Runs are keyed apart from the last's,
 	// and its first review is of the fix, never of an earlier simplifier.
-	st.Candidate, st.SimplifyBase = nil, nil
+	st.Candidate, st.SimplifyBase, st.FixRange = nil, nil, nil
+	direct := st.Policy.DirectFixes()
 	k := key(sc, st, ":prfix:", st.PRFixKey)
 	existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, k)
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if existing == "" {
+	if existing == "" && !direct {
 		// The last round's candidate never reached the pull request (a
 		// promoted one has nothing pending): what its fixers resolved goes
 		// to this round's fixer.
@@ -1963,9 +1989,12 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 			return workflow.Result{}, err
 		}
 		// The last round's candidate branch, if a person's push left it
-		// off the pull request's line, would refuse this fix's move.
-		if err := w.s.dropCandidateBranches(ctx, sc.OrganizationID, st, gh); err != nil {
-			return workflow.Result{}, forgeWait(err)
+		// off the pull request's line, would refuse this fix's move. A
+		// direct delivery has none, and deletes no branch.
+		if !direct {
+			if err := w.s.dropCandidateBranches(ctx, sc.OrganizationID, st, gh); err != nil {
+				return workflow.Result{}, forgeWait(err)
+			}
 		}
 	} else if existing != "" {
 		// A replay: the fix started from the heads it was created with.
@@ -1983,10 +2012,10 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	// none to keep its merge from, unless another repository's is open: the
 	// fixer may change that one too. A replay's Run already publishes where
 	// it was created to, whatever the pull requests' states are now.
-	candidate := st.Integration == nil || !st.Integration.BeforePR
+	candidate := !direct && (st.Integration == nil || !st.Integration.BeforePR)
 	if existing != "" {
 		candidate = runBranch == st.candidateBranch()
-	} else if !candidate && len(st.PullRequestIDs) > 0 {
+	} else if !candidate && !direct && len(st.PullRequestIDs) > 0 {
 		open, err := w.openPRRepos(ctx, sc, st)
 		if err != nil {
 			return workflow.Result{}, err
@@ -2075,6 +2104,20 @@ func writerKey(sc workflow.StepContext, st *State, phase string) string {
 func (w *steps) writerCandidate(ctx context.Context, sc workflow.StepContext, st *State, phase string) error {
 	if st.Candidate != nil {
 		return nil
+	}
+	if st.Policy.DirectFixes() {
+		// No candidate: the writer publishes to the task branch, an open
+		// pull request's too. A replay starts from its Run's heads; a new
+		// one at the pull request wait from GitHub's (a person may have
+		// pushed).
+		existing, err := w.s.runByKey(ctx, sc.OrganizationID, st.TaskID, writerKey(sc, st, phase))
+		if err != nil || existing != "" {
+			if err == nil {
+				st.Heads, _, err = w.s.runBaseRefs(ctx, sc.OrganizationID, existing)
+			}
+			return err
+		}
+		return w.refreshPRWaitHeads(ctx, sc, st)
 	}
 	proposed := *st
 	proposed.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1
@@ -2471,6 +2514,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		st.ActingOnPR = true
 		return workflow.Result{Next: "review", State: st}, nil
 	}
+	from := maps.Clone(st.Heads)
 	st.HeadRunID, st.PendingRunIDs, st.Heads = runID, nil, out.advance(st.Heads)
 	st.ActingOnPR = false
 	if len(out.Heads) > 0 {
@@ -2479,6 +2523,24 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		if err := w.chargeLandedPRFix(ctx, sc, st, out.Heads); err != nil {
 			return workflow.Result{}, err
 		}
+	}
+	if len(out.Heads) > 0 && st.Candidate == nil && st.Policy.DirectFixes() {
+		// On the pull request now: reviewed over its own push, in a loop
+		// of its own whose fixes push there too (fixLoop), bounded by
+		// maxPrFixReviewIterations. What the pull requests said about the
+		// test is stale until that loop is done (prFixDone).
+		st.FixRange = map[string]string{}
+		for repo := range out.Heads {
+			if base := cmp.Or(from[repo], out.Bases[repo]); base != "" {
+				st.FixRange[repo] = base
+			}
+		}
+		if len(st.FixRange) > 0 {
+			st.ChangedPaths, st.Iteration, st.TestFixRounds, st.TestFindingIDs = out.ChangedPaths, 0, 0, nil
+			w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
+			return workflow.Result{Next: "review", State: st}, nil
+		}
+		st.FixRange = nil
 	}
 	if len(out.Heads) == 0 || st.Candidate == nil {
 		// Nothing changed (or a fix from before candidates, already on the
@@ -2810,6 +2872,29 @@ func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st 
 		return w.beforePR(ctx, sc, st, "")
 	}
 	return w.prFixLanded(ctx, sc, st)
+}
+
+// prFixDone ends a direct pull request fix's round once its narrow loop
+// is clear (or a person accepted it): what candidateMoved does once a fix
+// is on the pull requests — reviewers asked again, a pull request opened
+// for a repository newly changed, back to waiting — with the bodies'
+// review and verification brought up to the heads they show.
+func (w *steps) prFixDone(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
+	st, err := load(sc)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	heads := map[string]string{}
+	for repo := range st.FixRange {
+		if h := st.Heads[repo]; h != "" {
+			heads[repo] = h
+		}
+	}
+	st.FixRange = nil
+	if len(heads) > 0 {
+		w.s.refreshBodies(ctx, sc.OrganizationID, st, w.forges, nil, true, true)
+	}
+	return w.candidateMoved(ctx, sc, st, heads)
 }
 
 // prFixLanded goes on from a pull request fix that reached the pull

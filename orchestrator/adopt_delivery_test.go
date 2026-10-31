@@ -26,9 +26,13 @@ func (w *world) adopting(kind string, number int, head, base string) string {
 	return w.startDelivery(w.adopted(kind, number, head, base, delivery.ModeReview))
 }
 
-// startDelivery starts the task's delivery through the API.
+// startDelivery starts the task's delivery through the API. A project
+// whose policy a test replaced without pullRequestFixes keeps candidate
+// fixes, as the world's does (newWorld): the direct tests name direct.
 func (w *world) startDelivery(wi string) string {
 	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"pullRequestFixes":"candidate"}'
+		WHERE id = $1 AND NOT delivery_policy ? 'pullRequestFixes'`, w.project)
 	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
 		w.t.Fatalf("deliver: %d %v", status, body)
 	}

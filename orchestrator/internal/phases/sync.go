@@ -2522,7 +2522,9 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	var keepBranch bool
 	// A pull request is open on branch: only promoteCandidate moves it, to
 	// a reviewed (and tested) candidate head. A writer that still targets it
-	// (one already running when the pull request opened) fails here.
+	// (one already running when the pull request opened) fails here. Not
+	// when the delivery's fixes reach its pull requests directly: there a
+	// writer's admission is what holds a push to the review after it.
 	var prOpen bool
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
@@ -2540,6 +2542,9 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		if own != "" {
 			branch = own
+		}
+		if tb.Direct && own == "" {
+			return nil
 		}
 		prOpen, err = delivery.PullRequestOpenOnTx(ctx, tx, r.TaskID, branch)
 		return err

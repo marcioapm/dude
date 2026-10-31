@@ -101,10 +101,14 @@ func (s *Store) rangeFindings(ctx context.Context, org string, st *State, r *Rev
 // loop's. Both the fix it sends and the exit it weighs read these.
 // Elsewhere it keeps every finding.
 func (s *Store) loopsOwn(ctx context.Context, org string, st *State, findings []FindingState) ([]FindingState, error) {
-	if !st.checkingCandidate() {
+	if !st.fixLoop() {
 		return findings, nil
 	}
-	ranges := []*ReviewRange{{Of: RangePullRequestFix, Base: st.Candidate.Base}}
+	base := st.FixRange
+	if st.checkingCandidate() {
+		base = st.Candidate.Base
+	}
+	ranges := []*ReviewRange{{Of: RangePullRequestFix, Base: base}}
 	if len(st.SimplifyBase) > 0 {
 		ranges = append(ranges, &ReviewRange{Of: RangeSimplify, Base: st.SimplifyBase})
 	}
