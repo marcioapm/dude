@@ -5,7 +5,7 @@ This is the loop's first review round: review all of the range above.
 {{- else if eq .Round 1 -}}
 This is the loop's first review round: review the whole change.
 {{- else if .FixRound -}}
-This is review round {{.Round}}, of what changed since round {{.Previous}} reviewed the branch (the range above). Report what those commits introduce, and what they were sent to fix and left unfixed. A problem elsewhere in the branch is out of scope unless these commits make it reachable.
+This is review round {{.Round}}, of what changed since round {{.Previous}} reviewed the branch (the range above). Report what those commits introduce, and what they were sent to fix and left unfixed.
 {{- else if .Ranged -}}
 This is review round {{.Round}}: review the range above.
 {{- else -}}

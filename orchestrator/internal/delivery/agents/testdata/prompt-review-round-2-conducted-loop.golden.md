@@ -34,7 +34,7 @@ verdicts:
 
 ## Round 2
 
-This is review round 2, of what changed since round 1 reviewed the branch (the range above). Report what those commits introduce, and what they were sent to fix and left unfixed. A problem elsewhere in the branch is out of scope unless these commits make it reachable.
+This is review round 2, of what changed since round 1 reviewed the branch (the range above). Report what those commits introduce, and what they were sent to fix and left unfixed.
 
 Decided in earlier rounds — do not raise these again, nor restate one in other words:
 - fnd_1 [medium] Totals are rounded per line: judged fixed by run_fix1
