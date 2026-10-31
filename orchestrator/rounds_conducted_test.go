@@ -400,3 +400,95 @@ func TestTheConductedFixerIsToldItsRound(t *testing.T) {
 		})
 	}
 }
+
+// mainInRange is each commit of main's, since the task branch left it,
+// that the review Run's range covers: what another task wrote, not this
+// one, is never a later round's to review as the round's change.
+func (w *world) mainInRange(run string) []string {
+	w.t.Helper()
+	base := w.str(`SELECT COALESCE(review_range->'base'->>'target', '') FROM runs WHERE id = $1`, run)
+	head := w.str(`SELECT base_refs->>'target' FROM runs WHERE id = $1`, run)
+	if base == "" {
+		return nil
+	}
+	var in []string
+	ranged := map[string]bool{}
+	for _, c := range w.gitLines("rev-list", base+".."+head) {
+		ranged[c] = true
+	}
+	for _, c := range w.gitLines("rev-list", head+"^1.."+"main") {
+		if ranged[c] {
+			in = append(in, c)
+		}
+	}
+	return in
+}
+
+// A person's Update branch merges main into the open pull request between
+// two conducted rounds: the next round, started from GitHub's head (the
+// merge), is the whole branch or starts at the merge — never a range from
+// the round before's head that carries main's commits as the round's.
+func TestABaseMergeBetweenRoundsIsNotTheNextRoundsChange(t *testing.T) {
+	w := conducting(t)
+	task := w.prOpen(w.task(), prAt{})
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	review := func(n int) roundReview {
+		w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+		w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+		rs := w.roundReviews(task)
+		w.must(task, "decide", `{"action":"next"}`)
+		w.until("waiting again", func() bool { return w.waitingOnPR(task) })
+		if r := rs[len(rs)-1]; r.Round != n {
+			t.Fatalf("review round %d, want %d\n%s", r.Round, n, w.describeRuns())
+		}
+		return rs[len(rs)-1]
+	}
+	review(1)
+	branch := w.gh.Pull(1).Head
+	w.gh.CommitFiles("main", "Another task's work", map[string]string{"OTHER.md": "theirs\n"})
+	merge := w.gh.MergeInto(branch, "main", nil)
+	second := review(2)
+	if second.Of != "" && second.Base != merge {
+		t.Errorf("round 2 reviews %s from %s, want the whole branch or from the merge %s\n%s", second.Of, second.Base, merge, w.describeRuns())
+	}
+	if in := w.mainInRange(second.ID); len(in) > 0 {
+		t.Errorf("round 2's range has main's commits %v\n%s", in, w.describeRuns())
+	}
+}
+
+// The same before the pull request: dude merges the moved base into the
+// task branch as it opens it (whenBehind update). The review the conductor
+// starts at the pull request's wait is the whole branch or starts at the
+// merge, never one carrying main's commits as its change.
+func TestDudesBaseMergeBeforeThePullRequestIsNotTheNextRoundsChange(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.reachGate(task)
+	w.gh.CommitFiles("main", "Another task's work", map[string]string{"OTHER.md": "theirs\n"})
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chat(task, "Open"); status != 200 {
+		t.Fatalf("answer Open: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the base merged in", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'action' = 'merge-base'`, task) > 0
+	})
+	w.until("the decision after the merge", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'action' = 'merge-base'`, task); n != 1 {
+		t.Fatalf("%d merges of the base before the pull request, want 1\n%s", n, w.describeRuns())
+	}
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	rs := w.roundReviews(task)
+	last := rs[len(rs)-1]
+	merge := w.str(`SELECT payload->>'head' FROM events WHERE task_id = $1 AND payload->>'action' = 'merge-base'`, task)
+	if last.Of != "" && last.Base != merge {
+		t.Errorf("the review after the merge is %s from %s, want the whole branch or from the merge %s\n%s", last.Of, last.Base, merge, w.describeRuns())
+	}
+	if in := w.mainInRange(last.ID); len(in) > 0 {
+		t.Errorf("the review's range has main's commits %v\n%s", in, w.describeRuns())
+	}
+}

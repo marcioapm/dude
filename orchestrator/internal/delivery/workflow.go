@@ -2499,6 +2499,11 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 				st.Heads = map[string]string{}
 			}
 			st.Heads[p.Repo] = head
+			// A head dude did not publish (a person's push, GitHub's
+			// Update branch merging the base in) is unknown to the loop:
+			// a range from the last round's head would carry the base's
+			// commits as the round's change. The whole branch instead.
+			delete(st.RoundHeads, p.Repo)
 		}
 	}
 	files := 0
