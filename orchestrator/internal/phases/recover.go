@@ -196,7 +196,7 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	// ended it or no longer knows it. Past the recovery's give-up the
 	// control is not waited on, as nothing may clear it, but a Run lux has
 	// still not ended, or will not say whether it has, ends the recovery:
-	// its checkpoints would be stale. Any other lux error is retried.
+	// its checkpoints would be stale. Any other error from that Get is retried.
 	if !c.StepLong {
 		var control string
 		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {

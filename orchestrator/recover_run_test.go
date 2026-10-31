@@ -768,18 +768,22 @@ func TestARecoveryPastItsGiveUpRetriesATransientLuxError(t *testing.T) {
 }
 
 // A dead Run lux has not yet ended, its control cleared, before the
-// recovery's give-up: the recovery waits for lux to end it, reading no
-// checkpoint, submitting no publisher and pushing nothing.
+// recovery's give-up: the recovery waits for lux to end it, submitting no
+// publisher and pushing nothing.
 func TestARecoveryWaitsWhileLuxStillRunsTheRun(t *testing.T) {
 	w := conducting(t)
 	task, run, _ := w.deadWriter("WIP.md", "half of it\n")
-	w.syncer.Lux = &deadRunLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), running: true}
+	l := &deadRunLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), running: true}
+	w.syncer.Lux = l
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	mustExec(t, w.owner, `UPDATE runs SET control = 'none' WHERE id = $1`, run)
 	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now(), next_attempt_at = NULL WHERE id = $1`, id)
 	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if l.gets == 0 {
+		t.Fatal("lux was never asked for the dead Run")
 	}
 	if s := w.recoveryStatus(id); s != "requested" {
 		t.Fatalf("the recovery is %s: %s", s, w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id))
