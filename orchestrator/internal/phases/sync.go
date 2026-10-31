@@ -2325,6 +2325,19 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		completed = true
+		// A writer's own account of its work (delivery.WriterOutcome),
+		// stored for whoever decides next.
+		if delivery.Publishes[r.Phase] {
+			reply, err := delivery.RunReplyTailTx(ctx, tx, r.ID, checksReplyMax)
+			if err != nil {
+				return err
+			}
+			outcome, note := delivery.WriterOutcome(reply)
+			if _, err := tx.Exec(ctx, `UPDATE runs SET writer_outcome = $2, writer_outcome_note = $3 WHERE id = $1`,
+				r.ID, outcome, db.Nullable(note)); err != nil {
+				return err
+			}
+		}
 		// Feedback it resolved holds only for a commit it published to the
 		// pull request's branch; one on a candidate holds once promoted.
 		settle := delivery.SettleResolutionsTx

@@ -45,3 +45,20 @@ func TestOnlyImplementFixAndSimplifyAreGated(t *testing.T) {
 		}
 	}
 }
+
+// A writer's outcome: done when it says nothing, partial or blocked with
+// its note when it says so, partial for a value of its own.
+func TestAWritersOutcomeIsReadFromItsChecksDocument(t *testing.T) {
+	for _, c := range []struct{ reply, outcome, note string }{
+		{"Done.\n```yaml\nchecks:\n  - command: go test ./...\n    result: pass\n    evidence: ok\n```\n", "done", ""},
+		{"No checks at all.", "done", ""},
+		{"```yaml\noutcome: partial\noutcome_note: the second endpoint is left\nchecks:\n  - command: go test\n    result: pass\n    evidence: ok\n```", "partial", "the second endpoint is left"},
+		{"```yaml\nchecks:\n  - command: go test\n    result: not_run\n    evidence: no Go\noutcome: blocked\noutcome_note: needs a key\n```", "blocked", "needs a key"},
+		{"```yaml\noutcome: mostly\nchecks: []\n```", "partial", ""},
+		{"```yaml\noutcome: DONE\nchecks: []\n```", "done", ""},
+	} {
+		if o, n := WriterOutcome(c.reply); o != c.outcome || n != c.note {
+			t.Errorf("%q: %q %q, want %q %q", c.reply, o, n, c.outcome, c.note)
+		}
+	}
+}

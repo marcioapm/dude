@@ -69,6 +69,75 @@ type checksDoc struct {
 	Checks []Check `yaml:"checks"`
 }
 
+// The values of a writer's outcome: what it says of its own work, on the
+// outcome line of its final checks document.
+const (
+	OutcomeDone    = "done"
+	OutcomePartial = "partial"
+	OutcomeBlocked = "blocked"
+)
+
+// WriterOutcome is what a writer said of its work: the outcome and
+// outcome_note keys of its reply's last checks document. Missing (no key,
+// or no checks document) is done, as every reply was before the key; a
+// value outside the three is partial, the reading that asks for a look.
+func WriterOutcome(reply string) (outcome, note string) {
+	block, ok := outcomeBlock(reply)
+	if !ok {
+		return OutcomeDone, ""
+	}
+	var doc struct {
+		Outcome     string `yaml:"outcome"`
+		OutcomeNote string `yaml:"outcome_note"`
+	}
+	if yaml.Unmarshal([]byte(block), &doc) != nil {
+		return OutcomeDone, ""
+	}
+	switch o := strings.ToLower(strings.TrimSpace(doc.Outcome)); o {
+	case "", OutcomeDone:
+		outcome = OutcomeDone
+	case OutcomePartial, OutcomeBlocked:
+		outcome = o
+	default:
+		outcome = OutcomePartial
+	}
+	return outcome, strings.TrimSpace(doc.OutcomeNote)
+}
+
+// outcomeBlock is the document of the reply's last outcome line: from it
+// back to the document's start, and on to the next fence or document end.
+// The outcome keys may sit before or after the checks list.
+func outcomeBlock(reply string) (string, bool) {
+	lines := strings.Split(reply, "\n")
+	at := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "outcome:") {
+			at = i
+		}
+	}
+	if at < 0 {
+		return "", false
+	}
+	boundary := func(line string) bool {
+		line = strings.TrimSpace(line)
+		return strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") || line == "---"
+	}
+	start, end := 0, len(lines)
+	for i := at - 1; i >= 0; i-- {
+		if boundary(lines[i]) {
+			start = i + 1
+			break
+		}
+	}
+	for i := at + 1; i < len(lines); i++ {
+		if boundary(lines[i]) {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n"), true
+}
+
 // checksBlock is the last checks document of a reply: from its last line
 // starting "checks:" to the next fence or document end.
 func checksBlock(reply string) (string, bool) {

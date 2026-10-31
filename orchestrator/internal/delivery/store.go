@@ -400,6 +400,9 @@ type Outcome struct {
 	// The commit each repository's checkout started from, as lux reported
 	// it (runs.base_shas).
 	Bases map[string]string
+	// A writer's own account of its work (WriterOutcome) and its line;
+	// "" for a Run that is no writer, or ended before it was kept.
+	WriterOutcome, WriterOutcomeNote string
 }
 
 // advance is where the work stands after this phase: the heads it moved,
@@ -551,8 +554,9 @@ func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, e
 		var errText *string
 		var heads []byte
 		err := tx.QueryRow(ctx, `SELECT status::text, error, heads,
-				EXISTS (SELECT 1 FROM artifacts WHERE run_id = runs.id)
-			FROM runs WHERE id = $1`, runID).Scan(&status, &errText, &heads, &o.Published)
+				EXISTS (SELECT 1 FROM artifacts WHERE run_id = runs.id),
+				COALESCE(writer_outcome, ''), COALESCE(writer_outcome_note, '')
+			FROM runs WHERE id = $1`, runID).Scan(&status, &errText, &heads, &o.Published, &o.WriterOutcome, &o.WriterOutcomeNote)
 		if db.IsNotFound(err) {
 			o.Error = "run not found"
 			return nil
