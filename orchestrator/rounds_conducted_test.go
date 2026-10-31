@@ -552,6 +552,34 @@ func TestDudesBaseMergeBeforeThePullRequestIsNotTheNextRoundsChange(t *testing.T
 	}
 }
 
+// The same with the merge on GitHub: main is merged into the task branch
+// there before the gate's answer, and dude adopts the moved head as it
+// opens the pull request. The review the conductor starts next is the
+// whole branch or starts at the merge, never carrying main's commits.
+func TestABaseMergeOnGitHubBeforeThePullRequestIsNotTheNextRoundsChange(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.reachGate(task)
+	w.gh.CommitFiles("main", "Another task's work", map[string]string{"OTHER.md": "theirs\n"})
+	merge := w.gh.MergeInto(delivery.BranchFor(task, 1), "main", nil)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chat(task, "Open"); status != 200 {
+		t.Fatalf("answer Open: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the decision after the merge", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	rs := w.roundReviews(task)
+	last := rs[len(rs)-1]
+	if last.Of != "" && last.Base != merge {
+		t.Errorf("the review after the merge is %s from %s, want the whole branch or from the merge %s\n%s", last.Of, last.Base, merge, w.describeRuns())
+	}
+	if in := w.mainInRange(last.ID); len(in) > 0 {
+		t.Errorf("the review's range has main's commits %v\n%s", in, w.describeRuns())
+	}
+}
+
 // publishedDuringRoundOne is a conducted round 1 of two lenses
 // (correctness, security) created at H1, whose reviewers lux holds until
 // the conductor's publish moves the task branch to H2 (its commit on
