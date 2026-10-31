@@ -137,6 +137,12 @@ func (w *world) recoveryStatus(id string) string {
 	return w.str(`SELECT status FROM run_recoveries WHERE id = $1`, id)
 }
 
+// pastGiveUp has the recovery's step started past its give-up
+// (recoveryStartGiveUp, ten minutes), and due now.
+func (w *world) pastGiveUp(id string) {
+	mustExec(w.t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
+}
+
 func (w *world) recoveredWakes(task string) int {
 	return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'recovered'`, task)
 }
@@ -566,7 +572,7 @@ func TestARecoveryStopsWaitingOnARunsControlAfterItsGiveUp(t *testing.T) {
 	task, run, commit := w.deadWriter("WIP.md", "half of it\n")
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	mustExec(t, w.owner, `UPDATE runs SET control = 'pause_graceful', control_requested_at = now(), status = 'completed' WHERE id = $1`, run)
-	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
+	w.pastGiveUp(id)
 	w.until("the recovery done", func() bool { return w.recoveryStatus(id) == "done" })
 	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != commit {
 		t.Errorf("the recovered branch is at %q, want %s", got, commit)
@@ -648,7 +654,7 @@ func TestARecoveryPastItsGiveUpOnARunLuxStillRunsEndsUnpushed(t *testing.T) {
 	w.syncer.Lux = &deadRunLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), running: true}
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
-	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
+	w.pastGiveUp(id)
 	w.noRecoveries = false
 	w.until("the recovery ended", func() bool { s := w.recoveryStatus(id); return s != "requested" && s != "" })
 	if s := w.recoveryStatus(id); s != "failed" {
@@ -705,7 +711,7 @@ func TestARecoveryLuxKeepsRefusingEndsAtItsGiveUp(t *testing.T) {
 		refusal: &lux.Error{Status: 403, Code: "forbidden", Message: "key does not cover the Run"}}
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
-	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
+	w.pastGiveUp(id)
 	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -735,7 +741,7 @@ func TestARecoveryPastItsGiveUpRetriesATransientLuxError(t *testing.T) {
 	w.syncer.Lux = l
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
-	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
+	w.pastGiveUp(id)
 	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
 		t.Fatal(err)
 	}
