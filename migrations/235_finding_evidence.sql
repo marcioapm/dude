@@ -16,12 +16,16 @@
 ALTER TABLE review_findings
   ADD COLUMN trivial boolean,
   ADD COLUMN introduced boolean,
-  ADD COLUMN evidence_kind text CHECK (evidence_kind IN ('failing_test', 'mutation', 'command', 'query_plan', 'trace')),
+  ADD COLUMN evidence_kind text,
   ADD COLUMN evidence text,
   ADD COLUMN scenario text,
   ADD COLUMN unverified boolean NOT NULL DEFAULT false,
   ADD COLUMN review_round smallint,
   ADD COLUMN touches_fix_run_id text REFERENCES runs(id) ON DELETE SET NULL;
+-- NOT VALID: no scan of the table under ACCESS EXCLUSIVE; every row is
+-- NULL here (075, 096).
+ALTER TABLE review_findings ADD CONSTRAINT review_findings_evidence_kind_check
+  CHECK (evidence_kind IN ('failing_test', 'mutation', 'command', 'query_plan', 'trace')) NOT VALID;
 
 -- On runs: a writer's own account of its work, from its final checks
 -- document (delivery.ParseChecks): done, partial or blocked, and its one
@@ -29,7 +33,9 @@ ALTER TABLE review_findings
 -- review_round, fix_hunks: a review Run's round and a fix's changed hunks,
 -- written by later steps.
 ALTER TABLE runs
-  ADD COLUMN writer_outcome text CHECK (writer_outcome IN ('done', 'partial', 'blocked')),
+  ADD COLUMN writer_outcome text,
   ADD COLUMN writer_outcome_note text,
   ADD COLUMN review_round smallint,
   ADD COLUMN fix_hunks jsonb;
+ALTER TABLE runs ADD CONSTRAINT runs_writer_outcome_check
+  CHECK (writer_outcome IN ('done', 'partial', 'blocked')) NOT VALID;
