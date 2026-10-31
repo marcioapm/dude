@@ -1466,3 +1466,7 @@ at most %d conditions to a wait
 
 wake %q is not all or any
 
+## refusals/delivery/edits/pull-request-push-unreviewed
+
+the pull request in %s shows %s, which dude pushed and no review has covered yet: nothing more goes to it until one has. Use start_phase review first
+
