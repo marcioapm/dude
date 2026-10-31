@@ -157,12 +157,28 @@ func pullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Deliver
 // review_failed or not_converging accept): its repository and head, ""
 // for none. A head a person pushed is never dude's, so never unreviewed here.
 func unreviewedPRHeadTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) (string, string, error) {
-	var repo, head string
-	accepted := d.State.AcceptedHeads
+	pushes, err := unreviewedPRPushesTx(ctx, tx, taskID, &d.State)
+	if err != nil || len(pushes) == 0 {
+		return "", "", err
+	}
+	return pushes[0].Repo, pushes[0].Head, nil
+}
+
+// unreviewedPush is an open pull request's head unreviewedPRHeadTx finds,
+// with where dude's push of it started (its git.commit_created's baseSha):
+// the range a review of it covers.
+type unreviewedPush struct{ Repo, Head, Base string }
+
+// unreviewedPRPushesTx is every repository's unreviewedPRHeadTx, by name.
+func unreviewedPRPushesTx(ctx context.Context, tx pgx.Tx, taskID string, st *State) ([]unreviewedPush, error) {
+	accepted := st.AcceptedHeads
 	if accepted == nil {
 		accepted = map[string]string{}
 	}
-	err := tx.QueryRow(ctx, `SELECT r.name, pr.head_sha FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+	rows, err := tx.Query(ctx, `SELECT r.name, pr.head_sha, COALESCE((SELECT e.payload->>'baseSha' FROM events e WHERE e.task_id = $1
+		    AND e.event_type = $3 AND e.payload->>'repo' = r.name AND e.payload->>'headSha' = pr.head_sha
+		    ORDER BY e.cursor DESC LIMIT 1), '')
+		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft') AND COALESCE(pr.head_sha, '') <> ''
 		  AND pr.head_sha IS DISTINCT FROM $5::jsonb->>r.name
 		  AND EXISTS (SELECT 1 FROM events e WHERE e.task_id = $1 AND e.event_type = $3
@@ -171,11 +187,55 @@ func unreviewedPRHeadTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delive
 		    AND k.attempt = COALESCE(NULLIF($4, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
 		    AND k.phase = 'review' AND k.status = 'completed' AND k.base_refs->>r.name = pr.head_sha
 		    AND (k.review_range IS NULL OR k.review_range->'base' ? r.name))
-		ORDER BY r.name LIMIT 1`, taskID, d.Branch(taskID), EvGitCommitCreated, d.State.Attempt, accepted).Scan(&repo, &head)
-	if db.IsNotFound(err) {
-		return "", "", nil
+		ORDER BY r.name`, taskID, st.taskBranch(taskID), EvGitCommitCreated, st.Attempt, accepted)
+	if err != nil {
+		return nil, err
 	}
-	return repo, head, err
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[unreviewedPush])
+}
+
+// reviewFirst keeps a direct delivery's pull request fix (or integration)
+// from starting on a head dude pushed that no review covered — two pushes
+// of dude's with nothing reviewed between — as reviewUntested keeps one
+// from the gate: a narrow review of that push runs first (FixRange from
+// where it started), and once it is clear the fix starts (afterReview).
+// What the fix was told is kept for it (PRFixAfter). diverted: the step
+// goes there instead.
+func (w *steps) reviewFirst(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
+	if a := st.PRFixAfter; a != nil {
+		// Back from that review: the fix, as it was told.
+		st.Directed, st.Integration, st.Iteration = a.Directed, a.Integration, a.Iteration
+		st.PRFixAfter, st.FixRange = nil, nil
+	}
+	if !st.Policy.DirectFixes() || len(st.PullRequestIDs) == 0 {
+		return workflow.Result{}, false, nil
+	}
+	var pushes []unreviewedPush
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		pushes, err = unreviewedPRPushesTx(ctx, tx, st.TaskID, st)
+		return err
+	}); err != nil || len(pushes) == 0 {
+		return workflow.Result{}, false, err
+	}
+	st.PRFixAfter = &PRFixAfter{Repo: pushes[0].Repo, Head: pushes[0].Head, Directed: st.Directed,
+		Integration: st.Integration, Iteration: st.Iteration}
+	st.Directed, st.Integration, st.Iteration = nil, nil, 0
+	st.Heads = maps.Clone(st.Heads)
+	if st.Heads == nil {
+		st.Heads = map[string]string{}
+	}
+	st.FixRange = map[string]string{}
+	for _, p := range pushes {
+		st.Heads[p.Repo] = p.Head
+		if p.Base != "" {
+			st.FixRange[p.Repo] = p.Base
+		}
+	}
+	if len(st.FixRange) == 0 {
+		// Where the push started is not known: the whole branch, then.
+		st.FixRange = nil
+	}
+	return workflow.Result{Next: "review", State: st}, true, nil
 }
 
 // PullRequestOpenOnTx says whether one of the task's pull requests is open

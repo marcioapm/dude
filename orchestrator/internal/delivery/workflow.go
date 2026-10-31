@@ -151,6 +151,10 @@ type State struct {
 	// converging): an open pull request showing one counts as reviewed
 	// (unreviewedPRHeadTx), Candidate.Accepted's direct counterpart.
 	AcceptedHeads map[string]string `json:"acceptedHeads,omitempty"`
+	// A direct pull request fix (or integration) held while the narrow
+	// review of dude's unreviewed push it would start from runs
+	// (reviewFirst): once that loop is clear, prFix starts it.
+	PRFixAfter *PRFixAfter `json:"prFixAfter,omitempty"`
 	// The after-promotion refresh of the task's open pull requests, while
 	// it is retried (refreshPromoted).
 	PromotedRefresh *PromotedRefresh `json:"promotedRefresh,omitempty"`
@@ -496,6 +500,19 @@ type PRFixCharge struct {
 	Pending bool     `json:"pending,omitempty"`
 }
 
+// PRFixAfter is a direct pull request fix held for the review of dude's
+// push it would start from (reviewFirst): that push, and what the fix step
+// had been told, given back to it once the review loop is done.
+type PRFixAfter struct {
+	Repo string `json:"repo"`
+	Head string `json:"head"`
+	// The conductor's direction for the fix, and the integration it is,
+	// kept from the review loop, which would take them as its own.
+	Directed    *Directed    `json:"directed,omitempty"`
+	Integration *Integration `json:"integration,omitempty"`
+	Iteration   int          `json:"iteration,omitempty"`
+}
+
 // PromotedRefresh is the after-promotion refresh still to do: the
 // repositories whose pull request (or adopted verdict comment) is not
 // refreshed yet, and the attempts made.
@@ -619,6 +636,9 @@ func key(sc workflow.StepContext, st *State, parts ...any) string {
 	}
 	if st.FixRange != nil {
 		parts = append(parts, ":prfix:", st.PRFixKey)
+	}
+	if st.PRFixAfter != nil {
+		parts = append(parts, ":before:", st.PRFixAfter.Head)
 	}
 	if st.Retries > 0 {
 		parts = append(parts, ":retry:", st.Retries)
@@ -966,6 +986,10 @@ func (st *State) fixLoop() bool { return st.checkingCandidate() || len(st.FixRan
 // diff goes to the test: the simplifier is not run again after a fix of
 // its diff; that fix was reviewed by the loop, and the tester runs next.
 func (st *State) afterReview() string {
+	if st.PRFixAfter != nil {
+		// dude's push the fix would start from is reviewed: the fix now.
+		return "prFix"
+	}
 	if len(st.FixRange) > 0 {
 		// A fix pushed to the pull request, reviewed: no simplifier and no
 		// tester after it; the pull request's CI is its test.
@@ -1104,6 +1128,9 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
 	case exit.Reason == "clear":
+		if st.PRFixAfter != nil {
+			return workflow.Result{Next: st.afterReview(), State: st}, nil
+		}
 		if st.Integration != nil {
 			if st.Policy.DirectFixes() && !st.Integration.BeforePR {
 				// The merge is on the pull request already: its CI is the
@@ -1941,6 +1968,9 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if res, diverted, err := w.reviewFirst(ctx, sc, st); diverted || err != nil {
+		return res, err
 	}
 	gh, err := w.forges.For(ctx, sc.OrganizationID)
 	if err != nil {
