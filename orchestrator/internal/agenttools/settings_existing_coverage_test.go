@@ -8,7 +8,7 @@ import (
 
 // Exact role and policy names make newly introduced settings fail classification.
 var coveredRoleFields = []string{"tier", "harness", "timeLimitMinutes", "machineSize", "image"}
-var coveredDeliveryFields = []string{"maxReviewIterations", "maxAttemptsPerFinding", "maxStillRounds", "maxRegressionRounds", "maxPrFixIterations", "maxPrFixReviewIterations", "requiredReviewers", "alwaysReviewers", "nonProductPaths", "blockingSeverities", "simplify", "test", "parkAfterMinutes", "idleNudgeMinutes", "conductorWarmMinutes", "conductorEditFiles", "conductorEditLines", "pullRequest", "pullRequestFixes"}
+var coveredDeliveryFields = []string{"maxReviewIterations", "maxAttemptsPerFinding", "maxStillRounds", "maxRegressionRounds", "maxPrFixIterations", "maxPrFixReviewIterations", "requiredReviewers", "alwaysReviewers", "nonProductPaths", "blockingSeverities", "simplify", "test", "parkAfterMinutes", "idleNudgeMinutes", "conductorWarmMinutes", "conductorEditFiles", "conductorEditLines", "pullRequest", "pullRequestFixes", "reviewLoop"}
 
 func sameInstant(a, b any) bool {
 	x, err := time.Parse(time.RFC3339Nano, a.(string))

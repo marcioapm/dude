@@ -1035,9 +1035,10 @@ def test_project_settings_manage_repositories_and_delivery(
     assert "bad" not in [r["name"] for r in project["repositories"]]
     # Only what differs from the factory's defaults is stored: the rest keeps
     # following them. forge_project's tester (off) and its pull requests'
-    # candidate fixes (the default is direct) both differ, so both stay.
+    # candidate fixes (the default is direct) and its policy-run review loop
+    # (the default is the conductor) differ, so they stay.
     assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"], "test": False,
-                                         "pullRequestFixes": "candidate"}
+                                         "pullRequestFixes": "candidate", "reviewLoop": "policy"}
     assert console_errors == []
 
     # Its face: an image picked in General, resized in the browser, stored,

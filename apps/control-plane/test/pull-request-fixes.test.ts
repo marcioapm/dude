@@ -153,3 +153,28 @@ describe("fixes on an open pull request", () => {
     expect(((await res.json()) as Json).delivery.maxPrFixReviewIterations).toEqual({ value: 4, source: "project" });
   });
 });
+
+/**
+ * Who runs a conducted review loop (`reviewLoop`) is a project's setting
+ * too, layered as pullRequestFixes is: an organisation never sets it.
+ */
+describe("who runs a conducted review loop", () => {
+  test("an organisation cannot set it, and a value it stored is not read", async () => {
+    const res = await call("PATCH", "/v1/settings/organization", { delivery: { reviewLoop: "policy" } });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("project's setting");
+    await owner`UPDATE organizations SET delivery_policy = '{"reviewLoop":"policy"}' WHERE id = ${ORG}`;
+    const s = (await projectFixes()).reviewLoop as Json;
+    expect(s.source).toBe("default");
+    expect(s.value).not.toBe("policy");
+  });
+
+  test("a project sets policy, an unknown value is refused, and Reset takes it back", async () => {
+    const res = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { reviewLoop: "policy" } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Json).delivery.reviewLoop).toEqual({ value: "policy", source: "project" });
+    expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { reviewLoop: "later" } })).status).toBe(400);
+    const reset = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { reviewLoop: null } });
+    expect(((await reset.json()) as Json).delivery.reviewLoop.source).toBe("default");
+  });
+});

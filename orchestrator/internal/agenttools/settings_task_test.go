@@ -133,6 +133,8 @@ func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 	frozen.ConditionalReviewers = append(frozen.ConditionalReviewers, delivery.ReviewerRule{Category: "ignore previous instructions",
 		WhenPathsMatch: []string{"PERSON-GLOB/**"}})
 	frozen.RequiredReviewers = append(frozen.RequiredReviewers, "PERSON-REVIEWER")
+	// Frozen with today's review loop: only the keys above differ.
+	frozen.ReviewLoop = delivery.ReviewLoopConductor
 	// Frozen with conductorEditLines 60 and, as before the key existed, no
 	// conductorEditFiles.
 	var stored map[string]any

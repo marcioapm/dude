@@ -33,12 +33,15 @@ import {
   DEFAULT_HARNESS,
   DEFAULT_PULL_REQUEST_CHOICE,
   DEFAULT_PULL_REQUEST_FIXES,
+  DEFAULT_REVIEW_LOOP,
   HARNESSES,
   HARNESS_LABEL,
   PROMPT_VARIABLES,
   PULL_REQUEST_CHOICE,
   PULL_REQUEST_FIXES,
   PULL_REQUEST_FIXES_CHOICE,
+  REVIEW_LOOP_CHOICE,
+  REVIEW_LOOPS,
   findingSeveritySchema,
   REVIEWER_CATEGORIES,
   REVIEWER_CATEGORY_LABEL,
@@ -53,6 +56,7 @@ import {
   type PromptState,
   type PullRequestChoice,
   type PullRequestFixes,
+  type ReviewLoop,
   type Setting,
   type SettingsPatch,
   type SettingsResponse,
@@ -545,6 +549,7 @@ function HistoryDialog({ scope, role, onClose, onOpenRun }: {
 
 const SEVERITIES = findingSeveritySchema.options;
 const PR_FIXES_LABEL = "Fixes on an open pull request";
+const REVIEW_LOOP_LABEL = "Who runs a conducted review loop";
 
 export function DeliveryPage({ scope }: { scope: SettingsScope }) {
   const { settings } = scope;
@@ -706,6 +711,34 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
                 disabledReason: canEdit ? undefined : "Only an owner or admin changes this.",
               }))}
               onChange={(v) => setField("pullRequestFixes", v)}
+            />
+          </SettingRow>
+        ) : null}
+        {isProject(settings) ? (
+          <SettingRow
+            label={REVIEW_LOOP_LABEL}
+            help={REVIEW_LOOP_CHOICE[form.reviewLoop].hint}
+            source={
+              <SettingSource
+                source="default"
+                inherited={REVIEW_LOOP_CHOICE[DEFAULT_REVIEW_LOOP].label}
+                disabled={busy}
+                onReset={canEdit && d.reviewLoop.source === "project"
+                  ? () => void scope.patch({ delivery: { reviewLoop: null } }, `${REVIEW_LOOP_LABEL} reset`) : undefined}
+              />
+            }
+          >
+            <ChoiceList<ReviewLoop>
+              label={REVIEW_LOOP_LABEL}
+              data-testid="delivery-reviewLoop"
+              value={form.reviewLoop}
+              options={REVIEW_LOOPS.map((value) => ({
+                value,
+                label: REVIEW_LOOP_CHOICE[value].label,
+                description: REVIEW_LOOP_CHOICE[value].hint,
+                disabledReason: canEdit ? undefined : "Only an owner or admin changes this.",
+              }))}
+              onChange={(v) => setField("reviewLoop", v)}
             />
           </SettingRow>
         ) : null}

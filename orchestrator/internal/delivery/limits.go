@@ -242,6 +242,10 @@ func TaskLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (TaskLimits, er
 			// Frozen before the key existed: candidate (DirectFixes).
 			l.Policy.PullRequestFixes = PullRequestFixesCandidate
 		}
+		if !l.Policy.ConductorLoop() {
+			// Frozen before the key existed: the policy's loop (ConductorLoop).
+			l.Policy.ReviewLoop = ReviewLoopPolicy
+		}
 		l.Grants, l.ChangedPaths = d.State.LimitGrants, d.State.ChangedPaths
 		if now.MaxPRFixIterations != l.Policy.MaxPRFixIterations {
 			l.PolicyNow = &now
