@@ -162,14 +162,11 @@ func atLeastMedium(severity string) bool {
 	return severity == "blocking" || severity == "high" || severity == "medium"
 }
 
-// yesNo reads a three-state yes/no field: nil when not said or neither.
+// yesNo reads a three-state yes/no field: isYes's yes, `no` or `false` in
+// any case, and nil when not said or neither.
 func yesNo(value string) *bool {
-	var b bool
-	switch strings.ToLower(value) {
-	case "yes", "true":
-		b = true
-	case "no", "false":
-	default:
+	b := isYes(value)
+	if !b && !strings.EqualFold(value, "no") && !strings.EqualFold(value, "false") {
 		return nil
 	}
 	return &b
