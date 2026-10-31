@@ -192,10 +192,8 @@ func newWorld(t *testing.T) *world {
 	// round fresh, as before rounds went on from the last (resuming). Its
 	// pull requests' fixes are checked on a candidate, as every delivery's
 	// were before direct fixes (pullRequestFixes): the direct tests set it.
-	// Its conducted review loops follow the policy, as every delivery's did
-	// before the conductor ran them (reviewLoop): the conducted tests set it.
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image, delivery_policy)
-		VALUES ($1, $2, 'P', $1, 'P', 'agent:test', '{"requiredReviewers":["correctness"],"test":false,"resumeRounds":false,"pullRequestFixes":"candidate","reviewLoop":"policy"}')`, w.project, w.org)
+		VALUES ($1, $2, 'P', $1, 'P', 'agent:test', '{"requiredReviewers":["correctness"],"test":false,"resumeRounds":false,"pullRequestFixes":"candidate"}')`, w.project, w.org)
 	for _, role := range []string{"implementer", "reviewer", "simplifier", "qa_browser"} {
 		w.onModel(role, "fake/scripted")
 	}

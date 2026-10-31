@@ -34,7 +34,7 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
                                                 "apiBaseUrl": fake_github.api_url, "publicUrl": "https://dude.example.com"})
     assert resp.status_code == 200, resp.text
     resp = client.patch(f"/v1/projects/{forge_project['id']}", {
-        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "pullRequestFixes": "candidate", "reviewLoop": "policy"},
+        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "pullRequestFixes": "candidate"},
         "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
                                          "simplifier": "fake/scripted", "qa_browser": "fake/test-fail-once"}),
     })

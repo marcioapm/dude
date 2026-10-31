@@ -82,7 +82,7 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
     or pushed to it directly and then reviewed once over its own push."""
     if fixes == "direct":
         resp = client.patch(f"/v1/projects/{forge_project['id']}", {
-            "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": False, "pullRequestFixes": "direct", "reviewLoop": "policy"},
+            "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": False, "pullRequestFixes": "direct"},
         })
         assert resp.status_code == 200, resp.text
     task = client.create_task(forge_project["id"], "Respond to review")
