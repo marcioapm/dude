@@ -358,3 +358,26 @@ func TestDirectAdoptedPullRequestsFirstLoopPublishesInPlace(t *testing.T) {
 		}
 	}
 }
+
+// The fixer of a direct delivery's pull request is told its fix goes to
+// the pull request when it publishes; a candidate delivery's, that it is
+// checked on a candidate branch first.
+func TestDirectTheFixerIsToldItsFixGoesToThePullRequest(t *testing.T) {
+	for _, direct := range []bool{true, false} {
+		w := newPRFixWorldAt(t, prAt{test: true, direct: direct})
+		w.comment("Please rename the greeting.")
+		var fix string
+		w.until("the fix submitted", func() bool {
+			w.sync()
+			fix, _, _ = w.fixRun()
+			return fix != "" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, fix) == 1
+		})
+		text := w.instructionsOf(fix)
+		want := delivery.Instructions("fixer", "", delivery.InstructionsInput{DirectFixes: direct})
+		_, role, _ := strings.Cut(want, "# Your role: fixer\n\n")
+		role, _, _ = strings.Cut(role, "\n")
+		if !strings.Contains(text, role) {
+			t.Errorf("direct=%v: the fixer's file lacks its role's line %q", direct, role)
+		}
+	}
+}

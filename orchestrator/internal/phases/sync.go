@@ -1691,7 +1691,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
+		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, DirectFixes: taskBranch.Direct, Adopted: adopted, LastFix: lastFix,
 		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh,
 	}
 	if reviewRange != nil {

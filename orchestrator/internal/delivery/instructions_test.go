@@ -167,3 +167,16 @@ func TestInstructionIncludesAreCheckedAtStartup(t *testing.T) {
 		}
 	}
 }
+
+// A delivery whose fixes reach its open pull requests directly: dude.md's
+// step 6 and the fixer's role say the fix goes to the pull request, then
+// is reviewed.
+func TestGoldenDirectFixesInstructions(t *testing.T) {
+	for _, role := range []string{"fixer", "implementer"} {
+		in := goldenTask()
+		in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+		in.Repositories = readOnlyRepos()
+		in.DirectFixes = true
+		golden(t, "instructions-"+role+"-direct", Instructions(role, "correctness", in.InstructionsInput()))
+	}
+}
