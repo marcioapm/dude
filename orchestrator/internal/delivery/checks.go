@@ -97,7 +97,7 @@ func WriterOutcome(reply string) (outcome, note string) {
 	// is its raw text, and an outcome is a value of its own (partial).
 	unreadOutcome := false
 	for _, line := range strings.Split(block, "\n") {
-		key, _, _ := strings.Cut(line, ":")
+		key, value, _ := strings.Cut(line, ":")
 		if key != "outcome" && key != "outcome_note" {
 			continue
 		}
@@ -108,7 +108,7 @@ func WriterOutcome(reply string) (outcome, note string) {
 			unreadOutcome = true
 			continue
 		}
-		doc.OutcomeNote = rawScalar(strings.TrimSpace(strings.TrimPrefix(line, key+":")))
+		doc.OutcomeNote = rawScalar(strings.TrimSpace(value))
 	}
 	switch o := strings.ToLower(strings.TrimSpace(doc.Outcome)); {
 	case unreadOutcome:
@@ -149,19 +149,15 @@ func outcomeBlock(reply string) (string, bool) {
 	if at < 0 {
 		return "", false
 	}
-	boundary := func(line string) bool {
-		line = strings.TrimSpace(line)
-		return strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") || line == "---"
-	}
 	start, end := 0, len(lines)
 	for i := at - 1; i >= 0; i-- {
-		if boundary(lines[i]) {
+		if docBoundary(lines[i]) {
 			start = i + 1
 			break
 		}
 	}
 	for i := at + 1; i < len(lines); i++ {
-		if boundary(lines[i]) {
+		if docBoundary(lines[i]) {
 			end = i
 			break
 		}
@@ -184,13 +180,18 @@ func checksBlock(reply string) (string, bool) {
 	}
 	end := len(lines)
 	for i := start + 1; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") || line == "---" {
+		if docBoundary(lines[i]) {
 			end = i
 			break
 		}
 	}
 	return strings.Join(lines[start:end], "\n"), true
+}
+
+// docBoundary says line ends a YAML document in a reply: a fence or `---`.
+func docBoundary(line string) bool {
+	line = strings.TrimSpace(line)
+	return strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") || line == "---"
 }
 
 // yamlLinePrefix is yaml.v3's "line N: " position, which counts from the
