@@ -1345,6 +1345,10 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
 		p.FindingIDs, p.FeedbackItemIDs, p.CountAttempts = open, feedback, true
 		p.Continue = cont
+		if st.ConductedLoop() {
+			// The round whose findings it fixes, which its prompt names.
+			p.Round = st.Round
+		}
 		d.apply(p)
 	})
 	if err != nil {

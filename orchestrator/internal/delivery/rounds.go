@@ -489,8 +489,18 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 		if err := tx.QueryRow(ctx, `SELECT mcp_token_hash IS NOT NULL FROM runs WHERE id = $1`, p.ID).Scan(&tools); err != nil {
 			return "", err
 		}
+		// A conducted loop's fixer is told its round, as a fresh one is.
+		conducted := false
+		if in.Round > 0 {
+			tb, err := TaskBranchTx(ctx, tx, in.TaskID, in.Attempt)
+			if err != nil {
+				return "", err
+			}
+			conducted = tb.ConductedLoop
+		}
 		message = FixRoundMessage(p.BaseRefs, in.BaseRefs, p.Phase != PhaseFix,
-			PromptInput{Findings: findings, PRFeedback: in.PRFeedback, Feedback: people, Tools: tools, CLI: tools && in.toolsService})
+			PromptInput{Findings: findings, PRFeedback: in.PRFeedback, Feedback: people, Tools: tools, CLI: tools && in.toolsService,
+				ConductedLoop: conducted, Round: in.Round})
 		since, err := sinceLastRoundTx(ctx, tx, in.TaskID, p.ID)
 		if err != nil {
 			return "", err

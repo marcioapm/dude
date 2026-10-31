@@ -111,7 +111,8 @@ type PromptInput struct {
 	Questions []EarlierQuestion
 	// Review phase of a conducted loop (ConductedLoop): its round
 	// (runs.review_round), 0 for none, and the attempt's findings decided
-	// in earlier rounds (DecidedFindingsTx).
+	// in earlier rounds (DecidedFindingsTx). Fix phase of one: the round
+	// whose findings it fixes.
 	Round   int
 	Decided []DecidedFinding
 }
@@ -476,6 +477,10 @@ func fixSections(in PromptInput) []string {
 	}
 	if len(in.Feedback) > 0 {
 		sections = append(sections, FeedbackText(in.Feedback, in.CLI))
+	}
+	if in.ConductedLoop && in.Round > 0 {
+		// A conducted loop's fixer: its round, and how the round is fixed.
+		sections = append(sections, render(fixRoundRulesTmpl, struct{ Round int }{in.Round}))
 	}
 	return sections
 }

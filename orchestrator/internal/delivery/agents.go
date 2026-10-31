@@ -71,6 +71,7 @@ var (
 	restartedTmpl              = mustTemplate("contracts/restarted")
 	reviewScopeTmpl            = mustTemplate("contracts/review-scope")
 	reviewerRoundTmpl          = mustTemplate("contracts/review-round")
+	fixRoundRulesTmpl          = mustTemplate("contracts/fix-round")
 	roundTmpl                  = mustTemplate("contracts/resume/round")
 	retestAfreshTmpl           = mustTemplate("contracts/resume/afresh")
 	fixRoundTmpl               = mustTemplate("contracts/resume/fix-round")

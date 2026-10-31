@@ -290,6 +290,23 @@ func TestGoldenConductedReviewRounds(t *testing.T) {
 	}
 }
 
+// A conducted loop's fixer told its round and how a round is fixed, fresh
+// and resumed; a fixer outside one, today's bytes.
+func TestGoldenConductedFixRound(t *testing.T) {
+	in := goldenTask()
+	in.Findings, in.Tools, in.CLI, in.ConductedLoop, in.Round = goldenFindings(), true, true, true, 2
+	golden(t, "prompt-fix-round-2-conducted-loop", Prompt(PhaseFix, in))
+	from, to := map[string]string{"api": "aaa111"}, map[string]string{"api": "bbb222"}
+	golden(t, "resume-fix-round-2-conducted-loop", FixRoundMessage(from, to, false,
+		PromptInput{Findings: goldenFindings()[:1], ConductedLoop: true, Round: 2}))
+	plain := goldenTask()
+	plain.Findings, plain.Tools, plain.CLI = goldenFindings(), true, true
+	in.ConductedLoop = false
+	if Prompt(PhaseFix, in) != Prompt(PhaseFix, plain) {
+		t.Error("a fixer outside a conducted loop is told its round")
+	}
+}
+
 // A next round's texts: a resumed reviewer's and tester's round message,
 // and a fresh reviewer's prompt given its predecessor's conversation and
 // the commits since its round.

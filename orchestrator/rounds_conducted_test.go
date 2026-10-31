@@ -354,3 +354,49 @@ func TestTheReviewerIsShownWhatEarlierRoundsDecided(t *testing.T) {
 		t.Errorf("round 3's reviewer is not shown %s judged fixed by %q and %s dismissed:\n%s", kept, judge, dismissed, third)
 	}
 }
+
+// A conducted loop's fixer is told its round and how a round is fixed;
+// a Deliver delivery's fixer is not, and its prompt has no round.
+func TestTheConductedFixerIsToldItsRound(t *testing.T) {
+	for _, conducted := range []bool{true, false} {
+		t.Run(map[bool]string{true: "conducted", false: "deliver"}[conducted], func(t *testing.T) {
+			w := roundsWorld(t)
+			w.onModel("fixer", "llm-fix")
+			task := w.task()
+			if conducted {
+				w.talk(task)
+				w.implemented(task)
+				w.must(task, "decide", `{"action":"next"}`)
+				w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+				w.must(task, "decide", `{"action":"next"}`)
+			} else {
+				w.deliver(task)
+			}
+			var prompt string
+			w.until("the fixer's prompt", func() bool {
+				prompt = w.promptOf(w.str(`SELECT COALESCE(max(id), '') FROM runs WHERE task_id = $1 AND phase = 'fix'`, task))
+				return prompt != ""
+			})
+			// The paragraph as a conducted fixer of round 1 is given it.
+			told := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{ConductedLoop: true, Round: 1})
+			plain := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{})
+			var first string
+			for _, part := range strings.Split(told, "\n\n") {
+				if !strings.Contains(plain, part) {
+					first = part
+					break
+				}
+			}
+			if first == "" {
+				t.Fatalf("a conducted fixer's prompt adds nothing:\n%s", told)
+			}
+			if got := strings.Contains(prompt, first); got != conducted {
+				t.Errorf("fixer told its round: %v, want %v\n%s", got, conducted, prompt)
+			}
+			round := w.count(`SELECT COALESCE(max(review_round), 0) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+			if want := map[bool]int{true: 1, false: 0}[conducted]; round != want {
+				t.Errorf("the fix Run's round %d, want %d", round, want)
+			}
+		})
+	}
+}
