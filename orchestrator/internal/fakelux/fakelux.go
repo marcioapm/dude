@@ -239,6 +239,9 @@ type Run struct {
 	// What GET /cost answers; nil is lux's answer before any plugin priced
 	// anything: pending, no amounts.
 	cost *lux.RunCost
+	// What lux kept of each repository's checkout at its last placement's
+	// end, by spec name (checkpoints.go).
+	checkpoints map[string]checkpoint
 
 	// Starts of the Run, as lux lists them; the last is the current one.
 	placements []*placement
@@ -725,6 +728,11 @@ type Server struct {
 	// is "cancelled", and a succeeded Run is final too. By default it is
 	// "terminated", and succeeded resumes as stopped does.
 	CancelledState bool
+	// NoCheckpoints is a lux that keeps no checkpoint of a Run's checkouts:
+	// GET /checkpoints lists none.
+	NoCheckpoints bool
+	// Runs whose checkpoints are never uploaded (CheckpointNotUploaded).
+	notUploaded map[string]bool
 	// HoldPushes is a lux that accepts a push and never reports it: no
 	// git.push follows, until ReleasePushes.
 	HoldPushes bool
@@ -1564,6 +1572,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/runs/{id}/servers/{name}", s.removeServer)
 	mux.HandleFunc("GET /v1/runs/{id}/servers/{name}/log", s.serverLog)
 	mux.HandleFunc("GET /v1/runs/{id}/cost", s.getCost)
+	mux.HandleFunc("GET /v1/runs/{id}/checkpoints", s.listCheckpoints)
 	mux.HandleFunc("POST /v1/runs/{id}/tickets", s.mintTicket)
 	mux.HandleFunc("GET /v1/pools", s.listPools)
 	mux.HandleFunc("POST /v1/pools", s.putPool)
@@ -1694,6 +1703,15 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 422, lux.CodeUnknownPool, msg)
 		return
 	}
+	// A repository cloned from a checkpoint is cloned at its head.
+	resolved, msg := s.fromCheckpoints(raw)
+	if msg != "" {
+		s.mu.Unlock()
+		writeErr(w, 422, lux.CodeInvalidSpec, msg)
+		return
+	}
+	raw = resolved
+	_ = json.Unmarshal(raw, &spec)
 	s.next++
 	run := &Run{ID: fmt.Sprintf("lrun_%d", s.next), Spec: raw, State: "submitted", Epoch: 1, starts: 1,
 		secretValues: secretValues(raw, nil)}
@@ -2387,6 +2405,7 @@ func (s *Server) setStateWith(run *Run, state, reason string) {
 	if lux.Terminal(state) {
 		s.exited(run)
 		s.placementEnded(run, state, reason)
+		s.recordCheckpoints(run)
 	}
 	if lux.Terminated(state) || (state == "succeeded" && s.CancelledState) {
 		// Never runs again: its owner servers are detached, as lux does.
@@ -2871,6 +2890,16 @@ func (s *Server) pushNow(run *Run, spec map[string]any, branch, requestID string
 		var sha string
 		var err error
 		work, op := "", ""
+		if repo.From {
+			// A checkpoint's clone: its HEAD goes to the branch, whatever the
+			// branch has; up to date only when it is there already.
+			if _, err := s.checkout(run, spec); err != nil {
+				result["status"], result["error"] = "failed", err.Error()
+				results = append(results, result)
+				continue
+			}
+			base = head(path, "refs/heads/"+branch)
+		}
 		if run.workspace != "" {
 			work = filepath.Join(run.workspace, "repos", repo.Name)
 			if op, err = operation(work); err != nil {
@@ -2950,6 +2979,8 @@ func leaseFails(run *Run, repo, tip, base, work string, files map[string]string)
 type specRepo struct {
 	Name, URL, Ref string
 	Push           bool
+	// Cloned from a checkpoint (checkpoints.go): pushed as its checkout is.
+	From bool
 }
 
 // scriptedFiles are the files of a scripted step's Commit that go to repo:
@@ -3138,7 +3169,8 @@ func specRepos(spec map[string]any) []specRepo {
 		url, _ := r["url"].(string)
 		ref, _ := r["ref"].(string)
 		push, set := r["push"].(bool)
-		out = append(out, specRepo{Name: name, URL: url, Ref: ref, Push: push || !set})
+		_, from := r["from"].(map[string]any)
+		out = append(out, specRepo{Name: name, URL: url, Ref: ref, Push: push || !set, From: from})
 	}
 	return out
 }

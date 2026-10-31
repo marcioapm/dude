@@ -152,6 +152,18 @@ Your wait cwt_4 reached its deadline: it was a timer. Meanwhile: 1 message from 
 
 It holds already (1 of 1): verifier run_ver completed.
 
+## recovered
+
+Your recovery rcv_1 of run_impl pushed its commits to dude/GLD-8/recovered-run_impl: api at aaaaaaaaaaaa; web rejected: the branch moved. Uncommitted work in api was lost. Have a writer merge it, then review it.
+
+## recovered-nothing
+
+Could not recover run_impl (rcv_2), nothing pushed: nothing committed beyond its start
+
+## recovered-secret
+
+Your recovery rcv_3 of run_impl was refused, nothing pushed: its work contains the project secret IMPL_TOKEN in config/app.toml; a person must remove it
+
 ## stalled
 
 Your security implement Run run_impl (round 2, fast, running 90 min) has made no progress for 15 min. Its agent has done nothing for 14 min: no output, no tool call. It has 3 tool calls open: `bash` "go test ./...", for 15 min, `task` "explore", for 10 min, `bash` "sleep 999", for 30 s; `bash`'s command is running; `task` runs inside the agent: no separate process is expected; no process runs `bash`'s command. Its `task` call "explore" has a child (subagent · ses_child_01) whose last event was 5 min ago: asked to run make — waiting on a permission nothing can answer: bash for make *, rm *. Processes: go test ./... (99.5 % CPU, up 15:00); sh (0.0 % CPU, up 1:00). CPU over 15 min: 12 s; network: 3.0 MiB. Its files last changed at 10:15 UTC. Its tool calls in the window: 3 bash, 1 read, 0 edit. Its plan: write the export; test it. Its last message: "Running the tests.". Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier).

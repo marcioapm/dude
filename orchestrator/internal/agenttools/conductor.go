@@ -479,6 +479,37 @@ func stopRun(ctx context.Context, tx pgx.Tx, c Caller, in stopRunIn) (map[string
 	return map[string]any{"stopped": in.Run, "status": status, "next": stopNext}, nil
 }
 
+type recoverRunIn struct {
+	Run    string `json:"run"`
+	Branch string `json:"branch,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
+// recoverRun is recover_run: the conductor asks for an ended Run's
+// committed work to be pushed to a branch of its own; the recovery worker
+// does it and wakes the conductor.
+func recoverRun(ctx context.Context, tx pgx.Tx, c Caller, in recoverRunIn) (map[string]any, error) {
+	rec, err := delivery.ConductRecoverTx(ctx, tx, c.run(), delivery.RecoverAsk{Run: in.Run, Branch: in.Branch, Note: in.Note})
+	if err != nil {
+		return conducted[map[string]any](nil, err)
+	}
+	if c.env.kick != nil {
+		c.env.kick()
+	}
+	if rec.Ended {
+		return map[string]any{"recoveryId": rec.ID, "run": rec.Run, "branch": rec.Branch, "status": rec.Status, "ended": true,
+			"error": rec.Error, "next": recoverEndedNext(rec.Status, rec.Error, delivery.RecoveredBranchPrefix(c.TaskID))}, nil
+	}
+	return map[string]any{"recoveryId": rec.ID, "run": rec.Run, "branch": rec.Branch, "status": rec.Status, "next": recoverNext}, nil
+}
+
+// recoverEndedNext is recover_run's answer for a recovery asked again
+// after it ended: how it ended, and, when it pushed nothing, where another
+// try must go. Its own wake tells the conductor once, if it has not yet.
+func recoverEndedNext(status, why, prefix string) string {
+	return recoverEndedResult.Render(struct{ Status, Error, Prefix string }{status, why, prefix})
+}
+
 type replyIn struct {
 	PR        string `json:"pr"`
 	Text      string `json:"text"`

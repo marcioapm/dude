@@ -440,6 +440,14 @@ export const EventTypes = {
   RunFailed: "run.failed",
   RunAborted: "run.aborted",
   /**
+   * The conductor's recover_run of this ended Run's committed work ended.
+   * Payload: `{ recoveryId, branch, status, results, dirty, error, by }`:
+   * status `done`, `failed` or `refused` (a secret in it); results per
+   * repository `{ repo, status, commit?, error? }`; dirty, the repositories
+   * whose uncommitted work was not captured.
+   */
+  RunRecovered: "run.recovered",
+  /**
    * A live phase Run made no progress for its window: a tool call open the
    * whole of it, its agent silent the whole of it (no output, no tool
    * call), or (a Run that changes code) no change to its files.
@@ -756,7 +764,7 @@ export const EventTypes = {
    * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
    * (decision, escalation, question, steer_read, steer_failed, pr_merged,
    * pr_closed, published, publish_refused, publish_stalled, checkout,
-   * stalled, unblocked, wait; safety in older notes); `started` when no conductor was live
+   * stalled, unblocked, wait, recovered; safety in older notes); `started` when no conductor was live
    * and the note briefed a new one.
    */
   ConductorWoken: "conductor.woken",

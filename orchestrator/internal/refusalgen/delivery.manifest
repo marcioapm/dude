@@ -198,3 +198,14 @@ rWaitRunsCount                         refusals/delivery/waits/runs-count
 rWaitNotRunOfThisTask                  refusals/delivery/waits/not-run-of-this-task
 rWaitHeadNotFullSHA                    refusals/delivery/waits/head-not-full-sha
 rWaitNotPullRequestOfThisTask          refusals/delivery/waits/not-pull-request-of-this-task
+rYouAreNoLongerThisTaskRecover         refusals/delivery/recover/you-are-no-longer-this-task
+rThisTaskYouAreReadOnlyRecover         refusals/delivery/recover/this-task-you-are-read-only
+rRecoverNoteAtMostChars                refusals/delivery/recover/note-at-most-chars
+rNotRunYourTaskRecover                 refusals/delivery/recover/not-run-your-task
+rRecoverYourself                       refusals/delivery/recover/yourself
+rRecoverStillLive                      refusals/delivery/recover/still-live
+rRecoverDoesNotPublish                 refusals/delivery/recover/does-not-publish
+rRecoverSecretFound                    refusals/delivery/recover/secret-found
+rRecoverBranchOutside                  refusals/delivery/recover/branch-outside
+rRecoverBranchInUse                    refusals/delivery/recover/branch-in-use
+rRecoverAlreadyRecovered               refusals/delivery/recover/already-recovered

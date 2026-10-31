@@ -1,6 +1,6 @@
 ---
 title: The conductor
-covers: [tool:start_phase, tool:start_agent, tool:start_agents, tool:read_run, tool:steer, tool:restart_run, tool:stop_run, tool:decide, tool:decide_escalation, tool:update_task, tool:publish, tool:wait_for]
+covers: [tool:start_phase, tool:start_agent, tool:start_agents, tool:read_run, tool:steer, tool:restart_run, tool:stop_run, tool:decide, tool:decide_escalation, tool:update_task, tool:publish, tool:wait_for, tool:recover_run]
 ---
 Every task has a conductor: an agent you talk to in the task's Chat. This page explains what it does, how it takes over a task's decisions, and how you steer, pause and resume agents.
 
@@ -65,6 +65,10 @@ The conductor can steer its task's running agents too, with `steer`, whoever dec
 To start an agent over instead, the conductor uses `restart_run`: a fresh Run of the same phase, from the task's current commit, told a note. The old Run's uncommitted work and its context are lost. It can put the new Run on another model tier.
 
 A child agent the conductor started (with `start_agent`, `start_agents` or `verify`) that is stuck or no longer needed it stops with `stop_run`, giving a reason shown in Chat. The child is aborted and its result comes back to the conductor as aborted; its uncommitted work is lost. The conductor never stops a phase Run the delivery waits on: it restarts it, and stopping a step is a person's **Stop**.
+
+## Recovering an ended Run's work
+
+When a Run that changes code ended with commits it never published — lux stopped it at its time limit, it crashed, or it was stopped — the conductor can recover them with `recover_run`. dude takes the Run's committed work from lux's checkpoint of its checkout, checks it for the project's secrets, and pushes it to a branch of its own, `dude/<task>/recovered-<run>`; the conductor is told what was pushed, or why not. Uncommitted work is not recovered, and a reviewer's or tester's work is never pushed. The branch moves no task branch and opens no pull request: the conductor has a writer merge it, and the change is reviewed as any other. It is deleted with the task's other per-Run branches when the task ends.
 
 ## Waiting for something
 

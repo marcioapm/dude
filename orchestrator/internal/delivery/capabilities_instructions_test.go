@@ -179,6 +179,18 @@ func TestGoldenInstructionsWithoutWait(t *testing.T) {
 	golden(t, "instructions-conductor-without-wait", Instructions(RoleConductor, "correctness", ii))
 }
 
+// The conductor's instruction file without conduct.recover, as a golden:
+// the wording a conductor that cannot recover_run reads.
+func TestGoldenInstructionsWithoutRecover(t *testing.T) {
+	less := capabilities.Default(RoleConductor).Without(capabilities.RunRecover)
+	in := goldenTask()
+	in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+	in.Repositories = readOnlyRepos()
+	ii := in.InstructionsInput()
+	ii.Grants = &less
+	golden(t, "instructions-conductor-without-recover", Instructions(RoleConductor, "correctness", ii))
+}
+
 // A brainstorm whose session a member named, as a golden: Resolve gives it
 // no session.name, so its file has no naming paragraph.
 func TestGoldenInstructionsBrainstormMemberNamed(t *testing.T) {
@@ -233,6 +245,7 @@ var toolCommands = map[string][]string{
 	"update_task": {"dude task update"}, "publish": {"dude publish --message"}, "relate": {"dude relate"},
 	"refresh_pull_requests": {"dude prs --refresh", "--refresh"}, "run_chat": {"dude chat"}, "limits": {"dude limits"},
 	"request_limit": {"dude limit request"}, "verify": {"dude verify"}, "settings": {"dude settings"}, "wait_for": {"dude wait-for"},
+	"recover_run": {"dude recover"},
 }
 
 // Prose in which a tool's name is an ordinary word, or a flag of another

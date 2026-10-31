@@ -46,6 +46,10 @@ const costNotFoundBackoff = time.Hour
 
 type costRun struct {
 	ID, Org, ProjectID, TaskID, LuxRunID string
+	// A recovery's publisher (run_recoveries, recover.go), not a runs row:
+	// its cost is kept on the recovery, and counted for the Run it
+	// recovered by the cost functions (migration 233).
+	Recovery bool
 }
 
 func (c *Costs) every() time.Duration {
@@ -67,12 +71,24 @@ func (c *Costs) Sweep(ctx context.Context) (int, error) {
 		// Only Runs with a read still due have a next_at (060): an agent's Run
 		// on lux, not final, not past costPatience.
 		// A session's Run has no project or task: "" (ledger writes NULL).
-		rows, err := tx.Query(ctx, `SELECT id, organization_id, COALESCE(project_id, ''), COALESCE(task_id, ''), lux_run_id FROM runs
-			WHERE lux_cost_next_at <= now() ORDER BY lux_cost_next_at LIMIT $1`, batch)
+		// Recoveries' publishers alongside, by the same next_at.
+		rows, err := tx.Query(ctx, `SELECT * FROM (
+				SELECT id, organization_id, COALESCE(project_id, ''), COALESCE(task_id, ''), lux_run_id, false, lux_cost_next_at FROM runs
+				WHERE lux_cost_next_at <= now() ORDER BY lux_cost_next_at LIMIT $1) r
+			UNION ALL SELECT * FROM (
+				SELECT c.id, c.organization_id, '', c.task_id, c.publisher_lux_run_id, true, c.lux_cost_next_at
+				FROM run_recoveries c
+				WHERE c.lux_cost_next_at <= now() AND c.publisher_lux_run_id IS NOT NULL ORDER BY c.lux_cost_next_at LIMIT $1) c
+			ORDER BY 7 LIMIT $1`, batch)
 		if err != nil {
 			return err
 		}
-		due, err = pgx.CollectRows(rows, pgx.RowToStructByPos[costRun])
+		due, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (costRun, error) {
+			var r costRun
+			var at time.Time
+			err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.LuxRunID, &r.Recovery, &at)
+			return r, err
+		})
 		return err
 	}); err != nil {
 		return 0, err
@@ -128,8 +144,12 @@ func (c *Costs) read(ctx context.Context, r costRun) (luxErr, dbErr error) {
 
 // putOff schedules the next read of a Run lux did not answer for.
 func (c *Costs) putOff(ctx context.Context, r costRun, wait time.Duration) error {
+	table := "runs"
+	if r.Recovery {
+		table = "run_recoveries"
+	}
 	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_cost_next_at = CASE
+		_, err := tx.Exec(ctx, `UPDATE `+table+` SET lux_cost_next_at = CASE
 				WHEN ended_at < now() - make_interval(secs => $3) THEN NULL
 				ELSE now() + make_interval(secs => $2) END
 			WHERE id = $1`,
@@ -143,6 +163,9 @@ func (c *Costs) putOff(ctx context.Context, r costRun, wait time.Duration) error
 func (c *Costs) store(ctx context.Context, r costRun, cost lux.RunCost) error {
 	ai, hasAI := cost.FamilyUSD(lux.FamilyAI)
 	compute, hasCompute := cost.FamilyUSD(lux.FamilyCompute)
+	if r.Recovery {
+		return c.storeRecovery(ctx, r, cost.Status, decimalOrNil(ai, hasAI), decimalOrNil(compute, hasCompute))
+	}
 	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var changed bool
 		// A Run that took over its predecessor's lux Run is charged only for
@@ -168,6 +191,21 @@ func (c *Costs) store(ctx context.Context, r costRun, cost lux.RunCost) error {
 			Payload: map[string]any{"aiUsd": jsonDecimal(ai, hasAI), "computeUsd": jsonDecimal(compute, hasCompute),
 				"status": cost.Status},
 		})
+		return err
+	})
+}
+
+// storeRecovery keeps lux's answer for a recovery's publisher on the
+// recovery, as store keeps a Run's, until final or costPatience after the
+// recovery ended. It writes no event: the run.cost.reported of the Run it
+// recovered is that Run's own lux cost, which this is not.
+func (c *Costs) storeRecovery(ctx context.Context, r costRun, status string, ai, compute any) error {
+	return c.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE run_recoveries SET lux_ai_usd = $2::numeric, lux_compute_usd = $3::numeric, lux_cost_status = $4,
+				lux_cost_read_at = now(), lux_cost_next_at = CASE
+					WHEN $4 = 'final' OR ended_at < now() - make_interval(secs => $6) THEN NULL
+					ELSE now() + make_interval(secs => $5) END
+			WHERE id = $1`, r.ID, ai, compute, status, c.every().Seconds(), costPatience.Seconds())
 		return err
 	})
 }
