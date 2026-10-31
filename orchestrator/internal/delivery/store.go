@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -410,6 +411,19 @@ func (o Outcome) advance(heads map[string]string) map[string]string {
 	}
 	maps.Copy(out, o.Heads)
 	return out
+}
+
+// fixBases is where a review of this phase's push starts, by repository it
+// changed: where it started from (from), else where lux says its checkout
+// did. A repository with neither has none.
+func (o Outcome) fixBases(from map[string]string) map[string]string {
+	bases := map[string]string{}
+	for repo := range o.Heads {
+		if base := cmp.Or(from[repo], o.Bases[repo]); base != "" {
+			bases[repo] = base
+		}
+	}
+	return bases
 }
 
 // line is the phase's outcome in a conductor's note: the Run, how it

@@ -2581,18 +2581,12 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		// of its own whose fixes push there too (fixLoop), bounded by
 		// maxPrFixReviewIterations. What the pull requests said about the
 		// test is stale until that loop is done (prFixDone).
-		st.FixRange = map[string]string{}
-		for repo := range out.Heads {
-			if base := cmp.Or(from[repo], out.Bases[repo]); base != "" {
-				st.FixRange[repo] = base
-			}
-		}
-		if len(st.FixRange) > 0 {
+		if bases := out.fixBases(from); len(bases) > 0 {
+			st.FixRange = bases
 			st.ChangedPaths, st.Iteration, st.TestFixRounds, st.TestFindingIDs = out.ChangedPaths, 0, 0, nil
 			w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
 			return workflow.Result{Next: "review", State: st}, nil
 		}
-		st.FixRange = nil
 	}
 	if len(out.Heads) == 0 || st.Candidate == nil {
 		// Nothing changed (or a fix from before candidates, already on the
@@ -2604,12 +2598,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	// and the test's fix rounds are this round's, bounded as before the
 	// pull request; the round counted once against PRIteration, in prFix,
 	// and against PRFixes, above.
-	st.Candidate.Base = map[string]string{}
-	for repo := range out.Heads {
-		if base := cmp.Or(st.Candidate.From[repo], out.Bases[repo]); base != "" {
-			st.Candidate.Base[repo] = base
-		}
-	}
+	st.Candidate.Base = out.fixBases(st.Candidate.From)
 	st.ChangedPaths, st.Iteration, st.TestFixRounds, st.TestFindingIDs = out.ChangedPaths, 0, 0, nil
 	// Mechanics, whoever decides: the conductor chose the fix; checking it
 	// before the pull request shows it is not a choice (checkingCandidate).
