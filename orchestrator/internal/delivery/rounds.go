@@ -680,7 +680,8 @@ func findingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding,
 		return nil, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
-			COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
+			COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix,
+			trivial, introduced, COALESCE(evidence_kind, ''), COALESCE(evidence, ''), COALESCE(scenario, ''), unverified
 		FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
 		ORDER BY chosen.n`, ids)
 	if err != nil {

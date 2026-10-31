@@ -1631,7 +1631,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		if len(r.FindingIDs) > 0 {
 			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
-				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
+				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix,
+				trivial, introduced, COALESCE(evidence_kind, ''), COALESCE(evidence, ''), COALESCE(scenario, ''), unverified
 				FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
 				ORDER BY chosen.n`,
 				r.FindingIDs)
@@ -4109,9 +4110,12 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			return err
 		}
 	}
-	counts := map[string]int{}
+	counts, unverified := map[string]int{}, 0
 	for _, f := range findings {
 		counts[f.Severity]++
+		if f.Unverified {
+			unverified++
+		}
 		// The category is the reviewer's flavour, what re-review routing
 		// groups by; a word of the reviewer's own is its topic. A test
 		// Run has no flavour: its word is the category.
@@ -4120,11 +4124,14 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			cat, topic = category, f.Category
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
-				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix)
-				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15)`,
+				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix,
+				trivial, introduced, evidence_kind, evidence, scenario, unverified)
+				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15,
+				$16, $17, $18, $19, $20, $21)`,
 			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
 			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix,
-			db.Nullable(f.Acceptance), f.CausedByFix); err != nil {
+			db.Nullable(f.Acceptance), f.CausedByFix,
+			f.Trivial, f.Introduced, db.Nullable(f.EvidenceKind), db.Nullable(f.Evidence), db.Nullable(f.Scenario), f.Unverified); err != nil {
 			return err
 		}
 	}
@@ -4168,7 +4175,7 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
 		ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
-		Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts},
+		Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts, "unverified": unverified},
 	})
 	return err
 }
