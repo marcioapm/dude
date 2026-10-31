@@ -102,9 +102,13 @@ func (st *State) conducted() bool { return st.Decider == DeciderConductor }
 
 // ConductedLoop says the review loop is the conductor's: the conductor
 // decides the delivery now. A delivery that was in flight before the
-// conducted loop existed gets it on its next round too. One handed back to
-// Deliver keeps it: the fix bar it had does not drop with the conductor.
-func (st *State) ConductedLoop() bool { return st.conducted() || st.HandedBack }
+// conducted loop existed gets it on its next round too. One a conductor
+// had (HadConductor), handed back to Deliver, keeps it: the fix bar it had
+// does not drop with the conductor. HandedBack alone is not enough: an
+// Open or Draft at Deliver's own Ask me first hold sets it on a delivery
+// no conductor ever had. A delivery handed back before HadConductor
+// existed has no bit, and goes back to the project's bar.
+func (st *State) ConductedLoop() bool { return st.conducted() || st.HadConductor }
 
 // Phases is what the conductor may start at a decision point.
 func (d *Pending) Phases() []string {
@@ -742,7 +746,9 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 		return false, err
 	}
 	st.Decider = to
-	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text)) WHERE id = $1`,
+	st.HadConductor = st.HadConductor || to == DeciderConductor
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text))
+			|| CASE WHEN $2 = 'conductor' THEN '{"hadConductor": true}'::jsonb ELSE '{}'::jsonb END WHERE id = $1`,
 		wfID, to); err != nil {
 		return false, err
 	}
