@@ -694,3 +694,53 @@ func TestARecoveryRefusedOnceByLuxIsRetried(t *testing.T) {
 		t.Errorf("the recovered branch is at %q, want %s", got, commit)
 	}
 }
+
+// forbiddenLux refuses dude every read of the dead Run (403: a key that
+// does not cover it), for good.
+type forbiddenLux struct {
+	lux.Client
+	dead string
+}
+
+func (c forbiddenLux) Get(ctx context.Context, runID string) (lux.Run, error) {
+	if runID == c.dead {
+		return lux.Run{}, &lux.Error{Status: 403, Code: "forbidden", Message: "key does not cover the Run"}
+	}
+	return c.Client.Get(ctx, runID)
+}
+
+func (c forbiddenLux) Checkpoints(ctx context.Context, runID string) ([]lux.Checkpoint, error) {
+	if runID == c.dead {
+		return nil, &lux.Error{Status: 403, Code: "forbidden", Message: "key does not cover the Run"}
+	}
+	return c.Client.Checkpoints(ctx, runID)
+}
+
+// lux refusing dude for good on the dead Run does not keep the recovery
+// requested for ever: past its give-up it ends failed, saying so, pushes
+// nothing, and wakes the conductor.
+func TestARecoveryLuxKeepsRefusingEndsAtItsGiveUp(t *testing.T) {
+	w := conducting(t)
+	task, run, _ := w.deadWriter("WIP.md", "half of it\n")
+	w.syncer.Lux = forbiddenLux{Client: w.syncer.Lux, dead: w.luxRunOf(run)}
+	w.noRecoveries = true
+	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
+	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := w.recoveryStatus(id); s != "failed" {
+		t.Fatalf("the recovery is %s", s)
+	}
+	if why := w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id); !strings.Contains(why, "lux would not say whether it ended the Run") {
+		t.Errorf("failed saying %q", why)
+	}
+	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != "" {
+		t.Errorf("the recovered branch was pushed, at %s", got)
+	}
+	if pub := w.publisherOf(id); pub != nil {
+		t.Errorf("a publisher %s was submitted", pub.ID)
+	}
+	w.noRecoveries = false
+	w.until("the conductor woken", func() bool { return w.recoveredWakes(task) == 1 })
+}
