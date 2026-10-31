@@ -2,13 +2,16 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // newPRFixWorldDirect is newPRFixWorld with the delivery frozen to push
@@ -379,5 +382,65 @@ func TestDirectTheFixerIsToldItsFixGoesToThePullRequest(t *testing.T) {
 		if !strings.Contains(text, role) {
 			t.Errorf("direct=%v: the fixer's file lacks its role's line %q", direct, role)
 		}
+	}
+}
+
+// Reviewers and testers never push, whichever way fixes reach the pull
+// request: their specs name no push branch.
+func TestDirectReviewersAndTestersStillNeverPush(t *testing.T) {
+	for _, direct := range []bool{true, false} {
+		w := newPRFixWorldAt(t, prAt{test: true, direct: direct})
+		w.comment("Please rename the greeting.")
+		w.until("the fix's review", func() bool {
+			w.sync()
+			return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
+				AND lux_run_id IS NOT NULL`, w.wi, delivery.RangePullRequestFix) > 0
+		})
+		for _, r := range w.lux.Runs() {
+			var spec lux.Spec
+			if json.Unmarshal(r.Spec, &spec) != nil {
+				continue
+			}
+			if p := spec.Labels["dude.phase"]; (p == "review" || p == "test") && spec.Git != nil && spec.Git.Push != nil {
+				t.Errorf("direct=%v: a %s Run's spec pushes to %q", direct, p, spec.Git.Push.Branch)
+			}
+		}
+	}
+}
+
+// The pull request syncer asks GitHub to update a branch that is behind
+// only while the delivery waits on it: never while a direct fix's narrow
+// loop runs, which pushes to it. Once the loop is done and the delivery
+// waits again, it does.
+func TestDirectNoBaseMergeIsAskedDuringAFixLoop(t *testing.T) {
+	w := newPRFixWorldDirect(t)
+	var hung atomic.Bool
+	hung.Store(true)
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		if phase == "review" && n == 1 {
+			b.Hang = hung.Load()
+		}
+	}
+	w.comment("Please rename the greeting.")
+	w.until("the narrow review running", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'running'`, w.wi) == 1
+	})
+	// The base moves: the pull request, at the fix's push, is behind.
+	w.gh.AdvanceBase("main", "Base moved")
+	w.until("the pull request read as behind", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND mergeable_state = 'behind'`, w.wi) == 1
+	})
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	updates := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action' AND payload->>'action' = 'update-branch'`
+	if n := w.count(updates, w.wi); n != 0 {
+		t.Errorf("%d update-branch requests during the fix's loop", n)
+	}
+	if w.waiting() {
+		t.Fatalf("the delivery is waiting already\n%s", w.describeRuns())
 	}
 }
