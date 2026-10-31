@@ -744,3 +744,49 @@ func TestARecoveryLuxKeepsRefusingEndsAtItsGiveUp(t *testing.T) {
 	w.noRecoveries = false
 	w.until("the conductor woken", func() bool { return w.recoveredWakes(task) == 1 })
 }
+
+// unavailableOnceLux answers the dead Run's Get with a 503 once, then
+// normally: lux down for a moment.
+type unavailableOnceLux struct {
+	lux.Client
+	dead   string
+	failed *bool
+}
+
+func (c unavailableOnceLux) Get(ctx context.Context, runID string) (lux.Run, error) {
+	if runID == c.dead && !*c.failed {
+		*c.failed = true
+		return lux.Run{}, &lux.Error{Status: 503, Code: "unavailable", Message: "lux is down for a moment"}
+	}
+	return c.Client.Get(ctx, runID)
+}
+
+// A transient lux error past the give-up is not lux refusing to say
+// whether it ended the Run: the recovery is tried again and pushes.
+func TestARecoveryPastItsGiveUpRetriesATransientLuxError(t *testing.T) {
+	w := conducting(t)
+	task, run, commit := w.deadWriter("WIP.md", "half of it\n")
+	var failed bool
+	w.syncer.Lux = unavailableOnceLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), failed: &failed}
+	w.noRecoveries = true
+	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
+	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !failed {
+		t.Fatal("lux was never asked for the dead Run")
+	}
+	if s := w.recoveryStatus(id); s != "requested" {
+		t.Fatalf("after the 503 the recovery is %s: %s", s, w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id))
+	}
+	mustExec(t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+	w.noRecoveries = false
+	w.until("the recovery ended", func() bool { s := w.recoveryStatus(id); return s == "done" || s == "failed" || s == "refused" })
+	if s := w.recoveryStatus(id); s != "done" {
+		t.Fatalf("the recovery is %s: %s", s, w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id))
+	}
+	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != commit {
+		t.Errorf("the recovered branch is at %q, want %s", got, commit)
+	}
+}

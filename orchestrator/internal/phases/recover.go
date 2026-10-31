@@ -210,7 +210,7 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	}
 	dead, err := s.Lux.Get(ctx, c.DeadLux)
 	if err != nil && !lux.IsNotFound(err) {
-		if c.StepLong {
+		if le, ok := lux.AsError(err); ok && !le.Retryable() && c.StepLong {
 			return s.endRequested(ctx, c, "lux would not say whether it ended the Run: "+err.Error())
 		}
 		return err
