@@ -9,6 +9,13 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
+// evidencedFinding is a correctness finding on FACTORY.md:1 with all its
+// evidence, in a conducted reviewer's format: head is its severity line(s).
+func evidencedFinding(head, title string) string {
+	return head + "\ncategory: correctness\nfile: FACTORY.md\nline: 1\ntitle: " + title +
+		"\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n"
+}
+
 // The owner's fix bar in a conducted loop: until the conductor runs the
 // loop itself, the policy's exit routes it, and what blocks there is every
 // finding at medium or above and every low marked trivial. A medium finding
@@ -33,8 +40,7 @@ func TestAConductedLoopFixesAMediumFindingThePolicyLoopShips(t *testing.T) {
 			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
 					if reviews++; reviews == 1 {
-						return fakelux.Behaviour{Reply: "```yaml\n" + c.finding + "\ncategory: correctness\nfile: FACTORY.md\nline: 1\n" +
-							"title: FACTORY.md says the wrong thing\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n```\n"}
+						return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding(c.finding, "FACTORY.md says the wrong thing") + "```\n"}
 					}
 					return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
 				}
@@ -71,8 +77,7 @@ func TestAHandedBackDeliveryKeepsTheConductedFixBar(t *testing.T) {
 		case "review":
 			switch reviews++; reviews {
 			case 1:
-				return fakelux.Behaviour{Reply: "```yaml\nseverity: medium\ncategory: correctness\nfile: FACTORY.md\nline: 1\n" +
-					"title: FACTORY.md says the wrong thing\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n```\n"}
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: medium", "FACTORY.md says the wrong thing") + "```\n"}
 			case 2:
 				return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
 			}
@@ -106,19 +111,15 @@ func TestAConductedLoopCountsAMediumRegression(t *testing.T) {
 	w := conducting(t)
 	scripted := w.lux.Decide
 	reviews := 0
-	medium := func(title, caused string) string {
-		return "severity: medium\ncategory: correctness\nfile: FACTORY.md\nline: 1\ntitle: " + title +
-			"\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n" + caused
-	}
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		labels, _ := spec["labels"].(map[string]any)
 		switch labels["dude.phase"] {
 		case "review":
 			if reviews++; reviews == 1 {
-				return fakelux.Behaviour{Reply: "```yaml\n" + medium("Original defect", "") + "```\n"}
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: medium", "Original defect") + "```\n"}
 			}
 			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n---\n" +
-				medium(fmt.Sprintf("Regression %d", reviews-1), "caused_by_fix: yes\n") + "```\n"}
+				evidencedFinding("severity: medium", fmt.Sprintf("Regression %d", reviews-1)) + "caused_by_fix: yes\n" + "```\n"}
 		case "fix":
 			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "fix"}
 		}

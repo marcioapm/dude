@@ -24,8 +24,7 @@ func TestADeliverOnlyDeliveryOpenedAtItsHoldKeepsTheProjectsFixBar(t *testing.T)
 		labels, _ := spec["labels"].(map[string]any)
 		if armed.Load() && labels["dude.phase"] == "review" {
 			if reviews.Add(1) == 1 {
-				return fakelux.Behaviour{Reply: "```yaml\nseverity: medium\ncategory: correctness\nfile: FACTORY.md\nline: 1\n" +
-					"title: FACTORY.md says the wrong thing\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n```\n"}
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: medium", "FACTORY.md says the wrong thing") + "```\n"}
 			}
 			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
 		}
