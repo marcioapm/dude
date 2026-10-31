@@ -199,8 +199,9 @@ type State struct {
 	// A conductor has decided this delivery at some point (Talk it
 	// through, a takeover in Chat, the decisions given to it, a start over
 	// it decides): its review loop stays conducted (ConductedLoop) once
-	// handed back. Unlike HandedBack, an Open or Draft at Deliver's own
-	// hold does not set it. Set by every writer of DeciderConductor.
+	// handed back. HandedBack cannot say this: an Open or Draft at
+	// Deliver's own Ask me first hold sets it on a delivery no conductor
+	// ever had. Set by every writer of DeciderConductor.
 	HadConductor bool `json:"hadConductor,omitempty"`
 	// The decision the workflow is parked on for the conductor.
 	Decision *Pending `json:"decision,omitempty"`

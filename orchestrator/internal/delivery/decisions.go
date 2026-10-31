@@ -104,10 +104,8 @@ func (st *State) conducted() bool { return st.Decider == DeciderConductor }
 // decides the delivery now. A delivery that was in flight before the
 // conducted loop existed gets it on its next round too. One a conductor
 // had (HadConductor), handed back to Deliver, keeps it: the fix bar it had
-// does not drop with the conductor. HandedBack alone is not enough: an
-// Open or Draft at Deliver's own Ask me first hold sets it on a delivery
-// no conductor ever had. A delivery handed back before HadConductor
-// existed has no bit, and goes back to the project's bar.
+// does not drop with the conductor. A delivery handed back before
+// HadConductor existed has no bit, and goes back to the project's bar.
 func (st *State) ConductedLoop() bool { return st.conducted() || st.HadConductor }
 
 // Phases is what the conductor may start at a decision point.
