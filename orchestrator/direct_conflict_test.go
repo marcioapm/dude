@@ -21,13 +21,7 @@ func (w *world) reviewingDirect() string {
 // conflict, and no integration Run until the conductor decides. Deciding
 // next has the integration fixer merge the base onto the pull request.
 func TestDirectAConflictWakesTheConductorWithAMessageNotAnIntegration(t *testing.T) {
-	w := conducting(t)
-	w.toolsWithSync()
-	task := w.prOpen(w.task(), prAt{direct: true})
-	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
-		t.Fatalf("chat: %d %v", status, out)
-	}
-	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w, task := conductedDirectWorld(t)
 	w.conflictWithMovedBase()
 	w.until("the conflict to decide on", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
 	w.wokenWith(task, "conflicts with main")
@@ -173,13 +167,7 @@ func TestDirectACleanBaseMergeBeforeThePullRequestTouchingNoTaskFileSkipsTheTest
 // in state and none starts; the pull request stays conflicting, and the
 // next sync tells the conductor again.
 func TestDirectAConflictTheConductorWaitsOnIsToldAgainAtTheNextSync(t *testing.T) {
-	w := conducting(t)
-	w.toolsWithSync()
-	task := w.prOpen(w.task(), prAt{direct: true})
-	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
-		t.Fatalf("chat: %d %v", status, out)
-	}
-	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w, task := conductedDirectWorld(t)
 	w.conflictWithMovedBase()
 	w.until("the conflict to decide on", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
 	w.wokenWith(task, "conflicts with main")

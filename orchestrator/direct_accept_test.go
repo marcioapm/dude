@@ -32,6 +32,17 @@ func conductedDirectFix(t *testing.T, crash *atomic.Bool) *editing {
 // fixes directly, waiting on its open pull request, as editing on it.
 func conductedDirect(t *testing.T) *editing {
 	t.Helper()
+	w, task := conductedDirectWorld(t)
+	cond, _, _ := w.conductor(task)
+	w.until("the conductor to answer", func() bool { return len(w.said(cond)) >= 1 })
+	return &editing{world: w, task: task, cond: cond, branch: w.gh.Pull(1).Head}
+}
+
+// conductedDirectWorld is a conducted delivery frozen to push its pull
+// request fixes directly, its conductor asked to look after the pull
+// request, waiting on it: the world and the task.
+func conductedDirectWorld(t *testing.T) (*world, string) {
+	t.Helper()
 	w := conducting(t)
 	w.toolsWithSync()
 	task := w.prOpen(w.task(), prAt{direct: true})
@@ -39,9 +50,7 @@ func conductedDirect(t *testing.T) *editing {
 		t.Fatalf("chat: %d %v", status, out)
 	}
 	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
-	cond, _, _ := w.conductor(task)
-	w.until("the conductor to answer", func() bool { return len(w.said(cond)) >= 1 })
-	return &editing{world: w, task: task, cond: cond, branch: w.gh.Pull(1).Head}
+	return w, task
 }
 
 // feedbackToDecide is a comment on the pull request, the conductor asked
