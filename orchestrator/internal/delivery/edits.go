@@ -175,14 +175,14 @@ func unreviewedPRPushesTx(ctx context.Context, tx pgx.Tx, taskID string, st *Sta
 	if accepted == nil {
 		accepted = map[string]string{}
 	}
-	rows, err := tx.Query(ctx, `SELECT r.name, pr.head_sha, COALESCE((SELECT e.payload->>'baseSha' FROM events e WHERE e.task_id = $1
-		    AND e.event_type = $3 AND e.payload->>'repo' = r.name AND e.payload->>'headSha' = pr.head_sha
-		    ORDER BY e.cursor DESC LIMIT 1), '')
+	// dude's last push of the head (JOIN LATERAL: none, not dude's head).
+	rows, err := tx.Query(ctx, `SELECT r.name, pr.head_sha, COALESCE(pushed.base, '')
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+		JOIN LATERAL (SELECT e.payload->>'baseSha' AS base FROM events e WHERE e.task_id = $1 AND e.event_type = $3
+		    AND e.payload->>'repo' = r.name AND e.payload->>'headSha' = pr.head_sha
+		    ORDER BY e.cursor DESC LIMIT 1) pushed ON true
 		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft') AND COALESCE(pr.head_sha, '') <> ''
 		  AND pr.head_sha IS DISTINCT FROM $5::jsonb->>r.name
-		  AND EXISTS (SELECT 1 FROM events e WHERE e.task_id = $1 AND e.event_type = $3
-		    AND e.payload->>'repo' = r.name AND e.payload->>'headSha' = pr.head_sha)
 		  AND NOT EXISTS (SELECT 1 FROM runs k WHERE k.task_id = $1
 		    AND k.attempt = COALESCE(NULLIF($4, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
 		    AND k.phase = 'review' AND k.status = 'completed' AND k.base_refs->>r.name = pr.head_sha
