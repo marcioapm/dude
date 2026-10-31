@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -492,3 +494,101 @@ func TestDudesBaseMergeBeforeThePullRequestIsNotTheNextRoundsChange(t *testing.T
 		t.Errorf("the review's range has main's commits %v\n%s", in, w.describeRuns())
 	}
 }
+
+// publishedDuringRoundOne is a conducted round 1 of two lenses
+// (correctness, security) created at H1, whose reviewers lux holds until
+// the conductor's publish moves the task branch to H2 (its commit on
+// GitHub and the delivery's heads, as PublishedTx advances them). With
+// failOne, the security reviewer crashes and a person retries it, at H2.
+// Round 1's findings go to a fix (H3) and round 2 follows. Returns H1.
+func (w *world) publishedDuringRoundOne(task string, failOne bool) string {
+	w.t.Helper()
+	ctx := context.Background()
+	scripted := w.lux.Decide
+	var crashed atomic.Bool
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "review" {
+			var category string
+			var round int
+			_ = w.owner.QueryRow(ctx, `SELECT COALESCE(category, ''), COALESCE(review_round, 0) FROM runs WHERE id = $1`,
+				fmt.Sprint(labels["dude.run"])).Scan(&category, &round)
+			if failOne && round == 1 && category == "security" && crashed.CompareAndSwap(false, true) {
+				return fakelux.Behaviour{Crash: true}
+			}
+			if round == 1 && category == "correctness" {
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: high", "FACTORY.md says the wrong thing") + "```\n"}
+			}
+		}
+		return scripted(spec)
+	}
+	hold := make(chan struct{})
+	var released atomic.Bool
+	release := func() {
+		if released.CompareAndSwap(false, true) {
+			close(hold)
+		}
+	}
+	w.t.Cleanup(release)
+	w.talk(task)
+	w.implemented(task)
+	w.lux.BeforeStart(func(luxID string) {
+		if w.count(`SELECT count(*) FROM runs WHERE lux_run_id = $1 AND phase = 'review'`, luxID) == 0 {
+			return
+		}
+		select {
+		case <-hold:
+		case <-time.After(30 * time.Second):
+		}
+	})
+	h1 := w.str(`SELECT state->'heads'->>'target' FROM workflow_runs WHERE task_id = $1`, task)
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness","security"]}`)
+	w.until("round 1's reviewers created", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, task) == 2 &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitReview'`, task) == 1
+	})
+	h2 := w.gh.CommitFiles(delivery.BranchFor(task, 1), "The conductor's edit", map[string]string{"NOTES.md": "conductor\n"})
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{heads,target}', to_jsonb($2::text)) WHERE task_id = $1`, task, h2)
+	release()
+	w.lux.BeforeStart(nil)
+	if failOne {
+		w.until("the failed reviewer escalated", func() bool { return w.escalationReason(task) == "review_failed" })
+		if status, body := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "retry"}); status != 200 {
+			w.t.Fatalf("retry: %d %v", status, body)
+		}
+	}
+	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 2", func() bool {
+		return w.decisionAt(task) == delivery.PointReviewed && w.count(`SELECT count(*) FROM runs WHERE task_id = $1
+			AND phase = 'review' AND status = 'completed' AND review_round = 2`, task) > 0
+	})
+	return h1
+}
+
+// roundTwoFromH1 says round 2 is fix_round from H1, the heads round 1's
+// lenses were created at, and no commit falls outside every round's range.
+func (w *world) roundTwoFromH1(task, h1 string) {
+	w.t.Helper()
+	rs := w.roundReviews(task)
+	second := rs[len(rs)-1]
+	if second.Round != 2 || second.Of != delivery.RangeFixRound || second.Base != h1 {
+		w.t.Errorf("round %d %q from %q, want fix_round from round 1's heads %s\n%s", second.Round, second.Of, second.Base, h1, w.describeRuns())
+	}
+	head := w.str(`SELECT base_refs->>'target' FROM runs WHERE id = $1`, second.ID)
+	if missed := w.unreviewed(task, head); len(missed) > 0 {
+		w.t.Errorf("commits no round reviewed: %v\n%s", missed, w.describeRuns())
+	}
+}
+
+// The conductor publishes while round 1's lenses work at H1: round 2,
+// after the fix, starts at H1, so the publish is in its range.
+func TestAPublishDuringARoundIsInTheNextRoundsRange(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	h1 := w.publishedDuringRoundOne(task, false)
+	w.roundTwoFromH1(task, h1)
+}
+
