@@ -21,6 +21,6 @@ Review `aaa111..HEAD`: `git log` and `git diff` over that range are what is unde
 
 This is the loop's first review round: review all of the range above.
 
-The conductor triages every finding before anything is fixed. It asks of each: can it happen through a supported path — so its `scenario` starts at a real entry point (a request, a command, a step of the workflow) and names the state it needs; and did this change introduce or worsen it — `introduced: yes`, or `introduced: no` for a problem that was there before. A pre-existing problem is still worth reporting, marked `introduced: no`: the conductor files it to be fixed later rather than here.
+The conductor triages every finding before anything is fixed. It asks of each: can it happen through a supported path — its `scenario` starts at a real entry point (a request, a command, a step of the workflow); and did this change introduce or worsen it (`introduced`). A pre-existing problem is still worth reporting, marked `introduced: no`: the conductor files it to be fixed later rather than here.
 
 No repository is checked out for this work: it changes no code. Its result is what you publish and what you reply.

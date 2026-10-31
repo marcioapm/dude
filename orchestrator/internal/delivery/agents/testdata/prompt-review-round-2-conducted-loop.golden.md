@@ -34,13 +34,13 @@ verdicts:
 
 ## Round 2
 
-This is review round 2. It covers only what changed since round 1 reviewed the branch (the range above): the fix made for that round's findings, and anything committed beside it. Report what those commits introduce, and what they were sent to fix and left unfixed. A problem elsewhere in the branch is out of scope unless these commits make it reachable.
+This is review round 2, of what changed since round 1 reviewed the branch (the range above). Report what those commits introduce, and what they were sent to fix and left unfixed. A problem elsewhere in the branch is out of scope unless these commits make it reachable.
 
 Decided in earlier rounds — do not raise these again, nor restate one in other words:
 - fnd_1 [medium] Totals are rounded per line: judged fixed by run_fix1
 - fnd_2 [low] The header row is optional: dismissed by the conductor: the person asked for it
 - fnd_3 [high] Export drops the last row: accepted by a person
 
-The conductor triages every finding before anything is fixed. It asks of each: can it happen through a supported path — so its `scenario` starts at a real entry point (a request, a command, a step of the workflow) and names the state it needs; and did this change introduce or worsen it — `introduced: yes`, or `introduced: no` for a problem that was there before. A pre-existing problem is still worth reporting, marked `introduced: no`: the conductor files it to be fixed later rather than here.
+The conductor triages every finding before anything is fixed. It asks of each: can it happen through a supported path — its `scenario` starts at a real entry point (a request, a command, a step of the workflow); and did this change introduce or worsen it (`introduced`). A pre-existing problem is still worth reporting, marked `introduced: no`: the conductor files it to be fixed later rather than here.
 
 No repository is checked out for this work: it changes no code. Its result is what you publish and what you reply.
