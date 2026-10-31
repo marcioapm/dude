@@ -598,19 +598,45 @@ func TestARecoveryThatFailedBeforeItsSubmitEndsWithNoPublisher(t *testing.T) {
 	}
 }
 
-// stillRunningLux is a lux that has not yet ended the dead Run: it answers
-// it running, whatever the fake has done with it.
-type stillRunningLux struct {
+// deadRunLux is lux as dude finds it about the dead Run, the fake answering
+// every other Run: it says the Run is still running, or refuses its Get
+// with refusal the first refusals times (every time when negative). With
+// checkpoints it refuses the checkpoint read that follows a refused Get
+// too, once, or every one when it always refuses.
+type deadRunLux struct {
 	lux.Client
-	dead string
+	dead        string
+	running     bool
+	refusal     *lux.Error
+	refusals    int
+	checkpoints bool
+	// gets counts the dead Run's Gets; refused is whether the last was.
+	gets    int
+	refused bool
 }
 
-func (c stillRunningLux) Get(ctx context.Context, runID string) (lux.Run, error) {
+func (c *deadRunLux) Get(ctx context.Context, runID string) (lux.Run, error) {
+	if runID != c.dead {
+		return c.Client.Get(ctx, runID)
+	}
+	c.gets++
+	c.refused = c.refusal != nil && (c.refusals < 0 || c.gets <= c.refusals)
+	if c.refused {
+		return lux.Run{}, c.refusal
+	}
 	run, err := c.Client.Get(ctx, runID)
-	if err == nil && runID == c.dead {
+	if err == nil && c.running {
 		run.State = "running"
 	}
 	return run, err
+}
+
+func (c *deadRunLux) Checkpoints(ctx context.Context, runID string) ([]lux.Checkpoint, error) {
+	if runID == c.dead && c.checkpoints && (c.refusals < 0 || c.refused) {
+		c.refused = false
+		return nil, c.refusal
+	}
+	return c.Client.Checkpoints(ctx, runID)
 }
 
 // A dead Run lux has still not ended once the recovery has waited past its
@@ -619,7 +645,7 @@ func (c stillRunningLux) Get(ctx context.Context, runID string) (lux.Run, error)
 func TestARecoveryPastItsGiveUpOnARunLuxStillRunsEndsUnpushed(t *testing.T) {
 	w := conducting(t)
 	task, run, _ := w.deadWriter("WIP.md", "half of it\n")
-	w.syncer.Lux = stillRunningLux{Client: w.syncer.Lux, dead: w.luxRunOf(run)}
+	w.syncer.Lux = &deadRunLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), running: true}
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
@@ -639,46 +665,20 @@ func TestARecoveryPastItsGiveUpOnARunLuxStillRunsEndsUnpushed(t *testing.T) {
 	}
 }
 
-// deniedOnceLux refuses dude once (401) on the dead Run, on the Get and on
-// any read that follows it in the same pass, then answers normally.
-type deniedOnceLux struct {
-	lux.Client
-	dead            string
-	denied, refused *bool
-}
-
-func (c deniedOnceLux) Get(ctx context.Context, runID string) (lux.Run, error) {
-	if runID == c.dead {
-		if !*c.refused {
-			*c.refused, *c.denied = true, true
-			return lux.Run{}, &lux.Error{Status: 401, Code: "unauthorized", Message: "bad key"}
-		}
-		*c.denied = false
-	}
-	return c.Client.Get(ctx, runID)
-}
-
-func (c deniedOnceLux) Checkpoints(ctx context.Context, runID string) ([]lux.Checkpoint, error) {
-	if runID == c.dead && *c.denied {
-		*c.denied = false
-		return nil, &lux.Error{Status: 401, Code: "unauthorized", Message: "bad key"}
-	}
-	return c.Client.Checkpoints(ctx, runID)
-}
-
 // lux refusing dude once (a 401 on the dead Run) is not lux having lost
 // it: the recovery is tried again and pushes the Run's commits.
 func TestARecoveryRefusedOnceByLuxIsRetried(t *testing.T) {
 	w := conducting(t)
 	task, run, commit := w.deadWriter("WIP.md", "half of it\n")
-	var denied, refused bool
-	w.syncer.Lux = deniedOnceLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), denied: &denied, refused: &refused}
+	l := &deadRunLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), refusals: 1, checkpoints: true,
+		refusal: &lux.Error{Status: 401, Code: "unauthorized", Message: "bad key"}}
+	w.syncer.Lux = l
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !refused {
+	if l.gets == 0 {
 		t.Fatal("lux was never asked for the dead Run")
 	}
 	if s := w.recoveryStatus(id); s != "requested" {
@@ -695,34 +695,14 @@ func TestARecoveryRefusedOnceByLuxIsRetried(t *testing.T) {
 	}
 }
 
-// forbiddenLux refuses dude every read of the dead Run (403: a key that
-// does not cover it), for good.
-type forbiddenLux struct {
-	lux.Client
-	dead string
-}
-
-func (c forbiddenLux) Get(ctx context.Context, runID string) (lux.Run, error) {
-	if runID == c.dead {
-		return lux.Run{}, &lux.Error{Status: 403, Code: "forbidden", Message: "key does not cover the Run"}
-	}
-	return c.Client.Get(ctx, runID)
-}
-
-func (c forbiddenLux) Checkpoints(ctx context.Context, runID string) ([]lux.Checkpoint, error) {
-	if runID == c.dead {
-		return nil, &lux.Error{Status: 403, Code: "forbidden", Message: "key does not cover the Run"}
-	}
-	return c.Client.Checkpoints(ctx, runID)
-}
-
 // lux refusing dude for good on the dead Run does not keep the recovery
 // requested for ever: past its give-up it ends failed, saying so, pushes
 // nothing, and wakes the conductor.
 func TestARecoveryLuxKeepsRefusingEndsAtItsGiveUp(t *testing.T) {
 	w := conducting(t)
 	task, run, _ := w.deadWriter("WIP.md", "half of it\n")
-	w.syncer.Lux = forbiddenLux{Client: w.syncer.Lux, dead: w.luxRunOf(run)}
+	w.syncer.Lux = &deadRunLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), refusals: -1, checkpoints: true,
+		refusal: &lux.Error{Status: 403, Code: "forbidden", Message: "key does not cover the Run"}}
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
@@ -745,36 +725,21 @@ func TestARecoveryLuxKeepsRefusingEndsAtItsGiveUp(t *testing.T) {
 	w.until("the conductor woken", func() bool { return w.recoveredWakes(task) == 1 })
 }
 
-// unavailableOnceLux answers the dead Run's Get with a 503 once, then
-// normally: lux down for a moment.
-type unavailableOnceLux struct {
-	lux.Client
-	dead   string
-	failed *bool
-}
-
-func (c unavailableOnceLux) Get(ctx context.Context, runID string) (lux.Run, error) {
-	if runID == c.dead && !*c.failed {
-		*c.failed = true
-		return lux.Run{}, &lux.Error{Status: 503, Code: "unavailable", Message: "lux is down for a moment"}
-	}
-	return c.Client.Get(ctx, runID)
-}
-
 // A transient lux error past the give-up is not lux refusing to say
 // whether it ended the Run: the recovery is tried again and pushes.
 func TestARecoveryPastItsGiveUpRetriesATransientLuxError(t *testing.T) {
 	w := conducting(t)
 	task, run, commit := w.deadWriter("WIP.md", "half of it\n")
-	var failed bool
-	w.syncer.Lux = unavailableOnceLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), failed: &failed}
+	l := &deadRunLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), refusals: 1,
+		refusal: &lux.Error{Status: 503, Code: "unavailable", Message: "lux is down for a moment"}}
+	w.syncer.Lux = l
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	mustExec(t, w.owner, `UPDATE run_recoveries SET stepped_at = now() - interval '11 minutes', next_attempt_at = NULL WHERE id = $1`, id)
 	if _, err := w.syncer.SettleRecoveries(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !failed {
+	if l.gets == 0 {
 		t.Fatal("lux was never asked for the dead Run")
 	}
 	if s := w.recoveryStatus(id); s != "requested" {
@@ -797,7 +762,7 @@ func TestARecoveryPastItsGiveUpRetriesATransientLuxError(t *testing.T) {
 func TestARecoveryWaitsWhileLuxStillRunsTheRun(t *testing.T) {
 	w := conducting(t)
 	task, run, _ := w.deadWriter("WIP.md", "half of it\n")
-	w.syncer.Lux = stillRunningLux{Client: w.syncer.Lux, dead: w.luxRunOf(run)}
+	w.syncer.Lux = &deadRunLux{Client: w.syncer.Lux, dead: w.luxRunOf(run), running: true}
 	w.noRecoveries = true
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	mustExec(t, w.owner, `UPDATE runs SET control = 'none' WHERE id = $1`, run)
