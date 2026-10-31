@@ -8,6 +8,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
+// directAtTheGate has mergeAtTheGate's delivery frozen to push its pull
+// request fixes directly.
+var directAtTheGate bool
+
 // mergeAtTheGate is a conducted task implemented, tested (passed) and at
 // the pull request gate; main then gains a commit of path from the task's
 // own content (same: the task's FACTORY.md as the task wrote it, a clean
@@ -19,6 +23,9 @@ func mergeAtTheGate(t *testing.T, same bool, answer string) (*world, string, int
 	task := w.task()
 	w.talk(task)
 	setPolicy(w, task, `{"test":true}`)
+	if directAtTheGate {
+		setPolicy(w, task, `{"pullRequestFixes":"direct"}`)
+	}
 	w.implemented(task)
 	w.carriedOut(task, "start_phase", `{"phase":"test"}`)
 	if at := w.decisionAt(task); at != delivery.PointBeforePR {

@@ -144,3 +144,12 @@ func TestDirectAConflictStillThereAfterTheIntegrationEscalatesOnce(t *testing.T)
 		t.Errorf("integration Runs %d", n)
 	}
 }
+
+// Before the pull request nothing changes in direct mode: a clean base
+// merge GitHub makes that touched none of the task's files skips the
+// tester, as in candidate mode (mergedHeadOpensUntested).
+func TestDirectACleanBaseMergeBeforeThePullRequestTouchingNoTaskFileSkipsTheTester(t *testing.T) {
+	directAtTheGate = true
+	t.Cleanup(func() { directAtTheGate = false })
+	mergedHeadOpensUntested(t, "Open")
+}
