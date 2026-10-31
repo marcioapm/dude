@@ -544,10 +544,13 @@ func PublishLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (lines, file
 // From (what the comparison measured, a branch name where the task had no
 // head) to Head, and how that went (MoveStatus).
 type Move struct {
-	RepoID       string   `json:"repoId"`
-	Slug         string   `json:"slug"`
-	From         string   `json:"from"`
-	Base         string   `json:"base"`
+	RepoID string `json:"repoId"`
+	Slug   string `json:"slug"`
+	From   string `json:"from"`
+	Base   string `json:"base"`
+	// The commit From named when the comparison measured (Base, or the
+	// branch's head where the task had none): where the push starts.
+	Start        string   `json:"start,omitempty"`
 	Head         string   `json:"head"`
 	ChangedPaths []string `json:"changedPaths"`
 	Lines        int      `json:"lines"`

@@ -3517,8 +3517,9 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 // waitForPR waits on the task's pull requests: what the forge says of
 // them, a person's decision, or a person's feedback in dude.
 func waitForPR(st *State) workflow.Result {
-	// Words for the Runs a decision started are not for a later round.
-	st.PersonSaid = ""
+	// Words for the Runs a decision started are not for a later round,
+	// nor a fix held for a review (reviewFirst) for a later fix.
+	st.PersonSaid, st.PRFixAfter = "", nil
 	if len(st.PendingConflicts) > 0 || st.handingOver {
 		return workflow.Result{Next: "awaitPullRequest", State: st}
 	}

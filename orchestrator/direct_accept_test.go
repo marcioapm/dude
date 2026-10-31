@@ -161,3 +161,54 @@ func TestDirectAPersonsAcceptOfAFailedNarrowReviewCountsAsItsReview(t *testing.T
 	e.commit(map[string]string{"README.md": "# target\n\nfixed again\n"})
 	e.refused(e.task, "publish", `{"message":"another"}`, unreviewedWords)
 }
+
+// The conductor publishes to the pull request from a delivery that had no
+// head on record for the repository (its git.commit_created names no
+// baseSha), then a comment arrives and the conductor has it fixed: the
+// review of that push is still narrow, a range of its own, never the
+// whole branch. Back waiting, nothing of that fix is held: a later fix
+// runs as it is told.
+func TestDirectAnUnreviewedPushWithNoBaseOnRecordIsReviewedOverARange(t *testing.T) {
+	e := conductedDirect(t)
+	// No head on record for the repository: the publish is measured from
+	// the default branch, the whole of the task's work (within limits
+	// raised for it).
+	mustExec(t, e.owner, `UPDATE workflow_runs SET state = state - 'heads' WHERE task_id = $1`, e.task)
+	mustExec(t, e.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"conductorEditFiles":50,"conductorEditLines":5000}'
+		WHERE id = (SELECT project_id FROM tasks WHERE id = $1)`, e.task)
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nthe conductor's fix\n"})
+	id := e.publish()
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("publish %s: %s", status, why)
+	}
+	published := e.gh.SHA(e.branch)
+	e.until("the pull request read at the publish", func() bool {
+		e.sync()
+		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
+	})
+	e.feedbackToDecide()
+	e.must(e.task, "decide", `{"action":"next","note":"NOTE-FIRST"}`)
+	e.until("the review of the conductor's push", func() bool {
+		e.sync()
+		return e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
+			AND base_refs->>'target' = $2`, e.task, published) > 0 && e.decisionAt(e.task) != "" || e.fixes(e.task) > 0
+	})
+	if n := e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2
+		AND review_range IS NULL`, e.task, published); n != 0 {
+		t.Errorf("%d reviews of the conductor's push over the whole branch\n%s", n, e.describeRuns())
+	}
+	e.until("waiting on the pull request again", func() bool { e.sync(); return e.waitingOnPR(e.task) })
+	if n := e.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'prFixAfter'`, e.task); n != 0 {
+		t.Errorf("a held fix is kept while waiting on the pull request")
+	}
+	fixes := e.fixes(e.task)
+	e.gh.Comment(1, "bob", "Please also fix the farewell.")
+	e.until("feedback to decide on", func() bool { e.sync(); return e.decisionAt(e.task) == delivery.PointPRFeedback })
+	e.must(e.task, "decide", `{"action":"next","note":"NOTE-LATER"}`)
+	e.until("the later fix", func() bool { e.sync(); return e.fixes(e.task) > fixes })
+	if got := e.ids(`SELECT COALESCE(conductor_note, '') FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb ORDER BY created_at DESC LIMIT 1`, e.task); len(got) != 1 || got[0] != "NOTE-LATER" {
+		t.Errorf("the later fix was told %q\n%s", got, e.describeRuns())
+	}
+}

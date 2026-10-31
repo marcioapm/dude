@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -463,7 +464,7 @@ func (s *Syncer) measurePublish(ctx context.Context, p publishRow) error {
 		}
 		lines += acc.Lines
 		files += len(acc.Paths)
-		moves[repo.Name] = delivery.Move{RepoID: repo.ID, Slug: slug, From: from, Base: base, Head: res.Commit,
+		moves[repo.Name] = delivery.Move{RepoID: repo.ID, Slug: slug, From: from, Base: base, Start: start, Head: res.Commit,
 			ChangedPaths: db.NonNil(acc.Paths), Lines: acc.Lines, Status: delivery.MovePending, BaseBranch: baseBranch}
 	}
 	if len(moves) == 0 {
@@ -744,7 +745,10 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 		case delivery.MoveMoved:
 			// The branch's head, the next writer's start; the change is
 			// the conductor's own, Base...Head.
-			heads[name] = delivery.PublishHead{SHA: m.BranchHead(), Base: m.Base, ChangedPaths: db.NonNil(m.ChangedPaths), Lines: m.Lines}
+			// Base...Head: from the commit the comparison measured where the
+			// task had no head (its git.commit_created's baseSha, the range
+			// a review of this push covers).
+			heads[name] = delivery.PublishHead{SHA: m.BranchHead(), Base: cmp.Or(m.Base, m.Start), ChangedPaths: db.NonNil(m.ChangedPaths), Lines: m.Lines}
 		case delivery.MoveRefused:
 			refused[name] = m.Error
 		case delivery.MoveStalled:
