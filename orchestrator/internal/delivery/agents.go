@@ -101,6 +101,7 @@ var (
 	unblockedTmpl              = mustTemplate("wakes/unblocked")
 	wakeNoteTmpl               = mustTemplate("wakes/note")
 	waitTmpl                   = mustTemplate("wakes/wait")
+	recoveredTmpl              = mustTemplate("wakes/recovered")
 
 	alreadyAnsweredTmpl = mustTemplate("notices/already-answered")
 	messageTmpl         = mustTemplate("notices/message")

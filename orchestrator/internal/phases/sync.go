@@ -2880,7 +2880,44 @@ func (s *Syncer) RetireCompleted(ctx context.Context) (int, error) {
 		})
 	}
 	wg.Wait()
+	if !halted.Load() {
+		errs = append(errs, s.releaseRecoveredBranches(ctx))
+	}
 	return int(retired.Load()), errors.Join(errs...)
+}
+
+// releaseRecoveredBranches deletes the branches recover_run pushed to
+// (dude/<task>/recovered-…) once their task has ended for good, as the
+// task's per-Run branches are: by releaseBranch, here with them. A task a
+// person stopped for a pick-up keeps them. Marked released whatever GitHub
+// answered, as releaseBranch is best effort.
+func (s *Syncer) releaseRecoveredBranches(ctx context.Context) error {
+	type recovered struct{ ID, Org, TaskID, Branch string }
+	var todo []recovered
+	if err := s.DB.InSystem(ctx, "recovered-branches", func(tx pgx.Tx) error {
+		// A stopped task's are left out here, not skipped after: however
+		// many it has, they never fill the batch.
+		rows, err := tx.Query(ctx, `SELECT c.id, c.organization_id, c.task_id, c.branch FROM run_recoveries c JOIN tasks t ON t.id = c.task_id
+			WHERE c.ended_at IS NOT NULL AND c.branch_released_at IS NULL AND t.status IN ('done', 'failed', 'aborted')
+			  AND NOT `+delivery.HaltedSQL("c.task_id")+`
+			ORDER BY c.ended_at LIMIT $1`, retireBatch)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[recovered])
+		return err
+	}); err != nil {
+		return err
+	}
+	var errs []error
+	for _, c := range todo {
+		s.releaseBranch(ctx, c.Org, c.TaskID, c.Branch)
+		errs = append(errs, s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE run_recoveries SET branch_released_at = now() WHERE id = $1`, c.ID)
+			return err
+		}))
+	}
+	return errors.Join(errs...)
 }
 
 // retirable (SQL, over runs r): a completed Run whose lux Run dude has not

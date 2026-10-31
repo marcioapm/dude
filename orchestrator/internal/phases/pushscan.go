@@ -299,19 +299,9 @@ func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork
 	if err != nil {
 		return nil, err
 	}
-	history, err := s.execChecked(ctx, r, historyCommand(r.BaseSHAs, trusted), "the history")
-	exit := execExit{}
-	switch {
-	case errors.As(err, &exit) && exit.code == 4:
-		return nil, errUnchecked{exit.Error()}
-	case errors.As(err, &exit) && exit.code == 5, err == nil && len(history) > historyLimit:
-		return nil, errUnchecked{fmt.Sprintf("the commits to push are over %d MiB, more than dude reads", historyLimit>>20)}
-	case err != nil:
+	history, err := s.readHistory(ctx, r, r.BaseSHAs, trusted)
+	if err != nil {
 		return nil, err
-	}
-	// Exit 0 is not enough: every repository lux would push has its section.
-	if missing := missingHistory(history, r.BaseSHAs); len(missing) > 0 {
-		return nil, errUnchecked{"no history was read for " + strings.Join(missing, ", ")}
 	}
 	var found hits
 	found.scanWork(red, work)
@@ -324,6 +314,27 @@ func (s *Syncer) scanBeforePush(ctx context.Context, r phaseRun) ([]SecretInWork
 		found.add(name, "the branch name")
 	}
 	return found, nil
+}
+
+// readHistory reads, in the Run's container, the history of each
+// repository of bases less its trusted base: errUnchecked when it cannot be
+// read whole.
+func (s *Syncer) readHistory(ctx context.Context, r phaseRun, bases, trusted map[string]string) (string, error) {
+	history, err := s.execChecked(ctx, r, historyCommand(bases, trusted), "the history")
+	exit := execExit{}
+	switch {
+	case errors.As(err, &exit) && exit.code == 4:
+		return "", errUnchecked{exit.Error()}
+	case errors.As(err, &exit) && exit.code == 5, err == nil && len(history) > historyLimit:
+		return "", errUnchecked{fmt.Sprintf("the commits to push are over %d MiB, more than dude reads", historyLimit>>20)}
+	case err != nil:
+		return "", err
+	}
+	// Exit 0 is not enough: every repository lux would push has its section.
+	if missing := missingHistory(history, bases); len(missing) > 0 {
+		return "", errUnchecked{"no history was read for " + strings.Join(missing, ", ")}
+	}
+	return history, nil
 }
 
 // execChecked runs command in the Run's container: its output, or an error

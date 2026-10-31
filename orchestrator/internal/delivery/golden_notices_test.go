@@ -95,6 +95,13 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"wait-timer", renderWaitDigest(waitEval{waitedAll: true}, "cwt_4", true, false, []waitCount{{"messages", 1}}, "check the deploy")},
 		{"wait-holds-now", renderWaitDigest(waitEval{held: 1, of: 1, waitedAll: true, items: []waitItem{
 			{Kind: "run", Who: "verifier", RunID: "run_ver", Status: "completed", Ended: true, rank: rankGood}}}, "", false, true, nil, "")},
+		{"recovered", recoveredLine(RecoveryEnd{ID: "rcv_1", RunID: "run_impl", Branch: "dude/GLD-8/recovered-run_impl", Status: RecoveryDone,
+			Results: []RecoveredRepo{{Repo: "api", Status: "pushed", Commit: headA}, {Repo: "web", Status: "rejected", Error: "the branch moved"}},
+			Dirty:   []string{"api"}})},
+		{"recovered-nothing", recoveredLine(RecoveryEnd{ID: "rcv_2", RunID: "run_impl", Branch: "dude/GLD-8/recovered-run_impl",
+			Status: RecoveryFailed, Error: "nothing committed beyond its start"})},
+		{"recovered-secret", recoveredLine(RecoveryEnd{ID: "rcv_3", RunID: "run_impl", Branch: "dude/GLD-8/recovered-run_impl",
+			Status: RecoveryRefused, Error: "its work contains the project secret IMPL_TOKEN in config/app.toml; a person must remove it"})},
 		{"stalled", goldenStall().Text(ConductorOptions(false))},
 		{"stalled-quiet", goldenQuietStall().Text(ConductorOptions(false))},
 		{"stalled-child", goldenStall().Text(ConductorOptions(true))},

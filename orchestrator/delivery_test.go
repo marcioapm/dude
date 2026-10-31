@@ -125,6 +125,8 @@ type world struct {
 	api string
 	// pump leaves conductors' publishes to a worker of the test's own.
 	noPublishes bool
+	// pump leaves recoveries to a worker of the test's own.
+	noRecoveries bool
 	// The fake GitHub's App, once a test connects one (asApp), and where
 	// the fake GitHub is.
 	ghApp atomic.Pointer[fakegithub.App]
@@ -397,6 +399,11 @@ func (w *world) pump() {
 	}
 	if !w.noPublishes {
 		if _, err := w.syncer.SettlePublishes(ctx); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+	if !w.noRecoveries {
+		if _, err := w.syncer.SettleRecoveries(ctx); err != nil {
 			w.t.Fatal(err)
 		}
 	}

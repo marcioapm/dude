@@ -373,6 +373,12 @@ const (
 	latestDelivery = ` AND w.workflow_type = '` + WorkflowType + `' ORDER BY w.created_at DESC, w.id DESC LIMIT 1`
 )
 
+// HaltedSQL (SQL) is HaltedTx of the task whose id is the expression
+// taskID.
+func HaltedSQL(taskID string) string {
+	return `COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = ` + taskID + latestDelivery + `), false)`
+}
+
 // EndWakesTx is a delivery's end for its wakes, as the task closes or
 // starts over: its pending reasons are settled, told to no conductor, and
 // its deliveries' Halt cleared, so nothing is held for a pick-up that will

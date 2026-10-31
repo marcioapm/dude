@@ -35,6 +35,7 @@ const (
 	ChildInspect    Key = "conduct.inspect"
 	RunStop         Key = "conduct.stop"
 	Wait            Key = "conduct.wait"
+	RunRecover      Key = "conduct.recover"
 	Session         Key = "session"
 	SessionName     Key = "session.name"
 	SessionAgents   Key = "session.agents"
@@ -107,6 +108,8 @@ var All = []Capability{
 		Tools: []string{"stop_run"}},
 	{Key: Wait, Description: "Declare what you are waiting on — Runs ending, a pull request's checks finishing, a time — and be woken once when it holds or the deadline passes.",
 		Tools: []string{"wait_for"}},
+	{Key: RunRecover, Description: "Push the committed work of one of the task's ended Runs, from lux's checkpoint, to a branch of its own; it moves no task branch.",
+		Tools: []string{"recover_run"}},
 	{Key: Session, Description: "Propose tasks, relations and projects to link for a member to file.",
 		Tools: []string{"propose", "relate"}},
 	{Key: SessionName, Description: "Name the session, until a member names it.",
@@ -141,7 +144,7 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, Cohorts, ChildInspect, RunStop, Wait, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, Cohorts, ChildInspect, RunStop, Wait, RunRecover, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
 	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, RunsRead,
 		PRRefresh, SettingsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,

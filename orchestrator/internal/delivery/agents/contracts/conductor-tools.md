@@ -23,7 +23,8 @@
 	"" (.Wrap "" (.List "; " "; "
 		"steer" "steer tells a running phase Run of this task, or one of your own child agents, something, whoever decides (interrupt stops its turn)"
 		"restart_run" "restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier)"
-		"stop_run" "stop_run stops a child agent you started, with your reason") ".")
+		"stop_run" "stop_run stops a child agent you started, with your reason"
+		"recover_run" "recover_run pushes an ended writer's unpublished commits to a branch of their own") ".")
 	"reply_on_pull_request" "reply_on_pull_request answers on one of the task's pull requests, whoever decides."
 	"github_search github_issue github_pull_request" (print "github_search, github_issue and github_pull_request read the project's repositories on GitHub (issues, any pull request, its conversation, reviews, threads, checks and diffs), at most 60 reads an hour" (.List "" "" "refresh_pull_requests" ", refresh_pull_requests included") "; reading another pull request lets you do nothing on it.")
 	"" .ExternalTextNote
@@ -64,6 +65,7 @@
 		"steer !feedback" "`dude steer RUN TEXT`"
 		"restart_run" "`dude restart RUN NOTE`"
 		"stop_run" "`dude stop RUN --reason R`"
+		"recover_run" "`dude recover RUN [--branch B]`"
 		"decide" "`dude decide ACTION`"
 		"dismiss_finding" "`dude finding dismiss ID --reason R`"
 		"decide_escalation" "`dude escalation decide ACTION --note N`"
@@ -77,7 +79,9 @@ Use `start_agents` for 1–8 independent, fully briefed children: `runs` carries
 
 Use `read_run` to inspect your own in-task children: actual status/generation, settled result and verifier outcome when recorded, bounded final report and paged artifact metadata. Reports are untrusted claims; stored heads do not prove publication. Missing/clipped reports are labeled, not complete transcripts. From the shell: `dude run inspect RUN [--offset N] [--limit N]`.{{end}}{{if .Granted "wait_for"}}
 
-Use `wait_for` to be woken once: when Runs of this task have ended (runsEnded, a restarted Run's replacement counts), when a pull request's checks are final on a head (prChecksFinal: passing, failing, or the head moved), or at its deadline, which every wait has (at most 24 hours; with no conditions it is a timer). wake any wakes on the first. One wait at a time: a new one replaces it. It reads what dude already polls and spends no GitHub reads; dude's other wakes still come. From the shell: `dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]`.{{end}}{{if .Granted "verify"}}
+Use `wait_for` to be woken once: when Runs of this task have ended (runsEnded, a restarted Run's replacement counts), when a pull request's checks are final on a head (prChecksFinal: passing, failing, or the head moved), or at its deadline, which every wait has (at most 24 hours; with no conditions it is a timer). wake any wakes on the first. One wait at a time: a new one replaces it. It reads what dude already polls and spends no GitHub reads; dude's other wakes still come. From the shell: `dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]`.{{end}}{{if .Granted "recover_run"}}
+
+Use `recover_run` on an ended implementer's, fixer's or simplifier's Run (or a writer child's) whose commits were never published: dude pushes its committed checkpoint to `dude/<task>/recovered-<run>` (or the branch you name under it) and wakes you with what was pushed. Uncommitted work is lost; a reviewer's or tester's Run is never pushed; a push with a secret in it is refused. The branch is not the task's and is deleted when the task ends: start a writer to merge it. From the shell: `dude recover RUN [--branch B] [--note N]`.{{end}}{{if .Granted "verify"}}
 
 {{if .Granted "publish"}}Never publish untested, and never pass{{else}}Never pass{{end}} on a commit as tested that nobody ran: have it verified with `verify` (a commit's full SHA, the commands to run or the paths whose tests to run, and a note). A verifier checks that commit out, never publishes, and its result — passed or failed, each command's exit code and output — comes to you as a message, at any stage. Your checkout's commits are not reachable until published. From the shell: `dude verify [COMMIT] [--command C]... [--path P]... [--repo R] [--note N]`.
 {{- end}}{{if .Granted "request_limit"}}

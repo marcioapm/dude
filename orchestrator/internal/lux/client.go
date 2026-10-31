@@ -267,6 +267,8 @@ type Spec struct {
 	Resources *Resources `json:"resources,omitempty"`
 	// Where it may run; nil is the tenant's default pool.
 	Placement *PlacementSpec `json:"placement,omitempty"`
+	// "never": lux does not resume it on its own (a short publisher Run).
+	ResumePolicy string `json:"resumePolicy,omitempty"`
 }
 
 // Resources is a Run's size. Memory and disk are bytes, which lux takes as
@@ -461,14 +463,38 @@ type Git struct {
 }
 
 type Repository struct {
-	Name       string `json:"name"`
-	URL        string `json:"url"`
+	Name string `json:"name"`
+	// Empty for a repository cloned From a checkpoint: lux knows its URL.
+	URL        string `json:"url,omitempty"`
 	Ref        string `json:"ref,omitempty"`
 	Credential string `json:"credential,omitempty"`
 	Path       string `json:"path,omitempty"`
 	// false: cloned, never pushed (lux reports it "skipped"). Nil is lux's
 	// default, true.
 	Push *bool `json:"push,omitempty"`
+	// Cloned from another Run's checkpoint of a repository, at its head,
+	// rather than from URL and Ref.
+	From *RepositoryFrom `json:"from,omitempty"`
+}
+
+// RepositoryFrom names a checkpoint to clone: the lux Run that left it,
+// which may have ended for good, and its repository's name in that Run.
+type RepositoryFrom struct {
+	Run  string `json:"run"`
+	Repo string `json:"repo"`
+}
+
+// Checkpoint is what lux kept of one repository of a Run's checkout when a
+// placement ended (GET /v1/runs/{id}/checkpoints): its committed HEAD,
+// whether that is uploaded (only then can a Run be cloned from it), whether
+// the checkout had uncommitted work then (never kept), and the branch it
+// was on. It outlives the Run's terminate.
+type Checkpoint struct {
+	Repo     string `json:"repo"`
+	Head     string `json:"head"`
+	Uploaded bool   `json:"uploaded"`
+	Dirty    bool   `json:"dirty"`
+	Branch   string `json:"branch,omitempty"`
 }
 
 type Push struct {
@@ -714,6 +740,10 @@ type Client interface {
 
 	// Cost is what lux's cost plugins have priced for a Run so far.
 	Cost(ctx context.Context, runID string) (RunCost, error)
+
+	// Checkpoints are what lux kept of a Run's checkouts, one per
+	// repository, a Run that has ended for good included.
+	Checkpoints(ctx context.Context, runID string) ([]Checkpoint, error)
 
 	// Pools are the pools dude's key can place Runs in.
 	Pools(ctx context.Context) ([]Pool, error)
@@ -999,6 +1029,15 @@ func (c *HTTPClient) Cost(ctx context.Context, runID string) (RunCost, error) {
 	var out RunCost
 	err := c.do(ctx, "GET", "/v1/runs/"+url.PathEscape(runID)+"/cost", nil, nil, &out)
 	return out, err
+}
+
+// Checkpoints reads GET /v1/runs/{id}/checkpoints: {"checkpoints": [...]}.
+func (c *HTTPClient) Checkpoints(ctx context.Context, runID string) ([]Checkpoint, error) {
+	var out struct {
+		Checkpoints []Checkpoint `json:"checkpoints"`
+	}
+	err := c.do(ctx, "GET", "/v1/runs/"+url.PathEscape(runID)+"/checkpoints", nil, nil, &out)
+	return out.Checkpoints, err
 }
 
 // Pools reads GET /v1/pools. The key's `run` scope includes `read`.

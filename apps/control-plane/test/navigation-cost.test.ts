@@ -134,3 +134,34 @@ test("an epic with no agent Runs yet is not lux's", async () => {
   await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, epic_id) VALUES ('wi_3', ${ORG}, ${PROJECT}, 3, 'New', 'epc_new')`;
   expect((await get<MetricsCost>("/v1/epics/epc_new/metrics")).cost.origin).toEqual(NOT_LUX);
 });
+
+test("a recovery's publisher costs its Run and its task what lux priced it, settled only once it is", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_4', ${ORG}, ${PROJECT}, 4, 'Recovered')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, lux_ai_usd, lux_compute_usd, lux_cost_status)
+              VALUES ('run_dead', ${ORG}, ${PROJECT}, 'wi_4', 1, 1.25, 0.5, 'final')`;
+  type Task = { costUsd: number; cost: { tokensUsd: number; machineUsd: number; origin?: unknown };
+    runs: Array<{ id: string; cost: { tokensUsd: number; machineUsd: number; origin?: unknown } }> };
+  const figures = async () => {
+    const nav = await get<{ projects: Array<{ tasks: Array<{ id: string; costUsd: number }> }> }>("/v1/navigation");
+    const task = await get<Task>("/v1/tasks/wi_4/metrics");
+    return { board: nav.projects[0]!.tasks.find((t) => t.id === "wi_4")!.costUsd, task, run: task.runs.find((r) => r.id === "run_dead")! };
+  };
+  const before = await figures();
+  expect(before.board).toBeCloseTo(1.25, 9);
+  expect(before.run.cost.machineUsd).toBeCloseTo(0.5, 9);
+
+  // Priced, not yet final: its amounts count, and the Run is no longer settled.
+  await owner`INSERT INTO run_recoveries (id, organization_id, task_id, run_id, branch, status, publisher_lux_run_id,
+                lux_ai_usd, lux_compute_usd, lux_cost_status)
+              VALUES ('rcv_nav', ${ORG}, 'wi_4', 'run_dead', 'dude/wi_4/recovered-run_dead', 'done', 'lux_pub', 0.000123, 0.0125, 'pending')`;
+  const pending = await figures();
+  expect(pending.board - before.board).toBeCloseTo(0.000123, 9);
+  expect(pending.task.costUsd - before.task.costUsd).toBeCloseTo(0.000123, 9);
+  expect(pending.run.cost.tokensUsd - before.run.cost.tokensUsd).toBeCloseTo(0.000123, 9);
+  expect(pending.run.cost.machineUsd - before.run.cost.machineUsd).toBeCloseTo(0.0125, 9);
+  expect(pending.task.cost.machineUsd - before.task.cost.machineUsd).toBeCloseTo(0.0125, 9);
+  expect(pending.run.cost.origin).toEqual({ tokens: "lux", machine: "lux", settled: false });
+
+  await owner`UPDATE run_recoveries SET lux_cost_status = 'final' WHERE id = 'rcv_nav'`;
+  expect((await figures()).run.cost.origin).toEqual({ tokens: "lux", machine: "lux", settled: true });
+});

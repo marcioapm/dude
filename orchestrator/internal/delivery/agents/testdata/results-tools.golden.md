@@ -42,6 +42,22 @@ The new Run starts fresh from the task's head in the same slot; the delivery wai
 
 Its result comes back to you as aborted, or with its cohort's digest; its uncommitted work is lost.
 
+## recover-run
+
+You are woken when its commits are on the branch, or why not. Uncommitted work is never recovered; the branch is not the task's: start a writer to merge it.
+
+## recover-run-ended-failed
+
+This recovery has already ended, failed: lux kept no checkpoint of its checkouts; how it ended reaches you once, by its own wake, if it has not already. It pushed nothing: to try again, ask with another branch under dude/wi_1/recovered-.
+
+## recover-run-ended-done
+
+This recovery has already ended, done; how it ended reaches you once, by its own wake, if it has not already. Its commits are on the branch; the branch is not the task's: start a writer to merge it.
+
+## recover-run-ended-refused
+
+This recovery has already ended, refused: its work contains the project secret API_TOKEN in config/app.toml; a person must remove it; how it ended reaches you once, by its own wake, if it has not already. It pushed nothing: a person must remove the secret from the Run's commits; recover_run refuses this Run until then.
+
 ## wait-for
 
 End your turn now; you are woken once, when it holds or at 2026-10-30T14:45:00Z. dude's own wakes (decisions, escalations, child results) still come as they do; a new wait_for replaces this one.
