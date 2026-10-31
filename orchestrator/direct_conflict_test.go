@@ -1,6 +1,8 @@
 package orchestrator_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -29,10 +31,18 @@ func TestDirectAConflictWakesTheConductorWithAMessageNotAnIntegration(t *testing
 	w.conflictWithMovedBase()
 	w.until("the conflict to decide on", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
 	w.wokenWith(task, "conflicts with main")
+	branch := w.gh.Pull(1).Head
+	// The fact, whole: which pull request, the base and its head, the
+	// head it shows, and the three ways on.
+	want := fmt.Sprintf("Decision waiting: pull request feedback. The pull request target#1 conflicts with main (at %s); it shows %s. "+
+		"Decide to have an integration fixer merge main into it, start a fix with your own note, or wait.",
+		w.gh.SHA("main")[:7], w.gh.SHA(branch)[:7])
+	if got := w.ids(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'decision' ORDER BY created_at DESC LIMIT 1`, task); len(got) != 1 || got[0] != want {
+		t.Errorf("the conductor's fact:\n got %q\nwant %q", got, want)
+	}
 	if n := w.count(integrationRuns, task); n != 0 {
 		t.Fatalf("%d integration Runs before the conductor decided", n)
 	}
-	branch := w.gh.Pull(1).Head
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("the integration on the pull request", func() bool {
 		w.sync()
@@ -136,8 +146,13 @@ func TestDirectAConflictStillThereAfterTheIntegrationEscalatesOnce(t *testing.T)
 	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
 	w.until("the integration escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
 	raw, _ := w.escalationOf(wi)
-	if !strings.Contains(string(raw), `"cause": "pair_attempted"`) && !strings.Contains(string(raw), `"cause": "still_conflicting"`) {
-		t.Errorf("escalation %s", raw)
+	var detail struct {
+		Detail struct {
+			Cause string `json:"cause"`
+		} `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &detail); err != nil || detail.Detail.Cause != "pair_attempted" {
+		t.Errorf("escalation %s, want cause pair_attempted", raw)
 	}
 	w.syncRounds(5)
 	if n := w.count(integrationRuns, wi); n != 1 {

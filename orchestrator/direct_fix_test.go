@@ -39,6 +39,12 @@ func (w *prFixWorld) waiting() bool {
 // again once, and nothing goes to a candidate branch.
 func TestDirectAPullRequestFixLandsOnThePullRequestThenIsReviewedOverItsRange(t *testing.T) {
 	w := newPRFixWorldDirect(t)
+	// A candidate branch left from before (I-5): a direct delivery neither
+	// writes nor deletes one.
+	leftover := w.gh.Branch(delivery.CandidateBranch(w.wi, 1), w.branch, "A candidate from before")
+	if leftover == "" {
+		t.Fatal("making the leftover candidate branch failed")
+	}
 	w.askingFor("jerv")
 	w.gh.Review(1, "jerv", "COMMENTED")
 	w.comment("Please rename the greeting.")
@@ -69,8 +75,8 @@ func TestDirectAPullRequestFixLandsOnThePullRequestThenIsReviewedOverItsRange(t 
 		AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb)`, w.wi); n != 0 {
 		t.Errorf("%d simplifier or tester Runs after the pull request's fix", n)
 	}
-	if w.candidate() != "" || slices.ContainsFunc(w.gh.BranchLog(delivery.CandidateBranch(w.wi, 1)), func(string) bool { return true }) {
-		t.Errorf("a candidate branch was written")
+	if w.candidate() != leftover || len(w.gh.BranchLog(delivery.CandidateBranch(w.wi, 1))) != 0 {
+		t.Errorf("the candidate branch was written or deleted: at %q, was %s", w.candidate(), leftover)
 	}
 	if events := w.rerequests(w.wi); len(events) != 1 || events[0]["head"] != fixHead {
 		t.Errorf("re-requests %v, want one at %s", events, fixHead)
