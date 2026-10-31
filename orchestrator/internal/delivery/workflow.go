@@ -3323,6 +3323,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			if err := w.s.AcceptFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
 				return workflow.Result{}, err
 			}
+			// Matters for a head a conductor's publish left while this waited.
 			if err := w.acceptHeads(ctx, sc, st); err != nil {
 				return workflow.Result{}, err
 			}
