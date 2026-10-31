@@ -51,11 +51,20 @@ type findingOut struct {
 	Settled    string `json:"settled"`
 	RaisedBy   string `json:"raisedBy,omitempty"`
 	ResolvedBy string `json:"resolvedBy,omitempty"`
+	// What the reviewer said of its evidence; absent when it said nothing
+	// (a finding from before it was asked). Unverified: at medium or above
+	// and missing some of it, its severity unchanged.
+	EvidenceKind string `json:"evidenceKind,omitempty"`
+	Trivial      *bool  `json:"trivial,omitempty"`
+	Introduced   *bool  `json:"introduced,omitempty"`
+	Unverified   bool   `json:"unverified,omitempty"`
 	// With ids only.
 	Title          string `json:"title,omitempty"`
 	Description    string `json:"description,omitempty"`
 	SuggestedFix   string `json:"suggestedFix,omitempty"`
 	Acceptance     string `json:"acceptance,omitempty"`
+	Scenario       string `json:"scenario,omitempty"`
+	Evidence       string `json:"evidence,omitempty"`
 	ResolutionNote string `json:"resolutionNote,omitempty"`
 }
 
@@ -81,9 +90,11 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, category || COALESCE(' · ' || topic, ''), COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0),
 			status::text, fix_attempts, COALESCE(run_id, ''), COALESCE(resolved_by_run_id, ''), COALESCE(resolution_note, ''),
 			CASE WHEN $2 THEN title ELSE '' END, CASE WHEN $2 THEN description ELSE '' END,
-			CASE WHEN $2 THEN suggested_fix ELSE '' END, CASE WHEN $2 THEN COALESCE(acceptance, '') ELSE '' END
+			CASE WHEN $2 THEN suggested_fix ELSE '' END, CASE WHEN $2 THEN COALESCE(acceptance, '') ELSE '' END,
+			COALESCE(evidence_kind, ''), trivial, introduced, unverified,
+			CASE WHEN $2 THEN COALESCE(scenario, '') ELSE '' END, CASE WHEN $2 THEN COALESCE(evidence, '') ELSE '' END
 		FROM review_findings WHERE task_id = $1 AND (NOT $2 OR id = ANY ($3))
-		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), created_at
+		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), unverified, created_at
 		LIMIT $4`, c.TaskID, full, ids, findingsMax)
 	if err != nil {
 		return nil, err
@@ -94,7 +105,8 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 		var file, note string
 		var line, attempts int
 		if err := rows.Scan(&f.ID, &f.Severity, &f.Category, &f.Repo, &file, &line, &f.Status, &attempts, &f.RaisedBy, &f.ResolvedBy,
-			&note, &f.Title, &f.Description, &f.SuggestedFix, &f.Acceptance); err != nil {
+			&note, &f.Title, &f.Description, &f.SuggestedFix, &f.Acceptance,
+			&f.EvidenceKind, &f.Trivial, &f.Introduced, &f.Unverified, &f.Scenario, &f.Evidence); err != nil {
 			return nil, err
 		}
 		if full {

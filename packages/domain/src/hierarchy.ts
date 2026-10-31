@@ -967,6 +967,14 @@ export const findingSchema = z.object({
   /** The Run whose judgement closed it, when a re-review did. */
   resolvedByRunId: z.string().nullable().default(null),
   fixAttempts: z.number().int(),
+  /** What the reviewer said of its evidence; null when it said nothing (a finding from before it was asked). */
+  trivial: z.boolean().nullish(),
+  introduced: z.boolean().nullish(),
+  evidenceKind: z.enum(["failing_test", "mutation", "command", "query_plan", "trace"]).nullish(),
+  evidence: z.string().nullish(),
+  scenario: z.string().nullish(),
+  /** At medium or above and missing some of its evidence; its severity stands. */
+  unverified: z.boolean().optional(),
   createdAt: z.string(),
 });
 export type Finding = z.infer<typeof findingSchema>;

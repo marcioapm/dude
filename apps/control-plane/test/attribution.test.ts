@@ -3,7 +3,7 @@ import { SQL } from "bun";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { actorTypeSchema, type PromptHistory, type SettingsResponse } from "@dude/domain";
+import { actorTypeSchema, findingSchema, type Finding, type PromptHistory, type SettingsResponse } from "@dude/domain";
 import { createApiKey, type Principal } from "../src/api/auth.ts";
 import { Router } from "../src/api/router.ts";
 import { registerProjectRoutes } from "../src/api/routes/projects.ts";
@@ -237,4 +237,19 @@ test("a finding is listed with its acceptance criterion, null when the reviewer 
            (${`${task}_without`}, ${org}, ${task}, 'correctness', 'low', 'Without', NULL)`;
   const { findings } = await (await call("person", "GET", `/v1/findings?taskId=${task}`)).json() as { findings: Array<{ title: string; acceptance: string | null }> };
   expect(findings.map((f) => [f.title, f.acceptance])).toEqual([["With", "Totals match to the cent."], ["Without", null]]);
+});
+
+test("a finding is listed with what its reviewer said of its evidence, and whether it is unverified", async () => {
+  const project = await (await call("person", "POST", "/v1/projects", { name: "evidence", slug: "evidence" })).json() as { id: string };
+  const task = `${project.id}_task`;
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES (${task}, ${org}, ${project.id}, 1, 'Task')`;
+  await owner`INSERT INTO review_findings (id, organization_id, task_id, category, severity, title, trivial, introduced, evidence_kind, evidence, scenario, unverified)
+    VALUES (${`${task}_said`}, ${org}, ${task}, 'correctness', 'medium', 'Said', false, true, 'command', 'curl /x: 500', 'GET /x empty', false),
+           (${`${task}_unsaid`}, ${org}, ${task}, 'correctness', 'high', 'Unsaid', NULL, NULL, NULL, NULL, NULL, true)`;
+  const { findings } = await (await call("person", "GET", `/v1/findings?taskId=${task}`)).json() as { findings: Finding[] };
+  const parsed = findings.map((f) => findingSchema.parse(f)).sort((a, b) => a.title.localeCompare(b.title));
+  expect(parsed.map((f) => [f.title, f.trivial, f.introduced, f.evidenceKind, f.evidence, f.scenario, f.unverified])).toEqual([
+    ["Said", false, true, "command", "curl /x: 500", "GET /x empty", false],
+    ["Unsaid", null, null, null, null, null, true],
+  ]);
 });
