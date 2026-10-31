@@ -444,3 +444,14 @@ func TestDirectNoBaseMergeIsAskedDuringAFixLoop(t *testing.T) {
 		t.Fatalf("the delivery is waiting already\n%s", w.describeRuns())
 	}
 }
+
+// The factory's delivery defaults, which the settings pages show for a key
+// no layer sets, say direct fixes and a narrow loop of 2.
+func TestTheFactoryDefaultsSayDirectFixes(t *testing.T) {
+	w := newWorld(t)
+	status, body := w.get("/internal/delivery-defaults", w.org)
+	var p delivery.Policy
+	if status != 200 || json.Unmarshal([]byte(body), &p) != nil || p.PullRequestFixes != delivery.PullRequestFixesDirect || p.MaxPRFixReviewIterations != 2 {
+		t.Errorf("delivery defaults %d: %s", status, body)
+	}
+}

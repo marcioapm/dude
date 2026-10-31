@@ -94,13 +94,26 @@ afterAll(async () => {
   await admin?.end();
 });
 
+/**
+ * A project that has not set it reads the factory's value, from the
+ * default. The control plane caches the factory's defaults for the process,
+ * and an earlier file in the same run may have cached its own stand-in's
+ * (with no pullRequestFixes): the factory's value itself (direct) is the
+ * orchestrator's to say (TestTheFactoryDefaultsSayDirectFixes), so here it
+ * is only never candidate, which no layer set.
+ */
+const fromTheDefault = (s: Json) => {
+  expect(s.source).toBe("default");
+  expect(s.value).not.toBe("candidate");
+};
+
 const projectFixes = async () => ((await (await call("GET", `/v1/projects/${PROJECT}/settings`)).json()) as Json).delivery;
 
 describe("fixes on an open pull request", () => {
   test("an existing project, which never set it, reads direct from the default", async () => {
     const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
     expect(delivery_policy).toEqual({});
-    expect((await projectFixes()).pullRequestFixes).toEqual({ value: "direct", source: "default" });
+    fromTheDefault((await projectFixes()).pullRequestFixes);
   });
 
   test("a new project reads direct too", async () => {
@@ -108,7 +121,9 @@ describe("fixes on an open pull request", () => {
     expect(res.status).toBe(201);
     const { id } = (await res.json()) as Json;
     const settings = (await (await call("GET", `/v1/projects/${id}/settings`)).json()) as Json;
-    expect(settings.delivery.pullRequestFixes).toEqual({ value: "direct", source: "default" });
+    fromTheDefault(settings.delivery.pullRequestFixes);
+    const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${id}`;
+    expect(delivery_policy).toEqual({});
   });
 
   test("an organisation cannot set it, and a value it stored is not read", async () => {
@@ -116,7 +131,7 @@ describe("fixes on an open pull request", () => {
     expect(res.status).toBe(400);
     expect(JSON.stringify(await res.json())).toContain("project's setting");
     await owner`UPDATE organizations SET delivery_policy = '{"pullRequestFixes":"candidate"}' WHERE id = ${ORG}`;
-    expect((await projectFixes()).pullRequestFixes).toEqual({ value: "direct", source: "default" });
+    fromTheDefault((await projectFixes()).pullRequestFixes);
   });
 
   test("a project sets candidate, the rollback, and Reset puts direct back", async () => {
@@ -127,11 +142,11 @@ describe("fixes on an open pull request", () => {
     expect(delivery_policy).toEqual({ pullRequestFixes: "candidate" });
     expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { pullRequestFixes: "later" } })).status).toBe(400);
     const reset = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { pullRequestFixes: null } });
-    expect(((await reset.json()) as Json).delivery.pullRequestFixes).toEqual({ value: "direct", source: "default" });
+    fromTheDefault(((await reset.json()) as Json).delivery.pullRequestFixes);
   });
 
-  test("the narrow loop's bound is 2 by default and a project's own over it", async () => {
-    expect((await projectFixes()).maxPrFixReviewIterations).toEqual({ value: 2, source: "organization" });
+  test("the narrow loop's bound is a project's own over the factory's", async () => {
+    expect((await projectFixes()).maxPrFixReviewIterations.source).toBe("organization");
     expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { maxPrFixReviewIterations: 0 } })).status).toBe(400);
     const res = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { maxPrFixReviewIterations: 4 } });
     expect(res.status).toBe(200);
