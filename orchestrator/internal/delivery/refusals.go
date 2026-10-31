@@ -69,6 +69,7 @@ const (
 	rYourCheckoutHasNoRepositoryYou         = "your checkout has no repository you may change: nothing can be published"
 	rPublishYoursUnderWayYouAre             = "a publish of yours is under way: you are woken when it is done"
 	rPullRequestOpenOnBranch                = "a pull request is open on this branch, so changes reach it only after review on a candidate: use start_phase fix with a note saying what to change"
+	rPullRequestPushUnreviewed              = "the pull request in %s shows %s, which dude pushed and no review has covered yet: nothing more goes to it until one has. Use start_phase review first"
 	rEscalationWasJustDecidedAskNothing     = "the escalation (%s) was just decided %s: %s. Ask nothing about it; the delivery carries it out, and you are woken at the next decision"
 	rActionsAreForQuestionAboutEscalation   = "actions are for a question about an escalation waiting on a person; there is none"
 	rTaskEscalationWaitsOnPersonAsk         = "the task's escalation waits on a person: ask its one question first (question, choices and actions, each one of %s), not %d questions; ask the rest once it is decided"
