@@ -1,10 +1,12 @@
 package orchestrator_test
 
 import (
+	"fmt"
 	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -211,4 +213,64 @@ func TestDirectAnUnreviewedPushWithNoBaseOnRecordIsReviewedOverARange(t *testing
 		AND pr_feedback <> '[]'::jsonb ORDER BY created_at DESC LIMIT 1`, e.task); len(got) != 1 || got[0] != "NOTE-LATER" {
 		t.Errorf("the later fix was told %q\n%s", got, e.describeRuns())
 	}
+}
+
+// A direct fix's narrow review keeps judging its blocking finding still
+// until the loop escalates not_converging, and a person accepts going on:
+// the conductor's publish reaches the pull request (the escalated head is
+// the last round's, which reviewed it); that publish is a new unreviewed
+// push of dude's, so the next is refused again.
+func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCountsAsItsReview(t *testing.T) {
+	e := conductedDirect(t)
+	setPolicy(e.world, e.task, `{"maxAttemptsPerFinding":4,"maxStillRounds":2,"maxPrFixReviewIterations":9}`)
+	var armed atomic.Bool
+	var reviews atomic.Int32
+	scripted := e.lux.Decide
+	e.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if !armed.Load() {
+			return scripted(spec)
+		}
+		switch labels["dude.phase"] {
+		case "review":
+			if reviews.Add(1) == 1 {
+				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+		case "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work", Checks: fakeagent.NoChecks}
+		}
+		return scripted(spec)
+	}
+	e.feedbackToDecide()
+	armed.Store(true)
+	e.must(e.task, "decide", `{"action":"next"}`)
+	e.until("the narrow loop not converging", func() bool {
+		e.sync()
+		return e.escalationReason(e.task) == delivery.ReasonNotConverging
+	})
+	fixed := e.gh.SHA(e.branch)
+	ana := e.person("Ana")
+	e.assignOwner(e.task, ana)
+	if code, body := e.decide(ana, e.task, "accept", "The record file is this pull request's own convention."); code != 200 {
+		t.Fatalf("accept: %d %v", code, body)
+	}
+	e.until("waiting on the pull request again", func() bool { e.sync(); return e.waitingOnPR(e.task) })
+	if e.gh.SHA(e.branch) != fixed {
+		t.Fatalf("the branch moved past the accepted head\n%s", e.describeRuns())
+	}
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nfixed by the conductor\n"})
+	id := e.publish()
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("publish after the person's accept %s: %s", status, why)
+	}
+	moved := e.gh.SHA(e.branch)
+	e.until("the pull request read at the publish", func() bool {
+		e.sync()
+		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, moved) == 1
+	})
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nfixed again\n"})
+	e.refused(e.task, "publish", `{"message":"another"}`, unreviewedWords)
 }
