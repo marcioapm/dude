@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -53,5 +54,45 @@ func TestAConductedLoopFixesAMediumFindingThePolicyLoopShips(t *testing.T) {
 				t.Errorf("after the round: %s, want %s\n%s", got, c.next, w.describeRuns())
 			}
 		})
+	}
+}
+
+// A delivery that had a conductor keeps its fix bar when the person lets
+// Deliver finish it: a medium the next round still finds gets another fix
+// round, as it would have conducted, rather than shipping.
+func TestAHandedBackDeliveryKeepsTheConductedFixBar(t *testing.T) {
+	w := conducting(t)
+	scripted := w.lux.Decide
+	reviews := 0
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			switch reviews++; reviews {
+			case 1:
+				return fakelux.Behaviour{Reply: "```yaml\nseverity: medium\ncategory: correctness\nfile: FACTORY.md\nline: 1\n" +
+					"title: FACTORY.md says the wrong thing\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n```\n"}
+			case 2:
+				return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
+		case "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "fix"}
+		}
+		return scripted(spec)
+	}
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+		t.Fatalf("hand back: %d %v", status, out)
+	}
+	w.until("the round after the first fix", func() bool {
+		return w.phaseRuns(task, "fix") >= 2 || w.phaseRuns(task, "simplify") > 0 || w.taskStatus(task) == "awaiting_input"
+	})
+	if n := w.phaseRuns(task, "fix"); n < 2 {
+		t.Errorf("handed back, the still-open medium got %d fix rounds, want a second\n%s", n, w.describeRuns())
 	}
 }

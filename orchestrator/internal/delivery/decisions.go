@@ -102,8 +102,9 @@ func (st *State) conducted() bool { return st.Decider == DeciderConductor }
 
 // ConductedLoop says the review loop is the conductor's: the conductor
 // decides the delivery now. A delivery that was in flight before the
-// conducted loop existed gets it on its next round too.
-func (st *State) ConductedLoop() bool { return st.conducted() }
+// conducted loop existed gets it on its next round too. One handed back to
+// Deliver keeps it: the fix bar it had does not drop with the conductor.
+func (st *State) ConductedLoop() bool { return st.conducted() || st.HandedBack }
 
 // Phases is what the conductor may start at a decision point.
 func (d *Pending) Phases() []string {
