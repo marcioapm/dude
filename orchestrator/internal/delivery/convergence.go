@@ -75,7 +75,10 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 		COALESCE(array_agg(raised_open ORDER BY raised_open) FILTER (WHERE raised_open IS NOT NULL), '{}')
 	FROM facts GROUP BY id HAVING count(fix) > 0
 	ORDER BY max(fix_at), max(fix), max(review_at), id`,
-		st.TaskID, st.Attempt, st.ConvergenceFrom, rangeJSON, st.Policy.BlockingSeverities, candidateBranch)
+		// $5 is the loop's fix bar by severity (fixBar). A low marked
+		// trivial blocks a conducted loop but is not counted here: a
+		// trivial low is no regression worth escalating on.
+		st.TaskID, st.Attempt, st.ConvergenceFrom, rangeJSON, fixBar(st), candidateBranch)
 	if err != nil {
 		return Convergence{}, err
 	}

@@ -96,3 +96,49 @@ func TestAHandedBackDeliveryKeepsTheConductedFixBar(t *testing.T) {
 		t.Errorf("handed back, the still-open medium got %d fix rounds, want a second\n%s", n, w.describeRuns())
 	}
 }
+
+// A conducted loop counts a fix-caused medium as a regression, as a Deliver
+// delivery whose policy blocks on medium does: two fix rounds that each fix
+// a medium and raise another escalate not_converging, rather than burning
+// the loop's rounds.
+func TestAConductedLoopCountsAMediumRegression(t *testing.T) {
+	w := conducting(t)
+	scripted := w.lux.Decide
+	reviews := 0
+	medium := func(title, caused string) string {
+		return "severity: medium\ncategory: correctness\nfile: FACTORY.md\nline: 1\ntitle: " + title +
+			"\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n" + caused
+	}
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			if reviews++; reviews == 1 {
+				return fakelux.Behaviour{Reply: "```yaml\n" + medium("Original defect", "") + "```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n---\n" +
+				medium(fmt.Sprintf("Regression %d", reviews-1), "caused_by_fix: yes\n") + "```\n"}
+		case "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "fix"}
+		}
+		return scripted(spec)
+	}
+	task := w.task()
+	w.talk(task)
+	setPolicy(w, task, `{"maxAttemptsPerFinding":4,"maxReviewIterations":9,"maxRegressionRounds":2}`)
+	w.implemented(task)
+	w.carriedOut(task, "decide", `{"action":"next"}`)
+	for round := 1; round <= 2; round++ {
+		w.until(fmt.Sprintf("round %d reviewed", round), func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+		w.carriedOut(task, "start_phase", `{"phase":"fix"}`)
+		w.until(fmt.Sprintf("fix %d done", round), func() bool { return w.decisionAt(task) == delivery.PointFixed })
+		w.carriedOut(task, "decide", `{"action":"next"}`)
+	}
+	w.until("not converging, or round 3 reviewed", func() bool {
+		return w.escalationReason(task) != "" || w.decisionAt(task) == delivery.PointReviewed
+	})
+	if got := w.escalationReason(task); got != delivery.ReasonNotConverging {
+		t.Fatalf("after two medium regressions: escalation %q, decision at %q; want %s\n%s",
+			got, w.decisionAt(task), delivery.ReasonNotConverging, w.describeRuns())
+	}
+}

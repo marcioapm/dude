@@ -108,14 +108,28 @@ type Policy struct {
 // every finding at medium or above, and a low marked trivial (atFixBar).
 var conductorFixSeverities = []string{"blocking", "high", "medium"}
 
-// atFixBar is the loop's policy and findings as the conductor's fix bar
-// weighs them: what blocks is every finding at medium or above, and every
-// low one marked trivial, whatever BlockingSeverities says. Until the
-// conductor runs the loop itself, the policy's Exit routes it, and a
-// conducted round's reviewers rate a wrong outcome medium (contracts/
-// review.md): without the bar such a finding would ship.
-func atFixBar(p Policy, findings []FindingState) (Policy, []FindingState) {
-	p.BlockingSeverities = conductorFixSeverities
+// fixBar is the severities st's review loop blocks on: the conductor's
+// fix bar in a conducted loop (ConductedLoop), BlockingSeverities
+// otherwise. Where findings are weighed one by one, atFixBar adds the
+// trivial-low rule.
+func fixBar(st *State) []string {
+	if st.ConductedLoop() {
+		return conductorFixSeverities
+	}
+	return st.Policy.BlockingSeverities
+}
+
+// atFixBar is the loop's policy and findings as st's fix bar (fixBar)
+// weighs them. In a conducted loop what blocks is every finding at medium
+// or above, and every low one marked trivial, whatever BlockingSeverities
+// says. Until the conductor runs the loop itself, the policy's Exit routes
+// it, and a conducted round's reviewers rate a wrong outcome medium
+// (contracts/review.md): without the bar such a finding would ship.
+func atFixBar(st *State, p Policy, findings []FindingState) (Policy, []FindingState) {
+	p.BlockingSeverities = fixBar(st)
+	if !st.ConductedLoop() {
+		return p, findings
+	}
 	out := slices.Clone(findings)
 	for i, f := range out {
 		if !f.Human && f.Severity == "low" && f.Trivial {
