@@ -2508,6 +2508,8 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 			// a range from the last round's head would carry the base's
 			// commits as the round's change. The whole branch instead.
 			delete(st.RoundHeads, p.Repo)
+			// A retried reviewer's round would keep its heads from before.
+			delete(st.ReviewingHeads, p.Repo)
 		}
 	}
 	files := 0

@@ -461,6 +461,63 @@ func TestABaseMergeBetweenRoundsIsNotTheNextRoundsChange(t *testing.T) {
 	}
 }
 
+// A lens of round 1 fails on the open pull request, a person's Update
+// branch merges main into it, and a person retries the lens: the retry
+// starts from GitHub's head (the merge), so round 2 is the whole branch or
+// starts at the merge — never fix_round from the heads before the merge,
+// which would carry main's commits as the round's change.
+func TestARetriedLensAfterAnUpdateBranchDoesNotNarrowOverMain(t *testing.T) {
+	w := conducting(t)
+	ctx := context.Background()
+	scripted := w.lux.Decide
+	var crashed atomic.Bool
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "review" {
+			var category string
+			var round int
+			_ = w.owner.QueryRow(ctx, `SELECT COALESCE(category, ''), COALESCE(review_round, 0) FROM runs WHERE id = $1`,
+				fmt.Sprint(labels["dude.run"])).Scan(&category, &round)
+			if round == 1 && category == "security" && crashed.CompareAndSwap(false, true) {
+				return fakelux.Behaviour{Crash: true}
+			}
+		}
+		return scripted(spec)
+	}
+	task := w.prOpen(w.task(), prAt{})
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness","security"]}`)
+	w.until("the failed reviewer escalated", func() bool { return w.escalationReason(task) == "review_failed" })
+	branch := w.gh.Pull(1).Head
+	w.gh.CommitFiles("main", "Another task's work", map[string]string{"OTHER.md": "theirs\n"})
+	merge := w.gh.MergeInto(branch, "main", nil)
+	if status, body := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "retry"}); status != 200 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	w.until("round 1's review decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("waiting again", func() bool { return w.waitingOnPR(task) })
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("round 2's review decision", func() bool {
+		return w.decisionAt(task) == delivery.PointReviewed && w.count(`SELECT count(*) FROM runs WHERE task_id = $1
+			AND phase = 'review' AND status = 'completed' AND review_round = 2`, task) > 0
+	})
+	rs := w.roundReviews(task)
+	second := rs[len(rs)-1]
+	if second.Round != 2 {
+		t.Fatalf("review round %d, want 2\n%s", second.Round, w.describeRuns())
+	}
+	if second.Of != "" && second.Base != merge {
+		t.Errorf("round 2 reviews %s from %s, want the whole branch or from the merge %s\n%s", second.Of, second.Base, merge, w.describeRuns())
+	}
+	if in := w.mainInRange(second.ID); len(in) > 0 {
+		t.Errorf("round 2's range has main's commits %v\n%s", in, w.describeRuns())
+	}
+}
+
 // The same before the pull request: dude merges the moved base into the
 // task branch as it opens it (whenBehind update). The review the conductor
 // starts at the pull request's wait is the whole branch or starts at the
