@@ -153,3 +153,47 @@ func TestDirectACleanBaseMergeBeforeThePullRequestTouchingNoTaskFileSkipsTheTest
 	t.Cleanup(func() { directAtTheGate = false })
 	mergedHeadOpensUntested(t, "Open")
 }
+
+// The conductor told of a conflict decides wait: no integration is kept
+// in state and none starts; the next sync that still reads the conflict
+// tells the conductor again.
+func TestDirectAConflictTheConductorWaitsOnIsToldAgainAtTheNextSync(t *testing.T) {
+	w := conducting(t)
+	w.toolsWithSync()
+	task := w.prOpen(w.task(), prAt{direct: true})
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w.conflictWithMovedBase()
+	w.until("the conflict to decide on", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
+	w.wokenWith(task, "conflicts with main")
+	told := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND line LIKE '%conflicts with main%'`, task)
+	w.must(task, "decide", `{"action":"wait"}`)
+	w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(task) })
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'integration'`, task); n != 0 {
+		t.Errorf("an integration is kept in state after wait")
+	}
+	if n := w.count(integrationRuns, task); n != 0 {
+		t.Errorf("%d integration Runs after wait", n)
+	}
+	// A person resolves it; then the base moves into it again: the next
+	// sync that reads it conflicting tells the conductor again. (The syncer
+	// signals a conflict as the pull request turns conflicting.)
+	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
+	w.until("read as no longer conflicting", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND mergeable_state <> 'conflicting'`, task) == 1
+	})
+	w.conflictWithMovedBase()
+	w.until("the conflict told again", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND line LIKE '%conflicts with main%'`, task) > told
+	})
+	if w.decisionAt(task) != delivery.PointPRFeedback {
+		t.Errorf("not deciding on the conflict again: at %q", w.decisionAt(task))
+	}
+	if n := w.count(integrationRuns, task); n != 0 {
+		t.Errorf("%d integration Runs before the conductor decided", n)
+	}
+}
