@@ -601,3 +601,100 @@ func TestARetriedLensKeepsTheRoundsHeads(t *testing.T) {
 	h1 := w.publishedDuringRoundOne(task, true)
 	w.roundTwoFromH1(task, h1)
 }
+
+// resumedRoundTwo is a conducted delivery with resumeRounds on, as the
+// default policy has it, on lux throughout: round 1 raises two findings,
+// the conductor dismisses one and sends the other to a fix; round 2's
+// reviewer, resumed (fix_round), judges it still there, and with
+// toFix the conductor sends it to round 2's fix, whose fixer is resumed.
+// Returns the dismissed finding.
+func (w *world) resumedRoundTwo(task string, toFix bool) string {
+	w.t.Helper()
+	w.onModel("reviewer", "llm-review")
+	w.onModel("fixer", "llm-fix")
+	mustExec(w.t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"resumeRounds":true}' WHERE id = $1`, w.project)
+	scripted := w.lux.Decide
+	reviews := 0
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			if reviews++; reviews == 1 {
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: high", "FACTORY.md says the wrong thing") +
+					"---\n" + evidencedFinding("severity: medium", "FACTORY.md could be shorter") + "```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+		case "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "fix"}
+		}
+		return scripted(spec)
+	}
+	w.talk(task)
+	setPolicy(w, task, `{"resumeRounds":true}`)
+	w.implemented(task)
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	dismissed := w.str(`SELECT id FROM review_findings WHERE task_id = $1 AND title = 'FACTORY.md could be shorter'`, task)
+	w.must(task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Its length is the house style"}`, dismissed))
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 2", func() bool {
+		return w.decisionAt(task) == delivery.PointReviewed && w.count(`SELECT count(*) FROM runs WHERE task_id = $1
+			AND phase = 'review' AND status = 'completed' AND review_round = 2`, task) > 0
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2
+		AND review_range->>'of' = $2`, task, delivery.RangeFixRound); n == 0 || !resumedReview(w) {
+		w.t.Fatalf("round 2's reviewer is not resumed over fix_round\n%s", w.describeRuns())
+	}
+	if toFix {
+		w.must(task, "decide", `{"action":"next"}`)
+		w.until("round 2's fixer resumed", func() bool {
+			for _, r := range w.luxRunsOf("fix") {
+				if r.Resumed > 0 && len(w.lux.Inputs(r.ID)) > 0 {
+					return true
+				}
+			}
+			return false
+		})
+	}
+	return dismissed
+}
+
+// inputsOf is every input the phase's agents on lux were given.
+func (w *world) inputsOf(phase string) []string {
+	var inputs []string
+	for _, r := range w.luxRunsOf(phase) {
+		inputs = append(inputs, w.lux.Inputs(r.ID)...)
+	}
+	return inputs
+}
+
+// A conducted loop's round 2 reviewer, resumed (the default), is told in
+// its round message its round and what earlier rounds decided, as a fresh
+// one's prompt has them.
+func TestAResumedRoundTwoReviewerIsToldItsRound(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	dismissed := w.resumedRoundTwo(task, false)
+	for _, in := range w.inputsOf("review") {
+		if strings.Contains(in, "## Round 2") && strings.Contains(in, dismissed) && strings.Contains(in, "Its length is the house style") {
+			return
+		}
+	}
+	t.Errorf("no resumed reviewer's round message tells round 2 and %s dismissed:\n%q", dismissed, w.inputsOf("review"))
+}
+
+// The fixer twin: round 2's fixer, resumed, is told its round and how a
+// round is fixed, as a fresh conducted fixer is.
+func TestAResumedRoundTwoFixerIsToldItsRound(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.resumedRoundTwo(task, true)
+	for _, in := range w.inputsOf("fix") {
+		if strings.Contains(in, "## Fix round 2") {
+			return
+		}
+	}
+	t.Errorf("no resumed fixer's round message tells fix round 2:\n%q", w.inputsOf("fix"))
+}
