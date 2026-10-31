@@ -281,6 +281,16 @@ func TestGoldenConductedReviewRounds(t *testing.T) {
 	golden(t, "prompt-review-round-2-conducted-loop", Prompt(PhaseReview, in))
 	in.Round, in.ReviewBase, in.ReviewOf, in.Findings = 3, nil, "", nil
 	golden(t, "prompt-review-round-3-whole-conducted-loop", Prompt(PhaseReview, in))
+	// A loop over its own range (the simplifier's diff, a pull request's
+	// fix): round 1 and later rounds review that range, never the whole.
+	for _, of := range []string{RangeSimplify, RangePullRequestFix} {
+		ranged := goldenTask()
+		ranged.Category, ranged.ConductedLoop, ranged.Round = "correctness", true, 1
+		ranged.ReviewBase, ranged.ReviewOf = map[string]string{"api": "aaa111"}, of
+		golden(t, "prompt-review-round-1-conducted-"+of, Prompt(PhaseReview, ranged))
+		ranged.Round, ranged.Decided = 2, decided
+		golden(t, "prompt-review-round-2-conducted-"+of, Prompt(PhaseReview, ranged))
+	}
 	// Outside a conducted loop the round says nothing: today's bytes.
 	in.ConductedLoop = false
 	plain := goldenTask()

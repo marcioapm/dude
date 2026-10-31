@@ -812,8 +812,8 @@ func reviewRoundNote(conducted bool, round int, of string, decided []DecidedFind
 		return ""
 	}
 	return render(reviewerRoundTmpl, struct {
-		Round, Previous int
-		Narrow          bool
-		Decided         []DecidedFinding
-	}{round, round - 1, of == RangeFixRound, decided})
+		Round, Previous  int
+		Ranged, FixRound bool
+		Decided          []DecidedFinding
+	}{round, round - 1, of != "", of == RangeFixRound, decided})
 }
