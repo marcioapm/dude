@@ -1717,6 +1717,14 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		if json.Unmarshal(sig.Payload, &s) != nil {
 			continue
 		}
+		if s.Kind == "actionable" && s.Head != "" {
+			// Checks failing on a head the pull request no longer shows
+			// (a fix pushed since) are not this head's: the sync of the
+			// new head says how its checks went.
+			if s.Feedback, err = w.currentHeadFeedback(ctx, sc, st, s); err != nil {
+				return workflow.Result{}, err
+			}
+		}
 		switch s.Kind {
 		case "terminal":
 			ended = true
@@ -1819,6 +1827,27 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	st.PRFeedback = actionable
 	return w.next(ctx, sc, st, PointPRFeedback, "prFix", feedbackLine(actionable))
 }
+
+// currentHeadFeedback is s's feedback without its checks when s was read
+// at a head its pull request no longer has, as last synced.
+func (w *steps) currentHeadFeedback(ctx context.Context, sc workflow.StepContext, st *State, s forge.Signal) ([]forge.ActionableFeedback, error) {
+	if !slices.ContainsFunc(s.Feedback, isChecks) {
+		return s.Feedback, nil
+	}
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range states {
+		if p.Repo == s.Repo && p.Number == s.Number && p.HeadSHA != "" && p.HeadSHA != s.Head {
+			return slices.DeleteFunc(slices.Clone(s.Feedback), isChecks), nil
+		}
+	}
+	return s.Feedback, nil
+}
+
+// isChecks says f is failing checks, not a person's words.
+func isChecks(f forge.ActionableFeedback) bool { return f.Source == "checks" || len(f.Checks) > 0 }
 
 // feedbackLine counts pull request feedback by kind, without its words.
 func feedbackLine(feedback []forge.ActionableFeedback) string {

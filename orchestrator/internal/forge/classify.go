@@ -27,6 +27,9 @@ type Signal struct {
 	// A person asked dude to resolve the conflict: integrate even when
 	// whenBehind is "tell".
 	Requested bool `json:"requested,omitempty"`
+	// The pull request's head the sync read it at: checks feedback about a
+	// head the pull request no longer shows starts no fix.
+	Head string `json:"head,omitempty"`
 }
 
 // ActionableFeedback is one thing a fixer is sent to address.
