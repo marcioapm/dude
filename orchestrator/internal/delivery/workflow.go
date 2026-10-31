@@ -2860,7 +2860,13 @@ func (w *steps) candidateRefused(ctx context.Context, sc workflow.StepContext, s
 // opened for a repository newly changed, the bodies' review and
 // verification brought up to the commit they show, and back to waiting.
 func (w *steps) candidateMoved(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string) (workflow.Result, error) {
-	promoted := len(heads) > 0 && st.Candidate != nil
+	return w.movedOnPR(ctx, sc, st, heads, len(heads) > 0 && st.Candidate != nil)
+}
+
+// movedOnPR is candidateMoved; promoted says the heads reached the pull
+// requests checked (a candidate's promotion, a direct fix's narrow loop
+// done), so their bodies are refreshed in a step of its own.
+func (w *steps) movedOnPR(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string, promoted bool) (workflow.Result, error) {
 	loop := st.Candidate != nil && st.Candidate.Loop
 	st.Candidate = nil
 	if st.Integration == nil && !loop {
@@ -2943,10 +2949,9 @@ func (w *steps) prFixDone(ctx context.Context, sc workflow.StepContext) (workflo
 		}
 	}
 	st.FixRange = nil
-	if len(heads) > 0 {
-		w.s.refreshBodies(ctx, sc.OrganizationID, st, w.forges, nil, true, true)
-	}
-	return w.candidateMoved(ctx, sc, st, heads)
+	// The bodies' review and verification are brought up to these heads
+	// as a promotion's are (refreshPromoted, retried), then prFixLanded.
+	return w.movedOnPR(ctx, sc, st, heads, len(heads) > 0)
 }
 
 // prFixLanded goes on from a pull request fix that reached the pull

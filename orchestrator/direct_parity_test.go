@@ -1,10 +1,13 @@
 package orchestrator_test
 
 import (
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -143,5 +146,50 @@ func TestDirectThePullRequestBodyAfterTheRoundShowsItsNarrowReview(t *testing.T)
 	review := body[strings.Index(body, "<!-- dude:review -->")+1:]
 	if !strings.Contains(review, title) {
 		t.Errorf("the description's Review section lacks the narrow review's finding %q:\n%s", title, body)
+	}
+}
+
+// GitHub answers the description update after a direct fix's narrow loop
+// with a 429: the round's refresh is tried again after a durable wait, as
+// a promotion's is, and the description shows the narrow review.
+func TestDirectTheRoundsDescriptionRefreshIsTriedAgain(t *testing.T) {
+	w := newPRFixWorldDirect(t)
+	const title = "The fix leaves the greeting untranslated"
+	var armed atomic.Bool
+	var patches atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if !armed.Load() || r.Method != "PATCH" || !bodyPatch.MatchString(r.URL.Path) {
+				return 0
+			}
+			if patches.Add(1) == 1 {
+				return http.StatusTooManyRequests
+			}
+			return 0
+		}
+	})
+	w.play = func(phase string, n int, b *fakelux.Behaviour) {
+		switch {
+		case phase == "review" && n == 1:
+			b.Reply = "One problem:\n\n" + reviewFinding(title)
+		case phase == "review" && n == 2:
+			// Only the round's own refresh, once its loop is done.
+			armed.Store(true)
+		}
+	}
+	w.comment("Please rename the greeting.")
+	w.until("the narrow loop's second review", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
+			AND status = 'completed'`, w.wi, delivery.RangePullRequestFix) == 2
+	})
+	w.elapseRefreshWait(w.wi, 1)
+	w.settledBackOnThePullRequest()
+	body := w.gh.Pull(1).Body
+	if i := strings.Index(body, "<!-- dude:review -->"); i < 0 || !strings.Contains(body[i:], title) {
+		t.Errorf("the description's Review section lacks the narrow review's finding:\n%s", body)
+	}
+	if n := patches.Load(); n != 2 {
+		t.Errorf("%d description updates, want the refused one and its retry", n)
 	}
 }
