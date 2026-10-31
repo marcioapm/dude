@@ -343,6 +343,7 @@ export const SETTINGS: SettingsResponse = {
     maxStillRounds: { value: 2, source: "organization" },
     maxRegressionRounds: { value: 2, source: "organization" },
     maxPrFixIterations: { value: 5, source: "organization" },
+    maxPrFixReviewIterations: { value: 2, source: "organization" },
     simplify: { value: true, source: "organization" },
     test: { value: false, source: "organization" },
     parkAfterMinutes: { value: 10, source: "organization" },
@@ -351,6 +352,7 @@ export const SETTINGS: SettingsResponse = {
     conductorEditLines: { value: 60, source: "organization" },
     conductorEditFiles: { value: 3, source: "organization" },
     pullRequest: { value: "open", source: "default" },
+    pullRequestFixes: { value: "direct", source: "default" },
   },
   network: {
     egress: { value: [], source: "organization" }, mode: { value: "add", source: "organization" },

@@ -90,6 +90,37 @@ type Policy struct {
 	// PullRequestAsk. A project's setting only (ProjectOnlyPolicyKeys), and
 	// a task's own over it.
 	PullRequest string `json:"pullRequest"`
+	// How a fix reaches an open pull request: PullRequestFixesDirect (it
+	// publishes to the pull request's branch, then a narrow review of its
+	// push) or PullRequestFixesCandidate (checked on a candidate branch,
+	// then promoted). A project's setting only (ProjectOnlyPolicyKeys),
+	// frozen per delivery: a frozen policy without it is a delivery started
+	// before it existed, and stays candidate (DirectFixes). A new
+	// delivery's resolves to direct when no layer sets it (ResolvePolicy).
+	PullRequestFixes string `json:"pullRequestFixes"`
+	// Review → fix cycles of the narrow loop after a direct pull request
+	// fix, before escalating as MaxReviewIterations does before the pull
+	// request: each cycle is a push the pull request's CI and reviewers see.
+	MaxPRFixReviewIterations int `json:"maxPrFixReviewIterations"`
+}
+
+// The values of Policy.PullRequestFixes.
+const (
+	PullRequestFixesCandidate = "candidate"
+	PullRequestFixesDirect    = "direct"
+)
+
+// DirectFixes says a delivery with this (frozen) policy publishes a pull
+// request's fixes to it directly. Unset is candidate: a delivery frozen
+// before the key existed must not change how it fixes mid-delivery.
+func (p Policy) DirectFixes() bool { return p.PullRequestFixes == PullRequestFixesDirect }
+
+// prFixReviewBound is the narrow loop's bound after a direct fix.
+func (p Policy) prFixReviewBound() int {
+	if p.MaxPRFixReviewIterations > 0 {
+		return p.MaxPRFixReviewIterations
+	}
+	return DefaultPolicy().MaxPRFixReviewIterations
 }
 
 // The values of Policy.PullRequest.
@@ -106,7 +137,7 @@ func IsPullRequestChoice(v string) bool {
 
 // ProjectOnlyPolicyKeys are the keys an organisation's policy never sets:
 // ResolvePolicy passes over them in its organisation layer.
-var ProjectOnlyPolicyKeys = []string{"pullRequest"}
+var ProjectOnlyPolicyKeys = []string{"pullRequest", "pullRequestFixes"}
 
 // LivePolicyKeys are the Policy keys dude reads from the project's and
 // organisation's policy as it is now, never from a delivery's frozen
@@ -143,6 +174,10 @@ func DefaultPolicy() Policy {
 		ConductorEditFiles:   3,
 		ResumeRounds:         true,
 		PullRequest:          PullRequestOpen,
+		// PullRequestFixes is left unset here, so that a State's frozen
+		// policy decoded without it reads as candidate (DirectFixes);
+		// ResolvePolicy gives a new delivery direct.
+		MaxPRFixReviewIterations: 2,
 	}
 }
 

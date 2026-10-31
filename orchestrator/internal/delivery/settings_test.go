@@ -3,6 +3,7 @@ package delivery
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -286,5 +287,58 @@ func TestASavedPromptsVariablesAreFilledAndTheTaskStillFollows(t *testing.T) {
 	in.Goal = "Mention {{run.branch}} literally."
 	if got := Instructions("implementer", "", in.InstructionsInput()); !strings.Contains(got, "**Goal:** Mention {{run.branch}} literally.") {
 		t.Errorf("a goal's braces were expanded:\n%s", got)
+	}
+}
+
+// How fixes reach an open pull request is a project's setting, direct for
+// every project's new delivery unless it chose candidate; an organisation's
+// value is passed over. A delivery's frozen policy without the key is one
+// from before it existed: it stays candidate.
+func TestDirectFixesIsAProjectOnlySettingFrozenPerDelivery(t *testing.T) {
+	p, err := ResolvePolicy(json.RawMessage(`{"pullRequestFixes":"candidate"}`), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.ForNewDelivery(); !got.DirectFixes() {
+		t.Errorf("an organisation's candidate was read: %q", got.PullRequestFixes)
+	}
+	p, _ = ResolvePolicy(nil, json.RawMessage(`{"pullRequestFixes":"candidate"}`))
+	if got := p.ForNewDelivery(); got.DirectFixes() || got.PullRequestFixes != PullRequestFixesCandidate {
+		t.Errorf("the project's candidate = %q", got.PullRequestFixes)
+	}
+	if _, err := ResolvePolicy(nil, json.RawMessage(`{"pullRequestFixes":"later"}`)); err == nil {
+		t.Error("pullRequestFixes later was accepted")
+	}
+	if _, from, _ := PolicySources(json.RawMessage(`{"pullRequestFixes":"candidate"}`), json.RawMessage(`{}`)); from["pullRequestFixes"] != SetInDefault {
+		t.Errorf("an organisation's stored value is its source: %q", from["pullRequestFixes"])
+	}
+	if slices.Contains(LivePolicyKeys, "pullRequestFixes") {
+		t.Error("pullRequestFixes is read live: a running delivery would change how it fixes")
+	}
+	// A delivery frozen before the key: candidate, until it ends.
+	var frozen State
+	if err := json.Unmarshal([]byte(`{"taskId":"t","policy":{"maxReviewIterations":5}}`), &frozen); err != nil {
+		t.Fatal(err)
+	}
+	if frozen.Policy.DirectFixes() {
+		t.Error("a frozen policy without pullRequestFixes reads as direct")
+	}
+	if b := frozen.Policy.prFixReviewBound(); b != 2 {
+		t.Errorf("the narrow loop's bound of a policy without it = %d, want 2", b)
+	}
+	if d := DefaultPolicy(); d.MaxPRFixReviewIterations != 2 {
+		t.Errorf("maxPrFixReviewIterations default %d", d.MaxPRFixReviewIterations)
+	}
+}
+
+// Every project, new and existing (one whose policy names nothing), starts
+// a new delivery fixing its pull requests directly.
+func TestEveryProjectResolvesDirectForANewDelivery(t *testing.T) {
+	for _, layers := range [][]json.RawMessage{{nil, nil}, {json.RawMessage(`{}`), json.RawMessage(`{}`)},
+		{json.RawMessage(`{"maxReviewIterations":3}`), json.RawMessage(`{"pullRequest":"ask"}`)}} {
+		p, err := ResolvePolicy(layers...)
+		if err != nil || !p.ForNewDelivery().DirectFixes() {
+			t.Errorf("%s: %q %v", layers, p.ForNewDelivery().PullRequestFixes, err)
+		}
 	}
 }

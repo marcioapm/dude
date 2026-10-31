@@ -28,14 +28,17 @@ import {
   Markdown,
 } from "@dude/design-system/components";
 import { formatTimestamp, plural } from "@dude/design-system";
-import { Button, Callout, Checkbox, Dialog, Input, Select } from "@dude/design-system/primitives";
+import { Button, Callout, Checkbox, ChoiceList, Dialog, Input, Select } from "@dude/design-system/primitives";
 import {
   DEFAULT_HARNESS,
   DEFAULT_PULL_REQUEST_CHOICE,
+  DEFAULT_PULL_REQUEST_FIXES,
   HARNESSES,
   HARNESS_LABEL,
   PROMPT_VARIABLES,
   PULL_REQUEST_CHOICE,
+  PULL_REQUEST_FIXES,
+  PULL_REQUEST_FIXES_CHOICE,
   findingSeveritySchema,
   REVIEWER_CATEGORIES,
   REVIEWER_CATEGORY_LABEL,
@@ -49,6 +52,7 @@ import {
   type PromptHistory as PromptHistoryData,
   type PromptState,
   type PullRequestChoice,
+  type PullRequestFixes,
   type Setting,
   type SettingsPatch,
   type SettingsResponse,
@@ -540,6 +544,7 @@ function HistoryDialog({ scope, role, onClose, onOpenRun }: {
 // ---------------------------------------------------------------------------
 
 const SEVERITIES = findingSeveritySchema.options;
+const PR_FIXES_LABEL = "Fixes on an open pull request";
 
 export function DeliveryPage({ scope }: { scope: SettingsScope }) {
   const { settings } = scope;
@@ -581,7 +586,7 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
   const valid =
     form.requiredReviewers.length > 0 &&
     form.blockingSeverities.length > 0 &&
-    [form.maxReviewIterations, form.maxAttemptsPerFinding, form.parkAfterMinutes, form.conductorWarmMinutes, form.conductorEditLines,
+    [form.maxReviewIterations, form.maxAttemptsPerFinding, form.maxPrFixReviewIterations, form.parkAfterMinutes, form.conductorWarmMinutes, form.conductorEditLines,
       form.conductorEditFiles].every((n) => Number.isInteger(n) && n >= 1) &&
     [form.maxPrFixIterations, form.idleNudgeMinutes].every((n) => Number.isInteger(n) && n >= 0) &&
     [form.maxStillRounds, form.maxRegressionRounds].every((n) => Number.isInteger(n) && n >= 0 && n <= 20);
@@ -675,6 +680,35 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
         {number("maxStillRounds", 0, 20, "Consecutive explicit still verdicts on a blocking acceptance criterion. 0 disables.", "Unmet criterion rounds")}
         {number("maxRegressionRounds", 0, 20, "Consecutive fix rounds replacing resolved blockers with blockers caused by the fix. 0 disables.", "Regression rounds")}
         {number("maxPrFixIterations", 0, 20, "Fixes for pull request comments before the owner is asked.", "Pull request fix rounds")}
+        {number("maxPrFixReviewIterations", 1, 20, "Review → fix cycles after a fix pushed to an open pull request, before the owner is asked. Each is a push CI sees.", "Reviews per pull request fix")}
+        {isProject(settings) ? (
+          <SettingRow
+            label={PR_FIXES_LABEL}
+            help={PULL_REQUEST_FIXES_CHOICE[form.pullRequestFixes].hint}
+            source={
+              <SettingSource
+                source="default"
+                inherited={PULL_REQUEST_FIXES_CHOICE[DEFAULT_PULL_REQUEST_FIXES].label}
+                disabled={busy}
+                onReset={canEdit && d.pullRequestFixes.source === "project"
+                  ? () => void scope.patch({ delivery: { pullRequestFixes: null } }, `${PR_FIXES_LABEL} reset`) : undefined}
+              />
+            }
+          >
+            <ChoiceList<PullRequestFixes>
+              label={PR_FIXES_LABEL}
+              data-testid="delivery-pullRequestFixes"
+              value={form.pullRequestFixes}
+              options={PULL_REQUEST_FIXES.map((value) => ({
+                value,
+                label: PULL_REQUEST_FIXES_CHOICE[value].label,
+                description: PULL_REQUEST_FIXES_CHOICE[value].hint,
+                disabledReason: canEdit ? undefined : "Only an owner or admin changes this.",
+              }))}
+              onChange={(v) => setField("pullRequestFixes", v)}
+            />
+          </SettingRow>
+        ) : null}
         <SettingRow
           label="Simplify pass"
           help="After review, before the pull request."
