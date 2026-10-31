@@ -90,8 +90,15 @@ func WriterOutcome(reply string) (outcome, note string) {
 		Outcome     string `yaml:"outcome"`
 		OutcomeNote string `yaml:"outcome_note"`
 	}
-	if yaml.Unmarshal([]byte(block), &doc) != nil {
-		return OutcomeDone, ""
+	// The two keys' lines alone, one scalar each: prose around an unfenced
+	// report cannot break the read, and the read is linear in the reply.
+	for _, line := range strings.Split(block, "\n") {
+		if !strings.HasPrefix(line, "outcome:") && !strings.HasPrefix(line, "outcome_note:") {
+			continue
+		}
+		if yaml.Unmarshal([]byte(line), &doc) != nil {
+			return OutcomeDone, ""
+		}
 	}
 	switch o := strings.ToLower(strings.TrimSpace(doc.Outcome)); o {
 	case "", OutcomeDone:

@@ -2,7 +2,9 @@ package delivery
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestTheLastChecksReportIsRead(t *testing.T) {
@@ -56,9 +58,29 @@ func TestAWritersOutcomeIsReadFromItsChecksDocument(t *testing.T) {
 		{"```yaml\nchecks:\n  - command: go test\n    result: not_run\n    evidence: no Go\noutcome: blocked\noutcome_note: needs a key\n```", "blocked", "needs a key"},
 		{"```yaml\noutcome: mostly\nchecks: []\n```", "partial", ""},
 		{"```yaml\noutcome: DONE\nchecks: []\n```", "done", ""},
+		// Unfenced, after prose a YAML parse of the whole reply rejects.
+		{"I changed the greeting: half of it.\nNote: the rest - later: maybe\n\noutcome: partial\noutcome_note: the second greeting is left\nchecks: []\n", "partial", "the second greeting is left"},
 	} {
 		if o, n := WriterOutcome(c.reply); o != c.outcome || n != c.note {
 			t.Errorf("%q: %q %q, want %q %q", c.reply, o, n, c.outcome, c.note)
 		}
+	}
+}
+
+// A long unfenced reply of prose with colons is read in linear time: the
+// outcome keys alone are parsed, never the prose before them.
+func TestAWritersOutcomeAfterLongProseIsReadQuickly(t *testing.T) {
+	var b strings.Builder
+	for b.Len() < 256<<10 {
+		b.WriteString("Note: the greeting changes, and its test with it.\n")
+	}
+	b.WriteString("outcome: blocked\noutcome_note: needs a key\nchecks: []\n")
+	start := time.Now()
+	o, n := WriterOutcome(b.String())
+	if took := time.Since(start); took > 50*time.Millisecond {
+		t.Errorf("256 KiB of prose took %v", took)
+	}
+	if o != OutcomeBlocked || n != "needs a key" {
+		t.Errorf("%q %q, want blocked, needs a key", o, n)
 	}
 }
