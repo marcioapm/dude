@@ -137,6 +137,11 @@ func (w *world) recoveryStatus(id string) string {
 	return w.str(`SELECT status FROM run_recoveries WHERE id = $1`, id)
 }
 
+// recoveryDue has the recovery's next attempt due now.
+func (w *world) recoveryDue(id string) {
+	mustExec(w.t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+}
+
 // pastGiveUp has the recovery's step started past its give-up
 // (recoveryStartGiveUp, ten minutes), and due now.
 func (w *world) pastGiveUp(id string) {
@@ -292,7 +297,7 @@ func TestRecoverRunIsIdempotentAndSurvivesAWorkerCrash(t *testing.T) {
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	ctx := context.Background()
 	settle := func() {
-		mustExec(t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+		w.recoveryDue(id)
 		if _, err := w.syncer.SettleRecoveries(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -388,7 +393,7 @@ func TestARecoveryOfATaskThatEndsStillPushesAndWakesNobody(t *testing.T) {
 	w.noRecoveries = false
 	ctx := context.Background()
 	// Its publisher asked of lux, then the task closed.
-	mustExec(t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+	w.recoveryDue(id)
 	if _, err := w.syncer.SettleRecoveries(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +518,7 @@ func TestARecoveryEndedBeforeItRecordedItsPublisherCancelsIt(t *testing.T) {
 	}
 	mustExec(t, w.owner, `DROP TRIGGER lose_submitted ON run_recoveries`)
 	w.lux.ForgetRun(deadLux)
-	mustExec(t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+	w.recoveryDue(id)
 	if _, err := w.syncer.SettleRecoveries(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +695,7 @@ func TestARecoveryRefusedOnceByLuxIsRetried(t *testing.T) {
 	if s := w.recoveryStatus(id); s != "requested" {
 		t.Fatalf("after the refused pass the recovery is %s", s)
 	}
-	mustExec(t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+	w.recoveryDue(id)
 	w.noRecoveries = false
 	w.until("the recovery ended", func() bool { s := w.recoveryStatus(id); return s == "done" || s == "failed" || s == "refused" })
 	if s := w.recoveryStatus(id); s != "done" {
@@ -751,7 +756,7 @@ func TestARecoveryPastItsGiveUpRetriesATransientLuxError(t *testing.T) {
 	if s := w.recoveryStatus(id); s != "requested" {
 		t.Fatalf("after the 503 the recovery is %s: %s", s, w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id))
 	}
-	mustExec(t, w.owner, `UPDATE run_recoveries SET next_attempt_at = NULL WHERE id = $1`, id)
+	w.recoveryDue(id)
 	w.noRecoveries = false
 	w.until("the recovery ended", func() bool { s := w.recoveryStatus(id); return s == "done" || s == "failed" || s == "refused" })
 	if s := w.recoveryStatus(id); s != "done" {
