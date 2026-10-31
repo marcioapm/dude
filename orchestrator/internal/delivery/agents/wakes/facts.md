@@ -37,6 +37,8 @@
 
 {{- define "wakes/facts/failing-check"}}failing check{{end}}
 
+{{- define "wakes/facts/pr-conflict"}}The pull request {{.Repo}}#{{.Number}} conflicts with {{.Base}} (at {{.BaseHead}}); it shows {{.Head}}. Decide to have an integration fixer merge {{.Base}} into it, start a fix with your own note, or wait.{{end}}
+
 {{- define "wakes/facts/took-over"}}Took over {{.Head}} at {{.SHA}}, {{.Files}} files changed against {{.Base}}. {{if .Continues}}Saved as work to continue: an implementer carries it on.{{else}}Saved as work to review as it is.{{end}}{{end}}
 
 {{- define "wakes/facts/test-failed"}}test {{.RunID}} failed: criteria {{.Criteria}}, {{.Findings}} blocking findings of the tester's; test fix round {{.Round}} of {{.Max}}.{{end}}

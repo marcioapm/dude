@@ -314,6 +314,11 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		return workflow.Result{Next: "openPullRequest", State: st}, nil
 	case "wait":
 		st.PRFeedback = nil
+		if i := st.Integration; i != nil && !i.Published && i.RunID == "" {
+			// A conflict told to the conductor (pullRequestFixes direct),
+			// left as it is: no integration was started for it.
+			st.Integration = nil
+		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "the conductor is waiting on the pull request")
 	case "start_phase":
 		st.Directed = &Directed{Phase: t.Phase, Categories: t.Categories, FindingIDs: t.FindingIDs, Note: t.Note, By: t.By}

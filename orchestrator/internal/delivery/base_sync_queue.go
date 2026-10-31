@@ -53,7 +53,10 @@ func QueueBaseSyncTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, base, sh
 	return status != "running", RouteBaseSyncTx(ctx, tx, RunRef{Org: org, ProjectID: project, TaskID: taskID, RunID: run})
 }
 
-func baseSyncInstruction(repo, base, sha string) string {
+func baseSyncInstruction(repo, base, sha string, direct bool) string {
+	if direct {
+		return fmt.Sprintf("Queued conflict resolution for %s (requested base %s): call sync_base, merge lux/%s into your current writer branch, resolve conflicts preserving both intents, run affected tests, and commit. Do not rebase. Your merge goes to the pull request when you publish, and is reviewed after.", repo, sha, base)
+	}
 	return fmt.Sprintf("Queued conflict resolution for %s (requested base %s): call sync_base, merge lux/%s into your current writer branch, resolve conflicts preserving both intents, run affected tests, and commit. Do not rebase. Keep candidate review gates; this does not authorize promotion or claim the public PR has changed.", repo, sha, base)
 }
 
@@ -90,8 +93,12 @@ func RouteBaseSyncTx(ctx context.Context, tx pgx.Tx, r RunRef) error {
 	if err != nil {
 		return err
 	}
+	direct, err := directFixesTx(ctx, tx, r.TaskID, len(requests))
+	if err != nil {
+		return err
+	}
 	for _, q := range requests {
-		if _, _, err := QueueDirective(ctx, tx, r, Directive{Text: baseSyncInstruction(q.repo, q.base, q.sha), Scope: "run"}); err != nil {
+		if _, _, err := QueueDirective(ctx, tx, r, Directive{Text: baseSyncInstruction(q.repo, q.base, q.sha, direct), Scope: "run"}); err != nil {
 			return err
 		}
 		if _, err := ledger.Append(ctx, tx, r.Event(EvPullRequestAction, ledger.ActorSystem, map[string]any{"action": "base-sync-writing", "repo": q.repo, "runId": r.RunID, "base": q.base, "baseSha": q.sha})); err != nil {
@@ -115,12 +122,27 @@ func ClaimBaseSyncPromptTx(ctx context.Context, tx pgx.Tx, r RunRef) (string, er
 	if err != nil {
 		return "", err
 	}
+	direct, err := directFixesTx(ctx, tx, r.TaskID, len(requests))
+	if err != nil {
+		return "", err
+	}
 	lines := make([]string, 0, len(requests))
 	for _, q := range requests {
 		if err := q.tellTx(ctx, tx, r.RunID, baseSyncViaPrompt); err != nil {
 			return "", err
 		}
-		lines = append(lines, baseSyncInstruction(q.repo, q.base, q.sha))
+		lines = append(lines, baseSyncInstruction(q.repo, q.base, q.sha, direct))
 	}
 	return strings.Join(lines, "\n\n"), nil
+}
+
+// directFixesTx says the task's delivery pushes its pull request fixes
+// directly (Policy.DirectFixes): what a writer told to merge the base is
+// told its merge does. Read only when there are requests (n) to tell.
+func directFixesTx(ctx context.Context, tx pgx.Tx, taskID string, n int) (bool, error) {
+	if n == 0 {
+		return false, nil
+	}
+	d, err := ReadDelivery(ctx, tx, taskID)
+	return d != nil && d.State.Policy.DirectFixes(), err
 }

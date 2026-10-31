@@ -1100,6 +1100,11 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 		return workflow.Result{Next: "fix", State: st}, nil
 	case exit.Reason == "clear":
 		if st.Integration != nil {
+			if st.Policy.DirectFixes() && !st.Integration.BeforePR {
+				// The merge is on the pull request already: its CI is the
+				// test, and whether it still conflicts the next sync says.
+				return workflow.Result{Next: "openPullRequest", State: st}, nil
+			}
 			return workflow.Result{Next: "test", State: st}, nil
 		}
 		if st.ActingOnPR && (st.Candidate == nil || st.Candidate.Loop) {
@@ -1505,7 +1510,10 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 				return w.integrationFailure(ctx, sc, st, causeStillConflicting, reasonStillConflicting)
 			}
 			if mergeable == forge.MergeUnknown {
-				if st.Integration.Polls < unknownMergeabilityPolls {
+				// Not polled when fixes reach the pull request directly: the
+				// pull request syncer's next reading says whether it still
+				// conflicts, at the pair recorded below.
+				if st.Integration.Polls < unknownMergeabilityPolls && !st.Policy.DirectFixes() {
 					wait := min(time.Second<<st.Integration.Polls, time.Minute)
 					st.Integration.Polls++
 					return workflow.Result{Next: "openPullRequest", State: st, SleepUntil: time.Now().Add(wait)}, nil
@@ -1528,7 +1536,7 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 					st.IntegrationPairs = map[string]string{}
 				}
 				st.IntegrationPairs[after.pair()] = st.Integration.RunID
-				if after.agentRun() {
+				if after.agentRun() && !st.Policy.DirectFixes() {
 					if st.HandedOver == nil {
 						st.HandedOver = map[string]Integration{}
 					}
@@ -1801,6 +1809,15 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 				return workflow.Result{}, err
 			}
 			if start {
+				if st.Policy.DirectFixes() {
+					// A message, not a mechanism: the conductor, when it
+					// decides, chooses how the conflict is resolved.
+					i := st.Integration
+					return w.next(ctx, sc, st, PointPRFeedback, "prFix", render(prConflictTmpl, struct {
+						Repo, Base, BaseHead, Head string
+						Number                     int
+					}{i.Repo, i.Base, short(i.BaseHead), short(i.Head), i.Number}))
+				}
 				return workflow.Result{Next: "prFix", State: st}, nil
 			}
 			if st.Integration != nil {
