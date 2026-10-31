@@ -592,3 +592,12 @@ func TestAPublishDuringARoundIsInTheNextRoundsRange(t *testing.T) {
 	w.roundTwoFromH1(task, h1)
 }
 
+// A lens of round 1 fails after the conductor's publish and a person
+// retries it at H2: the round's heads stay H1, what the lenses that
+// completed saw, and round 2 starts there.
+func TestARetriedLensKeepsTheRoundsHeads(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	h1 := w.publishedDuringRoundOne(task, true)
+	w.roundTwoFromH1(task, h1)
+}

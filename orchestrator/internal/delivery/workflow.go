@@ -851,7 +851,12 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	reviewRange := st.roundRange()
-	st.ReviewingHeads = maps.Clone(st.Heads)
+	// A retry of the round's failed reviewers keeps the heads its other
+	// reviewers saw: a move since is the next round's to review.
+	retrying := st.RetryCategories
+	if len(retrying) == 0 || st.ReviewingHeads == nil {
+		st.ReviewingHeads = maps.Clone(st.Heads)
+	}
 	// Each Run's creation key; the round's own is the key of no category.
 	runKey := func(c string) string {
 		switch {
@@ -863,7 +868,6 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return key(sc, st, ":review:", st.Iteration, ":", c)
 	}
 	// A retry of a round some reviewers failed: only theirs run again.
-	retrying := st.RetryCategories
 	var categories []string
 	var reasons map[string][]string
 	switch {
