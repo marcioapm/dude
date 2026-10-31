@@ -170,8 +170,8 @@ func TestDirectACleanBaseMergeBeforeThePullRequestTouchingNoTaskFileSkipsTheTest
 }
 
 // The conductor told of a conflict decides wait: no integration is kept
-// in state and none starts; the next sync that still reads the conflict
-// tells the conductor again.
+// in state and none starts; the pull request stays conflicting, and the
+// next sync tells the conductor again.
 func TestDirectAConflictTheConductorWaitsOnIsToldAgainAtTheNextSync(t *testing.T) {
 	w := conducting(t)
 	w.toolsWithSync()
@@ -192,21 +192,19 @@ func TestDirectAConflictTheConductorWaitsOnIsToldAgainAtTheNextSync(t *testing.T
 	if n := w.count(integrationRuns, task); n != 0 {
 		t.Errorf("%d integration Runs after wait", n)
 	}
-	// A person resolves it; then the base moves into it again: the next
-	// sync that reads it conflicting tells the conductor again. (The syncer
-	// signals a conflict as the pull request turns conflicting.)
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
-	w.until("read as no longer conflicting", func() bool {
-		w.sync()
-		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND mergeable_state <> 'conflicting'`, task) == 1
-	})
-	w.conflictWithMovedBase()
+	// The pull request stays conflicting: the next sync tells the
+	// conductor again (once per wait), deciding on the conflict.
 	w.until("the conflict told again", func() bool {
 		w.sync()
 		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND line LIKE '%conflicts with main%'`, task) > told
 	})
 	if w.decisionAt(task) != delivery.PointPRFeedback {
 		t.Errorf("not deciding on the conflict again: at %q", w.decisionAt(task))
+	}
+	again := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND line LIKE '%conflicts with main%'`, task)
+	w.syncRounds(3)
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND line LIKE '%conflicts with main%'`, task); n != again {
+		t.Errorf("told %d more times with no wait between", n-again)
 	}
 	if n := w.count(integrationRuns, task); n != 0 {
 		t.Errorf("%d integration Runs before the conductor decided", n)

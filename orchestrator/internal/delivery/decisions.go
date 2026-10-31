@@ -316,8 +316,21 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		st.PRFeedback = nil
 		if i := st.Integration; i != nil && !i.Published && i.RunID == "" {
 			// A conflict told to the conductor (pullRequestFixes direct),
-			// left as it is: no integration was started for it.
+			// left as it is: no integration was started for it. Its
+			// reading is forgotten, as openPullRequest forgets one, so
+			// the next sync that still reads it conflicting is news and
+			// tells the conductor again, once per wait.
 			st.Integration = nil
+			if st.Policy.DirectFixes() {
+				if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+					_, err := tx.Exec(ctx, `UPDATE pull_requests pr SET mergeable_state = 'unknown', updated_at = now()
+						FROM repositories r WHERE r.id = pr.repository_id AND pr.id = ANY($1) AND r.name = $2
+						AND pr.number = $3 AND pr.state IN ('open', 'draft')`, st.PullRequestIDs, i.Repo, i.Number)
+					return err
+				}); err != nil {
+					return workflow.Result{}, err
+				}
+			}
 		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "the conductor is waiting on the pull request")
 	case "start_phase":
