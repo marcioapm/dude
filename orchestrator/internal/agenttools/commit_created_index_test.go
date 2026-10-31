@@ -7,13 +7,13 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// Migration 233 indexes a task's git.commit_created events: on a task with
+// Migration 234 indexes a task's git.commit_created events: on a task with
 // thousands of other events, I-3's probe of whether dude pushed a pull
 // request's head (delivery.unreviewedPRPushesTx) and a conductor publish's
 // once-per-repository check (phases' publish) read
 // events_task_commit_created_idx, not every event of the task.
 func TestACommitCreatedProbeReadsItsIndex(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "233")
+	owner, apply := dbtest.Upgrade(t, "234")
 	ctx := context.Background()
 	if _, err := owner.Exec(ctx, `INSERT INTO organizations (id, name, slug) VALUES ('org_p', 'P', 'p')`); err != nil {
 		t.Fatal(err)
