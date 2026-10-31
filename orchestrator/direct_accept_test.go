@@ -224,12 +224,11 @@ func TestDirectAnUnreviewedPushWithNoBaseOnRecordIsReviewedOverARange(t *testing
 	}
 }
 
-// A direct fix's narrow review keeps judging its blocking finding still
-// until the loop escalates not_converging, and a person accepts going on:
-// the conductor's publish reaches the pull request (the escalated head is
-// the last round's, which reviewed it); that publish is a new unreviewed
-// push of dude's, so the next is refused again.
-func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCountsAsItsReview(t *testing.T) {
+// notConvergingDirect is a conducted direct delivery whose fix's narrow
+// review keeps judging its blocking finding still until the loop
+// escalates not_converging, as editing on it, that escalation waiting.
+func notConvergingDirect(t *testing.T) *editing {
+	t.Helper()
 	e := conductedDirect(t)
 	setPolicy(e.world, e.task, `{"maxAttemptsPerFinding":4,"maxStillRounds":2,"maxPrFixReviewIterations":9}`)
 	var armed atomic.Bool
@@ -258,6 +257,16 @@ func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCountsAsItsReview(t *test
 		e.sync()
 		return e.escalationReason(e.task) == delivery.ReasonNotConverging
 	})
+	return e
+}
+
+// A direct fix's narrow review keeps judging its blocking finding still
+// until the loop escalates not_converging, and a person accepts going on:
+// the conductor's publish reaches the pull request (the escalated head is
+// the last round's, which reviewed it); that publish is a new unreviewed
+// push of dude's, so the next is refused again.
+func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCountsAsItsReview(t *testing.T) {
+	e := notConvergingDirect(t)
 	fixed := e.gh.SHA(e.branch)
 	ana := e.person("Ana")
 	e.assignOwner(e.task, ana)
@@ -271,6 +280,53 @@ func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCountsAsItsReview(t *test
 	e.current()
 	e.commit(map[string]string{"README.md": "# target\n\nfixed by the conductor\n"})
 	id := e.publish()
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("publish after the person's accept %s: %s", status, why)
+	}
+	moved := e.gh.SHA(e.branch)
+	e.until("the pull request read at the publish", func() bool {
+		e.sync()
+		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, moved) == 1
+	})
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nfixed again\n"})
+	e.refused(e.task, "publish", `{"message":"another"}`, unreviewedWords)
+}
+
+// A direct fix's narrow loop escalates not_converging and, while that
+// waits, the conductor publishes to the pull request; then a person
+// accepts going on. The accept covers the head the conductor's publish
+// left (else no publish could reach the pull request after it): the next
+// publish reaches it, and that one, a new unreviewed push of dude's, has
+// the one after refused again.
+func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCoversAPublishWhileItWaited(t *testing.T) {
+	e := notConvergingDirect(t)
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\npublished while the escalation waits\n"})
+	id := e.publish()
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("publish while the escalation waits %s: %s", status, why)
+	}
+	waited := e.gh.SHA(e.branch)
+	e.until("the pull request read at the publish", func() bool {
+		e.sync()
+		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, waited) == 1
+	})
+	if r := e.escalationReason(e.task); r != delivery.ReasonNotConverging {
+		t.Fatalf("the escalation is %q, not %s, after the publish", r, delivery.ReasonNotConverging)
+	}
+	ana := e.person("Ana")
+	e.assignOwner(e.task, ana)
+	if code, body := e.decide(ana, e.task, "accept", "The record file is this pull request's own convention."); code != 200 {
+		t.Fatalf("accept: %d %v", code, body)
+	}
+	e.until("waiting on the pull request again", func() bool { e.sync(); return e.waitingOnPR(e.task) })
+	if e.gh.SHA(e.branch) != waited {
+		t.Fatalf("the branch moved past the conductor's publish\n%s", e.describeRuns())
+	}
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nfixed by the conductor\n"})
+	id = e.publish()
 	if status, why := e.published(id); status != delivery.PublishPublished {
 		t.Fatalf("publish after the person's accept %s: %s", status, why)
 	}
