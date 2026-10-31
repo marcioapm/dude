@@ -38,7 +38,7 @@ func TestGoldenConductedLoopInstructions(t *testing.T) {
 			t.Errorf("a %s's file changed in a conducted loop", role)
 		}
 	}
-	golden(t, "resume-review-conducted-loop", ConductedRoundMessage(PhaseReview, map[string]string{"api": "aaa111"},
+	golden(t, "resume-review-conducted-loop", roundMessage(true, PhaseReview, map[string]string{"api": "aaa111"},
 		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], nil, []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}}, ""))
 }
 

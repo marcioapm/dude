@@ -643,14 +643,9 @@ func RoundMessage(phase string, from, to map[string]string, reason string, findi
 	return roundMessage(false, phase, from, to, reason, findings, questions, lastFix, carry)
 }
 
-// ConductedRoundMessage is RoundMessage for a reviewer of a conducted loop
-// (ConductedLoop): the format it reports in asks for each finding's
+// roundMessage is RoundMessage; conducted, for a reviewer of a conducted
+// loop (ConductedLoop): the format it reports in asks for each finding's
 // evidence, as its instruction file does.
-func ConductedRoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
-	lastFix []FixRange, carry string) string {
-	return roundMessage(true, phase, from, to, reason, findings, questions, lastFix, carry)
-}
-
 func roundMessage(conducted bool, phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
 	lastFix []FixRange, carry string) string {
 	list := ""
