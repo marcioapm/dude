@@ -274,9 +274,8 @@ func TestAnInFlightDeliveryWithoutTheKeyStaysCandidate(t *testing.T) {
 
 // A person pushes to the pull request while dude's fix works: the fix's
 // publish is no fast-forward, so it fails rather than overwriting their
-// commit, and a person is asked. (The design said the fix's commit stays
-// on its per-Run branch; a failed writer's branch is released as it ends,
-// as before the pull request: see the report.)
+// commit, and a person is asked. The fix's commits stay on its per-Run
+// branch, kept with the Run, and the escalation names that branch.
 func TestDirectAPersonsPushDuringTheFixFailsThePublishAndKeepsItsCommits(t *testing.T) {
 	w := newPRFixWorldDirect(t)
 	var theirs string
@@ -307,6 +306,26 @@ func TestDirectAPersonsPushDuringTheFixFailsThePublishAndKeepsItsCommits(t *test
 	}
 	if w.candidate() != "" {
 		t.Errorf("a candidate branch was written")
+	}
+	// The fixer's commit is still on its per-Run branch once the Run ended.
+	var fixID, pushed string
+	_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(push_result->'results'->0->>'commit', '') FROM runs
+		WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, w.wi).Scan(&fixID, &pushed)
+	runBranch := "dude/" + w.wi + "/run-" + fixID
+	w.until("the fix's lux Run settled", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_stop_reason IS NOT NULL`, fixID) == 1
+	})
+	for range 3 {
+		w.pump()
+	}
+	if at := w.gh.SHA(runBranch); pushed == "" || at != pushed {
+		t.Errorf("the fix's per-Run branch %s is at %q, want its commit %q", runBranch, at, pushed)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND keep AND kept_until > now()`, fixID); n != 1 {
+		t.Errorf("the fix's Run is not kept")
+	}
+	if raw, _ := w.escalationOf(w.wi); !strings.Contains(string(raw), runBranch) {
+		t.Errorf("the escalation does not name %s: %s", runBranch, raw)
 	}
 }
 
