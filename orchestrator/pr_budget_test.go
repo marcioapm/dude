@@ -57,6 +57,10 @@ func (w *budgetWorld) spentDetail() string {
 // one fix round per pull request, the next feedback still gets its fix, and
 // only the one after the fix that committed is past the bound.
 func TestAPullRequestFixThatCommitsNothingSpendsNoBudget(t *testing.T) {
+	testAPullRequestFixThatCommitsNothingSpendsNoBudget(t)
+}
+
+func testAPullRequestFixThatCommitsNothingSpendsNoBudget(t *testing.T) {
 	w := newBudgetWorld(t, "1")
 	setPolicy(w.world, w.wi, `{"maxPrFixIterations":9}`)
 	head := w.gh.SHA(w.gh.Pull(1).Head)
@@ -103,6 +107,10 @@ func TestAPullRequestFixThatCommitsNothingSpendsNoBudget(t *testing.T) {
 // followed by another, and the per-round bound still ends that loop, though
 // the pull request's budget is unspent.
 func TestFixersThatCommitNothingAreStillBoundedPerRound(t *testing.T) {
+	testFixersThatCommitNothingAreStillBoundedPerRound(t)
+}
+
+func testFixersThatCommitNothingAreStillBoundedPerRound(t *testing.T) {
 	w := newBudgetWorld(t, "1")
 	w.commit.Store(false)
 	if code, body := w.feedback(w.person("Ana"), w.wi, "fbi_quiet", "Log the retry count at info."); code != 201 {
@@ -123,6 +131,10 @@ func TestFixersThatCommitNothingAreStillBoundedPerRound(t *testing.T) {
 // A fix that failed before landing spent nothing, so its retry gives back
 // nothing: the budget is what the committed fixes spent, no more, no less.
 func TestARetryAfterAFailedPullRequestFixRefundsNothing(t *testing.T) {
+	testARetryAfterAFailedPullRequestFixRefundsNothing(t)
+}
+
+func testARetryAfterAFailedPullRequestFixRefundsNothing(t *testing.T) {
 	w := newBudgetWorld(t, "2")
 	setPolicy(w.world, w.wi, `{"maxPrFixIterations":9}`)
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
@@ -157,6 +169,10 @@ func TestARetryAfterAFailedPullRequestFixRefundsNothing(t *testing.T) {
 }
 
 func TestALegacyPRFixAlreadyChargedAtStartIsNotChargedAgain(t *testing.T) {
+	testALegacyPRFixAlreadyChargedAtStartIsNotChargedAgain(t)
+}
+
+func testALegacyPRFixAlreadyChargedAtStartIsNotChargedAgain(t *testing.T) {
 	w := newPRFixWorld(t)
 	w.play = func(phase string, n int, b *fakelux.Behaviour) {
 		if phase == "fix" {
@@ -184,6 +200,10 @@ func TestALegacyPRFixAlreadyChargedAtStartIsNotChargedAgain(t *testing.T) {
 // marker when starting the next one. That is not a legacy start charge:
 // refunding it on retry would forgive the previous successful fix.
 func TestAnUpgradeDuringAFailedPRFixKeepsThePriorCharge(t *testing.T) {
+	testAnUpgradeDuringAFailedPRFixKeepsThePriorCharge(t)
+}
+
+func testAnUpgradeDuringAFailedPRFixKeepsThePriorCharge(t *testing.T) {
 	w := newBudgetWorld(t, "2")
 	setPolicy(w.world, w.wi, `{"maxPrFixIterations":9}`)
 	w.gh.Comment(1, "alice", "Please rename the greeting.")

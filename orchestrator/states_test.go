@@ -96,7 +96,7 @@ func (w *world) prOpen(wi string, at prAt) string {
 	ctx := context.Background()
 	policy := scriptedPolicy()
 	policy.Test = at.test
-	if at.direct {
+	if at.direct || directPRFixes {
 		policy.PullRequestFixes = delivery.PullRequestFixesDirect
 	}
 	type prRepo struct {

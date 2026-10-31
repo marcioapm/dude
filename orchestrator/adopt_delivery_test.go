@@ -31,8 +31,12 @@ func (w *world) adopting(kind string, number int, head, base string) string {
 // fixes, as the world's does (newWorld): the direct tests name direct.
 func (w *world) startDelivery(wi string) string {
 	w.t.Helper()
-	mustExec(w.t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"pullRequestFixes":"candidate"}'
-		WHERE id = $1 AND NOT delivery_policy ? 'pullRequestFixes'`, w.project)
+	mode := delivery.PullRequestFixesCandidate
+	if directPRFixes {
+		mode = delivery.PullRequestFixesDirect
+	}
+	mustExec(w.t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || jsonb_build_object('pullRequestFixes', $2::text)
+		WHERE id = $1 AND NOT delivery_policy ? 'pullRequestFixes'`, w.project, mode)
 	if status, body := w.call("/internal/tasks/"+wi+"/deliver", map[string]any{}); status != 201 {
 		w.t.Fatalf("deliver: %d %v", status, body)
 	}

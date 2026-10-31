@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from fake_github import FakeGitHub
 from helpers import ApiClient, wait_until
 
@@ -70,10 +72,19 @@ def test_delivery_opens_a_pull_request(client: ApiClient, forge_project: dict, f
     )
 
 
+@pytest.mark.parametrize("fixes", ["candidate", "direct"])
 def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
-    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub, fixes: str
 ):
-    """A person's comment brings the factory back; merging ends the task."""
+    """A person's comment brings the factory back; merging ends the task.
+
+    Either way a fix reaches the pull request: checked on a candidate first,
+    or pushed to it directly and then reviewed once over its own push."""
+    if fixes == "direct":
+        resp = client.patch(f"/v1/projects/{forge_project['id']}", {
+            "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": False, "pullRequestFixes": "direct"},
+        })
+        assert resp.status_code == 200, resp.text
     task = client.create_task(forge_project["id"], "Respond to review")
     client.post(f"/v1/tasks/{task['id']}/deliver")
 
@@ -88,6 +99,9 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
         return [r for r in client.task_runs(task["id"]) if r["phase"] == "fix"]
 
     fixes_before = len(fix_runs())
+
+    def review_runs():
+        return [r for r in client.task_runs(task["id"]) if r["phase"] == "review"]
 
     # A courtesy comment is recorded but wakes nobody.
     fake_github.comment(pr["number"], "LGTM so far, thanks!")
@@ -104,6 +118,7 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
     line = fake_github.comment(pr["number"], "Please also note the date in FIXED.md.", path="FIXED.md")
     wait_until(lambda: len(fix_runs()) > fixes_before, timeout=30, message="a change request did not wake a fixer")
     assert len(fix_runs()) == fixes_before + 1, "the courtesy comment also woke a fixer"
+    reviews_before = len(review_runs())
 
     # The fixer's work reaches the PR's branch.
     wait_until(
@@ -117,6 +132,20 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
         timeout=30,
         message="task did not return to review after the fix",
     )
+    if fixes == "direct":
+        # The fix went to the pull request's branch, not a candidate, and
+        # one review of its own push followed; no simplifier.
+        assert not [b for b in fake_github.branches() if b.endswith("-candidate")], fake_github.branches()
+        wait_until(
+            lambda: [r["status"] for r in review_runs()[reviews_before:]] == ["completed"]
+            and _task(client, task["id"])["status"] == "review",
+            timeout=30,
+            message="the fix's push was not reviewed once",
+        )
+        time.sleep(2)
+        assert len(review_runs()) == reviews_before + 1, review_runs()[reviews_before:]
+        assert not [r for r in client.task_runs(task["id"]) if r["phase"] == "simplify"
+                    and r["createdAt"] > fix_runs()[-1]["createdAt"]]
 
     # Its thread resolved and approved, and the fixture has no CI: ready to
     # merge, and it is a person's merge — the factory never does it.
