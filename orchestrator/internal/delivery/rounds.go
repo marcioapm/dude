@@ -471,7 +471,7 @@ func continuesEventTx(ctx context.Context, tx pgx.Tx, ref RunRef, from, how stri
 // (in.FindingIDs, answered by position, as a fresh Run's prompt lists
 // them) and how it reports; for a fixer, what it fixes (FixRoundMessage).
 func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow, created string) (string, error) {
-	findings, err := findingsInOrderTx(ctx, tx, in.FindingIDs)
+	findings, err := FindingsInOrderTx(ctx, tx, in.FindingIDs)
 	if err != nil {
 		return "", err
 	}
@@ -515,7 +515,18 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 				return "", err
 			}
 		}
-		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
+		// A reviewer of a conducted loop is asked for each finding's
+		// evidence, as the delivery reads now (its instruction file was
+		// its predecessor's).
+		var conducted bool
+		if in.Phase == PhaseReview {
+			tb, err := TaskBranchTx(ctx, tx, in.TaskID, in.Attempt)
+			if err != nil {
+				return "", err
+			}
+			conducted = tb.ConductedLoop
+		}
+		message = roundMessage(conducted, in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
 		if in.Phase == PhaseTest {
 			checks, err := WriterChecksTx(ctx, tx, in.TaskID, in.Attempt)
 			if err != nil {
@@ -629,16 +640,28 @@ func roundRanges(from, to map[string]string) []roundRange {
 // tester may carry criteria from ("" retests every one).
 func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
 	lastFix []FixRange, carry string) string {
+	return roundMessage(false, phase, from, to, reason, findings, questions, lastFix, carry)
+}
+
+// roundMessage is RoundMessage; conducted, for a reviewer of a conducted
+// loop (ConductedLoop): the format it reports in asks for each finding's
+// evidence, as its instruction file does.
+func roundMessage(conducted bool, phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
+	lastFix []FixRange, carry string) string {
 	list := ""
 	if len(findings) > 0 {
 		list = earlierFindings(findings)
+	}
+	format := findingFormat
+	if conducted {
+		format = conductedFindingFormat
 	}
 	return render(roundTmpl, struct {
 		Test                                 bool
 		Ranges                               []roundRange
 		Reason, Findings, Questions, LastFix string
 		Format, Summary, CarryFrom           string
-	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), findingFormat, reviewSummary, carry})
+	}{phase == PhaseTest, roundRanges(from, to), reason, list, earlierQuestions(questions), lastFixNote(lastFix), format, reviewSummary, carry})
 }
 
 // FixRange is what a fix Run published in one repository: its commits are
@@ -675,12 +698,15 @@ func lastFixNote(ranges []FixRange) string {
 	return render(lastFixTmpl, ranges)
 }
 
-func findingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding, error) {
+// FindingsInOrderTx is the findings of ids, in their order: what a Run
+// was chosen to fix or judge (runs.finding_ids).
+func FindingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
-			COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
+			COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix,
+			trivial, introduced, COALESCE(evidence_kind, ''), COALESCE(evidence, ''), COALESCE(scenario, ''), unverified
 		FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
 		ORDER BY chosen.n`, ids)
 	if err != nil {

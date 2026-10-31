@@ -169,7 +169,7 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	}
 	st.Overridden = in.Override != nil
 	if in.How == HowTalk {
-		st.Decider = DeciderConductor
+		st.Decider, st.HadConductor = DeciderConductor, true
 	}
 	if out.WorkflowID, out.Joined, err = rt.StartInTx(ctx, tx, workflow.StartOptions{Type: WorkflowType, OrganizationID: in.Org,
 		IdempotencyKey: key, TaskID: in.TaskID, Input: st}); err != nil {

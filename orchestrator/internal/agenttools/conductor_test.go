@@ -455,3 +455,46 @@ func TestFeedbackIsActedOnOnlyWhereTheFixerWasSentIt(t *testing.T) {
 		t.Errorf("acted on: %v; want only sdk:a.go, by run_prfix", acted)
 	}
 }
+
+// findings says what a reviewer said of each finding's evidence: its kind,
+// trivial and introduced in the list, the scenario and evidence by id; one
+// unverified is listed so, after a verified one of its severity; one stored
+// before evidence was asked for says nothing of it.
+func TestFindingsShowEachFindingsEvidence(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+		VALUES ('run_rev', $1, $2, $3, 1, 'completed', 'review', 'reviewer')`, f.org, f.project, f.item)
+	mustExec(t, f.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title,
+			trivial, introduced, evidence_kind, evidence, scenario, unverified, created_at)
+		VALUES ('fnd_unverified', $1, $2, 'run_rev', 'correctness', 'medium', 'U', NULL, NULL, NULL, NULL, NULL, true, now() - interval '1 hour'),
+			('fnd_verified', $1, $2, 'run_rev', 'correctness', 'medium', 'V', true, false, 'failing_test', 'TestX: want 1, got 2', 'POST /x', false, now()),
+			('fnd_old', $1, $2, 'run_rev', 'correctness', 'low', 'O', NULL, NULL, NULL, NULL, NULL, false, now())`, f.org, f.item)
+	var raw map[string]any
+	if status := f.postAs(t, token, "findings", `{}`, &raw); status != 200 {
+		t.Fatalf("findings: %d", status)
+	}
+	got := []string{}
+	for _, x := range raw["findings"].([]any) {
+		m := x.(map[string]any)
+		delete(m, "settled")
+		delete(m, "status")
+		delete(m, "raisedBy")
+		delete(m, "category")
+		b, _ := json.Marshal(m)
+		got = append(got, string(b))
+	}
+	want := []string{
+		`{"evidenceKind":"failing_test","id":"fnd_verified","introduced":false,"severity":"medium","trivial":true}`,
+		`{"id":"fnd_unverified","severity":"medium","unverified":true}`,
+		`{"id":"fnd_old","severity":"low"}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("findings:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	var one map[string]any
+	f.postAs(t, token, "findings", `{"ids":["fnd_verified"]}`, &one)
+	if v := one["findings"].([]any)[0].(map[string]any); v["evidence"] != "TestX: want 1, got 2" || v["scenario"] != "POST /x" {
+		t.Errorf("by id: %v", v)
+	}
+}

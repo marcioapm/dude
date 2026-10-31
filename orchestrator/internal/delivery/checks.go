@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -69,6 +70,101 @@ type checksDoc struct {
 	Checks []Check `yaml:"checks"`
 }
 
+// The values of a writer's outcome: what it says of its own work, on the
+// outcome line of its final checks document.
+const (
+	OutcomeDone    = "done"
+	OutcomePartial = "partial"
+	OutcomeBlocked = "blocked"
+)
+
+// WriterOutcome is what a writer said of its work: the outcome and
+// outcome_note keys of its reply's last checks document. Missing (no key,
+// or no checks document) is done, as every reply was before the key; a
+// value outside the three is partial, the reading that asks for a look.
+func WriterOutcome(reply string) (outcome, note string) {
+	block, ok := outcomeBlock(reply)
+	if !ok {
+		return OutcomeDone, ""
+	}
+	var doc struct {
+		Outcome     string `yaml:"outcome"`
+		OutcomeNote string `yaml:"outcome_note"`
+	}
+	// The two keys' lines alone, one scalar each: prose around an unfenced
+	// report cannot break the read, and the read is linear in the reply.
+	// A line that is no YAML on its own loses nothing already read: a note
+	// is its raw text, and an outcome is a value of its own (partial).
+	unreadOutcome := false
+	for _, line := range strings.Split(block, "\n") {
+		key, value, _ := strings.Cut(line, ":")
+		if key != "outcome" && key != "outcome_note" {
+			continue
+		}
+		if yaml.Unmarshal([]byte(line), &doc) == nil {
+			continue
+		}
+		if key == "outcome" {
+			unreadOutcome = true
+			continue
+		}
+		doc.OutcomeNote = rawScalar(strings.TrimSpace(value))
+	}
+	switch o := strings.ToLower(strings.TrimSpace(doc.Outcome)); {
+	case unreadOutcome:
+		outcome = OutcomePartial
+	case o == "" || o == OutcomeDone:
+		outcome = OutcomeDone
+	case o == OutcomePartial || o == OutcomeBlocked:
+		outcome = o
+	default:
+		outcome = OutcomePartial
+	}
+	return outcome, strings.TrimSpace(doc.OutcomeNote)
+}
+
+// rawScalar is a value YAML would not read, as written: unquoted when the
+// whole of it is one quoted string, else the text itself.
+func rawScalar(s string) string {
+	if u, err := strconv.Unquote(s); err == nil && strings.HasPrefix(s, `"`) {
+		return u
+	}
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' && !strings.Contains(strings.ReplaceAll(s[1:len(s)-1], "''", ""), "'") {
+		return strings.ReplaceAll(s[1:len(s)-1], "''", "'")
+	}
+	return s
+}
+
+// outcomeBlock is the document of the reply's last outcome line: from it
+// back to the document's start, and on to the next fence or document end.
+// The outcome keys may sit before or after the checks list.
+func outcomeBlock(reply string) (string, bool) {
+	lines := strings.Split(reply, "\n")
+	at := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "outcome:") {
+			at = i
+		}
+	}
+	if at < 0 {
+		return "", false
+	}
+	start, end := 0, len(lines)
+	for i := at - 1; i >= 0; i-- {
+		if docBoundary(lines[i]) {
+			start = i + 1
+			break
+		}
+	}
+	for i := at + 1; i < len(lines); i++ {
+		if docBoundary(lines[i]) {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n"), true
+}
+
 // checksBlock is the last checks document of a reply: from its last line
 // starting "checks:" to the next fence or document end.
 func checksBlock(reply string) (string, bool) {
@@ -84,13 +180,18 @@ func checksBlock(reply string) (string, bool) {
 	}
 	end := len(lines)
 	for i := start + 1; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") || line == "---" {
+		if docBoundary(lines[i]) {
 			end = i
 			break
 		}
 	}
 	return strings.Join(lines[start:end], "\n"), true
+}
+
+// docBoundary says line ends a YAML document in a reply: a fence or `---`.
+func docBoundary(line string) bool {
+	line = strings.TrimSpace(line)
+	return strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") || line == "---"
 }
 
 // yamlLinePrefix is yaml.v3's "line N: " position, which counts from the

@@ -26,6 +26,7 @@ const FINDING_SELECT = `
   title, description, suggested_fix AS "suggestedFix", acceptance,
   resolved_by_run_id AS "resolvedByRunId", resolution_note AS "resolutionNote",
   fix_attempts AS "fixAttempts",
+  trivial, introduced, evidence_kind AS "evidenceKind", evidence, scenario, unverified,
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 

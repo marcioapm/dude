@@ -568,7 +568,7 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, a
 	}
 	st.Attempt, st.Overridden = attempt, overridden
 	if decider == delivery.DeciderConductor {
-		st.Decider = decider
+		st.Decider, st.HadConductor = decider, true
 	}
 	id, err := s.Workflow.StartTx(ctx, tx, workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: org, TaskID: taskID,

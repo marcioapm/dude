@@ -340,3 +340,55 @@ func TestAnUnreadableAboutIsNone(t *testing.T) {
 		t.Errorf("questions = %+v, want none", got)
 	}
 }
+
+// A finding's evidence is read field by field: trivial and introduced in
+// three states, an improvised evidence kind as none, repair as the
+// suggested fix when there is none.
+func TestEvidenceFieldsAreRead(t *testing.T) {
+	got := ParseFindings("severity: medium\ntitle: T\nfile: a.go\nline: 3\ntrivial: yes\nintroduced: no\n" +
+		"scenario: POST /x with an empty body returns 200.\nevidence_kind: failing_test\nevidence: |\n  TestX fails:\n  want 400, got 200\nrepair: Check the body.\n" +
+		"---\nseverity: low\ntitle: U\nevidence_kind: hunch\ntrivial: perhaps\n")
+	if len(got) != 2 {
+		t.Fatalf("%d findings", len(got))
+	}
+	f := got[0]
+	if f.Trivial == nil || !*f.Trivial || f.Introduced == nil || *f.Introduced || f.EvidenceKind != "failing_test" ||
+		f.Evidence != "TestX fails: want 400, got 200" || f.Scenario != "POST /x with an empty body returns 200." ||
+		f.SuggestedFix != "Check the body." || f.Unverified {
+		t.Errorf("%+v", f)
+	}
+	if u := got[1]; u.Trivial != nil || u.Introduced != nil || u.EvidenceKind != "" || u.Unverified {
+		t.Errorf("%+v", u)
+	}
+}
+
+// Presence only, and only at medium or above: a finding missing any of
+// file, line, scenario, evidence_kind or evidence is unverified; its
+// severity stands. A low or a note without them is not.
+func TestUnverifiedIsAMediumOrAboveWithoutItsEvidence(t *testing.T) {
+	full := map[string]string{"file": "file: a.go\n", "line": "line: 3\n", "scenario": "scenario: S.\n",
+		"evidence_kind": "evidence_kind: trace\n", "evidence": "evidence: a.go:3 then b.go:9.\n"}
+	doc := func(severity, without string) string {
+		out := "severity: " + severity + "\ntitle: T\n"
+		for _, k := range []string{"file", "line", "scenario", "evidence_kind", "evidence"} {
+			if k != without {
+				out += full[k]
+			}
+		}
+		return out
+	}
+	for _, severity := range []string{"blocking", "high", "medium", "low", "note"} {
+		if f := ParseFindings(doc(severity, ""))[0]; f.Unverified {
+			t.Errorf("%s with all its evidence is unverified", severity)
+		}
+		for _, without := range []string{"file", "line", "scenario", "evidence_kind", "evidence"} {
+			f := ParseFindings(doc(severity, without))[0]
+			if want := severity != "low" && severity != "note"; f.Unverified != want || f.Severity != severity {
+				t.Errorf("%s without %s: unverified %v at %s", severity, without, f.Unverified, f.Severity)
+			}
+		}
+	}
+	if f := ParseFindings(strings.Replace(doc("high", ""), "trace", "vibes", 1))[0]; !f.Unverified || f.EvidenceKind != "" {
+		t.Errorf("an improvised evidence kind: %+v", f)
+	}
+}

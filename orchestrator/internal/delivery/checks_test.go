@@ -2,7 +2,9 @@ package delivery
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestTheLastChecksReportIsRead(t *testing.T) {
@@ -43,5 +45,48 @@ func TestOnlyImplementFixAndSimplifyAreGated(t *testing.T) {
 		if ChecksGated[phase] != want {
 			t.Errorf("%s gated = %v", phase, ChecksGated[phase])
 		}
+	}
+}
+
+// A writer's outcome: done when it says nothing, partial or blocked with
+// its note when it says so, partial for a value of its own.
+func TestAWritersOutcomeIsReadFromItsChecksDocument(t *testing.T) {
+	for _, c := range []struct{ reply, outcome, note string }{
+		{"Done.\n```yaml\nchecks:\n  - command: go test ./...\n    result: pass\n    evidence: ok\n```\n", "done", ""},
+		{"No checks at all.", "done", ""},
+		{"```yaml\noutcome: partial\noutcome_note: the second endpoint is left\nchecks:\n  - command: go test\n    result: pass\n    evidence: ok\n```", "partial", "the second endpoint is left"},
+		{"```yaml\nchecks:\n  - command: go test\n    result: not_run\n    evidence: no Go\noutcome: blocked\noutcome_note: needs a key\n```", "blocked", "needs a key"},
+		{"```yaml\noutcome: mostly\nchecks: []\n```", "partial", ""},
+		{"```yaml\noutcome: DONE\nchecks: []\n```", "done", ""},
+		// Unfenced, after prose a YAML parse of the whole reply rejects.
+		{"I changed the greeting: half of it.\nNote: the rest - later: maybe\n\noutcome: partial\noutcome_note: the second greeting is left\nchecks: []\n", "partial", "the second greeting is left"},
+		// A note line that is no YAML on its own: its raw text, the
+		// outcome kept.
+		{"```yaml\noutcome: blocked\noutcome_note: needs a key: the deploy one\nchecks: []\n```", "blocked", "needs a key: the deploy one"},
+		{"```yaml\noutcome: partial\noutcome_note: \"half: the rest\" later\nchecks: []\n```", "partial", "\"half: the rest\" later"},
+		// An outcome line that is no YAML: partial, never done.
+		{"```yaml\noutcome: done: mostly\noutcome_note: the second endpoint is left\nchecks: []\n```", "partial", "the second endpoint is left"},
+	} {
+		if o, n := WriterOutcome(c.reply); o != c.outcome || n != c.note {
+			t.Errorf("%q: %q %q, want %q %q", c.reply, o, n, c.outcome, c.note)
+		}
+	}
+}
+
+// A long unfenced reply of prose with colons is read in linear time: the
+// outcome keys alone are parsed, never the prose before them.
+func TestAWritersOutcomeAfterLongProseIsReadQuickly(t *testing.T) {
+	var b strings.Builder
+	for b.Len() < 256<<10 {
+		b.WriteString("Note: the greeting changes, and its test with it.\n")
+	}
+	b.WriteString("outcome: blocked\noutcome_note: needs a key\nchecks: []\n")
+	start := time.Now()
+	o, n := WriterOutcome(b.String())
+	if took := time.Since(start); took > 50*time.Millisecond {
+		t.Errorf("256 KiB of prose took %v", took)
+	}
+	if o != OutcomeBlocked || n != "needs a key" {
+		t.Errorf("%q %q, want blocked, needs a key", o, n)
 	}
 }

@@ -21,6 +21,27 @@ func TestGoldenInstructions(t *testing.T) {
 	}
 }
 
+// A reviewer of a conducted loop (ConductedLoop): severity by outcome,
+// each finding at medium or above with its evidence, the conductor's fix
+// bar. Every other role's file is the policy loop's, byte for byte.
+func TestGoldenConductedLoopInstructions(t *testing.T) {
+	for _, role := range []string{"reviewer", "qa_browser", "fixer"} {
+		in := goldenTask()
+		in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+		in.Repositories = readOnlyRepos()
+		policy := Instructions(role, "correctness", in.InstructionsInput())
+		in.ConductedLoop = true
+		conducted := Instructions(role, "correctness", in.InstructionsInput())
+		if role == "reviewer" {
+			golden(t, "instructions-reviewer-conducted-loop", conducted)
+		} else if conducted != policy {
+			t.Errorf("a %s's file changed in a conducted loop", role)
+		}
+	}
+	golden(t, "resume-review-conducted-loop", roundMessage(true, PhaseReview, map[string]string{"api": "aaa111"},
+		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], nil, []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}}, ""))
+}
+
 func TestGoldenReviewerInstructions(t *testing.T) {
 	for _, category := range reviewerOrder {
 		in := goldenTask()

@@ -18,7 +18,7 @@ Take the decision the delivery waits on by starting a phase from the task's head
       "items": {
         "type": "string"
       },
-      "description": "review: the reviewers to run (correctness, tests, security, database, api, frontend, documentation, performance); none runs those the change warrants"
+      "description": "review: the reviewers to run (correctness, quality, tests, security, database, api, frontend, documentation, performance); none runs those the change warrants"
     },
     "findings": {
       "type": [

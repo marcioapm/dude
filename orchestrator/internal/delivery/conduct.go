@@ -304,18 +304,19 @@ func reviewBound(st *State) error {
 // for none): open, of this attempt, and short of the attempts per finding.
 func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts,
-		COALESCE(btrim(acceptance), '') <> '' FROM review_findings
+		COALESCE(btrim(acceptance), '') <> '', COALESCE(trivial, false) FROM review_findings
 		WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, st.TaskID, st.Attempt)
 	if err != nil {
 		return nil, err
 	}
 	all, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (f FindingState, err error) {
-		err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion)
+		err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion, &f.Trivial)
 		return
 	})
 	if err != nil {
 		return nil, err
 	}
+	bar, weighed := atFixBar(st, st.Policy, all)
 	byID := map[string]FindingState{}
 	var open []string
 	for _, f := range all {
@@ -336,11 +337,11 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 		}
 		// A tester's finding has no still streak and is never fix-caused
 		// (ConvergenceTx reads reviews' findings only): it cannot stall the loop.
-		for i := range all {
-			all[i].StillRounds = conv.StillRounds[all[i].ID]
+		for i := range weighed {
+			weighed[i].StillRounds = conv.StillRounds[weighed[i].ID]
 		}
 		// A stalled review loop holds every fix, including a named subset.
-		if exit := Exit(st.Policy, all, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
+		if exit := Exit(bar, weighed, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
 			return nil, refuseText(rReviewLoopNotConverging)
 		}
 	}
@@ -360,8 +361,8 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	// The policy's checkpoint: a blocking finding still open after its last
 	// allowed fix stops the loop until a review says whether that fix worked,
 	// or the person decides. Another fix, of any finding, waits for that.
-	for _, f := range all {
-		if f.Status == "open" && f.FixAttempts >= limit && slices.Contains(st.Policy.BlockingSeverities, f.Severity) {
+	for _, f := range weighed {
+		if f.Status == "open" && f.FixAttempts >= limit && slices.Contains(bar.BlockingSeverities, f.Severity) {
 			return nil, refusef(rStillOpenAfterFixAttemptsBound, f.ID, f.FixAttempts)
 		}
 	}

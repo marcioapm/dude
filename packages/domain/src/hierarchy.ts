@@ -165,12 +165,13 @@ export const findingSeveritySchema = z.enum(["blocking", "high", "medium", "low"
  * The reviewer flavours the factory has prompts for. A project names the
  * ones every delivery runs; others join when a change touches their paths.
  */
-export const REVIEWER_CATEGORIES = ["correctness", "tests", "security", "database", "api", "frontend", "documentation", "performance"] as const;
+export const REVIEWER_CATEGORIES = ["correctness", "quality", "tests", "security", "database", "api", "frontend", "documentation", "performance"] as const;
 export type ReviewerCategory = (typeof REVIEWER_CATEGORIES)[number];
 
 /** A reviewer flavour as a person reads it. */
 export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
   correctness: "Correctness",
+  quality: "Code quality",
   tests: "Tests",
   security: "Security",
   database: "Database",
@@ -183,6 +184,7 @@ export const REVIEWER_CATEGORY_LABEL: Record<ReviewerCategory, string> = {
 /** A category whose mid-sentence form is not its id, e.g. an acronym. */
 export const REVIEWER_CATEGORY_IN_SENTENCE: Partial<Record<ReviewerCategory, string>> = {
   api: "API",
+  quality: "code quality",
 };
 
 /**
@@ -948,6 +950,14 @@ export const findingSchema = z.object({
   /** The Run whose judgement closed it, when a re-review did. */
   resolvedByRunId: z.string().nullable().default(null),
   fixAttempts: z.number().int(),
+  /** What the reviewer said of its evidence; null when it said nothing (a finding from before it was asked). */
+  trivial: z.boolean().nullish(),
+  introduced: z.boolean().nullish(),
+  evidenceKind: z.enum(["failing_test", "mutation", "command", "query_plan", "trace"]).nullish(),
+  evidence: z.string().nullish(),
+  scenario: z.string().nullish(),
+  /** At medium or above and missing some of its evidence; its severity stands. */
+  unverified: z.boolean().optional(),
   createdAt: z.string(),
 });
 export type Finding = z.infer<typeof findingSchema>;

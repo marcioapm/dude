@@ -1629,19 +1629,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			}
 			feedback = delivery.WithCheckLogs(feedback, checkLogs)
 		}
-		if len(r.FindingIDs) > 0 {
-			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
-				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix
-				FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
-				ORDER BY chosen.n`,
-				r.FindingIDs)
-			if err != nil {
-				return err
-			}
-			findings, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery.Finding])
-			return err
-		}
-		return nil
+		findings, err = delivery.FindingsInOrderTx(ctx, tx, r.FindingIDs)
+		return err
 	})
 	if err != nil {
 		return lux.Spec{}, runSizes{}, nil, nil, err
@@ -1691,7 +1680,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, DirectFixes: taskBranch.Direct, Adopted: adopted, LastFix: lastFix,
+		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, DirectFixes: taskBranch.Direct, ConductedLoop: taskBranch.ConductedLoop, Adopted: adopted, LastFix: lastFix,
 		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh,
 	}
 	if reviewRange != nil {
@@ -2324,6 +2313,19 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		completed = true
+		// A writer's own account of its work (delivery.WriterOutcome),
+		// stored for whoever decides next.
+		if delivery.Publishes[r.Phase] {
+			reply, err := delivery.RunReplyTailTx(ctx, tx, r.ID, checksReplyMax)
+			if err != nil {
+				return err
+			}
+			outcome, note := delivery.WriterOutcome(reply)
+			if _, err := tx.Exec(ctx, `UPDATE runs SET writer_outcome = $2, writer_outcome_note = $3 WHERE id = $1`,
+				r.ID, outcome, db.Nullable(note)); err != nil {
+				return err
+			}
+		}
 		// Feedback it resolved holds only for a commit it published to the
 		// pull request's branch; one on a candidate holds once promoted.
 		settle := delivery.SettleResolutionsTx
@@ -4109,9 +4111,12 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			return err
 		}
 	}
-	counts := map[string]int{}
+	counts, unverified := map[string]int{}, 0
 	for _, f := range findings {
 		counts[f.Severity]++
+		if f.Unverified {
+			unverified++
+		}
 		// The category is the reviewer's flavour, what re-review routing
 		// groups by; a word of the reviewer's own is its topic. A test
 		// Run has no flavour: its word is the category.
@@ -4120,11 +4125,14 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			cat, topic = category, f.Category
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
-				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix)
-				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15)`,
+				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix,
+				trivial, introduced, evidence_kind, evidence, scenario, unverified)
+				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15,
+				$16, $17, $18, $19, $20, $21)`,
 			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
 			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix,
-			db.Nullable(f.Acceptance), f.CausedByFix); err != nil {
+			db.Nullable(f.Acceptance), f.CausedByFix,
+			f.Trivial, f.Introduced, db.Nullable(f.EvidenceKind), db.Nullable(f.Evidence), db.Nullable(f.Scenario), f.Unverified); err != nil {
 			return err
 		}
 	}
@@ -4168,7 +4176,7 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 	_, err := ledger.Append(ctx, tx, ledger.Event{
 		Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
 		ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
-		Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts},
+		Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts, "unverified": unverified},
 	})
 	return err
 }

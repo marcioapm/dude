@@ -196,6 +196,13 @@ type State struct {
 	// Decisions were handed back to the policy on this delivery: a later
 	// message in Chat does not take them over again.
 	HandedBack bool `json:"handedBack,omitempty"`
+	// A conductor has decided this delivery at some point (Talk it
+	// through, a takeover in Chat, the decisions given to it, a start over
+	// it decides): its review loop stays conducted (ConductedLoop) once
+	// handed back. HandedBack cannot say this: an Open or Draft at
+	// Deliver's own Ask me first hold sets it on a delivery no conductor
+	// ever had. Set by every writer of DeciderConductor.
+	HadConductor bool `json:"hadConductor,omitempty"`
 	// The decision the workflow is parked on for the conductor.
 	Decision *Pending `json:"decision,omitempty"`
 	// Decisions taken so far: what makes each one's Runs and wake its own.
@@ -540,7 +547,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	def := &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
+		Owned:       []string{"decider", "handedBack", "hadConductor", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
@@ -1093,6 +1100,7 @@ func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *
 		// Each cycle after a direct fix is a push its CI and reviewers see.
 		policy.MaxReviewIterations = st.Policy.prFixReviewBound()
 	}
+	policy, findings = atFixBar(st, policy, findings)
 	return Exit(policy, findings, st.Iteration, conv)
 }
 

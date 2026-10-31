@@ -400,6 +400,9 @@ type Outcome struct {
 	// The commit each repository's checkout started from, as lux reported
 	// it (runs.base_shas).
 	Bases map[string]string
+	// A writer's own account of its work (WriterOutcome) and its line;
+	// "" for a Run that is no writer, or ended before it was kept.
+	WriterOutcome, WriterOutcomeNote string
 }
 
 // advance is where the work stands after this phase: the heads it moved,
@@ -551,8 +554,9 @@ func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, e
 		var errText *string
 		var heads []byte
 		err := tx.QueryRow(ctx, `SELECT status::text, error, heads,
-				EXISTS (SELECT 1 FROM artifacts WHERE run_id = runs.id)
-			FROM runs WHERE id = $1`, runID).Scan(&status, &errText, &heads, &o.Published)
+				EXISTS (SELECT 1 FROM artifacts WHERE run_id = runs.id),
+				COALESCE(writer_outcome, ''), COALESCE(writer_outcome_note, '')
+			FROM runs WHERE id = $1`, runID).Scan(&status, &errText, &heads, &o.Published, &o.WriterOutcome, &o.WriterOutcomeNote)
 		if db.IsNotFound(err) {
 			o.Error = "run not found"
 			return nil
@@ -650,13 +654,13 @@ func (s *Store) findings(ctx context.Context, org string, st *State, which strin
 	var out []FindingState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts,
-			COALESCE(btrim(acceptance), '') <> '' FROM review_findings
+			COALESCE(btrim(acceptance), '') <> '', COALESCE(trivial, false) FROM review_findings
 			WHERE task_id = $1 AND `+thisAttempt+` AND `+which+` ORDER BY created_at`, st.TaskID, st.Attempt)
 		if err != nil {
 			return err
 		}
 		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (f FindingState, err error) {
-			err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion)
+			err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion, &f.Trivial)
 			return
 		})
 		if err != nil || convergence == nil {

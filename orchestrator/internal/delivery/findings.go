@@ -121,7 +121,7 @@ func parseFinding(fields map[string]string) (Finding, bool) {
 		line = n
 	}
 
-	return Finding{
+	f := Finding{
 		Severity:     severity,
 		Category:     valueOr(fields["category"], "correctness"),
 		Title:        title,
@@ -132,7 +132,44 @@ func parseFinding(fields map[string]string) (Finding, bool) {
 		Line:         line,
 		Acceptance:   valueOr(fields["acceptance"], fields["acceptance_criterion"]),
 		CausedByFix:  isYes(fields["caused_by_fix"]),
-	}, true
+		Trivial:      yesNo(fields["trivial"]),
+		Introduced:   yesNo(fields["introduced"]),
+		Scenario:     fields["scenario"],
+		Evidence:     fields["evidence"],
+	}
+	if f.SuggestedFix == "" {
+		f.SuggestedFix = fields["repair"]
+	}
+	// An improvised kind is recorded as none, as an improvised severity is
+	// recorded at note: it gains the finding no weight.
+	if kind := strings.ToLower(fields["evidence_kind"]); validEvidenceKinds[kind] {
+		f.EvidenceKind = kind
+	}
+	// Presence only: whether the evidence holds is the conductor's to
+	// judge, and the finding's severity stands either way.
+	f.Unverified = atLeastMedium(f.Severity) && (f.File == "" || f.Line == 0 || f.EvidenceKind == "" ||
+		strings.TrimSpace(f.Evidence) == "" || strings.TrimSpace(f.Scenario) == "")
+	return f, true
+}
+
+// The kinds of evidence a finding may carry (evidence_kind).
+var validEvidenceKinds = map[string]bool{
+	"failing_test": true, "mutation": true, "command": true, "query_plan": true, "trace": true,
+}
+
+// atLeastMedium: a severity whose finding must carry its evidence.
+func atLeastMedium(severity string) bool {
+	return severity == "blocking" || severity == "high" || severity == "medium"
+}
+
+// yesNo reads a three-state yes/no field: isYes's yes, `no` or `false` in
+// any case, and nil when not said or neither.
+func yesNo(value string) *bool {
+	b := isYes(value)
+	if !b && !strings.EqualFold(value, "no") && !strings.EqualFold(value, "false") {
+		return nil
+	}
+	return &b
 }
 
 // isYes reads a yes/no field: `yes` or `true`, in any case; anything else,
@@ -259,4 +296,17 @@ type Finding struct {
 	Acceptance string `json:"acceptance"`
 	// The reviewer said the problem is in code the last fix wrote.
 	CausedByFix bool `json:"causedByFix"`
+	// Appended after CausedByFix, in FindingsInOrderTx's positional scan too.
+	// The smallest fix is obvious, local and a few lines; nil not said.
+	Trivial *bool `json:"trivial,omitempty"`
+	// This round's range introduced or worsened it; nil not said.
+	Introduced *bool `json:"introduced,omitempty"`
+	// How it is known (validEvidenceKinds), the evidence, and the scenario
+	// it goes wrong in; "" not said.
+	EvidenceKind string `json:"evidenceKind,omitempty"`
+	Evidence     string `json:"evidence,omitempty"`
+	Scenario     string `json:"scenario,omitempty"`
+	// The layer's fact: at medium or above, and any of file, line,
+	// scenario, evidence_kind or evidence missing.
+	Unverified bool `json:"unverified,omitempty"`
 }
