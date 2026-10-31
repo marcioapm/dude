@@ -299,7 +299,7 @@ type Finding struct {
 	Acceptance string `json:"acceptance"`
 	// The reviewer said the problem is in code the last fix wrote.
 	CausedByFix bool `json:"causedByFix"`
-	// Appended after CausedByFix, in the positional scans' order too.
+	// Appended after CausedByFix, in FindingsInOrderTx's positional scan too.
 	// The smallest fix is obvious, local and a few lines; nil not said.
 	Trivial *bool `json:"trivial,omitempty"`
 	// This round's range introduced or worsened it; nil not said.

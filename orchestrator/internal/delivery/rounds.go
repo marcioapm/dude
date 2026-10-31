@@ -471,7 +471,7 @@ func continuesEventTx(ctx context.Context, tx pgx.Tx, ref RunRef, from, how stri
 // (in.FindingIDs, answered by position, as a fresh Run's prompt lists
 // them) and how it reports; for a fixer, what it fixes (FixRoundMessage).
 func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRow, created string) (string, error) {
-	findings, err := findingsInOrderTx(ctx, tx, in.FindingIDs)
+	findings, err := FindingsInOrderTx(ctx, tx, in.FindingIDs)
 	if err != nil {
 		return "", err
 	}
@@ -703,7 +703,9 @@ func lastFixNote(ranges []FixRange) string {
 	return render(lastFixTmpl, ranges)
 }
 
-func findingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding, error) {
+// FindingsInOrderTx is the findings of ids, in their order: what a Run
+// was chosen to fix or judge (runs.finding_ids).
+func FindingsInOrderTx(ctx context.Context, tx pgx.Tx, ids []string) ([]Finding, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}

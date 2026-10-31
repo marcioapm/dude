@@ -1629,20 +1629,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			}
 			feedback = delivery.WithCheckLogs(feedback, checkLogs)
 		}
-		if len(r.FindingIDs) > 0 {
-			rows, err := tx.Query(ctx, `SELECT severity::text, category, title, description, suggested_fix,
-				COALESCE(repo, ''), COALESCE(file, ''), COALESCE(line, 0), COALESCE(acceptance, ''), caused_by_fix,
-				trivial, introduced, COALESCE(evidence_kind, ''), COALESCE(evidence, ''), COALESCE(scenario, ''), unverified
-				FROM review_findings f JOIN unnest($1::text[]) WITH ORDINALITY AS chosen(id, n) ON chosen.id = f.id
-				ORDER BY chosen.n`,
-				r.FindingIDs)
-			if err != nil {
-				return err
-			}
-			findings, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery.Finding])
-			return err
-		}
-		return nil
+		findings, err = delivery.FindingsInOrderTx(ctx, tx, r.FindingIDs)
+		return err
 	})
 	if err != nil {
 		return lux.Spec{}, runSizes{}, nil, nil, err
