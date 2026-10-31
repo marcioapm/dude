@@ -316,6 +316,7 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	if err != nil {
 		return nil, err
 	}
+	bar, weighed := atFixBar(st, st.Policy, all)
 	byID := map[string]FindingState{}
 	var open []string
 	for _, f := range all {
@@ -336,11 +337,10 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 		}
 		// A tester's finding has no still streak and is never fix-caused
 		// (ConvergenceTx reads reviews' findings only): it cannot stall the loop.
-		for i := range all {
-			all[i].StillRounds = conv.StillRounds[all[i].ID]
+		for i := range weighed {
+			weighed[i].StillRounds = conv.StillRounds[weighed[i].ID]
 		}
 		// A stalled review loop holds every fix, including a named subset.
-		bar, weighed := atFixBar(st, st.Policy, all)
 		if exit := Exit(bar, weighed, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
 			return nil, refuseText(rReviewLoopNotConverging)
 		}
@@ -361,7 +361,6 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	// The policy's checkpoint: a blocking finding still open after its last
 	// allowed fix stops the loop until a review says whether that fix worked,
 	// or the person decides. Another fix, of any finding, waits for that.
-	bar, weighed := atFixBar(st, st.Policy, all)
 	for _, f := range weighed {
 		if f.Status == "open" && f.FixAttempts >= limit && slices.Contains(bar.BlockingSeverities, f.Severity) {
 			return nil, refusef(rStillOpenAfterFixAttemptsBound, f.ID, f.FixAttempts)
