@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -141,4 +142,59 @@ func TestAConductedLoopCountsAMediumRegression(t *testing.T) {
 		t.Fatalf("after two medium regressions: escalation %q, decision at %q; want %s\n%s",
 			got, w.decisionAt(task), delivery.ReasonNotConverging, w.describeRuns())
 	}
+}
+
+// A resumed reviewer of a conducted loop is asked, in its round message,
+// for each finding's evidence, as a fresh one's instructions ask; a Deliver
+// delivery's resumed reviewer is given the plain format.
+func TestAResumedReviewerOfAConductedLoopIsAskedForEvidence(t *testing.T) {
+	for _, conducted := range []bool{true, false} {
+		t.Run(fmt.Sprintf("conducted=%v", conducted), func(t *testing.T) {
+			w := conducting(t)
+			w.onModel("reviewer", "llm-review")
+			mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"resumeRounds":true}' WHERE id = $1`, w.project)
+			task := w.task()
+			if conducted {
+				w.talk(task)
+				setPolicy(w, task, `{"resumeRounds":true}`)
+				w.implemented(task)
+				// On lux from here on (must, not carriedOut): a reviewer
+				// lux keeps is the one its next round resumes.
+				w.must(task, "decide", `{"action":"next"}`)
+				w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+				w.must(task, "start_phase", `{"phase":"fix"}`)
+				w.until("fix done", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+				w.must(task, "decide", `{"action":"next"}`)
+			} else {
+				w.names(task, w.repoID)
+				p := scriptedPolicy()
+				p.ResumeRounds = true
+				w.start(task, p)
+			}
+			w.until("the resumed reviewer's round message", func() bool { return resumedReview(w) })
+			var inputs []string
+			for _, r := range w.luxRunsOf("review") {
+				inputs = append(inputs, w.lux.Inputs(r.ID)...)
+			}
+			got := false
+			for _, in := range inputs {
+				if strings.Contains(in, "evidence_kind:") {
+					got = true
+				}
+			}
+			if got != conducted {
+				t.Errorf("conducted=%v: the resumed reviewer's round message asks for evidence: %v\n%q", conducted, got, inputs)
+			}
+		})
+	}
+}
+
+// resumedReview says a reviewer on lux has been resumed for a round.
+func resumedReview(w *world) bool {
+	for _, r := range w.luxRunsOf("review") {
+		if r.Resumed > 0 && len(w.lux.Inputs(r.ID)) > 0 {
+			return true
+		}
+	}
+	return false
 }
