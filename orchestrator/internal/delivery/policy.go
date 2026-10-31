@@ -124,8 +124,25 @@ const (
 func (p Policy) ConductorLoop() bool { return p.ReviewLoop == ReviewLoopConductor }
 
 // conductorFixSeverities is the owner's fix bar in a conducted loop:
-// every finding at medium or above (and a low marked trivial, FixesUnder).
+// every finding at medium or above, and a low marked trivial (atFixBar).
 var conductorFixSeverities = []string{"blocking", "high", "medium"}
+
+// atFixBar is the loop's policy and findings as the conductor's fix bar
+// weighs them: what blocks is every finding at medium or above, and every
+// low one marked trivial, whatever BlockingSeverities says. Until the
+// conductor runs the loop itself, the policy's Exit routes it, and a
+// conducted round's reviewers rate a wrong outcome medium (contracts/
+// review.md): without the bar such a finding would ship.
+func atFixBar(p Policy, findings []FindingState) (Policy, []FindingState) {
+	p.BlockingSeverities = conductorFixSeverities
+	out := slices.Clone(findings)
+	for i, f := range out {
+		if !f.Human && f.Severity == "low" && f.Trivial {
+			out[i].Severity = "medium"
+		}
+	}
+	return p, out
+}
 
 // The values of Policy.PullRequestFixes.
 const (
@@ -418,6 +435,9 @@ type FindingState struct {
 	Severity    string
 	Status      string
 	FixAttempts int
+	// The reviewer marked it trivial (review_findings.trivial; not said is
+	// not trivial): weighed only by the conductor's fix bar (ConductedLoop).
+	Trivial bool `db:"-"`
 	// Not a column of review_findings: set only for a person's item.
 	Human        bool `db:"-"`
 	HasCriterion bool `db:"-"`

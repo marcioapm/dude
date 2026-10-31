@@ -654,13 +654,13 @@ func (s *Store) findings(ctx context.Context, org string, st *State, which strin
 	var out []FindingState
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts,
-			COALESCE(btrim(acceptance), '') <> '' FROM review_findings
+			COALESCE(btrim(acceptance), '') <> '', COALESCE(trivial, false) FROM review_findings
 			WHERE task_id = $1 AND `+thisAttempt+` AND `+which+` ORDER BY created_at`, st.TaskID, st.Attempt)
 		if err != nil {
 			return err
 		}
 		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (f FindingState, err error) {
-			err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion)
+			err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion, &f.Trivial)
 			return
 		})
 		if err != nil || convergence == nil {

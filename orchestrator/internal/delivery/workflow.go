@@ -1093,6 +1093,9 @@ func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *
 		// Each cycle after a direct fix is a push its CI and reviewers see.
 		policy.MaxReviewIterations = st.Policy.prFixReviewBound()
 	}
+	if st.ConductedLoop() {
+		policy, findings = atFixBar(policy, findings)
+	}
 	return Exit(policy, findings, st.Iteration, conv)
 }
 
