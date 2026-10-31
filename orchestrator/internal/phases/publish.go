@@ -744,10 +744,9 @@ func (s *Syncer) recordPublish(ctx context.Context, p publishRow) error {
 		switch m.Status {
 		case delivery.MoveMoved:
 			// The branch's head, the next writer's start; the change is
-			// the conductor's own, Base...Head.
-			// Base...Head: from the commit the comparison measured where the
-			// task had no head (its git.commit_created's baseSha, the range
-			// a review of this push covers).
+			// the conductor's own, Base...Head, from the commit the
+			// comparison measured where the task had no head (Start): the
+			// range a review of this push covers.
 			heads[name] = delivery.PublishHead{SHA: m.BranchHead(), Base: cmp.Or(m.Base, m.Start), ChangedPaths: db.NonNil(m.ChangedPaths), Lines: m.Lines}
 		case delivery.MoveRefused:
 			refused[name] = m.Error
