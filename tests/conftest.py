@@ -184,7 +184,9 @@ def forge_project(client: ApiClient, org: dict, env: TestEnvironment, fake_githu
         name="Greeter",
         slug=f"greeter-{fake_github.api_port}",
         agentModels=client.on_models({role: "fake/scripted" for role in ("implementer", "reviewer", "simplifier")}),
-        deliveryPolicy={"requiredReviewers": ["correctness"], "test": False},
+        # Its pull requests' fixes are checked on a candidate, as every
+        # project's were before direct fixes (pullRequestFixes).
+        deliveryPolicy={"requiredReviewers": ["correctness"], "test": False, "pullRequestFixes": "candidate"},
         repositories=[
             {"name": "greeter", "url": fake_github.clone_url, "defaultBranch": "main"}
         ],

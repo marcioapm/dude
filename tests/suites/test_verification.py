@@ -27,7 +27,7 @@ def _deliver_with_tester(client: ApiClient, project: dict, tester: str, title: s
     # forge_project pins the tester off; these turn it on, as the factory does.
     # The scripted writers' Markdown files stand for product changes: every fix is tested.
     client.patch(f"/v1/projects/{project['id']}", {
-        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"]},
+        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"], "pullRequestFixes": "candidate"},
         "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
                                          "simplifier": "fake/scripted", "qa_browser": tester}),
     })
@@ -153,7 +153,7 @@ def test_a_new_verdict_refreshes_only_dudes_section_of_the_pull_request_body(
     rewrites its section for the new head and leaves every byte the person
     wrote where it was."""
     client.patch(f"/v1/projects/{forge_project['id']}", {
-        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"]},
+        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"], "pullRequestFixes": "candidate"},
         "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
                                          "simplifier": "fake/scripted", "qa_browser": "fake/scripted",
                                          "conductor": "fake/scripted"}),
