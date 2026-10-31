@@ -146,6 +146,11 @@ type State struct {
 	// while the narrow review loop over that push runs: where its range
 	// starts per repository the round changed. Nil outside that loop.
 	FixRange map[string]string `json:"fixRange,omitempty"`
+	// The heads, by repository, at which a person accepted a direct
+	// delivery's review round as it stood (a failed reviewer's, or one not
+	// converging): an open pull request showing one counts as reviewed
+	// (unreviewedPRHeadTx), Candidate.Accepted's direct counterpart.
+	AcceptedHeads map[string]string `json:"acceptedHeads,omitempty"`
 	// The after-promotion refresh of the task's open pull requests, while
 	// it is retried (refreshPromoted).
 	PromotedRefresh *PromotedRefresh `json:"promotedRefresh,omitempty"`
@@ -3283,6 +3288,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			if err := w.s.AcceptFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
 				return workflow.Result{}, err
 			}
+			if err := w.acceptHeads(ctx, sc, st); err != nil {
+				return workflow.Result{}, err
+			}
 			return workflow.Result{Next: "reviewExit", State: st}, nil
 		case "amend":
 			if err := w.s.AmendFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
@@ -3304,6 +3312,8 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			st.ReviewRunIDs = nil
 			if st.Candidate != nil {
 				st.Candidate.Accepted = maps.Clone(st.Heads)
+			} else if err := w.acceptHeads(ctx, sc, st); err != nil {
+				return workflow.Result{}, err
 			}
 			return workflow.Result{Next: "awaitReview", State: st}, nil
 		}
@@ -3334,6 +3344,28 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return resumeEscalationAt(st, e), nil
 	}
 	return retry(st, e.Step, e), nil
+}
+
+// acceptHeads records, in a direct delivery, the heads a person accepted
+// the review round at, for each repository with an open pull request:
+// what pullRequestOpenTx then takes as reviewed (AcceptedHeads).
+func (w *steps) acceptHeads(ctx context.Context, sc workflow.StepContext, st *State) error {
+	if !st.Policy.DirectFixes() || len(st.PullRequestIDs) == 0 {
+		return nil
+	}
+	open, err := w.openPRRepos(ctx, sc, st)
+	if err != nil {
+		return err
+	}
+	for _, repo := range open {
+		if h := st.Heads[repo]; h != "" {
+			if st.AcceptedHeads == nil {
+				st.AcceptedHeads = map[string]string{}
+			}
+			st.AcceptedHeads[repo] = h
+		}
+	}
+	return nil
 }
 
 // resumeEscalationAt restores the interrupted wait. Old rows have no saved

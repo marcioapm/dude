@@ -153,20 +153,25 @@ func pullRequestOpenTx(ctx context.Context, tx pgx.Tx, taskID string, d *Deliver
 // unreviewedPRHeadTx is an open pull request on the delivery's branch
 // whose head dude pushed (a writer's or the conductor's publish) and no
 // completed review Run of the attempt has started from, nor a person
-// accepted (Candidate.Accepted's direct counterpart is a review_failed
-// accept, which completes the round): its repository and head, "" for none.
-// A head a person pushed is never dude's, so never unreviewed here.
+// accepted a review round at (State.AcceptedHeads, recorded by a
+// review_failed or not_converging accept): its repository and head, ""
+// for none. A head a person pushed is never dude's, so never unreviewed here.
 func unreviewedPRHeadTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery) (string, string, error) {
 	var repo, head string
+	accepted := d.State.AcceptedHeads
+	if accepted == nil {
+		accepted = map[string]string{}
+	}
 	err := tx.QueryRow(ctx, `SELECT r.name, pr.head_sha FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.head_branch = $2 AND pr.state IN ('open', 'draft') AND COALESCE(pr.head_sha, '') <> ''
+		  AND pr.head_sha IS DISTINCT FROM $5::jsonb->>r.name
 		  AND EXISTS (SELECT 1 FROM events e WHERE e.task_id = $1 AND e.event_type = $3
 		    AND e.payload->>'repo' = r.name AND e.payload->>'headSha' = pr.head_sha)
 		  AND NOT EXISTS (SELECT 1 FROM runs k WHERE k.task_id = $1
 		    AND k.attempt = COALESCE(NULLIF($4, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
 		    AND k.phase = 'review' AND k.status = 'completed' AND k.base_refs->>r.name = pr.head_sha
 		    AND (k.review_range IS NULL OR k.review_range->'base' ? r.name))
-		ORDER BY r.name LIMIT 1`, taskID, d.Branch(taskID), EvGitCommitCreated, d.State.Attempt).Scan(&repo, &head)
+		ORDER BY r.name LIMIT 1`, taskID, d.Branch(taskID), EvGitCommitCreated, d.State.Attempt, accepted).Scan(&repo, &head)
 	if db.IsNotFound(err) {
 		return "", "", nil
 	}
