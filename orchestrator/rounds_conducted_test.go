@@ -23,7 +23,7 @@ type roundReview struct {
 func (w *world) roundReviews(task string) []roundReview {
 	w.t.Helper()
 	rows, err := w.owner.Query(context.Background(), `SELECT id, COALESCE(review_range->>'of', ''),
-			COALESCE(review_range->'base'->>'target', ''), COALESCE(prompt, ''), COALESCE(review_round, 0)
+			COALESCE(review_range->'base'->>'target', ''), '', COALESCE(review_round, 0)
 		FROM runs WHERE task_id = $1 AND phase = 'review' AND replaced_by IS NULL ORDER BY created_at, id`, task)
 	if err != nil {
 		w.t.Fatal(err)
@@ -31,6 +31,9 @@ func (w *world) roundReviews(task string) []roundReview {
 	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[roundReview])
 	if err != nil {
 		w.t.Fatal(err)
+	}
+	for i := range out {
+		out[i].Prompt = w.promptOf(out[i].ID)
 	}
 	return out
 }
@@ -40,6 +43,8 @@ func (w *world) roundReviews(task string) []roundReview {
 // simplifier each commit.
 func roundsWorld(t *testing.T) *world {
 	w := conducting(t)
+	// A real model, so a reviewer's prompt is the one a real one reads.
+	w.onModel("reviewer", "llm-review")
 	scripted := w.lux.Decide
 	reviews := 0
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -233,9 +238,16 @@ func TestRoundTwoReviewsOnlyTheFixsCommits(t *testing.T) {
 	if missed := w.unreviewed(task, head); len(missed) > 0 {
 		t.Errorf("commits no round reviewed: %v", missed)
 	}
-	if want := delivery.Prompt(delivery.PhaseReview, delivery.PromptInput{ReviewBase: map[string]string{"target": head1},
-		ReviewOf: delivery.RangeFixRound}); !strings.Contains(second.Prompt, strings.Split(want, "\n\n")[2]) {
-		t.Errorf("round 2's reviewer is not told its range:\n%s", second.Prompt)
+	// Its range as the review prompt renders one: the section naming it.
+	var scope string
+	for _, part := range strings.Split(delivery.Prompt(delivery.PhaseReview, delivery.PromptInput{
+		ReviewBase: map[string]string{"target": head1}, ReviewOf: delivery.RangeFixRound}), "\n\n") {
+		if strings.Contains(part, head1+"..HEAD") {
+			scope = part
+		}
+	}
+	if scope == "" || !strings.Contains(second.Prompt, scope) {
+		t.Errorf("round 2's reviewer is not told its range %q:\n%s", scope, second.Prompt)
 	}
 }
 
@@ -293,5 +305,52 @@ func TestADeliverRoundTwoReviewsTheWholeBranch(t *testing.T) {
 		if r.Round <= 2 && r.Of != "" {
 			t.Errorf("Deliver's round %d reviews %q, want the whole branch", r.Round, r.Of)
 		}
+	}
+}
+
+// What earlier rounds decided reaches a conducted loop's later reviewer: a
+// finding the conductor dismissed in round 1, with its reason, is listed
+// to round 2's, and to round 3's with the finding round 2 judged fixed.
+func TestTheReviewerIsShownWhatEarlierRoundsDecided(t *testing.T) {
+	w := conducting(t)
+	w.onModel("reviewer", "llm-review")
+	scripted := w.lux.Decide
+	reviews := 0
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			if reviews++; reviews == 1 {
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: high", "FACTORY.md says the wrong thing") +
+					"---\n" + evidencedFinding("severity: medium", "FACTORY.md could be shorter") + "```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
+		case "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "fix"}
+		}
+		return scripted(spec)
+	}
+	task := w.task()
+	var kept, dismissed string
+	w.toRoundTwo(task, func() {
+		kept = w.str(`SELECT id FROM review_findings WHERE task_id = $1 AND title = 'FACTORY.md says the wrong thing'`, task)
+		dismissed = w.str(`SELECT id FROM review_findings WHERE task_id = $1 AND title = 'FACTORY.md could be shorter'`, task)
+		w.must(task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Its length is the house style"}`, dismissed))
+	})
+	rs := w.roundReviews(task)
+	second := rs[len(rs)-1]
+	if !strings.Contains(second.Prompt, dismissed) || !strings.Contains(second.Prompt, "Its length is the house style") ||
+		strings.Contains(second.Prompt, "- "+kept) {
+		t.Errorf("round 2's reviewer is not shown %s dismissed with its reason alone:\n%s\n%+v\n%s", dismissed, second.Prompt, rs, w.describeRuns())
+	}
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	var third string
+	w.until("round 3", func() bool {
+		third = w.promptOf(w.str(`SELECT COALESCE(max(id), '') FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 3`, task))
+		return third != ""
+	})
+	judge := w.str(`SELECT resolved_by_run_id FROM review_findings WHERE id = $1 AND status = 'resolved'`, kept)
+	if judge == "" || !strings.Contains(third, "- "+kept) || !strings.Contains(third, judge) || !strings.Contains(third, dismissed) {
+		t.Errorf("round 3's reviewer is not shown %s judged fixed by %q and %s dismissed:\n%s", kept, judge, dismissed, third)
 	}
 }

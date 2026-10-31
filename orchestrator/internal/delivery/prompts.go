@@ -109,6 +109,11 @@ type PromptInput struct {
 	// Review phase: what earlier reviewers of its category asked
 	// (EarlierQuestionsTx).
 	Questions []EarlierQuestion
+	// Review phase of a conducted loop (ConductedLoop): its round
+	// (runs.review_round), 0 for none, and the attempt's findings decided
+	// in earlier rounds (DecidedFindingsTx).
+	Round   int
+	Decided []DecidedFinding
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -380,6 +385,9 @@ func Prompt(phase string, in PromptInput) string {
 			add(q)
 		}
 		if note := lastFixNote(in.LastFix); note != "" {
+			add(note)
+		}
+		if note := reviewRoundNote(in.ConductedLoop, in.Round, in.ReviewOf, in.Decided); note != "" {
 			add(note)
 		}
 

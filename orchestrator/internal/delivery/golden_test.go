@@ -264,6 +264,32 @@ func TestGoldenReviewPrompts(t *testing.T) {
 	golden(t, "prompt-review-adopted-quiet", Prompt(PhaseReview, adopted))
 }
 
+// A conducted loop's reviewer told its round: round 1 of the whole change;
+// round 2 over what changed since round 1, with what earlier rounds
+// decided; a later round whose range could not be named.
+func TestGoldenConductedReviewRounds(t *testing.T) {
+	decided := []DecidedFinding{
+		{ID: "fnd_1", Severity: "medium", Title: "Totals are rounded per line", How: decidedHow("resolved", "run_fix1", "")},
+		{ID: "fnd_2", Severity: "low", Title: "The header row is optional", How: decidedHow("accepted", "", DismissedByConductor+"the person asked for it")},
+		{ID: "fnd_3", Severity: "high", Title: "Export drops the last row", How: decidedHow("accepted", "", "")},
+	}
+	in := goldenTask()
+	in.Category, in.ConductedLoop, in.Round = "correctness", true, 1
+	golden(t, "prompt-review-round-1-conducted-loop", Prompt(PhaseReview, in))
+	in.Round, in.ReviewBase, in.ReviewOf, in.Decided = 2, map[string]string{"api": "aaa111"}, RangeFixRound, decided
+	in.Findings = goldenFindings()[:1]
+	golden(t, "prompt-review-round-2-conducted-loop", Prompt(PhaseReview, in))
+	in.Round, in.ReviewBase, in.ReviewOf, in.Findings = 3, nil, "", nil
+	golden(t, "prompt-review-round-3-whole-conducted-loop", Prompt(PhaseReview, in))
+	// Outside a conducted loop the round says nothing: today's bytes.
+	in.ConductedLoop = false
+	plain := goldenTask()
+	plain.Category = "correctness"
+	if Prompt(PhaseReview, in) != Prompt(PhaseReview, plain) {
+		t.Error("a review outside a conducted loop is told its round")
+	}
+}
+
 // A next round's texts: a resumed reviewer's and tester's round message,
 // and a fresh reviewer's prompt given its predecessor's conversation and
 // the commits since its round.

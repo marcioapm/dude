@@ -527,6 +527,18 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 			conducted = tb.ConductedLoop
 		}
 		message = roundMessage(conducted, in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
+		if conducted && in.Round > 0 {
+			// Its round, as a fresh reviewer's prompt has it.
+			decided, err := DecidedFindingsTx(ctx, tx, in.TaskID, in.Attempt)
+			if err != nil {
+				return "", err
+			}
+			of := ""
+			if in.ReviewRange != nil {
+				of = in.ReviewRange.Of
+			}
+			message += "\n\n" + reviewRoundNote(true, in.Round, of, decided)
+		}
 		if in.Phase == PhaseTest {
 			checks, err := WriterChecksTx(ctx, tx, in.TaskID, in.Attempt)
 			if err != nil {
@@ -733,4 +745,65 @@ func replayingTx(ctx context.Context, tx pgx.Tx, in *PhaseRun, predecessor strin
 		in.ReviewRange = &ReviewRange{Of: RangeSinceLastRound, Base: base}
 	}
 	return true, nil
+}
+
+// DecidedFinding is a finding of the attempt no longer open, as a later
+// round's reviewer is told it: judged fixed (by the review Run that said
+// so), dismissed by the
+// conductor with its reason, or accepted by a person.
+type DecidedFinding struct{ ID, Severity, Title, How string }
+
+// decidedLimit is how many decided findings a round's reviewer is shown,
+// the most recently decided first.
+const decidedLimit = 20
+
+// DecidedFindingsTx is the reviewers' findings of the task's attempt (0:
+// its highest) that are no longer open, most recently decided first, at
+// most decidedLimit: what a conducted loop's later round is told not to
+// raise again.
+func DecidedFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) ([]DecidedFinding, error) {
+	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, status::text, COALESCE(resolved_by_run_id, ''), resolution_note
+		FROM review_findings WHERE task_id = $1 AND status <> 'open' AND `+thisAttempt+` AND `+fromReview+`
+		ORDER BY updated_at DESC, id DESC LIMIT $3`, taskID, attempt, decidedLimit)
+	if err != nil {
+		return nil, err
+	}
+	type row struct{ ID, Severity, Title, Status, By, Note string }
+	found, err := pgx.CollectRows(rows, pgx.RowToStructByPos[row])
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DecidedFinding, 0, len(found))
+	for _, f := range found {
+		out = append(out, DecidedFinding{ID: f.ID, Severity: f.Severity, Title: f.Title, How: decidedHow(f.Status, f.By, f.Note)})
+	}
+	return out, nil
+}
+
+// decidedHow is how a finding was decided, in a few words.
+func decidedHow(status, by, note string) string {
+	switch status {
+	case "resolved":
+		if by != "" {
+			return "judged fixed by " + by
+		}
+		return "judged fixed"
+	case "accepted":
+		return AcceptedBy(note)
+	}
+	return status
+}
+
+// reviewRoundNote is contracts/review-round: a conducted loop's reviewer
+// told its round, what the round covers, and what earlier rounds decided.
+// "" outside a conducted loop or a round.
+func reviewRoundNote(conducted bool, round int, of string, decided []DecidedFinding) string {
+	if !conducted || round < 1 {
+		return ""
+	}
+	return render(reviewerRoundTmpl, struct {
+		Round, Previous int
+		Narrow          bool
+		Decided         []DecidedFinding
+	}{round, round - 1, of == RangeFixRound, decided})
 }

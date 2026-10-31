@@ -1469,18 +1469,20 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	// (forgeTokens).
 	var firstRepo []string
 	var reviewRange *delivery.ReviewRange
+	var reviewRound int
+	var decided []delivery.DecidedFinding
 	var grants capabilities.Grants
 	_ = json.Unmarshal(r.PRFeedback, &feedback)
 	err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT w.title, w.goal, w.acceptance_criteria, p.agent_models, o.default_agent_models,
 				COALESCE(r.prompt, ''), COALESCE(r.conductor_note, ''), COALESCE(r.restart_note, ''), COALESCE(r.person_note, ''), COALESCE(r.tier_override, ''),
-				o.agent_egress, p.agent_egress, p.agent_egress_mode, o.name, r.review_range
+				o.agent_egress, p.agent_egress, p.agent_egress_mode, o.name, r.review_range, COALESCE(r.review_round, 0)
 			FROM tasks w JOIN projects p ON p.id = w.project_id JOIN organizations o ON o.id = p.organization_id
 			JOIN runs r ON r.id = $2
 			WHERE w.id = $1`, r.TaskID, r.ID).
 			Scan(&title, &goal, &criteria, &projectModels, &orgModels, &briefing, &conductorNote, &restartNote, &personNote, &tierOverride,
-				&orgEgress, &projectEgress, &egressMode, &orgName, &reviewRange); err != nil {
+				&orgEgress, &projectEgress, &egressMode, &orgName, &reviewRange, &reviewRound); err != nil {
 			return fmt.Errorf("load task: %w", err)
 		}
 		var err error
@@ -1612,6 +1614,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			if lastFix, err = delivery.LastFixTx(ctx, tx, parent); err != nil {
 				return err
 			}
+			// A conducted loop's reviewer is told what earlier rounds
+			// decided, so it does not raise those again.
+			if taskBranch.ConductedLoop && reviewRound > 0 {
+				if decided, err = delivery.DecidedFindingsTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
+					return err
+				}
+			}
 		}
 		// What earlier reviewers of its category asked: none for any Run
 		// that is no review (EarlierQuestionsTx keys on the Run's phase).
@@ -1681,7 +1690,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, DirectFixes: taskBranch.Direct, ConductedLoop: taskBranch.ConductedLoop, Adopted: adopted, LastFix: lastFix,
-		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh,
+		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh, Round: reviewRound, Decided: decided,
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of

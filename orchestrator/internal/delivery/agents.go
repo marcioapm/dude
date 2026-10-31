@@ -70,6 +70,7 @@ var (
 	prPhaseStartedTmpl         = mustTemplate("results/pr-phase-started")
 	restartedTmpl              = mustTemplate("contracts/restarted")
 	reviewScopeTmpl            = mustTemplate("contracts/review-scope")
+	reviewerRoundTmpl          = mustTemplate("contracts/review-round")
 	roundTmpl                  = mustTemplate("contracts/resume/round")
 	retestAfreshTmpl           = mustTemplate("contracts/resume/afresh")
 	fixRoundTmpl               = mustTemplate("contracts/resume/fix-round")
