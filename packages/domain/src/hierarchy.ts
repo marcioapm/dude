@@ -218,21 +218,6 @@ export const PULL_REQUEST_FIXES_CHOICE: Record<PullRequestFixes, { label: string
 };
 
 /**
- * Who runs a conducted delivery's review loop (a project's `reviewLoop`):
- * "conductor" runs each round, "policy" keeps Deliver's rules and bounds.
- * "conductor" is the default for every new delivery.
- */
-export const REVIEW_LOOPS = ["conductor", "policy"] as const;
-export type ReviewLoop = (typeof REVIEW_LOOPS)[number];
-export const DEFAULT_REVIEW_LOOP: ReviewLoop = "conductor";
-
-/** Each choice's name and its one line, wherever the setting is shown. */
-export const REVIEW_LOOP_CHOICE: Record<ReviewLoop, { label: string; hint: string }> = {
-  conductor: { label: "Conductor", hint: "The conductor runs each round, with dude reporting each finding's evidence; no fixed round cap." },
-  policy: { label: "Policy", hint: "Deliver's rules and bounds (review rounds, attempts per finding) also bind the conductor." },
-};
-
-/**
  * How a project's work is delivered, over the factory's defaults. Each field
  * left out keeps the default; a task's own overrides layer on top.
  */
@@ -273,8 +258,6 @@ export const deliveryPolicySchema = z
     pullRequest: z.enum(PULL_REQUEST_CHOICES),
     /** How a fix reaches an open pull request. A project's setting only. */
     pullRequestFixes: z.enum(PULL_REQUEST_FIXES),
-    /** Who runs a conducted delivery's review loop. A project's setting only, frozen per delivery. */
-    reviewLoop: z.enum(REVIEW_LOOPS),
   })
   .partial()
   .strict();

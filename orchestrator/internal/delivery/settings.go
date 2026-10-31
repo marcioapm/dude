@@ -169,11 +169,6 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 	default:
 		return p, fmt.Errorf("pullRequestFixes: %q is not candidate or direct", p.PullRequestFixes)
 	}
-	switch p.ReviewLoop {
-	case "", ReviewLoopPolicy, ReviewLoopConductor:
-	default:
-		return p, fmt.Errorf("reviewLoop: %q is not policy or conductor", p.ReviewLoop)
-	}
 	err := p.checkReviewerKeys()
 	return p, err
 }
@@ -186,11 +181,6 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 func (p Policy) ForNewDelivery() Policy {
 	if p.PullRequestFixes == "" {
 		p.PullRequestFixes = PullRequestFixesDirect
-	}
-	// The same for who runs a conducted review loop: the conductor, unless
-	// the project chose policy; a frozen policy without it stays policy.
-	if p.ReviewLoop == "" {
-		p.ReviewLoop = ReviewLoopConductor
 	}
 	return p
 }

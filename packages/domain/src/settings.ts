@@ -152,7 +152,7 @@ export type DeliverySettings = {
  * Delivery settings only a project has: an organisation's settings refuse
  * them, and a value an organisation stored is not read.
  */
-export const PROJECT_ONLY_DELIVERY_KEYS = ["pullRequest", "pullRequestFixes", "reviewLoop"] as const satisfies ReadonlyArray<keyof FullDeliveryPolicy>;
+export const PROJECT_ONLY_DELIVERY_KEYS = ["pullRequest", "pullRequestFixes"] as const satisfies ReadonlyArray<keyof FullDeliveryPolicy>;
 
 /**
  * What an agent's Run may reach (the Network page). On the organisation's
@@ -239,8 +239,6 @@ export const settingsPatchSchema = z
         pullRequest: nullable(field("pullRequest")),
         /** A project's only: refused on the organisation's settings. */
         pullRequestFixes: nullable(field("pullRequestFixes")),
-        /** A project's only: refused on the organisation's settings. */
-        reviewLoop: nullable(field("reviewLoop")),
       })
       .strict()
       .optional(),

@@ -102,26 +102,7 @@ type Policy struct {
 	// fix, before escalating as MaxReviewIterations does before the pull
 	// request: each cycle is a push the pull request's CI and reviewers see.
 	MaxPRFixReviewIterations int `json:"maxPrFixReviewIterations"`
-	// Who runs a conducted delivery's review loop: ReviewLoopPolicy (the
-	// policy's rules and bounds bind the conductor too) or
-	// ReviewLoopConductor (the conductor runs each round, to its fix bar).
-	// A project's setting only (ProjectOnlyPolicyKeys), frozen per
-	// delivery: a frozen policy without it is a delivery started before it
-	// existed, and stays policy (ConductorLoop). A new delivery's resolves
-	// to conductor when no layer sets it (ForNewDelivery).
-	ReviewLoop string `json:"reviewLoop"`
 }
-
-// The values of Policy.ReviewLoop.
-const (
-	ReviewLoopPolicy    = "policy"
-	ReviewLoopConductor = "conductor"
-)
-
-// ConductorLoop says a delivery with this (frozen) policy has its review
-// loop run by the conductor, when it is conducted. Unset is policy: a
-// delivery frozen before the key existed keeps the loop it started with.
-func (p Policy) ConductorLoop() bool { return p.ReviewLoop == ReviewLoopConductor }
 
 // conductorFixSeverities is the owner's fix bar in a conducted loop:
 // every finding at medium or above, and a low marked trivial (atFixBar).
@@ -177,7 +158,7 @@ func IsPullRequestChoice(v string) bool {
 
 // ProjectOnlyPolicyKeys are the keys an organisation's policy never sets:
 // ResolvePolicy passes over them in its organisation layer.
-var ProjectOnlyPolicyKeys = []string{"pullRequest", "pullRequestFixes", "reviewLoop"}
+var ProjectOnlyPolicyKeys = []string{"pullRequest", "pullRequestFixes"}
 
 // LivePolicyKeys are the Policy keys dude reads from the project's and
 // organisation's policy as it is now, never from a delivery's frozen

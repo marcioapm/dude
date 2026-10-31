@@ -353,7 +353,6 @@ export const SETTINGS: SettingsResponse = {
     conductorEditFiles: { value: 3, source: "organization" },
     pullRequest: { value: "open", source: "default" },
     pullRequestFixes: { value: "direct", source: "default" },
-    reviewLoop: { value: "conductor", source: "default" },
   },
   network: {
     egress: { value: [], source: "organization" }, mode: { value: "add", source: "organization" },

@@ -100,9 +100,10 @@ type Directed struct {
 // conducted says whether the conductor takes the delivery's decisions.
 func (st *State) conducted() bool { return st.Decider == DeciderConductor }
 
-// ConductedLoop says the review loop is the conductor's: its delivery froze
-// reviewLoop conductor, and the conductor decides it now.
-func (st *State) ConductedLoop() bool { return st.Policy.ConductorLoop() && st.conducted() }
+// ConductedLoop says the review loop is the conductor's: the conductor
+// decides the delivery now. A delivery that was in flight before the
+// conducted loop existed gets it on its next round too.
+func (st *State) ConductedLoop() bool { return st.conducted() }
 
 // Phases is what the conductor may start at a decision point.
 func (d *Pending) Phases() []string {
