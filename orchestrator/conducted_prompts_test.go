@@ -4,18 +4,17 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
-
-	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
+
+// askedForEvidence is the line of a reviewer's finding format that asks
+// for each finding's evidence (contracts/finding-format).
+const askedForEvidence = "evidence_kind: failing_test | mutation | command | query_plan | trace"
 
 // A reviewer's instruction file asks for each finding's evidence only in a
 // conducted loop: a delivery whose conductor decides as the reviewer is
 // submitted. An un-conducted (Deliver) delivery briefs its reviewer as
 // before.
 func TestAConductedLoopsReviewerIsAskedForEvidence(t *testing.T) {
-	const asked = "evidence_kind: failing_test | mutation | command | query_plan | trace"
 	for _, c := range []struct {
 		name string
 		want bool
@@ -30,12 +29,8 @@ func TestAConductedLoopsReviewerIsAskedForEvidence(t *testing.T) {
 			} else {
 				w.deliver(task)
 			}
-			var review string
-			w.until("the reviewer on lux", func() bool {
-				_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review'`, task).Scan(&review)
-				return review != "" && w.luxRunOf(review) != ""
-			})
-			if got := strings.Contains(w.instructionsOf(review), asked); got != c.want {
+			review := w.reviewOnLux(task)
+			if got := strings.Contains(w.instructionsOf(review), askedForEvidence); got != c.want {
 				t.Errorf("%s: the reviewer is asked for evidence: %v", c.name, got)
 			}
 		})
@@ -47,18 +42,20 @@ func TestAConductedLoopsReviewerIsAskedForEvidence(t *testing.T) {
 func TestADeliverDeliverysReviewerIsBriefedAsThePolicyLoops(t *testing.T) {
 	w := newWorld(t)
 	task := w.task()
-	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-		return delivery.NameOnlyRepository(context.Background(), tx, task)
-	}); err != nil {
-		t.Fatal(err)
+	w.deliver(task)
+	review := w.reviewOnLux(task)
+	if strings.Contains(w.instructionsOf(review), askedForEvidence) {
+		t.Error("an un-conducted delivery's reviewer is asked for evidence")
 	}
-	w.start(task, scriptedPolicy())
+}
+
+// reviewOnLux is the task's review Run, once lux runs it.
+func (w *world) reviewOnLux(task string) string {
+	w.t.Helper()
 	var review string
 	w.until("the reviewer on lux", func() bool {
 		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review'`, task).Scan(&review)
 		return review != "" && w.luxRunOf(review) != ""
 	})
-	if strings.Contains(w.instructionsOf(review), "evidence_kind: failing_test | mutation | command | query_plan | trace") {
-		t.Error("an un-conducted delivery's reviewer is asked for evidence")
-	}
+	return review
 }

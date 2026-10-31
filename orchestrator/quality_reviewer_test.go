@@ -15,12 +15,11 @@ func TestAQualityReviewTheConductorStartsIsBriefedWithItsAspect(t *testing.T) {
 	w.talk(task)
 	w.implemented(task)
 	w.must(task, "start_phase", `{"phase":"review","categories":["quality"]}`)
-	var review, category string
-	w.until("the quality reviewer on lux", func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT id, COALESCE(category, '') FROM runs WHERE task_id = $1 AND phase = 'review'`,
-			task).Scan(&review, &category)
-		return review != "" && w.luxRunOf(review) != ""
-	})
+	review := w.reviewOnLux(task)
+	var category string
+	if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(category, '') FROM runs WHERE id = $1`, review).Scan(&category); err != nil {
+		t.Fatal(err)
+	}
 	if category != "quality" {
 		t.Errorf("the reviewer's category is %q", category)
 	}
