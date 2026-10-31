@@ -238,6 +238,10 @@ func TaskLimitsTx(ctx context.Context, tx pgx.Tx, taskID string) (TaskLimits, er
 	switch {
 	case d != nil && d.Live():
 		l.Delivery, l.Policy, l.PRIteration, l.PRFixes = DeliveryLive, d.State.Policy, d.State.PRIteration, d.State.PRFixes
+		if !l.Policy.DirectFixes() {
+			// Frozen before the key existed: candidate (DirectFixes).
+			l.Policy.PullRequestFixes = PullRequestFixesCandidate
+		}
 		l.Grants, l.ChangedPaths = d.State.LimitGrants, d.State.ChangedPaths
 		if now.MaxPRFixIterations != l.Policy.MaxPRFixIterations {
 			l.PolicyNow = &now

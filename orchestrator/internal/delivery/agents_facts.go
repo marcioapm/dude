@@ -14,6 +14,7 @@ var (
 	outcomeTmpl        = mustTemplate("wakes/facts/outcome")
 	prFeedbackFactTmpl = mustTemplate("wakes/facts/pr-feedback")
 	failingCheck       = render(mustTemplate("wakes/facts/failing-check"), nil)
+	prConflictTmpl     = mustTemplate("wakes/facts/pr-conflict")
 	tookOverTmpl       = mustTemplate("wakes/facts/took-over")
 	testFailedTmpl     = mustTemplate("wakes/facts/test-failed")
 	testPassedTmpl     = mustTemplate("wakes/facts/test-passed")

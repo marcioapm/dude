@@ -679,7 +679,7 @@ func ownVerdicts(ctx context.Context, gh *forge.GitHub, fs []forge.Feedback) (ma
 // change, however many deliveries report it.
 func (s *Syncer) signal(ctx context.Context, org string, pr tracked, status forge.Status, signal *forge.Signal,
 	permitted []forge.Feedback, recorded []string, stuckFor int, pendingSince *time.Time, workflowRunID string) error {
-	signal.Repo, signal.Number = pr.RepoName, pr.Number
+	signal.Repo, signal.Number, signal.Head = pr.RepoName, pr.Number, status.HeadSHA
 	for i := range signal.Feedback {
 		signal.Feedback[i].Repo = pr.RepoName
 	}

@@ -1691,7 +1691,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
+		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, DirectFixes: taskBranch.Direct, Adopted: adopted, LastFix: lastFix,
 		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh,
 	}
 	if reviewRange != nil {
@@ -2250,6 +2250,9 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			if forge.Transient(err) {
 				return true, s.retryLater(ctx, r, err)
 			}
+			if errors.As(err, new(*keptOnRunBranch)) {
+				return true, s.failKept(ctx, r, err.Error())
+			}
 			return true, s.fail(ctx, r, err.Error())
 		}
 	}
@@ -2522,8 +2525,13 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	var keepBranch bool
 	// A pull request is open on branch: only promoteCandidate moves it, to
 	// a reviewed (and tested) candidate head. A writer that still targets it
-	// (one already running when the pull request opened) fails here.
+	// (one already running when the pull request opened) fails here. Not
+	// when the delivery's fixes reach its pull requests directly: there a
+	// writer's admission is what holds a push to the review after it.
 	var prOpen bool
+	// The Run publishes straight to the task branch of a delivery whose
+	// fixes reach its pull requests directly.
+	var direct bool
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return err
@@ -2540,6 +2548,10 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		if own != "" {
 			branch = own
+		}
+		if tb.Direct && own == "" {
+			direct = true
+			return nil
 		}
 		prOpen, err = delivery.PullRequestOpenOnTx(ctx, tx, r.TaskID, branch)
 		return err
@@ -2627,7 +2639,13 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			})
 		})
 		if err != nil {
-			return nil, "", fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
+			err = fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
+			if direct && advance.NotFastForward(err) {
+				// Someone else pushed to the pull request's branch: what the
+				// Run made stays on its own branch, kept with the Run.
+				err = &keptOnRunBranch{err: err, branch: res.Branch}
+			}
+			return nil, "", err
 		}
 		// Best effort: a leftover per-Run branch is clutter, not a fault. One
 		// kept for the writer's next round stays: its next push's lease is
@@ -2666,6 +2684,20 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	}
 	return heads, branch, nil
 }
+
+// keptOnRunBranch is a direct delivery's publish refused as no
+// fast-forward (a person pushed to the pull request meanwhile): the Run
+// fails kept (failKept), its per-Run branch with it until kept_until.
+type keptOnRunBranch struct {
+	err    error
+	branch string
+}
+
+func (e *keptOnRunBranch) Error() string {
+	return e.err.Error() + "; its commits are kept on " + e.branch
+}
+
+func (e *keptOnRunBranch) Unwrap() error { return e.err }
 
 // mergeAttempted says whether the Run recorded, before a POST /merges,
 // asking GitHub to merge commit into repo's task branch: only then is a

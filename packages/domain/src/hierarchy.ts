@@ -201,6 +201,21 @@ export const PULL_REQUEST_CHOICE: Record<PullRequestChoice, { label: string; hin
 };
 
 /**
+ * How a fix reaches an open pull request (a project's `pullRequestFixes`):
+ * "direct" pushes it to the pull request, then reviews that push; "candidate"
+ * checks it on a separate branch first. "direct" is the default.
+ */
+export const PULL_REQUEST_FIXES = ["direct", "candidate"] as const;
+export type PullRequestFixes = (typeof PULL_REQUEST_FIXES)[number];
+export const DEFAULT_PULL_REQUEST_FIXES: PullRequestFixes = "direct";
+
+/** Each mode's name and its one line, wherever the setting is shown. */
+export const PULL_REQUEST_FIXES_CHOICE: Record<PullRequestFixes, { label: string; hint: string }> = {
+  direct: { label: "Pushed to the pull request, then reviewed", hint: "CI and GitHub reviewers see each fix; dude reviews each push before its next." },
+  candidate: { label: "Checked on a separate branch first", hint: "Slower: nothing unreviewed reaches the pull request." },
+};
+
+/**
  * How a project's work is delivered, over the factory's defaults. Each field
  * left out keeps the default; a task's own overrides layer on top.
  */
@@ -218,6 +233,8 @@ export const deliveryPolicySchema = z
     maxStillRounds: z.number().int().min(0).max(20),
     maxRegressionRounds: z.number().int().min(0).max(20),
     maxPrFixIterations: z.number().int().min(0).max(20),
+    /** Review → fix cycles after a fix pushed to an open pull request, before the owner is asked. */
+    maxPrFixReviewIterations: z.number().int().min(1).max(20),
     simplify: z.boolean(),
     /** A browser tester exercises the change and publishes a video, before the pull request. */
     test: z.boolean(),
@@ -237,6 +254,8 @@ export const deliveryPolicySchema = z
      * first. A project's setting only: an organisation never sets it.
      */
     pullRequest: z.enum(PULL_REQUEST_CHOICES),
+    /** How a fix reaches an open pull request. A project's setting only. */
+    pullRequestFixes: z.enum(PULL_REQUEST_FIXES),
   })
   .partial()
   .strict();

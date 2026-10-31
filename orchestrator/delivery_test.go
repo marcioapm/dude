@@ -189,9 +189,11 @@ func newWorld(t *testing.T) *world {
 	// One required reviewer, so a delivery's Runs are few enough to count;
 	// the factory's default requires several (scriptedPolicy). No tester,
 	// which the factory runs by default: tests of the gate turn it on. Each
-	// round fresh, as before rounds went on from the last (resuming).
+	// round fresh, as before rounds went on from the last (resuming). Its
+	// pull requests' fixes are checked on a candidate, as every delivery's
+	// were before direct fixes (pullRequestFixes): the direct tests set it.
 	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix, runtime_image, delivery_policy)
-		VALUES ($1, $2, 'P', $1, 'P', 'agent:test', '{"requiredReviewers":["correctness"],"test":false,"resumeRounds":false}')`, w.project, w.org)
+		VALUES ($1, $2, 'P', $1, 'P', 'agent:test', '{"requiredReviewers":["correctness"],"test":false,"resumeRounds":false,"pullRequestFixes":"candidate"}')`, w.project, w.org)
 	for _, role := range []string{"implementer", "reviewer", "simplifier", "qa_browser"} {
 		w.onModel(role, "fake/scripted")
 	}

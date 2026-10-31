@@ -117,7 +117,7 @@ func (s *Server) Handler() http.Handler {
 		return nil
 	}))
 	mux.Handle("GET /internal/delivery-defaults", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) error {
-		write(w, http.StatusOK, delivery.DefaultPolicy())
+		write(w, http.StatusOK, delivery.DefaultPolicy().ForNewDelivery())
 		return nil
 	}))
 	// lux's pools, for the machine sizes page and its fit check. Never an

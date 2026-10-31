@@ -64,6 +64,9 @@ type PromptInput struct {
 	// The task took over an existing branch: what it merges into, by
 	// repository. Empty for new work, whose base is the default branch.
 	Bases map[string]string
+	// The delivery's fixes reach its open pull requests directly
+	// (Policy.DirectFixes): its instruction file says so.
+	DirectFixes bool
 	// The existing pull request the task took over, when it did: its
 	// unresolved threads, changes requested and red checks are the
 	// reviewers' context.

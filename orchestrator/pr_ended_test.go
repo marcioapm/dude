@@ -170,13 +170,20 @@ func TestAMergeWhileAnEscalationWaitsOnAPersonFinishesTheTask(t *testing.T) {
 // candidate abandoned, and the task done with no pull request of its own
 // for the fix and no step failing.
 func TestAMergeWhileAPullRequestFixerWorksStopsIt(t *testing.T) {
+	testAMergeWhileAPullRequestFixerWorksStopsIt(t)
+}
+
+func testAMergeWhileAPullRequestFixerWorksStopsIt(t *testing.T) {
 	w := newWorld(t)
 	w.hangFixers()
 	task := w.reviewing()
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
 	w.until("the fixer at work", func() bool { w.sync(); return w.count(runningFixers, task) == 1 })
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'candidate'`, task); n != 1 {
+	// On a candidate, or straight to the pull request (directPRFixes).
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'candidate'`, task); n != 1 && !directPRFixes {
 		t.Fatalf("the fix is not on a candidate")
+	} else if n != 0 && directPRFixes {
+		t.Fatalf("a direct fix is on a candidate")
 	}
 	w.gh.Merge(1)
 	w.until("the task to finish", func() bool { w.sync(); return w.taskStatus(task) == "done" })
@@ -260,6 +267,10 @@ func TestACandidateCheckedAcrossAnUnsignalledMergeIsNotPromoted(t *testing.T) {
 // other. The fixer goes on and the task is not done; once the second
 // merges, it is.
 func TestOneOfTwoPullRequestsMergingLeavesTheOthersFixerAtWork(t *testing.T) {
+	testOneOfTwoPullRequestsMergingLeavesTheOthersFixerAtWork(t)
+}
+
+func testOneOfTwoPullRequestsMergingLeavesTheOthersFixerAtWork(t *testing.T) {
 	w := newWorld(t)
 	w.hangFixers()
 	task := w.prOpen(w.task(), prAt{web: true})

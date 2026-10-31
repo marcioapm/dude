@@ -74,7 +74,7 @@ export type SettingSource = "organization" | "project";
 
 /**
  * Where a delivery value comes from: as SettingSource, or "default" for a
- * setting only a project has (pullRequest) that the project has not set.
+ * setting only a project has (pullRequest, pullRequestFixes) that the project has not set.
  */
 export type DeliverySettingSource = SettingSource | "default";
 
@@ -152,7 +152,7 @@ export type DeliverySettings = {
  * Delivery settings only a project has: an organisation's settings refuse
  * them, and a value an organisation stored is not read.
  */
-export const PROJECT_ONLY_DELIVERY_KEYS = ["pullRequest"] as const satisfies ReadonlyArray<keyof FullDeliveryPolicy>;
+export const PROJECT_ONLY_DELIVERY_KEYS = ["pullRequest", "pullRequestFixes"] as const satisfies ReadonlyArray<keyof FullDeliveryPolicy>;
 
 /**
  * What an agent's Run may reach (the Network page). On the organisation's
@@ -227,6 +227,7 @@ export const settingsPatchSchema = z
         maxStillRounds: nullable(field("maxStillRounds")),
         maxRegressionRounds: nullable(field("maxRegressionRounds")),
         maxPrFixIterations: nullable(field("maxPrFixIterations")),
+        maxPrFixReviewIterations: nullable(field("maxPrFixReviewIterations")),
         simplify: nullable(field("simplify")),
         test: nullable(field("test")),
         parkAfterMinutes: nullable(field("parkAfterMinutes")),
@@ -236,6 +237,8 @@ export const settingsPatchSchema = z
         conductorEditFiles: nullable(field("conductorEditFiles")),
         /** A project's only: refused on the organisation's settings. */
         pullRequest: nullable(field("pullRequest")),
+        /** A project's only: refused on the organisation's settings. */
+        pullRequestFixes: nullable(field("pullRequestFixes")),
       })
       .strict()
       .optional(),

@@ -41,6 +41,9 @@ type InstructionsInput struct {
 	Context string
 	// What a saved prompt's {{task.*}} and {{run.*}} variables say.
 	Vars PromptVars
+	// A fix on an open pull request goes to it directly, then is reviewed
+	// (Policy.DirectFixes); else it is checked on a candidate first.
+	DirectFixes bool
 }
 
 // Web is what a Run reaches of the web with its harness's own tools.
@@ -100,8 +103,9 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 	return InstructionsInput{
 		Child: in.Child, SessionChild: in.SessionChild, Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
-		Context: in.Context,
-		Vars:    PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
+		Context:     in.Context,
+		Vars:        PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
+		DirectFixes: in.DirectFixes,
 	}
 }
 

@@ -355,6 +355,34 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   dude opens while a conductor's writer child is still publishing is not
   seen by that publish; under `update` (the default) `syncBeforePR` waits
   for live writers, so the window does not exist there.
+- **Fixes on an open pull request, direct.** The above is the
+  `candidate` mode of a project's `pullRequestFixes`. Every new delivery
+  resolves to `direct` unless its project set `candidate` (the rollback);
+  the mode is frozen in `State.Policy` when the delivery starts, and a
+  delivery frozen before the key existed reads as `candidate` until it
+  ends (`Policy.DirectFixes`). In `direct` mode no candidate is opened:
+  `prFix` starts from the pull request's heads and its fix publishes to the
+  task branch, which is the pull request's head, so its CI and reviewers
+  see it at once. Then a narrow review of that push's range
+  (`State.FixRange`, `{of: "pull_request_fix"}`) runs, and a finding there is
+  fixed on the pull request and reviewed again, at most
+  `maxPrFixReviewIterations` (2) times before it escalates as the review
+  loop does. There is no simplifier and no tester after the pull request
+  opens: CI is the test, and the conductor may still `start_phase test`.
+  Reviewers are asked again once, when the loop is clear (`prFixDone`). A
+  person's push under a running fix makes its publish fail
+  (`pr_fix_failed`); nothing is forced. A conductor's publish and its
+  writer children may reach the open pull request, but never twice past
+  review: while a pull request shows a head dude pushed that no completed
+  review started from, they are refused with `start_phase review`
+  (`unreviewedPRHeadTx`); a person's push is never such a head. A conflict
+  on the open pull request is a message to the conductor at the pull
+  request feedback decision. Under the policy, the integration fixer merges
+  the base onto the pull request's branch, its merge is reviewed and not
+  tested, and the delivery waits again with no mergeability polling and no
+  hand-over: the next sync's conflicting reading at the attempted pair
+  escalates. Checks feedback read at a head the pull request no longer
+  shows starts no fix (`forge.Signal.Head`), in both modes.
 - **Every loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxStillRounds`, `MaxRegressionRounds`,
   `MaxPRFixIterations`. Convergence asks for the owner's direction when a

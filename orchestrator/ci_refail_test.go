@@ -11,6 +11,10 @@ import (
 // A runner failure can leave the fixer nothing to push. A re-run failing on
 // that unchanged head must wake another fixer; rereading the same failure must not.
 func TestChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnotherFix(t *testing.T) {
+	testChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnotherFix(t)
+}
+
+func testChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnotherFix(t *testing.T) {
 	for _, via := range []string{"check run", "commit status"} {
 		t.Run(via, func(t *testing.T) {
 			w := newWorld(t)

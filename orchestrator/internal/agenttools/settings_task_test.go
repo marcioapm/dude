@@ -172,8 +172,11 @@ func TestTheTaskViewShowsTheFrozenPolicyBesideTodaysAndTheRaises(t *testing.T) {
 	if r, _ := task["reviewers"].([]any); len(r) != 4 || r[2] != "database" {
 		t.Errorf("reviewers for a migration: %v", task["reviewers"])
 	}
-	if d, _ := task["differsFromToday"].(map[string]any); len(d) != 4 {
-		t.Errorf("differs in %d keys, want the four changed: %v", len(d), d)
+	// And how it fixes its pull requests: frozen before the key, it stays
+	// candidate while every new delivery goes direct.
+	if d, _ := task["differsFromToday"].(map[string]any); len(d) != 5 || field(task, "differsFromToday", "pullRequestFixes", "frozen") != "candidate" ||
+		field(task, "differsFromToday", "pullRequestFixes", "today", "value") != "direct" {
+		t.Errorf("differs in %d keys, want the four changed and pullRequestFixes: %v", len(d), d)
 	}
 	for _, at := range [][]any{{"policy", "conditionalReviewers", "value"}, {"differsFromToday", "conditionalReviewers", "frozen"}} {
 		last := fmt.Sprint(field(task, append(at, 4)...))
