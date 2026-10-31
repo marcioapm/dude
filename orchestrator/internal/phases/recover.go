@@ -192,10 +192,11 @@ func (s *Syncer) submitRecovery(ctx context.Context, c recoveryRow) error {
 	}
 	// A Run stopped or restarted a moment ago is aborted in dude before the
 	// syncer has had lux end it: its checkpoints are those of its last stop,
-	// not of its end. Read them once lux has ended it, or once the recovery
-	// has waited past its give-up on a control nothing clears. A Run lux
-	// has not ended past the give-up ends the recovery: its checkpoints
-	// would be stale.
+	// not of its end. Read them once its control is cleared and lux has
+	// ended it or no longer knows it. Past the recovery's give-up the
+	// control is not waited on, as nothing may clear it, but a Run lux has
+	// still not ended, or will not say whether it has, ends the recovery:
+	// its checkpoints would be stale. Any other lux error is retried.
 	if !c.StepLong {
 		var control string
 		if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
