@@ -255,7 +255,7 @@ var Publishes = map[string]bool{
 	PhaseSimplify:  true,
 }
 
-var reviewerOrder = []string{"correctness", "tests", "security", "database", "api", "frontend", "documentation", "performance"}
+var reviewerOrder = []string{"correctness", "quality", "tests", "security", "database", "api", "frontend", "documentation", "performance"}
 
 // ReviewersFor picks the reviewers a diff warrants on a first review round,
 // in a stable order so a task's fan-out is reproducible.
