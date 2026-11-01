@@ -78,6 +78,14 @@ func fileOf(h delivery.FixHunks, repo, file string) *delivery.HunkFile {
 func TestAFixsPublishKeepsItsHunks(t *testing.T) {
 	f := newFixPublish(t)
 	f.a.commit(map[string]string{"FACTORY.md": "one\ntwo\nthree\n"}, "fix")
+	// GitHub's patch, its body and all (the fake shows only the header).
+	f.a.answer = func(base, head string, answer map[string]any) {
+		for _, file := range answer["files"].([]any) {
+			if file := file.(map[string]any); file["filename"] == "FACTORY.md" {
+				file["patch"] = "@@ -0,0 +1,3 @@\n+one\n+two\n+three"
+			}
+		}
+	}
 	if err := f.publish(); err != nil {
 		t.Fatal(err)
 	}
