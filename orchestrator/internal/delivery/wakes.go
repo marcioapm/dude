@@ -137,8 +137,18 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	for i, p := range pending {
 		lines[i], kinds[i], ids[i] = p.Line, p.Kind, p.ID
 	}
+	// The event keeps the note as recorded, unmarked: the replay marks it
+	// once, against the findings' status when it is read (a finding fixed
+	// or reopened since must not keep the mark it was sent with).
+	told := WakeNote(lines)
+	// A reason recorded before a finding it names was settled (a round
+	// wake's findings at the bar, the conductor mid-turn when it was
+	// recorded) says so: it is never told open.
+	if err := settledSinceTx(ctx, tx, taskID, lines); err != nil {
+		return "", err
+	}
 	note := WakeNote(lines)
-	payload := map[string]any{"text": note, "reasons": kinds}
+	payload := map[string]any{"text": told, "reasons": kinds}
 	var directiveID string
 	if runID == "" {
 		if runID, err = startConductor(ctx, tx, org, projectID, taskID, Writer{ActorType: ledger.ActorSystem, ActorID: "dude"},
@@ -156,7 +166,7 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 		}
 		if digest != "" {
 			note += "\n\n" + digest
-			payload["text"], payload["digest"] = note, true
+			payload["text"], payload["digest"] = told+"\n\n"+digest, true
 		}
 		if directiveID, _, err = QueueDirective(ctx, tx, ref, Directive{Text: note, Scope: "run"}); err != nil {
 			return "", err

@@ -571,12 +571,19 @@ func run(args []string, out io.Writer) error {
 		fs.Var(&categories, "category", "review: a reviewer to run (repeatable); none runs those the change warrants")
 		fs.Var(&findings, "finding", "fix: an open finding to fix (repeatable); none fixes every open one")
 		note := fs.String("note", "", "what you ask of the Run")
+		var thenReview many
+		fs.Var(&thenReview, "then-review", "fix or simplify: a reviewer to run as soon as it has committed (repeatable)")
+		wake := fs.String("wake", "", "with --then-review: after_review (default) or after_fix")
+		thenNote := fs.String("then-note", "", "with --then-review: what you ask of the reviewers")
+		scope := fs.String("scope", "", "the review round's scope: whole or fix")
+		bar := fs.String("bar", "", "your bar for the round, quoted to the fixer and the reviewers")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
 		if len(args) != 1 {
-			return errors.New("usage: dude phase start implement|review|fix|simplify|test [--category C]... [--finding ID]... [--note N]")
+			return errors.New("usage: dude phase start implement|review|fix|simplify|test [--category C]... [--finding ID]... [--note N] " +
+				"[--then-review C]... [--wake after_review|after_fix] [--then-note N] [--scope whole|fix] [--bar TEXT]")
 		}
 		body := map[string]any{"phase": args[0]}
 		if len(categories) > 0 {
@@ -587,6 +594,26 @@ func run(args []string, out io.Writer) error {
 		}
 		if *note != "" {
 			body["note"] = *note
+		}
+		if len(thenReview) > 0 || *wake != "" || *thenNote != "" {
+			then := map[string]any{"review": []string(thenReview)}
+			if *wake != "" {
+				then["wake"] = *wake
+			}
+			if *thenNote != "" {
+				then["note"] = *thenNote
+			}
+			body["then"] = then
+		}
+		if *scope != "" || *bar != "" {
+			round := map[string]any{}
+			if *scope != "" {
+				round["scope"] = *scope
+			}
+			if *bar != "" {
+				round["bar"] = *bar
+			}
+			body["round"] = round
 		}
 		return show(out, *asJSON, call("start_phase", body))
 	case "steer":

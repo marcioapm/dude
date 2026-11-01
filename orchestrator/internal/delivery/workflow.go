@@ -72,6 +72,11 @@ type State struct {
 
 	// Phase Runs being waited for.
 	PendingRunIDs []string `json:"pendingRunIds,omitempty"`
+	// The conductor's fix-then-review in flight (start_phase then): the
+	// review queued behind the fix (or simplifier) it started, which the
+	// fix's await step starts without a decision, or offers at one. Nil
+	// outside one.
+	Pipeline *Pipeline `json:"pipeline,omitempty"`
 	// A person's note on the decision the delivery goes on from (an
 	// escalation's, a pick-up's), marked as their words (PersonSaidTx):
 	// the next phase Runs started carry it (runs.person_note), then it is
@@ -851,6 +856,10 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	reviewRange := st.roundRange()
+	if d != nil && d.Round != nil && d.Round.Scope == ScopeWhole && reviewRange != nil && reviewRange.Of == RangeFixRound {
+		// The conductor asked for the whole branch in a later round.
+		reviewRange = nil
+	}
 	// A retry of the round's failed reviewers keeps the heads its other
 	// reviewers saw: a move since is the next round's to review.
 	retrying := st.RetryCategories
@@ -1150,13 +1159,27 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	st.ReviewingHeads = nil
 	st.PendingRunIDs = nil
 	exit := w.loopExit(st, findings, conv)
-	if (exit == nil || exit.Reason == "clear") && !st.fixLoop() {
+	// A conducted delivery's fix loop is the conductor's too: a direct pull
+	// request fix's narrow loop parks after each round. A candidate's loop
+	// goes on by the policy's rules.
+	if (exit == nil || exit.Reason == "clear") && (!st.fixLoop() || st.conducted() && !st.checkingCandidate()) {
 		// Past a bound it escalates as the policy does; short of one, the
 		// round's findings are the conductor's to triage, if it decides as
 		// the transition commits (recheck).
 		res, err := w.afterLoop(ctx, sc, st, exit)
+		if err != nil {
+			return res, err
+		}
 		st.Routed = &Routed{Point: PointReviewed, Policy: "reviewExit", Next: res.Next, Line: findingsLine(st, findings)}
-		return res, err
+		if st.conducted() {
+			// A conducted round's own wake: its findings at the fix bar.
+			line, err := w.roundLine(ctx, sc, st, round, findings)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			st.Routed.Line, st.Routed.Kind = line, WakeRound
+		}
+		return res, nil
 	}
 	return w.afterLoop(ctx, sc, st, exit)
 }
@@ -1324,6 +1347,7 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 		}
 	}
 	d := directed(st, PhaseFix)
+	st.Pipeline = d.pipeline()
 	if d != nil {
 		if len(d.FindingIDs) > 0 {
 			// Only those of the conductor's that are still open.
@@ -1358,6 +1382,9 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	if err != nil {
 		return workflow.Result{}, err
 	}
+	if st.Pipeline != nil {
+		st.Pipeline.Fix = runID
+	}
 	st.PersonSaid = ""
 	return park("awaitFix", st, []string{runID}), nil
 }
@@ -1376,6 +1403,7 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 		return workflow.Result{}, err
 	}
 	if !out.Succeeded {
+		// A pipeline's queued review goes with it (escalate).
 		return w.escalate(ctx, sc, st, "fix_failed", map[string]any{"runId": runID, "error": out.Error})
 	}
 	// A repository the fix changed first joins the range under review, from
@@ -1391,6 +1419,9 @@ func (w *steps) awaitFix(ctx context.Context, sc workflow.StepContext) (workflow
 	st.HeadRunID, st.PendingRunIDs, st.Heads, st.ChangedPaths = runID, nil, out.advance(st.Heads), out.ChangedPaths
 	// The tester's findings were sent; the next test judges them.
 	st.TestFindingIDs = nil
+	if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseFix, runID, out, "review"); ok || err != nil {
+		return res, err
+	}
 	if st.fixLoop() {
 		return workflow.Result{Next: "review", State: st}, nil
 	}
@@ -1424,9 +1455,13 @@ func (w *steps) simplify(ctx context.Context, sc workflow.StepContext) (workflow
 	}
 	k := writerKey(sc, st, PhaseSimplify)
 	d := directed(st, PhaseSimplify)
+	st.Pipeline = d.pipeline()
 	runID, err := w.phase(ctx, sc, st, PhaseSimplify, k, d.apply)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.Pipeline != nil {
+		st.Pipeline.Fix = runID
 	}
 	st.PersonSaid = ""
 	return park("awaitSimplify", st, []string{runID}), nil
@@ -1447,8 +1482,12 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	}
 	st.PendingRunIDs = nil
 	// A failed or empty simplification is not a failure of the task: the
-	// code was simple enough already. Carry on with what we had.
+	// code was simple enough already. Carry on with what we had — unless
+	// the conductor queued a review behind it: then it is told at once.
 	if !out.Succeeded || len(out.Heads) == 0 {
+		if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseSimplify, runID, out, "test"); ok || err != nil {
+			return res, err
+		}
 		return workflow.Result{Next: "test", State: st}, nil
 	}
 	// What it changed was never reviewed: a review round over its diff
@@ -1473,6 +1512,9 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	}
 	// The simplifier's diff is a loop of its own: its first review is round 1.
 	st.newLoop()
+	if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseSimplify, runID, out, "review"); ok || err != nil {
+		return res, err
+	}
 	// Mechanics, whoever decides: code nobody reviewed never reaches the
 	// test or the pull request. The round's findings are the conductor's
 	// to triage, as any round's are (awaitReview).
@@ -2162,6 +2204,10 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		st.Candidate = &Candidate{Round: st.PRFixKey, Branch: st.candidateBranch(), From: maps.Clone(st.Heads)}
 	}
 	d := directed(st, PhaseFix)
+	// A candidate's or an integration's fix is checked by its own loop.
+	if st.Pipeline = d.pipeline(); candidate || st.Integration != nil {
+		st.Pipeline = nil
+	}
 	// An integration fixer is given its brief alone: the pull request
 	// comments stay in st.PRFeedback and the people's items stay open, for
 	// the fix openPullRequest starts once the integration is promoted.
@@ -2183,6 +2229,9 @@ func (w *steps) prFix(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	})
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.Pipeline != nil {
+		st.Pipeline.Fix = runID
 	}
 	if st.Integration != nil {
 		st.Integration.RunID = runID
@@ -2683,7 +2732,27 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 			st.ChangedPaths, st.Iteration, st.TestFixRounds, st.TestFindingIDs = out.ChangedPaths, 0, 0, nil
 			st.newLoop()
 			w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
+			// The conductor's queued review replaces the round's reviewers.
+			if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseFix, runID, out, "review"); ok || err != nil {
+				return res, err
+			}
 			return workflow.Result{Next: "review", State: st}, nil
+		}
+	}
+	if p := st.Pipeline; p != nil {
+		// Nothing reached the pull request, or a candidate checks it: the
+		// queued review has nothing of its own to review. The conductor is
+		// told at once, if the fix committed nothing, and the delivery goes
+		// on as it would have.
+		st.Pipeline = nil
+		if len(out.Heads) == 0 {
+			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+				_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, WakeRound, "pipeline:"+runID,
+					out.line(runID, "fix")+" "+pipelineStopped(p, pipelineNothing, out, false))
+				return err
+			}); err != nil {
+				return workflow.Result{}, err
+			}
 		}
 	}
 	if len(out.Heads) == 0 || st.Candidate == nil {
@@ -3229,6 +3298,8 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 // resumes it.
 func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State, reason string, detail any) (workflow.Result, error) {
 	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
+	// A queued review goes with what stopped: the person decides first.
+	st.Pipeline = nil
 	switch reason {
 	case "pull_request_conflict":
 		if st.Integration != nil {
@@ -3511,6 +3582,8 @@ func resumeEscalationAt(st *State, e *Escalation) workflow.Result {
 // a step a person aborted.
 func retry(st *State, step string, e *Escalation) workflow.Result {
 	st.Retries++
+	// A step run again afresh is not the conductor's queued unit.
+	st.Pipeline = nil
 	switch step {
 	case "review":
 		if e != nil && e.Reason == "review_failed" {

@@ -1,0 +1,5 @@
+Review round {{.Round}} done ({{.Range}}; {{join .Lenses ", "}}): {{.Open}} open at the fix bar{{with .Below}}, {{.}} below it{{end}}{{with .People}}, {{.}} people's feedback items (feedback){{end}}.
+{{- range $i, $f := .Shown}}{{if $i}};{{end}} {{.ID}} [{{.Severity}}{{if .Trivial}}, trivial{{end}}{{if eq .Introduced "no"}}, pre-existing{{else if eq .Introduced "yes"}}, introduced{{end}}{{if .Unverified}}, unverified{{end}}] {{.Where}}: {{clip (oneLine .Title) 80}}{{end}}{{if .Shown}}.{{end}}
+{{- with .More}} And {{.}} more at the bar (findings).{{end}}
+{{- with .Fix}} The fix before it: {{.}}{{end}}
+{{- if .Long}} 8 rounds in this loop: consider asking the person.{{end}}

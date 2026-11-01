@@ -845,6 +845,158 @@ func TestAWakeNoteCarriesTheDigest(t *testing.T) {
 	}
 }
 
+// A round wake recorded while the conductor was mid-turn, naming a finding
+// it then dismissed, is delivered saying so: the note never tells it the
+// finding is open. A finding still open is named as it was.
+func TestAWakeNoteSaysAFindingWasSettledSinceItsReason(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx := context.Background()
+	w.run(t, "run_cond", "ABS-2", "", "conductor", "running")
+	w.run(t, "run_rev", "ABS-2", "review", "reviewer", "completed")
+	task := w.tasks["ABS-2"]
+	w.exec(t, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, status,
+			resolution_note)
+		VALUES ('find_gone', $1, $2, 'run_rev', 'correctness', 'blocking', 'Gone', 'D.', 'accepted', $3),
+			('find_open', $1, $2, 'run_rev', 'correctness', 'high', 'Open', 'D.', 'open', '')`,
+		w.org, task, delivery.DismissedByConductor+"it is generated")
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, delivery.WakeRound, "d:1",
+			"Review round 1 done: 2 open at the fix bar. find_gone [blocking] F.md:1: Gone; find_open [high] F.md:2: Open.")
+		return err
+	})
+	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '1 hour'`)
+	w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_cond'`)
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.WakeConductorTx(ctx, tx, w.org, task, 1)
+		return err
+	})
+	var text string
+	if err := w.owner.QueryRow(ctx, `SELECT text FROM directives WHERE run_id = 'run_cond'`).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "find_gone (now dismissed by the conductor: it is generated) [blocking]") ||
+		!strings.Contains(text, "find_open [high]") || strings.Contains(text, "find_open (now") {
+		t.Errorf("the wake note:\n%s", text)
+	}
+}
+
+// The wake's event keeps the note as it was told, unmarked: the replay
+// marks it once, against the finding's status now. A finding fixed after
+// its dismissal was delivered reads fixed only; one reopened, not settled.
+func TestAWakesReplayMarksAFindingOnceAgainstItsStatusNow(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx := context.Background()
+	w.run(t, "run_cond", "ABS-2", "", "conductor", "running")
+	w.run(t, "run_rev", "ABS-2", "review", "reviewer", "completed")
+	task := w.tasks["ABS-2"]
+	w.exec(t, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, status,
+			resolution_note)
+		VALUES ('find_gone', $1, $2, 'run_rev', 'correctness', 'blocking', 'Gone', 'D.', 'accepted', $3)`,
+		w.org, task, delivery.DismissedByConductor+"it is generated")
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, delivery.WakeRound, "d:1",
+			"Review round 1 done: 1 open at the fix bar. find_gone [blocking] F.md:1: Gone.")
+		return err
+	})
+	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '1 hour'`)
+	w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_cond'`)
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.WakeConductorTx(ctx, tx, w.org, task, 1)
+		return err
+	})
+	var sent, stored string
+	if err := w.owner.QueryRow(ctx, `SELECT text FROM directives WHERE run_id = 'run_cond'`).Scan(&sent); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.owner.QueryRow(ctx, `SELECT payload->>'text' FROM events WHERE task_id = $1 AND event_type = $2`,
+		task, delivery.EvConductorWoken).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sent, "find_gone (now dismissed by the conductor: it is generated)") {
+		t.Errorf("the note sent is not marked:\n%s", sent)
+	}
+	if strings.Contains(stored, "(now") || !strings.Contains(stored, "find_gone [blocking]") {
+		t.Errorf("the note stored is marked:\n%s", stored)
+	}
+	// Heard: the replay tells only what the conductor was delivered.
+	w.exec(t, `UPDATE directives SET delivered_at = now() WHERE run_id = 'run_cond'`)
+	replay := func() string {
+		var got string
+		w.in(t, func(tx pgx.Tx) (err error) {
+			got, err = delivery.Replay(ctx, tx, delivery.Talker{TaskID: task})
+			return err
+		})
+		return got
+	}
+	w.exec(t, `UPDATE review_findings SET status = 'resolved', resolution_note = '' WHERE id = 'find_gone'`)
+	if got := replay(); strings.Count(got, "(now fixed)") != 1 || strings.Contains(got, "dismissed") {
+		t.Errorf("the replay of a finding fixed since:\n%s", got)
+	}
+	w.exec(t, `UPDATE review_findings SET status = 'open', resolution_note = '' WHERE id = 'find_gone'`)
+	if got := replay(); strings.Contains(got, "(now") || !strings.Contains(got, "find_gone [blocking]") {
+		t.Errorf("the replay of a finding reopened:\n%s", got)
+	}
+}
+
+// A live conductor's wake carries its epic's digest: the event stores the
+// note as told, unmarked, with the digest after it, and the replay still
+// marks the finding once.
+func TestAWakeWithADigestStoresItsNoteUnmarked(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx := context.Background()
+	w.run(t, "run_cond", "ABS-2", "", "conductor", "running")
+	w.exec(t, `UPDATE runs SET created_at = now() - interval '1 hour' WHERE id = 'run_cond'`)
+	w.run(t, "run_rev", "ABS-2", "review", "reviewer", "completed")
+	one := w.run(t, "run_one", "ABS-1", "implement", "implementer", "running")
+	task := w.tasks["ABS-2"]
+	w.exec(t, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, status,
+			resolution_note)
+		VALUES ('find_gone', $1, $2, 'run_rev', 'correctness', 'blocking', 'Gone', 'D.', 'accepted', $3)`,
+		w.org, task, delivery.DismissedByConductor+"it is generated")
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, delivery.WakeRound, "d:1",
+			"Review round 1 done: 1 open at the fix bar. find_gone [blocking] F.md:1: Gone.")
+		return err
+	})
+	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '1 hour'`)
+	w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_cond'`)
+	// A peer's activity on the epic: the wake's digest is not empty.
+	w.send(t, one, "ABS-2", "Which body?", "")
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.WakeConductorTx(ctx, tx, w.org, task, 1)
+		return err
+	})
+	var sent, stored, digest string
+	if err := w.owner.QueryRow(ctx, `SELECT text FROM directives WHERE run_id = 'run_cond'`).Scan(&sent); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.owner.QueryRow(ctx, `SELECT payload->>'text', coalesce(payload->>'digest', '') FROM events
+		WHERE task_id = $1 AND event_type = $2`, task, delivery.EvConductorWoken).Scan(&stored, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if digest != "true" {
+		t.Fatalf("the wake carried no digest: digest=%q\n%s", digest, stored)
+	}
+	if !strings.Contains(sent, "find_gone (now dismissed by the conductor: it is generated)") ||
+		!strings.Contains(sent, "## Since you last looked, on this epic") || !strings.Contains(sent, "Which body?") {
+		t.Errorf("the note sent is not marked, or lacks the digest:\n%s", sent)
+	}
+	if strings.Contains(stored, "(now") || !strings.Contains(stored, "find_gone [blocking]") ||
+		!strings.Contains(stored, "## Since you last looked, on this epic") {
+		t.Errorf("the note stored is marked, or lacks the digest:\n%s", stored)
+	}
+	w.exec(t, `UPDATE directives SET delivered_at = now() WHERE run_id = 'run_cond'`)
+	w.exec(t, `UPDATE review_findings SET status = 'resolved', resolution_note = '' WHERE id = 'find_gone'`)
+	var got string
+	w.in(t, func(tx pgx.Tx) (err error) {
+		got, err = delivery.Replay(ctx, tx, delivery.Talker{TaskID: task})
+		return err
+	})
+	if strings.Count(got, "(now fixed)") != 1 || strings.Contains(got, "dismissed") {
+		t.Errorf("the replay of a finding fixed since:\n%s", got)
+	}
+}
+
 // A message to a task whose only live Run is its conductor is held: it is
 // never queued on the conductor, which it would wake.
 func TestAMessageNeverReachesAPeersConductor(t *testing.T) {

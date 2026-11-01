@@ -20,6 +20,16 @@
 
 {{- define "refusals/delivery/conduct/no-reviewer-categories-are"}}no reviewer %q: the categories are %s{{end}}
 
+{{- define "refusals/delivery/conduct/then-is-for-fix-or-simplify"}}then is for fix or simplify, not %s: start the review on its own (start_phase review){{end}}
+
+{{- define "refusals/delivery/conduct/then-names-the-review"}}then needs review: the reviewers to run after the fix (correctness, tests, …){{end}}
+
+{{- define "refusals/delivery/conduct/then-wake-is-one-of"}}then.wake %q: it is after_review (the default) or after_fix{{end}}
+
+{{- define "refusals/delivery/conduct/round-is-for-review-fix-or-simplify"}}round is for review, fix or simplify, not %s{{end}}
+
+{{- define "refusals/delivery/conduct/round-scope-is-one-of"}}round.scope %q: it is whole or fix{{end}}
+
 {{- define "refusals/delivery/conduct/review-loop-at-its-bound-rounds"}}the review loop is at its bound: %d of %d rounds spent. Ask the person how to go on (ask_person){{end}}
 
 {{- define "refusals/delivery/conduct/review-loop-not-converging"}}the review loop is not converging: blocking criteria remain unmet or fixes keep introducing new blockers. Re-review (start_phase review) or ask the person how to go on (ask_person) before another fix{{end}}

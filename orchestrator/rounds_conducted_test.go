@@ -87,14 +87,18 @@ func roundsWorld(t *testing.T) *world {
 }
 
 // reviewOf is the category and round of the review Run lux is asked to
-// start; "", 0 for any other Run.
+// start; "", 0 for any other Run. It runs on fakelux's goroutine, beside
+// the test's: read on a connection of w.app's pool, never w.owner (one
+// connection, the test goroutine's), and never failing the test.
 func (w *world) reviewOf(spec map[string]any) (category string, round int) {
 	labels, _ := spec["labels"].(map[string]any)
 	if labels["dude.phase"] != "review" {
 		return "", 0
 	}
-	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(category, ''), COALESCE(review_round, 0) FROM runs WHERE id = $1`,
-		fmt.Sprint(labels["dude.run"])).Scan(&category, &round)
+	_ = w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT COALESCE(category, ''), COALESCE(review_round, 0) FROM runs WHERE id = $1`,
+			fmt.Sprint(labels["dude.run"])).Scan(&category, &round)
+	})
 	return category, round
 }
 
@@ -635,8 +639,14 @@ func (w *world) publishedDuringRoundOne(task string, failOne bool) string {
 	w.t.Cleanup(release)
 	w.talk(task)
 	w.implemented(task)
+	// On fakelux's goroutine: w.app's pool, never w.owner, and no t.Fatal
+	// (the hook may run after the test ends).
 	w.lux.BeforeStart(func(luxID string) {
-		if w.count(`SELECT count(*) FROM runs WHERE lux_run_id = $1 AND phase = 'review'`, luxID) == 0 {
+		var review bool
+		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+			return tx.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM runs WHERE lux_run_id = $1 AND phase = 'review')`,
+				luxID).Scan(&review)
+		}); err != nil || !review {
 			return
 		}
 		select {

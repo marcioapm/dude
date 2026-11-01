@@ -68,3 +68,17 @@
 {{- define "wakes/facts/point-before_pull_request"}}before the pull request{{end}}
 
 {{- define "wakes/facts/point-pull_request_feedback"}}pull request feedback{{end}}
+
+{{- define "wakes/facts/pipeline-stopped"}}
+{{- if eq .Case "failed"}}It failed{{with .Error}} ({{clip (oneLine .) 160}}){{end}}
+{{- else if eq .Case "nothing"}}It committed nothing
+{{- else}}It reports itself {{.Outcome}}{{with .Note}}: {{clip (oneLine .) 300}}{{end}}
+{{- end}}; the review you queued after it ({{join .Review ", "}}) did not start.{{if .Queued}} decide next runs it; start_phase review with other reviewers replaces it.{{end}}{{end}}
+
+{{- define "wakes/facts/pipeline-queued"}}The review you queued after it ({{join .Review ", "}}) waits for you: decide next runs it; start_phase review with other reviewers replaces it.{{end}}
+
+{{- define "wakes/facts/pipeline-unreviewed-push"}} The fix is on the pull request, unreviewed: nothing is published past it until a review has run.{{end}}
+
+{{- define "wakes/facts/round-fix"}}{{.Phase}} {{.RunID}}{{with .Commits}} committed at {{join . " "}}{{else}} committed nothing{{end}}{{with .Outcome}}, reports itself {{.}}{{end}}{{with .Note}}: {{clip (oneLine .) 200}}{{end}}.{{end}}
+
+{{- define "wakes/facts/round-range"}}{{if .Of}}{{.Of}}{{range .Repos}} {{.}}{{end}}{{else}}the whole branch{{end}}{{end}}

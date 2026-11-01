@@ -1514,3 +1514,23 @@ you are no longer this task's conductor: another took over from you. Recover not
 
 the pull request in %s shows %s, which dude pushed and no review has covered yet: nothing more goes to it until one has. Use start_phase review first
 
+## refusals/delivery/conduct/round-is-for-review-fix-or-simplify
+
+round is for review, fix or simplify, not %s
+
+## refusals/delivery/conduct/round-scope-is-one-of
+
+round.scope %q: it is whole or fix
+
+## refusals/delivery/conduct/then-is-for-fix-or-simplify
+
+then is for fix or simplify, not %s: start the review on its own (start_phase review)
+
+## refusals/delivery/conduct/then-names-the-review
+
+then needs review: the reviewers to run after the fix (correctness, tests, …)
+
+## refusals/delivery/conduct/then-wake-is-one-of
+
+then.wake %q: it is after_review (the default) or after_fix
+

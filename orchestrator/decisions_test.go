@@ -268,7 +268,11 @@ func TestTalkItThroughToAPullRequest(t *testing.T) {
 
 	w.until("after the review round", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	n = w.wokenWith(task, "after a review round")
-	if !strings.Contains(n, "1 open findings (1 blocking)") || strings.Contains(n, "does not record the fix") {
+	// A conducted round's wake (step 3) names its finding at the fix bar,
+	// with its one-line title, not the counts a Deliver round's line has.
+	finding := w.str(`SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, task)
+	if !strings.Contains(n, finding) ||
+		w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeRound) != 1 {
 		t.Errorf("the note after review: %q", n)
 	}
 	w.must(task, "start_phase", `{"phase":"fix"}`)
@@ -821,6 +825,9 @@ func TestDismissAFinding(t *testing.T) {
 	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	var id string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1`, task).Scan(&id)
+	// The round's wake reached the conductor before the dismissal: it is in
+	// the conversation a replacement's briefing replays.
+	w.wokenWith(task, "Review round 1")
 	w.refused(task, "dismiss_finding", `{"id":"`+id+`","reason":"  "}`, "say why")
 	w.must(task, "dismiss_finding", `{"id":"`+id+`","reason":"FACTORY.md is generated; the record is elsewhere"}`)
 	var status, note string

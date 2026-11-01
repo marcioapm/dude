@@ -362,15 +362,17 @@ func conducted[T any](out T, err error) (T, error) {
 }
 
 type startPhaseIn struct {
-	Phase      string   `json:"phase"`
-	Categories []string `json:"categories,omitempty"`
-	Findings   []string `json:"findings,omitempty"`
-	Note       string   `json:"note,omitempty"`
+	Phase      string             `json:"phase"`
+	Categories []string           `json:"categories,omitempty"`
+	Findings   []string           `json:"findings,omitempty"`
+	Note       string             `json:"note,omitempty"`
+	Round      *delivery.RoundAsk `json:"round,omitempty"`
+	Then       *delivery.Then     `json:"then,omitempty"`
 }
 
 func startPhase(ctx context.Context, tx pgx.Tx, c Caller, in startPhaseIn) (map[string]any, error) {
 	next, err := delivery.ConductStartPhase(ctx, tx, c.run(), delivery.StartPhase{Phase: strings.TrimSpace(in.Phase),
-		Categories: in.Categories, FindingIDs: in.Findings, Note: in.Note})
+		Categories: in.Categories, FindingIDs: in.Findings, Note: in.Note, Then: in.Then, Round: in.Round})
 	return conducted(map[string]any{"started": in.Phase, "next": next}, err)
 }
 

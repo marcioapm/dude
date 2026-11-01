@@ -206,6 +206,23 @@ func take(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, t Taken) erro
 	if t.Action == "open_pull_request" {
 		payload["draft"] = t.Draft
 	}
+	if t.Then != nil {
+		then := map[string]any{"review": t.Then.Review, "wake": t.Then.Wake}
+		if t.Then.Note != "" {
+			then["note"] = t.Then.Note
+		}
+		payload["then"] = then
+	}
+	if t.Round != nil {
+		round := map[string]any{}
+		if t.Round.Scope != "" {
+			round["scope"] = t.Round.Scope
+		}
+		if t.Round.Bar != "" {
+			round["bar"] = t.Round.Bar
+		}
+		payload["round"] = round
+	}
 	if _, err := ledger.Append(ctx, tx, ref.Event(EvDecisionTaken, ledger.ActorAgent, payload)); err != nil {
 		return err
 	}
@@ -219,6 +236,63 @@ type StartPhase struct {
 	Categories []string
 	FindingIDs []string
 	Note       string
+	// fix or simplify: the review to start once it has committed.
+	Then *Then
+	// review, fix or simplify: the round's scope and bar.
+	Round *RoundAsk
+}
+
+// barChars bounds the conductor's bar for a round.
+const barChars = 1000
+
+// pipelineOf checks start_phase's then and round, and is what the decision
+// carries of them: then only with fix or simplify, naming known reviewers;
+// round with review, fix or simplify.
+func pipelineOf(in StartPhase) (*Pipeline, *RoundAsk, error) {
+	var round *RoundAsk
+	if in.Round != nil {
+		switch in.Phase {
+		case PhaseReview, PhaseFix, PhaseSimplify:
+		default:
+			return nil, nil, refusef(rRoundIsForReviewFixOrSimplify, in.Phase)
+		}
+		scope := strings.TrimSpace(in.Round.Scope)
+		if scope != "" && scope != ScopeWhole && scope != ScopeFix {
+			return nil, nil, refusef(rRoundScopeIsOneOf, scope)
+		}
+		round = &RoundAsk{Scope: scope, Bar: clip(strings.TrimSpace(in.Round.Bar), barChars)}
+		if round.Scope == "" && round.Bar == "" {
+			round = nil
+		}
+	}
+	if in.Then == nil {
+		return nil, round, nil
+	}
+	if in.Phase != PhaseFix && in.Phase != PhaseSimplify {
+		return nil, nil, refusef(rThenIsForFixOrSimplify, in.Phase)
+	}
+	if len(in.Then.Review) == 0 {
+		return nil, nil, refuseText(rThenNamesTheReview)
+	}
+	for _, c := range in.Then.Review {
+		if !slices.Contains(reviewCategories(), c) {
+			return nil, nil, refusef(rNoReviewerCategoriesAre, c, listOr(reviewCategories()))
+		}
+	}
+	wake := strings.TrimSpace(in.Then.Wake)
+	switch wake {
+	case "":
+		wake = WakeAfterReview
+	case WakeAfterReview, WakeAfterFix:
+	default:
+		return nil, nil, refusef(rThenWakeIsOneOf, wake)
+	}
+	p := &Pipeline{Review: slices.Clone(in.Then.Review), Wake: wake,
+		Note: clip(strings.TrimSpace(in.Then.Note), noteChars)}
+	if round != nil {
+		p.Scope, p.Bar = round.Scope, round.Bar
+	}
+	return p, round, nil
 }
 
 // ConductStartPhase takes start_phase as the decision the delivery waits on.
@@ -250,9 +324,22 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		} else if err != nil {
 			return "", err
 		}
+		if st.Policy.DirectFixes() && p.Point != PointPRFeedback {
+			// No second writer past an unreviewed push of dude's on the
+			// pull request (I-3), as after a fix with then.wake after_fix.
+			// Not at the pull request's feedback (or conflict): there the
+			// fix it starts reviews that push first (prFix's reviewFirst).
+			if err := refusePullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil {
+				return "", err
+			}
+		}
 	}
 	if len(in.Categories) > 0 && in.Phase != PhaseReview || len(in.FindingIDs) > 0 && in.Phase != PhaseFix {
 		return "", refuseText(rCategoriesAreForReviewFindingsFor)
+	}
+	then, round, err := pipelineOf(in)
+	if err != nil {
+		return "", err
 	}
 	switch in.Phase {
 	case PhaseReview:
@@ -281,7 +368,7 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		in.FindingIDs = ids
 	}
 	if err := take(ctx, tx, ref, d, Taken{Action: "start_phase", Phase: in.Phase, Categories: in.Categories,
-		FindingIDs: in.FindingIDs, Note: clip(strings.TrimSpace(in.Note), noteChars)}); err != nil {
+		FindingIDs: in.FindingIDs, Note: clip(strings.TrimSpace(in.Note), noteChars), Then: then, Round: round}); err != nil {
 		return "", err
 	}
 	return render(conductorStartsTmpl, in.Phase), nil

@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -69,6 +71,10 @@ type Pending struct {
 	// Taken by the conductor (decide, start_phase), set as it is taken so
 	// a second is refused before the workflow acts on the first.
 	Taken *Taken `json:"taken,omitempty"`
+	// The review the conductor queued behind the fix this decision follows
+	// (State.Pipeline), not started: an exception, or wake after_fix.
+	// "next" runs it.
+	Queued *Directed `json:"queued,omitempty"`
 }
 
 // Taken is a conductor's decision.
@@ -83,6 +89,10 @@ type Taken struct {
 	Note       string   `json:"note,omitempty"`
 	// open_pull_request: a draft, as the person answered.
 	Draft bool `json:"draft,omitempty"`
+	// start_phase fix or simplify: the review queued behind it (then).
+	Then *Pipeline `json:"then,omitempty"`
+	// start_phase review, fix or simplify: the round's scope and bar.
+	Round *RoundAsk `json:"round,omitempty"`
 	// The conductor that took it.
 	By string `json:"by"`
 }
@@ -94,7 +104,65 @@ type Directed struct {
 	Categories []string `json:"categories,omitempty"`
 	FindingIDs []string `json:"findingIds,omitempty"`
 	Note       string   `json:"note,omitempty"`
-	By         string   `json:"by"`
+	// A fix or simplify's queued review (Taken.Then); the round's scope
+	// and bar (Taken.Round).
+	Then  *Pipeline `json:"then,omitempty"`
+	Round *RoundAsk `json:"round,omitempty"`
+	By    string    `json:"by"`
+}
+
+// The wakes a fix-then-review may ask for (Then.Wake).
+const (
+	WakeAfterReview = "after_review"
+	WakeAfterFix    = "after_fix"
+)
+
+// The scopes a round may ask for (RoundAsk.Scope): the whole branch, or
+// what the round's rules give (round 1 whole, later ones the fix's commits).
+const (
+	ScopeWhole = "whole"
+	ScopeFix   = "fix"
+)
+
+// Then is start_phase's then: the review dude starts as soon as a fix (or
+// simplify) has committed, without a decision between.
+type Then struct {
+	Review []string `json:"review"`
+	Wake   string   `json:"wake,omitempty"`
+	Note   string   `json:"note,omitempty"`
+}
+
+// RoundAsk is start_phase's round: the scope of the review round, and the
+// conductor's bar for it, quoted to the fixer and the reviewers.
+type RoundAsk struct {
+	Scope string `json:"scope,omitempty"`
+	Bar   string `json:"bar,omitempty"`
+}
+
+// Pipeline is the conductor's fix-then-review in flight: the review queued
+// behind the fix it started, carried out by the fix's await step without a
+// decision (State.Pipeline). Fix is the fix Run, once created.
+type Pipeline struct {
+	Review []string `json:"review"`
+	Wake   string   `json:"wake"`
+	Note   string   `json:"note,omitempty"`
+	Scope  string   `json:"scope,omitempty"`
+	Bar    string   `json:"bar,omitempty"`
+	By     string   `json:"by"`
+	Fix    string   `json:"fix,omitempty"`
+}
+
+// round is the round its queued review is asked with; nil for none.
+func (p *Pipeline) round() *RoundAsk {
+	if p.Scope == "" && p.Bar == "" {
+		return nil
+	}
+	return &RoundAsk{Scope: p.Scope, Bar: p.Bar}
+}
+
+// queued is the review a pipeline queued, directed as the conductor asked.
+func (p *Pipeline) queued() *Directed {
+	return &Directed{Phase: PhaseReview, Categories: slices.Clone(p.Review), Note: p.Note, Round: p.round(), By: p.By}
 }
 
 // conducted says whether the conductor takes the delivery's decisions.
@@ -161,6 +229,83 @@ func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, po
 	return workflow.Result{Next: step, State: st}, nil
 }
 
+// pipeline is the fix-then-review a fix or simplify directed so starts
+// (State.Pipeline); nil for none.
+func (d *Directed) pipeline() *Pipeline {
+	if d == nil || d.Then == nil {
+		return nil
+	}
+	// Then carries the round's scope and bar already (pipelineOf).
+	p := *d.Then
+	p.Review, p.By = slices.Clone(p.Review), d.By
+	return &p
+}
+
+// What stops a pipeline at its fix, telling the conductor at once
+// (pipelineStop): the review it queued does not start.
+const (
+	pipelineFailed  = "failed"
+	pipelineNothing = "nothing"
+	pipelineOutcome = "outcome"
+)
+
+// pipelineStop is why a pipeline's fix (or simplifier) stops it, "" for
+// none: it failed (a simplifier: a fix's failure escalates first), it
+// committed nothing, or its writer reports itself partial or blocked.
+func pipelineStop(out Outcome) string {
+	switch {
+	case !out.Succeeded:
+		return pipelineFailed
+	case len(out.Heads) == 0:
+		return pipelineNothing
+	case out.WriterOutcome == OutcomePartial || out.WriterOutcome == OutcomeBlocked:
+		return pipelineOutcome
+	}
+	return ""
+}
+
+// pipelineStopped is the fact a stopped pipeline's wake says; queued: the
+// review is offered at the decision it parks on.
+func pipelineStopped(p *Pipeline, stop string, out Outcome, queued bool) string {
+	return render(pipelineStoppedTmpl, struct {
+		Case, Error, Outcome, Note string
+		Review                     []string
+		Queued                     bool
+	}{stop, out.Error, out.WriterOutcome, out.WriterOutcomeNote, p.Review, queued})
+}
+
+// pipelineGoesOn carries out the conductor's pipeline at its fix's (or
+// simplifier's) end: with no exception and wake after_review, its queued
+// review, directed, with no decision between; else a decision after the
+// fix, whose "next" runs the queued review (Pending.Queued), the fact
+// that stopped it said. ok is false with no pipeline: the step goes on as
+// it would. policy is where the step goes when no conductor decides.
+func (w *steps) pipelineGoesOn(ctx context.Context, sc workflow.StepContext, st *State, phase, runID string, out Outcome, policy string) (workflow.Result, bool, error) {
+	p := st.Pipeline
+	if p == nil {
+		return workflow.Result{}, false, nil
+	}
+	st.Pipeline = nil
+	stop := pipelineStop(out)
+	if stop == "" && p.Wake != WakeAfterFix {
+		st.Directed = p.queued()
+		return workflow.Result{Next: "review", State: st}, true, nil
+	}
+	line := out.line(runID, phase) + " "
+	if stop != "" {
+		line += pipelineStopped(p, stop, out, true)
+	} else {
+		line += render(pipelineQueuedTmpl, struct{ Review []string }{p.Review})
+	}
+	if len(st.FixRange) > 0 && len(out.Heads) > 0 {
+		line += render(pipelineUnreviewedTmpl, nil)
+	}
+	res, err := w.next(ctx, sc, st, PointFixed, policy, line)
+	// A round's wake: its facts are not a decision's 300 characters.
+	st.Routed.Queued, st.Routed.Kind = p.queued(), WakeRound
+	return res, true, err
+}
+
 // Routed is a decision point the policy took in a step: the step it chose
 // (Next), and what the conductor would have been asked (Point, Policy:
 // where its "next" goes).
@@ -169,6 +314,10 @@ type Routed struct {
 	Policy string `json:"policy"`
 	Next   string `json:"next"`
 	Line   string `json:"line,omitempty"`
+	// The review a pipeline queued, offered at the decision (Pending.Queued).
+	Queued *Directed `json:"queued,omitempty"`
+	// The wake's kind: "" is a decision's; WakeRound a conducted round's.
+	Kind string `json:"kind,omitempty"`
 }
 
 // recheck is the delivery's decision checkpoint (workflow.Definition.
@@ -225,7 +374,10 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		}
 		return res, true, nil
 	}
-	out, err := toConductorTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line)
+	out, err := toConductorKindTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line, cmp.Or(r.Kind, "decision"))
+	if err == nil && r.Queued != nil {
+		st.Decision.Queued = r.Queued
+	}
 	return out, true, err
 }
 
@@ -241,6 +393,11 @@ func decisionWaitingNote(point, line string) string {
 // The start wakes nobody: only Talk it through decides it, whose message
 // in Chat is the conductor's turn already.
 func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
+	return toConductorKindTx(ctx, tx, sc, st, point, policy, line, "decision")
+}
+
+// toConductorKindTx is toConductorTx recording its wake as kind.
+func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line, kind string) (workflow.Result, error) {
 	st.Directed, st.PendingRunIDs, st.Routed = nil, nil, nil
 	st.Decision = &Pending{Point: point, Policy: policy,
 		Adopted: st.Source != nil && st.HeadRunID == "" && (point == PointStart || point == PointImplemented)}
@@ -248,7 +405,7 @@ func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *
 		st.GateRequired, st.ChoiceGate = true, false
 	}
 	note := decisionWaitingNote(point, line)
-	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
+	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, kind,
 		fmt.Sprintf("%s:decision:%d", sc.WorkflowRunID, st.Decisions), note, point == PointStart)
 	if err == nil && added {
 		err = emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionAwaited, map[string]any{"point": point, "policy": policy,
@@ -315,6 +472,19 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 	st.Decisions++
 	switch t.Action {
 	case "next":
+		if q := d.Queued; q != nil {
+			// The review the conductor queued, with what it says now.
+			// What is cut to fit is then.note: decide next's words, the
+			// latest, and the round's bar (apply) stay whole.
+			reserve := 0
+			if bar := roundBar(q.Round); bar != "" {
+				reserve = utf8.RuneCountInString(bar) + 2
+			}
+			q.Note = joinNotes(q.Note, t.Note, reserve)
+			q.By = t.By
+			st.Directed = q
+			return workflow.Result{Next: "review", State: st}, nil
+		}
 		st.Directed = &Directed{Note: t.Note, By: t.By}
 		return workflow.Result{Next: d.Policy, State: st}, nil
 	case "open_pull_request":
@@ -342,7 +512,8 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "the conductor is waiting on the pull request")
 	case "start_phase":
-		st.Directed = &Directed{Phase: t.Phase, Categories: t.Categories, FindingIDs: t.FindingIDs, Note: t.Note, By: t.By}
+		st.Directed = &Directed{Phase: t.Phase, Categories: t.Categories, FindingIDs: t.FindingIDs, Note: t.Note,
+			Then: t.Then, Round: t.Round, By: t.By}
 		// Started while the delivery waited on its pull requests: it waits
 		// on them again once this is done (startAtPRWait).
 		st.ActingOnPR = d.Policy == "awaitPullRequest"
@@ -685,7 +856,32 @@ func conductorKey(sc workflow.StepContext, st *State, d *Directed, parts ...any)
 func (d *Directed) apply(p *PhaseRun) {
 	if d != nil {
 		p.ConductorRunID, p.ConductorNote = d.By, d.Note
+		if bar := roundBar(d.Round); bar != "" {
+			// The conductor's bar for the round, quoted as its words.
+			p.ConductorNote = joinNotes(d.Note, bar, 0)
+		}
 	}
+}
+
+// roundBar is the round's bar as a Run's note quotes it, "" for none.
+func roundBar(r *RoundAsk) string {
+	if r == nil || r.Bar == "" {
+		return ""
+	}
+	return strings.TrimSpace(render(roundBarTmpl, r.Bar))
+}
+
+// joinNotes is head then tail, a blank line between, within noteChars less
+// reserve: what is cut to fit is head, tail is kept whole. An empty side
+// is left out.
+func joinNotes(head, tail string, reserve int) string {
+	room := noteChars - reserve - utf8.RuneCountInString(tail) - 2
+	if head = strings.TrimSpace(head); room <= 0 {
+		head = ""
+	} else {
+		head = clip(head, room)
+	}
+	return strings.TrimSpace(head + "\n\n" + tail)
 }
 
 // RecordWakeTx records a reason to wake the task's conductor, once per key.
@@ -708,6 +904,9 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 	case "escalation":
 		// The findings it names and the direction the person must give.
 		limit = escalationLineChars
+	case WakeRound:
+		// A conducted round's findings at the fix bar, each with its facts.
+		limit = roundLineChars
 	}
 	text := clip(oneLine(line), limit)
 	if kind == "escalation" && strings.HasSuffix(key, ":decided") {
