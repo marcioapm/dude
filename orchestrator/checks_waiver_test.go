@@ -38,6 +38,17 @@ func (w *world) failingUntilEscalated(model string, j *scriptedJudge) string {
 	return wi
 }
 
+// baseShownUntilPulled runs a delivery whose writers all show their failure
+// the same at the task base, with no send-back allowed, to its pull request.
+func (w *world) baseShownUntilPulled() string {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
+	w.onModel("simplifier", fakeagent.ChecksBaseShownModel)
+	wi := w.checksDelivery(fakeagent.ChecksBaseShownModel, &scriptedJudge{})
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	return wi
+}
+
 // A scope is a checks waiver's alone, and attempt only for a held report
 // with a reported failure to carry: anything else is refused, deciding
 // nothing.
@@ -138,11 +149,7 @@ func (j *scriptedJudge) waiverQuestions() int {
 // nothing is sent back or escalated, and the work reaches the pull request.
 func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 	w := newWorld(t)
-	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
-	w.onModel("simplifier", fakeagent.ChecksBaseShownModel)
-	j := &scriptedJudge{}
-	wi := w.checksDelivery(fakeagent.ChecksBaseShownModel, j)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	wi := w.baseShownUntilPulled()
 	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:verified,fix:verified,simplify:verified" {
 		t.Errorf("judged %s", got)
 	}
@@ -178,10 +185,7 @@ func TestAFailureShownAtTheTaskBasePassesWithoutAPersonEvenWhenTheCheckoutEventL
 		}
 		return 0
 	}
-	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
-	w.onModel("simplifier", fakeagent.ChecksBaseShownModel)
-	wi := w.checksDelivery(fakeagent.ChecksBaseShownModel, &scriptedJudge{})
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	wi := w.baseShownUntilPulled()
 	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:verified,fix:verified,simplify:verified" {
 		t.Errorf("judged %s", got)
 	}
