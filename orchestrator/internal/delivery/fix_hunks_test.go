@@ -59,6 +59,38 @@ func TestSummarizeFix(t *testing.T) {
 		{"a test file's removed test is",
 			[]forge.ComparedFile{file("db_test.go", "@@ -1,2 +0,0 @@\n-func TestConnection(t *testing.T) {\n-}", 0, 2)},
 			[]HunkFile{{File: "db_test.go", New: [][2]int{{1, 1}}, Del: 2, Test: true, RemovedTests: []string{"TestConnection"}}}},
+		{"a patch with context keeps the changed line only",
+			[]forge.ComparedFile{file("a.go", "@@ -7,7 +7,7 @@\n a\n b\n c\n-d\n+D\n e\n f\n g", 1, 1)},
+			[]HunkFile{{File: "a.go", New: [][2]int{{10, 10}}, Add: 1, Del: 1}}},
+		{"a pure rename or an empty file, no patch and no lines, is known",
+			[]forge.ComparedFile{{Filename: "new.go", PreviousFilename: "old.go"}, file("empty.txt", "", 0, 0)},
+			[]HunkFile{{File: "new.go", New: [][2]int{}}, {File: "empty.txt", New: [][2]int{}}}},
+		{"lines GitHub did not show are not known",
+			[]forge.ComparedFile{file("big.go", "", 900, 2)},
+			[]HunkFile{{File: "big.go", New: [][2]int{}, Add: 900, Del: 2, Unknown: true}}},
+		{"Go, Python and TS/JS tests removed",
+			[]forge.ComparedFile{
+				file("a_test.go", "@@ -1,2 +0,0 @@\n-func TestGo(t *testing.T) {\n-}", 0, 2),
+				file("tests/test_a.py", "@@ -1,2 +0,0 @@\n-def test_sync():\n-    async def test_async(x):", 0, 2),
+				file("web/a.test.ts", "@@ -1,3 +0,0 @@\n-  it.only(\"runs once\", () => {\n-test('works', () => {\n-it(`templated`, () => {", 0, 3)},
+			[]HunkFile{
+				{File: "a_test.go", New: [][2]int{{1, 1}}, Del: 2, Test: true, RemovedTests: []string{"TestGo"}},
+				{File: "tests/test_a.py", New: [][2]int{{1, 1}}, Del: 2, Test: true, RemovedTests: []string{"test_sync", "test_async"}},
+				{File: "web/a.test.ts", New: [][2]int{{1, 1}}, Del: 3, Test: true, RemovedTests: []string{"runs once", "works", "templated"}}}},
+		{"a test added again in another file is moved, not removed; one removed twice is named once",
+			[]forge.ComparedFile{
+				file("a_test.go", "@@ -1,3 +0,0 @@\n-func TestMoved(t *testing.T) {}\n-func TestGone(t *testing.T) {}\n-func TestGone(t *testing.T) {}", 0, 3),
+				file("b_test.go", "@@ -0,0 +1,1 @@\n+func TestMoved(t *testing.T) {}", 1, 0)},
+			[]HunkFile{
+				{File: "a_test.go", New: [][2]int{{1, 1}}, Del: 3, Test: true, RemovedTests: []string{"TestGone"}},
+				{File: "b_test.go", New: [][2]int{{1, 1}}, Add: 1, Test: true}}},
+		{"a test added again in a production file is not removed",
+			[]forge.ComparedFile{
+				file("a_test.go", "@@ -1,1 +0,0 @@\n-func TestMoved(t *testing.T) {}", 0, 1),
+				file("helpers.go", "@@ -0,0 +1,1 @@\n+func TestMoved(t *testing.T) {}", 1, 0)},
+			[]HunkFile{
+				{File: "a_test.go", New: [][2]int{{1, 1}}, Del: 1, Test: true},
+				{File: "helpers.go", New: [][2]int{{1, 1}}, Add: 1}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := SummarizeFix(c.files, false); !reflect.DeepEqual(got, RepoHunks{Files: c.want}) {
@@ -87,10 +119,70 @@ func TestFixHunksChange(t *testing.T) {
 			one(prod("internal/delivery/x.go"), prod("other.go")), []string{"target"},
 			brief{Notes: []string{"see internal/del and other.go"}},
 			roundChange{Delta: &lineDelta{2, 0}, Outside: []string{"internal/delivery/x.go"}}},
+		{"two repositories: outside carries the repository",
+			FixHunks{"api": {Files: []HunkFile{prod("x.go")}}, "web": {Files: []HunkFile{prod("y.go")}}}, []string{"api", "web"},
+			brief{Findings: []briefPlace{{"api", "x.go"}}},
+			roundChange{Delta: &lineDelta{2, 0}, Outside: []string{"web/y.go"}}},
+		{"a finding names its repository's file, not another's of that name",
+			FixHunks{"api": {Files: []HunkFile{prod("x.go")}}, "web": {Files: []HunkFile{prod("x.go")}}}, []string{"api", "web"},
+			brief{Findings: []briefPlace{{"api", "./x.go"}}},
+			roundChange{Delta: &lineDelta{2, 0}, Outside: []string{"web/x.go"}}},
+		{"a note names repo/path",
+			FixHunks{"api": {Files: []HunkFile{prod("x.go")}}, "web": {Files: []HunkFile{prod("x.go")}}}, []string{"api", "web"},
+			brief{Notes: []string{"Change `web/x.go:3` only."}},
+			roundChange{Delta: &lineDelta{2, 0}, Outside: []string{"api/x.go"}}},
+		{"past the cap, the rest counted",
+			one(HunkFile{File: "a_test.go", New: [][2]int{}, Test: true, RemovedTests: []string{"T1", "T2", "T3", "T4", "T5"}},
+				prod("a.go"), prod("b.go"), prod("c.go"), prod("d.go")), []string{"target"},
+			brief{Findings: []briefPlace{{"", "a.go"}}},
+			roundChange{Delta: &lineDelta{4, 0}, Removed: []string{"T1", "T2", "T3"}, RemovedMore: 2,
+				Outside: []string{"a_test.go", "b.go", "c.go"}, OutsideMore: 1}},
+		{"a test file is not in the delta",
+			one(HunkFile{File: "a_test.go", New: [][2]int{}, Add: 9, Del: 9, Test: true}, prod("a.go")), []string{"target"},
+			brief{},
+			roundChange{Delta: &lineDelta{1, 0}}},
+		{"a file not known leaves the delta and removals unknown",
+			one(HunkFile{File: "a_test.go", New: [][2]int{}, Test: true, RemovedTests: []string{"T1"}}, HunkFile{File: "big.go", Unknown: true}), []string{"target"},
+			brief{Findings: []briefPlace{{"", "a_test.go"}}},
+			roundChange{Outside: []string{"big.go"}}},
+		{"a published repository not kept leaves it all unknown",
+			one(prod("a.go")), []string{"target", "other"}, brief{Findings: []briefPlace{{"", "x.go"}}}, roundChange{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := c.h.change(c.published, c.b); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("change =\n %s\nwant\n %s", show(got), show(c.want))
+			}
+		})
+	}
+}
+
+// TestFixHunksTouches places a finding on the fix's lines, or not.
+func TestFixHunksTouches(t *testing.T) {
+	file := HunkFile{File: "x.go", New: [][2]int{{5, 6}}, Add: 2}
+	two := FixHunks{"api": {Files: []HunkFile{file}}, "web": {Files: []HunkFile{file}}}
+	for _, c := range []struct {
+		name       string
+		h          FixHunks
+		published  []string
+		repo, file string
+		line       int
+		want       bool
+	}{
+		{"on its lines", two, []string{"api", "web"}, "api", "x.go", 5, true},
+		{"past them", two, []string{"api", "web"}, "api", "x.go", 7, false},
+		{"no line", two, []string{"api", "web"}, "api", "x.go", 0, false},
+		{"another file", two, []string{"api", "web"}, "api", "y.go", 5, false},
+		{"./path", two, []string{"api", "web"}, "api", "./x.go", 6, true},
+		{"no repository, one published", two, []string{"api"}, "", "x.go", 5, true},
+		{"no repository, two published", two, []string{"api", "web"}, "", "x.go", 5, false},
+		{"a repository it did not publish", two, []string{"api"}, "web", "x.go", 5, false},
+		{"a published repository not kept", FixHunks{"api": {Files: []HunkFile{file}}}, []string{"api", "web"}, "web", "x.go", 5, false},
+		{"a truncated repository", FixHunks{"api": {Truncated: true, Files: []HunkFile{file}}}, []string{"api"}, "api", "x.go", 5, false},
+		{"a file not known", FixHunks{"api": {Files: []HunkFile{{File: "x.go", New: [][2]int{{5, 6}}, Unknown: true}}}}, []string{"api"}, "api", "x.go", 5, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.h.Touches(c.published, c.repo, c.file, c.line); got != c.want {
+				t.Errorf("Touches(%v, %q, %q, %d) = %v, want %v", c.published, c.repo, c.file, c.line, got, c.want)
 			}
 		})
 	}
