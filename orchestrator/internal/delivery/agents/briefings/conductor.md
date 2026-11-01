@@ -55,6 +55,8 @@ Your checkout is at that head.
 No delivery is in progress: you are read-only.
 {{- else if .DeliverDecides -}}
 Deliver takes this task's decisions: you are read-only.
+{{- else if .Escalated -}}
+You take this task's decisions. The delivery is stopped at an escalation for a person: {{.Escalated}}. Only the person decides it: explain and propose.
 {{- else if .Waiting -}}
 You take this task's decisions. The delivery waits on one now: {{.Waiting}}.
 {{- else -}}

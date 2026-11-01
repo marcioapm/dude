@@ -188,6 +188,8 @@ type conductorBrief struct {
 	// Who decides: no live delivery, Deliver, or else the conductor.
 	NoDelivery, DeliverDecides bool
 	Waiting, Step              string
+	// The reason of the escalation the delivery is stopped at, for a person.
+	Escalated string
 }
 
 // briefLines is a bounded list: its total, and the lines shown.
@@ -216,6 +218,10 @@ func briefDecider(ctx context.Context, tx pgx.Tx, b *conductorBrief, taskID stri
 		b.NoDelivery = true
 	case !d.State.conducted():
 		b.DeliverDecides = true
+	case d.State.Escalation != nil && d.State.Escalation.Decided == nil:
+		// Stopped for a person: no decision of the conductor's comes next
+		// until the person decides it.
+		b.Escalated = strings.ReplaceAll(d.State.Escalation.Reason, "_", " ")
 	case d.State.Decision != nil && d.State.Decision.Taken == nil:
 		b.Waiting = pointLabel[d.State.Decision.Point]
 	default:
