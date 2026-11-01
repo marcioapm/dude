@@ -11,46 +11,17 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
-// spiralWorld is a conducted world whose first review raises one evidenced
+// spiralWorld is a changeWorld whose first review raises one evidenced
 // high finding on FACTORY.md:1, whose fixer commits FACTORY.md, and whose
-// second review judges it fixed and raises second, an evidenced high
-// finding of its own. patch, when not nil, is what GitHub's compare shows
-// of FACTORY.md: "" for no patch.
+// second review raises second as well. patch, when not nil, is what
+// GitHub's compare shows of FACTORY.md: "" for no patch.
 func spiralWorld(t *testing.T, second string, patch *string) *world {
-	w := conducting(t)
-	w.onModel("reviewer", "llm-review")
-	scripted := w.lux.Decide
-	reviews := 0
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		labels, _ := spec["labels"].(map[string]any)
-		switch labels["dude.phase"] {
-		case "review":
-			if reviews++; reviews == 1 {
-				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: high", wrongThing) + "```\n"}
-			}
-			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n---\n" + second + "```\n"}
-		case "fix", "simplify":
-			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": "one\ntwo\nthree\n"}, Message: "fix"}
-		}
-		return scripted(spec)
-	}
+	var patches map[string]string
 	if patch != nil {
-		w.gh.Set(func(s *fakegithub.Server) {
-			s.CompareAnswer = func(base, head string, answer map[string]any) {
-				files, _ := answer["files"].([]any)
-				for _, f := range files {
-					if f, ok := f.(map[string]any); ok && f["filename"] == "FACTORY.md" {
-						if *patch == "" {
-							delete(f, "patch")
-						} else {
-							f["patch"] = *patch
-						}
-					}
-				}
-			}
-		})
+		patches = map[string]string{"FACTORY.md": *patch}
 	}
-	return w
+	return changeWorld(t, evidencedFinding("severity: high", wrongThing), second,
+		map[string]string{"FACTORY.md": "one\ntwo\nthree\n"}, patches)
 }
 
 // findingAt is an evidenced high finding on FACTORY.md at line.
@@ -171,13 +142,16 @@ func TestTheSpiralFactNamesTheFixWhoseLinesAFindingTouches(t *testing.T) {
 
 // changeWorld is a conducted world whose first review raises first (YAML
 // documents), whose fixer commits commit, whose second review judges F1
-// fixed and raises nothing, and whose GitHub shows patches[file] as that
-// file's patch where set.
-func changeWorld(t *testing.T, first string, commit, patches map[string]string) *world {
+// fixed and raises second (none when ""), and whose GitHub shows
+// patches[file] as that file's patch where set: "" for no patch.
+func changeWorld(t *testing.T, first, second string, commit, patches map[string]string) *world {
 	w := conducting(t)
 	w.onModel("reviewer", "llm-review")
 	scripted := w.lux.Decide
 	reviews := 0
+	if second != "" {
+		second = "---\n" + second
+	}
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		labels, _ := spec["labels"].(map[string]any)
 		switch labels["dude.phase"] {
@@ -185,24 +159,29 @@ func changeWorld(t *testing.T, first string, commit, patches map[string]string) 
 			if reviews++; reviews == 1 {
 				return fakelux.Behaviour{Reply: "```yaml\n" + first + "```\n"}
 			}
-			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n" + second + "```\n"}
 		case "fix", "simplify":
 			return fakelux.Behaviour{Commit: commit, Message: "fix"}
 		}
 		return scripted(spec)
 	}
-	w.gh.Set(func(s *fakegithub.Server) {
-		s.CompareAnswer = func(base, head string, answer map[string]any) {
-			files, _ := answer["files"].([]any)
-			for _, f := range files {
-				if f, ok := f.(map[string]any); ok {
-					if p, ok := patches[fmt.Sprint(f["filename"])]; ok {
+	if patches != nil {
+		w.gh.Set(func(s *fakegithub.Server) {
+			s.CompareAnswer = func(base, head string, answer map[string]any) {
+				files, _ := answer["files"].([]any)
+				for _, f := range files {
+					f, _ := f.(map[string]any)
+					switch p, ok := patches[fmt.Sprint(f["filename"])]; {
+					case !ok:
+					case p == "":
+						delete(f, "patch")
+					default:
 						f["patch"] = p
 					}
 				}
 			}
-		}
-	})
+		})
+	}
 	return w
 }
 
@@ -229,7 +208,7 @@ func TestTheRoundWakeSaysTheFixsLineDelta(t *testing.T) {
 		{"a test file not recognised", map[string]string{"FACTORY.md": "one\ntwo\nthree\n", "spec/PlayerSpec.js": "describe(\"Player\", () => {\n});\n"}, [4]int{5, 1, 0, 0}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			w := changeWorld(t, evidencedFinding("severity: high", wrongThing), c.commit, nil)
+			w := changeWorld(t, evidencedFinding("severity: high", wrongThing), "", c.commit, nil)
 			task := w.task()
 			w.toFixedRoundTwo(task)
 			var outside []string
@@ -248,7 +227,7 @@ func TestTheRoundWakeSaysTheFixsLineDelta(t *testing.T) {
 // A test declaration the fix's diff removes and does not add again under
 // its name is said removed; one removed and added back (a rewrite) is not.
 func TestTheRoundWakeNamesTheTestDeclarationsTheFixRemoved(t *testing.T) {
-	w := changeWorld(t, evidencedFinding("severity: high", wrongThing),
+	w := changeWorld(t, evidencedFinding("severity: high", wrongThing), "",
 		map[string]string{"FACTORY.md": "one\ntwo\nthree\n", "factory_test.go": "package f\n\nfunc TestKept(t *testing.T) {}\n"},
 		map[string]string{"factory_test.go": "@@ -1,6 +1,3 @@\n package f\n-func TestGone(t *testing.T) {\n-}\n-func TestKept(t *testing.T) {\n-}\n+\n+func TestKept(t *testing.T) {}"})
 	task := w.task()
@@ -264,7 +243,7 @@ func TestTheRoundWakeNamesTheTestDeclarationsTheFixRemoved(t *testing.T) {
 func TestTheRoundWakeListsTheFilesOutsideTheFixsBrief(t *testing.T) {
 	commit := map[string]string{"FACTORY.md": "one\ntwo\nthree\n", "lib/a.go": "package lib\n", "docs/x.md": "x\n", "other.go": "package o\n"}
 	t.Run("named by a finding or the note", func(t *testing.T) {
-		w := changeWorld(t, evidencedFinding("severity: high", wrongThing), commit, nil)
+		w := changeWorld(t, evidencedFinding("severity: high", wrongThing), "", commit, nil)
 		task := w.task()
 		w.toRoundOne(task)
 		w.must(task, "start_phase", `{"phase":"fix","note":"Keep the change in lib/ and \u0060docs/x.md:1\u0060.","then":{"review":["tests"]}}`)
@@ -276,7 +255,7 @@ func TestTheRoundWakeListsTheFilesOutsideTheFixsBrief(t *testing.T) {
 	t.Run("a brief with no path", func(t *testing.T) {
 		placeless := "severity: high\ncategory: correctness\ntitle: " + wrongThing +
 			"\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n"
-		w := changeWorld(t, placeless, commit, nil)
+		w := changeWorld(t, placeless, "", commit, nil)
 		task := w.task()
 		w.toFixedRoundTwo(task)
 		if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&[4]int{6, 1, 0, 0}, nil, 0, nil, 0)); got != want {
