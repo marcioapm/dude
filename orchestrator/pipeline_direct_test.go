@@ -147,14 +147,21 @@ func TestDirectAConductedUndirectedFixIsReviewedByTheRoundsReviewers(t *testing.
 	}
 }
 
-// then.wake after_fix on an open pull request: the conductor is woken with
-// the fix unreviewed on it, and its publish is refused until the queued
-// review runs (I-3).
-func TestDirectAConductedFixWokenAfterTheFixCannotPublishPastTheUnreviewedHead(t *testing.T) {
+// fixedOnThePullRequest is a conducted direct delivery parked after a fix
+// with then.wake after_fix on its open pull request, its review queued.
+func fixedOnThePullRequest(t *testing.T) *conductedPR {
 	c := newConductedPR(t, func(phase string, n int, b *fakelux.Behaviour) {})
 	c.commented()
 	c.must(c.task, "start_phase", `{"phase":"fix","note":"Rename it.","then":{"review":["tests"],"wake":"after_fix"}}`)
 	c.until("after the fix, the review queued", func() bool { c.sync(); return c.fixedWith(c.task, `["tests"]`) })
+	return c
+}
+
+// then.wake after_fix on an open pull request: the conductor is woken with
+// the fix unreviewed on it, and its publish is refused until the queued
+// review runs (I-3).
+func TestDirectAConductedFixWokenAfterTheFixCannotPublishPastTheUnreviewedHead(t *testing.T) {
+	c := fixedOnThePullRequest(t)
 	if n := c.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $3 AND strpos(line, $2) > 0`,
 		c.task, delivery.MustText("wakes/facts/pipeline-unreviewed-push").Render(nil), delivery.WakeRound); n != 1 {
 		t.Errorf("the after-fix wake does not say the push is unreviewed")
@@ -168,10 +175,7 @@ func TestDirectAConductedFixWokenAfterTheFixCannotPublishPastTheUnreviewedHead(t
 // conductor starts at that decision is refused while the fix is unreviewed
 // on it; a review of it (any lenses) is not (I-3).
 func TestDirectAConductedFixWokenAfterTheFixCannotStartASecondWriter(t *testing.T) {
-	c := newConductedPR(t, func(phase string, n int, b *fakelux.Behaviour) {})
-	c.commented()
-	c.must(c.task, "start_phase", `{"phase":"fix","note":"Rename it.","then":{"review":["tests"],"wake":"after_fix"}}`)
-	c.until("after the fix, the review queued", func() bool { c.sync(); return c.fixedWith(c.task, `["tests"]`) })
+	c := fixedOnThePullRequest(t)
 	c.refused(c.task, "start_phase", `{"phase":"simplify"}`, "Use start_phase review first")
 	c.must(c.task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 	c.until("the review's round", func() bool { c.sync(); return c.decisionAt(c.task) == delivery.PointReviewed })
