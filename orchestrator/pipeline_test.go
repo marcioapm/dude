@@ -404,3 +404,45 @@ func TestARoundWakeListsTheFindingsAtTheBarAndTheFix(t *testing.T) {
 		t.Errorf("round 8's wake:\n got %q\nwant %q", got, want)
 	}
 }
+
+// stepFailed is the task's delivery's step failing (retried or dead-lettered),
+// its error.
+func (w *world) stepFailed(task string) string {
+	return w.str(`SELECT COALESCE((SELECT last_error FROM workflow_runs WHERE task_id = $1 AND last_error IS NOT NULL LIMIT 1), '')`, task)
+}
+
+// The conductor's note and its round's bar, each at its own bound, joined
+// on a Run fit runs.conductor_note: the step does not fail on it.
+func TestANoteAndTheRoundsBarFitTheRunsNote(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	w.toRoundOne(task)
+	w.must(task, "start_phase", fmt.Sprintf(`{"phase":"fix","note":%q,"then":{"review":["tests"],"wake":"after_fix"},"round":{"bar":%q}}`,
+		strings.Repeat("n", 3900), strings.Repeat("b", 900)))
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed || w.stepFailed(task) != "" })
+	if e := w.stepFailed(task); e != "" {
+		t.Fatalf("the delivery's step failed: %s", e)
+	}
+	if n := w.count(`SELECT max(length(conductor_note)) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); n == 0 || n > 4000 {
+		t.Errorf("the fixer's note: %d characters", n)
+	}
+}
+
+// then.note and decide next's note, each at its bound, joined on the
+// queued review's Runs fit runs.conductor_note.
+func TestAQueuedNoteAndDecideNextsNoteFitTheRunsNote(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	w.toRoundOne(task)
+	w.must(task, "start_phase", fmt.Sprintf(`{"phase":"fix","then":{"review":["tests"],"wake":"after_fix","note":%q}}`,
+		strings.Repeat("q", 3000)))
+	w.until("after the fix", func() bool { return w.fixedWith(task, `["tests"]`) })
+	w.must(task, "decide", fmt.Sprintf(`{"action":"next","note":%q}`, strings.Repeat("d", 3000)))
+	w.until("round 2", func() bool { return w.reviewedRound(task, 2) || w.stepFailed(task) != "" })
+	if e := w.stepFailed(task); e != "" {
+		t.Fatalf("the delivery's step failed: %s", e)
+	}
+	if n := w.count(`SELECT max(length(conductor_note)) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2`, task); n == 0 || n > 4000 {
+		t.Errorf("the queued review's note: %d characters", n)
+	}
+}

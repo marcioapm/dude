@@ -475,7 +475,7 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 	case "next":
 		if q := d.Queued; q != nil {
 			// The review the conductor queued, with what it says now.
-			q.Note = strings.TrimSpace(strings.Join([]string{q.Note, t.Note}, "\n\n"))
+			q.Note = clip(strings.TrimSpace(strings.Join([]string{q.Note, t.Note}, "\n\n")), noteChars)
 			q.By = t.By
 			st.Directed = q
 			return workflow.Result{Next: "review", State: st}, nil
@@ -853,7 +853,7 @@ func (d *Directed) apply(p *PhaseRun) {
 		p.ConductorRunID, p.ConductorNote = d.By, d.Note
 		if d.Round != nil && d.Round.Bar != "" {
 			// The conductor's bar for the round, quoted as its words.
-			p.ConductorNote = strings.TrimSpace(d.Note + "\n\n" + render(roundBarTmpl, d.Round.Bar))
+			p.ConductorNote = clip(strings.TrimSpace(d.Note+"\n\n"+render(roundBarTmpl, d.Round.Bar)), noteChars)
 		}
 	}
 }
