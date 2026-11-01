@@ -318,3 +318,52 @@ func TestAFixWhoseChangeIsNotKnownLeavesTheRoundWakeSilent(t *testing.T) {
 		})
 	}
 }
+
+// A round wake shows at most 12 findings and counts the rest; of those it
+// counts, it says how many are on lines the fix changed — the hidden ones
+// only, not the shown ones it marks already.
+func TestTheRoundWakeCountsTheHiddenFindingsOnTheFixsLines(t *testing.T) {
+	// Twelve high findings, the first on the fix's line 2 and the rest
+	// past its lines; and a medium one on its line 3, shown after them,
+	// so hidden.
+	var docs []string
+	titles := map[int]string{}
+	for i := range 12 {
+		line := 40 + i
+		if i == 0 {
+			line = 2
+		}
+		titles[line] = fmt.Sprintf("Wrong thing number %d", i+1)
+		docs = append(docs, findingAt(line, titles[line]))
+	}
+	medium := strings.Replace(findingAt(3, "The third line is wrong"), "severity: high", "severity: medium", 1)
+	patch := "@@ -1,1 +1,3 @@\n-x\n+one\n+two\n+three"
+	w := spiralWorld(t, strings.Join(append(docs, medium), "---\n"), &patch)
+	task := w.task()
+	w.toFixedRoundTwo(task)
+	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND review_round = 2 AND touches_fix_run_id = $2`, task, fix); n != 2 {
+		t.Fatalf("%d round 2 findings touch the fix, want 2", n)
+	}
+	var shown []map[string]any
+	for _, id := range w.ids(`SELECT id FROM review_findings WHERE task_id = $1 AND review_round = 2 AND severity = 'high' ORDER BY line`, task) {
+		line := w.count(`SELECT line FROM review_findings WHERE id = $1`, id)
+		shown = append(shown, map[string]any{"ID": id, "Severity": "high", "Title": titles[line], "Where": fmt.Sprintf("FACTORY.md:%d", line),
+			"Introduced": "", "Trivial": false, "Unverified": false, "Touches": line == 2})
+	}
+	head := w.str(`SELECT heads->'target'->>'sha' FROM runs WHERE id = $1`, fix)
+	review := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2 ORDER BY created_at LIMIT 1`, task)
+	of := w.str(`SELECT COALESCE(review_range->>'of', '') FROM runs WHERE id = $1`, review)
+	base := w.str(`SELECT COALESCE(review_range->'base'->>'target', '') FROM runs WHERE id = $1`, review)
+	var repos []string
+	if base != "" {
+		repos = []string{"target@" + base[:7] + ".." + head[:7]}
+	}
+	rng := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": of, "Repos": repos})
+	fixLine := delivery.MustText("wakes/facts/round-fix").Render(map[string]any{"Phase": "fix", "RunID": fix, "Outcome": "", "Note": "",
+		"Commits": []string{"target@" + head[:7]}})
+	want := roundWakeTouching(2, 13, 0, rng, []string{"tests"}, shown, 1, 1, fixLine, changeFact(&[2]int{3, 1}, nil, 0, nil, 0), false)
+	if got := w.roundWakeLine(task); got != want {
+		t.Errorf("round 2's wake:\n got %q\nwant %q", got, want)
+	}
+}
