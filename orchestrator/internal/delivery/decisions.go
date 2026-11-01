@@ -331,7 +331,7 @@ type Routed struct {
 func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (workflow.Result, bool, error) {
 	if sc.Step != "decide" {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id=$1`, sc.WorkflowRunID).Scan(&raw); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id=$1 FOR UPDATE`, sc.WorkflowRunID).Scan(&raw); err != nil {
 			return res, false, err
 		}
 		var current State
@@ -340,6 +340,16 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		}
 		if e := current.Escalation; e != nil && e.Reason == ReasonChecksUnverified {
 			return workflow.Result{Next: "decide", State: &current, AwaitSignals: []string{SignalHumanDecision}}, true, nil
+		}
+		// Handed to the conductor while the step escalated: told as escalate
+		// tells a conducted delivery's escalation.
+		if st, ok := res.State.(*State); ok && res.Next == "decide" && st.Escalation != nil && current.conducted() && !st.conducted() {
+			st.Decider = current.Decider
+			st.Decision, st.Directed = nil, nil
+			if _, err := tellEscalationTx(ctx, tx, sc.OrganizationID, sc.WorkflowRunID, st); err != nil {
+				return res, false, err
+			}
+			return res, true, nil
 		}
 	}
 	st, ok := res.State.(*State)
@@ -931,7 +941,8 @@ const (
 // on a person at: its wake, kind escalation, keyed on its number among those
 // told (State.Escalations). Whoever escalated: one the conductor had when it
 // escalated (escalate, a held checks report), or one Deliver stopped at,
-// handed to the conductor while it waits (SetDeciderTx). Once per
+// handed to the conductor while it waits (SetDeciderTx) or while its step
+// escalated (recheck). Once per
 // escalation (Escalation.Told), however often it is handed over; a step
 // replayed tells it again with its same key, which records nothing new.
 // Returns whether it told it now, st changed.
