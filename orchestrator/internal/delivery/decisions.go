@@ -235,11 +235,9 @@ func (d *Directed) pipeline() *Pipeline {
 	if d == nil || d.Then == nil {
 		return nil
 	}
+	// Then carries the round's scope and bar already (pipelineOf).
 	p := *d.Then
-	p.Review, p.By, p.Fix = slices.Clone(p.Review), d.By, ""
-	if d.Round != nil {
-		p.Scope, p.Bar = d.Round.Scope, d.Round.Bar
-	}
+	p.Review, p.By = slices.Clone(p.Review), d.By
 	return &p
 }
 
