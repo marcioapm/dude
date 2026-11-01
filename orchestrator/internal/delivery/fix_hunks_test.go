@@ -3,6 +3,8 @@ package delivery
 import (
 	"reflect"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // newRanges keeps the lines a patch changed — its + lines, and the lines
@@ -34,6 +36,32 @@ func TestNewRanges(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := newRanges(c.patch); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("newRanges = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// SummarizeFix keeps each file's changed lines, counts and the test
+// declarations it removed and did not add again.
+func TestSummarizeFix(t *testing.T) {
+	file := func(name, patch string, add, del int) forge.ComparedFile {
+		return forge.ComparedFile{Filename: name, Patch: patch, Additions: add, Deletions: del}
+	}
+	for _, c := range []struct {
+		name  string
+		files []forge.ComparedFile
+		want  []HunkFile
+	}{
+		{"a test-like declaration in a production file is not a removed test",
+			[]forge.ComparedFile{file("app/db.py", "@@ -1,2 +0,0 @@\n-def test_connection(db):\n-    pass", 0, 2)},
+			[]HunkFile{{File: "app/db.py", New: [][2]int{{1, 1}}, Del: 2}}},
+		{"a test file's removed test is",
+			[]forge.ComparedFile{file("db_test.go", "@@ -1,2 +0,0 @@\n-func TestConnection(t *testing.T) {\n-}", 0, 2)},
+			[]HunkFile{{File: "db_test.go", New: [][2]int{{1, 1}}, Del: 2, Test: true, RemovedTests: []string{"TestConnection"}}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := SummarizeFix(c.files, false); !reflect.DeepEqual(got, RepoHunks{Files: c.want}) {
+				t.Errorf("SummarizeFix =\n %+v\nwant\n %+v", got, RepoHunks{Files: c.want})
 			}
 		})
 	}

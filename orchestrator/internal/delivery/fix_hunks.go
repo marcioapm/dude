@@ -68,7 +68,9 @@ func SummarizeFix(files []forge.ComparedFile, truncated bool) RepoHunks {
 					for _, name := range testDecls(line[1:]) {
 						added[name] = true
 					}
-				case strings.HasPrefix(line, "-"):
+				case strings.HasPrefix(line, "-") && h.Test:
+					// A test removed is a test file's: a production file's
+					// test-like name (def test_connection) is not one.
 					for _, name := range testDecls(line[1:]) {
 						removed[f.Filename] = append(removed[f.Filename], name)
 					}
