@@ -10,6 +10,22 @@ Review round 2 done (fix_round api@0000000..1111111; tests): 0 open at the fix b
 
 Review round 3 done (fix_round api@0000000..1111111; tests): 15 open at the fix bar. fnd_1 [high, introduced] api/store.go:42: The retry loses the second write. And 12 more at the bar (findings). The fix before it: fix run_f committed at api@1111111 web@2222222, reports itself partial: the second greeting is left.
 
+## round-2-touches
+
+Review round 2 done (fix_round api@0000000..1111111; tests): 2 open at the fix bar. fnd_4 [high, introduced, on lines the fix changed] api/store.go:43: The retry loops; fnd_3 [medium, trivial] api/log.go: Typo in the log line. The fix before it: fix run_f committed at api@1111111.
+
+## round-3-more-touches
+
+Review round 3 done (fix_round api@0000000..1111111; tests): 15 open at the fix bar. fnd_1 [high, introduced] api/store.go:42: The retry loses the second write. And 14 more at the bar (findings), 2 of them on lines the fix changed. The fix before it: fix run_f committed at api@1111111.
+
+## round-2-change
+
+Review round 2 done (fix_round api@0000000..1111111; tests): 1 open at the fix bar. fnd_1 [high, introduced] api/store.go:42: The retry loses the second write. The fix before it: fix run_f committed at api@1111111. Lines: +120 -4 (of them +30 -2 in recognised test files). Removed test declarations in recognised test files: TestRetry, test_empty, rejects a bad id and 2 more. Files it changed that its brief did not name: api/cache.go, web/src/retry.ts, Makefile and 5 more.
+
+## round-2-change-delta-only
+
+Review round 2 done (fix_round api@0000000..1111111; tests): 0 open at the fix bar. The fix before it: fix run_f committed at api@1111111. Lines: +3 -9.
+
 ## round-8
 
 Review round 8 done (fix_round api@0000000..1111111; tests): 1 open at the fix bar. fnd_1 [high, introduced] api/store.go:42: The retry loses the second write. The fix before it: fix run_f committed at api@1111111. 8 rounds in this loop: consider asking the person.

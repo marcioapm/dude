@@ -33,9 +33,10 @@ const roundShown = 12
 const longLoop = 8
 
 var (
-	roundWakeTmpl  = mustTemplate("wakes/round")
-	roundFixTmpl   = mustTemplate("wakes/facts/round-fix")
-	roundRangeTmpl = mustTemplate("wakes/facts/round-range")
+	roundWakeTmpl   = mustTemplate("wakes/round")
+	roundFixTmpl    = mustTemplate("wakes/facts/round-fix")
+	roundRangeTmpl  = mustTemplate("wakes/facts/round-range")
+	roundChangeTmpl = mustTemplate("wakes/facts/round-change")
 )
 
 // roundFinding is a finding at the bar as a round wake lists it, scanned
@@ -45,6 +46,8 @@ type roundFinding struct {
 	// yes, no, or "" for not said.
 	Introduced          string
 	Trivial, Unverified bool
+	// On lines the fix before the round changed (touches_fix_run_id).
+	Touches bool
 }
 
 // severityRank orders findings most severe first.
@@ -100,8 +103,9 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 		if len(atBar) > 0 {
 			rows, err := tx.Query(ctx, `SELECT id, severity::text, title, COALESCE(NULLIF(repo, '') || '/', '') || COALESCE(file, '?')
 					|| CASE WHEN COALESCE(line, 0) > 0 THEN ':' || line ELSE '' END,
-					CASE introduced WHEN true THEN 'yes' WHEN false THEN 'no' ELSE '' END, COALESCE(trivial, false), COALESCE(unverified, false)
-				FROM review_findings WHERE id = ANY($1)`, atBar)
+					CASE introduced WHEN true THEN 'yes' WHEN false THEN 'no' ELSE '' END, COALESCE(trivial, false), COALESCE(unverified, false),
+					touches_fix_run_id IS NOT NULL AND touches_fix_run_id = $2
+				FROM review_findings WHERE id = ANY($1)`, atBar, parent)
 			if err != nil {
 				return err
 			}
@@ -119,6 +123,7 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 			})
 			data.Shown = shown[:min(len(shown), roundShown)]
 			data.More = len(atBar) - len(data.Shown)
+			data.all = shown
 		}
 		if parent == "" || parentPhase != PhaseFix && parentPhase != PhaseSimplify {
 			return nil
@@ -139,18 +144,31 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 			Phase, RunID, Outcome, Note string
 			Commits                     []string
 		}{parentPhase, parent, outcome, out.WriterOutcomeNote, commits})
+		change, err := fixChangeTx(ctx, tx, parent, round)
+		if err != nil {
+			return err
+		}
+		data.Change = render(roundChangeTmpl, change)
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
-	// Fit the bound with the decision it waits on: the last shown
-	// findings give way, counted, so the tail (how many more, the fix,
-	// the long loop) is never what the clip cuts.
+	// Fit the bound with the decision it waits on: the fix's change gives
+	// way first, so it never crowds out a finding; then the last shown
+	// findings, counted, so the tail (how many more, the fix, the long
+	// loop) is never what the clip cuts.
 	text := data.text()
-	for len(data.Shown) > 0 && utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars {
-		data.Shown = data.Shown[:len(data.Shown)-1]
-		data.More++
+	for utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars {
+		switch {
+		case data.Change != "":
+			data.Change = ""
+		case len(data.Shown) > 0:
+			data.Shown = data.Shown[:len(data.Shown)-1]
+			data.More++
+		default:
+			return text, nil
+		}
 		text = data.text()
 	}
 	return text, nil
@@ -163,14 +181,26 @@ type roundWake struct {
 	Lenses                           []string
 	Shown                            []roundFinding
 	Fix                              string
+	// What the fix's kept change says (wakes/facts/round-change).
+	Change string
+	// Every finding at the bar, in the order shown: those past Shown are
+	// counted in More, and those of them on the fix's lines in MoreTouch.
+	all []roundFinding
 }
 
 // text renders the wake; from round longLoop on it says the loop is long.
 func (r roundWake) text() string {
+	touch := 0
+	for _, f := range r.all[min(len(r.Shown), len(r.all)):] {
+		if f.Touches {
+			touch++
+		}
+	}
 	return render(roundWakeTmpl, struct {
 		roundWake
-		Long bool
-	}{r, r.Round >= longLoop})
+		Long      bool
+		MoreTouch int
+	}{r, r.Round >= longLoop, touch})
 }
 
 func boolRank(b bool) int {

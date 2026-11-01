@@ -21,7 +21,7 @@ Acceptance criteria:
 
 ## Findings (7: 2 accepted, 2 open, 2 resolved, 1 superseded)
 
-- fnd_1 · high · security · api/export.go:40 · open, 2 fix attempts
+- fnd_1 · high · security · api/export.go:40 · on lines fix run_fix changed · open, 2 fix attempts
 - fnd_6 · medium · database · migrations/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/dee… · open
 - fnd_2 · blocking · correctness · api/round.go · fixed, by run_fix
 - fnd_7 · high · correctness · fixed

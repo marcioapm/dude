@@ -82,3 +82,9 @@
 {{- define "wakes/facts/round-fix"}}{{.Phase}} {{.RunID}}{{with .Commits}} committed at {{join . " "}}{{else}} committed nothing{{end}}{{with .Outcome}}, reports itself {{.}}{{end}}{{with .Note}}: {{clip (oneLine .) 200}}{{end}}.{{end}}
 
 {{- define "wakes/facts/round-range"}}{{if .Of}}{{.Of}}{{range .Repos}} {{.}}{{end}}{{else}}the whole branch{{end}}{{end}}
+
+{{- define "wakes/facts/round-change"}}
+{{- $s := ""}}{{with .Delta}}Lines: +{{.Add}} -{{.Del}}{{if or .TestAdd .TestDel}} (of them +{{.TestAdd}} -{{.TestDel}} in recognised test files){{end}}.{{$s = " "}}{{end}}
+{{- with .Removed}}{{$s}}Removed test declarations in recognised test files: {{range $i, $n := .}}{{if $i}}, {{end}}{{clip . 60}}{{end}}{{with $.RemovedMore}} and {{.}} more{{end}}.{{$s = " "}}{{end}}
+{{- with .Outside}}{{$s}}Files it changed that its brief did not name: {{range $i, $n := .}}{{if $i}}, {{end}}{{clip . 80}}{{end}}{{with $.OutsideMore}} and {{.}} more{{end}}.{{end}}
+{{- end}}

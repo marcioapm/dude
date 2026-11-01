@@ -273,7 +273,7 @@ func briefFindings(ctx context.Context, tx pgx.Tx, taskID string) (briefLines, e
 	}
 	// Open first, most severe first: what a person most likely asks about.
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, category, COALESCE(file, ''), COALESCE(line, 0), status::text,
-			COALESCE(resolved_by_run_id, ''), fix_attempts, COALESCE(resolution_note, '')
+			COALESCE(resolved_by_run_id, ''), fix_attempts, COALESCE(resolution_note, ''), COALESCE(touches_fix_run_id, '')
 		FROM review_findings WHERE task_id = $1
 		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), created_at
 		LIMIT $2`, taskID, briefFindingsMax)
@@ -285,7 +285,7 @@ func briefFindings(ctx context.Context, tx pgx.Tx, taskID string) (briefLines, e
 		Line                         int
 		Status, ResolvedBy           string
 		Attempts                     int
-		Note                         string
+		Note, Touches                string
 	}
 	fs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[finding])
 	if err != nil {
@@ -296,8 +296,8 @@ func briefFindings(ctx context.Context, tx pgx.Tx, taskID string) (briefLines, e
 		if where != "" && f.Line > 0 {
 			where = fmt.Sprintf("%s:%d", f.File, f.Line)
 		}
-		out.Lines = append(out.Lines, render(findingLineTmpl, struct{ ID, Severity, Category, Where, Settled string }{
-			f.ID, f.Severity, f.Category, where, settled(f.Status, f.ResolvedBy, f.Attempts, f.Note)}))
+		out.Lines = append(out.Lines, render(findingLineTmpl, struct{ ID, Severity, Category, Where, Touches, Settled string }{
+			f.ID, f.Severity, f.Category, where, f.Touches, settled(f.Status, f.ResolvedBy, f.Attempts, f.Note)}))
 	}
 	return out, nil
 }

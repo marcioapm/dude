@@ -2682,6 +2682,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		// under the Run); the change is the Run's own, base...commit.
 		heads[repo.Name] = delivery.RunHead{SHA: adv.Head, ChangedPaths: db.NonNil(acc.Paths), Base: base}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			if r.Phase == delivery.PhaseFix {
+				if err := keepFixHunks(ctx, tx, r.ID, repo.Name, cmp, acc); err != nil {
+					return err
+				}
+			}
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first
 			// seen — was about the one before: its CI is yet to run on this.
@@ -2708,6 +2713,39 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 	}
 	return heads, branch, nil
+}
+
+// keepFixHunks keeps what a fix Run changed in repo, as the compares its
+// publish made showed it (runs.fix_hunks; delivery.SummarizeFix), with no
+// compare of its own. Each publish of the Run compares from where its
+// checkout started (runs.base_shas, which a resume of the same Run keeps),
+// so the latest replaces the one before: it is the Run's whole change,
+// base..its final head. A count made in full (accountPublish: a compare
+// refused, or what the base brought in not known) is a change not known:
+// the repository's entry goes, and the facts read from it are unknown. A
+// file counted as T...head shows it (acc.OwnApprox) holds the task's whole
+// change to it, not only the fix's: it is kept Unknown, with no ranges.
+func keepFixHunks(ctx context.Context, tx pgx.Tx, runID, repo string, task forge.Comparison, acc accounting) error {
+	var raw []byte
+	switch {
+	case task.Truncated():
+		raw, _ = json.Marshal(delivery.RepoHunks{Truncated: true, Files: []delivery.HunkFile{}})
+	case acc.Full == "":
+		kept := delivery.SummarizeFix(acc.Own, false)
+		for i, f := range kept.Files {
+			if acc.OwnApprox[f.File] {
+				kept.Files[i] = delivery.HunkFile{File: f.File, New: [][2]int{}, Add: f.Add, Del: f.Del, Test: f.Test, Unknown: true}
+			}
+		}
+		raw, _ = json.Marshal(kept)
+	}
+	if raw == nil {
+		_, err := tx.Exec(ctx, `UPDATE runs SET fix_hunks = NULLIF(fix_hunks - $2::text, '{}'::jsonb) WHERE id = $1`, runID, repo)
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE runs SET fix_hunks = COALESCE(fix_hunks, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+		WHERE id = $1`, runID, repo, raw)
+	return err
 }
 
 // keptOnRunBranch is a direct delivery's publish refused as no
@@ -4134,8 +4172,18 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			return err
 		}
 	}
+	// The layer's fact, never the reviewer's: a finding on lines the fix
+	// this review follows changed (its kept hunks) names that fix.
+	fix, err := delivery.ReviewedFixTx(ctx, tx, runID)
+	if err != nil {
+		return err
+	}
 	counts, unverified := map[string]int{}, 0
 	for _, f := range findings {
+		var touches *string
+		if fix.Touches(f.Repo, f.File, f.Line) {
+			touches = &fix.RunID
+		}
 		counts[f.Severity]++
 		if f.Unverified {
 			unverified++
@@ -4149,13 +4197,14 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
 				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix,
-				trivial, introduced, evidence_kind, evidence, scenario, unverified, review_round)
+				trivial, introduced, evidence_kind, evidence, scenario, unverified, review_round, touches_fix_run_id)
 				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15,
-				$16, $17, $18, $19, $20, $21, (SELECT review_round FROM runs WHERE id = $4))`,
+				$16, $17, $18, $19, $20, $21, (SELECT review_round FROM runs WHERE id = $4), $22)`,
 			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
 			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix,
 			db.Nullable(f.Acceptance), f.CausedByFix,
-			f.Trivial, f.Introduced, db.Nullable(f.EvidenceKind), db.Nullable(f.Evidence), db.Nullable(f.Scenario), f.Unverified); err != nil {
+			f.Trivial, f.Introduced, db.Nullable(f.EvidenceKind), db.Nullable(f.Evidence), db.Nullable(f.Scenario), f.Unverified,
+			touches); err != nil {
 			return err
 		}
 	}
@@ -4196,7 +4245,7 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			}
 		}
 	}
-	_, err := ledger.Append(ctx, tx, ledger.Event{
+	_, err = ledger.Append(ctx, tx, ledger.Event{
 		Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
 		ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
 		Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts, "unverified": unverified},
