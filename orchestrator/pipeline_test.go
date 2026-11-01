@@ -502,3 +502,26 @@ func TestARoundWakeAtItsBoundKeepsItsTail(t *testing.T) {
 		t.Errorf("the wake's tail is cut:\n%s", line)
 	}
 }
+
+// A conducted pipeline's note, then.note and round: the fixer is told the
+// note and the bar, the queued reviewers then.note and the bar, and
+// round.scope whole reviews the whole branch in a later round.
+func TestAPipelinesNotesAndRoundReachItsRuns(t *testing.T) {
+	w := roundsWorld(t)
+	task := w.task()
+	w.toRoundOne(task)
+	w.must(task, "start_phase", `{"phase":"fix","note":"N1","then":{"review":["tests"],"note":"N2"},"round":{"scope":"whole","bar":"BAR"}}`)
+	w.until("round 2", func() bool { return w.reviewedRound(task, 2) })
+	fix := w.str(`SELECT COALESCE(conductor_note, '') FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	if !strings.Contains(fix, "N1") || !strings.Contains(fix, "BAR") {
+		t.Errorf("the fixer's note %q, want N1 and BAR", fix)
+	}
+	review := w.str(`SELECT COALESCE(conductor_note, '') FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2 LIMIT 1`, task)
+	if !strings.Contains(review, "N2") || !strings.Contains(review, "BAR") {
+		t.Errorf("the queued reviewer's note %q, want N2 and BAR", review)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2
+		AND COALESCE(review_range->>'of', '') <> ''`, task); n != 0 {
+		t.Errorf("%d of round 2's reviews are not of the whole branch\n%s", n, w.describeRuns())
+	}
+}
