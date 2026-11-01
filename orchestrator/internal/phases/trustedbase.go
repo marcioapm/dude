@@ -81,7 +81,7 @@ func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, sta
 	task forge.Comparison) (accounting, error) {
 	full := func(why string) (accounting, error) {
 		acc := counted(task.Files)
-		acc.Full, acc.Own = why, nil
+		acc.Full = why
 		return acc, nil
 	}
 	if task.Truncated() {
@@ -150,7 +150,7 @@ func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, sta
 		}
 	}
 	acc := counted(own)
-	acc.OwnApprox = approx
+	acc.Own, acc.OwnApprox = own, approx
 	return acc, nil
 }
 
@@ -171,6 +171,5 @@ func counted(files []forge.ComparedFile) accounting {
 		}
 	}
 	acc.Paths = slices.Sorted(maps.Keys(paths))
-	acc.Own = files
 	return acc
 }
