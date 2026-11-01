@@ -567,3 +567,30 @@ func TestAPipelinesFixerThatAsksAPersonGoesOnToItsReview(t *testing.T) {
 		t.Errorf("%d fixes completed, want 1", n)
 	}
 }
+
+// A simplifier with then that commits nothing stops its pipeline: the
+// delivery parks after it with that fact and the review offered, rather
+// than going on to the test.
+func TestAPipelinesSimplifierThatCommitsNothingWakesTheConductor(t *testing.T) {
+	w := roundsWorld(t)
+	w.fixPlays(func(map[string]any) *fakelux.Behaviour { return &fakelux.Behaviour{Reply: "Simple enough."} })
+	task := w.task()
+	w.toRoundOne(task)
+	tests := w.phaseRuns(task, "test")
+	w.must(task, "start_phase", `{"phase":"simplify","then":{"review":["tests"]}}`)
+	w.until("after the simplifier", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'simplify' AND status = 'completed'`, task) == 1 &&
+			(w.untaken(task) || w.phaseRuns(task, "test") > tests)
+	})
+	if !w.fixedWith(task, `["tests"]`) {
+		t.Errorf("parked at %q, want after the fix with the review offered\n%s", w.decisionAt(task), w.describeRuns())
+	}
+	if n := w.phaseRuns(task, "test"); n != tests {
+		t.Errorf("%d tests started after the simplifier", n-tests)
+	}
+	fact := stoppedFact("nothing", "done", "", "tests")
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $3
+		AND strpos(line, $2) > 0`, task, fact, delivery.WakeRound); n != 1 {
+		t.Errorf("wakes saying %q: %d, want 1", fact, n)
+	}
+}

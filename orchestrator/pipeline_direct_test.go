@@ -175,3 +175,31 @@ func TestDirectAConductedFixWokenAfterTheFixCannotStartASecondWriter(t *testing.
 	c.must(c.task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 	c.until("the review's round", func() bool { c.sync(); return c.decisionAt(c.task) == delivery.PointReviewed })
 }
+
+// A direct pull request fix with then that commits nothing has nothing of
+// its own to review: the conductor is told at once, with that fact.
+func TestDirectAConductedPipelineFixThatCommitsNothingTellsTheConductor(t *testing.T) {
+	c := newConductedPR(t, func(phase string, n int, b *fakelux.Behaviour) {
+		if phase == "fix" {
+			*b = fakelux.Behaviour{Reply: "Nothing to change."}
+		}
+	})
+	c.commented()
+	c.must(c.task, "start_phase", `{"phase":"fix","note":"Rename it.","then":{"review":["tests"]}}`)
+	fix := ""
+	c.until("the fix's end", func() bool {
+		c.sync()
+		fix = c.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'
+			ORDER BY created_at DESC, id DESC LIMIT 1), '')`, c.task)
+		return fix != "" && c.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key = $2`, c.task, "pipeline:"+fix) == 1
+	})
+	fact := delivery.MustText("wakes/facts/pipeline-stopped").Render(struct {
+		Case, Error, Outcome, Note string
+		Review                     []string
+		Queued                     bool
+	}{"nothing", "", "done", "", []string{"tests"}, false})
+	if n := c.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND key = $3 AND strpos(line, $4) > 0`,
+		c.task, delivery.WakeRound, "pipeline:"+fix, fact); n != 1 {
+		t.Errorf("the no-commit wake does not say %q", fact)
+	}
+}
