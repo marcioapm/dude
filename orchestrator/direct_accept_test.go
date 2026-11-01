@@ -61,23 +61,40 @@ func (e *editing) feedbackToDecide() {
 	e.until("feedback to decide on", func() bool { e.sync(); return e.decisionAt(e.task) == delivery.PointPRFeedback })
 }
 
-// The conductor publishes to the pull request (its last push was
-// reviewed), then a comment arrives and the conductor has it fixed: the
-// publish is reviewed before the fixer starts from it, so dude never
-// pushes twice with no review between.
-func TestDirectAPullRequestFixFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
-	e := conductedDirect(t)
+// publishUnreviewed publishes the conductor's commit to the pull request,
+// which no review has covered yet, and waits for the pull request to show
+// it; it is the published head.
+func (e *editing) publishUnreviewed() string {
+	e.t.Helper()
 	e.current()
 	e.commit(map[string]string{"README.md": "# target\n\nthe conductor's fix\n"})
 	id := e.publish()
 	if status, why := e.published(id); status != delivery.PublishPublished {
-		t.Fatalf("publish %s: %s", status, why)
+		e.t.Fatalf("publish %s: %s", status, why)
 	}
 	published := e.gh.SHA(e.branch)
 	e.until("the pull request read at the publish", func() bool {
 		e.sync()
 		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
 	})
+	return published
+}
+
+// reviewedBefore says a review of published completed before the first of
+// the task's Runs f matching where started.
+func (e *editing) reviewedBefore(published, where string) bool {
+	return e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
+		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
+		AND `+where+`)`, e.task, published) > 0
+}
+
+// The conductor publishes to the pull request (its last push was
+// reviewed), then a comment arrives and the conductor has it fixed: the
+// publish is reviewed before the fixer starts from it, so dude never
+// pushes twice with no review between.
+func TestDirectAPullRequestFixFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
+	e := conductedDirect(t)
+	published := e.publishUnreviewed()
 	e.feedbackToDecide()
 	e.must(e.task, "decide", `{"action":"next","note":"NOTE-XYZZY"}`)
 	e.until("the fix on the pull request, and waiting again", func() bool {
@@ -85,9 +102,7 @@ func TestDirectAPullRequestFixFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) 
 		e.nextAtRound(e.task)
 		return e.fixes(e.task) == 1 && e.gh.SHA(e.branch) != published && e.waitingOnPR(e.task)
 	})
-	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
-		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
-		AND f.phase = 'fix' AND f.pr_feedback <> '[]'::jsonb)`, e.task, published); n == 0 {
+	if !e.reviewedBefore(published, `f.phase = 'fix' AND f.pr_feedback <> '[]'::jsonb`) {
 		t.Fatalf("no review of the conductor's push %s before the fixer started from it\n%s", published, e.describeRuns())
 	}
 	// The fix was told what the conductor said, kept across the review.
@@ -102,17 +117,7 @@ func TestDirectAPullRequestFixFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) 
 // first, then the integration it decided on runs, once.
 func TestDirectAnIntegrationFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
 	e := conductedDirect(t)
-	e.current()
-	e.commit(map[string]string{"README.md": "# target\n\nthe conductor's fix\n"})
-	id := e.publish()
-	if status, why := e.published(id); status != delivery.PublishPublished {
-		t.Fatalf("publish %s: %s", status, why)
-	}
-	published := e.gh.SHA(e.branch)
-	e.until("the pull request read at the publish", func() bool {
-		e.sync()
-		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
-	})
+	published := e.publishUnreviewed()
 	e.conflictWithMovedBase()
 	e.until("the conflict to decide on", func() bool { e.sync(); return e.decisionAt(e.task) == delivery.PointPRFeedback })
 	e.must(e.task, "decide", `{"action":"next"}`)
@@ -121,9 +126,7 @@ func TestDirectAnIntegrationFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
 		e.nextAtRound(e.task)
 		return e.count(integrationRuns+` AND status = 'completed'`, e.task) == 1
 	})
-	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
-		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
-		AND f.pr_feedback::text LIKE '%Base integration%')`, e.task, published); n == 0 {
+	if !e.reviewedBefore(published, `f.pr_feedback::text LIKE '%Base integration%'`) {
 		t.Fatalf("no review of the conductor's push %s before the integration started from it\n%s", published, e.describeRuns())
 	}
 	e.syncRounds(3)
@@ -350,17 +353,7 @@ func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCoversAPublishWhileItWait
 // with its note, and then its queued reviewers.
 func TestDirectAConductedFixWithThenAtFeedbackFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
 	e := conductedDirect(t)
-	e.current()
-	e.commit(map[string]string{"README.md": "# target\n\nthe conductor's fix\n"})
-	id := e.publish()
-	if status, why := e.published(id); status != delivery.PublishPublished {
-		t.Fatalf("publish %s: %s", status, why)
-	}
-	published := e.gh.SHA(e.branch)
-	e.until("the pull request read at the publish", func() bool {
-		e.sync()
-		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
-	})
+	published := e.publishUnreviewed()
 	e.feedbackToDecide()
 	e.must(e.task, "start_phase", `{"phase":"fix","note":"NOTE-XYZZY","then":{"review":["tests"]}}`)
 	queued := `SELECT count(*) FROM events q WHERE q.task_id = $1 AND q.event_type = 'run.created'
@@ -374,9 +367,7 @@ func TestDirectAConductedFixWithThenAtFeedbackFirstReviewsAnUnreviewedPushOfDude
 		}
 		return e.count(queued, e.task) > 0
 	})
-	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
-		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
-		AND f.phase = 'fix' AND f.pr_feedback <> '[]'::jsonb)`, e.task, published); n == 0 {
+	if !e.reviewedBefore(published, `f.phase = 'fix' AND f.pr_feedback <> '[]'::jsonb`) {
 		t.Fatalf("no review of the conductor's push %s before the fixer started from it\n%s", published, e.describeRuns())
 	}
 	if got := e.ids(`SELECT COALESCE(conductor_note, '') FROM runs WHERE task_id = $1 AND phase = 'fix'
@@ -391,17 +382,7 @@ func TestDirectAConductedFixWithThenAtFeedbackFirstReviewsAnUnreviewedPushOfDude
 // reviewed first; then the integration runs, once.
 func TestDirectAConductedFixAtAConflictFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
 	e := conductedDirect(t)
-	e.current()
-	e.commit(map[string]string{"README.md": "# target\n\nthe conductor's fix\n"})
-	id := e.publish()
-	if status, why := e.published(id); status != delivery.PublishPublished {
-		t.Fatalf("publish %s: %s", status, why)
-	}
-	published := e.gh.SHA(e.branch)
-	e.until("the pull request read at the publish", func() bool {
-		e.sync()
-		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
-	})
+	published := e.publishUnreviewed()
 	e.conflictWithMovedBase()
 	e.until("the conflict to decide on", func() bool { e.sync(); return e.decisionAt(e.task) == delivery.PointPRFeedback })
 	e.must(e.task, "start_phase", `{"phase":"fix","note":"Keep both."}`)
@@ -410,9 +391,7 @@ func TestDirectAConductedFixAtAConflictFirstReviewsAnUnreviewedPushOfDudes(t *te
 		e.nextAtRound(e.task)
 		return e.count(integrationRuns+` AND status = 'completed'`, e.task) == 1
 	})
-	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
-		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
-		AND f.pr_feedback::text LIKE '%Base integration%')`, e.task, published); n == 0 {
+	if !e.reviewedBefore(published, `f.pr_feedback::text LIKE '%Base integration%'`) {
 		t.Fatalf("no review of the conductor's push %s before the integration started from it\n%s", published, e.describeRuns())
 	}
 }
