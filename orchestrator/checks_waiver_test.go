@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
@@ -34,6 +35,17 @@ func (w *world) failingUntilEscalated(model string, j *scriptedJudge) string {
 	w.onModel("simplifier", model)
 	wi := w.checksDelivery(model, j)
 	w.until("the checks escalation", func() bool { return w.checksEscalations(wi) == 1 })
+	return wi
+}
+
+// baseShownUntilPulled runs a delivery whose writers all show their failure
+// the same at the task base, with no send-back allowed, to its pull request.
+func (w *world) baseShownUntilPulled() string {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
+	w.onModel("simplifier", fakeagent.ChecksBaseShownModel)
+	wi := w.checksDelivery(fakeagent.ChecksBaseShownModel, &scriptedJudge{})
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	return wi
 }
 
@@ -137,11 +149,7 @@ func (j *scriptedJudge) waiverQuestions() int {
 // nothing is sent back or escalated, and the work reaches the pull request.
 func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 	w := newWorld(t)
-	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
-	w.onModel("simplifier", fakeagent.ChecksBaseShownModel)
-	j := &scriptedJudge{}
-	wi := w.checksDelivery(fakeagent.ChecksBaseShownModel, j)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	wi := w.baseShownUntilPulled()
 	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:verified,fix:verified,simplify:verified" {
 		t.Errorf("judged %s", got)
 	}
@@ -163,6 +171,30 @@ func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 	}
 	if strings.Contains(account, "waived") || strings.Contains(account, "`"+fakeagent.FailingCommand+"` — **pass**") {
 		t.Errorf("PR account reads as a waiver or a pass:\n%s", account)
+	}
+}
+
+// The same writer when lux's git.checkout for the implementer trails its
+// turn's end by seconds: its report is judged once the task base is
+// recorded, not rejected for lacking one and escalated.
+func TestAFailureShownAtTheTaskBasePassesWithoutAPersonEvenWhenTheCheckoutEventLags(t *testing.T) {
+	w := newWorld(t)
+	w.lux.CheckoutLag = func(spec map[string]any) time.Duration {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			return 3 * time.Second
+		}
+		return 0
+	}
+	wi := w.baseShownUntilPulled()
+	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:verified,fix:verified,simplify:verified" {
+		t.Errorf("judged %s", got)
+	}
+	if n := w.checksEscalations(wi); n != 0 {
+		t.Errorf("%d checks escalations", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->'checks'->0->>'result' = $3
+		AND (payload->>'judgePassed')::bool`, wi, delivery.EvRunChecksJudged, delivery.CheckPreexisting); n != 3 {
+		t.Errorf("%d judgements recording the failure pre-existing, want each writer's", n)
 	}
 }
 
