@@ -18,8 +18,9 @@ import (
 
 // A fix Run's change as GitHub's compare showed it, kept when it publishes
 // (runs.fix_hunks, by repository name): the facts a round wake says about
-// the fix before it — which lines it changed (the spiral fact), its
-// production-line delta, the test declarations it removed, and the paths
+// the fix before it — which lines it changed (the spiral fact), its line
+// delta and the recognised tests' share of it, the test declarations it
+// removed from recognised test files, and the paths
 // it changed — are read from here, never from a compare made later. A
 // repository the fix published that is not here, one whose compare was cut
 // short (Truncated), or a file GitHub showed no patch for (Unknown), is a
@@ -298,8 +299,10 @@ const changeListed = 3
 // kept change (wakes/facts/round-change): each part nil or empty when not
 // known, or when there is nothing to say.
 type roundChange struct {
-	// Lines added and removed in files that are not tests, summed over the
-	// repositories it published.
+	// Lines added and removed in every file it changed, summed over the
+	// repositories it published, and the part of them in files IsTestPath
+	// recognises: true whatever the heuristic misses, for a test file it
+	// does not recognise is in the total and only out of the share.
 	Delta *lineDelta
 	// Test declarations it removed and did not add again under the same
 	// name, listed up to changeListed, the rest counted.
@@ -310,7 +313,9 @@ type roundChange struct {
 	OutsideMore int
 }
 
-type lineDelta struct{ Add, Del int }
+// lineDelta is a fix's whole delta (Add, Del), and the part of it in
+// recognised test files (TestAdd, TestDel).
+type lineDelta struct{ Add, Del, TestAdd, TestDel int }
 
 // brief is what a fix was asked to change: the places of the findings it
 // was handed, and its conductor's words (its note, the queued review's
@@ -341,9 +346,11 @@ func (h FixHunks) change(published []string, b brief) roundChange {
 				allKnown = false
 				continue
 			}
-			if !f.Test {
-				delta.Add += f.Add
-				delta.Del += f.Del
+			delta.Add += f.Add
+			delta.Del += f.Del
+			if f.Test {
+				delta.TestAdd += f.Add
+				delta.TestDel += f.Del
 			}
 			removed = append(removed, f.RemovedTests...)
 		}

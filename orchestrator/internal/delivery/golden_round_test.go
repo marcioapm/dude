@@ -38,7 +38,7 @@ func TestGoldenRoundWakes(t *testing.T) {
 		{"round-3-more-touches", roundWake{Round: 3, Open: 15, More: 14, Range: narrow, Lenses: []string{"tests"}, Shown: findings[:1], Fix: fix,
 			all: append(findings[:1:1], roundFinding{Touches: true}, roundFinding{}, roundFinding{Touches: true})}.text()},
 		{"round-2-change", roundWake{Round: 2, Open: 1, Range: narrow, Lenses: []string{"tests"}, Shown: findings[:1], Fix: fix,
-			Change: render(roundChangeTmpl, roundChange{Delta: &lineDelta{Add: 120, Del: 4},
+			Change: render(roundChangeTmpl, roundChange{Delta: &lineDelta{Add: 120, Del: 4, TestAdd: 30, TestDel: 2},
 				Removed: []string{"TestRetry", "test_empty", "rejects a bad id"}, RemovedMore: 2,
 				Outside: []string{"api/cache.go", "web/src/retry.ts", "Makefile"}, OutsideMore: 5})}.text()},
 		{"round-2-change-delta-only", roundWake{Round: 2, Range: narrow, Lenses: []string{"tests"}, Fix: fix,

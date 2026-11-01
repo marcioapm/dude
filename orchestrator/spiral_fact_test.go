@@ -80,11 +80,12 @@ func (w *world) roundTwoFinding(task string) (id, touches string) {
 }
 
 // changeFact is what a round wake says of the fix's kept change, as dude
-// renders it (wakes/facts/round-change): delta nil when not known.
-func changeFact(delta *[2]int, removed []string, removedMore int, outside []string, outsideMore int) string {
+// renders it (wakes/facts/round-change): delta (added, deleted, and the
+// part of them in recognised test files) nil when not known.
+func changeFact(delta *[4]int, removed []string, removedMore int, outside []string, outsideMore int) string {
 	var d any
 	if delta != nil {
-		d = map[string]any{"Add": delta[0], "Del": delta[1]}
+		d = map[string]any{"Add": delta[0], "Del": delta[1], "TestAdd": delta[2], "TestDel": delta[3]}
 	}
 	return strings.TrimSpace(delivery.MustText("wakes/facts/round-change").Render(map[string]any{
 		"Delta": d, "Removed": removed, "RemovedMore": removedMore, "Outside": outside, "OutsideMore": outsideMore}))
@@ -149,7 +150,7 @@ func TestTheSpiralFactNamesTheFixWhoseLinesAFindingTouches(t *testing.T) {
 			}
 			// The fix wrote three lines over one (git's count; the patch is
 			// GitHub's answer); with no patch, its change is not known.
-			change := changeFact(&[2]int{3, 1}, nil, 0, nil, 0)
+			change := changeFact(&[4]int{3, 1, 0, 0}, nil, 0, nil, 0)
 			if c.patch == "" {
 				change = ""
 			}
@@ -216,15 +217,34 @@ func (w *world) fixedRoundTwoWake(task, change string) string {
 	return roundWakeTouching(2, 0, 0, rng, []string{"tests"}, nil, 0, 0, fixLine, change, false)
 }
 
-// The fix's production-line delta counts lines added and removed outside
-// test files: a test file's lines are not in it.
-func TestTheRoundWakeSaysTheFixsProductionLineDelta(t *testing.T) {
-	w := changeWorld(t, evidencedFinding("severity: high", wrongThing),
-		map[string]string{"FACTORY.md": "one\ntwo\nthree\n", "factory_test.go": "package f\n\nfunc helper() {}\n"}, nil)
-	task := w.task()
-	w.toFixedRoundTwo(task)
-	if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&[2]int{3, 1}, nil, 0, []string{"factory_test.go"}, 0)); got != want {
-		t.Errorf("round 2's wake:\n got %q\nwant %q", got, want)
+// The fix's line delta is every file it changed, and the part of it in
+// recognised test files is said beside it: a test file IsTestPath does not
+// recognise (spec/PlayerSpec.js) is in the total, so the total is true
+// whatever the heuristic misses.
+func TestTheRoundWakeSaysTheFixsLineDelta(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		commit map[string]string
+		delta  [4]int
+	}{
+		{"a recognised test file", map[string]string{"FACTORY.md": "one\ntwo\nthree\n", "factory_test.go": "package f\nfunc helper() {}\n"}, [4]int{5, 1, 2, 0}},
+		{"no test file", map[string]string{"FACTORY.md": "one\ntwo\nthree\n"}, [4]int{3, 1, 0, 0}},
+		{"a test file not recognised", map[string]string{"FACTORY.md": "one\ntwo\nthree\n", "spec/PlayerSpec.js": "describe(\"Player\", () => {\n});\n"}, [4]int{5, 1, 0, 0}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := changeWorld(t, evidencedFinding("severity: high", wrongThing), c.commit, nil)
+			task := w.task()
+			w.toFixedRoundTwo(task)
+			var outside []string
+			for f := range c.commit {
+				if f != "FACTORY.md" {
+					outside = append(outside, f)
+				}
+			}
+			if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&c.delta, nil, 0, outside, 0)); got != want {
+				t.Errorf("round 2's wake:\n got %q\nwant %q", got, want)
+			}
+		})
 	}
 }
 
@@ -236,7 +256,7 @@ func TestTheRoundWakeNamesTheTestDeclarationsTheFixRemoved(t *testing.T) {
 		map[string]string{"factory_test.go": "@@ -1,6 +1,3 @@\n package f\n-func TestGone(t *testing.T) {\n-}\n-func TestKept(t *testing.T) {\n-}\n+\n+func TestKept(t *testing.T) {}"})
 	task := w.task()
 	w.toFixedRoundTwo(task)
-	if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&[2]int{3, 1}, []string{"TestGone"}, 0, []string{"factory_test.go"}, 0)); got != want {
+	if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&[4]int{6, 1, 3, 0}, []string{"TestGone"}, 0, []string{"factory_test.go"}, 0)); got != want {
 		t.Errorf("round 2's wake:\n got %q\nwant %q", got, want)
 	}
 }
@@ -252,7 +272,7 @@ func TestTheRoundWakeListsTheFilesOutsideTheFixsBrief(t *testing.T) {
 		w.toRoundOne(task)
 		w.must(task, "start_phase", `{"phase":"fix","note":"Keep the change in lib/ and \u0060docs/x.md:1\u0060.","then":{"review":["tests"]}}`)
 		w.until("round 2", func() bool { return w.reviewedRound(task, 2) })
-		if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&[2]int{6, 1}, nil, 0, []string{"other.go"}, 0)); got != want {
+		if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&[4]int{6, 1, 0, 0}, nil, 0, []string{"other.go"}, 0)); got != want {
 			t.Errorf("round 2's wake:\n got %q\nwant %q", got, want)
 		}
 	})
@@ -262,7 +282,7 @@ func TestTheRoundWakeListsTheFilesOutsideTheFixsBrief(t *testing.T) {
 		w := changeWorld(t, placeless, commit, nil)
 		task := w.task()
 		w.toFixedRoundTwo(task)
-		if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&[2]int{6, 1}, nil, 0, nil, 0)); got != want {
+		if got, want := w.roundWakeLine(task), w.fixedRoundTwoWake(task, changeFact(&[4]int{6, 1, 0, 0}, nil, 0, nil, 0)); got != want {
 			t.Errorf("round 2's wake:\n got %q\nwant %q", got, want)
 		}
 	})
@@ -363,7 +383,7 @@ func TestTheRoundWakeCountsTheHiddenFindingsOnTheFixsLines(t *testing.T) {
 	rng := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": of, "Repos": repos})
 	fixLine := delivery.MustText("wakes/facts/round-fix").Render(map[string]any{"Phase": "fix", "RunID": fix, "Outcome": "", "Note": "",
 		"Commits": []string{"target@" + head[:7]}})
-	want := roundWakeTouching(2, 14, 0, rng, []string{"tests"}, shown, 2, 2, fixLine, changeFact(&[2]int{3, 1}, nil, 0, nil, 0), false)
+	want := roundWakeTouching(2, 14, 0, rng, []string{"tests"}, shown, 2, 2, fixLine, changeFact(&[4]int{3, 1, 0, 0}, nil, 0, nil, 0), false)
 	if got := w.roundWakeLine(task); got != want {
 		t.Errorf("round 2's wake:\n got %q\nwant %q", got, want)
 	}

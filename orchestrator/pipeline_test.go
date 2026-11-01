@@ -415,7 +415,7 @@ func TestARoundWakeListsTheFindingsAtTheBarAndTheFix(t *testing.T) {
 	narrow := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": delivery.RangeFixRound,
 		"Repos": []string{"target@" + before[:7] + ".." + head[:7]}})
 	// The fix rewrote FACTORY.md's one line: nothing else to say of it.
-	change := changeFact(&[2]int{1, 1}, nil, 0, nil, 0)
+	change := changeFact(&[4]int{1, 1, 0, 0}, nil, 0, nil, 0)
 	if got, want := w.roundWakeLine(task), roundWakeTouching(8, 2, 1, narrow, []string{"tests"}, shown, 0, 0, fixLine, change, true); got != want {
 		t.Errorf("round 8's wake:\n got %q\nwant %q", got, want)
 	}
