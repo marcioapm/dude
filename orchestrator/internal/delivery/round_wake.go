@@ -38,7 +38,8 @@ var (
 	roundRangeTmpl = mustTemplate("wakes/facts/round-range")
 )
 
-// roundFinding is a finding at the bar as a round wake lists it.
+// roundFinding is a finding at the bar as a round wake lists it, scanned
+// in its fields' order.
 type roundFinding struct {
 	ID, Severity, Title, Where string
 	// yes, no, or "" for not said.
@@ -104,7 +105,7 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 			if err != nil {
 				return err
 			}
-			shown, err := pgx.CollectRows(rows, pgx.RowToStructByPos[roundFindingRow])
+			shown, err := pgx.CollectRows(rows, pgx.RowToStructByPos[roundFinding])
 			if err != nil {
 				return err
 			}
@@ -112,17 +113,11 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 			for i, id := range atBar {
 				order[id] = i
 			}
-			slices.SortFunc(shown, func(a, b roundFindingRow) int {
+			slices.SortFunc(shown, func(a, b roundFinding) int {
 				return cmp.Or(cmp.Compare(severityRank[a.Severity], severityRank[b.Severity]),
 					cmp.Compare(boolRank(a.Unverified), boolRank(b.Unverified)), cmp.Compare(order[a.ID], order[b.ID]))
 			})
-			for _, f := range shown {
-				if len(data.Shown) == roundShown {
-					break
-				}
-				data.Shown = append(data.Shown, roundFinding{ID: f.ID, Severity: f.Severity, Title: f.Title, Where: f.Where,
-					Introduced: f.Introduced, Trivial: f.Trivial, Unverified: f.Unverified})
-			}
+			data.Shown = shown[:min(len(shown), roundShown)]
 			data.More = len(atBar) - len(data.Shown)
 		}
 		if parent == "" || parentPhase != PhaseFix && parentPhase != PhaseSimplify {
@@ -176,11 +171,6 @@ func (r roundWake) text() string {
 		roundWake
 		Long bool
 	}{r, r.Round >= longLoop})
-}
-
-type roundFindingRow struct {
-	ID, Severity, Title, Where, Introduced string
-	Trivial, Unverified                    bool
 }
 
 func boolRank(b bool) int {
