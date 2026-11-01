@@ -98,6 +98,12 @@ func TestSummarizeFix(t *testing.T) {
 			[]HunkFile{
 				{File: "a_test.go", New: [][2]int{{1, 1}}, Del: 1, Test: true},
 				{File: "helpers.go", New: [][2]int{{1, 1}}, Add: 1}}},
+		// The removed-tests fact looks only in recognised test files: one
+		// IsTestPath misses yields no removal, so the fact is silent and
+		// claims nothing, rather than claiming none were removed.
+		{"a test file not recognised reports no removal",
+			[]forge.ComparedFile{file("spec/PlayerSpec.js", "@@ -1,2 +0,0 @@\n-it(\"x\", () => {\n-});", 0, 2)},
+			[]HunkFile{{File: "spec/PlayerSpec.js", New: [][2]int{{1, 1}}, Del: 2}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := SummarizeFix(c.files, false); !reflect.DeepEqual(got, RepoHunks{Files: c.want}) {
