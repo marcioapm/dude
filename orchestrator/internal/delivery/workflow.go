@@ -1223,18 +1223,16 @@ func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *
 }
 
 // loopFindings is what the review loop weighs: the reviewers' findings its
-// loop owns (loopsOwn), with the loop's convergence, and the people's
-// feedback still to be handled.
+// loop owns (loopsOwn), with the loop's convergence (none for a round the
+// conductor decides, loopExit), and the people's feedback still to be
+// handled.
 func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
-	var findings []FindingState
 	var conv Convergence
-	var err error
+	read := &conv
 	if st.conductsRounds() {
-		// The conductor's round weighs no convergence (loopExit).
-		findings, err = w.s.Findings(ctx, org, st)
-	} else {
-		findings, conv, err = w.s.ConvergingFindings(ctx, org, st)
+		read = nil
 	}
+	findings, err := w.s.findings(ctx, org, st, fromReview, read)
 	if err == nil {
 		findings, err = w.s.loopsOwn(ctx, org, st, findings)
 	}
