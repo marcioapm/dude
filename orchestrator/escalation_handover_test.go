@@ -4,13 +4,10 @@ package orchestrator_test
 // the conductor is told, as it is of one it had when it escalated.
 
 import (
-	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
-	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
@@ -19,26 +16,19 @@ import (
 // person, no conductor yet.
 func stuckDelivered(w *world) string {
 	w.t.Helper()
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		labels, _ := spec["labels"].(map[string]any)
-		switch labels["dude.phase"] {
-		case "review":
-			// Raised once, then still there after every fix.
-			if fmt.Sprint(labels["dude.run"]) == w.firstReview() {
-				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
-			}
-			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
-		case "implement", "fix":
-			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
-		}
-		return scripted(spec)
-	}
+	stillAfterFirstReview(w, "")
 	task := w.task()
+	deliveredStuck(w, task)
+	return task
+}
+
+// deliveredStuck has Deliver decide the task, at one fix attempt per
+// finding, until its review escalates stuck.
+func deliveredStuck(w *world, task string) {
+	w.t.Helper()
 	w.deliver(task)
 	setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
 	w.until("stuck", func() bool { return w.escalationReason(task) == "stuck" })
-	return task
 }
 
 // A delivery handed to the conductor while it waits at Deliver's escalation
@@ -90,20 +80,7 @@ func TestAnEscalationHandedToTheConductorTellsIt(t *testing.T) {
 // it waits.
 func TestAnEscalationHandedOverWhileItsStepRunsTellsTheConductor(t *testing.T) {
 	w := conducting(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		labels, _ := spec["labels"].(map[string]any)
-		switch labels["dude.phase"] {
-		case "review":
-			if fmt.Sprint(labels["dude.run"]) == w.firstReview() {
-				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
-			}
-			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
-		case "implement", "fix":
-			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
-		}
-		return scripted(spec)
-	}
+	stillAfterFirstReview(w, "")
 	task := w.task()
 	var once sync.Once
 	def := delivery.Workflow(&delivery.Store{DB: w.app}, forge.Resolver{DB: w.app})
@@ -117,9 +94,7 @@ func TestAnEscalationHandedOverWhileItsStepRunsTellsTheConductor(t *testing.T) {
 		}
 	}
 	w.runtime.Register(def)
-	w.deliver(task)
-	setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
-	w.until("stuck", func() bool { return w.escalationReason(task) == "stuck" })
+	deliveredStuck(w, task)
 	if d := w.decider(task); d != delivery.DeciderConductor {
 		t.Fatalf("decider %s after the Chat message", d)
 	}

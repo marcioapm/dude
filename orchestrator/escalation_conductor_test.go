@@ -31,25 +31,7 @@ const escalationQuestion = `{"question":"Stuck on the finding. I propose one mor
 // hand-over: its first wakes are the escalation's.
 func stuck(t *testing.T) (*world, string) {
 	w := conducting(t)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		labels, _ := spec["labels"].(map[string]any)
-		switch labels["dude.phase"] {
-		case "review":
-			// Raised once, then still there after every fix.
-			if fmt.Sprint(labels["dude.run"]) == w.firstReview() {
-				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
-			}
-			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
-		case "implement", "fix":
-			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
-		}
-		return scripted(spec)
-	}
-	task := w.task()
-	w.deliver(task)
-	setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
-	w.until("stuck", func() bool { return w.escalationReason(task) == "stuck" })
+	task := stuckDelivered(w)
 	handOver(w, task)
 	w.wokenWith(task, "Escalated to a person: stuck")
 	return w, task
@@ -67,6 +49,26 @@ func handOver(w *world, task string) {
 	}
 	cond, _, _ := w.conductor(task)
 	w.until("the conductor to answer", func() bool { return len(w.said(cond)) >= 1 })
+}
+
+// stillAfterFirstReview makes the world's first review raise Finding (then
+// extra, YAML documents after it), and every review after it judge Finding
+// still; an implement or fix commits.
+func stillAfterFirstReview(w *world, extra string) {
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			if fmt.Sprint(labels["dude.run"]) == w.firstReview() {
+				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + extra + "```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+		case "implement", "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
+		}
+		return scripted(spec)
+	}
 }
 
 // firstReview is the first review Run of the world's organization.
