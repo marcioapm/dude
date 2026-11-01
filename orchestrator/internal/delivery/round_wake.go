@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -148,7 +149,16 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 	if err != nil {
 		return "", err
 	}
-	return data.text(), nil
+	// Fit the bound with the decision it waits on: the last shown
+	// findings give way, counted, so the tail (how many more, the fix,
+	// the long loop) is never what the clip cuts.
+	text := data.text()
+	for len(data.Shown) > 0 && utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars {
+		data.Shown = data.Shown[:len(data.Shown)-1]
+		data.More++
+		text = data.text()
+	}
+	return text, nil
 }
 
 // roundWake is what a round wake says (wakes/round).

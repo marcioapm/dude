@@ -446,3 +446,59 @@ func TestAQueuedNoteAndDecideNextsNoteFitTheRunsNote(t *testing.T) {
 		t.Errorf("the queued review's note: %d characters", n)
 	}
 }
+
+// A round wake listing a full roundShown of findings with long titles and
+// long places fits roundLineChars by listing fewer: its tail — how many
+// more, the fix before it, the long loop — is never what is cut.
+func TestARoundWakeAtItsBoundKeepsItsTail(t *testing.T) {
+	w := conducting(t)
+	w.onModel("reviewer", "llm-review")
+	scripted := w.lux.Decide
+	reviews := 0
+	dir := strings.Repeat("a-rather-long-directory-name/", 5)
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			if reviews++; reviews == 1 {
+				var b strings.Builder
+				for i := range 14 {
+					if i > 0 {
+						b.WriteString("---\n")
+					}
+					fmt.Fprintf(&b, "severity: medium\ncategory: correctness\nfile: %sfile%02d.go\nline: %d\ntitle: %s %02d\ndescription: D.\n",
+						dir, i, i+1, strings.Repeat("t", 76), i)
+				}
+				return fakelux.Behaviour{Reply: "```yaml\n" + b.String() + "```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+		case "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "fix",
+				Checks: "```yaml\noutcome: partial\noutcome_note: one left\nchecks: []\n```"}
+		}
+		return scripted(spec)
+	}
+	task := w.task()
+	w.toRoundOne(task)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"round":7}'::jsonb WHERE task_id = $1`, task)
+	w.must(task, "start_phase", `{"phase":"fix","then":{"review":["tests"]},"round":{"scope":"fix"}}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 8", func() bool { return w.reviewedRound(task, 8) || w.escalationReason(task) != "" })
+	if r := w.escalationReason(task); r != "" {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	line := w.roundWakeLine(task)
+	if n := len([]rune(line)); n > 2000 {
+		t.Errorf("the wake: %d characters", n)
+	}
+	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	for _, want := range []string{"more at the bar (findings).", "The fix before it: ", fix, "8 rounds in this loop: consider asking the person."} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the wake does not say %q:\n%s", want, line)
+		}
+	}
+	if !strings.HasSuffix(line, "consider asking the person.") {
+		t.Errorf("the wake's tail is cut:\n%s", line)
+	}
+}
