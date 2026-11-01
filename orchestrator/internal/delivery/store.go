@@ -160,6 +160,9 @@ type PhaseRun struct {
 	// findings belong to (a pull request's fix on its candidate,
 	// rangeFindings).
 	KeepRange bool
+	// Review: the loop's round it is part of (State.Round), stored as
+	// runs.review_round; 0 for none (a Run that is no loop's review).
+	Round int
 	// A publishing Run: the branch dude fast-forwards to what it pushed
 	// (runs.branch), "" for the task branch. A candidate for an open pull
 	// request's fix (CandidateBranch) is checked before the pull request
@@ -181,6 +184,14 @@ type PhaseRun struct {
 	toolsService bool
 	// Store.RunTimeLimit, for continueOrCreateTx.
 	timeLimit time.Duration
+}
+
+// nullableRound is a review round as runs.review_round has it: NULL for none.
+func nullableRound(round int) *int {
+	if round <= 0 {
+		return nil
+	}
+	return &round
 }
 
 // ReviewRange is the range a review covers: from Base, per repository,
@@ -309,15 +320,15 @@ func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (
 		INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role,
 		                  parent_run_id, base_refs, category, pr_feedback, creation_key,
 		                  finding_ids, blocking_severities, conductor_run_id, conductor_note, restart_note, tier_override,
-		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how, check_logs, person_note)
+		                  review_range, branch, feedback_item_ids, continues_run_id, continues_how, check_logs, person_note, review_round)
 		VALUES ($1, $2, $3, $4, $5, 'pending', $6::run_phase, $7::agent_role, $8, $9::jsonb, $10, $11::jsonb, $12, $13, $14,
-		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23, $24::jsonb, $25)`,
+		        $15, $16, $17, $18, $19::jsonb, $20, $21, $22, $23, $24::jsonb, $25, $26)`,
 		runID, org, projectID, in.TaskID, attempt, in.Phase, RoleForPhase[in.Phase],
 		db.Nullable(in.ParentRunID), bases, db.Nullable(in.Category), feedback,
 		db.Nullable(in.Key), db.NonNil(in.FindingIDs), db.NonNil(in.BlockingSeverities),
 		db.Nullable(in.ConductorRunID), db.Nullable(in.ConductorNote), db.Nullable(in.RestartNote), db.Nullable(in.Tier),
 		reviewRange, db.Nullable(in.Branch), db.NonNil(in.FeedbackItemIDs), continues, how, checkLogs,
-		db.Nullable(strings.TrimSpace(in.PersonNote))); err != nil {
+		db.Nullable(strings.TrimSpace(in.PersonNote)), nullableRound(in.Round)); err != nil {
 		return "", err
 	}
 	if in.CountAttempts && len(in.FindingIDs) > 0 {

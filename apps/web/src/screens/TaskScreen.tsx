@@ -1344,6 +1344,7 @@ const WAIVED_NOTE = "waived by a person: ";
 const REVIEW_OF: Readonly<Record<NonNullable<Run["reviewOf"]>, string>> = {
   simplify: "of the simplifier's diff",
   pull_request_fix: "of the pull request's fix",
+  fix_round: "of what changed since the last round",
 };
 
 /**

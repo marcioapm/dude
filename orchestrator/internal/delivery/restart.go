@@ -76,13 +76,14 @@ func restartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	var feedback json.RawMessage
 	var conductorRun, conductorNote, personNote, branch string
 	var reviewRange *ReviewRange
+	var round int
 	err = tx.QueryRow(ctx, `SELECT COALESCE(task_id, ''), COALESCE(phase::text, ''), COALESCE(category, ''), status::text,
 			COALESCE(role::text, ''), attempt, finding_ids, blocking_severities, pr_feedback,
 			COALESCE(conductor_run_id, ''), COALESCE(conductor_note, ''), COALESCE(branch, ''), review_range,
-			feedback_item_ids, COALESCE(person_note, '')
+			feedback_item_ids, COALESCE(person_note, ''), COALESCE(review_round, 0)
 		FROM runs WHERE id = $1 FOR UPDATE`, in.RunID).
 		Scan(&runTask, &phase, &category, &status, &role, &attempt, &findingIDs, &blocking, &feedback, &conductorRun, &conductorNote,
-			&branch, &reviewRange, &feedbackIDs, &personNote)
+			&branch, &reviewRange, &feedbackIDs, &personNote, &round)
 	switch {
 	case db.IsNotFound(err) || err == nil && runTask != taskID:
 		return "", refusef(rNotRunThisTaskOnlyThis, in.RunID)
@@ -141,7 +142,7 @@ func restartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 		ConductorRunID:  conductorRun, ConductorNote: conductorNote, PersonNote: personNote,
 		RestartNote: restartLine(in, note), Tier: tierID,
 		// Where it publishes and what it reviews, as the Run it replaces.
-		Branch: branch, ReviewRange: reviewRange, Replays: in.Replays,
+		Branch: branch, ReviewRange: reviewRange, Replays: in.Replays, Round: round,
 	})
 	if err != nil {
 		return "", err

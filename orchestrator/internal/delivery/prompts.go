@@ -109,6 +109,12 @@ type PromptInput struct {
 	// Review phase: what earlier reviewers of its category asked
 	// (EarlierQuestionsTx).
 	Questions []EarlierQuestion
+	// Review phase of a conducted loop (ConductedLoop): its round
+	// (runs.review_round), 0 for none, and the attempt's findings decided
+	// in earlier rounds (DecidedFindingsTx). Fix phase of one: the round
+	// whose findings it fixes.
+	Round   int
+	Decided []DecidedFinding
 }
 
 // promptVariable matches {{name}} in a saved prompt. The names are
@@ -189,11 +195,14 @@ var reviewFocus = agentTexts("aspects/reviewer/", reviewerOrder...)
 const (
 	RangeSimplify       = "simplify"
 	RangePullRequestFix = "pull_request_fix"
+	// A conducted loop's later round: what changed since the round before
+	// it reviewed (State.roundRange).
+	RangeFixRound = "fix_round"
 )
 
 // rangeReason says why a review covers only its range, by ReviewRange.Of:
 // agents/contracts/review-range/<of>.md.
-var rangeReason = agentTexts("contracts/review-range/", RangeSimplify, RangePullRequestFix, RangeSinceLastRound)
+var rangeReason = agentTexts("contracts/review-range/", RangeSimplify, RangePullRequestFix, RangeSinceLastRound, RangeFixRound)
 
 // reviewScope is what this review covers, in its first message: the whole
 // branch when base is empty, else the commits named, per repository, to
@@ -379,6 +388,9 @@ func Prompt(phase string, in PromptInput) string {
 		if note := lastFixNote(in.LastFix); note != "" {
 			add(note)
 		}
+		if note := reviewRoundNote(in.ConductedLoop, in.Round, in.ReviewOf, in.Decided); note != "" {
+			add(note)
+		}
 
 	case PhaseFix:
 		add(fixSections(in)...)
@@ -465,6 +477,10 @@ func fixSections(in PromptInput) []string {
 	}
 	if len(in.Feedback) > 0 {
 		sections = append(sections, FeedbackText(in.Feedback, in.CLI))
+	}
+	if in.ConductedLoop && in.Round > 0 {
+		// A conducted loop's fixer: its round, and how the round is fixed.
+		sections = append(sections, render(fixRoundRulesTmpl, struct{ Round int }{in.Round}))
 	}
 	return sections
 }

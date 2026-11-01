@@ -205,6 +205,7 @@ func (w *steps) reviewFirst(ctx context.Context, sc workflow.StepContext, st *St
 	if a := st.PRFixAfter; a != nil {
 		// Back from that review: the fix, as it was told.
 		st.Directed, st.Integration, st.Iteration = a.Directed, a.Integration, a.Iteration
+		st.Round, st.RoundHeads = a.Round, a.RoundHeads
 		st.PRFixAfter, st.FixRange = nil, nil
 	}
 	if !st.Policy.DirectFixes() || len(st.PullRequestIDs) == 0 {
@@ -217,8 +218,10 @@ func (w *steps) reviewFirst(ctx context.Context, sc workflow.StepContext, st *St
 	}); err != nil || len(pushes) == 0 {
 		return workflow.Result{}, false, err
 	}
-	st.PRFixAfter = &PRFixAfter{Head: pushes[0].Head, Directed: st.Directed, Integration: st.Integration, Iteration: st.Iteration}
+	st.PRFixAfter = &PRFixAfter{Head: pushes[0].Head, Directed: st.Directed, Integration: st.Integration, Iteration: st.Iteration,
+		Round: st.Round, RoundHeads: st.RoundHeads}
 	st.Directed, st.Integration, st.Iteration = nil, nil, 0
+	st.newLoop()
 	st.Heads = maps.Clone(st.Heads)
 	if st.Heads == nil {
 		st.Heads = map[string]string{}

@@ -89,6 +89,8 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 		if head != st.Heads[repo.Name] {
 			st.Heads[repo.Name] = head
 			st.Integration = serverMerged(head, head)
+			// A merge the loop never reviewed: its next round is the whole branch.
+			st.newLoop()
 			return workflow.Result{Next: "test", State: st}, true, nil
 		}
 		if cmp.BehindBy == 0 {
@@ -115,6 +117,7 @@ func (w *steps) syncBeforePR(ctx context.Context, sc workflow.StepContext, st *S
 		}
 		st.Heads[repo.Name] = merged.SHA
 		st.Integration = serverMerged(head, merged.SHA)
+		st.newLoop()
 		// Only a merge onto the head read above is that head plus the target
 		// branch: a push landing between the read and the merge is in it too.
 		st.Integration.ServerMerge = len(merged.Parents) > 0 && merged.Parents[0] == head
