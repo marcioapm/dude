@@ -331,7 +331,13 @@ type Routed struct {
 func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (workflow.Result, bool, error) {
 	if sc.Step != "decide" {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id=$1 FOR UPDATE`, sc.WorkflowRunID).Scan(&raw); err != nil {
+		// NO KEY UPDATE: it conflicts with LoadDelivery's FOR UPDATE, so a
+		// handover (SetDeciderTx) in flight is read committed, but lets a
+		// signal insert's FK KEY SHARE through: a writer holding the task
+		// that signals the delivery (EndConductorWait) cannot cycle with a
+		// park at Ask me first that waits on the task
+		// (choiceReleasedAtCommitTx).
+		if err := tx.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id=$1 FOR NO KEY UPDATE`, sc.WorkflowRunID).Scan(&raw); err != nil {
 			return res, false, err
 		}
 		var current State
