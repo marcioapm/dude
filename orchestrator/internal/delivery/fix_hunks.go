@@ -177,9 +177,16 @@ func testDecls(line string) []string {
 // IsTestPath says a repository path is a test's: Go's _test.go, a TS/JS
 // .test or .spec file, Python's test_*.py, *_test.py and tests.py, Ruby's
 // *_spec.rb, or anything under a test, tests, testdata or __tests__
-// directory. Not a *Test.java (a production class may be named so: Maven's
-// and Gradle's tests are under src/test/), nor a spec/ directory (an API's
+// directory, or a Gradle or Android test source set (androidTest,
+// integrationTest, functionalTest, testFixtures). Not a *Test.java (a
+// production class may be named so: Maven's and Gradle's tests are under
+// src/test/), nor a *Spec.js or a spec/ directory (an API's
 // spec/openapi.yaml is production).
+//
+// The rule: recognise only layouts that are never production; a miss only
+// moves lines out of the recognised share, and the wake's wording stays
+// true. A false positive would put production lines in the share and make
+// it false, so a layout that may be production stays unrecognised.
 func IsTestPath(p string) bool {
 	base := path.Base(p)
 	switch {
@@ -198,7 +205,8 @@ func IsTestPath(p string) bool {
 	}
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		switch dir {
-		case "test", "tests", "testdata", "__tests__":
+		case "test", "tests", "testdata", "__tests__",
+			"androidTest", "integrationTest", "functionalTest", "testFixtures":
 			return true
 		}
 	}

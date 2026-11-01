@@ -225,7 +225,9 @@ func show(c roundChange) string {
 	return fmt.Sprintf("delta %s removed %q +%d outside %q +%d", d, c.Removed, c.RemovedMore, c.Outside, c.OutsideMore)
 }
 
-// IsTestPath knows the common test layouts, by whole path segment.
+// IsTestPath knows the common test layouts, by whole path segment, and
+// only those that are never production: a production class named like a
+// test (IntegrationTest.java) and a *Spec.js are not.
 func TestIsTestPath(t *testing.T) {
 	for p, want := range map[string]bool{
 		"a/b_test.go": true, "x/test_a.py": true, "x/a_test.py": true, "app/tests.py": true,
@@ -237,6 +239,9 @@ func TestIsTestPath(t *testing.T) {
 		"a.go": false, "contest.go": false, "latest.ts": false, "testing/helper.go": false,
 		"src/contest/x.go": false, "latest/x.go": false, "spectrum/x.go": false, "a/Test.java": false,
 		"a/Contest.java": false, "a/test.py": false, "a/spec.rb": false,
+		"app/src/androidTest/java/a/FooTest.java": true, "src/integrationTest/kotlin/a/FooTest.kt": true,
+		"src/functionalTest/groovy/a/FooSpec.groovy": true, "lib/src/testFixtures/java/a/Fixtures.java": true,
+		"src/main/java/a/IntegrationTest.java": false, "spec/PlayerSpec.js": false,
 	} {
 		if got := IsTestPath(p); got != want {
 			t.Errorf("IsTestPath(%q) = %v, want %v", p, got, want)
