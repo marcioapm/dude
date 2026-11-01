@@ -159,16 +159,16 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 	// findings, counted, so the tail (how many more, the fix, the long
 	// loop) is never what the clip cuts.
 	text := data.text()
-	over := func() bool {
-		return utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars
-	}
-	if data.Change != "" && over() {
-		data.Change = ""
-		text = data.text()
-	}
-	for len(data.Shown) > 0 && over() {
-		data.Shown = data.Shown[:len(data.Shown)-1]
-		data.More++
+	for utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars {
+		switch {
+		case data.Change != "":
+			data.Change = ""
+		case len(data.Shown) > 0:
+			data.Shown = data.Shown[:len(data.Shown)-1]
+			data.More++
+		default:
+			return text, nil
+		}
 		text = data.text()
 	}
 	return text, nil
