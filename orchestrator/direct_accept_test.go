@@ -342,3 +342,77 @@ func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCoversAPublishWhileItWait
 	e.commit(map[string]string{"README.md": "# target\n\nfixed again\n"})
 	e.refused(e.task, "publish", `{"message":"another"}`, unreviewedWords)
 }
+
+// The conductor publishes to the pull request, then a comment arrives and
+// the conductor starts the fix with then at the pull request's feedback
+// decision: it is not refused for the unreviewed publish (reviewFirst's
+// path), the publish is reviewed first, then the fix runs as directed —
+// with its note, and then its queued reviewers.
+func TestDirectAConductedFixWithThenAtFeedbackFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
+	e := conductedDirect(t)
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nthe conductor's fix\n"})
+	id := e.publish()
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("publish %s: %s", status, why)
+	}
+	published := e.gh.SHA(e.branch)
+	e.until("the pull request read at the publish", func() bool {
+		e.sync()
+		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
+	})
+	e.feedbackToDecide()
+	e.must(e.task, "start_phase", `{"phase":"fix","note":"NOTE-XYZZY","then":{"review":["tests"]}}`)
+	queued := `SELECT count(*) FROM events q WHERE q.task_id = $1 AND q.event_type = 'run.created'
+		AND q.payload->>'phase' = 'review' AND q.payload->>'reviewers' = '["tests"]'
+		AND q.cursor > (SELECT min(f.cursor) FROM events f WHERE f.task_id = $1 AND f.event_type = 'run.created'
+		AND f.payload->>'phase' = 'fix')`
+	e.until("the fix on the pull request, then its queued review", func() bool {
+		e.sync()
+		if e.fixes(e.task) == 0 {
+			e.nextAtRound(e.task)
+		}
+		return e.count(queued, e.task) > 0
+	})
+	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
+		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
+		AND f.phase = 'fix' AND f.pr_feedback <> '[]'::jsonb)`, e.task, published); n == 0 {
+		t.Fatalf("no review of the conductor's push %s before the fixer started from it\n%s", published, e.describeRuns())
+	}
+	if got := e.ids(`SELECT COALESCE(conductor_note, '') FROM runs WHERE task_id = $1 AND phase = 'fix'
+		AND pr_feedback <> '[]'::jsonb ORDER BY created_at`, e.task); len(got) != 1 || got[0] != "NOTE-XYZZY" {
+		t.Errorf("the pull request fix's note: %q", got)
+	}
+}
+
+// The integration variant: the conductor publishes, the base moves into a
+// conflict, and at that pull_request_feedback decision the conductor
+// starts the fix itself: not refused for the unreviewed publish, which is
+// reviewed first; then the integration runs, once.
+func TestDirectAConductedFixAtAConflictFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
+	e := conductedDirect(t)
+	e.current()
+	e.commit(map[string]string{"README.md": "# target\n\nthe conductor's fix\n"})
+	id := e.publish()
+	if status, why := e.published(id); status != delivery.PublishPublished {
+		t.Fatalf("publish %s: %s", status, why)
+	}
+	published := e.gh.SHA(e.branch)
+	e.until("the pull request read at the publish", func() bool {
+		e.sync()
+		return e.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND head_sha = $2`, e.task, published) == 1
+	})
+	e.conflictWithMovedBase()
+	e.until("the conflict to decide on", func() bool { e.sync(); return e.decisionAt(e.task) == delivery.PointPRFeedback })
+	e.must(e.task, "start_phase", `{"phase":"fix","note":"Keep both."}`)
+	e.until("the integration on the pull request", func() bool {
+		e.sync()
+		e.nextAtRound(e.task)
+		return e.count(integrationRuns+` AND status = 'completed'`, e.task) == 1
+	})
+	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
+		AND k.base_refs->>'target' = $2 AND k.ended_at <= (SELECT min(f.created_at) FROM runs f WHERE f.task_id = $1
+		AND f.pr_feedback::text LIKE '%Base integration%')`, e.task, published); n == 0 {
+		t.Fatalf("no review of the conductor's push %s before the integration started from it\n%s", published, e.describeRuns())
+	}
+}
