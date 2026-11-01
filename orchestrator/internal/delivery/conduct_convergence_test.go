@@ -231,3 +231,25 @@ func TestConductFixOfFeedbackAloneReadsNoConvergence(t *testing.T) {
 		t.Fatalf("feedback-only fix: %v", err)
 	}
 }
+
+// A conducted round weighs no convergence (loopFindings): a review history
+// it could not read holds no conducted round, and Deliver's reads it.
+func TestAConductedLoopReadsNoConvergence(t *testing.T) {
+	for _, decider := range []string{delivery.DeciderConductor, delivery.DeciderPolicy} {
+		t.Run(decider, func(t *testing.T) {
+			w := newConvergenceWorld(t)
+			w.phase(t, "fix1", "fix", "", []string{"f"}, nil, 1)
+			w.phase(t, "review1", "review", "fix1", []string{"f"}, nil, 2)
+			// Not a verdict map ConvergenceTx can scan.
+			w.exec(t, `UPDATE runs SET verdicts = '{"f": 1}' WHERE id = 'review1'`)
+			st := w.state()
+			st.Decider = decider
+			_, _, err := (&delivery.Store{DB: w.app}).LoopFindings(context.Background(), w.org, st)
+			// Deliver's fails reading the history's verdicts: it reads
+			// convergence.
+			if got := err != nil && strings.Contains(err.Error(), "can't scan"); got != (decider == delivery.DeciderPolicy) {
+				t.Fatalf("decider %s: loop findings error %v", decider, err)
+			}
+		})
+	}
+}
