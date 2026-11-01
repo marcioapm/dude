@@ -11,6 +11,11 @@ rCannotStartAtThisDecisionCan           refusals/delivery/conduct/cannot-start-a
 rYourPublishMovingTaskBranchNow         refusals/delivery/conduct/your-publish-moving-task-branch-now
 rCategoriesAreForReviewFindingsFor      refusals/delivery/conduct/categories-are-for-review-findings-for
 rNoReviewerCategoriesAre                refusals/delivery/conduct/no-reviewer-categories-are
+rThenIsForFixOrSimplify                 refusals/delivery/conduct/then-is-for-fix-or-simplify
+rThenNamesTheReview                     refusals/delivery/conduct/then-names-the-review
+rThenWakeIsOneOf                        refusals/delivery/conduct/then-wake-is-one-of
+rRoundIsForReviewFixOrSimplify          refusals/delivery/conduct/round-is-for-review-fix-or-simplify
+rRoundScopeIsOneOf                      refusals/delivery/conduct/round-scope-is-one-of
 rReviewLoopAtItsBoundRounds             refusals/delivery/conduct/review-loop-at-its-bound-rounds
 rReviewLoopNotConverging                refusals/delivery/conduct/review-loop-not-converging
 rNoOpenFindingOrFeedbackItem            refusals/delivery/conduct/no-open-finding-or-feedback-item

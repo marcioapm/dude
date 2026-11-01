@@ -58,6 +58,10 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 	if len(in.Categories) > 0 && in.Phase != PhaseReview || len(in.FindingIDs) > 0 && in.Phase != PhaseFix {
 		return "", refuseText(rCategoriesAreForReviewFindingsFor)
 	}
+	then, round, err := pipelineOf(in)
+	if err != nil {
+		return "", err
+	}
 	st := &d.State
 	switch in.Phase {
 	case PhaseReview:
@@ -98,7 +102,7 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 		return "", err
 	}
 	if err := take(ctx, tx, ref, d, Taken{Action: "start_phase", Phase: in.Phase, Categories: in.Categories,
-		Note: clip(strings.TrimSpace(in.Note), noteChars)}); err != nil {
+		Note: clip(strings.TrimSpace(in.Note), noteChars), Then: then, Round: round}); err != nil {
 		return "", err
 	}
 	return prPhaseStarted(in.Phase), nil

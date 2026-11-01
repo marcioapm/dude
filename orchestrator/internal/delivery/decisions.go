@@ -83,6 +83,10 @@ type Taken struct {
 	Note       string   `json:"note,omitempty"`
 	// open_pull_request: a draft, as the person answered.
 	Draft bool `json:"draft,omitempty"`
+	// start_phase fix or simplify: the review queued behind it (then).
+	Then *Pipeline `json:"then,omitempty"`
+	// start_phase review, fix or simplify: the round's scope and bar.
+	Round *RoundAsk `json:"round,omitempty"`
 	// The conductor that took it.
 	By string `json:"by"`
 }
@@ -94,7 +98,65 @@ type Directed struct {
 	Categories []string `json:"categories,omitempty"`
 	FindingIDs []string `json:"findingIds,omitempty"`
 	Note       string   `json:"note,omitempty"`
-	By         string   `json:"by"`
+	// A fix or simplify's queued review (Taken.Then); the round's scope
+	// and bar (Taken.Round).
+	Then  *Pipeline `json:"then,omitempty"`
+	Round *RoundAsk `json:"round,omitempty"`
+	By    string    `json:"by"`
+}
+
+// The wakes a fix-then-review may ask for (Then.Wake).
+const (
+	WakeAfterReview = "after_review"
+	WakeAfterFix    = "after_fix"
+)
+
+// The scopes a round may ask for (RoundAsk.Scope): the whole branch, or
+// what the round's rules give (round 1 whole, later ones the fix's commits).
+const (
+	ScopeWhole = "whole"
+	ScopeFix   = "fix"
+)
+
+// Then is start_phase's then: the review dude starts as soon as a fix (or
+// simplify) has committed, without a decision between.
+type Then struct {
+	Review []string `json:"review"`
+	Wake   string   `json:"wake,omitempty"`
+	Note   string   `json:"note,omitempty"`
+}
+
+// RoundAsk is start_phase's round: the scope of the review round, and the
+// conductor's bar for it, quoted to the fixer and the reviewers.
+type RoundAsk struct {
+	Scope string `json:"scope,omitempty"`
+	Bar   string `json:"bar,omitempty"`
+}
+
+// Pipeline is the conductor's fix-then-review in flight: the review queued
+// behind the fix it started, carried out by the fix's await step without a
+// decision (State.Pipeline). Fix is the fix Run, once created.
+type Pipeline struct {
+	Review []string `json:"review"`
+	Wake   string   `json:"wake"`
+	Note   string   `json:"note,omitempty"`
+	Scope  string   `json:"scope,omitempty"`
+	Bar    string   `json:"bar,omitempty"`
+	By     string   `json:"by"`
+	Fix    string   `json:"fix,omitempty"`
+}
+
+// round is the round its queued review is asked with; nil for none.
+func (p *Pipeline) round() *RoundAsk {
+	if p.Scope == "" && p.Bar == "" {
+		return nil
+	}
+	return &RoundAsk{Scope: p.Scope, Bar: p.Bar}
+}
+
+// queued is the review a pipeline queued, directed as the conductor asked.
+func (p *Pipeline) queued() *Directed {
+	return &Directed{Phase: PhaseReview, Categories: slices.Clone(p.Review), Note: p.Note, Round: p.round(), By: p.By}
 }
 
 // conducted says whether the conductor takes the delivery's decisions.
