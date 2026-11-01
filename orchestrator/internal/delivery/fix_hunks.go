@@ -365,18 +365,18 @@ func (h FixHunks) change(published []string, b brief) roundChange {
 	}
 	// The brief's paths: its findings' files, and each token of its words
 	// that is a changed file's path or a directory of one ("dir/").
+	tokens := noteTokens(b.Notes)
 	named := func(repo, file string) bool {
 		for _, p := range b.Findings {
 			if p.File != "" && strings.TrimPrefix(p.File, "./") == file && (p.Repo == "" || p.Repo == repo) {
 				return true
 			}
 		}
-		for _, tok := range noteTokens(b.Notes) {
+		for _, tok := range tokens {
 			// A directory is named with its trailing slash or without
 			// one, whole segments only: "internal/del" names nothing
 			// under internal/delivery/. A word with no slash in it
 			// ("api", "app") is not a directory.
-			tok = strings.TrimRight(tok, ".,;:)`")
 			dir := strings.TrimSuffix(tok, "/") + "/"
 			for _, path := range []string{file, repo + "/" + file} {
 				if tok == path || strings.Contains(tok, "/") && strings.HasPrefix(path, dir) {
@@ -417,7 +417,8 @@ func listed(names []string) ([]string, int) {
 }
 
 // noteTokens is the words of notes that may be paths: split on space,
-// stripped of quoting and punctuation around them, and of a :line after.
+// stripped of quoting and punctuation around them, and of a :line after
+// (and of the quote or punctuation before that :line: `docs/x.md`:1).
 func noteTokens(notes []string) []string {
 	var out []string
 	for _, note := range notes {
@@ -428,7 +429,7 @@ func noteTokens(notes []string) []string {
 			if i := strings.LastIndex(w, ":"); i > 0 && strings.Trim(w[i+1:], "0123456789-") == "" {
 				w = w[:i]
 			}
-			w = strings.TrimPrefix(w, "./")
+			w = strings.TrimPrefix(strings.TrimRight(w, ".,;:)`"), "./")
 			if w != "" {
 				out = append(out, w)
 			}
