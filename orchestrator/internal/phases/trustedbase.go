@@ -42,6 +42,10 @@ type accounting struct {
 	Binary bool
 	// Why the count is start...head in full; "" when T's part was left out.
 	Full string
+	// The files counted, as GitHub's compares showed them: what a fix's
+	// kept change is read from (delivery.SummarizeFix). Nil when the count
+	// is in full: then they may hold what the base brought in.
+	Own []forge.ComparedFile
 }
 
 // recordSyncedBase keeps the commit of a git.sync lux reported for the
@@ -74,7 +78,7 @@ func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, sta
 	task forge.Comparison) (accounting, error) {
 	full := func(why string) (accounting, error) {
 		acc := counted(task.Files)
-		acc.Full = why
+		acc.Full, acc.Own = why, nil
 		return acc, nil
 	}
 	if task.Truncated() {
@@ -160,5 +164,6 @@ func counted(files []forge.ComparedFile) accounting {
 		}
 	}
 	acc.Paths = slices.Sorted(maps.Keys(paths))
+	acc.Own = files
 	return acc
 }

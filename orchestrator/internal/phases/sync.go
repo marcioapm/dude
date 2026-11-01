@@ -2682,6 +2682,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		// under the Run); the change is the Run's own, base...commit.
 		heads[repo.Name] = delivery.RunHead{SHA: adv.Head, ChangedPaths: db.NonNil(acc.Paths), Base: base}
 		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			if r.Phase == delivery.PhaseFix {
+				if err := keepFixHunks(ctx, tx, r.ID, repo.Name, cmp, acc); err != nil {
+					return err
+				}
+			}
 			// A pull request open on this branch now has this head. What is
 			// on record about it — its checks, and when its head was first
 			// seen — was about the one before: its CI is yet to run on this.
@@ -2708,6 +2713,31 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 	}
 	return heads, branch, nil
+}
+
+// keepFixHunks keeps what a fix Run changed in repo, as the compares its
+// publish made showed it (runs.fix_hunks; delivery.SummarizeFix), with no
+// compare of its own. Each publish of the Run compares from where its
+// checkout started (runs.base_shas, which a resume of the same Run keeps),
+// so the latest replaces the one before: it is the Run's whole change,
+// base..its final head. A count made in full (accountPublish: a compare
+// refused, or what the base brought in not known) is a change not known:
+// the repository's entry goes, and the facts read from it are unknown.
+func keepFixHunks(ctx context.Context, tx pgx.Tx, runID, repo string, task forge.Comparison, acc accounting) error {
+	var raw []byte
+	switch {
+	case task.Truncated():
+		raw, _ = json.Marshal(delivery.RepoHunks{Truncated: true, Files: []delivery.HunkFile{}})
+	case acc.Full == "":
+		raw, _ = json.Marshal(delivery.SummarizeFix(acc.Own, false))
+	}
+	if raw == nil {
+		_, err := tx.Exec(ctx, `UPDATE runs SET fix_hunks = NULLIF(fix_hunks - $2::text, '{}'::jsonb) WHERE id = $1`, runID, repo)
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE runs SET fix_hunks = COALESCE(fix_hunks, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+		WHERE id = $1`, runID, repo, raw)
+	return err
 }
 
 // keptOnRunBranch is a direct delivery's publish refused as no
