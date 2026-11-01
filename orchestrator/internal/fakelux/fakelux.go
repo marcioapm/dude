@@ -1817,7 +1817,6 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 			s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "cloned", "commit": base})
 			checkout := map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": base}
 			if lag := s.checkoutLag(spec); lag > 0 {
-				// lux's lifecycle stream trailing the agent's records.
 				time.AfterFunc(lag, func() {
 					s.mu.Lock()
 					defer s.mu.Unlock()
