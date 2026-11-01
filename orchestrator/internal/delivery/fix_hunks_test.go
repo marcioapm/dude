@@ -103,3 +103,21 @@ func show(c roundChange) string {
 	}
 	return fmt.Sprintf("delta %s removed %q +%d outside %q +%d", d, c.Removed, c.RemovedMore, c.Outside, c.OutsideMore)
 }
+
+// IsTestPath knows the common test layouts, by whole path segment.
+func TestIsTestPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"a/b_test.go": true, "x/test_a.py": true, "x/a_test.py": true, "app/tests.py": true,
+		"web/a.test.ts": true, "web/a.spec.tsx": true, "web/a.test.mjs": true,
+		"tests/a.go": true, "x/testdata/a.json": true, "web/__tests__/a.ts": true,
+		"test/api.js": true, "spec/models/user_spec.rb": true, "spec/support/factories.rb": true, "lib/user_spec.rb": true,
+		"src/test/java/a/FooTest.java": true, "src/a/FooTests.java": true, "src/a/FooTest.kt": true, "src/a/FooTests.kt": true,
+		"a.go": false, "contest.go": false, "latest.ts": false, "testing/helper.go": false,
+		"src/contest/x.go": false, "latest/x.go": false, "spectrum/x.go": false, "a/Test.java": true,
+		"a/Contest.java": false, "a/test.py": false, "a/spec.rb": false,
+	} {
+		if got := IsTestPath(p); got != want {
+			t.Errorf("IsTestPath(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
