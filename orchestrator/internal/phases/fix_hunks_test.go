@@ -47,6 +47,18 @@ func (f *fixPublish) publish() error {
 	return err
 }
 
+// patch has the fake GitHub's compares show file's patch as GitHub's
+// would, its body and all (the fake shows only the header).
+func (f *fixPublish) patch(file, patch string) {
+	f.a.answer = func(base, head string, answer map[string]any) {
+		for _, g := range answer["files"].([]any) {
+			if g := g.(map[string]any); g["filename"] == file {
+				g["patch"] = patch
+			}
+		}
+	}
+}
+
 // hunks is the Run's runs.fix_hunks; nil when NULL.
 func (f *fixPublish) hunks() delivery.FixHunks {
 	f.w.t.Helper()
@@ -78,14 +90,7 @@ func fileOf(h delivery.FixHunks, repo, file string) *delivery.HunkFile {
 func TestAFixsPublishKeepsItsHunks(t *testing.T) {
 	f := newFixPublish(t)
 	f.a.commit(map[string]string{"FACTORY.md": "one\ntwo\nthree\n"}, "fix")
-	// GitHub's patch, its body and all (the fake shows only the header).
-	f.a.answer = func(base, head string, answer map[string]any) {
-		for _, file := range answer["files"].([]any) {
-			if file := file.(map[string]any); file["filename"] == "FACTORY.md" {
-				file["patch"] = "@@ -0,0 +1,3 @@\n+one\n+two\n+three"
-			}
-		}
-	}
+	f.patch("FACTORY.md", "@@ -0,0 +1,3 @@\n+one\n+two\n+three")
 	if err := f.publish(); err != nil {
 		t.Fatal(err)
 	}
@@ -201,16 +206,10 @@ func TestAFixThatMergedMainKeepsAFileMainAlsoChangedUnknown(t *testing.T) {
 	f.a.mergeBase(nil)
 	implemented[40], implemented[20] = "main", "fix"
 	f.a.commit(map[string]string{"shared.go": numbered(implemented), "only.go": "package a\n"}, "fix")
-	// GitHub's T...head patch for shared.go, its body and all (the fake
-	// shows only the header): the implementer's lines 1-3 and the fix's 20.
+	// GitHub's T...head patch for shared.go: the implementer's lines 1-3
+	// and the fix's 20.
 	// Kept, it would place a finding on line 2 on the fix's lines.
-	f.a.answer = func(base, head string, answer map[string]any) {
-		for _, file := range answer["files"].([]any) {
-			if file := file.(map[string]any); file["filename"] == "shared.go" {
-				file["patch"] = "@@ -1,3 +1,3 @@\n-line\n-line\n-line\n+impl1\n+impl2\n+impl3\n@@ -20 +20 @@\n-line\n+fix"
-			}
-		}
-	}
+	f.patch("shared.go", "@@ -1,3 +1,3 @@\n-line\n-line\n-line\n+impl1\n+impl2\n+impl3\n@@ -20 +20 @@\n-line\n+fix")
 	if err := f.publish(); err != nil {
 		t.Fatal(err)
 	}
