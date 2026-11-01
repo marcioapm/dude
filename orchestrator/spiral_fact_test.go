@@ -91,12 +91,11 @@ func changeFact(delta *[4]int, removed []string, removedMore int, outside []stri
 		"Delta": d, "Removed": removed, "RemovedMore": removedMore, "Outside": outside, "OutsideMore": outsideMore}))
 }
 
-// roundTwoWake is the wake round 2 says with its one finding, at line,
-// shown with touches, and the fix before it, change what its kept change
-// says.
-func (w *world) roundTwoWake(task, id, title string, line int, touches bool, change string) string {
+// roundTwoTail is round 2's range fact and the fix before it, as dude
+// renders them, and the fix's id.
+func (w *world) roundTwoTail(task string) (fix, rng, fixLine string) {
 	w.t.Helper()
-	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	fix = w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
 	head := w.str(`SELECT heads->'target'->>'sha' FROM runs WHERE id = $1`, fix)
 	review := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2 ORDER BY created_at LIMIT 1`, task)
 	of := w.str(`SELECT COALESCE(review_range->>'of', '') FROM runs WHERE id = $1`, review)
@@ -105,9 +104,18 @@ func (w *world) roundTwoWake(task, id, title string, line int, touches bool, cha
 	if base != "" {
 		repos = []string{"target@" + base[:7] + ".." + head[:7]}
 	}
-	rng := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": of, "Repos": repos})
-	data := map[string]any{"Phase": "fix", "RunID": fix, "Outcome": "", "Note": "", "Commits": []string{"target@" + head[:7]}}
-	fixLine := delivery.MustText("wakes/facts/round-fix").Render(data)
+	rng = delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": of, "Repos": repos})
+	fixLine = delivery.MustText("wakes/facts/round-fix").Render(map[string]any{"Phase": "fix", "RunID": fix, "Outcome": "", "Note": "",
+		"Commits": []string{"target@" + head[:7]}})
+	return fix, rng, fixLine
+}
+
+// roundTwoWake is the wake round 2 says with its one finding, at line,
+// shown with touches, and the fix before it, change what its kept change
+// says.
+func (w *world) roundTwoWake(task, id, title string, line int, touches bool, change string) string {
+	w.t.Helper()
+	_, rng, fixLine := w.roundTwoTail(task)
 	shown := []map[string]any{{"ID": id, "Severity": "high", "Title": title, "Where": fmt.Sprintf("FACTORY.md:%d", line),
 		"Introduced": "", "Trivial": false, "Unverified": false, "Touches": touches}}
 	return roundWakeTouching(2, 1, 0, rng, []string{"tests"}, shown, 0, 0, fixLine, change, false)
@@ -202,18 +210,7 @@ func changeWorld(t *testing.T, first string, commit, patches map[string]string) 
 // before it, and change.
 func (w *world) fixedRoundTwoWake(task, change string) string {
 	w.t.Helper()
-	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
-	head := w.str(`SELECT heads->'target'->>'sha' FROM runs WHERE id = $1`, fix)
-	review := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2 ORDER BY created_at LIMIT 1`, task)
-	of := w.str(`SELECT COALESCE(review_range->>'of', '') FROM runs WHERE id = $1`, review)
-	base := w.str(`SELECT COALESCE(review_range->'base'->>'target', '') FROM runs WHERE id = $1`, review)
-	var repos []string
-	if base != "" {
-		repos = []string{"target@" + base[:7] + ".." + head[:7]}
-	}
-	rng := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": of, "Repos": repos})
-	fixLine := delivery.MustText("wakes/facts/round-fix").Render(map[string]any{"Phase": "fix", "RunID": fix, "Outcome": "", "Note": "",
-		"Commits": []string{"target@" + head[:7]}})
+	_, rng, fixLine := w.roundTwoTail(task)
 	return roundWakeTouching(2, 0, 0, rng, []string{"tests"}, nil, 0, 0, fixLine, change, false)
 }
 
@@ -372,17 +369,7 @@ func TestTheRoundWakeCountsTheHiddenFindingsOnTheFixsLines(t *testing.T) {
 		shown = append(shown, map[string]any{"ID": id, "Severity": "high", "Title": titles[line], "Where": fmt.Sprintf("FACTORY.md:%d", line),
 			"Introduced": "", "Trivial": false, "Unverified": false, "Touches": line == 2})
 	}
-	head := w.str(`SELECT heads->'target'->>'sha' FROM runs WHERE id = $1`, fix)
-	review := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2 ORDER BY created_at LIMIT 1`, task)
-	of := w.str(`SELECT COALESCE(review_range->>'of', '') FROM runs WHERE id = $1`, review)
-	base := w.str(`SELECT COALESCE(review_range->'base'->>'target', '') FROM runs WHERE id = $1`, review)
-	var repos []string
-	if base != "" {
-		repos = []string{"target@" + base[:7] + ".." + head[:7]}
-	}
-	rng := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": of, "Repos": repos})
-	fixLine := delivery.MustText("wakes/facts/round-fix").Render(map[string]any{"Phase": "fix", "RunID": fix, "Outcome": "", "Note": "",
-		"Commits": []string{"target@" + head[:7]}})
+	_, rng, fixLine := w.roundTwoTail(task)
 	want := roundWakeTouching(2, 14, 0, rng, []string{"tests"}, shown, 2, 2, fixLine, changeFact(&[4]int{3, 1, 0, 0}, nil, 0, nil, 0), false)
 	if got := w.roundWakeLine(task); got != want {
 		t.Errorf("round 2's wake:\n got %q\nwant %q", got, want)
