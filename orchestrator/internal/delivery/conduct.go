@@ -324,6 +324,13 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		} else if err != nil {
 			return "", err
 		}
+		if st.Policy.DirectFixes() {
+			// A fix parked after (then.wake after_fix) is on the pull
+			// request unreviewed: no second writer past it (I-3).
+			if err := refusePullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil {
+				return "", err
+			}
+		}
 	}
 	if len(in.Categories) > 0 && in.Phase != PhaseReview || len(in.FindingIDs) > 0 && in.Phase != PhaseFix {
 		return "", refuseText(rCategoriesAreForReviewFindingsFor)

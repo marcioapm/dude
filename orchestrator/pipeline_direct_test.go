@@ -162,3 +162,16 @@ func TestDirectAConductedFixWokenAfterTheFixCannotPublishPastTheUnreviewedHead(t
 	c.must(c.task, "decide", `{"action":"next"}`)
 	c.until("the queued review's round", func() bool { c.sync(); return c.decisionAt(c.task) == delivery.PointReviewed })
 }
+
+// then.wake after_fix on an open pull request: a second writer the
+// conductor starts at that decision is refused while the fix is unreviewed
+// on it; a review of it (any lenses) is not (I-3).
+func TestDirectAConductedFixWokenAfterTheFixCannotStartASecondWriter(t *testing.T) {
+	c := newConductedPR(t, func(phase string, n int, b *fakelux.Behaviour) {})
+	c.commented()
+	c.must(c.task, "start_phase", `{"phase":"fix","note":"Rename it.","then":{"review":["tests"],"wake":"after_fix"}}`)
+	c.until("after the fix, the review queued", func() bool { c.sync(); return c.fixedWith(c.task, `["tests"]`) })
+	c.refused(c.task, "start_phase", `{"phase":"simplify"}`, "Use start_phase review first")
+	c.must(c.task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	c.until("the review's round", func() bool { c.sync(); return c.decisionAt(c.task) == delivery.PointReviewed })
+}
