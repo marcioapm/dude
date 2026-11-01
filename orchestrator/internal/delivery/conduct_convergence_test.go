@@ -186,8 +186,12 @@ func TestConductFixConvergenceKeepsNamedValidation(t *testing.T) {
 				w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id = 'f'`)
 				named = nil
 			}
-			if err := conductConvergenceStart(w, ref, delivery.PhaseFix, named); !delivery.IsRefusal(err) {
+			err := conductConvergenceStart(w, ref, delivery.PhaseFix, named)
+			if !delivery.IsRefusal(err) {
 				t.Fatalf("expected refusal: %v", err)
+			}
+			if want := "missing is not a finding of this task's delivery (findings lists them)"; scenario == "unknown" && err.Error() != want {
+				t.Fatalf("refused %q, want %q", err, want)
 			}
 		})
 	}
