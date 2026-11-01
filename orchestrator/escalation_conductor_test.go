@@ -211,12 +211,24 @@ func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 		if status, out := w.answerAs(ana, task, "Your call."); status != 200 {
 			t.Fatalf("the answer: %d %v", status, out)
 		}
-		// The owner decides this one on the banner; the retry gets stuck again.
+		// The owner decides this one on the banner and hands the delivery
+		// back to Deliver, whose retry escalates again; handed over again,
+		// the conductor is told of the second escalation.
 		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "retry", "note": "Try the greeting's wording only."}); status != 200 {
 			t.Fatalf("the banner: %d %v", status, out)
 		}
-		w.until("after the retry's fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-		w.must(task, "decide", `{"action":"next"}`)
+		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": delivery.DeciderPolicy}); status != 200 {
+			t.Fatalf("hand-back: %d %v", status, out)
+		}
+		// Deliver's second escalation: not_converging, the loop once
+		// conducted keeping the fix bar (HadConductor).
+		w.until("Deliver's second escalation", func() bool {
+			return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'decide'
+				AND state->'escalation' IS NOT NULL AND NOT state->'escalation' ? 'decided'`, task) == 1
+		})
+		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": delivery.DeciderConductor}); status != 200 {
+			t.Fatalf("hand-over: %d %v", status, out)
+		}
 		w.until("the second escalation waiting at decide", func() bool {
 			return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'decide'
 				AND (state->>'escalations')::int = 2 AND state->'escalation' IS NOT NULL
