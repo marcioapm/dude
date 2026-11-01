@@ -35,7 +35,8 @@ const longLoop = 8
 var (
 	roundWakeTmpl  = mustTemplate("wakes/round")
 	roundFixTmpl   = mustTemplate("wakes/facts/round-fix")
-	roundRangeTmpl = mustTemplate("wakes/facts/round-range")
+	roundRangeTmpl  = mustTemplate("wakes/facts/round-range")
+	roundChangeTmpl = mustTemplate("wakes/facts/round-change")
 )
 
 // roundFinding is a finding at the bar as a round wake lists it, scanned
@@ -143,16 +144,27 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 			Phase, RunID, Outcome, Note string
 			Commits                     []string
 		}{parentPhase, parent, outcome, out.WriterOutcomeNote, commits})
+		change, err := fixChangeTx(ctx, tx, parent, round)
+		if err != nil {
+			return err
+		}
+		data.Change = render(roundChangeTmpl, change)
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
-	// Fit the bound with the decision it waits on: the last shown
-	// findings give way, counted, so the tail (how many more, the fix,
-	// the long loop) is never what the clip cuts.
+	// Fit the bound with the decision it waits on: the fix's change gives
+	// way first, so it never crowds out a finding; then the last shown
+	// findings, counted, so the tail (how many more, the fix, the long
+	// loop) is never what the clip cuts.
 	text := data.text()
-	for len(data.Shown) > 0 && utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars {
+	over := func() bool { return utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars }
+	if data.Change != "" && over() {
+		data.Change = ""
+		text = data.text()
+	}
+	for len(data.Shown) > 0 && over() {
 		data.Shown = data.Shown[:len(data.Shown)-1]
 		data.More++
 		text = data.text()
@@ -167,6 +179,8 @@ type roundWake struct {
 	Lenses                           []string
 	Shown                            []roundFinding
 	Fix                              string
+	// What the fix's kept change says (wakes/facts/round-change).
+	Change string
 	// Every finding at the bar, in the order shown: those past Shown are
 	// counted in More, and those of them on the fix's lines in MoreTouch.
 	all []roundFinding

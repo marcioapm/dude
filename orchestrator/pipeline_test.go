@@ -338,13 +338,13 @@ func (w *world) roundWakeLine(task string) string {
 // roundWake is a round wake as dude renders it (wakes/round), on one line,
 // more counting the findings at the bar it does not show.
 func roundWake(round, open, below int, rng string, lenses []string, shown []map[string]any, more int, fix string, long bool) string {
-	return roundWakeTouching(round, open, below, rng, lenses, shown, more, 0, fix, long)
+	return roundWakeTouching(round, open, below, rng, lenses, shown, more, 0, fix, "", long)
 }
 
 // roundWakeTouching is roundWake with moreTouch of the findings it does
-// not show on lines the fix before it changed. A shown finding not said
-// to be on them is not.
-func roundWakeTouching(round, open, below int, rng string, lenses []string, shown []map[string]any, more, moreTouch int, fix string, long bool) string {
+// not show on lines the fix before it changed, and change, what the fix's
+// kept change says. A shown finding not said to be on them is not.
+func roundWakeTouching(round, open, below int, rng string, lenses []string, shown []map[string]any, more, moreTouch int, fix, change string, long bool) string {
 	for _, f := range shown {
 		if _, ok := f["Touches"]; !ok {
 			f["Touches"] = false
@@ -352,7 +352,7 @@ func roundWakeTouching(round, open, below int, rng string, lenses []string, show
 	}
 	line := strings.Join(strings.Fields(delivery.MustText("wakes/round").Render(map[string]any{
 		"Round": round, "Open": open, "Below": below, "People": 0, "More": more, "Range": rng, "Lenses": lenses,
-		"Shown": shown, "Fix": fix, "Long": long, "MoreTouch": moreTouch})), " ")
+		"Shown": shown, "Fix": fix, "Change": change, "Long": long, "MoreTouch": moreTouch})), " ")
 	return delivery.MustText("wakes/decision-waiting").Render(map[string]any{
 		"Point": delivery.MustText("wakes/facts/point-" + delivery.PointReviewed).Render(nil), "Line": line})
 }
@@ -414,7 +414,9 @@ func TestARoundWakeListsTheFindingsAtTheBarAndTheFix(t *testing.T) {
 		"Outcome": "partial", "Note": "one left", "Commits": []string{"target@" + head[:7]}})
 	narrow := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": delivery.RangeFixRound,
 		"Repos": []string{"target@" + before[:7] + ".." + head[:7]}})
-	if got, want := w.roundWakeLine(task), roundWake(8, 2, 1, narrow, []string{"tests"}, shown, 0, fixLine, true); got != want {
+	// The fix rewrote FACTORY.md's one line: nothing else to say of it.
+	change := changeFact(&[2]int{1, 1}, nil, 0, nil, 0)
+	if got, want := w.roundWakeLine(task), roundWakeTouching(8, 2, 1, narrow, []string{"tests"}, shown, 0, 0, fixLine, change, true); got != want {
 		t.Errorf("round 8's wake:\n got %q\nwant %q", got, want)
 	}
 }

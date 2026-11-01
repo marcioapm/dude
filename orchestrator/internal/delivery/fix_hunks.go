@@ -159,9 +159,8 @@ func IsTestPath(p string) bool {
 	return false
 }
 
-// fixFacts is what a fix's kept change says, per the repositories it
-// published (published): nil when any of them is not known (not kept, or
-// its compare cut short).
+// known says the fix's change is kept for every repository it published,
+// none cut short at GitHub's file cap.
 func (h FixHunks) known(published []string) bool {
 	if len(published) == 0 {
 		return false
@@ -244,4 +243,173 @@ func ReviewedFixTx(ctx context.Context, tx pgx.Tx, runID string) (ReviewedFix, e
 // Touches says a finding at repo/file:line is on lines the fix changed.
 func (f ReviewedFix) Touches(repo, file string, line int) bool {
 	return f.RunID != "" && f.Hunks.Touches(f.Published, repo, file, line)
+}
+
+// changeListed is how many names a round wake's change fact lists before
+// it counts the rest.
+const changeListed = 3
+
+// roundChange is what a round wake says of the fix before it, from its
+// kept change (wakes/facts/round-change): each part nil or empty when not
+// known, or when there is nothing to say.
+type roundChange struct {
+	// Lines added and removed in files that are not tests, summed over the
+	// repositories it published.
+	Delta *lineDelta
+	// Test declarations it removed and did not add again under the same
+	// name, listed up to changeListed, the rest counted.
+	Removed     []string
+	RemovedMore int
+	// Files it changed that its brief did not name, likewise.
+	Outside     []string
+	OutsideMore int
+}
+
+type lineDelta struct{ Add, Del int }
+
+// brief is what a fix was asked to change: the places of the findings it
+// was handed, and its conductor's words (its note, the queued review's
+// note, the round's bar).
+type brief struct {
+	Findings []briefPlace
+	Notes    []string
+}
+
+type briefPlace struct{ Repo, File string }
+
+// change is what the fix's kept change says, as roundChange: unknown, nil
+// parts, unless every repository it published (published) was kept in full.
+func (h FixHunks) change(published []string, b brief) roundChange {
+	var out roundChange
+	if !h.known(published) {
+		return out
+	}
+	allKnown := true
+	delta := lineDelta{}
+	var removed []string
+	type changed struct{ repo, file string }
+	var files []changed
+	for _, repo := range published {
+		for _, f := range h[repo].Files {
+			files = append(files, changed{repo, f.File})
+			if f.Unknown {
+				allKnown = false
+				continue
+			}
+			if !f.Test {
+				delta.Add += f.Add
+				delta.Del += f.Del
+			}
+			removed = append(removed, f.RemovedTests...)
+		}
+	}
+	if allKnown {
+		out.Delta = &delta
+		out.Removed, out.RemovedMore = listed(removed)
+	}
+	// The brief's paths: its findings' files, and each token of its words
+	// that is a changed file's path or a directory of one ("dir/").
+	named := func(repo, file string) bool {
+		for _, p := range b.Findings {
+			if p.File != "" && strings.TrimPrefix(p.File, "./") == file && (p.Repo == "" || p.Repo == repo) {
+				return true
+			}
+		}
+		for _, tok := range noteTokens(b.Notes) {
+			for _, path := range []string{file, repo + "/" + file} {
+				if tok == path || strings.HasSuffix(tok, "/") && strings.HasPrefix(path, tok) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var outside []string
+	anyNamed := false
+	for _, c := range files {
+		if named(c.repo, c.file) {
+			anyNamed = true
+			continue
+		}
+		where := c.file
+		if len(published) > 1 {
+			where = c.repo + "/" + c.file
+		}
+		outside = append(outside, where)
+	}
+	for _, p := range b.Findings {
+		anyNamed = anyNamed || p.File != ""
+	}
+	if anyNamed {
+		out.Outside, out.OutsideMore = listed(outside)
+	}
+	return out
+}
+
+// listed is names up to changeListed, and how many more.
+func listed(names []string) ([]string, int) {
+	if len(names) <= changeListed {
+		return names, 0
+	}
+	return names[:changeListed], len(names) - changeListed
+}
+
+// noteTokens is the words of notes that may be paths: split on space,
+// stripped of quoting and punctuation around them, and of a :line after.
+func noteTokens(notes []string) []string {
+	var out []string
+	for _, note := range notes {
+		for _, w := range strings.FieldsFunc(note, func(r rune) bool {
+			return r == ' ' || r == '\n' || r == '\t' || r == ',' || r == ';' || r == '(' || r == ')' || r == '[' || r == ']'
+		}) {
+			w = strings.TrimRight(strings.TrimLeft(w, "`'\"*<>{}"), "`'\"*<>{}.:!?")
+			if i := strings.LastIndex(w, ":"); i > 0 && strings.Trim(w[i+1:], "0123456789-") == "" {
+				w = w[:i]
+			}
+			w = strings.TrimPrefix(w, "./")
+			if w != "" {
+				out = append(out, w)
+			}
+		}
+	}
+	return out
+}
+
+// fixChangeTx is the round wake's change fact for fix Run fix, whose
+// round's review Runs are round: unknown parts nil.
+func fixChangeTx(ctx context.Context, tx pgx.Tx, fix string, round []string) (roundChange, error) {
+	var raw []byte
+	var published, findingIDs []string
+	var note string
+	if err := tx.QueryRow(ctx, `SELECT fix_hunks, ARRAY(SELECT jsonb_object_keys(COALESCE(heads, '{}'::jsonb)) ORDER BY 1),
+			COALESCE(finding_ids, '{}'), COALESCE(conductor_note, '')
+		FROM runs WHERE id = $1 AND phase = 'fix'`, fix).Scan(&raw, &published, &findingIDs, &note); err != nil {
+		if db.IsNotFound(err) {
+			return roundChange{}, nil
+		}
+		return roundChange{}, err
+	}
+	var h FixHunks
+	if raw == nil || json.Unmarshal(raw, &h) != nil {
+		return roundChange{}, nil
+	}
+	b := brief{Notes: []string{note}}
+	rows, err := tx.Query(ctx, `SELECT COALESCE(repo, ''), COALESCE(file, '') FROM review_findings WHERE id = ANY($1)`, findingIDs)
+	if err != nil {
+		return roundChange{}, err
+	}
+	if b.Findings, err = pgx.CollectRows(rows, pgx.RowToStructByPos[briefPlace]); err != nil {
+		return roundChange{}, err
+	}
+	// The queued review's note (then.note) is on the round's review Runs.
+	rows, err = tx.Query(ctx, `SELECT DISTINCT COALESCE(conductor_note, '') FROM runs WHERE id = ANY($1)`, round)
+	if err != nil {
+		return roundChange{}, err
+	}
+	notes, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return roundChange{}, err
+	}
+	b.Notes = append(b.Notes, notes...)
+	return h.change(published, b), nil
 }

@@ -18,6 +18,14 @@ Review round 2 done (fix_round api@0000000..1111111; tests): 2 open at the fix b
 
 Review round 3 done (fix_round api@0000000..1111111; tests): 15 open at the fix bar. fnd_1 [high, introduced] api/store.go:42: The retry loses the second write. And 14 more at the bar (findings), 2 of them on lines the fix changed. The fix before it: fix run_f committed at api@1111111.
 
+## round-2-change
+
+Review round 2 done (fix_round api@0000000..1111111; tests): 1 open at the fix bar. fnd_1 [high, introduced] api/store.go:42: The retry loses the second write. The fix before it: fix run_f committed at api@1111111. Outside test files: +120 -4 lines. Removed test declarations (from its diff): TestRetry, test_empty, rejects a bad id and 2 more. Files it changed that its brief did not name: api/cache.go, web/src/retry.ts, Makefile and 5 more.
+
+## round-2-change-delta-only
+
+Review round 2 done (fix_round api@0000000..1111111; tests): 0 open at the fix bar. The fix before it: fix run_f committed at api@1111111. Outside test files: +3 -9 lines.
+
 ## round-8
 
 Review round 8 done (fix_round api@0000000..1111111; tests): 1 open at the fix bar. fnd_1 [high, introduced] api/store.go:42: The retry loses the second write. The fix before it: fix run_f committed at api@1111111. 8 rounds in this loop: consider asking the person.
