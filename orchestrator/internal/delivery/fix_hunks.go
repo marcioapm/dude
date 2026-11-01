@@ -338,31 +338,6 @@ func (h FixHunks) change(published []string, b brief) roundChange {
 	if !h.known(published) {
 		return out
 	}
-	allKnown := true
-	delta := lineDelta{}
-	var removed []string
-	type changed struct{ repo, file string }
-	var files []changed
-	for _, repo := range published {
-		for _, f := range h[repo].Files {
-			files = append(files, changed{repo, f.File})
-			if f.Unknown {
-				allKnown = false
-				continue
-			}
-			delta.Add += f.Add
-			delta.Del += f.Del
-			if f.Test {
-				delta.TestAdd += f.Add
-				delta.TestDel += f.Del
-			}
-			removed = append(removed, f.RemovedTests...)
-		}
-	}
-	if allKnown {
-		out.Delta = &delta
-		out.Removed, out.RemovedMore = listed(removed)
-	}
 	// The brief's paths: its findings' files, and each token of its words
 	// that is a changed file's path or a directory of one ("dir/").
 	tokens := noteTokens(b.Notes)
@@ -386,18 +361,35 @@ func (h FixHunks) change(published []string, b brief) roundChange {
 		}
 		return false
 	}
-	var outside []string
-	anyNamed := false
-	for _, c := range files {
-		if named(c.repo, c.file) {
-			anyNamed = true
-			continue
+	allKnown, anyNamed := true, false
+	delta := lineDelta{}
+	var removed, outside []string
+	for _, repo := range published {
+		for _, f := range h[repo].Files {
+			switch {
+			case named(repo, f.File):
+				anyNamed = true
+			case len(published) > 1:
+				outside = append(outside, repo+"/"+f.File)
+			default:
+				outside = append(outside, f.File)
+			}
+			if f.Unknown {
+				allKnown = false
+				continue
+			}
+			delta.Add += f.Add
+			delta.Del += f.Del
+			if f.Test {
+				delta.TestAdd += f.Add
+				delta.TestDel += f.Del
+			}
+			removed = append(removed, f.RemovedTests...)
 		}
-		where := c.file
-		if len(published) > 1 {
-			where = c.repo + "/" + c.file
-		}
-		outside = append(outside, where)
+	}
+	if allKnown {
+		out.Delta = &delta
+		out.Removed, out.RemovedMore = listed(removed)
 	}
 	for _, p := range b.Findings {
 		anyNamed = anyNamed || p.File != ""
