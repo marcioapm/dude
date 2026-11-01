@@ -170,3 +170,49 @@ func TestATruncatedCompareKeepsTheRepositoryTruncated(t *testing.T) {
 		t.Fatalf("kept after a truncated compare: %+v", h)
 	}
 }
+
+// A fix that merged main, on a file main changed too, is counted with
+// GitHub's T...head (accountPublish), which holds the whole task's change
+// to it, not only the fix's: the file's kept change is not known, so the
+// facts read from it say nothing. A file only the fix changed is known.
+func TestAFixThatMergedMainKeepsAFileMainAlsoChangedUnknown(t *testing.T) {
+	f := newFixPublish(t)
+	numbered := func(edit map[int]string) string {
+		var b strings.Builder
+		for i := 1; i <= 40; i++ {
+			if s, ok := edit[i]; ok {
+				b.WriteString(s + "\n")
+				continue
+			}
+			b.WriteString("line\n")
+		}
+		return b.String()
+	}
+	f.a.seed(map[string]string{"shared.go": numbered(nil)})
+	// The implementer's lines 1-3, on the task branch before the fix.
+	implemented := map[int]string{1: "impl1", 2: "impl2", 3: "impl3"}
+	f.a.commit(map[string]string{"shared.go": numbered(implemented)}, "implement")
+	f.a.push()
+	f.a.start = f.a.head()
+	f.w.run.BaseSHAs = map[string]string{"target": f.a.start}
+	// Main changes line 40; the fix merges it and changes line 20.
+	f.a.advanceBase(map[string]string{"shared.go": numbered(map[int]string{40: "main"})})
+	f.a.syncBase()
+	f.a.mergeBase(nil)
+	implemented[40], implemented[20] = "main", "fix"
+	f.a.commit(map[string]string{"shared.go": numbered(implemented), "only.go": "package a\n"}, "fix")
+	if err := f.publish(); err != nil {
+		t.Fatal(err)
+	}
+	h := f.hunks()
+	shared := fileOf(h, "target", "shared.go")
+	if shared == nil || !shared.Unknown || len(shared.New) != 0 || shared.RemovedTests != nil {
+		t.Fatalf("shared.go's kept change: %+v, want it not known (all: %+v)", shared, h)
+	}
+	if h.Touches([]string{"target"}, "target", "shared.go", 2) {
+		t.Errorf("a finding on the implementer's line 2 touches the fix")
+	}
+	if only := fileOf(h, "target", "only.go"); only == nil || only.Unknown || only.Add != 1 {
+		t.Fatalf("only.go's kept change: %+v, want it known (all: %+v)", only, h)
+	}
+}

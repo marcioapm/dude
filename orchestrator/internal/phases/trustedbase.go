@@ -46,6 +46,9 @@ type accounting struct {
 	// kept change is read from (delivery.SummarizeFix). Nil when the count
 	// is in full: then they may hold what the base brought in.
 	Own []forge.ComparedFile
+	// Own's files counted as T...head shows them (a file the base also
+	// changed): the task's whole change to it, not only this publish's.
+	OwnApprox map[string]bool
 }
 
 // recordSyncedBase keeps the commit of a git.sync lux reported for the
@@ -120,7 +123,7 @@ func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, sta
 	// Each name counts once: a copy's source the task also changed is listed
 	// under its own name and as the copy's previous_filename.
 	var own []forge.ComparedFile
-	counts := map[string]bool{}
+	counts, approx := map[string]bool{}, map[string]bool{}
 	add := func(g forge.ComparedFile) {
 		if !counts[g.Filename] {
 			counts[g.Filename] = true
@@ -134,6 +137,7 @@ func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, sta
 		}
 		if g, changed := ownOnTop[f.Filename]; changed {
 			add(g)
+			approx[g.Filename] = true
 		}
 		// A task deletion GitHub paired with a file the base added: T...head
 		// lists the deletion under the old name, whether or not the base
@@ -141,10 +145,13 @@ func accountPublish(ctx context.Context, gh *forge.GitHub, slug, baseBranch, sta
 		if f.PreviousFilename != "" {
 			if g, changed := ownOnTop[f.PreviousFilename]; changed {
 				add(g)
+				approx[g.Filename] = true
 			}
 		}
 	}
-	return counted(own), nil
+	acc := counted(own)
+	acc.OwnApprox = approx
+	return acc, nil
 }
 
 // counted adds up GitHub's numbers for files, both names of a rename or

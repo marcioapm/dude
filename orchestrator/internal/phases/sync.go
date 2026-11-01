@@ -2722,14 +2722,22 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 // so the latest replaces the one before: it is the Run's whole change,
 // base..its final head. A count made in full (accountPublish: a compare
 // refused, or what the base brought in not known) is a change not known:
-// the repository's entry goes, and the facts read from it are unknown.
+// the repository's entry goes, and the facts read from it are unknown. A
+// file counted as T...head shows it (acc.OwnApprox) holds the task's whole
+// change to it, not only the fix's: it is kept Unknown, with no ranges.
 func keepFixHunks(ctx context.Context, tx pgx.Tx, runID, repo string, task forge.Comparison, acc accounting) error {
 	var raw []byte
 	switch {
 	case task.Truncated():
 		raw, _ = json.Marshal(delivery.RepoHunks{Truncated: true, Files: []delivery.HunkFile{}})
 	case acc.Full == "":
-		raw, _ = json.Marshal(delivery.SummarizeFix(acc.Own, false))
+		kept := delivery.SummarizeFix(acc.Own, false)
+		for i, f := range kept.Files {
+			if acc.OwnApprox[f.File] {
+				kept.Files[i] = delivery.HunkFile{File: f.File, New: [][2]int{}, Add: f.Add, Del: f.Del, Test: f.Test, Unknown: true}
+			}
+		}
+		raw, _ = json.Marshal(kept)
 	}
 	if raw == nil {
 		_, err := tx.Exec(ctx, `UPDATE runs SET fix_hunks = NULLIF(fix_hunks - $2::text, '{}'::jsonb) WHERE id = $1`, runID, repo)
