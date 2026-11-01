@@ -948,10 +948,9 @@ const (
 // told (State.Escalations). Whoever escalated: one the conductor had when it
 // escalated (escalate, a held checks report), or one Deliver stopped at,
 // handed to the conductor while it waits (SetDeciderTx) or while its step
-// escalated (recheck). Once per
-// escalation (Escalation.Told), however often it is handed over; a step
-// replayed tells it again with its same key, which records nothing new.
-// Returns whether it told it now, st changed.
+// escalated (recheck). Once per escalation (Escalation.Told), however often
+// it is handed over; a step replayed tells it again with its same key, which
+// records nothing new. Returns whether it told it now, st changed.
 func tellEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State) (bool, error) {
 	e := st.Escalation
 	if e == nil || e.Decided != nil || e.Told != 0 {
