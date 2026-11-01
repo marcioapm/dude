@@ -509,6 +509,41 @@ func TestARetriedLensAfterAnUpdateBranchDoesNotNarrowOverMain(t *testing.T) {
 	w.notMainsChange(second, merge)
 }
 
+// In a one-repository task a lens of round 1 fails on the open pull
+// request, a person pushes P to it and retries the lens, and after the
+// round dude edits the branch (E): round 2 is the whole branch, or a range
+// that has P — never fix_round from P, which round 1's other lenses never
+// saw.
+func TestARetriedLensAfterAPersonsPushInAOneRepositoryTaskReviewsTheWholeBranch(t *testing.T) {
+	w := conducting(t)
+	w.crashRoundOneSecurity()
+	task := w.conductedPR()
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness","security"]}`)
+	w.until("the failed reviewer escalated", func() bool { return w.escalationReason(task) == "review_failed" })
+	p := w.gh.CommitFiles(w.gh.Pull(1).Head, "A person's push", map[string]string{"PERSON.md": "theirs\n"})
+	w.retryReview(task)
+	w.until("round 1's review decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("waiting again", func() bool { return w.waitingOnPR(task) })
+	w.pushed(task, "dude's edit", "dude\n")
+	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.until("round 2's review decision", func() bool { return w.reviewedRound(task, 2) })
+	second := w.lastReview(task)
+	if second.Round != 2 {
+		t.Fatalf("review round %d, want 2\n%s", second.Round, w.describeRuns())
+	}
+	if second.Of == "" {
+		return
+	}
+	for _, c := range w.gitLines("rev-list", second.Base+".."+second.Head) {
+		if c == p {
+			return
+		}
+	}
+	t.Errorf("round 2 reviews %s from %s to %s, which leaves out the person's push %s\n%s",
+		second.Of, second.Base, second.Head, p, w.describeRuns())
+}
+
 // retryReview is a person retrying the review that escalated.
 func (w *world) retryReview(task string) {
 	w.t.Helper()

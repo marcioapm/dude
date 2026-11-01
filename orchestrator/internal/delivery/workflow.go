@@ -2508,8 +2508,13 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 			// a range from the heads a round reviewed, or a retried
 			// reviewer's round is reviewing, would carry the base's
 			// commits as the round's change. The whole branch instead.
+			// A reviewing round's heads mark it unknown (""), not
+			// absent: emptied, they would be stored as none, and the
+			// round would take the moved heads as the ones it reviewed.
 			delete(st.RoundHeads, p.Repo)
-			delete(st.ReviewingHeads, p.Repo)
+			if st.ReviewingHeads != nil {
+				st.ReviewingHeads[p.Repo] = ""
+			}
 		}
 	}
 	files := 0
