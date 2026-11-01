@@ -33,6 +33,13 @@ func TestNewRanges(t *testing.T) {
 		{"two hunks",
 			"@@ -1,4 +1,4 @@\n a\n-b\n+B\n c\n d\n@@ -20,3 +20,4 @@\n t\n+u\n v\n w",
 			[][2]int{{2, 2}, {21, 21}}},
+		{"a header that omits its count (1)", "@@ -1 +1 @@\n-a\n+b", [][2]int{{1, 1}}},
+		{"two changed lines one apart are not merged",
+			"@@ -1,3 +1,3 @@\n-a\n+A\n b\n-c\n+C",
+			[][2]int{{1, 1}, {3, 3}}},
+		{"a replacement, context, then a lone deletion",
+			"@@ -1,5 +1,4 @@\n-a\n+A\n b\n c\n-d\n e",
+			[][2]int{{1, 1}, {3, 4}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := newRanges(c.patch); !reflect.DeepEqual(got, c.want) {
