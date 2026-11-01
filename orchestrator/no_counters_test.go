@@ -21,12 +21,7 @@ import (
 func TestNoReviewRoundBoundRefusesAConductedLoop(t *testing.T) {
 	t.Run("at a decision", func(t *testing.T) {
 		w := conducting(t)
-		task := w.task()
-		w.talk(task)
-		setPolicy(w, task, `{"maxReviewIterations":2}`)
-		w.implemented(task)
-		w.must(task, "decide", `{"action":"next"}`)
-		w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+		task := w.conductedToRound1(`{"maxReviewIterations":2}`)
 		w.must(task, "start_phase", `{"phase":"fix"}`)
 		w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
 		w.must(task, "start_phase", `{"phase":"review"}`)
@@ -65,12 +60,7 @@ func TestNoReviewRoundBoundRefusesAConductedLoop(t *testing.T) {
 // to send to the fixer again; the delivery does not escalate stuck.
 func TestNoFixAttemptBoundRefusesAConductedLoop(t *testing.T) {
 	w := conducting(t)
-	task := w.task()
-	w.talk(task)
-	setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
-	w.implemented(task)
-	w.must(task, "decide", `{"action":"next"}`)
-	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	task := w.conductedToRound1(`{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
 	var a string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1`, task).Scan(&a)
 	w.must(task, "start_phase", `{"phase":"fix","findings":["`+a+`"]}`)
@@ -80,6 +70,19 @@ func TestNoFixAttemptBoundRefusesAConductedLoop(t *testing.T) {
 	if r := w.escalationReason(task); r != "" {
 		t.Errorf("escalated %s on the finding's second fix", r)
 	}
+}
+
+// conductedToRound1 is a new task the conductor decides, under policy,
+// implemented and parked for the conductor after its first review round.
+func (w *world) conductedToRound1(policy string) string {
+	w.t.Helper()
+	task := w.task()
+	w.talk(task)
+	setPolicy(w, task, policy)
+	w.implemented(task)
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	return task
 }
 
 // iteration is the task's delivery's review rounds so far.
