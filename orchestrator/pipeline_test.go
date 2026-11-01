@@ -337,8 +337,13 @@ func (w *world) roundWakeLine(task string) string {
 
 // roundWake is a round wake as dude renders it (wakes/round), on one line.
 func roundWake(round, open, below int, rng string, lenses []string, shown []map[string]any, fix string, long bool) string {
+	return roundWakeMore(round, open, below, rng, lenses, shown, 0, fix, long)
+}
+
+// roundWakeMore is roundWake counting more findings at the bar than it shows.
+func roundWakeMore(round, open, below int, rng string, lenses []string, shown []map[string]any, more int, fix string, long bool) string {
 	line := strings.Join(strings.Fields(delivery.MustText("wakes/round").Render(map[string]any{
-		"Round": round, "Open": open, "Below": below, "People": 0, "More": 0, "Range": rng, "Lenses": lenses,
+		"Round": round, "Open": open, "Below": below, "People": 0, "More": more, "Range": rng, "Lenses": lenses,
 		"Shown": shown, "Fix": fix, "Long": long})), " ")
 	return delivery.MustText("wakes/decision-waiting").Render(map[string]any{
 		"Point": delivery.MustText("wakes/facts/point-" + delivery.PointReviewed).Render(nil), "Line": line})
@@ -495,6 +500,7 @@ func TestARoundWakeAtItsBoundKeepsItsTail(t *testing.T) {
 	task := w.task()
 	w.toRoundOne(task)
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"round":7}'::jsonb WHERE task_id = $1`, task)
+	before := w.str(`SELECT state->'roundHeads'->>'target' FROM workflow_runs WHERE task_id = $1`, task)
 	w.must(task, "start_phase", `{"phase":"fix","then":{"review":["tests"]},"round":{"scope":"fix"}}`)
 	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
 	w.must(task, "decide", `{"action":"next"}`)
@@ -506,14 +512,31 @@ func TestARoundWakeAtItsBoundKeepsItsTail(t *testing.T) {
 	if n := len([]rune(line)); n > 2000 {
 		t.Errorf("the wake: %d characters", n)
 	}
-	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
-	for _, want := range []string{"more at the bar (findings).", "The fix before it: ", fix, "8 rounds in this loop: consider asking the person."} {
-		if !strings.Contains(line, want) {
-			t.Errorf("the wake does not say %q:\n%s", want, line)
-		}
+	// The wake as rendered with the findings it lists, the rest counted
+	// (all 14 are at the bar): its tail whole.
+	ids := w.ids(`SELECT id FROM review_findings WHERE task_id = $1 ORDER BY line`, task)
+	if len(ids) != 14 {
+		t.Fatalf("findings %v, want 14", ids)
 	}
-	if !strings.HasSuffix(line, "consider asking the person.") {
-		t.Errorf("the wake's tail is cut:\n%s", line)
+	var shown []map[string]any
+	for i, id := range ids {
+		if !strings.Contains(line, " "+id+" [") {
+			break
+		}
+		shown = append(shown, map[string]any{"ID": id, "Severity": "medium", "Title": fmt.Sprintf("%s %02d", strings.Repeat("t", 76), i),
+			"Where": fmt.Sprintf("%sfile%02d.go:%d", dir, i, i+1), "Introduced": "", "Trivial": false, "Unverified": true})
+	}
+	if len(shown) == 0 || len(shown) >= 12 {
+		t.Fatalf("the wake lists %d findings, want fewer than the 12 it lists at no bound:\n%s", len(shown), line)
+	}
+	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	head := w.str(`SELECT heads->'target'->>'sha' FROM runs WHERE id = $1`, fix)
+	fixLine := delivery.MustText("wakes/facts/round-fix").Render(map[string]any{"Phase": "fix", "RunID": fix,
+		"Outcome": "partial", "Note": "one left", "Commits": []string{"target@" + head[:7]}})
+	narrow := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": delivery.RangeFixRound,
+		"Repos": []string{"target@" + before[:7] + ".." + head[:7]}})
+	if want := roundWakeMore(8, 14, 0, narrow, []string{"tests"}, shown, 14-len(shown), fixLine, true); line != want {
+		t.Errorf("round 8's wake:\n got %q\nwant %q", line, want)
 	}
 }
 
