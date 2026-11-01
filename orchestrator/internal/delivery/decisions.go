@@ -478,11 +478,11 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 			// The review the conductor queued, with what it says now.
 			// What is cut to fit is then.note: decide next's words, the
 			// latest, and the round's bar (apply) stay whole.
-			room := noteChars - utf8.RuneCountInString(t.Note) - 2
+			reserve := 0
 			if bar := roundBar(q.Round); bar != "" {
-				room -= utf8.RuneCountInString(bar) + 2
+				reserve = utf8.RuneCountInString(bar) + 2
 			}
-			q.Note = clip(strings.TrimSpace(strings.Join([]string{clipTo(q.Note, room), t.Note}, "\n\n")), noteChars)
+			q.Note = joinNotes(q.Note, t.Note, reserve)
 			q.By = t.By
 			st.Directed = q
 			return workflow.Result{Next: "review", State: st}, nil
@@ -859,12 +859,8 @@ func (d *Directed) apply(p *PhaseRun) {
 	if d != nil {
 		p.ConductorRunID, p.ConductorNote = d.By, d.Note
 		if bar := roundBar(d.Round); bar != "" {
-			// The conductor's bar for the round, quoted as its words,
-			// whole: what is cut to fit is the note before it.
-			p.ConductorNote = bar
-			if note := clipTo(strings.TrimSpace(d.Note), noteChars-utf8.RuneCountInString(bar)-2); note != "" {
-				p.ConductorNote = note + "\n\n" + bar
-			}
+			// The conductor's bar for the round, quoted as its words.
+			p.ConductorNote = joinNotes(d.Note, bar, 0)
 		}
 	}
 }
@@ -877,12 +873,17 @@ func roundBar(r *RoundAsk) string {
 	return strings.TrimSpace(render(roundBarTmpl, r.Bar))
 }
 
-// clipTo is clip to n runes, "" when there is no room at all.
-func clipTo(s string, n int) string {
-	if n <= 0 {
-		return ""
+// joinNotes is head then tail, a blank line between, within noteChars less
+// reserve: what is cut to fit is head, tail is kept whole. An empty side
+// is left out.
+func joinNotes(head, tail string, reserve int) string {
+	room := noteChars - reserve - utf8.RuneCountInString(tail) - 2
+	if head = strings.TrimSpace(head); room <= 0 {
+		head = ""
+	} else {
+		head = clip(head, room)
 	}
-	return clip(s, n)
+	return strings.TrimSpace(head + "\n\n" + tail)
 }
 
 // RecordWakeTx records a reason to wake the task's conductor, once per key.
