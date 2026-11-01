@@ -3,7 +3,6 @@ package delivery
 import (
 	"context"
 	"encoding/json"
-	"maps"
 	"path"
 	"regexp"
 	"slices"
@@ -227,9 +226,6 @@ func (h FixHunks) known(published []string) bool {
 	}
 	return true
 }
-
-// repos is h's repositories in name order.
-func (h FixHunks) repos() []string { return slices.Sorted(maps.Keys(h)) }
 
 // Touches says whether a finding at repo/file:line is on lines the fix
 // changed: false for a finding not known to be (no line, no repository
