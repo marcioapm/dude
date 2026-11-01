@@ -741,6 +741,11 @@ type Server struct {
 	// report it: no git.sync or sync.done follows, until ReleaseSyncs.
 	HoldSyncs bool
 	heldSyncs []func()
+	// CheckoutLag, set by a test before any Run, is how long a Run's
+	// first start holds each git.checkout event back, by its spec: lux's
+	// lifecycle stream trailing the agent's records. The agent runs
+	// meanwhile; zero emits it at once.
+	CheckoutLag func(spec map[string]any) time.Duration
 	// How long the scripted agent calls sync_base again while it answers
 	// pending; zero is fakeagent.SyncBaseRetryFor.
 	SyncBaseRetryFor time.Duration
@@ -1810,7 +1815,17 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 				return
 			}
 			s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "cloned", "commit": base})
-			s.luxEvent(run, "git.checkout", map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": base})
+			checkout := map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": base}
+			if lag := s.checkoutLag(spec); lag > 0 {
+				// lux's lifecycle stream trailing the agent's records.
+				time.AfterFunc(lag, func() {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+					s.luxEvent(run, "git.checkout", checkout)
+				})
+			} else {
+				s.luxEvent(run, "git.checkout", checkout)
+			}
 			if run.at == nil {
 				run.at = map[string]string{}
 			}
@@ -2504,6 +2519,13 @@ func mimeFor(name string) string {
 		return t
 	}
 	return "application/octet-stream"
+}
+
+func (s *Server) checkoutLag(spec map[string]any) time.Duration {
+	if s.CheckoutLag == nil {
+		return 0
+	}
+	return s.CheckoutLag(spec)
 }
 
 // luxEvent is one of a Run's events: on its stream and on the tenant's
