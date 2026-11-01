@@ -226,3 +226,28 @@ func TestAFixThatMergedMainKeepsAFileMainAlsoChangedUnknown(t *testing.T) {
 		t.Fatalf("only.go's kept change: %+v, want it known (all: %+v)", only, h)
 	}
 }
+
+// A fix's rename into a path main added, merged with main: T...head lists
+// the old name's deletion (accountPublish pairs it through the task
+// compare's previous_filename), which holds the task's whole change to
+// it, so it is kept not known as well as the new name.
+func TestAFixsRenameIntoAPathMainAddedKeepsTheOldNameUnknown(t *testing.T) {
+	f := newFixPublish(t)
+	f.a.seed(map[string]string{"a.txt": lines(500, "a")})
+	f.w.run.BaseSHAs = map[string]string{"target": f.a.start}
+	git(t, f.a.work, "mv", "a.txt", "n.txt")
+	mine := lines(500, "a") + lines(5, "mine")
+	f.a.commit(map[string]string{"n.txt": mine}, "rename and grow")
+	f.a.advanceBase(map[string]string{"n.txt": lines(500, "a")})
+	f.a.syncBase()
+	f.a.mergeBase(map[string]string{"n.txt": mine})
+	if err := f.publish(); err != nil {
+		t.Fatal(err)
+	}
+	h := f.hunks()
+	for _, name := range []string{"a.txt", "n.txt"} {
+		if got := fileOf(h, "target", name); got == nil || !got.Unknown || len(got.New) != 0 {
+			t.Errorf("%s's kept change: %+v, want it not known (all: %+v)", name, got, h)
+		}
+	}
+}
