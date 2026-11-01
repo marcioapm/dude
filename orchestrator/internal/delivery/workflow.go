@@ -567,8 +567,10 @@ const promotedRefreshRetries = 2
 //	implement → review ⟲ fix → simplify → [test] → PR → PR feedback ⟲ fix → done
 //
 // Two properties it exists to guarantee: every loop ends on a bound declared
-// in policy, never on a model deciding it is finished; and waking an agent is
-// a decision, not a reflex — an approval or a green check wakes nobody.
+// in policy or on the conductor's judgement (a conducted review loop has no
+// counters; a candidate's fix loop keeps the policy's bounds), never on a
+// fixer or reviewer deciding it is finished; and waking an agent is a
+// decision, not a reflex — an approval or a green check wakes nobody.
 func Workflow(s *Store, forges Forges) *workflow.Definition {
 	w := &steps{s: s, forges: forges}
 	def := &workflow.Definition{

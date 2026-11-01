@@ -407,7 +407,10 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
 - **A conducted loop has no counters.** While the conductor decides
   (`State.conducted`), no review round, fix attempt, still or regression
   count refuses its tools or escalates its round: a round exits clear (no
-  open finding at the fix bar) or parks for the conductor (`loopExit`).
+  open finding at the fix bar) or parks for the conductor (`loopExit`),
+  except a candidate's fix loop (`pullRequestFixes: candidate`,
+  `checkingCandidate`), which keeps the policy's bounds
+  (`conductsRounds`).
   When to stop is the conductor's judgement, on the facts each round's wake
   states (`wakes/round.md`), which from round 8 suggests asking the person.
   A delivery handed back to Deliver is the policy's again, bounds included.
