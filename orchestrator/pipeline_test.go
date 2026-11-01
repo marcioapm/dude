@@ -7,6 +7,7 @@ package orchestrator_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -216,8 +217,8 @@ func TestAPipelinesFixThatFallsShortWakesTheConductor(t *testing.T) {
 				t.Errorf("%d reviews started after the fix", n-reviews)
 			}
 			fact := stoppedFact(c.kase, c.outcome, c.note, "tests")
-			if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'decision'
-				AND strpos(line, $2) > 0`, task, fact); n != 1 {
+			if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $3
+				AND strpos(line, $2) > 0`, task, fact, delivery.WakeRound); n != 1 {
 				t.Errorf("wakes saying %q: %d, want 1", fact, n)
 			}
 		})
@@ -324,5 +325,82 @@ func TestAStoppedPipelineResumesWithItsReview(t *testing.T) {
 				t.Errorf("the retried fix kept the conductor's queued review")
 			}
 		})
+	}
+}
+
+// roundWakeLine is the task's latest round wake, as recorded.
+func (w *world) roundWakeLine(task string) string {
+	return w.str(`SELECT COALESCE((SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = $2
+		ORDER BY created_at DESC, id DESC LIMIT 1), '')`, task, delivery.WakeRound)
+}
+
+// roundWake is a round wake as dude renders it (wakes/round), on one line.
+func roundWake(round, open, below int, rng string, lenses []string, shown []map[string]any, fix string, long bool) string {
+	line := strings.Join(strings.Fields(delivery.MustText("wakes/round").Render(map[string]any{
+		"Round": round, "Open": open, "Below": below, "People": 0, "More": 0, "Range": rng, "Lenses": lenses,
+		"Shown": shown, "Fix": fix, "Long": long})), " ")
+	return delivery.MustText("wakes/decision-waiting").Render(map[string]any{
+		"Point": delivery.MustText("wakes/facts/point-" + delivery.PointReviewed).Render(nil), "Line": line})
+}
+
+// A conducted review round wakes the conductor with the round wake: its
+// number and what it reviewed, each finding at the fix bar with its
+// severity, trivial, introduced, unverified and place, the count of those
+// below it, and the fix before it — its commits and its writer's outcome.
+// From round 8 on it says the loop is long; a fact, no bound.
+func TestARoundWakeListsTheFindingsAtTheBarAndTheFix(t *testing.T) {
+	w := conducting(t)
+	w.onModel("reviewer", "llm-review")
+	scripted := w.lux.Decide
+	reviews := 0
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			if reviews++; reviews == 1 {
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: high\nintroduced: yes", wrongThing) +
+					"---\nseverity: medium\ncategory: correctness\nfile: FACTORY.md\nline: 3\ntitle: Unproven\ndescription: D.\n" +
+					"---\nseverity: low\ncategory: correctness\nfile: FACTORY.md\nline: 4\ntitle: Below the bar\ndescription: D.\ntrivial: no\n```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+		case "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "fix",
+				Checks: "```yaml\noutcome: partial\noutcome_note: one left\nchecks: []\n```"}
+		}
+		return scripted(spec)
+	}
+	task := w.task()
+	w.toRoundOne(task)
+	ids := w.ids(`SELECT id FROM review_findings WHERE task_id = $1 ORDER BY line`, task)
+	if len(ids) != 3 {
+		t.Fatalf("findings %v, want 3", ids)
+	}
+	shown := []map[string]any{
+		{"ID": ids[0], "Severity": "high", "Title": wrongThing, "Where": "FACTORY.md:1", "Introduced": "yes", "Trivial": false, "Unverified": false},
+		{"ID": ids[1], "Severity": "medium", "Title": "Unproven", "Where": "FACTORY.md:3", "Introduced": "", "Trivial": false, "Unverified": true},
+	}
+	whole := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": ""})
+	if got, want := w.roundWakeLine(task), roundWake(1, 2, 1, whole, []string{"correctness"}, shown, "", false); got != want {
+		t.Errorf("round 1's wake:\n got %q\nwant %q", got, want)
+	}
+	// Round 8 of the loop: the fix before it, and the long-loop fact.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"round":7}'::jsonb WHERE task_id = $1`, task)
+	before := w.str(`SELECT state->'roundHeads'->>'target' FROM workflow_runs WHERE task_id = $1`, task)
+	w.must(task, "start_phase", `{"phase":"fix","then":{"review":["tests"]},"round":{"scope":"fix"}}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	// The fix reported itself partial: its review waits for the conductor.
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("round 8", func() bool { return w.reviewedRound(task, 8) || w.escalationReason(task) != "" })
+	if r := w.escalationReason(task); r != "" {
+		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
+	}
+	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	head := w.str(`SELECT heads->'target'->>'sha' FROM runs WHERE id = $1`, fix)
+	fixLine := delivery.MustText("wakes/facts/round-fix").Render(map[string]any{"Phase": "fix", "RunID": fix,
+		"Outcome": "partial", "Note": "one left", "Commits": []string{"target@" + head[:7]}})
+	narrow := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": delivery.RangeFixRound,
+		"Repos": []string{"target@" + before[:7] + ".." + head[:7]}})
+	if got, want := w.roundWakeLine(task), roundWake(8, 2, 1, narrow, []string{"tests"}, shown, fixLine, true); got != want {
+		t.Errorf("round 8's wake:\n got %q\nwant %q", got, want)
 	}
 }

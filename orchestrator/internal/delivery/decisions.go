@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -301,7 +302,8 @@ func (w *steps) pipelineGoesOn(ctx context.Context, sc workflow.StepContext, st 
 		line += render(pipelineUnreviewedTmpl, nil)
 	}
 	res, err := w.next(ctx, sc, st, PointFixed, policy, line)
-	st.Routed.Queued = p.queued()
+	// A round's wake: its facts are not a decision's 300 characters.
+	st.Routed.Queued, st.Routed.Kind = p.queued(), WakeRound
 	return res, true, err
 }
 
@@ -315,6 +317,8 @@ type Routed struct {
 	Line   string `json:"line,omitempty"`
 	// The review a pipeline queued, offered at the decision (Pending.Queued).
 	Queued *Directed `json:"queued,omitempty"`
+	// The wake's kind: "" is a decision's; WakeRound a conducted round's.
+	Kind string `json:"kind,omitempty"`
 }
 
 // recheck is the delivery's decision checkpoint (workflow.Definition.
@@ -371,7 +375,7 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		}
 		return res, true, nil
 	}
-	out, err := toConductorTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line)
+	out, err := toConductorKindTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line, cmp.Or(r.Kind, "decision"))
 	if err == nil && r.Queued != nil {
 		st.Decision.Queued = r.Queued
 	}
@@ -390,6 +394,11 @@ func decisionWaitingNote(point, line string) string {
 // The start wakes nobody: only Talk it through decides it, whose message
 // in Chat is the conductor's turn already.
 func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
+	return toConductorKindTx(ctx, tx, sc, st, point, policy, line, "decision")
+}
+
+// toConductorKindTx is toConductorTx recording its wake as kind.
+func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line, kind string) (workflow.Result, error) {
 	st.Directed, st.PendingRunIDs, st.Routed = nil, nil, nil
 	st.Decision = &Pending{Point: point, Policy: policy,
 		Adopted: st.Source != nil && st.HeadRunID == "" && (point == PointStart || point == PointImplemented)}
@@ -397,7 +406,7 @@ func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *
 		st.GateRequired, st.ChoiceGate = true, false
 	}
 	note := decisionWaitingNote(point, line)
-	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
+	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, kind,
 		fmt.Sprintf("%s:decision:%d", sc.WorkflowRunID, st.Decisions), note, point == PointStart)
 	if err == nil && added {
 		err = emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionAwaited, map[string]any{"point": point, "policy": policy,
@@ -869,6 +878,9 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 	case "escalation":
 		// The findings it names and the direction the person must give.
 		limit = escalationLineChars
+	case WakeRound:
+		// A conducted round's findings at the fix bar, each with its facts.
+		limit = roundLineChars
 	}
 	text := clip(oneLine(line), limit)
 	if kind == "escalation" && strings.HasSuffix(key, ":decided") {

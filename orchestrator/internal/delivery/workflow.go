@@ -1159,13 +1159,27 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	st.ReviewingHeads = nil
 	st.PendingRunIDs = nil
 	exit := w.loopExit(st, findings, conv)
-	if (exit == nil || exit.Reason == "clear") && !st.fixLoop() {
+	// A conducted delivery's fix loop is the conductor's too: a direct pull
+	// request fix's narrow loop parks after each round. A candidate's loop
+	// goes on by the policy's rules.
+	if (exit == nil || exit.Reason == "clear") && (!st.fixLoop() || st.conducted() && !st.checkingCandidate()) {
 		// Past a bound it escalates as the policy does; short of one, the
 		// round's findings are the conductor's to triage, if it decides as
 		// the transition commits (recheck).
 		res, err := w.afterLoop(ctx, sc, st, exit)
+		if err != nil {
+			return res, err
+		}
 		st.Routed = &Routed{Point: PointReviewed, Policy: "reviewExit", Next: res.Next, Line: findingsLine(st, findings)}
-		return res, err
+		if st.conducted() {
+			// A conducted round's own wake: its findings at the fix bar.
+			line, err := w.roundLine(ctx, sc, st, round, findings)
+			if err != nil {
+				return workflow.Result{}, err
+			}
+			st.Routed.Line, st.Routed.Kind = line, WakeRound
+		}
+		return res, nil
 	}
 	return w.afterLoop(ctx, sc, st, exit)
 }
@@ -2733,7 +2747,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		st.Pipeline = nil
 		if len(out.Heads) == 0 {
 			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-				_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision", "pipeline:"+runID,
+				_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, WakeRound, "pipeline:"+runID,
 					out.line(runID, "fix")+" "+pipelineStopped(p, pipelineNothing, out, false))
 				return err
 			}); err != nil {

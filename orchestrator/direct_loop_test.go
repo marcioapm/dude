@@ -13,16 +13,19 @@ import (
 )
 
 // A conducted direct delivery's pull request fix: the conductor decides
-// on the comment, then the fix's narrow loop runs by the policy's rules
-// alone — its review's blocking finding fixed and reviewed again with no
-// decision of the conductor's between — and ends at prFixDone. A fresh
-// reviewer (a large delta) keeps the loop's range. Neither an older open
-// blocking finding outside the range nor a person's open feedback item
-// holds the loop's exit.
+// on the comment, then the fix's narrow loop runs — its review's blocking
+// finding fixed and reviewed again — and ends at prFixDone. Each review
+// round of the loop is the conductor's (step 3): it is asked after each
+// round, and never after a fix, and its decide next goes on as the
+// policy's rules would. (The name is from before step 3, when the loop ran
+// with no decision; kept, as the test's id.) A fresh reviewer (a large
+// delta) keeps the loop's range. Neither an older open blocking finding
+// outside the range nor a person's open feedback item holds the loop's
+// exit.
 //
-// Each of the loop's direct-mode switches (fixLoop at awaitFix, the
-// triage skip, withFeedback, loopsOwn, KeepRange) reverted to
-// checkingCandidate turns this red; gateReviewers' is the next test's.
+// Each of the loop's direct-mode switches (fixLoop at awaitFix,
+// withFeedback, loopsOwn, KeepRange) reverted to checkingCandidate turns
+// this red; gateReviewers' is the next test's.
 func TestDirectAConductedNarrowLoopRunsWithoutTheConductor(t *testing.T) {
 	w := conducting(t)
 	w.toolsWithSync()
@@ -90,14 +93,14 @@ func TestDirectAConductedNarrowLoopRunsWithoutTheConductor(t *testing.T) {
 	_ = w.owner.QueryRow(ctx, `SELECT max(cursor) FROM events WHERE task_id = $1`, task).Scan(&from)
 	w.must(task, "decide", `{"action":"next"}`)
 	stopped := func() string {
-		switch at := w.decisionAt(task); at {
-		case delivery.PointFixed, delivery.PointReviewed:
+		if at := w.decisionAt(task); at == delivery.PointFixed {
 			return at
 		}
 		return w.escalationReason(task)
 	}
 	w.until("the fix's loop done", func() bool {
 		w.sync()
+		w.nextAtRound(task)
 		return stopped() != "" || len(seen()) >= 4 && w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1
 			AND NOT state ? 'fixRange' AND (step = 'awaitPullRequest' OR state->'decision'->>'point' = $2)`, task, delivery.PointPRFeedback) == 1
 	})
@@ -107,9 +110,9 @@ func TestDirectAConductedNarrowLoopRunsWithoutTheConductor(t *testing.T) {
 	if got := seen(); !slices.Equal(got, []string{"fix", "review", "fix", "review"}) {
 		t.Fatalf("after the decision: %v, want [fix review fix review]\n%s", got, w.describeRuns())
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND cursor > $2 AND event_type = $3
-		AND payload->>'point' IN ($4, $5)`, task, from, delivery.EvDecisionAwaited, delivery.PointFixed, delivery.PointReviewed); n != 0 {
-		t.Errorf("the conductor was asked %d times during the loop", n)
+	if got := slices.DeleteFunc(w.awaited(task, from), func(p string) bool { return p == delivery.PointPRFeedback }); !slices.Equal(got,
+		[]string{delivery.PointReviewed, delivery.PointReviewed}) {
+		t.Errorf("the conductor was asked at %v during the loop, want after each of its two rounds", got)
 	}
 	// Both reviews over the round's push, the fresh one too.
 	reviews := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2 ORDER BY created_at`,

@@ -560,26 +560,33 @@ func failedCategories(u []Unfinished) []string {
 
 func (s *Store) PhaseOutcome(ctx context.Context, org, runID string) (Outcome, error) {
 	var o Outcome
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var status string
-		var errText *string
-		var heads []byte
-		err := tx.QueryRow(ctx, `SELECT status::text, error, heads,
-				EXISTS (SELECT 1 FROM artifacts WHERE run_id = runs.id),
-				COALESCE(writer_outcome, ''), COALESCE(writer_outcome_note, '')
-			FROM runs WHERE id = $1`, runID).Scan(&status, &errText, &heads, &o.Published, &o.WriterOutcome, &o.WriterOutcomeNote)
-		if db.IsNotFound(err) {
-			o.Error = "run not found"
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		o.Bases = readBases(heads)
-		o.Succeeded, o.Error = status == "completed", deref(errText)
-		o.Heads, o.ChangedPaths, err = ReadHeads(heads)
+	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		o, err = phaseOutcomeTx(ctx, tx, runID)
 		return err
 	})
+	return o, err
+}
+
+// phaseOutcomeTx is PhaseOutcome in tx.
+func phaseOutcomeTx(ctx context.Context, tx pgx.Tx, runID string) (Outcome, error) {
+	var o Outcome
+	var status string
+	var errText *string
+	var heads []byte
+	err := tx.QueryRow(ctx, `SELECT status::text, error, heads,
+			EXISTS (SELECT 1 FROM artifacts WHERE run_id = runs.id),
+			COALESCE(writer_outcome, ''), COALESCE(writer_outcome_note, '')
+		FROM runs WHERE id = $1`, runID).Scan(&status, &errText, &heads, &o.Published, &o.WriterOutcome, &o.WriterOutcomeNote)
+	if db.IsNotFound(err) {
+		o.Error = "run not found"
+		return o, nil
+	}
+	if err != nil {
+		return o, err
+	}
+	o.Bases = readBases(heads)
+	o.Succeeded, o.Error = status == "completed", deref(errText)
+	o.Heads, o.ChangedPaths, err = ReadHeads(heads)
 	return o, err
 }
 

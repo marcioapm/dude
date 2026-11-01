@@ -78,3 +78,7 @@
 {{- define "wakes/facts/pipeline-queued"}}The review you queued after it ({{join .Review ", "}}) waits for you: decide next runs it; start_phase review with other reviewers replaces it.{{end}}
 
 {{- define "wakes/facts/pipeline-unreviewed-push"}} The fix is on the pull request, unreviewed: nothing is published past it until a review has run.{{end}}
+
+{{- define "wakes/facts/round-fix"}}{{.Phase}} {{.RunID}}{{with .Commits}} committed at {{join . " "}}{{else}} committed nothing{{end}}{{with .Outcome}}, reports itself {{.}}{{end}}{{with .Note}}: {{clip (oneLine .) 200}}{{end}}.{{end}}
+
+{{- define "wakes/facts/round-range"}}{{if .Of}}{{.Of}}{{range .Repos}} {{.}}{{end}}{{else}}the whole branch{{end}}{{end}}

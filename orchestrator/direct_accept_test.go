@@ -82,6 +82,7 @@ func TestDirectAPullRequestFixFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) 
 	e.must(e.task, "decide", `{"action":"next","note":"NOTE-XYZZY"}`)
 	e.until("the fix on the pull request, and waiting again", func() bool {
 		e.sync()
+		e.nextAtRound(e.task)
 		return e.fixes(e.task) == 1 && e.gh.SHA(e.branch) != published && e.waitingOnPR(e.task)
 	})
 	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
@@ -117,6 +118,7 @@ func TestDirectAnIntegrationFirstReviewsAnUnreviewedPushOfDudes(t *testing.T) {
 	e.must(e.task, "decide", `{"action":"next"}`)
 	e.until("the integration on the pull request", func() bool {
 		e.sync()
+		e.nextAtRound(e.task)
 		return e.count(integrationRuns+` AND status = 'completed'`, e.task) == 1
 	})
 	if n := e.count(`SELECT count(*) FROM runs k WHERE k.task_id = $1 AND k.phase = 'review' AND k.status = 'completed'
@@ -152,7 +154,7 @@ func TestDirectAPersonsAcceptOfAFailedNarrowReviewCountsAsItsReview(t *testing.T
 	if code, body := e.decide(ana, e.task, "accept", "Read the fix myself."); code != 200 {
 		t.Fatalf("accept: %d %v", code, body)
 	}
-	e.until("waiting on the pull request again", func() bool { e.sync(); return e.waitingOnPR(e.task) })
+	e.until("waiting on the pull request again", func() bool { e.sync(); e.nextAtRound(e.task); return e.waitingOnPR(e.task) })
 	if n := e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
 		AND base_refs->>'target' = $2`, e.task, fixed); n != 0 {
 		t.Fatalf("%d completed reviews of the accepted head", n)
@@ -209,7 +211,7 @@ func TestDirectAnUnreviewedPushWithNoBaseOnRecordIsReviewedOverARange(t *testing
 		AND review_range IS NULL`, e.task, published); n != 0 {
 		t.Errorf("%d reviews of the conductor's push over the whole branch\n%s", n, e.describeRuns())
 	}
-	e.until("waiting on the pull request again", func() bool { e.sync(); return e.waitingOnPR(e.task) })
+	e.until("waiting on the pull request again", func() bool { e.sync(); e.nextAtRound(e.task); return e.waitingOnPR(e.task) })
 	if n := e.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'prFixAfter'`, e.task); n != 0 {
 		t.Errorf("a held fix is kept while waiting on the pull request")
 	}
@@ -255,6 +257,7 @@ func notConvergingDirect(t *testing.T) *editing {
 	e.must(e.task, "decide", `{"action":"next"}`)
 	e.until("the narrow loop not converging", func() bool {
 		e.sync()
+		e.nextAtRound(e.task)
 		return e.escalationReason(e.task) == delivery.ReasonNotConverging
 	})
 	return e
@@ -273,7 +276,7 @@ func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCountsAsItsReview(t *test
 	if code, body := e.decide(ana, e.task, "accept", "The record file is this pull request's own convention."); code != 200 {
 		t.Fatalf("accept: %d %v", code, body)
 	}
-	e.until("waiting on the pull request again", func() bool { e.sync(); return e.waitingOnPR(e.task) })
+	e.until("waiting on the pull request again", func() bool { e.sync(); e.nextAtRound(e.task); return e.waitingOnPR(e.task) })
 	if e.gh.SHA(e.branch) != fixed {
 		t.Fatalf("the branch moved past the accepted head\n%s", e.describeRuns())
 	}
@@ -320,7 +323,7 @@ func TestDirectAPersonsAcceptOfANotConvergingNarrowLoopCoversAPublishWhileItWait
 	if code, body := e.decide(ana, e.task, "accept", "The record file is this pull request's own convention."); code != 200 {
 		t.Fatalf("accept: %d %v", code, body)
 	}
-	e.until("waiting on the pull request again", func() bool { e.sync(); return e.waitingOnPR(e.task) })
+	e.until("waiting on the pull request again", func() bool { e.sync(); e.nextAtRound(e.task); return e.waitingOnPR(e.task) })
 	if e.gh.SHA(e.branch) != waited {
 		t.Fatalf("the branch moved past the conductor's publish\n%s", e.describeRuns())
 	}
