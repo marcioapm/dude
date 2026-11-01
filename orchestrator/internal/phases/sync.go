@@ -2165,6 +2165,13 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 	// failed below, kept, as before; its report is judged when a person
 	// resumes it and its turn ends again.
 	if pushes && delivery.ChecksGated[r.Phase] && r.PushRequestID == "" && r.PushResult == nil && !lux.Terminal(r.LuxState) {
+		// Judged against where each checkout started (taskBases): a turn
+		// read before lux's git.checkout waits for it, as the push does,
+		// rather than have a pre-existing failure refused for want of a
+		// base. Past the base wait it is judged with what there is.
+		if _, _, wait, err := s.awaitedBases(ctx, r); err != nil || wait {
+			return err != nil, err
+		}
 		pass, acted, err := s.checksBeforePush(ctx, r)
 		if err != nil || !pass {
 			return acted, err
@@ -2175,12 +2182,12 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			// lux's git.checkout, which says where each checkout started,
 			// trails the agent's records like any lifecycle event: a turn
 			// read before it waits for it, and nothing is pushed without it.
-			bases, missing, over, err := s.checkoutBases(ctx, r)
+			bases, missing, wait, err := s.awaitedBases(ctx, r)
 			if err != nil {
 				return true, err
 			}
 			if missing {
-				if over || lux.Terminal(r.LuxState) {
+				if !wait {
 					return true, s.failKept(ctx, r, errNoBase.Error())
 				}
 				return false, nil
@@ -2418,6 +2425,13 @@ func (s *Syncer) checkoutBases(ctx context.Context, r phaseRun) (bases map[strin
 			FROM runs r WHERE r.id = $1`, r.ID, s.baseWait().Seconds()).Scan(&bases, &missing, &over)
 	})
 	return bases, missing, over, err
+}
+
+// awaitedBases is checkoutBases with whether r waits for them: a base is
+// missing, its base wait is not over, and lux has not reported r over.
+func (s *Syncer) awaitedBases(ctx context.Context, r phaseRun) (bases map[string]string, missing, wait bool, err error) {
+	bases, missing, over, err := s.checkoutBases(ctx, r)
+	return bases, missing, missing && !over && !lux.Terminal(r.LuxState), err
 }
 
 func (s *Syncer) baseWait() time.Duration {
