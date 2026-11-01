@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -523,5 +524,46 @@ func TestAPipelinesNotesAndRoundReachItsRuns(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2
 		AND COALESCE(review_range->>'of', '') <> ''`, task); n != 0 {
 		t.Errorf("%d of round 2's reviews are not of the whole branch\n%s", n, w.describeRuns())
+	}
+}
+
+// A pipeline's fixer that asks a person is no exception (design §9.1 #5):
+// once answered, the fix commits and its queued review starts with no
+// conductor decision between.
+func TestAPipelinesFixerThatAsksAPersonGoesOnToItsReview(t *testing.T) {
+	w := roundsWorld(t)
+	var asked atomic.Bool
+	w.fixPlays(func(spec map[string]any) *fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] != "fix" || !asked.CompareAndSwap(false, true) {
+			return nil
+		}
+		return &fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Fixed it, as asked.",
+			Commit: map[string]string{"FACTORY.md": "fixed as asked\n"}, Message: "fix"}
+	})
+	task := w.task()
+	w.toRoundOne(task)
+	from := w.cursor(task)
+	w.must(task, "start_phase", `{"phase":"fix","then":{"review":["tests"]}}`)
+	var question string
+	w.until("the fixer's question", func() bool {
+		question = w.str(`SELECT COALESCE((SELECT q.id FROM questions q JOIN runs r ON r.id = q.run_id
+			WHERE q.task_id = $1 AND r.phase = 'fix' AND q.status = 'open' LIMIT 1), '')`, task)
+		return question != ""
+	})
+	if status, body := w.call("/internal/questions/"+question+"/answer", map[string]any{"text": "yes"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("the queued review's round", func() bool {
+		return w.decisionAt(task) == delivery.PointReviewed && len(w.awaited(task, from)) > 0 || w.escalationReason(task) != ""
+	})
+	if got := w.awaited(task, from); fmt.Sprint(got) != "["+delivery.PointReviewed+"]" {
+		t.Errorf("decisions after the start: %v, want [%s]\n%s", got, delivery.PointReviewed, w.describeRuns())
+	}
+	if got := w.reviewersSince(task, from); fmt.Sprint(got) != `[["tests"]]` {
+		t.Errorf("review rounds' reviewers after the start: %v, want [[\"tests\"]]", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'`, task); n != 1 {
+		t.Errorf("%d fixes completed, want 1", n)
 	}
 }
