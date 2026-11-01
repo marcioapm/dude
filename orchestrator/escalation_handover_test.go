@@ -1,0 +1,82 @@
+package orchestrator_test
+
+// An escalation Deliver stopped at, handed to the conductor while it waits:
+// the conductor is told, as it is of one it had when it escalated.
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
+)
+
+// stuckDelivered is a delivery Deliver decides whose review is stuck on its
+// finding (one fix attempt per finding): escalated stuck, waiting on a
+// person, no conductor yet.
+func stuckDelivered(w *world) string {
+	w.t.Helper()
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		switch labels["dude.phase"] {
+		case "review":
+			// Raised once, then still there after every fix.
+			if fmt.Sprint(labels["dude.run"]) == w.firstReview() {
+				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
+			}
+			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
+		case "implement", "fix":
+			return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "work"}
+		}
+		return scripted(spec)
+	}
+	task := w.task()
+	w.deliver(task)
+	setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
+	w.until("stuck", func() bool { return w.escalationReason(task) == "stuck" })
+	return task
+}
+
+// A delivery handed to the conductor while it waits at Deliver's escalation
+// tells the conductor of it, once: a person's first Chat message hands it
+// over and the conductor is woken with the escalation; another message, or
+// the decisions handed back and given to it again, tell it nothing more.
+func TestAnEscalationHandedToTheConductorTellsIt(t *testing.T) {
+	w := conducting(t)
+	task := stuckDelivered(w)
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1`, task); n != 0 {
+		t.Fatalf("%d wakes before the conductor had the delivery", n)
+	}
+	if status, out := w.chat(task, "What happened?"); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	if d := w.decider(task); d != delivery.DeciderConductor {
+		t.Fatalf("decider %s after the Chat message", d)
+	}
+	w.wokenWith(task, "Escalated to a person: stuck")
+	escalations := func() int {
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'escalation'`, task)
+	}
+	if n := escalations(); n != 1 {
+		t.Fatalf("%d escalation wakes, want 1", n)
+	}
+	// Handed over again: a second message, then back to Deliver and to the
+	// conductor again (the explicit switch), the same escalation waiting.
+	if status, out := w.chat(task, "And now?"); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	for _, to := range []string{delivery.DeciderPolicy, delivery.DeciderConductor} {
+		if status, out := w.handBack(task, map[string]any{"decider": to}); status != 200 {
+			t.Fatalf("decider %s: %d %v", to, status, out)
+		}
+	}
+	w.pump()
+	if w.escalationReason(task) != "stuck" {
+		t.Fatalf("the escalation no longer waits: %q", w.escalationReason(task))
+	}
+	if n := escalations(); n != 1 {
+		t.Fatalf("%d escalation wakes after handing it over again, want 1", n)
+	}
+}

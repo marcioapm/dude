@@ -927,6 +927,26 @@ const (
 	escalationLineChars = 1200
 )
 
+// tellEscalationTx tells the conductor of the escalation the delivery waits
+// on a person at: its wake, kind escalation, keyed on its number among those
+// told (State.Escalations). Whoever escalated: one the conductor had when it
+// escalated (escalate, a held checks report), or one Deliver stopped at,
+// handed to the conductor while it waits (SetDeciderTx). Once per
+// escalation (Escalation.Told), however often it is handed over; a step
+// replayed tells it again with its same key, which records nothing new.
+// Returns whether it told it now, st changed.
+func tellEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State) (bool, error) {
+	e := st.Escalation
+	if e == nil || e.Decided != nil || e.Told != 0 {
+		return false, nil
+	}
+	st.Escalations++
+	e.Told = st.Escalations
+	_, err := RecordWakeTx(ctx, tx, org, st.TaskID, "escalation", fmt.Sprintf("%s:escalation:%d", wfID, st.Escalations),
+		escalatedLine(e))
+	return err == nil, err
+}
+
 // SetDeciderTx changes who decides a task's delivery, recording it once:
 // a no-op when it already is. Returns whether it changed.
 func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, to, why, actorType, actorID string) (bool, error) {
@@ -944,10 +964,34 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 	}
 	st.Decider = to
 	st.HadConductor = st.HadConductor || to == DeciderConductor
+	// Handed to the conductor while it waits on a person at an escalation:
+	// the conductor is told of it, as of one it had when it escalated.
+	told := false
+	if to == DeciderConductor {
+		var err error
+		if told, err = tellEscalationTx(ctx, tx, org, wfID, st); err != nil {
+			return false, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text))
 			|| CASE WHEN $2 = 'conductor' THEN '{"hadConductor": true}'::jsonb ELSE '{}'::jsonb END WHERE id = $1`,
 		wfID, to); err != nil {
 		return false, err
+	}
+	if told {
+		// The fields the telling changed, beside the decider: the
+		// escalation (now told) and its number. Its decision and direction
+		// stay: Directed is the conductor's alone, and a Pending decision
+		// here is Deliver's own hold, which the escalation resumes to.
+		raw, err := json.Marshal(st.Escalation)
+		if err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = state
+				|| jsonb_build_object('escalation', $2::jsonb, 'escalations', $3::int) WHERE id = $1`,
+			wfID, raw, st.Escalations); err != nil {
+			return false, err
+		}
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvDeciderChanged, OrganizationID: org, ProjectID: st.ProjectID,
 		TaskID: st.TaskID, ActorType: actorType, ActorID: actorID, Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID,

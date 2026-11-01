@@ -300,6 +300,10 @@ type Escalation struct {
 	// A person's decision, once made: set as it is taken, so a second is
 	// refused before the workflow has acted on the first.
 	Decided *HumanDecision `json:"decided,omitempty"`
+	// Its number among the escalations told to the conductor
+	// (State.Escalations, its wake's key), once told: 0 while no conductor
+	// was. A delivery handed to the conductor again is not told twice.
+	Told int `json:"told,omitempty"`
 }
 
 // Actions says what a person may do about it: go back and try again,
@@ -3366,11 +3370,8 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// The person still decides; the conductor is told, to explain and
 		// propose in Chat. Once per escalation, however often replayed.
 		st.Decision, st.Directed = nil, nil
-		st.Escalations++
-		line := escalatedLine(st.Escalation)
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
-				fmt.Sprintf("%s:escalation:%d", sc.WorkflowRunID, st.Escalations), line)
+			_, err := tellEscalationTx(ctx, tx, sc.OrganizationID, sc.WorkflowRunID, st)
 			return err
 		}); err != nil {
 			return workflow.Result{}, err
