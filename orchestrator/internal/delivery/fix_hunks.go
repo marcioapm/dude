@@ -379,7 +379,7 @@ func (h FixHunks) change(published []string, b brief) roundChange {
 			tok = strings.TrimRight(tok, ".,;:)`")
 			dir := strings.TrimSuffix(tok, "/") + "/"
 			for _, path := range []string{file, repo + "/" + file} {
-				if tok == path || dir != "/" && strings.Contains(tok, "/") && strings.HasPrefix(path, dir) {
+				if tok == path || strings.Contains(tok, "/") && strings.HasPrefix(path, dir) {
 					return true
 				}
 			}
