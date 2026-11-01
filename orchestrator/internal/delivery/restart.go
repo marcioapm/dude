@@ -165,6 +165,13 @@ func restartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 			'{reviewRunIds}', $3::jsonb) WHERE id = $1`, d.WorkflowID, pending, review); err != nil {
 		return "", err
 	}
+	// A pipeline's fix restarted is still the fix its review is queued behind.
+	if p := d.State.Pipeline; p != nil && p.Fix == in.RunID {
+		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{pipeline,fix}', to_jsonb($2::text))
+			WHERE id = $1`, d.WorkflowID, newID); err != nil {
+			return "", err
+		}
+	}
 	payload := map[string]any{"from": in.RunID, "to": newID, "note": note, "phase": phase}
 	if category != "" {
 		payload["category"] = category

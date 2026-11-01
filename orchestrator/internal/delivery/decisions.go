@@ -69,6 +69,10 @@ type Pending struct {
 	// Taken by the conductor (decide, start_phase), set as it is taken so
 	// a second is refused before the workflow acts on the first.
 	Taken *Taken `json:"taken,omitempty"`
+	// The review the conductor queued behind the fix this decision follows
+	// (State.Pipeline), not started: an exception, or wake after_fix.
+	// "next" runs it.
+	Queued *Directed `json:"queued,omitempty"`
 }
 
 // Taken is a conductor's decision.
@@ -223,6 +227,84 @@ func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, po
 	return workflow.Result{Next: step, State: st}, nil
 }
 
+// pipeline is the fix-then-review a fix or simplify directed so starts
+// (State.Pipeline); nil for none.
+func (d *Directed) pipeline() *Pipeline {
+	if d == nil || d.Then == nil {
+		return nil
+	}
+	p := *d.Then
+	p.Review, p.By, p.Fix = slices.Clone(p.Review), d.By, ""
+	if d.Round != nil {
+		p.Scope, p.Bar = d.Round.Scope, d.Round.Bar
+	}
+	return &p
+}
+
+// What stops a pipeline at its fix, telling the conductor at once
+// (pipelineStop): the review it queued does not start.
+const (
+	pipelineFailed  = "failed"
+	pipelineNothing = "nothing"
+	pipelineOutcome = "outcome"
+)
+
+// pipelineStop is why a pipeline's fix (or simplifier) stops it, "" for
+// none: it failed (a simplifier: a fix's failure escalates first), it
+// committed nothing, or its writer reports itself partial or blocked.
+func pipelineStop(out Outcome) string {
+	switch {
+	case !out.Succeeded:
+		return pipelineFailed
+	case len(out.Heads) == 0:
+		return pipelineNothing
+	case out.WriterOutcome == OutcomePartial || out.WriterOutcome == OutcomeBlocked:
+		return pipelineOutcome
+	}
+	return ""
+}
+
+// pipelineStopped is the fact a stopped pipeline's wake says; queued: the
+// review is offered at the decision it parks on.
+func pipelineStopped(p *Pipeline, stop string, out Outcome, queued bool) string {
+	return render(pipelineStoppedTmpl, struct {
+		Case, Error, Outcome, Note string
+		Review                     []string
+		Queued                     bool
+	}{stop, out.Error, out.WriterOutcome, out.WriterOutcomeNote, p.Review, queued})
+}
+
+// pipelineGoesOn carries out the conductor's pipeline at its fix's (or
+// simplifier's) end: with no exception and wake after_review, its queued
+// review, directed, with no decision between; else a decision after the
+// fix, whose "next" runs the queued review (Pending.Queued), the fact
+// that stopped it said. ok is false with no pipeline: the step goes on as
+// it would. policy is where the step goes when no conductor decides.
+func (w *steps) pipelineGoesOn(ctx context.Context, sc workflow.StepContext, st *State, phase, runID string, out Outcome, policy string) (workflow.Result, bool, error) {
+	p := st.Pipeline
+	if p == nil {
+		return workflow.Result{}, false, nil
+	}
+	st.Pipeline = nil
+	stop := pipelineStop(out)
+	if stop == "" && p.Wake != WakeAfterFix {
+		st.Directed = p.queued()
+		return workflow.Result{Next: "review", State: st}, true, nil
+	}
+	line := out.line(runID, phase) + " "
+	if stop != "" {
+		line += pipelineStopped(p, stop, out, true)
+	} else {
+		line += render(pipelineQueuedTmpl, struct{ Review []string }{p.Review})
+	}
+	if len(st.FixRange) > 0 && len(out.Heads) > 0 {
+		line += render(pipelineUnreviewedTmpl, nil)
+	}
+	res, err := w.next(ctx, sc, st, PointFixed, policy, line)
+	st.Routed.Queued = p.queued()
+	return res, true, err
+}
+
 // Routed is a decision point the policy took in a step: the step it chose
 // (Next), and what the conductor would have been asked (Point, Policy:
 // where its "next" goes).
@@ -231,6 +313,8 @@ type Routed struct {
 	Policy string `json:"policy"`
 	Next   string `json:"next"`
 	Line   string `json:"line,omitempty"`
+	// The review a pipeline queued, offered at the decision (Pending.Queued).
+	Queued *Directed `json:"queued,omitempty"`
 }
 
 // recheck is the delivery's decision checkpoint (workflow.Definition.
@@ -288,6 +372,9 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		return res, true, nil
 	}
 	out, err := toConductorTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line)
+	if err == nil && r.Queued != nil {
+		st.Decision.Queued = r.Queued
+	}
 	return out, true, err
 }
 
@@ -377,6 +464,13 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 	st.Decisions++
 	switch t.Action {
 	case "next":
+		if q := d.Queued; q != nil {
+			// The review the conductor queued, with what it says now.
+			q.Note = strings.TrimSpace(strings.Join([]string{q.Note, t.Note}, "\n\n"))
+			q.By = t.By
+			st.Directed = q
+			return workflow.Result{Next: "review", State: st}, nil
+		}
 		st.Directed = &Directed{Note: t.Note, By: t.By}
 		return workflow.Result{Next: d.Policy, State: st}, nil
 	case "open_pull_request":
@@ -404,7 +498,8 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "the conductor is waiting on the pull request")
 	case "start_phase":
-		st.Directed = &Directed{Phase: t.Phase, Categories: t.Categories, FindingIDs: t.FindingIDs, Note: t.Note, By: t.By}
+		st.Directed = &Directed{Phase: t.Phase, Categories: t.Categories, FindingIDs: t.FindingIDs, Note: t.Note,
+			Then: t.Then, Round: t.Round, By: t.By}
 		// Started while the delivery waited on its pull requests: it waits
 		// on them again once this is done (startAtPRWait).
 		st.ActingOnPR = d.Policy == "awaitPullRequest"
@@ -747,6 +842,10 @@ func conductorKey(sc workflow.StepContext, st *State, d *Directed, parts ...any)
 func (d *Directed) apply(p *PhaseRun) {
 	if d != nil {
 		p.ConductorRunID, p.ConductorNote = d.By, d.Note
+		if d.Round != nil && d.Round.Bar != "" {
+			// The conductor's bar for the round, quoted as its words.
+			p.ConductorNote = strings.TrimSpace(d.Note + "\n\n" + render(roundBarTmpl, d.Round.Bar))
+		}
 	}
 }
 
