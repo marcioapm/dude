@@ -335,13 +335,9 @@ func (w *world) roundWakeLine(task string) string {
 		ORDER BY created_at DESC, id DESC LIMIT 1), '')`, task, delivery.WakeRound)
 }
 
-// roundWake is a round wake as dude renders it (wakes/round), on one line.
-func roundWake(round, open, below int, rng string, lenses []string, shown []map[string]any, fix string, long bool) string {
-	return roundWakeMore(round, open, below, rng, lenses, shown, 0, fix, long)
-}
-
-// roundWakeMore is roundWake counting more findings at the bar than it shows.
-func roundWakeMore(round, open, below int, rng string, lenses []string, shown []map[string]any, more int, fix string, long bool) string {
+// roundWake is a round wake as dude renders it (wakes/round), on one line,
+// more counting the findings at the bar it does not show.
+func roundWake(round, open, below int, rng string, lenses []string, shown []map[string]any, more int, fix string, long bool) string {
 	line := strings.Join(strings.Fields(delivery.MustText("wakes/round").Render(map[string]any{
 		"Round": round, "Open": open, "Below": below, "People": 0, "More": more, "Range": rng, "Lenses": lenses,
 		"Shown": shown, "Fix": fix, "Long": long})), " ")
@@ -386,7 +382,7 @@ func TestARoundWakeListsTheFindingsAtTheBarAndTheFix(t *testing.T) {
 		{"ID": ids[1], "Severity": "medium", "Title": "Unproven", "Where": "FACTORY.md:3", "Introduced": "", "Trivial": false, "Unverified": true},
 	}
 	whole := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": ""})
-	if got, want := w.roundWakeLine(task), roundWake(1, 2, 1, whole, []string{"correctness"}, shown, "", false); got != want {
+	if got, want := w.roundWakeLine(task), roundWake(1, 2, 1, whole, []string{"correctness"}, shown, 0, "", false); got != want {
 		t.Errorf("round 1's wake:\n got %q\nwant %q", got, want)
 	}
 	// Round 8 of the loop: the fix before it, and the long-loop fact.
@@ -406,7 +402,7 @@ func TestARoundWakeListsTheFindingsAtTheBarAndTheFix(t *testing.T) {
 		"Outcome": "partial", "Note": "one left", "Commits": []string{"target@" + head[:7]}})
 	narrow := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": delivery.RangeFixRound,
 		"Repos": []string{"target@" + before[:7] + ".." + head[:7]}})
-	if got, want := w.roundWakeLine(task), roundWake(8, 2, 1, narrow, []string{"tests"}, shown, fixLine, true); got != want {
+	if got, want := w.roundWakeLine(task), roundWake(8, 2, 1, narrow, []string{"tests"}, shown, 0, fixLine, true); got != want {
 		t.Errorf("round 8's wake:\n got %q\nwant %q", got, want)
 	}
 }
@@ -535,7 +531,7 @@ func TestARoundWakeAtItsBoundKeepsItsTail(t *testing.T) {
 		"Outcome": "partial", "Note": "one left", "Commits": []string{"target@" + head[:7]}})
 	narrow := delivery.MustText("wakes/facts/round-range").Render(map[string]any{"Of": delivery.RangeFixRound,
 		"Repos": []string{"target@" + before[:7] + ".." + head[:7]}})
-	if want := roundWakeMore(8, 14, 0, narrow, []string{"tests"}, shown, 14-len(shown), fixLine, true); line != want {
+	if want := roundWake(8, 14, 0, narrow, []string{"tests"}, shown, 14-len(shown), fixLine, true); line != want {
 		t.Errorf("round 8's wake:\n got %q\nwant %q", line, want)
 	}
 }
