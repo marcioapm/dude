@@ -148,6 +148,41 @@ func TestAConductedLoopCountsAMediumRegression(t *testing.T) {
 	if n := w.phaseRuns(task, "fix"); n != fixes+1 || w.phaseRuns(task, "simplify") != 0 {
 		t.Errorf("after the round: %d fixes (want %d), %d simplifiers\n%s", n, fixes+1, w.phaseRuns(task, "simplify"), w.describeRuns())
 	}
+	// Handed back to Deliver after round 1, the loop keeps the conducted
+	// fix bar in its convergence too (HadConductor): the medium
+	// regressions count, and past the bound it escalates not_converging.
+	t.Run("handed back", func(t *testing.T) {
+		w := conducting(t)
+		scripted := w.lux.Decide
+		reviews := 0
+		w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+			labels, _ := spec["labels"].(map[string]any)
+			switch labels["dude.phase"] {
+			case "review":
+				if reviews++; reviews == 1 {
+					return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: medium", "Original defect") + "```\n"}
+				}
+				return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n---\n" +
+					evidencedFinding("severity: medium", fmt.Sprintf("Regression %d", reviews-1)) + "caused_by_fix: yes\n" + "```\n"}
+			case "fix":
+				return fakelux.Behaviour{Commit: map[string]string{"FACTORY.md": fmt.Sprint(labels["dude.run"]) + "\n"}, Message: "fix"}
+			}
+			return scripted(spec)
+		}
+		task := w.task()
+		w.talk(task)
+		setPolicy(w, task, `{"maxAttemptsPerFinding":4,"maxReviewIterations":9,"maxRegressionRounds":2}`)
+		w.implemented(task)
+		w.carriedOut(task, "decide", `{"action":"next"}`)
+		w.until("round 1 reviewed", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+		if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+			t.Fatalf("hand back: %d %v", status, out)
+		}
+		w.until("an escalation", func() bool { return w.escalationReason(task) != "" })
+		if got := w.escalationReason(task); got != delivery.ReasonNotConverging {
+			t.Errorf("handed back after two medium regressions: escalated %q, want %s\n%s", got, delivery.ReasonNotConverging, w.describeRuns())
+		}
+	})
 }
 
 // A resumed reviewer of a conducted loop is asked, in its round message,
