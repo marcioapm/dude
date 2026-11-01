@@ -33,8 +33,8 @@ const roundShown = 12
 const longLoop = 8
 
 var (
-	roundWakeTmpl  = mustTemplate("wakes/round")
-	roundFixTmpl   = mustTemplate("wakes/facts/round-fix")
+	roundWakeTmpl   = mustTemplate("wakes/round")
+	roundFixTmpl    = mustTemplate("wakes/facts/round-fix")
 	roundRangeTmpl  = mustTemplate("wakes/facts/round-range")
 	roundChangeTmpl = mustTemplate("wakes/facts/round-change")
 )
@@ -159,7 +159,9 @@ func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *Stat
 	// findings, counted, so the tail (how many more, the fix, the long
 	// loop) is never what the clip cuts.
 	text := data.text()
-	over := func() bool { return utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars }
+	over := func() bool {
+		return utf8.RuneCountInString(oneLine(decisionWaitingNote(PointReviewed, text))) > roundLineChars
+	}
 	if data.Change != "" && over() {
 		data.Change = ""
 		text = data.text()
