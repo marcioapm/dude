@@ -70,9 +70,6 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 				return "", refusef(rNoReviewerCategoriesAre, c, listOr(reviewCategories()))
 			}
 		}
-		if err := reviewBound(st); err != nil {
-			return "", err
-		}
 	case PhaseFix:
 		if len(in.FindingIDs) > 0 {
 			return "", refuseText(rFixWhilePullRequestWaitsAddresses)

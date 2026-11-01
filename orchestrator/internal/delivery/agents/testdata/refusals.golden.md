@@ -718,17 +718,9 @@ categories are for review, findings for fix
 
 no reviewer %q: the categories are %s
 
-## refusals/delivery/conduct/review-loop-at-its-bound-rounds
-
-the review loop is at its bound: %d of %d rounds spent. Ask the person how to go on (ask_person)
-
 ## refusals/delivery/conduct/no-open-finding-or-feedback-item
 
 no open finding or feedback item to fix
-
-## refusals/delivery/conduct/still-open-after-fix-attempts-bound
-
-%s is still open after %d fix attempts, the bound per finding: re-review (start_phase review) or ask the person how to go on (ask_person) before another fix
 
 ## refusals/delivery/conduct/not-finding-this-task-delivery-findings
 
@@ -737,10 +729,6 @@ no open finding or feedback item to fix
 ## refusals/delivery/conduct/not-open
 
 %s is %s, not open
-
-## refusals/delivery/conduct/has-had-fix-attempts-bound-per
-
-%s has had %d fix attempts, the bound per finding: ask the person how to go on (ask_person)
 
 ## refusals/delivery/conduct/pull-request-fixes-are-at-their
 
@@ -1353,10 +1341,6 @@ a pull request is open on this branch, so changes reach it only after review on 
 ## refusals/delivery/conduct/answer-or-withdraw-review-question
 
 give an answer, or withdraw: true with a reason; one of the two
-
-## refusals/delivery/conduct/review-loop-not-converging
-
-the review loop is not converging: blocking criteria remain unmet or fixes keep introducing new blockers. Re-review (start_phase review) or ask the person how to go on (ask_person) before another fix
 
 ## refusals/delivery/escalations/not-choice-needs-person-direction
 

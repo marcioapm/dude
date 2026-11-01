@@ -70,44 +70,8 @@ func conductStillRounds(t *testing.T, w *convergenceWorld) {
 	}
 }
 
-func TestConductFixConvergenceStillGuard(t *testing.T) {
-	for _, named := range [][]string{nil, {"f"}, {"other"}} {
-		t.Run(fmt.Sprint(named), func(t *testing.T) {
-			w := newConvergenceWorld(t)
-			wf, ref := conductConvergenceSetup(t, w)
-			w.finding(t, "other", "origin", "medium", false)
-			conductStillRounds(t, w)
-			err := conductConvergenceStart(w, ref, delivery.PhaseFix, named)
-			if !delivery.IsRefusal(err) || !strings.Contains(err.Error(), "not converging") {
-				t.Fatalf("fix with ordinary budget available: %v", err)
-			}
-			if n := w.count(t, `SELECT count(*) FROM workflow_runs WHERE id = $1 AND state->'decision'->'taken' IS NOT NULL`, wf); n != 0 {
-				t.Fatal("refused fix recorded a decision")
-			}
-			if n := w.count(t, `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decided'`, w.task); n != 0 {
-				t.Fatal("refused fix emitted a decision event")
-			}
-			if err := conductConvergenceStart(w, ref, delivery.PhaseReview, nil); err != nil {
-				t.Fatalf("re-review must remain available: %v", err)
-			}
-		})
-	}
-}
-
-func TestConductFixConvergenceRegressionGuard(t *testing.T) {
-	w := newConvergenceWorld(t)
-	_, ref := conductConvergenceSetup(t, w)
-	conductRegressionRounds(t, w)
-	w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id IN ('f', 'new1')`)
-	err := conductConvergenceStart(w, ref, delivery.PhaseFix, []string{"new2"})
-	if !delivery.IsRefusal(err) || !strings.Contains(err.Error(), "not converging") {
-		t.Fatalf("regression with ordinary budget available: %v", err)
-	}
-}
-
 // Two regression rounds stand, but every reviewer blocker is resolved: the
-// tester's open blocker is the next test's to judge, not the review loop's,
-// so it neither trips the guard nor is held by it.
+// tester's open blocker is the next test's to judge, and the fix takes it.
 func TestConductFixConvergenceRegressionIgnoresTesterBlocker(t *testing.T) {
 	w := newConvergenceWorld(t)
 	wf, ref := conductConvergenceSetup(t, w)
@@ -208,7 +172,7 @@ func TestConductFixConvergencePreservesFeedbackOnly(t *testing.T) {
 }
 
 func TestConductFixConvergenceKeepsNamedValidation(t *testing.T) {
-	for _, scenario := range []string{"unknown", "resolved", "attempt bound", "no open items"} {
+	for _, scenario := range []string{"unknown", "resolved", "no open items"} {
 		t.Run(scenario, func(t *testing.T) {
 			w := newConvergenceWorld(t)
 			_, ref := conductConvergenceSetup(t, w)
@@ -218,8 +182,6 @@ func TestConductFixConvergenceKeepsNamedValidation(t *testing.T) {
 				named = []string{"missing"}
 			case "resolved":
 				w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id = 'f'`)
-			case "attempt bound":
-				w.exec(t, `UPDATE review_findings SET fix_attempts = 10 WHERE id = 'f'`)
 			case "no open items":
 				w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id = 'f'`)
 				named = nil
@@ -255,29 +217,17 @@ func TestAnEscalationWakePastItsBoundIsClippedToTheTablesBound(t *testing.T) {
 }
 
 // A fix of the people's feedback alone never reads the review loop's
-// convergence: a review history it could not read holds no such fix, and
-// does hold a fix that names a review finding.
+// convergence: a review history it could not read holds no such fix.
 func TestConductFixOfFeedbackAloneReadsNoConvergence(t *testing.T) {
-	for _, named := range [][]string{nil, {"f"}} {
-		t.Run(fmt.Sprint(named), func(t *testing.T) {
-			w := newConvergenceWorld(t)
-			_, ref := conductConvergenceSetup(t, w)
-			w.phase(t, "fix1", "fix", "", []string{"f"}, nil, 1)
-			w.phase(t, "review1", "review", "fix1", []string{"f"}, nil, 2)
-			// Not a verdict map ConvergenceTx can scan.
-			w.exec(t, `UPDATE runs SET verdicts = '{"f": 1}' WHERE id = 'review1'`)
-			if named == nil {
-				w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id = 'f'`)
-			}
-			conductOpenFeedback(t, w)
-			err := conductConvergenceStart(w, ref, delivery.PhaseFix, named)
-			if named == nil && err != nil {
-				t.Fatalf("feedback-only fix: %v", err)
-			}
-			// The unreadable history fails the read itself, not as a refusal.
-			if named != nil && (err == nil || delivery.IsRefusal(err)) {
-				t.Fatalf("a fix of a review finding did not read the convergence: %v", err)
-			}
-		})
+	w := newConvergenceWorld(t)
+	_, ref := conductConvergenceSetup(t, w)
+	w.phase(t, "fix1", "fix", "", []string{"f"}, nil, 1)
+	w.phase(t, "review1", "review", "fix1", []string{"f"}, nil, 2)
+	// Not a verdict map ConvergenceTx can scan.
+	w.exec(t, `UPDATE runs SET verdicts = '{"f": 1}' WHERE id = 'review1'`)
+	w.exec(t, `UPDATE review_findings SET status = 'resolved' WHERE id = 'f'`)
+	conductOpenFeedback(t, w)
+	if err := conductConvergenceStart(w, ref, delivery.PhaseFix, nil); err != nil {
+		t.Fatalf("feedback-only fix: %v", err)
 	}
 }

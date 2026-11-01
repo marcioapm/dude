@@ -30,19 +30,11 @@
 
 {{- define "refusals/delivery/conduct/round-scope-is-one-of"}}round.scope %q: it is whole or fix{{end}}
 
-{{- define "refusals/delivery/conduct/review-loop-at-its-bound-rounds"}}the review loop is at its bound: %d of %d rounds spent. Ask the person how to go on (ask_person){{end}}
-
-{{- define "refusals/delivery/conduct/review-loop-not-converging"}}the review loop is not converging: blocking criteria remain unmet or fixes keep introducing new blockers. Re-review (start_phase review) or ask the person how to go on (ask_person) before another fix{{end}}
-
 {{- define "refusals/delivery/conduct/no-open-finding-or-feedback-item"}}no open finding or feedback item to fix{{end}}
-
-{{- define "refusals/delivery/conduct/still-open-after-fix-attempts-bound"}}%s is still open after %d fix attempts, the bound per finding: re-review (start_phase review) or ask the person how to go on (ask_person) before another fix{{end}}
 
 {{- define "refusals/delivery/conduct/not-finding-this-task-delivery-findings"}}%s is not a finding of this task's delivery (findings lists them){{end}}
 
 {{- define "refusals/delivery/conduct/not-open"}}%s is %s, not open{{end}}
-
-{{- define "refusals/delivery/conduct/has-had-fix-attempts-bound-per"}}%s has had %d fix attempts, the bound per finding: ask the person how to go on (ask_person){{end}}
 
 {{- define "refusals/delivery/conduct/pull-request-fixes-are-at-their"}}pull request fixes are at their bound: %d of %d this review round. Ask the person how to go on (ask_person){{end}}
 

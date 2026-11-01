@@ -714,50 +714,10 @@ func TestThePullRequestGateFollowsTheHead(t *testing.T) {
 	}
 }
 
-// The policy's bounds bound the conductor: review rounds, fix attempts per
-// finding, pull request fix rounds — each refused saying to ask the person.
+// The pull request's fix rounds bound the conductor, each refused saying to
+// ask the person; review rounds and fix attempts do not
+// (TestNoReviewRoundBoundRefusesAConductedLoop).
 func TestTheBoundsRefuseTheConductor(t *testing.T) {
-	t.Run("review rounds", func(t *testing.T) {
-		w := conducting(t)
-		task := w.task()
-		w.talk(task)
-		setPolicy(w, task, `{"maxReviewIterations":2}`)
-		w.implemented(task)
-		w.must(task, "decide", `{"action":"next"}`)
-		w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-		w.must(task, "start_phase", `{"phase":"fix"}`)
-		w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-		w.must(task, "start_phase", `{"phase":"review"}`)
-		w.until("round 2, clean", func() bool { return w.decisionAt(task) == delivery.PointReviewed && w.phaseRuns(task, "review") == 2 })
-		w.refused(task, "start_phase", `{"phase":"review"}`, "2 of 2 rounds spent")
-		w.refused(task, "start_phase", `{"phase":"fix"}`, "the person how to go on")
-	})
-	t.Run("fix attempts per finding", func(t *testing.T) {
-		w := conducting(t)
-		task := w.task()
-		w.talk(task)
-		setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
-		w.implemented(task)
-		w.must(task, "decide", `{"action":"next"}`)
-		w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-		// A is the reviewer's; B another blocking finding of the round.
-		var a, run string
-		_ = w.owner.QueryRow(context.Background(), `SELECT id, run_id FROM review_findings WHERE task_id = $1`, task).Scan(&a, &run)
-		mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title,
-				description, suggested_fix)
-			SELECT 'fnd_b_'||$1, organization_id, task_id, run_id, category, severity, 'B', 'b', 'b'
-			FROM review_findings WHERE id = $2`, task, a)
-		w.must(task, "start_phase", `{"phase":"fix","findings":["`+a+`"]}`)
-		w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-		w.refused(task, "start_phase", `{"phase":"fix","findings":["`+a+`"]}`, "the bound per finding")
-		fixes := w.phaseRuns(task, "fix")
-		w.refused(task, "start_phase", `{"phase":"fix","findings":["fnd_b_`+task+`"]}`, "re-review")
-		w.refused(task, "start_phase", `{"phase":"fix"}`, "re-review")
-		if n := w.phaseRuns(task, "fix"); n != fixes {
-			t.Errorf("a fix started past the stuck finding")
-		}
-		w.must(task, "start_phase", `{"phase":"review"}`)
-	})
 	t.Run("pull request fix rounds", func(t *testing.T) {
 		w := conducting(t)
 		task := w.task()
