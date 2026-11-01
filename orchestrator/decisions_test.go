@@ -825,6 +825,9 @@ func TestDismissAFinding(t *testing.T) {
 	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	var id string
 	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM review_findings WHERE task_id = $1`, task).Scan(&id)
+	// The round's wake reached the conductor before the dismissal: it is in
+	// the conversation a replacement's briefing replays.
+	w.wokenWith(task, "Review round 1")
 	w.refused(task, "dismiss_finding", `{"id":"`+id+`","reason":"  "}`, "say why")
 	w.must(task, "dismiss_finding", `{"id":"`+id+`","reason":"FACTORY.md is generated; the record is elsewhere"}`)
 	var status, note string

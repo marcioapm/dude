@@ -91,11 +91,36 @@ func Replay(ctx context.Context, tx pgx.Tx, of Talker) (string, error) {
 	if err != nil || len(events) == 0 {
 		return "", err
 	}
+	if of.TaskID != "" && of.SessionID == "" && of.RunID == "" {
+		if err := settledSinceInWakes(ctx, tx, of.TaskID, events); err != nil {
+			return "", err
+		}
+	}
 	body := renderReplayFrom(fromCompaction(events))
 	if body == "" {
 		return "", nil
 	}
 	return replayHeading(body), nil
+}
+
+// settledSinceInWakes marks, in the notes dude woke the task's conductors
+// with, each finding settled since (settledSinceTx): a round wake's
+// findings at the bar, replayed as they were, would read as open still.
+func settledSinceInWakes(ctx context.Context, tx pgx.Tx, taskID string, events []replayEvent) error {
+	var at []int
+	var texts []string
+	for i, ev := range events {
+		if t, ok := ev.Payload["text"].(string); ok && ev.Type == EvConductorWoken {
+			at, texts = append(at, i), append(texts, t)
+		}
+	}
+	if err := settledSinceTx(ctx, tx, taskID, texts); err != nil {
+		return err
+	}
+	for j, i := range at {
+		events[i].Payload["text"] = texts[j]
+	}
+	return nil
 }
 
 // replayHeading is the rendered replay under its heading and lead.

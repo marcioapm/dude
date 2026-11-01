@@ -137,6 +137,12 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	for i, p := range pending {
 		lines[i], kinds[i], ids[i] = p.Line, p.Kind, p.ID
 	}
+	// A reason recorded before a finding it names was settled (a round
+	// wake's findings at the bar, the conductor mid-turn when it was
+	// recorded) says so: it is never told open.
+	if err := settledSinceTx(ctx, tx, taskID, lines); err != nil {
+		return "", err
+	}
 	note := WakeNote(lines)
 	payload := map[string]any{"text": note, "reasons": kinds}
 	var directiveID string

@@ -845,6 +845,41 @@ func TestAWakeNoteCarriesTheDigest(t *testing.T) {
 	}
 }
 
+// A round wake recorded while the conductor was mid-turn, naming a finding
+// it then dismissed, is delivered saying so: the note never tells it the
+// finding is open. A finding still open is named as it was.
+func TestAWakeNoteSaysAFindingWasSettledSinceItsReason(t *testing.T) {
+	w := newEpicWorld(t)
+	ctx := context.Background()
+	w.run(t, "run_cond", "ABS-2", "", "conductor", "running")
+	w.run(t, "run_rev", "ABS-2", "review", "reviewer", "completed")
+	task := w.tasks["ABS-2"]
+	w.exec(t, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, status,
+			resolution_note)
+		VALUES ('find_gone', $1, $2, 'run_rev', 'correctness', 'blocking', 'Gone', 'D.', 'accepted', $3),
+			('find_open', $1, $2, 'run_rev', 'correctness', 'high', 'Open', 'D.', 'open', '')`,
+		w.org, task, delivery.DismissedByConductor+"it is generated")
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, delivery.WakeRound, "d:1",
+			"Review round 1 done: 2 open at the fix bar. find_gone [blocking] F.md:1: Gone; find_open [high] F.md:2: Open.")
+		return err
+	})
+	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '1 hour'`)
+	w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_cond'`)
+	w.in(t, func(tx pgx.Tx) error {
+		_, err := delivery.WakeConductorTx(ctx, tx, w.org, task, 1)
+		return err
+	})
+	var text string
+	if err := w.owner.QueryRow(ctx, `SELECT text FROM directives WHERE run_id = 'run_cond'`).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "find_gone (now dismissed by the conductor: it is generated) [blocking]") ||
+		!strings.Contains(text, "find_open [high]") || strings.Contains(text, "find_open (now") {
+		t.Errorf("the wake note:\n%s", text)
+	}
+}
+
 // A message to a task whose only live Run is its conductor is held: it is
 // never queued on the conductor, which it would wake.
 func TestAMessageNeverReachesAPeersConductor(t *testing.T) {

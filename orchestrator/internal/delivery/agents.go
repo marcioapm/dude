@@ -43,6 +43,7 @@ var (
 	findingAcceptedTmpl        = mustTemplate("briefings/finding-accepted")
 	findingLineTmpl            = mustTemplate("briefings/finding-line")
 	findingSettledTmpl         = mustTemplate("briefings/finding-settled")
+	findingSinceTmpl           = mustTemplate("briefings/finding-since")
 	lostConversationReasonTmpl = mustTemplate("briefings/lost-conversation-reason")
 	questionWithdrawnTmpl      = mustTemplate("briefings/question-withdrawn")
 	rebriefSessionTmpl         = mustTemplate("briefings/rebrief-session")

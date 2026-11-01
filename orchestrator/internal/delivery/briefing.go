@@ -327,6 +327,42 @@ func settled(status, by string, attempts int, note string) string {
 	}{status, by, attempts})
 }
 
+// settledSinceTx marks, in each of texts (wake lines and notes written
+// earlier), every finding of the task it names that is settled now, after
+// its id, in the findings list's words (settled): a round wake lists its
+// findings open at the fix bar when it is written, and one dismissed or
+// fixed since must never read as open to the conductor told it later. A
+// text marked already is left as it is.
+func settledSinceTx(ctx context.Context, tx pgx.Tx, taskID string, texts []string) error {
+	if len(texts) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, status::text, COALESCE(resolved_by_run_id, ''), fix_attempts, COALESCE(resolution_note, '')
+		FROM review_findings f WHERE task_id = $1 AND status <> 'open'
+			AND EXISTS (SELECT 1 FROM unnest($2::text[]) t WHERE strpos(t, f.id) > 0)`, taskID, texts)
+	if err != nil {
+		return err
+	}
+	type finding struct {
+		ID, Status, By string
+		Attempts       int
+		Note           string
+	}
+	fs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[finding])
+	if err != nil {
+		return err
+	}
+	for _, f := range fs {
+		marked := render(findingSinceTmpl, struct{ ID, Settled string }{f.ID, settled(f.Status, f.By, f.Attempts, f.Note)})
+		for i, t := range texts {
+			if !strings.Contains(t, marked) {
+				texts[i] = strings.ReplaceAll(t, f.ID, marked)
+			}
+		}
+	}
+	return nil
+}
+
 func briefPullRequests(ctx context.Context, tx pgx.Tx, taskID string) ([]briefPullRequest, error) {
 	rows, err := tx.Query(ctx, `SELECT repo.name, pr.number, pr.state::text, COALESCE(pr.head_sha, ''), pr.checks::text, pr.review::text,
 			(SELECT count(*) FROM events e WHERE e.task_id = pr.task_id AND e.event_type = 'pull_request.commented'
