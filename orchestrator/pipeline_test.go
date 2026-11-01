@@ -427,6 +427,11 @@ func TestANoteAndTheRoundsBarFitTheRunsNote(t *testing.T) {
 	if n := w.count(`SELECT max(length(conductor_note)) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); n == 0 || n > 4000 {
 		t.Errorf("the fixer's note: %d characters", n)
 	}
+	// What is cut is the note, never the bar: the note ends with it whole.
+	bar := strings.TrimSpace(delivery.MustText("contracts/round-bar").Render(strings.Repeat("b", 900)))
+	if note := w.str(`SELECT COALESCE(conductor_note, '') FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); !strings.HasSuffix(note, "\n\n"+bar) {
+		t.Errorf("the fixer's note does not end with the round's whole bar: ...%q", note[max(0, len(note)-120):])
+	}
 }
 
 // then.note and decide next's note, each at its bound, joined on the
@@ -435,8 +440,8 @@ func TestAQueuedNoteAndDecideNextsNoteFitTheRunsNote(t *testing.T) {
 	w := roundsWorld(t)
 	task := w.task()
 	w.toRoundOne(task)
-	w.must(task, "start_phase", fmt.Sprintf(`{"phase":"fix","then":{"review":["tests"],"wake":"after_fix","note":%q}}`,
-		strings.Repeat("q", 3000)))
+	w.must(task, "start_phase", fmt.Sprintf(`{"phase":"fix","then":{"review":["tests"],"wake":"after_fix","note":%q},"round":{"bar":%q}}`,
+		strings.Repeat("q", 3000), strings.Repeat("b", 900)))
 	w.until("after the fix", func() bool { return w.fixedWith(task, `["tests"]`) })
 	w.must(task, "decide", fmt.Sprintf(`{"action":"next","note":%q}`, strings.Repeat("d", 3000)))
 	w.until("round 2", func() bool { return w.reviewedRound(task, 2) || w.stepFailed(task) != "" })
@@ -445,6 +450,14 @@ func TestAQueuedNoteAndDecideNextsNoteFitTheRunsNote(t *testing.T) {
 	}
 	if n := w.count(`SELECT max(length(conductor_note)) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2`, task); n == 0 || n > 4000 {
 		t.Errorf("the queued review's note: %d characters", n)
+	}
+	// What is cut is then.note: the conductor's latest words, decide
+	// next's note, survive whole, and the round's bar ends it whole.
+	bar := strings.TrimSpace(delivery.MustText("contracts/round-bar").Render(strings.Repeat("b", 900)))
+	for _, note := range w.ids(`SELECT COALESCE(conductor_note, '') FROM runs WHERE task_id = $1 AND phase = 'review' AND review_round = 2`, task) {
+		if !strings.HasSuffix(note, strings.Repeat("d", 3000)+"\n\n"+bar) {
+			t.Errorf("the queued review's note does not end with decide next's note and the round's whole bar: ...%q", note[max(0, len(note)-120):])
+		}
 	}
 }
 
