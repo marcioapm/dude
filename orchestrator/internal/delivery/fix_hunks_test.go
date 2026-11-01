@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -65,4 +66,40 @@ func TestSummarizeFix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFixHunksChange is what a round wake says of a fix's kept change.
+func TestFixHunksChange(t *testing.T) {
+	one := func(files ...HunkFile) FixHunks { return FixHunks{"target": {Files: files}} }
+	prod := func(name string) HunkFile { return HunkFile{File: name, New: [][2]int{}, Add: 1} }
+	for _, c := range []struct {
+		name      string
+		h         FixHunks
+		published []string
+		b         brief
+		want      roundChange
+	}{
+		{"a directory named without a trailing slash names its files",
+			one(prod("internal/delivery/x.go"), prod("other.go")), []string{"target"},
+			brief{Notes: []string{"Keep it small; see internal/delivery."}},
+			roundChange{Delta: &lineDelta{2, 0}, Outside: []string{"other.go"}}},
+		{"a partial segment names nothing",
+			one(prod("internal/delivery/x.go"), prod("other.go")), []string{"target"},
+			brief{Notes: []string{"see internal/del and other.go"}},
+			roundChange{Delta: &lineDelta{2, 0}, Outside: []string{"internal/delivery/x.go"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.h.change(c.published, c.b); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("change =\n %s\nwant\n %s", show(got), show(c.want))
+			}
+		})
+	}
+}
+
+func show(c roundChange) string {
+	d := "nil"
+	if c.Delta != nil {
+		d = fmt.Sprint(*c.Delta)
+	}
+	return fmt.Sprintf("delta %s removed %q +%d outside %q +%d", d, c.Removed, c.RemovedMore, c.Outside, c.OutsideMore)
 }

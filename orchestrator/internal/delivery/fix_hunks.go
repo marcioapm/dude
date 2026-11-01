@@ -355,8 +355,13 @@ func (h FixHunks) change(published []string, b brief) roundChange {
 			}
 		}
 		for _, tok := range noteTokens(b.Notes) {
+			// A directory is named with its trailing slash or without
+			// one, whole segments only: "internal/del" names nothing
+			// under internal/delivery/.
+			tok = strings.TrimRight(tok, ".,;:)`")
+			dir := strings.TrimSuffix(tok, "/") + "/"
 			for _, path := range []string{file, repo + "/" + file} {
-				if tok == path || strings.HasSuffix(tok, "/") && strings.HasPrefix(path, tok) {
+				if tok == path || dir != "/" && strings.HasPrefix(path, dir) {
 					return true
 				}
 			}
