@@ -255,6 +255,14 @@ func TestGoldenConductorBriefings(t *testing.T) {
 			"escalation":{"reason":"not_converging","step":"fix","told":1}}`)
 		golden(t, "briefing-conductor-escalated", w.in(t, briefWith(byPerson, "Bo", "What happened?")))
 	})
+	t.Run("conductor-escalation-decided", func(t *testing.T) {
+		// Its escalation decided on the banner, not yet carried out: the
+		// delivery no longer stops for a person.
+		w := newGoldenWorld(t)
+		w.delivery(t, "decide", `{"decider":"conductor","escalations":1,
+			"escalation":{"reason":"not_converging","step":"fix","told":1,"decided":{"action":"retry"}}}`)
+		golden(t, "briefing-conductor-escalation-decided", w.in(t, briefWith(byPerson, "Bo", "What happened?")))
+	})
 	t.Run("not-started", func(t *testing.T) {
 		w := newGoldenWorld(t)
 		w.exec(t, `UPDATE tasks SET epic_id = NULL, acceptance_criteria = '[]', status = 'received' WHERE id = 'wi_g'`)

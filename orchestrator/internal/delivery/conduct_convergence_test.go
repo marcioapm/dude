@@ -253,3 +253,35 @@ func TestAConductedLoopReadsNoConvergence(t *testing.T) {
 		})
 	}
 }
+
+// An escalation already decided on the banner, its decision not yet carried
+// out, handed to the conductor: nothing waits on a person, and the conductor
+// is told nothing (tellEscalationTx).
+func TestADecidedEscalationHandedOverTellsNothing(t *testing.T) {
+	w := newConvergenceWorld(t)
+	wf := w.delivery(t, "decide", delivery.DeciderPolicy, `["human.decision"]`)
+	w.exec(t, `UPDATE workflow_runs SET state = state || '{"escalations":0,
+		"escalation":{"reason":"stuck","step":"fix","decided":{"action":"retry"}}}'::jsonb WHERE id = $1`, wf)
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		d, err := delivery.LoadDelivery(ctx, tx, w.task)
+		if err != nil {
+			return err
+		}
+		_, err = delivery.SetDeciderTx(ctx, tx, w.org, d.WorkflowID, &d.State, delivery.DeciderConductor, "a person wrote in Chat", "human", w.ana)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var wakes int
+	if err := w.owner.QueryRow(ctx, `SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'escalation'`, w.task).Scan(&wakes); err != nil {
+		t.Fatal(err)
+	}
+	if wakes != 0 {
+		t.Fatalf("%d escalation wakes for a decided escalation", wakes)
+	}
+	var decider string
+	if err := w.owner.QueryRow(ctx, `SELECT state->>'decider' FROM workflow_runs WHERE id = $1`, wf).Scan(&decider); err != nil || decider != delivery.DeciderConductor {
+		t.Fatalf("decider %q (%v): the hand-over did not happen", decider, err)
+	}
+}
