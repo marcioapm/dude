@@ -201,16 +201,26 @@ func TestAFixThatMergedMainKeepsAFileMainAlsoChangedUnknown(t *testing.T) {
 	f.a.mergeBase(nil)
 	implemented[40], implemented[20] = "main", "fix"
 	f.a.commit(map[string]string{"shared.go": numbered(implemented), "only.go": "package a\n"}, "fix")
+	// GitHub's T...head patch for shared.go, its body and all (the fake
+	// shows only the header): the implementer's lines 1-3 and the fix's 20.
+	// Kept, it would place a finding on line 2 on the fix's lines.
+	f.a.answer = func(base, head string, answer map[string]any) {
+		for _, file := range answer["files"].([]any) {
+			if file := file.(map[string]any); file["filename"] == "shared.go" {
+				file["patch"] = "@@ -1,3 +1,3 @@\n-line\n-line\n-line\n+impl1\n+impl2\n+impl3\n@@ -20 +20 @@\n-line\n+fix"
+			}
+		}
+	}
 	if err := f.publish(); err != nil {
 		t.Fatal(err)
 	}
 	h := f.hunks()
+	if h.Touches([]string{"target"}, "target", "shared.go", 2) {
+		t.Errorf("a finding on the implementer's line 2 touches the fix")
+	}
 	shared := fileOf(h, "target", "shared.go")
 	if shared == nil || !shared.Unknown || len(shared.New) != 0 || shared.RemovedTests != nil {
 		t.Fatalf("shared.go's kept change: %+v, want it not known (all: %+v)", shared, h)
-	}
-	if h.Touches([]string{"target"}, "target", "shared.go", 2) {
-		t.Errorf("a finding on the implementer's line 2 touches the fix")
 	}
 	if only := fileOf(h, "target", "only.go"); only == nil || only.Unknown || only.Add != 1 {
 		t.Fatalf("only.go's kept change: %+v, want it known (all: %+v)", only, h)
