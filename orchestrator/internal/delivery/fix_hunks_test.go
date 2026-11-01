@@ -206,10 +206,11 @@ func TestIsTestPath(t *testing.T) {
 		"a/b_test.go": true, "x/test_a.py": true, "x/a_test.py": true, "app/tests.py": true,
 		"web/a.test.ts": true, "web/a.spec.tsx": true, "web/a.test.mjs": true,
 		"tests/a.go": true, "x/testdata/a.json": true, "web/__tests__/a.ts": true,
-		"test/api.js": true, "spec/models/user_spec.rb": true, "spec/support/factories.rb": true, "lib/user_spec.rb": true,
-		"src/test/java/a/FooTest.java": true, "src/a/FooTests.java": true, "src/a/FooTest.kt": true, "src/a/FooTests.kt": true,
+		"test/api.js": true, "spec/models/user_spec.rb": true, "lib/user_spec.rb": true,
+		"src/test/java/a/FooTest.java": true, "src/test/kotlin/a/FooTests.kt": true,
+		"src/main/java/x/ABTest.java": false, "src/a/FooTests.java": false, "src/a/FooTest.kt": false, "api/spec/openapi.yaml": false,
 		"a.go": false, "contest.go": false, "latest.ts": false, "testing/helper.go": false,
-		"src/contest/x.go": false, "latest/x.go": false, "spectrum/x.go": false, "a/Test.java": true,
+		"src/contest/x.go": false, "latest/x.go": false, "spectrum/x.go": false, "a/Test.java": false,
 		"a/Contest.java": false, "a/test.py": false, "a/spec.rb": false,
 	} {
 		if got := IsTestPath(p); got != want {

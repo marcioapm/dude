@@ -174,9 +174,11 @@ func testDecls(line string) []string {
 }
 
 // IsTestPath says a repository path is a test's: Go's _test.go, a TS/JS
-// .test or .spec file, Python's test_*.py, *_test.py and tests.py, Java's
-// and Kotlin's *Test and *Tests, Ruby's *_spec.rb, or anything under a
-// test, tests, spec, testdata or __tests__ directory.
+// .test or .spec file, Python's test_*.py, *_test.py and tests.py, Ruby's
+// *_spec.rb, or anything under a test, tests, testdata or __tests__
+// directory. Not a *Test.java (a production class may be named so: Maven's
+// and Gradle's tests are under src/test/), nor a spec/ directory (an API's
+// spec/openapi.yaml is production).
 func IsTestPath(p string) bool {
 	base := path.Base(p)
 	switch {
@@ -187,11 +189,6 @@ func IsTestPath(p string) bool {
 		strings.HasSuffix(base, "_spec.rb"):
 		return true
 	}
-	for _, suffix := range []string{"Test.java", "Tests.java", "Test.kt", "Tests.kt"} {
-		if strings.HasSuffix(base, suffix) {
-			return true
-		}
-	}
 	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"} {
 		stem, ok := strings.CutSuffix(base, ext)
 		if ok && (strings.HasSuffix(stem, ".test") || strings.HasSuffix(stem, ".spec")) {
@@ -200,7 +197,7 @@ func IsTestPath(p string) bool {
 	}
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		switch dir {
-		case "test", "tests", "spec", "testdata", "__tests__":
+		case "test", "tests", "testdata", "__tests__":
 			return true
 		}
 	}
