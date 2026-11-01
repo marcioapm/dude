@@ -24,8 +24,10 @@ import (
 const escalationQuestion = `{"question":"Stuck on the finding. I propose one more narrow fix round; say how, or pick one.",
 	"choices":["Accept as it is","Stop"],"actions":["accept","stop"]}`
 
-// stuck is a conducted delivery whose review is stuck on its finding (one
-// fix attempt per finding): escalated, the conductor told. The conductor's
+// stuck is a delivery whose review is stuck on its finding (one fix attempt
+// per finding): Deliver's loop escalates stuck (a conducted loop has no such
+// bound), then a person's Chat message hands it to the conductor while it
+// waits, the conductor told. The conductor's
 // earlier wakes arrive batched (conductor_wakes/directives are fewer than on
 // the real path), so tests must not assert per-decision delivery on this state.
 func stuck(t *testing.T) (*world, string) {
@@ -46,17 +48,26 @@ func stuck(t *testing.T) (*world, string) {
 		return scripted(spec)
 	}
 	task := w.task()
-	w.talk(task)
+	w.deliver(task)
 	setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
-	w.implemented(task)
-	w.carriedOut(task, "decide", `{"action":"next"}`)
-	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-	w.carriedOut(task, "start_phase", `{"phase":"fix"}`)
-	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-	w.carriedOut(task, "decide", `{"action":"next"}`)
 	w.until("stuck", func() bool { return w.escalationReason(task) == "stuck" })
+	handOver(w, task)
 	w.wokenWith(task, "Escalated to a person: stuck")
 	return w, task
+}
+
+// handOver is a person's Chat message on a delivery Deliver decides, which
+// hands it to the conductor; once the conductor has answered.
+func handOver(w *world, task string) {
+	w.t.Helper()
+	if status, out := w.chat(task, "What happened?"); status >= 300 {
+		w.t.Fatalf("chat: %d %v", status, out)
+	}
+	if d := w.decider(task); d != delivery.DeciderConductor {
+		w.t.Fatalf("decider %s after the Chat message", d)
+	}
+	cond, _, _ := w.conductor(task)
+	w.until("the conductor to answer", func() bool { return len(w.said(cond)) >= 1 })
 }
 
 // firstReview is the first review Run of the world's organization.

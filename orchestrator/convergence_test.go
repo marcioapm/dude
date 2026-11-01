@@ -522,9 +522,10 @@ func TestConvergenceAcceptLeavesAnUnrelatedBlockerToBeFixed(t *testing.T) {
 	}
 }
 
-// notConvergingConducted is a conducted delivery whose reviewer judged its
-// criterion finding still after two fixes the conductor started: escalated
-// not_converging, the conductor told.
+// notConvergingConducted is a delivery whose reviewer judged its criterion
+// finding still after two fixes: Deliver's loop escalates not_converging (a
+// conducted loop has no such bound), then a person's Chat message hands it
+// to the conductor while it waits, the conductor told.
 func notConvergingConducted(t *testing.T) (*world, string) {
 	return notConvergingConductedWith(t, "")
 }
@@ -549,16 +550,8 @@ func notConvergingConductedWith(t *testing.T, extra string) (*world, string) {
 		return scripted(spec)
 	}
 	task := w.task()
-	w.talk(task)
+	w.deliver(task)
 	setPolicy(w, task, `{"maxAttemptsPerFinding":4,"maxReviewIterations":9,"maxStillRounds":2}`)
-	w.implemented(task)
-	w.carriedOut(task, "decide", `{"action":"next"}`)
-	for round := 1; round <= 2; round++ {
-		w.until(fmt.Sprintf("round %d reviewed", round), func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-		w.carriedOut(task, "start_phase", `{"phase":"fix"}`)
-		w.until(fmt.Sprintf("fix %d done", round), func() bool { return w.decisionAt(task) == delivery.PointFixed })
-		w.carriedOut(task, "decide", `{"action":"next"}`)
-	}
 	w.until("not converging", func() bool { return w.escalationReason(task) == delivery.ReasonNotConverging })
 	_, e := w.escalationOf(task)
 	raw, _ := json.Marshal(e.Detail)
@@ -566,6 +559,7 @@ func notConvergingConductedWith(t *testing.T, extra string) (*world, string) {
 	if err := json.Unmarshal(raw, &exit); err != nil || len(exit.FindingIDs) != 1 {
 		t.Fatalf("escalation detail %s: %v", raw, err)
 	}
+	handOver(w, task)
 	w.wokenWith(task, "Escalated to a person: not converging")
 	// The wake as recorded (a batched note shortens each line).
 	var line string
