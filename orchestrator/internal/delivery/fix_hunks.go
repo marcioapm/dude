@@ -90,23 +90,60 @@ func SummarizeFix(files []forge.ComparedFile, truncated bool) RepoHunks {
 // hunkHeader is a unified diff hunk's header: its new side, start and count.
 var hunkHeader = regexp.MustCompile(`(?m)^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
-// newRanges is a patch's hunks' new-side line ranges, first and last line.
-// A hunk adding no line (a pure deletion) is the lines either side of
-// where the lines were: its start is the line before them, and a finding
-// on the line after them is in it too.
+// newRanges is the new-side line ranges a patch changed, first and last
+// line: its + lines, not the context GitHub shows around them. A run of -
+// lines with no + line beside it (a deletion) is the lines either side of
+// where the lines were: the line before them, and the line after them.
 func newRanges(patch string) [][2]int {
-	out := [][2]int{}
-	for _, m := range hunkHeader.FindAllStringSubmatch(patch, -1) {
-		start, _ := strconv.Atoi(m[1])
-		count := 1
-		if m[2] != "" {
-			count, _ = strconv.Atoi(m[2])
+	var lines []int
+	mark := func(l int) {
+		if l >= 1 && (len(lines) == 0 || lines[len(lines)-1] < l) {
+			lines = append(lines, l)
 		}
-		if count == 0 {
-			out = append(out, [2]int{max(start, 1), start + 1})
+	}
+	// next is the new side's next line; deleted, a run of - lines not yet
+	// placed; plus, whether the change lines since the last context line
+	// hold a + line.
+	next, deleted, plus, in := 0, false, false, false
+	place := func() {
+		if deleted && !plus {
+			mark(next - 1)
+			mark(next)
+		}
+		deleted, plus = false, false
+	}
+	for _, line := range strings.Split(patch, "\n") {
+		if m := hunkHeader.FindStringSubmatch(line); m != nil {
+			place()
+			start, _ := strconv.Atoi(m[1])
+			next, in = start, true
+			if m[2] == "0" {
+				// No new line: start is the line before the hunk.
+				next = start + 1
+			}
 			continue
 		}
-		out = append(out, [2]int{start, start + count - 1})
+		switch {
+		case !in, strings.HasPrefix(line, "\\"):
+		case strings.HasPrefix(line, "+"):
+			plus = true
+			mark(next)
+			next++
+		case strings.HasPrefix(line, "-"):
+			deleted = true
+		default:
+			place()
+			next++
+		}
+	}
+	place()
+	out := [][2]int{}
+	for _, l := range lines {
+		if n := len(out); n > 0 && out[n-1][1]+1 >= l {
+			out[n-1][1] = l
+			continue
+		}
+		out = append(out, [2]int{l, l})
 	}
 	return out
 }

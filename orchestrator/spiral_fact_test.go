@@ -112,6 +112,10 @@ func (w *world) roundTwoWake(task, id, title string, line int, touches bool, cha
 	return roundWakeTouching(2, 1, 0, rng, []string{"tests"}, shown, 0, 0, fixLine, change, false)
 }
 
+// contextPatch is a one-line change at line 10 as GitHub's compare shows
+// it: three lines of context either side.
+const contextPatch = "@@ -7,7 +7,7 @@ func f() {\n a\n b\n c\n-d\n+D\n e\n f\n g"
+
 // Design test 21: a finding on lines the fix before its round changed —
 // the fix's hunk +1,3 on FACTORY.md, the finding at FACTORY.md:2 — names
 // that fix (touches_fix_run_id), and the round wake marks it. A finding
@@ -128,6 +132,10 @@ func TestTheSpiralFactNamesTheFixWhoseLinesAFindingTouches(t *testing.T) {
 		{"past them", "@@ -1,1 +1,3 @@\n-x\n+one\n+two\n+three", 40, false},
 		{"no patch", "", 2, false},
 		{"the line after a pure deletion", "@@ -2,3 +1,0 @@\n-a\n-b\n-c", 2, true},
+		// GitHub's patches carry three lines of context either side: a
+		// finding on one is not on the fix's lines; one on its + line is.
+		{"a context line", contextPatch, 8, false},
+		{"the + line among context", contextPatch, 10, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			title := "The second line is wrong"
