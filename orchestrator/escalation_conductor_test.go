@@ -27,9 +27,8 @@ const escalationQuestion = `{"question":"Stuck on the finding. I propose one mor
 // stuck is a delivery whose review is stuck on its finding (one fix attempt
 // per finding): Deliver's loop escalates stuck (a conducted loop has no such
 // bound), then a person's Chat message hands it to the conductor while it
-// waits, the conductor told. The conductor's
-// earlier wakes arrive batched (conductor_wakes/directives are fewer than on
-// the real path), so tests must not assert per-decision delivery on this state.
+// waits, the conductor told. The conductor had no decision before the
+// hand-over: its first wakes are the escalation's.
 func stuck(t *testing.T) (*world, string) {
 	w := conducting(t)
 	scripted := w.lux.Decide
