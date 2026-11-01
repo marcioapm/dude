@@ -145,6 +145,8 @@ func (w goldenWorld) history(t *testing.T) {
 		('fnd_5', $1, 'wi_g', 'run_rev', 'api', 'medium', 'superseded', NULL, NULL, 'T', 'D', 'F', NULL, 0, '', '2026-01-02 10:49Z'),
 		('fnd_6', $1, 'wi_g', 'run_rev', 'database', 'medium', 'open', 'migrations/`+strings.Repeat("deep/", 20)+`x.sql', 3, 'T', 'D', 'F', NULL, 0, '', '2026-01-02 10:50Z'),
 		('fnd_7', $1, 'wi_g', 'run_rev', 'correctness', 'high', 'resolved', NULL, NULL, 'T', 'D', 'F', NULL, 1, '', '2026-01-02 10:51Z')`)
+	// fnd_1 is on lines run_fix changed: the layer's fact, as recordFindingsTx keeps it.
+	w.exec(t, `UPDATE review_findings SET touches_fix_run_id = 'run_fix' WHERE id = 'fnd_1'`)
 	w.exec(t, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, needed_from, status, answer,
 			answered_at, created_at)
 		VALUES

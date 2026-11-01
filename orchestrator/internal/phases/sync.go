@@ -4164,8 +4164,18 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			return err
 		}
 	}
+	// The layer's fact, never the reviewer's: a finding on lines the fix
+	// this review follows changed (its kept hunks) names that fix.
+	fix, err := delivery.ReviewedFixTx(ctx, tx, runID)
+	if err != nil {
+		return err
+	}
 	counts, unverified := map[string]int{}, 0
 	for _, f := range findings {
+		var touches *string
+		if fix.Touches(f.Repo, f.File, f.Line) {
+			touches = &fix.RunID
+		}
 		counts[f.Severity]++
 		if f.Unverified {
 			unverified++
@@ -4179,13 +4189,14 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, topic,
 				severity, repo, file, line, title, description, suggested_fix, acceptance, caused_by_fix,
-				trivial, introduced, evidence_kind, evidence, scenario, unverified, review_round)
+				trivial, introduced, evidence_kind, evidence, scenario, unverified, review_round, touches_fix_run_id)
 				VALUES ($1, $2, $3, $4, $5, $6, $7::finding_severity, $8, $9, $10, $11, $12, $13, $14, $15,
-				$16, $17, $18, $19, $20, $21, (SELECT review_round FROM runs WHERE id = $4))`,
+				$16, $17, $18, $19, $20, $21, (SELECT review_round FROM runs WHERE id = $4), $22)`,
 			ids.New(ids.Finding), org, taskID, runID, cat, db.Nullable(topic), f.Severity,
 			db.Nullable(f.Repo), db.Nullable(f.File), nullableInt(f.Line), f.Title, f.Description, f.SuggestedFix,
 			db.Nullable(f.Acceptance), f.CausedByFix,
-			f.Trivial, f.Introduced, db.Nullable(f.EvidenceKind), db.Nullable(f.Evidence), db.Nullable(f.Scenario), f.Unverified); err != nil {
+			f.Trivial, f.Introduced, db.Nullable(f.EvidenceKind), db.Nullable(f.Evidence), db.Nullable(f.Scenario), f.Unverified,
+			touches); err != nil {
 			return err
 		}
 	}
@@ -4226,7 +4237,7 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			}
 		}
 	}
-	_, err := ledger.Append(ctx, tx, ledger.Event{
+	_, err = ledger.Append(ctx, tx, ledger.Event{
 		Type: delivery.EvReviewCompleted, OrganizationID: org, ProjectID: projectID, TaskID: taskID, RunID: runID,
 		ActorType: ledger.ActorAgent, ActorID: runID, Source: ledger.SourceRunner, CorrelationID: taskID,
 		Payload: map[string]any{"phase": phase, "count": len(findings), "bySeverity": counts, "unverified": unverified},

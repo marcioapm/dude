@@ -498,3 +498,28 @@ func TestFindingsShowEachFindingsEvidence(t *testing.T) {
 		t.Errorf("by id: %v", v)
 	}
 }
+
+// findings says which fix's changed lines a finding is on — the layer's
+// fact (touches_fix_run_id) — and nothing for one not on them.
+func TestFindingsSayWhichFixsLinesAFindingTouches(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	mustExec(t, f.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+		VALUES ('run_fix', $1, $2, $3, 1, 'completed', 'fix', 'implementer'),
+			('run_rev', $1, $2, $3, 1, 'completed', 'review', 'reviewer')`, f.org, f.project, f.item)
+	mustExec(t, f.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, touches_fix_run_id, created_at)
+		VALUES ('fnd_touches', $1, $2, 'run_rev', 'correctness', 'high', 'T', 'run_fix', now() - interval '1 hour'),
+			('fnd_apart', $1, $2, 'run_rev', 'correctness', 'high', 'A', NULL, now())`, f.org, f.item)
+	var raw map[string]any
+	if status := f.postAs(t, token, "findings", `{}`, &raw); status != 200 {
+		t.Fatalf("findings: %d", status)
+	}
+	got := map[string]any{}
+	for _, x := range raw["findings"].([]any) {
+		m := x.(map[string]any)
+		got[m["id"].(string)] = m["touchesFixRunId"]
+	}
+	if got["fnd_touches"] != "run_fix" || got["fnd_apart"] != nil {
+		t.Errorf("touchesFixRunId by finding: %v, want fnd_touches run_fix and none for fnd_apart", got)
+	}
+}

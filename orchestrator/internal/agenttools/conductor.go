@@ -58,6 +58,9 @@ type findingOut struct {
 	Trivial      *bool  `json:"trivial,omitempty"`
 	Introduced   *bool  `json:"introduced,omitempty"`
 	Unverified   bool   `json:"unverified,omitempty"`
+	// The layer's fact, never the reviewer's: the fix Run whose changed
+	// lines it is on; absent when it is not, or that is not known.
+	TouchesFixRunID string `json:"touchesFixRunId,omitempty"`
 	// With ids only.
 	Title          string `json:"title,omitempty"`
 	Description    string `json:"description,omitempty"`
@@ -92,7 +95,8 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 			CASE WHEN $2 THEN title ELSE '' END, CASE WHEN $2 THEN description ELSE '' END,
 			CASE WHEN $2 THEN suggested_fix ELSE '' END, CASE WHEN $2 THEN COALESCE(acceptance, '') ELSE '' END,
 			COALESCE(evidence_kind, ''), trivial, introduced, unverified,
-			CASE WHEN $2 THEN COALESCE(scenario, '') ELSE '' END, CASE WHEN $2 THEN COALESCE(evidence, '') ELSE '' END
+			CASE WHEN $2 THEN COALESCE(scenario, '') ELSE '' END, CASE WHEN $2 THEN COALESCE(evidence, '') ELSE '' END,
+			COALESCE(touches_fix_run_id, '')
 		FROM review_findings WHERE task_id = $1 AND (NOT $2 OR id = ANY ($3))
 		ORDER BY status <> 'open', array_position(ARRAY['blocking','high','medium','low','note'], severity::text), unverified, created_at
 		LIMIT $4`, c.TaskID, full, ids, findingsMax)
@@ -106,7 +110,7 @@ func findings(ctx context.Context, tx pgx.Tx, c Caller, in findingsIn) (any, err
 		var line, attempts int
 		if err := rows.Scan(&f.ID, &f.Severity, &f.Category, &f.Repo, &file, &line, &f.Status, &attempts, &f.RaisedBy, &f.ResolvedBy,
 			&note, &f.Title, &f.Description, &f.SuggestedFix, &f.Acceptance,
-			&f.EvidenceKind, &f.Trivial, &f.Introduced, &f.Unverified, &f.Scenario, &f.Evidence); err != nil {
+			&f.EvidenceKind, &f.Trivial, &f.Introduced, &f.Unverified, &f.Scenario, &f.Evidence, &f.TouchesFixRunID); err != nil {
 			return nil, err
 		}
 		if full {

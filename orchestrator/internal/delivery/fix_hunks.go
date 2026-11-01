@@ -1,6 +1,8 @@
 package delivery
 
 import (
+	"context"
+	"encoding/json"
 	"maps"
 	"path"
 	"regexp"
@@ -8,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
@@ -204,4 +209,39 @@ func (h FixHunks) Touches(published []string, repo, file string, line int) bool 
 		}
 	}
 	return false
+}
+
+// ReviewedFix is the fix a review Run follows (its parent_run_id, a fix),
+// with its kept change; its zero value for none.
+type ReviewedFix struct {
+	RunID string
+	Hunks FixHunks
+	// The repositories it published (runs.heads).
+	Published []string
+}
+
+// ReviewedFixTx is the fix review Run runID follows: its parent, when that
+// is a fix Run whose change was kept (runs.fix_hunks). None otherwise: a
+// first review, one after a simplifier, or a fix whose change is not known.
+func ReviewedFixTx(ctx context.Context, tx pgx.Tx, runID string) (ReviewedFix, error) {
+	var fix ReviewedFix
+	var raw []byte
+	err := tx.QueryRow(ctx, `SELECT p.id, p.fix_hunks, ARRAY(SELECT jsonb_object_keys(COALESCE(p.heads, '{}'::jsonb)) ORDER BY 1)
+		FROM runs r JOIN runs p ON p.id = r.parent_run_id
+		WHERE r.id = $1 AND p.phase = 'fix' AND p.fix_hunks IS NOT NULL`, runID).Scan(&fix.RunID, &raw, &fix.Published)
+	if db.IsNotFound(err) {
+		return ReviewedFix{}, nil
+	}
+	if err != nil {
+		return ReviewedFix{}, err
+	}
+	if err := json.Unmarshal(raw, &fix.Hunks); err != nil {
+		return ReviewedFix{}, nil
+	}
+	return fix, nil
+}
+
+// Touches says a finding at repo/file:line is on lines the fix changed.
+func (f ReviewedFix) Touches(repo, file string, line int) bool {
+	return f.RunID != "" && f.Hunks.Touches(f.Published, repo, file, line)
 }
