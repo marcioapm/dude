@@ -325,10 +325,10 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 			return "", err
 		}
 		if st.Policy.DirectFixes() && p.Point != PointPRFeedback {
-			// A fix parked after (then.wake after_fix) is on the pull
-			// request unreviewed: no second writer past it (I-3). At the
-			// pull request's feedback (or conflict) the fix reviews an
-			// unreviewed push first itself (prFix's reviewFirst).
+			// No second writer past an unreviewed push of dude's on the
+			// pull request (I-3), as after a fix with then.wake after_fix.
+			// Not at the pull request's feedback (or conflict): there the
+			// fix it starts reviews that push first (prFix's reviewFirst).
 			if err := refusePullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil {
 				return "", err
 			}
