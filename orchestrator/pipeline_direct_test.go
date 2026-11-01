@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -198,8 +199,13 @@ func TestDirectAConductedPipelineFixThatCommitsNothingTellsTheConductor(t *testi
 		Review                     []string
 		Queued                     bool
 	}{"nothing", "", "done", "", []string{"tests"}, false})
-	if n := c.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND key = $3 AND strpos(line, $4) > 0`,
-		c.task, delivery.WakeRound, "pipeline:"+fix, fact); n != 1 {
-		t.Errorf("the no-commit wake does not say %q", fact)
+	// The whole line: the fix's outcome, then the fact as it is with no
+	// review offered (Queued false), nothing after.
+	outcome := delivery.MustText("wakes/facts/outcome").Render(map[string]any{"Phase": "fix", "RunID": fix,
+		"Succeeded": true, "Commits": []string(nil), "Files": 0})
+	want := strings.Join(strings.Fields(outcome+" "+fact), " ")
+	if got := c.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND key = $3`,
+		c.task, delivery.WakeRound, "pipeline:"+fix); got != want {
+		t.Errorf("the no-commit wake:\n got %q\nwant %q", got, want)
 	}
 }
