@@ -232,6 +232,54 @@ func TestAPersonsMessageMakesAQuietDeliveryChatty(t *testing.T) {
 	w.wokenWith(task, delivery.VoiceChangedLine(delivery.VoiceChatty))
 }
 
+// A delivery handed back quietly, then started over (Stop with andRestart,
+// or the pick-up's Start over) under its conductor: attempt 2 is quiet and
+// handed back too, so its implementer starts at once with no conductor
+// turn at the start, as Deliver's own restart did before voices.
+func TestStartingOverAQuietHandBackStaysQuiet(t *testing.T) {
+	for _, via := range []string{"stop", "recover"} {
+		t.Run(via, func(t *testing.T) {
+			w := conducting(t)
+			task := w.task()
+			ana := w.ownedBy(task, "Ana")
+			w.talk(task)
+			if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+				t.Fatalf("hand back: %d %v", status, out)
+			}
+			w.until("attempt 1's implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
+			// The web sends the conducted task's decider explicitly.
+			body := map[string]any{"decider": "conductor", "note": "again"}
+			if via == "stop" {
+				body["andRestart"] = true
+				if out := w.stop(ana, task, body); out["attempt"] != float64(2) {
+					t.Fatalf("stop and start over answered %v", out)
+				}
+			} else {
+				w.stop(ana, task, map[string]any{"note": "wrong"})
+				body["action"] = "restart"
+				w.pickUp(ana, task, body)
+			}
+			if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state->>'attempt')::int = 2`, task); n != 1 {
+				t.Fatalf("%d attempt-2 deliveries", n)
+			}
+			if d, v := w.decider(task), w.voice(task); d != delivery.DeciderConductor || v != delivery.VoiceQuiet {
+				t.Fatalf("attempt 2: decider %s voice %q, want the conductor, quiet", d, v)
+			}
+			if hb := w.str(`SELECT COALESCE(state->>'handedBack', '') FROM workflow_runs WHERE task_id = $1
+				ORDER BY created_at DESC LIMIT 1`, task); hb != "true" {
+				t.Errorf("attempt 2 handedBack %q, want true", hb)
+			}
+			w.until("attempt 2's implementer, with no conductor turn at the start", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'`, task) == 1
+			})
+			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = 'start'`,
+				task, delivery.EvDecisionAwaited); n != 1 {
+				t.Errorf("%d decisions awaited at a start, want only attempt 1's", n)
+			}
+		})
+	}
+}
+
 // decidedQuietly is a quiet conductor taking its defaults at each decision
 // the delivery parks on for it (each open finding dismissed after a round,
 // then next), until done holds.
