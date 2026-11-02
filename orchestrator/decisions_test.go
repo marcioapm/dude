@@ -650,6 +650,7 @@ func TestLetItFinishQuietly(t *testing.T) {
 		AND payload->>'to' = 'conductor' AND payload->>'voice' = 'quiet'`, task); n != 1 {
 		t.Errorf("%d changes to quiet recorded", n)
 	}
+	w.until("the implementer, with no conductor turn at the start", func() bool { return w.phaseRuns(task, "implement") == 1 })
 	w.decidedQuietly(task, "the pull request, the conductor deciding quietly", func() bool { return len(w.gh.Pulls()) == 1 })
 	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1`, task); n != 0 {
 		t.Errorf("%d questions on a delivery finished quietly", n)
