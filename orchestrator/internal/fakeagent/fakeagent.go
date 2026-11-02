@@ -448,6 +448,37 @@ func TakesDefaults(input string) bool {
 	return strings.Contains(input, "Decision waiting:") || strings.Contains(input, "Review round ")
 }
 
+// Quiet says a conductor decides its delivery quietly, from its briefing
+// and the inputs since, oldest first: the briefing says so, or the latest
+// change of voice it was told is to quiet. DefaultsModel takes Deliver's
+// defaults only while quiet: once a person takes the delivery over in
+// Chat (chatty), its decisions are the person's to drive.
+func Quiet(briefing string, inputs []string) bool {
+	return QuietSince(Briefed(briefing), inputs)
+}
+
+// Briefed says a conductor's briefing says it decides quietly.
+func Briefed(briefing string) bool {
+	return strings.Contains(briefing, "You take this task's decisions, quietly")
+}
+
+// QuietLabel is the lux label a DefaultsModel conductor's spec carries
+// when its briefing says it decides quietly (Briefed).
+const QuietLabel = "dude.quiet"
+
+// QuietSince is Quiet from what the briefing said (quiet) on.
+func QuietSince(quiet bool, inputs []string) bool {
+	for _, in := range inputs {
+		switch {
+		case strings.Contains(in, "This delivery is quiet now"):
+			quiet = true
+		case strings.Contains(in, "This delivery is chatty now"):
+			quiet = false
+		}
+	}
+	return quiet
+}
+
 // ConductorReply is the scripted conductor's answer to one input: the line
 // of its briefing that names the task, quoted, so a test sees the briefing
 // arrived, and the input it answers, quoted back.
@@ -491,7 +522,7 @@ func conductorScript(briefing, model string) string {
 	}
 	var b strings.Builder
 	calls := ConductorCalls(message)
-	if model == DefaultsModel && !session && TakesDefaults(message) {
+	if model == DefaultsModel && !session && TakesDefaults(message) && Quiet(briefing, nil) {
 		calls = append(calls, DefaultsCall)
 	}
 	for _, c := range calls {
