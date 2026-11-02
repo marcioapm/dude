@@ -568,3 +568,39 @@ func TestAStepDoesNotUndoAChatTakeoverThatLandedWhileItRan(t *testing.T) {
 		t.Errorf("voice/defaultsAccepted/defaulted %s once the step committed, want chatty/false/0", got)
 	}
 }
+
+// A person who takes a delivery over in Chat at conductor_unavailable,
+// accepts the defaults, then lets it finish quietly gives the conductor a
+// fresh wait: the chatty decision gave up the acceptance, so the quiet
+// hand-back does not take the defaults at once as accepted.
+func TestAnAcceptedDecisionMadeChattyThenQuietWaitsAfresh(t *testing.T) {
+	w := conducting(t)
+	w.waitingFor(100 * time.Millisecond)
+	task := w.task()
+	owner, _, _ := w.people(task)
+	w.quietUnavailable(task)
+	w.waitingFor(time.Hour)
+	if status, out := w.chat(task, "let me talk this one through"); status != 200 && status != 201 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	before := w.defaulted(task, "")
+	if status, out := w.decide(owner, task, "accept", ""); status != 200 {
+		t.Fatalf("accept: %d %v", status, out)
+	}
+	w.until("the chatty decision parked", func() bool {
+		return w.str(`SELECT status || '/' || step FROM workflow_runs WHERE task_id = $1`, task) == "waiting/conductorDecision"
+	})
+	if status, out := w.callAs(owner, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+		t.Fatalf("let it finish quietly: %d %v", status, out)
+	}
+	w.until("the quiet wait, or a default", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting'
+			AND (state->'decision'->>'decideBy')::timestamptz > now() + interval '30 minutes'`, task) == 1 || w.defaulted(task, "") > before
+	})
+	for range 3 {
+		w.pump()
+	}
+	if n := w.defaulted(task, "") - before; n != 0 {
+		t.Fatalf("%d defaults (%d accepted) on the quiet hand-back, want a fresh wait", n, w.defaulted(task, delivery.DefaultedAccepted))
+	}
+}
