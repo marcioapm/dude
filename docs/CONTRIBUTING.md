@@ -383,7 +383,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   hand-over: the next sync's conflicting reading at the attempted pair
   escalates. Checks feedback read at a head the pull request no longer
   shows starts no fix (`forge.Signal.Head`), in both modes.
-- **Every loop ends on a declared bound**: `MaxReviewIterations`,
+- **Every Deliver loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxStillRounds`, `MaxRegressionRounds`,
   `MaxPRFixIterations`. Convergence asks for the owner's direction when a
   blocking criterion stays unmet or fixes keep causing blockers; retry and
@@ -395,14 +395,28 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   the conductor the workflow still does the mechanics, and where it would
   apply a rule it parks on `conductor.decision` and records a reason to wake
   the conductor (`conductor_wakes`); the syncer delivers a task's reasons as
-  one bounded note (`delivery/wakes.go`). The same bounds refuse the
-  conductor's `start_phase` and `decide`. A person's first Chat message
-  hands a delivery in progress to the conductor; Talk it through starts one
+  one bounded note (`delivery/wakes.go`). The pull request's fix rounds
+  (`MaxPRFixIterations`, the organization's `fixRoundsPerPr`) refuse the
+  conductor's `start_phase` and `decide` as they bound Deliver. A person's
+  first Chat message hands a delivery in progress to the conductor; Talk it through starts one
   it decides; "Let Deliver finish it" hands it back. The conductor may also
   steer a live phase Run of its task's current attempt (`steer`, whoever
   decides): the same `delivery.Steer` a person's steer goes through, marked
   the conductor's (`directives.conductor_run_id`, `run.steered` by its Run);
   its read or failure wakes it (`steer_read`, `steer_failed`).
+- **A conducted loop has no counters.** While the conductor decides
+  (`State.conducted`), no review round, fix attempt, still or regression
+  count refuses its tools or escalates its round: a round exits clear (no
+  open finding at the fix bar) or parks for the conductor (`loopExit`),
+  except a candidate's fix loop (`pullRequestFixes: candidate`,
+  `checkingCandidate`), which keeps the policy's bounds
+  (`conductsRounds`).
+  When to stop is the conductor's judgement, on the facts each round's wake
+  states (`wakes/round.md`), which from round 8 suggests asking the person.
+  A delivery handed back to Deliver is the policy's again, bounds included.
+  What still bounds a conducted delivery: the pull request's fix rounds and
+  failed-check reruns (a person may raise either for the task,
+  `request_limit`), and `MaxTestFixRounds`.
 - **An escalation is still a person's** under the conductor, which is told
   to explain and propose. Its `ask_person` while the delivery waits at
   `decide` is the escalation's question (`questions.escalation`, each

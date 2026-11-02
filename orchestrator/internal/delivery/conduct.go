@@ -348,18 +348,12 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 				return "", refusef(rNoReviewerCategoriesAre, c, listOr(reviewCategories()))
 			}
 		}
-		if err := reviewBound(st); err != nil {
-			return "", err
-		}
 	case PhaseFix:
 		if p.Point == PointPRFeedback {
 			if err := prFixBound(ctx, tx, st); err != nil {
 				return "", err
 			}
 			break
-		}
-		if err := reviewBound(st); err != nil {
-			return "", err
 		}
 		ids, err := fixable(ctx, tx, st, in.FindingIDs)
 		if err != nil {
@@ -377,33 +371,23 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 // noteChars bounds what the conductor asks of a Run, as runs.conductor_note does.
 const noteChars = 4000
 
-// reviewBound refuses another review round, or a fix, once the policy's
-// review iterations are spent, as the policy's loop would escalate.
-func reviewBound(st *State) error {
-	if st.Iteration >= st.Policy.MaxReviewIterations {
-		return refusef(rReviewLoopAtItsBoundRounds,
-			st.Iteration, st.Policy.MaxReviewIterations)
-	}
-	return nil
-}
-
 // fixable is the findings a fix may be sent, of those named (all open ones
-// for none): open, of this attempt, and short of the attempts per finding.
+// for none): of this attempt and open. No counter refuses one: how many
+// rounds or fixes a finding gets is the conductor's judgement, with the
+// round wake's facts (playbook).
 func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, fix_attempts,
-		COALESCE(btrim(acceptance), '') <> '', COALESCE(trivial, false) FROM review_findings
+	rows, err := tx.Query(ctx, `SELECT id, status::text FROM review_findings
 		WHERE task_id = $1 AND `+thisAttempt+` ORDER BY created_at`, st.TaskID, st.Attempt)
 	if err != nil {
 		return nil, err
 	}
 	all, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (f FindingState, err error) {
-		err = row.Scan(&f.ID, &f.Severity, &f.Status, &f.FixAttempts, &f.HasCriterion, &f.Trivial)
+		err = row.Scan(&f.ID, &f.Status)
 		return
 	})
 	if err != nil {
 		return nil, err
 	}
-	bar, weighed := atFixBar(st, st.Policy, all)
 	byID := map[string]FindingState{}
 	var open []string
 	for _, f := range all {
@@ -414,23 +398,6 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 	}
 	if len(named) == 0 {
 		named = open
-	}
-	// A fix of no review finding (the people's feedback alone, or ids
-	// refused below) is not held by the review loop's convergence.
-	if slices.ContainsFunc(named, func(id string) bool { _, ok := byID[id]; return ok }) {
-		conv, err := ConvergenceTx(ctx, tx, st)
-		if err != nil {
-			return nil, err
-		}
-		// A tester's finding has no still streak and is never fix-caused
-		// (ConvergenceTx reads reviews' findings only): it cannot stall the loop.
-		for i := range weighed {
-			weighed[i].StillRounds = conv.StillRounds[weighed[i].ID]
-		}
-		// A stalled review loop holds every fix, including a named subset.
-		if exit := Exit(bar, weighed, st.Iteration, conv); exit != nil && exit.Reason == "not_converging" {
-			return nil, refuseText(rReviewLoopNotConverging)
-		}
 	}
 	if len(named) == 0 {
 		// A fix for the people's feedback alone: every open item goes with it.
@@ -444,15 +411,6 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 		}
 		return nil, refuseText(rNoOpenFindingOrFeedbackItem)
 	}
-	limit := st.Policy.MaxAttemptsPerFinding + st.ExtraFixAttempts
-	// The policy's checkpoint: a blocking finding still open after its last
-	// allowed fix stops the loop until a review says whether that fix worked,
-	// or the person decides. Another fix, of any finding, waits for that.
-	for _, f := range weighed {
-		if f.Status == "open" && f.FixAttempts >= limit && slices.Contains(bar.BlockingSeverities, f.Severity) {
-			return nil, refusef(rStillOpenAfterFixAttemptsBound, f.ID, f.FixAttempts)
-		}
-	}
 	for _, id := range named {
 		f, ok := byID[id]
 		switch {
@@ -460,9 +418,6 @@ func fixable(ctx context.Context, tx pgx.Tx, st *State, named []string) ([]strin
 			return nil, refusef(rNotFindingThisTaskDeliveryFindings, id)
 		case f.Status != "open":
 			return nil, refusef(rNotOpen, id, f.Status)
-		case f.FixAttempts >= limit:
-			return nil, refusef(rHasHadFixAttemptsBoundPer,
-				id, f.FixAttempts)
 		}
 	}
 	return named, nil
@@ -544,12 +499,7 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 				return nil, err
 			}
 		}
-		switch p.Policy {
-		case "review":
-			if err := reviewBound(st); err != nil {
-				return nil, err
-			}
-		case "prFix":
+		if p.Policy == "prFix" {
 			if err := prFixBound(ctx, tx, st); err != nil {
 				return nil, err
 			}

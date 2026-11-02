@@ -87,9 +87,7 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 	}
 	st.Escalation = &Escalation{Reason: ReasonChecksUnverified, At: d.Step, AtSignals: atSignals, Detail: detail}
 	if st.conducted() {
-		st.Escalations++
-		if _, err := RecordWakeTx(ctx, tx, org, taskID, "escalation", fmt.Sprintf("%s:escalation:%d", d.WorkflowID, st.Escalations),
-			escalatedLine(st.Escalation)); err != nil {
+		if _, err := tellEscalationTx(ctx, tx, org, d.WorkflowID, &st); err != nil {
 			return err
 		}
 	}

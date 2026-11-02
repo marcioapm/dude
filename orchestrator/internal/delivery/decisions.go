@@ -331,7 +331,13 @@ type Routed struct {
 func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (workflow.Result, bool, error) {
 	if sc.Step != "decide" {
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id=$1`, sc.WorkflowRunID).Scan(&raw); err != nil {
+		// NO KEY UPDATE: it conflicts with LoadDelivery's FOR UPDATE, so a
+		// handover (SetDeciderTx) in flight is read committed, but lets a
+		// signal insert's FK KEY SHARE through: a writer holding the task
+		// that signals the delivery (EndConductorWait) cannot cycle with a
+		// park at Ask me first that waits on the task
+		// (choiceReleasedAtCommitTx).
+		if err := tx.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id=$1 FOR NO KEY UPDATE`, sc.WorkflowRunID).Scan(&raw); err != nil {
 			return res, false, err
 		}
 		var current State
@@ -340,6 +346,16 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		}
 		if e := current.Escalation; e != nil && e.Reason == ReasonChecksUnverified {
 			return workflow.Result{Next: "decide", State: &current, AwaitSignals: []string{SignalHumanDecision}}, true, nil
+		}
+		// Handed to the conductor while the step escalated: told as escalate
+		// tells a conducted delivery's escalation.
+		if st, ok := res.State.(*State); ok && res.Next == "decide" && st.Escalation != nil && current.conducted() && !st.conducted() {
+			st.Decider = current.Decider
+			st.Decision, st.Directed = nil, nil
+			if _, err := tellEscalationTx(ctx, tx, sc.OrganizationID, sc.WorkflowRunID, st); err != nil {
+				return res, false, err
+			}
+			return res, true, nil
 		}
 	}
 	st, ok := res.State.(*State)
@@ -927,6 +943,26 @@ const (
 	escalationLineChars = 1200
 )
 
+// tellEscalationTx tells the conductor of the escalation the delivery waits
+// on a person at: its wake, kind escalation, keyed on its number among those
+// told (State.Escalations). Whoever escalated: one the conductor had when it
+// escalated (escalate, a held checks report), or one Deliver stopped at,
+// handed to the conductor while it waits (SetDeciderTx) or while its step
+// escalated (recheck). Once per escalation (Escalation.Told), however often
+// it is handed over; a step replayed tells it again with its same key, which
+// records nothing new. Returns whether it told it now, st changed.
+func tellEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State) (bool, error) {
+	e := st.Escalation
+	if e == nil || e.Decided != nil || e.Told != 0 {
+		return false, nil
+	}
+	st.Escalations++
+	e.Told = st.Escalations
+	_, err := RecordWakeTx(ctx, tx, org, st.TaskID, "escalation", fmt.Sprintf("%s:escalation:%d", wfID, st.Escalations),
+		escalatedLine(e))
+	return err == nil, err
+}
+
 // SetDeciderTx changes who decides a task's delivery, recording it once:
 // a no-op when it already is. Returns whether it changed.
 func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, to, why, actorType, actorID string) (bool, error) {
@@ -944,10 +980,34 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 	}
 	st.Decider = to
 	st.HadConductor = st.HadConductor || to == DeciderConductor
+	// Handed to the conductor while it waits on a person at an escalation:
+	// the conductor is told of it, as of one it had when it escalated.
+	told := false
+	if to == DeciderConductor {
+		var err error
+		if told, err = tellEscalationTx(ctx, tx, org, wfID, st); err != nil {
+			return false, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text))
 			|| CASE WHEN $2 = 'conductor' THEN '{"hadConductor": true}'::jsonb ELSE '{}'::jsonb END WHERE id = $1`,
 		wfID, to); err != nil {
 		return false, err
+	}
+	if told {
+		// The fields the telling changed, beside the decider: the
+		// escalation (now told) and its number. Its decision and direction
+		// stay: Directed is the conductor's alone, and a Pending decision
+		// here is Deliver's own hold, which the escalation resumes to.
+		raw, err := json.Marshal(st.Escalation)
+		if err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = state
+				|| jsonb_build_object('escalation', $2::jsonb, 'escalations', $3::int) WHERE id = $1`,
+			wfID, raw, st.Escalations); err != nil {
+			return false, err
+		}
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvDeciderChanged, OrganizationID: org, ProjectID: st.ProjectID,
 		TaskID: st.TaskID, ActorType: actorType, ActorID: actorID, Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID,

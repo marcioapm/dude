@@ -300,6 +300,10 @@ type Escalation struct {
 	// A person's decision, once made: set as it is taken, so a second is
 	// refused before the workflow has acted on the first.
 	Decided *HumanDecision `json:"decided,omitempty"`
+	// Its number among the escalations told to the conductor
+	// (State.Escalations, its wake's key), once told: 0 while no conductor
+	// was. A delivery handed to the conductor again is not told twice.
+	Told int `json:"told,omitempty"`
 }
 
 // Actions says what a person may do about it: go back and try again,
@@ -563,8 +567,10 @@ const promotedRefreshRetries = 2
 //	implement → review ⟲ fix → simplify → [test] → PR → PR feedback ⟲ fix → done
 //
 // Two properties it exists to guarantee: every loop ends on a bound declared
-// in policy, never on a model deciding it is finished; and waking an agent is
-// a decision, not a reflex — an approval or a green check wakes nobody.
+// in policy or on the conductor's judgement (a conducted review loop has no
+// counters; a candidate's fix loop keeps the policy's bounds), never on a
+// fixer or reviewer deciding it is finished; and waking an agent is a
+// decision, not a reflex — an approval or a green check wakes nobody.
 func Workflow(s *Store, forges Forges) *workflow.Definition {
 	w := &steps{s: s, forges: forges}
 	def := &workflow.Definition{
@@ -1055,6 +1061,14 @@ func (st *State) roundRange() *ReviewRange {
 // decides, weighs its own reviews' findings alone, and keeps its range.
 func (st *State) fixLoop() bool { return st.checkingCandidate() || len(st.FixRange) > 0 }
 
+// conductsRounds says the conductor decides the review loop's rounds: the
+// delivery is conducted (conducted, not ConductedLoop: a delivery a conductor
+// had and handed back to Deliver is decided by the policy again, and keeps
+// the policy's exits, or its loop would never end), and its round parks for
+// the conductor. A candidate's fix loop does not park: it goes on by the
+// policy's rules, bounds included, for no one else decides its rounds.
+func (st *State) conductsRounds() bool { return st.conducted() && !st.checkingCandidate() }
+
 // newLoop starts the review loop anew: its next review is round 1, of the
 // whole change the loop is over.
 func (st *State) newLoop() { st.Round, st.RoundHeads, st.ReviewingHeads = 0, nil, nil }
@@ -1162,10 +1176,11 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	// A conducted delivery's fix loop is the conductor's too: a direct pull
 	// request fix's narrow loop parks after each round. A candidate's loop
 	// goes on by the policy's rules.
-	if (exit == nil || exit.Reason == "clear") && (!st.fixLoop() || st.conducted() && !st.checkingCandidate()) {
-		// Past a bound it escalates as the policy does; short of one, the
-		// round's findings are the conductor's to triage, if it decides as
-		// the transition commits (recheck).
+	if (exit == nil || exit.Reason == "clear") && (!st.fixLoop() || st.conductsRounds()) {
+		// A round the conductor decides has no bound to escalate past; under
+		// Deliver one past a bound escalates as the policy does. Short of
+		// that, the round's findings are the conductor's to triage, if it
+		// decides as the transition commits (recheck).
 		res, err := w.afterLoop(ctx, sc, st, exit)
 		if err != nil {
 			return res, err
@@ -1185,8 +1200,18 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 }
 
 // loopExit is the review loop's exit for the findings, with the fix
-// attempts a person granted beyond the policy's.
+// attempts a person granted beyond the policy's. A round the conductor
+// decides (conductsRounds) exits clear, with no open finding at the fix bar,
+// or not at all: no counter (rounds, attempts, convergence) escalates it;
+// when to stop is the conductor's judgement, on the round wake's facts.
 func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *LoopExit {
+	if st.conductsRounds() {
+		bar, weighed := atFixBar(st, st.Policy, findings)
+		if slices.ContainsFunc(weighed, func(f FindingState) bool { return IsBlocking(bar, f) }) {
+			return nil
+		}
+		return &LoopExit{Reason: "clear"}
+	}
 	policy := st.Policy
 	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
 	if len(st.FixRange) > 0 {
@@ -1198,10 +1223,16 @@ func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *
 }
 
 // loopFindings is what the review loop weighs: the reviewers' findings its
-// loop owns (loopsOwn), with the loop's convergence, and the people's
-// feedback still to be handled.
+// loop owns (loopsOwn), with the loop's convergence (none for a round the
+// conductor decides, loopExit), and the people's feedback still to be
+// handled.
 func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
-	findings, conv, err := w.s.ConvergingFindings(ctx, org, st)
+	var conv Convergence
+	read := &conv
+	if st.conductsRounds() {
+		read = nil
+	}
+	findings, err := w.s.findings(ctx, org, st, fromReview, read)
 	if err == nil {
 		findings, err = w.s.loopsOwn(ctx, org, st, findings)
 	}
@@ -3339,11 +3370,8 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// The person still decides; the conductor is told, to explain and
 		// propose in Chat. Once per escalation, however often replayed.
 		st.Decision, st.Directed = nil, nil
-		st.Escalations++
-		line := escalatedLine(st.Escalation)
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "escalation",
-				fmt.Sprintf("%s:escalation:%d", sc.WorkflowRunID, st.Escalations), line)
+			_, err := tellEscalationTx(ctx, tx, sc.OrganizationID, sc.WorkflowRunID, st)
 			return err
 		}); err != nil {
 			return workflow.Result{}, err

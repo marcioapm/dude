@@ -229,21 +229,21 @@ func TestDirectAnUnreviewedPushWithNoBaseOnRecordIsReviewedOverARange(t *testing
 	}
 }
 
-// notConvergingDirect is a conducted direct delivery whose fix's narrow
-// review keeps judging its blocking finding still until the loop
-// escalates not_converging, as editing on it, that escalation waiting.
+// notConvergingDirect is a direct delivery whose fix's narrow review keeps
+// judging its blocking finding still until Deliver's loop escalates
+// not_converging (a conducted loop has no such bound), then handed to the
+// conductor by a person's Chat message while that escalation waits, as
+// editing on it.
 func notConvergingDirect(t *testing.T) *editing {
 	t.Helper()
-	e := conductedDirect(t)
-	setPolicy(e.world, e.task, `{"maxAttemptsPerFinding":4,"maxStillRounds":2,"maxPrFixReviewIterations":9}`)
-	var armed atomic.Bool
+	w := conducting(t)
+	w.toolsWithSync()
+	task := w.prOpen(w.task(), prAt{direct: true})
+	setPolicy(w, task, `{"maxAttemptsPerFinding":4,"maxStillRounds":2,"maxPrFixReviewIterations":9}`)
 	var reviews atomic.Int32
-	scripted := e.lux.Decide
-	e.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		labels, _ := spec["labels"].(map[string]any)
-		if !armed.Load() {
-			return scripted(spec)
-		}
 		switch labels["dude.phase"] {
 		case "review":
 			if reviews.Add(1) == 1 {
@@ -255,15 +255,20 @@ func notConvergingDirect(t *testing.T) *editing {
 		}
 		return scripted(spec)
 	}
-	e.feedbackToDecide()
-	armed.Store(true)
-	e.must(e.task, "decide", `{"action":"next"}`)
-	e.until("the narrow loop not converging", func() bool {
-		e.sync()
-		e.nextAtRound(e.task)
-		return e.escalationReason(e.task) == delivery.ReasonNotConverging
+	w.gh.Comment(1, "alice", "Please rename the greeting.")
+	w.until("the narrow loop not converging", func() bool {
+		w.sync()
+		return w.escalationReason(task) == delivery.ReasonNotConverging
 	})
-	return e
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	cond, _, _ := w.conductor(task)
+	w.until("the conductor to answer", func() bool { return len(w.said(cond)) >= 1 })
+	if d := w.decider(task); d != delivery.DeciderConductor {
+		t.Fatalf("decider %s after the Chat message", d)
+	}
+	return &editing{world: w, task: task, cond: cond, branch: w.gh.Pull(1).Head}
 }
 
 // A direct fix's narrow review keeps judging its blocking finding still

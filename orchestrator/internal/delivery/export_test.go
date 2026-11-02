@@ -37,3 +37,8 @@ func CreatePhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun, l
 func (s *Store) PullRequestText(ctx context.Context, org string, st *State) (string, string, error) {
 	return s.pullRequestText(ctx, org, st)
 }
+
+// LoopFindings is what the review loop weighs for st (loopFindings).
+func (s *Store) LoopFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
+	return (&steps{s: s}).loopFindings(ctx, org, st)
+}

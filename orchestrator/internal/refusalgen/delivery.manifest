@@ -16,13 +16,9 @@ rThenNamesTheReview                     refusals/delivery/conduct/then-names-the
 rThenWakeIsOneOf                        refusals/delivery/conduct/then-wake-is-one-of
 rRoundIsForReviewFixOrSimplify          refusals/delivery/conduct/round-is-for-review-fix-or-simplify
 rRoundScopeIsOneOf                      refusals/delivery/conduct/round-scope-is-one-of
-rReviewLoopAtItsBoundRounds             refusals/delivery/conduct/review-loop-at-its-bound-rounds
-rReviewLoopNotConverging                refusals/delivery/conduct/review-loop-not-converging
 rNoOpenFindingOrFeedbackItem            refusals/delivery/conduct/no-open-finding-or-feedback-item
-rStillOpenAfterFixAttemptsBound         refusals/delivery/conduct/still-open-after-fix-attempts-bound
 rNotFindingThisTaskDeliveryFindings     refusals/delivery/conduct/not-finding-this-task-delivery-findings
 rNotOpen                                refusals/delivery/conduct/not-open
-rHasHadFixAttemptsBoundPer              refusals/delivery/conduct/has-had-fix-attempts-bound-per
 rPullRequestFixesAreAtTheir             refusals/delivery/conduct/pull-request-fixes-are-at-their
 rPullRequestInHasHadFix                 refusals/delivery/conduct/pull-request-in-has-had-fix
 rNotDecisionAtOneOrStart                refusals/delivery/conduct/not-decision-at-one-or-start

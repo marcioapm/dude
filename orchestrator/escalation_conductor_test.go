@@ -24,20 +24,44 @@ import (
 const escalationQuestion = `{"question":"Stuck on the finding. I propose one more narrow fix round; say how, or pick one.",
 	"choices":["Accept as it is","Stop"],"actions":["accept","stop"]}`
 
-// stuck is a conducted delivery whose review is stuck on its finding (one
-// fix attempt per finding): escalated, the conductor told. The conductor's
-// earlier wakes arrive batched (conductor_wakes/directives are fewer than on
-// the real path), so tests must not assert per-decision delivery on this state.
+// stuck is a delivery whose review is stuck on its finding (one fix attempt
+// per finding): Deliver's loop escalates stuck (a conducted loop has no such
+// bound), then a person's Chat message hands it to the conductor while it
+// waits, the conductor told. The conductor had no decision before the
+// hand-over: its first wakes are the escalation's.
 func stuck(t *testing.T) (*world, string) {
 	w := conducting(t)
+	task := stuckDelivered(w)
+	handOver(w, task)
+	w.wokenWith(task, "Escalated to a person: stuck")
+	return w, task
+}
+
+// handOver is a person's Chat message on a delivery Deliver decides, which
+// hands it to the conductor; once the conductor has answered.
+func handOver(w *world, task string) {
+	w.t.Helper()
+	if status, out := w.chat(task, "What happened?"); status >= 300 {
+		w.t.Fatalf("chat: %d %v", status, out)
+	}
+	if d := w.decider(task); d != delivery.DeciderConductor {
+		w.t.Fatalf("decider %s after the Chat message", d)
+	}
+	cond, _, _ := w.conductor(task)
+	w.until("the conductor to answer", func() bool { return len(w.said(cond)) >= 1 })
+}
+
+// stillAfterFirstReview makes the world's first review raise Finding (then
+// extra, YAML documents after it), and every review after it judge Finding
+// still; an implement or fix commits.
+func stillAfterFirstReview(w *world, extra string) {
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		labels, _ := spec["labels"].(map[string]any)
 		switch labels["dude.phase"] {
 		case "review":
-			// Raised once, then still there after every fix.
 			if fmt.Sprint(labels["dude.run"]) == w.firstReview() {
-				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + "```\n"}
+				return fakelux.Behaviour{Reply: "```yaml\n" + fakeagent.Finding + extra + "```\n"}
 			}
 			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: still\n```\n"}
 		case "implement", "fix":
@@ -45,18 +69,6 @@ func stuck(t *testing.T) (*world, string) {
 		}
 		return scripted(spec)
 	}
-	task := w.task()
-	w.talk(task)
-	setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9}`)
-	w.implemented(task)
-	w.carriedOut(task, "decide", `{"action":"next"}`)
-	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-	w.carriedOut(task, "start_phase", `{"phase":"fix"}`)
-	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-	w.carriedOut(task, "decide", `{"action":"next"}`)
-	w.until("stuck", func() bool { return w.escalationReason(task) == "stuck" })
-	w.wokenWith(task, "Escalated to a person: stuck")
-	return w, task
 }
 
 // firstReview is the first review Run of the world's organization.
@@ -200,12 +212,24 @@ func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 		if status, out := w.answerAs(ana, task, "Your call."); status != 200 {
 			t.Fatalf("the answer: %d %v", status, out)
 		}
-		// The owner decides this one on the banner; the retry gets stuck again.
+		// The owner decides this one on the banner and hands the delivery
+		// back to Deliver, whose retry escalates again; handed over again,
+		// the conductor is told of the second escalation.
 		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "retry", "note": "Try the greeting's wording only."}); status != 200 {
 			t.Fatalf("the banner: %d %v", status, out)
 		}
-		w.until("after the retry's fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-		w.must(task, "decide", `{"action":"next"}`)
+		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": delivery.DeciderPolicy}); status != 200 {
+			t.Fatalf("hand-back: %d %v", status, out)
+		}
+		// Deliver's second escalation: not_converging, the loop once
+		// conducted keeping the fix bar (HadConductor).
+		w.until("Deliver's second escalation", func() bool {
+			return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'decide'
+				AND state->'escalation' IS NOT NULL AND NOT state->'escalation' ? 'decided'`, task) == 1
+		})
+		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": delivery.DeciderConductor}); status != 200 {
+			t.Fatalf("hand-over: %d %v", status, out)
+		}
 		w.until("the second escalation waiting at decide", func() bool {
 			return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'decide'
 				AND (state->>'escalations')::int = 2 AND state->'escalation' IS NOT NULL

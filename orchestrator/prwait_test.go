@@ -465,7 +465,8 @@ func TestWorkPastTheReviewLoopReturnsToTheOpenPullRequestBesideOneMergedAtItsHea
 }
 
 // Refused while a phase that publishes is at work (one writer), and past
-// the pull request's fix bound.
+// the pull request's fix bound. No review round bound refuses a review
+// (TestNoReviewRoundBoundRefusesAConductedLoop).
 func TestStartingAPhaseWhileThePullRequestWaitsHasTheSameBounds(t *testing.T) {
 	w := conducting(t)
 	task := w.reviewing()
@@ -482,9 +483,6 @@ func TestStartingAPhaseWhileThePullRequestWaitsHasTheSameBounds(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{prIteration}', to_jsonb((state->'policy'->>'maxPrFixIterations')::int))
 		WHERE task_id = $1`, task)
 	w.refused(task, "start_phase", `{"phase":"fix","note":"Rename it."}`, "at their bound")
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{iteration}', to_jsonb((state->'policy'->>'maxReviewIterations')::int))
-		WHERE task_id = $1`, task)
-	w.refused(task, "start_phase", `{"phase":"review"}`, "at its bound")
 	if !w.waitingOnPR(task) {
 		t.Error("a refused start moved the delivery")
 	}
