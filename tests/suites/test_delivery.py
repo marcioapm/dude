@@ -28,7 +28,10 @@ def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: A
 
     project = client.create_project(
         name="Notes", slug=f"notes-{os.urandom(3).hex()}",
-        agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
+        # Every delivery has a conductor: Deliver's is quiet, on the model
+        # that takes Deliver's defaults, as forge_project's.
+        agentModels=client.on_models({**{r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")},
+                                      "conductor": "fake/defaults"}),
     )
     task = client.create_task(project["id"], "Write up the options")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
@@ -88,7 +91,8 @@ def test_the_review_fix_loop_converges_and_the_ledger_shows_it(
         timeout=60,
         message="the loop never converged to simplify",
     )
-    phases = [(r["phase"], r["status"]) for r in client.task_runs(task["id"])]
+    # The phase Runs; the delivery's quiet conductor (no phase) is not one.
+    phases = [(r["phase"], r["status"]) for r in client.task_runs(task["id"]) if r["phase"]]
     assert phases == [
         ("implement", "completed"),
         ("review", "completed"),

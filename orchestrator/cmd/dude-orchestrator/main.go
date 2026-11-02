@@ -190,7 +190,7 @@ func run(log *slog.Logger) error {
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient, Objects: objectStore,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log, Judge: judgeService,
-		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm, KeepFor: set.KeepStopped,
+		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm, WakeWindow: set.WakeWindow, KeepFor: set.KeepStopped,
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 		// A pass stops waiting for a slow Run or publish after 2 s, so the
 		// next pass reaches every other one; the slow one keeps its slot.

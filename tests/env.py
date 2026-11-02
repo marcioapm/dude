@@ -561,6 +561,10 @@ class TestEnvironment:
                 "DUDE_PARK_AFTER": "3s",
                 # A task's conductor is parked a few seconds after its turn.
                 "DUDE_CONDUCTOR_WARM": "4s",
+                # A conductor's wake reasons are gathered for a second, not
+                # 15: every delivery has a conductor, and the defaults-taking
+                # one (fake/defaults) is woken at each of its decisions.
+                "DUDE_WAKE_WINDOW": "1s",
                 # A working agent's diff is read every few seconds besides
                 # after each edit, so a test sees the slow path too.
                 "DUDE_DIFF_EVERY": "3s",

@@ -169,6 +169,9 @@ class ApiClient:
         return self.post(f"/v1/runs/{run_id}/sessions", {"role": role, **body})
 
     def events(self, **params) -> list[dict]:
+        """Events, oldest first: a page of 1000 unless asked for fewer. A
+        delivery's quiet conductor adds its own to a task's."""
+        params.setdefault("limit", 1000)
         resp = self.get("/v1/events", params=params)
         assert resp.status_code == 200, f"events failed: {resp.status_code} {resp.text}"
         return resp.json()["events"]
@@ -199,7 +202,15 @@ class ApiClient:
         """Agent models with each role on a tier requesting the model named:
         `{"implementer": "fake/scripted"}`, or `{"implementer": {"model":
         "fake/hang", "timeLimitMinutes": 45}}` to keep other fields. A role names a
-        tier, never a model; this is how a test still says which model."""
+        tier, never a model; this is how a test still says which model.
+
+        Every delivery has a conductor, and Deliver's decides quietly: agents
+        on fake models that name no conductor get one on fake/defaults, the
+        scripted conductor that takes Deliver's defaults at each decision, so
+        a delivery they run never waits out a quiet decision's wait."""
+        if "conductor" not in models and any(
+                str(spec if isinstance(spec, str) else spec.get("model", "")).startswith("fake/") for spec in models.values()):
+            models = {**models, "conductor": "fake/defaults"}
         out = {}
         for role, spec in models.items():
             fields = dict(spec) if isinstance(spec, dict) else {"model": spec}

@@ -25,8 +25,11 @@ from fake_github import FakeGitHub
 from helpers import ApiClient, finish_simplifier_review, query, wait_until
 
 
-def _conducting(client: ApiClient, forge_project: dict) -> dict:
-    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
+def _conducting(client: ApiClient, forge_project: dict, model: str = "fake/scripted") -> dict:
+    """The project's conductor on model, warm. fake/scripted decides only
+    what a message names; a delivery Deliver starts, quiet, needs one that
+    takes Deliver's defaults (fake/defaults), or it waits out each decision."""
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": model})}
     resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models})
     assert resp.status_code == 200, resp.text
     # Warm throughout: each decision reaches a live conductor.
@@ -52,6 +55,12 @@ def _task(client: ApiClient, task_id: str) -> dict:
 def _waiting_on(client: ApiClient, task_id: str, point: str, message: str) -> None:
     wait_until(lambda: (_task(client, task_id)["awaitingDecision"] or {}).get("point") == point,
                timeout=90, message=message)
+
+
+def _decisions(client: ApiClient, task_id: str) -> list[tuple[str, str]]:
+    """The conductor's decisions on the task, oldest first: point and action."""
+    return [(e["payload"]["point"], e["payload"]["action"]) for e in client.events(taskId=task_id, limit=1000)
+            if e["eventType"] == "conductor.decided"]
 
 
 def _phases(client: ApiClient, task_id: str, phase: str) -> list[dict]:
@@ -173,7 +182,7 @@ def test_a_conductor_parked_between_decisions_still_decides(client: ApiClient, f
 
 
 def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fake_github: FakeGitHub):
-    project = _conducting(client, forge_project)
+    project = _conducting(client, forge_project, "fake/defaults")
     task = client.create_task(project["id"], "Respond to review, with the conductor")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     pr = wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],
@@ -182,6 +191,9 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
     # Every delivery has a conductor: Deliver's decides quietly.
     started = _task(client, task["id"])
     assert (started["decider"], started["voice"]) == ("conductor", "quiet"), started
+    # Quiet, it took Deliver's defaults at each decision it was woken for.
+    quietly = _decisions(client, task["id"])
+    assert quietly and all(action == "next" for _, action in quietly), quietly
 
     # The first message takes it over: the conductor talks it through now.
     resp = _say(client, task["id"], "I'll steer from here.")
@@ -204,8 +216,7 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
     # The new fixer is the conductor's, and its decision was recorded.
     conducted = [r for r in _phases(client, task["id"], "fix") if r["id"] not in before]
     assert len(conducted) == 1 and conducted[0]["conductorRunId"] == resp["runId"], conducted
-    decisions = [(e["payload"]["point"], e["payload"]["action"]) for e in client.events(taskId=task["id"], limit=1000)
-                 if e["eventType"] == "conductor.decided"]
+    decisions = _decisions(client, task["id"])[len(quietly):]
     assert decisions == [("pull_request_feedback", "start_phase")], decisions
     before |= {conducted[0]["id"]}
 
@@ -239,7 +250,7 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     escalation's actions as choices (a retry is not one: it needs the person's
     own direction), the owner answers "Your call", and the conductor retries
     with decide_escalation: the next fix round runs."""
-    project = _conducting(client, forge_project)
+    project = _conducting(client, forge_project, "fake/defaults")
     models = {**project["agentModels"], **client.on_models({"reviewer": "fake/stuck"})}
     assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{project['id']}/settings",
