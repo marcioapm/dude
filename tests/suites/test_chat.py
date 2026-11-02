@@ -36,6 +36,11 @@ def _said(client: ApiClient, run_id: str) -> list[str]:
     return [e["payload"]["text"] for e in client.events(runId=run_id, limit=1000) if e["eventType"] == "agent.message"]
 
 
+def _answer(client: ApiClient, run_id: str, since: int, asked: str) -> str | None:
+    """The conductor's answer quoting asked, among what it said after the first since."""
+    return next((t for t in _said(client, run_id)[since:] if asked in t), None)
+
+
 def _state(client: ApiClient, owner_dsn: str, task_id: str, fake_github: FakeGitHub, branch: str) -> tuple:
     """What delivery left: the task's status, its phase Runs, its workflow and its branch."""
     runs = sorted((r["id"], r["phase"], r["status"]) for r in client.task_runs(task_id) if r["phase"])
@@ -70,16 +75,18 @@ def test_a_delivered_tasks_chat_starts_its_conductor_which_answers_parks_and_wak
     conductor = quiet
     run = client.get_run(conductor)
     assert (run["phase"], run["role"], run["kind"]) == (None, "conductor", "agent")
-    wait_until(lambda: len(_said(client, conductor)) > said, timeout=30, message="the conductor never answered")
-    first = _said(client, conductor)[said]
-    assert key in first and "why is the max backoff 8s?" in first, first
+    # Answers are matched by what they quote: a decision's wake may come
+    # between the messages (its conductor decides the delivery too).
+    first = wait_until(lambda: _answer(client, conductor, said, "why is the max backoff 8s?"), timeout=30,
+                       message="the conductor never answered")
+    assert key in first, first
 
     # A second message reaches the same conductor, still warm: no resume.
     assert client.get_run(conductor)["status"] == "running"
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "and does it retry POSTs?"})
     assert resp.status_code == 200 and resp.json()["runId"] == conductor, resp.text
-    wait_until(lambda: len(_said(client, conductor)) == said + 2, timeout=30, message="the second answer never came")
-    assert "and does it retry POSTs?" in _said(client, conductor)[said + 1]
+    wait_until(lambda: _answer(client, conductor, said, "and does it retry POSTs?"), timeout=30,
+               message="the second answer never came")
     resumed = len(query(owner_dsn, "SELECT cause FROM run_resumes WHERE run_id = %s", (conductor,)))
 
     # Past its warm period — the project's setting reset, the suite's
@@ -92,10 +99,10 @@ def test_a_delivered_tasks_chat_starts_its_conductor_which_answers_parks_and_wak
     # A third message resumes it, timed as a conductor's resume, and it answers.
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "what about the tests?"})
     assert resp.status_code == 200 and resp.json()["runId"] == conductor, resp.text
-    wait_until(lambda: len(_said(client, conductor)) == said + 3, timeout=60, message="the parked conductor never answered")
-    assert "what about the tests?" in _said(client, conductor)[said + 2]
+    wait_until(lambda: _answer(client, conductor, said, "what about the tests?"), timeout=60,
+               message="the parked conductor never answered")
     resumes = query(owner_dsn, "SELECT cause FROM run_resumes WHERE run_id = %s", (conductor,))
-    assert [r["cause"] for r in resumes][resumed:] == ["conductor"]
+    assert [r["cause"] for r in resumes][resumed:] and {r["cause"] for r in resumes[resumed:]} == {"conductor"}, resumes
 
     # Nothing about the task moved: its status, Runs, workflow and branch.
     assert _state(client, owner_dsn, task["id"], fake_github, branch) == before
