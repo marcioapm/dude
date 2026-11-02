@@ -101,9 +101,9 @@ func worldLog(t *testing.T) *slog.Logger {
 }
 
 type world struct {
-	t         *testing.T
+	t *testing.T
 	// dude's tools are served (withTools): its conductors can call them.
-	toolsOn bool
+	toolsOn   bool
 	app       *db.DB
 	owner     *pgx.Conn
 	org       string
@@ -1356,12 +1356,13 @@ func (w *world) withTools() {
 	w.syncer.Agent.ToolsService = true
 }
 
-// toolsForDeliver serves dude's tools before Deliver's start (path):
+// toolsForDeliver serves dude's tools before Deliver's start, or a Stop's
+// or pick-up's Start over (path), whose next attempt is quiet too:
 // every delivery has a conductor, whose defaults-taking scripted model
 // calls decide next at each decision (newWorld). A world that never
 // starts one through the API keeps its Runs' specs without them.
 func (w *world) toolsForDeliver(path string) {
-	if strings.HasSuffix(path, "/deliver") {
+	if strings.HasSuffix(path, "/deliver") || strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/recover") {
 		w.withTools()
 	}
 }

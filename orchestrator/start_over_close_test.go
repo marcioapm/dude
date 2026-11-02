@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -128,7 +129,9 @@ func TestStartingOverClosesAttemptOnesPullRequestWithoutEndingTheTask(t *testing
 				task := p.at(w, &hang)
 				ana := w.ownedBy(task, "Ana")
 				var since int64
-				// Attempt 2 under Deliver, so it opens its pull request unasked.
+				// Attempt 2 quiet (policy on the wire), so it opens its pull
+				// request unasked: its conductor takes Deliver's defaults.
+				w.onModel("conductor", fakeagent.DefaultsModel)
 				if via == "stop" {
 					w.stop(ana, task, map[string]any{"andRestart": true, "decider": "policy"})
 					// Stop's own aborted move is the person's, before the start over.
