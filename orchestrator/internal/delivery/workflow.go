@@ -263,6 +263,12 @@ type State struct {
 	draftChoice bool
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
+	// Decisions in a row a quiet conductor left to Deliver's defaults
+	// (conductorDecision); a decision it takes itself resets it. At
+	// MaxDefaulted the delivery stops for a person (conductor_unavailable),
+	// unless they accepted the defaults for it (DefaultsAccepted).
+	Defaulted        int  `json:"defaulted,omitempty"`
+	DefaultsAccepted bool `json:"defaultsAccepted,omitempty"`
 	// A decision point the policy took in the step committing (next): set
 	// only between the step and its transition, which re-checks it.
 	Routed *Routed `json:"routed,omitempty"`
@@ -353,6 +359,10 @@ func (e *Escalation) Actions() []string {
 		// The same feedback fixed again from what the branch holds now, or
 		// back to waiting on the pull request without the fix.
 		out = append(out, "retry", "wait")
+	case ReasonConductorUnavailable:
+		// Wait for the conductor again, or go on by Deliver's defaults
+		// with no bound for this delivery.
+		out = append(out, "retry", "accept")
 	default:
 		// A Run that failed is kept a while (phases.keep): the same agent
 		// can carry on where it stopped. Whether it still is, the API checks.
@@ -3510,6 +3520,26 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
 	}
+	if e.Reason == ReasonConductorUnavailable && st.Decision != nil {
+		// The decision the conductor left: waited on afresh (retry), the
+		// conductor woken for it again, or Deliver's defaults at once and
+		// from now on (accept).
+		st.Defaulted, st.PersonSaid = 0, ""
+		st.Decision.Since, st.Decision.DecideBy = nil, nil
+		if d.Action == "accept" {
+			st.DefaultsAccepted = true
+			now := time.Now().UTC()
+			st.Decision.Since, st.Decision.DecideBy = &now, &now
+		} else if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
+				fmt.Sprintf("%s:retry:%d", decisionWakeKey(sc.WorkflowRunID, st.Decisions), st.Escalations),
+				decisionWaitingNote(st.Decision.Point, "A person asked dude to wait for your decision again."))
+			return err
+		}); err != nil {
+			return workflow.Result{}, err
+		}
+		return workflow.Result{Next: "conductorDecision", State: st}, nil
+	}
 	if e.Reason == ReasonNotConverging {
 		st.ConvergenceFrom = d.At
 		switch d.Action {
@@ -3603,6 +3633,11 @@ func (w *steps) acceptHeads(ctx context.Context, sc workflow.StepContext, st *St
 // other steps run immediately and reconstruct their own wait, including
 // the gate's human.feedback and the pull request wait's full signal set.
 func resumeEscalationAt(st *State, e *Escalation) workflow.Result {
+	if e.At == "conductorDecision" && st.waitsQuietly() {
+		// A quiet conductor's decision: its wait starts again, its
+		// deadline with it (quietDecision), which signals alone would lose.
+		return workflow.Result{Next: e.At, State: st}
+	}
 	if len(e.AtSignals) > 0 {
 		return workflow.Result{Next: e.At, State: st, AwaitSignals: slices.Clone(e.AtSignals)}
 	}
@@ -3694,6 +3729,8 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 	}
 	e, halted := st.Stopped, st.Halt
 	st.Recover, st.Stopped, st.Halt = nil, nil, nil
+	// A quiet decision picked back up waits its whole time again.
+	st.waitsQuietly()
 	if rc.Action == "resume" {
 		if len(st.PendingRunIDs) > 0 {
 			return park(rc.At, st, st.PendingRunIDs), nil

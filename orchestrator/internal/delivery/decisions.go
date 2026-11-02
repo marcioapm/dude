@@ -85,6 +85,106 @@ type Pending struct {
 	// (State.Pipeline), not started: an exception, or wake after_fix.
 	// "next" runs it.
 	Queued *Directed `json:"queued,omitempty"`
+	// Under a quiet conductor: when the wait for its decision began, and
+	// when Deliver's defaults take it (QuietDecisionWait).
+	Since    *time.Time `json:"since,omitempty"`
+	DecideBy *time.Time `json:"decideBy,omitempty"`
+}
+
+// QuietDecisionWait is how long a quiet conductor has to take a decision
+// its delivery parked on: past it, dude goes on by Deliver's defaults
+// (conductorDecision). A constant; tests shorten it (Store.DecisionWait).
+const QuietDecisionWait = 10 * time.Minute
+
+// MaxDefaulted is how many decisions in a row a quiet delivery takes by
+// Deliver's defaults, its conductor not deciding, before it stops for a
+// person (ReasonConductorUnavailable).
+const MaxDefaulted = 3
+
+// ReasonConductorUnavailable: a quiet conductor left MaxDefaulted decisions
+// in a row to Deliver's defaults. The person waits for it again (retry),
+// lets Deliver's defaults go on without a bound (accept), or stops.
+const ReasonConductorUnavailable = "conductor_unavailable"
+
+// EvDecisionDefaulted: dude took Deliver's defaults at a decision a quiet
+// conductor did not take. Payload: {point, policy, reason (deadline,
+// no_model, run_failed), count (in a row)}.
+const EvDecisionDefaulted = "conductor.decision_defaulted"
+
+// Why dude took Deliver's defaults at a quiet conductor's decision.
+const (
+	DefaultedDeadline  = "deadline"
+	DefaultedNoModel   = "no_model"
+	DefaultedRunFailed = "run_failed"
+)
+
+// DefaultedLine is the Chat notice of a decision taken by Deliver's
+// defaults.
+func DefaultedLine(reason string) string {
+	switch reason {
+	case DefaultedNoModel:
+		return "dude went on by Deliver's defaults: the conductor has no model to decide with."
+	case DefaultedRunFailed:
+		return "dude went on by Deliver's defaults: the conductor's Run failed before it decided."
+	}
+	return fmt.Sprintf("dude went on by Deliver's defaults: the conductor did not decide within %d minutes.",
+		int(QuietDecisionWait/time.Minute))
+}
+
+// decisionWait is how long a quiet conductor has to decide.
+func (s *Store) decisionWait() time.Duration {
+	if s.DecisionWait > 0 {
+		return s.DecisionWait
+	}
+	return QuietDecisionWait
+}
+
+// conductorNoModelTx is why the task's conductor would run on no model,
+// "" when it has one: its role's tier as the syncer resolves it for the
+// conductor's spec (ResolveRole, TierFor), where errNoModel fails it.
+func conductorNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
+	var project, org json.RawMessage
+	if err := tx.QueryRow(ctx, `SELECT p.agent_models, o.default_agent_models FROM tasks t
+		JOIN projects p ON p.id = t.project_id JOIN organizations o ON o.id = p.organization_id
+		WHERE t.id = $1`, taskID).Scan(&project, &org); err != nil {
+		return "", err
+	}
+	_, no, err := TierFor(ctx, tx, RoleConductor, ResolveRole(RoleConductor, project, org))
+	return no, err
+}
+
+// decisionWakeKey keys the reason that wakes the conductor for the
+// delivery's decision number n.
+func decisionWakeKey(wfID string, n int) string { return fmt.Sprintf("%s:decision:%d", wfID, n) }
+
+// quietWait starts the wait for a quiet conductor's decision: its
+// deadline, now (no model: Deliver's defaults at once) or after the wait.
+func (w *steps) quietWait(st *State, noModel bool) workflow.Result {
+	now := time.Now().UTC()
+	by := now.Add(w.s.decisionWait())
+	if noModel {
+		by = now
+	}
+	st.Decision.Since, st.Decision.DecideBy = &now, &by
+	return w.parkQuiet(st)
+}
+
+// parkQuiet parks on a quiet conductor's decision until its deadline.
+func (w *steps) parkQuiet(st *State) workflow.Result {
+	return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision},
+		SleepUntil: *st.Decision.DecideBy}
+}
+
+// waitsQuietly says the delivery waits on a quiet conductor's decision not
+// taken, and restarts its wait: a person's pick-up or decision gives the
+// conductor its whole time again.
+func (st *State) waitsQuietly() bool {
+	d := st.Decision
+	if !st.quiet() || d == nil || d.Taken != nil || st.quietAt(d.Point) {
+		return false
+	}
+	d.Since, d.DecideBy = nil, nil
+	return true
 }
 
 // Taken is a conductor's decision.
@@ -432,9 +532,21 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		}
 		return res, true, nil
 	}
-	out, err := toConductorKindTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line, cmp.Or(r.Kind, "decision"))
+	// A quiet conductor with no model to decide with: Deliver's defaults
+	// at once, its reason settled, so no conductor Run is started for it.
+	noModel := ""
+	if st.quiet() {
+		var err error
+		if noModel, err = conductorNoModelTx(ctx, tx, st.TaskID); err != nil {
+			return res, false, err
+		}
+	}
+	out, err := toConductorKindTx(ctx, tx, sc, st, r.Point, r.Policy, r.Line, cmp.Or(r.Kind, "decision"), noModel != "")
 	if err == nil && r.Queued != nil {
 		st.Decision.Queued = r.Queued
+	}
+	if err == nil && st.quiet() {
+		out = w.quietWait(st, noModel != "")
 	}
 	return out, true, err
 }
@@ -451,11 +563,13 @@ func decisionWaitingNote(point, line string) string {
 // The start wakes nobody: only Talk it through decides it, whose message
 // in Chat is the conductor's turn already.
 func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line string) (workflow.Result, error) {
-	return toConductorKindTx(ctx, tx, sc, st, point, policy, line, "decision")
+	return toConductorKindTx(ctx, tx, sc, st, point, policy, line, "decision", false)
 }
 
-// toConductorKindTx is toConductorTx recording its wake as kind.
-func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line, kind string) (workflow.Result, error) {
+// toConductorKindTx is toConductorTx recording its wake as kind; settled
+// records it heard already (a quiet conductor with no model: nobody to
+// wake).
+func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line, kind string, settled bool) (workflow.Result, error) {
 	st.Directed, st.PendingRunIDs, st.Routed = nil, nil, nil
 	st.Decision = &Pending{Point: point, Policy: policy,
 		Adopted: st.Source != nil && st.HeadRunID == "" && (point == PointStart || point == PointImplemented)}
@@ -464,7 +578,7 @@ func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, 
 	}
 	note := decisionWaitingNote(point, line)
 	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, kind,
-		fmt.Sprintf("%s:decision:%d", sc.WorkflowRunID, st.Decisions), note, point == PointStart)
+		decisionWakeKey(sc.WorkflowRunID, st.Decisions), note, point == PointStart || settled)
 	if err == nil && added {
 		err = emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionAwaited, map[string]any{"point": point, "policy": policy,
 			"actions": st.Decision.Actions(), "phases": st.Decision.Phases(), "note": note})
@@ -526,12 +640,17 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		st.Decisions++
 		return workflow.Result{Next: d.Policy, State: st}, nil
 	}
+	if d.Taken == nil && st.quiet() {
+		return w.quietDecision(ctx, sc, st)
+	}
 	if d.Taken == nil {
 		return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision}}, nil
 	}
 	t := d.Taken
 	st.Decision = nil
 	st.Decisions++
+	// The conductor decided: the defaults it left in a row start over.
+	st.Defaulted = 0
 	switch t.Action {
 	case "next":
 		if q := d.Queued; q != nil {
@@ -582,6 +701,73 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		return workflow.Result{Next: phaseStep(t.Phase, d.Point), State: st}, nil
 	}
 	return workflow.Result{}, fmt.Errorf("decision %q cannot be carried out", t.Action)
+}
+
+// quietDecision is a quiet conductor's decision not taken yet: waited on
+// until its deadline (Pending.DecideBy), then Deliver's defaults (the
+// policy's step, as a hand-back takes it) with a notice in Chat — at once
+// when the conductor has no model, or its Run failed since the wait
+// began. MaxDefaulted in a row stops for a person instead. The conductor's
+// decide is serialised with this by the row: it is refused unless the
+// delivery waits (parked), and the step runs claimed, status running.
+func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, error) {
+	d := st.Decision
+	var noModel string
+	var failed bool
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		if noModel, err = conductorNoModelTx(ctx, tx, st.TaskID); err != nil || d.Since == nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT COALESCE((SELECT status = 'failed' AND ended_at > $2 FROM runs
+			WHERE task_id = $1 AND role = 'conductor' ORDER BY created_at DESC LIMIT 1), false)`, st.TaskID, *d.Since).Scan(&failed)
+	}); err != nil {
+		return workflow.Result{}, err
+	}
+	if d.DecideBy == nil {
+		// Parked before its wait was kept (an escalation's resume, a
+		// retry): the wait starts now.
+		return w.quietWait(st, noModel != ""), nil
+	}
+	reason := ""
+	switch {
+	case noModel != "":
+		reason = DefaultedNoModel
+	case failed:
+		reason = DefaultedRunFailed
+	case !time.Now().Before(*d.DecideBy):
+		reason = DefaultedDeadline
+	default:
+		return w.parkQuiet(st), nil
+	}
+	if st.Defaulted >= MaxDefaulted && !st.DefaultsAccepted {
+		res, err := w.escalate(ctx, sc, st, ReasonConductorUnavailable, map[string]any{"point": d.Point, "defaulted": st.Defaulted,
+			"reason": reason})
+		// The decision stays: retry waits on it again, accept takes it.
+		st.Decision = d
+		st.Escalation.Step = "conductorDecision"
+		return res, err
+	}
+	st.Defaulted++
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		// Once per decision, however often the step is replayed.
+		var said bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
+			AND payload->>'workflowId' = $3 AND (payload->>'decision')::int = $4)`,
+			st.TaskID, EvDecisionDefaulted, sc.WorkflowRunID, st.Decisions).Scan(&said); err != nil || said {
+			return err
+		}
+		if err := emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionDefaulted, map[string]any{"point": d.Point,
+			"policy": d.Policy, "reason": reason, "count": st.Defaulted, "workflowId": sc.WorkflowRunID, "decision": st.Decisions}); err != nil {
+			return err
+		}
+		return emitTx(ctx, tx, sc.OrganizationID, st, EvChatNotice, map[string]any{"about": "decision_defaulted",
+			"reason": reason, "text": DefaultedLine(reason)})
+	}); err != nil {
+		return workflow.Result{}, err
+	}
+	st.Decision = nil
+	st.Decisions++
+	return workflow.Result{Next: d.Policy, State: st}, nil
 }
 
 // gateAuthorized says whether a gate the conductor entered may open under

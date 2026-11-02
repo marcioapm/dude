@@ -151,6 +151,13 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	payload := map[string]any{"text": told, "reasons": kinds}
 	var directiveID string
 	if runID == "" {
+		// A quiet delivery whose conductor has no model starts none: its
+		// Run would fail, and its reasons come back on every sweep. Deliver's
+		// defaults decide meanwhile (conductorDecision); the reasons wait
+		// until a model is set.
+		if quiet, err := quietNoModelTx(ctx, tx, taskID); err != nil || quiet {
+			return "", err
+		}
 		if runID, err = startConductor(ctx, tx, org, projectID, taskID, Writer{ActorType: ledger.ActorSystem, ActorID: "dude"},
 			note, true, "", ""); err != nil {
 			return "", err
@@ -420,6 +427,26 @@ func HaltedTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 		return false, nil
 	}
 	return halted, err
+}
+
+// quietNoModelTx says the task's newest delivery is decided by a quiet
+// conductor that has no model to run on (conductorNoModelTx).
+func quietNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
+	var quiet bool
+	err := tx.QueryRow(ctx, `SELECT w.state->>'decider' = 'conductor' AND COALESCE(w.state->>'voice', '') = 'quiet'
+		AND w.status IN ('running', 'waiting') FROM workflow_runs w WHERE w.task_id = $1`+latestDelivery, taskID).Scan(&quiet)
+	if db.IsNotFound(err) || err != nil || !quiet {
+		return false, ignoreNotFound(err)
+	}
+	no, err := conductorNoModelTx(ctx, tx, taskID)
+	return no != "", err
+}
+
+func ignoreNotFound(err error) error {
+	if db.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // Wakeable (SQL, over conductor_wakes c, $1 the window in seconds): a task
