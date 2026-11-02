@@ -3281,8 +3281,9 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	if err != nil {
 		return workflow.Result{}, true, err
 	}
-	if st.conducted() {
+	if st.chatty() {
 		// The conductor hears each one end once, however often this runs.
+		// A quiet one has nothing to close out, and is not resumed for it.
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			for _, p := range states {
 				if err := CloseOutTx(ctx, tx, sc.OrganizationID, st.TaskID, p.Repo, p.Number, p.State); err != nil {

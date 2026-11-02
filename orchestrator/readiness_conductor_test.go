@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -187,5 +188,54 @@ func TestASiblingMergedDuringAnEscalationWakesTheConductorOnce(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind IN ('pr_merged', 'pr_closed')`, task); n != 2 {
 		t.Errorf("%d close-out reasons for two ended pull requests", n)
+	}
+}
+
+// Merged, or closed without merging, on GitHub: a delivery Deliver
+// started (its conductor quiet) records no reason to close out, so its
+// parked conductor is not resumed for a turn that does nothing; the task
+// ends done, or aborted, and its conductor stays parked (paused), its
+// container stopped, as the warm period left it. A chatty one still closes
+// out (TestAnEndWakesTheConductorOnceToCloseOut).
+func TestAQuietDeliverysEndRecordsNoCloseOut(t *testing.T) {
+	for _, end := range []struct{ how, status string }{{"merged", "done"}, {"closed", "aborted"}} {
+		t.Run(end.how, func(t *testing.T) {
+			w := newWorld(t)
+			w.syncer.ConductorWarm = time.Millisecond
+			task := w.task()
+			w.deliverByAPI(task)
+			w.until("the pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+			if got := w.deciderState(task); got != "conductor/quiet/false" {
+				t.Fatalf("decided %s, want a quiet conductor", got)
+			}
+			w.until("the conductor parked", func() bool {
+				id, status, pause := w.conductor(task)
+				return id != "" && status == "paused" && pause == "conductor"
+			})
+			c, _, _ := w.conductor(task)
+			woken, resumed := len(w.woken(task)), len(w.lux.ResumeInputs(w.luxRunOf(c)))
+			if end.how == "merged" {
+				w.gh.Merge(1)
+			} else {
+				w.gh.Close(1)
+			}
+			w.until(end.status, func() bool { w.sync(); return w.taskStatus(task) == end.status })
+			w.syncs(5)
+			if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind IN ('pr_merged', 'pr_closed')`, task); n != 0 {
+				t.Errorf("%d close-out reasons for a quiet conductor, want 0", n)
+			}
+			if n := len(w.woken(task)); n != woken {
+				t.Errorf("the quiet conductor was woken %d times at the end", n-woken)
+			}
+			if n := len(w.lux.ResumeInputs(w.luxRunOf(c))); n != resumed {
+				t.Errorf("the quiet conductor was resumed %d times at the end", n-resumed)
+			}
+			if id, status, pause := w.conductor(task); id != c || status != "paused" || pause != "conductor" {
+				t.Errorf("the conductor at the end: %s %s/%s, want %s parked", id, status, pause, c)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor' AND status IN ('running', 'starting', 'scheduled')`, task); n != 0 {
+				t.Errorf("%d conductor Runs left running at the end", n)
+			}
+		})
 	}
 }

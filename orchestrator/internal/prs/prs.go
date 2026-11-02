@@ -489,14 +489,14 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// The delivery the pull request is from: a task started over has a
 		// delivery per attempt, each on its own branch, and an earlier
 		// attempt's pull request must not wake the next one.
-		var decider string
-		err = tx.QueryRow(ctx, `SELECT w.id, w.step, COALESCE(w.state->>'decider', ''),
+		var decider, voice string
+		err = tx.QueryRow(ctx, `SELECT w.id, w.step, COALESCE(w.state->>'decider', ''), COALESCE(w.state->>'voice', ''),
 			COALESCE(CASE WHEN w.state->'escalation'->'decided' IS NULL
 				THEN w.state->'escalation'->>'reason' END, '') FROM workflow_runs w
 			JOIN pull_requests p ON p.id = $2
 			WHERE w.task_id = $1 AND w.status IN ('running', 'waiting')
 			  AND COALESCE(w.state->>'branch', p.head_branch) = p.head_branch
-			LIMIT 1`, pr.TaskID, pr.ID).Scan(&workflowRunID, &workflowStep, &decider, &escalationReason)
+			LIMIT 1`, pr.TaskID, pr.ID).Scan(&workflowRunID, &workflowStep, &decider, &voice, &escalationReason)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -505,8 +505,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		}
 		// Its end is the conductor's to close out, recorded here with the
 		// end itself: the workflow may be waiting on something else (a
-		// person's decision on a sibling closed), and hear of it never.
-		if status.State != pr.State && decider == delivery.DeciderConductor {
+		// person's decision on a sibling closed), and hear of it never. A
+		// quiet conductor has nothing to close out: it is not resumed for it.
+		if status.State != pr.State && decider == delivery.DeciderConductor && voice != delivery.VoiceQuiet {
 			return delivery.CloseOutTx(ctx, tx, org, pr.TaskID, pr.RepoName, pr.Number, status.State)
 		}
 		return nil
