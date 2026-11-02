@@ -20,7 +20,7 @@ func convertDeliveries(ctx context.Context, database *db.DB, log *slog.Logger) {
 	pass, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	n, err := delivery.ConvertInFlight(pass, database)
-	attrs := []any{"converted", n.Converted, "skipped_accepted", n.Accepted, "skipped_moving", n.Moving}
+	attrs := []any{"converted", n.Converted, "skipped_accepted", n.Accepted, "skipped_moving", n.Moving, "skipped_no_model", n.NoModel}
 	if err != nil {
 		log.Error("deliveries in flight not all handed to a quiet conductor; the next boot sweeps again",
 			append(attrs, "error", err)...)
@@ -50,7 +50,7 @@ func convertCommand(ctx context.Context, args []string, opts config.Options, std
 	}
 	defer database.Close()
 	n, err := delivery.ConvertInFlight(ctx, database)
-	fmt.Fprintf(stdout, "converted %d, skipped (accepted) %d, skipped (moving) %d\n", n.Converted, n.Accepted, n.Moving)
+	fmt.Fprintf(stdout, "converted %d, skipped (accepted) %d, skipped (moving) %d, skipped (no model) %d\n", n.Converted, n.Accepted, n.Moving, n.NoModel)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

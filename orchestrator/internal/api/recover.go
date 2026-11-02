@@ -437,7 +437,17 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 		return out, err
 	}
 	next := nextAttemptOf(decider, accepted)
-	if next.Decider == delivery.DeciderConductor {
+	if next.Decider == delivery.DeciderConductor && !next.chatty() {
+		// A quiet conductor with no model: Deliver's policy, as at a start.
+		noModel, err := delivery.ConductorNoModelTx(ctx, tx, taskID)
+		if err != nil {
+			return out, err
+		}
+		if noModel {
+			next = nextAttempt{Decider: delivery.DeciderPolicy, Voice: delivery.VoiceQuiet, noModel: true}
+		}
+	}
+	if next.Decider == delivery.DeciderConductor || next.noModel {
 		// Each attempt has its own conductor: the stopped one's ends.
 		if err := endLiveConductorTx(ctx, tx, org, t.ProjectID, taskID, live, reason); err != nil {
 			return out, err
@@ -499,16 +509,21 @@ func wireDecider(st *delivery.State) string {
 // delivery has a conductor — except after a person accepted Deliver's
 // defaults on the stopped attempt (accepted), which Deliver's policy goes
 // on deciding: no Stop or pick-up conducts it again silently.
-type nextAttempt struct{ Decider, Voice string }
+// One whose quiet conductor has no model (noModel) is Deliver's too, its
+// Voice kept quiet, until a sweep hands it over (delivery.WhyNoConductorModel).
+type nextAttempt struct {
+	Decider, Voice string
+	noModel        bool
+}
 
 func nextAttemptOf(wire string, accepted bool) nextAttempt {
 	switch {
 	case wire == delivery.DeciderConductor:
-		return nextAttempt{delivery.DeciderConductor, delivery.VoiceChatty}
+		return nextAttempt{Decider: delivery.DeciderConductor, Voice: delivery.VoiceChatty}
 	case accepted:
 		return nextAttempt{Decider: delivery.DeciderPolicy}
 	}
-	return nextAttempt{delivery.DeciderConductor, delivery.VoiceQuiet}
+	return nextAttempt{Decider: delivery.DeciderConductor, Voice: delivery.VoiceQuiet}
 }
 
 // chatty says the attempt's conductor talks it through: it is started
@@ -607,6 +622,10 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, a
 		if next.Voice == delivery.VoiceQuiet && stopped.Decider == delivery.DeciderConductor && stopped.Voice == delivery.VoiceQuiet {
 			st.HandedBack = stopped.HandedBack
 		}
+	} else if next.noModel {
+		// Its quiet conductor has no model: Deliver's policy, the fix bar
+		// the conductor's, as StartTx starts one.
+		st.Decider, st.HadConductor, st.Voice = delivery.DeciderPolicy, true, delivery.VoiceQuiet
 	} else {
 		// Deliver's policy, as the person who accepted its defaults left
 		// it; the conductor's fix bar it had stays (HadConductor).
@@ -621,7 +640,11 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, a
 	if err != nil || from == next.Decider && wasVoice == next.Voice {
 		return id, err
 	}
-	payload := map[string]any{"from": from, "to": next.Decider, "why": "start over"}
+	why := "start over"
+	if next.noModel {
+		why = delivery.WhyNoConductorModel
+	}
+	payload := map[string]any{"from": from, "to": next.Decider, "why": why}
 	if next.Voice != "" {
 		payload["voice"] = next.Voice
 	}

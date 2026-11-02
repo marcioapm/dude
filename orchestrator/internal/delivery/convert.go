@@ -25,6 +25,9 @@ const (
 	// ConvertMoving: the conductor's publish moves its branch now; the
 	// next sweep converts it.
 	ConvertMoving = "moving"
+	// ConvertNoModel: its conductor has no model to run on
+	// (ConductorNoModelTx): left Deliver's, for a sweep once one is set.
+	ConvertNoModel = "no_model"
 	// ConvertNone: nothing to convert — no live delivery, or one a
 	// conductor decides already (another sweep, a Chat takeover).
 	ConvertNone = "none"
@@ -34,7 +37,8 @@ const (
 // every delivery had a conductor, to a quiet conductor, as a person's
 // hand-back would (SetDeciderTx): an escalation it waits at is told, the
 // change recorded. A delivery whose person accepted Deliver's defaults
-// stays Deliver's. One parked on an untaken decision of the conductor's
+// stays Deliver's, as does one whose conductor has no model, until one is
+// set (ConvertNoModel). One parked on an untaken decision of the conductor's
 // that is not Deliver's own (the start, the hold before the pull request,
 // which a quiet conductor leaves to Deliver) gets the decision's wake,
 // keyed as toConductorKindTx keys it, and its step run so its wait starts.
@@ -54,6 +58,16 @@ func ConvertToQuietTx(ctx context.Context, tx pgx.Tx, org, taskID string) (strin
 	}
 	if accepted {
 		return ConvertAccepted, nil
+	}
+	// A quiet conductor with no model would default every decision, and
+	// stop the delivery at conductor_unavailable: Deliver's policy goes on
+	// deciding it until a model is set.
+	noModel, err := ConductorNoModelTx(ctx, tx, taskID)
+	if err != nil {
+		return "", err
+	}
+	if noModel {
+		return ConvertNoModel, nil
 	}
 	st := &d.State
 	if _, err := SetDeciderTx(ctx, tx, org, d.WorkflowID, st, DeciderConductor, VoiceQuiet, WhyEveryDelivery,
@@ -86,7 +100,7 @@ func ConvertToQuietTx(ctx context.Context, tx pgx.Tx, org, taskID string) (strin
 
 // Converted counts what a sweep of ConvertToQuietTx did.
 type Converted struct {
-	Converted, Accepted, Moving int
+	Converted, Accepted, Moving, NoModel int
 }
 
 // ConvertInFlight is the one-shot sweep every orchestrator runs at boot,
@@ -94,7 +108,8 @@ type Converted struct {
 // every live delivery no conductor decides goes to a quiet one
 // (ConvertToQuietTx), each in its own transaction. A delivery a person
 // handed to Deliver by accepting its defaults is skipped; one whose branch
-// the conductor's publish moves now is skipped, for the next sweep.
+// the conductor's publish moves now is skipped, for the next sweep, as is
+// one whose conductor has no model, until one is set.
 func ConvertInFlight(ctx context.Context, database *db.DB) (Converted, error) {
 	var out Converted
 	type row struct{ Org, TaskID string }
@@ -127,6 +142,8 @@ func ConvertInFlight(ctx context.Context, database *db.DB) (Converted, error) {
 			out.Accepted++
 		case ConvertMoving:
 			out.Moving++
+		case ConvertNoModel:
+			out.NoModel++
 		}
 	}
 	return out, nil

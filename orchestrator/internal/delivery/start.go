@@ -173,6 +173,17 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	// at the start, and Deliver's rules open the pull request), chatty for
 	// Talk it through.
 	st.Decider, st.HadConductor, st.Voice = DeciderConductor, true, StartVoice(in.How)
+	why := "deliver"
+	if in.How == HowTalk {
+		why = "talk it through"
+	} else if noModel, err := ConductorNoModelTx(ctx, tx, in.TaskID); err != nil {
+		return out, err
+	} else if noModel {
+		// No model for its conductor: Deliver's policy decides, as before
+		// every delivery had one, the fix bar the conductor's (HadConductor).
+		// The sweep hands it to the quiet conductor once a model is set.
+		st.Decider, why = DeciderPolicy, WhyNoConductorModel
+	}
 	if out.WorkflowID, out.Joined, err = rt.StartInTx(ctx, tx, workflow.StartOptions{Type: WorkflowType, OrganizationID: in.Org,
 		IdempotencyKey: key, TaskID: in.TaskID, Input: st}); err != nil {
 		return out, err
@@ -184,19 +195,29 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	if out.Joined {
 		return out, nil
 	}
-	why := "deliver"
-	if in.How == HowTalk {
-		why = "talk it through"
-	}
 	if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvDeciderChanged, OrganizationID: in.Org, ProjectID: projectID,
 		TaskID: in.TaskID, ActorType: in.Writer.ActorType, ActorID: in.Writer.ActorID, Source: ledger.SourceOrchestrator,
-		CorrelationID: in.TaskID, Payload: map[string]any{"from": nil, "to": DeciderConductor, "why": why, "voice": st.Voice}}); err != nil {
+		CorrelationID: in.TaskID, Payload: map[string]any{"from": nil, "to": st.Decider, "why": why, "voice": st.Voice}}); err != nil {
 		return out, err
 	}
 	if in.How == HowTalk && in.Message != "" {
 		out.ConductorRunID, err = StartConductor(ctx, tx, in.Org, projectID, in.TaskID, in.Writer, in.Message)
 	}
 	return out, err
+}
+
+// WhyNoConductorModel is why a delivery that would be its quiet
+// conductor's is Deliver's policy's: the conductor's tier resolves no
+// model (ConductorNoModelTx). Not an accept: the sweep (ConvertToQuietTx)
+// hands it to the quiet conductor once a model is set.
+const WhyNoConductorModel = "the conductor has no model"
+
+// ConductorNoModelTx says the task's conductor has no model to run on: its
+// role, resolved as ResolveRole resolves it, names a tier that is unset,
+// gone, or names no model (quietFactsTx).
+func ConductorNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
+	_, noModel, err := quietFactsTx(ctx, tx, taskID)
+	return noModel, err
 }
 
 // StartVoice is the voice a delivery started as how is conducted in:
