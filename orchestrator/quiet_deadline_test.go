@@ -7,8 +7,8 @@ package orchestrator_test
 // API and the fake lux and GitHub; the wait test-sized.
 
 import (
-	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,6 +103,10 @@ func TestAQuietConductorWithNoModelTakesTheDefaultsAtOnce(t *testing.T) {
 	task := w.task()
 	w.startQuiet(task)
 	w.until("the review, by the defaults", func() bool { return w.phaseRuns(task, "review") > 0 })
+	// Other news for the conductor (a stall, say) starts none either: it
+	// waits until a model is set, rather than fail a Run every sweep.
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES ('cwk_nomodel', $1, $2, 'stalled', 'stalled:nomodel', 'A reviewer stalled.', now() - interval '1 hour')`, w.org, task)
 	for range 5 {
 		w.pump()
 	}
@@ -225,41 +229,44 @@ func TestAConductorsDecisionResetsTheDefaults(t *testing.T) {
 }
 
 // The conductor's decide at the deadline's moment: exactly one decision is
-// taken — the conductor's, refused once the defaults began, or the
-// defaults, never both.
+// taken. Its decide lands while the step taking the defaults runs, before
+// that step commits: it is refused (the delivery is not waiting, its row
+// claimed), and the defaults alone go on. A decide that commits first is
+// carried out by the step instead (TestAConductorsDecisionResetsTheDefaults).
 func TestTheConductorRacingTheDeadlineTakesOneDecision(t *testing.T) {
 	w := conducting(t)
-	w.waitingFor(time.Hour)
+	store := &delivery.Store{DB: w.app, DecisionWait: time.Hour, SyncPullRequest: w.prs.Sync}
+	def := delivery.Workflow(store, forge.Resolver{DB: w.app})
+	var once sync.Once
+	var armed atomic.Bool
+	status := 0
 	task := w.task()
+	def.BeforeCommit = func(_, step, next string) {
+		if step == "conductorDecision" && next == "review" && armed.Load() {
+			once.Do(func() { status, _ = w.as(task, "decide", `{"action":"next"}`) })
+		}
+	}
+	w.runtime.Register(def)
 	w.quietAfterImplement(task)
 	w.until("the conductor woken", func() bool { id, _, _ := w.conductor(task); return id != "" })
 	w.conductorSpecOf(task)
+	armed.Store(true)
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 second')),
 		wake_at = now() WHERE task_id = $1`, task)
-	var wg sync.WaitGroup
-	var status int
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		status, _ = w.as(task, "decide", `{"action":"next"}`)
-	}()
-	w.pump()
-	wg.Wait()
 	w.until("the review", func() bool { return w.phaseRuns(task, "review") > 0 })
 	for range 3 {
 		w.pump()
 	}
+	if status == 0 {
+		t.Fatalf("the conductor's decide never raced the defaults")
+	}
 	taken := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = $3`,
 		task, delivery.EvDecisionTaken, delivery.PointImplemented)
 	defaulted := w.defaulted(task, "")
-	if taken+defaulted != 1 {
+	if taken+defaulted != 1 || status == 200 {
 		t.Fatalf("%d conductor decisions and %d defaults at one decision (decide answered %d)", taken, defaulted, status)
 	}
-	if (status == 200) != (taken == 1) {
-		t.Errorf("decide answered %d with %d decisions recorded", status, taken)
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND attempt = 1`, task); n != 1 {
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, task); n != 1 {
 		t.Errorf("%d reviews started at one decision", n)
 	}
-	_ = context.Background()
 }
