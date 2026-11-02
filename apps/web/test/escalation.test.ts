@@ -77,6 +77,16 @@ describe("escalationWords", () => {
       .toBe("The pull request in web has had 5 fixes, the most the organisation allows for one.");
   });
 
+  test("a quiet conductor that does not decide says how many decisions went by the defaults", () => {
+    expect(escalationWords({ reason: "conductor_unavailable", detail: { point: "after_review", defaulted: 3, reason: "deadline" }, at })).toEqual({
+      short: "The conductor isn't deciding",
+      sentence: "dude went on by Deliver's defaults at 3 decisions in a row: the conductor did not decide. Wait for the conductor again, let Deliver's defaults finish this delivery, or stop.",
+      runId: null,
+    });
+    expect(needsNote("conductor_unavailable", "retry")).toBe(false);
+    expect(needsNote("conductor_unavailable", "accept")).toBe(false);
+  });
+
   test("a moved pull request says GitHub's refusal when there was one, and a person's push when not", () => {
     const refused = escalationWords({ reason: "pull_request_moved", at,
       detail: { repo: "web", number: 4, error: "main was merged into the task branch meanwhile, and the fix conflicts with that merge\nmore" } });

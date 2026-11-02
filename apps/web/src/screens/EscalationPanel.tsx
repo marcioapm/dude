@@ -44,6 +44,8 @@ const actionLabel = (action: EscalationAction, reason: string) => {
   if (action === "retry" && reason === "test_failed_criteria") return "Fix it once more";
   if (action === "retry" && reason === "test_blocked") return "Test again";
   if (action === "retry" && reason === "checks_unverified") return "Send it back once more";
+  if (action === "retry" && reason === "conductor_unavailable") return "Wait for the conductor";
+  if (action === "accept" && reason === "conductor_unavailable") return "Go on by Deliver's defaults";
   return ACTION_LABEL[action];
 };
 

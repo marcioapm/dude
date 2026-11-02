@@ -417,6 +417,22 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   What still bounds a conducted delivery: the pull request's fix rounds and
   failed-check reruns (a person may raise either for the task,
   `request_limit`), and `MaxTestFixRounds`.
+- **A quiet conductor never stalls its delivery.** A quiet delivery's
+  `conductorDecision` park sleeps until `Pending.DecideBy`
+  (`QuietDecisionWait`, 10 minutes, a constant; tests shorten it through
+  `Store.DecisionWait`). Past it, or at once when the conductor's role
+  resolves no model (`TierFor`, as the syncer's spec does; no conductor Run is
+  started for that delivery, `WakeConductorTx`), or when its latest Run
+  failed since the wait began, dude takes Deliver's step (`Pending.Policy`),
+  with a Chat notice (`chat.notice`, about `decision_defaulted`) and
+  `conductor.decision_defaulted` (`deadline`, `no_model`, `run_failed`).
+  `State.Defaulted` counts them in a row; a decision the conductor takes
+  resets it. At `MaxDefaulted` (3) the delivery escalates
+  `conductor_unavailable`: `retry` waits for the conductor again, the count
+  reset; `accept` lets Deliver's defaults finish the delivery unbounded;
+  `stop`. Talk it through (chatty) has no deadline. The conductor's `decide`
+  is refused unless the delivery waits there (`parked`), so it cannot race a
+  step taking the defaults.
 - **An escalation is still a person's** under the conductor, which is told
   to explain and propose. Its `ask_person` while the delivery waits at
   `decide` is the escalation's question (`questions.escalation`, each

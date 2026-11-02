@@ -8,7 +8,7 @@ Decide the escalation the delivery is stopped at (retry, accept, amend, waive, r
   "properties": {
     "action": {
       "type": "string",
-      "description": "one of the escalation's actions; for not_converging, retry fixes differently, accept accepts only the named risks, and amend replaces the named findings' criteria with the person's words before fixing"
+      "description": "one of the escalation's actions; for not_converging, retry fixes differently, accept accepts only the named risks, and amend replaces the named findings' criteria with the person's words before fixing; for conductor_unavailable, retry waits for your decisions again and accept lets Deliver's defaults finish the delivery"
     },
     "note": {
       "type": "string",
