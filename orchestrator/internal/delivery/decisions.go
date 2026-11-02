@@ -182,15 +182,19 @@ func (st *State) conducted() bool { return st.Decider == DeciderConductor }
 // at the start, and the pull request opens by Deliver's rules.
 func (st *State) quiet() bool { return st.conducted() && st.Voice == VoiceQuiet }
 
+// chatty says the conductor decides the delivery and talks it through:
+// it takes its turn at every decision point, the pull request's too.
+func (st *State) chatty() bool { return st.conducted() && !st.quiet() }
+
 // voice is the conductor's voice, "" when no conductor decides.
 func (st *State) voice() string {
 	switch {
-	case !st.conducted():
-		return ""
 	case st.quiet():
 		return VoiceQuiet
+	case st.chatty():
+		return VoiceChatty
 	}
-	return VoiceChatty
+	return ""
 }
 
 // quietAt says a quiet conductor takes no turn at point: the start, whose
@@ -202,7 +206,7 @@ func (st *State) quietAt(point string) bool {
 
 // deliverOpens says Deliver's rules hold the pull request gate: no
 // conductor decides, or a quiet one does.
-func (st *State) deliverOpens() bool { return !st.conducted() || st.quiet() }
+func (st *State) deliverOpens() bool { return !st.chatty() }
 
 // ConductedLoop says the review loop is the conductor's: the conductor
 // decides the delivery now. A delivery that was in flight before the
@@ -258,7 +262,7 @@ var pointLabel = func() map[string]string {
 // wake and event in the transition's transaction. A conductor that was
 // deciding as the step entered the pull request gate leaves it required.
 func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, point, step, line string) (workflow.Result, error) {
-	if st.conducted() && !st.quiet() && point == PointBeforePR {
+	if st.chatty() && point == PointBeforePR {
 		st.GateRequired, st.ChoiceGate = true, false
 	}
 	st.Routed = &Routed{Point: point, Policy: step, Next: step, Line: line}

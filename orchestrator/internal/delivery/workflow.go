@@ -720,7 +720,7 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 	// first implementer is its call. A person's "try again" is not.
 	if st.conducted() && st.Retries == 0 {
 		// A quiet conductor takes no turn here (recheck): no planning.
-		if !st.quiet() {
+		if st.chatty() {
 			if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
 				return workflow.Result{}, err
 			}
@@ -1835,8 +1835,8 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		// Not the latched Draft: a later opening (another repository's) is not this one.
 		st.draftChoice = choice == PullRequestDraft
 	}
-	if len(st.PullRequestIDs) == 0 && (st.conducted() && !st.quiet() || st.GateRequired) && !st.gateHeld() {
-		if st.conducted() && !st.quiet() {
+	if len(st.PullRequestIDs) == 0 && (st.chatty() || st.GateRequired) && !st.gateHeld() {
+		if st.chatty() {
 			return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
 		}
 		ok, err := w.gateAuthorized(ctx, sc, st)
