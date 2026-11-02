@@ -179,14 +179,17 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
     pr = wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],
                     timeout=90, message="the delivery never opened a pull request")[0]
     wait_until(lambda: _task(client, task["id"])["status"] == "review", timeout=60, message="never in review")
-    assert _task(client, task["id"])["decider"] == "policy"
+    # Every delivery has a conductor: Deliver's decides quietly.
+    started = _task(client, task["id"])
+    assert (started["decider"], started["voice"]) == ("conductor", "quiet"), started
 
-    # The first message takes it over.
+    # The first message takes it over: the conductor talks it through now.
     resp = _say(client, task["id"], "I'll steer from here.")
     assert resp["decider"] == "conductor"
-    assert _task(client, task["id"])["decider"] == "conductor"
+    assert _task(client, task["id"])["voice"] == "chatty"
     changes = [e["payload"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decider_changed"]
-    assert changes == [{"from": "policy", "to": "conductor", "voice": "chatty", "why": "a person wrote in Chat"}]
+    assert changes == [{"from": None, "to": "conductor", "voice": "quiet", "why": "deliver"},
+                       {"from": "conductor", "to": "conductor", "voice": "chatty", "why": "a person wrote in Chat"}], changes
 
     # Feedback now waits on the conductor: no fixer until it decides.
     before = {r["id"] for r in _phases(client, task["id"], "fix")}
@@ -242,13 +245,13 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     assert client.patch(f"/v1/projects/{project['id']}/settings",
                         {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task = client.create_task(project["id"], "Greet, and get stuck on review")
-    # Deliver decides: its review loop escalates stuck, no conductor yet.
+    # Deliver's quiet conductor decides by the defaults; the review loop,
+    # under a quiet conductor that triages nothing, escalates stuck.
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    assert _task(client, task["id"])["decider"] == "policy"
+    assert _task(client, task["id"])["voice"] == "quiet"
     wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=180,
                message="Deliver's review never got stuck")
-    assert _task(client, task["id"])["decider"] == "policy"
-    assert not _woken(client, task["id"])
+    assert _task(client, task["id"])["voice"] == "quiet"
 
     # The person's first message hands the waiting delivery to the conductor.
     resp = _say(client, task["id"], "What happened?")
