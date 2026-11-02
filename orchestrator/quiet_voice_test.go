@@ -231,3 +231,18 @@ func TestAPersonsMessageMakesAQuietDeliveryChatty(t *testing.T) {
 	}
 	w.wokenWith(task, delivery.VoiceChangedLine(delivery.VoiceChatty))
 }
+
+// decidedQuietly is a quiet conductor taking its defaults at each decision
+// the delivery parks on for it (each open finding dismissed after a round,
+// then next), until done holds.
+func (w *world) decidedQuietly(task, what string, done func() bool) {
+	w.t.Helper()
+	w.until(what, func() bool {
+		if at := w.decisionAt(task); at == delivery.PointReviewed {
+			w.finishReview(task)
+		} else if at != "" && at != delivery.PointBeforePR {
+			w.must(task, "decide", `{"action":"next"}`)
+		}
+		return done()
+	})
+}

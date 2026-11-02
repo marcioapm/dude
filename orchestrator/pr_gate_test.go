@@ -466,10 +466,14 @@ func TestALaterRepositorysPullRequestIsNeitherHeldNorADraft(t *testing.T) {
 			w.assignOwner(task, ana)
 			w.projectChoice(choice)
 			if c.viaConductor {
-				// Talked through, then handed to Deliver: its conductor stays live.
+				// Talked through, then handed to Deliver's policy, as a
+				// hand-back from before voices left it (a hand-back is quiet
+				// now: TestAQuietDeliveryOpensItsPullRequestByTheChoice): its
+				// conductor stays live.
 				w.talk(task)
+				mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"decider":"policy","handedBack":true}' WHERE task_id = $1`, task)
 				if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
-					t.Fatalf("hand back: %d %v", status, out)
+					t.Fatalf("the wake a hand-back sends: %d %v", status, out)
 				}
 				w.until("the hold's gate question", func() bool {
 					return w.heldBeforePR(task) && w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0
