@@ -35,6 +35,9 @@ import type { RequestContext, Router } from "../router.ts";
  * (voice: quiet or chatty, null under Deliver). With it, the decision the delivery
  * waits on for the conductor, `{point, actions, phases}`, or null.
  */
+/** Why the orchestrator hands a delivery to Deliver's policy on an accept (delivery.WhyAcceptedDefaults). */
+const ACCEPTED_DEFAULTS_WHY = "the person accepted Deliver's defaults";
+
 const DECIDING_JSON = `
   COALESCE((SELECT w.state->>'decider' FROM workflow_runs w WHERE w.task_id = tasks.id
     ORDER BY w.created_at DESC LIMIT 1), 'policy') AS decider,
@@ -43,6 +46,10 @@ const DECIDING_JSON = `
     FROM workflow_runs w WHERE w.task_id = tasks.id ORDER BY w.created_at DESC LIMIT 1) AS voice,
   COALESCE((SELECT (w.state->>'handedBack')::boolean FROM workflow_runs w WHERE w.task_id = tasks.id
     ORDER BY w.created_at DESC LIMIT 1), false) AS "handedBack",
+  -- Its person accepted Deliver's defaults (the orchestrator's AcceptedDefaultsTx): its latest change of
+  -- decider is that accept, so a Start over on Deliver stays Deliver's policy, no quiet conductor.
+  COALESCE((SELECT e.payload->>'to' = 'policy' AND e.payload->>'why' = '${ACCEPTED_DEFAULTS_WHY.replaceAll("'", "''")}' FROM events e
+    WHERE e.task_id = tasks.id AND e.event_type = 'task.decider_changed' ORDER BY e.cursor DESC LIMIT 1), false) AS "acceptedDefaults",
   (SELECT json_build_object('point', w.state->'decision'->>'point')
    FROM workflow_runs w WHERE w.task_id = tasks.id AND w.status IN ('running', 'waiting')
      AND w.step = 'conductorDecision' AND w.state ? 'decision' AND NOT w.state->'decision' ? 'taken'

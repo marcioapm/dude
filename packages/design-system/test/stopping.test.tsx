@@ -81,7 +81,14 @@ describe("DeciderField", () => {
   test("a Deliver attempt marks Deliver as now and says what Deliver does", async () => {
     const el = await mount(<DeciderField attempt={3} value="deliver" previous="deliver" onChange={() => undefined} />);
     expect([...el.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["The conductor", "Deliveras now"]);
-    expect(el.textContent).toContain("Deliver runs attempt 3 to the pull request on its own");
+    expect(el.textContent).toContain("A quiet conductor takes Deliver's defaults through attempt 3 to the pull request; it speaks in Chat only when it needs you.");
+    expect(el.textContent).not.toContain("decides nothing");
+  });
+
+  test("after its person accepted Deliver's defaults, Deliver decides the attempt itself", async () => {
+    const el = await mount(<DeciderField attempt={3} value="deliver" previous="deliver" accepted onChange={() => undefined} />);
+    expect(el.textContent).toContain("Deliver decides attempt 3 to the pull request on its own, as you accepted its defaults.");
+    expect(el.textContent).not.toContain("quiet conductor");
   });
 });
 

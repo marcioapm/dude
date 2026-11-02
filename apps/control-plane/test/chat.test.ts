@@ -230,6 +230,25 @@ test("the board's driver: who its latest delivery's decider is and whether a con
   expect(await said("wi_drv_none")).toEqual(["policy", false]);
 });
 
+test("a task says its person accepted Deliver's defaults only while that accept is its latest change of decider", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+    VALUES ('wi_acc', ${ORG}, ${PROJECT}, 30, 'Accepted', 'running')`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
+    ('wfr_acc', ${ORG}, 'task.delivery', 'delivery:wi_acc', 'waiting', 'awaitFix', '{"decider":"policy","hadConductor":true}', 'wi_acc')`;
+  const changed = async (n: number, to: string, why: string) => {
+    await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+      VALUES (${`evt_acc_${n}`}, ${ORG}, 'task.decider_changed', 'wi_acc', 'system', 'dude', 'orchestrator',
+              jsonb_build_object('to', ${to}::text, 'why', ${why}::text))`;
+  };
+  const accepted = async () => ((await (await call("GET", "/v1/tasks/wi_acc")).json()) as { acceptedDefaults: boolean }).acceptedDefaults;
+  await changed(1, "conductor", "deliver");
+  expect(await accepted()).toBe(false);
+  await changed(2, "policy", "the person accepted Deliver's defaults");
+  expect(await accepted()).toBe(true);
+  await changed(3, "conductor", "a person gave the decisions to the conductor");
+  expect(await accepted()).toBe(false);
+});
+
 test("a task carries each attempt's own last decider, the first delivery's as attempt 1, and none it never had", async () => {
   await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status) VALUES ('wi_att', ${ORG}, ${PROJECT}, 20, 'Started over', 'running')`;
   await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id, created_at) VALUES

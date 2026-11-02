@@ -528,6 +528,8 @@ export const taskSchema = z.object({
   voice: voiceSchema.nullable().default(null),
   /** A person let its delivery finish quietly: a later message in Chat does not make it chatty again. */
   handedBack: z.boolean().default(false),
+  /** Its person accepted Deliver's defaults: Deliver's policy decides it, and a Start over on Deliver stays so (no quiet conductor). */
+  acceptedDefaults: z.boolean().default(false),
   /** The decision its delivery waits on for the conductor, or null. */
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
   /** Its delivery is parked until its reviewers' open questions are answered or withdrawn. */

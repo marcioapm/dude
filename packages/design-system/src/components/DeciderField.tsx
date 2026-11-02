@@ -20,18 +20,27 @@ export interface DeciderFieldProps {
   readonly onChange: (v: NextDecider) => void;
   /** Attempt N's: marked "as now", the default. */
   readonly previous: NextDecider;
+  /**
+   * Its person accepted Deliver's defaults: Deliver decides the next
+   * attempt itself, with no quiet conductor (true), as the orchestrator
+   * keeps it.
+   */
+  readonly accepted?: boolean | undefined;
   readonly className?: string | undefined;
 }
 
 const NAME: Record<NextDecider, string> = { conductor: "The conductor", deliver: "Deliver" };
 
-function hint(v: NextDecider, attempt: number): string {
-  return v === "conductor"
-    ? `A new conductor, briefed with your note and what attempt ${attempt - 1} did. Each finished step comes back to it, in Chat, with you.`
-    : `Deliver runs attempt ${attempt} to the pull request on its own; a message in Chat still reaches a conductor, who decides nothing.`;
+function hint(v: NextDecider, attempt: number, accepted: boolean): string {
+  if (v === "conductor") {
+    return `A new conductor, briefed with your note and what attempt ${attempt - 1} did. Each finished step comes back to it, in Chat, with you.`;
+  }
+  return accepted
+    ? `Deliver decides attempt ${attempt} to the pull request on its own, as you accepted its defaults.`
+    : `A quiet conductor takes Deliver's defaults through attempt ${attempt} to the pull request; it speaks in Chat only when it needs you.`;
 }
 
-export function DeciderField({ attempt, value, onChange, previous, className }: DeciderFieldProps) {
+export function DeciderField({ attempt, value, onChange, previous, accepted = false, className }: DeciderFieldProps) {
   const hintId = useId();
   const label = `Who decides attempt ${attempt}`;
   return (
@@ -48,7 +57,7 @@ export function DeciderField({ attempt, value, onChange, previous, className }: 
             </span>
           ),
         }))} />
-      <span id={hintId} className={styles["hint"]}>{hint(value, attempt)}</span>
+      <span id={hintId} className={styles["hint"]}>{hint(value, attempt, accepted)}</span>
     </div>
   );
 }

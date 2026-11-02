@@ -367,7 +367,7 @@ describe("Start over on adopted work", () => {
       ["Branch", "kept", "feature/greet, PR #12's: attempt 2 works on it from where attempt 1 left it."],
       ["Pull request", "kept", "#12 stays open — attempt 2 continues on it. dude never closes it."],
       ["Session", "new", "Attempt 2, from review again. Attempt 1's sessions stay, marked as such."],
-      ["Deliver", "new", "Runs attempt 2 to the pull request on its own, with your note."],
+      ["Deliver", "new", "A quiet conductor takes attempt 2 to the pull request by Deliver's defaults, with your note. It speaks in Chat only when it needs you."],
     ]);
     for (const words of [said, option]) {
       expect(words).not.toContain("new branch");

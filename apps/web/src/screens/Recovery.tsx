@@ -21,7 +21,7 @@ import { actorName, humanActor } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import type { People } from "../people.tsx";
-import { prsAnd, prsByOpener, type OpenPullRequest } from "./TaskStop.tsx";
+import { deliverNext, prsAnd, prsByOpener, type OpenPullRequest } from "./TaskStop.tsx";
 
 /** How the task stopped, as the record has it. */
 export interface Stop {
@@ -212,7 +212,7 @@ export function StoppedNotice({ task, stop, options, owner, you, pullRequests = 
 type Effect = { what: string; how: "kept" | "new" | "gone"; text: ReactNode };
 
 function effects(action: RecoverAction, role: string, branch: string, head: string | null, attempt: number, source: TaskSource | null,
-  conducted: boolean, next: NextDecider, prs: readonly OpenPullRequest[]): Effect[] {
+  conducted: boolean, next: NextDecider, prs: readonly OpenPullRequest[], accepted: boolean): Effect[] {
   const at = head ? <span className="ds-mono">{head}</span> : "what was pushed";
   const prKept: Effect[] = prs.length ? [{ what: "Pull request", how: "kept", text: `${prsAnd(prs, "stays", "stay")} open.` }] : [];
   switch (action) {
@@ -249,7 +249,7 @@ function effects(action: RecoverAction, role: string, branch: string, head: stri
     case "restart": {
       const who: Effect = next === "conductor"
         ? { what: "Conductor", how: "new", text: `A new one, briefed with your note and what attempt ${attempt} did. Attempt ${attempt}'s Chat stays above a divider.` }
-        : { what: "Deliver", how: "new", text: `Runs attempt ${attempt + 1} to the pull request on its own, with your note.` };
+        : { what: "Deliver", how: "new", text: deliverNext(attempt + 1, accepted) };
       // Existing work is started over where it is: its branch, and its pull request if it had one.
       if (source) {
         return [
@@ -374,9 +374,9 @@ export function PickUpDialog({ client, task, stop, options, initial, pullRequest
         <div className="pickUpWhatItDoes">
           {choices.map(({ value: a }) => (
             <div key={a} className="pickUpWay" data-shown={a === action}>
-              {a === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={previous} /> : null}
+              {a === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={previous} accepted={task.acceptedDefaults} /> : null}
               <ul className="pickUpEffects" aria-label="What it does">
-                {effects(a, role, branch, head, options.attempt, source, conducted, next, pullRequests).map((e) => (
+                {effects(a, role, branch, head, options.attempt, source, conducted, next, pullRequests, task.acceptedDefaults).map((e) => (
                   <li key={e.what} data-how={e.how}>
                     <span className="pickUpWhat">{e.what}</span>
                     <span className="pickUpHow">{e.how === "gone" && e.what === "Pull request" ? "closed" : e.how}</span>
