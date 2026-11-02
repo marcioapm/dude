@@ -70,6 +70,8 @@ type PromptInput struct {
 	// The review loop is the conductor's (State.ConductedLoop, at submit):
 	// a reviewer's instruction file asks for each finding's evidence.
 	ConductedLoop bool
+	// A conductor's: its delivery's voice at submit (State.Voice).
+	Voice string
 	// The existing pull request the task took over, when it did: its
 	// unresolved threads, changes requested and red checks are the
 	// reviewers' context.

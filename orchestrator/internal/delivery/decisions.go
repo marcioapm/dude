@@ -182,6 +182,17 @@ func (st *State) conducted() bool { return st.Decider == DeciderConductor }
 // at the start, and the pull request opens by Deliver's rules.
 func (st *State) quiet() bool { return st.conducted() && st.Voice == VoiceQuiet }
 
+// voice is the conductor's voice, "" when no conductor decides.
+func (st *State) voice() string {
+	switch {
+	case !st.conducted():
+		return ""
+	case st.quiet():
+		return VoiceQuiet
+	}
+	return VoiceChatty
+}
+
 // deliverOpens says Deliver's rules hold the pull request gate: no
 // conductor decides, or a quiet one does.
 func (st *State) deliverOpens() bool { return !st.conducted() || st.quiet() }

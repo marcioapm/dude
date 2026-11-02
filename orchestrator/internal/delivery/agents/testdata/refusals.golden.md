@@ -1518,3 +1518,7 @@ then needs review: the reviewers to run after the fix (correctness, tests, …)
 
 then.wake %q: it is after_review (the default) or after_fix
 
+## refusals/delivery/conduct/dude-holds-this-delivery-before-its-pr
+
+dude holds this delivery before its pull request for the person's Open or Draft: you decide nothing here. If they ask, tell them to answer Open or Draft
+
