@@ -238,9 +238,17 @@ func TestGoldenConductorBriefings(t *testing.T) {
 		golden(t, "briefing-conductor-rebrief-no-reason", got)
 	})
 	t.Run("deliver-decides", func(t *testing.T) {
+		// Deliver's policy decides only a delivery its person handed to it
+		// by accepting its defaults (conductor_unavailable).
 		w := newGoldenWorld(t)
-		w.delivery(t, "review", `{}`)
+		w.delivery(t, "review", `{"decider":"policy","hadConductor":true}`)
 		golden(t, "briefing-conductor-deliver-decides", w.in(t, briefWith(byPerson, "Bo", "Status?")))
+	})
+	t.Run("quiet", func(t *testing.T) {
+		// Every delivery has a conductor: Deliver's start is a quiet one.
+		w := newGoldenWorld(t)
+		w.delivery(t, "review", `{"decider":"conductor","hadConductor":true,"voice":"quiet"}`)
+		golden(t, "briefing-conductor-quiet", w.in(t, briefWith(byPerson, "Bo", "Status?")))
 	})
 	t.Run("conductor-at-step", func(t *testing.T) {
 		w := newGoldenWorld(t)
