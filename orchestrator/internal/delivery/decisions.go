@@ -1261,6 +1261,15 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 	if voice != "" {
 		st.Voice = voice
 	}
+	// Taken over chatty (a person's Chat, Talk it through), the delivery
+	// is the conductor's judgement again: Deliver's defaults a person
+	// accepted for it at conductor_unavailable are given up, and the count
+	// of defaults in a row starts over. Handed back quietly later, its
+	// rounds park for the conductor and three defaults stop for a person.
+	chatty := voice == VoiceChatty
+	if chatty {
+		st.DefaultsAccepted, st.Defaulted = false, 0
+	}
 	// Handed to the conductor while it waits on a person at an escalation:
 	// the conductor is told of it, as of one it had when it escalated.
 	told := false
@@ -1270,9 +1279,10 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 			return false, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text))
-			|| CASE WHEN $2 = 'conductor' THEN jsonb_build_object('hadConductor', true, 'voice', $3::text) ELSE '{}'::jsonb END
-			WHERE id = $1`, wfID, to, voice); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = (jsonb_set(state, '{decider}', to_jsonb($2::text))
+			|| CASE WHEN $2 = 'conductor' THEN jsonb_build_object('hadConductor', true, 'voice', $3::text) ELSE '{}'::jsonb END)
+			- CASE WHEN $4 THEN ARRAY['defaultsAccepted', 'defaulted'] ELSE ARRAY[]::text[] END
+			WHERE id = $1`, wfID, to, voice, chatty); err != nil {
 		return false, err
 	}
 	if told {

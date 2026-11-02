@@ -427,3 +427,96 @@ func TestAcceptingTakesTheDecisionAtOnce(t *testing.T) {
 	}
 	w.until("the accepted decision, by the defaults", func() bool { return w.defaulted(task, "") > before })
 }
+
+// A person who takes a delivery over in Chat after accepting Deliver's
+// defaults wants the conductor's judgement back: the chatty takeover
+// gives up the accepted defaults (SetDeciderTx), and the review rounds are
+// the conductor's again.
+func TestAChatTakeoverGivesUpTheAcceptedDefaults(t *testing.T) {
+	// acceptedThenChat runs the task quietly to conductor_unavailable with
+	// a reviewer that never clears, accepts the defaults, and once the
+	// delivery has taken them writes in the task's Chat.
+	acceptedThenChat := func(t *testing.T, w *world) (task, owner string) {
+		t.Helper()
+		w.waitingFor(100 * time.Millisecond)
+		w.onModel("reviewer", fakeagent.StuckModel)
+		task = w.task()
+		owner, _, _ = w.people(task)
+		w.startQuiet(task)
+		w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
+		if status, out := w.decide(owner, task, "accept", ""); status != 200 {
+			t.Fatalf("accept: %d %v", status, out)
+		}
+		w.until("the defaults accepted", func() bool {
+			return w.str(`SELECT COALESCE(state->>'defaultsAccepted', '') FROM workflow_runs WHERE task_id = $1`, task) == "true"
+		})
+		if status, out := w.chat(task, "let me take this one over"); status != 200 && status != 201 {
+			t.Fatalf("chat: %d %v", status, out)
+		}
+		if got := w.str(`SELECT COALESCE(state->>'voice', '') || '/' || COALESCE(state->>'defaultsAccepted', 'false') || '/'
+			|| COALESCE(state->>'defaulted', '0') FROM workflow_runs WHERE task_id = $1`, task); got != "chatty/false/0" {
+			t.Errorf("voice/defaultsAccepted/defaulted %s after the Chat takeover, want chatty/false/0", got)
+		}
+		return task, owner
+	}
+	// reviewRound waits for the delivery to park for the conductor after a
+	// review, or to leave the loop by the policy's exit (escalated, ok
+	// false). The takeover may land mid-fix: the conductor takes the fix's
+	// decision (next: the review), as a conductor's turn would.
+	reviewRound := func(t *testing.T, w *world, task string) bool {
+		t.Helper()
+		exited := func() bool { r := w.escalationReason(task); return r != "" && r != delivery.ReasonConductorUnavailable }
+		parked := func() bool {
+			at := w.decisionAt(task)
+			return at == delivery.PointReviewed || at == delivery.PointFixed || exited()
+		}
+		w.until("a round parked for the conductor, or the policy's exit", parked)
+		if w.decisionAt(task) == delivery.PointFixed {
+			w.must(task, "decide", `{"action":"next"}`)
+			w.until("the review round, or the policy's exit", func() bool {
+				return w.decisionAt(task) == delivery.PointReviewed || exited()
+			})
+		}
+		return !exited() && w.decisionAt(task) == delivery.PointReviewed
+	}
+	unavailable := func(w *world, task string) int {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+			AND payload->>'reason' = $2`, task, delivery.ReasonConductorUnavailable)
+	}
+	t.Run("the review rounds park for the conductor", func(t *testing.T) {
+		w := conducting(t)
+		task, _ := acceptedThenChat(t, w)
+		// The policy's loop bound tight: a review round the policy still
+		// decided would exit stuck at its first still round.
+		setPolicy(w, task, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9,"maxStillRounds":0}`)
+		if !reviewRound(t, w, task) {
+			t.Fatalf("the review loop exited %q by the policy after a Chat takeover, want it parked for the conductor at %s",
+				w.escalationReason(task), delivery.PointReviewed)
+		}
+	})
+	t.Run("handed back quietly, three defaults stop for a person again", func(t *testing.T) {
+		w := conducting(t)
+		task, owner := acceptedThenChat(t, w)
+		if !reviewRound(t, w, task) {
+			t.Fatalf("the review loop exited %q after a Chat takeover, want it parked for the conductor", w.escalationReason(task))
+		}
+		if status, out := w.callAs(owner, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+			t.Fatalf("let it finish quietly: %d %v", status, out)
+		}
+		if got := w.str(`SELECT COALESCE(state->>'voice', '') || '/' || COALESCE(state->>'defaultsAccepted', 'false') || '/'
+			|| COALESCE(state->>'defaulted', '0') FROM workflow_runs WHERE task_id = $1`, task); got != "quiet/false/0" {
+			t.Errorf("voice/defaultsAccepted/defaulted %s handed back quietly, want quiet/false/0", got)
+		}
+		before := w.defaulted(task, "")
+		w.until("conductor_unavailable again, or another exit", func() bool {
+			r := w.escalationReason(task)
+			return unavailable(w, task) == 2 || r != "" && r != delivery.ReasonConductorUnavailable
+		})
+		if n := unavailable(w, task); n != 2 {
+			t.Fatalf("%d conductor_unavailable escalations (now %q), want a second after the quiet hand-back", n, w.escalationReason(task))
+		}
+		if n := w.defaulted(task, "") - before; n != delivery.MaxDefaulted {
+			t.Errorf("%d defaults after the quiet hand-back before the stop, want %d", n, delivery.MaxDefaulted)
+		}
+	})
+}
