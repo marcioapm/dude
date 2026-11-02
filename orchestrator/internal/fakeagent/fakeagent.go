@@ -431,6 +431,23 @@ const (
 // as people see it (delivery.UntitledSession).
 const UntitledSession = "Untitled session"
 
+// DefaultsModel is a scripted conductor that takes Deliver's defaults: at
+// every decision it is woken for (TakesDefaults), it calls decide next,
+// as dude's defaults would after the wait, then answers as the scripted
+// conductor does. What the e2e suites' projects put their conductor on, so
+// a quiet delivery never waits out its decision's wait.
+const DefaultsModel = "fake/defaults"
+
+// DefaultsCall is the call DefaultsModel makes at a decision.
+var DefaultsCall = [2]string{"decide", `{"action":"next"}`}
+
+// TakesDefaults says an input wakes the conductor for a decision of the
+// delivery's: a decision waiting, or a review round's end, its own wake.
+// One that only tells it (an escalation, news) decides nothing.
+func TakesDefaults(input string) bool {
+	return strings.Contains(input, "Decision waiting:") || strings.Contains(input, "Review round ")
+}
+
 // ConductorReply is the scripted conductor's answer to one input: the line
 // of its briefing that names the task, quoted, so a test sees the briefing
 // arrived, and the input it answers, quoted back.
@@ -452,7 +469,14 @@ func BrainstormReply(title, input string) string {
 // phase's script is (for a real lux, a lux-fake script). The tools the
 // message names (ConductorCalls) are called first. A session agent's
 // briefing names a session, not a task: its reply quotes the title.
-func ConductorScript(briefing string) string {
+func ConductorScript(briefing string) string { return conductorScript(briefing, "") }
+
+// ConductorScriptFor is ConductorScript for a conductor on model: on
+// DefaultsModel, a briefing that wakes it for a decision (TakesDefaults)
+// takes Deliver's defaults first.
+func ConductorScriptFor(briefing, model string) string { return conductorScript(briefing, model) }
+
+func conductorScript(briefing, model string) string {
 	task := ""
 	if _, after, ok := strings.Cut(briefing, "## The task\n\n"); ok {
 		task, _, _ = strings.Cut(after, "\n")
@@ -466,7 +490,11 @@ func ConductorScript(briefing string) string {
 		message, _, _ = strings.Cut(message, "\n\n## How you work")
 	}
 	var b strings.Builder
-	for _, c := range ConductorCalls(message) {
+	calls := ConductorCalls(message)
+	if model == DefaultsModel && !session && TakesDefaults(message) {
+		calls = append(calls, DefaultsCall)
+	}
+	for _, c := range calls {
 		if Local(c[0]) {
 			b.WriteString(localScript(c[0], c[1]))
 			continue

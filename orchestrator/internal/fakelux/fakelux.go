@@ -132,6 +132,9 @@ type Behaviour struct {
 	// A task's conductor: each turn's reply quotes its briefing and the
 	// input it answers (fakeagent.ConductorReply), in place of Reply.
 	Conductor bool
+	// A conductor on fakeagent.DefaultsModel: at each later decision it is
+	// woken for, it takes Deliver's defaults (decide next).
+	Defaults bool
 	// Tool calls to open before a Hang, each as OpenCode reports it:
 	// [title, kind, raw input as JSON]. They stay open, as a call that
 	// never settles does.
@@ -1060,7 +1063,7 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		ChecksModel: str("dude.model"), Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, ToolOutput: toolOutput, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open,
-		Verify: verify, NeverWake: str("dude.model") == fakeagent.HangModel}
+		Verify: verify, NeverWake: str("dude.model") == fakeagent.HangModel, Defaults: str("dude.model") == fakeagent.DefaultsModel}
 }
 
 // envSecretsOf are a submitted spec's env secrets, name and value, in the
@@ -1976,6 +1979,11 @@ func (s *Server) turn(run *Run) {
 		}
 		for _, c := range fakeagent.ConductorCalls(conductorAsked(input, first)) {
 			s.callTool(run, c[0], c[1])
+		}
+		// Deliver's defaults, taken at a later decision it is woken for
+		// (its first prompt's script carries them already).
+		if b.Defaults && !first && fakeagent.TakesDefaults(input) {
+			s.callTool(run, fakeagent.DefaultsCall[0], fakeagent.DefaultsCall[1])
 		}
 	}
 	if b.Hang && !run.woken && (first || !b.Conductor || len(b.OpenCalls) == 0) {

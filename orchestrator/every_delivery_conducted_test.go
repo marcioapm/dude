@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 )
 
 // deliverByAPI is Deliver pressed on a task not started: the API's start.
@@ -133,5 +134,25 @@ func TestStartingOverAnAcceptedDeliveryKeepsItDeliversUnlessAsked(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+// A conductor on the defaults-taking scripted model (fake/defaults, the
+// e2e suites' conductor) decides each decision it is woken for by
+// Deliver's defaults at once: Deliver's quiet delivery reaches its pull
+// request with no decision left to its wait, and none defaulted.
+func TestADefaultsTakingConductorDeliversToThePullRequest(t *testing.T) {
+	w := conducting(t)
+	w.onModel("conductor", fakeagent.DefaultsModel)
+	w.waitingFor(time.Hour)
+	task := w.task()
+	w.deliverByAPI(task)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2
+		AND payload->>'action' = 'next'`, task, delivery.EvDecisionTaken); n < 2 {
+		t.Errorf("the conductor took %d decisions, want at least after implement and after review", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvDecisionDefaulted); n != 0 {
+		t.Errorf("%d decisions left to the wait", n)
 	}
 }

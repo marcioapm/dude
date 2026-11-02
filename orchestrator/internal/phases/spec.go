@@ -493,7 +493,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 			spec.Labels[fakeagent.VerifyLabel] = string(raw)
 		}
 		if in.Phase == "" && (in.Role == fakeagent.Conductor || in.Role == fakeagent.Brainstorm) {
-			spec.Workload.Prompt = fakeagent.ConductorScript(in.Prompt)
+			spec.Workload.Prompt = fakeagent.ConductorScriptFor(in.Prompt, in.Model)
 		}
 		// An automation's scripted agent calls the tools its prompt names:
 		// the fake lux from the label, a real lux's lux-fake from the script.

@@ -102,6 +102,8 @@ func worldLog(t *testing.T) *slog.Logger {
 
 type world struct {
 	t         *testing.T
+	// dude's tools are served (withTools): its conductors can call them.
+	toolsOn bool
 	app       *db.DB
 	owner     *pgx.Conn
 	org       string
@@ -197,6 +199,12 @@ func newWorld(t *testing.T) *world {
 	for _, role := range []string{"implementer", "reviewer", "simplifier", "qa_browser"} {
 		w.onModel(role, "fake/scripted")
 	}
+	// Every delivery has a conductor: one Deliver starts (the API, StartTx)
+	// is decided quietly by one that takes Deliver's defaults at every
+	// decision it is woken for, so it goes on as Deliver alone did. A world
+	// start (w.deliver, w.start) bypasses StartTx and stays Deliver's
+	// policy; conductorWorld puts the conductor on fake/scripted instead.
+	w.onModel("conductor", fakeagent.DefaultsModel)
 	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ($1, $2, $3, 'target', 'git://127.0.0.1/acme/target.git', 'main')`, w.repoID, w.org, w.project)
 	mustExec(t, owner, `INSERT INTO forge_credentials (id, organization_id, auth, secret, api_base_url)
@@ -212,6 +220,10 @@ func newWorld(t *testing.T) *world {
 		Judge: &judge.Service{DB: app},
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
+	// The defaults-taking conductor of a delivery Deliver starts is woken
+	// at once: the wake window is a person's typing, not a test's.
+	// conductorWorld keeps the default.
+	w.syncer.WakeWindow = 50 * time.Millisecond
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
 	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: w.log,
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
@@ -233,6 +245,7 @@ func newWorld(t *testing.T) *world {
 // call posts to the orchestrator's internal API as the backend would.
 func (w *world) call(path string, body any) (int, map[string]any) {
 	w.t.Helper()
+	w.toolsForDeliver(path)
 	b, _ := json.Marshal(body)
 	req, _ := http.NewRequest("POST", w.api+path, bytes.NewReader(b))
 	req.Header.Set("Authorization", "Bearer svc")
@@ -1329,6 +1342,10 @@ func TestTheChatShowsThinkingToolOutputTokensAndThePrompt(t *testing.T) {
 // withTools serves dude's tools to the world's agents, as the orchestrator
 // does, reached through lux's service in their containers.
 func (w *world) withTools() {
+	if w.toolsOn {
+		return
+	}
+	w.toolsOn = true
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
 		SyncPullRequest: w.prs.Sync,
 		ValidateMachine: func(ctx context.Context, id string, from, to *delivery.Machine, before lux.Run) error {
@@ -1337,6 +1354,16 @@ func (w *world) withTools() {
 	w.t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
 	w.syncer.Agent.ToolsService = true
+}
+
+// toolsForDeliver serves dude's tools before Deliver's start (path):
+// every delivery has a conductor, whose defaults-taking scripted model
+// calls decide next at each decision (newWorld). A world that never
+// starts one through the API keeps its Runs' specs without them.
+func (w *world) toolsForDeliver(path string) {
+	if strings.HasSuffix(path, "/deliver") {
+		w.withTools()
+	}
 }
 
 // lux's lifecycle events trail the agent's records, so its "running" can be
@@ -1440,6 +1467,7 @@ func testAnAgentThatAsksWaits(t *testing.T, trailing bool) {
 // one person (X-Dude-Actor, their key).
 func (w *world) callAs(actor, path string, body any) (int, map[string]any) {
 	w.t.Helper()
+	w.toolsForDeliver(path)
 	b, _ := json.Marshal(body)
 	req, _ := http.NewRequest("POST", w.api+path, bytes.NewReader(b))
 	req.Header.Set("Authorization", "Bearer svc")
