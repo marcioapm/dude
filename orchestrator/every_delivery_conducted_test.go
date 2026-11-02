@@ -156,3 +156,31 @@ func TestADefaultsTakingConductorDeliversToThePullRequest(t *testing.T) {
 		t.Errorf("%d decisions left to the wait", n)
 	}
 }
+
+// Feedback on a quiet delivery goes to its conductor (step 3b, PR C1), and
+// reaches the work: the defaults-taking conductor (fake/defaults, the e2e
+// suites') steers the working implementer with the person's items, as
+// Deliver's policy did before every delivery had one.
+func TestFeedbackOnAQuietDeliveryReachesTheWorkingImplementerThroughItsConductor(t *testing.T) {
+	w := conducting(t)
+	w.onModel("conductor", fakeagent.DefaultsModel)
+	w.onModel("implementer", "fake/hang")
+	w.waitingFor(time.Hour)
+	ana := w.person("Ana")
+	task := w.task()
+	w.deliverByAPI(task)
+	w.until("the implementer at work", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, task) == 1
+	})
+	impl := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
+	if code, body := w.feedback(ana, task, "fbi_working", "Keep the old endpoint as an alias."); code != 201 || body["routedTo"] != "conductor" {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	w.until("the conductor's steer of the implementer", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND strpos(text, 'Keep the old endpoint as an alias.') > 0`, impl) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.tool.dude'
+		AND payload->>'tool' = 'steer' AND payload->'arguments'->>'run' = $2`, task, impl); n != 1 {
+		t.Errorf("%d conductor steers of the implementer", n)
+	}
+}

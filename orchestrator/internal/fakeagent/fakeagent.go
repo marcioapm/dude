@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -448,6 +449,39 @@ func TakesDefaults(input string) bool {
 	return strings.Contains(input, "Decision waiting:") || strings.Contains(input, "Review round ")
 }
 
+// WorkingRun stands, in a DefaultsModel conductor's steer, for the task's
+// implementer or fixer at work: the fake lux puts the Run's dude id in its
+// place, and makes no call when none is at work.
+const WorkingRun = "{{working.run}}"
+
+// feedbackWake matches a feedback wake's line (delivery's wake-feedback
+// briefing), naming its items.
+var feedbackWake = regexp.MustCompile(`feedback items? from a person \(([^)]*)\)`)
+
+// FeedbackCalls are what DefaultsModel does with the feedback wakes in an
+// input, as Deliver's policy did before every delivery had a conductor: a
+// working implementer or fixer is steered with the people's items, at its
+// next step (WorkingRun; none at work, no call). With nothing at work, the
+// delivery's own next decision (a decision wake, TakesDefaults) or its
+// next fix takes them up, as it did under Deliver. A stall wake asks for
+// no call: the Run is left as it is, as an owner's Leave it does, and the
+// conductor is told again only if its facts change.
+func FeedbackCalls(input string) [][2]string {
+	var ids []string
+	for _, m := range feedbackWake.FindAllStringSubmatch(input, -1) {
+		for id := range strings.SplitSeq(m[1], ",") {
+			if id = strings.TrimSpace(id); id != "" && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	args, _ := json.Marshal(map[string]any{"run": WorkingRun, "feedbackIds": ids})
+	return [][2]string{{"steer", string(args)}}
+}
+
 // Quiet says a conductor decides its delivery quietly, from its briefing
 // and the inputs since, oldest first: the briefing says so, or the latest
 // change of voice it was told is to quiet. DefaultsModel takes Deliver's
@@ -522,6 +556,9 @@ func conductorScript(briefing, model string) string {
 	}
 	var b strings.Builder
 	calls := ConductorCalls(message)
+	if model == DefaultsModel && !session && Quiet(briefing, nil) {
+		calls = append(calls, FeedbackCalls(message)...)
+	}
 	if model == DefaultsModel && !session && TakesDefaults(message) && Quiet(briefing, nil) {
 		calls = append(calls, DefaultsCall)
 	}

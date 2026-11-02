@@ -7,7 +7,9 @@ own sweep then finds it. Under a conductor: the conductor is woken once
 with the facts and restarts the reviewer with restart_run; the round goes
 on with the new Run. A plain delivery: its owner sees the banner, restarts
 it, and the delivery goes on. fake/silent's first reviewer hangs with no
-call open, saying nothing: its owner is told it is silent, and leaves it.
+call open, saying nothing: on a delivery Deliver's policy decides, its
+owner is told it is silent, and leaves it; on Deliver's quiet delivery, its
+conductor is told, and leaves it.
 """
 
 from __future__ import annotations
@@ -158,20 +160,52 @@ def _silent_reviewer(client: ApiClient, owner_dsn: str, task_id: str) -> dict:
     return run
 
 
-def test_an_owner_is_told_of_a_silent_reviewer_and_leaves_it(client: ApiClient, forge_project: dict, owner_dsn: str):
-    """fake/silent's first reviewer starts its turn and then says and does
-    nothing, no call open, as a model call that never answers. Its last
-    activity is back-dated past the role's window; the sweep reports it as
-    silent to the owner, once; Leave it keeps it from being asked again.
-    Another task's silent reviewer, reported after that, shows a sweep
-    looked at both."""
-    models = {**forge_project["agentModels"], **client.on_models({"reviewer": "fake/silent"})}
+def _policy_delivery(client: ApiClient, forge_project: dict, title: str) -> dict:
+    """A task its owner handed to Deliver's policy, its review stuck: the
+    conductor on a tier with no model (the organisation's Fast, unset), so
+    each quiet decision goes by the defaults until it stops for the person
+    (conductor_unavailable), who accepts them; Deliver's policy decides
+    from there, and its bound (one fix attempt per finding) escalates the
+    review stuck. Every delivery has a conductor (step 3b, PR C1): this is
+    how one ends up Deliver's own, with none live."""
+    fast = {t["name"]: t for t in client.get("/v1/models/tiers").json()["tiers"]}["Fast"]
+    assert not fast["model"], fast
+    models = {**forge_project["agentModels"], **client.on_models({"reviewer": "fake/stuck"}), "conductor": {"tier": fast["id"]}}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
-    task = client.create_task(forge_project["id"], "Greet, past a silent review")
-    other = client.create_task(forge_project["id"], "Greet, past another silent review")
+    assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
+                        {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
+    task = client.create_task(forge_project["id"], title)
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "conductor_unavailable",
+               timeout=180, message="the quiet conductor with no model never stopped for the person")
+    accepted = client.post(f"/v1/tasks/{task['id']}/decide", {"action": "accept"})
+    assert accepted.status_code == 200, accepted.text
+    assert _task(client, task["id"])["decider"] == "policy"
+    wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=180,
+               message="Deliver's review never got stuck")
+    return task
+
+
+def test_an_owner_is_told_of_a_silent_reviewer_and_leaves_it(client: ApiClient, forge_project: dict, owner_dsn: str):
+    """On a delivery Deliver's policy decides (its owner accepted Deliver's
+    defaults: no live conductor), fake/silent's first reviewer starts its
+    turn and then says and does nothing, no call open, as a model call that
+    never answers. Its last activity is back-dated past the role's window;
+    the sweep reports it as silent to the owner, once; Leave it keeps it
+    from being asked again. Another task's silent reviewer, reported after
+    that, shows a sweep looked at both."""
+    task = _policy_delivery(client, forge_project, "Greet, past a silent review")
+    # The owner's retry of the stuck review runs a fix, then a review: by fake/silent.
+    project = client.get(f"/v1/projects/{forge_project['id']}").json()
+    # The reviewer alone: the conductor's tier stays the one with no model.
+    models = {**project["agentModels"], "reviewer": client.on_models({"reviewer": "fake/silent"})["reviewer"]}
+    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
+    retried = client.post(f"/v1/tasks/{task['id']}/decide", {"action": "retry", "note": "One more round."})
+    assert retried.status_code == 200, retried.text
+    other = client.create_task(forge_project["id"], "Greet, past another silent review")
     assert client.post(f"/v1/tasks/{other['id']}/deliver").status_code == 201
     run = _silent_reviewer(client, owner_dsn, task["id"])
+    assert _task(client, task["id"])["decider"] == "policy"
     execute(owner_dsn, "UPDATE runs SET agent_active_at = now() - %s::interval WHERE id = %s", (_OPENED, run["id"]))
 
     stalled = wait_until(lambda: (client.get_run(run["id"])["stalled"] or {}).get("owner") and client.get_run(run["id"])["stalled"],
@@ -189,4 +223,40 @@ def test_an_owner_is_told_of_a_silent_reviewer_and_leaves_it(client: ApiClient, 
     barrier = _silent_reviewer(client, owner_dsn, other["id"])
     execute(owner_dsn, "UPDATE runs SET agent_active_at = now() - %s::interval WHERE id = %s", (_OPENED, barrier["id"]))
     wait_until(lambda: _stalled(client, barrier["id"]), timeout=60, message="the other silent reviewer was never reported")
+    assert len(_stalled(client, run["id"])) == 1
+
+
+def test_a_quiet_deliverys_silent_reviewer_reaches_its_conductor_which_leaves_it(client: ApiClient, forge_project: dict,
+                                                                                owner_dsn: str):
+    """Deliver's delivery is its quiet conductor's (step 3b, PR C1): its
+    silent reviewer is reported to the conductor, which handles it and
+    speaks only when it needs the person; the owner's banner is not raised.
+    The defaults-taking conductor (fake/defaults) leaves it, as Deliver's
+    policy would: no restart, stop or steer, and the reviewer stays at work."""
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults", "reviewer": "fake/silent"})}
+    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
+    task = client.create_task(forge_project["id"], "Greet, past a silent review, quietly")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    assert _task(client, task["id"])["voice"] == "quiet"
+    run = _silent_reviewer(client, owner_dsn, task["id"])
+    execute(owner_dsn, "UPDATE runs SET agent_active_at = now() - %s::interval WHERE id = %s", (_OPENED, run["id"]))
+
+    woken = wait_until(lambda: [e for e in client.events(taskId=task["id"], limit=1000)
+                                if e["eventType"] == "conductor.woken" and run["id"] in e["payload"]["text"]
+                                and "made no progress" in e["payload"]["text"]],
+                       timeout=60, message="the quiet conductor was never told of the silent reviewer")
+    assert len(woken) == 1, [e["payload"]["text"] for e in woken]
+    conductor = woken[0]["runId"]
+    wait_until(lambda: client.get_run(run["id"])["stalled"] is not None, timeout=30, message="the Run never showed as stalled")
+    assert not (client.get_run(run["id"])["stalled"] or {}).get("owner")
+    reports = _stalled(client, run["id"])
+    assert len(reports) == 1 and reports[0]["payload"]["stall"]["reasons"] == ["silent"], reports
+    # Its turn on the wake over, it left the reviewer as it is.
+    wait_until(lambda: [e for e in client.events(runId=conductor, limit=1000) if e["eventType"] == "agent.message"
+                        and e["cursor"] > woken[0]["cursor"]],
+               timeout=60, message="the conductor never took its turn on the stall")
+    acted = [e["payload"].get("tool") for e in client.events(runId=conductor, limit=1000)
+             if e["eventType"] == "agent.tool.dude" and e["payload"].get("tool") in ("restart_run", "stop_run", "steer")]
+    assert acted == [], acted
+    assert client.get_run(run["id"])["status"] == "running"
     assert len(_stalled(client, run["id"])) == 1

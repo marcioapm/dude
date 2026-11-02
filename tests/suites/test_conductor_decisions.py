@@ -296,6 +296,8 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     # The banner stays while the question is open: a person may still use it.
     assert (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck"
     fixes = len(_phases(client, task["id"], "fix"))
+    # The person's accept of conductor_unavailable is a decision of its own, before this one.
+    decided_before = len([e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"])
 
     # "Your call": a free answer decides nothing; the conductor decides.
     assert _say(client, task["id"], "Your call, use your judgement.")["questionId"] == question["id"]
@@ -304,7 +306,7 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     wait_until(lambda: len(_phases(client, task["id"], "fix")) == fixes + 1, timeout=90,
                message="the conductor's retry never started the next fix round")
     assert _task(client, task["id"]).get("escalation") is None
-    decided = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"]
+    decided = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"][decided_before:]
     assert len(decided) == 1 and decided[0]["payload"]["by"] == "conductor", decided
     assert decided[0]["payload"]["questionId"] == question["id"] and decided[0]["actor"]["id"] == conductor, decided
     # On the answer of the person who wrote "Your call": the client's own.

@@ -56,8 +56,15 @@ def test_a_draft_is_private_and_a_batch_at_the_pull_request_wait_holds_it_until_
     # A retry of the same submit is the same batch.
     again = client.post(f"/v1/tasks/{task['id']}/feedback/submit", {"draftIds": [item["id"]], "submissionKey": "s-1"})
     assert again.status_code == 200 and again.json()["batchId"] == batch["batchId"], again.text
-    assert batch["routedTo"] == "workflow"
+    # Every delivery has a conductor (step 3b, PR C1): its feedback goes to the
+    # conductor, which Deliver's quiet one (fake/defaults) answers as Deliver's
+    # policy did: the pull request's feedback decision, taken by its defaults,
+    # sends the item to a fixer.
+    assert batch["routedTo"] == "conductor", batch
     assert _item(bo, task["id"], item["id"])["body"] == "Name the flag --dry-run, as git does."
+    wait_until(lambda: any(e["eventType"] == "conductor.woken" and item["id"] in e["payload"]["text"]
+                           for e in client.events(taskId=task["id"], limit=1000)),
+               timeout=60, message="the conductor was never woken for the feedback")
 
     # Approved while the item is open: dude sees the approval, and never
     # calls the task ready to merge.
@@ -112,9 +119,17 @@ def test_a_working_implementer_hears_feedback_at_its_next_step(client: ApiClient
                        {"body": "Keep the old endpoint as an alias.", "anchor": {"kind": "general"}}).json()
     submitted = client.post(f"/v1/tasks/{task['id']}/feedback/submit", {"draftIds": [item["id"]], "submissionKey": "w-1"})
     assert submitted.status_code == 201, submitted.text
-    assert submitted.json()["routedTo"] == "steer" and submitted.json()["runId"] == impl["id"]
-    directives = client.get(f"/v1/runs/{impl['id']}/directives").json()["directives"]
+    # The feedback goes to the delivery's quiet conductor (step 3b, PR C1),
+    # which (fake/defaults, as Deliver's policy did) steers the working
+    # implementer with the person's items.
+    assert submitted.json()["routedTo"] == "conductor", submitted.text
+    directives = wait_until(lambda: client.get(f"/v1/runs/{impl['id']}/directives").json()["directives"], timeout=60,
+                            message="the conductor never steered the working implementer")
     assert len(directives) == 1 and "> Keep the old endpoint as an alias." in directives[0]["text"]
+    steered = [e for e in client.events(taskId=task["id"], limit=1000)
+               if e["eventType"] == "agent.tool.dude" and e["payload"].get("tool") == "steer"]
+    assert len(steered) == 1 and steered[0]["payload"]["arguments"]["run"] == impl["id"], steered
+    assert steered[0]["payload"]["arguments"]["feedbackIds"] == [item["id"]], steered
     assert item["id"] in directives[0]["text"]
     # Never interrupting: fake/hang never ends its turn, so it has not read
     # it, and the item is not counted as given to it until it does.
