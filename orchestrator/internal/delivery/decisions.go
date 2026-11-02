@@ -163,10 +163,13 @@ func conductorNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (string, 
 // delivery's decision number n.
 func decisionWakeKey(wfID string, n int) string { return fmt.Sprintf("%s:decision:%d", wfID, n) }
 
-// quietWait starts the wait for a quiet conductor's decision: its
-// deadline, now (no model: Deliver's defaults at once) or after the wait.
-func (w *steps) quietWait(st *State, noModel bool) workflow.Result {
-	now := time.Now().UTC()
+// quietWait starts the wait for a quiet conductor's decision at now, the
+// database's clock (dbNowTx): its deadline, now (no model: Deliver's
+// defaults at once) or after the wait. The runtime wakes the step by the
+// database's clock too, so a host clock behind it cannot have the step
+// claimed again and again before a deadline it has not reached.
+func (w *steps) quietWait(st *State, noModel bool, now time.Time) workflow.Result {
+	now = now.UTC()
 	by := now.Add(w.s.decisionWait())
 	if noModel {
 		by = now
@@ -541,9 +544,13 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 	// A quiet conductor with no model to decide with: Deliver's defaults
 	// at once, its reason settled, so no conductor Run is started for it.
 	noModel := ""
+	var now time.Time
 	if st.quiet() {
 		var err error
 		if noModel, err = conductorNoModelTx(ctx, tx, st.TaskID); err != nil {
+			return res, false, err
+		}
+		if now, err = dbNowTx(ctx, tx); err != nil {
 			return res, false, err
 		}
 	}
@@ -552,7 +559,7 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		st.Decision.Queued = r.Queued
 	}
 	if err == nil && st.quiet() {
-		out = w.quietWait(st, noModel != "")
+		out = w.quietWait(st, noModel != "", now)
 	}
 	return out, true, err
 }
@@ -723,7 +730,11 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	d := st.Decision
 	var noModel string
 	var failed bool
+	var now time.Time
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		if now, err = dbNowTx(ctx, tx); err != nil {
+			return err
+		}
 		if noModel, err = conductorNoModelTx(ctx, tx, st.TaskID); err != nil || d.Since == nil {
 			return err
 		}
@@ -735,19 +746,10 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	if d.DecideBy == nil {
 		// Parked before its wait was kept (an escalation's resume, a
 		// retry): the wait starts now.
-		return w.quietWait(st, noModel != ""), nil
+		return w.quietWait(st, noModel != "", now), nil
 	}
-	reason := ""
-	switch {
-	case d.Accepted:
-		reason = DefaultedAccepted
-	case noModel != "":
-		reason = DefaultedNoModel
-	case failed:
-		reason = DefaultedRunFailed
-	case !time.Now().Before(*d.DecideBy):
-		reason = DefaultedDeadline
-	default:
+	reason := defaultedReason(d, noModel != "", failed, now)
+	if reason == "" {
 		return w.parkQuiet(st), nil
 	}
 	if st.Defaulted >= MaxDefaulted && !st.DefaultsAccepted {
@@ -779,6 +781,31 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	st.Decision = nil
 	st.Decisions++
 	return workflow.Result{Next: d.Policy, State: st}, nil
+}
+
+// defaultedReason is why Deliver's defaults take a quiet conductor's
+// decision d now (the database's clock, as its deadline was set by), ""
+// while it still waits for the conductor.
+func defaultedReason(d *Pending, noModel, failed bool, now time.Time) string {
+	switch {
+	case d.Accepted:
+		return DefaultedAccepted
+	case noModel:
+		return DefaultedNoModel
+	case failed:
+		return DefaultedRunFailed
+	case !now.Before(*d.DecideBy):
+		return DefaultedDeadline
+	}
+	return ""
+}
+
+// dbNowTx is the database's clock: what the runtime claims a parked
+// step's wake by (wake_at <= now()).
+func dbNowTx(ctx context.Context, tx pgx.Tx) (time.Time, error) {
+	var now time.Time
+	err := tx.QueryRow(ctx, `SELECT now()`).Scan(&now)
+	return now, err
 }
 
 // gateAuthorized says whether a gate the conductor entered may open under
