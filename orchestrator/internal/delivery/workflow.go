@@ -223,6 +223,10 @@ type State struct {
 	// Deliver's own Ask me first hold sets it on a delivery no conductor
 	// ever had. Set by every writer of DeciderConductor.
 	HadConductor bool `json:"hadConductor,omitempty"`
+	// How the conductor speaks, when it decides (VoiceQuiet, VoiceChatty;
+	// "" is chatty). Written from outside the steps (the hand-back, a
+	// person's message in Chat), so a step's transition keeps the row's.
+	Voice string `json:"voice,omitempty"`
 	// The decision the workflow is parked on for the conductor.
 	Decision *Pending `json:"decision,omitempty"`
 	// Decisions taken so far: what makes each one's Runs and wake its own.
@@ -576,7 +580,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	def := &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "hadConductor", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
+		Owned:       []string{"decider", "handedBack", "hadConductor", "voice", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},

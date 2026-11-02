@@ -27,6 +27,16 @@ const (
 	DeciderConductor = "conductor"
 )
 
+// How a conducted delivery's conductor speaks (State.Voice): quiet, it
+// decides by Deliver's defaults and leaves the pull request to Deliver's
+// own rules, talking only when something needs a person; chatty, it talks
+// the work through with its people. "" reads as chatty: a conductor before
+// voices existed talked.
+const (
+	VoiceQuiet  = "quiet"
+	VoiceChatty = "chatty"
+)
+
 // SignalConductorDecision wakes a workflow parked on a decision once its
 // conductor took it, or decisions went back to the policy. The decision is
 // in the workflow's state (Decision.Taken); the signal only wakes it.
@@ -167,6 +177,14 @@ func (p *Pipeline) queued() *Directed {
 
 // conducted says whether the conductor takes the delivery's decisions.
 func (st *State) conducted() bool { return st.Decider == DeciderConductor }
+
+// quiet says the conductor decides the delivery quietly: it takes no turn
+// at the start, and the pull request opens by Deliver's rules.
+func (st *State) quiet() bool { return st.conducted() && st.Voice == VoiceQuiet }
+
+// deliverOpens says Deliver's rules hold the pull request gate: no
+// conductor decides, or a quiet one does.
+func (st *State) deliverOpens() bool { return !st.conducted() || st.quiet() }
 
 // ConductedLoop says the review loop is the conductor's: the conductor
 // decides the delivery now. A delivery that was in flight before the
