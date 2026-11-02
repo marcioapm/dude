@@ -223,6 +223,10 @@ type State struct {
 	// Deliver's own Ask me first hold sets it on a delivery no conductor
 	// ever had. Set by every writer of DeciderConductor.
 	HadConductor bool `json:"hadConductor,omitempty"`
+	// How the conductor speaks, when it decides (VoiceQuiet, VoiceChatty;
+	// "" is chatty). Written from outside the steps (the hand-back, a
+	// person's message in Chat), so a step's transition keeps the row's.
+	Voice string `json:"voice,omitempty"`
 	// The decision the workflow is parked on for the conductor.
 	Decision *Pending `json:"decision,omitempty"`
 	// Decisions taken so far: what makes each one's Runs and wake its own.
@@ -576,7 +580,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	def := &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "hadConductor", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
+		Owned:       []string{"decider", "handedBack", "hadConductor", "voice", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
@@ -715,8 +719,11 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 	// The conductor plans with the person before anything is built: the
 	// first implementer is its call. A person's "try again" is not.
 	if st.conducted() && st.Retries == 0 {
-		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
-			return workflow.Result{}, err
+		// A quiet conductor takes no turn here (recheck): no planning.
+		if st.chatty() {
+			if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
+				return workflow.Result{}, err
+			}
 		}
 		return w.next(ctx, sc, st, PointStart, "implementRun", "")
 	}
@@ -1828,8 +1835,8 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		// Not the latched Draft: a later opening (another repository's) is not this one.
 		st.draftChoice = choice == PullRequestDraft
 	}
-	if len(st.PullRequestIDs) == 0 && (st.conducted() || st.GateRequired) && !st.gateHeld() {
-		if st.conducted() {
+	if len(st.PullRequestIDs) == 0 && (st.chatty() || st.GateRequired) && !st.gateHeld() {
+		if st.chatty() {
 			return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
 		}
 		ok, err := w.gateAuthorized(ctx, sc, st)
@@ -3427,7 +3434,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		status := "running"
 		if e.At == "awaitPullRequest" || e.At == "awaitRead" {
 			status = "review"
-		} else if e.At == "conductorDecision" && !st.conducted() && st.Decision != nil && st.Decision.Point == PointBeforePR {
+		} else if e.At == "conductorDecision" && st.deliverOpens() && st.Decision != nil && st.Decision.Point == PointBeforePR {
 			status = "awaiting_input"
 		}
 		return resumeEscalationAt(st, e), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, "a person decided: "+d.Action)

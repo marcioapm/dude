@@ -102,6 +102,7 @@ var (
 	steerFailedTmpl            = mustTemplate("wakes/steer-failed")
 	steerReadTmpl              = mustTemplate("wakes/steer-read")
 	unblockedTmpl              = mustTemplate("wakes/unblocked")
+	voiceChangedTmpl           = mustTemplate("wakes/voice-changed")
 	wakeNoteTmpl               = mustTemplate("wakes/note")
 	waitTmpl                   = mustTemplate("wakes/wait")
 	recoveredTmpl              = mustTemplate("wakes/recovered")

@@ -174,10 +174,11 @@ func TestAConductedNarrowLoopParksPastItsBound(t *testing.T) {
 	}
 }
 
-// A delivery a conductor had, handed back to Deliver, is decided by the
-// policy again and keeps its exits: one fix attempt per finding, its finding
-// still open after its fix, escalates stuck.
-func TestAHandedBackDeliveryKeepsThePolicysExits(t *testing.T) {
+// A delivery handed back to finish quietly is still its conductor's, and
+// quiet has no counters: past the policy's attempt and still bounds the
+// round parks for the conductor with the round's wake, never escalating
+// stuck.
+func TestAQuietlyHandedBackDeliveryHasNoCounters(t *testing.T) {
 	w := conducting(t)
 	stillReviews(w, false)
 	task := w.task()
@@ -189,5 +190,17 @@ func TestAHandedBackDeliveryKeepsThePolicysExits(t *testing.T) {
 	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
 		t.Fatalf("hand back: %d %v", status, out)
 	}
-	w.until("stuck", func() bool { w.pump(); return w.escalationReason(task) == "stuck" })
+	if d, v := w.decider(task), w.voice(task); d != "conductor" || v != "quiet" {
+		t.Fatalf("handed back: decider %s voice %q, want conductor and quiet", d, v)
+	}
+	w.carriedOut(task, "start_phase", `{"phase":"fix","then":{"review":["correctness"]}}`)
+	w.until("round 2 parked, or escalated", func() bool {
+		return w.escalationReason(task) != "" || w.decisionAt(task) == delivery.PointReviewed && w.iteration(task) == 2
+	})
+	if r := w.escalationReason(task); r != "" {
+		t.Fatalf("the quiet round escalated %s\n%s", r, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeRound); n < 1 {
+		t.Errorf("no round wake for the quiet round")
+	}
 }

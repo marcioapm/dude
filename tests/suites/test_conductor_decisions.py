@@ -186,7 +186,7 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
     assert resp["decider"] == "conductor"
     assert _task(client, task["id"])["decider"] == "conductor"
     changes = [e["payload"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decider_changed"]
-    assert changes == [{"from": "policy", "to": "conductor", "why": "a person wrote in Chat"}]
+    assert changes == [{"from": "policy", "to": "conductor", "voice": "chatty", "why": "a person wrote in Chat"}]
 
     # Feedback now waits on the conductor: no fixer until it decides.
     before = {r["id"] for r in _phases(client, task["id"], "fix")}
@@ -206,15 +206,25 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
     assert decisions == [("pull_request_feedback", "start_phase")], decisions
     before |= {conducted[0]["id"]}
 
-    # Let Deliver finish it: the next feedback is the policy's again.
+    # Let it finish quietly: the conductor still decides, quiet, and is told so;
+    # the next feedback is still its decision, and a later message keeps it quiet.
     wait_until(lambda: _task(client, task["id"])["status"] == "review", timeout=60, message="not back in review")
     assert client.post(f"/v1/tasks/{task['id']}/decider", {"decider": "policy"}).status_code == 200
-    assert _task(client, task["id"])["decider"] == "policy"
+    after = _task(client, task["id"])
+    assert (after["decider"], after["voice"], after["handedBack"]) == ("conductor", "quiet", True), after
+    changes = [e["payload"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decider_changed"]
+    assert changes[-1] == {"from": "conductor", "to": "conductor", "voice": "quiet", "why": "a person let it finish quietly"}, changes
     fake_github.comment(pr["number"], "And the time, please.", path="FIXED.md")
+    _waiting_on(client, task["id"], "pull_request_feedback", "the feedback never waited on the quiet conductor")
+    assert len(_phases(client, task["id"], "fix")) == fixes + 1
+    wait_until(lambda: any("This delivery is quiet now" in n for n in _woken(client, task["id"])), timeout=60,
+               message="the conductor was never told it is quiet")
+    _say(client, task["id"], "Fix it too.", _tool("start_phase", {"phase": "fix"}))
     wait_until(lambda: len(_phases(client, task["id"], "fix")) == fixes + 2, timeout=60,
-               message="after the hand-back, Deliver never fixed the feedback")
-    policy_fix = [r for r in _phases(client, task["id"], "fix") if r["id"] not in before]
-    assert len(policy_fix) == 1 and policy_fix[0]["conductorRunId"] is None, policy_fix
+               message="the quiet conductor's fix never ran")
+    quiet_fix = [r for r in _phases(client, task["id"], "fix") if r["id"] not in before]
+    assert len(quiet_fix) == 1 and quiet_fix[0]["conductorRunId"] == resp["runId"], quiet_fix
+    assert _task(client, task["id"])["voice"] == "quiet"
 
 
 def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,

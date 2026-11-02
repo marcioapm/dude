@@ -1891,7 +1891,7 @@ func (s *Syncer) talkerInput(ctx context.Context, tx pgx.Tx, r phaseRun, images 
 			in.Repositories = append(in.Repositories, delivery.PromptRepo{Name: repo.Name, Path: RepoPath(repo.Name), ReadOnly: readOnly})
 		}
 		in.CLI = in.Tools && s.Agent.ToolsService
-		in.Branch, in.TaskBranch = runBranch(r), tb.Branch
+		in.Branch, in.TaskBranch, in.Voice = runBranch(r), tb.Branch, tb.Voice
 	}
 	in.Context = delivery.ResolveRole(role, models...).Context
 	// A session spans projects: its organisation's prompt alone.

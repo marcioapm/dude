@@ -7,6 +7,7 @@ const (
 	rThisTaskYouAreReadOnly                 = "this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees"
 	rThisTaskHasNoDeliveryIn                = "this task has no delivery in progress to decide for"
 	rDeliverTakesThisTaskDecisionsNot       = "Deliver takes this task's decisions, not you: you are read-only. A person hands them to you by writing in Chat; until then, answer and advise"
+	rDudeHoldsThisDeliveryBeforeItsPR       = "dude holds this delivery before its pull request for the person's Open or Draft: you decide nothing here. If they ask, tell them to answer Open or Draft"
 	rThisDecisionWasTakenAlreadyYou         = "this decision was taken already (%s); you are woken at the next one"
 	rDeliveryStoppedForPersonAtEscalation   = "the delivery is stopped for a person at an escalation (%s), not waiting on your decision. The person decides it on the banner, or by answering your question about it (ask_person with the escalation's actions as choices); if the owner answers that question in their own words, decide it with decide_escalation"
 	rDeliveryNotWaitingOnDecisionNow        = "the delivery is not waiting on a decision now (it is at %s): you are woken when it is"

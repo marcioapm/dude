@@ -3,6 +3,7 @@
 rThisTaskYouAreReadOnly                 refusals/delivery/conduct/this-task-you-are-read-only
 rThisTaskHasNoDeliveryIn                refusals/delivery/conduct/this-task-has-no-delivery-in
 rDeliverTakesThisTaskDecisionsNot       refusals/delivery/conduct/deliver-takes-this-task-decisions-not
+rDudeHoldsThisDeliveryBeforeItsPR       refusals/delivery/conduct/dude-holds-this-delivery-before-its-pr
 rThisDecisionWasTakenAlreadyYou         refusals/delivery/conduct/this-decision-was-taken-already-you
 rDeliveryStoppedForPersonAtEscalation   refusals/delivery/conduct/delivery-stopped-for-person-at-escalation
 rDeliveryNotWaitingOnDecisionNow        refusals/delivery/conduct/delivery-not-waiting-on-decision-now

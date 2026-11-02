@@ -212,14 +212,13 @@ func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 		if status, out := w.answerAs(ana, task, "Your call."); status != 200 {
 			t.Fatalf("the answer: %d %v", status, out)
 		}
-		// The owner decides this one on the banner and hands the delivery
-		// back to Deliver, whose retry escalates again; handed over again,
-		// the conductor is told of the second escalation.
+		// The owner decides this one on the banner, on a delivery Deliver's
+		// policy decides (written directly: no hand-back gives it to the
+		// policy), whose retry escalates again; handed over again, the conductor is told of the second
+		// escalation.
+		mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"decider":"policy"}' WHERE task_id = $1`, task)
 		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "retry", "note": "Try the greeting's wording only."}); status != 200 {
 			t.Fatalf("the banner: %d %v", status, out)
-		}
-		if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": delivery.DeciderPolicy}); status != 200 {
-			t.Fatalf("hand-back: %d %v", status, out)
 		}
 		// Deliver's second escalation: not_converging, the loop once
 		// conducted keeping the fix bar (HadConductor).

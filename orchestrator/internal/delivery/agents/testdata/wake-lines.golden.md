@@ -132,6 +132,14 @@ The person withdrew reviewer question rvq_1. Decide whether a review should weig
 
 `main` moved: GLD-8 merged (#14). Call sync_base if your work depends on it; while a pull request is open on the task branch, publish is refused, so use start_phase fix to bring it in instead.
 
+## voice-quiet
+
+This delivery is quiet now: decide by your defaults, post in Chat only when something needs a person, and leave the pull request to dude, which opens it by the task's choice.
+
+## voice-chatty
+
+This delivery is chatty now: talk the work through with the person, and ask the pull-request question when dude wakes you before the pull request.
+
 ## wait-held
 
 Your wait cwt_1 held (2 of 2): review run_rev failed: lux: the host went away xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…; api#12 checks failing at aaaaaaa (lint, unit); implement run_impl2 (restarted from run_impl) completed; web#3 checks passing at aaaaaaa.

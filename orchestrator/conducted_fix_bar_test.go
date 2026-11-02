@@ -64,9 +64,9 @@ func TestAConductedLoopFixesAMediumFindingThePolicyLoopShips(t *testing.T) {
 	}
 }
 
-// A delivery that had a conductor keeps its fix bar when the person lets
-// Deliver finish it: a medium the next round still finds gets another fix
-// round, as it would have conducted, rather than shipping.
+// A delivery handed back to finish quietly keeps its conductor's fix bar:
+// a medium the next round still finds is at the bar in the round's wake,
+// as it was chatty, rather than shipping.
 func TestAHandedBackDeliveryKeepsTheConductedFixBar(t *testing.T) {
 	w := conducting(t)
 	scripted := w.lux.Decide
@@ -95,11 +95,13 @@ func TestAHandedBackDeliveryKeepsTheConductedFixBar(t *testing.T) {
 	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
 		t.Fatalf("hand back: %d %v", status, out)
 	}
+	w.carriedOut(task, "start_phase", `{"phase":"fix","then":{"review":["correctness"]}}`)
 	w.until("the round after the first fix", func() bool {
-		return w.phaseRuns(task, "fix") >= 2 || w.phaseRuns(task, "simplify") > 0 || w.taskStatus(task) == "awaiting_input"
+		return w.decisionAt(task) == delivery.PointReviewed && w.phaseRuns(task, "review") >= 2 || w.phaseRuns(task, "simplify") > 0
 	})
-	if n := w.phaseRuns(task, "fix"); n < 2 {
-		t.Errorf("handed back, the still-open medium got %d fix rounds, want a second\n%s", n, w.describeRuns())
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND line LIKE '%Review round 2 done%: 1 open at the fix bar. % [medium] %'`,
+		task, delivery.WakeRound); n != 1 {
+		t.Errorf("handed back quietly, the still-open medium is at the bar in %d round wakes, want 1\n%s", n, w.describeRuns())
 	}
 }
 
@@ -148,10 +150,10 @@ func TestAConductedLoopCountsAMediumRegression(t *testing.T) {
 	if n := w.phaseRuns(task, "fix"); n != fixes+1 || w.phaseRuns(task, "simplify") != 0 {
 		t.Errorf("after the round: %d fixes (want %d), %d simplifiers\n%s", n, fixes+1, w.phaseRuns(task, "simplify"), w.describeRuns())
 	}
-	// Handed back to Deliver after round 1, the loop keeps the conducted
-	// fix bar in its convergence too (HadConductor): the medium
-	// regressions count, and past the bound it escalates not_converging.
-	t.Run("handed back", func(t *testing.T) {
+	// Handed back to finish quietly after round 1, the loop is still the
+	// conductor's, with no counters: past the regression bound the round
+	// parks for the conductor, never escalating not_converging.
+	t.Run("handed back quietly", func(t *testing.T) {
 		w := conducting(t)
 		scripted := w.lux.Decide
 		reviews := 0
@@ -178,9 +180,19 @@ func TestAConductedLoopCountsAMediumRegression(t *testing.T) {
 		if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
 			t.Fatalf("hand back: %d %v", status, out)
 		}
-		w.until("an escalation", func() bool { return w.escalationReason(task) != "" })
-		if got := w.escalationReason(task); got != delivery.ReasonNotConverging {
-			t.Errorf("handed back after two medium regressions: escalated %q, want %s\n%s", got, delivery.ReasonNotConverging, w.describeRuns())
+		for round := 1; round <= 2; round++ {
+			if round > 1 {
+				w.until(fmt.Sprintf("round %d reviewed", round), func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+			}
+			w.carriedOut(task, "start_phase", `{"phase":"fix"}`)
+			w.until(fmt.Sprintf("fix %d done", round), func() bool { return w.decisionAt(task) == delivery.PointFixed })
+			w.carriedOut(task, "decide", `{"action":"next"}`)
+		}
+		w.until("round 3 reviewed, or escalated", func() bool {
+			return w.escalationReason(task) != "" || w.decisionAt(task) == delivery.PointReviewed
+		})
+		if got := w.escalationReason(task); got != "" {
+			t.Errorf("handed back quietly after two medium regressions: escalated %q, want the round parked for the conductor\n%s", got, w.describeRuns())
 		}
 	})
 }

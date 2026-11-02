@@ -417,29 +417,33 @@ func TestAWaitHoldsAStepWokenByASignalUntilItsTime(t *testing.T) {
 func TestAStepDoesNotUndoAnOwnedKeyWrittenWhileItRan(t *testing.T) {
 	h := newHarness(t)
 	var id string
-	h.rt.Register(&Definition{Type: "test.owned", InitialStep: "work", Owned: []string{"decider"},
+	h.rt.Register(&Definition{Type: "test.owned", InitialStep: "work", Owned: []string{"decider", "voice"},
 		Steps: map[string]Step{
 			"work": func(ctx context.Context, sc StepContext) (Result, error) {
 				var st map[string]any
 				_ = json.Unmarshal(sc.State, &st)
-				// A person's write lands while the step runs.
-				if _, err := h.owner.Exec(ctx, `UPDATE workflow_runs SET state = state || '{"decider":"conductor","note":"theirs"}'
+				// A person's write lands while the step runs: a hand-back
+				// to the conductor, quiet.
+				if _, err := h.owner.Exec(ctx, `UPDATE workflow_runs SET state = state || '{"decider":"conductor","voice":"quiet","note":"theirs"}'
 					WHERE id = $1`, id); err != nil {
 					return Result{}, err
 				}
-				st["step"], st["note"] = "done", "the step's"
+				st["step"], st["note"], st["voice"] = "done", "the step's", "chatty"
 				return Result{Next: "wait", State: st, AwaitSignals: []string{"never"}}, nil
 			},
 		}})
 	id = h.start("test.owned")
 	h.tick()
-	var decider, step, note string
-	if err := h.owner.QueryRow(context.Background(), `SELECT COALESCE(state->>'decider', ''), state->>'step', state->>'note'
-		FROM workflow_runs WHERE id = $1`, id).Scan(&decider, &step, &note); err != nil {
+	var decider, voice, step, note string
+	if err := h.owner.QueryRow(context.Background(), `SELECT COALESCE(state->>'decider', ''), COALESCE(state->>'voice', ''),
+		state->>'step', state->>'note' FROM workflow_runs WHERE id = $1`, id).Scan(&decider, &voice, &step, &note); err != nil {
 		t.Fatal(err)
 	}
 	if decider != "conductor" {
 		t.Errorf("the owned key written mid-step is %q after the transition, want conductor", decider)
+	}
+	if voice != "quiet" {
+		t.Errorf("the voice written mid-step is %q after the transition, want quiet", voice)
 	}
 	if step != "done" || note != "the step's" {
 		t.Errorf("the step's own keys: step %q note %q", step, note)

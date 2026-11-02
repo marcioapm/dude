@@ -46,6 +46,7 @@ import type {
   TaskSource,
   TaskSourceInput,
   Decider,
+  Voice,
   DeliveryPolicy,
   Directive,
   DirectiveScope,
@@ -2042,11 +2043,12 @@ export class ApiClient {
   }
 
   /**
-   * Who takes the delivery's decisions from the next one on: "policy" is Let Deliver finish it.
-   * openPullRequest confirms that Deliver opens the pull request now, past the conductor's gate question;
+   * How the delivery's conductor decides from the next decision on: "policy" is Let it finish quietly (the
+   * conductor goes on, quiet: Deliver's rules open the pull request), "conductor" is Talk it through (chatty).
+   * openPullRequest confirms that Deliver opens the pull request now, past the gate's question;
    * with it, draft is the person's Open (false) or Draft (true).
    */
-  setDecider(taskId: string, decider: Decider, openPullRequest = false, draft?: boolean): Promise<{ taskId: string; decider: Decider }> {
+  setDecider(taskId: string, decider: Decider, openPullRequest = false, draft?: boolean): Promise<{ taskId: string; decider: Decider; voice?: Voice }> {
     return this.#request("POST", `/v1/tasks/${taskId}/decider`,
       openPullRequest ? { decider, openPullRequest, ...(draft === undefined ? {} : { draft }) } : { decider });
   }

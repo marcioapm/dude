@@ -453,6 +453,27 @@ export const taskCriteriaInput = z.array(z.string()).refine(
 export const deciderSchema = z.enum(["policy", "conductor"]);
 export type Decider = z.infer<typeof deciderSchema>;
 
+/**
+ * How a conductor that decides a delivery speaks (the orchestrator's
+ * State.Voice): quiet, it decides by its defaults and Deliver's rules open
+ * the pull request; chatty, it talks the work through. On the wire a
+ * hand-back's "policy" is quiet and its "conductor" chatty.
+ */
+export const voiceSchema = z.enum(["quiet", "chatty"]);
+export type Voice = z.infer<typeof voiceSchema>;
+
+type Voiced = { readonly decider: Decider; readonly voice?: Voice | null | undefined };
+
+/** The delivery's conductor decides it quietly. */
+export function decidesQuietly(task: Voiced): boolean {
+  return task.decider === "conductor" && task.voice === "quiet";
+}
+
+/** Deliver's rules hold the delivery's gate before its pull request: no conductor decides, or a quiet one does. */
+export function deliverOpens(task: Voiced): boolean {
+  return task.decider !== "conductor" || decidesQuietly(task);
+}
+
 /** Where a conducted delivery waits on its conductor (the orchestrator's decision points). */
 export const decisionPointSchema = z.enum([
   "start",
@@ -503,7 +524,9 @@ export const taskSchema = z.object({
    * or its conductor, in Chat with its people ("conductor").
    */
   decider: deciderSchema.default("policy"),
-  /** A person let Deliver finish its delivery: a later message in Chat does not take the decisions over again. */
+  /** How its conductor speaks, when one decides ("quiet" or "chatty"); null when Deliver's policy decides. */
+  voice: voiceSchema.nullable().default(null),
+  /** A person let its delivery finish quietly: a later message in Chat does not make it chatty again. */
   handedBack: z.boolean().default(false),
   /** The decision its delivery waits on for the conductor, or null. */
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),

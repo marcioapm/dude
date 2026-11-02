@@ -27,6 +27,16 @@ const (
 	DeciderConductor = "conductor"
 )
 
+// How a conducted delivery's conductor speaks (State.Voice): quiet, it
+// decides by Deliver's defaults and leaves the pull request to Deliver's
+// own rules, talking only when something needs a person; chatty, it talks
+// the work through with its people. "" reads as chatty: a conductor before
+// voices existed talked.
+const (
+	VoiceQuiet  = "quiet"
+	VoiceChatty = "chatty"
+)
+
 // SignalConductorDecision wakes a workflow parked on a decision once its
 // conductor took it, or decisions went back to the policy. The decision is
 // in the workflow's state (Decision.Taken); the signal only wakes it.
@@ -168,6 +178,36 @@ func (p *Pipeline) queued() *Directed {
 // conducted says whether the conductor takes the delivery's decisions.
 func (st *State) conducted() bool { return st.Decider == DeciderConductor }
 
+// quiet says the conductor decides the delivery quietly: it takes no turn
+// at the start, and the pull request opens by Deliver's rules.
+func (st *State) quiet() bool { return st.conducted() && st.Voice == VoiceQuiet }
+
+// chatty says the conductor decides the delivery and talks it through:
+// it takes its turn at every decision point, the pull request's too.
+func (st *State) chatty() bool { return st.conducted() && !st.quiet() }
+
+// voice is the conductor's voice, "" when no conductor decides.
+func (st *State) voice() string {
+	switch {
+	case st.quiet():
+		return VoiceQuiet
+	case st.chatty():
+		return VoiceChatty
+	}
+	return ""
+}
+
+// quietAt says a quiet conductor takes no turn at point: the start, whose
+// implementer starts at once, and the pull request, which Deliver's own
+// rules open. The policy's step is taken there, as with no conductor.
+func (st *State) quietAt(point string) bool {
+	return st.quiet() && (point == PointStart || point == PointBeforePR)
+}
+
+// deliverOpens says Deliver's rules hold the pull request gate: no
+// conductor decides, or a quiet one does.
+func (st *State) deliverOpens() bool { return !st.chatty() }
+
 // ConductedLoop says the review loop is the conductor's: the conductor
 // decides the delivery now. A delivery that was in flight before the
 // conducted loop existed gets it on its next round too. One a conductor
@@ -222,7 +262,7 @@ var pointLabel = func() map[string]string {
 // wake and event in the transition's transaction. A conductor that was
 // deciding as the step entered the pull request gate leaves it required.
 func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, point, step, line string) (workflow.Result, error) {
-	if st.conducted() && point == PointBeforePR {
+	if st.chatty() && point == PointBeforePR {
 		st.GateRequired, st.ChoiceGate = true, false
 	}
 	st.Routed = &Routed{Point: point, Policy: step, Next: step, Line: line}
@@ -376,13 +416,15 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 	}
 	r := st.Routed
 	st.Routed = nil
-	var decider string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', '') FROM workflow_runs WHERE id = $1 FOR UPDATE`,
-		sc.WorkflowRunID).Scan(&decider); err != nil {
+	var decider, voice string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', ''), COALESCE(state->>'voice', '') FROM workflow_runs
+		WHERE id = $1 FOR UPDATE`, sc.WorkflowRunID).Scan(&decider, &voice); err != nil {
 		return res, false, err
 	}
-	st.Decider = decider
-	if decider != DeciderConductor || res.Next != r.Next {
+	st.Decider, st.Voice = decider, voice
+	// A quiet conductor takes no turn at the start, and Deliver's own rules
+	// open the pull request: the policy's step, as with no conductor.
+	if decider != DeciderConductor || res.Next != r.Next || st.quietAt(r.Point) {
 		if res.Next == "openPullRequest" && !st.GateRequired {
 			if err := FreezePublicationTx(ctx, tx, st.TaskID, st.Branch); err != nil {
 				return res, false, err
@@ -446,7 +488,11 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 	if d == nil {
 		return workflow.Result{}, fmt.Errorf("no decision to carry out")
 	}
-	if d.Taken == nil && !st.conducted() {
+	// Under a quiet conductor, a start or Deliver's hold before the pull
+	// request (handed back quietly while parked there) is Deliver's too:
+	// the implementer starts, and the person's Open or Draft opens it, with
+	// no conductor turn.
+	if d.Taken == nil && (!st.conducted() || st.quietAt(d.Point)) {
 		// A gate the conductor entered stays one handed back: Deliver goes
 		// on only with the person's Open or Draft, or their confirmation.
 		if d.Point == PointBeforePR && st.GateRequired && !st.gateHeld() {
@@ -663,7 +709,7 @@ func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *Sta
 	}); err != nil {
 		return workflow.Result{}, err
 	}
-	if (st.adoptedBranch() || st.ChoiceGate) && !st.conducted() {
+	if (st.adoptedBranch() || st.ChoiceGate) && st.deliverOpens() {
 		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", ReasonReadyForReview); err != nil {
 			return workflow.Result{}, err
 		}
@@ -963,14 +1009,22 @@ func tellEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *Stat
 	return err == nil, err
 }
 
-// SetDeciderTx changes who decides a task's delivery, recording it once:
-// a no-op when it already is. Returns whether it changed.
-func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, to, why, actorType, actorID string) (bool, error) {
-	from := st.Decider
+// SetDeciderTx changes who decides a task's delivery, and under the
+// conductor how it speaks (voice: VoiceQuiet, VoiceChatty; "" keeps the
+// delivery's), recording it once: a no-op when both already are. Returns
+// whether it changed. A conductor whose delivery changes voice is told
+// (voiceToldTx): its instruction file says the voice it was submitted with.
+func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, to, voice, why, actorType, actorID string) (bool, error) {
+	from, fromVoice := st.Decider, st.voice()
 	if from == "" {
 		from = DeciderPolicy
 	}
-	if from == to {
+	if to != DeciderConductor {
+		voice = ""
+	} else if voice == "" {
+		voice = cmp.Or(st.Voice, VoiceChatty)
+	}
+	if from == to && (to != DeciderConductor || fromVoice == voice) {
 		return false, nil
 	}
 	// Not while the conductor's publish moves the task branch: the caller
@@ -980,6 +1034,9 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 	}
 	st.Decider = to
 	st.HadConductor = st.HadConductor || to == DeciderConductor
+	if voice != "" {
+		st.Voice = voice
+	}
 	// Handed to the conductor while it waits on a person at an escalation:
 	// the conductor is told of it, as of one it had when it escalated.
 	told := false
@@ -990,8 +1047,8 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text))
-			|| CASE WHEN $2 = 'conductor' THEN '{"hadConductor": true}'::jsonb ELSE '{}'::jsonb END WHERE id = $1`,
-		wfID, to); err != nil {
+			|| CASE WHEN $2 = 'conductor' THEN jsonb_build_object('hadConductor', true, 'voice', $3::text) ELSE '{}'::jsonb END
+			WHERE id = $1`, wfID, to, voice); err != nil {
 		return false, err
 	}
 	if told {
@@ -1009,10 +1066,45 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 			return false, err
 		}
 	}
+	if fromVoice != "" && voice != "" && fromVoice != voice {
+		if err := voiceToldTx(ctx, tx, org, st.TaskID, voice); err != nil {
+			return false, err
+		}
+	}
+	payload := map[string]any{"from": from, "to": to, "why": why}
+	if voice != "" {
+		payload["voice"] = voice
+	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvDeciderChanged, OrganizationID: org, ProjectID: st.ProjectID,
 		TaskID: st.TaskID, ActorType: actorType, ActorID: actorID, Source: ledger.SourceOrchestrator, CorrelationID: st.TaskID,
-		Payload: map[string]any{"from": from, "to": to, "why": why}})
+		Payload: payload})
 	return true, err
+}
+
+// voiceWakePrefix keys the reason that tells a conductor its delivery's
+// voice changed: held news (heldWakePrefix), as a merge's is (retest).
+const voiceWakePrefix = heldWakePrefix + "voice:"
+
+// voiceToldTx tells the conductor its delivery's voice, which its
+// instruction file says only as it was submitted: one line, recorded
+// as a reason in the same transaction as the change, as an escalation
+// handed to it is told (tellEscalationTx). It is news, not a call to act:
+// told at once to a conductor between turns, else in its next note, never
+// spending a turn by itself. A change not yet told replaces the one before
+// it: only the latest voice is said.
+func voiceToldTx(ctx context.Context, tx pgx.Tx, org, taskID, voice string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM conductor_wakes WHERE task_id = $1 AND key LIKE $2 AND delivered_at IS NULL`,
+		taskID, voiceWakePrefix+"%"); err != nil {
+		return err
+	}
+	_, err := RecordWakeTx(ctx, tx, org, taskID, "decision", voiceWakePrefix+ids.New("v"), VoiceChangedLine(voice))
+	return err
+}
+
+// VoiceChangedLine is the fact a conductor is told when its delivery's
+// voice changes.
+func VoiceChangedLine(voice string) string {
+	return render(voiceChangedTmpl, struct{ Quiet bool }{voice == VoiceQuiet})
 }
 
 // reviewCategories is every reviewer a conductor may name.

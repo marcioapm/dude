@@ -31,12 +31,16 @@ import type { RequestContext, Router } from "../router.ts";
 /**
  * Who takes the task's delivery decisions, from its latest delivery's state
  * (the orchestrator's State.Decider): "policy" (Deliver) or "conductor";
- * "policy" for a task with no delivery. With it, the decision the delivery
+ * "policy" for a task with no delivery; and how its conductor speaks
+ * (voice: quiet or chatty, null under Deliver). With it, the decision the delivery
  * waits on for the conductor, `{point, actions, phases}`, or null.
  */
 const DECIDING_JSON = `
   COALESCE((SELECT w.state->>'decider' FROM workflow_runs w WHERE w.task_id = tasks.id
     ORDER BY w.created_at DESC LIMIT 1), 'policy') AS decider,
+  -- How its conductor speaks when one decides (State.Voice): "" from before voices reads as chatty.
+  (SELECT CASE WHEN w.state->>'decider' = 'conductor' THEN COALESCE(NULLIF(w.state->>'voice', ''), 'chatty') END
+    FROM workflow_runs w WHERE w.task_id = tasks.id ORDER BY w.created_at DESC LIMIT 1) AS voice,
   COALESCE((SELECT (w.state->>'handedBack')::boolean FROM workflow_runs w WHERE w.task_id = tasks.id
     ORDER BY w.created_at DESC LIMIT 1), false) AS "handedBack",
   (SELECT json_build_object('point', w.state->'decision'->>'point')

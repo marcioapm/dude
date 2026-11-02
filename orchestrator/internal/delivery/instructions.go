@@ -48,6 +48,9 @@ type InstructionsInput struct {
 	// as the Run is submitted: a reviewer's severities are by outcome, and
 	// each finding at medium or above carries its evidence.
 	ConductedLoop bool
+	// A conductor's delivery's voice as the Run is submitted (State.Voice):
+	// quiet, its file says so and asks no pull-request question of it.
+	Voice string
 }
 
 // Web is what a Run reaches of the web with its harness's own tools.
@@ -109,7 +112,7 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
 		Context:     in.Context,
 		Vars:        PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
-		DirectFixes: in.DirectFixes, ConductedLoop: in.ConductedLoop,
+		DirectFixes: in.DirectFixes, ConductedLoop: in.ConductedLoop, Voice: in.Voice,
 	}
 }
 

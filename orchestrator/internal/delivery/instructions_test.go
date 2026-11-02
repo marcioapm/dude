@@ -42,6 +42,22 @@ func TestGoldenConductedLoopInstructions(t *testing.T) {
 		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], nil, []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}}, ""))
 }
 
+// A quiet conductor's file (Voice quiet): the quiet paragraph, and no
+// pull-request question of its own. A chatty conductor's is the file every
+// other conductor golden pins, byte for byte.
+func TestGoldenQuietConductorInstructions(t *testing.T) {
+	in := goldenTask()
+	in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+	in.Repositories = readOnlyRepos()
+	builtin := Instructions(RoleConductor, "correctness", in.InstructionsInput())
+	in.Voice = VoiceChatty
+	if chatty := Instructions(RoleConductor, "correctness", in.InstructionsInput()); chatty != builtin {
+		t.Error("a chatty conductor's file differs from one with no voice")
+	}
+	in.Voice = VoiceQuiet
+	golden(t, "instructions-conductor-quiet", Instructions(RoleConductor, "correctness", in.InstructionsInput()))
+}
+
 func TestGoldenReviewerInstructions(t *testing.T) {
 	for _, category := range reviewerOrder {
 		in := goldenTask()

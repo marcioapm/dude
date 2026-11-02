@@ -450,7 +450,7 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 	if out.Attempt, err = delivery.NextAttemptTx(ctx, tx, taskID, t.State.Attempt); err != nil {
 		return out, err
 	}
-	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, out.Attempt, decider, w, override != nil); err != nil {
+	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, out.Attempt, decider, &t.State, w, override != nil); err != nil {
 		return out, err
 	}
 	out.ClosePRs = t.State.PullRequestIDs
@@ -540,9 +540,11 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 // by decider, under the settings as they are now (not the stopped attempt's
 // frozen policy), on a branch of its own from the default branch — or, for
 // a task started from existing work, on that work's head branch again
-// (delivery.NewState), whose adopted pull request it carries on.
+// (delivery.NewState), whose adopted pull request it carries on. A
+// conductor that decided the stopped attempt (stopped) quietly decides
+// the next quietly too, handed back as it was.
 func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int,
-	decider string, w delivery.Writer, overridden bool) (string, error) {
+	decider string, stopped *delivery.State, w delivery.Writer, overridden bool) (string, error) {
 	projectID, policy, err := policyFor(ctx, tx, taskID)
 	if err != nil {
 		return "", err
@@ -569,6 +571,9 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, a
 	st.Attempt, st.Overridden = attempt, overridden
 	if decider == delivery.DeciderConductor {
 		st.Decider, st.HadConductor = decider, true
+		if stopped.Decider == delivery.DeciderConductor && stopped.Voice == delivery.VoiceQuiet {
+			st.Voice, st.HandedBack = delivery.VoiceQuiet, stopped.HandedBack
+		}
 	}
 	id, err := s.Workflow.StartTx(ctx, tx, workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: org, TaskID: taskID,
