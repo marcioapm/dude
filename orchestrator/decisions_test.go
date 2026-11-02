@@ -631,27 +631,48 @@ func TestGivingTheDecisionsToTheConductorWithNoneYet(t *testing.T) {
 	}
 }
 
-// Let Deliver finish it: the decision waited on goes to the policy at once,
-// and the rest of the delivery is Deliver's — to a pull request with no
-// question. A later message does not take it over again.
-func TestLetDeliverFinishIt(t *testing.T) {
+// Let it finish quietly: the conductor goes on deciding, quiet. The start
+// it waited on goes on at once, its implementer with no conductor turn;
+// the conductor decides each later point, and the pull request opens by
+// the task's choice with no question. A later message keeps it quiet: it
+// was handed back.
+func TestLetItFinishQuietly(t *testing.T) {
 	w := conducting(t)
 	task := w.task()
 	w.talk(task)
-	if status, out := w.call("/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+	if status, out := w.call("/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 || out["voice"] != "quiet" {
 		t.Fatalf("hand back: %d %v", status, out)
 	}
-	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1`, task); n != 0 {
-		t.Errorf("%d questions on a delivery Deliver finished", n)
+	if d, v := w.decider(task), w.voice(task); d != "conductor" || v != "quiet" {
+		t.Fatalf("handed back: decider %s voice %q", d, v)
 	}
-	if status, out := w.chat(task, "anything left?"); status != 200 || out["decider"] != "policy" {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decider_changed'
+		AND payload->>'to' = 'conductor' AND payload->>'voice' = 'quiet'`, task); n != 1 {
+		t.Errorf("%d changes to quiet recorded", n)
+	}
+	w.until("the pull request, the conductor deciding quietly", func() bool {
+		if at := w.decisionAt(task); at == delivery.PointReviewed {
+			w.finishReview(task)
+		} else if at != "" {
+			w.must(task, "decide", `{"action":"next"}`)
+		}
+		return len(w.gh.Pulls()) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1`, task); n != 0 {
+		t.Errorf("%d questions on a delivery finished quietly", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2
+		AND payload->>'point' IN ('start', 'before_pull_request') AND payload->>'kind' IS NULL
+		AND occurred_at > (SELECT min(occurred_at) FROM events WHERE task_id = $1 AND event_type = 'task.decider_changed' AND payload->>'voice' = 'quiet')`,
+		task, delivery.EvDecisionAwaited); n != 0 {
+		t.Errorf("the quiet conductor was asked %d times at the start or the pull request", n)
+	}
+	if status, out := w.chat(task, "anything left?"); status != 200 || out["decider"] != "conductor" {
 		t.Errorf("a later message: %d %v", status, out)
 	}
-	if w.decider(task) != "policy" {
-		t.Errorf("decider after a later message: %s", w.decider(task))
+	if v := w.voice(task); v != "quiet" {
+		t.Errorf("voice after a later message on a delivery handed back: %q", v)
 	}
-	w.refused(task, "start_phase", `{"phase":"review"}`, "Deliver takes this task's decisions")
 }
 
 // A merged or closed task's conductor is read-only: Chat does not hand it

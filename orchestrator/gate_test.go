@@ -30,6 +30,11 @@ func (w *world) gated(hook func(step, next string)) *atomic.Bool {
 	return armed
 }
 
+// voice is how the task's delivery's conductor speaks, "" for unsaid.
+func (w *world) voice(task string) string {
+	return w.str(`SELECT COALESCE(state->>'voice', '') FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, task)
+}
+
 func (w *world) handBack(task string, body map[string]any) (int, map[string]any) {
 	return w.call("/internal/tasks/"+task+"/decider", body)
 }
@@ -118,8 +123,8 @@ func TestAHandBackWhileEnteringTheGateStillAsks(t *testing.T) {
 			if n := len(w.gh.Pulls()); n != 0 {
 				t.Fatalf("%d pull requests opened with the gate unanswered", n)
 			}
-			if w.decider(task) != "policy" {
-				t.Fatalf("decider %s after the hand-back", w.decider(task))
+			if d, v := w.decider(task), w.voice(task); d != "conductor" || v != "quiet" {
+				t.Fatalf("decider %s voice %q after the hand-back, want the conductor, quiet", d, v)
 			}
 			if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
 				t.Fatalf("hand-back at the gate, unanswered: %d %v", status, out)
@@ -165,6 +170,8 @@ func TestAGateAuthorizationIsForItsHeads(t *testing.T) {
 			if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
 				t.Fatalf("hand-back during the simplifier: %d %v", status, out)
 			}
+			// Quiet, the conductor still ends the simplifier's round.
+			w.finishSimplifierReview(task)
 			w.until("Deliver's gate question at the new head", func() bool {
 				return w.phaseRuns(task, "simplify") == simplifiers+1 && w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0
 			})

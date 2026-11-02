@@ -272,7 +272,7 @@ func refuseHalted(ctx context.Context, tx pgx.Tx, taskID string) error {
 
 // decideFor settles who decides the task's delivery as a person writes in
 // its Chat, and says who does: a delivery in progress becomes the
-// conductor's (unless its decisions were handed back to Deliver); a task
+// conductor's, chatty (unless it was handed back to finish quietly); a task
 // not started gets a delivery the conductor decides, parked on its first
 // decision; anything else is unchanged. talk is Talk it through, refused
 // on a task already started.
@@ -317,7 +317,7 @@ func (s *Server) decideFor(ctx context.Context, tx pgx.Tx, org, taskID string, w
 	if !d.Live() || delivery.Ended(d.TaskStatus) || d.State.HandedBack {
 		return decider, nil
 	}
-	if _, err := delivery.SetDeciderTx(ctx, tx, org, d.WorkflowID, &d.State, delivery.DeciderConductor,
+	if _, err := delivery.SetDeciderTx(ctx, tx, org, d.WorkflowID, &d.State, delivery.DeciderConductor, delivery.VoiceChatty,
 		"a person wrote in Chat", wr.ActorType, wr.ActorID); err != nil {
 		return "", err
 	}
@@ -334,10 +334,13 @@ func (s *Server) talkThrough(ctx context.Context, tx pgx.Tx, org, taskID string,
 	return startFailure(err)
 }
 
-// handBack is "Let Deliver finish it" (decider policy), or taking the
-// decisions back for the conductor (decider conductor): from the next
-// decision on. An untaken pending decision goes to the policy at once;
-// a taken decision is still carried out, and a required PR gate still holds.
+// handBack is "Let it finish quietly" (decider policy on the wire: the
+// conductor goes on deciding, quiet), or "Talk it through" (decider
+// conductor: chatty), from the next decision on. A delivery no conductor
+// decides stays Deliver's: the call is then only the opening's
+// confirmation at Deliver's own hold. Deliver's hold before the pull
+// request is woken at once to read it; a taken decision is still carried
+// out, and a required PR gate still holds.
 func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) error {
 	taskID := r.PathValue("id")
 	var body struct {
@@ -409,21 +412,27 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 				return err
 			}
 		}
-		why := "a person let Deliver finish it"
+		// The wire's policy is the quiet voice, its conductor the chatty
+		// one. Nothing hands a delivery to Deliver's policy any more: one
+		// no conductor ever decided stays as it is.
+		voice, why := delivery.VoiceQuiet, "a person let it finish quietly"
 		if body.Decider == delivery.DeciderConductor {
-			why = "a person gave the decisions to the conductor"
+			voice, why = delivery.VoiceChatty, "a person gave the decisions to the conductor"
 		}
-		if _, err := delivery.SetDeciderTx(r.Context(), tx, org, d.WorkflowID, &d.State, body.Decider, why,
-			p.ActorType, p.Actor); err != nil {
-			return err
+		if body.Decider == delivery.DeciderConductor || d.State.Decider == delivery.DeciderConductor {
+			if _, err := delivery.SetDeciderTx(r.Context(), tx, org, d.WorkflowID, &d.State, delivery.DeciderConductor, voice, why,
+				p.ActorType, p.Actor); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(r.Context(), `UPDATE workflow_runs SET state = jsonb_set(state, '{handedBack}', to_jsonb($2::boolean))
 			WHERE id = $1`, d.WorkflowID, handedBack); err != nil {
 			return err
 		}
 		wfID = d.WorkflowID
-		// Handed back, a decision the delivery waits on, or is about to,
-		// is the policy's: the signal waits for it if it is not parked yet.
+		// Handed back, Deliver's hold the delivery waits at, or is about
+		// to, reads it again: the signal waits for it if it is not parked
+		// yet. Any other decision stays the conductor's, quiet.
 		wake = handedBack
 		return nil
 	})
@@ -436,6 +445,15 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 		}
 	}
 	s.kick()
-	write(w, http.StatusOK, map[string]any{"taskId": taskID, "decider": body.Decider})
+	write(w, http.StatusOK, map[string]any{"taskId": taskID, "decider": body.Decider, "voice": voiceOf(body.Decider)})
 	return nil
+}
+
+// voiceOf is the voice a hand-back's wire decider asks for: policy is the
+// quiet voice, conductor the chatty one.
+func voiceOf(decider string) string {
+	if decider == delivery.DeciderPolicy {
+		return delivery.VoiceQuiet
+	}
+	return delivery.VoiceChatty
 }

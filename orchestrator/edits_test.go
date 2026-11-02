@@ -713,9 +713,9 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 	})
 	t.Run("Deliver decides", func(t *testing.T) {
 		e := newEditing(t)
-		if status, out := e.call("/internal/tasks/"+e.task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
-			t.Fatalf("hand back: %d %v", status, out)
-		}
+		// A delivery Deliver's policy decides: one from before every
+		// hand-back kept its conductor (a hand-back is quiet now).
+		mustExec(t, e.owner, `UPDATE workflow_runs SET state = state || '{"decider":"policy"}' WHERE task_id = $1`, e.task)
 		e.refused(e.task, "publish", `{}`, "Deliver decides this task: steer its agents, or ask the person to hand it to you.")
 	})
 	t.Run("superseded", func(t *testing.T) {

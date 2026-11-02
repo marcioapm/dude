@@ -190,3 +190,44 @@ func TestTheQuietConductorIsRefusedAtDeliversHold(t *testing.T) {
 		t.Fatalf("the refused calls moved the hold\n%s", w.describeRuns())
 	}
 }
+
+// A conductor whose delivery goes quiet is told, in a line of its next
+// note: its instruction file still says the voice it was submitted with.
+// Told chatty again, it hears only the latest.
+func TestAConductorIsToldItsDeliveryWentQuiet(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.talk(task)
+	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+		t.Fatalf("hand back: %d %v", status, out)
+	}
+	w.wokenWith(task, delivery.VoiceChangedLine(delivery.VoiceQuiet))
+	// Quiet → chatty → quiet before the conductor hears it: one line, the last.
+	w.handBack(task, map[string]any{"decider": "conductor"})
+	w.handBack(task, map[string]any{"decider": "policy"})
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'base-moved:voice:%' AND delivered_at IS NULL`, task); n > 1 {
+		t.Errorf("%d voice lines pending, want only the latest", n)
+	}
+}
+
+// A person's message on a quiet delivery nobody handed back makes it
+// chatty, as a message takes over one Deliver decides; its conductor is
+// told.
+func TestAPersonsMessageMakesAQuietDeliveryChatty(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.startQuiet(task)
+	w.until("the implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
+	if status, out := w.chat(task, "let me talk this one through"); status != 201 || out["decider"] != "conductor" {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	if v := w.voice(task); v != delivery.VoiceChatty {
+		t.Fatalf("voice %q after a person's message, want chatty", v)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decider_changed'
+		AND payload->>'from' = 'conductor' AND payload->>'to' = 'conductor' AND payload->>'voice' = 'chatty'
+		AND payload->>'why' = 'a person wrote in Chat'`, task); n != 1 {
+		t.Errorf("%d changes to chatty recorded", n)
+	}
+	w.wokenWith(task, delivery.VoiceChangedLine(delivery.VoiceChatty))
+}

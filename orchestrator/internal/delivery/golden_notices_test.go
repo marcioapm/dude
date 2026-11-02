@@ -77,6 +77,8 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"review-question-answered", reviewQuestionAnsweredLine("rvq_1", "In UTC.\nAlways.", false)},
 		{"review-question-withdrawn", reviewQuestionAnsweredLine("rvq_1", "the code is gone", true)},
 		{"base-moved", baseMovedLine("main", "GLD-8", 14)},
+		{"voice-quiet", VoiceChangedLine(VoiceQuiet)},
+		{"voice-chatty", VoiceChangedLine(VoiceChatty)},
 		{"wait-held", renderWaitDigest(waitEval{held: 2, of: 2, waitedAll: true, items: []waitItem{
 			{Kind: "run", Who: "review", RunID: "run_rev", Status: "failed", Ended: true, Error: "lux: the host\nwent away " + strings.Repeat("x", 130), rank: rankBad},
 			{Kind: "pr", PR: "api#12", Head: headA, State: "open", Checks: "failing", Failing: []string{"lint", "unit"}, rank: rankBad},

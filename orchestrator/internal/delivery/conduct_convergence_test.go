@@ -272,7 +272,7 @@ func TestADecidedEscalationHandedOverTellsNothing(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = delivery.SetDeciderTx(ctx, tx, w.org, d.WorkflowID, &d.State, delivery.DeciderConductor, "a person wrote in Chat", "human", w.ana)
+		_, err = delivery.SetDeciderTx(ctx, tx, w.org, d.WorkflowID, &d.State, delivery.DeciderConductor, delivery.VoiceChatty, "a person wrote in Chat", "human", w.ana)
 		return err
 	}); err != nil {
 		t.Fatal(err)

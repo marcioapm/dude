@@ -109,7 +109,7 @@ func TestRecheckWaitsForAHandoverAndTellsTheEscalation(t *testing.T) {
 	if err != nil || d == nil {
 		t.Fatalf("delivery %v, %v", d, err)
 	}
-	if changed, err := SetDeciderTx(w.ctx, holder, w.org, d.WorkflowID, &d.State, DeciderConductor, "test",
+	if changed, err := SetDeciderTx(w.ctx, holder, w.org, d.WorkflowID, &d.State, DeciderConductor, VoiceChatty, "test",
 		"system", "test"); err != nil || !changed {
 		t.Fatalf("set decider %v, %v", changed, err)
 	}
