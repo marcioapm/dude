@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strconv"
 	"testing"
 	"time"
 
@@ -167,5 +168,64 @@ func TestTheSweepFindsBothKindsOfUnheardConductor(t *testing.T) {
 	}
 	if n := count(`SELECT count(*) FROM conductor_wakes WHERE id LIKE 'cwk_h%' AND delivered_at IS NULL`); n != 0 {
 		t.Errorf("%d heard reasons put back to pending", n)
+	}
+}
+
+// Past the batch: wakeBatch+5 quiet deliveries whose conductor has no
+// model, each with an older reason pending, and one ready task. The quiet
+// ones are not selected (WakeConductorTx would start no conductor for
+// them), so the ready one is told in one sweep; their reasons stay
+// pending, and a model set for one of them is told on the next sweep.
+func TestQuietDeliveriesWithNoModelDoNotCrowdOutTheSweep(t *testing.T) {
+	ctx := context.Background()
+	w := newWakeSweepWorld(t)
+	org, exec, count := w.org, w.exec, w.count
+	n := strconv.Itoa(wakeBatch + 5)
+	exec(`INSERT INTO model_tiers (id, organization_id, name) VALUES ('tier_none_'||$1, $1, 'No model'), ('tier_later_'||$1, $1, 'Later')`, org)
+	exec(`UPDATE projects SET agent_models = jsonb_build_object('conductor', jsonb_build_object('tier', 'tier_none_'||$1)) WHERE id = 'prj_'||$1`, org)
+	// The one to get a model later is in a project of its own.
+	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix, agent_models)
+		VALUES ('prj2_'||$1, $1, 'P2', 'prj2_'||$1, 'Q', jsonb_build_object('conductor', jsonb_build_object('tier', 'tier_later_'||$1)))`, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+		SELECT 'wi_'||n, $1, 'prj_'||$1, n, 'T', 'G' FROM generate_series(1, `+n+`) n`, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_later', $1, 'prj2_'||$1, 1, 'T', 'G')`, org)
+	exec(`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+		SELECT 'wf_'||t.id, $1, t.id, 'task.delivery', 'delivery:'||t.id, 'waiting', 'conductorDecision',
+			'{"attempt":1,"decider":"conductor","hadConductor":true,"voice":"quiet"}'
+		FROM tasks t WHERE t.organization_id = $1`, org)
+	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		SELECT 'cwk_'||t.id, $1, t.id, 'stalled', 'stalled:'||t.id, 'A reviewer stalled.', now() - interval '1 hour'
+		FROM tasks t WHERE t.organization_id = $1`, org)
+	// The ready one: parked between turns, its reason the newest.
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_zready', $1, 'prj_'||$1, 9999, 'T', 'G')`, org)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, dude_pause, turn_done_at)
+		VALUES ('run_ready', $1, 'prj_'||$1, 'wi_zready', 1, 'conductor', 'agent', 'paused', 'conductor', now())`, org)
+	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES ('cwk_ready', $1, 'wi_zready', 'decision', 'k', 'ready to decide', now() - interval '1 minute')`, org)
+
+	s := w.s
+	s.WakeWindow = 15 * time.Second
+	if err := s.wakeConductors(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(`SELECT count(*) FROM conductor_wakes WHERE id = 'cwk_ready' AND delivered_at IS NOT NULL`); n != 1 {
+		t.Fatalf("the ready reason is still pending after a sweep")
+	}
+	if n := count(`SELECT count(*) FROM conductor_wakes WHERE organization_id = $1 AND kind = 'stalled' AND delivered_at IS NULL`, org); n != wakeBatch+6 {
+		t.Errorf("%d reasons pending for conductors with no model, want %d", n, wakeBatch+6)
+	}
+	if n := count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND role = 'conductor' AND id <> 'run_ready'`, org); n != 0 {
+		t.Errorf("%d conductors started with no model", n)
+	}
+	// A model set: its news, kept pending, is told on the next sweep.
+	exec(`UPDATE model_tiers SET model = 'fake/scripted' WHERE id = 'tier_later_'||$1`, org)
+	if err := s.wakeConductors(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(`SELECT count(*) FROM conductor_wakes WHERE task_id = 'wi_later' AND delivered_at IS NOT NULL`); n != 1 {
+		t.Fatalf("the reason of the delivery given a model is still pending")
+	}
+	if n := count(`SELECT count(*) FROM runs WHERE task_id = 'wi_later' AND role = 'conductor'`); n != 1 {
+		t.Errorf("%d conductors started once a model was set, want 1", n)
 	}
 }

@@ -429,24 +429,28 @@ func HaltedTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 	return halted, err
 }
 
+// quietNoModel (SQL, over qn.task_id) says the task's newest delivery is
+// live and decided by a quiet conductor that has no model to run on: its
+// tier, resolved as ResolveRole resolves the conductor's (the project's,
+// else the organization's; the conductor follows no other role), is unset,
+// gone, or names no model. The one source of truth for quietNoModelTx and
+// Wakeable: a task the sweep selects is one WakeConductorTx delivers to.
+const quietNoModel = `COALESCE((SELECT w.state->>'decider' = 'conductor' AND COALESCE(w.state->>'voice', '') = 'quiet'
+		AND w.status IN ('running', 'waiting')
+		AND NOT EXISTS (SELECT 1 FROM tasks mt JOIN projects mp ON mp.id = mt.project_id
+			JOIN organizations mo ON mo.id = mp.organization_id
+			JOIN model_tiers mm ON mm.organization_id = mo.id
+				AND mm.id = COALESCE(NULLIF(mp.agent_models->'conductor'->>'tier', ''),
+					NULLIF(mo.default_agent_models->'conductor'->>'tier', ''))
+			WHERE mt.id = w.task_id AND COALESCE(mm.model, '') <> '')
+		FROM workflow_runs w WHERE w.task_id = qn.task_id` + latestDelivery + `), false)`
+
 // quietNoModelTx says the task's newest delivery is decided by a quiet
-// conductor that has no model to run on (conductorNoModelTx).
+// conductor that has no model to run on (quietNoModel).
 func quietNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 	var quiet bool
-	err := tx.QueryRow(ctx, `SELECT w.state->>'decider' = 'conductor' AND COALESCE(w.state->>'voice', '') = 'quiet'
-		AND w.status IN ('running', 'waiting') FROM workflow_runs w WHERE w.task_id = $1`+latestDelivery, taskID).Scan(&quiet)
-	if db.IsNotFound(err) || err != nil || !quiet {
-		return false, ignoreNotFound(err)
-	}
-	no, err := conductorNoModelTx(ctx, tx, taskID)
-	return no != "", err
-}
-
-func ignoreNotFound(err error) error {
-	if db.IsNotFound(err) {
-		return nil
-	}
-	return err
+	err := tx.QueryRow(ctx, `SELECT `+quietNoModel+` FROM (SELECT $1::text AS task_id) qn`, taskID).Scan(&quiet)
+	return quiet, err
 }
 
 // Wakeable (SQL, over conductor_wakes c, $1 the window in seconds): a task
@@ -457,9 +461,14 @@ func ignoreNotFound(err error) error {
 // that must wait (a conductor mid-turn) cannot fill the batch. Held
 // reasons alone (heldWakePrefix) wait for a conductor running between turns;
 // riding reasons alone (rideWakePrefix) wait for a reason of another kind.
-// A task whose newest delivery a person stopped (Halt) waits for its pick-up.
+// A task whose newest delivery a person stopped (Halt) waits for its pick-up;
+// one with no conductor, whose quiet conductor has no model (quietNoModel:
+// WakeConductorTx would start none), waits for one, its reasons pending,
+// and is not selected, so it never fills the batch.
 const Wakeable = `c.delivered_at IS NULL
 	AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = c.task_id` + latestDelivery + `), false)
+	AND NOT ((SELECT ` + quietNoModel + ` FROM (SELECT c.task_id) qn)
+		AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + `))
 	AND NOT EXISTS (SELECT 1 FROM conductor_wakes n WHERE n.task_id = c.task_id AND n.delivered_at IS NULL
 		AND n.created_at >= now() - make_interval(secs => $1))
 	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT COALESCE(` + Ending + `, false)
