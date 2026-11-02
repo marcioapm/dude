@@ -1141,6 +1141,13 @@ func (w *steps) feedbackAtGate(ctx context.Context, sc workflow.StepContext, st 
 	if err != nil || len(open) == 0 {
 		return workflow.Result{}, false, err
 	}
+	// The work leaves the hold's heads for a fix: the question about them
+	// is over, and asked again when the work comes back to the hold.
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		return leaveGateTx(ctx, tx, sc.OrganizationID, st)
+	}); err != nil {
+		return workflow.Result{}, false, err
+	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", ReasonFixingFeedback); err != nil {
 		return workflow.Result{}, false, err
 	}
