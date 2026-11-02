@@ -3535,7 +3535,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if d.Action == "accept" {
 			st.DefaultsAccepted = true
 			now := time.Now().UTC()
-			st.Decision.Since, st.Decision.DecideBy = &now, &now
+			st.Decision.Since, st.Decision.DecideBy, st.Decision.Accepted = &now, &now, true
 		} else if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
 				fmt.Sprintf("%s:retry:%d", decisionWakeKey(sc.WorkflowRunID, st.Decisions), st.Escalations),

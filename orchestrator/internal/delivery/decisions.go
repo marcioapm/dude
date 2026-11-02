@@ -89,6 +89,9 @@ type Pending struct {
 	// when Deliver's defaults take it (QuietDecisionWait).
 	Since    *time.Time `json:"since,omitempty"`
 	DecideBy *time.Time `json:"decideBy,omitempty"`
+	// A person accepted Deliver's defaults for it (conductor_unavailable's
+	// accept): taken at once, said as theirs (DefaultedAccepted).
+	Accepted bool `json:"accepted,omitempty"`
 }
 
 // QuietDecisionWait is how long a quiet conductor has to take a decision
@@ -108,7 +111,7 @@ const ReasonConductorUnavailable = "conductor_unavailable"
 
 // EvDecisionDefaulted: dude took Deliver's defaults at a decision a quiet
 // conductor did not take. Payload: {point, policy, reason (deadline,
-// no_model, run_failed), count (in a row)}.
+// no_model, run_failed, accepted), count (in a row)}.
 const EvDecisionDefaulted = "conductor.decision_defaulted"
 
 // Why dude took Deliver's defaults at a quiet conductor's decision.
@@ -116,6 +119,7 @@ const (
 	DefaultedDeadline  = "deadline"
 	DefaultedNoModel   = "no_model"
 	DefaultedRunFailed = "run_failed"
+	DefaultedAccepted  = "accepted"
 )
 
 // DefaultedLine is the Chat notice of a decision taken by Deliver's
@@ -126,6 +130,8 @@ func DefaultedLine(reason string) string {
 		return "dude went on by Deliver's defaults: the conductor has no model to decide with."
 	case DefaultedRunFailed:
 		return "dude went on by Deliver's defaults: the conductor's Run failed before it decided."
+	case DefaultedAccepted:
+		return "dude went on by Deliver's defaults, as the person accepted."
 	}
 	return fmt.Sprintf("dude went on by Deliver's defaults: the conductor did not decide within %d minutes.",
 		int(QuietDecisionWait/time.Minute))
@@ -733,6 +739,8 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	}
 	reason := ""
 	switch {
+	case d.Accepted:
+		reason = DefaultedAccepted
 	case noModel != "":
 		reason = DefaultedNoModel
 	case failed:

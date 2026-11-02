@@ -210,6 +210,17 @@ func TestAcceptingTheDefaultsFinishesByDeliversBounds(t *testing.T) {
 		if n := unavailable(w, task); n != 1 {
 			t.Errorf("%d conductor_unavailable escalations, want 1 after accept", n)
 		}
+		// The decision accepted is said as the person's, not a deadline.
+		if n := w.defaulted(task, delivery.DefaultedAccepted); n != 1 {
+			t.Errorf("%d decisions defaulted as accepted, want 1", n)
+		}
+		if n := w.defaultedNotices(task, delivery.DefaultedAccepted); n != 1 {
+			t.Errorf("%d Chat notices of the accepted defaults, want 1", n)
+		}
+		if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+			AND payload->>'about' = 'decision_defaulted' AND payload->>'reason' = $2`, task, delivery.DefaultedAccepted); n != 1 {
+			t.Errorf("%d notices with reason accepted, want 1", n)
+		}
 	})
 	t.Run("a review that never clears", func(t *testing.T) {
 		w := conducting(t)
