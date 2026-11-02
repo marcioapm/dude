@@ -807,19 +807,26 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 // has no count of its own to write back. said: decision n's default is
 // recorded already (a step replayed), counted in inARow.
 func defaultsInARowTx(ctx context.Context, tx pgx.Tx, taskID, wfID string, n int) (inARow int, said bool, err error) {
-	// One statement, on events_task_cursor_idx (task_id, cursor): the
-	// newest reset read backwards from the task's last event, the defaults
-	// forwards from it, the replay check among the defaults alone.
-	err = tx.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE cursor > COALESCE((SELECT cursor FROM events WHERE task_id = $1
-				AND (event_type IN ($5, $6) OR event_type = $7 AND payload->>'reason' = $8 AND payload->>'action' = 'retry')
-				ORDER BY cursor DESC LIMIT 1), 0)),
-			COALESCE(bool_or((payload->>'decision')::int = $4), false)
-		FROM events WHERE task_id = $1 AND event_type = $3 AND payload->>'workflowId' = $2`,
-		taskID, wfID, EvDecisionDefaulted, n, EvDeciderChanged, EvDecisionTaken, EvTaskDecided, ReasonConductorUnavailable).
-		Scan(&inARow, &said)
+	err = tx.QueryRow(ctx, defaultsInARowSQL, taskID, wfID, n, ReasonConductorUnavailable).Scan(&inARow, &said)
 	return inARow, said, err
 }
+
+// defaultsInARowSQL is defaultsInARowTx's one statement, on
+// events_task_decisions_idx (migration 238: task_id, cursor, over these
+// event types alone): the newest reset, the defaults since it, the replay
+// check among the defaults. The types are literals, so the planner proves
+// the index's predicate; a task.decided that is not conductor_unavailable's
+// retry is filtered out here. The reset is the max of the task's resets
+// read whole (OFFSET 0 keeps it a subquery): a LIMIT 1 the planner may
+// read backwards on the primary key, betting a reset is near the end,
+// which walks every event since it.
+const defaultsInARowSQL = `SELECT
+		count(*) FILTER (WHERE cursor > COALESCE((SELECT max(cursor) FROM (SELECT cursor FROM events WHERE task_id = $1
+			AND event_type IN ('` + EvDeciderChanged + `', '` + EvDecisionTaken + `', '` + EvTaskDecided + `')
+			AND (event_type <> '` + EvTaskDecided + `' OR payload->>'reason' = $4 AND payload->>'action' = 'retry')
+			OFFSET 0) resets), 0)),
+		COALESCE(bool_or((payload->>'decision')::int = $3), false)
+	FROM events WHERE task_id = $1 AND event_type = '` + EvDecisionDefaulted + `' AND payload->>'workflowId' = $2`
 
 // defaultedTx records that Deliver's defaults took the delivery's pending
 // decision, for reason, and says so in Chat: once per decision, however
