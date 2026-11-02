@@ -713,8 +713,8 @@ func TestAPublishIsRefusedSayingWhy(t *testing.T) {
 	})
 	t.Run("Deliver decides", func(t *testing.T) {
 		e := newEditing(t)
-		// A delivery Deliver's policy decides: one from before every
-		// hand-back kept its conductor (a hand-back is quiet now).
+		// A delivery Deliver's policy decides (a hand-back keeps its
+		// conductor, quiet: the row is written as Deliver's directly).
 		mustExec(t, e.owner, `UPDATE workflow_runs SET state = state || '{"decider":"policy"}' WHERE task_id = $1`, e.task)
 		e.refused(e.task, "publish", `{}`, "Deliver decides this task: steer its agents, or ask the person to hand it to you.")
 	})

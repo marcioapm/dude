@@ -413,8 +413,8 @@ func (s *Server) handBack(w http.ResponseWriter, r *http.Request, org string) er
 			}
 		}
 		// The wire's policy is the quiet voice, its conductor the chatty
-		// one. Nothing hands a delivery to Deliver's policy any more: one
-		// no conductor ever decided stays as it is.
+		// one. No hand-back gives a delivery to Deliver's policy: one no
+		// conductor decides stays as it is.
 		voice, why := delivery.VoiceQuiet, "a person let it finish quietly"
 		if body.Decider == delivery.DeciderConductor {
 			voice, why = delivery.VoiceChatty, "a person gave the decisions to the conductor"

@@ -239,7 +239,7 @@ func TestAPersonsMessageMakesAQuietDeliveryChatty(t *testing.T) {
 // A delivery handed back quietly, then started over (Stop with andRestart,
 // or the pick-up's Start over) under its conductor: attempt 2 is quiet and
 // handed back too, so its implementer starts at once with no conductor
-// turn at the start, as Deliver's own restart did before voices.
+// turn at the start, as under Deliver.
 func TestStartingOverAQuietHandBackStaysQuiet(t *testing.T) {
 	for _, via := range []string{"stop", "recover"} {
 		t.Run(via, func(t *testing.T) {

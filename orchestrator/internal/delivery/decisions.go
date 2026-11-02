@@ -1085,8 +1085,8 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 // voice changed: held news (heldWakePrefix), as a merge's is (retest).
 const voiceWakePrefix = heldWakePrefix + "voice:"
 
-// voiceToldTx tells the conductor its delivery is voice now, since its
-// instruction file says the voice it was submitted with: one line, recorded
+// voiceToldTx tells the conductor its delivery's voice, which its
+// instruction file says only as it was submitted: one line, recorded
 // as a reason in the same transaction as the change, as an escalation
 // handed to it is told (tellEscalationTx). It is news, not a call to act:
 // told at once to a conductor between turns, else in its next note, never
