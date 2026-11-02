@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
@@ -172,22 +173,56 @@ func TestThreeDefaultsInARowStopForAPerson(t *testing.T) {
 	w.until("a default after the retry", func() bool { return w.defaulted(task, "") > before })
 }
 
-// accept on conductor_unavailable lets the defaults go on with no bound.
-func TestAcceptingTheDefaultsGoesOnWithoutABound(t *testing.T) {
-	w := conducting(t)
-	w.waitingFor(100 * time.Millisecond)
-	task := w.task()
-	owner, _, _ := w.people(task)
-	w.startQuiet(task)
-	w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
-	if status, out := w.decide(owner, task, "accept", ""); status != 200 {
-		t.Fatalf("accept: %d %v", status, out)
+// accept on conductor_unavailable: Deliver's defaults finish the
+// delivery, Deliver's bounds included (CONTRIBUTING: a delivery handed
+// back to Deliver is the policy's again). Renamed from
+// TestAcceptingTheDefaultsGoesOnWithoutABound: it went on with no bound,
+// so a review that never clears ran forever. Defaults that clear reach the
+// pull request with no second conductor_unavailable; a review that never
+// clears stops at the policy's own exit (stuck, at one fix per finding),
+// not in an endless review and fix loop.
+func TestAcceptingTheDefaultsFinishesByDeliversBounds(t *testing.T) {
+	// accepted runs the task quietly to conductor_unavailable, patches its
+	// policy (patch, "" none), and accepts the defaults.
+	accepted := func(t *testing.T, w *world, patch string) string {
+		t.Helper()
+		w.waitingFor(100 * time.Millisecond)
+		task := w.task()
+		owner, _, _ := w.people(task)
+		w.startQuiet(task)
+		w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
+		if patch != "" {
+			setPolicy(w, task, patch)
+		}
+		if status, out := w.decide(owner, task, "accept", ""); status != 200 {
+			t.Fatalf("accept: %d %v", status, out)
+		}
+		return task
 	}
-	w.until("the pull request, by the defaults", func() bool { return len(w.gh.Pulls()) == 1 })
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
-		AND payload->>'reason' = $2`, task, delivery.ReasonConductorUnavailable); n != 1 {
-		t.Errorf("%d conductor_unavailable escalations, want 1 after accept", n)
+	unavailable := func(w *world, task string) int {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+			AND payload->>'reason' = $2`, task, delivery.ReasonConductorUnavailable)
 	}
+	t.Run("to the pull request", func(t *testing.T) {
+		w := conducting(t)
+		task := accepted(t, w, "")
+		w.until("the pull request, by the defaults", func() bool { return len(w.gh.Pulls()) == 1 })
+		if n := unavailable(w, task); n != 1 {
+			t.Errorf("%d conductor_unavailable escalations, want 1 after accept", n)
+		}
+	})
+	t.Run("a review that never clears", func(t *testing.T) {
+		w := conducting(t)
+		w.onModel("reviewer", fakeagent.StuckModel)
+		task := accepted(t, w, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9,"maxStillRounds":0}`)
+		w.until("the policy's exit", func() bool { return w.escalationReason(task) == "stuck" })
+		if n := unavailable(w, task); n != 1 {
+			t.Errorf("%d conductor_unavailable escalations, want 1 after accept", n)
+		}
+		if it := w.iteration(task); it > 9 {
+			t.Errorf("iteration %d past the policy's bound", it)
+		}
+	})
 }
 
 // A decision the conductor takes resets the count: two defaults, a

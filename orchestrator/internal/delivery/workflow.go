@@ -1084,7 +1084,13 @@ func (st *State) fixLoop() bool { return st.checkingCandidate() || len(st.FixRan
 // the policy's exits, or its loop would never end), and its round parks for
 // the conductor. A candidate's fix loop does not park: it goes on by the
 // policy's rules, bounds included, for no one else decides its rounds.
-func (st *State) conductsRounds() bool { return st.conducted() && !st.checkingCandidate() }
+// Nor does a quiet delivery whose person accepted Deliver's defaults for it
+// (conductor_unavailable's accept): the defaults finish it, and Deliver's
+// bounds with them, or its review and fix would follow each other forever.
+// Its fix bar stays the conductor's (ConductedLoop), as on a hand-back.
+func (st *State) conductsRounds() bool {
+	return st.conducted() && !st.checkingCandidate() && !(st.DefaultsAccepted && st.quiet())
+}
 
 // newLoop starts the review loop anew: its next review is round 1, of the
 // whole change the loop is over.
