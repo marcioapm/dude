@@ -93,18 +93,23 @@ func TestAQuietContinueAdoptedStartRunsTheImplementerWithNoWake(t *testing.T) {
 	w.startedQuietly(wi)
 }
 
-// quietToTheOpening talks the task through to after its implementer, makes
-// it quiet there, and has its conductor go on to the simplifier and past
-// its review: the delivery reaches its opening with the conductor deciding
-// quietly. Returns the task.
-func (w *world) quietToTheOpening(task string) {
+// quietToTheOpening makes a task owned by Ana under the project's choice,
+// talks it through to after its implementer, makes it quiet there, and has
+// its conductor go on to the simplifier and past its review: the delivery
+// reaches its opening with the conductor deciding quietly. Returns the
+// task and Ana.
+func (w *world) quietToTheOpening(choice string) (task, ana string) {
 	w.t.Helper()
+	task = w.task()
+	ana = w.ownedBy(task, "Ana")
+	w.projectChoice(choice)
 	w.talk(task)
 	w.implemented(task)
 	w.quietly(task)
 	w.carriedOut(task, "start_phase", `{"phase":"simplify"}`)
 	w.agentsDone(task, "the simplifier's narrow review", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	w.finishSimplifierReview(task)
+	return task, ana
 }
 
 // conductorAskedAtTheOpening counts the decisions the conductor was asked
@@ -127,11 +132,7 @@ func TestAQuietDeliveryOpensItsPullRequestByTheChoice(t *testing.T) {
 	} {
 		t.Run(c.choice, func(t *testing.T) {
 			w := conducting(t)
-			ana := w.person("Ana")
-			task := w.task()
-			w.assignOwner(task, ana)
-			w.projectChoice(c.choice)
-			w.quietToTheOpening(task)
+			task, ana := w.quietToTheOpening(c.choice)
 			if c.choice == delivery.PullRequestAsk {
 				w.until("Deliver's hold, asking", func() bool {
 					return w.heldBeforePR(task) && w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0
@@ -168,11 +169,7 @@ func TestAQuietDeliveryOpensItsPullRequestByTheChoice(t *testing.T) {
 // conductor's decide and start_phase are refused there, and nothing moves.
 func TestTheQuietConductorIsRefusedAtDeliversHold(t *testing.T) {
 	w := conducting(t)
-	ana := w.person("Ana")
-	task := w.task()
-	w.assignOwner(task, ana)
-	w.projectChoice(delivery.PullRequestAsk)
-	w.quietToTheOpening(task)
+	task, _ := w.quietToTheOpening(delivery.PullRequestAsk)
 	w.until("Deliver's hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
 	for _, call := range []struct{ tool, args string }{
 		{"decide", `{"action":"ask_person"}`},
