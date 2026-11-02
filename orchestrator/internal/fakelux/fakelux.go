@@ -941,6 +941,14 @@ func (s *Server) replay(run *Run, spec map[string]any) {
 	run.behavior.withChecks(now)
 }
 
+// defaultsTaker says spec is a conductor's on fakeagent.DefaultsModel.
+func defaultsTaker(spec map[string]any) bool {
+	labels, _ := spec["labels"].(map[string]any)
+	phase, _ := labels["dude.phase"].(string)
+	model, _ := labels["dude.model"].(string)
+	return phase == fakeagent.Conductor && model == fakeagent.DefaultsModel
+}
+
 // scripted plays fakeagent's step for the Run's phase, deciding the
 // reviewer's verdict from the tree it checks out.
 func (s *Server) scripted(spec map[string]any) Behaviour {
@@ -1744,6 +1752,12 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 				run.behavior.Command = append(run.behavior.Command, arg)
 			}
 		}
+	} else if defaultsTaker(spec) {
+		// A conductor on fakeagent.DefaultsModel is the scripted agent
+		// whatever a test's Decide plays: the model is its script, which
+		// takes Deliver's defaults, so a quiet delivery a test drives with
+		// its own agents goes on as Deliver alone would.
+		run.behavior = s.scripted(spec)
 	} else {
 		run.behavior = s.Decide(spec)
 		run.behavior.withChecks(spec)

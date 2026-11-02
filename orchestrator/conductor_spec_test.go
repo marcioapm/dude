@@ -34,8 +34,9 @@ func TestWhatAConductorIsSubmittedWith(t *testing.T) {
 
 	t.Run("Small, Thinker, the agent image", func(t *testing.T) {
 		w := newWorld(t)
-		// No image named anywhere: DUDE_AGENT_IMAGE.
-		mustExec(t, w.owner, `UPDATE projects SET runtime_image = NULL WHERE id = $1`, w.project)
+		// No image named anywhere: DUDE_AGENT_IMAGE. No tier named for the
+		// conductor either (newWorld names fake/defaults): the organisation's.
+		mustExec(t, w.owner, `UPDATE projects SET runtime_image = NULL, agent_models = agent_models - 'conductor' WHERE id = $1`, w.project)
 		task := w.task()
 		spec := w.conductorSubmitted(task)
 		if spec.Resources == nil || *spec.Resources != small || spec.Placement != nil {

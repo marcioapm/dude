@@ -1151,8 +1151,9 @@ func TestAWakeNoteFailedAfterTheReopenIsNotToldAgain(t *testing.T) {
 
 // Stop and start over handed to Deliver with a wake note in flight: the
 // stopped conductor's unread note is failed by the stop itself, and its
-// reasons stay attempt 1's. No conductor is started with them; attempt 2
-// runs under the policy alone.
+// reasons stay attempt 1's. No conductor is started with them: attempt 2
+// is its conductor's, quietly (policy on the wire), whose first turn is
+// its own decision's, not attempt 1's reasons.
 func TestAWakeNoteFailedByStartingOverIsNotToldAgain(t *testing.T) {
 	w := conducting(t)
 	task := w.task()
@@ -1182,8 +1183,11 @@ func TestAWakeNoteFailedByStartingOverIsNotToldAgain(t *testing.T) {
 	if n := len(w.woken(task)); n != 1 {
 		t.Errorf("%d notes, want only the one in flight at the stop", n)
 	}
-	if d := w.decider(task); d != "policy" {
-		t.Errorf("attempt 2 is decided by %s", d)
+	// Policy on the wire, for a delivery whose person never accepted
+	// Deliver's defaults, is a quiet conductor: every delivery has one.
+	if d := w.str(`SELECT COALESCE(state->>'decider', 'policy') || '/' || COALESCE(state->>'voice', '') FROM workflow_runs
+		WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, task); d != "conductor/quiet" {
+		t.Errorf("attempt 2 is decided by %s, want its conductor, quietly", d)
 	}
 }
 
