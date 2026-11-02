@@ -208,6 +208,10 @@ func TestAConductorIsToldItsDeliveryWentQuiet(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'base-moved:voice:%' AND delivered_at IS NULL`, task); n > 1 {
 		t.Errorf("%d voice lines pending, want only the latest", n)
 	}
+	if got := w.str(`SELECT COALESCE(max(line), '') FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'base-moved:voice:%' AND delivered_at IS NULL`,
+		task); got != delivery.VoiceChangedLine(delivery.VoiceQuiet) {
+		t.Errorf("the voice line pending is %q, want the latest, quiet", got)
+	}
 }
 
 // A person's message on a quiet delivery nobody handed back makes it
