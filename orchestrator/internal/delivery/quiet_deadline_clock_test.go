@@ -10,7 +10,7 @@ import (
 )
 
 // A quiet decision's deadline is weighed against the clock it was set by,
-// the database's (dbNowTx), not the host's: a database ahead of the host
+// the database's (quietFactsTx), not the host's: a database ahead of the host
 // past the deadline defaults it, where the host's clock would re-park it
 // at a wake the runtime claims again on every poll; and a hand-back's
 // signal an hour before the deadline waits, whatever the host says.
