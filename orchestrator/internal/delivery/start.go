@@ -102,8 +102,9 @@ func Reopened(d *Delivery) bool { return d != nil && !d.Live() && NotStarted(d.T
 // StartTx starts the task's delivery, in tx: refused for an archived or
 // closed task, and while it is blocked unless a person overrides
 // (RefuseStartTx); then its policy, its only repository named, and the
-// delivery — decided by Deliver's policy, or for a talk by the conductor,
-// parked on its first decision.
+// delivery — decided by its conductor: quietly for Deliver, whose
+// implementer starts at once, or for a talk chattily, parked on its first
+// decision.
 func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started, error) {
 	var out Started
 	if in.How == HowTalk && in.Message != "" {
@@ -168,9 +169,10 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 		st.Attempt = attempt
 	}
 	st.Overridden = in.Override != nil
-	if in.How == HowTalk {
-		st.Decider, st.HadConductor = DeciderConductor, true
-	}
+	// Every delivery has a conductor: quiet for Deliver (it takes no turn
+	// at the start, and Deliver's rules open the pull request), chatty for
+	// Talk it through.
+	st.Decider, st.HadConductor, st.Voice = DeciderConductor, true, StartVoice(in.How)
 	if out.WorkflowID, out.Joined, err = rt.StartInTx(ctx, tx, workflow.StartOptions{Type: WorkflowType, OrganizationID: in.Org,
 		IdempotencyKey: key, TaskID: in.TaskID, Input: st}); err != nil {
 		return out, err
@@ -179,18 +181,31 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	if err := EndAutoStartTx(ctx, tx, in.Org, in.TaskID, "started", in.Writer.ActorType, in.Writer.ActorID); err != nil {
 		return out, err
 	}
-	if in.How != HowTalk || out.Joined {
+	if out.Joined {
 		return out, nil
+	}
+	why := "deliver"
+	if in.How == HowTalk {
+		why = "talk it through"
 	}
 	if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvDeciderChanged, OrganizationID: in.Org, ProjectID: projectID,
 		TaskID: in.TaskID, ActorType: in.Writer.ActorType, ActorID: in.Writer.ActorID, Source: ledger.SourceOrchestrator,
-		CorrelationID: in.TaskID, Payload: map[string]any{"from": nil, "to": DeciderConductor, "why": "talk it through"}}); err != nil {
+		CorrelationID: in.TaskID, Payload: map[string]any{"from": nil, "to": DeciderConductor, "why": why, "voice": st.Voice}}); err != nil {
 		return out, err
 	}
-	if in.Message != "" {
+	if in.How == HowTalk && in.Message != "" {
 		out.ConductorRunID, err = StartConductor(ctx, tx, in.Org, projectID, in.TaskID, in.Writer, in.Message)
 	}
 	return out, err
+}
+
+// StartVoice is the voice a delivery started as how is conducted in:
+// chatty for Talk it through, quiet for every other start.
+func StartVoice(how string) string {
+	if how == HowTalk {
+		return VoiceChatty
+	}
+	return VoiceQuiet
 }
 
 // NextAttemptTx is a fresh attempt's number, for a Reopen's start and for

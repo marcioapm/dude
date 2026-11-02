@@ -296,7 +296,9 @@ export function PickUpDialog({ client, task, stop, options, initial, pullRequest
   onDone: (action: RecoverAction) => void;
 }) {
   const conducted = task.decider === "conductor";
-  const previous: NextDecider = conducted ? "conductor" : "deliver";
+  // A quiet conductor's attempt is Deliver's on the wire (policy): every
+  // delivery has a conductor, and only a chatty one is "the conductor".
+  const previous: NextDecider = conducted && task.voice !== "quiet" ? "conductor" : "deliver";
   const [action, setAction] = useState<RecoverAction>(initial);
   const [next, setNext] = useState<NextDecider>(previous);
   const [note, setNote] = useState("");

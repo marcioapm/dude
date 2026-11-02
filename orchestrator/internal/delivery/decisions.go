@@ -1285,6 +1285,24 @@ func tellEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *Stat
 	return err == nil, err
 }
 
+// WhyAcceptedDefaults is why a delivery was handed to Deliver's policy
+// when its person accepted conductor_unavailable: the one delivery no
+// conductor decides, by the person's choice (AcceptedDefaultsTx).
+const WhyAcceptedDefaults = "the person accepted Deliver's defaults"
+
+// AcceptedDefaultsTx says the task's delivery is Deliver's because its
+// person accepted Deliver's defaults: its latest change of decider is that
+// accept. Nothing re-conducts it silently — not a Stop's or a pick-up's
+// next attempt, nor the boot sweep (ConvertToQuietTx); a person's Chat or
+// an explicit hand to the conductor does.
+func AcceptedDefaultsTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
+	var accepted bool
+	err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT payload->>'to' = $2 AND payload->>'why' = $3 FROM events
+		WHERE task_id = $1 AND event_type = '`+EvDeciderChanged+`' ORDER BY cursor DESC LIMIT 1), false)`,
+		taskID, DeciderPolicy, WhyAcceptedDefaults).Scan(&accepted)
+	return accepted, err
+}
+
 // SetDeciderTx changes who decides a task's delivery, and under the
 // conductor how it speaks (voice: VoiceQuiet, VoiceChatty; "" keeps the
 // delivery's), recording it once: a no-op when both already are. Returns

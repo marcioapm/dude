@@ -222,7 +222,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		// whose policy decides from here on, its bounds included, the fix
 		// bar staying the conductor's (HadConductor). Not handed back
 		// (HandedBack): a person's Chat takes it over again, as any.
-		if _, err := SetDeciderTx(ctx, tx, org, wfID, &st, DeciderPolicy, "", "the person accepted Deliver's defaults",
+		if _, err := SetDeciderTx(ctx, tx, org, wfID, &st, DeciderPolicy, "", WhyAcceptedDefaults,
 			in.ActorType, in.ActorID); err != nil {
 			return err
 		}

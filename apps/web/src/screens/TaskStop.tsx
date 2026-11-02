@@ -140,8 +140,11 @@ export function StopDialog({ client, task, attempt, live, pullRequests = [], onC
   onDone: (restarted: boolean) => void;
 }) {
   const decider: NextDecider = task.decider === "conductor" ? "conductor" : "deliver";
+  // The next attempt as now: a quiet conductor's is Deliver's on the wire
+  // (policy), as every delivery has a conductor.
+  const asNow: NextDecider = decider === "conductor" && task.voice !== "quiet" ? "conductor" : "deliver";
   const [way, setWay] = useState<Way>("stop");
-  const [next, setNext] = useState<NextDecider>(decider);
+  const [next, setNext] = useState<NextDecider>(asNow);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -185,7 +188,7 @@ export function StopDialog({ client, task, attempt, live, pullRequests = [], onC
         <div className="pickUpWhatItDoes">
           {ways.map(({ value: w }) => (
             <div key={w} className="pickUpWay" data-shown={w === way}>
-              {w === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={decider} /> : null}
+              {w === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={asNow} /> : null}
               <ul className="pickUpEffects" aria-label="What it does">
                 {effects(w, decider, next, attempt, branch, pullRequests, task.source?.headBranch ?? null).map((e) => (
                   <li key={`${e.what}-${e.how}`} data-how={e.how}>
