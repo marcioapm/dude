@@ -3361,6 +3361,14 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	case ReasonChoiceUnresolved:
 		// The opening, which reads the choice again.
 		st.Escalation.Step = "openPullRequest"
+	case ReasonConductorUnavailable:
+		// Its retry waits on the conductor's decision again (decide).
+		st.Escalation.Step = "conductorDecision"
+	}
+	if st.Escalation.Step == "" && slices.Contains(st.Escalation.Actions(), "retry") {
+		// A retry with nowhere to go back to would end the workflow while
+		// its task still runs: a missing RetryStep entry, said loudly.
+		return workflow.Result{}, fmt.Errorf("escalation %s at step %s offers retry with no step to go back to (RetryStep)", reason, sc.Step)
 	}
 	if ids := st.Escalation.RunIDs(); len(ids) > 0 && strings.HasSuffix(reason, "_failed") {
 		// A Run failed, and lux keeps it: the step waiting on it can wait on
@@ -3400,8 +3408,11 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 var RetryStep = map[string]string{
 	"awaitImplement": "implement",
 	"adopt":          "adopt",
-	// A review loop that gave up tries again with another round of fixes.
+	// A review loop that gave up tries again with another round of fixes:
+	// from its own round, or from where Deliver's policy weighs the round
+	// a decision left to it (reviewExit), the same loop's exit.
 	"awaitReview": "fix",
+	"reviewExit":  "fix",
 	"awaitFix":    "fix",
 	"awaitTest":   "test",
 	"testVerdict": "test",
@@ -3427,6 +3438,13 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// Checked when it was taken; a decision that cannot be carried out
 		// must not leave the task looking busy.
 		return workflow.Result{}, fmt.Errorf("escalation %s cannot %s", e.Reason, d.Action)
+	}
+	if d.Action == "retry" && e.Step == "" && e.Reason != ReasonChecksUnverified && e.Reason != ReasonNotConverging &&
+		(e.Reason != ReasonConductorUnavailable || st.Decision == nil) {
+		// A retry with no step to go back to: no Next would complete the
+		// workflow with its task still running. Refused before anything
+		// moves, and loudly.
+		return workflow.Result{}, fmt.Errorf("escalation %s: retry has no step to go back to (RetryStep)", e.Reason)
 	}
 	st.Escalation = nil
 	if e.Reason == ReasonChecksUnverified {

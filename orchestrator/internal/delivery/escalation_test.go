@@ -319,3 +319,88 @@ func TestChecksFinishedRechecksTheEscalationAndCurrentChecks(t *testing.T) {
 		})
 	}
 }
+
+// A review loop exhausted where Deliver's policy weighs a decision's
+// default (reviewExit, after an accepted conductor_unavailable or a
+// not_converging accept) escalates stuck from that step; a retry is
+// another round of fixes, as one from awaitReview is, never the
+// workflow's end.
+func TestAStuckEscalationAtReviewExitRetriesTheFix(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	for _, query := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status) VALUES ('review_e', $1, 'prj_e', 'wi_e', 1, 'review', 'completed')`,
+		`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, fix_attempts) VALUES ('f', $1, 'wi_e', 'review_e', 'correctness', 'high', 'F', 'problem', 1)`,
+	} {
+		if _, err := owner.Exec(ctx, query, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := DefaultPolicy()
+	policy.MaxAttemptsPerFinding = 1
+	st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Policy: policy, Iteration: 1}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: app}}
+	res, err := w.reviewExit(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "reviewExit", State: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = res.State.(*State)
+	if res.Next != "decide" || st.Escalation == nil || st.Escalation.Reason != "stuck" {
+		t.Fatalf("reviewExit: next %q, escalation %+v", res.Next, st.Escalation)
+	}
+	if st.Escalation.Step != "fix" {
+		t.Fatalf("stuck at reviewExit retries %q, want fix", st.Escalation.Step)
+	}
+	raw, _ = json.Marshal(st)
+	if _, err := owner.Exec(ctx, `INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state) VALUES ('wf_e', $1, $2, 'e', 'wi_e', 'waiting', 'decide', $3)`, org, WorkflowType, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return DecideEscalationTx(ctx, tx, org, "wi_e", EscalationDecision{Action: "retry", Note: "One narrow round.", ActorType: "system", ActorID: "test"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id = 'wf_e'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	res, err = w.decide(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "decide", State: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := res.State.(*State)
+	if res.Next != "fix" || after.Iteration != 0 || after.ExtraFixAttempts != policy.MaxAttemptsPerFinding {
+		t.Fatalf("retry: next %q, iteration %d, extra attempts %d", res.Next, after.Iteration, after.ExtraFixAttempts)
+	}
+}
+
+// Every escalation that offers a retry says where it goes back to: one
+// with none would end the workflow (a Result with no Next) while its task
+// still runs. escalate refuses it, and decide refuses to carry one out.
+func TestAnEscalationOfferingRetryWithNoStepFailsLoudly(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	for _, query := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`,
+	} {
+		if _, err := owner.Exec(ctx, query, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := &steps{s: &Store{DB: app}}
+	st := &State{TaskID: "wi_e", ProjectID: "prj_e", Policy: DefaultPolicy()}
+	if _, err := w.escalate(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "noSuchStep"}, st, "stuck", LoopExit{Reason: "stuck"}); err == nil {
+		t.Fatal("a stuck escalation from a step with no retry target was raised")
+	}
+	st = &State{TaskID: "wi_e", ProjectID: "prj_e", Policy: DefaultPolicy(),
+		Escalation: &Escalation{Reason: "exhausted", Decided: &HumanDecision{Action: "retry"}}}
+	raw, _ := json.Marshal(st)
+	if res, err := w.decide(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "decide", State: raw}); err == nil {
+		t.Fatalf("a retry with no step was carried out: next %q", res.Next)
+	}
+}
