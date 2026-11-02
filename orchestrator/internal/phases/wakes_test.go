@@ -175,7 +175,8 @@ func TestTheSweepFindsBothKindsOfUnheardConductor(t *testing.T) {
 // model, each with an older reason pending, and one ready task. The quiet
 // ones are not selected (WakeConductorTx would start no conductor for
 // them), so the ready one is told in one sweep; their reasons stay
-// pending, and a model set for one of them is told on the next sweep.
+// pending, and a model set for one of them is told on the next sweep. One
+// with no model but a live conductor is told in the first sweep.
 func TestQuietDeliveriesWithNoModelDoNotCrowdOutTheSweep(t *testing.T) {
 	ctx := context.Background()
 	w := newWakeSweepWorld(t)
@@ -203,6 +204,18 @@ func TestQuietDeliveriesWithNoModelDoNotCrowdOutTheSweep(t *testing.T) {
 	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
 		VALUES ('cwk_ready', $1, 'wi_zready', 'decision', 'k', 'ready to decide', now() - interval '1 minute')`, org)
 
+	// Selected all the same: a quiet one with no model whose conductor is
+	// live (paused between turns) hears its note, as any live one does.
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_zlive', $1, 'prj_'||$1, 9998, 'T', 'G')`, org)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, dude_pause, turn_done_at)
+		VALUES ('run_live', $1, 'prj_'||$1, 'wi_zlive', 1, 'conductor', 'agent', 'paused', 'conductor', now())`, org)
+	exec(`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+		SELECT 'wf_'||t.id, $1, t.id, 'task.delivery', 'delivery:'||t.id, 'waiting', 'conductorDecision',
+			'{"attempt":1,"decider":"conductor","hadConductor":true,"voice":"quiet"}'
+		FROM tasks t WHERE t.id = 'wi_zlive'`, org)
+	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES ('cwk_live', $1, 'wi_zlive', 'decision', 'k', 'live to decide', now() - interval '1 minute')`, org)
+
 	s := w.s
 	s.WakeWindow = 15 * time.Second
 	if err := s.wakeConductors(ctx); err != nil {
@@ -211,10 +224,14 @@ func TestQuietDeliveriesWithNoModelDoNotCrowdOutTheSweep(t *testing.T) {
 	if n := count(`SELECT count(*) FROM conductor_wakes WHERE id = 'cwk_ready' AND delivered_at IS NOT NULL`); n != 1 {
 		t.Fatalf("the ready reason is still pending after a sweep")
 	}
+	if n := count(`SELECT count(*) FROM directives WHERE run_id = 'run_live' AND text LIKE '%live to decide%'`); n != 1 {
+		t.Errorf("the live conductor with no model has %d notes after one sweep, want 1", n)
+	}
 	if n := count(`SELECT count(*) FROM conductor_wakes WHERE organization_id = $1 AND kind = 'stalled' AND delivered_at IS NULL`, org); n != wakeBatch+6 {
 		t.Errorf("%d reasons pending for conductors with no model, want %d", n, wakeBatch+6)
 	}
-	if n := count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND role = 'conductor' AND id <> 'run_ready'`, org); n != 0 {
+	if n := count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND role = 'conductor'
+		AND id NOT IN ('run_ready', 'run_live')`, org); n != 0 {
 		t.Errorf("%d conductors started with no model", n)
 	}
 	// A model set: its news, kept pending, is told on the next sweep.
