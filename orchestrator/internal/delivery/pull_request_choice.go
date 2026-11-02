@@ -188,7 +188,7 @@ func releaseChoiceGate(st *State) {
 // cycle.
 func choiceReleasedAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, res workflow.Result) (workflow.Result, bool, error) {
 	d := st.Decision
-	if res.Next != "conductorDecision" || !st.ChoiceGate || st.conducted() || d == nil || d.Point != PointBeforePR || d.Taken != nil {
+	if res.Next != "conductorDecision" || !st.ChoiceGate || !st.deliverOpens() || d == nil || d.Point != PointBeforePR || d.Taken != nil {
 		return res, false, nil
 	}
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM workflow_runs WHERE id = $1 FOR NO KEY UPDATE`, sc.WorkflowRunID); err != nil {
@@ -217,10 +217,10 @@ func FeedbackStillOpenText(n int) string {
 	return fmt.Sprintf("%d feedback items still open", n)
 }
 
-// HeldByDeliver says Deliver, not the conductor, holds the delivery at the
-// gate before its pull request.
+// HeldByDeliver says Deliver's rules, not the conductor, hold the delivery
+// at the gate before its pull request: no conductor decides, or a quiet one.
 func (d *Delivery) HeldByDeliver() bool {
-	return d.AtGate() && !d.State.conducted()
+	return d.AtGate() && d.State.deliverOpens()
 }
 
 // HeldByChoice says the task's delivery is held before its pull request by

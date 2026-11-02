@@ -899,7 +899,7 @@ func (w *steps) reviewUntested(ctx context.Context, sc workflow.StepContext, st 
 	if err != nil || !untested {
 		return workflow.Result{}, false, err
 	}
-	if st.conducted() {
+	if st.conducted() && !st.quiet() {
 		res, err := w.next(ctx, sc, st, PointBeforePR, "openPullRequest", UntestedHead+".")
 		return res, true, err
 	}

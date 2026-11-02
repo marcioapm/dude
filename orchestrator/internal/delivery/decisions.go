@@ -240,7 +240,7 @@ var pointLabel = func() map[string]string {
 // wake and event in the transition's transaction. A conductor that was
 // deciding as the step entered the pull request gate leaves it required.
 func (w *steps) next(ctx context.Context, sc workflow.StepContext, st *State, point, step, line string) (workflow.Result, error) {
-	if st.conducted() && point == PointBeforePR {
+	if st.conducted() && !st.quiet() && point == PointBeforePR {
 		st.GateRequired, st.ChoiceGate = true, false
 	}
 	st.Routed = &Routed{Point: point, Policy: step, Next: step, Line: line}
@@ -467,7 +467,9 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 	if d == nil {
 		return workflow.Result{}, fmt.Errorf("no decision to carry out")
 	}
-	if d.Taken == nil && !st.conducted() {
+	// Deliver's hold before the pull request is Deliver's under a quiet
+	// conductor too: the person's Open or Draft opens it, no conductor turn.
+	if d.Taken == nil && (!st.conducted() || st.quiet() && d.Point == PointBeforePR) {
 		// A gate the conductor entered stays one handed back: Deliver goes
 		// on only with the person's Open or Draft, or their confirmation.
 		if d.Point == PointBeforePR && st.GateRequired && !st.gateHeld() {
@@ -684,7 +686,7 @@ func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *Sta
 	}); err != nil {
 		return workflow.Result{}, err
 	}
-	if (st.adoptedBranch() || st.ChoiceGate) && !st.conducted() {
+	if (st.adoptedBranch() || st.ChoiceGate) && st.deliverOpens() {
 		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", ReasonReadyForReview); err != nil {
 			return workflow.Result{}, err
 		}

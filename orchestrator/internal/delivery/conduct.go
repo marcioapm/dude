@@ -142,6 +142,9 @@ func parked(ctx context.Context, tx pgx.Tx, ref RunRef) (*Delivery, error) {
 		return nil, refuseText(rThisTaskHasNoDeliveryIn)
 	case !d.State.conducted():
 		return nil, refuseText(rDeliverTakesThisTaskDecisionsNot)
+	case d.HeldByDeliver():
+		// Quiet: Deliver's own hold before the pull request, the person's.
+		return nil, refuseText(rDudeHoldsThisDeliveryBeforeItsPR)
 	case d.Step == "conductorDecision" && d.State.Decision != nil && d.State.Decision.Taken != nil:
 		return nil, refusef(rThisDecisionWasTakenAlreadyYou, d.State.Decision.Taken.Action)
 	case d.Step == "decide" && d.State.Escalation != nil:
@@ -601,9 +604,23 @@ func askGateTx(ctx context.Context, tx pgx.Tx, org string, st *State) error {
 	if err != nil {
 		return err
 	}
-	_, err = askGate(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID}, st,
-		"Deliver is about to open the pull request, and the conductor had asked you first.\n\n"+GateQuestion)
+	_, err = askGate(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID}, st, gatePrompt(st))
 	return err
+}
+
+// The gate's question at Deliver's hold: under a quiet conductor the hold
+// is Deliver's own, its conductor asked nothing first.
+const (
+	gateAskedFirst = "Deliver is about to open the pull request, and the conductor had asked you first."
+	gateHeldQuiet  = "Deliver is about to open the pull request, and holds it for your Open or Draft first."
+)
+
+// gatePrompt is the question askGateTx asks at Deliver's hold.
+func gatePrompt(st *State) string {
+	if st.quiet() {
+		return gateHeldQuiet + "\n\n" + GateQuestion
+	}
+	return gateAskedFirst + "\n\n" + GateQuestion
 }
 
 // GateAnswered wakes the task's delivery once the gate's question is

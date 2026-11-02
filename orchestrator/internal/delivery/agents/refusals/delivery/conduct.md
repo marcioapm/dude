@@ -4,6 +4,8 @@
 
 {{- define "refusals/delivery/conduct/deliver-takes-this-task-decisions-not"}}Deliver takes this task's decisions, not you: you are read-only. A person hands them to you by writing in Chat; until then, answer and advise{{end}}
 
+{{- define "refusals/delivery/conduct/dude-holds-this-delivery-before-its-pr"}}dude holds this delivery before its pull request for the person's Open or Draft: you decide nothing here. If they ask, tell them to answer Open or Draft{{end}}
+
 {{- define "refusals/delivery/conduct/this-decision-was-taken-already-you"}}this decision was taken already (%s); you are woken at the next one{{end}}
 
 {{- define "refusals/delivery/conduct/delivery-stopped-for-person-at-escalation"}}the delivery is stopped for a person at an escalation (%s), not waiting on your decision. The person decides it on the banner, or by answering your question about it (ask_person with the escalation's actions as choices); if the owner answers that question in their own words, decide it with decide_escalation{{end}}

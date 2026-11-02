@@ -1835,8 +1835,8 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 		// Not the latched Draft: a later opening (another repository's) is not this one.
 		st.draftChoice = choice == PullRequestDraft
 	}
-	if len(st.PullRequestIDs) == 0 && (st.conducted() || st.GateRequired) && !st.gateHeld() {
-		if st.conducted() {
+	if len(st.PullRequestIDs) == 0 && (st.conducted() && !st.quiet() || st.GateRequired) && !st.gateHeld() {
+		if st.conducted() && !st.quiet() {
 			return w.next(ctx, sc, st, PointBeforePR, "openPullRequest", "")
 		}
 		ok, err := w.gateAuthorized(ctx, sc, st)
@@ -3434,7 +3434,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		status := "running"
 		if e.At == "awaitPullRequest" || e.At == "awaitRead" {
 			status = "review"
-		} else if e.At == "conductorDecision" && !st.conducted() && st.Decision != nil && st.Decision.Point == PointBeforePR {
+		} else if e.At == "conductorDecision" && st.deliverOpens() && st.Decision != nil && st.Decision.Point == PointBeforePR {
 			status = "awaiting_input"
 		}
 		return resumeEscalationAt(st, e), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, "a person decided: "+d.Action)

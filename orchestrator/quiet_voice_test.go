@@ -7,6 +7,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -90,4 +91,102 @@ func TestAQuietContinueAdoptedStartRunsTheImplementerWithNoWake(t *testing.T) {
 	wi := w.adopted("pr", n, "feature/half", "main", delivery.ModeContinue)
 	w.startQuiet(wi)
 	w.startedQuietly(wi)
+}
+
+// quietToTheOpening talks the task through to after its implementer, makes
+// it quiet there, and has its conductor go on to the simplifier and past
+// its review: the delivery reaches its opening with the conductor deciding
+// quietly. Returns the task.
+func (w *world) quietToTheOpening(task string) {
+	w.t.Helper()
+	w.talk(task)
+	w.implemented(task)
+	w.quietly(task)
+	w.carriedOut(task, "start_phase", `{"phase":"simplify"}`)
+	w.agentsDone(task, "the simplifier's narrow review", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.finishSimplifierReview(task)
+}
+
+// conductorAskedAtTheOpening counts the decisions the conductor was asked
+// for before the pull request: none under a quiet one, whose opening is
+// Deliver's (Deliver's own hold offers the conductor no action).
+func (w *world) conductorAskedAtTheOpening(task string) int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2
+		AND payload->>'point' = 'before_pull_request' AND jsonb_array_length(payload->'actions') > 0`, task, delivery.EvDecisionAwaited) +
+		w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'decision'
+			AND created_at > (SELECT max(occurred_at) FROM events WHERE task_id = $1 AND event_type = 'conductor.decision_taken')`, task)
+}
+
+// A quiet conductor's delivery opens its pull request as the task's choice
+// says, by Deliver's own rules, with no conductor turn before it: Open it
+// opens, Open as draft opens a draft, and Ask me first holds it for the
+// owner, whose Open on the gate's question opens it.
+func TestAQuietDeliveryOpensItsPullRequestByTheChoice(t *testing.T) {
+	for _, c := range []struct{ choice string }{
+		{delivery.PullRequestOpen}, {delivery.PullRequestDraft}, {delivery.PullRequestAsk},
+	} {
+		t.Run(c.choice, func(t *testing.T) {
+			w := conducting(t)
+			ana := w.person("Ana")
+			task := w.task()
+			w.assignOwner(task, ana)
+			w.projectChoice(c.choice)
+			w.quietToTheOpening(task)
+			if c.choice == delivery.PullRequestAsk {
+				w.until("Deliver's hold, asking", func() bool {
+					return w.heldBeforePR(task) && w.conductorQuestion(task) != "" || len(w.gh.Pulls()) > 0
+				})
+				if n := len(w.gh.Pulls()); n != 0 {
+					t.Fatalf("%d pull requests opened under Ask me first", n)
+				}
+				if s := w.taskStatus(task); s != "awaiting_input" {
+					t.Errorf("task %s at Deliver's hold, want awaiting_input for its owner", s)
+				}
+				// The question is Deliver's, not one the conductor asked first.
+				if p := w.str(`SELECT prompt FROM questions WHERE id = $1`, w.conductorQuestion(task)); strings.Contains(p, "conductor") {
+					t.Errorf("the quiet hold's question says the conductor asked: %q", p)
+				}
+				if status, out := w.answerAs(ana, task, "Open"); status != 200 && status != 201 {
+					t.Fatalf("the owner's Open: %d %v", status, out)
+				}
+			}
+			w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			if got := w.gh.Pulls()[0].Draft; got != (c.choice == delivery.PullRequestDraft) {
+				t.Errorf("draft %v under %s", got, c.choice)
+			}
+			if n := w.conductorAskedAtTheOpening(task); n != 0 {
+				t.Errorf("the quiet conductor was asked %d times before the pull request", n)
+			}
+			if d := w.decider(task); d != delivery.DeciderConductor {
+				t.Errorf("decider %s", d)
+			}
+		})
+	}
+}
+
+// At Deliver's hold of a quiet delivery the opening is the person's: the
+// conductor's decide and start_phase are refused there, and nothing moves.
+func TestTheQuietConductorIsRefusedAtDeliversHold(t *testing.T) {
+	w := conducting(t)
+	ana := w.person("Ana")
+	task := w.task()
+	w.assignOwner(task, ana)
+	w.projectChoice(delivery.PullRequestAsk)
+	w.quietToTheOpening(task)
+	w.until("Deliver's hold", func() bool { return w.heldBeforePR(task) || len(w.gh.Pulls()) > 0 })
+	for _, call := range []struct{ tool, args string }{
+		{"decide", `{"action":"ask_person"}`},
+		{"start_phase", `{"phase":"review","categories":["correctness"]}`},
+	} {
+		if status, out := w.as(task, call.tool, call.args); status != 422 {
+			t.Errorf("%s at Deliver's hold: %d %v, want refused", call.tool, status, out)
+		}
+	}
+	for range 3 {
+		w.pump()
+	}
+	if !w.heldBeforePR(task) || len(w.gh.Pulls()) != 0 || w.phaseRuns(task, "review") != w.count(`SELECT count(*) FROM runs
+		WHERE task_id = $1 AND phase = 'review' AND status IN ('completed', 'failed')`, task) {
+		t.Fatalf("the refused calls moved the hold\n%s", w.describeRuns())
+	}
 }
