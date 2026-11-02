@@ -8,6 +8,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -275,6 +276,24 @@ func TestTheSweepSkipsADeliveryWhosePersonAcceptedTheDefaults(t *testing.T) {
 	}
 	if got := w.deciderState(task); got[:7] != "policy/" {
 		t.Errorf("an accepted delivery converted: %s", got)
+	}
+}
+
+// Accepted, then handed to the conductor, then back to Deliver's policy as
+// a hand-back from before voices left it: the accept is not its latest
+// change of decider, so the sweep converts it.
+func TestTheSweepConvertsADeliveryAcceptedThenHandedOn(t *testing.T) {
+	w := conducting(t)
+	task, owner := w.acceptedDelivery()
+	if status, out := w.callAs(owner, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "conductor"}); status != 200 {
+		t.Fatalf("hand to the conductor: %d %v", status, out)
+	}
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state - 'voice' || '{"decider":"policy"}'::jsonb WHERE task_id = $1`, task)
+	if n := w.convert(); n.Converted != 1 || n.Accepted != 0 {
+		t.Fatalf("sweep: %+v, want it converted", n)
+	}
+	if got := w.deciderState(task); !strings.HasPrefix(got, "conductor/quiet/") {
+		t.Errorf("after the sweep: %s, want the conductor, quiet", got)
 	}
 }
 

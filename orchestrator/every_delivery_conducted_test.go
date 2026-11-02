@@ -184,3 +184,35 @@ func TestFeedbackOnAQuietDeliveryReachesTheWorkingImplementerThroughItsConductor
 		t.Errorf("%d conductor steers of the implementer", n)
 	}
 }
+
+// handBackAfterAccept hands an accepted delivery to its conductor, then back
+// to it quietly (POST /decider), as its owner may: the accept is no longer
+// its latest change of decider.
+func (w *world) handBackAfterAccept(owner, task string) {
+	w.t.Helper()
+	for _, d := range []string{"conductor", "policy"} {
+		if status, out := w.callAs(owner, "/internal/tasks/"+task+"/decider", map[string]any{"decider": d}); status != 200 {
+			w.t.Fatalf("hand to %s: %d %v", d, status, out)
+		}
+	}
+	if got := w.deciderState(task); !strings.HasPrefix(got, "conductor/quiet/") {
+		w.t.Fatalf("handed back quietly after the accept: %s", got)
+	}
+}
+
+// Accepted, then handed to the conductor quietly: the accept is not the
+// latest change of decider, so a Stop and Start over on Deliver (policy)
+// starts attempt 2 with a quiet conductor, not Deliver's policy.
+func TestStartingOverAfterAnAcceptHandedBackIsConductedQuietly(t *testing.T) {
+	w := conducting(t)
+	task, owner := w.acceptedDelivery()
+	w.handBackAfterAccept(owner, task)
+	if out := w.stop(owner, task, map[string]any{"note": "again", "andRestart": true, "decider": "policy"}); out["attempt"] != float64(2) {
+		t.Fatalf("stop and start over answered %v", out)
+	}
+	got := w.str(`SELECT COALESCE(state->>'decider', 'policy') || '/' || COALESCE(state->>'voice', '')
+		FROM workflow_runs WHERE task_id = $1 AND (state->>'attempt')::int = 2`, task)
+	if got != "conductor/quiet" {
+		t.Errorf("attempt 2 decided %s, want conductor/quiet", got)
+	}
+}
