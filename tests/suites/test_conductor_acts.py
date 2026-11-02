@@ -29,7 +29,7 @@ def _said(client: ApiClient, run_id: str) -> list[str]:
 
 def _conducted_pr(client: ApiClient, forge_project: dict, delivery: dict, title: str) -> tuple[dict, dict, str]:
     """A task delivered to an open pull request, then handed to the scripted conductor."""
-    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted", "investigator": "fake/scripted"})}
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults", "investigator": "fake/scripted"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
                         {"delivery": {"conductorWarmMinutes": 30, **delivery}}).status_code == 200
@@ -40,7 +40,10 @@ def _conducted_pr(client: ApiClient, forge_project: dict, delivery: dict, title:
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
                message="the task never reached review")
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "I'll steer this from here."})
-    assert resp.status_code == 201 and resp.json()["decider"] == "conductor", resp.text
+    # Deliver's delivery has its conductor already (quiet): the message is
+    # its next input, and makes it chatty.
+    assert resp.status_code in (200, 201) and resp.json()["decider"] == "conductor", resp.text
+    assert client.get(f"/v1/tasks/{task['id']}").json()["voice"] == "chatty"
     conductor = resp.json()["runId"]
     wait_until(lambda: _said(client, conductor), timeout=60, message="the conductor never answered")
     return task, pr, conductor

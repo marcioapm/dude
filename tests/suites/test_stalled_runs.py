@@ -59,7 +59,7 @@ def _stalled(client: ApiClient, run_id: str) -> list[dict]:
 
 
 def test_the_conductor_is_told_once_and_restarts_the_stalled_reviewer(client: ApiClient, forge_project: dict, owner_dsn: str):
-    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted", "reviewer": "fake/stall"})}
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults", "reviewer": "fake/stall"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
                         {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200

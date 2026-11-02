@@ -27,7 +27,7 @@ def _said(client: ApiClient, run_id: str) -> list[str]:
 
 def test_the_conductor_relays_a_fixers_question_and_reads_the_limits(client: ApiClient, forge_project: dict,
                                                                      fake_github: FakeGitHub):
-    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
                         {"delivery": {"conductorWarmMinutes": 30, "maxPrFixIterations": 5}}).status_code == 200
@@ -53,7 +53,10 @@ def test_the_conductor_relays_a_fixers_question_and_reads_the_limits(client: Api
                        timeout=120, message="the fixer never asked")
 
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "I'll steer this from here."})
-    assert resp.status_code == 201 and resp.json()["decider"] == "conductor", resp.text
+    # Deliver's delivery has its conductor already (quiet): the message is
+    # its next input, and makes it chatty.
+    assert resp.status_code in (200, 201) and resp.json()["decider"] == "conductor", resp.text
+    assert client.get(f"/v1/tasks/{task['id']}").json()["voice"] == "chatty"
     conductor = resp.json()["runId"]
     said = len(_said(client, conductor))
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "\n".join([

@@ -2001,7 +2001,7 @@ def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     in a line over an empty composer; a message starts the conductor, whose
     briefing El Duderino signs and whose answer carries its own face."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        **forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}})
+        **forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults"})}})
     task = client.create_task(forge_project["id"], "Chat about me")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],

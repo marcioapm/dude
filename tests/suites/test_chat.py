@@ -18,7 +18,7 @@ from helpers import ApiClient, query, wait_until
 
 
 def _conductor_project(client: ApiClient, forge_project: dict) -> dict:
-    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults"})}
     resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models})
     assert resp.status_code == 200, resp.text
     return resp.json()
@@ -57,25 +57,30 @@ def test_a_delivered_tasks_chat_starts_its_conductor_which_answers_parks_and_wak
     before = _state(client, owner_dsn, task["id"], fake_github, branch)
     key = f"{task['key']} · {task['id']}"
 
-    # The first message starts the conductor, briefed by dude.
+    # Every delivery has a conductor: Deliver's, quiet, briefed by dude when
+    # it was first woken. The first message is its next input, and makes it
+    # chatty.
+    quiet = next(r["id"] for r in client.task_runs(task["id"]) if r["role"] == "conductor")
+    briefed = [e for e in client.events(runId=quiet) if e["eventType"] == "conductor.briefed"]
+    assert len(briefed) == 1 and key in briefed[0]["payload"]["text"], briefed
+    said = len(_said(client, quiet))
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "why is the max backoff 8s?"})
-    assert resp.status_code == 201, resp.text
-    conductor = resp.json()["runId"]
+    assert resp.status_code == 200 and resp.json()["runId"] == quiet, resp.text
+    assert client.get(f"/v1/tasks/{task['id']}").json()["voice"] == "chatty"
+    conductor = quiet
     run = client.get_run(conductor)
     assert (run["phase"], run["role"], run["kind"]) == (None, "conductor", "agent")
-    wait_until(lambda: _said(client, conductor), timeout=30, message="the conductor never answered")
-    first = _said(client, conductor)[0]
+    wait_until(lambda: len(_said(client, conductor)) > said, timeout=30, message="the conductor never answered")
+    first = _said(client, conductor)[said]
     assert key in first and "why is the max backoff 8s?" in first, first
-    briefed = [e for e in client.events(runId=conductor) if e["eventType"] == "conductor.briefed"]
-    assert len(briefed) == 1 and briefed[0]["payload"]["text"].endswith("why is the max backoff 8s?")
 
     # A second message reaches the same conductor, still warm: no resume.
     assert client.get_run(conductor)["status"] == "running"
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "and does it retry POSTs?"})
     assert resp.status_code == 200 and resp.json()["runId"] == conductor, resp.text
-    wait_until(lambda: len(_said(client, conductor)) == 2, timeout=30, message="the second answer never came")
-    assert "and does it retry POSTs?" in _said(client, conductor)[1]
-    assert query(owner_dsn, "SELECT cause FROM run_resumes WHERE run_id = %s", (conductor,)) == []
+    wait_until(lambda: len(_said(client, conductor)) == said + 2, timeout=30, message="the second answer never came")
+    assert "and does it retry POSTs?" in _said(client, conductor)[said + 1]
+    resumed = len(query(owner_dsn, "SELECT cause FROM run_resumes WHERE run_id = %s", (conductor,)))
 
     # Past its warm period — the project's setting reset, the suite's
     # seconds (DUDE_CONDUCTOR_WARM) — it is parked, quietly.
@@ -87,10 +92,10 @@ def test_a_delivered_tasks_chat_starts_its_conductor_which_answers_parks_and_wak
     # A third message resumes it, timed as a conductor's resume, and it answers.
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "what about the tests?"})
     assert resp.status_code == 200 and resp.json()["runId"] == conductor, resp.text
-    wait_until(lambda: len(_said(client, conductor)) == 3, timeout=60, message="the parked conductor never answered")
-    assert "what about the tests?" in _said(client, conductor)[2]
+    wait_until(lambda: len(_said(client, conductor)) == said + 3, timeout=60, message="the parked conductor never answered")
+    assert "what about the tests?" in _said(client, conductor)[said + 2]
     resumes = query(owner_dsn, "SELECT cause FROM run_resumes WHERE run_id = %s", (conductor,))
-    assert [r["cause"] for r in resumes] == ["conductor"]
+    assert [r["cause"] for r in resumes][resumed:] == ["conductor"]
 
     # Nothing about the task moved: its status, Runs, workflow and branch.
     assert _state(client, owner_dsn, task["id"], fake_github, branch) == before
