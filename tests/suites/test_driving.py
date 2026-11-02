@@ -1,12 +1,12 @@
 """Who drives a task, end to end through the deployed processes and the built UI.
 
-A task Deliver delivers shows Deliver beside its status. Its owner gives
-the decisions to the conductor from the header's switch; the header and
-Chat then both say the conductor decides. Let Deliver finish it, from
-Chat, hands them back: the composer says messages are answered, and
-Deliver decides. A colleague sees the same chip with nothing to switch.
-On a conducted task waiting on the pull request question, letting
-Deliver finish asks first: keeping on deciding in Chat opens nothing.
+A task Deliver delivers shows Deliver beside its status. Its owner has the
+conductor talk it through from the header's switch; the header and Chat
+then both say the conductor decides. Let it finish quietly, from Chat,
+keeps the conductor deciding, quiet: the composer says it answers and
+stays quiet. A colleague sees the same chip with nothing to switch. On a
+conducted task waiting on the pull request question, letting it finish
+quietly asks first: keeping on talking it through opens nothing.
 
 Screenshots: with DUDE_SHOTS=<dir> set, the header, its menu, Chat and
 the board are saved there, at 1440x900 light and dark and 390x844.
@@ -87,13 +87,13 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     expect(chip).to_contain_text("Deliver · runs to the pull request on its own")
     _shoot(page, "header-deliver")
 
-    # The owner's switch: Deliver ticked; Give decisions to the conductor.
+    # The owner's switch: Deliver ticked; Talk it through.
     chip.click()
     menu = page.get_by_role("menu")
     expect(menu.get_by_role("menuitemradio", checked=True)).to_contain_text("Deliver decides")
     expect(menu).to_contain_text("It takes over when the implementer finishes; the implementer keeps running.")
     _shoot(page, "menu-deliver")
-    menu.get_by_role("menuitemradio").filter(has_text="Give decisions to the conductor").click()
+    menu.get_by_role("menuitemradio").filter(has_text="Talk it through").click()
     expect(chip).to_have_attribute("data-driver", "conductor", timeout=30_000)
     assert _task(client, task["id"])["decider"] == "conductor"
     # The implementer was not restarted: the same one is still at work.
@@ -104,19 +104,24 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     line = page.get_by_test_id("decider-line")
     expect(line).to_have_attribute("data-decider", "conductor", timeout=30_000)
     _shoot(page, "chat-conductor")
-    line.get_by_test_id("let-deliver-finish").click()
-    expect(line).to_have_attribute("data-decider", "policy", timeout=30_000)
-    expect(chip).to_have_attribute("data-driver", "deliver")
-    expect(line).to_contain_text("messages here are answered, and take no decisions back")
-    expect(page.get_by_test_id("composer-to")).to_have_text("To Conductor · answers only, Deliver decides")
+    finish = line.get_by_test_id("let-deliver-finish")
+    expect(finish).to_have_text("Let it finish quietly")
+    finish.click()
+    # Still the conductor's, quiet.
+    expect(line).to_have_attribute("data-voice", "quiet", timeout=30_000)
+    expect(line).to_have_attribute("data-decider", "conductor")
+    expect(chip).to_have_attribute("data-driver", "conductor")
+    expect(chip).to_contain_text("decides quietly; speaks when it needs you")
+    expect(line).to_contain_text("it decides quietly; messages here are answered, and keep it quiet")
+    expect(page.get_by_test_id("composer-to")).to_have_text("To Conductor · it answers, and stays quiet")
     _shoot(page, "chat-handed-back")
     t = _task(client, task["id"])
-    assert (t["decider"], t["handedBack"]) == ("policy", True)
+    assert (t["decider"], t["voice"], t["handedBack"]) == ("conductor", "quiet", True)
 
     # Activity: who did each, in the words of why.
     page.goto(f"{web_url}#/task/{task['id']}/activity")
     activity = page.get_by_test_id("activity")
-    expect(activity).to_contain_text("e2e user let Deliver finish it", timeout=30_000)
+    expect(activity).to_contain_text("e2e user let it finish quietly", timeout=30_000)
     expect(activity).to_contain_text("e2e user gave the decisions to the conductor")
 
     # A colleague: the same chip, no menu, and why.
@@ -133,7 +138,7 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     sign_in(page, web_url, bo.api_key, at=f"#/task/{task['id']}")
     chip = page.get_by_test_id("task-header").get_by_test_id("driver")
     expect(chip).to_have_attribute("data-switchable", "false", timeout=30_000)
-    expect(chip).to_have_attribute("aria-label", "Deliver: runs to the pull request on its own. Only the owner can change who decides. e2e owns this task.")
+    expect(chip).to_have_attribute("aria-label", "Conductor: decides quietly; speaks when it needs you. Only the owner can change who decides. e2e owns this task.")
     chip.focus()
     expect(page.get_by_role("tooltip")).to_contain_text("Only the owner can change who decides.")
     _shoot(page, "header-member")
@@ -167,7 +172,7 @@ def test_letting_deliver_finish_at_the_pull_request_question_asks_first(
     dialog = page.get_by_role("dialog")
     expect(dialog).to_contain_text("Deliver will open the pull request now.")
     _shoot(page, "gate-confirm")
-    # Keep deciding in Chat: nothing changes, nothing opens.
+    # Keep talking it through: nothing changes, nothing opens.
     dialog.get_by_test_id("hand-back-keep").click()
     expect(page.get_by_role("dialog")).to_have_count(0)
     assert _task(client, task["id"])["decider"] == "conductor"
@@ -176,10 +181,11 @@ def test_letting_deliver_finish_at_the_pull_request_question_asks_first(
 
     # The same from the header's switch, confirmed: Deliver opens it.
     chip.click()
-    page.get_by_role("menu").get_by_role("menuitemradio").filter(has_text="Let Deliver finish it").click()
+    page.get_by_role("menu").get_by_role("menuitemradio").filter(has_text="Let it finish quietly").click()
     page.get_by_role("dialog").get_by_test_id("hand-back-open").click()
     wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"], timeout=90,
                message="the confirmed hand-back never opened the pull request")
-    assert _task(client, task["id"])["decider"] == "policy"
+    t = _task(client, task["id"])
+    assert (t["decider"], t["voice"]) == ("conductor", "quiet"), t
     # The gate's refusals (409 pull_request_gate) are the browser's only complaints: one per unconfirmed hand-back.
     assert console_errors == ["Failed to load resource: the server responded with a status of 409 (Conflict)"] * 2, console_errors
