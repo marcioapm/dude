@@ -15,13 +15,48 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // waitingFor gives the world's deliveries wait as a quiet conductor's
 // time to decide (Store.DecisionWait), in place of QuietDecisionWait.
 func (w *world) waitingFor(wait time.Duration) {
+	w.runtime.Register(w.deliveryWaiting(wait))
+}
+
+// deliveryWaiting is the delivery workflow with wait as a quiet
+// conductor's time to decide, for a test to hook before registering.
+func (w *world) deliveryWaiting(wait time.Duration) *workflow.Definition {
 	store := &delivery.Store{DB: w.app, DecisionWait: wait, SyncPullRequest: w.prs.Sync}
-	w.runtime.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
+	return delivery.Workflow(store, forge.Resolver{DB: w.app})
+}
+
+// lapse moves the task's quiet decision past its deadline (by the
+// database's clock), and wakes its step now.
+func (w *world) lapse(task string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 second')),
+		wake_at = now() WHERE task_id = $1 AND step = 'conductorDecision'`, task)
+}
+
+// quietUnavailable starts the task quietly and waits for it to stop for a
+// person at conductor_unavailable.
+func (w *world) quietUnavailable(task string) {
+	w.t.Helper()
+	w.startQuiet(task)
+	w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
+}
+
+// unavailable is how many times the task stopped at conductor_unavailable.
+func (w *world) unavailable(task string) int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+		AND payload->>'reason' = $2`, task, delivery.ReasonConductorUnavailable)
+}
+
+// defaultsState is the delivery's voice/defaultsAccepted/defaulted.
+func (w *world) defaultsState(task string) string {
+	return w.str(`SELECT COALESCE(state->>'voice', '') || '/' || COALESCE(state->>'defaultsAccepted', 'false') || '/'
+		|| COALESCE(state->>'defaulted', '0') FROM workflow_runs WHERE task_id = $1`, task)
 }
 
 // defaulted is how many decisions the task's delivery took by Deliver's
@@ -148,8 +183,7 @@ func TestThreeDefaultsInARowStopForAPerson(t *testing.T) {
 	w.waitingFor(200 * time.Millisecond)
 	task := w.task()
 	owner, _, _ := w.people(task)
-	w.startQuiet(task)
-	w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
+	w.quietUnavailable(task)
 	if n := w.defaulted(task, ""); n != delivery.MaxDefaulted {
 		t.Errorf("%d defaults before the escalation, want %d", n, delivery.MaxDefaulted)
 	}
@@ -187,8 +221,7 @@ func TestAcceptingTheDefaultsFinishesByDeliversBounds(t *testing.T) {
 		w.waitingFor(100 * time.Millisecond)
 		task := w.task()
 		owner, _, _ := w.people(task)
-		w.startQuiet(task)
-		w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
+		w.quietUnavailable(task)
 		if patch != "" {
 			setPolicy(w, task, patch)
 		}
@@ -197,15 +230,11 @@ func TestAcceptingTheDefaultsFinishesByDeliversBounds(t *testing.T) {
 		}
 		return task
 	}
-	unavailable := func(w *world, task string) int {
-		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
-			AND payload->>'reason' = $2`, task, delivery.ReasonConductorUnavailable)
-	}
 	t.Run("to the pull request", func(t *testing.T) {
 		w := conducting(t)
 		task := accepted(t, w, "")
 		w.until("the pull request, by the defaults", func() bool { return len(w.gh.Pulls()) == 1 })
-		if n := unavailable(w, task); n != 1 {
+		if n := w.unavailable(task); n != 1 {
 			t.Errorf("%d conductor_unavailable escalations, want 1 after accept", n)
 		}
 		// The decision accepted is said as the person's, not a deadline.
@@ -225,7 +254,7 @@ func TestAcceptingTheDefaultsFinishesByDeliversBounds(t *testing.T) {
 		w.onModel("reviewer", fakeagent.StuckModel)
 		task := accepted(t, w, `{"maxAttemptsPerFinding":1,"maxReviewIterations":9,"maxStillRounds":0}`)
 		w.until("the policy's exit", func() bool { return w.escalationReason(task) == "stuck" })
-		if n := unavailable(w, task); n != 1 {
+		if n := w.unavailable(task); n != 1 {
 			t.Errorf("%d conductor_unavailable escalations, want 1 after accept", n)
 		}
 		if it := w.iteration(task); it > 9 {
@@ -241,17 +270,13 @@ func TestAConductorsDecisionResetsTheDefaults(t *testing.T) {
 	w.waitingFor(time.Hour)
 	task := w.task()
 	w.startQuiet(task)
-	// The test moves each deadline itself: a default is one decision.
-	lapse := func() {
-		mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 second')),
-			wake_at = now() WHERE task_id = $1 AND step = 'conductorDecision'`, task)
-	}
+	// The test moves each deadline itself (lapse): a default is one decision.
 	parked := func() bool { return w.decisionAt(task) != "" && w.decisionAt(task) != delivery.PointBeforePR }
 	defaults := func(n int) {
 		t.Helper()
 		for want := w.defaulted(task, "") + n; w.defaulted(task, "") < want; {
 			w.until("a quiet decision", parked)
-			lapse()
+			w.lapse(task)
 			got := w.defaulted(task, "")
 			w.until("the default", func() bool { return w.defaulted(task, "") > got })
 		}
@@ -279,8 +304,7 @@ func TestAConductorsDecisionResetsTheDefaults(t *testing.T) {
 // carried out by the step instead (TestAConductorsDecisionResetsTheDefaults).
 func TestTheConductorRacingTheDeadlineTakesOneDecision(t *testing.T) {
 	w := conducting(t)
-	store := &delivery.Store{DB: w.app, DecisionWait: time.Hour, SyncPullRequest: w.prs.Sync}
-	def := delivery.Workflow(store, forge.Resolver{DB: w.app})
+	def := w.deliveryWaiting(time.Hour)
 	var once sync.Once
 	var armed atomic.Bool
 	status := 0
@@ -295,8 +319,7 @@ func TestTheConductorRacingTheDeadlineTakesOneDecision(t *testing.T) {
 	w.until("the conductor woken", func() bool { id, _, _ := w.conductor(task); return id != "" })
 	w.conductorSpecOf(task)
 	armed.Store(true)
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 second')),
-		wake_at = now() WHERE task_id = $1`, task)
+	w.lapse(task)
 	w.until("the review", func() bool { return w.phaseRuns(task, "review") > 0 })
 	for range 3 {
 		w.pump()
@@ -329,8 +352,7 @@ func TestAQuietDecisionHandedBackAfterChattyWaitsAfresh(t *testing.T) {
 	}
 	// The quiet wait's wake comes, and finds the decision chatty; its old
 	// deadline is long past by the time it is handed back.
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 second')),
-		wake_at = now() WHERE task_id = $1`, task)
+	w.lapse(task)
 	w.until("the chatty decision parked with no wake", func() bool {
 		return w.str(`SELECT COALESCE(wake_at::text, '') || '/' || status FROM workflow_runs WHERE task_id = $1`, task) == "/waiting"
 	})
@@ -359,8 +381,7 @@ func TestAQuietDecisionHandedBackAfterChattyWaitsAfresh(t *testing.T) {
 // the replay says nothing more.
 func TestTheDefaultsAreSaidOnceAcrossALostTransition(t *testing.T) {
 	w := conducting(t)
-	store := &delivery.Store{DB: w.app, DecisionWait: time.Hour, SyncPullRequest: w.prs.Sync}
-	def := delivery.Workflow(store, forge.Resolver{DB: w.app})
+	def := w.deliveryWaiting(time.Hour)
 	var once sync.Once
 	var armed atomic.Bool
 	task := w.task()
@@ -374,8 +395,7 @@ func TestTheDefaultsAreSaidOnceAcrossALostTransition(t *testing.T) {
 	w.runtime.Register(def)
 	w.quietAfterImplement(task)
 	armed.Store(true)
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 second')),
-		wake_at = now() WHERE task_id = $1`, task)
+	w.lapse(task)
 	w.until("the review, by the defaults", func() bool { return w.phaseRuns(task, "review") > 0 })
 	for range 3 {
 		w.pump()
@@ -416,8 +436,7 @@ func TestAcceptingTakesTheDecisionAtOnce(t *testing.T) {
 	w.waitingFor(100 * time.Millisecond)
 	task := w.task()
 	owner, _, _ := w.people(task)
-	w.startQuiet(task)
-	w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
+	w.quietUnavailable(task)
 	before := w.defaulted(task, "")
 	w.waitingFor(time.Hour)
 	if status, out := w.decide(owner, task, "accept", ""); status != 200 {
@@ -440,8 +459,7 @@ func TestAChatTakeoverGivesUpTheAcceptedDefaults(t *testing.T) {
 		w.onModel("reviewer", fakeagent.StuckModel)
 		task = w.task()
 		owner, _, _ = w.people(task)
-		w.startQuiet(task)
-		w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
+		w.quietUnavailable(task)
 		if status, out := w.decide(owner, task, "accept", ""); status != 200 {
 			t.Fatalf("accept: %d %v", status, out)
 		}
@@ -451,8 +469,7 @@ func TestAChatTakeoverGivesUpTheAcceptedDefaults(t *testing.T) {
 		if status, out := w.chat(task, "let me take this one over"); status != 200 && status != 201 {
 			t.Fatalf("chat: %d %v", status, out)
 		}
-		if got := w.str(`SELECT COALESCE(state->>'voice', '') || '/' || COALESCE(state->>'defaultsAccepted', 'false') || '/'
-			|| COALESCE(state->>'defaulted', '0') FROM workflow_runs WHERE task_id = $1`, task); got != "chatty/false/0" {
+		if got := w.defaultsState(task); got != "chatty/false/0" {
 			t.Errorf("voice/defaultsAccepted/defaulted %s after the Chat takeover, want chatty/false/0", got)
 		}
 		return task, owner
@@ -477,10 +494,6 @@ func TestAChatTakeoverGivesUpTheAcceptedDefaults(t *testing.T) {
 		}
 		return !exited() && w.decisionAt(task) == delivery.PointReviewed
 	}
-	unavailable := func(w *world, task string) int {
-		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
-			AND payload->>'reason' = $2`, task, delivery.ReasonConductorUnavailable)
-	}
 	t.Run("the review rounds park for the conductor", func(t *testing.T) {
 		w := conducting(t)
 		task, _ := acceptedThenChat(t, w)
@@ -501,16 +514,15 @@ func TestAChatTakeoverGivesUpTheAcceptedDefaults(t *testing.T) {
 		if status, out := w.callAs(owner, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
 			t.Fatalf("let it finish quietly: %d %v", status, out)
 		}
-		if got := w.str(`SELECT COALESCE(state->>'voice', '') || '/' || COALESCE(state->>'defaultsAccepted', 'false') || '/'
-			|| COALESCE(state->>'defaulted', '0') FROM workflow_runs WHERE task_id = $1`, task); got != "quiet/false/0" {
+		if got := w.defaultsState(task); got != "quiet/false/0" {
 			t.Errorf("voice/defaultsAccepted/defaulted %s handed back quietly, want quiet/false/0", got)
 		}
 		before := w.defaulted(task, "")
 		w.until("conductor_unavailable again, or another exit", func() bool {
 			r := w.escalationReason(task)
-			return unavailable(w, task) == 2 || r != "" && r != delivery.ReasonConductorUnavailable
+			return w.unavailable(task) == 2 || r != "" && r != delivery.ReasonConductorUnavailable
 		})
-		if n := unavailable(w, task); n != 2 {
+		if n := w.unavailable(task); n != 2 {
 			t.Fatalf("%d conductor_unavailable escalations (now %q), want a second after the quiet hand-back", n, w.escalationReason(task))
 		}
 		if n := w.defaulted(task, "") - before; n != delivery.MaxDefaulted {
