@@ -394,13 +394,16 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 	}
 	r := st.Routed
 	st.Routed = nil
-	var decider string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', '') FROM workflow_runs WHERE id = $1 FOR UPDATE`,
-		sc.WorkflowRunID).Scan(&decider); err != nil {
+	var decider, voice string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', ''), COALESCE(state->>'voice', '') FROM workflow_runs
+		WHERE id = $1 FOR UPDATE`, sc.WorkflowRunID).Scan(&decider, &voice); err != nil {
 		return res, false, err
 	}
-	st.Decider = decider
-	if decider != DeciderConductor || res.Next != r.Next {
+	st.Decider, st.Voice = decider, voice
+	// A quiet conductor takes no turn at the start, and Deliver's own rules
+	// open the pull request: the policy's step, as with no conductor.
+	quietPoint := st.quiet() && (r.Point == PointStart || r.Point == PointBeforePR)
+	if decider != DeciderConductor || res.Next != r.Next || quietPoint {
 		if res.Next == "openPullRequest" && !st.GateRequired {
 			if err := FreezePublicationTx(ctx, tx, st.TaskID, st.Branch); err != nil {
 				return res, false, err

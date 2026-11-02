@@ -106,7 +106,7 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	}
 	// Work to continue: the implementer, which under the conductor is its
 	// call at the start, as for new work (or a review of it as it is).
-	if st.conducted() {
+	if st.conducted() && !st.quiet() {
 		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
 			return workflow.Result{}, err
 		}

@@ -719,8 +719,11 @@ func (w *steps) implement(ctx context.Context, sc workflow.StepContext) (workflo
 	// The conductor plans with the person before anything is built: the
 	// first implementer is its call. A person's "try again" is not.
 	if st.conducted() && st.Retries == 0 {
-		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
-			return workflow.Result{}, err
+		// A quiet conductor takes no turn here (recheck): no planning.
+		if !st.quiet() {
+			if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "planning with the conductor"); err != nil {
+				return workflow.Result{}, err
+			}
 		}
 		return w.next(ctx, sc, st, PointStart, "implementRun", "")
 	}
