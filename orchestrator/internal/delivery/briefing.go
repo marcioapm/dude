@@ -188,7 +188,7 @@ type conductorBrief struct {
 	// Who decides: no live delivery, Deliver's policy (a person accepted
 	// its defaults), or else the conductor — quietly (Quiet) or not.
 	NoDelivery, DeliverDecides, Quiet bool
-	Waiting, Step              string
+	Waiting, Step                     string
 	// The reason of the escalation the delivery is stopped at, for a person.
 	Escalated string
 }
