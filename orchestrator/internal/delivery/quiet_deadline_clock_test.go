@@ -35,13 +35,12 @@ func TestTheQuietDeadlineIsWeighedByTheGivenClock(t *testing.T) {
 		noModel, failed bool
 		want            string
 	}{
-		{&Pending{DecideBy: &by, Accepted: true}, true, true, DefaultedAccepted},
 		{d, true, true, DefaultedNoModel},
 		{d, false, true, DefaultedRunFailed},
 	} {
 		if got := defaultedReason(c.d, c.noModel, c.failed, by.Add(-time.Hour)); got != c.want {
-			t.Errorf("before the deadline, no model %v, failed %v, accepted %v: %q, want %q",
-				c.noModel, c.failed, c.d.Accepted, got, c.want)
+			t.Errorf("before the deadline, no model %v, failed %v: %q, want %q",
+				c.noModel, c.failed, got, c.want)
 		}
 	}
 }

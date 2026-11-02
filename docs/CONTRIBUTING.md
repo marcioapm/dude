@@ -426,12 +426,16 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   failed since the wait began, dude takes Deliver's step (`Pending.Policy`),
   with a Chat notice (`chat.notice`, about `decision_defaulted`) and
   `conductor.decision_defaulted` (`deadline`, `no_model`, `run_failed`).
-  `State.Defaulted` counts them in a row; a decision the conductor takes
-  resets it. At `MaxDefaulted` (3) the delivery escalates
+  The count in a row is not kept in the state: `defaultsInARowTx` counts
+  those events since the last `task.decider_changed` (a Chat takeover, a
+  hand-back, an accept), `conductor.decided` or retry, so no step can write
+  a stale count back. At `MaxDefaulted` (3) the delivery escalates
   `conductor_unavailable`: `retry` waits for the conductor again, the count
-  reset; `accept` lets Deliver's defaults finish the delivery by Deliver's
-  bounds, with no further stop for the conductor (a Chat takeover gives it
-  up); `stop`. Talk it through (chatty) has no deadline. The conductor's `decide`
+  reset; `accept` hands the delivery to Deliver (`SetDeciderTx` to
+  `policy`, not `handedBack`), whose policy takes the decision at once
+  (`accepted`) and finishes it by Deliver's bounds, the fix bar staying the
+  conductor's (`HadConductor`); a person's Chat takes it over again as it
+  takes over any delivery; `stop`. Talk it through (chatty) has no deadline. The conductor's `decide`
   is refused unless the delivery waits there (`parked`), so it cannot race a
   step taking the defaults.
 - **An escalation is still a person's** under the conductor, which is told

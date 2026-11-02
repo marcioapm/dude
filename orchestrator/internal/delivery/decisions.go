@@ -89,9 +89,6 @@ type Pending struct {
 	// when Deliver's defaults take it (QuietDecisionWait).
 	Since    *time.Time `json:"since,omitempty"`
 	DecideBy *time.Time `json:"decideBy,omitempty"`
-	// A person accepted Deliver's defaults for it (conductor_unavailable's
-	// accept): taken at once, said as theirs (DefaultedAccepted).
-	Accepted bool `json:"accepted,omitempty"`
 }
 
 // QuietDecisionWait is how long a quiet conductor has to take a decision
@@ -106,8 +103,8 @@ const MaxDefaulted = 3
 
 // ReasonConductorUnavailable: a quiet conductor left MaxDefaulted decisions
 // in a row to Deliver's defaults. The person waits for it again (retry),
-// lets Deliver's defaults finish the delivery by Deliver's bounds
-// (accept), or stops.
+// hands the delivery to Deliver, whose defaults and bounds finish it
+// (accept: decider policy), or stops.
 const ReasonConductorUnavailable = "conductor_unavailable"
 
 // EvDecisionDefaulted: dude took Deliver's defaults at a decision a quiet
@@ -658,16 +655,13 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 	}
 	if d.Taken == nil {
 		// Chatty, the decision has no deadline: a quiet wait it had is
-		// over, and one handed back quietly later starts afresh — a
-		// person's accept of the defaults given up with it.
-		d.Since, d.DecideBy, d.Accepted = nil, nil, false
+		// over, and one handed back quietly later starts afresh.
+		d.Since, d.DecideBy = nil, nil
 		return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision}}, nil
 	}
 	t := d.Taken
 	st.Decision = nil
 	st.Decisions++
-	// The conductor decided: the defaults it left in a row start over.
-	st.Defaulted = 0
 	switch t.Action {
 	case "next":
 		if q := d.Queued; q != nil {
@@ -724,15 +718,20 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 // until its deadline (Pending.DecideBy), then Deliver's defaults (the
 // policy's step, as a hand-back takes it) with a notice in Chat — at once
 // when the conductor has no model, or its Run failed since the wait
-// began. MaxDefaulted in a row stops for a person instead. The conductor's
-// decide is serialised with this by the row: it is refused unless the
-// delivery waits (parked), and the step runs claimed, status running.
+// began. MaxDefaulted in a row (defaultsInARowTx) stops for a person
+// instead. The conductor's decide is serialised with this by the row: it
+// is refused unless the delivery waits (parked), and the step runs
+// claimed, status running.
 func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, error) {
 	d := st.Decision
-	var noModel, failed bool
+	var noModel, failed, said bool
 	var now time.Time
+	var inARow int
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
 		if now, noModel, err = quietFactsTx(ctx, tx, st.TaskID); err != nil || d.Since == nil {
+			return err
+		}
+		if inARow, said, err = defaultsInARowTx(ctx, tx, st.TaskID, sc.WorkflowRunID, st.Decisions); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, `SELECT COALESCE((SELECT status = 'failed' AND ended_at > $2 FROM runs
@@ -740,7 +739,7 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	}); err != nil {
 		return workflow.Result{}, err
 	}
-	if d.DecideBy == nil && !d.Accepted {
+	if d.DecideBy == nil {
 		// Parked before its wait was kept (an escalation's resume, a
 		// retry): the wait starts now.
 		return w.quietWait(st, noModel, now), nil
@@ -749,29 +748,17 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	if reason == "" {
 		return w.parkQuiet(st), nil
 	}
-	if st.Defaulted >= MaxDefaulted && !st.DefaultsAccepted {
-		res, err := w.escalate(ctx, sc, st, ReasonConductorUnavailable, map[string]any{"point": d.Point, "defaulted": st.Defaulted,
+	if !said && inARow >= MaxDefaulted {
+		res, err := w.escalate(ctx, sc, st, ReasonConductorUnavailable, map[string]any{"point": d.Point, "defaulted": inARow,
 			"reason": reason})
-		// The decision stays: retry waits on it again, accept takes it.
+		// The decision stays: retry waits on it again, accept hands it
+		// to Deliver.
 		st.Decision = d
 		st.Escalation.Step = "conductorDecision"
 		return res, err
 	}
-	st.Defaulted++
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		// Once per decision, however often the step is replayed.
-		var said bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
-			AND payload->>'workflowId' = $3 AND (payload->>'decision')::int = $4)`,
-			st.TaskID, EvDecisionDefaulted, sc.WorkflowRunID, st.Decisions).Scan(&said); err != nil || said {
-			return err
-		}
-		if err := emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionDefaulted, map[string]any{"point": d.Point,
-			"policy": d.Policy, "reason": reason, "count": st.Defaulted, "workflowId": sc.WorkflowRunID, "decision": st.Decisions}); err != nil {
-			return err
-		}
-		return emitTx(ctx, tx, sc.OrganizationID, st, EvChatNotice, map[string]any{"about": "decision_defaulted",
-			"reason": reason, "text": DefaultedLine(reason)})
+		return defaultedTx(ctx, tx, sc, st, reason)
 	}); err != nil {
 		return workflow.Result{}, err
 	}
@@ -780,13 +767,52 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	return workflow.Result{Next: d.Policy, State: st}, nil
 }
 
+// defaultsInARowTx is how many decisions in a row the task's delivery
+// (workflow wfID) left to Deliver's defaults: its decision_defaulted
+// events since the last thing that gave the decisions back to someone —
+// who decides or how the conductor speaks changed (decider_changed: a
+// Chat takeover, a hand-back, accept), the conductor decided, or a person
+// asked to wait for it again (conductor_unavailable's retry). Read from the
+// ledger, not kept in the state, so a step that ran across one of these
+// has no count of its own to write back. said: decision n's default is
+// recorded already (a step replayed), counted in inARow.
+func defaultsInARowTx(ctx context.Context, tx pgx.Tx, taskID, wfID string, n int) (inARow int, said bool, err error) {
+	// One statement, on events_task_cursor_idx (task_id, cursor): the
+	// newest reset read backwards from the task's last event, the defaults
+	// forwards from it, the replay check among the defaults alone.
+	err = tx.QueryRow(ctx, `SELECT
+			count(*) FILTER (WHERE cursor > COALESCE((SELECT cursor FROM events WHERE task_id = $1
+				AND (event_type IN ($5, $6) OR event_type = $7 AND payload->>'reason' = $8 AND payload->>'action' = 'retry')
+				ORDER BY cursor DESC LIMIT 1), 0)),
+			COALESCE(bool_or((payload->>'decision')::int = $4), false)
+		FROM events WHERE task_id = $1 AND event_type = $3 AND payload->>'workflowId' = $2`,
+		taskID, wfID, EvDecisionDefaulted, n, EvDeciderChanged, EvDecisionTaken, EvTaskDecided, ReasonConductorUnavailable).
+		Scan(&inARow, &said)
+	return inARow, said, err
+}
+
+// defaultedTx records that Deliver's defaults took the delivery's pending
+// decision, for reason, and says so in Chat: once per decision, however
+// often its step is replayed.
+func defaultedTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, reason string) error {
+	d := st.Decision
+	inARow, said, err := defaultsInARowTx(ctx, tx, st.TaskID, sc.WorkflowRunID, st.Decisions)
+	if err != nil || said {
+		return err
+	}
+	if err := emitTx(ctx, tx, sc.OrganizationID, st, EvDecisionDefaulted, map[string]any{"point": d.Point,
+		"policy": d.Policy, "reason": reason, "count": inARow + 1, "workflowId": sc.WorkflowRunID, "decision": st.Decisions}); err != nil {
+		return err
+	}
+	return emitTx(ctx, tx, sc.OrganizationID, st, EvChatNotice, map[string]any{"about": "decision_defaulted",
+		"reason": reason, "text": DefaultedLine(reason)})
+}
+
 // defaultedReason is why Deliver's defaults take a quiet conductor's
 // decision d now (the database's clock, as its deadline was set by), ""
 // while it still waits for the conductor.
 func defaultedReason(d *Pending, noModel, failed bool, now time.Time) string {
 	switch {
-	case d.Accepted:
-		return DefaultedAccepted
 	case noModel:
 		return DefaultedNoModel
 	case failed:
@@ -1222,31 +1248,6 @@ func tellEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *Stat
 	return err == nil, err
 }
 
-// chatTookOverTx is the transition's (awaitEnded, the row locked as
-// recheck locks it): a delivery the row says is chatty keeps the row's
-// defaultsAccepted and defaulted, so a step that read it quiet — taking an
-// accepted or lapsed default while a Chat takeover landed — does not undo
-// the takeover's clear (SetDeciderTx). Not Owned: a quiet step's own count
-// and a person's accept are written by steps. Says whether it changed res.
-func chatTookOverTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (bool, error) {
-	st, ok := res.State.(*State)
-	if !ok {
-		return false, nil
-	}
-	var row State
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', ''), COALESCE(state->>'voice', ''),
-		COALESCE((state->>'defaultsAccepted')::boolean, false), COALESCE((state->>'defaulted')::int, 0)
-		FROM workflow_runs WHERE id = $1 FOR NO KEY UPDATE`, sc.WorkflowRunID).Scan(&row.Decider, &row.Voice,
-		&row.DefaultsAccepted, &row.Defaulted); err != nil {
-		return false, err
-	}
-	if !row.chatty() || st.DefaultsAccepted == row.DefaultsAccepted && st.Defaulted == row.Defaulted {
-		return false, nil
-	}
-	st.DefaultsAccepted, st.Defaulted = row.DefaultsAccepted, row.Defaulted
-	return true, nil
-}
-
 // SetDeciderTx changes who decides a task's delivery, and under the
 // conductor how it speaks (voice: VoiceQuiet, VoiceChatty; "" keeps the
 // delivery's), recording it once: a no-op when both already are. Returns
@@ -1275,15 +1276,6 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 	if voice != "" {
 		st.Voice = voice
 	}
-	// Taken over chatty (a person's Chat, Talk it through), the delivery
-	// is the conductor's judgement again: Deliver's defaults a person
-	// accepted for it at conductor_unavailable are given up, and the count
-	// of defaults in a row starts over. Handed back quietly later, its
-	// rounds park for the conductor and three defaults stop for a person.
-	chatty := voice == VoiceChatty
-	if chatty {
-		st.DefaultsAccepted, st.Defaulted = false, 0
-	}
 	// Handed to the conductor while it waits on a person at an escalation:
 	// the conductor is told of it, as of one it had when it escalated.
 	told := false
@@ -1295,8 +1287,7 @@ func SetDeciderTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State, t
 	}
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state = (jsonb_set(state, '{decider}', to_jsonb($2::text))
 			|| CASE WHEN $2 = 'conductor' THEN jsonb_build_object('hadConductor', true, 'voice', $3::text) ELSE '{}'::jsonb END)
-			- CASE WHEN $4 THEN ARRAY['defaultsAccepted', 'defaulted'] ELSE ARRAY[]::text[] END
-			WHERE id = $1`, wfID, to, voice, chatty); err != nil {
+			WHERE id = $1`, wfID, to, voice); err != nil {
 		return false, err
 	}
 	if told {

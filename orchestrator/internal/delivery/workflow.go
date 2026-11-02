@@ -263,12 +263,6 @@ type State struct {
 	draftChoice bool
 	// Escalations told to the conductor: each one's wake its own.
 	Escalations int `json:"escalations,omitempty"`
-	// Decisions in a row a quiet conductor left to Deliver's defaults
-	// (conductorDecision); a decision it takes itself resets it. At
-	// MaxDefaulted the delivery stops for a person (conductor_unavailable),
-	// unless they accepted the defaults for it (DefaultsAccepted).
-	Defaulted        int  `json:"defaulted,omitempty"`
-	DefaultsAccepted bool `json:"defaultsAccepted,omitempty"`
 	// A decision point the policy took in the step committing (next): set
 	// only between the step and its transition, which re-checks it.
 	Routed *Routed `json:"routed,omitempty"`
@@ -1084,13 +1078,7 @@ func (st *State) fixLoop() bool { return st.checkingCandidate() || len(st.FixRan
 // the policy's exits, or its loop would never end), and its round parks for
 // the conductor. A candidate's fix loop does not park: it goes on by the
 // policy's rules, bounds included, for no one else decides its rounds.
-// Nor does a quiet delivery whose person accepted Deliver's defaults for it
-// (conductor_unavailable's accept): the defaults finish it, and Deliver's
-// bounds with them, or its review and fix would follow each other forever.
-// Its fix bar stays the conductor's (ConductedLoop), as on a hand-back.
-func (st *State) conductsRounds() bool {
-	return st.conducted() && !st.checkingCandidate() && !(st.DefaultsAccepted && st.quiet())
-}
+func (st *State) conductsRounds() bool { return st.conducted() && !st.checkingCandidate() }
 
 // newLoop starts the review loop anew: its next review is round 1, of the
 // whole change the loop is over.
@@ -3528,13 +3516,20 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	if e.Reason == ReasonConductorUnavailable && st.Decision != nil {
 		// The decision the conductor left: waited on afresh (retry), the
-		// conductor woken for it again, or Deliver's defaults at once and
-		// from now on (accept).
-		st.Defaulted, st.PersonSaid = 0, ""
+		// conductor woken for it again; or (accept) the delivery handed to
+		// Deliver with it (DecideEscalationTx), whose policy takes it at
+		// once, said as the person's.
+		st.PersonSaid = ""
 		st.waitsQuietly()
-		if d.Action == "accept" {
-			st.DefaultsAccepted, st.Decision.Accepted = true, true
-		} else if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			if d.Action == "accept" {
+				// Unless a person took it over in Chat since: the
+				// conductor's again, the decision is its own.
+				if st.conducted() {
+					return nil
+				}
+				return defaultedTx(ctx, tx, sc, st, DefaultedAccepted)
+			}
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
 				fmt.Sprintf("%s:retry:%d", decisionWakeKey(sc.WorkflowRunID, st.Decisions), st.Escalations),
 				decisionWaitingNote(st.Decision.Point, "A person asked dude to wait for your decision again."))
