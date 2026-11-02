@@ -176,7 +176,8 @@ func TestTheSweepFindsBothKindsOfUnheardConductor(t *testing.T) {
 // ones are not selected (WakeConductorTx would start no conductor for
 // them), so the ready one is told in one sweep; their reasons stay
 // pending, and a model set for one of them is told on the next sweep. One
-// with no model but a live conductor is told in the first sweep.
+// with no model but a live conductor is told in the first sweep, and so is
+// one whose project's conductor tier is empty: the organization's is its.
 func TestQuietDeliveriesWithNoModelDoNotCrowdOutTheSweep(t *testing.T) {
 	ctx := context.Background()
 	w := newWakeSweepWorld(t)
@@ -209,12 +210,20 @@ func TestQuietDeliveriesWithNoModelDoNotCrowdOutTheSweep(t *testing.T) {
 	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_zlive', $1, 'prj_'||$1, 9998, 'T', 'G')`, org)
 	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, dude_pause, turn_done_at)
 		VALUES ('run_live', $1, 'prj_'||$1, 'wi_zlive', 1, 'conductor', 'agent', 'paused', 'conductor', now())`, org)
+	// And one whose project names an empty conductor tier: the
+	// organization's tier, which has a model, is the conductor's.
+	exec(`INSERT INTO model_tiers (id, organization_id, name, model) VALUES ('tier_org_'||$1, $1, 'Org', 'fake/scripted')`, org)
+	exec(`UPDATE organizations SET default_agent_models = jsonb_build_object('conductor', jsonb_build_object('tier', 'tier_org_'||$1)) WHERE id = $1`, org)
+	exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix, agent_models)
+		VALUES ('prj3_'||$1, $1, 'P3', 'prj3_'||$1, 'R', '{"conductor":{"tier":""}}')`, org)
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_zorg', $1, 'prj3_'||$1, 1, 'T', 'G')`, org)
 	exec(`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
 		SELECT 'wf_'||t.id, $1, t.id, 'task.delivery', 'delivery:'||t.id, 'waiting', 'conductorDecision',
 			'{"attempt":1,"decider":"conductor","hadConductor":true,"voice":"quiet"}'
-		FROM tasks t WHERE t.id = 'wi_zlive'`, org)
+		FROM tasks t WHERE t.id IN ('wi_zlive', 'wi_zorg')`, org)
 	exec(`INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
-		VALUES ('cwk_live', $1, 'wi_zlive', 'decision', 'k', 'live to decide', now() - interval '1 minute')`, org)
+		VALUES ('cwk_live', $1, 'wi_zlive', 'decision', 'k', 'live to decide', now() - interval '1 minute'),
+		       ('cwk_org', $1, 'wi_zorg', 'decision', 'k', 'org tier to decide', now() - interval '1 minute')`, org)
 
 	s := w.s
 	s.WakeWindow = 15 * time.Second
@@ -227,11 +236,17 @@ func TestQuietDeliveriesWithNoModelDoNotCrowdOutTheSweep(t *testing.T) {
 	if n := count(`SELECT count(*) FROM directives WHERE run_id = 'run_live' AND text LIKE '%live to decide%'`); n != 1 {
 		t.Errorf("the live conductor with no model has %d notes after one sweep, want 1", n)
 	}
+	if n := count(`SELECT count(*) FROM conductor_wakes WHERE id = 'cwk_org' AND delivered_at IS NOT NULL`); n != 1 {
+		t.Errorf("the reason of the delivery on the organization's tier is still pending after a sweep")
+	}
+	if n := count(`SELECT count(*) FROM runs WHERE task_id = 'wi_zorg' AND role = 'conductor'`); n != 1 {
+		t.Errorf("%d conductors started on the organization's tier, want 1", n)
+	}
 	if n := count(`SELECT count(*) FROM conductor_wakes WHERE organization_id = $1 AND kind = 'stalled' AND delivered_at IS NULL`, org); n != wakeBatch+6 {
 		t.Errorf("%d reasons pending for conductors with no model, want %d", n, wakeBatch+6)
 	}
 	if n := count(`SELECT count(*) FROM runs WHERE organization_id = $1 AND role = 'conductor'
-		AND id NOT IN ('run_ready', 'run_live')`, org); n != 0 {
+		AND id NOT IN ('run_ready', 'run_live') AND task_id <> 'wi_zorg'`, org); n != 0 {
 		t.Errorf("%d conductors started with no model", n)
 	}
 	// A model set: its news, kept pending, is told on the next sweep.
