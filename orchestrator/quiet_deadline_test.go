@@ -530,3 +530,41 @@ func TestAChatTakeoverGivesUpTheAcceptedDefaults(t *testing.T) {
 		}
 	})
 }
+
+// A Chat takeover that lands while the step taking the accepted defaults
+// runs is not undone by that step's transition: the step read the
+// delivery quiet and accepted, and its defaultsAccepted and defaulted are
+// the takeover's (false, 0) once it commits.
+func TestAStepDoesNotUndoAChatTakeoverThatLandedWhileItRan(t *testing.T) {
+	w := conducting(t)
+	def := w.deliveryWaiting(100 * time.Millisecond)
+	var once sync.Once
+	var armed atomic.Bool
+	status, during := 0, ""
+	task := w.task()
+	def.BeforeCommit = func(_, step, next string) {
+		if step == "conductorDecision" && next != "conductorDecision" && armed.Load() {
+			once.Do(func() {
+				status, _ = w.chat(task, "let me take this one over")
+				during = w.defaultsState(task)
+			})
+		}
+	}
+	w.runtime.Register(def)
+	owner, _, _ := w.people(task)
+	w.quietUnavailable(task)
+	armed.Store(true)
+	if code, out := w.decide(owner, task, "accept", ""); code != 200 {
+		t.Fatalf("accept: %d %v", code, out)
+	}
+	w.until("the accepted decision, by the defaults", func() bool { return w.defaulted(task, delivery.DefaultedAccepted) > 0 })
+	if status != 200 && status != 201 {
+		t.Fatalf("the Chat takeover never raced the defaults' step (chat answered %d)", status)
+	}
+	if during != "chatty/false/0" {
+		t.Fatalf("voice/defaultsAccepted/defaulted %s right after the Chat takeover, want chatty/false/0", during)
+	}
+	if got := w.defaultsState(task); got != "chatty/false/0" {
+		t.Errorf("voice/defaultsAccepted/defaulted %s once the step committed, want chatty/false/0", got)
+	}
+}

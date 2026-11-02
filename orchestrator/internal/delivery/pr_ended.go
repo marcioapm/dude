@@ -70,6 +70,11 @@ func (w *steps) awaitEnded(ctx context.Context, tx pgx.Tx, sc workflow.StepConte
 	if !changed {
 		next = res
 	}
+	took, err := chatTookOverTx(ctx, tx, sc, next)
+	if err != nil {
+		return next, changed, err
+	}
+	changed = changed || took
 	if len(next.AwaitSignals) == 0 || slices.Contains(next.AwaitSignals, SignalPullRequestEnded) {
 		return next, changed, nil
 	}

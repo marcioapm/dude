@@ -1221,6 +1221,31 @@ func tellEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *Stat
 	return err == nil, err
 }
 
+// chatTookOverTx is the transition's (awaitEnded, the row locked as
+// recheck locks it): a delivery the row says is chatty keeps the row's
+// defaultsAccepted and defaulted, so a step that read it quiet — taking an
+// accepted or lapsed default while a Chat takeover landed — does not undo
+// the takeover's clear (SetDeciderTx). Not Owned: a quiet step's own count
+// and a person's accept are written by steps. Says whether it changed res.
+func chatTookOverTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (bool, error) {
+	st, ok := res.State.(*State)
+	if !ok {
+		return false, nil
+	}
+	var row State
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', ''), COALESCE(state->>'voice', ''),
+		COALESCE((state->>'defaultsAccepted')::boolean, false), COALESCE((state->>'defaulted')::int, 0)
+		FROM workflow_runs WHERE id = $1 FOR NO KEY UPDATE`, sc.WorkflowRunID).Scan(&row.Decider, &row.Voice,
+		&row.DefaultsAccepted, &row.Defaulted); err != nil {
+		return false, err
+	}
+	if !row.chatty() || st.DefaultsAccepted == row.DefaultsAccepted && st.Defaulted == row.Defaulted {
+		return false, nil
+	}
+	st.DefaultsAccepted, st.Defaulted = row.DefaultsAccepted, row.Defaulted
+	return true, nil
+}
+
 // SetDeciderTx changes who decides a task's delivery, and under the
 // conductor how it speaks (voice: VoiceQuiet, VoiceChatty; "" keeps the
 // delivery's), recording it once: a no-op when both already are. Returns
