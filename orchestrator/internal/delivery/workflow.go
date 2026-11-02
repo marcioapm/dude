@@ -255,6 +255,11 @@ type State struct {
 	// The step read an answer authorizing the gate: its transition records
 	// it (recheck). Never persisted.
 	authorizeGate bool
+	// The step carried out accept on conductor_unavailable: its transition
+	// takes the decision by Deliver's defaults, said as accepted, unless
+	// the row says the conductor decides by then (acceptAtCommitTx). Never
+	// persisted.
+	acceptDefaults bool
 	// The step handed an integration over: the wait after it takes one
 	// pass first (closeHandedOver). Never persisted.
 	handingOver bool
@@ -3521,14 +3526,18 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// once, said as the person's.
 		st.PersonSaid = ""
 		st.waitsQuietly()
+		if d.Action == "accept" && !st.conducted() {
+			// Taken in the transition with its notice, under the row lock:
+			// a Chat takeover that lands before it commits keeps the
+			// decision the conductor's (acceptAtCommitTx).
+			st.acceptDefaults = true
+			return workflow.Result{Next: st.Decision.Policy, State: st}, nil
+		}
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			if d.Action == "accept" {
-				// Unless a person took it over in Chat since: the
-				// conductor's again, the decision is its own.
-				if st.conducted() {
-					return nil
-				}
-				return defaultedTx(ctx, tx, sc, st, DefaultedAccepted)
+				// A person took it over in Chat since: the conductor's
+				// again, the decision is its own.
+				return nil
 			}
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
 				fmt.Sprintf("%s:retry:%d", decisionWakeKey(sc.WorkflowRunID, st.Decisions), st.Escalations),

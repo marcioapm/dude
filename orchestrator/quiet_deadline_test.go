@@ -685,3 +685,74 @@ func TestAcceptingAfterAChatTakeoverHandsTheDeliveryToDeliver(t *testing.T) {
 	}
 	w.until("the accepted decision, by the defaults", func() bool { return w.defaulted(task, delivery.DefaultedAccepted) == 1 })
 }
+
+// A Chat that lands while accept's decide step commits wins: the decision
+// parks for the conductor, with no notice that Deliver's defaults took
+// it, and nothing recorded as taken for it. Handed back quietly, its quiet
+// lapse is then counted and said as any default (the first in a row).
+func TestAChatLandingAsAcceptCommitsKeepsTheDecisionTheConductors(t *testing.T) {
+	w := conducting(t)
+	def := w.deliveryWaiting(100 * time.Millisecond)
+	var once sync.Once
+	var armed, fired atomic.Bool
+	status := 0
+	task := w.task()
+	def.BeforeCommit = func(_, step, _ string) {
+		if step == "decide" && armed.Load() {
+			once.Do(func() {
+				status, _ = w.chat(task, "let me take this one over")
+				fired.Store(true)
+			})
+		}
+	}
+	w.runtime.Register(def)
+	owner, _, _ := w.people(task)
+	w.quietUnavailable(task)
+	at := w.str(`SELECT state->'decision'->>'point' FROM workflow_runs WHERE task_id = $1`, task)
+	before := w.defaulted(task, "")
+	armed.Store(true)
+	if status, out := w.decide(owner, task, "accept", ""); status != 200 {
+		t.Fatalf("accept: %d %v", status, out)
+	}
+	w.until("accept's decide step committing", fired.Load)
+	if status != 200 && status != 201 {
+		t.Fatalf("chat during accept's commit: %d", status)
+	}
+	w.until("the decision parked", func() bool {
+		return w.str(`SELECT status || '/' || step FROM workflow_runs WHERE task_id = $1`, task) == "waiting/conductorDecision"
+	})
+	for range 3 {
+		w.pump()
+	}
+	if got := w.deciderState(task); got != "conductor/chatty/false" {
+		t.Errorf("decider/voice/handedBack %s, want conductor/chatty/false", got)
+	}
+	if got := w.decisionAt(task); got != at {
+		t.Errorf("decision parked at %q, want the conductor's at %q", got, at)
+	}
+	if n := w.defaulted(task, delivery.DefaultedAccepted); n != 0 {
+		t.Errorf("%d decisions defaulted as accepted, want 0: the Chat won", n)
+	}
+	if n := w.defaultedNotices(task, delivery.DefaultedAccepted); n != 0 {
+		t.Errorf("%d Chat notices of the accepted defaults, want 0", n)
+	}
+	// Handed back quietly, the decision waits afresh; its lapse is the
+	// first default in a row since, recorded and said.
+	if status, out := w.callAs(owner, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy"}); status != 200 {
+		t.Fatalf("hand back quietly: %d %v", status, out)
+	}
+	w.until("the quiet wait", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting'
+			AND state->'decision' ? 'decideBy'`, task) == 1
+	})
+	notices := w.defaultedNotices(task, delivery.DefaultedDeadline)
+	w.lapse(task)
+	w.until("the quiet lapse, by the defaults", func() bool { return w.defaulted(task, "") > before })
+	if n := w.count(`SELECT (payload->>'count')::int FROM events WHERE task_id = $1 AND event_type = $2
+		ORDER BY cursor LIMIT 1 OFFSET $3`, task, delivery.EvDecisionDefaulted, before); n != 1 {
+		t.Errorf("the lapse counted %d in a row, want 1", n)
+	}
+	if n := w.defaultedNotices(task, delivery.DefaultedDeadline); n <= notices {
+		t.Errorf("no Chat notice of the lapse's default")
+	}
+}

@@ -511,6 +511,9 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 	if !ok {
 		return res, false, nil
 	}
+	if st.acceptDefaults {
+		return acceptAtCommitTx(ctx, tx, sc, st, res)
+	}
 	if st.Routed == nil && !st.authorizeGate {
 		return choiceReleasedAtCommitTx(ctx, tx, sc, st, res)
 	}
@@ -559,6 +562,33 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 		out = w.quietWait(st, noModel, now)
 	}
 	return out, true, err
+}
+
+// acceptAtCommitTx is accept on conductor_unavailable, in its transition
+// (recheck): the row locked as recheck locks it, the decision is taken by
+// Deliver's defaults with its notice (defaultedTx) when the row says the
+// policy decides, the policy's step next; when a Chat took the delivery
+// over before the commit, nothing is taken or said, and the decision is
+// the conductor's (conductorDecision parks it). The step has no conductor
+// decision points: conductor_unavailable stops only where a quiet
+// conductor decides (not quietAt), so its policy step is Deliver's as is.
+func acceptAtCommitTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, res workflow.Result) (workflow.Result, bool, error) {
+	st.acceptDefaults = false
+	var decider, voice string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', ''), COALESCE(state->>'voice', '') FROM workflow_runs
+		WHERE id = $1 FOR UPDATE`, sc.WorkflowRunID).Scan(&decider, &voice); err != nil {
+		return res, false, err
+	}
+	st.Decider, st.Voice = decider, voice
+	if st.conducted() {
+		return workflow.Result{Next: "conductorDecision", State: st}, true, nil
+	}
+	if err := defaultedTx(ctx, tx, sc, st, DefaultedAccepted); err != nil {
+		return res, false, err
+	}
+	st.Decision = nil
+	st.Decisions++
+	return res, true, nil
 }
 
 // decisionWaitingNote is the reason to wake the conductor for a decision
