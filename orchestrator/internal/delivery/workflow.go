@@ -360,8 +360,8 @@ func (e *Escalation) Actions() []string {
 		// back to waiting on the pull request without the fix.
 		out = append(out, "retry", "wait")
 	case ReasonConductorUnavailable:
-		// Wait for the conductor again, or go on by Deliver's defaults
-		// with no bound for this delivery.
+		// Wait for the conductor again, or let Deliver's defaults finish
+		// this delivery, by Deliver's bounds.
 		out = append(out, "retry", "accept")
 	default:
 		// A Run that failed is kept a while (phases.keep): the same agent

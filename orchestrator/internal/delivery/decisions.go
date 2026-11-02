@@ -106,7 +106,8 @@ const MaxDefaulted = 3
 
 // ReasonConductorUnavailable: a quiet conductor left MaxDefaulted decisions
 // in a row to Deliver's defaults. The person waits for it again (retry),
-// lets Deliver's defaults go on without a bound (accept), or stops.
+// lets Deliver's defaults finish the delivery by Deliver's bounds
+// (accept), or stops.
 const ReasonConductorUnavailable = "conductor_unavailable"
 
 // EvDecisionDefaulted: dude took Deliver's defaults at a decision a quiet

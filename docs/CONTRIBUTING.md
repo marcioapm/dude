@@ -429,8 +429,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   `State.Defaulted` counts them in a row; a decision the conductor takes
   resets it. At `MaxDefaulted` (3) the delivery escalates
   `conductor_unavailable`: `retry` waits for the conductor again, the count
-  reset; `accept` lets Deliver's defaults finish the delivery unbounded;
-  `stop`. Talk it through (chatty) has no deadline. The conductor's `decide`
+  reset; `accept` lets Deliver's defaults finish the delivery by Deliver's
+  bounds, with no further stop for the conductor (a Chat takeover gives it
+  up); `stop`. Talk it through (chatty) has no deadline. The conductor's `decide`
   is refused unless the delivery waits there (`parked`), so it cannot race a
   step taking the defaults.
 - **An escalation is still a person's** under the conductor, which is told

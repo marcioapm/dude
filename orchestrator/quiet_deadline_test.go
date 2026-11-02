@@ -175,9 +175,7 @@ func TestThreeDefaultsInARowStopForAPerson(t *testing.T) {
 
 // accept on conductor_unavailable: Deliver's defaults finish the
 // delivery, Deliver's bounds included (CONTRIBUTING: a delivery handed
-// back to Deliver is the policy's again). Renamed from
-// TestAcceptingTheDefaultsGoesOnWithoutABound: it went on with no bound,
-// so a review that never clears ran forever. Defaults that clear reach the
+// back to Deliver is the policy's again). Defaults that clear reach the
 // pull request with no second conductor_unavailable; a review that never
 // clears stops at the policy's own exit (stuck, at one fix per finding),
 // not in an endless review and fix loop.
