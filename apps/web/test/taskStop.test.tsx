@@ -163,6 +163,31 @@ describe("the Stop dialog", () => {
     expect(stops).toEqual([{ andRestart: true, decider: "policy", note: "" }]);
   });
 
+  // Who decides attempt 2 "as now", from the task's decider and voice: a
+  // quiet conductor's and an accepted delivery's are Deliver's on the wire
+  // (policy); only a chatty conductor's is the conductor's.
+  for (const c of [
+    { name: "a quiet conductor", patch: { decider: "conductor", voice: "quiet" }, want: "deliver", sent: "policy",
+      hint: "A quiet conductor takes Deliver's defaults" },
+    { name: "a chatty conductor", patch: { decider: "conductor", voice: "chatty" }, want: "conductor", sent: "conductor",
+      hint: "A new conductor, briefed with your note" },
+    { name: "an accepted delivery", patch: { decider: "policy", voice: null, acceptedDefaults: true }, want: "deliver", sent: "policy",
+      hint: "Deliver decides attempt 2 to the pull request on its own" },
+  ] as const) {
+    test(`Stop and start attempt 2 of ${c.name}: ${c.want} is ticked as now, and ${c.sent} is sent`, async () => {
+      const stops: StopRequest[] = [];
+      const dialog = await open(c.patch as Partial<TaskDetail>, [], stops);
+      await pick(dialog, "Stop and start attempt 2");
+      const field = dialog.querySelector('.pickUpWay[data-shown="true"] [data-testid="decider-field"]')!;
+      expect(field.getAttribute("data-value")).toBe(c.want);
+      const asNow = [...field.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.endsWith("as now"))!;
+      expect(asNow.textContent).toBe(c.want === "conductor" ? "The conductoras now" : "Deliveras now");
+      expect(field.textContent).toContain(c.hint);
+      await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="stop-confirm"]')!.click());
+      expect(stops).toEqual([{ andRestart: true, decider: c.sent, note: "" }]);
+    });
+  }
+
   test("an adopted PR: attempt 2 continues on it, and it stays open", async () => {
     const source = { kind: "pr" as const, number: 412, headBranch: "marcio/pause-split", baseBranch: "main", repositoryId: "repo_wc", repository: "web-console",
       title: "Pause split", mode: "review" as const };

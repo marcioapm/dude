@@ -143,6 +143,41 @@ describe("a stopped task", () => {
     expect(sent).toEqual([["restart", { decider: "policy" }], ["restart", { override: true, decider: "policy" }]]);
   });
 
+  // Who decides attempt 2 "as now" on Start over, from the task's decider
+  // and voice: a quiet conductor's and an accepted delivery's are Deliver's
+  // on the wire (policy); only a chatty conductor's is the conductor's.
+  for (const c of [
+    { name: "a quiet conductor", patch: { decider: "conductor", voice: "quiet" }, want: "deliver", sent: "policy",
+      effect: "A quiet conductor takes attempt 2 to the pull request by Deliver's defaults" },
+    { name: "a chatty conductor", patch: { decider: "conductor", voice: "chatty" }, want: "conductor", sent: "conductor",
+      effect: "A new one, briefed with your note" },
+    { name: "an accepted delivery", patch: { decider: "policy", voice: null, acceptedDefaults: true }, want: "deliver", sent: "policy",
+      effect: "Deliver decides attempt 2 to the pull request on its own" },
+  ] as const) {
+    test(`Start over of ${c.name}: ${c.want} is ticked as now, and ${c.sent} is sent`, async () => {
+      const client = stoppedAs("aborted");
+      const original = await client.getTask(TASK_ID);
+      client.getTask = async () => ({ ...original, ...c.patch } as TaskDetail);
+      const sent: Array<[RecoverAction, unknown]> = [];
+      client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: ["resume", "retry", "restart"], attempt: 1, keptUntil: null });
+      client.recover = async (_id, action, _note, start = {}) => {
+        sent.push([action, start]);
+        return { action };
+      };
+      const page = await taskPage(client);
+      await click(await until(() => page.querySelector("[data-testid=recover-restart]"), "Start over…"));
+      const dialog = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "the dialog");
+      const field = await until(() => dialog.querySelector('.pickUpWay[data-shown="true"] [data-testid="decider-field"]'), "who decides");
+      expect(field.getAttribute("data-value")).toBe(c.want);
+      const asNow = [...field.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.endsWith("as now"))!;
+      expect(asNow.textContent).toBe(c.want === "conductor" ? "The conductoras now" : "Deliveras now");
+      expect(dialog.textContent).toContain(c.effect);
+      await click(dialog.querySelector("[data-testid=recover-confirm]")!);
+      await until(() => !document.querySelector("[role=dialog]"), "the dialog to close");
+      expect(sent).toEqual([["restart", { decider: c.sent }]]);
+    });
+  }
+
   test("each way opens the one dialog on it, and what it keeps follows the choice", async () => {
     const client = stoppedAs("aborted");
     const sent: Array<[RecoverAction, string]> = [];
