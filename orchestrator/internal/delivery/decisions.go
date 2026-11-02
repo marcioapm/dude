@@ -644,6 +644,9 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 		return w.quietDecision(ctx, sc, st)
 	}
 	if d.Taken == nil {
+		// Chatty, the decision has no deadline: a quiet wait it had is
+		// over, and one handed back quietly later starts afresh.
+		d.Since, d.DecideBy = nil, nil
 		return workflow.Result{Next: "conductorDecision", State: st, AwaitSignals: []string{SignalConductorDecision}}, nil
 	}
 	t := d.Taken

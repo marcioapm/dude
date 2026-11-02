@@ -305,3 +305,42 @@ func TestTheConductorRacingTheDeadlineTakesOneDecision(t *testing.T) {
 		t.Errorf("%d reviews started at one decision", n)
 	}
 }
+
+// A quiet decision made chatty by a person's message, then handed back
+// quietly once its old deadline is past, waits for the conductor afresh:
+// the chatty step forgot the quiet wait, so the defaults do not take it at
+// once on the old deadline.
+func TestAQuietDecisionHandedBackAfterChattyWaitsAfresh(t *testing.T) {
+	w := conducting(t)
+	w.waitingFor(time.Hour)
+	task := w.task()
+	w.quietAfterImplement(task)
+	if status, out := w.chat(task, "let me talk this one through"); status != 201 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	// The quiet wait's wake comes, and finds the decision chatty; its old
+	// deadline is long past by the time it is handed back.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 second')),
+		wake_at = now() WHERE task_id = $1`, task)
+	w.until("the chatty decision parked with no wake", func() bool {
+		return w.str(`SELECT COALESCE(wake_at::text, '') || '/' || status FROM workflow_runs WHERE task_id = $1`, task) == "/waiting"
+	})
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = CASE WHEN state->'decision' ? 'decideBy'
+		THEN jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 hour')) ELSE state END WHERE task_id = $1`, task)
+	if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 200 {
+		t.Fatalf("hand back quietly: %d %v", status, out)
+	}
+	w.until("the quiet wait, restarted", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting'
+			AND (state->'decision'->>'decideBy')::timestamptz > now() + interval '30 minutes'`, task) == 1 || w.defaulted(task, "") > 0
+	})
+	for range 3 {
+		w.pump()
+	}
+	if n := w.defaulted(task, ""); n != 0 {
+		t.Fatalf("%d defaults on the quiet hand-back, want a fresh wait", n)
+	}
+	if at := w.decisionAt(task); at != delivery.PointImplemented {
+		t.Errorf("decision at %q, want still after the implementer", at)
+	}
+}
