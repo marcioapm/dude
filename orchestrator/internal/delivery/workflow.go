@@ -3531,11 +3531,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// conductor woken for it again, or Deliver's defaults at once and
 		// from now on (accept).
 		st.Defaulted, st.PersonSaid = 0, ""
-		st.Decision.Since, st.Decision.DecideBy = nil, nil
+		st.waitsQuietly()
 		if d.Action == "accept" {
-			st.DefaultsAccepted = true
-			now := time.Now().UTC()
-			st.Decision.Since, st.Decision.DecideBy, st.Decision.Accepted = &now, &now, true
+			st.DefaultsAccepted, st.Decision.Accepted = true, true
 		} else if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
 				fmt.Sprintf("%s:retry:%d", decisionWakeKey(sc.WorkflowRunID, st.Decisions), st.Escalations),

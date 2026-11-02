@@ -739,7 +739,7 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	}); err != nil {
 		return workflow.Result{}, err
 	}
-	if d.DecideBy == nil {
+	if d.DecideBy == nil && !d.Accepted {
 		// Parked before its wait was kept (an escalation's resume, a
 		// retry): the wait starts now.
 		return w.quietWait(st, noModel, now), nil
