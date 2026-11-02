@@ -126,6 +126,10 @@ func TestAHandBackWhileEnteringTheGateStillAsks(t *testing.T) {
 			if d, v := w.decider(task), w.voice(task); d != "conductor" || v != "quiet" {
 				t.Fatalf("decider %s voice %q after the hand-back, want the conductor, quiet", d, v)
 			}
+			// Deliver's hold of the gate is the person's: the quiet conductor is refused there.
+			if status, out := w.as(task, "start_phase", `{"phase":"review","categories":["correctness"]}`); status != 422 {
+				t.Fatalf("start_phase at Deliver's hold of the gate: %d %v, want refused", status, out)
+			}
 			if status, out := w.handBack(task, map[string]any{"decider": "policy"}); status != 409 || !gateRefused(out) {
 				t.Fatalf("hand-back at the gate, unanswered: %d %v", status, out)
 			}
