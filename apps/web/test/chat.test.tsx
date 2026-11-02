@@ -685,6 +685,18 @@ describe("the Chat tab", () => {
     expect(turns.some((t) => t.includes("Answer"))).toBe(false);
   });
 
+  test("the gate's question, closed as the work went back for a fix: its card says so, not that the banner decided it", async () => {
+    const left = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_g", prompt: "Open the pull request?", options: ["Open", "Draft"] }, { type: "agent", id: CONDUCTOR }),
+      ev("question.closed", { questionId: "q_g", by: "left_gate" })];
+    const page = await chatPage(new ChatClient({ status: "running" }, left));
+    await until(() => page.textContent?.includes("Open the pull request?") ? page : null, "the question");
+    const card = page.querySelector("[data-testid=task-chat] article[data-state]")!;
+    expect(card.getAttribute("data-state")).toBe("dismissed");
+    expect(card.querySelector("[data-testid=settled-by]")?.textContent).toBe("Went back for a fix");
+    expect(page.textContent).not.toContain("Decided on the banner");
+  });
+
   test("the conductor's escalation question, decided on the banner: its card says so, and the composer no longer answers it", async () => {
     const decided = [...conductorEvents(),
       ev("question.asked", { kind: "agent", questionId: "q_e", prompt: "Stuck: retry once more?", options: ["Retry", "Stop"] }, { type: "agent", id: CONDUCTOR }),

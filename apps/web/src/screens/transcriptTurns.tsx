@@ -363,6 +363,14 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
 }
 
 /** The question's turn in a transcript (AskTurn marks it), for the transcript to keep in view. */
+/** A question closed unanswered, by why (QuestionTurn.closedBy), as its card's tag says it. */
+export const SETTLED_BY: Record<NonNullable<QuestionTurn["closedBy"]>, string> = {
+  decision: "Decided on the banner",
+  withdrawn: "Withdrawn",
+  // Deliver's hold it asked about was left: feedback sent the work back.
+  left_gate: "Went back for a fix",
+};
+
 export const questionTurnSelector = (questionId: string) => `[data-question="${CSS.escape(questionId)}"]`;
 
 /** Whom a session's question waits on: none when it is put to you, else their first name. */
@@ -406,7 +414,7 @@ function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
       answers={turn.answers}
       answeredBy={by ? firstName(by) : undefined}
       dismissed={ended && turn.answeredAt === null}
-      settledBy={turn.closedAt === null ? undefined : turn.closedBy === "withdrawn" ? "Withdrawn" : "Decided on the banner"}
+      settledBy={turn.closedAt === null ? undefined : SETTLED_BY[turn.closedBy ?? "decision"]}
       waitingOn={whom}
       onlyThey={turn.to !== null}
       {...(open ? {
