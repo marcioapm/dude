@@ -355,3 +355,75 @@ func TestAQuietDecisionHandedBackAfterChattyWaitsAfresh(t *testing.T) {
 		t.Errorf("decision at %q, want still after the implementer", at)
 	}
 }
+
+// The defaults' notice is said once per decision: a transition that lost
+// its lease after the step said it (another poller's now) is replayed, and
+// the replay says nothing more.
+func TestTheDefaultsAreSaidOnceAcrossALostTransition(t *testing.T) {
+	w := conducting(t)
+	store := &delivery.Store{DB: w.app, DecisionWait: time.Hour, SyncPullRequest: w.prs.Sync}
+	def := delivery.Workflow(store, forge.Resolver{DB: w.app})
+	var once sync.Once
+	var armed atomic.Bool
+	task := w.task()
+	def.BeforeCommit = func(_, step, next string) {
+		if step == "conductorDecision" && next == "review" && armed.Load() {
+			once.Do(func() {
+				mustExec(t, w.owner, `UPDATE workflow_runs SET locked_until = now() - interval '1 second' WHERE task_id = $1`, task)
+			})
+		}
+	}
+	w.runtime.Register(def)
+	w.quietAfterImplement(task)
+	armed.Store(true)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,decideBy}', to_jsonb(now() - interval '1 second')),
+		wake_at = now() WHERE task_id = $1`, task)
+	w.until("the review, by the defaults", func() bool { return w.phaseRuns(task, "review") > 0 })
+	for range 3 {
+		w.pump()
+	}
+	if n := w.defaulted(task, ""); n != 1 {
+		t.Errorf("%d decision_defaulted events across the lost transition, want 1", n)
+	}
+	if n := w.defaultedNotices(task, delivery.DefaultedDeadline); n != 1 {
+		t.Errorf("%d Chat notices across the lost transition, want 1", n)
+	}
+}
+
+// A conductor Run that failed before the wait began is not this decision's
+// failure: the decision waits out its time, not defaulted as run_failed.
+func TestAConductorRunThatFailedBeforeTheWaitDoesNotDefault(t *testing.T) {
+	w := conducting(t)
+	w.waitingFor(time.Hour)
+	task := w.task()
+	w.quietAfterImplement(task)
+	w.until("the conductor woken", func() bool { id, _, _ := w.conductor(task); return id != "" })
+	id, _, _ := w.conductor(task)
+	mustExec(t, w.owner, `UPDATE runs SET status = 'failed', ended_at = (SELECT (state->'decision'->>'since')::timestamptz
+		FROM workflow_runs WHERE task_id = $2) - interval '1 minute', error = 'an earlier failure' WHERE id = $1`, id, task)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, task)
+	w.until("the decision looked at again", func() bool {
+		return w.str(`SELECT status || '/' || COALESCE((wake_at > now() + interval '30 minutes')::text, '') FROM workflow_runs
+			WHERE task_id = $1`, task) == "waiting/true" || w.defaulted(task, "") > 0
+	})
+	if n := w.defaulted(task, ""); n != 0 {
+		t.Fatalf("%d defaults for a Run that failed before the wait", n)
+	}
+}
+
+// accept takes the decision by Deliver's defaults at once, however long
+// the conductor's wait: not an hour later.
+func TestAcceptingTakesTheDecisionAtOnce(t *testing.T) {
+	w := conducting(t)
+	w.waitingFor(100 * time.Millisecond)
+	task := w.task()
+	owner, _, _ := w.people(task)
+	w.startQuiet(task)
+	w.until("conductor_unavailable", func() bool { return w.escalationReason(task) == delivery.ReasonConductorUnavailable })
+	before := w.defaulted(task, "")
+	w.waitingFor(time.Hour)
+	if status, out := w.decide(owner, task, "accept", ""); status != 200 {
+		t.Fatalf("accept: %d %v", status, out)
+	}
+	w.until("the accepted decision, by the defaults", func() bool { return w.defaulted(task, "") > before })
+}
