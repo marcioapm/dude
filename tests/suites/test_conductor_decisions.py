@@ -219,7 +219,10 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
 
 def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,
                                                             owner_dsn: str):
-    """The abs run's stall: the review gets stuck, the conductor asks with the
+    """The abs run's stall: Deliver's review gets stuck (one fix attempt per
+    finding; a conducted loop has no such bound), and the person hands the
+    delivery to the conductor with a Chat message while it waits, the
+    conductor told of the escalation. The conductor asks with the
     escalation's actions as choices (a retry is not one: it needs the person's
     own direction), the owner answers "Your call", and the conductor retries
     with decide_escalation: the next fix round runs."""
@@ -229,15 +232,19 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     assert client.patch(f"/v1/projects/{project['id']}/settings",
                         {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task = client.create_task(project["id"], "Greet, and get stuck on review")
-    conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
-    _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
-    _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
-    _waiting_on(client, task["id"], "after_implement", "the implementer never came back")
-    _say(client, task["id"], "Review it.", _tool("decide", {"action": "next"}))
-    _waiting_on(client, task["id"], "after_review", "the review never came back")
-    _say(client, task["id"], "Fix it.", _tool("start_phase", {"phase": "fix"}))
-    _waiting_on(client, task["id"], "after_fix", "the fix never came back")
-    _say(client, task["id"], "Again.", _tool("decide", {"action": "next"}))
+    # Deliver decides: its review loop escalates stuck, no conductor yet.
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    assert _task(client, task["id"])["decider"] == "policy"
+    wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=180,
+               message="Deliver's review never got stuck")
+    assert _task(client, task["id"])["decider"] == "policy"
+    assert not _woken(client, task["id"])
+
+    # The person's first message hands the waiting delivery to the conductor.
+    resp = _say(client, task["id"], "What happened?")
+    assert resp["decider"] == "conductor", resp
+    conductor = resp["runId"]
+    assert _task(client, task["id"])["decider"] == "conductor"
 
     # Stuck: escalated to a person, the conductor told how it works.
     wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=90,
