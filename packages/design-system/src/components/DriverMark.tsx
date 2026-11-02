@@ -43,9 +43,13 @@ export interface DriverWaiting {
   readonly on: string;
 }
 
-/** The chip's words: who, then what that means or what it waits on (short, and in full for its name). */
-export function driverWords(mode: DriverMode, waiting?: DriverWaiting | undefined): { who: string; detail: string; long: string } {
-  if (!waiting) return { who: WHO[mode], detail: DETAIL[mode], long: DETAIL[mode] };
+/** What a quiet conductor's chip says it does. */
+export const QUIET_DETAIL = "decides quietly; speaks when it needs you";
+
+/** The chip's words: who, then what that means or what it waits on (short, and in full for its name); quiet: a quiet conductor's. */
+export function driverWords(mode: DriverMode, waiting?: DriverWaiting | undefined, quiet = false): { who: string; detail: string; long: string } {
+  const means = quiet && mode === "conductor" ? QUIET_DETAIL : DETAIL[mode];
+  if (!waiting) return { who: WHO[mode], detail: means, long: means };
   return { who: WHO[mode], detail: `waiting on ${waiting.on}: ${DECISION_POINT_SHORT[waiting.point]}`,
     long: `waiting on ${waiting.on}: ${DECISION_POINT_LABEL[waiting.point]}` };
 }
@@ -67,6 +71,8 @@ export interface DriverChipProps extends ButtonHTMLAttributes<HTMLButtonElement>
   readonly switchable: boolean;
   /** Read-only: why it cannot be switched, said in its accessible name. */
   readonly readOnlyReason?: string | undefined;
+  /** The conductor decides quietly. */
+  readonly quiet?: boolean | undefined;
 }
 
 /**
@@ -75,8 +81,8 @@ export interface DriverChipProps extends ButtonHTMLAttributes<HTMLButtonElement>
  * muted line of what that means or what it waits on. Never a tone: who
  * decides is a fact, not a state.
  */
-export const DriverChip = forwardRef<HTMLButtonElement, DriverChipProps>(function DriverChip({ mode, waiting, switchable, readOnlyReason, className, ...rest }, ref) {
-  const w = driverWords(mode, waiting);
+export const DriverChip = forwardRef<HTMLButtonElement, DriverChipProps>(function DriverChip({ mode, waiting, switchable, readOnlyReason, quiet, className, ...rest }, ref) {
+  const w = driverWords(mode, waiting, quiet === true);
   const body = (
     <>
       <DriverIcons mode={mode} />
@@ -124,8 +130,10 @@ export interface DriverSwitchProps {
   readonly waiting?: DriverWaiting | undefined;
   /** Who is at work now, as a doer ("fixer"): whose end is the next decision point. */
   readonly running?: string | undefined;
-  /** A person let Deliver finish it: a later Chat message takes nothing back. */
+  /** A person let it finish quietly: a later Chat message does not make it talk again. */
   readonly handedBack: boolean;
+  /** The conductor decides quietly (its delivery's voice). */
+  readonly quiet?: boolean | undefined;
   /** The reader may switch (the owner, or anyone on a task nobody owns). */
   readonly canSwitch: boolean;
   /** Who may, for the reader who may not: "Ana". */
@@ -147,11 +155,11 @@ export function toConductorWords(mode: DriverMode, waiting: DriverWaiting | unde
   return `It takes over ${when}. ${mode === "deliver-chat" ? "The conductor already in Chat takes it." : "A conductor starts in Chat to take it."}`;
 }
 
-/** What letting Deliver finish does now, in a sentence. */
+/** What letting it finish quietly does now, in a sentence. */
 export function toDeliverWords(waiting: DriverWaiting | undefined, running: string | undefined): string {
-  if (waiting?.point === "before_pull_request") return "Deliver opens the pull request now, and finishes on its own. You are asked to confirm.";
-  if (waiting) return "Deliver takes the decision waiting now and runs to the pull request. The conductor stays in Chat to answer.";
-  return `Deliver takes over ${running ? `when the ${running} finishes` : "at the next decision point"} and runs to the pull request. The conductor stays in Chat to answer; it decides nothing.`;
+  if (waiting?.point === "before_pull_request") return "Deliver opens the pull request now, and the conductor finishes quietly. You are asked to confirm.";
+  if (waiting) return "The conductor goes on quietly from the decision waiting now, and Deliver's rules open the pull request.";
+  return `The conductor goes on quietly ${running ? `when the ${running} finishes` : "from the next decision point"}: it speaks only when something needs you, and Deliver's rules open the pull request.`;
 }
 
 /**
@@ -160,16 +168,18 @@ export function toDeliverWords(waiting: DriverWaiting | undefined, running: stri
  * restarted, the next decision is the chosen one's. For anyone else it is
  * the same chip, read-only, its tooltip saying whose it is.
  */
-export function DriverSwitch({ mode, waiting, running, handedBack, canSwitch, ownerName, busy, open, onOpenChange, onSwitch, forceMount, container }: DriverSwitchProps) {
+export function DriverSwitch({ mode, waiting, running, handedBack, quiet, canSwitch, ownerName, busy, open, onOpenChange, onSwitch, forceMount, container }: DriverSwitchProps) {
+  const isQuiet = quiet === true && mode === "conductor";
   if (!canSwitch) {
     const reason = `Only the owner can change who decides.${ownerName ? ` ${ownerName} owns this task.` : ""}`;
     return (
       <Tooltip content={reason} keepOnPress>
-        <DriverChip mode={mode} waiting={waiting} switchable={false} readOnlyReason={reason} />
+        <DriverChip mode={mode} waiting={waiting} switchable={false} readOnlyReason={reason} quiet={isQuiet} />
       </Tooltip>
     );
   }
-  const deciding = mode === "conductor" ? "conductor" : "policy";
+  // The wire's two values: "policy" is finishing quietly (or Deliver's own rules), "conductor" talking it through.
+  const deciding = mode === "conductor" && !isQuiet ? "conductor" : "policy";
   const items: RowMenuItem[] = [
     {
       kind: "radio", id: "decides", label: "Who decides", value: deciding,
@@ -177,9 +187,10 @@ export function DriverSwitch({ mode, waiting, running, handedBack, canSwitch, ow
         if (v !== deciding && (v === "policy" || v === "conductor")) onSwitch(v);
       },
       items: [
-        { id: "policy", label: deciding === "policy" ? "Deliver decides" : "Let Deliver finish it", leading: <DriverIcons mode="deliver" />,
-          description: deciding === "policy" ? "Runs to the pull request on its own." : toDeliverWords(waiting, running), descriptionWraps: true, disabled: busy === true },
-        { id: "conductor", label: deciding === "conductor" ? "The conductor decides" : "Give decisions to the conductor", leading: <DriverIcons mode="conductor" />,
+        { id: "policy", label: isQuiet ? "Finishing quietly" : deciding === "policy" ? "Deliver decides" : "Let it finish quietly", leading: <DriverIcons mode="deliver" />,
+          description: isQuiet ? "The conductor decides by its defaults, and Deliver's rules open the pull request."
+            : deciding === "policy" ? "Runs to the pull request on its own." : toDeliverWords(waiting, running), descriptionWraps: true, disabled: busy === true },
+        { id: "conductor", label: deciding === "conductor" ? "The conductor decides" : "Talk it through", leading: <DriverIcons mode="conductor" />,
           description: deciding === "conductor" ? "Each finished step comes back to it, in Chat, with you." : toConductorWords(mode, waiting, running),
           descriptionWraps: true, disabled: busy === true },
       ],
@@ -188,8 +199,8 @@ export function DriverSwitch({ mode, waiting, running, handedBack, canSwitch, ow
     {
       kind: "note", id: "driver-rule",
       text: handedBack && deciding === "policy"
-        ? "You let Deliver finish it: writing in Chat no longer takes the decisions back. Switch here."
-        : deciding === "policy" ? "Writing in Chat also gives the conductor the decisions."
+        ? "You let it finish quietly: writing in Chat no longer makes it talk it through. Switch here."
+        : deciding === "policy" ? "Writing in Chat also has the conductor talk it through."
         : "Takes effect at the next decision point: after implement, review or fix, before the PR, on its feedback.",
     },
   ];
@@ -197,7 +208,7 @@ export function DriverSwitch({ mode, waiting, running, handedBack, canSwitch, ow
     <RowMenu items={items} label="Who decides" align="start" className={styles["menu"]}
       {...(open !== undefined ? { open } : {})} {...(onOpenChange ? { onOpenChange } : {})}
       {...(forceMount ? { forceMount } : {})} {...(container ? { container } : {})}
-      trigger={<DriverChip mode={mode} waiting={waiting} switchable />} />
+      trigger={<DriverChip mode={mode} waiting={waiting} switchable quiet={isQuiet} />} />
   );
 }
 

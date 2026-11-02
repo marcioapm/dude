@@ -13,7 +13,7 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AttemptDivider, ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, EarlierTurns, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
-import { DECISION_POINT_LABEL, EventTypes, NOT_STARTED_STATUSES, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
+import { DECISION_POINT_LABEL, EventTypes, NOT_STARTED_STATUSES, deliverOpens, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail } from "../api/client.ts";
 import { actorName, humanActor, steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
@@ -259,30 +259,36 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
 
   const inProgress = !["done", "aborted", "failed"].includes(task.status) && task.runs.some((r) => r.phase || isConductor(r));
   const waiting = task.awaitingDecision ? DECISION_POINT_LABEL[task.awaitingDecision.point] : undefined;
-  const gateHeld = task.decider !== "conductor" && task.awaitingDecision?.point === "before_pull_request";
+  const gateHeld = deliverOpens(task) && task.awaitingDecision?.point === "before_pull_request";
   const above = useMemo(() => {
     if (!inProgress) return null;
-    const conductor = task.decider === "conductor";
-    return <DeciderLine data-testid="decider-line" decider={task.decider} waiting={waiting}
-      detail={conductor ? undefined : task.handedBack
+    const talking = task.decider === "conductor" && task.voice !== "quiet";
+    const quiet = task.decider === "conductor" && task.voice === "quiet";
+    return <DeciderLine data-testid="decider-line" decider={task.decider} data-voice={task.voice ?? undefined} waiting={waiting}
+      detail={talking ? undefined : quiet
+        ? task.handedBack ? "it decides quietly; messages here are answered, and keep it quiet" : "it decides quietly; a message from you has it talk it through"
+        : task.handedBack
         ? "messages here are answered, and take no decisions back"
         : "the conductor answers here; a message from you gives it the decisions"}
       action={!canSwitchDriver ? undefined : <>
         <Button variant="quiet" size="sm" disabled={driverControl.busy}
-          onClick={() => void driverControl.change(conductor ? "policy" : "conductor")}
-          data-testid={conductor ? "let-deliver-finish" : "give-to-conductor"}>
-          {conductor ? "Let Deliver finish it" : "Give decisions to the conductor"}
+          onClick={() => void driverControl.change(talking ? "policy" : "conductor")}
+          data-testid={talking ? "let-deliver-finish" : "give-to-conductor"}>
+          {talking ? "Let it finish quietly" : "Talk it through"}
         </Button>
-        {gateHeld ? <Button variant="quiet" size="sm" disabled={driverControl.busy} onClick={() => void driverControl.change("policy")} data-testid="let-deliver-finish">Let Deliver finish it</Button> : null}
+        {gateHeld ? <Button variant="quiet" size="sm" disabled={driverControl.busy} onClick={() => void driverControl.change("policy")} data-testid="let-deliver-finish">Let it finish quietly</Button> : null}
       </>} />;
-  }, [task.decider, task.handedBack, gateHeld, inProgress, waiting, driverControl.busy, driverControl.change, canSwitchDriver]);
+  }, [task.decider, task.voice, task.handedBack, gateHeld, inProgress, waiting, driverControl.busy, driverControl.change, canSwitchDriver]);
   // What the first message does: plans a task not started, takes over a delivery Deliver runs, or only asks.
   const first = firstMessage(task, inProgress);
   const to = useMemo(() => {
     if (!inProgress) return first.readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>;
+    if (task.decider === "conductor" && task.voice === "quiet") {
+      return task.handedBack ? <>To <b>Conductor</b> · it answers, and stays quiet</> : <>To <b>Conductor</b> · sending has it talk it through</>;
+    }
     if (task.decider === "conductor") return <>To <b>Conductor</b></>;
     return task.handedBack ? <>To <b>Conductor</b> · answers only, Deliver decides</> : <>To <b>Conductor</b> · sending gives it the decisions</>;
-  }, [inProgress, first.readOnly, task.decider, task.handedBack]);
+  }, [inProgress, first.readOnly, task.decider, task.voice, task.handedBack]);
   const stoppedWords = stoppedHere ? STOPPED_COMPOSER : undefined;
   const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines: currentLines, above, readOnly: gateHeld,
     to, briefedBefore: briefedAgain, stopped: stoppedWords }),
@@ -336,9 +342,13 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
 }
 
 /** What a first message in Chat does, in the words the empty Chat says it with. */
-export function firstMessage(task: Pick<TaskDetail, "status" | "decider" | "runs"> & { handedBack?: boolean | undefined }, inProgress: boolean): { empty: string; readOnly: boolean } {
+export function firstMessage(task: Pick<TaskDetail, "status" | "decider" | "runs"> & { handedBack?: boolean | undefined; voice?: TaskDetail["voice"] | undefined },
+  inProgress: boolean): { empty: string; readOnly: boolean } {
   if (NOT_STARTED_STATUSES.includes(task.status) && !task.runs.some((r) => r.phase)) {
     return { readOnly: false, empty: "Nobody has written here yet. Your message starts planning this task with its conductor (Talk it through): it reads the code and asks what it needs, and nothing is built until it decides to." };
+  }
+  if (inProgress && task.decider === "conductor" && task.voice === "quiet" && !task.handedBack) {
+    return { readOnly: false, empty: "Nobody has written here yet. Its conductor decides this delivery quietly; your message has it talk the work through with you from the next decision." };
   }
   if (inProgress && task.decider !== "conductor" && !task.handedBack) {
     return { readOnly: false, empty: "Nobody has written here yet. Your message hands this delivery's decisions to its conductor: what Deliver is running finishes, and the next decision is the conductor's, with you." };

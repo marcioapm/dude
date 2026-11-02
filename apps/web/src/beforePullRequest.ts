@@ -5,14 +5,15 @@
  * one place a task is read as held at it or sent back from it.
  */
 
-import { PULL_REQUEST_CHOICE, PULL_REQUEST_CHOICES, type PullRequestChoice } from "@dude/domain";
+import { PULL_REQUEST_CHOICE, PULL_REQUEST_CHOICES, deliverOpens, type PullRequestChoice } from "@dude/domain";
 import type { TaskDetail } from "./api/client.ts";
 
-type GateFacts = Pick<TaskDetail, "decider" | "awaitingDecision" | "hold" | "pullRequestOpened" | "status" | "escalation">;
+type GateFacts = Pick<TaskDetail, "decider" | "awaitingDecision" | "hold" | "pullRequestOpened" | "status" | "escalation">
+  & { voice?: TaskDetail["voice"] | undefined };
 
-/** Deliver holds the task before its first pull request, for its owner's answer. */
+/** Deliver holds the task before its first pull request, for its owner's answer: under its rules, a quiet conductor's too. */
 export const heldAtGate = (task: GateFacts): boolean =>
-  task.decider !== "conductor" && !task.pullRequestOpened && task.awaitingDecision?.point === "before_pull_request";
+  deliverOpens(task) && !task.pullRequestOpened && task.awaitingDecision?.point === "before_pull_request";
 
 /**
  * A fixer works on the feedback sent from the hold before the first pull
@@ -21,7 +22,7 @@ export const heldAtGate = (task: GateFacts): boolean =>
  * goes back to the fix) with nobody at work.
  */
 export const sentBackFromGate = (task: GateFacts): boolean =>
-  task.decider !== "conductor" && !task.pullRequestOpened && !heldAtGate(task) && task.hold?.sentBack === true
+  deliverOpens(task) && !task.pullRequestOpened && !heldAtGate(task) && task.hold?.sentBack === true
   && !task.escalation && (task.status === "running" || task.status === "review");
 
 /** Why a task's choice can no longer change: a pull request is open. */

@@ -603,10 +603,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     driver = <DriverEnded decider={item.decider} />;
   } else if (!NOT_STARTED_STATUSES.includes(item.status)) {
     const ownerName = owner ? firstName(owner.name) : undefined;
-    const waitingOn = item.decider === "conductor" ? "it" : yours ? "you" : ownerName ?? "the owner";
+    // Deliver's hold before the pull request waits on its owner, under a quiet conductor too.
+    const waitingOn = item.decider === "conductor" && !(item.voice === "quiet" && item.awaitingDecision?.point === "before_pull_request") ? "it"
+      : yours ? "you" : ownerName ?? "the owner";
     driver = <DriverSwitch
       mode={driverMode(item.decider, conductors.some((r) => !TERMINAL_RUN_STATUSES.includes(r.status)))}
-      handedBack={item.handedBack} canSwitch={yours} ownerName={ownerName}
+      handedBack={item.handedBack} quiet={item.voice === "quiet"} canSwitch={yours} ownerName={ownerName}
       busy={driverControl.busy} running={working ? runDoer(working) : undefined}
       waiting={item.awaitingDecision ? { point: item.awaitingDecision.point, on: waitingOn } : undefined}
       onSwitch={(to) => void driverControl.change(to)} />;
@@ -1681,9 +1683,12 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         if (p.why === "talk it through" || withinStopRestart(e)) break;
         out.push({ ...base, kind: "decisions", who: face ?? <DudeMark size={32} />,
           text: <>{by ? person : <b>{dude}</b>} {p.to === "policy" ? "let Deliver finish it"
-            : p.why === "a person wrote in Chat" ? "wrote in Chat, which gave the decisions to the conductor"
+            : p.voice === "quiet" ? "let it finish quietly"
+            : p.why === "a person wrote in Chat" ? (p.from === "conductor" ? "wrote in Chat, which has the conductor talk it through" : "wrote in Chat, which gave the decisions to the conductor")
+            : p.from === "conductor" ? "had the conductor talk it through"
             : "gave the decisions to the conductor"}</>,
-          quote: `${p.from === "conductor" ? "Conductor" : "Deliver"} → ${p.to === "conductor" ? "Conductor" : "Deliver"}` });
+          quote: p.from === "conductor" && p.to === "conductor" ? `Conductor → Conductor, ${p.voice === "quiet" ? "quiet" : "chatty"}`
+            : `${p.from === "conductor" ? "Conductor" : "Deliver"} → ${p.to === "conductor" ? "Conductor" : "Deliver"}${p.voice === "quiet" ? ", quiet" : ""}` });
         break;
       case "task.decided":
         out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });

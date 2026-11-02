@@ -621,6 +621,25 @@ describe("Activity's started lines", () => {
     expect(quotes).toEqual(["Deliver → Conductor", "Conductor → Deliver", "Deliver → Conductor"]);
   });
 
+  test("a voice change says it: let it finish quietly, and a message or the switch that has the conductor talk it through", () => {
+    const changed = (why: string, from: string, voice: string): PersistedEvent =>
+      ({ ...created(null, {}), eventType: "task.decider_changed", actor: { type: "human", id: "u_ana", name: "Ana" },
+        payload: { from, to: "conductor", voice, why } }) as PersistedEvent;
+    const events = [
+      changed("a person let it finish quietly", "conductor", "quiet"),
+      changed("a person wrote in Chat", "conductor", "chatty"),
+      changed("a person gave the decisions to the conductor", "conductor", "chatty"),
+    ];
+    expect(said(events, [])).toEqual([
+      "Ana had the conductor talk it through",
+      "Ana wrote in Chat, which has the conductor talk it through",
+      "Ana let it finish quietly",
+    ]);
+    const people = { names: new Map<string, string>(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
+    expect(activityLines(events, people, [], [], 1).map((l) => l.quote)).toEqual(
+      ["Conductor → Conductor, chatty", "Conductor → Conductor, chatty", "Conductor → Conductor, quiet"]);
+  });
+
   test("the API reviewer keeps its capitals, in its own line and in the round's; other categories stay lower case", () => {
     const lines = said([
       created("r_api", { phase: "review", role: "reviewer", category: "api" }),

@@ -240,3 +240,23 @@ test("path 8: an archived task's bare Run is refused as archived, and allowed on
   await owner`UPDATE tasks SET status = 'received', resolution = NULL WHERE id = ${t}`;
   expect((await call("POST", `/v1/tasks/${t}/runs`)).status).toBe(201);
 });
+
+test("a quiet conductor's delivery: the task says its voice, and Deliver's hold before its pull request is ready for its owner", async () => {
+  const quiet = await task("awaiting_input");
+  const chatty = await task("awaiting_input");
+  const old = await task("running");
+  const parked = { decider: "conductor", decision: { point: "before_pull_request", policy: "openPullRequest" } };
+  for (const [id, state] of [[quiet, { ...parked, voice: "quiet" }], [chatty, { ...parked, voice: "chatty" }], [old, { decider: "conductor" }]] as const) {
+    await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id)
+      VALUES (${`wf_${id}`}, ${ORG}, 'task.delivery', ${`delivery:${id}`}, 'waiting', 'conductorDecision', ${state}::jsonb, ${id})`;
+  }
+  const voice = async (id: string) => ((await (await call("GET", `/v1/tasks/${id}`)).json()) as { voice: string | null }).voice;
+  expect(await voice(quiet)).toBe("quiet");
+  expect(await voice(chatty)).toBe("chatty");
+  // A conductor from before voices talked.
+  expect(await voice(old)).toBe("chatty");
+  const tree = (await (await call("GET", "/v1/navigation")).json()) as { projects: Array<{ id: string; tasks: Array<{ key: string; heldForReview: boolean }> }> };
+  const tasks = tree.projects.find((p) => p.id === PROJECT)!.tasks;
+  expect(tasks.find((t) => t.key === key(quiet))!.heldForReview).toBe(true);
+  expect(tasks.find((t) => t.key === key(chatty))!.heldForReview ?? false).toBe(false);
+});

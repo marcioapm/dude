@@ -110,14 +110,14 @@ describe("the owner's switch", () => {
   const labels = () => radios().map(label);
   const checked = () => radios().filter((r) => r.getAttribute("aria-checked") === "true").map(label);
 
-  test("under Deliver: Deliver ticked, the other offered as Give decisions to the conductor, and picking it calls back once", async () => {
+  test("under Deliver: Deliver ticked, the other offered as Talk it through, and picking it calls back once", async () => {
     const to: string[] = [];
     const el = await mount(<DriverSwitch mode="deliver" running="fixer" handedBack={false} canSwitch onSwitch={(d) => to.push(d)} />);
     const menu = await openMenu(el);
-    expect(labels()).toEqual(["Deliver decides", "Give decisions to the conductor"]);
+    expect(labels()).toEqual(["Deliver decides", "Talk it through"]);
     expect(checked()).toEqual(["Deliver decides"]);
     expect(menu.textContent).toContain("It takes over when the fixer finishes; the fixer keeps running. A conductor starts in Chat to take it.");
-    expect(menu.textContent).toContain("Writing in Chat also gives the conductor the decisions.");
+    expect(menu.textContent).toContain("Writing in Chat also has the conductor talk it through.");
     await act(async () => radios()[1]!.click());
     expect(to).toEqual(["conductor"]);
   });
@@ -130,14 +130,26 @@ describe("the owner's switch", () => {
     expect(to).toEqual([]);
   });
 
-  test("under the conductor: it is ticked, and Let Deliver finish it calls back with policy", async () => {
+  test("under the conductor: it is ticked, and Let it finish quietly calls back with policy", async () => {
     const to: string[] = [];
     const el = await mount(<DriverSwitch mode="conductor" handedBack={false} canSwitch onSwitch={(d) => to.push(d)} />);
     await openMenu(el);
     expect(checked()).toEqual(["The conductor decides"]);
-    expect(labels()).toEqual(["Let Deliver finish it", "The conductor decides"]);
+    expect(labels()).toEqual(["Let it finish quietly", "The conductor decides"]);
     await act(async () => radios()[0]!.click());
     expect(to).toEqual(["policy"]);
+  });
+
+  test("a quiet conductor: finishing quietly is ticked, its chip says so, and Talk it through calls back with conductor", async () => {
+    const to: string[] = [];
+    const el = await mount(<DriverSwitch mode="conductor" quiet handedBack canSwitch onSwitch={(d) => to.push(d)} />);
+    expect(chip(el).textContent).toBe("Conductor · decides quietly; speaks when it needs you");
+    const menu = await openMenu(el);
+    expect(labels()).toEqual(["Finishing quietly", "Talk it through"]);
+    expect(checked()).toEqual(["Finishing quietly"]);
+    expect(menu.textContent).toContain("You let it finish quietly: writing in Chat no longer makes it talk it through.");
+    await act(async () => radios()[1]!.click());
+    expect(to).toEqual(["conductor"]);
   });
 
   test("a conductor live in Chat is not the driver: Deliver stays ticked, and the conductor already there is the one to take it", async () => {
@@ -145,13 +157,13 @@ describe("the owner's switch", () => {
     const menu = await openMenu(el);
     expect(checked()).toEqual(["Deliver decides"]);
     expect(menu.textContent).toContain("The conductor already in Chat takes it.");
-    expect(menu.textContent).toContain("You let Deliver finish it: writing in Chat no longer takes the decisions back.");
+    expect(menu.textContent).toContain("You let it finish quietly: writing in Chat no longer makes it talk it through.");
   });
 
-  test("at the pull request question, letting Deliver finish says it opens the pull request and asks first", async () => {
+  test("at the pull request question, letting it finish quietly says Deliver opens the pull request and asks first", async () => {
     const el = await mount(<DriverSwitch mode="conductor" waiting={{ point: "before_pull_request", on: "you" }} handedBack={false} canSwitch onSwitch={() => undefined} />);
     const menu = await openMenu(el);
-    expect(menu.textContent).toContain("Deliver opens the pull request now, and finishes on its own. You are asked to confirm.");
+    expect(menu.textContent).toContain("Deliver opens the pull request now, and the conductor finishes quietly. You are asked to confirm.");
   });
 });
 

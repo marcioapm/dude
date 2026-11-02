@@ -40,12 +40,12 @@ export function useDriverSwitch(client: ApiClient, taskId: string, onChanged: ()
 export function DriverConfirmation({ control }: { control: DriverControl }) {
   return (
     <Dialog open={control.confirmOpen} onOpenChange={(o) => !o && control.cancel()} size="sm" tone="attention"
-      title="Let Deliver finish it?"
-      description="Deliver will open the pull request now. You have not answered Open or Draft to the conductor's question."
+      title="Let it finish quietly?"
+      description="Deliver will open the pull request now. You have not answered Open or Draft to the gate's question."
       footer={<>
-        <Button variant="quiet" disabled={control.busy} onClick={control.cancel} data-testid="hand-back-keep">Keep deciding in Chat</Button>
+        <Button variant="quiet" disabled={control.busy} onClick={control.cancel} data-testid="hand-back-keep">Keep talking it through</Button>
         <Button variant="primary" disabled={control.busy} data-testid="hand-back-open" onClick={() => void control.change("policy", true)}>
-          Open it and let Deliver finish
+          Open it and finish quietly
         </Button>
       </>} />
   );

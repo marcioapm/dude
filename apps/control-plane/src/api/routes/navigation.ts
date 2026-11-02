@@ -242,11 +242,12 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
                ORDER BY wf.created_at DESC LIMIT 1), 'policy') AS decider,
               EXISTS (SELECT 1 FROM runs c WHERE c.task_id = w.id AND c.role = 'conductor' AND c.phase IS NULL
                 AND c.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')) AS "conductorLive",
-              -- Deliver holds its live delivery before the pull request for its owner (work.ts's awaitingDecision, under Deliver).
+              -- Deliver holds its live delivery before the pull request for its owner (work.ts's awaitingDecision, under
+              -- Deliver's rules: no conductor decides, or a quiet one).
               w.status = 'awaiting_input' AND EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = w.id
                 AND wf.workflow_type = 'task.delivery' AND wf.status IN ('running', 'waiting') AND wf.step = 'conductorDecision'
                 AND wf.state->'decision'->>'point' = 'before_pull_request' AND NOT wf.state->'decision' ? 'taken'
-                AND COALESCE(wf.state->>'decider', 'policy') <> 'conductor') AS "heldForReview"
+                AND (COALESCE(wf.state->>'decider', 'policy') <> 'conductor' OR wf.state->>'voice' = 'quiet')) AS "heldForReview"
       FROM tasks w JOIN projects p ON p.id = w.project_id
       WHERE w.archived_at IS NULL
       ORDER BY w.created_at DESC LIMIT 500`) as TaskRow[];
