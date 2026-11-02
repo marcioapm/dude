@@ -760,6 +760,16 @@ export const EventTypes = {
    */
   ConductorDecided: "conductor.decided",
   /**
+   * dude took Deliver's defaults at a decision a quiet conductor did not
+   * take. Payload: `{ point, policy, reason, count, workflowId, decision }`:
+   * reason `deadline` (not within 10 minutes), `no_model` (the conductor
+   * has none), `run_failed`, or `accepted` (a person's accept on
+   * `conductor_unavailable`, which hands the delivery to Deliver); count
+   * the defaults in a row (3 escalates `conductor_unavailable`). Chat shows
+   * its `chat.notice`.
+   */
+  ConductorDecisionDefaulted: "conductor.decision_defaulted",
+  /**
    * dude woke a task's conductor with a note listing why. Payload:
    * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
    * (decision, escalation, question, steer_read, steer_failed, pr_merged,

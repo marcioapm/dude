@@ -255,6 +255,11 @@ type State struct {
 	// The step read an answer authorizing the gate: its transition records
 	// it (recheck). Never persisted.
 	authorizeGate bool
+	// The step carried out accept on conductor_unavailable: its transition
+	// takes the decision by Deliver's defaults, said as accepted, unless
+	// the row says the conductor decides by then (acceptAtCommitTx). Never
+	// persisted.
+	acceptDefaults bool
 	// The step handed an integration over: the wait after it takes one
 	// pass first (closeHandedOver). Never persisted.
 	handingOver bool
@@ -353,6 +358,10 @@ func (e *Escalation) Actions() []string {
 		// The same feedback fixed again from what the branch holds now, or
 		// back to waiting on the pull request without the fix.
 		out = append(out, "retry", "wait")
+	case ReasonConductorUnavailable:
+		// Wait for the conductor again, or let Deliver's defaults finish
+		// this delivery, by Deliver's bounds.
+		out = append(out, "retry", "accept")
 	default:
 		// A Run that failed is kept a while (phases.keep): the same agent
 		// can carry on where it stopped. Whether it still is, the API checks.
@@ -3510,6 +3519,35 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
 	}
+	if e.Reason == ReasonConductorUnavailable && st.Decision != nil {
+		// The decision the conductor left: waited on afresh (retry), the
+		// conductor woken for it again; or (accept) the delivery handed to
+		// Deliver with it (DecideEscalationTx), whose policy takes it at
+		// once, said as the person's.
+		st.PersonSaid = ""
+		st.waitsQuietly()
+		if d.Action == "accept" && !st.conducted() {
+			// Taken in the transition with its notice, under the row lock:
+			// a Chat takeover that lands before it commits keeps the
+			// decision the conductor's (acceptAtCommitTx).
+			st.acceptDefaults = true
+			return workflow.Result{Next: st.Decision.Policy, State: st}, nil
+		}
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			if d.Action == "accept" {
+				// A person took it over in Chat since: the conductor's
+				// again, the decision is its own.
+				return nil
+			}
+			_, err := RecordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, "decision",
+				fmt.Sprintf("%s:retry:%d", decisionWakeKey(sc.WorkflowRunID, st.Decisions), st.Escalations),
+				decisionWaitingNote(st.Decision.Point, "A person asked dude to wait for your decision again."))
+			return err
+		}); err != nil {
+			return workflow.Result{}, err
+		}
+		return workflow.Result{Next: "conductorDecision", State: st}, nil
+	}
 	if e.Reason == ReasonNotConverging {
 		st.ConvergenceFrom = d.At
 		switch d.Action {
@@ -3603,6 +3641,11 @@ func (w *steps) acceptHeads(ctx context.Context, sc workflow.StepContext, st *St
 // other steps run immediately and reconstruct their own wait, including
 // the gate's human.feedback and the pull request wait's full signal set.
 func resumeEscalationAt(st *State, e *Escalation) workflow.Result {
+	if e.At == "conductorDecision" && st.waitsQuietly() {
+		// A quiet conductor's decision: its wait starts again, its
+		// deadline with it (quietDecision), which signals alone would lose.
+		return workflow.Result{Next: e.At, State: st}
+	}
 	if len(e.AtSignals) > 0 {
 		return workflow.Result{Next: e.At, State: st, AwaitSignals: slices.Clone(e.AtSignals)}
 	}
@@ -3694,6 +3737,8 @@ func (w *steps) recover(ctx context.Context, sc workflow.StepContext) (workflow.
 	}
 	e, halted := st.Stopped, st.Halt
 	st.Recover, st.Stopped, st.Halt = nil, nil, nil
+	// A quiet decision picked back up waits its whole time again.
+	st.waitsQuietly()
 	if rc.Action == "resume" {
 		if len(st.PendingRunIDs) > 0 {
 			return park(rc.At, st, st.PendingRunIDs), nil

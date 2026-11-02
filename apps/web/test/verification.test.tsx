@@ -177,6 +177,14 @@ test("an admin who is not the owner may waive, and nothing else; a member only w
   expect(member.page.textContent).toContain("Waiting for Ana to decide.");
 });
 
+test("conductor_unavailable offers waiting for the conductor, Deliver's defaults, or stopping", async () => {
+  const { page } = await banner("conductor_unavailable", ["retry", "accept", "stop"],
+    { detail: { point: "after_review", defaulted: 3, reason: "deadline" } });
+  expect(page.querySelector("[data-testid=escalation-retry]")?.textContent).toBe("Wait for the conductor");
+  expect(page.querySelector("[data-testid=escalation-accept]")?.textContent).toBe("Go on by Deliver's defaults");
+  expect(page.querySelector("[data-testid=escalation-stop]")?.textContent).toBe("Stop");
+});
+
 test("convergence actions require nonblank owner direction, while stop does not", async () => {
   for (const action of ["retry", "accept", "amend"] as const) {
     const { page, sent } = await banner("not_converging", ["retry", "accept", "amend", "stop"]);

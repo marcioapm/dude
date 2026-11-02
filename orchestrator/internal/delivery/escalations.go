@@ -217,6 +217,16 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 			return err
 		}
 	}
+	if e.Reason == ReasonConductorUnavailable && in.Action == "accept" {
+		// Deliver's defaults finish the delivery: it is handed to Deliver,
+		// whose policy decides from here on, its bounds included, the fix
+		// bar staying the conductor's (HadConductor). Not handed back
+		// (HandedBack): a person's Chat takes it over again, as any.
+		if _, err := SetDeciderTx(ctx, tx, org, wfID, &st, DeciderPolicy, "", "the person accepted Deliver's defaults",
+			in.ActorType, in.ActorID); err != nil {
+			return err
+		}
+	}
 	// Taken now, in the workflow's own state: a second decision is refused
 	// from here on, before the workflow has acted on this one. One that
 	// ended (from before decisions) is reopened to wait for it.

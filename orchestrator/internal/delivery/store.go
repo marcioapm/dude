@@ -89,6 +89,9 @@ type Store struct {
 	// The running time lux gives a phase Run (phases.AgentConfig's
 	// TimeLimit), for timeSpentTx; zero checks nothing.
 	RunTimeLimit time.Duration
+	// How long a quiet conductor has to take a decision; zero means
+	// QuietDecisionWait. Tests shorten it.
+	DecisionWait time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).

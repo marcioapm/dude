@@ -236,6 +236,12 @@ export function escalationWords(e: Escalation): EscalationWords {
       const parts: Words = [`${sentence} What doesn't load: `, { mono: shortError(d.error) }, "."];
       return { short: "Delivery settings don't load", sentence: plainWords(parts), parts, runId };
     }
+    case "conductor_unavailable":
+      return {
+        short: "The conductor isn't deciding",
+        sentence: `dude went on by Deliver's defaults at ${plural(num("defaulted"), "decision")} in a row: the conductor did not decide. Wait for the conductor again, let Deliver's defaults finish this delivery, or stop.`,
+        runId,
+      };
     default: {
       const words = e.reason.replaceAll("_", " ");
       return { short: words.charAt(0).toUpperCase() + words.slice(1), sentence: `Delivery stopped: ${words}.`, runId };
