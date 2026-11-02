@@ -509,7 +509,10 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 				return nil, err
 			}
 		}
-		if p.Policy == "prFix" {
+		// A quiet conductor's next is Deliver's defaults: at the bound,
+		// prFix escalates pr_loop_exhausted as Deliver's policy does
+		// (chargePRFix), so it is not refused for the conductor to ask.
+		if p.Policy == "prFix" && !st.quiet() {
 			if err := prFixBound(ctx, tx, st); err != nil {
 				return nil, err
 			}

@@ -475,3 +475,30 @@ func TestGoldenConductorResults(t *testing.T) {
 		}))
 	})
 }
+
+// A quiet conductor's next at the pull request's feedback is Deliver's
+// defaults: with the round's fixes spent, it is taken, and prFix escalates
+// pr_loop_exhausted as Deliver's policy does. A chatty conductor's is
+// refused, for it to ask the person.
+func TestAQuietConductorsNextAtThePRFixBoundIsDeliversDefaults(t *testing.T) {
+	for _, voice := range []string{VoiceQuiet, VoiceChatty} {
+		t.Run(voice, func(t *testing.T) {
+			w := newGoldenWorld(t)
+			w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind, created_at)
+				VALUES ('run_cond1', $1, 'prj_g', 'wi_g', 1, 'running', 'conductor', 'agent', '2026-01-02 09:00Z')`)
+			w.delivery(t, "conductorDecision", fmt.Sprintf(`{"taskId":"wi_g","projectId":"prj_g","attempt":1,"decider":"conductor",
+				"voice":%q,"prIteration":3,"policy":{"maxPrFixIterations":3},"decision":{"point":%q,"policy":"prFix"}}`, voice, PointPRFeedback))
+			ref := RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
+			err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+				_, err := ConductDecide(context.Background(), tx, ref, "next", "")
+				return err
+			})
+			if voice == VoiceQuiet && err != nil {
+				t.Fatalf("a quiet conductor's next at the bound was refused: %v", err)
+			}
+			if voice == VoiceChatty && (err == nil || !strings.Contains(err.Error(), "at their bound")) {
+				t.Fatalf("a chatty conductor's next at the bound: %v, want refused", err)
+			}
+		})
+	}
+}
