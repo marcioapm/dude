@@ -235,6 +235,36 @@ func TestTheSweepWakesTheConductorForAnUntakenDecisionOnce(t *testing.T) {
 	}
 }
 
+// The decision's wake already recorded (a hand-back after the conductor was
+// woken for it): the sweep converts the delivery, records no second wake,
+// and awaits the decision no second time.
+func TestTheSweepAwaitsADecisionWhoseWakeIsRecordedNoMore(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.talk(task)
+	w.implemented(task)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state - 'voice'
+		|| '{"decider":"policy","handedBack":true}'::jsonb WHERE task_id = $1`, task)
+	mustExec(t, w.owner, `DELETE FROM conductor_wakes WHERE task_id = $1`, task)
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
+		SELECT 'cwk_recorded', $1, $2, 'decision', wf.id || ':decision:' || COALESCE(wf.state->>'decisions', '0'), 'recorded'
+		FROM workflow_runs wf WHERE wf.task_id = $2`, w.org, task)
+	if n := w.decisionWakes(task); n != 1 {
+		t.Fatalf("%d decision wakes before the sweep, want the one recorded", n)
+	}
+	awaited := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvDecisionAwaited)
+	if n := w.convert(); n.Converted != 1 {
+		t.Fatalf("sweep: %+v", n)
+	}
+	w.convertedQuietly(task)
+	if n := w.decisionWakes(task); n != 1 {
+		t.Errorf("%d decision wakes, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvDecisionAwaited); n != awaited {
+		t.Errorf("%d decisions awaited, want %d: its wake was recorded already", n, awaited)
+	}
+}
+
 // A delivery whose person accepted Deliver's defaults is left Deliver's.
 func TestTheSweepSkipsADeliveryWhosePersonAcceptedTheDefaults(t *testing.T) {
 	w := conducting(t)
