@@ -13,7 +13,7 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AttemptDivider, ChatComposer, ChatMessage, ChatNotice, ChatRunLine, ChatTranscript, DeciderLine, EarlierTurns, TaskHistory } from "@dude/design-system/components";
 import { Button, Callout } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
-import { DECISION_POINT_LABEL, EventTypes, NOT_STARTED_STATUSES, deliverOpens, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
+import { DECISION_POINT_LABEL, EventTypes, NOT_STARTED_STATUSES, decidesQuietly, deliverOpens, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
 import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail } from "../api/client.ts";
 import { actorName, humanActor, steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
@@ -262,8 +262,8 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   const gateHeld = deliverOpens(task) && task.awaitingDecision?.point === "before_pull_request";
   const above = useMemo(() => {
     if (!inProgress) return null;
-    const talking = task.decider === "conductor" && task.voice !== "quiet";
-    const quiet = task.decider === "conductor" && task.voice === "quiet";
+    const talking = !deliverOpens(task);
+    const quiet = decidesQuietly(task);
     return <DeciderLine data-testid="decider-line" decider={task.decider} data-voice={task.voice ?? undefined} waiting={waiting}
       detail={talking ? undefined : quiet
         ? task.handedBack ? "it decides quietly; messages here are answered, and keep it quiet" : "it decides quietly; a message from you has it talk it through"
@@ -283,7 +283,7 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   const first = firstMessage(task, inProgress);
   const to = useMemo(() => {
     if (!inProgress) return first.readOnly ? <>To <b>Conductor</b> · read-only</> : <>To <b>Conductor</b></>;
-    if (task.decider === "conductor" && task.voice === "quiet") {
+    if (decidesQuietly(task)) {
       return task.handedBack ? <>To <b>Conductor</b> · it answers, and stays quiet</> : <>To <b>Conductor</b> · sending has it talk it through</>;
     }
     if (task.decider === "conductor") return <>To <b>Conductor</b></>;
@@ -347,7 +347,7 @@ export function firstMessage(task: Pick<TaskDetail, "status" | "decider" | "runs
   if (NOT_STARTED_STATUSES.includes(task.status) && !task.runs.some((r) => r.phase)) {
     return { readOnly: false, empty: "Nobody has written here yet. Your message starts planning this task with its conductor (Talk it through): it reads the code and asks what it needs, and nothing is built until it decides to." };
   }
-  if (inProgress && task.decider === "conductor" && task.voice === "quiet" && !task.handedBack) {
+  if (inProgress && decidesQuietly(task) && !task.handedBack) {
     return { readOnly: false, empty: "Nobody has written here yet. Its conductor decides this delivery quietly; your message has it talk the work through with you from the next decision." };
   }
   if (inProgress && task.decider !== "conductor" && !task.handedBack) {

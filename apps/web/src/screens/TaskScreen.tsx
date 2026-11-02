@@ -61,7 +61,7 @@ import {
 } from "@dude/design-system/components";
 import { KeyValueList, Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, RESOLUTION_LABEL, TERMINAL_RUN_STATUSES, blockerList, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskResolution, type TaskStatus } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, RESOLUTION_LABEL, TERMINAL_RUN_STATUSES, blockerList, decidesQuietly, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskResolution, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, ReviewQuestion, Run, TaskDetail, TaskSource, Verification } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -604,11 +604,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   } else if (!NOT_STARTED_STATUSES.includes(item.status)) {
     const ownerName = owner ? firstName(owner.name) : undefined;
     // Deliver's hold before the pull request waits on its owner, under a quiet conductor too.
-    const waitingOn = item.decider === "conductor" && !(item.voice === "quiet" && item.awaitingDecision?.point === "before_pull_request") ? "it"
+    const waitingOn = item.decider === "conductor" && !(decidesQuietly(item) && item.awaitingDecision?.point === "before_pull_request") ? "it"
       : yours ? "you" : ownerName ?? "the owner";
     driver = <DriverSwitch
       mode={driverMode(item.decider, conductors.some((r) => !TERMINAL_RUN_STATUSES.includes(r.status)))}
-      handedBack={item.handedBack} quiet={item.voice === "quiet"} canSwitch={yours} ownerName={ownerName}
+      handedBack={item.handedBack} quiet={decidesQuietly(item)} canSwitch={yours} ownerName={ownerName}
       busy={driverControl.busy} running={working ? runDoer(working) : undefined}
       waiting={item.awaitingDecision ? { point: item.awaitingDecision.point, on: waitingOn } : undefined}
       onSwitch={(to) => void driverControl.change(to)} />;

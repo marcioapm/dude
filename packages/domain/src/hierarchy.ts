@@ -462,9 +462,16 @@ export type Decider = z.infer<typeof deciderSchema>;
 export const voiceSchema = z.enum(["quiet", "chatty"]);
 export type Voice = z.infer<typeof voiceSchema>;
 
+type Voiced = { readonly decider: Decider; readonly voice?: Voice | null | undefined };
+
+/** The delivery's conductor decides it quietly. */
+export function decidesQuietly(task: Voiced): boolean {
+  return task.decider === "conductor" && task.voice === "quiet";
+}
+
 /** Deliver's rules hold the delivery's gate before its pull request: no conductor decides, or a quiet one does. */
-export function deliverOpens(task: { readonly decider: Decider; readonly voice?: Voice | null | undefined }): boolean {
-  return task.decider !== "conductor" || task.voice === "quiet";
+export function deliverOpens(task: Voiced): boolean {
+  return task.decider !== "conductor" || decidesQuietly(task);
 }
 
 /** Where a conducted delivery waits on its conductor (the orchestrator's decision points). */
