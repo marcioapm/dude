@@ -160,8 +160,8 @@ func (w *world) runsSoFar(task string) []string {
 }
 
 // writersOnCandidate fails the test unless the task has a Run of each of
-// phases besides those in before, and every such Run published to a
-// candidate branch.
+// phases besides those in before, and none of them published to a
+// candidate branch: every fix reaches the pull request directly.
 func (w *world) writersOnCandidate(task string, before []string, phases ...string) {
 	w.t.Helper()
 	if before == nil {
@@ -169,10 +169,10 @@ func (w *world) writersOnCandidate(task string, before []string, phases ...strin
 	}
 	for _, phase := range phases {
 		all := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)`, task, phase, before)
-		off := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)
-			AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, task, phase, before)
-		if all == 0 || off != 0 {
-			w.t.Errorf("%d %s Runs, %d of them off the candidate\n%s", all, phase, off, w.describeRuns())
+		on := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = $2::run_phase AND id <> ALL($3)
+			AND branch LIKE '%-candidate'`, task, phase, before)
+		if all == 0 || on != 0 {
+			w.t.Errorf("%d %s Runs, %d of them on a candidate\n%s", all, phase, on, w.describeRuns())
 		}
 	}
 }

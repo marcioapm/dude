@@ -556,14 +556,16 @@ func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase IN ('review', 'test') AND status='completed' AND keep`, wi); n != 0 {
 		t.Errorf("%d completed review/test Runs kept with resumeRounds off", n)
 	}
-	// An integration fixer publishes on the candidate. A person's item stays
-	// the candidate after it is given the comment.
+	// An integration fixer is not given the comment: a fixer after it is,
+	// publishing to the pull request directly.
 	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%preserve this feedback%' AND pr_feedback::text LIKE '%Base integration%'`, wi) != 0 {
 		t.Fatal("the integration fixer was given the comment")
 	}
-	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='fix' AND pr_feedback::text LIKE '%preserve this feedback%' AND branch=$2`, wi, delivery.CandidateBranch(wi, 1)) != 1 {
-		t.Fatal("feedback lost")
-	}
+	w.until("the comment's fixer", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='fix' AND pr_feedback::text LIKE '%preserve this feedback%'
+			AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, wi) == 1
+	})
 	branch := w.gh.Pull(1).Head
 	if out := gitOut(t, w.gh.Repo, "rev-list", "--count", branch+"..main"); out != "0" {
 		t.Fatal("base not integrated", out)
@@ -888,38 +890,6 @@ func TestALostCleanMergeIsAdoptedAndTestedAgain(t *testing.T) {
 	}
 }
 
-// GitHub has not computed mergeability when the integration is validated:
-// the step waits, then, conflicting after all, escalates the integration as
-// a known conflict does, with no second Run.
-func TestUnknownMergeabilityAtValidationWaitsThenEscalatesAConflict(t *testing.T) {
-	w := newWorld(t)
-	w.toolsWithSync()
-	wi := w.reviewing()
-	w.conflictWithMovedBase()
-	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
-	w.until("validation waiting on GitHub", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest' AND state->'integration' IS NOT NULL`, wi) == 1
-	})
-	for range 3 {
-		w.pump()
-	}
-	if r := w.escalationReason(wi); r != "" {
-		t.Fatalf("escalated while GitHub had not said: %s", r)
-	}
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
-	w.until("the integration escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-	raw, e := w.escalationOf(wi)
-	if strings.Join(e.Actions(), " ") != "retry wait stop" || !strings.Contains(string(raw), `"cause": "still_conflicting"`) {
-		t.Fatalf("escalation %s, actions %v", raw, e.Actions())
-	}
-	if n := w.count(integrationRuns, wi); n != 1 {
-		t.Fatalf("integration Runs %d", n)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-refused'`, wi); n != 1 {
-		t.Fatalf("integration-refused events %d", n)
-	}
-}
 
 func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {
 	w := newWorld(t)

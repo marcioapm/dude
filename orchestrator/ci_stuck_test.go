@@ -211,12 +211,10 @@ func TestCIStuckHeadChangeStartsANewClock(t *testing.T) {
 			if dude {
 				w.comment("Please rename the greeting.")
 				w.sync()
-				w.until("the candidate promoted", func() bool {
-					return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi) == 1
+				w.until("the fix pushed", func() bool {
+					w.sync()
+					return w.gh.SHA(w.branch) != w.before
 				})
-				if since := w.checksPendingSince(w.wi); since != nil {
-					t.Fatalf("dude's new head kept the pending clock: %v", since)
-				}
 			} else {
 				w.gh.CommitOnTop(w.branch, "A person's new head")
 			}

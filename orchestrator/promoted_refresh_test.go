@@ -367,8 +367,8 @@ func TestARestartDuringAPromotedRefreshRetryDoesNotPromoteAgain(t *testing.T) {
 }
 
 // An adopted pull request's verdict comment GitHub fails to edit after a
-// promotion is edited again, in place: one comment, at the promoted head,
-// and one record of it.
+// direct fix is edited again, in place: one comment, marked stale, and one
+// record of it.
 func TestAnAdoptedVerdictCommentAPromotionFailedToEditIsEditedAgainInPlace(t *testing.T) {
 	w := newWorld(t)
 	wi, n := w.testingAdopted("fake/scripted")
@@ -377,7 +377,6 @@ func TestAnAdoptedVerdictCommentAPromotionFailedToEditIsEditedAgainInPlace(t *te
 		t.Fatalf("verdict comments %+v, want one", first)
 	}
 	seen := len(w.verdictEvents(wi))
-	moved := w.moves(wi)
 	var edits atomic.Int32
 	w.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
@@ -387,12 +386,12 @@ func TestAnAdoptedVerdictCommentAPromotionFailedToEditIsEditedAgainInPlace(t *te
 			return 0
 		}
 	})
-	fixed := w.prFixPushed(wi)
+	w.prFixPushed(wi)
 	w.elapseRefreshWait(wi, 1)
 	w.elapseRefreshWait(wi, 2)
-	w.until("the verdict at the fixed head", func() bool {
+	w.until("the verdict marked stale", func() bool {
 		got := w.verdictComments(wi, n)
-		return len(got) == 1 && strings.Contains(got[0].Body, "Tested at `"+fixed[:7]+"`.")
+		return len(got) == 1 && strings.Contains(got[0].Body, "Stale")
 	})
 	if got := w.verdictComments(wi, n); len(got) != 1 || got[0].ID != first[0].ID {
 		t.Errorf("verdict comments %+v, want comment %d edited in place", got, first[0].ID)
@@ -402,7 +401,6 @@ func TestAnAdoptedVerdictCommentAPromotionFailedToEditIsEditedAgainInPlace(t *te
 	}
 	events := w.verdictEvents(wi)[seen:]
 	if len(events) != 1 || events[0]["error"] != nil || events[0]["edited"] != true {
-		t.Errorf("verdict events after the move %v, want the one edit", events)
+		t.Errorf("verdict events after the fix %v, want the one edit", events)
 	}
-	w.verdictOnlyAfterTheMove(wi, seen, moved)
 }
