@@ -1311,15 +1311,26 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 
 // reviewExit is "what the policy would do" after a review round the
 // conductor triaged: the exit for the findings as they are now — some may
-// have been dismissed since. Convergence is not weighed again: awaitReview
-// weighed this round's history, and triage or a not_converging accept (which
-// moves ConvergenceFrom past it) can only lower it.
+// have been dismissed since. A quiet conductor's next is Deliver's policy,
+// bounds and convergence alike: awaitReview read no convergence for its
+// conducted round (loopFindings), so it is read here, over the window the
+// policy's awaitReview reads — every fix round since ConvergenceFrom,
+// whoever directed it. Otherwise (loopExit) convergence is not weighed
+// again: a chatty conductor's rounds have no bound, and Deliver's policy's
+// awaitReview weighed this round's history, which triage or a
+// not_converging accept (moving ConvergenceFrom past it) can only lower.
 func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
+	var findings []FindingState
+	var conv Convergence
+	if st.quiet() {
+		findings, conv, err = w.s.ConvergingFindings(ctx, sc.OrganizationID, st)
+	} else {
+		findings, err = w.s.Findings(ctx, sc.OrganizationID, st)
+	}
 	if err == nil {
 		findings, err = w.s.loopsOwn(ctx, sc.OrganizationID, st, findings)
 	}
@@ -1333,7 +1344,7 @@ func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workfl
 		// A quiet conductor's next (or Deliver's defaults on its behalf) is
 		// Deliver's policy: its bounds escalate the loop, as Deliver's do,
 		// or the defaults would fix an unanswerable finding forever.
-		return w.afterLoop(ctx, sc, st, w.policyExit(st, findings, Convergence{}))
+		return w.afterLoop(ctx, sc, st, w.policyExit(st, findings, conv))
 	}
 	return w.afterLoop(ctx, sc, st, w.loopExit(st, findings, Convergence{}))
 }
