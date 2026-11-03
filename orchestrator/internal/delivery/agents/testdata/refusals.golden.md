@@ -1522,3 +1522,7 @@ then.wake %q: it is after_review (the default) or after_fix
 
 dude holds this delivery before its pull request for the person's Open or Draft: you decide nothing here. If they ask, tell them to answer Open or Draft
 
+## refusals/delivery/conduct-steer/feedback-already-given-to-run
+
+already given to %[2]s, which has their words: %[1]s. Do not steer them to it again; pass only the items it does not have
+

@@ -1,1 +1,1 @@
-{{len .}} feedback items from a person ({{join . ", "}}): read their words with `dude feedback {{join . " "}}`; they stay open until a worker resolves or replies to each.
+{{with .Run}}Already given to the implementer or fixer at work ({{.}}) at its next step, do not steer them again: {{end}}{{len .Items}} feedback items from a person ({{join .Items ", "}}): read their words with `dude feedback {{join .Items " "}}`; they stay open until a worker resolves or replies to each.

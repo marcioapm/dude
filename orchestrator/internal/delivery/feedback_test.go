@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -697,4 +700,296 @@ func TestABranchAnchoredItemIsSubmittedHeldAndResolvedLikeAnyOther(t *testing.T)
 	if n := blocking(); n != 0 || w.count(t, `SELECT count(*) FROM feedback_replies WHERE item_id = 'fbi_branch'`) != 3 {
 		t.Errorf("resolved again: %d blocking", n)
 	}
+}
+
+// A quiet delivery's feedback is the conductor's, and reaches a working
+// implementer or fixer at once all the same (step 3b, PR C2), as Deliver
+// steered it: one directive, the Run named on the batch, and the
+// conductor's reason says the items were given, for it not to steer them
+// again. A chatty delivery's working Run is not steered: the person and
+// the conductor drive. With nothing at work, no Run is steered.
+func TestAQuietDeliverysFeedbackSteersTheWorkingRunAtOnce(t *testing.T) {
+	cases := []struct {
+		name, voice, phase string
+		steered            bool
+	}{
+		{"quiet, an implementer at work", delivery.VoiceQuiet, "implement", true},
+		{"quiet, a fixer at work", delivery.VoiceQuiet, "fix", true},
+		{"quiet, a reviewer at work", delivery.VoiceQuiet, "review", false},
+		{"chatty, an implementer at work", delivery.VoiceChatty, "implement", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newFeedbackWorld(t)
+			w.voiced(t, c.voice)
+			role := "implementer"
+			if c.phase == "review" {
+				role = "reviewer"
+			}
+			w.run(t, "run_work", "ABS-1", c.phase, role, "running")
+			w.run(t, "run_c", "ABS-1", "", "conductor", "running")
+			w.draft(t, "fbi_1", w.ana, "The VAT rate for PT is 23%, not 20%.")
+			out, err := w.submit(t, w.ana, "k", "fbi_1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRun := ""
+			if c.steered {
+				wantRun = "run_work"
+			}
+			if out.RoutedTo != delivery.RoutedConductor || out.RunID != wantRun {
+				t.Fatalf("routed %+v, want conductor %q", out, wantRun)
+			}
+			if n := w.count(t, `SELECT count(*) FROM feedback_batches WHERE routed_to = 'conductor' AND routed_run_id IS NOT DISTINCT FROM NULLIF($1, '')`, wantRun); n != 1 {
+				t.Errorf("the batch does not say it went to the conductor and %q", wantRun)
+			}
+			directives := w.count(t, `SELECT count(*) FROM directives WHERE run_id = 'run_work' AND text LIKE '%The VAT rate for PT is 23%'`)
+			if all := w.count(t, `SELECT count(*) FROM directives`); all != directives {
+				t.Errorf("%d directives to another Run than the one at work", all-directives)
+			}
+			line := w.feedbackWakeLine(t)
+			if c.steered {
+				if directives != 1 {
+					t.Errorf("%d steers of the Run at work, want 1", directives)
+				}
+				if !strings.Contains(line, "Already given to the implementer or fixer at work (run_work)") {
+					t.Errorf("the conductor's reason does not say the items were given: %q", line)
+				}
+				return
+			}
+			if directives != 0 {
+				t.Errorf("%d steers of the Run at work, want none", directives)
+			}
+			if strings.Contains(strings.ToLower(line), "already given") {
+				t.Errorf("the conductor's reason says the items were given: %q", line)
+			}
+		})
+	}
+}
+
+// Feedback alone, not yet quiet for FeedbackQuiet, calls no turn whatever
+// the window; quiet for it, it does.
+func TestFeedbackAloneWaitsForItsQuiet(t *testing.T) {
+	w := newFeedbackWorld(t)
+	ctx := context.Background()
+	w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
+	w.run(t, "run_c", "ABS-1", "", "conductor", "running")
+	w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_c'`)
+	w.draft(t, "fbi_1", w.ana, "one")
+	if _, err := w.submit(t, w.ana, "k", "fbi_1"); err != nil {
+		t.Fatal(err)
+	}
+	wake := func() string {
+		var woke string
+		w.in(t, func(tx pgx.Tx) (err error) {
+			woke, err = delivery.WakeConductorTx(ctx, tx, w.org, w.task, 0)
+			return err
+		})
+		return woke
+	}
+	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '9 minutes'`)
+	if woke := wake(); woke != "" {
+		t.Fatalf("feedback 9 minutes old woke %q", woke)
+	}
+	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '10 minutes 1 second'`)
+	if woke := wake(); woke != "run_c" {
+		t.Fatalf("feedback quiet for 10 minutes woke %q", woke)
+	}
+}
+
+// The note says the items were already given, and to whom, before it
+// lists them (step 3b, PR C2): a reason's line is clipped at 300 characters,
+// and real ids (29 characters each, listed twice) push a clause at the end
+// past it from two items on.
+func TestAlreadyGivenSurvivesTheClipWithRealIDs(t *testing.T) {
+	for _, n := range []int{1, 3, 5} {
+		t.Run(strconv.Itoa(n)+" items", func(t *testing.T) {
+			w := newFeedbackWorld(t)
+			w.voiced(t, delivery.VoiceQuiet)
+			work := ids.New(ids.Run)
+			w.run(t, work, "ABS-1", "implement", "implementer", "running")
+			w.run(t, ids.New(ids.Run), "ABS-1", "", "conductor", "running")
+			var drafts []string
+			for i := range n {
+				id := ids.New(ids.FeedbackItem)
+				w.draft(t, id, w.ana, "comment "+strconv.Itoa(i))
+				drafts = append(drafts, id)
+			}
+			if out, err := w.submit(t, w.ana, "k", drafts...); err != nil || out.RunID != work {
+				t.Fatalf("submit: %+v %v, want steered to %s", out, err, work)
+			}
+			line := w.feedbackWakeLine(t)
+			if !strings.Contains(line, "Already given to the implementer or fixer at work ("+work+")") ||
+				!strings.Contains(line, "do not steer them again") {
+				t.Errorf("the stored line lost the clause or its Run (%d chars): %q", len(line), line)
+			}
+		})
+	}
+}
+
+// The conductor cannot give items again to the Run that has them (step
+// 3b, PR C2): a quiet delivery's submit steered them to the implementer at
+// work, and the conductor's steer of the same items to it is refused,
+// naming them, whole, a batch with an item it does not have too. Once
+// that Run ended (the items open again), a steer of them to a new fixer
+// is taken.
+func TestTheConductorDoesNotGiveItemsAgainToTheRunThatHasThem(t *testing.T) {
+	w := newFeedbackWorld(t)
+	ctx := context.Background()
+	w.voiced(t, delivery.VoiceQuiet)
+	w.run(t, "run_work", "ABS-1", "implement", "implementer", "running")
+	conductor := w.run(t, "run_c", "ABS-1", "", "conductor", "running")
+	w.draft(t, "fbi_1", w.ana, "The VAT rate for PT is 23%, not 20%.")
+	w.draft(t, "fbi_2", w.ana, "And for ES it is 21%.")
+	if out, err := w.submit(t, w.ana, "k", "fbi_1"); err != nil || out.RunID != "run_work" {
+		t.Fatalf("submit: %+v %v", out, err)
+	}
+	if _, err := w.submit(t, w.ana, "k2", "fbi_2"); err != nil {
+		t.Fatal(err)
+	}
+	// The second went to run_work too; make it a fresh item no Run has.
+	w.exec(t, `UPDATE feedback_items SET delivered_run_id = NULL, directive_id = NULL WHERE id = 'fbi_2'`)
+	directives := func() int {
+		return w.count(t, `SELECT count(*) FROM directives WHERE run_id IN ('run_work', 'run_fix')`)
+	}
+	before := directives()
+	steer := func(run string, items ...string) error {
+		return w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			_, _, err := delivery.ConductSteerFeedback(ctx, tx, conductor, run, "", false, items)
+			return err
+		})
+	}
+	for _, items := range [][]string{{"fbi_1"}, {"fbi_2", "fbi_1"}} {
+		err := steer("run_work", items...)
+		if !delivery.IsRefusal(err) || !strings.Contains(err.Error(), "already given to run_work, which has their words: fbi_1.") ||
+			strings.Contains(err.Error(), "fbi_2") {
+			t.Errorf("steering %v to the Run that has fbi_1: %v, want refused naming fbi_1 only", items, err)
+		}
+	}
+	if n := directives() - before; n != 0 {
+		t.Fatalf("%d directives from refused steers", n)
+	}
+	// The implementer ends, its items open again; a new fixer is given them.
+	w.exec(t, `UPDATE runs SET status = 'completed' WHERE id = 'run_work'`)
+	w.in(t, func(tx pgx.Tx) error { return delivery.FeedbackRunEndedTx(ctx, tx, "run_work", true) })
+	w.run(t, "run_fix", "ABS-1", "fix", "implementer", "running")
+	if err := steer("run_fix", "fbi_1", "fbi_2"); err != nil {
+		t.Fatalf("steering the reopened items to a new fixer: %v", err)
+	}
+	if n := w.count(t, `SELECT count(*) FROM directives WHERE run_id = 'run_fix'`); n != 1 {
+		t.Errorf("%d directives to the new fixer, want 1", n)
+	}
+}
+
+// A burst of 12 submits is one feedback line in the conductor's note (step
+// 3b, PR C2): a note shows 10 lines, and a submit's own line past them
+// would go untold. Every item is reachable: named, or, with ids too many to fit in
+// a line, counted, with `dude feedback` to list them, and that lists all
+// of them. Items a working Run was given say so, with the Run, first.
+func TestABurstOfTwelveSubmitsIsOneFeedbackLine(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		real  bool
+		given int
+	}{{"short ids, none given", false, 0}, {"real ids, five given", true, 5}} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newFeedbackWorld(t)
+			ctx := context.Background()
+			w.voiced(t, delivery.VoiceQuiet)
+			w.run(t, "run_c", "ABS-1", "", "conductor", "running")
+			w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_c'`)
+			work := ids.New(ids.Run)
+			if c.given > 0 {
+				w.run(t, work, "ABS-1", "implement", "implementer", "running")
+			}
+			var items []string
+			for i := range 12 {
+				id := "fbi_" + string(rune('a'+i))
+				if c.real {
+					id = ids.New(ids.FeedbackItem)
+				}
+				if i == c.given && c.given > 0 {
+					// Its turn ends: the rest go to no Run.
+					w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = $1`, work)
+				}
+				w.draft(t, id, w.ana, "comment "+strconv.Itoa(i))
+				if _, err := w.submit(t, w.ana, "k"+strconv.Itoa(i), id); err != nil {
+					t.Fatal(err)
+				}
+				items = append(items, id)
+			}
+			w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '11 minutes'`)
+			w.in(t, func(tx pgx.Tx) error {
+				woke, err := delivery.WakeConductorTx(ctx, tx, w.org, w.task, 0)
+				if err == nil && woke != "run_c" {
+					t.Errorf("woke %q, want run_c", woke)
+				}
+				return err
+			})
+			var notes []string
+			rows, err := w.owner.Query(ctx, `SELECT text FROM directives WHERE run_id = 'run_c'`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var s string
+				_ = rows.Scan(&s)
+				notes = append(notes, s)
+			}
+			rows.Close()
+			if len(notes) != 1 {
+				t.Fatalf("%d notes, want 1", len(notes))
+			}
+			note := notes[0]
+			if !strings.Contains(note, "one thing:") || strings.Contains(note, "more") {
+				t.Errorf("the burst is not one line:\n%s", note)
+			}
+			if !c.real {
+				for _, id := range items {
+					if !strings.Contains(note, id) {
+						t.Errorf("the note does not name %s:\n%s", id, note)
+					}
+				}
+			} else {
+				if !strings.Contains(note, "12 feedback items from people, too many to name here: list them and read their words with `dude feedback`") ||
+					!strings.Contains(note, "5 to "+work) {
+					t.Errorf("the note neither names the items nor points at dude feedback, or does not say five were given:\n%s", note)
+				}
+				var listed delivery.FeedbackList
+				w.in(t, func(tx pgx.Tx) (err error) {
+					listed, err = delivery.AgentFeedbackTx(ctx, tx, w.task, nil, false)
+					return err
+				})
+				var got []string
+				for _, it := range listed.Items {
+					got = append(got, it.ID)
+				}
+				for _, id := range items {
+					if !slices.Contains(got, id) {
+						t.Errorf("dude feedback does not list %s: %v", id, got)
+					}
+				}
+			}
+			if n := w.count(t, `SELECT count(*) FROM conductor_wakes WHERE delivered_at IS NULL`); n != 0 {
+				t.Errorf("%d reasons still pending", n)
+			}
+		})
+	}
+}
+
+// voiced is a conducted delivery waiting on a fix, in voice.
+func (w *feedbackWorld) voiced(t *testing.T, voice string) {
+	t.Helper()
+	wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
+	w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, voice)
+}
+
+// feedbackWakeLine is the line the task's one feedback reason recorded.
+func (w *feedbackWorld) feedbackWakeLine(t *testing.T) string {
+	t.Helper()
+	var line string
+	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE kind = 'feedback'`).Scan(&line); err != nil {
+		t.Fatal(err)
+	}
+	return line
 }

@@ -3,8 +3,8 @@
 A fake/live implementer is at work with uncommitted edits, so its Run has a
 live diff to comment on: a person comments on a range of it, which is a
 private draft in the drafts tray; Submit sends the batch to the
-delivery's conductor (Deliver's quiet one, on fake/defaults), which steers
-the implementer at work with it; the item then shows submitted on its lines and on
+delivery's conductor (Deliver's quiet one, on fake/defaults), and the
+submit steers the implementer at work with it at once; the item then shows submitted on its lines and on
 the Feedback tab, holds the merge while it is open, and is replied to and
 resolved from its card. General feedback is written on the Feedback tab.
 
@@ -121,8 +121,8 @@ def test_a_comment_on_a_runs_diff_is_a_draft_until_submitted_then_handled_from_i
     expect(tray.get_by_test_id("fb-tray-row")).to_have_count(1)
     _shoot(page, "tray-open", tray)
 
-    # Submit asks first, then sends the batch to the conductor, which
-    # steers the implementer at work with it (fake/defaults).
+    # Submit asks first, then sends the batch to the conductor; the
+    # implementer at work is steered with it at once (step 3b, PR C2).
     tray.get_by_test_id("fb-submit").click()
     dialog = page.get_by_role("dialog", name="Submit 1 feedback item")
     expect(dialog.get_by_test_id("fb-confirm-route")).to_contain_text("They go to the conductor.")
@@ -138,9 +138,9 @@ def test_a_comment_on_a_runs_diff_is_a_draft_until_submitted_then_handled_from_i
     item = wait_until(lambda: next((i for i in _feedback(client, task["id"])["feedback"] if i["status"] != "draft"), None),
                       timeout=10, message="nothing submitted")
     assert item["routedTo"] == "conductor"
-    # The conductor's steer gives it to the implementer at work.
+    # The submit's steer gives it to the implementer at work.
     wait_until(lambda: any(item["id"] in d["text"] for d in client.get(f"/v1/runs/{run['id']}/directives").json()["directives"]),
-               timeout=60, message="the conductor never steered the implementer with the item")
+               timeout=60, message="the implementer at work was never steered with the item")
 
     # Submitted: on its lines with its status, and holding the merge.
     submitted = changes.get_by_test_id("fb-item").filter(has_text="Say which pause it was")
