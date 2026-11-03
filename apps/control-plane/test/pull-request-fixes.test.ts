@@ -1,9 +1,8 @@
 /**
- * Fixes on an open pull request (`pullRequestFixes`) through the settings
- * API: a project's setting only, direct by default for every project, new
- * and existing. Its source is "default" until the project sets it, Reset
- * takes it back there, the organisation's settings refuse it, and a value an
- * organisation stored is not read. And the narrow loop's bound
+ * Fixes on an open pull request through the settings API: every fix is
+ * direct, so the retired `pullRequestFixes` is neither shown nor stored, and
+ * a value an old client sends or a layer stored is never refused. And the
+ * narrow loop's bound
  * (`maxPrFixReviewIterations`), layered as any bound is.
  *
  * Against a database of its own, migrated as a release is, and a stand-in
@@ -94,55 +93,36 @@ afterAll(async () => {
   await admin?.end();
 });
 
-/**
- * A project that has not set it reads the factory's value, from the
- * default. The control plane caches the factory's defaults for the process,
- * and an earlier file in the same run may have cached its own stand-in's
- * (with no pullRequestFixes): the factory's value itself (direct) is the
- * orchestrator's to say (TestTheFactoryDefaultsSayDirectFixes), so here it
- * is only never candidate, which no layer set.
- */
-const fromTheDefault = (s: Json) => {
-  expect(s.source).toBe("default");
-  expect(s.value).not.toBe("candidate");
-};
-
-const projectFixes = async () => ((await (await call("GET", `/v1/projects/${PROJECT}/settings`)).json()) as Json).delivery;
+const projectSettings = async () => ((await (await call("GET", `/v1/projects/${PROJECT}/settings`)).json()) as Json).delivery;
+const projectFixes = projectSettings;
 
 describe("fixes on an open pull request", () => {
-  test("an existing project, which never set it, reads direct from the default", async () => {
+  test("every fix is direct: the settings no longer show the retired choice", async () => {
     const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
     expect(delivery_policy).toEqual({});
-    fromTheDefault((await projectFixes()).pullRequestFixes);
+    expect((await projectSettings()).pullRequestFixes).toBeUndefined();
   });
 
-  test("a new project reads direct too", async () => {
-    const res = await call("POST", "/v1/projects", { name: "Fresh", slug: "fresh", key: "FRS" });
-    expect(res.status).toBe(201);
-    const { id } = (await res.json()) as Json;
-    const settings = (await (await call("GET", `/v1/projects/${id}/settings`)).json()) as Json;
-    fromTheDefault(settings.delivery.pullRequestFixes);
-    const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${id}`;
+  test("a value an old client sends is accepted and ignored, on the organisation's and a project's", async () => {
+    for (const path of ["/v1/settings/organization", `/v1/projects/${PROJECT}/settings`]) {
+      const res = await call("PATCH", path, { delivery: { pullRequestFixes: "candidate" } });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as Json).delivery.pullRequestFixes).toBeUndefined();
+    }
+    const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
     expect(delivery_policy).toEqual({});
+    const [{ delivery_policy: org }] = await owner`SELECT delivery_policy FROM organizations WHERE id = ${ORG}`;
+    expect(org).toEqual({});
   });
 
-  test("an organisation cannot set it, and a value it stored is not read", async () => {
-    const res = await call("PATCH", "/v1/settings/organization", { delivery: { pullRequestFixes: "candidate" } });
-    expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toContain("project's setting");
-    await owner`UPDATE organizations SET delivery_policy = '{"pullRequestFixes":"candidate"}' WHERE id = ${ORG}`;
-    fromTheDefault((await projectFixes()).pullRequestFixes);
-  });
-
-  test("a project sets candidate, the rollback, and Reset puts direct back", async () => {
-    const res = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { pullRequestFixes: "candidate" } });
+  test("a value stored before is not refused: other settings still save, and the stored key stays untouched", async () => {
+    await owner`UPDATE projects SET delivery_policy = '{"pullRequestFixes":"candidate"}' WHERE id = ${PROJECT}`;
+    expect((await projectSettings()).pullRequestFixes).toBeUndefined();
+    const res = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { simplify: false } });
     expect(res.status).toBe(200);
-    expect(((await res.json()) as Json).delivery.pullRequestFixes).toEqual({ value: "candidate", source: "project" });
     const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
-    expect(delivery_policy).toEqual({ pullRequestFixes: "candidate" });
-    expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { pullRequestFixes: "later" } })).status).toBe(400);
-    const reset = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { pullRequestFixes: null } });
-    fromTheDefault(((await reset.json()) as Json).delivery.pullRequestFixes);
+    expect(delivery_policy).toEqual({ pullRequestFixes: "candidate", simplify: false });
+    await owner`UPDATE projects SET delivery_policy = '{}' WHERE id = ${PROJECT}`;
   });
 
   test("the narrow loop's bound is a project's own over the factory's", async () => {

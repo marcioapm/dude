@@ -2316,6 +2316,17 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(branch, '') FROM runs WHERE id = $1`, r.ID).Scan(&own); err != nil {
 			return err
 		}
+		if own != "" {
+			// A conductor's writer child is created on the task branch
+			// itself: what it publishes reaches the pull request directly.
+			tb, err := delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
+			if err != nil {
+				return err
+			}
+			if own == tb.Branch {
+				own = ""
+			}
+		}
 		// A reviewer's or tester's lux Run is kept, stopped, for its next
 		// round to take over (delivery.RoundContinues), until the keep
 		// window ends or the task lets it go (ReleaseKeptTx).
@@ -2570,6 +2581,11 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(r.branch, ''), `+keptForNextRound+` FROM runs r WHERE r.id = $1`, r.ID).
 			Scan(&own, &keepBranch); err != nil {
 			return err
+		}
+		// A conductor's writer child names the task branch itself: it
+		// publishes there as any direct writer does, not as a candidate.
+		if own == branch {
+			own = ""
 		}
 		if own != "" {
 			branch = own

@@ -17,6 +17,7 @@ import (
 // Close ends the delivery there, and the candidate is never promoted onto
 // the pull request.
 func TestClosingATaskWhoseIntegrationCandidateIsOutNeverPromotesIt(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newWorld(t)
 	w.toolsWithSync()
 	wi := w.reviewing()

@@ -8,7 +8,7 @@ import (
 
 // Exact role and policy names make newly introduced settings fail classification.
 var coveredRoleFields = []string{"tier", "harness", "timeLimitMinutes", "machineSize", "image"}
-var coveredDeliveryFields = []string{"maxReviewIterations", "maxAttemptsPerFinding", "maxStillRounds", "maxRegressionRounds", "maxPrFixIterations", "maxPrFixReviewIterations", "requiredReviewers", "alwaysReviewers", "nonProductPaths", "blockingSeverities", "simplify", "test", "parkAfterMinutes", "idleNudgeMinutes", "conductorWarmMinutes", "conductorEditFiles", "conductorEditLines", "pullRequest", "pullRequestFixes"}
+var coveredDeliveryFields = []string{"maxReviewIterations", "maxAttemptsPerFinding", "maxStillRounds", "maxRegressionRounds", "maxPrFixIterations", "maxPrFixReviewIterations", "requiredReviewers", "alwaysReviewers", "nonProductPaths", "blockingSeverities", "simplify", "test", "parkAfterMinutes", "idleNudgeMinutes", "conductorWarmMinutes", "conductorEditFiles", "conductorEditLines", "pullRequest"}
 
 func sameInstant(a, b any) bool {
 	x, err := time.Parse(time.RFC3339Nano, a.(string))
@@ -228,6 +228,7 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 	for _, k := range coveredDeliveryFields {
 		deliveryRules[k] = mapped
 	}
+	deliveryRules["pullRequestFixes"] = coverageRule{Excluded: "retired: accepted and ignored, every fix is direct"}
 	if err := classifyResponse(f.settingsRoute(t, "/schemas/delivery"), deliveryRules); err != nil {
 		t.Fatal(err)
 	}

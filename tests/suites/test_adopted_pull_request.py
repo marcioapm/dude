@@ -34,7 +34,7 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
                                                 "apiBaseUrl": fake_github.api_url, "publicUrl": "https://dude.example.com"})
     assert resp.status_code == 200, resp.text
     resp = client.patch(f"/v1/projects/{forge_project['id']}", {
-        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "pullRequestFixes": "candidate"},
+        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True},
         "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
                                          "simplifier": "fake/scripted", "qa_browser": "fake/test-fail-once"}),
     })
@@ -69,10 +69,9 @@ def test_an_adopted_pull_request_is_reviewed_and_fixed_in_place(
     assert f"Tested at `{head[:7]}`." in verdict["body"], verdict
     assert "dude's test verdict for this pull request" in verdict["body"], verdict
     assert "## Verification" in verdict["body"] and f"/task/{task['id']}" in verdict["body"], verdict
-    # The failed test and its re-test ran on the candidate: the verdict is
-    # posted once, after promotion, and never edited (the fake sets
-    # updated_at only on an edit).
-    assert verdict["user"]["login"] == fake_github.token_login and "updated_at" not in verdict, verdict
+    # The failed test and its re-test reached the pull request directly:
+    # one verdict comment, kept up to date to the passing re-test.
+    assert verdict["user"]["login"] == fake_github.token_login, verdict
     assert len(fake_github.pulls[1].comments) == 1, fake_github.pulls[1].comments
     assert fake_github.pulls[1].body == "", "the person's description was edited"
     phases = [r["phase"] for r in client.task_runs(task["id"]) if r["phase"]]
@@ -225,16 +224,17 @@ def test_a_draft_pull_request_is_continued_on_its_own_branch_then_reviewed(
     assert task["source"]["mode"] == "continue"
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
-    wait_until(lambda: _task(client, task["id"])["status"] == "review" and _simplified(client, task["id"]),
+    wait_until(lambda: _task(client, task["id"])["status"] == "review"
+               and any(r["phase"] == "review" and r["status"] == "completed" for r in client.task_runs(task["id"])),
                timeout=120, message="the continued draft never got back to review")
     phases = _phases(client, task["id"])
     assert phases[:2] == ["implement", "review"], phases
-    # The writers commit on feature/half-candidate; feature/half takes them
-    # only when the candidate is promoted, after the loop's review.
+    # The writers push to feature/half directly: no candidate branch.
     log = wait_until(
         lambda: (lg := fake_github.branch_log("feature/half")) and any(m.startswith("Add FACTORY.md") for m in lg) and lg,
-        timeout=90, message="the continued draft's candidate was never promoted onto feature/half",
+        timeout=90, message="the continued draft's work never reached feature/half",
     )
+    assert not [b for b in fake_github.branches() if b.endswith("-candidate")], fake_github.branches()
     assert "work on feature/half" in log, log
     assert fake_github._git_out("merge-base", "--is-ancestor", person_head, "feature/half") == ""
     assert len(fake_github.pulls) == 1, "dude opened a second pull request"

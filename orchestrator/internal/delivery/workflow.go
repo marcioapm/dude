@@ -313,6 +313,12 @@ type Escalation struct {
 	// (State.Escalations, its wake's key), once told: 0 while no conductor
 	// was. A delivery handed to the conductor again is not told twice.
 	Told int `json:"told,omitempty"`
+	// Set by ConvertCandidateTx, with At, on an escalation parked with a
+	// candidate open: what it asked about was the candidate's, dropped, so
+	// any resuming answer (retry, accept, amend, waive) redoes the fix
+	// directly at At, in the fresh key namespace the sweep gave the
+	// delivery (Retries).
+	Redo bool `json:"redo,omitempty"`
 }
 
 // Actions says what a person may do about it: go back and try again,
@@ -2372,7 +2378,24 @@ func (w *steps) writerCandidate(ctx context.Context, sc workflow.StepContext, st
 			}
 			return err
 		}
-		return w.refreshPRWaitHeads(ctx, sc, st)
+		if st.ActingOnPR {
+			return w.refreshPRWaitHeads(ctx, sc, st)
+		}
+		// A loop writer while a pull request is open publishes to it: from
+		// GitHub's head, as its candidate started (a person may have pushed
+		// since the round's review), or its push is no fast-forward.
+		var open bool
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+			open, err = PullRequestOpenOnTx(ctx, tx, st.TaskID, st.taskBranch(st.TaskID))
+			return err
+		}); err != nil || !open || w.forges == nil {
+			return err
+		}
+		gh, err := w.forges.For(ctx, sc.OrganizationID)
+		if err != nil || gh == nil {
+			return err
+		}
+		return w.fromPullRequestHeads(ctx, sc, st, gh, false)
 	}
 	proposed := *st
 	proposed.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1
@@ -3471,6 +3494,29 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, fmt.Errorf("escalation %s: retry has no step to go back to (RetryStep)", e.Reason)
 	}
 	st.Escalation = nil
+	if e.Redo && d.Action != "stop" && d.Action != "done" && d.Action != "wait" {
+		// The candidate it stopped on is gone (ConvertCandidateTx), and with
+		// it what the findings, test, checks or review it asked about were
+		// of: whatever resuming answer (retry, accept, amend, waive), the
+		// fix is redone from the pull requests' heads at the step the sweep
+		// set (At: prFix, or the loop's writer), the person's note
+		// (PersonSaid) given to its fixer. Its Runs are keyed apart from
+		// every earlier one's: the sweep bumped Retries. An amend's
+		// criteria still stand for the findings it names: the new fixer
+		// works to them. The sweep sets Redo only with At, and never on a
+		// conductor_unavailable escalation.
+		st.PersonSaid = d.Said
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
+			return workflow.Result{}, err
+		}
+		if e.Reason == ReasonNotConverging && d.Action == "amend" {
+			if err := w.s.AmendFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		st.Pipeline, st.PendingRunIDs = nil, nil
+		return workflow.Result{Next: e.At, State: st}, nil
+	}
 	if e.Reason == ReasonChecksUnverified {
 		if d.Action == "stop" {
 			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")

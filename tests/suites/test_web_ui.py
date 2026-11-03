@@ -177,9 +177,8 @@ def test_delivering_from_the_ui_reaches_a_pull_request_and_back(
     fake_github.comment(pr_number, "Please also handle an empty name.")
     expect(page.get_by_test_id("phase")).to_have_count(phases_before + 1, timeout=90_000)
     expect(page.get_by_test_id("phase").last).to_contain_text("Completed", timeout=120_000)
-    # The fix is checked on its candidate (review, simplify, test) before
-    # the pull request shows it; merged earlier, it would rightly get a
-    # follow-up pull request of its own.
+    # The fix is pushed to the pull request directly, then reviewed over
+    # its own push.
     wait_until(lambda: fake_github.branch_sha(head_branch) != head_before, timeout=240,
                message="the checked fix never reached the pull request")
 
@@ -1034,10 +1033,8 @@ def test_project_settings_manage_repositories_and_delivery(
     assert "docs" in [r["name"] for r in project["repositories"]]
     assert "bad" not in [r["name"] for r in project["repositories"]]
     # Only what differs from the factory's defaults is stored: the rest keeps
-    # following them. forge_project's tester (off) and its pull requests'
-    # candidate fixes (the default is direct) both differ, so both stay.
-    assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"], "test": False,
-                                         "pullRequestFixes": "candidate"}
+    # following them. forge_project's tester (off) differs, so it stays.
+    assert project["deliveryPolicy"] == {"requiredReviewers": ["correctness", "security"], "test": False}
     assert console_errors == []
 
     # Its face: an image picked in General, resized in the browser, stored,

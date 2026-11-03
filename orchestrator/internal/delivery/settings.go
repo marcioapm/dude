@@ -174,14 +174,12 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 }
 
 // ForNewDelivery is p as a delivery starting now freezes it: every
-// project, new and existing, fixes a new delivery's pull requests directly
-// unless it set candidate. Not in ResolvePolicy's defaults: a frozen
-// State.Policy without the key is a delivery from before it, and stays
-// candidate (DirectFixes).
+// project, new and existing, fixes a new delivery's pull requests directly,
+// a stored candidate included. Not in ResolvePolicy's defaults: a frozen
+// State.Policy without the key is a delivery from before it, which
+// ConvertCandidates moves to direct at boot.
 func (p Policy) ForNewDelivery() Policy {
-	if p.PullRequestFixes == "" {
-		p.PullRequestFixes = PullRequestFixesDirect
-	}
+	p.PullRequestFixes = PullRequestFixesDirect
 	return p
 }
 

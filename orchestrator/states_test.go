@@ -57,9 +57,6 @@ type prAt struct {
 	// Files committed on target's main before the task, and the
 	// implementer's own edits of target's files on top of its commit.
 	seed, edit map[string]string
-	// The delivery froze pullRequestFixes direct; else, as before the
-	// key, candidate.
-	direct bool
 }
 
 // stateRun is one phase Run prOpen writes.
@@ -96,9 +93,7 @@ func (w *world) prOpen(wi string, at prAt) string {
 	ctx := context.Background()
 	policy := scriptedPolicy()
 	policy.Test = at.test
-	if at.direct || directPRFixes {
-		policy.PullRequestFixes = delivery.PullRequestFixesDirect
-	}
+	policy.PullRequestFixes = delivery.PullRequestFixesDirect
 	type prRepo struct {
 		name string
 		gh   *fakegithub.Server

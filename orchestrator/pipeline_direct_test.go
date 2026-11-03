@@ -27,7 +27,7 @@ func newConductedPR(t *testing.T, play func(phase string, n int, b *fakelux.Beha
 	w := conducting(t)
 	w.toolsWithSync()
 	w.onModel("reviewer", "llm-reviewer")
-	c := &conductedPR{world: w, task: w.prOpen(w.task(), prAt{direct: true, test: true})}
+	c := &conductedPR{world: w, task: w.prOpen(w.task(), prAt{test: true})}
 	if status, out := w.chat(c.task, "Look after the pull request for me."); status >= 300 {
 		t.Fatalf("chat: %d %v", status, out)
 	}

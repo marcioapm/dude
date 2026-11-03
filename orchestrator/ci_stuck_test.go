@@ -8,6 +8,48 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// blockedBy counts the backends waiting on a lock pid holds.
+const blockedBy = `SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))`
+
+// syncTakesNoDeliveryLock holds the delivery's row and fails t if a sync of
+// prID waits on it.
+func (w *world) syncTakesNoDeliveryLock(t *testing.T, wi, prID string) {
+	t.Helper()
+	ctx := context.Background()
+	holder, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx)
+	var pid int
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid() FROM workflow_runs WHERE task_id = $1 FOR UPDATE`, wi).
+		Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.prs.Sync(ctx, w.org, prID) }()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		default:
+		}
+		if w.count(blockedBy, pid) > 0 {
+			_ = holder.Rollback(ctx)
+			<-done
+			t.Fatal("the sync waited on the delivery's row lock")
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sync neither returned nor waited")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func (w *world) checksPendingSince(wi string) (since *time.Time) {
 	if err := w.owner.QueryRow(context.Background(), `SELECT checks_pending_since FROM pull_requests WHERE task_id = $1`, wi).Scan(&since); err != nil && err != pgx.ErrNoRows {
 		w.t.Fatal(err)
@@ -211,12 +253,10 @@ func TestCIStuckHeadChangeStartsANewClock(t *testing.T) {
 			if dude {
 				w.comment("Please rename the greeting.")
 				w.sync()
-				w.until("the candidate promoted", func() bool {
-					return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi) == 1
+				w.until("the fix pushed", func() bool {
+					w.sync()
+					return w.gh.SHA(w.branch) != w.before
 				})
-				if since := w.checksPendingSince(w.wi); since != nil {
-					t.Fatalf("dude's new head kept the pending clock: %v", since)
-				}
 			} else {
 				w.gh.CommitOnTop(w.branch, "A person's new head")
 			}

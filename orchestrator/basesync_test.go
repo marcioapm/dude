@@ -19,10 +19,8 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -222,233 +220,6 @@ func TestBeforePRConflictingBaseIsResolvedReviewedAndTested(t *testing.T) {
 	// No pull request is open: the integration publishes to the task branch itself.
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND branch LIKE '%-candidate'`, wi); n != 0 {
 		t.Fatalf("%d Runs on a candidate with no pull request open\n%s", n, w.describeRuns())
-	}
-}
-
-// The merge before a pull request opens, for a repository with none yet
-// (web) beside one whose pull request is open and approved (target): the
-// integration fixer also changes target, and target's pull request moves
-// only once that change is reviewed and tested, by its promotion. web's
-// pull request opens at the checked head too. With target's pull request,
-// the task's only one, closed first, the delivery ends aborted: web's pull
-// request never opens and nothing integrates.
-func TestBeforePRIntegrationBesideAnOpenPullRequestIsCheckedOnACandidate(t *testing.T) {
-	t.Run("open", func(t *testing.T) { beforePRIntegrationBesideAPullRequest(t, false) })
-	t.Run("closed", func(t *testing.T) { beforePRIntegrationBesideAPullRequest(t, true) })
-}
-
-func beforePRIntegrationBesideAPullRequest(t *testing.T, closed bool) {
-	w := conducting(t)
-	w.onModel("qa_browser", "fake/scripted")
-	// The conductor's tools and sync_base for the integration fixer.
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
-		SyncPullRequest: w.prs.Sync, SyncBase: w.syncer.SyncBase}).Handler())
-	t.Cleanup(tools.Close)
-	w.syncer.Agent.ToolsURL = tools.URL
-	arm := w.firstReviewAfter()
-	inLoop := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := inLoop(spec)
-		labels, _ := spec["labels"].(map[string]any)
-		switch {
-		case labels["dude.integration"] == "true":
-			// Merges web's base in its checkout, and changes target as well.
-			b.Commit = map[string]string{"target:INTEGRATION.md": "touched by the integration\n"}
-		case labels["dude.phase"] == "fix":
-			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
-		}
-		return b
-	}
-	task := w.prOpen(w.task(), prAt{test: true})
-	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main') ON CONFLICT DO NOTHING`, "repo_web_"+w.org, w.org, w.project)
-	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
-		VALUES ($1, $2, $3, 'write')`, w.org, task, "repo_web_"+w.org)
-	setPolicy(w, task, `{"maxReviewIterations":9}`)
-	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
-		t.Fatalf("chat: %d %v", status, out)
-	}
-	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
-	arm()
-
-	// A fix that changes web first: web gets no pull request without the
-	// person's Open or Draft.
-	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
-	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
-	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
-	w.until("the decision before the pull request", func() bool {
-		switch w.decisionAt(task) {
-		case delivery.PointReviewed, delivery.PointFixed:
-			w.must(task, "decide", `{"action":"next"}`)
-		case delivery.PointBeforePR:
-			return true
-		}
-		return false
-	})
-
-	branch := w.gh.Pull(1).Head
-	w.gh.Review(1, "ana", "APPROVED")
-	// web's base moves under it, conflicting: GitHub cannot merge it in.
-	w.commitFileIn(w.web.Repo, "main", "FIX.md", "base intent\n", "Another task's change")
-	if closed {
-		// The task's only pull request closed without merging: the loop is
-		// over wherever the delivery stands (delivery.endable), so web's
-		// opening never comes and nothing integrates.
-		w.gh.Close(1)
-		w.until("the delivery to end", func() bool { w.sync(); return w.taskStatus(task) == "aborted" })
-		for range 3 {
-			w.sync()
-			w.pump()
-		}
-		if n := len(w.web.Pulls()); n != 0 {
-			t.Errorf("%d web pull requests opened after the task's pull request closed", n)
-		}
-		if n := w.count(integrationRuns, task); n != 0 {
-			t.Errorf("%d integration Runs after the task's pull request closed", n)
-		}
-		return
-	}
-	checkTarget := w.prShowsOnlyChecked(t, task, "target", branch, true)
-	checkWeb := w.prShowsOnlyChecked(t, task, "web", branch, true)
-	w.must(task, "decide", `{"action":"ask_person","note":"Reviewed and tested; web is new."}`)
-	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
-		t.Fatalf("answer: %d %v", status, out)
-	}
-	w.must(task, "decide", `{"action":"open_pull_request"}`)
-
-	w.until("web's pull request open, and waiting on both", func() bool {
-		w.sync()
-		opened := len(w.web.Pulls()) == 1 && w.count(integrationCompleted, task) == 1
-		if r := w.escalationReason(task); r != "" {
-			t.Fatalf("escalated %s\n%s", r, w.describeRuns())
-		}
-		if w.decisionAt(task) == delivery.PointReviewed {
-			w.must(task, "decide", `{"action":"next"}`)
-		}
-		return opened && w.waitingOnPR(task)
-	})
-	checkTarget()
-	checkWeb()
-	if n := w.count(integrationRuns+` AND branch LIKE '%-candidate'`, task); n != 1 {
-		t.Errorf("integration Runs on the candidate %d, want 1\n%s", n, w.describeRuns())
-	}
-	// Every Run that publishes from the integration on goes to the candidate.
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('implement', 'fix', 'simplify')
-		AND created_at >= (SELECT min(created_at) FROM runs WHERE task_id = $1 AND pr_feedback::text LIKE '%Base integration%')
-		AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, task); n != 0 {
-		t.Errorf("%d publishing Runs of the integration's loop off the candidate", n)
-	}
-	head := w.web.SHA(w.web.Pull(1).Head)
-	if missing := w.checkedAt(task, "web", head, true); missing != "" {
-		t.Errorf("web's pull request opened at %s with no %s there", head, missing)
-	}
-	if out := gitOut(t, w.web.Repo, "rev-list", "--count", head+"..main"); out != "0" {
-		t.Errorf("web's pull request lacks its base: %s behind", out)
-	}
-	if got := gitOut(t, w.gh.Repo, "show", branch+":INTEGRATION.md"); got != "touched by the integration" {
-		t.Errorf("target's pull request does not show the integration's change: %q", got)
-	}
-}
-
-// web's base moves before its pull request opens, cleanly: GitHub merges
-// it in (a clean merge counts as reviewed) and the test of that merge
-// fails once. Its fix changes target too, whose pull request is open and
-// approved: target's pull request moves only by promotion, to a head
-// reviewed and tested, and web's opens at such a head.
-func TestAFixAfterACleanBeforePRMergesFailedTestReachesAnOpenPullRequestOnlyByPromotion(t *testing.T) {
-	w := conducting(t)
-	w.onModel("qa_browser", "fake/scripted")
-	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Forges: forge.Resolver{DB: w.app}, Lux: w.syncer.Lux,
-		SyncPullRequest: w.prs.Sync, SyncBase: w.syncer.SyncBase}).Handler())
-	t.Cleanup(tools.Close)
-	w.syncer.Agent.ToolsURL = tools.URL
-	arm := w.firstReviewAfter()
-	inLoop := w.lux.Decide
-	var afterMerge atomic.Bool
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := inLoop(spec)
-		labels, _ := spec["labels"].(map[string]any)
-		if labels["dude.phase"] == "fix" {
-			b.Commit = map[string]string{"target:FIX.md": "fix\n", "web:FIX.md": "fix\n"}
-			if afterMerge.Load() {
-				// The test's fix: in the tree the once-failing tester
-				// counts (fakeagent.FixedFile), which then passes.
-				b.Commit["target:"+fakeagent.FixedFile] = fmt.Sprint(labels["dude.run"]) + "\n"
-			}
-		}
-		return b
-	}
-	task := w.prOpen(w.task(), prAt{test: true})
-	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
-		VALUES ($1, $2, $3, 'web', 'git://127.0.0.1/acme/web.git', 'main') ON CONFLICT DO NOTHING`, "repo_web_"+w.org, w.org, w.project)
-	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
-		VALUES ($1, $2, $3, 'write')`, w.org, task, "repo_web_"+w.org)
-	setPolicy(w, task, `{"maxReviewIterations":9}`)
-	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
-		t.Fatalf("chat: %d %v", status, out)
-	}
-	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
-	arm()
-	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
-	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
-	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
-	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
-	w.until("the decision before the pull request", func() bool {
-		switch w.decisionAt(task) {
-		case delivery.PointReviewed, delivery.PointFixed:
-			w.must(task, "decide", `{"action":"next"}`)
-		case delivery.PointBeforePR:
-			return true
-		}
-		return false
-	})
-	branch := w.gh.Pull(1).Head
-	w.gh.Review(1, "ana", "APPROVED")
-	// A file the task changed in web, as the fix wrote it: GitHub merges it
-	// cleanly, and the merge is tested again because it touched the task's file.
-	w.commitFileIn(w.web.Repo, "main", "FIX.md", "fix\n", "Another task's change")
-	w.onModel("qa_browser", fakeagent.TestFailOnceModel)
-	afterMerge.Store(true)
-	merges := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'action' = 'merge-base'`, task)
-	earlier := w.runsSoFar(task)
-	targetMoves := len(w.gh.BranchLog(branch))
-	checkTarget := w.prShowsOnlyChecked(t, task, "target", branch, true)
-	w.must(task, "decide", `{"action":"ask_person","note":"Reviewed and tested; web is new."}`)
-	if status, out := w.chat(task, "Open"); status != 200 || out["questionId"] == nil {
-		t.Fatalf("answer: %d %v", status, out)
-	}
-	w.must(task, "decide", `{"action":"open_pull_request"}`)
-	w.until("web's pull request open, and waiting on both", func() bool {
-		w.sync()
-		if r := w.escalationReason(task); r != "" {
-			t.Fatalf("escalated %s\n%s", r, w.describeRuns())
-		}
-		switch w.decisionAt(task) {
-		case delivery.PointReviewed, delivery.PointFixed:
-			w.must(task, "decide", `{"action":"next"}`)
-		case delivery.PointBeforePR:
-			// The fix moved web past the Open the person gave.
-			w.must(task, "decide", `{"action":"open_pull_request"}`)
-		}
-		return len(w.web.Pulls()) == 1 && w.waitingOnPR(task)
-	})
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'action' = 'merge-base'`, task); n != merges+1 {
-		t.Fatalf("%d merges of web's base, want GitHub's one\n%s", n-merges, w.describeRuns())
-	}
-	if w.verdictsOfTestAfter(task, w.phaseRuns(task, "test")-2)[0] != "fail" {
-		t.Fatalf("the merge's test did not fail first\n%s", w.describeRuns())
-	}
-	checkTarget()
-	if got := w.gh.BranchLog(branch)[targetMoves:]; len(got) != 1 {
-		t.Errorf("target's pull request moved to %v, want the fix's one promotion", got)
-	}
-	w.writersOnCandidate(task, earlier, "fix")
-	head := w.web.SHA(w.web.Pull(1).Head)
-	if missing := w.checkedAt(task, "web", head, true); missing != "" {
-		t.Errorf("web's pull request opened at %s with no %s there", head, missing)
 	}
 }
 
@@ -669,14 +440,16 @@ func TestIntegrationConflictRunsInternalReviewAndKeepsFeedback(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase IN ('review', 'test') AND status='completed' AND keep`, wi); n != 0 {
 		t.Errorf("%d completed review/test Runs kept with resumeRounds off", n)
 	}
-	// An integration fixer publishes on the candidate. A person's item stays
-	// the candidate after it is given the comment.
+	// An integration fixer is not given the comment: a fixer after it is,
+	// publishing to the pull request directly.
 	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%preserve this feedback%' AND pr_feedback::text LIKE '%Base integration%'`, wi) != 0 {
 		t.Fatal("the integration fixer was given the comment")
 	}
-	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='fix' AND pr_feedback::text LIKE '%preserve this feedback%' AND branch=$2`, wi, delivery.CandidateBranch(wi, 1)) != 1 {
-		t.Fatal("feedback lost")
-	}
+	w.until("the comment's fixer", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='fix' AND pr_feedback::text LIKE '%preserve this feedback%'
+			AND (branch IS NULL OR branch NOT LIKE '%-candidate')`, wi) == 1
+	})
 	branch := w.gh.Pull(1).Head
 	if out := gitOut(t, w.gh.Repo, "rev-list", "--count", branch+"..main"); out != "0" {
 		t.Fatal("base not integrated", out)
@@ -940,7 +713,14 @@ func TestAConductorPublishWaitsForALiveIntegration(t *testing.T) {
 	w.conflictWithMovedBase()
 	integrating := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'
 		AND status IN ('pending','scheduled','starting','running')`
-	w.until("a live integration Run", func() bool { w.sync(); return w.count(integrating, task) == 1 })
+	w.until("a live integration Run", func() bool {
+		w.sync()
+		// Direct: the conductor is asked first about the conflict; it goes on.
+		if w.decisionAt(task) != "" {
+			w.must(task, "decide", `{"action":"next"}`)
+		}
+		return w.count(integrating, task) == 1
+	})
 	w.refused(task, "publish", `{"message":"a small fix"}`, "an implementer is working on this task; wait for it, or steer it")
 	if n := w.count(`SELECT count(*) FROM conductor_publishes WHERE task_id = $1`, task); n != 0 {
 		t.Fatalf("%d publishes recorded beside a live integration", n)
@@ -998,39 +778,6 @@ func TestALostCleanMergeIsAdoptedAndTestedAgain(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='merge-base'`, wi); n > 1 {
 		t.Fatalf("merge-base events %d", n)
-	}
-}
-
-// GitHub has not computed mergeability when the integration is validated:
-// the step waits, then, conflicting after all, escalates the integration as
-// a known conflict does, with no second Run.
-func TestUnknownMergeabilityAtValidationWaitsThenEscalatesAConflict(t *testing.T) {
-	w := newWorld(t)
-	w.toolsWithSync()
-	wi := w.reviewing()
-	w.conflictWithMovedBase()
-	w.until("the integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
-	w.until("validation waiting on GitHub", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1 AND step='openPullRequest' AND state->'integration' IS NOT NULL`, wi) == 1
-	})
-	for range 3 {
-		w.pump()
-	}
-	if r := w.escalationReason(wi); r != "" {
-		t.Fatalf("escalated while GitHub had not said: %s", r)
-	}
-	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = false })
-	w.until("the integration escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-	raw, e := w.escalationOf(wi)
-	if strings.Join(e.Actions(), " ") != "retry wait stop" || !strings.Contains(string(raw), `"cause": "still_conflicting"`) {
-		t.Fatalf("escalation %s, actions %v", raw, e.Actions())
-	}
-	if n := w.count(integrationRuns, wi); n != 1 {
-		t.Fatalf("integration Runs %d", n)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='pull_request.action' AND payload->>'action'='integration-refused'`, wi); n != 1 {
-		t.Fatalf("integration-refused events %d", n)
 	}
 }
 
@@ -1448,71 +1195,5 @@ func TestAnIntegrationFixerIsNotGivenThePeoplesOpenFeedback(t *testing.T) {
 				t.Errorf("fix_attempts %d, want %d: one per ordinary fix", n, attempts+bound)
 			}
 		})
-	}
-}
-
-// An integration fixer publishes on the candidate. A person's item open
-// during it, and a comment that came with the conflict, are neither given
-// to it nor settled by its publish: the fix after the integration's review
-// and test takes them up on a candidate, and the item's resolution holds
-// once that candidate is promoted.
-func TestAnIntegrationLeavesTheOpenFeedbackToTheNextCheckedFix(t *testing.T) {
-	w := newWorld(t)
-	w.toolsWithSync()
-	ana := w.person("Ana")
-	wi := w.reviewing()
-	ctx := context.Background()
-	// A writer at work keeps the conflict queued while the item is
-	// submitted, so both are there when the integration starts.
-	mustExec(t, w.owner, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,phase,role) VALUES('run_existing_writer',$1,$2,$3,1,'paused','fix','implementer')`, w.org, w.project, wi)
-	ar := w.resolveAsItPublishes(wi, "fbi_int", itsNewHead, nil)
-	w.conflictWithMovedBase()
-	w.gh.Comment(1, "alice", "Please rename the greeting.")
-	w.syncRounds(3)
-	if code, body := w.feedback(ana, wi, "fbi_int", "Rename the flag."); code != 201 {
-		t.Fatalf("submit: %d %v", code, body)
-	}
-	mustExec(t, w.owner, `UPDATE runs SET status='aborted' WHERE id='run_existing_writer'`)
-
-	w.until("the integration fixer", func() bool { w.sync(); return w.count(integrationRuns, wi) == 1 })
-	if n := w.count(integrationRuns+` AND (feedback_item_ids <> '{}' OR pr_feedback::text LIKE '%rename the greeting%')`, wi); n != 0 {
-		t.Fatalf("the integration fixer was given the people's feedback")
-	}
-	w.gh.Set(func(s *fakegithub.Server) { s.Conflicting[1] = false })
-	w.until("the item verified", func() bool {
-		w.sync()
-		_, verified := w.resolution("fbi_int")
-		return verified
-	})
-	if w.count(integrationCompleted, wi) != 1 {
-		t.Fatalf("the item was verified before the integration was reviewed and tested:\n%s", w.describeRuns())
-	}
-	var completedAt time.Time
-	if err := w.owner.QueryRow(ctx, `SELECT occurred_at FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
-		AND payload->>'action' = 'integration-completed'`, wi).Scan(&completedAt); err != nil {
-		t.Fatal(err)
-	}
-	fixer, commit, answer := ar.state()
-	if !strings.HasPrefix(answer, "200 ") {
-		t.Fatalf("feedback_resolve with %s: %s", commit, answer)
-	}
-	// The fixer that resolved it ran on the candidate, after the
-	// integration was checked, and was given the comment too.
-	var branch string
-	var created time.Time
-	var given bool
-	if err := w.owner.QueryRow(ctx, `SELECT COALESCE(branch, ''), created_at, pr_feedback::text LIKE '%rename the greeting%'
-		FROM runs WHERE id = $1`, fixer).Scan(&branch, &created, &given); err != nil {
-		t.Fatal(err)
-	}
-	if branch != delivery.CandidateBranch(wi, 1) || !created.After(completedAt) || !given {
-		t.Errorf("resolved by %s on %q at %s (integration completed %s), given the comment %v: want the candidate fix after the integration",
-			fixer, branch, created, completedAt, given)
-	}
-	// Verified by the promotion: in the transaction that records the move.
-	if n := w.count(`SELECT count(*) FROM events v JOIN events m ON m.xmin = v.xmin AND m.task_id = v.task_id
-		AND m.event_type = $2 WHERE v.task_id = $1 AND v.event_type = 'feedback.resolved' AND v.payload->>'verified' = 'true'`,
-		wi, delivery.EvPullRequestFixMoved); n != 1 {
-		t.Errorf("%d verifications recorded with a candidate's promotion, want 1", n)
 	}
 }

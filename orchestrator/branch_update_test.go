@@ -1142,7 +1142,7 @@ func (w *world) fixPromotedFrom(wi, base string) {
 	var status, from, promoted string
 	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 		return tx.QueryRow(context.Background(), `SELECT status::text, COALESCE(base_refs->>'target', ''),
-				COALESCE((SELECT payload->>'to' FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'), '')
+				COALESCE(heads->'target'->>'sha', '')
 			FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, wi).Scan(&status, &from, &promoted)
 	}); err != nil {
 		w.t.Fatal(err)
@@ -1158,6 +1158,6 @@ func (w *world) fixPromotedFrom(wi, base string) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
 		AND payload->>'action' = 'update-branch' AND payload->>'refused' IS NULL AND payload->>'head' = $2`, wi, promoted); n != 1 || promoted == "" {
-		w.t.Errorf("the branch was not updated at the head the fix was promoted to (%.8s)", promoted)
+		w.t.Errorf("the branch was not updated at the head the fix pushed (%.8s)", promoted)
 	}
 }

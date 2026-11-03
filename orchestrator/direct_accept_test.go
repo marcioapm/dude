@@ -45,7 +45,7 @@ func conductedDirectWorld(t *testing.T) (*world, string) {
 	t.Helper()
 	w := conducting(t)
 	w.toolsWithSync()
-	task := w.prOpen(w.task(), prAt{direct: true})
+	task := w.prOpen(w.task(), prAt{})
 	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
 		t.Fatalf("chat: %d %v", status, out)
 	}
@@ -238,7 +238,7 @@ func notConvergingDirect(t *testing.T) *editing {
 	t.Helper()
 	w := conducting(t)
 	w.toolsWithSync()
-	task := w.prOpen(w.task(), prAt{direct: true})
+	task := w.prOpen(w.task(), prAt{})
 	setPolicy(w, task, `{"maxAttemptsPerFinding":4,"maxStillRounds":2,"maxPrFixReviewIterations":9}`)
 	var reviews atomic.Int32
 	scripted := w.lux.Decide

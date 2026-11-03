@@ -1,15 +1,12 @@
 /**
- * Fixes on an open pull request on a project's Delivery page: a radio of
- * its two modes, direct chosen from the default, saved as only what
- * changed, Reset once set; and no such row on the organisation's page,
- * which has no value for it. Mounted in happy-dom against the fixture
- * client.
+ * Fixes on an open pull request are always direct: neither a project's
+ * Delivery page nor the organisation's offers the retired choice. Mounted
+ * in happy-dom against the fixture client.
  */
 
 import { afterEach, expect, test } from "bun:test";
-import type { SettingsPatch, SettingsResponse } from "@dude/domain";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
-import { click, mount, until } from "./dom.ts";
+import { mount, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, PROJECT } from "../src/fixtures/data.ts";
 import { ProjectSettingsScreen } from "../src/screens/ProjectSettingsScreen.tsx";
@@ -21,24 +18,8 @@ afterEach(async () => {
   mounted = [];
 });
 
-class Recording extends FixtureClient {
-  patches: SettingsPatch[] = [];
-  set: "direct" | "candidate" | null = null;
-  override async projectSettings(projectId: string): Promise<SettingsResponse> {
-    const s = await super.projectSettings(projectId);
-    return this.set ? { ...s, delivery: { ...s.delivery, pullRequestFixes: { value: this.set, source: "project" } } } : s;
-  }
-  override async updateProjectSettings(projectId: string, patch: SettingsPatch): Promise<SettingsResponse> {
-    this.patches.push(patch);
-    if (patch.delivery && "pullRequestFixes" in patch.delivery) this.set = patch.delivery.pullRequestFixes ?? null;
-    return this.projectSettings(projectId);
-  }
-}
-
-const chosen = (group: HTMLElement) => group.querySelector("[role=radio][aria-checked=true]")?.getAttribute("data-value");
-
-test("a project's Delivery page sets how fixes reach an open pull request, direct by default", async () => {
-  const client = new Recording("a");
+test("a project's Delivery page has no Fixes on an open pull request: every fix is direct", async () => {
+  const client = new FixtureClient("a");
   const { container: c, unmount } = await mount(
     <TooltipProvider>
       <ToastProvider>
@@ -48,21 +29,10 @@ test("a project's Delivery page sets how fixes reach an open pull request, direc
     </TooltipProvider>,
   );
   mounted.push(unmount);
-  const group = await until(() => c.querySelector<HTMLElement>("[data-testid=delivery-pullRequestFixes]"), "the radio");
-  expect(group.getAttribute("role")).toBe("radiogroup");
-  expect([...group.querySelectorAll("[role=radio]")].map((o) => o.getAttribute("data-value"))).toEqual(["direct", "candidate"]);
-  expect(chosen(group)).toBe("direct");
-  await click(group.querySelector<HTMLElement>('[data-value="candidate"]')!);
-  expect(chosen(group)).toBe("candidate");
-  await click(c.querySelector<HTMLButtonElement>("[data-testid=delivery-save]")!);
-  await until(() => client.patches.length > 0 || null, "the save");
-  expect(client.patches).toEqual([{ delivery: { pullRequestFixes: "candidate" } }]);
-
-  // Before the pull request is still its default: the one Reset is this row's.
-  const reset = await until(() => c.querySelector<HTMLButtonElement>('[data-source="default"] button'), "Reset once changed");
-  await click(reset);
-  await until(() => (client.patches.length === 2 ? true : null), "the reset");
-  expect(client.patches[1]).toEqual({ delivery: { pullRequestFixes: null } });
+  await until(() => c.querySelector("[data-testid=delivery-form]"), "the Delivery page");
+  expect(c.querySelectorAll("[data-testid=delivery-pullRequestFixes]").length).toBe(0);
+  expect(c.textContent).not.toContain("Fixes on an open pull request");
+  expect(c.querySelectorAll("[data-testid=delivery-maxPrFixReviewIterations]").length).toBe(1);
 });
 
 test("the organisation's Delivery page has no Fixes on an open pull request", async () => {

@@ -119,7 +119,12 @@ func TestAnAdminRaisesTheFixRoundsForOneTask(t *testing.T) {
 	branch := w.gh.Pull(1).Head
 	before := w.gh.SHA(branch)
 	w.must(task, "start_phase", `{"phase":"fix","note":"Rename greet to welcome."}`)
-	w.until("the granted fix on the branch, and waiting again", func() bool { return w.gh.SHA(branch) != before && w.waitingOnPR(task) })
+	// The fix goes to the pull request directly; the conductor takes its
+	// review round's decision (next), and the delivery waits again.
+	w.until("the granted fix on the branch, and waiting again", func() bool {
+		w.nextAtRound(task)
+		return w.gh.SHA(branch) != before && w.waitingOnPR(task)
+	})
 	w.refused(task, "start_phase", `{"phase":"fix","note":"And another."}`, "3 of 3 this review round")
 }
 
@@ -196,7 +201,12 @@ func TestAnAdminRaisesTheFixRoundsPerPullRequest(t *testing.T) {
 	branch := w.gh.Pull(1).Head
 	before := w.gh.SHA(branch)
 	w.must(task, "start_phase", `{"phase":"fix","note":"Rename greet to welcome."}`)
-	w.until("the granted fix on the branch, and waiting again", func() bool { return w.gh.SHA(branch) != before && w.waitingOnPR(task) })
+	// The fix goes to the pull request directly; the conductor takes its
+	// review round's decision (next), and the delivery waits again.
+	w.until("the granted fix on the branch, and waiting again", func() bool {
+		w.nextAtRound(task)
+		return w.gh.SHA(branch) != before && w.waitingOnPR(task)
+	})
 	w.refused(task, "start_phase", `{"phase":"fix","note":"And another."}`, "the pull request in target has had 2 fix rounds")
 
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = settings || '{"fixRoundsPerPr":0}' WHERE organization_id = $1`, w.org)

@@ -203,19 +203,13 @@ export const PULL_REQUEST_CHOICE: Record<PullRequestChoice, { label: string; hin
 };
 
 /**
- * How a fix reaches an open pull request (a project's `pullRequestFixes`):
- * "direct" pushes it to the pull request, then reviews that push; "candidate"
- * checks it on a separate branch first. "direct" is the default.
+ * Delivery keys dude no longer reads. `pullRequestFixes`: every fix reaches
+ * an open pull request directly, whatever a project chose. Still accepted
+ * (optional), so a stored or sent value is never refused, and ignored: the
+ * settings neither show nor store it.
  */
-export const PULL_REQUEST_FIXES = ["direct", "candidate"] as const;
-export type PullRequestFixes = (typeof PULL_REQUEST_FIXES)[number];
-export const DEFAULT_PULL_REQUEST_FIXES: PullRequestFixes = "direct";
-
-/** Each mode's name and its one line, wherever the setting is shown. */
-export const PULL_REQUEST_FIXES_CHOICE: Record<PullRequestFixes, { label: string; hint: string }> = {
-  direct: { label: "Pushed to the pull request, then reviewed", hint: "CI and GitHub reviewers see each fix; dude reviews each push before its next." },
-  candidate: { label: "Checked on a separate branch first", hint: "Slower: nothing unreviewed reaches the pull request." },
-};
+export const RETIRED_DELIVERY_KEYS = ["pullRequestFixes"] as const;
+export type RetiredDeliveryKey = (typeof RETIRED_DELIVERY_KEYS)[number];
 
 /**
  * How a project's work is delivered, over the factory's defaults. Each field
@@ -256,12 +250,12 @@ export const deliveryPolicySchema = z
      * first. A project's setting only: an organisation never sets it.
      */
     pullRequest: z.enum(PULL_REQUEST_CHOICES),
-    /** How a fix reaches an open pull request. A project's setting only. */
-    pullRequestFixes: z.enum(PULL_REQUEST_FIXES),
+    /** Retired (RETIRED_DELIVERY_KEYS): accepted and ignored. */
+    pullRequestFixes: z.unknown(),
   })
   .partial()
   .strict();
-export type DeliveryPolicy = z.infer<typeof deliveryPolicySchema>;
+export type DeliveryPolicy = Omit<z.infer<typeof deliveryPolicySchema>, RetiredDeliveryKey>;
 /** A delivery policy with every field set: the factory's defaults, or a project's over them. */
 export type FullDeliveryPolicy = { [K in keyof DeliveryPolicy]-?: NonNullable<DeliveryPolicy[K]> };
 

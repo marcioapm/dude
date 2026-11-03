@@ -27,7 +27,7 @@ def _deliver_with_tester(client: ApiClient, project: dict, tester: str, title: s
     # forge_project pins the tester off; these turn it on, as the factory does.
     # The scripted writers' Markdown files stand for product changes: every fix is tested.
     client.patch(f"/v1/projects/{project['id']}", {
-        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"], "pullRequestFixes": "candidate"},
+        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"]},
         "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
                                          "simplifier": "fake/scripted", "qa_browser": tester}),
     })
@@ -153,7 +153,7 @@ def test_a_new_verdict_refreshes_only_dudes_section_of_the_pull_request_body(
     rewrites its section for the new head and leaves every byte the person
     wrote where it was."""
     client.patch(f"/v1/projects/{forge_project['id']}", {
-        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"], "pullRequestFixes": "candidate"},
+        "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"]},
         "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
                                          "simplifier": "fake/scripted", "qa_browser": "fake/scripted",
                                          "conductor": "fake/defaults"}),
@@ -210,13 +210,13 @@ def test_a_new_verdict_refreshes_only_dudes_section_of_the_pull_request_body(
 
 
 @pytest.mark.ui
-def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
+def test_a_direct_pull_request_fix_marks_its_verification_stale(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list
 ):
-    """A comment brings a fixer whose fix is reviewed and tested on a
-    candidate. At the promoted head, the task page and PR have fresh
-    verification. The Go integration tests check the strict ordering of
-    the completed test and the branch move."""
+    """A comment brings a fixer whose fix is pushed to the pull request
+    directly, then reviewed over its own push; it is not tested again. The
+    task page and the PR's description say the verdict is about the commit
+    before the fix (stale)."""
     task = _deliver_with_tester(client, forge_project, "fake/scripted", "Greet, then rename it")
     pr = _pull_request(client, task["id"])
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
@@ -226,45 +226,23 @@ def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
 
     fake_github.comment(pr["number"], "Please rename the greeting.", author="alice")
 
-    # While the candidate is checked the pull request still holds `before`:
-    # its verdict there is never stale, whatever the candidate's heads, and
-    # a verdict at the candidate's current head is the candidate's.
-    while_checked: list[bool] = []
-    at_candidate: list[dict] = []
+    head = wait_until(lambda: (sha if (sha := fake_github.branch_sha(pr["headBranch"])) != before else None),
+                      timeout=180, interval=0.2, message="the fix never reached the pull request")
+    assert not [b for b in fake_github.branches() if b.endswith("-candidate")], fake_github.branches()
+    def reviewed() -> list[dict] | None:
+        rs = client.task_runs(task["id"])
+        return rs if any(r["phase"] == "review" and r["reviewOf"] == "pull_request_fix" for r in rs) else None
 
-    def moved():
-        if (sha := fake_github.branch_sha(pr["headBranch"])) != before:
-            return sha
-        if candidate := fake_github.branch_sha(f"{pr['headBranch']}-candidate"):
-            verdicts = client.get(f"/v1/tasks/{task['id']}/verification").json()["verifications"]
-            at_pr = next((v for v in verdicts if v["heads"].get("greeter") == before), None)
-            at_head = next((v for v in verdicts if v["heads"].get("greeter") == candidate), None)
-            if fake_github.branch_sha(pr["headBranch"]) == before and \
-                    fake_github.branch_sha(f"{pr['headBranch']}-candidate") == candidate:
-                if at_pr is not None:
-                    while_checked.append(at_pr["stale"])
-                if at_head is not None and candidate != before:
-                    at_candidate.append(at_head)
-        return None
-
-    head = wait_until(moved, timeout=180, interval=0.2, message="the fix never reached the pull request")
-    assert while_checked and not any(while_checked), while_checked
-    assert all(v["candidate"] is True for v in at_candidate), at_candidate
-    runs = client.task_runs(task["id"])
+    runs = wait_until(reviewed, timeout=60, message="the fix's push was never reviewed")
     fix = next(r for r in runs if r["phase"] == "fix" and r["createdAt"] > next(x for x in runs if x["id"] == tests_before[-1])["createdAt"])
-    assert fix["branch"] == f"{pr['headBranch']}-candidate", fix
-    assert any(r["phase"] == "review" and r["reviewOf"] == "pull_request_fix" for r in runs), [r["phase"] for r in runs]
+    assert not (fix.get("branch") or "").endswith("-candidate"), fix
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
+               message="the task never waited on the pull request again")
+    assert [r["id"] for r in client.task_runs(task["id"]) if r["phase"] == "test"] == tests_before
 
-    latest = wait_until(lambda: next((v for v in client.get(f"/v1/tasks/{task['id']}/verification").json()["verifications"]
-                                      if v["heads"].get("greeter") == head), None), timeout=30,
-                        message="no verdict at the pull request's new head")
-    assert latest["stale"] is False, latest
-    # The verdict at the new head is the candidate's, recorded before the
-    # move; the step after the move refreshes the description.
-    fresh = f"Tested at `{head[:7]}`."
-    body = wait_until(lambda: (b if fresh in (b := fake_github.pulls[pr["number"]].body) else None), timeout=30,
-                      message="the pull request's description was not refreshed at its new head")
-    assert "Stale" not in body, body
+    body = wait_until(lambda: (b if "Stale" in (b := fake_github.pulls[pr["number"]].body) else None), timeout=30,
+                      message="the pull request's description does not say its verdict is stale")
+    assert f"Tested at `{before[:7]}`." in body and f"Tested at `{head[:7]}`." not in body, body
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/task/{task['id']}")
@@ -272,6 +250,6 @@ def test_a_pull_request_fix_has_fresh_verification_at_its_promoted_head(
     expect(page.get_by_test_id("phase").filter(has_text="of the pull request's fix").first).to_be_visible()
     page.get_by_role("tab", name="Findings").click()
     section = page.get_by_test_id("verification")
-    expect(section.get_by_test_id("verification-heads")).to_have_text(f"tested at {head[:7]}")
-    expect(section.get_by_test_id("verification-stale")).to_have_count(0)
+    expect(section.get_by_test_id("verification-heads")).to_have_text(f"tested at {before[:7]}")
+    expect(section.get_by_test_id("verification-stale")).to_have_count(1)
     assert console_errors == []

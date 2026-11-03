@@ -13,7 +13,7 @@ import (
 // reviewingDirect is a delivery waiting on its open pull request, frozen
 // to push its pull request fixes directly, with the tester on.
 func (w *world) reviewingDirect() string {
-	return w.prOpen(w.task(), prAt{direct: true, test: true})
+	return w.prOpen(w.task(), prAt{test: true})
 }
 
 // A conflict on a conducted delivery's open pull request is a message to

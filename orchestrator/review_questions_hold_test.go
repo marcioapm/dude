@@ -103,8 +103,8 @@ func (w *world) settle(person, id, verb string) {
 }
 
 // With two questions open, settling one re-reads the rest: still held
-// until the last is settled, at the pull request (none opened) and at a
-// pull request fix's promotion (its branch unmoved).
+// until the last is settled, at the pull request (none opened). A pull
+// request fix is pushed directly, with no promotion to hold.
 func TestTheHoldWaitsForTheLastOfTwoQuestions(t *testing.T) {
 	t.Run("pull request", func(t *testing.T) {
 		w := newWorld(t)
@@ -123,27 +123,7 @@ func TestTheHoldWaitsForTheLastOfTwoQuestions(t *testing.T) {
 		w.settle(ana, ids[1], "withdraw")
 		w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
 	})
-	t.Run("promotion", func(t *testing.T) {
-		w := newWorld(t)
-		ana := w.person("Ana")
-		wi, before := w.heldAtPromotion(ana, twoQuestionsDoc)
-		ids := w.reviewQuestionIDs(wi)
-		if len(ids) != 2 {
-			t.Fatalf("questions %v, want two", ids)
-		}
-		w.settle(ana, ids[0], "answer")
-		for range 5 {
-			w.sync()
-			w.pump()
-		}
-		w.notPromoted(wi, before)
-		if s := w.taskStatus(wi); s != "awaiting_input" {
-			t.Fatalf("task %s with a question still open, want awaiting_input", s)
-		}
-		w.settle(ana, ids[1], "withdraw")
-		w.until("the promotion", func() bool { w.sync(); return w.head(wi) != before })
-		w.until("the pull request in review", func() bool { w.sync(); return w.taskStatus(wi) == "review" })
-	})
+
 }
 
 // The owner's decision 1: a policy delivery whose reviewer asked a question
@@ -197,95 +177,6 @@ func TestTheFixLoopRunsAndThenTheQuestionHoldsThePullRequest(t *testing.T) {
 		t.Fatalf("answer: %d %v", status, out)
 	}
 	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-}
-
-// heldAtPromotion is a delivery with its pull request open whose fix, for
-// a person's comment, was reviewed by a reviewer who asked heldQuestion:
-// held at promoteCandidate, the pull request's branch still at before.
-// owner owns the task; doc is the reviewer's questions.
-func (w *world) heldAtPromotion(owner, doc string) (wi, before string) {
-	w.t.Helper()
-	wi = w.reviewing()
-	w.assignOwner(wi, owner)
-	before = w.head(wi)
-	// The fix's own review asks; the review of the simplifier's diff after it does not.
-	scripted := w.lux.Decide
-	var reviews int
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
-			if reviews++; reviews == 1 {
-				b.Reply += "\n" + doc
-			}
-		}
-		return b
-	}
-	w.gh.Comment(1, "alice", "Please rename the greeting.")
-	w.until("the candidate held at its promotion, or promoted", func() bool {
-		w.sync()
-		return w.head(wi) != before || w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'promoteCandidate' AND status = 'waiting'`, wi) == 1
-	})
-	for range 5 {
-		w.pump()
-	}
-	w.notPromoted(wi, before)
-	if s := w.taskStatus(wi); s != "awaiting_input" {
-		w.t.Errorf("task %s while held, want awaiting_input", s)
-	}
-	return wi, before
-}
-
-// notPromoted fails unless the pull request's branch is still at before,
-// with no promotion recorded.
-func (w *world) notPromoted(wi, before string) {
-	w.t.Helper()
-	if got := w.head(wi); got != before {
-		w.t.Fatalf("the pull request's branch moved from %s to %s with a question open", before, got)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvPullRequestFixMoved); n != 0 {
-		w.t.Fatalf("%d promotions recorded with a question open", n)
-	}
-}
-
-// A pull request merged or closed while its fix is held by a question ends
-// the delivery as the pull request loop ends it (done, aborted), with the
-// question unanswered and the held candidate never published.
-func TestAPullRequestEndedWhileItsPromotionIsHeldEndsTheDelivery(t *testing.T) {
-	for _, c := range []struct {
-		how, status string
-		end         func(*world)
-	}{
-		{"merged", "done", func(w *world) { w.gh.Merge(1) }},
-		{"closed", "aborted", func(w *world) { w.gh.Close(1) }},
-	} {
-		t.Run(c.how, func(t *testing.T) {
-			w := newWorld(t)
-			wi, before := w.heldAtPromotion(w.person("Ana"), questionDoc)
-			c.end(w)
-			w.until("the task "+c.status, func() bool { w.sync(); return w.taskStatus(wi) == c.status })
-			w.until("the delivery ended", func() bool {
-				return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')`, wi) == 0
-			})
-			w.notPromoted(wi, before)
-			if n := w.count(`SELECT count(*) FROM review_questions WHERE task_id = $1 AND status = 'open'`, wi); n != 1 {
-				t.Errorf("%d open questions, want the one nobody answered", n)
-			}
-		})
-	}
-}
-
-// A question asked by the review of a pull request's fix holds that fix's
-// promotion: the pull request's branch stays where it was until the
-// question is answered, then moves to the checked candidate.
-func TestAQuestionOnAPullRequestFixHoldsItsPromotion(t *testing.T) {
-	w := newWorld(t)
-	ana := w.person("Ana")
-	wi, before := w.heldAtPromotion(ana, questionDoc)
-	if status, out := w.callAs(ana, "/internal/review-questions/"+w.reviewQuestionOf(wi)+"/answer", map[string]any{"answer": "Yes, once."}); status != 200 {
-		t.Fatalf("answer: %d %v", status, out)
-	}
-	w.until("the promotion", func() bool { w.sync(); return w.head(wi) != before })
-	w.until("the pull request in review", func() bool { w.sync(); return w.taskStatus(wi) == "review" })
 }
 
 // Under the conductor the question holds the pull request too (Open

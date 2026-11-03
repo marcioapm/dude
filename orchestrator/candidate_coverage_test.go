@@ -9,6 +9,7 @@ import (
 )
 
 func TestCandidatePromotionRequiresRepositoryReviewCoverage(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	for _, tc := range []struct {
 		name       string
 		whole      bool

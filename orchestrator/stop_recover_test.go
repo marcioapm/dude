@@ -369,12 +369,12 @@ func TestStopAndStartOverUnderSettingsThatDoNotDecodeStopsNothing(t *testing.T) 
 	}
 }
 
-// Try again while a loop writer works on an open pull request's candidate:
-// a new simplifier works on the candidate, its promotion moves the pull
-// request, and the delivery waits on it again with the candidate cleared.
-func TestTryingAgainALoopWriterOnACandidateGoesBackToTheSimplifier(t *testing.T) {
+// Try again while a loop writer works on an open pull request (directly,
+// as every writer does): a new simplifier works, its own push moves the
+// pull request, and the delivery waits on it again, with no candidate.
+func TestTryingAgainALoopWriterOnAPullRequestGoesBackToTheSimplifier(t *testing.T) {
 	w := newWorld(t)
-	task, ana, branch, start := w.adoptedSimplifierOnCandidate()
+	task, ana, branch, start := w.adoptedSimplifierAtWork()
 	simplifier := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'simplify'`, task)
 	w.stop(ana, task, map[string]any{"note": "hold on"})
 	w.until("the simplifier to be kept", func() bool { return w.keptRun(simplifier) })
@@ -388,7 +388,7 @@ func TestTryingAgainALoopWriterOnACandidateGoesBackToTheSimplifier(t *testing.T)
 		return b
 	}
 	w.pickUp(ana, task, map[string]any{"action": "retry", "note": "Again."})
-	w.until("the new simplifier promoted onto the pull request", func() bool {
+	w.until("the new simplifier pushed to the pull request", func() bool {
 		w.sync()
 		return w.waitingOnPR(task) && w.gh.SHA(branch) != start
 	})
@@ -404,11 +404,11 @@ func TestTryingAgainALoopWriterOnACandidateGoesBackToTheSimplifier(t *testing.T)
 	}
 }
 
-// adoptedSimplifierOnCandidate is a taken-over pull request whose clean
-// review sends its first loop writer, the simplifier, to work on the
-// candidate, hanging there: the task, its owner, the pull request's head
-// branch and its head before the loop.
-func (w *world) adoptedSimplifierOnCandidate() (task, ana, branch, start string) {
+// adoptedSimplifierAtWork is a taken-over pull request whose clean review
+// sends its first loop writer, the simplifier, to work on the pull
+// request's branch directly, hanging there: the task, its owner, the pull
+// request's head branch and its head before the loop.
+func (w *world) adoptedSimplifierAtWork() (task, ana, branch, start string) {
 	w.t.Helper()
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -429,49 +429,18 @@ func (w *world) adoptedSimplifierOnCandidate() (task, ana, branch, start string)
 	task = w.adopted("pr", n, branch, "main", delivery.ModeReview)
 	ana = w.ownedBy(task, "Ana")
 	w.startDelivery(task)
-	w.until("the simplifier at work on the candidate", func() bool {
+	w.until("the simplifier at work on the pull request", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'simplify' AND status = 'running'
-			AND branch LIKE '%-candidate'`, task) == 1
+			AND COALESCE(branch, '') NOT LIKE '%-candidate'`, task) == 1
 	})
 	return task, ana, branch, start
 }
 
-// A Stop while a loop writer works on an open pull request's candidate
-// keeps that writer, and the pull request does not move; Resume takes the
-// same writer up on the same candidate, and only its promotion reaches the
-// pull request.
-func TestStoppingALoopWriterOnACandidateKeepsItForTheResume(t *testing.T) {
+// Closing a task while a loop writer works on its pull request stops the
+// writer before it pushes: the pull request never moves.
+func TestClosingWhileALoopWriterWorksOnAPullRequestNeverMovesIt(t *testing.T) {
 	w := newWorld(t)
-	task, ana, branch, start := w.adoptedSimplifierOnCandidate()
-	simplifier := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'simplify'`, task)
-	w.stop(ana, task, map[string]any{"note": "hold on"})
-	w.until("the simplifier to be kept", func() bool { return w.keptRun(simplifier) })
-	if c := w.str(`SELECT COALESCE(state->'candidate'->>'branch', '') FROM workflow_runs WHERE task_id = $1`, task); !strings.HasSuffix(c, "-candidate") {
-		t.Fatalf("the stopped delivery's candidate is %q, want the loop's, kept for the resume", c)
-	}
-	for range 3 {
-		w.sync()
-		w.pump()
-	}
-	if got := w.gh.SHA(branch); got != start {
-		t.Fatalf("the stopped task's pull request moved to %s", got)
-	}
-	w.pickUp(ana, task, map[string]any{"action": "resume", "note": "Go on."})
-	w.until("the resumed simplifier promoted onto the pull request", func() bool {
-		w.sync()
-		return w.waitingOnPR(task) && w.gh.SHA(branch) != start
-	})
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'simplify'`, task); n != 1 {
-		t.Errorf("%d simplifiers after the resume, want the one resumed", n)
-	}
-	w.writersOnCandidate(task, nil, "simplify")
-}
-
-// Closing a task while a loop writer works on its candidate stops the
-// writer, and the candidate never reaches the pull request.
-func TestClosingWhileALoopWriterWorksOnACandidateNeverPromotesIt(t *testing.T) {
-	w := newWorld(t)
-	task, ana, branch, start := w.adoptedSimplifierOnCandidate()
+	task, ana, branch, start := w.adoptedSimplifierAtWork()
 	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
 		t.Fatalf("close: %d %v", status, body)
 	}

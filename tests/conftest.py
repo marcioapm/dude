@@ -188,9 +188,7 @@ def forge_project(client: ApiClient, org: dict, env: TestEnvironment, fake_githu
         # decision it is woken for, so no delivery waits out its decision's wait.
         agentModels=client.on_models({**{role: "fake/scripted" for role in ("implementer", "reviewer", "simplifier")},
                                       "conductor": "fake/defaults"}),
-        # Its pull requests' fixes are checked on a candidate, as every
-        # project's were before direct fixes (pullRequestFixes).
-        deliveryPolicy={"requiredReviewers": ["correctness"], "test": False, "pullRequestFixes": "candidate"},
+        deliveryPolicy={"requiredReviewers": ["correctness"], "test": False},
         repositories=[
             {"name": "greeter", "url": fake_github.clone_url, "defaultBranch": "main"}
         ],
