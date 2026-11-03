@@ -27,6 +27,14 @@ func convertDeliveries(ctx context.Context, database *db.DB, log *slog.Logger) {
 		return
 	}
 	log.Info("deliveries in flight handed to a quiet conductor", attrs...)
+	c, err := delivery.ConvertCandidates(pass, database)
+	attrs = []any{"converted", c.Converted, "moving", c.Moving, "left", c.Left}
+	if err != nil {
+		log.Error("deliveries on a candidate not all moved to direct fixes; the next boot sweeps again",
+			append(attrs, "error", err)...)
+		return
+	}
+	log.Info("deliveries on a candidate moved to direct fixes", attrs...)
 }
 
 // convertCommand is `dude-orchestrator convert-deliveries`: the boot's
@@ -51,6 +59,12 @@ func convertCommand(ctx context.Context, args []string, opts config.Options, std
 	defer database.Close()
 	n, err := delivery.ConvertInFlight(ctx, database)
 	fmt.Fprintf(stdout, "converted %d, skipped (accepted) %d, skipped (moving) %d, skipped (no model) %d\n", n.Converted, n.Accepted, n.Moving, n.NoModel)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	c, err := delivery.ConvertCandidates(ctx, database)
+	fmt.Fprintf(stdout, "candidates: converted %d, moving %d, left %d\n", c.Converted, c.Moving, c.Left)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
