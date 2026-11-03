@@ -291,7 +291,7 @@ func TestASavedPromptsVariablesAreFilledAndTheTaskStillFollows(t *testing.T) {
 }
 
 // Every fix reaches an open pull request directly: a project that stored
-// candidate resolves to direct, in ResolvePolicy and for a new delivery; an
+// candidate starts a new delivery direct (ForNewDelivery); an
 // organisation's value is passed over. A delivery's frozen policy without
 // the key is one from before it existed: ConvertCandidates moves it.
 func TestDirectFixesIsAProjectOnlySettingFrozenPerDelivery(t *testing.T) {
@@ -303,8 +303,8 @@ func TestDirectFixesIsAProjectOnlySettingFrozenPerDelivery(t *testing.T) {
 		t.Errorf("an organisation's candidate was read: %q", got.PullRequestFixes)
 	}
 	p, _ = ResolvePolicy(nil, json.RawMessage(`{"pullRequestFixes":"candidate"}`))
-	if !p.DirectFixes() || !p.ForNewDelivery().DirectFixes() {
-		t.Errorf("the project's stored candidate = %q, want direct", p.PullRequestFixes)
+	if got := p.ForNewDelivery(); !got.DirectFixes() {
+		t.Errorf("the project's stored candidate = %q, want direct", got.PullRequestFixes)
 	}
 	if got := (Policy{PullRequestFixes: PullRequestFixesCandidate}).ForNewDelivery(); !got.DirectFixes() {
 		t.Errorf("ForNewDelivery kept candidate: %q", got.PullRequestFixes)

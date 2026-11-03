@@ -165,10 +165,7 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 		return p, err
 	}
 	switch p.PullRequestFixes {
-	case "", PullRequestFixesDirect:
-	case PullRequestFixesCandidate:
-		// Retired: a project that stored it fixes directly too.
-		p.PullRequestFixes = PullRequestFixesDirect
+	case "", PullRequestFixesDirect, PullRequestFixesCandidate:
 	default:
 		return p, fmt.Errorf("pullRequestFixes: %q is not candidate or direct", p.PullRequestFixes)
 	}
@@ -182,9 +179,7 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 // State.Policy without the key is a delivery from before it, which
 // ConvertCandidates moves to direct at boot.
 func (p Policy) ForNewDelivery() Policy {
-	if p.PullRequestFixes == "" || p.PullRequestFixes == PullRequestFixesCandidate {
-		p.PullRequestFixes = PullRequestFixesDirect
-	}
+	p.PullRequestFixes = PullRequestFixesDirect
 	return p
 }
 
