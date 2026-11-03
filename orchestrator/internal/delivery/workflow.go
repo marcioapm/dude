@@ -3440,11 +3440,11 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// must not leave the task looking busy.
 		return workflow.Result{}, fmt.Errorf("escalation %s cannot %s", e.Reason, d.Action)
 	}
-	if d.Action == "retry" && e.Step == "" && e.Reason != ReasonChecksUnverified && e.Reason != ReasonNotConverging &&
-		(e.Reason != ReasonConductorUnavailable || st.Decision == nil) {
+	if d.Action == "retry" && e.Step == "" && e.Reason != ReasonChecksUnverified {
 		// A retry with no step to go back to: no Next would complete the
 		// workflow with its task still running. Refused before anything
-		// moves, and loudly.
+		// moves, and loudly. checks_unverified resumes where it stopped
+		// (At), not at a Step.
 		return workflow.Result{}, fmt.Errorf("escalation %s: retry has no step to go back to (RetryStep)", e.Reason)
 	}
 	st.Escalation = nil
