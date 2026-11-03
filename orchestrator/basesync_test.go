@@ -829,7 +829,14 @@ func TestAConductorPublishWaitsForALiveIntegration(t *testing.T) {
 	w.conflictWithMovedBase()
 	integrating := `SELECT count(*) FROM runs WHERE task_id=$1 AND pr_feedback::text LIKE '%Base integration%'
 		AND status IN ('pending','scheduled','starting','running')`
-	w.until("a live integration Run", func() bool { w.sync(); return w.count(integrating, task) == 1 })
+	w.until("a live integration Run", func() bool {
+		w.sync()
+		// Direct: the conductor is asked first about the conflict; it goes on.
+		if w.decisionAt(task) != "" {
+			w.must(task, "decide", `{"action":"next"}`)
+		}
+		return w.count(integrating, task) == 1
+	})
 	w.refused(task, "publish", `{"message":"a small fix"}`, "an implementer is working on this task; wait for it, or steer it")
 	if n := w.count(`SELECT count(*) FROM conductor_publishes WHERE task_id = $1`, task); n != 0 {
 		t.Fatalf("%d publishes recorded beside a live integration", n)
@@ -889,7 +896,6 @@ func TestALostCleanMergeIsAdoptedAndTestedAgain(t *testing.T) {
 		t.Fatalf("merge-base events %d", n)
 	}
 }
-
 
 func TestSyncBaseReportsAPendingFetchWithinItsBound(t *testing.T) {
 	w := newWorld(t)
