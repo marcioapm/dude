@@ -462,7 +462,28 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 	}
 	if d != nil && d.Live() && d.State.conducted() {
 		out.RoutedTo = RoutedConductor
-		if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, WakeFeedback, key, render(wakeFeedbackTmpl, itemIDs)); err != nil {
+		// Quiet, the conductor takes Deliver's defaults, and Deliver
+		// steered a working implementer or fixer at once: so does the
+		// submit, not waiting for the conductor's debounced turn
+		// (FeedbackQuiet). Its reason says so, for it not to steer them
+		// again. Chatty, the person and the conductor steer.
+		if d.State.quiet() {
+			var runID string
+			if err := tx.QueryRow(ctx, workingRunSQL, ref.TaskID, attempt).Scan(&runID); err != nil && !db.IsNotFound(err) {
+				return err
+			}
+			if runID != "" {
+				out.RunID = runID
+				if err := steerFeedbackTx(ctx, tx, RunRef{Org: ref.Org, ProjectID: ref.ProjectID, TaskID: ref.TaskID, RunID: runID}, itemIDs); err != nil {
+					return err
+				}
+			}
+		}
+		line := render(wakeFeedbackTmpl, struct {
+			Items []string
+			Run   string
+		}{itemIDs, out.RunID})
+		if _, err := RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, WakeFeedback, key, line); err != nil {
 			return err
 		}
 		// Waiting on its pull requests or its reader, the delivery parks at

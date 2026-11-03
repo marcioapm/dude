@@ -698,3 +698,102 @@ func TestABranchAnchoredItemIsSubmittedHeldAndResolvedLikeAnyOther(t *testing.T)
 		t.Errorf("resolved again: %d blocking", n)
 	}
 }
+
+// A quiet delivery's feedback is the conductor's, and reaches a working
+// implementer or fixer at once all the same (step 3b, PR C2), as Deliver
+// steered it: one directive, the Run named on the batch, and the
+// conductor's reason says the items were given, for it not to steer them
+// again. A chatty delivery's working Run is not steered: the person and
+// the conductor drive. With nothing at work, no Run is steered.
+func TestAQuietDeliverysFeedbackSteersTheWorkingRunAtOnce(t *testing.T) {
+	cases := []struct {
+		name, voice, phase string
+		steered            bool
+	}{
+		{"quiet, an implementer at work", delivery.VoiceQuiet, "implement", true},
+		{"quiet, a fixer at work", delivery.VoiceQuiet, "fix", true},
+		{"quiet, a reviewer at work", delivery.VoiceQuiet, "review", false},
+		{"chatty, an implementer at work", delivery.VoiceChatty, "implement", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newFeedbackWorld(t)
+			wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
+			w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, c.voice)
+			role := "implementer"
+			if c.phase == "review" {
+				role = "reviewer"
+			}
+			w.run(t, "run_work", "ABS-1", c.phase, role, "running")
+			w.run(t, "run_c", "ABS-1", "", "conductor", "running")
+			w.draft(t, "fbi_1", w.ana, "The VAT rate for PT is 23%, not 20%.")
+			out, err := w.submit(t, w.ana, "k", "fbi_1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRun := ""
+			if c.steered {
+				wantRun = "run_work"
+			}
+			if out.RoutedTo != delivery.RoutedConductor || out.RunID != wantRun {
+				t.Fatalf("routed %+v, want conductor %q", out, wantRun)
+			}
+			if n := w.count(t, `SELECT count(*) FROM feedback_batches WHERE routed_to = 'conductor' AND routed_run_id IS NOT DISTINCT FROM NULLIF($1, '')`, wantRun); n != 1 {
+				t.Errorf("the batch does not say it went to the conductor and %q", wantRun)
+			}
+			directives := w.count(t, `SELECT count(*) FROM directives WHERE run_id = 'run_work' AND text LIKE '%The VAT rate for PT is 23%'`)
+			if all := w.count(t, `SELECT count(*) FROM directives`); all != directives {
+				t.Errorf("%d directives to another Run than the one at work", all-directives)
+			}
+			var line string
+			if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE kind = 'feedback'`).Scan(&line); err != nil {
+				t.Fatal(err)
+			}
+			if c.steered {
+				if directives != 1 {
+					t.Errorf("%d steers of the Run at work, want 1", directives)
+				}
+				if !strings.Contains(line, "already given to the implementer or fixer at work (run_work)") {
+					t.Errorf("the conductor's reason does not say the items were given: %q", line)
+				}
+				return
+			}
+			if directives != 0 {
+				t.Errorf("%d steers of the Run at work, want none", directives)
+			}
+			if strings.Contains(line, "already given") {
+				t.Errorf("the conductor's reason says the items were given: %q", line)
+			}
+		})
+	}
+}
+
+// Feedback alone, not yet quiet for FeedbackQuiet, calls no turn whatever
+// the window; quiet for it, it does.
+func TestFeedbackAloneWaitsForItsQuiet(t *testing.T) {
+	w := newFeedbackWorld(t)
+	ctx := context.Background()
+	w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
+	w.run(t, "run_c", "ABS-1", "", "conductor", "running")
+	w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_c'`)
+	w.draft(t, "fbi_1", w.ana, "one")
+	if _, err := w.submit(t, w.ana, "k", "fbi_1"); err != nil {
+		t.Fatal(err)
+	}
+	wake := func() string {
+		var woke string
+		w.in(t, func(tx pgx.Tx) (err error) {
+			woke, err = delivery.WakeConductorTx(ctx, tx, w.org, w.task, 0)
+			return err
+		})
+		return woke
+	}
+	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '9 minutes'`)
+	if woke := wake(); woke != "" {
+		t.Fatalf("feedback 9 minutes old woke %q", woke)
+	}
+	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '10 minutes 1 second'`)
+	if woke := wake(); woke != "run_c" {
+		t.Fatalf("feedback quiet for 10 minutes woke %q", woke)
+	}
+}

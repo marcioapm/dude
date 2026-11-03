@@ -166,14 +166,18 @@ func TestADefaultsTakingConductorDeliversToThePullRequest(t *testing.T) {
 }
 
 // Feedback on a quiet delivery goes to its conductor (step 3b, PR C1), and
-// reaches the work: the defaults-taking conductor (fake/defaults, the e2e
-// suites') steers the working implementer with the person's items, as
-// Deliver's policy did before every delivery had one.
-func TestFeedbackOnAQuietDeliveryReachesTheWorkingImplementerThroughItsConductor(t *testing.T) {
+// reaches the work at once (PR C2): the submit steers the working
+// implementer with the person's items, as Deliver's policy did, without
+// waiting for the conductor's debounced turn; the defaults-taking conductor
+// (fake/defaults, the e2e suites') does not steer them again when it is
+// woken. Steered once.
+func TestFeedbackOnAQuietDeliveryReachesTheWorkingImplementerOnceAtOnce(t *testing.T) {
 	w := conducting(t)
 	w.onModel("conductor", fakeagent.DefaultsModel)
 	w.onModel("implementer", "fake/hang")
 	w.waitingFor(time.Hour)
+	// Debounced for a moment only: the conductor's turn comes in the test.
+	w.syncer.FeedbackDebounce = delivery.FeedbackDebounce{Quiet: 50 * time.Millisecond}
 	ana := w.person("Ana")
 	task := w.task()
 	w.deliverByAPI(task)
@@ -181,15 +185,27 @@ func TestFeedbackOnAQuietDeliveryReachesTheWorkingImplementerThroughItsConductor
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'running'`, task) == 1
 	})
 	impl := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
-	if code, body := w.feedback(ana, task, "fbi_working", "Keep the old endpoint as an alias."); code != 201 || body["routedTo"] != "conductor" {
+	code, body := w.feedback(ana, task, "fbi_working", "Keep the old endpoint as an alias.")
+	if code != 201 || body["routedTo"] != "conductor" || body["runId"] != impl {
 		t.Fatalf("submit: %d %v", code, body)
 	}
-	w.until("the conductor's steer of the implementer", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND strpos(text, 'Keep the old endpoint as an alias.') > 0`, impl) == 1
+	// At once: the submit's own steer, before any conductor turn.
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND strpos(text, 'Keep the old endpoint as an alias.') > 0`, impl); n != 1 {
+		t.Fatalf("%d steers of the implementer at the submit, want 1", n)
+	}
+	w.until("the conductor told of the feedback", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
+			AND strpos(payload->>'text', 'fbi_working') > 0`, task) == 1
+	})
+	w.until("the conductor's turn on it ended", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor' AND turn_done_at IS NOT NULL`, task) == 1
 	})
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.tool.dude'
-		AND payload->>'tool' = 'steer' AND payload->'arguments'->>'run' = $2`, task, impl); n != 1 {
-		t.Errorf("%d conductor steers of the implementer", n)
+		AND payload->>'tool' = 'steer'`, task); n != 0 {
+		t.Errorf("the conductor steered %d times: the item was steered again", n)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1`, impl); n != 1 {
+		t.Errorf("%d directives to the implementer, want 1", n)
 	}
 }
 
@@ -222,5 +238,35 @@ func TestStartingOverAfterAnAcceptHandedBackIsConductedQuietly(t *testing.T) {
 		FROM workflow_runs WHERE task_id = $1 AND (state->>'attempt')::int = 2`, task)
 	if got != "conductor/quiet" {
 		t.Errorf("attempt 2 decided %s, want conductor/quiet", got)
+	}
+}
+
+// Feedback at a quiet delivery's pull request wait reaches a fixer through
+// the delivery's own decision, not the conductor's feedback debounce (step
+// 3b, PR C2): the wait parks at the conductor's decision on it, whose wake
+// goes out on the window, carrying the feedback, and Deliver's defaults
+// send the item to a fixer — long before the feedback alone would call a
+// turn (FeedbackQuiet, here its 10 minutes).
+func TestFeedbackAtAQuietPullRequestWaitReachesAFixerWithoutTheDebounce(t *testing.T) {
+	w := defaultsConducting(t)
+	ana := w.person("Ana")
+	task := w.task()
+	w.deliverByAPI(task)
+	w.until("the pull request wait", func() bool {
+		return len(w.gh.Pulls()) == 1 && w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest' AND status = 'waiting'`, task) == 1
+	})
+	if code, body := w.feedback(ana, task, "fbi_prwait", "Log the retry count at info, not debug."); code != 201 || body["routedTo"] != "conductor" {
+		t.Fatalf("submit: %d %v", code, body)
+	}
+	w.until("a fixer given the item", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_prwait' = ANY(feedback_item_ids)`, task) >= 1
+	})
+	// The feedback's reason was told with the decision's, once.
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND delivered_at IS NOT NULL`, task, delivery.WakeFeedback); n != 1 {
+		t.Errorf("the feedback's reason told %d times with the decision, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
+		AND strpos(payload->>'text', 'fbi_prwait') > 0 AND strpos(payload->>'text', 'Decision waiting:') > 0`, task); n != 1 {
+		t.Errorf("%d notes carrying the feedback with the decision, want 1", n)
 	}
 }

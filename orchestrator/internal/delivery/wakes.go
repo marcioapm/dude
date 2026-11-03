@@ -1,9 +1,12 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -48,13 +51,52 @@ func WakeNote(lines []string) string {
 	}{len(lines), more, shown})
 }
 
-// WakeConductorTx delivers the task's pending reasons to its conductor as
-// one note, unless they should wait: the newest arrived within the window
-// (more may come), or the conductor is mid-turn (they join its next). A
+// People's feedback comes in bursts (several comments in a row): its
+// reasons (WakeFeedback) call the conductor once per burst, not once per
+// submit. A task's pending feedback is due once none arrived for
+// FeedbackQuiet, or once the oldest has waited FeedbackMaxWait (a steady
+// trickle does not hold it forever). Until then it calls no turn, and only
+// rides on a note another reason sends, which carries every pending reason.
+// The workflow hears feedback at once all the same (SignalHumanFeedback),
+// and a quiet delivery's working implementer or fixer is steered with it.
+const (
+	FeedbackQuiet   = 10 * time.Minute
+	FeedbackMaxWait = 30 * time.Minute
+)
+
+// FeedbackDebounce is the feedback's debounce; a zero field is its const
+// (FeedbackQuiet, FeedbackMaxWait). A seam for tests.
+type FeedbackDebounce struct{ Quiet, MaxWait time.Duration }
+
+func (d FeedbackDebounce) secs() (quiet, maxWait string) {
+	q, m := cmp.Or(d.Quiet, FeedbackQuiet), cmp.Or(d.MaxWait, FeedbackMaxWait)
+	return strconv.FormatFloat(q.Seconds(), 'f', -1, 64), strconv.FormatFloat(m.Seconds(), 'f', -1, 64)
+}
+
+// feedbackDue (SQL, over c.task_id) says the task has pending feedback
+// that is due (FeedbackDebounce).
+func feedbackDue(d FeedbackDebounce) string {
+	quiet, maxWait := d.secs()
+	return `COALESCE((SELECT max(f.created_at) < now() - make_interval(secs => ` + quiet + `)
+			OR min(f.created_at) < now() - make_interval(secs => ` + maxWait + `)
+		FROM conductor_wakes f WHERE f.task_id = c.task_id AND f.delivered_at IS NULL AND f.kind = '` + WakeFeedback + `'), false)`
+}
+
+// WakeConductorTx is WakeConductorWithinTx with the feedback's own
+// debounce (FeedbackQuiet, FeedbackMaxWait).
+func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64) (string, error) {
+	return WakeConductorWithinTx(ctx, tx, org, taskID, windowSecs, FeedbackDebounce{})
+}
+
+// WakeConductorWithinTx delivers the task's pending reasons to its
+// conductor as one note, unless they should wait: the newest that is not
+// feedback arrived within the window (more may come), only feedback not yet
+// due is pending (debounce), or the conductor is mid-turn (they join its
+// next). A note carries every pending reason, feedback not yet due too. A
 // conductor that is parked is resumed by the note; with none, one is
 // started, briefed with it. Returns the conductor woken, "" for none yet.
 // The caller holds the task's Chat lock.
-func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64) (string, error) {
+func WakeConductorWithinTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64, debounce FeedbackDebounce) (string, error) {
 	type reason struct{ ID, Kind, Line, Key string }
 	pendingNow := func() ([]reason, error) {
 		rows, err := tx.Query(ctx, `SELECT id, kind, line, key FROM conductor_wakes
@@ -91,12 +133,25 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	if err != nil || len(pending) == 0 {
 		return "", err
 	}
-	var settled bool
-	if err := tx.QueryRow(ctx, `SELECT max(created_at) < now() - make_interval(secs => $2)
-		FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, taskID, windowSecs).Scan(&settled); err != nil {
+	// The window gathers the reasons that are not feedback; feedback has
+	// its own, longer quiet (feedbackDue).
+	var settled, due bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(created_at) FILTER (WHERE kind <> '`+WakeFeedback+`')
+			< now() - make_interval(secs => $2), true), `+feedbackDue(debounce)+`
+		FROM (SELECT $1::text AS task_id) c LEFT JOIN conductor_wakes w ON w.task_id = c.task_id AND w.delivered_at IS NULL
+		GROUP BY c.task_id`, taskID, windowSecs).Scan(&settled, &due); err != nil {
 		return "", err
 	}
 	if !settled {
+		return "", nil
+	}
+	// What may call a turn: any reason but feedback not yet due, which
+	// only rides along.
+	callingNow := func() []reason {
+		return slices.DeleteFunc(slices.Clone(pending), func(r reason) bool { return r.Kind == WakeFeedback && !due })
+	}
+	calling := callingNow()
+	if len(calling) == 0 {
 		return "", nil
 	}
 	var projectID string
@@ -115,6 +170,7 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 		if pending, err = pendingNow(); err != nil {
 			return "", err
 		}
+		calling = callingNow()
 		if err := liveNow(); err != nil {
 			return "", err
 		}
@@ -123,12 +179,12 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 		// Mid-turn, or not started yet: what it hears next.
 		return "", nil
 	}
-	if parked := runID == "" || paused; parked && !slices.ContainsFunc(pending, func(r reason) bool { return !heldKey(r.Key) }) {
+	if parked := runID == "" || paused; parked && !slices.ContainsFunc(calling, func(r reason) bool { return !heldKey(r.Key) }) {
 		// Only news that waits (a base that moved): a parked conductor is
 		// not resumed, nor one started, for it. It goes with the next note.
 		return "", nil
 	}
-	if !slices.ContainsFunc(pending, func(r reason) bool { return !rideKey(r.Key) }) {
+	if !slices.ContainsFunc(calling, func(r reason) bool { return !rideKey(r.Key) }) {
 		// Only news that rides on another note: no turn for it alone.
 		return "", nil
 	}
@@ -454,27 +510,36 @@ func quietNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error)
 }
 
 // Wakeable (SQL, over conductor_wakes c, $1 the window in seconds): a task
-// with pending reasons that can be delivered now — none arrived within the
-// window, and its live conductor can hear a note (between turns, or
+// with pending reasons that can be delivered now — none but feedback
+// arrived within the window, one may call a turn (feedback only once due:
+// feedbackDue), and its live conductor can hear a note (between turns, or
 // paused), or it has none (one is started), or the one it has is ending
 // (it is ended first). Selected before the sweep's batch limit, so tasks
-// that must wait (a conductor mid-turn) cannot fill the batch. Held
-// reasons alone (heldWakePrefix) wait for a conductor running between turns;
-// riding reasons alone (rideWakePrefix) wait for a reason of another kind.
-// A task whose newest delivery a person stopped (Halt) waits for its pick-up;
-// one with no conductor, whose quiet conductor has no model (quietNoModel:
-// WakeConductorTx would start none), waits for one, its reasons pending,
-// and is not selected, so it never fills the batch.
-const Wakeable = `c.delivered_at IS NULL
+// that must wait (a conductor mid-turn, feedback debouncing) cannot fill
+// the batch. Held reasons alone (heldWakePrefix) wait for a conductor
+// running between turns; riding reasons alone (rideWakePrefix) wait for a
+// reason of another kind. A task whose newest delivery a person stopped
+// (Halt) waits for its pick-up; one with no conductor, whose quiet
+// conductor has no model (quietNoModel: WakeConductorTx would start none),
+// waits for one, its reasons pending, and is not selected, so it never
+// fills the batch. With the feedback's own debounce (FeedbackQuiet,
+// FeedbackMaxWait); WakeableWithin takes another.
+var Wakeable = WakeableWithin(FeedbackDebounce{})
+
+// WakeableWithin is Wakeable with the feedback debounced by d.
+func WakeableWithin(d FeedbackDebounce) string {
+	calling := `h.task_id = c.task_id AND h.delivered_at IS NULL AND (h.kind <> '` + WakeFeedback + `' OR ` + feedbackDue(d) + `)`
+	return `c.delivered_at IS NULL
 	AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = c.task_id` + latestDelivery + `), false)
 	AND NOT ((SELECT ` + quietNoModel + ` FROM (SELECT c.task_id) qn)
 		AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + `))
 	AND NOT EXISTS (SELECT 1 FROM conductor_wakes n WHERE n.task_id = c.task_id AND n.delivered_at IS NULL
-		AND n.created_at >= now() - make_interval(secs => $1))
+		AND n.kind <> '` + WakeFeedback + `' AND n.created_at >= now() - make_interval(secs => $1))
 	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT COALESCE(` + Ending + `, false)
 		AND NOT (r.status = 'paused' OR (r.status = 'running' AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))
-	AND (EXISTS (SELECT 1 FROM conductor_wakes h WHERE h.task_id = c.task_id AND h.delivered_at IS NULL
+	AND (EXISTS (SELECT 1 FROM conductor_wakes h WHERE ` + calling + `
 			AND h.key NOT LIKE '` + heldWakePrefix + `%')
 		OR (EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND r.status = 'running')
-			AND EXISTS (SELECT 1 FROM conductor_wakes h WHERE h.task_id = c.task_id AND h.delivered_at IS NULL
+			AND EXISTS (SELECT 1 FROM conductor_wakes h WHERE ` + calling + `
 				AND h.key NOT LIKE '` + rideWakePrefix + `%')))`
+}

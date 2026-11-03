@@ -2152,14 +2152,6 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		// As the brief says: no merge of a lux/<base> never fetched.
 		return http.StatusOK
 	}
-	if strings.Contains(args, fakeagent.WorkingRun) {
-		// The task's implementer or fixer at work; none, no call.
-		working := s.workingRun(run)
-		if working == "" {
-			return http.StatusOK
-		}
-		args = strings.ReplaceAll(args, fakeagent.WorkingRun, working)
-	}
 	id, from := InboxLast(run.Inputs)
 	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
 	args = lastFields(run.lastAnswer, args)
@@ -2217,26 +2209,6 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		run.lastID, run.lastAnswer = answer.ID, body
 	}
 	return status
-}
-
-// workingRun is the dude id of the implementer or fixer of conductor's task
-// at work in lux now, "" for none. Callers hold s.mu.
-func (s *Server) workingRun(conductor *Run) string {
-	var spec lux.Spec
-	_ = json.Unmarshal(conductor.Spec, &spec)
-	task := spec.Labels["dude.task"]
-	for i := s.next; i >= 1; i-- {
-		r := s.runs[fmt.Sprintf("lrun_%d", i)]
-		if r == nil || r.State != "running" {
-			continue
-		}
-		var rs lux.Spec
-		_ = json.Unmarshal(r.Spec, &rs)
-		if l := rs.Labels; task != "" && l["dude.task"] == task && (l["dude.phase"] == "implement" || l["dude.phase"] == "fix") {
-			return l["dude.run"]
-		}
-	}
-	return ""
 }
 
 var lastField = regexp.MustCompile(`\{\{last\.([A-Za-z0-9_.]+)\}\}`)

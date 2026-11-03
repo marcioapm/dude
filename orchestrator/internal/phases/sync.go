@@ -77,6 +77,10 @@ type Syncer struct {
 	// How long reasons to wake a conductor are gathered after the last
 	// arrived before one note delivers them (DUDE_WAKE_WINDOW; 0: WakeWindow).
 	WakeWindow time.Duration
+	// How long people's feedback is debounced before it calls the
+	// conductor; zero fields take delivery.FeedbackQuiet and
+	// delivery.FeedbackMaxWait. A seam for tests, no setting.
+	FeedbackDebounce delivery.FeedbackDebounce
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -587,7 +591,6 @@ var (
 	silentTalkers    = `runs r WHERE ` + silentTalker
 	stalledRuns      = stallFrom + ` WHERE ` + noProgress + ` AND ` + stallDue
 	failedForWake    = `runs r WHERE r.source_kind IS NULL AND ` + delivery.FailedForConductor
-	wakeableWakes    = `conductor_wakes c WHERE ` + delivery.Wakeable
 	// Every open wait is evaluated each sweep: its conditions read Runs
 	// and pull requests, which change under it.
 	openWaits = `conductor_waits w WHERE w.ended_at IS NULL`
@@ -613,7 +616,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 			{stalledRuns, &p.stalls, []any{delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds()}},
 			{openWaits, &p.waits, nil},
 			{failedForWake, &p.failed, nil},
-			{wakeableWakes, &p.wakes, []any{window.Seconds()}},
+			{s.wakeableWakes(), &p.wakes, []any{window.Seconds()}},
 		} {
 			b.Queue(`SELECT EXISTS (SELECT 1 FROM `+probe.selection+`)`, probe.args...).
 				QueryRow(func(row pgx.Row) error { return row.Scan(probe.found) })
@@ -1057,6 +1060,12 @@ func (r phaseRun) ref() delivery.RunRef {
 // WakeWindow after the last arrived.
 const WakeWindow = 15 * time.Second
 
+// wakeableWakes is what the wake step selects from (SQL): delivery.Wakeable,
+// with the syncer's feedback debounce.
+func (s *Syncer) wakeableWakes() string {
+	return `conductor_wakes c WHERE ` + delivery.WakeableWithin(s.FeedbackDebounce)
+}
+
 // wakeBatch bounds each kind of work one sweep takes up for wakes.
 const wakeBatch = 200
 
@@ -1081,7 +1090,7 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 		if todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[found]); err != nil {
 			return err
 		}
-		rows, err = tx.Query(ctx, `SELECT 'wake', c.organization_id, c.task_id, '' FROM `+wakeableWakes+`
+		rows, err = tx.Query(ctx, `SELECT 'wake', c.organization_id, c.task_id, '' FROM `+s.wakeableWakes()+`
 			GROUP BY c.organization_id, c.task_id ORDER BY min(c.created_at) LIMIT $2`,
 			window.Seconds(), wakeBatch)
 		if err != nil {
@@ -1106,7 +1115,7 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 			if err := delivery.LockChat(ctx, tx, f.TaskID); err != nil {
 				return err
 			}
-			_, err := delivery.WakeConductorTx(ctx, tx, f.Org, f.TaskID, window.Seconds())
+			_, err := delivery.WakeConductorWithinTx(ctx, tx, f.Org, f.TaskID, window.Seconds(), s.FeedbackDebounce)
 			return err
 		})
 		if err != nil {
