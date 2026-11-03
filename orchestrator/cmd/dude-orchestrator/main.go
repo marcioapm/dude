@@ -86,6 +86,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "validate" {
 		os.Exit(validate(os.Args[2:], config.Options{}, os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "convert-deliveries" {
+		os.Exit(convertCommand(context.Background(), os.Args[2:], config.Options{}, os.Stdout, os.Stderr))
+	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(log); err != nil {
 		log.Error("orchestrator stopped", "error", err)
@@ -150,6 +153,9 @@ func run(log *slog.Logger) error {
 	runtime := workflow.New(database, fmt.Sprintf("orchestrator-%s-%d", host, os.Getpid()), log)
 	store := deliveryStore(database, agent, log)
 	runtime.Register(delivery.Workflow(store, forges))
+	// Every delivery has a conductor: those in flight from before, handed
+	// to a quiet one, before this process runs any step.
+	convertDeliveries(ctx, database, log)
 
 	signalWorkflow := func(ctx context.Context, org, wf, name string, payload any, key string) error {
 		return runtime.Signal(ctx, org, wf, name, payload, key)
@@ -184,7 +190,7 @@ func run(log *slog.Logger) error {
 	syncer := &phases.Syncer{
 		DB: database, Lux: luxClient, Objects: objectStore,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log, Judge: judgeService,
-		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm, KeepFor: set.KeepStopped,
+		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm, WakeWindow: set.WakeWindow, KeepFor: set.KeepStopped,
 		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 		// A pass stops waiting for a slow Run or publish after 2 s, so the
 		// next pass reaches every other one; the slow one keeps its slot.

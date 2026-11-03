@@ -11,7 +11,7 @@ import { useState, type ReactNode } from "react";
 import { DeciderField, LiveWork, liveWords, pullRequestNumbers, type LiveItem, type NextDecider } from "@dude/design-system/components";
 import { Button, ChoiceList, Dialog, RefusedButton, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
 import type { RowMenuItem } from "@dude/design-system/primitives";
-import { NOT_STARTED_STATUSES, PHASE_DOER, TERMINAL_RUN_STATUSES, isConductor, reviewerCategoryInSentence } from "@dude/domain";
+import { NOT_STARTED_STATUSES, PHASE_DOER, TERMINAL_RUN_STATUSES, isConductor, reviewerCategoryInSentence, type PolicyBecause } from "@dude/domain";
 import type { ApiClient, PullRequest, Run, TaskDetail } from "../api/client.ts";
 import { errorText } from "../hooks/useSave.tsx";
 import { isAdoptedPr } from "../attempts.ts";
@@ -95,7 +95,7 @@ type Way = "stop" | "restart";
 type Effect = { what: string; how: "kept" | "new" | "gone"; text: ReactNode };
 
 function effects(way: Way, decider: NextDecider, next: NextDecider, attempt: number, branch: string, prs: readonly OpenPullRequest[],
-  headBranch: string | null): Effect[] {
+  headBranch: string | null, because: PolicyBecause | null): Effect[] {
   const mono = (s: string) => <span className="ds-mono">{s}</span>;
   const n = attempt + 1;
   if (way === "stop") {
@@ -123,8 +123,24 @@ function effects(way: Way, decider: NextDecider, next: NextDecider, attempt: num
     { what: "Sessions", how: "new", text: `The whole pipeline again. Attempt ${attempt}'s stay to read.` },
     next === "conductor"
       ? { what: "Conductor", how: "new", text: `A new one, briefed with your note and what attempt ${attempt} did. Attempt ${attempt}'s Chat stays above a divider.` }
-      : { what: "Deliver", how: "new", text: `Runs attempt ${n} to the pull request on its own, with your note. Chat stays open to the conductor.` },
+      : { what: "Deliver", how: "new", text: deliverNext(n, because) },
   ];
+}
+
+/**
+ * What Deliver does with attempt n: Deliver decides it itself once its
+ * person accepted its defaults, or while its conductor has no model
+ * (because); otherwise a quiet conductor takes Deliver's defaults, speaking
+ * only when it needs the person.
+ */
+export function deliverNext(n: number, because: PolicyBecause | null): string {
+  switch (because) {
+    case "accepted":
+      return `Deliver decides attempt ${n} to the pull request on its own, with your note, as you accepted its defaults.`;
+    case "no_model":
+      return `Deliver decides attempt ${n} to the pull request on its own, with your note: the conductor has no model.`;
+  }
+  return `A quiet conductor takes attempt ${n} to the pull request by Deliver's defaults, with your note. It speaks in Chat only when it needs you.`;
 }
 
 /** The Stop dialog: Stop here, or Stop and start the next attempt. */
@@ -140,8 +156,11 @@ export function StopDialog({ client, task, attempt, live, pullRequests = [], onC
   onDone: (restarted: boolean) => void;
 }) {
   const decider: NextDecider = task.decider === "conductor" ? "conductor" : "deliver";
+  // The next attempt as now: a quiet conductor's is Deliver's on the wire
+  // (policy), as every delivery has a conductor.
+  const asNow: NextDecider = decider === "conductor" && task.voice !== "quiet" ? "conductor" : "deliver";
   const [way, setWay] = useState<Way>("stop");
-  const [next, setNext] = useState<NextDecider>(decider);
+  const [next, setNext] = useState<NextDecider>(asNow);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -185,9 +204,9 @@ export function StopDialog({ client, task, attempt, live, pullRequests = [], onC
         <div className="pickUpWhatItDoes">
           {ways.map(({ value: w }) => (
             <div key={w} className="pickUpWay" data-shown={w === way}>
-              {w === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={decider} /> : null}
+              {w === "restart" ? <DeciderField attempt={n} value={next} onChange={setNext} previous={asNow} because={task.policyBecause} /> : null}
               <ul className="pickUpEffects" aria-label="What it does">
-                {effects(w, decider, next, attempt, branch, pullRequests, task.source?.headBranch ?? null).map((e) => (
+                {effects(w, decider, next, attempt, branch, pullRequests, task.source?.headBranch ?? null, task.policyBecause).map((e) => (
                   <li key={`${e.what}-${e.how}`} data-how={e.how}>
                     <span className="pickUpWhat">{e.what}</span>
                     <span className="pickUpHow">{e.how === "gone" ? "closed" : e.how}</span>

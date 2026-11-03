@@ -248,8 +248,9 @@ func TestStartingOverAQuietHandBackStaysQuiet(t *testing.T) {
 				t.Fatalf("hand back: %d %v", status, out)
 			}
 			w.until("attempt 1's implementer", func() bool { return w.phaseRuns(task, "implement") == 1 })
-			// The web sends the conducted task's decider explicitly.
-			body := map[string]any{"decider": "conductor", "note": "again"}
+			// The web sends a quiet task's decider explicitly: policy, the
+			// quiet voice on the wire.
+			body := map[string]any{"decider": "policy", "note": "again"}
 			if via == "stop" {
 				body["andRestart"] = true
 				if out := w.stop(ana, task, body); out["attempt"] != float64(2) {

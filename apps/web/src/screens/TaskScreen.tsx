@@ -61,7 +61,7 @@ import {
 } from "@dude/design-system/components";
 import { KeyValueList, Badge, Button, Callout, EmptyState, LinkButton, Select, Spinner, Tab, TabList, TabPanel, Tabs } from "@dude/design-system/primitives";
 import { formatUsd, plural, type IconName } from "@dude/design-system";
-import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, RESOLUTION_LABEL, TERMINAL_RUN_STATUSES, blockerList, decidesQuietly, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskResolution, type TaskStatus } from "@dude/domain";
+import { DEFAULT_RUN_ROLE, EventTypes, NOT_STARTED_STATUSES, POLICY_WHY, RESOLUTION_LABEL, TERMINAL_RUN_STATUSES, blockerList, decidesQuietly, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskResolution, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, ReviewQuestion, Run, TaskDetail, TaskSource, Verification } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
 import { actorName, humanActor, planFrom } from "../api/conversation.ts";
@@ -1681,6 +1681,15 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
       case "task.decider_changed":
         // Talk it through's own start line says it; the change is not said twice. Nor Stop and start over's.
         if (p.why === "talk it through" || withinStopRestart(e)) break;
+        // Deliver's start: no one decided before it, so it says the task was delivered and who decides now.
+        if (p.from == null && (p.why === "deliver" || p.why === POLICY_WHY.no_model)) {
+          const noModel = p.why === POLICY_WHY.no_model;
+          out.push({ ...base, kind: "decisions", who: face ?? <DudeMark size={32} />,
+            text: <>{by ? person : <b>{dude}</b>} delivered the task; {noModel ? <>Deliver decides: {POLICY_WHY.no_model}</> : "its conductor decides quietly"}</>,
+            quote: p.to === "policy" ? "Deliver" : `Conductor${p.voice === "quiet" ? ", quiet" : ""}` });
+          break;
+        }
+        const side = (d: unknown) => (d === "conductor" ? "Conductor" : "Deliver");
         out.push({ ...base, kind: "decisions", who: face ?? <DudeMark size={32} />,
           text: <>{by ? person : <b>{dude}</b>} {p.to === "policy" ? "let Deliver finish it"
             : p.voice === "quiet" ? "let it finish quietly"
@@ -1688,7 +1697,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
             : p.from === "conductor" ? "had the conductor talk it through"
             : "gave the decisions to the conductor"}</>,
           quote: p.from === "conductor" && p.to === "conductor" ? `Conductor → Conductor, ${p.voice === "quiet" ? "quiet" : "chatty"}`
-            : `${p.from === "conductor" ? "Conductor" : "Deliver"} → ${p.to === "conductor" ? "Conductor" : "Deliver"}${p.voice === "quiet" ? ", quiet" : ""}` });
+            : `${p.from == null ? "" : `${side(p.from)} → `}${side(p.to)}${p.voice === "quiet" ? ", quiet" : ""}` });
         break;
       case "task.decided":
         out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });

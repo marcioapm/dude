@@ -193,6 +193,13 @@ func take(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, t Taken) erro
 		d.WorkflowID, raw); err != nil {
 		return err
 	}
+	if d.State.Decision.Point == PointBeforePR && t.Action == "start_phase" {
+		// The conductor sends the work from the gate to another phase: its
+		// question about the gate's heads is over (leaveGateTx).
+		if err := leaveGateTx(ctx, tx, ref.Org, &d.State); err != nil {
+			return err
+		}
+	}
 	payload := map[string]any{"point": d.State.Decision.Point, "action": t.Action}
 	for k, v := range map[string]any{"phase": t.Phase, "categories": t.Categories, "findingIds": t.FindingIDs, "note": t.Note} {
 		switch v := v.(type) {
@@ -502,7 +509,10 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 				return nil, err
 			}
 		}
-		if p.Policy == "prFix" {
+		// A quiet conductor's next is Deliver's defaults: at the bound,
+		// prFix escalates pr_loop_exhausted as Deliver's policy does
+		// (chargePRFix), so it is not refused for the conductor to ask.
+		if p.Policy == "prFix" && !st.quiet() {
 			if err := prFixBound(ctx, tx, st); err != nil {
 				return nil, err
 			}
@@ -607,6 +617,40 @@ func askGateTx(ctx context.Context, tx pgx.Tx, org string, st *State) error {
 	_, err = askGate(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID}, st, gatePrompt(st))
 	return err
 }
+
+// leaveGateTx closes the task's open gate question as its work leaves the
+// gate for a fix (feedback at Deliver's hold, or a conductor's start_phase
+// there): the question was about the heads at the gate, which the fix
+// moves on from. Left open it would keep the conductor it was asked on
+// paused on a person, and the fix round's decision wakes would never reach
+// it. The question is asked again when the work returns to the gate, at its
+// new heads; messages held for its answer go on to the conductor.
+func leaveGateTx(ctx context.Context, tx pgx.Tx, org string, st *State) error {
+	rows, err := tx.Query(ctx, `UPDATE questions SET status = 'cancelled' WHERE task_id = $1 AND pr_gate_heads IS NOT NULL
+		AND status = 'open' RETURNING id, run_id`, st.TaskID)
+	if err != nil {
+		return err
+	}
+	closed, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, RunID string }])
+	if err != nil {
+		return err
+	}
+	for _, q := range closed {
+		if _, err := tx.Exec(ctx, `UPDATE directives SET held_for = NULL WHERE held_for = $1`, q.ID); err != nil {
+			return err
+		}
+		ref := RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: q.RunID}
+		if _, err := ledger.Append(ctx, tx, ref.Event(EvQuestionClosed, ledger.ActorSystem,
+			map[string]any{"questionId": q.ID, "by": QuestionLeftGate})); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// QuestionLeftGate is a question.closed's by for the gate's question closed
+// as the work left the gate for a fix (leaveGateTx).
+const QuestionLeftGate = "left_gate"
 
 // The gate's question at Deliver's hold: under a quiet conductor the hold
 // is Deliver's own, its conductor asked nothing first.

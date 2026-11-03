@@ -156,7 +156,7 @@ def test_a_new_verdict_refreshes_only_dudes_section_of_the_pull_request_body(
         "deliveryPolicy": {"requiredReviewers": ["correctness"], "test": True, "nonProductPaths": [".github/**"], "pullRequestFixes": "candidate"},
         "agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted",
                                          "simplifier": "fake/scripted", "qa_browser": "fake/scripted",
-                                         "conductor": "fake/scripted"}),
+                                         "conductor": "fake/defaults"}),
     })
     # Warm throughout: the second message reaches a live conductor.
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings",

@@ -185,9 +185,10 @@ type conductorBrief struct {
 	Digest, Epic, Replay string
 	PullRequests         []briefPullRequest
 	Heads                []RepoHead
-	// Who decides: no live delivery, Deliver, or else the conductor.
-	NoDelivery, DeliverDecides bool
-	Waiting, Step              string
+	// Who decides: no live delivery, Deliver's policy (a person accepted
+	// its defaults), or else the conductor — quietly (Quiet) or not.
+	NoDelivery, DeliverDecides, Quiet bool
+	Waiting, Step                     string
 	// The reason of the escalation the delivery is stopped at, for a person.
 	Escalated string
 }
@@ -216,8 +217,13 @@ func briefDecider(ctx context.Context, tx pgx.Tx, b *conductorBrief, taskID stri
 	switch {
 	case d == nil || !d.Live() || Ended(d.TaskStatus):
 		b.NoDelivery = true
+		return nil
 	case !d.State.conducted():
 		b.DeliverDecides = true
+		return nil
+	}
+	b.Quiet = d.State.quiet()
+	switch {
 	case d.State.Escalation != nil && d.State.Escalation.Decided == nil:
 		// Stopped for a person: no decision of the conductor's comes next
 		// until the person decides it.

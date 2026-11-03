@@ -144,7 +144,8 @@ def test_previews_and_tester_secret_reaches_the_tester_and_a_preview_redacted_ne
     # The conductor, asked in Chat, is given nothing.
     client.patch(f"/v1/projects/{pid}", {"agentModels": {**client.get(f"/v1/projects/{pid}").json()["agentModels"],
                                                          **client.on_models({"conductor": "fake/scripted"})}})
-    assert client.post(f"/v1/tasks/{task['id']}/chat", {"text": "what is this task about?"}).status_code == 201
+    # Deliver's delivery has its conductor already (quiet): the message is its next input.
+    assert client.post(f"/v1/tasks/{task['id']}/chat", {"text": "what is this task about?"}).status_code in (200, 201)
     conductor = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["role"] == "conductor"), None),
                            timeout=60, message="no conductor")
     spec = _lux_spec(client, env, conductor["id"])

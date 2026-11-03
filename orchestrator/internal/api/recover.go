@@ -334,7 +334,7 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 				return err
 			}
 			if body.Action != "resume" {
-				if decider == delivery.DeciderConductor {
+				if t.State.Decider == delivery.DeciderConductor {
 					// The stopped conductor's wait ends with it: the next
 					// one is briefed afresh.
 					if err := delivery.EndWaitsTx(r.Context(), tx, taskID, delivery.WaitConductorEnded); err != nil {
@@ -354,7 +354,7 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			}
 			// Try again under the conductor: a new conductor on this
 			// attempt, told the note, with the stopped one's conversation.
-			if body.Action == "retry" && decider == delivery.DeciderConductor {
+			if body.Action == "retry" && t.State.Decider == delivery.DeciderConductor {
 				if _, err := delivery.StartPickedUpConductor(r.Context(), tx, delivery.PickUp{Writer: writer, Note: note,
 					Org: org, Project: t.ProjectID, TaskID: taskID}); err != nil {
 					return err
@@ -432,7 +432,12 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 		decider = t.decider()
 	}
 	out.Decider = decider
-	if decider == delivery.DeciderConductor {
+	next, err := nextAttemptTx(ctx, tx, taskID, decider)
+	if err != nil {
+		return out, err
+	}
+	if next.Decider == delivery.DeciderConductor || next.noModel {
+		// Each attempt has its own conductor: the stopped one's ends.
 		if err := endLiveConductorTx(ctx, tx, org, t.ProjectID, taskID, live, reason); err != nil {
 			return out, err
 		}
@@ -446,15 +451,14 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 	if err := delivery.ReleaseKeptTx(ctx, tx, taskID); err != nil {
 		return out, err
 	}
-	var err error
 	if out.Attempt, err = delivery.NextAttemptTx(ctx, tx, taskID, t.State.Attempt); err != nil {
 		return out, err
 	}
-	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, out.Attempt, decider, &t.State, w, override != nil); err != nil {
+	if out.WorkflowID, err = s.startOver(ctx, tx, org, taskID, out.Attempt, next, &t.State, w, override != nil); err != nil {
 		return out, err
 	}
 	out.ClosePRs = t.State.PullRequestIDs
-	if decider != delivery.DeciderConductor {
+	if !next.chatty() {
 		return out, nil
 	}
 	out.Conductor, err = delivery.StartPickedUpConductor(ctx, tx, delivery.PickUp{Writer: w, Note: note, Attempt: out.Attempt,
@@ -475,13 +479,53 @@ func endLiveConductorTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, 
 	return delivery.AbortConductorTx(ctx, tx, delivery.RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: live}, reason, false)
 }
 
-// decider is who decided the stopped attempt.
-func (t stoppedTask) decider() string {
-	if t.State.Decider == delivery.DeciderConductor {
+// decider is who decided the stopped attempt, on the wire: conductor for
+// a conductor that talked it through (chatty), policy for one that decided
+// quietly or for Deliver's own policy (a person accepted its defaults).
+func (t stoppedTask) decider() string { return wireDecider(&t.State) }
+
+// wireDecider is who decides a delivery, as /stop and /recover say it:
+// conductor for a chatty conductor, policy for a quiet one or Deliver's.
+func wireDecider(st *delivery.State) string {
+	if st.Decider == delivery.DeciderConductor && st.Voice != delivery.VoiceQuiet {
 		return delivery.DeciderConductor
 	}
 	return delivery.DeciderPolicy
 }
+
+// nextAttempt is who decides a Start over's attempt, asked on the wire as
+// decider: conductor is a chatty conductor; policy a quiet one — every
+// delivery has a conductor — except after a person accepted Deliver's
+// defaults on the stopped attempt (accepted), which Deliver's policy goes
+// on deciding: no Stop or pick-up conducts it again silently.
+// One whose quiet conductor has no model (noModel) is Deliver's too, its
+// Voice kept quiet, until a sweep hands it over (delivery.WhyNoConductorModel).
+type nextAttempt struct {
+	Decider, Voice string
+	noModel        bool
+}
+
+// nextAttemptTx is who decides the attempt a Start over asked as wire
+// starts: Deliver's policy for the reason PolicyWhyTx gives, else a quiet
+// conductor.
+func nextAttemptTx(ctx context.Context, tx pgx.Tx, taskID, wire string) (nextAttempt, error) {
+	if wire == delivery.DeciderConductor {
+		return nextAttempt{Decider: delivery.DeciderConductor, Voice: delivery.VoiceChatty}, nil
+	}
+	switch why, err := delivery.PolicyWhyTx(ctx, tx, taskID); {
+	case err != nil:
+		return nextAttempt{}, err
+	case why == delivery.WhyAcceptedDefaults:
+		return nextAttempt{Decider: delivery.DeciderPolicy}, nil
+	case why == delivery.WhyNoConductorModel:
+		return nextAttempt{Decider: delivery.DeciderPolicy, Voice: delivery.VoiceQuiet, noModel: true}, nil
+	}
+	return nextAttempt{Decider: delivery.DeciderConductor, Voice: delivery.VoiceQuiet}, nil
+}
+
+// chatty says the attempt's conductor talks it through: it is started
+// with the pick-up's briefing, where a quiet one takes no turn at the start.
+func (n nextAttempt) chatty() bool { return n.Voice == delivery.VoiceChatty }
 
 // reopenTask takes a stopped task out of aborted (or failed): the one move
 // out of those SetTaskStatusTx refuses.
@@ -540,19 +584,20 @@ func pickUp(ctx context.Context, tx pgx.Tx, org string, t stoppedTask, action, n
 // by decider, under the settings as they are now (not the stopped attempt's
 // frozen policy), on a branch of its own from the default branch — or, for
 // a task started from existing work, on that work's head branch again
-// (delivery.NewState), whose adopted pull request it carries on. A
-// conductor that decided the stopped attempt (stopped) quietly decides
-// the next quietly too, handed back as it was.
+// (delivery.NewState), whose adopted pull request it carries on. A quiet
+// conductor that decided the stopped attempt (stopped) hands the next its
+// hand-back, as it was.
 func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int,
-	decider string, stopped *delivery.State, w delivery.Writer, overridden bool) (string, error) {
+	next nextAttempt, stopped *delivery.State, w delivery.Writer, overridden bool) (string, error) {
 	projectID, policy, err := policyFor(ctx, tx, taskID)
 	if err != nil {
 		return "", err
 	}
 	// The last attempt's delivery is over, whatever state it stopped in.
-	var was string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT state->>'decider' FROM workflow_runs WHERE task_id = $1
-		ORDER BY created_at DESC LIMIT 1), '')`, taskID).Scan(&was); err != nil {
+	var was, wasVoice string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(state->>'decider', ''), CASE WHEN state->>'decider' = 'conductor'
+			THEN COALESCE(NULLIF(state->>'voice', ''), 'chatty') ELSE '' END
+		FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, taskID).Scan(&was, &wasVoice); err != nil && !db.IsNotFound(err) {
 		return "", err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = 'completed', wake_at = NULL,
@@ -569,23 +614,40 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, a
 		return "", err
 	}
 	st.Attempt, st.Overridden = attempt, overridden
-	if decider == delivery.DeciderConductor {
-		st.Decider, st.HadConductor = decider, true
-		if stopped.Decider == delivery.DeciderConductor && stopped.Voice == delivery.VoiceQuiet {
-			st.Voice, st.HandedBack = delivery.VoiceQuiet, stopped.HandedBack
+	if next.Decider == delivery.DeciderConductor {
+		st.Decider, st.HadConductor, st.Voice = next.Decider, true, next.Voice
+		if next.Voice == delivery.VoiceQuiet && stopped.Decider == delivery.DeciderConductor && stopped.Voice == delivery.VoiceQuiet {
+			st.HandedBack = stopped.HandedBack
 		}
+	} else if next.noModel {
+		// Its quiet conductor has no model: Deliver's policy, the fix bar
+		// the conductor's, as StartTx starts one.
+		st.Decider, st.HadConductor, st.Voice = delivery.DeciderPolicy, true, delivery.VoiceQuiet
+	} else {
+		// Deliver's policy, as the person who accepted its defaults left
+		// it; the conductor's fix bar it had stays (HadConductor).
+		st.Decider, st.HadConductor = delivery.DeciderPolicy, stopped.HadConductor
 	}
 	id, err := s.Workflow.StartTx(ctx, tx, workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: org, TaskID: taskID,
 		IdempotencyKey: fmt.Sprintf("delivery:%s:attempt-%d", taskID, attempt),
 		Input:          st,
 	})
-	if err != nil || cmp.Or(was, delivery.DeciderPolicy) == decider {
+	from := cmp.Or(was, delivery.DeciderPolicy)
+	if err != nil || from == next.Decider && wasVoice == next.Voice {
 		return id, err
+	}
+	why := "start over"
+	if next.noModel {
+		why = delivery.WhyNoConductorModel
+	}
+	payload := map[string]any{"from": from, "to": next.Decider, "why": why}
+	if next.Voice != "" {
+		payload["voice"] = next.Voice
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: delivery.EvDeciderChanged, OrganizationID: org, ProjectID: projectID,
 		TaskID: taskID, ActorType: w.ActorType, ActorID: w.ActorID, Source: ledger.SourceOrchestrator, CorrelationID: taskID,
-		Payload: map[string]any{"from": cmp.Or(was, delivery.DeciderPolicy), "to": decider, "why": "start over"}})
+		Payload: payload})
 	return id, err
 }
 

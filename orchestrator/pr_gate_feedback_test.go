@@ -9,6 +9,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
@@ -22,6 +23,11 @@ func (w *world) holdRound(task string) (round, commitsSince int) {
 // holdSentBack says the task's hold records its feedback being fixed.
 func (w *world) holdSentBack(task string) bool {
 	return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state->'hold'->>'sentBack')::boolean`, task) == 1
+}
+
+// openGateQuestions counts the task's open pull request gate questions.
+func (w *world) openGateQuestions(task string) int {
+	return w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
 }
 
 // openItems records items open on the task's current attempt, by author's
@@ -201,4 +207,100 @@ func TestUnderTheConductorFeedbackAtTheGateWakesTheConductor(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); n != fixes {
 		t.Errorf("the workflow started a fix under the conductor")
 	}
+}
+
+// Deliver's hold under its quiet conductor (step 3b, PR C1): the hold's
+// question is asked on the conductor's Run, about the heads at the hold.
+// Feedback there sends the work to a fix, which takes it off those heads:
+// the question is closed with it, so the conductor (paused on a person
+// while it was open) is resumable, and the decisions the fix round wakes it
+// for land and are taken, none left to the wait. Back at the hold, the
+// question is asked again at the new heads, and its Open opens them.
+func TestFeedbackAtAQuietHoldClosesItsQuestionAndTheConductorDecidesTheFix(t *testing.T) {
+	w := defaultsConducting(t)
+	// Parked on the person at once while the hold's question is open, as
+	// it is once the factory's grace before parking passes.
+	w.syncer.ParkAfter = time.Millisecond
+	ana := w.person("Ana")
+	task := w.task()
+	w.assignOwner(task, ana)
+	w.projectChoice(delivery.PullRequestAsk)
+	w.deliverByAPI(task)
+	w.until("the hold before the pull request", func() bool { return w.heldBeforePR(task) && w.openGateQuestions(task) == 1 })
+	if got := w.deciderState(task); !strings.HasPrefix(got, "conductor/quiet") {
+		t.Fatalf("held delivery decided %s", got)
+	}
+	conductor := w.str(`SELECT run_id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
+	if w.str(`SELECT role FROM runs WHERE id = $1`, conductor) != "conductor" {
+		t.Fatalf("the hold's question is on %s, not the conductor", conductor)
+	}
+	ar := w.resolveAsItPublishes(task, "fbi_quiet", itsNewHead, nil)
+	if code, body := w.feedback(ana, task, "fbi_quiet", "Name the saved filter after its query."); code != 201 {
+		t.Fatalf("submit at the hold: %d %v", code, body)
+	}
+	w.until("a fixer given the item", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_quiet' = ANY(feedback_item_ids)`, task) > 0
+	})
+	if n := w.openGateQuestions(task); n != 0 {
+		t.Errorf("%d gate questions still open once the work left the hold for a fix", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'by' = 'left_gate'`,
+		task, delivery.EvQuestionClosed); n != 1 {
+		t.Errorf("%d question.closed events for the hold's question", n)
+	}
+	w.until("back at the hold, round 2", func() bool { r, _ := w.holdRound(task); return r == 2 && w.heldBeforePR(task) })
+	if fixer, _, answer := ar.state(); fixer == "" || !strings.HasPrefix(answer, "200 ") {
+		t.Fatalf("the fixer's resolution: %s %s", fixer, answer)
+	}
+	// The fix round's decisions were the conductor's: none waited out.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvDecisionDefaulted); n != 0 {
+		t.Errorf("%d decisions left to the wait", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = $3`,
+		task, delivery.EvDecisionTaken, delivery.PointFixed); n == 0 {
+		t.Error("the conductor took no decision after the feedback's fix")
+	}
+	if n := w.count(`SELECT count(*) FROM questions q JOIN workflow_runs wf ON wf.task_id = q.task_id
+		WHERE q.task_id = $1 AND q.status = 'open' AND q.pr_gate_heads = wf.state->'heads'`, task); n != 1 {
+		t.Errorf("%d gate questions open at the new heads, want 1", n)
+	}
+	if len(w.gh.Pulls()) != 0 {
+		t.Fatal("a pull request opened before the owner's Open")
+	}
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": "policy", "openPullRequest": true}); status != 200 {
+		t.Fatalf("Open at round 2: %d %v", status, out)
+	}
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+}
+
+// A chatty conductor at the gate asked its person (Ask me first): the
+// person's feedback wakes it, and it sends the work to a fix. The gate's
+// question was about the heads the fix moves on from: it is closed with
+// the start, so the conductor, paused on the person while it was open, is
+// woken after the fix. Asked again at the new heads, the answer opens them.
+func TestAChattyConductorsFixFromTheGateClosesItsQuestion(t *testing.T) {
+	w := conducting(t)
+	// Parked on the person at once while its question is open.
+	w.syncer.ParkAfter = time.Millisecond
+	task := w.task()
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person","note":"Reviewed clean."}`)
+	if n := w.openGateQuestions(task); n != 1 {
+		t.Fatalf("%d gate questions open, want 1", n)
+	}
+	conductor := w.str(`SELECT run_id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
+	w.until("the conductor paused on the person", func() bool {
+		return w.str(`SELECT status || '/' || COALESCE(dude_pause, '') FROM runs WHERE id = $1`, conductor) == "paused/person"
+	})
+	ana := w.person("Ana")
+	if code, body := w.feedback(ana, task, "fbi_chatty", "Name the saved filter after its query."); code != 201 || body["routedTo"] != "conductor" {
+		t.Fatalf("submit at the gate: %d %v", code, body)
+	}
+	w.must(task, "start_phase", `{"phase":"fix","note":"The person's feedback first."}`)
+	if n := w.openGateQuestions(task); n != 0 {
+		t.Errorf("%d gate questions still open once the conductor sent the work to a fix", n)
+	}
+	w.ran(task)
+	w.until("the decision after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.wokenWith(task, "after a fix")
 }

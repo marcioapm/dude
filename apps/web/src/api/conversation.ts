@@ -143,8 +143,12 @@ export interface QuestionTurn {
    * escalation decided on the task's banner). Null while it may be answered.
    */
   closedAt: string | null;
-  /** Why it closed unanswered: decided on the banner, or withdrawn (its one recipient left the session). */
-  closedBy?: "decision" | "withdrawn";
+  /**
+   * Why it closed unanswered: decided on the banner, withdrawn (its one
+   * recipient left the session), or left_gate (Deliver's hold it asked
+   * about was left: the work went back for a fix).
+   */
+  closedBy?: "decision" | "withdrawn" | "left_gate";
   /** In a brainstorm session: the one member it is put to (ask_person `to`); null for anyone who can chat. */
   to: ActorRef | null;
 }
@@ -1556,7 +1560,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const question = state.questionsById.get(String(payload.questionId ?? ""));
         if (question && question.answeredAt === null) {
           question.closedAt = event.occurredAt;
-          question.closedBy = payload.by === "withdrawn" ? "withdrawn" : "decision";
+          question.closedBy = payload.by === "withdrawn" || payload.by === "left_gate" ? payload.by : "decision";
         }
         break;
       }

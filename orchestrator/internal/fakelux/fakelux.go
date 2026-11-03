@@ -132,6 +132,11 @@ type Behaviour struct {
 	// A task's conductor: each turn's reply quotes its briefing and the
 	// input it answers (fakeagent.ConductorReply), in place of Reply.
 	Conductor bool
+	// A conductor on fakeagent.DefaultsModel: at each later decision it is
+	// woken for, it takes Deliver's defaults (decide next).
+	Defaults bool
+	// Its briefing said it decides quietly (fakeagent.QuietLabel).
+	Quiet bool
 	// Tool calls to open before a Hang, each as OpenCode reports it:
 	// [title, kind, raw input as JSON]. They stay open, as a call that
 	// never settles does.
@@ -936,6 +941,14 @@ func (s *Server) replay(run *Run, spec map[string]any) {
 	run.behavior.withChecks(now)
 }
 
+// defaultsTaker says spec is a conductor's on fakeagent.DefaultsModel.
+func defaultsTaker(spec map[string]any) bool {
+	labels, _ := spec["labels"].(map[string]any)
+	phase, _ := labels["dude.phase"].(string)
+	model, _ := labels["dude.model"].(string)
+	return phase == fakeagent.Conductor && model == fakeagent.DefaultsModel
+}
+
 // scripted plays fakeagent's step for the Run's phase, deciding the
 // reviewer's verdict from the tree it checks out.
 func (s *Server) scripted(spec map[string]any) Behaviour {
@@ -1060,7 +1073,8 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 		ChecksModel: str("dude.model"), Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, ToolOutput: toolOutput, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open,
-		Verify: verify, NeverWake: str("dude.model") == fakeagent.HangModel}
+		Verify: verify, NeverWake: str("dude.model") == fakeagent.HangModel, Defaults: str("dude.model") == fakeagent.DefaultsModel,
+		Quiet: str(fakeagent.QuietLabel) == "true"}
 }
 
 // envSecretsOf are a submitted spec's env secrets, name and value, in the
@@ -1738,6 +1752,12 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 				run.behavior.Command = append(run.behavior.Command, arg)
 			}
 		}
+	} else if defaultsTaker(spec) {
+		// A conductor on fakeagent.DefaultsModel is the scripted agent
+		// whatever a test's Decide plays: the model is its script, which
+		// takes Deliver's defaults, so a quiet delivery a test drives with
+		// its own agents goes on as Deliver alone would.
+		run.behavior = s.scripted(spec)
 	} else {
 		run.behavior = s.Decide(spec)
 		run.behavior.withChecks(spec)
@@ -1977,6 +1997,14 @@ func (s *Server) turn(run *Run) {
 		for _, c := range fakeagent.ConductorCalls(conductorAsked(input, first)) {
 			s.callTool(run, c[0], c[1])
 		}
+		// Deliver's defaults and the people's feedback, taken at a later
+		// input it is woken for (its first prompt's script carries them
+		// already: fakeagent.ConductorScriptFor).
+		if b.Defaults && !first {
+			for _, c := range fakeagent.DefaultsCalls(input, fakeagent.QuietSince(b.Quiet, run.Inputs)) {
+				s.callTool(run, c[0], c[1])
+			}
+		}
 	}
 	if b.Hang && !run.woken && (first || !b.Conductor || len(b.OpenCalls) == 0) {
 		if first {
@@ -2124,6 +2152,14 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		// As the brief says: no merge of a lux/<base> never fetched.
 		return http.StatusOK
 	}
+	if strings.Contains(args, fakeagent.WorkingRun) {
+		// The task's implementer or fixer at work; none, no call.
+		working := s.workingRun(run)
+		if working == "" {
+			return http.StatusOK
+		}
+		args = strings.ReplaceAll(args, fakeagent.WorkingRun, working)
+	}
 	id, from := InboxLast(run.Inputs)
 	args = strings.NewReplacer("{{last.id}}", run.lastID, "{{inbox.last}}", id, "{{inbox.from}}", from).Replace(args)
 	args = lastFields(run.lastAnswer, args)
@@ -2181,6 +2217,26 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		run.lastID, run.lastAnswer = answer.ID, body
 	}
 	return status
+}
+
+// workingRun is the dude id of the implementer or fixer of conductor's task
+// at work in lux now, "" for none. Callers hold s.mu.
+func (s *Server) workingRun(conductor *Run) string {
+	var spec lux.Spec
+	_ = json.Unmarshal(conductor.Spec, &spec)
+	task := spec.Labels["dude.task"]
+	for i := s.next; i >= 1; i-- {
+		r := s.runs[fmt.Sprintf("lrun_%d", i)]
+		if r == nil || r.State != "running" {
+			continue
+		}
+		var rs lux.Spec
+		_ = json.Unmarshal(r.Spec, &rs)
+		if l := rs.Labels; task != "" && l["dude.task"] == task && (l["dude.phase"] == "implement" || l["dude.phase"] == "fix") {
+			return l["dude.run"]
+		}
+	}
+	return ""
 }
 
 var lastField = regexp.MustCompile(`\{\{last\.([A-Za-z0-9_.]+)\}\}`)

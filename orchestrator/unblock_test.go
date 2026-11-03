@@ -125,8 +125,10 @@ func TestStartWhenUnblockedFiresAfterTheMergeNotInIt(t *testing.T) {
 	if w.fireAutoStarts() != 1 {
 		t.Fatal("the worker took no request")
 	}
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND NOT (state ? 'decider')`, task); n != 1 {
-		t.Fatal("the request did not start a Deliver")
+	// Every delivery has a conductor: an auto-start is Deliver's, quiet.
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->>'decider' = 'conductor'
+		AND state->>'voice' = 'quiet'`, task); n != 1 {
+		t.Fatal("the request did not start a Deliver, quietly conducted")
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.auto_started' AND payload->>'how' = 'deliver'
 		AND payload->>'by' = $2 AND payload->>'setBy' = $3`, task, w.keyOf(blocker), w.relPerson()); n != 1 {

@@ -147,21 +147,26 @@ func TestStartingOverUnderTheConductorKeepsTheConductorDeciding(t *testing.T) {
 	}
 }
 
-// Start over handing attempt 2 to Deliver: no conductor is started, the
-// change is recorded, and Deliver starts the implementer.
-func TestStartingOverCanHandTheNextAttemptToDeliver(t *testing.T) {
+// Start over asking for Deliver (policy on the wire): every delivery has
+// a conductor, so attempt 2's decides quietly. No conductor is started at
+// the start, the change of voice is recorded, and the implementer starts.
+func TestStartingOverAskingForDeliverHandsTheNextAttemptToAQuietConductor(t *testing.T) {
 	w := conducting(t)
 	task, ana, _ := w.stoppedAtDecision()
-	w.pickUp(ana, task, map[string]any{"action": "restart", "decider": "policy"})
-	if got := w.conductorRuns(task); len(got) != 1 {
-		t.Errorf("Start over to Deliver started a conductor: %v", got)
+	out := w.pickUp(ana, task, map[string]any{"action": "restart", "decider": "policy"})
+	if out["decider"] != "policy" {
+		t.Errorf("restart answered %v", out)
 	}
-	if d := w.decider(task); d != "policy" {
-		t.Errorf("attempt 2 is decided by %s", d)
+	if got := w.conductorRuns(task); len(got) != 1 {
+		t.Errorf("Start over to a quiet conductor started a conductor: %v", got)
+	}
+	if d, v := w.decider(task), w.voice(task); d != delivery.DeciderConductor || v != delivery.VoiceQuiet {
+		t.Errorf("attempt 2 is decided by %s, %q", d, v)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decider_changed'
-		AND payload->>'from' = 'conductor' AND payload->>'to' = 'policy' AND payload->>'why' = 'start over'`, task); n != 1 {
-		t.Errorf("the hand-over to Deliver was not recorded")
+		AND payload->>'from' = 'conductor' AND payload->>'to' = 'conductor' AND payload->>'voice' = 'quiet'
+		AND payload->>'why' = 'start over'`, task); n != 1 {
+		t.Errorf("the quiet attempt 2 was not recorded")
 	}
 	w.until("attempt 2's implementer", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'`, task) == 1
@@ -171,8 +176,9 @@ func TestStartingOverCanHandTheNextAttemptToDeliver(t *testing.T) {
 	}
 }
 
-// Stop and start attempt 2 on a Deliver task, handed to the conductor:
-// one request, attempt 2 decided by a new conductor.
+// Stop and start attempt 2 on a task Deliver's policy decides (a world
+// start, which bypasses StartTx), handed to the conductor: one request,
+// attempt 2 decided by a new, chatty conductor.
 func TestStopAndStartOverHandsTheNextAttemptToTheConductor(t *testing.T) {
 	w := conducting(t)
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {

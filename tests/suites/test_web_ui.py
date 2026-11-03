@@ -1264,7 +1264,8 @@ def test_a_role_on_claude_code_or_codex_delivers_and_its_chat_shows_its_work(
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     wait_until(lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(item["id"])),
                timeout=90, message=f"the delivery on {label} never reached simplify")
-    runs = client.task_runs(item["id"])
+    # The phase Runs; the delivery's quiet conductor (no phase, on its own model) is not one.
+    runs = [r for r in client.task_runs(item["id"]) if r["phase"]]
     assert [r["phase"] for r in runs] == ["implement", "review", "fix", "review", "simplify"], runs
     assert {r["harness"] for r in runs} == {harness}, runs
     implement = runs[0]
@@ -1998,10 +1999,11 @@ def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     """Chat is the task's third tab, after Overview and Changes: before anyone wrote, the task's history
-    in a line over an empty composer; a message starts the conductor, whose
-    briefing El Duderino signs and whose answer carries its own face."""
+    in a line over an empty composer; a message reaches the delivery's
+    conductor, whose briefing El Duderino signs and whose answer carries its
+    own face."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        **forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}})
+        **forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults"})}})
     task = client.create_task(forge_project["id"], "Chat about me")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],
@@ -2025,7 +2027,8 @@ def test_a_delivered_tasks_chat_asks_its_conductor_and_shows_the_answer(
     expect(briefing).to_contain_text("Briefing", timeout=30_000)
     dude = briefing.locator("header").inner_text().split("\n")[0]
     assert dude in ("The Dude", "El Duderino", "His Dudeness", "Duder"), dude
-    answer = page.get_by_test_id("conductor-turn").first
+    # The delivery's quiet conductor has taken turns on its wakes already: the answer is the turn on the message.
+    answer = page.get_by_test_id("conductor-turn").filter(has_text="why does it greet like that?").first
     expect(answer).to_contain_text("why does it greet like that?", timeout=30_000)
     expect(answer).to_contain_text(task["id"])
     expect(answer).to_have_attribute("data-role", "conductor")

@@ -46,6 +46,9 @@ idle_after = "0s"                                        # DUDE_IDLE_AFTER
 # How long a task's conductor stays running after it answers in Chat, before
 # it is parked, for projects that set none. "0s": the delivery policy's.
 conductor_warm = "0s"                                    # DUDE_CONDUCTOR_WARM
+# How long reasons to wake a task's conductor are gathered after the last
+# arrived, before one note delivers them. "0s": 15s.
+wake_window = "0s"                                       # DUDE_WAKE_WINDOW
 # How often a working agent's diff is read besides after its edits.
 diff_every = "15s"                                       # DUDE_DIFF_EVERY
 # What an hour of a lux host costs, recorded with each Run. Not negative.

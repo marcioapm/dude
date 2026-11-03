@@ -766,7 +766,13 @@ func (w *world) migrate085() {
 			DROP COLUMN restart_note, DROP COLUMN tier_override, DROP COLUMN replaced_by`); err != nil {
 		w.t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, string(sql)); err != nil {
+	// 090's model check predates the conductor newWorld puts on
+	// fake/defaults (239): the world's tier for it stays allowed.
+	ddl := strings.Replace(string(sql), "'fake/silent')", "'fake/silent', 'fake/defaults')", 1)
+	if ddl == string(sql) {
+		w.t.Fatal("090's model check no longer lists fake/silent last")
+	}
+	if _, err := tx.Exec(ctx, ddl); err != nil {
 		w.t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {

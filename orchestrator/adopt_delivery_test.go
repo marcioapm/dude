@@ -918,7 +918,10 @@ func TestStartOverAfterAnAttemptThatStoppedBeforeAnyRunStartsANewOne(t *testing.
 			stop(what)
 		}
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'agent'`, task); n != 0 {
+	// Phase Runs: the quiet conductor Deliver's start gives the delivery,
+	// woken at the adopt escalation, is no phase Run.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'agent'
+		AND role IS DISTINCT FROM 'conductor'`, task); n != 0 {
 		t.Fatalf("%d phase Runs: the attempts were meant to stop before any", n)
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, task); n != 3 {

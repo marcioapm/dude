@@ -32,7 +32,9 @@ from helpers import ApiClient, execute, provision_person, query, sign_in, wait_u
 BUILDER_ALIVE = "INSERT INTO image_builder (seen_at) VALUES (now()) ON CONFLICT (id) DO UPDATE SET seen_at = now()"
 
 BASE = "FROM debian:bookworm-slim\nRUN apt-get update && apt-get install -y git\n"
-SCRIPTED = {r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}
+# Every delivery has a conductor: Deliver's is quiet, on the model that
+# takes Deliver's defaults (as forge_project's).
+SCRIPTED = {**{r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}, "conductor": "fake/defaults"}
 
 
 def _digest(seed: str) -> str:

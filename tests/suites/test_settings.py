@@ -188,7 +188,8 @@ def test_a_run_records_the_prompt_version_it_ran_with(client: ApiClient, owner_d
     versions current when it started, and the history counts them."""
     project = client.create_project(
         name="Notes", slug=f"notes-{os.urandom(3).hex()}",
-        agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
+        agentModels=client.on_models({**{r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")},
+                                      "conductor": "fake/defaults"}),
     )
     client.post("/v1/prompts/implementer", {"body": "Implement it, carefully."})
     client.post("/v1/prompts/implementer", {"projectId": project["id"], "mode": "add", "body": "Notes go in NOTES.md."})
@@ -599,7 +600,8 @@ def test_a_phase_run_goes_to_lux_on_its_roles_size_and_pool(client: ApiClient, e
     Run records it with the pool's name then."""
     project = client.create_project(
         name="Sized", slug=f"sized-{os.urandom(3).hex()}",
-        agentModels=client.on_models({r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")}),
+        agentModels=client.on_models({**{r: "fake/scripted" for r in ("implementer", "reviewer", "simplifier")},
+                                      "conductor": "fake/defaults"}),
     )
     big = _pool_id(client, "big")
     size = client.post("/v1/machines/sizes", {"name": "Half", "cpus": 6.5, "memoryMiB": 23040, "diskGiB": 120, "poolId": big}).json()

@@ -116,9 +116,12 @@ func TestATaskStartedWithImagesInItsTextGivesThemToItsFirstAgent(t *testing.T) {
 		}
 	}
 	// The transcript's prompt turn names them, in the same order.
+	// The implementer's: the delivery's quiet conductor, once woken, is
+	// given the task's images with its briefing too.
 	w.until("the prompt to reach the ledger", func() bool {
-		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.prompt.delivered'
-			AND payload->'attachments'->0->>'id' = 'att_header' AND payload->'attachments'->2->>'id' = 'att_after'`, wi) == 1
+		return w.count(`SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id
+			WHERE e.task_id = $1 AND r.phase = 'implement' AND e.event_type = 'agent.prompt.delivered'
+			AND e.payload->'attachments'->0->>'id' = 'att_header' AND e.payload->'attachments'->2->>'id' = 'att_after'`, wi) == 1
 	})
 }
 
@@ -384,21 +387,36 @@ func TestARetriedImplementerIsGivenTheTasksImages(t *testing.T) {
 	if reason != "the task's image design.png is gone from storage" {
 		t.Fatalf("the first implementer failed with %q", reason)
 	}
-	if n := len(w.lux.Runs()); n != 0 {
-		t.Fatalf("lux was given %d Runs", n)
+	// The implementers' Runs on lux: the delivery's quiet conductor may
+	// have one too.
+	implementers := func() []*fakelux.Run {
+		var out []*fakelux.Run
+		for _, r := range w.lux.Runs() {
+			if submitted(t, r).Labels["dude.phase"] == "implement" {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	if n := len(implementers()); n != 0 {
+		t.Fatalf("lux was given %d implementers", n)
 	}
 
 	b["attachments/att_design"] = screenshot
 	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "retry"}); status != 200 {
 		t.Fatalf("retry: %d %v", status, body)
 	}
-	w.until("the second implementer to be submitted", func() bool { return len(w.lux.Runs()) >= 1 })
-	if got := promptImages(t, w.lux.Runs()[0].Spec); !slices.Equal(got, []string{"design.png"}) {
+	w.until("the second implementer to be submitted", func() bool { return len(implementers()) >= 1 })
+	if got := promptImages(t, implementers()[0].Spec); !slices.Equal(got, []string{"design.png"}) {
 		t.Fatalf("the retried implementer was given %v", got)
 	}
+	// The implementer's prompt turn: the delivery's quiet conductor is
+	// given the task's images with its briefing too (PromptAttachments),
+	// and its prompt turn may land before or after.
 	w.until("its prompt turn to name the image", func() bool {
-		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'agent.prompt.delivered'
-			AND payload->'attachments'->0->>'id' = 'att_design'`, wi) == 1
+		return w.count(`SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id
+			WHERE e.task_id = $1 AND r.phase = 'implement' AND e.event_type = 'agent.prompt.delivered'
+			AND e.payload->'attachments'->0->>'id' = 'att_design'`, wi) == 1
 	})
 }
 

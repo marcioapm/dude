@@ -33,6 +33,8 @@ def _project(client: ApiClient, fake_github: FakeGitHub, model: str) -> dict:
             "implementer": model,
             "reviewer": "fake/scripted",
             "simplifier": "fake/scripted",
+            # Deliver's quiet conductor takes Deliver's defaults.
+            "conductor": "fake/defaults",
         }),
         deliveryPolicy={"requiredReviewers": ["correctness"], "test": False},
         repositories=[{"name": "checks", "url": fake_github.clone_url, "defaultBranch": "main"}],

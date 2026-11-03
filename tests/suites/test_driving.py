@@ -1,6 +1,6 @@
 """Who drives a task, end to end through the deployed processes and the built UI.
 
-A task Deliver delivers shows Deliver beside its status. Its owner has the
+A task Deliver delivers is its quiet conductor's, shown beside its status. Its owner has the
 conductor talk it through from the header's switch; the header and Chat
 then both say the conductor decides. Let it finish quietly, from Chat,
 keeps the conductor deciding, quiet: the composer says it answers and
@@ -64,7 +64,7 @@ def _waiting_on(client: ApiClient, task_id: str, point: str) -> None:
 def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list,
 ):
-    models = {**forge_project["agentModels"], **client.on_models({"implementer": "fake/hang", "conductor": "fake/scripted"})}
+    models = {**forge_project["agentModels"], **client.on_models({"implementer": "fake/hang", "conductor": "fake/defaults"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
     task = client.create_task(forge_project["id"], "Greet, driven")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
@@ -73,29 +73,31 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
 
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"])
-    # The board: the card in progress carries Deliver's glyph, said in its name.
+    # Every delivery has a conductor: Deliver's decides quietly. The board's
+    # card carries the conductor's glyph, said in its name.
     card = page.locator(f"[data-board-key='task:{task['id']}']")
-    expect(card.get_by_test_id("driver-glyph")).to_have_attribute("data-driver", "deliver", timeout=30_000)
-    expect(card).to_have_attribute("aria-label", f"{task['key']} Greet, driven; Deliver, runs to the pull request on its own")
+    expect(card.get_by_test_id("driver-glyph")).to_have_attribute("data-driver", "conductor", timeout=30_000)
+    expect(card).to_have_attribute("aria-label", f"{task['key']} Greet, driven; Conductor, each finished step comes back to it")
     expect(card.locator("[data-testid=driver-glyph] button")).to_have_count(0)
     _shoot(page, "board")
 
     page.goto(f"{web_url}#/task/{task['id']}")
     header = page.get_by_test_id("task-header")
     chip = header.get_by_test_id("driver")
-    expect(chip).to_have_attribute("data-driver", "deliver", timeout=30_000)
-    expect(chip).to_contain_text("Deliver · runs to the pull request on its own")
+    expect(chip).to_have_attribute("data-driver", "conductor", timeout=30_000)
+    expect(chip).to_contain_text("Conductor · decides quietly; speaks when it needs you")
     _shoot(page, "header-deliver")
 
-    # The owner's switch: Deliver ticked; Talk it through.
+    # The owner's switch: finishing quietly ticked; Talk it through.
     chip.click()
     menu = page.get_by_role("menu")
-    expect(menu.get_by_role("menuitemradio", checked=True)).to_contain_text("Deliver decides")
+    expect(menu.get_by_role("menuitemradio", checked=True)).to_contain_text("Finishing quietly")
     expect(menu).to_contain_text("It takes over when the implementer finishes; the implementer keeps running.")
     _shoot(page, "menu-deliver")
     menu.get_by_role("menuitemradio").filter(has_text="Talk it through").click()
-    expect(chip).to_have_attribute("data-driver", "conductor", timeout=30_000)
-    assert _task(client, task["id"])["decider"] == "conductor"
+    expect(chip).to_contain_text("Conductor · each finished step comes back to it", timeout=30_000)
+    t = _task(client, task["id"])
+    assert (t["decider"], t["voice"]) == ("conductor", "chatty"), t
     # The implementer was not restarted: the same one is still at work.
     assert [r["status"] for r in client.task_runs(task["id"]) if r["phase"] == "implement"] == ["running"]
 
@@ -122,7 +124,11 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     page.goto(f"{web_url}#/task/{task['id']}/activity")
     activity = page.get_by_test_id("activity")
     expect(activity).to_contain_text("e2e user let it finish quietly", timeout=30_000)
-    expect(activity).to_contain_text("e2e user gave the decisions to the conductor")
+    # Deliver started it as its quiet conductor's: the start says so, from no one before it.
+    expect(activity).to_contain_text("e2e user delivered the task; its conductor decides quietly")
+    expect(activity).not_to_contain_text("Deliver →")
+    expect(activity).to_contain_text("e2e user had the conductor talk it through")
+    expect(activity).not_to_contain_text("gave the decisions to the conductor")
 
     # A colleague: the same chip, no menu, and why.
     _, bo = provision_person(client, env, "Bo", f"bo-{org['id']}@acme.dev")
@@ -150,7 +156,7 @@ def test_letting_deliver_finish_at_the_pull_request_question_asks_first(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github: FakeGitHub, console_errors: list,
     owner_dsn: str,
 ):
-    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings", {"delivery": {"conductorWarmMinutes": 30}}).status_code == 200
     task = client.create_task(forge_project["id"], "Greet, gated")

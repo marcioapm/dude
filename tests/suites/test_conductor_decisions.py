@@ -25,8 +25,11 @@ from fake_github import FakeGitHub
 from helpers import ApiClient, finish_simplifier_review, query, wait_until
 
 
-def _conducting(client: ApiClient, forge_project: dict) -> dict:
-    models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/scripted"})}
+def _conducting(client: ApiClient, forge_project: dict, model: str = "fake/scripted") -> dict:
+    """The project's conductor on model, warm. fake/scripted decides only
+    what a message names; a delivery Deliver starts, quiet, needs one that
+    takes Deliver's defaults (fake/defaults), or it waits out each decision."""
+    models = {**forge_project["agentModels"], **client.on_models({"conductor": model})}
     resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models})
     assert resp.status_code == 200, resp.text
     # Warm throughout: each decision reaches a live conductor.
@@ -52,6 +55,12 @@ def _task(client: ApiClient, task_id: str) -> dict:
 def _waiting_on(client: ApiClient, task_id: str, point: str, message: str) -> None:
     wait_until(lambda: (_task(client, task_id)["awaitingDecision"] or {}).get("point") == point,
                timeout=90, message=message)
+
+
+def _decisions(client: ApiClient, task_id: str) -> list[tuple[str, str]]:
+    """The conductor's decisions on the task, oldest first: point and action."""
+    return [(e["payload"]["point"], e["payload"]["action"]) for e in client.events(taskId=task_id, limit=1000)
+            if e["eventType"] == "conductor.decided"]
 
 
 def _phases(client: ApiClient, task_id: str, phase: str) -> list[dict]:
@@ -173,20 +182,26 @@ def test_a_conductor_parked_between_decisions_still_decides(client: ApiClient, f
 
 
 def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fake_github: FakeGitHub):
-    project = _conducting(client, forge_project)
+    project = _conducting(client, forge_project, "fake/defaults")
     task = client.create_task(project["id"], "Respond to review, with the conductor")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     pr = wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],
                     timeout=90, message="the delivery never opened a pull request")[0]
     wait_until(lambda: _task(client, task["id"])["status"] == "review", timeout=60, message="never in review")
-    assert _task(client, task["id"])["decider"] == "policy"
+    # Every delivery has a conductor: Deliver's decides quietly.
+    started = _task(client, task["id"])
+    assert (started["decider"], started["voice"]) == ("conductor", "quiet"), started
+    # Quiet, it took Deliver's defaults at each decision it was woken for.
+    quietly = _decisions(client, task["id"])
+    assert quietly and all(action == "next" for _, action in quietly), quietly
 
-    # The first message takes it over.
+    # The first message takes it over: the conductor talks it through now.
     resp = _say(client, task["id"], "I'll steer from here.")
     assert resp["decider"] == "conductor"
-    assert _task(client, task["id"])["decider"] == "conductor"
+    assert _task(client, task["id"])["voice"] == "chatty"
     changes = [e["payload"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decider_changed"]
-    assert changes == [{"from": "policy", "to": "conductor", "voice": "chatty", "why": "a person wrote in Chat"}]
+    assert changes == [{"from": None, "to": "conductor", "voice": "quiet", "why": "deliver"},
+                       {"from": "conductor", "to": "conductor", "voice": "chatty", "why": "a person wrote in Chat"}], changes
 
     # Feedback now waits on the conductor: no fixer until it decides.
     before = {r["id"] for r in _phases(client, task["id"], "fix")}
@@ -201,8 +216,7 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
     # The new fixer is the conductor's, and its decision was recorded.
     conducted = [r for r in _phases(client, task["id"], "fix") if r["id"] not in before]
     assert len(conducted) == 1 and conducted[0]["conductorRunId"] == resp["runId"], conducted
-    decisions = [(e["payload"]["point"], e["payload"]["action"]) for e in client.events(taskId=task["id"], limit=1000)
-                 if e["eventType"] == "conductor.decided"]
+    decisions = _decisions(client, task["id"])[len(quietly):]
     assert decisions == [("pull_request_feedback", "start_phase")], decisions
     before |= {conducted[0]["id"]}
 
@@ -230,25 +244,35 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
 def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,
                                                             owner_dsn: str):
     """The abs run's stall: Deliver's review gets stuck (one fix attempt per
-    finding; a conducted loop has no such bound), and the person hands the
+    finding; a conducted loop has no such bound: Deliver's policy decides it,
+    as it does a delivery whose conductor has no model), and the person hands the
     delivery to the conductor with a Chat message while it waits, the
     conductor told of the escalation. The conductor asks with the
     escalation's actions as choices (a retry is not one: it needs the person's
     own direction), the owner answers "Your call", and the conductor retries
     with decide_escalation: the next fix round runs."""
     project = _conducting(client, forge_project)
-    models = {**project["agentModels"], **client.on_models({"reviewer": "fake/stuck"})}
+    # The conductor on a tier with no model (the organisation's Fast, unset):
+    # Deliver starts the delivery on Deliver's policy, as before every
+    # delivery had a conductor, and its bounds escalate the stuck review.
+    fast = {t["name"]: t for t in client.get("/v1/models/tiers").json()["tiers"]}["Fast"]
+    assert not fast["model"], fast
+    models = {**project["agentModels"], **client.on_models({"reviewer": "fake/stuck"}), "conductor": {"tier": fast["id"]}}
     assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{project['id']}/settings",
                         {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task = client.create_task(project["id"], "Greet, and get stuck on review")
-    # Deliver decides: its review loop escalates stuck, no conductor yet.
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    assert _task(client, task["id"])["decider"] == "policy"
+    started = _task(client, task["id"])
+    assert (started["decider"], started["voice"]) == ("policy", None), started
+    changes = [e["payload"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decider_changed"]
+    assert changes == [{"from": None, "to": "policy", "voice": "quiet", "why": "the conductor has no model"}], changes
+    # The conductor back on the scripted model, for the person's Chat.
+    models = {**models, **client.on_models({"conductor": "fake/scripted"})}
+    assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
     wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=180,
                message="Deliver's review never got stuck")
     assert _task(client, task["id"])["decider"] == "policy"
-    assert not _woken(client, task["id"])
 
     # The person's first message hands the waiting delivery to the conductor.
     resp = _say(client, task["id"], "What happened?")
@@ -269,6 +293,8 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     # The banner stays while the question is open: a person may still use it.
     assert (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck"
     fixes = len(_phases(client, task["id"], "fix"))
+    # Any decision before this one is not the conductor's retry.
+    decided_before = len([e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"])
 
     # "Your call": a free answer decides nothing; the conductor decides.
     assert _say(client, task["id"], "Your call, use your judgement.")["questionId"] == question["id"]
@@ -277,7 +303,7 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     wait_until(lambda: len(_phases(client, task["id"], "fix")) == fixes + 1, timeout=90,
                message="the conductor's retry never started the next fix round")
     assert _task(client, task["id"]).get("escalation") is None
-    decided = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"]
+    decided = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"][decided_before:]
     assert len(decided) == 1 and decided[0]["payload"]["by"] == "conductor", decided
     assert decided[0]["payload"]["questionId"] == question["id"] and decided[0]["actor"]["id"] == conductor, decided
     # On the answer of the person who wrote "Your call": the client's own.

@@ -30,6 +30,9 @@ func conductorWorld(t *testing.T, model ...string) *world {
 		m = model[0]
 	}
 	w.onModel("conductor", m)
+	// The syncer's own wake window: newWorld's short one is for its
+	// defaults-taking conductor.
+	w.syncer.WakeWindow = 0
 	return w
 }
 

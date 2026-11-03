@@ -1141,6 +1141,13 @@ func (w *steps) feedbackAtGate(ctx context.Context, sc workflow.StepContext, st 
 	if err != nil || len(open) == 0 {
 		return workflow.Result{}, false, err
 	}
+	// The work leaves the hold's heads for a fix: the question about them
+	// is over, and asked again when the work comes back to the hold.
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		return leaveGateTx(ctx, tx, sc.OrganizationID, st)
+	}); err != nil {
+		return workflow.Result{}, false, err
+	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", ReasonFixingFeedback); err != nil {
 		return workflow.Result{}, false, err
 	}
@@ -1283,6 +1290,38 @@ func tellEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *Stat
 	_, err := RecordWakeTx(ctx, tx, org, st.TaskID, "escalation", fmt.Sprintf("%s:escalation:%d", wfID, st.Escalations),
 		escalatedLine(e))
 	return err == nil, err
+}
+
+// WhyAcceptedDefaults is why a delivery was handed to Deliver's policy
+// when its person accepted conductor_unavailable: the one delivery no
+// conductor decides, by the person's choice (AcceptedDefaultsTx).
+const WhyAcceptedDefaults = "the person accepted Deliver's defaults"
+
+// AcceptedDefaultsTx says the task's delivery is Deliver's because its
+// person accepted Deliver's defaults: its latest change of decider is that
+// accept. Nothing re-conducts it silently — not a Stop's or a pick-up's
+// next attempt, nor the boot sweep (ConvertToQuietTx); a person's Chat or
+// an explicit hand to the conductor does.
+func AcceptedDefaultsTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
+	var accepted bool
+	err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT payload->>'to' = $2 AND payload->>'why' = $3 FROM events
+		WHERE task_id = $1 AND event_type = '`+EvDeciderChanged+`' ORDER BY cursor DESC LIMIT 1), false)`,
+		taskID, DeciderPolicy, WhyAcceptedDefaults).Scan(&accepted)
+	return accepted, err
+}
+
+// PolicyWhyTx is why Deliver's policy, not a quiet conductor, decides the
+// task's delivery from here (a Start over's, the boot sweep's): its person
+// accepted Deliver's defaults (WhyAcceptedDefaults), else its conductor has
+// no model (WhyNoConductorModel); "" when a quiet conductor does.
+func PolicyWhyTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
+	if accepted, err := AcceptedDefaultsTx(ctx, tx, taskID); err != nil || accepted {
+		return WhyAcceptedDefaults, err
+	}
+	if noModel, err := ConductorNoModelTx(ctx, tx, taskID); err != nil || noModel {
+		return WhyNoConductorModel, err
+	}
+	return "", nil
 }
 
 // SetDeciderTx changes who decides a task's delivery, and under the

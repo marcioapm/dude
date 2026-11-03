@@ -319,3 +319,205 @@ func TestChecksFinishedRechecksTheEscalationAndCurrentChecks(t *testing.T) {
 		})
 	}
 }
+
+// A review loop exhausted where Deliver's policy weighs a decision's
+// default (reviewExit, after an accepted conductor_unavailable or a
+// not_converging accept) escalates stuck from that step; a retry is
+// another round of fixes, as one from awaitReview is, never the
+// workflow's end.
+func TestAStuckEscalationAtReviewExitRetriesTheFix(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	for _, query := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status) VALUES ('review_e', $1, 'prj_e', 'wi_e', 1, 'review', 'completed')`,
+		`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, fix_attempts) VALUES ('f', $1, 'wi_e', 'review_e', 'correctness', 'high', 'F', 'problem', 1)`,
+	} {
+		if _, err := owner.Exec(ctx, query, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := DefaultPolicy()
+	policy.MaxAttemptsPerFinding = 1
+	st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Policy: policy, Iteration: 1}
+	raw, _ := json.Marshal(st)
+	w := &steps{s: &Store{DB: app}}
+	res, err := w.reviewExit(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "reviewExit", State: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = res.State.(*State)
+	if res.Next != "decide" || st.Escalation == nil || st.Escalation.Reason != "stuck" {
+		t.Fatalf("reviewExit: next %q, escalation %+v", res.Next, st.Escalation)
+	}
+	if st.Escalation.Step != "fix" {
+		t.Fatalf("stuck at reviewExit retries %q, want fix", st.Escalation.Step)
+	}
+	raw, _ = json.Marshal(st)
+	if _, err := owner.Exec(ctx, `INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state) VALUES ('wf_e', $1, $2, 'e', 'wi_e', 'waiting', 'decide', $3)`, org, WorkflowType, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return DecideEscalationTx(ctx, tx, org, "wi_e", EscalationDecision{Action: "retry", Note: "One narrow round.", ActorType: "system", ActorID: "test"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id = 'wf_e'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	res, err = w.decide(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "decide", State: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := res.State.(*State)
+	if res.Next != "fix" || after.Iteration != 0 || after.ExtraFixAttempts != policy.MaxAttemptsPerFinding {
+		t.Fatalf("retry: next %q, iteration %d, extra attempts %d", res.Next, after.Iteration, after.ExtraFixAttempts)
+	}
+}
+
+// Every escalation that offers a retry says where it goes back to: one
+// with none would end the workflow (a Result with no Next) while its task
+// still runs. escalate refuses it, and decide refuses to carry one out.
+func TestAnEscalationOfferingRetryWithNoStepFailsLoudly(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	for _, query := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`,
+	} {
+		if _, err := owner.Exec(ctx, query, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := &steps{s: &Store{DB: app}}
+	st := &State{TaskID: "wi_e", ProjectID: "prj_e", Policy: DefaultPolicy()}
+	if _, err := w.escalate(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "noSuchStep"}, st, "stuck", LoopExit{Reason: "stuck"}); err == nil {
+		t.Fatal("a stuck escalation from a step with no retry target was raised")
+	}
+	st = &State{TaskID: "wi_e", ProjectID: "prj_e", Policy: DefaultPolicy(),
+		Escalation: &Escalation{Reason: "exhausted", Decided: &HumanDecision{Action: "retry"}}}
+	raw, _ := json.Marshal(st)
+	if res, err := w.decide(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "decide", State: raw}); err == nil {
+		t.Fatalf("a retry with no step was carried out: next %q", res.Next)
+	}
+}
+
+// A quiet conductor's next after a review round is Deliver's defaults
+// (reviewExit, "what the policy would do"): past Deliver's bound on a
+// finding's fixes it escalates stuck, as Deliver's policy does, for the
+// person. A chatty conductor's next is its own judgement: no counter
+// escalates it, and the loop goes on to a fix.
+func TestAQuietConductorsNextAtReviewExitEscalatesDeliversBound(t *testing.T) {
+	for voice, want := range map[string]string{VoiceQuiet: "decide", VoiceChatty: "fix"} {
+		t.Run(voice, func(t *testing.T) {
+			app, owner := dbtest.Open(t)
+			org := dbtest.Org(t, owner)
+			ctx := context.Background()
+			for _, query := range []string{
+				`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`,
+				`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`,
+				`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status) VALUES ('review_e', $1, 'prj_e', 'wi_e', 1, 'review', 'completed')`,
+				`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, fix_attempts) VALUES ('f', $1, 'wi_e', 'review_e', 'correctness', 'high', 'F', 'problem', 1)`,
+			} {
+				if _, err := owner.Exec(ctx, query, org); err != nil {
+					t.Fatal(err)
+				}
+			}
+			policy := DefaultPolicy()
+			policy.MaxAttemptsPerFinding = 1
+			st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Policy: policy, Iteration: 1,
+				Decider: DeciderConductor, HadConductor: true, Voice: voice}
+			raw, _ := json.Marshal(st)
+			w := &steps{s: &Store{DB: app}}
+			res, err := w.reviewExit(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "reviewExit", State: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			st = res.State.(*State)
+			if res.Next != want {
+				t.Fatalf("%s conductor's next past the bound: next %q, escalation %+v, want %q", voice, res.Next, st.Escalation, want)
+			}
+			if want == "decide" && (st.Escalation == nil || st.Escalation.Reason != "stuck" || st.Escalation.Step != "fix") {
+				t.Fatalf("%s conductor's next past the bound: escalation %+v, want stuck, retrying the fix", voice, st.Escalation)
+			}
+		})
+	}
+}
+
+// A quiet conductor's next weighs the loop's convergence as Deliver's
+// policy does: a finding judged still in two fix rounds in a row (with its
+// criterion), or two fix rounds in a row that each fixed a blocker and
+// caused another, escalate not_converging with attempts and rounds to
+// spare, whoever directed those rounds. A chatty conductor's next is its own
+// judgement and goes on to a fix.
+func TestAQuietConductorsNextAtReviewExitEscalatesNotConverging(t *testing.T) {
+	const run = `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, parent_run_id, finding_ids, verdicts, created_at)
+		VALUES ($2, $1, 'prj_e', 'wi_e', 1, $3::run_phase, 'completed', NULLIF($4, ''), $5::text[], $6::jsonb, '2026-01-01'::timestamptz + $7 * interval '1 minute')`
+	const finding = `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, acceptance, caused_by_fix, fix_attempts, status)
+		VALUES ($2, $1, 'wi_e', $3, 'correctness', 'high', 'F', 'problem', 'observable', $4, $5, $6::finding_status)`
+	type row struct {
+		query string
+		args  []any
+	}
+	for name, rows := range map[string][]row{
+		"still": {
+			{run, []any{"fix1", "fix", "", []string{"f"}, `{}`, 1}},
+			{run, []any{"review1", "review", "fix1", []string{"f"}, `{"f":"still"}`, 2}},
+			{run, []any{"fix2", "fix", "", []string{"f"}, `{}`, 3}},
+			{run, []any{"review2", "review", "fix2", []string{"f"}, `{"f":"still"}`, 4}},
+			{finding, []any{"f", "review_e", false, 2, "open"}},
+		},
+		"regression": {
+			{run, []any{"fix1", "fix", "", []string{"f"}, `{}`, 1}},
+			{run, []any{"review1", "review", "fix1", []string{"f"}, `{"f":"fixed"}`, 2}},
+			{finding, []any{"f", "review_e", false, 1, "resolved"}},
+			{finding, []any{"n1", "review1", true, 1, "resolved"}},
+			{run, []any{"fix2", "fix", "", []string{"n1"}, `{}`, 3}},
+			{run, []any{"review2", "review", "fix2", []string{"n1"}, `{"n1":"fixed"}`, 4}},
+			{finding, []any{"n2", "review2", true, 0, "open"}},
+		},
+	} {
+		for voice, want := range map[string]string{VoiceQuiet: "decide", VoiceChatty: "fix"} {
+			t.Run(name+"/"+voice, func(t *testing.T) {
+				app, owner := dbtest.Open(t)
+				org := dbtest.Org(t, owner)
+				ctx := context.Background()
+				for _, query := range []string{
+					`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`,
+					`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`,
+					`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, created_at) VALUES ('review_e', $1, 'prj_e', 'wi_e', 1, 'review', 'completed', '2026-01-01')`,
+				} {
+					if _, err := owner.Exec(ctx, query, org); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, r := range rows {
+					if _, err := owner.Exec(ctx, r.query, append([]any{org}, r.args...)...); err != nil {
+						t.Fatal(err)
+					}
+				}
+				policy := DefaultPolicy()
+				policy.MaxAttemptsPerFinding, policy.MaxReviewIterations = 99, 6
+				policy.MaxStillRounds, policy.MaxRegressionRounds = 2, 2
+				st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Policy: policy, Iteration: 3,
+					Decider: DeciderConductor, HadConductor: true, Voice: voice}
+				raw, _ := json.Marshal(st)
+				w := &steps{s: &Store{DB: app}}
+				res, err := w.reviewExit(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "reviewExit", State: raw})
+				if err != nil {
+					t.Fatal(err)
+				}
+				st = res.State.(*State)
+				if res.Next != want {
+					t.Fatalf("%s conductor's next on a loop not converging: next %q, escalation %+v, want %q", voice, res.Next, st.Escalation, want)
+				}
+				if want == "decide" && (st.Escalation == nil || st.Escalation.Reason != ReasonNotConverging) {
+					t.Fatalf("%s conductor's next on a loop not converging: escalation %+v, want not_converging", voice, st.Escalation)
+				}
+			})
+		}
+	}
+}

@@ -75,7 +75,7 @@ type Syncer struct {
 	// policy's minutes, for tests). Zero takes delivery.DefaultPolicy's.
 	ConductorWarm time.Duration
 	// How long reasons to wake a conductor are gathered after the last
-	// arrived before one note delivers them (0: WakeWindow).
+	// arrived before one note delivers them (DUDE_WAKE_WINDOW; 0: WakeWindow).
 	WakeWindow time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found

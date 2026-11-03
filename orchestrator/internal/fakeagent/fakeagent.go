@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -431,6 +432,103 @@ const (
 // as people see it (delivery.UntitledSession).
 const UntitledSession = "Untitled session"
 
+// DefaultsModel is a scripted conductor that takes Deliver's defaults: at
+// every decision it is woken for (TakesDefaults), it calls decide next,
+// as dude's defaults would after the wait, then answers as the scripted
+// conductor does. What the e2e suites' projects put their conductor on, so
+// a quiet delivery never waits out its decision's wait.
+const DefaultsModel = "fake/defaults"
+
+// DefaultsCall is the call DefaultsModel makes at a decision.
+var DefaultsCall = [2]string{"decide", `{"action":"next"}`}
+
+// TakesDefaults says an input wakes the conductor for a decision of the
+// delivery's: a decision waiting, or a review round's end, its own wake.
+// One that only tells it (an escalation, news) decides nothing.
+func TakesDefaults(input string) bool {
+	return strings.Contains(input, "Decision waiting:") || strings.Contains(input, "Review round ")
+}
+
+// WorkingRun stands, in a DefaultsModel conductor's steer, for the task's
+// implementer or fixer at work: the fake lux puts the Run's dude id in its
+// place, and makes no call when none is at work.
+const WorkingRun = "{{working.run}}"
+
+// feedbackWake matches a feedback wake's line (delivery's wake-feedback
+// briefing), naming its items.
+var feedbackWake = regexp.MustCompile(`feedback items? from a person \(([^)]*)\)`)
+
+// FeedbackCalls are what DefaultsModel does with the feedback wakes in an
+// input, as Deliver's policy did before every delivery had a conductor: a
+// working implementer or fixer is steered with the people's items, at its
+// next step (WorkingRun; none at work, no call). With nothing at work, the
+// delivery's own next decision (a decision wake, TakesDefaults) or its
+// next fix takes them up, as it did under Deliver. A stall wake asks for
+// no call: the Run is left as it is, as an owner's Leave it does, and the
+// conductor is told again only if its facts change.
+func FeedbackCalls(input string) [][2]string {
+	var ids []string
+	for _, m := range feedbackWake.FindAllStringSubmatch(input, -1) {
+		for id := range strings.SplitSeq(m[1], ",") {
+			if id = strings.TrimSpace(id); id != "" && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	args, _ := json.Marshal(map[string]any{"run": WorkingRun, "feedbackIds": ids})
+	return [][2]string{{"steer", string(args)}}
+}
+
+// DefaultsCalls are what a DefaultsModel conductor that decides quietly
+// does with an input, as Deliver's policy would: steer with the people's
+// feedback it names (FeedbackCalls), then, woken for a decision
+// (TakesDefaults), take Deliver's defaults (DefaultsCall). None while it is
+// chatty: a person drives its decisions.
+func DefaultsCalls(input string, quiet bool) [][2]string {
+	if !quiet {
+		return nil
+	}
+	calls := FeedbackCalls(input)
+	if TakesDefaults(input) {
+		calls = append(calls, DefaultsCall)
+	}
+	return calls
+}
+
+// Quiet says a conductor decides its delivery quietly, from its briefing
+// and the inputs since, oldest first: the briefing says so, or the latest
+// change of voice it was told is to quiet. DefaultsModel takes Deliver's
+// defaults only while quiet: once a person takes the delivery over in
+// Chat (chatty), its decisions are the person's to drive.
+func Quiet(briefing string, inputs []string) bool {
+	return QuietSince(Briefed(briefing), inputs)
+}
+
+// Briefed says a conductor's briefing says it decides quietly.
+func Briefed(briefing string) bool {
+	return strings.Contains(briefing, "You take this task's decisions, quietly")
+}
+
+// QuietLabel is the lux label a DefaultsModel conductor's spec carries
+// when its briefing says it decides quietly (Briefed).
+const QuietLabel = "dude.quiet"
+
+// QuietSince is Quiet from what the briefing said (quiet) on.
+func QuietSince(quiet bool, inputs []string) bool {
+	for _, in := range inputs {
+		switch {
+		case strings.Contains(in, "This delivery is quiet now"):
+			quiet = true
+		case strings.Contains(in, "This delivery is chatty now"):
+			quiet = false
+		}
+	}
+	return quiet
+}
+
 // ConductorReply is the scripted conductor's answer to one input: the line
 // of its briefing that names the task, quoted, so a test sees the briefing
 // arrived, and the input it answers, quoted back.
@@ -452,7 +550,14 @@ func BrainstormReply(title, input string) string {
 // phase's script is (for a real lux, a lux-fake script). The tools the
 // message names (ConductorCalls) are called first. A session agent's
 // briefing names a session, not a task: its reply quotes the title.
-func ConductorScript(briefing string) string {
+func ConductorScript(briefing string) string { return conductorScript(briefing, "") }
+
+// ConductorScriptFor is ConductorScript for a conductor on model: on
+// DefaultsModel, a briefing that wakes it for a decision (TakesDefaults)
+// takes Deliver's defaults first.
+func ConductorScriptFor(briefing, model string) string { return conductorScript(briefing, model) }
+
+func conductorScript(briefing, model string) string {
 	task := ""
 	if _, after, ok := strings.Cut(briefing, "## The task\n\n"); ok {
 		task, _, _ = strings.Cut(after, "\n")
@@ -466,7 +571,11 @@ func ConductorScript(briefing string) string {
 		message, _, _ = strings.Cut(message, "\n\n## How you work")
 	}
 	var b strings.Builder
-	for _, c := range ConductorCalls(message) {
+	calls := ConductorCalls(message)
+	if model == DefaultsModel && !session {
+		calls = append(calls, DefaultsCalls(message, Quiet(briefing, nil))...)
+	}
+	for _, c := range calls {
 		if Local(c[0]) {
 			b.WriteString(localScript(c[0], c[1]))
 			continue

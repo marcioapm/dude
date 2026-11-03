@@ -661,8 +661,9 @@ func TestAnEarlierAttemptsRunsAreNotSignalledToTheNext(t *testing.T) {
 	if status, body := w.call("/internal/tasks/"+wi+"/recover", map[string]any{"action": "restart"}); status != 200 {
 		t.Fatalf("restart: %d %v", status, body)
 	}
+	// attempt 2 is its quiet conductor's, whose own Run is attempt 2's too.
 	w.until("attempt 2's implementer", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2`, wi) == 1
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'`, wi) == 1
 	})
 	for range 3 {
 		w.pump()

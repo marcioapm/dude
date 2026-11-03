@@ -48,7 +48,7 @@ export function clampTimeLimit(minutes: number): number {
 }
 
 // The scripted agent's models (orchestrator/internal/fakeagent): a tier may request them, for tests.
-export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine", "fake/test-fail", "fake/test-fail-once", "fake/test-blocked", "fake/test-unverified", "fake/test-silent", "fake/test-fail-quiet", "fake/done", "fake/print-secrets", "fake/commit-secrets", "fake/checks-honest", "fake/checks-unbacked", "fake/checks-fixed", "fake/checks-base-shown"] as const;
+export const TEST_HARNESS_MODELS = ["fake/scripted", "fake/hang", "fake/tools", "fake/request", "fake/wait", "fake/live", "fake/ask", "fake/ask-several", "fake/command", "fake/stuck", "fake/stall", "fake/silent", "fake/lookup", "fake/peer", "fake/subagent", "fake/subagent-ask", "fake/machine", "fake/test-fail", "fake/test-fail-once", "fake/test-blocked", "fake/test-unverified", "fake/test-silent", "fake/test-fail-quiet", "fake/done", "fake/print-secrets", "fake/commit-secrets", "fake/checks-honest", "fake/checks-unbacked", "fake/checks-fixed", "fake/checks-base-shown", "fake/defaults"] as const;
 /** What a role that still names a model is told. */
 export const ROLE_MODEL_REMOVED = "a role names a model tier (`tier`, one of the organization's tiers), not a model";
 /** What a settings change that still names a role's effort is told. */
@@ -474,6 +474,24 @@ export function deliverOpens(task: Voiced): boolean {
   return task.decider !== "conductor" || decidesQuietly(task);
 }
 
+/**
+ * Why Deliver's policy, not a quiet conductor, decides a delivery: its
+ * person accepted Deliver's defaults, or its conductor has no model.
+ */
+export const policyBecauseSchema = z.enum(["accepted", "no_model"]);
+export type PolicyBecause = z.infer<typeof policyBecauseSchema>;
+
+/**
+ * The why of the task.decider_changed that hands a delivery to Deliver's
+ * policy for each reason (the orchestrator's delivery.WhyAcceptedDefaults,
+ * delivery.WhyNoConductorModel; packages/domain/test/policy-why.json holds
+ * both sides to it).
+ */
+export const POLICY_WHY: Record<PolicyBecause, string> = {
+  accepted: "the person accepted Deliver's defaults",
+  no_model: "the conductor has no model",
+};
+
 /** Where a conducted delivery waits on its conductor (the orchestrator's decision points). */
 export const decisionPointSchema = z.enum([
   "start",
@@ -528,6 +546,12 @@ export const taskSchema = z.object({
   voice: voiceSchema.nullable().default(null),
   /** A person let its delivery finish quietly: a later message in Chat does not make it chatty again. */
   handedBack: z.boolean().default(false),
+  /**
+   * Why Deliver's policy decides it rather than a quiet conductor, from its
+   * latest change of decider: its person accepted Deliver's defaults
+   * ("accepted"), or its conductor has no model ("no_model"); null otherwise.
+   */
+  policyBecause: policyBecauseSchema.nullable().default(null),
   /** The decision its delivery waits on for the conductor, or null. */
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
   /** Its delivery is parked until its reviewers' open questions are answered or withdrawn. */

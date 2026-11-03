@@ -20,6 +20,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -1025,9 +1026,14 @@ func TestAFailedWakeNoteIsToldAgain(t *testing.T) {
 	}
 
 	// Read, then reported failed: the read wins, nothing is told again.
+	// wokenWith saw lux's read receipt; dude records it as delivered on a
+	// later sync of the conductor's records.
 	var second string
 	_ = w.owner.QueryRow(ctx, `SELECT payload->>'directiveId' FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
 		ORDER BY cursor DESC LIMIT 1`, task).Scan(&second)
+	w.until("the second note delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL`, second) == 1
+	})
 	mustExec(t, w.owner, `UPDATE directives SET failed_at = now() WHERE id = $1 AND delivered_at IS NOT NULL`, second)
 	if n := w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL AND failed_at IS NOT NULL`, second); n != 1 {
 		t.Fatalf("the read note is not both delivered and failed")
@@ -1151,10 +1157,15 @@ func TestAWakeNoteFailedAfterTheReopenIsNotToldAgain(t *testing.T) {
 
 // Stop and start over handed to Deliver with a wake note in flight: the
 // stopped conductor's unread note is failed by the stop itself, and its
-// reasons stay attempt 1's. No conductor is started with them; attempt 2
-// runs under the policy alone.
+// reasons stay attempt 1's. No conductor is started with them: attempt 2
+// is its conductor's, quietly (policy on the wire), whose first turn is
+// its own decision's, not attempt 1's reasons. Attempt 2's implementer
+// works on, so it has no decision of its own: a conductor started, a
+// reason pending or a note told after the start over could only be attempt
+// 1's.
 func TestAWakeNoteFailedByStartingOverIsNotToldAgain(t *testing.T) {
 	w := conducting(t)
+	w.onModel("implementer", fakeagent.HangModel)
 	task := w.task()
 	ana := w.ownedBy(task, "Ana")
 	conductor := w.talk(task)
@@ -1165,8 +1176,9 @@ func TestAWakeNoteFailedByStartingOverIsNotToldAgain(t *testing.T) {
 	w.until("the unread note failed by the stop", func() bool {
 		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND failed_at IS NOT NULL`, note) == 1
 	})
-	w.until("attempt 2's implementer", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'`, task) == 1
+	w.until("attempt 2's implementer at work", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'
+			AND status = 'running' AND lux_state = 'running'`, task) == 1
 	})
 	mustExec(t, w.owner, `UPDATE conductor_wakes SET created_at = now() - interval '1 minute' WHERE task_id = $1`, task)
 	for range 3 {
@@ -1182,8 +1194,11 @@ func TestAWakeNoteFailedByStartingOverIsNotToldAgain(t *testing.T) {
 	if n := len(w.woken(task)); n != 1 {
 		t.Errorf("%d notes, want only the one in flight at the stop", n)
 	}
-	if d := w.decider(task); d != "policy" {
-		t.Errorf("attempt 2 is decided by %s", d)
+	// Policy on the wire, for a delivery whose person never accepted
+	// Deliver's defaults, is a quiet conductor: every delivery has one.
+	if d := w.str(`SELECT COALESCE(state->>'decider', 'policy') || '/' || COALESCE(state->>'voice', '') FROM workflow_runs
+		WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, task); d != "conductor/quiet" {
+		t.Errorf("attempt 2 is decided by %s, want its conductor, quietly", d)
 	}
 }
 

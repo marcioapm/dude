@@ -17,7 +17,7 @@ export interface TaskHistoryLine {
  * (reviewers in parallel) folded into "reviewers ×3", each pull request,
  * then the findings and how they stand, and the cost when known.
  */
-export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; decider?: string }, findings: readonly Finding[],
+export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; decider?: string; voice?: string | null }, findings: readonly Finding[],
   pullRequests: readonly PullRequest[], costUsd: number | null, format: (usd: number) => string, events?: readonly PersistedEvent[]): TaskHistoryLine {
   const phases = task.runs.filter((r) => r.phase);
   const attempt = Math.max(0, ...task.runs.filter((r) => r.kind !== "preview").map((r) => r.attempt));
@@ -46,9 +46,26 @@ export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; de
   }
   if (costUsd !== null && costUsd > 0) facts.push(format(costUsd));
 
-  const byConductor = task.decider === "conductor" || task.runs.some((r) => r.conductorRunId);
-  const line = { lead: leadFor(task.status, ran, byConductor), steps, facts };
+  const line = { lead: leadFor(task.status, ran, conducted(task, events ?? [])), steps, facts };
   return events ? withRelations(line, task.status, ran.length > 0, events) : line;
+}
+
+/**
+ * Conducted: the delivery was ever chatty — a person took it over in Chat,
+ * or started it with Talk it through — by its changes of decider (one to
+ * the conductor with no voice is from before voices, chatty), whatever
+ * decides now. A quiet conductor is Deliver's, taking Deliver's defaults
+ * (its next marks the Runs it starts as its own), as are an accept of
+ * them and a conductor with no model: those read as Deliver's, automatic.
+ * With no change of decider in the ledger (a legacy task, or the ledger
+ * not read yet): a conductor not quiet decides, or started a Run.
+ */
+function conducted(task: { runs: readonly Run[]; decider?: string; voice?: string | null }, events: readonly PersistedEvent[]): boolean {
+  const changes = events.filter((e) => e.eventType === EventTypes.TaskDeciderChanged);
+  if (changes.length > 0) {
+    return changes.some(({ payload: p }) => p.why === "talk it through" || (p.to === "conductor" && (p.voice ?? "chatty") === "chatty"));
+  }
+  return task.voice !== "quiet" && (task.decider === "conductor" || task.runs.some((r) => r.conductorRunId));
 }
 
 /**

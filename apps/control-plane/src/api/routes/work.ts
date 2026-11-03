@@ -9,7 +9,7 @@
 import { auditActor } from "../auth.ts";
 import { z } from "zod";
 import {
-  BUILDER_OFFLINE_SECONDS, EventTypes, PULL_REQUEST_CHOICES, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, blockedRefusal, newId,
+  BUILDER_OFFLINE_SECONDS, EventTypes, POLICY_WHY, PULL_REQUEST_CHOICES, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, agentRoleSchema, blockedRefusal, newId,
   resolveAgentModel, resolveTier, startRefusalWords,
   taskCriteriaInput, taskGoalInput, taskGoalShortBy, taskSourceInputSchema,
 } from "@dude/domain";
@@ -28,6 +28,9 @@ import { agentMachines } from "./machines.ts";
 import { answers as answersInput, text as messageInput } from "./sessions.ts";
 import type { RequestContext, Router } from "../router.ts";
 
+/** A SQL string literal of s. */
+const sqlText = (s: string) => `'${s.replaceAll("'", "''")}'`;
+
 /**
  * Who takes the task's delivery decisions, from its latest delivery's state
  * (the orchestrator's State.Decider): "policy" (Deliver) or "conductor";
@@ -43,6 +46,11 @@ const DECIDING_JSON = `
     FROM workflow_runs w WHERE w.task_id = tasks.id ORDER BY w.created_at DESC LIMIT 1) AS voice,
   COALESCE((SELECT (w.state->>'handedBack')::boolean FROM workflow_runs w WHERE w.task_id = tasks.id
     ORDER BY w.created_at DESC LIMIT 1), false) AS "handedBack",
+  -- Why Deliver's policy decides it, from its latest change of decider (the orchestrator's AcceptedDefaultsTx,
+  -- and StartTx's and Start over's no-model hand): its person accepted Deliver's defaults, or its conductor has no model.
+  (SELECT CASE WHEN e.payload->>'to' = 'policy' THEN CASE e.payload->>'why'
+      WHEN ${sqlText(POLICY_WHY.accepted)} THEN 'accepted' WHEN ${sqlText(POLICY_WHY.no_model)} THEN 'no_model' END END
+    FROM events e WHERE e.task_id = tasks.id AND e.event_type = 'task.decider_changed' ORDER BY e.cursor DESC LIMIT 1) AS "policyBecause",
   (SELECT json_build_object('point', w.state->'decision'->>'point')
    FROM workflow_runs w WHERE w.task_id = tasks.id AND w.status IN ('running', 'waiting')
      AND w.step = 'conductorDecision' AND w.state ? 'decision' AND NOT w.state->'decision' ? 'taken'

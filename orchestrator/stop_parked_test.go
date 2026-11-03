@@ -26,7 +26,10 @@ func (w *world) parkedAtGate() (task, ana string) {
 	if n := len(w.gh.Pulls()); n != 0 {
 		w.t.Fatalf("%d pull requests opened before the Open or Draft", n)
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status NOT IN ('completed', 'failed', 'aborted')`, task); n != 0 {
+	// No phase Run is live; the delivery's conductor (every delivery Deliver
+	// starts has one, quiet) waits between turns, as a chatty one does.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role IS DISTINCT FROM 'conductor'
+		AND status NOT IN ('completed', 'failed', 'aborted')`, task); n != 0 {
 		w.t.Fatalf("%d Runs live at the gate\n%s", n, w.describeRuns())
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting'
@@ -38,9 +41,15 @@ func (w *world) parkedAtGate() (task, ana string) {
 }
 
 // nothingPublished pumps the syncer and workflow, then asks the gate's
-// Open: no pull request is opened for the ended task.
+// Open: no pull request is opened for the ended task. Its conductor was
+// stopped with it: Stop and Close stop a quiet delivery's conductor, as a
+// chatty one's.
 func (w *world) nothingPublished(task string) {
 	w.t.Helper()
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'
+		AND status NOT IN ('completed', 'failed', 'aborted')`, task); n != 0 {
+		w.t.Fatalf("the ended task's conductor is still live\n%s", w.describeRuns())
+	}
 	for range 4 {
 		w.pump()
 	}

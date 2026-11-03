@@ -74,10 +74,7 @@ func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) er
 			return err
 		}
 		d := stopped.Delivery
-		decider := d.State.Decider
-		if decider == "" {
-			decider = delivery.DeciderPolicy
-		}
+		decider := wireDecider(&d.State)
 		if _, err := delivery.SetTaskStatusTx(r.Context(), tx, org, stopped.ProjectID, taskID, "", "aborted", "a person stopped the task"); err != nil {
 			return err
 		}

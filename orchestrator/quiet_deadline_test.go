@@ -547,6 +547,10 @@ func TestAChatTakeoverGivesUpTheAcceptedDefaults(t *testing.T) {
 		if !reviewRound(t, w, task) {
 			t.Fatalf("the review loop exited %q after a Chat takeover, want it parked for the conductor", w.escalationReason(task))
 		}
+		// Quiet again, the defaults' next after a review is Deliver's
+		// policy, its bounds included: loose, so the stop for a person
+		// this weighs is the defaults in a row, not the loop's bound.
+		setPolicy(w, task, `{"maxAttemptsPerFinding":99,"maxReviewIterations":99,"maxStillRounds":0,"maxRegressionRounds":0}`)
 		// The conductor's whole wait, as the 10 minutes are in production.
 		w.waitingFor(time.Hour)
 		before := w.defaulted(task, "")

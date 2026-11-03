@@ -526,12 +526,16 @@ func (w *world) upTo(task, phase string) string {
 // agent would (finished), until cond holds. What the delivery does with
 // GitHub — the pull request fix's candidate, its promotion, the refresh —
 // is the delivery's own code against the fake GitHub, and a step waiting
-// GitHub out (forgeWait) is waited for, as until does.
+// GitHub out (forgeWait) is waited for, as until does. A quiet
+// conductor's decision (every delivery Deliver starts has one) is its
+// conductor's: its Run goes to the fake lux (the syncer's Sweep), whose
+// defaults-taking model decides it, while no phase Run is pending.
 func (w *world) agentsDone(task, what string, cond func() bool) {
 	w.t.Helper()
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(untilPoll) {
 		w.sync()
 		w.advanced()
+		w.quietConductorDecides(task)
 		for _, id := range w.pendingPhaseRuns(task) {
 			w.finished(id)
 		}
@@ -541,6 +545,21 @@ func (w *world) agentsDone(task, what string, cond func() bool) {
 		}
 	}
 	w.t.Fatalf("never settled on %s\nruns:\n%s", what, w.describeRuns())
+}
+
+// quietConductorDecides hands task's conductor to the fake lux (the
+// syncer's Sweep) while its delivery waits on a quiet conductor's decision
+// and no phase Run is pending, for agentsDone: the conductor's wake is
+// delivered, and its model decides.
+func (w *world) quietConductorDecides(task string) {
+	w.t.Helper()
+	if w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'conductorDecision'
+		AND status = 'waiting' AND state->>'voice' = 'quiet'`, task) == 0 || len(w.pendingPhaseRuns(task)) > 0 {
+		return
+	}
+	if _, err := w.syncer.Sweep(context.Background()); err != nil {
+		w.t.Fatal(err)
+	}
 }
 
 // finished writes what the syncer leaves once a pending phase Run's agent

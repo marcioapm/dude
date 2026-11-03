@@ -33,7 +33,7 @@ Your checkout is at that head.
 
 ## Decisions
 
-Deliver takes this task's decisions: you are read-only.
+Deliver takes this task's decisions: its person accepted Deliver's defaults. You are read-only.
 
 ## On this epic: Billing export
 

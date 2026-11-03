@@ -183,7 +183,11 @@ def forge_project(client: ApiClient, org: dict, env: TestEnvironment, fake_githu
     return client.create_project(
         name="Greeter",
         slug=f"greeter-{fake_github.api_port}",
-        agentModels=client.on_models({role: "fake/scripted" for role in ("implementer", "reviewer", "simplifier")}),
+        # Every delivery has a conductor: Deliver's is quiet, and on the
+        # scripted model that takes Deliver's defaults (decide next) at every
+        # decision it is woken for, so no delivery waits out its decision's wait.
+        agentModels=client.on_models({**{role: "fake/scripted" for role in ("implementer", "reviewer", "simplifier")},
+                                      "conductor": "fake/defaults"}),
         # Its pull requests' fixes are checked on a candidate, as every
         # project's were before direct fixes (pullRequestFixes).
         deliveryPolicy={"requiredReviewers": ["correctness"], "test": False, "pullRequestFixes": "candidate"},

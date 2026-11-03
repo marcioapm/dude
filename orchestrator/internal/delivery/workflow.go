@@ -1228,6 +1228,12 @@ func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *
 		}
 		return &LoopExit{Reason: "clear"}
 	}
+	return w.policyExit(st, findings, conv)
+}
+
+// policyExit is the review loop's exit by Deliver's policy's bounds, with
+// the fix attempts a person granted beyond the policy's.
+func (w *steps) policyExit(st *State, findings []FindingState, conv Convergence) *LoopExit {
 	policy := st.Policy
 	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
 	if len(st.FixRange) > 0 {
@@ -1305,15 +1311,26 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 
 // reviewExit is "what the policy would do" after a review round the
 // conductor triaged: the exit for the findings as they are now — some may
-// have been dismissed since. Convergence is not weighed again: awaitReview
-// weighed this round's history, and triage or a not_converging accept (which
-// moves ConvergenceFrom past it) can only lower it.
+// have been dismissed since. A quiet conductor's next is Deliver's policy,
+// bounds and convergence alike: awaitReview read no convergence for its
+// conducted round (loopFindings), so it is read here, over the window the
+// policy's awaitReview reads — every fix round since ConvergenceFrom,
+// whoever directed it. Otherwise (loopExit) convergence is not weighed
+// again: a chatty conductor's rounds have no bound, and Deliver's policy's
+// awaitReview weighed this round's history, which triage or a
+// not_converging accept (moving ConvergenceFrom past it) can only lower.
 func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	findings, err := w.s.Findings(ctx, sc.OrganizationID, st)
+	var findings []FindingState
+	var conv Convergence
+	if st.quiet() {
+		findings, conv, err = w.s.ConvergingFindings(ctx, sc.OrganizationID, st)
+	} else {
+		findings, err = w.s.Findings(ctx, sc.OrganizationID, st)
+	}
 	if err == nil {
 		findings, err = w.s.loopsOwn(ctx, sc.OrganizationID, st, findings)
 	}
@@ -1322,6 +1339,12 @@ func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.quiet() {
+		// A quiet conductor's next (or Deliver's defaults on its behalf) is
+		// Deliver's policy: its bounds escalate the loop, as Deliver's do,
+		// or the defaults would fix an unanswerable finding forever.
+		return w.afterLoop(ctx, sc, st, w.policyExit(st, findings, conv))
 	}
 	return w.afterLoop(ctx, sc, st, w.loopExit(st, findings, Convergence{}))
 }
@@ -3281,8 +3304,9 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	if err != nil {
 		return workflow.Result{}, true, err
 	}
-	if st.conducted() {
+	if st.chatty() {
 		// The conductor hears each one end once, however often this runs.
+		// A quiet one has nothing to close out, and is not resumed for it.
 		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 			for _, p := range states {
 				if err := CloseOutTx(ctx, tx, sc.OrganizationID, st.TaskID, p.Repo, p.Number, p.State); err != nil {
@@ -3361,6 +3385,14 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	case ReasonChoiceUnresolved:
 		// The opening, which reads the choice again.
 		st.Escalation.Step = "openPullRequest"
+	case ReasonConductorUnavailable:
+		// Its retry waits on the conductor's decision again (decide).
+		st.Escalation.Step = "conductorDecision"
+	}
+	if st.Escalation.Step == "" && slices.Contains(st.Escalation.Actions(), "retry") {
+		// A retry with nowhere to go back to would end the workflow while
+		// its task still runs: a missing RetryStep entry, said loudly.
+		return workflow.Result{}, fmt.Errorf("escalation %s at step %s offers retry with no step to go back to (RetryStep)", reason, sc.Step)
 	}
 	if ids := st.Escalation.RunIDs(); len(ids) > 0 && strings.HasSuffix(reason, "_failed") {
 		// A Run failed, and lux keeps it: the step waiting on it can wait on
@@ -3400,8 +3432,11 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 var RetryStep = map[string]string{
 	"awaitImplement": "implement",
 	"adopt":          "adopt",
-	// A review loop that gave up tries again with another round of fixes.
+	// A review loop that gave up tries again with another round of fixes:
+	// from its own round, or from where Deliver's policy weighs the round
+	// a decision left to it (reviewExit), the same loop's exit.
 	"awaitReview": "fix",
+	"reviewExit":  "fix",
 	"awaitFix":    "fix",
 	"awaitTest":   "test",
 	"testVerdict": "test",
@@ -3427,6 +3462,13 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// Checked when it was taken; a decision that cannot be carried out
 		// must not leave the task looking busy.
 		return workflow.Result{}, fmt.Errorf("escalation %s cannot %s", e.Reason, d.Action)
+	}
+	if d.Action == "retry" && e.Step == "" && e.Reason != ReasonChecksUnverified {
+		// A retry with no step to go back to: no Next would complete the
+		// workflow with its task still running. Refused before anything
+		// moves, and loudly. checks_unverified resumes where it stopped
+		// (At), not at a Step.
+		return workflow.Result{}, fmt.Errorf("escalation %s: retry has no step to go back to (RetryStep)", e.Reason)
 	}
 	st.Escalation = nil
 	if e.Reason == ReasonChecksUnverified {

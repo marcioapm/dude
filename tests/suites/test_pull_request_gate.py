@@ -50,8 +50,12 @@ def test_open_as_draft_opens_a_draft_and_asks_nobody(client: ApiClient, forge_pr
     pr = wait_until(lambda: _pull_requests(client, task["id"]), timeout=90, message="no pull request")[0]
     assert fake_github.pulls[pr["number"]].draft is True
     assert _task(client, task["id"])["pullRequestOpened"] is True
-    awaited = [e for e in client.events(taskId=task["id"]) if e["eventType"] == "conductor.decision_awaited"]
-    assert awaited == [], awaited
+    # Nobody is asked at the gate: a quiet conductor's decisions (every
+    # delivery has one) are its own, and the gate is Deliver's.
+    events = client.events(taskId=task["id"], limit=1000)
+    awaited = [e["payload"]["point"] for e in events if e["eventType"] == "conductor.decision_awaited"]
+    assert "before_pull_request" not in awaited, awaited
+    assert not [e for e in events if e["eventType"] == "question.asked"], events
 
 
 def test_ask_me_first_holds_until_its_owner_opens_it_and_feedback_goes_round_first(
@@ -130,7 +134,8 @@ def test_done_without_a_pull_request_keeps_the_branch(client: ApiClient, env, or
     assert done["resolution"] == "nothing_to_merge"
     assert fake_github.branch_sha(branch) == head
     assert len(fake_github.pulls) == 0
-    assert [e for e in client.events(taskId=task["id"]) if e["eventType"] == "task.done_without_pull_request"]
+    # Past the first page: the quiet conductor's decisions are the task's events too.
+    assert [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.done_without_pull_request"]
 
 
 def test_changing_ask_me_first_while_held_opens_the_pull_request(client: ApiClient, forge_project: dict,

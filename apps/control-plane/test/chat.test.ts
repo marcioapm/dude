@@ -10,6 +10,7 @@
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
+import { POLICY_WHY } from "@dude/domain";
 import { join } from "node:path";
 import { closePool, setPool } from "../src/db/client.ts";
 import { buildRouter } from "../src/index.ts";
@@ -228,6 +229,48 @@ test("the board's driver: who its latest delivery's decider is and whether a con
   expect(await said("wi_drv_pc")).toEqual(["policy", true]);
   expect(await said("wi_drv_c")).toEqual(["conductor", false]);
   expect(await said("wi_drv_none")).toEqual(["policy", false]);
+});
+
+test("a task says its person accepted Deliver's defaults only while that accept is its latest change of decider", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+    VALUES ('wi_acc', ${ORG}, ${PROJECT}, 30, 'Accepted', 'running')`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
+    ('wfr_acc', ${ORG}, 'task.delivery', 'delivery:wi_acc', 'waiting', 'awaitFix', '{"decider":"policy","hadConductor":true}', 'wi_acc')`;
+  const changed = async (n: number, to: string, why: string) => {
+    await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+      VALUES (${`evt_acc_${n}`}, ${ORG}, 'task.decider_changed', 'wi_acc', 'system', 'dude', 'orchestrator',
+              jsonb_build_object('to', ${to}::text, 'why', ${why}::text))`;
+  };
+  const because = async () => ((await (await call("GET", "/v1/tasks/wi_acc")).json()) as { policyBecause: string | null }).policyBecause;
+  await changed(1, "conductor", "deliver");
+  expect(await because()).toBe(null);
+  await changed(2, "policy", POLICY_WHY.accepted);
+  expect(await because()).toBe("accepted");
+  await changed(3, "conductor", "a person gave the decisions to the conductor");
+  expect(await because()).toBe(null);
+});
+
+test("a task says its conductor has no model only while Deliver's policy took it for that, at its latest change of decider", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+    VALUES ('wi_nom', ${ORG}, ${PROJECT}, 31, 'No model', 'running')`;
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, status, step, state, task_id) VALUES
+    ('wfr_nom', ${ORG}, 'task.delivery', 'delivery:wi_nom', 'waiting', 'awaitFix', '{"decider":"policy","hadConductor":true,"voice":"quiet"}', 'wi_nom')`;
+  const changed = async (n: number, to: string, why: string) => {
+    await owner`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+      VALUES (${`evt_nom_${n}`}, ${ORG}, 'task.decider_changed', 'wi_nom', 'system', 'dude', 'orchestrator',
+              jsonb_build_object('to', ${to}::text, 'why', ${why}::text))`;
+  };
+  const because = async () => ((await (await call("GET", "/v1/tasks/wi_nom")).json()) as { policyBecause: string | null }).policyBecause;
+  expect(await because()).toBe(null);
+  await changed(1, "policy", POLICY_WHY.no_model);
+  expect(await because()).toBe("no_model");
+  // The same why to the conductor is not Deliver's: none.
+  await changed(2, "conductor", POLICY_WHY.no_model);
+  expect(await because()).toBe(null);
+  await changed(3, "policy", POLICY_WHY.no_model);
+  expect(await because()).toBe("no_model");
+  await changed(4, "conductor", "every delivery has a conductor");
+  expect(await because()).toBe(null);
 });
 
 test("a task carries each attempt's own last decider, the first delivery's as attempt 1, and none it never had", async () => {

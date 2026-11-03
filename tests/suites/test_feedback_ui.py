@@ -3,7 +3,8 @@
 A fake/live implementer is at work with uncommitted edits, so its Run has a
 live diff to comment on: a person comments on a range of it, which is a
 private draft in the drafts tray; Submit sends the batch to the
-implementer at work; the item then shows submitted on its lines and on
+delivery's conductor (Deliver's quiet one, on fake/defaults), which steers
+the implementer at work with it; the item then shows submitted on its lines and on
 the Feedback tab, holds the merge while it is open, and is replied to and
 resolved from its card. General feedback is written on the Feedback tab.
 
@@ -112,17 +113,19 @@ def test_a_comment_on_a_runs_diff_is_a_draft_until_submitted_then_handled_from_i
     tray = page.get_by_test_id("fb-tray")
     expect(tray).to_have_attribute("data-count", "1")
     expect(tray).to_contain_text("only you see them until you submit")
-    expect(tray.get_by_test_id("fb-tray-route")).to_contain_text("the implementer at work")
+    # A conducted delivery's feedback goes to its conductor.
+    expect(tray.get_by_test_id("fb-tray-route")).to_contain_text("the conductor")
     listed = _feedback(client, task["id"])["feedback"]
     assert [(i["status"], i["anchor"]["path"], i["anchor"]["startLine"], i["anchor"]["endLine"]) for i in listed] == [("draft", "LIVE.md", 1, 3)]
     tray.get_by_role("button", name="Review").click()
     expect(tray.get_by_test_id("fb-tray-row")).to_have_count(1)
     _shoot(page, "tray-open", tray)
 
-    # Submit asks first, then sends the batch to the implementer at work.
+    # Submit asks first, then sends the batch to the conductor, which
+    # steers the implementer at work with it (fake/defaults).
     tray.get_by_test_id("fb-submit").click()
     dialog = page.get_by_role("dialog", name="Submit 1 feedback item")
-    expect(dialog.get_by_test_id("fb-confirm-route")).to_contain_text("The implementer at work gets them at its next step.")
+    expect(dialog.get_by_test_id("fb-confirm-route")).to_contain_text("They go to the conductor.")
     _shoot(page, "submit-dialog", dialog)
     # On a phone the confirmation still fits and its key hint gives the buttons the room.
     page.set_viewport_size({"width": 390, "height": 844})
@@ -134,7 +137,10 @@ def test_a_comment_on_a_runs_diff_is_a_draft_until_submitted_then_handled_from_i
     expect(page.get_by_test_id("fb-tray")).to_have_count(0)
     item = wait_until(lambda: next((i for i in _feedback(client, task["id"])["feedback"] if i["status"] != "draft"), None),
                       timeout=10, message="nothing submitted")
-    assert item["routedTo"] == "steer"
+    assert item["routedTo"] == "conductor"
+    # The conductor's steer gives it to the implementer at work.
+    wait_until(lambda: any(item["id"] in d["text"] for d in client.get(f"/v1/runs/{run['id']}/directives").json()["directives"]),
+               timeout=60, message="the conductor never steered the implementer with the item")
 
     # Submitted: on its lines with its status, and holding the merge.
     submitted = changes.get_by_test_id("fb-item").filter(has_text="Say which pause it was")
