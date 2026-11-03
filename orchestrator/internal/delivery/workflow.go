@@ -3493,7 +3493,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, fmt.Errorf("escalation %s: retry has no step to go back to (RetryStep)", e.Reason)
 	}
 	st.Escalation = nil
-	if e.Redo && e.Reason != ReasonConductorUnavailable && d.Action != "stop" && d.Action != "done" && d.Action != "wait" {
+	if e.Redo && d.Action != "stop" && d.Action != "done" && d.Action != "wait" {
 		// The candidate it stopped on is gone (ConvertCandidateTx), and with
 		// it what the findings, test, checks or review it asked about were
 		// of: whatever resuming answer (retry, accept, amend, waive), the
@@ -3502,7 +3502,8 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// (PersonSaid) given to its fixer. Its Runs are keyed apart from
 		// every earlier one's: the sweep bumped Retries. An amend's
 		// criteria still stand for the findings it names: the new fixer
-		// works to them.
+		// works to them. The sweep sets Redo only with At, and never on a
+		// conductor_unavailable escalation.
 		st.PersonSaid = d.Said
 		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
 			return workflow.Result{}, err
@@ -3513,11 +3514,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			}
 		}
 		st.Pipeline, st.PendingRunIDs = nil, nil
-		next := e.At
-		if next == "" {
-			next = "prFix"
-		}
-		return workflow.Result{Next: next, State: st}, nil
+		return workflow.Result{Next: e.At, State: st}, nil
 	}
 	if e.Reason == ReasonChecksUnverified {
 		if d.Action == "stop" {
