@@ -299,6 +299,7 @@ func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
 	for _, c := range shapes {
 		t.Run(c.name, func(t *testing.T) {
 			w, ana, review, from := midCandidateReview(t)
+			wake := "" // the untaken decision's wake ConvertInFlight records
 			if c.loop {
 				mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{candidate,loop}', 'true') WHERE task_id = $1`, w.wi)
 			}
@@ -308,6 +309,14 @@ func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
 					awaiting_signals = '["conductor.decision"]',
 					state = state || jsonb_build_object('decision', jsonb_build_object('point', $2::text, 'policy', 'review'))
 					WHERE task_id = $1`, w.wi, c.point)
+				// As boot runs them: the quiet conductor's sweep first, which
+				// records the untaken decision's wake.
+				w.convert()
+				wake = w.str(`SELECT COALESCE(max(key), '') FROM conductor_wakes WHERE task_id = $1 AND key LIKE '%:decision:%'
+					AND delivered_at IS NULL`, w.wi)
+				if wake == "" {
+					t.Fatalf("no pending decision wake after ConvertInFlight")
+				}
 			case "decide":
 				at, step := "awaitFix", "fix"
 				if !c.loop {
@@ -328,6 +337,14 @@ func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
 			if w.state("decision") != "" {
 				t.Errorf("the conductor's decision about the candidate is still there: %s", w.state("decision"))
 			}
+			if c.step == "conductorDecision" {
+				// The decision's wake is settled with it: no turn is started
+				// for a decision that no longer exists.
+				if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key = $2
+					AND delivered_at IS NULL`, w.wi, wake); n != 0 {
+					t.Errorf("the cleared decision's wake %s is still pending", wake)
+				}
+			}
 			if c.step == "decide" {
 				if got := w.step(); got != "decide" {
 					t.Errorf("step %s, want it left at decide", got)
@@ -340,6 +357,11 @@ func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
 			// The fix's own review: a Run after the sweep, not the one from
 			// before it whose key a reset Iteration would match.
 			w.until("the new fix's own review finished", func() bool {
+				if wake != "" {
+					// Quiet now (ConvertInFlight): the redo's own decisions
+					// lapse to their defaults.
+					w.lapse(w.wi)
+				}
 				if w.count(`SELECT count(*) FROM workflow_runs wf JOIN tasks t ON t.id = wf.task_id
 					WHERE wf.task_id = $1 AND wf.status = 'completed' AND t.status = 'running'`, w.wi) != 0 {
 					t.Fatalf("the workflow completed with its task running\n%s", w.describeRuns())
@@ -348,6 +370,9 @@ func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
 					AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix' AND created_at > $2::timestamptz)`, w.wi, before) > 0
 			})
 			w.until("the delivery past the new fix's review", func() bool {
+				if wake != "" {
+					w.lapse(w.wi)
+				}
 				var pending []string
 				_ = json.Unmarshal([]byte(w.state("pendingRunIds")), &pending)
 				for _, id := range pending {
@@ -364,6 +389,10 @@ func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
 			if n := w.count(`SELECT count(*) FROM workflow_runs wf JOIN tasks t ON t.id = wf.task_id
 				WHERE wf.task_id = $1 AND wf.status = 'completed' AND t.status IN ('running', 'review')`, w.wi); n != 0 {
 				t.Errorf("the workflow completed while its task goes on: step %s\n%s", w.step(), w.describeRuns())
+			}
+			if n := w.count(`SELECT count(*) FROM conductor_wakes cw WHERE cw.task_id = $1 AND cw.key = $2
+				AND (cw.conductor_run_id IS NOT NULL OR EXISTS (SELECT 1 FROM conductor_wake_attempts a WHERE a.wake_id = cw.id))`, w.wi, wake); n != 0 {
+				t.Errorf("a conductor turn was started for the cleared decision's wake %s", wake)
 			}
 		})
 	}

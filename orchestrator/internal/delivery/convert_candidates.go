@@ -184,7 +184,14 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 		if st.Decision != nil && (d.Step == "conductorDecision" || redo) {
 			// The conductor's decision was about the dropped candidate: it
 			// hears of the redo from the notice. The row leaves
-			// conductorDecision, so no quiet deadline fires on it.
+			// conductorDecision, so no quiet deadline fires on it; the
+			// decision's wake (ConvertToQuietTx's, at boot) is settled
+			// with it, so no turn is asked for a decision nobody waits on.
+			if _, err := tx.Exec(ctx, `UPDATE conductor_wakes SET delivered_at = now()
+				WHERE task_id = $1 AND key = $2 AND delivered_at IS NULL`,
+				taskID, decisionWakeKey(workflowID, st.Decisions)); err != nil {
+				return "", err
+			}
 			st.Decision = nil
 			st.Decisions++
 		}
