@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
@@ -753,7 +755,7 @@ func TestAQuietDeliverysFeedbackSteersTheWorkingRunAtOnce(t *testing.T) {
 				if directives != 1 {
 					t.Errorf("%d steers of the Run at work, want 1", directives)
 				}
-				if !strings.Contains(line, "already given to the implementer or fixer at work (run_work)") {
+				if !strings.Contains(line, "Already given to the implementer or fixer at work (run_work)") {
 					t.Errorf("the conductor's reason does not say the items were given: %q", line)
 				}
 				return
@@ -761,7 +763,7 @@ func TestAQuietDeliverysFeedbackSteersTheWorkingRunAtOnce(t *testing.T) {
 			if directives != 0 {
 				t.Errorf("%d steers of the Run at work, want none", directives)
 			}
-			if strings.Contains(line, "already given") {
+			if strings.Contains(strings.ToLower(line), "already given") {
 				t.Errorf("the conductor's reason says the items were given: %q", line)
 			}
 		})
@@ -795,5 +797,39 @@ func TestFeedbackAloneWaitsForItsQuiet(t *testing.T) {
 	w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '10 minutes 1 second'`)
 	if woke := wake(); woke != "run_c" {
 		t.Fatalf("feedback quiet for 10 minutes woke %q", woke)
+	}
+}
+
+// The note says the items were already given, and to whom, before it
+// lists them (C2 round 1): a reason's line is clipped at 300 characters,
+// and real ids (29 characters each, listed twice) push a clause at the end
+// past it from two items on.
+func TestAlreadyGivenSurvivesTheClipWithRealIDs(t *testing.T) {
+	for _, n := range []int{1, 3, 5} {
+		t.Run(strconv.Itoa(n)+" items", func(t *testing.T) {
+			w := newFeedbackWorld(t)
+			wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
+			w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, delivery.VoiceQuiet)
+			work := ids.New(ids.Run)
+			w.run(t, work, "ABS-1", "implement", "implementer", "running")
+			w.run(t, ids.New(ids.Run), "ABS-1", "", "conductor", "running")
+			var drafts []string
+			for i := range n {
+				id := ids.New(ids.FeedbackItem)
+				w.draft(t, id, w.ana, "comment "+strconv.Itoa(i))
+				drafts = append(drafts, id)
+			}
+			if out, err := w.submit(t, w.ana, "k", drafts...); err != nil || out.RunID != work {
+				t.Fatalf("submit: %+v %v, want steered to %s", out, err, work)
+			}
+			var line string
+			if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE kind = 'feedback'`).Scan(&line); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(line, "Already given to the implementer or fixer at work ("+work+")") ||
+				!strings.Contains(line, "do not steer them again") {
+				t.Errorf("the stored line lost the clause or its Run (%d chars): %q", len(line), line)
+			}
+		})
 	}
 }
