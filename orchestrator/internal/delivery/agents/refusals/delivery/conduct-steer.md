@@ -24,4 +24,6 @@
 
 {{- define "refusals/delivery/conduct-steer/not-open-feedback-item-this-task"}}%s is not an open feedback item of this task's current attempt (feedback lists them){{end}}
 
+{{- define "refusals/delivery/conduct-steer/feedback-already-given-to-run"}}already given to %[2]s, which has their words: %[1]s. Do not steer them to it again; pass only the items it does not have{{end}}
+
 {{- define "refusals/delivery/conduct-steer/not-your-child"}}%s is not your child: steer only the child agents you started{{end}}

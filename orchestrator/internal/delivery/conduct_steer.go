@@ -110,6 +110,26 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 			}
 			items = append(items, open[i])
 		}
+		// Items the Run already has (given in its prompt, read, or on a
+		// steer still on its way) are not given again: a quiet delivery's
+		// submit steers its working Run itself, and the same words twice
+		// are noise to it. The whole steer is refused, naming them, so the
+		// conductor learns which; a Run that ended released its items
+		// (FeedbackRunEndedTx), and they go to the next as any open item.
+		rows, err := tx.Query(ctx, `SELECT f.id FROM feedback_items f WHERE f.id = ANY($1) AND f.delivered_run_id = $2
+			AND (f.directive_id IS NULL OR EXISTS (SELECT 1 FROM directives d WHERE d.id = f.directive_id
+				AND (d.delivered_at IS NOT NULL OR d.failed_at IS NULL)))
+			ORDER BY array_position($1, f.id)`, feedbackIDs, runID)
+		if err != nil {
+			return Steered{}, "", err
+		}
+		given, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return Steered{}, "", err
+		}
+		if len(given) > 0 {
+			return Steered{}, "", refusef(rFeedbackAlreadyGivenToRun, strings.Join(given, ", "), runID)
+		}
 		words = FeedbackText(items, true)
 	}
 	out, err := Steer(ctx, tx, ref.Org, SteerInput{RunID: runID, Text: text, Interrupt: interrupt,

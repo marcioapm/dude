@@ -833,3 +833,58 @@ func TestAlreadyGivenSurvivesTheClipWithRealIDs(t *testing.T) {
 		})
 	}
 }
+
+// The conductor cannot give items again to the Run that has them (C2
+// round 1): a quiet delivery's submit steered them to the implementer at
+// work, and the conductor's steer of the same items to it is refused,
+// naming them, whole, a batch with an item it does not have too. Once
+// that Run ended (the items open again), a steer of them to a new fixer
+// is taken.
+func TestTheConductorDoesNotGiveItemsAgainToTheRunThatHasThem(t *testing.T) {
+	w := newFeedbackWorld(t)
+	ctx := context.Background()
+	wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
+	w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, delivery.VoiceQuiet)
+	w.run(t, "run_work", "ABS-1", "implement", "implementer", "running")
+	conductor := w.run(t, "run_c", "ABS-1", "", "conductor", "running")
+	w.draft(t, "fbi_1", w.ana, "The VAT rate for PT is 23%, not 20%.")
+	w.draft(t, "fbi_2", w.ana, "And for ES it is 21%.")
+	if out, err := w.submit(t, w.ana, "k", "fbi_1"); err != nil || out.RunID != "run_work" {
+		t.Fatalf("submit: %+v %v", out, err)
+	}
+	if _, err := w.submit(t, w.ana, "k2", "fbi_2"); err != nil {
+		t.Fatal(err)
+	}
+	// The second went to run_work too; make it a fresh item no Run has.
+	w.exec(t, `UPDATE feedback_items SET delivered_run_id = NULL, directive_id = NULL WHERE id = 'fbi_2'`)
+	directives := func() int {
+		return w.count(t, `SELECT count(*) FROM directives WHERE run_id IN ('run_work', 'run_fix')`)
+	}
+	before := directives()
+	steer := func(run string, items ...string) error {
+		return w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+			_, _, err := delivery.ConductSteerFeedback(ctx, tx, conductor, run, "", false, items)
+			return err
+		})
+	}
+	for _, items := range [][]string{{"fbi_1"}, {"fbi_2", "fbi_1"}} {
+		err := steer("run_work", items...)
+		if !delivery.IsRefusal(err) || !strings.Contains(err.Error(), "already given to run_work, which has their words: fbi_1.") ||
+			strings.Contains(err.Error(), "fbi_2") {
+			t.Errorf("steering %v to the Run that has fbi_1: %v, want refused naming fbi_1 only", items, err)
+		}
+	}
+	if n := directives() - before; n != 0 {
+		t.Fatalf("%d directives from refused steers", n)
+	}
+	// The implementer ends, its items open again; a new fixer is given them.
+	w.exec(t, `UPDATE runs SET status = 'completed' WHERE id = 'run_work'`)
+	w.in(t, func(tx pgx.Tx) error { return delivery.FeedbackRunEndedTx(ctx, tx, "run_work", true) })
+	w.run(t, "run_fix", "ABS-1", "fix", "implementer", "running")
+	if err := steer("run_fix", "fbi_1", "fbi_2"); err != nil {
+		t.Fatalf("steering the reopened items to a new fixer: %v", err)
+	}
+	if n := w.count(t, `SELECT count(*) FROM directives WHERE run_id = 'run_fix'`); n != 1 {
+		t.Errorf("%d directives to the new fixer, want 1", n)
+	}
+}
