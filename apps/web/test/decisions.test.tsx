@@ -692,6 +692,31 @@ describe("what the Chat is made of", () => {
       .toBe("Delivering automatically");
   });
 
+  test("the history reads conducted iff the delivery was ever chatty, by its changes of decider", () => {
+    const changed = (to: string, why: string, voice?: string) =>
+      ev("task.decider_changed", { from: null, to, why, ...(voice ? { voice } : {}) }, 1);
+    const deliver = changed("conductor", "deliver", "quiet");
+    const lead = (decider: string, voice: string | null, events: PersistedEvent[], runs = [run({ id: "a", status: "completed" })]) =>
+      taskHistory({ status: "review", decider, voice, runs }, [], [], null, String, events).lead;
+    const directed = [run({ id: "a", status: "completed", conductorRunId: CONDUCTOR })];
+    // Quiet, taken over in Chat, then let finish quietly: a person and a chatty conductor directed it.
+    expect(lead("conductor", "quiet", [deliver, changed("conductor", "a person gave the decisions to the conductor", "chatty"),
+      changed("conductor", "a person let it finish quietly", "quiet")], directed)).toBe("Conducted");
+    // Accepted after its quiet conductor's next started Runs: never chatty, Deliver's.
+    expect(lead("policy", null, [deliver, changed("policy", "the person accepted Deliver's defaults")], directed))
+      .toBe("Delivered automatically");
+    // Plain quiet, its next's Runs too; no model; talked through; talked through then handed back quietly.
+    expect(lead("conductor", "quiet", [deliver], directed)).toBe("Delivered automatically");
+    expect(lead("policy", null, [changed("policy", "the conductor has no model", "quiet")])).toBe("Delivered automatically");
+    expect(lead("conductor", "chatty", [changed("conductor", "talk it through", "chatty")])).toBe("Conducted");
+    expect(lead("conductor", "quiet", [changed("conductor", "talk it through"), changed("conductor", "a person let it finish quietly", "quiet")]))
+      .toBe("Conducted");
+    // A legacy task, no voice anywhere: the old rule, who decides or a Run its conductor started.
+    expect(lead("policy", null, [])).toBe("Delivered automatically");
+    expect(lead("policy", null, [], directed)).toBe("Conducted");
+    expect(lead("conductor", "chatty", [])).toBe("Conducted");
+  });
+
   test("what an agent records between its tool calls stays in their aside, on the message column", () => {
     const t = (kind: string, id: string) => ({ kind, id, at: at(1), startedAt: at(1) }) as never;
     const out = asides([t("message", "m1"), t("tool", "a"), t("thought", "b"), t("event", "c"), t("progress", "d"),
