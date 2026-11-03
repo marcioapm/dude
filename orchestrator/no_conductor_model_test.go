@@ -2,8 +2,7 @@ package orchestrator_test
 
 // A delivery whose conductor has no model (step 3b, PR C1):
 // Deliver's start, a Start over and the boot sweep leave it to Deliver's
-// policy, as before every delivery had a conductor, the fix bar the
-// conductor's; the sweep hands it to the quiet conductor once a model is
+// policy, the fix bar the conductor's; the sweep hands it to the quiet conductor once a model is
 // set. Through the real API, workflow, syncer and fake lux and GitHub.
 
 import (

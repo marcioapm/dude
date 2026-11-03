@@ -179,8 +179,8 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	} else if noModel, err := ConductorNoModelTx(ctx, tx, in.TaskID); err != nil {
 		return out, err
 	} else if noModel {
-		// No model for its conductor: Deliver's policy decides, as before
-		// every delivery had one, the fix bar the conductor's (HadConductor).
+		// No model for its conductor: Deliver's policy decides, the fix bar
+		// the conductor's (HadConductor).
 		// The sweep hands it to the quiet conductor once a model is set.
 		st.Decider, why = DeciderPolicy, WhyNoConductorModel
 	}
