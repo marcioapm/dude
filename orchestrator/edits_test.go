@@ -642,7 +642,9 @@ func TestThePublishedCommitMovesTheTaskBranch(t *testing.T) {
 	e.wokenWith(e.task, "is on the task branch")
 }
 
-const pullRequestOpenRefusal = "a pull request is open on this branch, so changes reach it only after review on a candidate: use start_phase fix"
+// pullRequestOpenRefusal is the I-3 refusal (pull-request-push-unreviewed)
+// a publish meets while the pull request shows dude's unreviewed push.
+const pullRequestOpenRefusal = unreviewedWords
 
 // pullRequestRow records a pull request in state (open, draft, closed
 // or merged) on the task branch at its head, as the pull request syncer
@@ -657,9 +659,9 @@ func (e *editing) pullRequestRow(state string) string {
 	return head
 }
 
-// While a pull request is open on the task branch, a conductor's publish
-// is refused, pointing to start_phase fix: neither the branch nor the
-// pull request's head moves. Asked before the pull request was recorded,
+// While a pull request open (or draft) on the task branch shows dude's
+// last push, unreviewed, a conductor's publish is refused (I-3): neither
+// the branch nor the pull request's head moves. Asked before the pull request was recorded,
 // it is refused once it is, before anything moves.
 func TestAPublishIsRefusedWhileAPullRequestIsOpen(t *testing.T) {
 	unmoved := func(t *testing.T, e *editing, log int, head string) {

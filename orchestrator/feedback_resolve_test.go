@@ -150,9 +150,14 @@ func TestFeedbackAnAgentsResolutionHoldsOnlyForItsOwnPublishedCommit(t *testing.
 				return fixer != "" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fixer) == 1
 			})
 			if c.verified {
-				// The fixer published to the candidate: its resolution is
-				// verified as promotion moves the pull request to it.
-				w.until("the candidate promoted", func() bool { return w.promoted(wi) })
+				// The fixer published to the pull request's head: its
+				// resolution is verified as the fixer finishes.
+				w.until("the resolution verified", func() bool {
+					return w.count(`SELECT count(*) FROM feedback_items WHERE id = 'fbi_res' AND resolved_verified_at IS NOT NULL`) == 1
+				})
+				if w.promoted(wi) {
+					t.Error("a direct fix was promoted")
+				}
 			}
 			fixer, commit, answer := ar.state()
 			if !strings.HasPrefix(answer, "200 ") {
@@ -265,14 +270,16 @@ func TestFeedbackTwoResolutionsWithOneCommitCompareItOnce(t *testing.T) {
 	if !strings.HasPrefix(answer, "200 ") {
 		t.Fatalf("feedback_resolve: %s", answer)
 	}
-	// The fixer's compares, read as it completes: the candidate's later
-	// Runs (its simplifier) compare from its head as they publish.
+	// The fixer's compares, read as it completes: later Runs compare from
+	// its head as they publish.
 	ar.mu.Lock()
 	compares := slices.Clone(ar.compares)
 	ar.mu.Unlock()
-	// The fixer published to the candidate: its resolutions are verified as
-	// promotion moves the pull request to it.
-	w.until("the candidate promoted", func() bool { return w.promoted(wi) })
+	// The fixer published to the pull request's head: its resolutions are
+	// verified as it finishes, with no promotion.
+	if w.promoted(wi) {
+		t.Error("a direct fix was promoted")
+	}
 	if n := w.count(`SELECT count(*) FROM feedback_items WHERE id IN ('fbi_res', 'fbi_two') AND status = 'resolved'
 		AND resolved_verified_at IS NOT NULL`); n != 2 {
 		t.Errorf("%d of 2 resolutions verified", n)

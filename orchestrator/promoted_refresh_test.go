@@ -1,8 +1,12 @@
 package orchestrator_test
 
-// The refresh of a promoted fix's pull requests: GitHub failing it is
-// tried again, durably and at most twice more, only for the pull requests
-// it failed, and never moves a branch again.
+// The refresh of a fix's pull requests once it is on them: GitHub failing
+// it is tried again, durably and at most twice more, only for the pull
+// requests it failed, and never moves a branch again. A direct fix's push
+// marks the verification stale at once (RefreshVerification, not retried);
+// its narrow loop done (prFixDone, movedOnPR) brings review and
+// verification up to the head (refreshPromoted, retried). These tests fail
+// GitHub from the push's own update, so the refresh has a body to write.
 
 import (
 	"context"
@@ -66,10 +70,15 @@ func (w *world) elapseRefreshWait(wi string, tries int) {
 	mustExec(w.t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, wi)
 }
 
+// verificationEvents counts the description updates recorded for repo
+// since the person's comment that started the fix: the fix's push marks
+// the verification stale (RefreshVerification, not retried), then its
+// narrow loop done (prFixDone) refreshes review and verification
+// (refreshPromoted, retried).
 func (w *prFixWorld) verificationEvents(repo string) (ok, failed int) {
 	q := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.verification_updated'
 		AND payload->>'repo' = $2 AND cursor > (SELECT min(cursor) FROM events WHERE task_id = $1
-		AND event_type = 'pull_request.fix_moved') AND payload ? 'error' = $3`
+		AND event_type = 'pull_request.commented') AND payload ? 'error' = $3`
 	return w.count(q, w.wi, repo, false), w.count(q, w.wi, repo, true)
 }
 
@@ -98,36 +107,39 @@ func (w *prFixWorld) settledBackOnThePullRequest() {
 	}
 }
 
-// GitHub fails the promoted fix's description update twice: the third
-// try, after a durable wait each, brings it up to the head it shows.
+// GitHub fails the fix's push's description update and the refresh's
+// first two: the third try, after a durable wait each, brings it up to
+// the head it shows (its test stale there, a direct fix not tested again).
 func TestAPromotedRefreshGitHubFailsTwiceIsTriedAgainAndLands(t *testing.T) {
 	w := newPRFixWorld(t)
 	var armed atomic.Bool
-	patches := bodyPatches(w.gh, &armed, 2)
+	patches := bodyPatches(w.gh, &armed, 3)
 	armed.Store(true)
 	w.comment("Please rename the greeting.")
 	w.untilTheFixIsOnThePullRequest()
 	w.elapseRefreshWait(w.wi, 1)
 	w.elapseRefreshWait(w.wi, 2)
 	w.settledBackOnThePullRequest()
-	head := w.gh.SHA(w.branch)
 	body := w.gh.Pull(1).Body
-	if !strings.Contains(body, "Tested at `"+head[:7]+"`.") || strings.Count(body, "<!-- dude:review -->") != 1 {
-		t.Errorf("the description is not about %s:\n%s", head[:7], body)
+	if !strings.Contains(body, "Tested at `"+w.before[:7]+"`. **Stale:**") || strings.Count(body, "<!-- dude:review -->") != 1 {
+		t.Errorf("the description does not say the test at %s is stale:\n%s", w.before[:7], body)
 	}
-	if n := patches.Load(); n != 3 {
-		t.Errorf("%d description updates, want 3", n)
+	if n := patches.Load(); n != 4 {
+		t.Errorf("%d description updates, want 4: the push's, and the refresh's three tries", n)
 	}
-	if ok, failed := w.verificationEvents("target"); ok != 1 || failed != 0 {
-		t.Errorf("recorded %d updates and %d failures, want the one that landed", ok, failed)
+	// The push's failure is recorded (it is not retried); the refresh's
+	// two failures are not, only its update that landed.
+	if ok, failed := w.verificationEvents("target"); ok != 1 || failed != 1 {
+		t.Errorf("recorded %d updates and %d failures, want the push's failure and the update that landed", ok, failed)
 	}
-	if n := w.moves(w.wi); n != 1 {
-		t.Errorf("%d moves recorded", n)
+	if n := w.moves(w.wi); n != 0 {
+		t.Errorf("%d promotions recorded for a direct fix", n)
 	}
 }
 
-// GitHub fails it every time: after the third try the failure is recorded
-// once and the delivery goes on, with no fourth.
+// GitHub fails it every time: after the refresh's third try its failure is
+// recorded once (beside the push's own) and the delivery goes on, with no
+// fourth.
 func TestAPromotedRefreshGitHubKeepsFailingIsRecordedAndLeftAfterThreeTries(t *testing.T) {
 	w := newPRFixWorld(t)
 	var armed atomic.Bool
@@ -144,11 +156,11 @@ func TestAPromotedRefreshGitHubKeepsFailingIsRecordedAndLeftAfterThreeTries(t *t
 		mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1 AND wake_at IS NOT NULL`, w.wi)
 		w.pump()
 	}
-	if n := patches.Load(); n != 3 {
-		t.Errorf("%d description updates, want 3", n)
+	if n := patches.Load(); n != 4 {
+		t.Errorf("%d description updates, want 4: the push's, and the refresh's three tries", n)
 	}
-	if ok, failed := w.verificationEvents("target"); ok != 0 || failed != 1 {
-		t.Errorf("recorded %d updates and %d failures, want the last failure once", ok, failed)
+	if ok, failed := w.verificationEvents("target"); ok != 0 || failed != 2 {
+		t.Errorf("recorded %d updates and %d failures, want the push's failure and the refresh's last once", ok, failed)
 	}
 	if body := w.gh.Pull(1).Body; body != before {
 		t.Errorf("the description changed though every update failed:\n%s", body)
@@ -180,11 +192,11 @@ func TestAPromotedRefreshsLastFailureIsNotTriedAgainWhenTheNextStepIsLost(t *tes
 	if !lost.Load() {
 		t.Fatal("no step after the refresh was lost")
 	}
-	if n := patches.Load(); n != 3 {
-		t.Errorf("%d description updates, want 3", n)
+	if n := patches.Load(); n != 4 {
+		t.Errorf("%d description updates, want 4: the push's, and the refresh's three tries", n)
 	}
-	if ok, failed := w.verificationEvents("target"); ok != 0 || failed != 1 {
-		t.Errorf("recorded %d updates and %d failures, want the last failure once", ok, failed)
+	if ok, failed := w.verificationEvents("target"); ok != 0 || failed != 2 {
+		t.Errorf("recorded %d updates and %d failures, want the push's failure and the refresh's last once", ok, failed)
 	}
 }
 
@@ -211,8 +223,8 @@ func TestAPullRequestMergedDuringAPromotedRefreshWaitEndsTheTask(t *testing.T) {
 	}
 }
 
-// Of two pull requests the promotion moved, GitHub fails one's update
-// once: only that one is tried again.
+// Of two pull requests a direct fix moved, GitHub fails one's refresh
+// once (after failing its push's stale mark): only that one is tried again.
 func TestAPromotedRefreshRetriesOnlyThePullRequestItFailed(t *testing.T) {
 	w := newPRFixWorldIn(t, true)
 	w.play = func(phase string, n int, b *fakelux.Behaviour) {
@@ -222,7 +234,7 @@ func TestAPromotedRefreshRetriesOnlyThePullRequestItFailed(t *testing.T) {
 	}
 	var armed atomic.Bool
 	target := bodyPatches(w.gh, &armed, 0)
-	web := bodyPatches(w.web, &armed, 1)
+	web := bodyPatches(w.web, &armed, 2)
 	armed.Store(true)
 	w.comment("Please rename the greeting.")
 	w.until("the fix on both pull requests", func() bool {
@@ -234,31 +246,34 @@ func TestAPromotedRefreshRetriesOnlyThePullRequestItFailed(t *testing.T) {
 		t.Errorf("retrying %s, want web alone", repos)
 	}
 	w.settledBackOnThePullRequest()
+	// target's refresh finds the body the push left already right: no PATCH.
 	if n := target.Load(); n != 1 {
-		t.Errorf("target's description updated %d times, want once", n)
+		t.Errorf("target's description updated %d times, want the push's alone", n)
 	}
-	if n := web.Load(); n != 2 {
-		t.Errorf("web's description updated %d times, want the failure and its retry", n)
+	if n := web.Load(); n != 3 {
+		t.Errorf("web's description updated %d times, want the push's, the refresh's failure and its retry", n)
 	}
+	want := map[string][2]int{"target": {2, 0}, "web": {1, 1}}
 	for repo, server := range map[string]*fakegithub.Server{"target": w.gh, "web": w.web} {
-		if ok, failed := w.verificationEvents(repo); ok != 1 || failed != 0 {
-			t.Errorf("%s: recorded %d updates and %d failures, want one update", repo, ok, failed)
+		if ok, failed := w.verificationEvents(repo); ok != want[repo][0] || failed != want[repo][1] {
+			t.Errorf("%s: recorded %d updates and %d failures, want %v", repo, ok, failed, want[repo])
 		}
-		head := server.SHA(w.branch)
-		if !strings.Contains(server.Pull(1).Body, repo+" `"+head[:7]+"`") {
-			t.Errorf("%s's description is not about %s:\n%s", repo, head[:7], server.Pull(1).Body)
+		tested := "Tested at target `" + w.before[:7] + "`, web `" + w.webBefore[:7] + "`. **Stale:**"
+		if !strings.Contains(server.Pull(1).Body, tested) {
+			t.Errorf("%s's description does not say the test is stale:\n%s", repo, server.Pull(1).Body)
 		}
 	}
 }
 
-// A fix promoted to target alone: web's pull request, which the fix did not
+// A direct fix to target alone: web's pull request, which the fix did not
 // move, is refreshed too, since its Review and Verification are about both
-// heads. GitHub fails web's first update; it is tried again and lands.
+// heads. GitHub fails web's update for the push's stale mark and the
+// refresh's first try; it is tried again and lands.
 func TestAPromotionRefreshesASiblingPullRequestItDidNotMove(t *testing.T) {
 	w := newPRFixWorldIn(t, true)
 	var armed atomic.Bool
 	target := bodyPatches(w.gh, &armed, 0)
-	web := bodyPatches(w.web, &armed, 1)
+	web := bodyPatches(w.web, &armed, 2)
 	armed.Store(true)
 	w.comment("Please rename the greeting.")
 	w.until("the fix on target's pull request", func() bool { w.sync(); return w.gh.SHA(w.branch) != w.before })
@@ -270,20 +285,23 @@ func TestAPromotionRefreshesASiblingPullRequestItDidNotMove(t *testing.T) {
 	if at := w.web.SHA(w.branch); at != w.webBefore {
 		t.Fatalf("web moved to %s; the fix was to change target alone", at)
 	}
+	// target's refresh finds the body the push left already right: no PATCH.
 	if n := target.Load(); n != 1 {
-		t.Errorf("target's description updated %d times, want once", n)
+		t.Errorf("target's description updated %d times, want the push's alone", n)
 	}
-	if n := web.Load(); n != 2 {
-		t.Errorf("web's description updated %d times, want the failure and its retry", n)
+	if n := web.Load(); n != 3 {
+		t.Errorf("web's description updated %d times, want the push's, the refresh's failure and its retry", n)
 	}
-	moved := w.gh.SHA(w.branch)
-	want := "Tested at target `" + moved[:7] + "`, web `" + w.webBefore[:7] + "`."
+	// A direct fix is not tested again: the verdict is the one before it,
+	// stale at the head the fix left.
+	want := "Tested at target `" + w.before[:7] + "`, web `" + w.webBefore[:7] + "`. **Stale:**"
+	recorded := map[string][2]int{"target": {2, 0}, "web": {1, 1}}
 	for repo, server := range map[string]*fakegithub.Server{"target": w.gh, "web": w.web} {
-		if ok, failed := w.verificationEvents(repo); ok != 1 || failed != 0 {
-			t.Errorf("%s: recorded %d updates and %d failures, want one update", repo, ok, failed)
+		if ok, failed := w.verificationEvents(repo); ok != recorded[repo][0] || failed != recorded[repo][1] {
+			t.Errorf("%s: recorded %d updates and %d failures, want %v", repo, ok, failed, recorded[repo])
 		}
-		if body := server.Pull(1).Body; !strings.Contains(body, want) || strings.Contains(body, "**Stale:**") {
-			t.Errorf("%s's description is not about the promoted heads (%s):\n%s", repo, want, body)
+		if body := server.Pull(1).Body; !strings.Contains(body, want) {
+			t.Errorf("%s's description is not about the heads (%s):\n%s", repo, want, body)
 		}
 	}
 }
