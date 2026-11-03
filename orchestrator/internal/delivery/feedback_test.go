@@ -721,8 +721,7 @@ func TestAQuietDeliverysFeedbackSteersTheWorkingRunAtOnce(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := newFeedbackWorld(t)
-			wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
-			w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, c.voice)
+			w.voiced(t, c.voice)
 			role := "implementer"
 			if c.phase == "review" {
 				role = "reviewer"
@@ -748,10 +747,7 @@ func TestAQuietDeliverysFeedbackSteersTheWorkingRunAtOnce(t *testing.T) {
 			if all := w.count(t, `SELECT count(*) FROM directives`); all != directives {
 				t.Errorf("%d directives to another Run than the one at work", all-directives)
 			}
-			var line string
-			if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE kind = 'feedback'`).Scan(&line); err != nil {
-				t.Fatal(err)
-			}
+			line := w.feedbackWakeLine(t)
 			if c.steered {
 				if directives != 1 {
 					t.Errorf("%d steers of the Run at work, want 1", directives)
@@ -809,8 +805,7 @@ func TestAlreadyGivenSurvivesTheClipWithRealIDs(t *testing.T) {
 	for _, n := range []int{1, 3, 5} {
 		t.Run(strconv.Itoa(n)+" items", func(t *testing.T) {
 			w := newFeedbackWorld(t)
-			wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
-			w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, delivery.VoiceQuiet)
+			w.voiced(t, delivery.VoiceQuiet)
 			work := ids.New(ids.Run)
 			w.run(t, work, "ABS-1", "implement", "implementer", "running")
 			w.run(t, ids.New(ids.Run), "ABS-1", "", "conductor", "running")
@@ -823,10 +818,7 @@ func TestAlreadyGivenSurvivesTheClipWithRealIDs(t *testing.T) {
 			if out, err := w.submit(t, w.ana, "k", drafts...); err != nil || out.RunID != work {
 				t.Fatalf("submit: %+v %v, want steered to %s", out, err, work)
 			}
-			var line string
-			if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE kind = 'feedback'`).Scan(&line); err != nil {
-				t.Fatal(err)
-			}
+			line := w.feedbackWakeLine(t)
 			if !strings.Contains(line, "Already given to the implementer or fixer at work ("+work+")") ||
 				!strings.Contains(line, "do not steer them again") {
 				t.Errorf("the stored line lost the clause or its Run (%d chars): %q", len(line), line)
@@ -844,8 +836,7 @@ func TestAlreadyGivenSurvivesTheClipWithRealIDs(t *testing.T) {
 func TestTheConductorDoesNotGiveItemsAgainToTheRunThatHasThem(t *testing.T) {
 	w := newFeedbackWorld(t)
 	ctx := context.Background()
-	wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
-	w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, delivery.VoiceQuiet)
+	w.voiced(t, delivery.VoiceQuiet)
 	w.run(t, "run_work", "ABS-1", "implement", "implementer", "running")
 	conductor := w.run(t, "run_c", "ABS-1", "", "conductor", "running")
 	w.draft(t, "fbi_1", w.ana, "The VAT rate for PT is 23%, not 20%.")
@@ -904,8 +895,7 @@ func TestABurstOfTwelveSubmitsIsOneFeedbackLine(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			w := newFeedbackWorld(t)
 			ctx := context.Background()
-			wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
-			w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, delivery.VoiceQuiet)
+			w.voiced(t, delivery.VoiceQuiet)
 			w.run(t, "run_c", "ABS-1", "", "conductor", "running")
 			w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_c'`)
 			work := ids.New(ids.Run)
@@ -985,4 +975,21 @@ func TestABurstOfTwelveSubmitsIsOneFeedbackLine(t *testing.T) {
 			}
 		})
 	}
+}
+
+// voiced is a conducted delivery waiting on a fix, in voice.
+func (w *feedbackWorld) voiced(t *testing.T, voice string) {
+	t.Helper()
+	wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
+	w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, voice)
+}
+
+// feedbackWakeLine is the line the task's one feedback reason recorded.
+func (w *feedbackWorld) feedbackWakeLine(t *testing.T) string {
+	t.Helper()
+	var line string
+	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE kind = 'feedback'`).Scan(&line); err != nil {
+		t.Fatal(err)
+	}
+	return line
 }
