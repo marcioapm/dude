@@ -432,20 +432,9 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 		decider = t.decider()
 	}
 	out.Decider = decider
-	accepted, err := delivery.AcceptedDefaultsTx(ctx, tx, taskID)
+	next, err := nextAttemptTx(ctx, tx, taskID, decider)
 	if err != nil {
 		return out, err
-	}
-	next := nextAttemptOf(decider, accepted)
-	if next.Decider == delivery.DeciderConductor && !next.chatty() {
-		// A quiet conductor with no model: Deliver's policy, as at a start.
-		noModel, err := delivery.ConductorNoModelTx(ctx, tx, taskID)
-		if err != nil {
-			return out, err
-		}
-		if noModel {
-			next = nextAttempt{Decider: delivery.DeciderPolicy, Voice: delivery.VoiceQuiet, noModel: true}
-		}
 	}
 	if next.Decider == delivery.DeciderConductor || next.noModel {
 		// Each attempt has its own conductor: the stopped one's ends.
@@ -516,14 +505,22 @@ type nextAttempt struct {
 	noModel        bool
 }
 
-func nextAttemptOf(wire string, accepted bool) nextAttempt {
-	switch {
-	case wire == delivery.DeciderConductor:
-		return nextAttempt{Decider: delivery.DeciderConductor, Voice: delivery.VoiceChatty}
-	case accepted:
-		return nextAttempt{Decider: delivery.DeciderPolicy}
+// nextAttemptTx is who decides the attempt a Start over asked as wire
+// starts: Deliver's policy for the reason PolicyWhyTx gives, else a quiet
+// conductor.
+func nextAttemptTx(ctx context.Context, tx pgx.Tx, taskID, wire string) (nextAttempt, error) {
+	if wire == delivery.DeciderConductor {
+		return nextAttempt{Decider: delivery.DeciderConductor, Voice: delivery.VoiceChatty}, nil
 	}
-	return nextAttempt{Decider: delivery.DeciderConductor, Voice: delivery.VoiceQuiet}
+	switch why, err := delivery.PolicyWhyTx(ctx, tx, taskID); {
+	case err != nil:
+		return nextAttempt{}, err
+	case why == delivery.WhyAcceptedDefaults:
+		return nextAttempt{Decider: delivery.DeciderPolicy}, nil
+	case why == delivery.WhyNoConductorModel:
+		return nextAttempt{Decider: delivery.DeciderPolicy, Voice: delivery.VoiceQuiet, noModel: true}, nil
+	}
+	return nextAttempt{Decider: delivery.DeciderConductor, Voice: delivery.VoiceQuiet}, nil
 }
 
 // chatty says the attempt's conductor talks it through: it is started

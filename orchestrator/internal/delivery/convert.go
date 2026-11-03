@@ -52,21 +52,15 @@ func ConvertToQuietTx(ctx context.Context, tx pgx.Tx, org, taskID string) (strin
 	if err != nil || d == nil || !d.Live() || d.State.conducted() {
 		return ConvertNone, err
 	}
-	accepted, err := AcceptedDefaultsTx(ctx, tx, taskID)
-	if err != nil {
-		return "", err
-	}
-	if accepted {
-		return ConvertAccepted, nil
-	}
 	// A quiet conductor with no model would default every decision, and
 	// stop the delivery at conductor_unavailable: Deliver's policy goes on
 	// deciding it until a model is set.
-	noModel, err := ConductorNoModelTx(ctx, tx, taskID)
-	if err != nil {
+	switch why, err := PolicyWhyTx(ctx, tx, taskID); {
+	case err != nil:
 		return "", err
-	}
-	if noModel {
+	case why == WhyAcceptedDefaults:
+		return ConvertAccepted, nil
+	case why == WhyNoConductorModel:
 		return ConvertNoModel, nil
 	}
 	st := &d.State

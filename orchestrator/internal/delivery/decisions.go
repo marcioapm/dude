@@ -1310,6 +1310,20 @@ func AcceptedDefaultsTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, er
 	return accepted, err
 }
 
+// PolicyWhyTx is why Deliver's policy, not a quiet conductor, decides the
+// task's delivery from here (a Start over's, the boot sweep's): its person
+// accepted Deliver's defaults (WhyAcceptedDefaults), else its conductor has
+// no model (WhyNoConductorModel); "" when a quiet conductor does.
+func PolicyWhyTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
+	if accepted, err := AcceptedDefaultsTx(ctx, tx, taskID); err != nil || accepted {
+		return WhyAcceptedDefaults, err
+	}
+	if noModel, err := ConductorNoModelTx(ctx, tx, taskID); err != nil || noModel {
+		return WhyNoConductorModel, err
+	}
+	return "", nil
+}
+
 // SetDeciderTx changes who decides a task's delivery, and under the
 // conductor how it speaks (voice: VoiceQuiet, VoiceChatty; "" keeps the
 // delivery's), recording it once: a no-op when both already are. Returns
