@@ -460,6 +460,18 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 	signal := func() error {
 		return workflow.SignalTx(ctx, tx, ref.Org, d.WorkflowID, SignalHumanFeedback, map[string]any{"itemIds": itemIDs}, key)
 	}
+	// steerWorkingTx steers the items to the attempt's working implementer
+	// or fixer, if there is one, and returns it ("" for none).
+	steerWorkingTx := func() (string, error) {
+		var runID string
+		if err := tx.QueryRow(ctx, workingRunSQL, ref.TaskID, attempt).Scan(&runID); err != nil {
+			if db.IsNotFound(err) {
+				err = nil
+			}
+			return "", err
+		}
+		return runID, steerFeedbackTx(ctx, tx, RunRef{Org: ref.Org, ProjectID: ref.ProjectID, TaskID: ref.TaskID, RunID: runID}, itemIDs)
+	}
 	if d != nil && d.Live() && d.State.conducted() {
 		out.RoutedTo = RoutedConductor
 		// Quiet, the conductor takes Deliver's defaults, and Deliver
@@ -468,15 +480,9 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 		// (FeedbackQuiet). Its reason says so, for it not to steer them
 		// again. Chatty, the person and the conductor steer.
 		if d.State.quiet() {
-			var runID string
-			if err := tx.QueryRow(ctx, workingRunSQL, ref.TaskID, attempt).Scan(&runID); err != nil && !db.IsNotFound(err) {
+			var err error
+			if out.RunID, err = steerWorkingTx(); err != nil {
 				return err
-			}
-			if runID != "" {
-				out.RunID = runID
-				if err := steerFeedbackTx(ctx, tx, RunRef{Org: ref.Org, ProjectID: ref.ProjectID, TaskID: ref.TaskID, RunID: runID}, itemIDs); err != nil {
-					return err
-				}
 			}
 		}
 		line := render(wakeFeedbackTmpl, struct {
@@ -491,16 +497,12 @@ func routeFeedbackTx(ctx context.Context, tx pgx.Tx, rt Starter, ref RunRef, d *
 		// any other step reads the items again when it waits there.
 		return signal()
 	}
-	var runID string
-	err := tx.QueryRow(ctx, workingRunSQL, ref.TaskID, attempt).Scan(&runID)
-	if err != nil && !db.IsNotFound(err) {
+	runID, err := steerWorkingTx()
+	if err != nil {
 		return err
 	}
 	if runID != "" {
 		out.RoutedTo, out.RunID = RoutedSteer, runID
-		if err := steerFeedbackTx(ctx, tx, RunRef{Org: ref.Org, ProjectID: ref.ProjectID, TaskID: ref.TaskID, RunID: runID}, itemIDs); err != nil {
-			return err
-		}
 		// Left unhandled by that Run, the items are open again when it
 		// ends: a wait on the pull requests after it reads them then.
 		if d != nil && d.Live() {
