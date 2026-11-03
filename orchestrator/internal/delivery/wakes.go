@@ -74,12 +74,17 @@ func (d FeedbackDebounce) secs() (quiet, maxWait string) {
 }
 
 // feedbackDue (SQL, over c.task_id) says the task has pending feedback
-// that is due (FeedbackDebounce).
+// that is due (FeedbackDebounce): some, none of it fresh, or some past the
+// cap. Each is an EXISTS bounded on conductor_wakes_pending_idx (task_id,
+// created_at), not an aggregate over every pending row of the task: the
+// Wakeable probe evaluates it per candidate row, every sweep, while a
+// burst debounces.
 func feedbackDue(d FeedbackDebounce) string {
 	quiet, maxWait := d.secs()
-	return `COALESCE((SELECT max(f.created_at) < now() - make_interval(secs => ` + quiet + `)
-			OR min(f.created_at) < now() - make_interval(secs => ` + maxWait + `)
-		FROM conductor_wakes f WHERE f.task_id = c.task_id AND f.delivered_at IS NULL AND f.kind = '` + WakeFeedback + `'), false)`
+	pending := `conductor_wakes f WHERE f.task_id = c.task_id AND f.delivered_at IS NULL AND f.kind = '` + WakeFeedback + `'`
+	return `(EXISTS (SELECT 1 FROM ` + pending + `)
+		AND (NOT EXISTS (SELECT 1 FROM ` + pending + ` AND f.created_at >= now() - make_interval(secs => ` + quiet + `))
+			OR EXISTS (SELECT 1 FROM ` + pending + ` AND f.created_at < now() - make_interval(secs => ` + maxWait + `))))`
 }
 
 // WakeConductorTx is WakeConductorWithinTx with the feedback's own
@@ -528,8 +533,22 @@ var Wakeable = WakeableWithin(FeedbackDebounce{})
 
 // WakeableWithin is Wakeable with the feedback debounced by d.
 func WakeableWithin(d FeedbackDebounce) string {
-	calling := `h.task_id = c.task_id AND h.delivered_at IS NULL AND (h.kind <> '` + WakeFeedback + `' OR ` + feedbackDue(d) + `)`
+	// A reason that may call a turn: any but feedback, or feedback once its
+	// task's is due. feedbackDue is the task's, asked once per candidate,
+	// not again for each pending row of a trickle.
+	calling := func(key string) string {
+		pending := `conductor_wakes h WHERE h.task_id = c.task_id AND h.delivered_at IS NULL AND h.key NOT LIKE '` + key + `%'`
+		return `(EXISTS (SELECT 1 FROM ` + pending + ` AND h.kind <> '` + WakeFeedback + `')
+			OR (` + feedbackDue(d) + ` AND EXISTS (SELECT 1 FROM ` + pending + ` AND h.kind = '` + WakeFeedback + `')))`
+	}
+	// Feedback that arrived within the quiet never makes its task due (due
+	// feedback has a row older than the quiet), so it is not a candidate:
+	// the probe and the selection do not test the task again for each of a
+	// burst's rows. ORDER BY min(c.created_at) is then the oldest reason
+	// that can call a turn; the set selected is the same.
+	quiet, _ := d.secs()
 	return `c.delivered_at IS NULL
+	AND (c.kind <> '` + WakeFeedback + `' OR c.created_at < now() - make_interval(secs => ` + quiet + `))
 	AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = c.task_id` + latestDelivery + `), false)
 	AND NOT ((SELECT ` + quietNoModel + ` FROM (SELECT c.task_id) qn)
 		AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + `))
@@ -537,9 +556,7 @@ func WakeableWithin(d FeedbackDebounce) string {
 		AND n.kind <> '` + WakeFeedback + `' AND n.created_at >= now() - make_interval(secs => $1))
 	AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND NOT COALESCE(` + Ending + `, false)
 		AND NOT (r.status = 'paused' OR (r.status = 'running' AND (r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL))))
-	AND (EXISTS (SELECT 1 FROM conductor_wakes h WHERE ` + calling + `
-			AND h.key NOT LIKE '` + heldWakePrefix + `%')
+	AND (` + calling(heldWakePrefix) + `
 		OR (EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND r.status = 'running')
-			AND EXISTS (SELECT 1 FROM conductor_wakes h WHERE ` + calling + `
-				AND h.key NOT LIKE '` + rideWakePrefix + `%')))`
+			AND ` + calling(rideWakePrefix) + `))`
 }
