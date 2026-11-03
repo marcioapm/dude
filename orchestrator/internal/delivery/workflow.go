@@ -1228,6 +1228,12 @@ func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *
 		}
 		return &LoopExit{Reason: "clear"}
 	}
+	return w.policyExit(st, findings, conv)
+}
+
+// policyExit is the review loop's exit by Deliver's policy's bounds, with
+// the fix attempts a person granted beyond the policy's.
+func (w *steps) policyExit(st *State, findings []FindingState, conv Convergence) *LoopExit {
 	policy := st.Policy
 	policy.MaxAttemptsPerFinding += st.ExtraFixAttempts
 	if len(st.FixRange) > 0 {
@@ -1322,6 +1328,12 @@ func (w *steps) reviewExit(ctx context.Context, sc workflow.StepContext) (workfl
 	}
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.quiet() {
+		// A quiet conductor's next (or Deliver's defaults on its behalf) is
+		// Deliver's policy: its bounds escalate the loop, as Deliver's do,
+		// or the defaults would fix an unanswerable finding forever.
+		return w.afterLoop(ctx, sc, st, w.policyExit(st, findings, Convergence{}))
 	}
 	return w.afterLoop(ctx, sc, st, w.loopExit(st, findings, Convergence{}))
 }

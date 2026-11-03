@@ -404,3 +404,45 @@ func TestAnEscalationOfferingRetryWithNoStepFailsLoudly(t *testing.T) {
 		t.Fatalf("a retry with no step was carried out: next %q", res.Next)
 	}
 }
+
+// A quiet conductor's next after a review round is Deliver's defaults
+// (reviewExit, "what the policy would do"): past Deliver's bound on a
+// finding's fixes it escalates stuck, as Deliver's policy does, for the
+// person. A chatty conductor's next is its own judgement: no counter
+// escalates it, and the loop goes on to a fix.
+func TestAQuietConductorsNextAtReviewExitEscalatesDeliversBound(t *testing.T) {
+	for voice, want := range map[string]string{VoiceQuiet: "decide", VoiceChatty: "fix"} {
+		t.Run(voice, func(t *testing.T) {
+			app, owner := dbtest.Open(t)
+			org := dbtest.Org(t, owner)
+			ctx := context.Background()
+			for _, query := range []string{
+				`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_e', $1, 'P', 'p', 'P')`,
+				`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_e', $1, 'prj_e', 1, 'Greet', 'greet', 'running')`,
+				`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status) VALUES ('review_e', $1, 'prj_e', 'wi_e', 1, 'review', 'completed')`,
+				`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, fix_attempts) VALUES ('f', $1, 'wi_e', 'review_e', 'correctness', 'high', 'F', 'problem', 1)`,
+			} {
+				if _, err := owner.Exec(ctx, query, org); err != nil {
+					t.Fatal(err)
+				}
+			}
+			policy := DefaultPolicy()
+			policy.MaxAttemptsPerFinding = 1
+			st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Policy: policy, Iteration: 1,
+				Decider: DeciderConductor, HadConductor: true, Voice: voice}
+			raw, _ := json.Marshal(st)
+			w := &steps{s: &Store{DB: app}}
+			res, err := w.reviewExit(ctx, workflow.StepContext{WorkflowRunID: "wf_e", OrganizationID: org, Step: "reviewExit", State: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			st = res.State.(*State)
+			if res.Next != want {
+				t.Fatalf("%s conductor's next past the bound: next %q, escalation %+v, want %q", voice, res.Next, st.Escalation, want)
+			}
+			if want == "decide" && (st.Escalation == nil || st.Escalation.Reason != "stuck" || st.Escalation.Step != "fix") {
+				t.Fatalf("%s conductor's next past the bound: escalation %+v, want stuck, retrying the fix", voice, st.Escalation)
+			}
+		})
+	}
+}
