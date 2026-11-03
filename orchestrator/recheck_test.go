@@ -381,46 +381,6 @@ func TestARepositoryAFixOfTheSimplifiersDiffChangesFirstIsReviewed(t *testing.T)
 	}
 }
 
-// The candidate's test fails and its fix changes a repository the pull
-// request's fix did not: that repository's pull request moves only after
-// a review told its range; each pull request's stored description is its
-// own, though both have the same number.
-func TestARepositoryATestFixOfACandidateChangesFirstIsReviewedBeforeItsPullRequestMoves(t *testing.T) {
-	w := newPRFixWorldIn(t, true, fakeagent.TestFailModel)
-	w.play = func(phase string, n int, b *fakelux.Behaviour) {
-		if phase == "fix" && n == 2 {
-			b.Commit = map[string]string{"web:WEB.md": "the test's fix\n"}
-		}
-	}
-	w.comment("Please rename the greeting.")
-	w.until("both fixes on the pull requests", func() bool {
-		w.sync()
-		return w.gh.SHA(w.branch) != w.before && w.web.SHA(w.branch) != w.webBefore && w.taskStatus(w.wi) == "review"
-	})
-	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "test", "fix", "review", "simplify", "review", "test"}) {
-		t.Errorf("after the comment: %v", w.phases)
-	}
-	for i, sha := range w.seenWeb {
-		if sha != w.webBefore {
-			t.Errorf("web's pull request was at %s as %s started", sha, w.phases[i])
-		}
-	}
-	if n := w.rangesNaming(delivery.RangePullRequestFix, "web", w.webBefore); n != 1 {
-		t.Errorf("%d reviews told web's range from %s, want the test fix's re-review", n, w.webBefore)
-	}
-	if n := w.rangesNaming(delivery.RangePullRequestFix, "target", w.before); n != 2 {
-		t.Errorf("%d reviews told target's range from %s, want both", n, w.before)
-	}
-	for _, s := range []*fakegithub.Server{w.gh, w.web} {
-		var stored string
-		_ = w.owner.QueryRow(context.Background(), `SELECT pr.body FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE pr.task_id = $1 AND r.name = $2`, w.wi, strings.TrimPrefix(s.Slug, "acme/")).Scan(&stored)
-		if body := s.Pull(1).Body; stored != body {
-			t.Errorf("%s#1's stored description is not its own:\n%s\nGitHub has:\n%s", s.Slug, stored, body)
-		}
-	}
-}
-
 // Someone pushes between promotion's read of a branch and its move: the
 // move is refused, the person's commit kept, and a pull request already
 // moved is recorded at its new head, its description about it.
@@ -487,56 +447,6 @@ func TestAPushRacingThePromotionIsNeverOverwritten(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'
 		AND payload->>'repo' = 'target' AND payload->>'to' = $2`, w.wi, moved); n != 1 {
 		t.Errorf("%d moves of target recorded", n)
-	}
-}
-
-// candidateFinding is what a review of a pull request's fix raises, in the
-// scripted reviewer's format.
-const candidateFinding = "One problem:\n\n```yaml\n---\nseverity: blocking\ncategory: correctness\nfile: FIXED.md\nline: 1\n" +
-	"title: The rename misses the farewell\n" +
-	"description: \"Traced: FIXED.md:1 renames the greeting only.\"\nsuggested_fix: Rename the farewell too.\n```\n"
-
-// A finding of the candidate's first review is still open after a fix that
-// also changed a second repository: the range grew, and the next fix is
-// still sent that finding.
-func TestAFindingOfACandidateIsStillFixedAfterItsRangeGrows(t *testing.T) {
-	w := newPRFixWorldIn(t, true)
-	w.play = func(phase string, n int, b *fakelux.Behaviour) {
-		switch {
-		case phase == "review" && n == 1:
-			b.Reply = candidateFinding
-		case phase == "review" && n == 2:
-			b.Reply = "Not yet.\n\n" + fakeagent.StillVerdict
-		case phase == "review":
-			b.Reply = "Reviewed the fix.\n\n" + fakeagent.Verdict
-		case phase == "fix" && n == 2:
-			b.Commit = map[string]string{"*:" + fakeagent.FixedFile: "the farewell too"}
-		}
-	}
-	w.comment("Please rename the greeting.")
-	w.agentsDone(w.wi, "the fix on the pull requests", func() bool {
-		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
-	})
-	if !slices.Equal(w.phases, []string{"fix", "review", "fix", "review", "fix", "review", "simplify", "review", "test"}) {
-		t.Errorf("after the comment: %v", w.phases)
-	}
-	if n := w.count(`SELECT count(*) FROM runs r JOIN review_findings f ON f.id = ANY(r.finding_ids)
-		WHERE r.task_id = $1 AND r.phase = 'fix' AND f.title = 'The rename misses the farewell'`, w.wi); n != 2 {
-		t.Errorf("the finding was sent to %d fixes, want both after it was raised", n)
-	}
-	// Each promoted pull request's Review names the candidate's finding,
-	// fixed, once; the stored description is GitHub's.
-	for _, s := range []*fakegithub.Server{w.gh, w.web} {
-		body := s.Pull(1).Body
-		if !strings.Contains(body, "The rename misses the farewell _(resolved)_") || strings.Count(body, "<!-- dude:review -->") != 1 {
-			t.Errorf("%s's Review does not name the candidate's finding, fixed, once:\n%s", s.Slug, body)
-		}
-		var stored string
-		_ = w.owner.QueryRow(context.Background(), `SELECT pr.body FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE pr.task_id = $1 AND r.name = $2`, w.wi, strings.TrimPrefix(s.Slug, "acme/")).Scan(&stored)
-		if stored != body {
-			t.Errorf("%s's stored description is not GitHub's:\n%s", s.Slug, stored)
-		}
 	}
 }
 
@@ -631,32 +541,4 @@ func TestADeletionBeforeTheRefPatchKeepsTheCheckedCandidate(t *testing.T) {
 			}
 		})
 	}
-}
-
-// GitHub rate-limits the promotion's move: the step waits and moves the
-// branch after, without counting the refusal against its attempts.
-func TestARateLimitedPromotionWaitsAndMoves(t *testing.T) {
-	w := newPRFixWorld(t)
-	var limited atomic.Int32
-	w.gh.Set(func(s *fakegithub.Server) {
-		s.Intercept = func(r *http.Request) int {
-			if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+w.branch) && limited.Add(1) == 1 {
-				return http.StatusTooManyRequests
-			}
-			return 0
-		}
-	})
-	w.comment("Please rename the greeting.")
-	var attempt int
-	var waiting bool
-	settled := func() bool {
-		_ = w.owner.QueryRow(context.Background(), `SELECT attempt, wait_until > now() FROM workflow_runs WHERE task_id = $1`,
-			w.wi).Scan(&attempt, &waiting)
-		return attempt > 0 || waiting
-	}
-	w.agentsDone(w.wi, "the rate limit", func() bool { return limited.Load() >= 1 && settled() })
-	if attempt != 0 || !waiting {
-		t.Errorf("after a rate limit: attempt %d, waiting %v; want a wait, not a failure", attempt, waiting)
-	}
-	w.fixReviewed()
 }

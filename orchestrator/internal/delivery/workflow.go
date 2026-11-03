@@ -2377,7 +2377,24 @@ func (w *steps) writerCandidate(ctx context.Context, sc workflow.StepContext, st
 			}
 			return err
 		}
-		return w.refreshPRWaitHeads(ctx, sc, st)
+		if st.ActingOnPR {
+			return w.refreshPRWaitHeads(ctx, sc, st)
+		}
+		// A loop writer while a pull request is open publishes to it: from
+		// GitHub's head, as its candidate started (a person may have pushed
+		// since the round's review), or its push is no fast-forward.
+		var open bool
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+			open, err = PullRequestOpenOnTx(ctx, tx, st.TaskID, st.taskBranch(st.TaskID))
+			return err
+		}); err != nil || !open || w.forges == nil {
+			return err
+		}
+		gh, err := w.forges.For(ctx, sc.OrganizationID)
+		if err != nil || gh == nil {
+			return err
+		}
+		return w.fromPullRequestHeads(ctx, sc, st, gh, false)
 	}
 	proposed := *st
 	proposed.PRFixKey = max(st.PRFixKey, st.PRIteration) + 1

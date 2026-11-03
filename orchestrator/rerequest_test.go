@@ -66,9 +66,11 @@ func (w *world) prFixPushed(wi string) string {
 	branch := w.gh.Pull(1).Head
 	before := w.gh.SHA(branch)
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
-	w.agentsDone(wi, "the fix pushed", func() bool {
+	w.agentsDone(wi, "the fix pushed and its loop done", func() bool {
 		s := w.taskStatus(wi)
-		return w.fixes(wi) == 1 && w.gh.SHA(branch) != before && (s == "review" || s == "ready_to_merge")
+		// A direct fix's reviewers are asked once its narrow loop is done
+		// (prFixDone), after the push: back on the pull request.
+		return w.fixes(wi) == 1 && w.gh.SHA(branch) != before && (s == "review" || s == "ready_to_merge") && w.waitingOnPR(wi)
 	})
 	return w.gh.SHA(branch)
 }

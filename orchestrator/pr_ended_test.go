@@ -335,8 +335,9 @@ func TestAMixedEndWhileASiblingsFixerWorksLetsTheFixLand(t *testing.T) {
 	if webHead() == webBefore {
 		t.Fatalf("web's fix never reached its pull request\n%s", w.describeRuns())
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, task); n != 1 {
-		t.Errorf("%d promotions of web's fix, want 1", n)
+	// A direct fix pushes to web's pull request itself: no promotion.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, task); n != 0 {
+		t.Errorf("%d promotions of web's direct fix, want none", n)
 	}
 	asked := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
 		AND payload->>'reason' = 'pull_request_closed'`

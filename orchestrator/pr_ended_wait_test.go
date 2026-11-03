@@ -258,13 +258,14 @@ func TestWorkPastTheReviewLoopAfterWaitingPastACloseAsksNoOpenOrDraft(t *testing
 	}
 	w.until("waiting on web's pull request", func() bool { w.pump(); return w.waitingOnPR(task) })
 	arm()
+	// A direct fix pushes web's change itself, before its review.
+	webBefore := len(w.web.BranchLog(w.web.Pull(1).Head))
 
 	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 	w.until("the review's decision", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	w.must(task, "start_phase", `{"phase":"fix","note":"Fix the finding the review raised."}`)
 	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
 	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
-	webBefore := len(w.web.BranchLog(w.web.Pull(1).Head))
 	w.until("waiting on web's pull request again, or the decision before the pull request", func() bool {
 		switch w.decisionAt(task) {
 		case delivery.PointReviewed, delivery.PointFixed:
