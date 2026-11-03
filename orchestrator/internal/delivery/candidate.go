@@ -15,7 +15,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
@@ -313,83 +312,10 @@ func (s *Store) CandidateMovedTx(ctx context.Context, org string, st *State, mov
 	})
 }
 
-// discardLoopCandidateTx reopens the findings a refused loop candidate's Runs
-// resolved outside the moved repositories and returns the round's first
-// writer phase. A round's Runs are those whose creation key carries
-// ":candidate:<round>" (key), optionally followed by its retry suffix, and
-// the Runs that replaced them (restart_run, replaceRound), which have no key.
-func discardLoopCandidateTx(ctx context.Context, tx pgx.Tx, taskID, workflowID string, attempt, round int, moved []string) (string, error) {
-	inRound := `r.task_id = $1 AND r.attempt = ` + attemptOr + ` AND starts_with(r.creation_key, $3)
-		AND (r.creation_key LIKE '%:candidate:' || $4::int OR r.creation_key LIKE '%:candidate:' || $4::int || ':retry:%')`
-	// A finding naming no repository may concern any of them: reopened.
-	if _, err := tx.Exec(ctx, `WITH RECURSIVE round AS (
-			SELECT r.id, r.replaced_by FROM runs r WHERE `+inRound+`
-			UNION SELECT r.id, r.replaced_by FROM runs r JOIN round o ON r.id = o.replaced_by)
-		UPDATE review_findings f SET status = 'open', resolved_by_run_id = NULL,
-			resolution_note = 'its fix never reached the pull request', updated_at = now()
-		FROM round r WHERE r.id = f.resolved_by_run_id AND f.task_id = $1 AND f.status = 'resolved'
-		  AND (f.repo IS NULL OR NOT f.repo = ANY($5))`, taskID, attempt, workflowID, round, db.NonNil(moved)); err != nil {
-		return "", err
-	}
-	var phase string
-	err := tx.QueryRow(ctx, `SELECT r.phase::text FROM runs r WHERE `+inRound+`
-		AND r.phase IN ('implement', 'fix', 'simplify') ORDER BY r.created_at, r.id LIMIT 1`,
-		taskID, attempt, workflowID, round).Scan(&phase)
-	if err == pgx.ErrNoRows {
-		return "", nil
-	}
-	return phase, err
-}
-
-// AbandonCandidateTx reopens the pending resolutions of the candidate
-// branch's Runs (task, attempt; 0 for the task's current) when its round
-// ends without reaching the pull request: the next fixer is given them.
-func AbandonCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, branch string) error {
-	return candidateResolutionsTx(ctx, tx, org, taskID, attempt, branch, nil, nil)
-}
-
 // abandonCandidate is AbandonCandidateTx for the delivery's candidate
 // branch, in a transaction of its own.
 func (s *Store) abandonCandidate(ctx context.Context, org string, st *State) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		return AbandonCandidateTx(ctx, tx, org, st.TaskID, st.Attempt, st.candidateBranch())
 	})
-}
-
-// candidateResolutionsTx settles the pending resolutions made by the Runs
-// that published to branch: verified in a repository of verify, reopened
-// in any other. One in a repository of ended (its pull request merged or
-// closed during the check) is reopened as such, not as a commit that never
-// reached a pull request.
-func candidateResolutionsTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, branch string, verify, ended []string) error {
-	rows, err := tx.Query(ctx, `SELECT f.id, f.resolved_by_run_id, COALESCE(f.resolved_commit, ''), COALESCE(f.resolved_repo, '')
-		FROM feedback_items f JOIN runs r ON r.id = f.resolved_by_run_id
-		WHERE r.task_id = $1 AND r.attempt = `+attemptOr+` AND r.branch = $3
-		  AND f.status = 'resolved' AND f.resolved_verified_at IS NULL
-		ORDER BY f.id FOR UPDATE OF f`, taskID, attempt, branch)
-	if err != nil {
-		return err
-	}
-	type pending struct{ ID, RunID, Commit, Repo string }
-	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[pending])
-	if err != nil {
-		return err
-	}
-	for _, p := range got {
-		ref := RunRef{Org: org, TaskID: taskID, RunID: p.RunID}
-		var err error
-		switch {
-		case slices.Contains(verify, p.Repo):
-			err = verifyResolutionTx(ctx, tx, ref, p.ID, p.Commit, p.Repo)
-		case slices.Contains(ended, p.Repo):
-			err = reopenResolutionTx(ctx, tx, ref, p.ID, ReopenPullRequestEnded,
-				"its pull request ended while the fix was checked; a fixer checks it again on the follow-up pull request")
-		default:
-			err = reopenResolutionTx(ctx, tx, ref, p.ID, ReopenNotPublished, "its commit never reached the pull request")
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }

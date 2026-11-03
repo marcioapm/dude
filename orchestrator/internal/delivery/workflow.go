@@ -500,47 +500,6 @@ func BranchFor(taskID string, attempt int) string {
 	return fmt.Sprintf("dude/%s/attempt-%d", taskID, attempt)
 }
 
-// CandidateBranch is where a fix for an open pull request's feedback, and
-// every fix of it, is taken while it is reviewed and tested: the task
-// branch (the pull request's head) is fast-forwarded to it only once the
-// gate passes (promoteCandidate).
-func CandidateBranch(taskID string, attempt int) string {
-	return BranchFor(taskID, attempt) + candidateSuffix
-}
-
-const candidateSuffix = "-candidate"
-
-// NotGeneratedCandidateSQL (SQL, over runs aliased run) holds when the
-// Run's branch is not its own CandidateBranch: a fix not yet checked.
-func NotGeneratedCandidateSQL(run string) string {
-	return fmt.Sprintf(`%[1]s.branch <> ('dude/' || %[1]s.task_id || '/attempt-' || %[1]s.attempt || '%[2]s')`, run, candidateSuffix)
-}
-
-// Candidate is one round of pull request feedback being fixed on the
-// candidate branch.
-type Candidate struct {
-	// The round's PRFixKey: what keeps its Runs apart from another round's.
-	Round  int    `json:"round"`
-	Branch string `json:"branch"`
-	// The heads the fix started from: each pull request's head as GitHub
-	// had it, the rest where the delivery had them. The pull request
-	// branch is moved only from these.
-	From map[string]string `json:"from"`
-	// Where its review range starts per repository the fix changed: From,
-	// or where the fix's checkout started in a repository From lacks.
-	Base map[string]string `json:"base,omitempty"`
-	// The heads at which a person accepted a review round whose reviewers
-	// failed: promotion takes them as reviewed (unreviewedHeads).
-	Accepted map[string]string `json:"accepted,omitempty"`
-	// Opened by a writer of the review loop while a pull request was open
-	// (writerCandidate), not by a pull request's fix: once promoted, the
-	// delivery goes on as that loop would have (beforePR).
-	Loop bool `json:"loop,omitempty"`
-	// Set by writerCandidate in the step that opens it, until phase has
-	// read the pull requests' heads (or a replay's Run's). Never persisted.
-	opening bool
-}
-
 // PRFixCharge is a round (its PRFixKey) charged to the pull requests in
 // Repos: once, when its fix landed with commits; a retry of that round
 // gives it back.
