@@ -244,8 +244,8 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
 def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,
                                                             owner_dsn: str):
     """The abs run's stall: Deliver's review gets stuck (one fix attempt per
-    finding; a conducted loop has no such bound: Deliver's policy decides it
-    once the person accepted Deliver's defaults), and the person hands the
+    finding; a conducted loop has no such bound: Deliver's policy decides it,
+    as it does a delivery whose conductor has no model), and the person hands the
     delivery to the conductor with a Chat message while it waits, the
     conductor told of the escalation. The conductor asks with the
     escalation's actions as choices (a retry is not one: it needs the person's
@@ -253,9 +253,8 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     with decide_escalation: the next fix round runs."""
     project = _conducting(client, forge_project)
     # The conductor on a tier with no model (the organisation's Fast, unset):
-    # Deliver's quiet conductor cannot decide, so each decision goes by the
-    # defaults until it stops for the person, who accepts them: Deliver's
-    # policy decides from there, and its bounds escalate the stuck review.
+    # Deliver starts the delivery on Deliver's policy, as before every
+    # delivery had a conductor, and its bounds escalate the stuck review.
     fast = {t["name"]: t for t in client.get("/v1/models/tiers").json()["tiers"]}["Fast"]
     assert not fast["model"], fast
     models = {**project["agentModels"], **client.on_models({"reviewer": "fake/stuck"}), "conductor": {"tier": fast["id"]}}
@@ -264,12 +263,10 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
                         {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task = client.create_task(project["id"], "Greet, and get stuck on review")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    assert _task(client, task["id"])["voice"] == "quiet"
-    wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "conductor_unavailable",
-               timeout=180, message="the quiet conductor with no model never stopped for the person")
-    accepted = client.post(f"/v1/tasks/{task['id']}/decide", {"action": "accept"})
-    assert accepted.status_code == 200, accepted.text
-    assert _task(client, task["id"])["decider"] == "policy"
+    started = _task(client, task["id"])
+    assert (started["decider"], started["voice"]) == ("policy", None), started
+    changes = [e["payload"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decider_changed"]
+    assert changes == [{"from": None, "to": "policy", "voice": "quiet", "why": "the conductor has no model"}], changes
     # The conductor back on the scripted model, for the person's Chat.
     models = {**models, **client.on_models({"conductor": "fake/scripted"})}
     assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
@@ -296,7 +293,7 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     # The banner stays while the question is open: a person may still use it.
     assert (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck"
     fixes = len(_phases(client, task["id"], "fix"))
-    # The person's accept of conductor_unavailable is a decision of its own, before this one.
+    # Any decision before this one is not the conductor's retry.
     decided_before = len([e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"])
 
     # "Your call": a free answer decides nothing; the conductor decides.
