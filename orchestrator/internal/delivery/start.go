@@ -172,10 +172,10 @@ func StartTx(ctx context.Context, tx pgx.Tx, rt Starter, in StartInput) (Started
 	// Every delivery has a conductor: quiet for Deliver (it takes no turn
 	// at the start, and Deliver's rules open the pull request), chatty for
 	// Talk it through.
-	st.Decider, st.HadConductor, st.Voice = DeciderConductor, true, StartVoice(in.How)
+	st.Decider, st.HadConductor, st.Voice = DeciderConductor, true, VoiceQuiet
 	why := "deliver"
 	if in.How == HowTalk {
-		why = "talk it through"
+		st.Voice, why = VoiceChatty, "talk it through"
 	} else if noModel, err := ConductorNoModelTx(ctx, tx, in.TaskID); err != nil {
 		return out, err
 	} else if noModel {
@@ -218,15 +218,6 @@ const WhyNoConductorModel = "the conductor has no model"
 func ConductorNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 	_, noModel, err := quietFactsTx(ctx, tx, taskID)
 	return noModel, err
-}
-
-// StartVoice is the voice a delivery started as how is conducted in:
-// chatty for Talk it through, quiet for every other start.
-func StartVoice(how string) string {
-	if how == HowTalk {
-		return VoiceChatty
-	}
-	return VoiceQuiet
 }
 
 // NextAttemptTx is a fresh attempt's number, for a Reopen's start and for
