@@ -29,6 +29,7 @@ import (
 // earlier reviewer is asked to look at that merge. Nobody is asked to
 // decide.
 func TestAPromotionMergesTheCandidateInOverABaseMergeThatLandedDuringItsCheck(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	w.gh.Review(1, "jerv", "COMMENTED")
 	var x, checked string
@@ -85,6 +86,7 @@ func newBothSidesWorld(t *testing.T) *prFixWorld {
 // merge is exactly git's merge of the file: promotion merges the checked
 // candidate in on top rather than stopping as pull_request_moved.
 func TestAPromotionMergesTheCandidateInOverACleanBaseMergeOfAFileBothSidesEdited(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newBothSidesWorld(t)
 	var x, checked string
 	w.onTest = func() {
@@ -111,6 +113,7 @@ func TestAPromotionMergesTheCandidateInOverACleanBaseMergeOfAFileBothSidesEdited
 // in GitHub's editor: not git's merge of the file, so promotion stops as
 // pull_request_moved and the branch keeps the merge.
 func TestAPromotionIsRefusedOverABaseMergeOfAFileBothSidesEditedCarryingAnEdit(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newBothSidesWorld(t)
 	var x string
 	w.onTest = func() {
@@ -123,6 +126,7 @@ func TestAPromotionIsRefusedOverABaseMergeOfAFileBothSidesEditedCarryingAnEdit(t
 // A person's own commit lands on the pull request's branch while the fix
 // is checked: promotion refuses it as before, and the branch keeps it.
 func TestAPromotionIsRefusedOverAPersonsCommitThatLandedDuringItsCheck(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	var theirs string
 	w.onTest = func() {
@@ -135,6 +139,7 @@ func TestAPromotionIsRefusedOverAPersonsCommitThatLandedDuringItsCheck(t *testin
 // target's and a person pushes to web's: target's base merge alone would be
 // merged into, but web's push refuses the promotion before either moves.
 func TestAPromotionAdmissibleInOneRepositoryButNotTheOtherMovesNeither(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorldIn(t, true)
 	w.play = func(phase string, n int, b *fakelux.Behaviour) {
 		if phase == "fix" && n == 1 {
@@ -167,6 +172,7 @@ func TestAPromotionAdmissibleInOneRepositoryButNotTheOtherMovesNeither(t *testin
 // in GitHub's editor) lands during the check: not only the base's, so
 // promotion refuses it.
 func TestAPromotionIsRefusedOverAnEvilBaseMergeThatLandedDuringItsCheck(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	var x string
 	w.onTest = func() {
@@ -183,6 +189,7 @@ func TestAPromotionIsRefusedOverAnEvilBaseMergeThatLandedDuringItsCheck(t *testi
 // branch themselves, over a base merge, during the check. dude never asked
 // for that merge: promotion does not take it as its own.
 func TestAPromotionDoesNotAdoptAPersonsMergeOfTheCandidate(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	var m string
 	w.onTest = func() {
@@ -200,6 +207,7 @@ func TestAPromotionDoesNotAdoptAPersonsMergeOfTheCandidate(t *testing.T) {
 // GitHub will not merge the candidate in (409), the branch keeps the base
 // merge, and a person is asked, told why.
 func TestAPromotionConflictingWithABaseMergeIsRefused(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	var x string
 	w.onTest = func() {
@@ -221,6 +229,7 @@ func TestAPromotionConflictingWithABaseMergeIsRefused(t *testing.T) {
 // the person's commit. That merge is not adopted, and a person is asked,
 // told what the merge's parents are.
 func TestAPromotionsMergeOntoAPersonsCommitIsNotAdopted(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	again, theirs := landOnce(isMergesCall, func(*http.Request) string {
 		return w.gh.CommitFiles(w.branch, "A person's own fix", map[string]string{"PERSON.md": "mine\n"})
@@ -255,6 +264,7 @@ func TestAPromotionsMergeOntoAPersonsCommitIsNotAdopted(t *testing.T) {
 // branch and its move: GitHub refuses the fast-forward (422), and the
 // candidate is merged in over the base merge.
 func TestAPromotionMergesTheCandidateInOverABaseMergeThatLandedBeforeItsMove(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	hook, landed := landOnce(isMoveOf(w.branch), func(*http.Request) string {
 		w.gh.CommitFiles("main", "Someone else's work", map[string]string{"BASE.md": "the base's\n"})
@@ -279,6 +289,7 @@ func TestAPromotionMergesTheCandidateInOverABaseMergeThatLandedBeforeItsMove(t *
 // lost: the step's retry finds the merge on the branch and adopts it, as
 // the promotion recorded attempting it, sending no second merge.
 func TestAPromotionsMergeWhoseAnswerWasLostIsAdoptedOnRetry(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	var merges atomic.Int32
 	w.onGitHub(func(r *http.Request) int {

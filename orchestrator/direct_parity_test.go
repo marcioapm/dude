@@ -11,32 +11,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
-// directPRFixes freezes the deliveries prOpen and startDelivery make to
-// push their pull request fixes directly (pullRequestFixes direct), as
-// every new delivery in production does; off, they stay candidate, as the
-// world's project pins it. Set only by TestDirectParity, never in parallel.
-var directPRFixes bool
-
-// The mode-independent tests of the pull request fix loop — its budget,
-// a pull request ending under a fixer, CI failing again — hold the same
-// when fixes reach the pull request directly.
-func TestDirectParity(t *testing.T) {
-	directPRFixes = true
-	t.Cleanup(func() { directPRFixes = false })
-	for name, body := range map[string]func(*testing.T){
-		"AFixThatCommitsNothingSpendsNoBudget":         testAPullRequestFixThatCommitsNothingSpendsNoBudget,
-		"FixersThatCommitNothingAreBoundedPerRound":    testFixersThatCommitNothingAreStillBoundedPerRound,
-		"ARetryAfterAFailedFixRefundsNothing":          testARetryAfterAFailedPullRequestFixRefundsNothing,
-		"ALegacyFixChargedAtStartIsNotChargedAgain":    testALegacyPRFixAlreadyChargedAtStartIsNotChargedAgain,
-		"AnUpgradeDuringAFailedFixKeepsThePriorCharge": testAnUpgradeDuringAFailedPRFixKeepsThePriorCharge,
-		"AMergeWhileAFixerWorksStopsIt":                testAMergeWhileAPullRequestFixerWorksStopsIt,
-		"OneOfTwoMergingLeavesTheOthersFixerAtWork":    testOneOfTwoPullRequestsMergingLeavesTheOthersFixerAtWork,
-		"ChecksFailingAgainAfterANoOpFixGetAnotherFix": testChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnotherFix,
-	} {
-		t.Run(name, body)
-	}
-}
-
 // A person stops the task while a direct fix's narrow review works, then
 // resumes it: the same reviewer goes on over the fix's range, and the
 // round ends as it would have — reviewers asked again, back to waiting.
@@ -87,7 +61,7 @@ func TestDirectAStopAndResumeMidNarrowLoopFinishesTheRound(t *testing.T) {
 // its repository's push, the narrow review covers both from where each
 // stood, and each pull request's reviewers are asked again once.
 func TestDirectAFixAcrossTwoRepositoriesIsReviewedOverBothRanges(t *testing.T) {
-	w := newPRFixWorldAt(t, prAt{test: true, web: true, direct: true})
+	w := newPRFixWorldAt(t, prAt{test: true, web: true})
 	w.askingFor("jerv")
 	w.gh.Review(1, "jerv", "COMMENTED")
 	w.web.Review(1, "jerv", "COMMENTED")

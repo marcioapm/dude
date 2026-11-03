@@ -179,10 +179,8 @@ func testAMergeWhileAPullRequestFixerWorksStopsIt(t *testing.T) {
 	task := w.reviewing()
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
 	w.until("the fixer at work", func() bool { w.sync(); return w.count(runningFixers, task) == 1 })
-	// On a candidate, or straight to the pull request (directPRFixes).
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'candidate'`, task); n != 1 && !directPRFixes {
-		t.Fatalf("the fix is not on a candidate")
-	} else if n != 0 && directPRFixes {
+	// Straight to the pull request: no candidate.
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'candidate'`, task); n != 0 {
 		t.Fatalf("a direct fix is on a candidate")
 	}
 	w.gh.Merge(1)
@@ -239,6 +237,7 @@ func TestAFixFinishingAfterAnUnsignalledMergeOpensNothing(t *testing.T) {
 // the checked candidate is not promoted (promoteCandidate's guard). The pull
 // request's branch never moves and the task is done.
 func TestACandidateCheckedAcrossAnUnsignalledMergeIsNotPromoted(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	w.onTest = func() {
 		w.gh.Merge(1)

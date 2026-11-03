@@ -30,7 +30,7 @@ func TestDirectAConductedNarrowLoopRunsWithoutTheConductor(t *testing.T) {
 	w := conducting(t)
 	w.toolsWithSync()
 	w.onModel("reviewer", "llm-reviewer")
-	task := w.prOpen(w.task(), prAt{direct: true, test: true})
+	task := w.prOpen(w.task(), prAt{test: true})
 	setPolicy(w, task, `{"resumeRounds":true}`)
 	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
 		t.Fatalf("chat: %d %v", status, out)

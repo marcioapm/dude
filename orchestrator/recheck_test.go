@@ -317,141 +317,6 @@ func (w *prFixWorld) state(field string) string {
 	return v
 }
 
-// A comment on the pull request: the fix goes to the candidate branch, is
-// reviewed over its own range, simplified there, the simplifier's diff
-// reviewed alone, tested on every criterion, and only then is the pull
-// request's branch fast-forwarded to it; its reviewers are
-// asked again, and its description's Verification is about the commit it
-// shows. The pull request's branch never held the fix before the gate.
-func TestAPullRequestFixIsReviewedAndTestedBeforeThePullRequestShowsIt(t *testing.T) {
-	w := newPRFixWorld(t)
-	w.askingFor("jerv")
-	w.gh.Review(1, "jerv", "COMMENTED")
-	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
-		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
-	})
-	if shown := w.shownBeforeTheGate(); len(shown) > 0 {
-		t.Errorf("the pull request showed the fix before its review and test: %v", shown)
-	}
-	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "test"}) {
-		t.Errorf("after the comment: %v, want the fix, its review, the simplifier, its diff's review and the test", w.phases)
-	}
-	head := w.gh.SHA(w.branch)
-	// The fix's Run published to the candidate branch, then the simplifier
-	// on it, from the fix; the pull request's branch was moved to the
-	// simplified head, by fast-forward from where it was.
-	var fixBranch, fixHead string
-	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), heads->'target'->>'sha' FROM runs
-		WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, w.wi).Scan(&fixBranch, &fixHead)
-	var simplifyBranch, simplifyFrom, simplified string
-	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), base_refs->>'target', heads->'target'->>'sha' FROM runs
-		WHERE task_id = $1 AND phase = 'simplify' ORDER BY created_at DESC LIMIT 1`, w.wi).Scan(&simplifyBranch, &simplifyFrom, &simplified)
-	if fixBranch != delivery.CandidateBranch(w.wi, 1) || fixHead == "" || fixHead == head {
-		t.Errorf("the fix published to %q at %s; the pull request is at %s", fixBranch, fixHead, head)
-	}
-	if simplifyBranch != delivery.CandidateBranch(w.wi, 1) || simplifyFrom != fixHead || simplified != head {
-		t.Errorf("the simplifier published to %q from %s at %s; the fix is at %s, the pull request at %s",
-			simplifyBranch, simplifyFrom, simplified, fixHead, head)
-	}
-	if log := w.gh.Log(w.branch); !strings.HasPrefix(log[0], "Simplify") || !strings.HasPrefix(log[1], "Address review findings") {
-		t.Errorf("branch history = %v", log)
-	}
-	// The simplifier's diff alone, from the candidate's head before it.
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
-		AND branch IS NULL AND review_range->>'of' = $2 AND review_range->'base' = jsonb_build_object('target', $3::text)
-		AND base_refs->>'target' = $4`, w.wi, delivery.RangeSimplify, fixHead, simplified); n != 1 {
-		t.Errorf("%d reviews of the candidate's simplification over %s..%s\n%s", n, fixHead, simplified, w.describeRuns())
-	}
-	if last := lastPrompt(w.rangeSpecs(delivery.RangeSimplify)); !strings.Contains(last, "Review `"+fixHead+"..HEAD`:") ||
-		!strings.Contains(last, "behaviour-preservation check of the simplifier's diff") {
-		t.Errorf("the review of the candidate's simplification is not told its range from %s:\n%s", fixHead, last)
-	}
-	specs := w.rangeSpecs(delivery.RangePullRequestFix)
-	if len(specs) != 1 || !strings.Contains(specs[0].Workload.Prompt, "Review `"+w.before+"..HEAD`:") ||
-		!strings.Contains(specs[0].Workload.Prompt, "only the fix made for the open pull request's feedback") {
-		t.Fatalf("%d reviews of the fix's range: %v", len(specs), specs)
-	}
-	var tested string
-	_ = w.owner.QueryRow(context.Background(), `SELECT heads->>'target' FROM acceptance_verdicts WHERE task_id = $1
-		ORDER BY created_at DESC LIMIT 1`, w.wi).Scan(&tested)
-	if tested != head {
-		t.Errorf("the latest verdict is at %s, the pull request at %s", tested, head)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'
-		AND payload->>'from' = $2 AND payload->>'to' = $3`, w.wi, w.before, head); n != 1 {
-		t.Errorf("%d moves recorded", n)
-	}
-	// Asked again, once the pull request shows the fix.
-	if events := w.rerequests(w.wi); len(events) != 1 || events[0]["head"] != head ||
-		!slices.Equal(strs(events[0]["reviewersRequested"]), []string{"jerv"}) {
-		t.Errorf("re-requests %v", events)
-	}
-	body := w.gh.Pull(1).Body
-	for _, want := range []string{"## Verification", "Tested at `" + head[:7] + "`.", "- **pass** — it greets", "Opened by the dude factory."} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the pull request's description lacks %q:\n%s", want, body)
-		}
-	}
-	if strings.Contains(body, "Stale") || strings.Contains(body, w.before[:7]) {
-		t.Errorf("the description is about the commit before the fix:\n%s", body)
-	}
-	if strings.Count(body, "<!-- dude:review -->") != 1 || strings.Count(body, "<!-- dude:verification -->") != 1 {
-		t.Errorf("want one marked Review and one marked Verification:\n%s", body)
-	}
-	if w.candidate() != "" {
-		t.Errorf("the candidate branch is left at %s", w.candidate())
-	}
-	if n := w.refreshedBeforeTheMove(); n != 0 {
-		t.Errorf("%d description refreshes about the candidate before the pull request held it", n)
-	}
-}
-
-// The review of the simplifier's diff on a pull request's fix raises a
-// finding: its fix goes to the candidate too, is reviewed over the
-// simplifier's range, and the simplifier does not run again; the pull
-// request moves only after the test, to the fix of the simplification.
-func TestAFindingOnTheSimplificationOfAPullRequestFixIsFixedOnTheCandidate(t *testing.T) {
-	w := newPRFixWorld(t)
-	var atTest string
-	w.onTest = func() { atTest = w.gh.SHA(w.branch) }
-	w.play = findingOnTheCandidatesSimplification
-	before := len(w.rangeSpecs(delivery.RangeSimplify))
-	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
-		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
-	})
-	if shown := w.shownBeforeTheGate(); len(shown) > 0 || atTest != w.before {
-		t.Errorf("the pull request showed the fix before its test: %v (at the test: %s)", shown, atTest)
-	}
-	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "fix", "review", "test"}) {
-		t.Errorf("after the comment: %v", w.phases)
-	}
-	candidate := delivery.CandidateBranch(w.wi, 1)
-	var fixBranch, fixHead, title, status string
-	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(r.branch, ''), r.heads->'target'->>'sha', f.title, f.status::text
-		FROM runs r JOIN review_findings f ON f.id = ANY(r.finding_ids)
-		WHERE r.task_id = $1 AND r.phase = 'fix' AND f.title LIKE 'The simplification drops%'`, w.wi).Scan(&fixBranch, &fixHead, &title, &status)
-	if fixBranch != candidate || status != "resolved" {
-		t.Errorf("the simplification's finding (%q, %s) was fixed on %q, want the candidate", title, status, fixBranch)
-	}
-	if head := w.gh.SHA(w.branch); head != fixHead {
-		t.Errorf("the pull request is at %s, the fix of the simplification at %s", head, fixHead)
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('fix', 'simplify') AND branch IS DISTINCT FROM $2
-		AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND pr_feedback <> '[]'::jsonb)`, w.wi, candidate); n != 0 {
-		t.Errorf("%d of the round's publishing Runs off the candidate branch", n)
-	}
-	if n := len(w.rangeSpecs(delivery.RangeSimplify)) - before; n != 2 {
-		t.Errorf("%d reviews over the candidate's simplifier's range, want its round and its fix's", n)
-	}
-	if n := w.refreshedBeforeTheMove(); n != 0 {
-		t.Errorf("%d description refreshes about the candidate before the pull request held it", n)
-	}
-}
-
 // The pull request opened with a non-blocking finding still open: a fix
 // on its candidate is sent the findings of the candidate's own reviews,
 // here the simplifier's diff's, never that one.
@@ -472,117 +337,6 @@ func TestAFindingThePullRequestOpenedWithIsNeverSentToItsCandidatesFix(t *testin
 	if n := w.count(`SELECT count(*) FROM runs r JOIN review_findings f ON f.id = ANY(r.finding_ids)
 		WHERE r.task_id = $1 AND r.phase = 'fix' AND f.title LIKE 'The simplification drops%'`, w.wi); n != 1 {
 		t.Errorf("the simplifier's diff's finding was sent to %d fixes, want one", n)
-	}
-}
-
-// The candidate's test fails: back to the fixer, still on the candidate,
-// reviewed and tested again; it passes, and only then the pull request
-// moves. The round counts once against both pull request budgets, whatever
-// it went through: a per-round budget of one leaves a second comment
-// past it.
-func TestAPullRequestFixThatFailsItsTestIsFixedOnTheCandidateAndCountsOnce(t *testing.T) {
-	w := newPRFixWorld(t, fakeagent.TestFailModel)
-	setPolicy(w.world, w.wi, `{"maxPrFixIterations":1}`)
-	var atFailure string
-	w.onTest = func() { atFailure = w.gh.SHA(w.branch) }
-	// The test's fix starts once the failed verdict was judged: the pull
-	// request then still shows what it showed before the candidate.
-	bodyBefore := w.gh.Pull(1).Body
-	var bodyAtFailure string
-	var commentsAtFailure []fakegithub.Comment
-	w.play = func(phase string, n int, _ *fakelux.Behaviour) {
-		if phase == "fix" && n == 2 {
-			p := w.gh.Pull(1)
-			bodyAtFailure, commentsAtFailure = p.Body, slices.Clone(p.Comments)
-		}
-	}
-	w.comment("Please rename the greeting.")
-	w.fixReviewed()
-	if shown := w.shownBeforeTheGate(); len(shown) > 0 || atFailure != w.before {
-		t.Errorf("a candidate that failed its test reached the pull request: %v (at the test: %s)", shown, atFailure)
-	}
-	if !slices.Equal(w.phases, []string{"fix", "review", "simplify", "review", "test", "fix", "review", "simplify", "review", "test"}) {
-		t.Errorf("after the comment: %v", w.phases)
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND branch = $2`,
-		w.wi, delivery.CandidateBranch(w.wi, 1)); n != 2 {
-		t.Errorf("%d fixes on the candidate, want the pull request's and the test's", n)
-	}
-	if got := w.verdicts(w.wi); strings.Join(got, ",") != "pass,pass" {
-		t.Errorf("the verdict at the pull request's head: %v", got)
-	}
-	if n := w.refreshedBeforeTheMove(); n != 0 {
-		t.Errorf("%d description refreshes about a candidate before the pull request held it", n)
-	}
-	if bodyAtFailure != bodyBefore {
-		t.Errorf("after the candidate's failed test the description changed:\n%s\nwas:\n%s", bodyAtFailure, bodyBefore)
-	}
-	for _, c := range commentsAtFailure {
-		if strings.Contains(c.Body, "Tested at") || strings.Contains(c.Body, "**fail**") {
-			t.Errorf("a comment carries the candidate's verdict before the pull request held it: %+v", c)
-		}
-	}
-	head := w.gh.SHA(w.branch)
-	if body := w.gh.Pull(1).Body; !strings.Contains(body, "Tested at `"+head[:7]+"`.") || strings.Contains(body, "**fail**") {
-		t.Errorf("after the move the description is not about the candidate's passing test at %s:\n%s", head[:7], body)
-	}
-	if p, f := w.state("prIteration"), w.state("prFixesByRepo"); p != "1" || f != `{"target": 1}` {
-		t.Errorf("the round counted prIteration=%s prFixes=%s, want once", p, f)
-	}
-	// A second comment in the same review round is past the one fix.
-	w.gh.Comment(1, "alice", "And the farewell.")
-	w.agentsDone(w.wi, "escalated", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
-	if r := w.escalationReason(w.wi); r != "pr_loop_exhausted" {
-		t.Errorf("escalated %q", r)
-	}
-}
-
-// A person pushes to the pull request while its fix is checked: the
-// candidate is not moved over their commit, and a person is asked.
-func TestAPushWhileAFixIsCheckedIsNeverOverwritten(t *testing.T) {
-	w := newPRFixWorld(t)
-	var theirs string
-	w.onTest = func() { theirs = w.gh.CommitOnTop(w.branch, "A person's own fix") }
-	bodyBefore := w.gh.Pull(1).Body
-	w.comment("Please rename the greeting.")
-	w.personAsked()
-	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
-		t.Fatalf("escalated %q, want %s\n%s", r, delivery.ReasonPullRequestMoved, w.describeRuns())
-	}
-	// The candidate passed its test but was never moved: its verdict is not
-	// the pull request's.
-	if body := w.gh.Pull(1).Body; body != bodyBefore {
-		t.Errorf("the description of a pull request the candidate never reached changed:\n%s\nwas:\n%s", body, bodyBefore)
-	}
-	if at := w.gh.SHA(w.branch); at != theirs || theirs == "" {
-		t.Errorf("the pull request is at %s, the person's commit %s", at, theirs)
-	}
-	if c := w.candidate(); c == "" || c == theirs {
-		t.Errorf("the candidate is at %q", c)
-	}
-	var detail map[string]any
-	_ = w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&detail)
-	if detail["found"] != theirs || detail["expected"] != w.before || detail["repo"] != "target" {
-		t.Errorf("detail = %v", detail)
-	}
-	// Retry fixes the same feedback again, from their commit.
-	owner := w.person("owner")
-	w.assignOwner(w.wi, owner)
-	if code, body := w.decide(owner, w.wi, "retry", ""); code != 200 {
-		t.Fatalf("retry: %d %v", code, body)
-	}
-	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
-		return w.gh.SHA(w.branch) != theirs && w.taskStatus(w.wi) == "review"
-	})
-	if log := w.gh.Log(w.branch); !slices.Contains(log, "A person's own fix") {
-		t.Errorf("the person's commit is gone: %v", log)
-	}
-	if p := w.state("prIteration"); p != "1" {
-		t.Errorf("prIteration = %s after a retry of the round, want 1", p)
-	}
-	if f := w.state("prFixesByRepo"); f != `{"target": 1}` {
-		t.Errorf("after the moved round's retry prFixes = %s, want one landed fix", f)
 	}
 }
 
@@ -761,49 +515,11 @@ func TestARepositoryAFixOfACandidatesSimplificationChangesFirstIsInTheFixsRange(
 	}
 }
 
-// Simplify off: a pull request's fix is reviewed and tested on its
-// candidate with no simplifier, and the pull request moves after.
-func TestAPullRequestFixWithSimplifyOffIsReviewedAndTestedAlone(t *testing.T) {
-	w := newPRFixWorld(t)
-	setPolicy(w.world, w.wi, `{"simplify":false}`)
-	w.comment("Please rename the greeting.")
-	w.fixReviewed()
-	if shown := w.shownBeforeTheGate(); len(shown) > 0 {
-		t.Errorf("the pull request showed the fix before its test: %v", shown)
-	}
-	if !slices.Equal(w.phases, []string{"fix", "review", "test"}) {
-		t.Errorf("after the comment: %v, want the fix, its review and the test", w.phases)
-	}
-}
-
-// A person pushes to one pull request while a fix of two is checked: no
-// branch is moved, the other's included, and a person is asked.
-func TestAPushToOnePullRequestMovesNeitherOfTwo(t *testing.T) {
-	w := newPRFixWorldIn(t, true)
-	w.play = func(phase string, n int, b *fakelux.Behaviour) {
-		if phase == "fix" && n == 1 {
-			b.Commit = map[string]string{"*:" + fakeagent.FixedFile: "addressed for both"}
-		}
-	}
-	var theirs string
-	w.onTest = func() { theirs = w.web.CommitOnTop(w.branch, "A person's own fix") }
-	w.comment("Please rename the greeting.")
-	w.personAsked()
-	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
-		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
-	}
-	if at := w.gh.SHA(w.branch); at != w.before {
-		t.Errorf("target's pull request moved to %s while web's refused the fix", at)
-	}
-	if at := w.web.SHA(w.branch); at != theirs {
-		t.Errorf("web is at %s, the person's commit %s", at, theirs)
-	}
-}
-
 // Someone pushes between promotion's read of a branch and its move: the
 // move is refused, the person's commit kept, and a pull request already
 // moved is recorded at its new head, its description about it.
 func TestAPushRacingThePromotionIsNeverOverwritten(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorldIn(t, true)
 	w.play = func(phase string, n int, b *fakelux.Behaviour) {
 		if phase == "fix" && n == 1 {
@@ -959,106 +675,10 @@ func TestAFindingOfACandidateIsStillFixedAfterItsRangeGrows(t *testing.T) {
 	}
 }
 
-// One of two pull requests is merged while their fix is checked: the
-// merged pull request stays merged, and the checked work gets a follow-up
-// pull request rather than being discarded or merged without a person.
-// A person's item the fix resolved in that repository is not verified by
-// the promotion: it is reopened as its pull request having ended, and the
-// follow-up's fixer is given it.
-func TestAPullRequestMergedWhileItsFixIsCheckedIsNotMoved(t *testing.T) {
-	w := newPRFixWorldIn(t, true)
-	ana := w.person("Ana")
-	w.play = func(phase string, n int, b *fakelux.Behaviour) {
-		if phase == "fix" && n == 1 {
-			b.Commit = map[string]string{"*:" + fakeagent.FixedFile: "addressed for both"}
-		}
-	}
-	mustExec(t, w.owner, `INSERT INTO feedback_items (id, organization_id, task_id, attempt, author_person_id, body, anchor_kind, anchor)
-		SELECT 'fbi_web', $1, $2, task_attempt($2), person_id, 'Greet in the page too.', 'code', '{"kind":"code","repo":"web"}'
-		FROM api_keys WHERE id = $3`, w.org, w.wi, ana)
-	ar := w.resolveAsItPublishesIn(w.web, "web", w.wi, "fbi_web", itsNewHead, nil)
-	var mainAfterMerge string
-	var pullsAtTest int
-	w.onTest = func() {
-		w.web.Merge(1)
-		w.sync()
-		mainAfterMerge = w.web.SHA("main")
-		pullsAtTest = len(w.web.Pulls())
-	}
-	w.armed.Store(true)
-	if code, body := w.callAs(ana, "/internal/tasks/"+w.wi+"/feedback/submit",
-		map[string]any{"draftIds": []string{"fbi_web"}, "submissionKey": "k-web"}); code != 201 {
-		t.Fatalf("submit: %d %v", code, body)
-	}
-	w.comment("Please rename the greeting.")
-	w.until("the checked fix on target and a follow-up pull request in web", func() bool {
-		w.sync()
-		return w.gh.SHA(w.branch) != w.before && len(w.web.Pulls()) == 2
-	})
-	fixer, commit, answer := ar.state()
-	if !strings.HasPrefix(answer, "200 ") {
-		t.Fatalf("feedback_resolve with %s: %s", commit, answer)
-	}
-	if status, verified := w.resolution("fbi_web"); verified || status == "resolved" {
-		t.Errorf("resolved in web, whose pull request merged during the check: %s verified=%v", status, verified)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'feedback.reopened'
-		AND payload->>'itemId' = 'fbi_web' AND payload->>'why' = $2`, w.wi, delivery.ReopenPullRequestEnded); n != 1 {
-		t.Errorf("%d reopenings as the pull request having ended, want 1", n)
-	}
-	w.until("the follow-up's fixer given the item", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND 'fbi_web' = ANY(feedback_item_ids)
-			AND created_at > (SELECT created_at FROM runs WHERE id = $2)`, w.wi, fixer) > 0
-	})
-	// What follows is about the check of the first fix: the follow-up's
-	// fixer and its own check come after it.
-	w.mu <- struct{}{}
-	checked := min(len(w.phases), 5)
-	phases, seen, seenWeb := slices.Clone(w.phases[:checked]), slices.Clone(w.seen[:checked]), slices.Clone(w.seenWeb[:checked])
-	<-w.mu
-	if p := w.web.Pull(1); p.State != "closed" || p.MergedAt == nil {
-		t.Errorf("the original pull request is no longer merged: %+v", p)
-	}
-	followup := w.web.Pull(2)
-	head := w.web.SHA(followup.Head)
-	if followup.State != "open" || followup.MergedAt != nil || head == "" || head == w.webBefore || followup.Base != "main" {
-		t.Fatalf("the checked fix has no open follow-up: %+v at %s", followup, head)
-	}
-	if at := w.web.SHA("main"); mainAfterMerge == "" || at != mainAfterMerge || at == head {
-		t.Errorf("main moved from %s to %s without a person merging the follow-up at %s", mainAfterMerge, at, head)
-	}
-	for i, sha := range seen {
-		if sha != w.before {
-			t.Errorf("unchecked work exposed: target's branch was at %s as %s started", sha, phases[i])
-		}
-	}
-	if pullsAtTest != 1 {
-		t.Errorf("web pull requests at test %d, want 1", pullsAtTest)
-	}
-	for i, sha := range seenWeb {
-		if sha != w.webBefore {
-			t.Errorf("web's branch was at %s as %s started", sha, phases[i])
-		}
-	}
-	if !slices.Equal(phases, []string{"fix", "review", "simplify", "review", "test"}) {
-		t.Errorf("after the comment: %v, want the fix, its review, the simplifier, its diff's review and the test", phases)
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
-		AND review_range->>'of' = $2 AND base_refs->>'web' = $3`, w.wi, delivery.RangePullRequestFix, head); n != 1 {
-		t.Errorf("%d completed reviews of the follow-up head", n)
-	}
-	if n := w.count(`SELECT count(*) FROM acceptance_verdicts WHERE task_id = $1 AND heads->>'web' = $2
-		AND status = 'pass'`, w.wi, head); n != 2 {
-		t.Errorf("%d passing criteria at the follow-up head, want both", n)
-	}
-	if r := w.escalationReason(w.wi); r == delivery.ReasonPullRequestMoved {
-		t.Errorf("escalated %s for a merged pull request", r)
-	}
-}
-
 // A person's push after the promotion's GET but before its PATCH returns
 // 422: the escalation names their SHA, not the candidate's or the old head.
 func TestAPushBeforeTheRefPatchEscalatesWithThePersonsHead(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	var raced atomic.Bool
 	var theirs atomic.Value
@@ -1087,6 +707,7 @@ func TestAPushBeforeTheRefPatchEscalatesWithThePersonsHead(t *testing.T) {
 }
 
 func TestADeletionBeforeTheRefPatchKeepsTheCheckedCandidate(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	for _, status := range []int{http.StatusUnprocessableEntity, http.StatusNotFound} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			w := newPRFixWorld(t)

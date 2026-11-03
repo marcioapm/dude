@@ -187,6 +187,7 @@ func TestALaterFixOpensAPullRequestWhereTheWaitedPastCloseWasReopenedAndMerged(t
 // past target's close: the question holds the fix's promotion while web is
 // open, and the accepted close neither ends the delivery nor is asked about.
 func TestAQuestionAfterWaitingPastAMixedEndHoldsThePromotion(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	m := newMixedEnd(t)
 	m.waitPastTargetsClose()
 	scripted := m.lux.Decide

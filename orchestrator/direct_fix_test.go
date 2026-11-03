@@ -17,7 +17,7 @@ import (
 // newPRFixWorldDirect is newPRFixWorld with the delivery frozen to push
 // its pull request fixes directly (pullRequestFixes direct).
 func newPRFixWorldDirect(t *testing.T, testers ...string) *prFixWorld {
-	return newPRFixWorldAt(t, prAt{test: true, direct: true}, testers...)
+	return newPRFixWorldAt(t, prAt{test: true}, testers...)
 }
 
 // fixRun is the round's fix Run of the pull request feedback: its id,
@@ -253,31 +253,6 @@ func TestDirectChecksFailingOnAnOlderHeadDoNotStartAFix(t *testing.T) {
 	}
 }
 
-// A delivery already running when direct fixes shipped froze its policy
-// without the key: its next fix goes to a candidate and is promoted, as
-// before, whatever every new delivery does.
-func TestAnInFlightDeliveryWithoutTheKeyStaysCandidate(t *testing.T) {
-	w := newPRFixWorld(t)
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state #- '{policy,pullRequestFixes}' WHERE task_id = $1`, w.wi)
-	if strings.Contains(w.state("policy"), "pullRequestFixes") {
-		t.Fatalf("the delivery froze the key: %s", w.state("policy"))
-	}
-	w.comment("Please rename the greeting.")
-	w.until("the fix on the pull request", func() bool {
-		w.sync()
-		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
-	})
-	if shown := w.shownBeforeTheGate(); len(shown) > 0 {
-		t.Errorf("the pull request showed the fix before its review and test: %v", shown)
-	}
-	if _, branch, _ := w.fixRun(); branch != delivery.CandidateBranch(w.wi, 1) {
-		t.Errorf("the fix published to %q, want its candidate", branch)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi); n != 1 {
-		t.Errorf("%d promotions", n)
-	}
-}
-
 // A person pushes to the pull request while dude's fix works: the fix's
 // publish is no fast-forward, so it fails rather than overwriting their
 // commit, and a person is asked. The fix's commits stay on its per-Run
@@ -387,12 +362,11 @@ func TestDirectAdoptedPullRequestsFirstLoopPublishesInPlace(t *testing.T) {
 	}
 }
 
-// The fixer of a direct delivery's pull request is told its fix goes to
-// the pull request when it publishes; a candidate delivery's, that it is
-// checked on a candidate branch first.
+// The fixer of a delivery's pull request is told its fix goes to the pull
+// request when it publishes: every delivery's is direct.
 func TestDirectTheFixerIsToldItsFixGoesToThePullRequest(t *testing.T) {
-	for _, direct := range []bool{true, false} {
-		w := newPRFixWorldAt(t, prAt{test: true, direct: direct})
+	for _, direct := range []bool{true} {
+		w := newPRFixWorldAt(t, prAt{test: true})
 		w.comment("Please rename the greeting.")
 		var fix string
 		w.until("the fix submitted", func() bool {
@@ -410,11 +384,10 @@ func TestDirectTheFixerIsToldItsFixGoesToThePullRequest(t *testing.T) {
 	}
 }
 
-// Reviewers and testers never push, whichever way fixes reach the pull
-// request: their specs name no push branch.
+// Reviewers and testers never push: their specs name no push branch.
 func TestDirectReviewersAndTestersStillNeverPush(t *testing.T) {
-	for _, direct := range []bool{true, false} {
-		w := newPRFixWorldAt(t, prAt{test: true, direct: direct})
+	for _, direct := range []bool{true} {
+		w := newPRFixWorldAt(t, prAt{test: true})
 		w.comment("Please rename the greeting.")
 		w.until("the fix's review", func() bool {
 			w.sync()

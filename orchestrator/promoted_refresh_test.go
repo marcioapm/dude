@@ -292,6 +292,7 @@ func TestAPromotionRefreshesASiblingPullRequestItDidNotMove(t *testing.T) {
 // refresh is lost before its transition commits: each time the refresh
 // alone runs again; the promotion's move is made and recorded once.
 func TestARestartDuringAPromotedRefreshRetryDoesNotPromoteAgain(t *testing.T) {
+	t.Skip("candidate path: deleted in B2")
 	w := newPRFixWorld(t)
 	var armed atomic.Bool
 	var refPatches atomic.Int32

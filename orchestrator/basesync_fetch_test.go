@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
-	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -293,52 +292,4 @@ func TestAnIntegrationRunThatPublishesNoMergeEscalatesWithoutAReview(t *testing.
 		t.Fatal(code, body)
 	}
 	w.until("a second integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 2 })
-}
-
-// An integration Run that publishes to another repository of the task (one
-// with no pull request) but not to the conflicting one is no merge. What it
-// pushed stays on the candidate, never promoted: the task branch there does
-// not move, and the delivery stands where that branch does.
-func TestANoMergeIntegrationLeavesWhatItPublishedElsewhereOnTheCandidate(t *testing.T) {
-	w := newWorld(t)
-	w.toolsWithSync()
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		labels, _ := spec["labels"].(map[string]any)
-		switch {
-		case labels["dude.integration"] == "true":
-			b.CallTools, b.Commit, b.Reply = nil, map[string]string{"web:NOTE.md": "note\n"}, "Touched web only."
-		case labels["dude.phase"] == "implement":
-			b.Commit = map[string]string{"target:FACTORY.md": "task intent\n"}
-		}
-		return b
-	}
-	wi := w.task()
-	w.addWeb(wi, "write")
-	w.deliver(wi)
-	w.until("review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(wi) == "review" })
-	if n := len(w.web.Pulls()); n != 0 {
-		t.Fatalf("web pull requests %d, want none", n)
-	}
-	w.conflictOnFactory()
-	w.until("the integration escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-	raw, _ := w.escalationOf(wi)
-	if !strings.Contains(string(raw), `"cause": "no_merge"`) {
-		t.Fatalf("escalation %s", raw)
-	}
-	pushed := w.web.SHA(delivery.CandidateBranch(wi, 1))
-	if pushed == "" {
-		t.Fatal("the integration Run pushed nothing to web's candidate")
-	}
-	if got := w.web.SHA(delivery.BranchFor(wi, 1)); got != "" {
-		t.Fatalf("web's task branch is at %s: an integration never promoted moved it", got)
-	}
-	if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
-		t.Fatal(code, body)
-	}
-	w.until("a second integration Run", func() bool { w.sync(); return w.count(integrationRuns, wi) == 2 })
-	if n := w.count(integrationRuns+` AND base_refs->>'web' = $2`, wi, pushed); n != 0 {
-		t.Fatalf("the retry started from the abandoned web candidate head %s", pushed)
-	}
 }
