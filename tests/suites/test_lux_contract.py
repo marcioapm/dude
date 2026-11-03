@@ -69,7 +69,8 @@ def test_a_delivery_runs_on_real_lux(client: ApiClient, lux_project):
     finally:
         print("phases:", [(r["phase"], r["status"], r.get("error")) for r in client.task_runs(task["id"])])
 
-    phases = [(r["phase"], r["status"]) for r in client.task_runs(task["id"])]
+    # The phase Runs; the delivery's quiet conductor (no phase) is not one.
+    phases = [(r["phase"], r["status"]) for r in client.task_runs(task["id"]) if r["phase"]]
     assert phases == [("implement", "completed"), ("review", "completed"), ("fix", "completed"),
                       ("review", "completed"), ("simplify", "completed")], phases
 

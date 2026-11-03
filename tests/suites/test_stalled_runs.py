@@ -7,8 +7,8 @@ own sweep then finds it. Under a conductor: the conductor is woken once
 with the facts and restarts the reviewer with restart_run; the round goes
 on with the new Run. A plain delivery: its owner sees the banner, restarts
 it, and the delivery goes on. fake/silent's first reviewer hangs with no
-call open, saying nothing: on a delivery Deliver's policy decides, its
-owner is told it is silent, and leaves it; on Deliver's quiet delivery, its
+call open, saying nothing: on a delivery Deliver's policy decides (its
+conductor has no model), its owner is told it is silent, and leaves it; on Deliver's quiet delivery, its
 conductor is told, and leaves it.
 """
 
@@ -115,10 +115,8 @@ def test_the_conductor_is_told_once_and_restarts_the_stalled_reviewer(client: Ap
 @pytest.mark.ui
 def test_an_owner_restarts_a_stalled_reviewer_from_its_banner(page: Page, web_url: str, client: ApiClient, org: dict,
                                                              forge_project: dict, owner_dsn: str, console_errors: list):
-    models = {**forge_project["agentModels"], **client.on_models({"reviewer": "fake/stall"})}
-    assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
-    task = client.create_task(forge_project["id"], "Greet, past a stalled review, delivered")
-    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    # Deliver's policy decides (no live conductor): the stall is its owner's.
+    task = _policy_delivery(client, forge_project, "Greet, past a stalled review, delivered", {"reviewer": "fake/stall"})
     hung = _hung_reviewer(client, owner_dsn, task["id"])
     wait_until(lambda: (client.get_run(hung["id"])["stalled"] or {}).get("owner"), timeout=60,
                message="the stalled reviewer was never reported to its owner")
@@ -160,41 +158,36 @@ def _silent_reviewer(client: ApiClient, owner_dsn: str, task_id: str) -> dict:
     return run
 
 
-def _policy_delivery(client: ApiClient, forge_project: dict, title: str) -> dict:
-    """A task its owner handed to Deliver's policy, its review stuck: the
-    conductor on a tier with no model (the organisation's Fast, unset), so
-    each quiet decision goes by the defaults until it stops for the person
-    (conductor_unavailable), who accepts them; Deliver's policy decides
-    from there, and its bound (one fix attempt per finding) escalates the
-    review stuck. Every delivery has a conductor (step 3b, PR C1): this is
-    how one ends up Deliver's own, with none live."""
+def _policy_delivery(client: ApiClient, forge_project: dict, title: str, models: dict) -> dict:
+    """A task its owner handed to Deliver, on Deliver's policy from the
+    start: the conductor on a tier with no model (the organisation's Fast,
+    unset), so the delivery is Deliver's policy's (step 3b, PR C1: "the
+    conductor has no model"), with none live and no accept needed. Its
+    stalls and escalations are its owner's. models: the roles' models."""
     fast = {t["name"]: t for t in client.get("/v1/models/tiers").json()["tiers"]}["Fast"]
     assert not fast["model"], fast
-    models = {**forge_project["agentModels"], **client.on_models({"reviewer": "fake/stuck"}), "conductor": {"tier": fast["id"]}}
+    models = {**forge_project["agentModels"], **client.on_models(models), "conductor": {"tier": fast["id"]}}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
-    assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
-                        {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
     task = client.create_task(forge_project["id"], title)
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
-    wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "conductor_unavailable",
-               timeout=180, message="the quiet conductor with no model never stopped for the person")
-    accepted = client.post(f"/v1/tasks/{task['id']}/decide", {"action": "accept"})
-    assert accepted.status_code == 200, accepted.text
     assert _task(client, task["id"])["decider"] == "policy"
-    wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=180,
-               message="Deliver's review never got stuck")
     return task
 
 
 def test_an_owner_is_told_of_a_silent_reviewer_and_leaves_it(client: ApiClient, forge_project: dict, owner_dsn: str):
-    """On a delivery Deliver's policy decides (its owner accepted Deliver's
-    defaults: no live conductor), fake/silent's first reviewer starts its
+    """On a delivery Deliver's policy decides (its conductor has no model:
+    no live conductor), fake/silent's first reviewer starts its
     turn and then says and does nothing, no call open, as a model call that
     never answers. Its last activity is back-dated past the role's window;
     the sweep reports it as silent to the owner, once; Leave it keeps it
     from being asked again. Another task's silent reviewer, reported after
     that, shows a sweep looked at both."""
-    task = _policy_delivery(client, forge_project, "Greet, past a silent review")
+    assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
+                        {"delivery": {"maxAttemptsPerFinding": 1}}).status_code == 200
+    task = _policy_delivery(client, forge_project, "Greet, past a silent review", {"reviewer": "fake/stuck"})
+    # Deliver's bound (one fix attempt per finding) escalates the review stuck.
+    wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=180,
+               message="Deliver's review never got stuck")
     # The owner's retry of the stuck review runs a fix, then a review: by fake/silent.
     project = client.get(f"/v1/projects/{forge_project['id']}").json()
     # The reviewer alone: the conductor's tier stays the one with no model.

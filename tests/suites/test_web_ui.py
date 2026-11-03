@@ -1264,7 +1264,8 @@ def test_a_role_on_claude_code_or_codex_delivers_and_its_chat_shows_its_work(
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     wait_until(lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(item["id"])),
                timeout=90, message=f"the delivery on {label} never reached simplify")
-    runs = client.task_runs(item["id"])
+    # The phase Runs; the delivery's quiet conductor (no phase, on its own model) is not one.
+    runs = [r for r in client.task_runs(item["id"]) if r["phase"]]
     assert [r["phase"] for r in runs] == ["implement", "review", "fix", "review", "simplify"], runs
     assert {r["harness"] for r in runs} == {harness}, runs
     implement = runs[0]
