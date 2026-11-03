@@ -168,7 +168,10 @@ func TestTheOwnersRestartGoesOnFromTheBanner(t *testing.T) {
 	}
 }
 
-func TestARestartedCandidateFixPublishesToTheCandidateWithItsSecret(t *testing.T) {
+// A pull request fix restarted by its owner: the restarted Run declares
+// the fixer's secret as the first did, and publishes to the pull
+// request's head directly (no candidate).
+func TestARestartedPullRequestFixPublishesToThePullRequestWithItsSecret(t *testing.T) {
 	w := newWorld(t)
 	w.grant("FIX_KEY", "fix-test-not-a-real-key-1", "fixer")
 	ana := w.person("Ana")
@@ -195,14 +198,14 @@ func TestARestartedCandidateFixPublishesToTheCandidateWithItsSecret(t *testing.T
 	head := w.gh.Pull(1).Head
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
 	var fix string
-	w.until("a candidate fix running", func() bool {
+	w.until("a pull request fix running", func() bool {
 		w.sync()
 		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'running'
-			AND branch IS NOT NULL`, wi).Scan(&fix)
+			AND lux_run_id IS NOT NULL`, wi).Scan(&fix)
 		return fix != ""
 	})
 	if got := projectSecretsOf(submitted(t, w.luxRunFor(fix))); got["FIX_KEY"] != "fix-test-not-a-real-key-1" {
-		t.Errorf("the candidate fix declares %v", got)
+		t.Errorf("the pull request fix declares %v", got)
 	}
 	if status, body := w.callAs(ana, "/internal/runs/"+fix+"/restart", map[string]any{"note": "again"}); status != 200 {
 		t.Fatalf("restart: %d %v", status, body)
@@ -219,7 +222,13 @@ func TestARestartedCandidateFixPublishesToTheCandidateWithItsSecret(t *testing.T
 	w.until("the restarted fix completed", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fresh) == 1
 	})
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'git.commit_created' AND payload->>'branch' = $2`, fresh, head); n != 0 {
-		t.Errorf("the restarted fix published to the pull request's branch %s before its review and test", head)
+	if got := projectSecretsOf(submitted(t, w.luxRunFor(fresh))); got["FIX_KEY"] != "fix-test-not-a-real-key-1" {
+		t.Errorf("the restarted fix declares %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'git.commit_created' AND payload->>'branch' = $2`, fresh, head); n != 1 {
+		t.Errorf("the restarted fix published %d times to the pull request's branch %s, want once", n, head)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND branch LIKE '%-candidate'`, wi); n != 0 {
+		t.Errorf("%d Runs on a candidate", n)
 	}
 }

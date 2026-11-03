@@ -39,61 +39,28 @@ func (w *prFixWorld) ciOnlyFixLands() {
 }
 
 // A pull request's fix that changes only CI configuration, after a test
-// that passed every criterion: no tester is started, the passed verdicts
-// stand, the skip is in the task's ledger with the verdicts it rests on,
-// the pull request takes the fix, and its Verification says the verdict was
-// not tested again.
+// that passed every criterion: no tester is started (a direct fix is never
+// tested again; the pull request's CI is its test), the pull request takes
+// the fix by its own push, and its Verification keeps the passed verdicts,
+// marked stale at the head they were tested at.
 func TestACIOnlyFixAfterAPassingTestStartsNoTester(t *testing.T) {
 	w := newPRFixWorld(t)
-	first := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'test'`, w.wi)
 	w.ciOnlyFixLands()
-	if !slices.Equal(w.phases, []string{"fix", "review", "simplify"}) {
-		t.Errorf("after the comment: %v, want the fix, its review and the simplifier; no tester", w.phases)
+	w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(w.wi) })
+	if !slices.Equal(w.phases, []string{"fix", "review"}) {
+		t.Errorf("after the comment: %v, want the fix and its review; no simplifier, no tester", w.phases)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'test'`, w.wi); n != 1 {
 		t.Errorf("%d test Runs, want the first alone\n%s", n, w.describeRuns())
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'fromRunId' = $3
-		AND payload->'paths' = '["target/.github/workflows/ci.yml"]'::jsonb
-		AND jsonb_path_query_array(payload->'criteria', '$[*].status') = '["pass", "pass"]'::jsonb`,
-		w.wi, delivery.EvTestSkipped, first); n != 1 {
-		t.Errorf("%d skip events naming %s, the CI path and its two passes", n, first)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi); n != 1 {
-		t.Errorf("%d fix moves, want the pull request moved to the fix", n)
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi); n != 0 {
+		t.Errorf("%d promotions, want none: the fix is pushed to the pull request", n)
 	}
 	body := w.gh.Pull(1).Body
-	for _, want := range []string{"- **pass** — it greets", "Not tested again since"} {
+	for _, want := range []string{"- **pass** — it greets", "Tested at `" + w.before[:7] + "`. **Stale:**"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the pull request's description lacks %q:\n%s", want, body)
 		}
-	}
-	if strings.Contains(body, "Stale") {
-		t.Errorf("the description calls the carried verdict stale:\n%s", body)
-	}
-}
-
-// The same CI-only fix, after a test that did not pass, or with a finding
-// of the tester's a fix was sent for (low, so the gate passed): a tester
-// is started, and no skip recorded.
-func TestACIOnlyFixIsTestedWhenThePreviousTestFailedOrHasAFindingToJudge(t *testing.T) {
-	for _, c := range []struct{ name, setup string }{
-		{"a failed criterion", `UPDATE acceptance_verdicts SET status = 'fail' WHERE task_id = $1 AND criterion = 2`},
-		{"a finding to judge", `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, fix_attempts)
-			SELECT 'fnd_judge_' || r.task_id, r.organization_id, r.task_id, r.id, 'acceptance', 'low', 'The greeting flickers', 'Seen once.', 1
-			FROM runs r WHERE r.task_id = $1 AND r.phase = 'test'`},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			w := newPRFixWorld(t)
-			mustExec(t, w.owner, c.setup, w.wi)
-			w.ciOnlyFixLands()
-			if !slices.Contains(w.phases, "test") {
-				t.Errorf("after the comment: %v, want a tester", w.phases)
-			}
-			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, w.wi, delivery.EvTestSkipped); n != 0 {
-				t.Errorf("%d skips, want none", n)
-			}
-		})
 	}
 }
 

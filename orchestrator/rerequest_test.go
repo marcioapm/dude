@@ -239,6 +239,9 @@ func TestAReviewRequestGitHubRefusesLeavesTheFixPushed(t *testing.T) {
 		// jerv is no longer a collaborator: GitHub refuses any request naming them.
 		w.gh.Set(func(s *fakegithub.Server) { s.Permissions["jerv"] = "none" })
 		head := w.prFixPushed(wi)
+		// A direct fix's reviewers are asked once its narrow loop is done
+		// (prFixDone), after the push.
+		w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(wi) })
 		e := w.rerequests(wi)
 		if len(e) != 1 || e[0]["head"] != head || !slices.Equal(strs(e[0]["reviewersRequested"]), []string{"ana"}) ||
 			!slices.Equal(strs(e[0]["reviewersRefused"]), []string{"jerv"}) || !strings.Contains(e[0]["error"].(string), "collaborators") {
@@ -255,6 +258,9 @@ func TestAReviewRequestGitHubRefusesLeavesTheFixPushed(t *testing.T) {
 		w.gh.Review(1, "jerv", "COMMENTED")
 		w.gh.Set(func(s *fakegithub.Server) { s.ReviewRequestStatus = http.StatusForbidden })
 		head := w.prFixPushed(wi)
+		// A direct fix's reviewers are asked once its narrow loop is done
+		// (prFixDone), after the push.
+		w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(wi) })
 		e := w.rerequests(wi)
 		if len(e) != 1 || e[0]["head"] != head || len(strs(e[0]["reviewersRequested"])) != 0 ||
 			!slices.Equal(strs(e[0]["reviewersRefused"]), []string{"jerv"}) || !strings.Contains(e[0]["error"].(string), "403") {

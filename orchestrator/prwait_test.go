@@ -192,7 +192,6 @@ func TestAFailedTestAtThePullRequestWaitIsTestedAgainAfterItsFix(t *testing.T) {
 	w.gh.Review(1, "ana", "APPROVED")
 	branch := w.gh.Pull(1).Head
 	moves, earlier := len(w.gh.BranchLog(branch)), w.runsSoFar(task)
-	check := w.prShowsOnlyChecked(t, task, "target", branch, true)
 
 	w.must(task, "start_phase", `{"phase":"test"}`)
 	w.fixFailedTestAtPRWait(task)
@@ -200,11 +199,14 @@ func TestAFailedTestAtThePullRequestWaitIsTestedAgainAfterItsFix(t *testing.T) {
 	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"test", "fix", "review", "test"}) {
 		t.Errorf("phases after start_phase test: %v", got)
 	}
-	// The fix reached the pull request once, by promotion, reviewed and
-	// tested at the head it moved to.
-	check()
+	// The fix reached the pull request once, directly, and the re-test ran
+	// at the head it pushed.
 	if got := w.gh.BranchLog(branch)[moves:]; len(got) != 1 || got[0] != w.gh.SHA(branch) {
-		t.Errorf("the pull request's branch moved to %v, want one promotion", got)
+		t.Errorf("the pull request's branch moved to %v, want the fix's one push", got)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'test' AND status = 'completed'
+		AND id <> ALL($2) AND base_refs->>'target' = $3`, task, earlier, w.gh.SHA(branch)); n != 1 {
+		t.Errorf("%d re-tests at the fix's head %s, want one\n%s", n, w.gh.SHA(branch), w.describeRuns())
 	}
 	w.writersOnCandidate(task, earlier, "fix")
 	if got := w.verdicts(task); !slices.Equal(got, []string{"pass"}) {
