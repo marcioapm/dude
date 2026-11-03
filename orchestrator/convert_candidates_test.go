@@ -523,3 +523,43 @@ func TestConvertCandidatesLeavesAClosedTask(t *testing.T) {
 		t.Errorf("%d notices for a closed task", n)
 	}
 }
+
+// Selection: a task stopped with its candidate kept, then closed, has
+// ended: its delivery still says stopped (Close leaves State.Stopped), but
+// it is not selected, nothing tells Chat dude fixes it again, and its
+// state is left as it is.
+func TestConvertCandidatesLeavesATaskClosedAfterAStop(t *testing.T) {
+	w, ana, review, _ := midCandidateReview(t)
+	// Parked on Ana with the candidate open, she stops it (State.Stopped).
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'decide', status = 'waiting', wake_at = NULL,
+		awaiting_signals = '["human.decision"]', state = state || jsonb_build_object('escalation', jsonb_build_object(
+		  'reason', 'review_failed', 'step', 'review', 'at', 'awaitReview', 'detail', jsonb_build_object('runId', $2::text)))
+		WHERE task_id = $1`, w.wi, review)
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'awaiting_input' WHERE id = $1`, w.wi)
+	if code, body := w.decide(ana, w.wi, "stop", ""); code != 200 {
+		t.Fatalf("stop: %d %v", code, body)
+	}
+	w.until("stopped", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'stopped'
+			AND status IN ('completed', 'aborted', 'failed')`, w.wi) == 1
+	})
+	if status, body := w.callAs(ana, "/internal/tasks/"+w.wi+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	if w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND resolution IS NOT NULL`, w.wi) != 1 {
+		t.Fatalf("not closed")
+	}
+	if w.state("candidate") == "" || w.state("stopped") == "" {
+		t.Fatalf("closed after a stop: candidate %q stopped %q: nothing to pin", w.state("candidate"), w.state("stopped"))
+	}
+	before := w.str(`SELECT state::text || step FROM workflow_runs WHERE task_id = $1`, w.wi)
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
+		t.Errorf("swept %+v, want nothing", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'about' = 'candidate_converted'`, w.wi); n != 0 {
+		t.Errorf("%d notices for a closed task", n)
+	}
+	if after := w.str(`SELECT state::text || step FROM workflow_runs WHERE task_id = $1`, w.wi); after != before {
+		t.Errorf("the closed task's delivery was rewritten:\n%s\n%s", before, after)
+	}
+}

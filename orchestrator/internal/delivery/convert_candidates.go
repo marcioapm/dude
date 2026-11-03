@@ -30,12 +30,15 @@ const (
 
 // candidateRowsSQL selects each task's latest delivery, only while it can
 // still go on (live, or stopped or halted for a recovery: an ended or
-// superseded one never reads its policy or candidate again), that still
+// superseded one never reads its policy or candidate again, nor does one
+// whose task is done or closed, whose State.Stopped Close leaves), that still
 // fixes through a candidate or has one's state: its frozen policy not
 // direct (keyless included), a candidate, a hand-over, or a step of the
 // candidate's promotion.
 const candidateRowsSQL = `workflow_type = '` + WorkflowType + `' AND task_id IS NOT NULL
 	AND (status IN ('running', 'waiting') OR state ? 'stopped' OR state ? 'halt')
+	AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = workflow_runs.task_id
+	  AND (t.status = 'done' OR t.resolution IS NOT NULL))
 	AND NOT EXISTS (SELECT 1 FROM workflow_runs n WHERE n.task_id = workflow_runs.task_id
 	  AND n.workflow_type = workflow_runs.workflow_type AND n.created_at > workflow_runs.created_at)
 	AND COALESCE(
