@@ -66,11 +66,9 @@ func (w *world) prFixPushed(wi string) string {
 	branch := w.gh.Pull(1).Head
 	before := w.gh.SHA(branch)
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
-	w.agentsDone(wi, "the fix pushed and its loop done", func() bool {
+	w.agentsDone(wi, "the fix pushed", func() bool {
 		s := w.taskStatus(wi)
-		// A direct fix's reviewers are asked once its narrow loop is done
-		// (prFixDone), after the push: back on the pull request.
-		return w.fixes(wi) == 1 && w.gh.SHA(branch) != before && (s == "review" || s == "ready_to_merge") && w.waitingOnPR(wi)
+		return w.fixes(wi) == 1 && w.gh.SHA(branch) != before && (s == "review" || s == "ready_to_merge")
 	})
 	return w.gh.SHA(branch)
 }
@@ -108,6 +106,9 @@ func TestAFixDudePushesIsPutBeforeItsReviewersAgain(t *testing.T) {
 	}
 
 	head := w.prFixPushed(wi)
+	// A direct fix's reviewers are asked once its narrow loop is done
+	// (prFixDone), after the push.
+	w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(wi) })
 
 	reqs := w.reviewRequests()
 	if len(reqs) != 2 || !slices.Equal(reqs[1].Logins, []string{"jerv", "ana"}) {
