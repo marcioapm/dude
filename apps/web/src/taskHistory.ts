@@ -17,7 +17,7 @@ export interface TaskHistoryLine {
  * (reviewers in parallel) folded into "reviewers ×3", each pull request,
  * then the findings and how they stand, and the cost when known.
  */
-export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; decider?: string }, findings: readonly Finding[],
+export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; decider?: string; voice?: string | null }, findings: readonly Finding[],
   pullRequests: readonly PullRequest[], costUsd: number | null, format: (usd: number) => string, events?: readonly PersistedEvent[]): TaskHistoryLine {
   const phases = task.runs.filter((r) => r.phase);
   const attempt = Math.max(0, ...task.runs.filter((r) => r.kind !== "preview").map((r) => r.attempt));
@@ -46,7 +46,10 @@ export function taskHistory(task: { status: TaskStatus; runs: readonly Run[]; de
   }
   if (costUsd !== null && costUsd > 0) facts.push(format(costUsd));
 
-  const byConductor = task.decider === "conductor" || task.runs.some((r) => r.conductorRunId);
+  // Conducted: a conductor that talks it through decides, or started a Run.
+  // A quiet one is Deliver's, taking Deliver's defaults (its next marks the
+  // Runs it starts as its own): the delivery reads as Deliver's, automatic.
+  const byConductor = task.voice !== "quiet" && (task.decider === "conductor" || task.runs.some((r) => r.conductorRunId));
   const line = { lead: leadFor(task.status, ran, byConductor), steps, facts };
   return events ? withRelations(line, task.status, ran.length > 0, events) : line;
 }

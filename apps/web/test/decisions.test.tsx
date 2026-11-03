@@ -677,6 +677,21 @@ describe("what the Chat is made of", () => {
     expect(taskHistory({ status: "received", decider: "conductor", runs: [] }, [], [], null, String).lead).toBe("Planning with the conductor");
   });
 
+  test("a quiet delivery reads as Deliver's, automatic, its conductor's Runs too; one talked through is conducted", () => {
+    const done = (decider: string, voice: string | null, runs = [run({ id: "a", status: "completed" })]) =>
+      taskHistory({ status: "review", decider, voice, runs }, [], [], null, String).lead;
+    expect(done("conductor", "quiet")).toBe("Delivered automatically");
+    expect(done("policy", "quiet")).toBe("Delivered automatically");
+    expect(done("policy", null)).toBe("Delivered automatically");
+    expect(done("conductor", "chatty")).toBe("Conducted");
+    // A quiet conductor's next (Deliver's defaults) marks the Runs it starts as its own.
+    expect(done("conductor", "quiet", [run({ id: "a", status: "completed", conductorRunId: CONDUCTOR })])).toBe("Delivered automatically");
+    expect(done("conductor", "chatty", [run({ id: "a", status: "completed", conductorRunId: CONDUCTOR })])).toBe("Conducted");
+    expect(done("policy", null, [run({ id: "a", status: "completed", conductorRunId: CONDUCTOR })])).toBe("Conducted");
+    expect(taskHistory({ status: "running", decider: "conductor", voice: "quiet", runs: [run({ id: "a", status: "running" })] }, [], [], null, String).lead)
+      .toBe("Delivering automatically");
+  });
+
   test("what an agent records between its tool calls stays in their aside, on the message column", () => {
     const t = (kind: string, id: string) => ({ kind, id, at: at(1), startedAt: at(1) }) as never;
     const out = asides([t("message", "m1"), t("tool", "a"), t("thought", "b"), t("event", "c"), t("progress", "d"),
