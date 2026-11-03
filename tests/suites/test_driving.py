@@ -1,6 +1,6 @@
 """Who drives a task, end to end through the deployed processes and the built UI.
 
-A task Deliver delivers shows Deliver beside its status. Its owner has the
+A task Deliver delivers is its quiet conductor's, shown beside its status. Its owner has the
 conductor talk it through from the header's switch; the header and Chat
 then both say the conductor decides. Let it finish quietly, from Chat,
 keeps the conductor deciding, quiet: the composer says it answers and
@@ -124,7 +124,11 @@ def test_the_owner_switches_who_drives_and_header_and_chat_agree(
     page.goto(f"{web_url}#/task/{task['id']}/activity")
     activity = page.get_by_test_id("activity")
     expect(activity).to_contain_text("e2e user let it finish quietly", timeout=30_000)
-    expect(activity).to_contain_text("e2e user gave the decisions to the conductor")
+    # Deliver started it as its quiet conductor's: the start says so, from no one before it.
+    expect(activity).to_contain_text("e2e user delivered the task; its conductor decides quietly")
+    expect(activity).not_to_contain_text("Deliver →")
+    expect(activity).to_contain_text("e2e user had the conductor talk it through")
+    expect(activity).not_to_contain_text("gave the decisions to the conductor")
 
     # A colleague: the same chip, no menu, and why.
     _, bo = provision_person(client, env, "Bo", f"bo-{org['id']}@acme.dev")

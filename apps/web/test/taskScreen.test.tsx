@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { PersistedEvent, Run } from "@dude/domain";
+import { POLICY_WHY, type PersistedEvent, type Run } from "@dude/domain";
 import { act, click, facetCheckbox, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { TASK_ID } from "../src/fixtures/data.ts";
@@ -638,6 +638,26 @@ describe("Activity's started lines", () => {
     const people = { names: new Map<string, string>(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
     expect(activityLines(events, people, [], [], 1).map((l) => l.quote)).toEqual(
       ["Conductor → Conductor, chatty", "Conductor → Conductor, chatty", "Conductor → Conductor, quiet"]);
+  });
+
+  test("Deliver's start says the task was delivered and who decides, never Deliver →; a later hand-back still lets it finish quietly", () => {
+    const ana = { type: "human", id: "u_ana", name: "Ana" } as PersistedEvent["actor"];
+    const changed = (why: string, from: string | null, to: string, voice: string): PersistedEvent =>
+      ({ ...created(null, {}), eventType: "task.decider_changed", actor: ana, payload: { from, to, voice, why } }) as PersistedEvent;
+    const events = [
+      changed("deliver", null, "conductor", "quiet"),
+      changed(POLICY_WHY.no_model, null, "policy", "quiet"),
+      changed("a person let it finish quietly", "conductor", "conductor", "quiet"),
+    ];
+    expect(said(events, [])).toEqual([
+      "Ana let it finish quietly",
+      "Ana delivered the task; Deliver decides: the conductor has no model",
+      "Ana delivered the task; its conductor decides quietly",
+    ]);
+    const people = { names: new Map<string, string>(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
+    const quotes = activityLines(events, people, [], [], 1).map((l) => l.quote);
+    expect(quotes).toEqual(["Conductor → Conductor, quiet", "Deliver", "Conductor, quiet"]);
+    expect(quotes.some((q) => String(q).startsWith("Deliver →"))).toBe(false);
   });
 
   test("the API reviewer keeps its capitals, in its own line and in the round's; other categories stay lower case", () => {
