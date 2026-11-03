@@ -1,7 +1,7 @@
 package orchestrator_test
 
-// Everyone direct now (step 2, PR B1): the boot sweep moves every delivery
-// still on the candidate path to direct fixes (delivery.ConvertCandidates),
+// Every fix reaches its pull request directly: the boot sweep moves every
+// delivery still on the candidate path to direct fixes (delivery.ConvertCandidates),
 // whatever state its candidate is in. Through the real workflow, API and
 // fake lux and GitHub.
 
@@ -73,13 +73,6 @@ func midCandidateReview(t *testing.T) (*prFixWorld, string, string, map[string]s
 	return w, ana, review, c.From
 }
 
-// heads is the delivery's heads.
-func (w *prFixWorld) heads() map[string]string {
-	var h map[string]string
-	_ = json.Unmarshal([]byte(w.state("heads")), &h)
-	return h
-}
-
 func (w *prFixWorld) step() string {
 	return w.str(`SELECT step FROM workflow_runs WHERE task_id = $1`, w.wi)
 }
@@ -119,7 +112,9 @@ func (w *prFixWorld) candidateDropped(from map[string]string) {
 	if w.state("candidate") != "" {
 		w.t.Errorf("the candidate is still in state: %s", w.state("candidate"))
 	}
-	if got := w.heads(); !maps.Equal(got, from) {
+	var got map[string]string
+	_ = json.Unmarshal([]byte(w.state("heads")), &got)
+	if !maps.Equal(got, from) {
 		w.t.Errorf("heads %v, want the candidate's from %v", got, from)
 	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'policy'->>'pullRequestFixes' = 'direct'`, w.wi); n != 1 {
