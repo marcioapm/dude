@@ -345,12 +345,3 @@ func (w *world) resolution(item string) (status string, verified bool) {
 	}
 	return status, verified
 }
-
-func (w *world) mergeAs(key, task string) (int, map[string]any) {
-	w.t.Helper()
-	var prID string
-	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, task).Scan(&prID); err != nil {
-		w.t.Fatal(err)
-	}
-	return w.callAs(key, "/internal/pull-requests/"+prID+"/merge", map[string]any{})
-}
