@@ -229,9 +229,11 @@ def test_a_direct_pull_request_fix_marks_its_verification_stale(
     head = wait_until(lambda: (sha if (sha := fake_github.branch_sha(pr["headBranch"])) != before else None),
                       timeout=180, interval=0.2, message="the fix never reached the pull request")
     assert not [b for b in fake_github.branches() if b.endswith("-candidate")], fake_github.branches()
-    runs = wait_until(lambda: (rs if any(r["phase"] == "review" and r["reviewOf"] == "pull_request_fix"
-                                         for r in (rs := client.task_runs(task["id"]))) else None),
-                      timeout=60, message="the fix's push was never reviewed")
+    def reviewed() -> list[dict] | None:
+        rs = client.task_runs(task["id"])
+        return rs if any(r["phase"] == "review" and r["reviewOf"] == "pull_request_fix" for r in rs) else None
+
+    runs = wait_until(reviewed, timeout=60, message="the fix's push was never reviewed")
     fix = next(r for r in runs if r["phase"] == "fix" and r["createdAt"] > next(x for x in runs if x["id"] == tests_before[-1])["createdAt"])
     assert not (fix.get("branch") or "").endswith("-candidate"), fix
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
