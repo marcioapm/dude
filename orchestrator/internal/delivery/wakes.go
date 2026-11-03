@@ -1,7 +1,6 @@
 package delivery
 
 import (
-	"cmp"
 	"context"
 	"slices"
 	"strconv"
@@ -65,44 +64,31 @@ const (
 	FeedbackMaxWait = 30 * time.Minute
 )
 
-// FeedbackDebounce is the feedback's debounce; a zero field is its const
-// (FeedbackQuiet, FeedbackMaxWait). A seam for tests.
-type FeedbackDebounce struct{ Quiet, MaxWait time.Duration }
-
-func (d FeedbackDebounce) secs() (quiet, maxWait string) {
-	q, m := cmp.Or(d.Quiet, FeedbackQuiet), cmp.Or(d.MaxWait, FeedbackMaxWait)
-	return strconv.FormatFloat(q.Seconds(), 'f', -1, 64), strconv.FormatFloat(m.Seconds(), 'f', -1, 64)
-}
-
 // feedbackDue (SQL, over c.task_id) says the task has pending feedback
-// that is due (FeedbackDebounce): some, none of it fresh, or some past the
-// cap. Each is an EXISTS bounded on conductor_wakes_pending_idx (task_id,
-// created_at), not an aggregate over every pending row of the task: the
-// Wakeable probe evaluates it per candidate row, every sweep, while a
-// burst debounces.
-func feedbackDue(d FeedbackDebounce) string {
-	quiet, maxWait := d.secs()
+// that is due: some, none of it fresh (FeedbackQuiet), or some past the cap
+// (FeedbackMaxWait). Each is an EXISTS bounded on conductor_wakes_pending_idx
+// (task_id, created_at), not an aggregate over every pending row of the
+// task: the Wakeable probe evaluates it per candidate row, every sweep,
+// while a burst debounces.
+var feedbackDue = func() string {
 	pending := `conductor_wakes f WHERE f.task_id = c.task_id AND f.delivered_at IS NULL AND f.kind = '` + WakeFeedback + `'`
 	return `(EXISTS (SELECT 1 FROM ` + pending + `)
-		AND (NOT EXISTS (SELECT 1 FROM ` + pending + ` AND f.created_at >= now() - make_interval(secs => ` + quiet + `))
-			OR EXISTS (SELECT 1 FROM ` + pending + ` AND f.created_at < now() - make_interval(secs => ` + maxWait + `))))`
-}
+		AND (NOT EXISTS (SELECT 1 FROM ` + pending + ` AND f.created_at >= now() - make_interval(secs => ` + feedbackQuietSecs + `))
+			OR EXISTS (SELECT 1 FROM ` + pending + ` AND f.created_at < now() - make_interval(secs => ` + strconv.Itoa(int(FeedbackMaxWait/time.Second)) + `))))`
+}()
 
-// WakeConductorTx is WakeConductorWithinTx with the feedback's own
-// debounce (FeedbackQuiet, FeedbackMaxWait).
-func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64) (string, error) {
-	return WakeConductorWithinTx(ctx, tx, org, taskID, windowSecs, FeedbackDebounce{})
-}
+// feedbackQuietSecs is FeedbackQuiet in seconds, for SQL.
+var feedbackQuietSecs = strconv.Itoa(int(FeedbackQuiet / time.Second))
 
-// WakeConductorWithinTx delivers the task's pending reasons to its
-// conductor as one note, unless they should wait: the newest that is not
+// WakeConductorTx delivers the task's pending reasons to its conductor as
+// one note, unless they should wait: the newest that is not
 // feedback arrived within the window (more may come), only feedback not yet
 // due is pending (debounce), or the conductor is mid-turn (they join its
 // next). A note carries every pending reason, feedback not yet due too. A
 // conductor that is parked is resumed by the note; with none, one is
 // started, briefed with it. Returns the conductor woken, "" for none yet.
 // The caller holds the task's Chat lock.
-func WakeConductorWithinTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64, debounce FeedbackDebounce) (string, error) {
+func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowSecs float64) (string, error) {
 	type reason struct{ ID, Kind, Line, Key string }
 	pendingNow := func() ([]reason, error) {
 		rows, err := tx.Query(ctx, `SELECT id, kind, line, key FROM conductor_wakes
@@ -143,7 +129,7 @@ func WakeConductorWithinTx(ctx context.Context, tx pgx.Tx, org, taskID string, w
 	// its own, longer quiet (feedbackDue).
 	var settled, due bool
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(created_at) FILTER (WHERE kind <> '`+WakeFeedback+`')
-			< now() - make_interval(secs => $2), true), `+feedbackDue(debounce)+`
+			< now() - make_interval(secs => $2), true), `+feedbackDue+`
 		FROM (SELECT $1::text AS task_id) c LEFT JOIN conductor_wakes w ON w.task_id = c.task_id AND w.delivered_at IS NULL
 		GROUP BY c.task_id`, taskID, windowSecs).Scan(&settled, &due); err != nil {
 		return "", err
@@ -624,28 +610,23 @@ func quietNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error)
 // (Halt) waits for its pick-up; one with no conductor, whose quiet
 // conductor has no model (quietNoModel: WakeConductorTx would start none),
 // waits for one, its reasons pending, and is not selected, so it never
-// fills the batch. With the feedback's own debounce (FeedbackQuiet,
-// FeedbackMaxWait); WakeableWithin takes another.
-var Wakeable = WakeableWithin(FeedbackDebounce{})
-
-// WakeableWithin is Wakeable with the feedback debounced by d.
-func WakeableWithin(d FeedbackDebounce) string {
+// fills the batch.
+var Wakeable = func() string {
 	// A reason that may call a turn: any but feedback, or feedback once its
 	// task's is due. feedbackDue is the task's, asked once per candidate,
 	// not again for each pending row of a trickle.
 	calling := func(key string) string {
 		pending := `conductor_wakes h WHERE h.task_id = c.task_id AND h.delivered_at IS NULL AND h.key NOT LIKE '` + key + `%'`
 		return `(EXISTS (SELECT 1 FROM ` + pending + ` AND h.kind <> '` + WakeFeedback + `')
-			OR (` + feedbackDue(d) + ` AND EXISTS (SELECT 1 FROM ` + pending + ` AND h.kind = '` + WakeFeedback + `')))`
+			OR (` + feedbackDue + ` AND EXISTS (SELECT 1 FROM ` + pending + ` AND h.kind = '` + WakeFeedback + `')))`
 	}
 	// Feedback that arrived within the quiet never makes its task due (due
 	// feedback has a row older than the quiet), so it is not a candidate:
 	// the probe and the selection do not test the task again for each of a
 	// burst's rows. ORDER BY min(c.created_at) is then the oldest reason
 	// that can call a turn; the set selected is the same.
-	quiet, _ := d.secs()
 	return `c.delivered_at IS NULL
-	AND (c.kind <> '` + WakeFeedback + `' OR c.created_at < now() - make_interval(secs => ` + quiet + `))
+	AND (c.kind <> '` + WakeFeedback + `' OR c.created_at < now() - make_interval(secs => ` + feedbackQuietSecs + `))
 	AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = c.task_id` + latestDelivery + `), false)
 	AND NOT ((SELECT ` + quietNoModel + ` FROM (SELECT c.task_id) qn)
 		AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + `))
@@ -656,4 +637,4 @@ func WakeableWithin(d FeedbackDebounce) string {
 	AND (` + calling(heldWakePrefix) + `
 		OR (EXISTS (SELECT 1 FROM runs r WHERE r.task_id = c.task_id AND ` + LiveConductor + ` AND r.status = 'running')
 			AND ` + calling(rideWakePrefix) + `))`
-}
+}()

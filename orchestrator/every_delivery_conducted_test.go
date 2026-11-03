@@ -6,6 +6,7 @@ package orchestrator_test
 // the implementer. Through the real API, workflow, syncer and fake lux.
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -176,8 +177,6 @@ func TestFeedbackOnAQuietDeliveryReachesTheWorkingImplementerOnceAtOnce(t *testi
 	w.onModel("conductor", fakeagent.DefaultsModel)
 	w.onModel("implementer", "fake/hang")
 	w.waitingFor(time.Hour)
-	// Debounced for a moment only: the conductor's turn comes in the test.
-	w.syncer.FeedbackDebounce = delivery.FeedbackDebounce{Quiet: 50 * time.Millisecond}
 	ana := w.person("Ana")
 	task := w.task()
 	w.deliverByAPI(task)
@@ -192,6 +191,11 @@ func TestFeedbackOnAQuietDeliveryReachesTheWorkingImplementerOnceAtOnce(t *testi
 	// At once: the submit's own steer, before any conductor turn.
 	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND strpos(text, 'Keep the old endpoint as an alias.') > 0`, impl); n != 1 {
 		t.Fatalf("%d steers of the implementer at the submit, want 1", n)
+	}
+	// Its quiet passed: the conductor's turn comes in the test.
+	if _, err := w.owner.Exec(context.Background(), `UPDATE conductor_wakes SET created_at = created_at - make_interval(secs => $2)
+		WHERE task_id = $1 AND kind = $3 AND delivered_at IS NULL`, task, (delivery.FeedbackQuiet + time.Second).Seconds(), delivery.WakeFeedback); err != nil {
+		t.Fatal(err)
 	}
 	w.until("the conductor told of the feedback", func() bool {
 		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
