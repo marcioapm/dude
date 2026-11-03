@@ -482,6 +482,22 @@ func FeedbackCalls(input string) [][2]string {
 	return [][2]string{{"steer", string(args)}}
 }
 
+// DefaultsCalls are what a DefaultsModel conductor that decides quietly
+// does with an input, as Deliver's policy would: steer with the people's
+// feedback it names (FeedbackCalls), then, woken for a decision
+// (TakesDefaults), take Deliver's defaults (DefaultsCall). None while it is
+// chatty: a person drives its decisions.
+func DefaultsCalls(input string, quiet bool) [][2]string {
+	if !quiet {
+		return nil
+	}
+	calls := FeedbackCalls(input)
+	if TakesDefaults(input) {
+		calls = append(calls, DefaultsCall)
+	}
+	return calls
+}
+
 // Quiet says a conductor decides its delivery quietly, from its briefing
 // and the inputs since, oldest first: the briefing says so, or the latest
 // change of voice it was told is to quiet. DefaultsModel takes Deliver's
@@ -556,11 +572,8 @@ func conductorScript(briefing, model string) string {
 	}
 	var b strings.Builder
 	calls := ConductorCalls(message)
-	if model == DefaultsModel && !session && Quiet(briefing, nil) {
-		calls = append(calls, FeedbackCalls(message)...)
-	}
-	if model == DefaultsModel && !session && TakesDefaults(message) && Quiet(briefing, nil) {
-		calls = append(calls, DefaultsCall)
+	if model == DefaultsModel && !session {
+		calls = append(calls, DefaultsCalls(message, Quiet(briefing, nil))...)
 	}
 	for _, c := range calls {
 		if Local(c[0]) {

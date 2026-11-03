@@ -1997,18 +1997,13 @@ func (s *Server) turn(run *Run) {
 		for _, c := range fakeagent.ConductorCalls(conductorAsked(input, first)) {
 			s.callTool(run, c[0], c[1])
 		}
-		// Deliver's defaults, taken at a later decision it is woken for
-		// (its first prompt's script carries them already).
-		// And the people's feedback it is woken for, as Deliver's policy
-		// took it (fakeagent.FeedbackCalls).
-		if b.Defaults && !first && fakeagent.QuietSince(b.Quiet, run.Inputs) {
-			for _, c := range fakeagent.FeedbackCalls(input) {
+		// Deliver's defaults and the people's feedback, taken at a later
+		// input it is woken for (its first prompt's script carries them
+		// already: fakeagent.ConductorScriptFor).
+		if b.Defaults && !first {
+			for _, c := range fakeagent.DefaultsCalls(input, fakeagent.QuietSince(b.Quiet, run.Inputs)) {
 				s.callTool(run, c[0], c[1])
 			}
-		}
-		if b.Defaults && !first && fakeagent.TakesDefaults(input) &&
-			fakeagent.QuietSince(b.Quiet, run.Inputs) {
-			s.callTool(run, fakeagent.DefaultsCall[0], fakeagent.DefaultsCall[1])
 		}
 	}
 	if b.Hang && !run.woken && (first || !b.Conductor || len(b.OpenCalls) == 0) {
