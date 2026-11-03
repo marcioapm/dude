@@ -221,3 +221,22 @@ func TestDebouncingFeedbackDoesNotCrowdOutTheSweep(t *testing.T) {
 		t.Errorf("%d debouncing feedback reasons told", n)
 	}
 }
+
+// The debounce is each task's own (C2 round 1): task A's feedback, quiet
+// for 11 minutes, is told in the sweep that finds task B's just in; B's
+// waits for its own quiet.
+func TestFeedbackDebouncesPerTask(t *testing.T) {
+	w := newWakeSweepWorld(t)
+	w.s.WakeWindow = 15 * time.Second
+	w.debounceTask("wi_a", delivery.VoiceQuiet)
+	w.debounceTask("wi_b", delivery.VoiceQuiet)
+	w.feedbackAt("wi_a", "fbi_a", 11*time.Minute)
+	w.feedbackAt("wi_b", "fbi_b", 0)
+	w.sweep()
+	if notes := w.notes("wi_a"); len(notes) != 1 || !strings.Contains(notes[0], "fbi_a") {
+		t.Errorf("A, quiet for 11 minutes: got %d notes, want 1 with fbi_a: %q", len(notes), notes)
+	}
+	if notes := w.notes("wi_b"); len(notes) != 0 {
+		t.Errorf("B, just in: got %d notes, want none: %q", len(notes), notes)
+	}
+}
