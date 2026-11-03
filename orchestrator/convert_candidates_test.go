@@ -252,6 +252,72 @@ func TestConvertCandidatesLeavesAParkedDeliveryParkedAndItsRetryDirect(t *testin
 	w.directlyFixedAgain(review)
 }
 
+// State D on a loop's candidate (a writer of the review loop opened it
+// while a pull request was open), parked on a stuck or exhausted loop:
+// whatever the person answers, the fix is redone directly from the pull
+// request's head, by a new fix Run keyed apart from every earlier one,
+// and the delivery goes on to wait on its pull request again, never
+// waiting on a Run from before the sweep (Escalation.Redo, Retries).
+func TestConvertCandidatesRedoesAParkedLoopCandidateDirectlyWhateverThePersonAnswers(t *testing.T) {
+	for _, c := range []struct{ reason, action, note string }{
+		{"stuck", "accept", ""},
+		{"exhausted", "accept", ""},
+		{"stuck", "retry", "Log it at info."},
+		{"exhausted", "retry", ""},
+		{delivery.ReasonNotConverging, "amend", "The greeting may stay in English."},
+	} {
+		t.Run(c.reason+"/"+c.action, func(t *testing.T) {
+			w, ana, review, from := midCandidateReview(t)
+			mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'decide', status = 'waiting', wake_at = NULL,
+				awaiting_signals = '["human.decision"]',
+				state = jsonb_set(state, '{candidate,loop}', 'true') || jsonb_build_object('escalation',
+				  jsonb_build_object('reason', $2::text, 'step', 'fix', 'at', 'awaitFix'))
+				WHERE task_id = $1`, w.wi, c.reason)
+			mustExec(t, w.owner, `UPDATE tasks SET status = 'awaiting_input' WHERE id = $1`, w.wi)
+			before := w.str(`SELECT max(created_at)::text FROM runs WHERE task_id = $1`, w.wi)
+			if n := w.convertCandidates(); n.Converted != 1 {
+				t.Fatalf("swept %+v", n)
+			}
+			if got := w.str(`SELECT state->'escalation'->>'step' || '/' || COALESCE(state->'escalation'->>'at', '') FROM workflow_runs WHERE task_id = $1`, w.wi); got != "prFix/" {
+				t.Errorf("escalation step/at %s, want prFix/", got)
+			}
+			w.candidateDropped(from)
+			if code, body := w.decide(ana, w.wi, c.action, c.note); code != 200 {
+				t.Fatalf("%s: %d %v", c.action, code, body)
+			}
+			w.directlyFixedAgain(review)
+			// The fix's review is a new Run, not one from before the sweep
+			// (whose key the sweep's reset Iteration would have matched).
+			w.until("the new fix's own review finished", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
+					AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix' AND created_at > $2::timestamptz)`, w.wi, before) > 0
+			})
+			var pending []string
+			_ = json.Unmarshal([]byte(w.state("pendingRunIds")), &pending)
+			for _, id := range pending {
+				if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND created_at <= $2::timestamptz`, id, before) != 0 {
+					t.Errorf("the delivery waits on %s, a Run from before the sweep\n%s", id, w.describeRuns())
+				}
+			}
+			// Nothing after the sweep waited on, or reused, a Run from before it.
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND created_at <= $2::timestamptz AND status NOT IN ('aborted', 'completed', 'failed')`, w.wi, before); n != 0 {
+				t.Errorf("%d Runs from before the sweep still live\n%s", n, w.describeRuns())
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND created_at > $2::timestamptz`, w.wi, before); n == 0 {
+				t.Errorf("no fix Run after the sweep\n%s", w.describeRuns())
+			}
+			// prFix's own Run, keyed to its round: not the loop's fix step's.
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND created_at > $2::timestamptz
+				AND creation_key NOT LIKE '%:prfix:%'`, w.wi, before); n != 0 {
+				t.Errorf("%d fix Runs after the sweep not prFix's\n%s", n, w.describeRuns())
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('simplify', 'implement', 'test') AND created_at > $2::timestamptz`, w.wi, before); n != 0 {
+				t.Errorf("the loop's writer or a tester ran after the sweep\n%s", w.describeRuns())
+			}
+		})
+	}
+}
+
 // State F: stopped with its candidate kept for a recovery. The candidate
 // goes, the kept Runs are let go, and a retry fixes again directly.
 func TestConvertCandidatesLetsAStoppedDeliveryRetryDirectly(t *testing.T) {

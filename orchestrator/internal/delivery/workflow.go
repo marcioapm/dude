@@ -313,6 +313,11 @@ type Escalation struct {
 	// (State.Escalations, its wake's key), once told: 0 while no conductor
 	// was. A delivery handed to the conductor again is not told twice.
 	Told int `json:"told,omitempty"`
+	// Set by ConvertCandidateTx on an escalation parked with a candidate
+	// open: what it asked about was the candidate's, now dropped, so a
+	// retry, accept or amend all redo the fix directly (prFix), in the
+	// fresh key namespace the sweep gave the delivery (Retries).
+	Redo bool `json:"redo,omitempty"`
 }
 
 // Actions says what a person may do about it: go back and try again,
@@ -3560,6 +3565,22 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
+	}
+	if e.Redo && e.Reason != ReasonConductorUnavailable && (d.Action == "retry" || d.Action == "accept" || d.Action == "amend") {
+		// The candidate it stopped on is gone (ConvertCandidateTx), and with
+		// it what the findings, test or review it asked about were of: the
+		// fix is redone from the pull requests' heads, the person's note
+		// (PersonSaid) given to its fixer. Its Runs are keyed apart from
+		// every earlier one's: prFix's by its new round (PRFixKey), and the
+		// sweep bumped Retries for any other. An amend's criteria still
+		// stand for the findings it names: the new fixer works to them.
+		if e.Reason == ReasonNotConverging && d.Action == "amend" {
+			if err := w.s.AmendFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		st.Pipeline, st.PendingRunIDs = nil, nil
+		return workflow.Result{Next: "prFix", State: st}, nil
 	}
 	if e.Reason == ReasonConductorUnavailable && st.Decision != nil {
 		// The decision the conductor left: waited on afresh (retry), the

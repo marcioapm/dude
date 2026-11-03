@@ -129,6 +129,10 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 			return "", err
 		}
 		next = "prFix"
+		// Parked on a person's answer about the candidate's work: redone
+		// directly, whatever they answer (below). A conductor's lost
+		// decision is not about the candidate's work: left as it was.
+		redo := st.Escalation != nil && st.Escalation.Reason != ReasonConductorUnavailable
 		if c.Loop {
 			phase, err := discardLoopCandidateTx(ctx, tx, taskID, workflowID, st.Attempt, c.Round, nil)
 			if err != nil {
@@ -141,9 +145,9 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 			case PhaseSimplify:
 				next = "simplify"
 			}
-		} else if st.Integration == nil && live && !parked && st.PRIteration > 0 {
+		} else if st.Integration == nil && (live && !parked || redo) && st.PRIteration > 0 {
 			// The fix is redone as its round, not as another: prFix counts
-			// it again (retry gives it back for a parked one).
+			// it again (a stopped one's retry gives it back as it recovers).
 			st.PRIteration--
 		}
 		if st.PRFixCharged != nil && st.PRFixCharged.Pending {
@@ -165,8 +169,14 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 		}
 		// Parked or stopped: the person's retry (or the conductor's) fixes
 		// again from what the pull requests show, never resuming a Run of
-		// the candidate's.
-		if e := st.Escalation; e != nil {
+		// the candidate's. A parked one's escalation asked about the
+		// candidate's work: whatever the answer (retry, accept, amend), the
+		// fix is redone directly (Escalation.Redo), its Runs keyed apart
+		// from every earlier one's (Retries; Iteration starts again at 0).
+		if e := st.Escalation; e != nil && redo {
+			e.Step, e.At, e.AtSignals, e.Redo = "prFix", "", nil, true
+			st.Retries++
+		} else if e != nil {
 			e.Step, e.At, e.AtSignals = next, "", nil
 		}
 		if e := st.Stopped; e != nil {
