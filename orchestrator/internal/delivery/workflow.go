@@ -3493,6 +3493,32 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, fmt.Errorf("escalation %s: retry has no step to go back to (RetryStep)", e.Reason)
 	}
 	st.Escalation = nil
+	if e.Redo && e.Reason != ReasonConductorUnavailable && d.Action != "stop" && d.Action != "done" && d.Action != "wait" {
+		// The candidate it stopped on is gone (ConvertCandidateTx), and with
+		// it what the findings, test, checks or review it asked about were
+		// of: whatever resuming answer (retry, accept, amend, waive), the
+		// fix is redone from the pull requests' heads at the step the sweep
+		// set (At: prFix, or the loop's writer), the person's note
+		// (PersonSaid) given to its fixer. Its Runs are keyed apart from
+		// every earlier one's: the sweep bumped Retries. An amend's
+		// criteria still stand for the findings it names: the new fixer
+		// works to them.
+		st.PersonSaid = d.Said
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
+			return workflow.Result{}, err
+		}
+		if e.Reason == ReasonNotConverging && d.Action == "amend" {
+			if err := w.s.AmendFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		st.Pipeline, st.PendingRunIDs = nil, nil
+		next := e.At
+		if next == "" {
+			next = "prFix"
+		}
+		return workflow.Result{Next: next, State: st}, nil
+	}
 	if e.Reason == ReasonChecksUnverified {
 		if d.Action == "stop" {
 			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
@@ -3582,22 +3608,6 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
-	}
-	if e.Redo && e.Reason != ReasonConductorUnavailable && (d.Action == "retry" || d.Action == "accept" || d.Action == "amend") {
-		// The candidate it stopped on is gone (ConvertCandidateTx), and with
-		// it what the findings, test or review it asked about were of: the
-		// fix is redone from the pull requests' heads, the person's note
-		// (PersonSaid) given to its fixer. Its Runs are keyed apart from
-		// every earlier one's: prFix's by its new round (PRFixKey), and the
-		// sweep bumped Retries for any other. An amend's criteria still
-		// stand for the findings it names: the new fixer works to them.
-		if e.Reason == ReasonNotConverging && d.Action == "amend" {
-			if err := w.s.AmendFindingIDs(ctx, sc.OrganizationID, st, e.findingIDs(), d.Note); err != nil {
-				return workflow.Result{}, err
-			}
-		}
-		st.Pipeline, st.PendingRunIDs = nil, nil
-		return workflow.Result{Next: "prFix", State: st}, nil
 	}
 	if e.Reason == ReasonConductorUnavailable && st.Decision != nil {
 		// The decision the conductor left: waited on afresh (retry), the

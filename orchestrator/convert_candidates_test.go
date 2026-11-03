@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"strings"
 	"sync"
 	"testing"
 
@@ -239,8 +240,8 @@ func TestConvertCandidatesLeavesAParkedDeliveryParkedAndItsRetryDirect(t *testin
 	if got := w.step(); got != "decide" {
 		t.Errorf("step %s, want it left at decide", got)
 	}
-	if got := w.str(`SELECT state->'escalation'->>'step' || '/' || COALESCE(state->'escalation'->>'at', '') FROM workflow_runs WHERE task_id = $1`, w.wi); got != "prFix/" {
-		t.Errorf("escalation step/at %s, want prFix/", got)
+	if got := w.str(`SELECT state->'escalation'->>'step' || '/' || COALESCE(state->'escalation'->>'at', '') FROM workflow_runs WHERE task_id = $1`, w.wi); got != "prFix/prFix" {
+		t.Errorf("escalation step/at %s, want prFix/prFix", got)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, review); n != 1 {
 		t.Errorf("the candidate's review was not aborted")
@@ -252,67 +253,122 @@ func TestConvertCandidatesLeavesAParkedDeliveryParkedAndItsRetryDirect(t *testin
 	w.directlyFixedAgain(review)
 }
 
-// State D on a loop's candidate (a writer of the review loop opened it
-// while a pull request was open), parked on a stuck or exhausted loop:
-// whatever the person answers, the fix is redone directly from the pull
-// request's head, by a new fix Run keyed apart from every earlier one,
-// and the delivery goes on to wait on its pull request again, never
-// waiting on a Run from before the sweep (Escalation.Redo, Retries).
-func TestConvertCandidatesRedoesAParkedLoopCandidateDirectlyWhateverThePersonAnswers(t *testing.T) {
-	for _, c := range []struct{ reason, action, note string }{
-		{"stuck", "accept", ""},
-		{"exhausted", "accept", ""},
-		{"stuck", "retry", "Log it at info."},
-		{"exhausted", "retry", ""},
-		{delivery.ReasonNotConverging, "amend", "The greeting may stay in English."},
+// Every shape a delivery with an open candidate can be in when the sweep
+// runs, under one rule (ConvertCandidateTx): the candidate goes, Retries
+// moves on so the redo's Runs are keyed apart from every earlier one's,
+// and the fix is redone from the pull request's head (prFix for a pull
+// request fix's candidate, the loop's writer for a loop's): at once when
+// it runs or waits on its conductor's decision (dropped), on the person's
+// answer, whatever resuming one, when it is parked on an escalation.
+// Whatever the shape: a fix Run started after the sweep publishes to the
+// pull request's head, no Run from before the sweep is waited on, and the
+// workflow never completes under a running task.
+func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
+	type shape struct {
+		name   string
+		loop   bool
+		step   string // "" running as midCandidateReview left it
+		point  string // conductorDecision's
+		reason string // decide's
+		action string
+		note   string
+	}
+	shapes := []shape{
+		{name: "running/pr_fix"},
+		{name: "running/loop", loop: true},
+		{name: "conductorDecision/after_fix", loop: true, step: "conductorDecision", point: delivery.PointFixed},
+		{name: "conductorDecision/after_review", loop: true, step: "conductorDecision", point: delivery.PointReviewed},
+	}
+	for _, d := range []struct {
+		reason  string
+		actions []string
+	}{
+		{"stuck", []string{"retry", "accept"}},
+		{"exhausted", []string{"retry", "accept"}},
+		{delivery.ReasonNotConverging, []string{"retry", "accept", "amend"}},
+		{delivery.ReasonChecksUnverified, []string{"retry", delivery.ActionWaive}},
+		{delivery.ReasonTestBlocked, []string{"retry", delivery.ActionWaive}},
 	} {
-		t.Run(c.reason+"/"+c.action, func(t *testing.T) {
+		for _, a := range d.actions {
+			note := ""
+			if delivery.NeedsNote(d.reason, a) {
+				note = "The greeting may stay in English."
+			}
+			// A loop's writer escalates stuck, exhausted and not converging;
+			// a test or a held check, a pull request fix's candidate too.
+			loop := d.reason != delivery.ReasonChecksUnverified && d.reason != delivery.ReasonTestBlocked
+			shapes = append(shapes, shape{name: "decide/" + d.reason + "/" + a, loop: loop, step: "decide",
+				reason: d.reason, action: a, note: note})
+		}
+	}
+	for _, c := range shapes {
+		t.Run(c.name, func(t *testing.T) {
 			w, ana, review, from := midCandidateReview(t)
-			mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'decide', status = 'waiting', wake_at = NULL,
-				awaiting_signals = '["human.decision"]',
-				state = jsonb_set(state, '{candidate,loop}', 'true') || jsonb_build_object('escalation',
-				  jsonb_build_object('reason', $2::text, 'step', 'fix', 'at', 'awaitFix'))
-				WHERE task_id = $1`, w.wi, c.reason)
-			mustExec(t, w.owner, `UPDATE tasks SET status = 'awaiting_input' WHERE id = $1`, w.wi)
-			before := w.str(`SELECT max(created_at)::text FROM runs WHERE task_id = $1`, w.wi)
+			if c.loop {
+				mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{candidate,loop}', 'true') WHERE task_id = $1`, w.wi)
+			}
+			switch c.step {
+			case "conductorDecision":
+				mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'conductorDecision', status = 'waiting', wake_at = NULL,
+					awaiting_signals = '["conductor.decision"]',
+					state = state || jsonb_build_object('decision', jsonb_build_object('point', $2::text, 'policy', 'review'))
+					WHERE task_id = $1`, w.wi, c.point)
+			case "decide":
+				at, step := "awaitFix", "fix"
+				if !c.loop {
+					at, step = "awaitReview", "review"
+				}
+				mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'decide', status = 'waiting', wake_at = NULL,
+					awaiting_signals = '["human.decision"]', state = state || jsonb_build_object('testRunId', $5::text,
+					'escalation', jsonb_build_object('reason', $2::text, 'step', $3::text, 'at', $4::text,
+					  'atSignals', '["phase.finished"]'::jsonb, 'detail', jsonb_build_object('runId', $5::text)))
+					WHERE task_id = $1`, w.wi, c.reason, step, at, review)
+				mustExec(t, w.owner, `UPDATE tasks SET status = 'awaiting_input' WHERE id = $1`, w.wi)
+			}
+			before := w.str(`SELECT clock_timestamp()::text`)
 			if n := w.convertCandidates(); n.Converted != 1 {
 				t.Fatalf("swept %+v", n)
 			}
-			if got := w.str(`SELECT state->'escalation'->>'step' || '/' || COALESCE(state->'escalation'->>'at', '') FROM workflow_runs WHERE task_id = $1`, w.wi); got != "prFix/" {
-				t.Errorf("escalation step/at %s, want prFix/", got)
-			}
 			w.candidateDropped(from)
-			if code, body := w.decide(ana, w.wi, c.action, c.note); code != 200 {
-				t.Fatalf("%s: %d %v", c.action, code, body)
+			if w.state("decision") != "" {
+				t.Errorf("the conductor's decision about the candidate is still there: %s", w.state("decision"))
+			}
+			if c.step == "decide" {
+				if got := w.step(); got != "decide" {
+					t.Errorf("step %s, want it left at decide", got)
+				}
+				if code, body := w.decide(ana, w.wi, c.action, c.note); code != 200 {
+					t.Fatalf("%s: %d %v", c.action, code, body)
+				}
 			}
 			w.directlyFixedAgain(review)
-			// The fix's review is a new Run, not one from before the sweep
-			// (whose key the sweep's reset Iteration would have matched).
+			// The fix's own review: a Run after the sweep, not the one from
+			// before it whose key a reset Iteration would match.
 			w.until("the new fix's own review finished", func() bool {
+				if w.count(`SELECT count(*) FROM workflow_runs wf JOIN tasks t ON t.id = wf.task_id
+					WHERE wf.task_id = $1 AND wf.status = 'completed' AND t.status = 'running'`, w.wi) != 0 {
+					t.Fatalf("the workflow completed with its task running\n%s", w.describeRuns())
+				}
 				return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
 					AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix' AND created_at > $2::timestamptz)`, w.wi, before) > 0
 			})
-			var pending []string
-			_ = json.Unmarshal([]byte(w.state("pendingRunIds")), &pending)
-			for _, id := range pending {
-				if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND created_at <= $2::timestamptz`, id, before) != 0 {
-					t.Errorf("the delivery waits on %s, a Run from before the sweep\n%s", id, w.describeRuns())
+			w.until("the delivery past the new fix's review", func() bool {
+				var pending []string
+				_ = json.Unmarshal([]byte(w.state("pendingRunIds")), &pending)
+				for _, id := range pending {
+					if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND created_at <= $2::timestamptz`, id, before) != 0 {
+						return false
+					}
 				}
-			}
-			// Nothing after the sweep waited on, or reused, a Run from before it.
-			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND created_at <= $2::timestamptz AND status NOT IN ('aborted', 'completed', 'failed')`, w.wi, before); n != 0 {
+				return w.step() != "awaitReview" || len(pending) > 0
+			})
+			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND created_at <= $2::timestamptz
+				AND status NOT IN ('aborted', 'completed', 'failed')`, w.wi, before); n != 0 {
 				t.Errorf("%d Runs from before the sweep still live\n%s", n, w.describeRuns())
 			}
-			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND created_at > $2::timestamptz`, w.wi, before); n == 0 {
-				t.Errorf("no fix Run after the sweep\n%s", w.describeRuns())
-			}
-			// prFix's own Run, keyed to its round: not the loop's fix step's.
-			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND created_at > $2::timestamptz
-				AND creation_key NOT LIKE '%:prfix:%'`, w.wi, before); n != 0 {
-				t.Errorf("%d fix Runs after the sweep not prFix's\n%s", n, w.describeRuns())
-			}
-			if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('simplify', 'implement', 'test') AND created_at > $2::timestamptz`, w.wi, before); n != 0 {
-				t.Errorf("the loop's writer or a tester ran after the sweep\n%s", w.describeRuns())
+			if n := w.count(`SELECT count(*) FROM workflow_runs wf JOIN tasks t ON t.id = wf.task_id
+				WHERE wf.task_id = $1 AND wf.status = 'completed' AND t.status IN ('running', 'review')`, w.wi); n != 0 {
+				t.Errorf("the workflow completed while its task goes on: step %s\n%s", w.step(), w.describeRuns())
 			}
 		})
 	}
@@ -356,5 +412,90 @@ func TestConvertCandidatesDropsAHandOver(t *testing.T) {
 	}
 	if got := w.step(); got != "awaitPullRequest" {
 		t.Errorf("step %s", got)
+	}
+}
+
+// Selection: a delivery frozen before pullRequestFixes was a key (most
+// live ones) still fixes through a candidate: the sweep makes it direct,
+// and touches nothing else (no Retries, no step).
+func TestConvertCandidatesMakesAKeylessDeliveryDirect(t *testing.T) {
+	w := candidateWorld(t)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state #- '{policy,pullRequestFixes}' WHERE task_id = $1`, w.wi)
+	if n := w.convertCandidates(); n.Converted != 1 {
+		t.Fatalf("swept %+v, want the keyless delivery converted", n)
+	}
+	if got := w.state("policy"); !strings.Contains(got, `"pullRequestFixes": "direct"`) {
+		t.Errorf("policy %s, want direct", got)
+	}
+	if got := w.step(); got != "awaitPullRequest" || w.state("retries") != "" {
+		t.Errorf("step %s, retries %q: want it left waiting, untouched", got, w.state("retries"))
+	}
+	w.comment("Please rename the greeting.")
+	w.until("the fix on the pull request", func() bool {
+		w.sync()
+		return w.gh.SHA(w.branch) != w.before
+	})
+	if w.gh.SHA(delivery.CandidateBranch(w.wi, 1)) != "" {
+		t.Errorf("a candidate branch was written")
+	}
+}
+
+// Selection: an attempt started over is not the task's delivery any more.
+// Stopped with its candidate kept, then superseded by a start over, it is
+// left as it is: no notice, and the live attempt's kept Run stays kept.
+func TestConvertCandidatesLeavesASupersededAttempt(t *testing.T) {
+	w, ana, _, _ := midCandidateReview(t)
+	w.stop(ana, w.wi, map[string]any{"note": "hold on"})
+	w.until("stopped", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
+	})
+	old := w.str(`SELECT id FROM workflow_runs WHERE task_id = $1`, w.wi)
+	w.pickUp(ana, w.wi, map[string]any{"action": "restart"})
+	w.until("the next attempt", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND id <> $2`, w.wi, old) == 1
+	})
+	// As a person's stop at decide leaves it (State.Stopped), recoverable
+	// but for the start over.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"stopped":{"reason":"stuck","step":"fix"}}' WHERE id = $1`, old)
+	if w.count(`SELECT count(*) FROM workflow_runs WHERE id = $1 AND state ? 'candidate' AND (state ? 'stopped' OR state ? 'halt')`, old) != 1 {
+		t.Fatalf("the stopped attempt kept no candidate: nothing to pin: %s", w.str(`SELECT state::text FROM workflow_runs WHERE id = $1`, old))
+	}
+	// A Run of the live attempt kept for its next round.
+	w.until("a Run of the next attempt", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND status IN ('aborted', 'failed', 'completed')`, w.wi) > 0
+	})
+	kept := w.str(`SELECT max(id) FROM runs WHERE task_id = $1 AND attempt = 2 AND status IN ('aborted', 'failed', 'completed')`, w.wi)
+	mustExec(t, w.owner, `UPDATE runs SET keep = true, kept_until = now() + interval '1 hour' WHERE id = $1`, kept)
+	before := w.str(`SELECT state::text FROM workflow_runs WHERE id = $1`, old)
+	w.convertCandidates()
+	if after := w.str(`SELECT state::text FROM workflow_runs WHERE id = $1`, old); after != before {
+		t.Errorf("the superseded attempt was rewritten")
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND keep AND kept_until > now()`, kept); n != 1 {
+		t.Errorf("the live attempt's kept Run %s was let go", kept)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'about' = 'candidate_converted'`, w.wi); n != 0 {
+		t.Errorf("%d notices for a superseded attempt", n)
+	}
+}
+
+// Selection: a task closed with its candidate open has ended: not
+// selected, and nothing tells Chat dude fixes it again.
+func TestConvertCandidatesLeavesAClosedTask(t *testing.T) {
+	w, ana, _, _ := midCandidateReview(t)
+	if status, body := w.callAs(ana, "/internal/tasks/"+w.wi+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
+		t.Fatalf("close: %d %v", status, body)
+	}
+	w.until("closed", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
+	})
+	if w.state("candidate") == "" || w.state("stopped") != "" || w.state("halt") != "" {
+		t.Fatalf("closed: candidate %q stopped %q halt %q: nothing to pin", w.state("candidate"), w.state("stopped"), w.state("halt"))
+	}
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
+		t.Errorf("swept %+v, want nothing", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'about' = 'candidate_converted'`, w.wi); n != 0 {
+		t.Errorf("%d notices for a closed task", n)
 	}
 }

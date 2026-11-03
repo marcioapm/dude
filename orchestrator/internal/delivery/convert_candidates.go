@@ -28,11 +28,17 @@ const (
 	CandidateNone = "none"
 )
 
-// candidateRowsSQL selects every delivery, whatever its status (a stopped
-// one is picked back up), that still fixes through a candidate or has
-// one's state: its frozen policy not direct, a candidate, a hand-over,
-// or a step of the candidate's promotion.
-const candidateRowsSQL = `workflow_type = '` + WorkflowType + `' AND task_id IS NOT NULL AND COALESCE(
+// candidateRowsSQL selects each task's latest delivery, only while it can
+// still go on (live, or stopped or halted for a recovery: an ended or
+// superseded one never reads its policy or candidate again), that still
+// fixes through a candidate or has one's state: its frozen policy not
+// direct (keyless included), a candidate, a hand-over, or a step of the
+// candidate's promotion.
+const candidateRowsSQL = `workflow_type = '` + WorkflowType + `' AND task_id IS NOT NULL
+	AND (status IN ('running', 'waiting') OR state ? 'stopped' OR state ? 'halt')
+	AND NOT EXISTS (SELECT 1 FROM workflow_runs n WHERE n.task_id = workflow_runs.task_id
+	  AND n.workflow_type = workflow_runs.workflow_type AND n.created_at > workflow_runs.created_at)
+	AND COALESCE(
 	COALESCE(state->'policy'->>'pullRequestFixes', '') <> '` + PullRequestFixesDirect + `'
 	OR state ? 'candidate' OR state ? 'handedOver'
 	OR state->'promotedRefresh'->>'next' = 'beforePR'
@@ -98,7 +104,10 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 		return CandidateLeft, nil
 	}
 	live := d.Live()
-	parked := st.Escalation != nil || d.Step == "conductorDecision" || d.Step == "decide"
+	// Parked on a person (or a conductor's lost decision): its answer
+	// redoes the fix. A conductor's decision parked on is not about the
+	// candidate's work: dropped, and the fix redone now (below).
+	parked := st.Escalation != nil || d.Step == "decide"
 	st.Policy.PullRequestFixes = PullRequestFixesDirect
 	st.HandedOver = nil
 	next := ""
@@ -167,15 +176,24 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 			"branch": c.Branch, "heads": c.From, "text": convertedNotice(c.Branch, c.From)}); err != nil {
 			return "", err
 		}
-		// Parked or stopped: the person's retry (or the conductor's) fixes
-		// again from what the pull requests show, never resuming a Run of
-		// the candidate's. A parked one's escalation asked about the
-		// candidate's work: whatever the answer (retry, accept, amend), the
-		// fix is redone directly (Escalation.Redo), its Runs keyed apart
-		// from every earlier one's (Retries; Iteration starts again at 0).
+		// However it goes on, the redo's Runs are keyed apart from every
+		// earlier one's (Iteration starts again at 0): none from before
+		// the sweep is adopted.
+		st.Retries++
+		if st.Decision != nil && (d.Step == "conductorDecision" || redo) {
+			// The conductor's decision was about the dropped candidate: it
+			// hears of the redo from the notice. The row leaves
+			// conductorDecision, so no quiet deadline fires on it.
+			st.Decision = nil
+			st.Decisions++
+		}
+		// Parked or stopped: the person's answer (or the conductor's)
+		// fixes again from what the pull requests show, never resuming a
+		// Run of the candidate's. A parked one's escalation asked about
+		// the candidate's work: whatever resuming answer (retry, accept,
+		// amend, waive), the fix is redone directly (Escalation.Redo).
 		if e := st.Escalation; e != nil && redo {
-			e.Step, e.At, e.AtSignals, e.Redo = "prFix", "", nil, true
-			st.Retries++
+			e.Step, e.At, e.AtSignals, e.Redo = next, next, nil, true
 		} else if e != nil {
 			e.Step, e.At, e.AtSignals = next, "", nil
 		}
