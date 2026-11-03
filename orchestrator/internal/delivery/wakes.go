@@ -441,6 +441,13 @@ func failBriefingTx(ctx context.Context, tx pgx.Tx, runID string, ended bool) er
 	return requeueTx(ctx, tx, wakes)
 }
 
+// feedbackGiven (SQL, over feedback_items f): the item's Run
+// (delivered_run_id) has it now: given in its prompt, read, or on a steer
+// still on its way, and not since released by its end or a failed steer.
+const feedbackGiven = `f.delivered_run_id IS NOT NULL AND f.status IN ('open', 'delivered')
+	AND (f.directive_id IS NULL OR EXISTS (SELECT 1 FROM directives d WHERE d.id = f.directive_id
+		AND (d.delivered_at IS NOT NULL OR d.failed_at IS NULL)))`
+
 // feedbackLineTx is the one line a note gives the task's pending feedback
 // reasons (keys; a submit's "feedback:<batch>", a reopening's
 // "feedback:reopen:<reply>"): every item they name, and those a working
@@ -454,10 +461,7 @@ func feedbackLineTx(ctx context.Context, tx pgx.Tx, taskID string, keys []string
 		return "", nil, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT k.key, f.id,
-			CASE WHEN f.delivered_run_id IS NOT NULL AND f.status IN ('open', 'delivered')
-				AND (f.directive_id IS NULL OR EXISTS (SELECT 1 FROM directives d WHERE d.id = f.directive_id
-					AND (d.delivered_at IS NOT NULL OR d.failed_at IS NULL)))
-			THEN f.delivered_run_id ELSE '' END
+			CASE WHEN `+feedbackGiven+` THEN f.delivered_run_id ELSE '' END
 		FROM unnest($2::text[]) WITH ORDINALITY k(key, n)
 		JOIN feedback_items f ON f.task_id = $1 AND (f.batch_id = substr(k.key, length('feedback:') + 1)
 			OR f.id = (SELECT r.item_id FROM feedback_replies r WHERE r.id = substr(k.key, length('feedback:reopen:') + 1)))
