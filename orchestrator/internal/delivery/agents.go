@@ -31,6 +31,7 @@ var agentTemplates = mustLoad(parseAgentTemplates(agentFiles))
 var (
 	conductorTmpl              = mustTemplate("briefings/conductor")
 	wakeFeedbackTmpl           = mustTemplate("briefings/wake-feedback")
+	wakeFeedbackMergedTmpl     = mustTemplate("briefings/wake-feedback-merged")
 	conductorStartsTmpl        = mustTemplate("contracts/conductor-starts")
 	conductorOpensTmpl         = mustTemplate("contracts/conductor-opens")
 	digestTmpl                 = mustTemplate("briefings/digest")

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -193,10 +194,31 @@ func WakeConductorWithinTx(ctx context.Context, tx pgx.Tx, org, taskID string, w
 		// Only news that rides on another note: no turn for it alone.
 		return "", nil
 	}
-	lines, kinds := make([]string, len(pending)), make([]string, len(pending))
 	ids := make([]string, len(pending))
+	var feedbackKeys []string
 	for i, p := range pending {
-		lines[i], kinds[i], ids[i] = p.Line, p.Kind, p.ID
+		ids[i] = p.ID
+		if p.Kind == WakeFeedback {
+			feedbackKeys = append(feedbackKeys, p.Key)
+		}
+	}
+	// People's feedback is one line however many submits a burst had
+	// (feedbackLineTx): past the note's cap, a submit's own line would go
+	// untold. Reasons it does not know the items of keep their own line.
+	merged, mergedKeys, err := feedbackLineTx(ctx, tx, taskID, feedbackKeys)
+	if err != nil {
+		return "", err
+	}
+	var lines, kinds []string
+	placed := false
+	for _, p := range pending {
+		if p.Kind == WakeFeedback && slices.Contains(mergedKeys, p.Key) {
+			if placed {
+				continue
+			}
+			placed, p.Line = true, merged
+		}
+		lines, kinds = append(lines, p.Line), append(kinds, p.Kind)
 	}
 	// The event keeps the note as recorded, unmarked: the replay marks it
 	// once, against the findings' status when it is read (a finding fixed
@@ -417,6 +439,77 @@ func failBriefingTx(ctx context.Context, tx pgx.Tx, runID string, ended bool) er
 		return err
 	}
 	return requeueTx(ctx, tx, wakes)
+}
+
+// feedbackLineTx is the one line a note gives the task's pending feedback
+// reasons (keys; a submit's "feedback:<batch>", a reopening's
+// "feedback:reopen:<reply>"): every item they name, and those a working
+// Run has now (given, not since released by its end or a failed steer),
+// by Run, first: a long line is clipped. With too many ids to fit in a
+// reason's line, it counts them and points at `dude feedback`, which lists
+// the open ones. Returns the keys it covers; a key whose items it cannot
+// find keeps its own line.
+func feedbackLineTx(ctx context.Context, tx pgx.Tx, taskID string, keys []string) (string, []string, error) {
+	if len(keys) == 0 {
+		return "", nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT k.key, f.id,
+			CASE WHEN f.delivered_run_id IS NOT NULL AND f.status IN ('open', 'delivered')
+				AND (f.directive_id IS NULL OR EXISTS (SELECT 1 FROM directives d WHERE d.id = f.directive_id
+					AND (d.delivered_at IS NOT NULL OR d.failed_at IS NULL)))
+			THEN f.delivered_run_id ELSE '' END
+		FROM unnest($2::text[]) WITH ORDINALITY k(key, n)
+		JOIN feedback_items f ON f.task_id = $1 AND (f.batch_id = substr(k.key, length('feedback:') + 1)
+			OR f.id = (SELECT r.item_id FROM feedback_replies r WHERE r.id = substr(k.key, length('feedback:reopen:') + 1)))
+		ORDER BY k.n, f.submitted_at, f.id`, taskID, keys)
+	if err != nil {
+		return "", nil, err
+	}
+	type item struct{ Key, ID, Run string }
+	found, err := pgx.CollectRows(rows, pgx.RowToStructByPos[item])
+	if err != nil || len(found) == 0 {
+		return "", nil, err
+	}
+	type given struct {
+		Run   string
+		Items []string
+		All   bool
+	}
+	var covered, items []string
+	var byRun []given
+	for _, it := range found {
+		if !slices.Contains(covered, it.Key) {
+			covered = append(covered, it.Key)
+		}
+		if slices.Contains(items, it.ID) {
+			continue
+		}
+		items = append(items, it.ID)
+		if it.Run == "" {
+			continue
+		}
+		if i := slices.IndexFunc(byRun, func(g given) bool { return g.Run == it.Run }); i >= 0 {
+			byRun[i].Items = append(byRun[i].Items, it.ID)
+		} else {
+			byRun = append(byRun, given{Run: it.Run, Items: []string{it.ID}})
+		}
+	}
+	if len(byRun) == 1 && len(byRun[0].Items) == len(items) {
+		byRun[0].All = true
+	}
+	line := func(named bool) string {
+		return render(wakeFeedbackMergedTmpl, struct {
+			Count int
+			Items []string
+			Given []given
+			Named bool
+		}{len(items), items, byRun, named})
+	}
+	text := line(true)
+	if utf8.RuneCountInString(text) > wakeLineChars {
+		text = line(false)
+	}
+	return text, covered, nil
 }
 
 // FailedForConductor (SQL, over runs r): a phase Run the task's conductor

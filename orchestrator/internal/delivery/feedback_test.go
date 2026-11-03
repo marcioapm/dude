@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -886,5 +887,102 @@ func TestTheConductorDoesNotGiveItemsAgainToTheRunThatHasThem(t *testing.T) {
 	}
 	if n := w.count(t, `SELECT count(*) FROM directives WHERE run_id = 'run_fix'`); n != 1 {
 		t.Errorf("%d directives to the new fixer, want 1", n)
+	}
+}
+
+// A burst of 12 submits is one feedback line in the conductor's note (C2
+// round 1): a note shows 10 lines, and a submit's own line past them went
+// untold. Every item is reachable: named, or, with ids too many to fit in
+// a line, counted, with `dude feedback` to list them, and that lists all
+// of them. Items a working Run was given say so, with the Run, first.
+func TestABurstOfTwelveSubmitsIsOneFeedbackLine(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		real  bool
+		given int
+	}{{"short ids, none given", false, 0}, {"real ids, five given", true, 5}} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newFeedbackWorld(t)
+			ctx := context.Background()
+			wf := w.delivery(t, "awaitFix", "conductor", `["phase.finished"]`)
+			w.exec(t, `UPDATE workflow_runs SET state = state || jsonb_build_object('voice', $2::text) WHERE id = $1`, wf, delivery.VoiceQuiet)
+			w.run(t, "run_c", "ABS-1", "", "conductor", "running")
+			w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = 'run_c'`)
+			work := ids.New(ids.Run)
+			if c.given > 0 {
+				w.run(t, work, "ABS-1", "implement", "implementer", "running")
+			}
+			var items []string
+			for i := range 12 {
+				id := "fbi_" + string(rune('a'+i))
+				if c.real {
+					id = ids.New(ids.FeedbackItem)
+				}
+				if i == c.given && c.given > 0 {
+					// Its turn ends: the rest go to no Run.
+					w.exec(t, `UPDATE runs SET turn_done_at = now() WHERE id = $1`, work)
+				}
+				w.draft(t, id, w.ana, "comment "+strconv.Itoa(i))
+				if _, err := w.submit(t, w.ana, "k"+strconv.Itoa(i), id); err != nil {
+					t.Fatal(err)
+				}
+				items = append(items, id)
+			}
+			w.exec(t, `UPDATE conductor_wakes SET created_at = now() - interval '11 minutes'`)
+			w.in(t, func(tx pgx.Tx) error {
+				woke, err := delivery.WakeConductorTx(ctx, tx, w.org, w.task, 0)
+				if err == nil && woke != "run_c" {
+					t.Errorf("woke %q, want run_c", woke)
+				}
+				return err
+			})
+			var notes []string
+			rows, err := w.owner.Query(ctx, `SELECT text FROM directives WHERE run_id = 'run_c'`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var s string
+				_ = rows.Scan(&s)
+				notes = append(notes, s)
+			}
+			rows.Close()
+			if len(notes) != 1 {
+				t.Fatalf("%d notes, want 1", len(notes))
+			}
+			note := notes[0]
+			if !strings.Contains(note, "one thing:") || strings.Contains(note, "more") {
+				t.Errorf("the burst is not one line:\n%s", note)
+			}
+			if !c.real {
+				for _, id := range items {
+					if !strings.Contains(note, id) {
+						t.Errorf("the note does not name %s:\n%s", id, note)
+					}
+				}
+			} else {
+				if !strings.Contains(note, "12 feedback items from people, too many to name here: list them and read their words with `dude feedback`") ||
+					!strings.Contains(note, "5 to "+work) {
+					t.Errorf("the note neither names the items nor points at dude feedback, or does not say five were given:\n%s", note)
+				}
+				var listed delivery.FeedbackList
+				w.in(t, func(tx pgx.Tx) (err error) {
+					listed, err = delivery.AgentFeedbackTx(ctx, tx, w.task, nil, false)
+					return err
+				})
+				var got []string
+				for _, it := range listed.Items {
+					got = append(got, it.ID)
+				}
+				for _, id := range items {
+					if !slices.Contains(got, id) {
+						t.Errorf("dude feedback does not list %s: %v", id, got)
+					}
+				}
+			}
+			if n := w.count(t, `SELECT count(*) FROM conductor_wakes WHERE delivered_at IS NULL`); n != 0 {
+				t.Errorf("%d reasons still pending", n)
+			}
+		})
 	}
 }
