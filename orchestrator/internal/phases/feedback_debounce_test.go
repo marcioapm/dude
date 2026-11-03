@@ -222,7 +222,7 @@ func TestDebouncingFeedbackDoesNotCrowdOutTheSweep(t *testing.T) {
 	}
 }
 
-// The debounce is each task's own (C2 round 1): task A's feedback, quiet
+// The debounce is each task's own (step 3b, PR C2): task A's feedback, quiet
 // for 11 minutes, is told in the sweep that finds task B's just in; B's
 // waits for its own quiet.
 func TestFeedbackDebouncesPerTask(t *testing.T) {

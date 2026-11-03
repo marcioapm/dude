@@ -802,7 +802,7 @@ func TestFeedbackAloneWaitsForItsQuiet(t *testing.T) {
 }
 
 // The note says the items were already given, and to whom, before it
-// lists them (C2 round 1): a reason's line is clipped at 300 characters,
+// lists them (step 3b, PR C2): a reason's line is clipped at 300 characters,
 // and real ids (29 characters each, listed twice) push a clause at the end
 // past it from two items on.
 func TestAlreadyGivenSurvivesTheClipWithRealIDs(t *testing.T) {
@@ -835,8 +835,8 @@ func TestAlreadyGivenSurvivesTheClipWithRealIDs(t *testing.T) {
 	}
 }
 
-// The conductor cannot give items again to the Run that has them (C2
-// round 1): a quiet delivery's submit steered them to the implementer at
+// The conductor cannot give items again to the Run that has them (step
+// 3b, PR C2): a quiet delivery's submit steered them to the implementer at
 // work, and the conductor's steer of the same items to it is refused,
 // naming them, whole, a batch with an item it does not have too. Once
 // that Run ended (the items open again), a steer of them to a new fixer
@@ -890,9 +890,9 @@ func TestTheConductorDoesNotGiveItemsAgainToTheRunThatHasThem(t *testing.T) {
 	}
 }
 
-// A burst of 12 submits is one feedback line in the conductor's note (C2
-// round 1): a note shows 10 lines, and a submit's own line past them went
-// untold. Every item is reachable: named, or, with ids too many to fit in
+// A burst of 12 submits is one feedback line in the conductor's note (step
+// 3b, PR C2): a note shows 10 lines, and a submit's own line past them
+// would go untold. Every item is reachable: named, or, with ids too many to fit in
 // a line, counted, with `dude feedback` to list them, and that lists all
 // of them. Items a working Run was given say so, with the Run, first.
 func TestABurstOfTwelveSubmitsIsOneFeedbackLine(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 )
 
 // Feedback debouncing is read once per task, not once per pending row and
-// again per row inside (step 3b, PR C2, round 1). 100 tasks whose conductor
+// again per row inside (step 3b, PR C2). 100 tasks whose conductor
 // is between turns hold feedback that is not due, and the Wakeable probe,
 // run every sweep, rules them out:
 //   - a burst, 20 reasons each within the quiet: no row is a candidate
@@ -19,8 +19,8 @@ import (
 //     feedback is due with bounded probes on conductor_wakes_pending_idx,
 //     not an aggregate over the whole trickle.
 //
-// Before the repair the burst read about 150k buffers and the trickle
-// about 400k (a few dozen per pending row, read again per row).
+// Read again per row, the burst takes about 150k buffers and the trickle
+// about 400k (a few dozen per pending row).
 func TestDebouncingFeedbackIsNotReadAgainForEachOfItsReasons(t *testing.T) {
 	_, owner := dbtest.Open(t)
 	ctx := context.Background()
