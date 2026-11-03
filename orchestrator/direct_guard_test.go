@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -71,6 +72,44 @@ func TestDirectAWriterChildIsRefusedWhileThePullRequestsLastPushIsUnreviewed(t *
 	if id, _ := out["runId"].(string); id == "" {
 		t.Fatalf("start_agent: %v", out)
 	}
+}
+
+// A writer child the conductor starts once a review covered the pull
+// request's last push publishes to the pull request's head: its runs.branch
+// is the task branch (the one it pushes), not a candidate's, so it is
+// direct, and the pull request's head moves to its commit.
+func TestDirectAnAdmittedWriterChildPublishesToThePullRequestsHead(t *testing.T) {
+	e, head := directEditing(t)
+	e.onModel("implementer", "fake/scripted")
+	e.carriedOut(e.task, "decide", `{"action":"next"}`)
+	if n := e.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed'
+		AND base_refs->>'target' = $2`, e.task, head); n == 0 {
+		t.Fatalf("no review of %s\n%s", head, e.describeRuns())
+	}
+	out := e.must(e.task, "start_agent", `{"profile":"implementer","prompt":"Rename the greeting.","key":"rename"}`)
+	child, _ := out["runId"].(string)
+	if child == "" {
+		t.Fatalf("start_agent: %v", out)
+	}
+	if n := e.count(`SELECT count(*) FROM runs WHERE id = $1 AND branch = $2`, child, e.branch); n != 1 {
+		t.Fatalf("the child's runs.branch is not the task branch\n%s", e.describeRuns())
+	}
+	e.until("the child ended", func() bool {
+		return e.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed', 'aborted')`, child) == 1
+	})
+	if n := e.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, child); n != 1 {
+		var why string
+		_ = e.owner.QueryRow(context.Background(), `SELECT COALESCE(error, '') FROM runs WHERE id = $1`, child).Scan(&why)
+		t.Fatalf("the child did not complete: %s\n%s", why, e.describeRuns())
+	}
+	moved := e.gh.SHA(e.branch)
+	if moved == head {
+		t.Fatalf("the task branch did not move from %s", head)
+	}
+	e.until("the pull request's head at the child's commit", func() bool {
+		return e.count(`SELECT count(*) FROM pull_requests WHERE id = 'pr_edit' AND head_sha = $1`, moved) == 1 ||
+			e.count(`SELECT count(*) FROM runs WHERE id = $1 AND heads->'target'->>'sha' = $2`, child, moved) == 1
+	})
 }
 
 // A person's push is their own review: once the pull request shows a head
