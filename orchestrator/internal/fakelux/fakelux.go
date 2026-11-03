@@ -1997,8 +1997,9 @@ func (s *Server) turn(run *Run) {
 		for _, c := range fakeagent.ConductorCalls(conductorAsked(input, first)) {
 			s.callTool(run, c[0], c[1])
 		}
-		// Deliver's defaults, taken at a later input it is woken for (its first prompt's script carries them
-		// already: fakeagent.ConductorScriptFor).
+		// Deliver's defaults, taken at a later input it is woken for (its
+		// first prompt's script carries them already:
+		// fakeagent.ConductorScriptFor).
 		if b.Defaults && !first {
 			for _, c := range fakeagent.DefaultsCalls(input, fakeagent.QuietSince(b.Quiet, run.Inputs)) {
 				s.callTool(run, c[0], c[1])
