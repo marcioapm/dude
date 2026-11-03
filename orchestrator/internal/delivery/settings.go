@@ -167,7 +167,7 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 	switch p.PullRequestFixes {
 	case "", PullRequestFixesDirect:
 	case PullRequestFixesCandidate:
-		// No longer offered: a project that chose it fixes directly too.
+		// Retired: a project that stored it fixes directly too.
 		p.PullRequestFixes = PullRequestFixesDirect
 	default:
 		return p, fmt.Errorf("pullRequestFixes: %q is not candidate or direct", p.PullRequestFixes)

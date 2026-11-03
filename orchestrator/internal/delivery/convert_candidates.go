@@ -16,13 +16,13 @@ import (
 
 // What ConvertCandidateTx did with a delivery.
 const (
-	// CandidateConverted: it fixes its pull requests directly now; an open
+	// CandidateConverted: it fixes its pull requests directly; an open
 	// candidate's fix is redone from the pull requests' heads.
 	CandidateConverted = "converted"
 	// CandidateMoving: its candidate is being promoted (promoteCandidate,
 	// or the refresh after a loop's): left for the next sweep.
 	CandidateMoving = "moving"
-	// CandidateLeft: a worker runs its step now: left for the next sweep.
+	// CandidateLeft: a worker is running its step: left for the next sweep.
 	CandidateLeft = "left"
 	// CandidateNone: nothing to convert (another sweep did it).
 	CandidateNone = "none"
@@ -59,7 +59,7 @@ func convertedNotice(branch string, heads map[string]string) string {
 }
 
 // ConvertCandidateTx moves one delivery (workflowID, of taskID) off the
-// candidate path, now that every fix reaches its pull request directly:
+// candidate path, as every fix reaches its pull request directly:
 //
 //   - its frozen policy says direct;
 //   - a hand-over (State.HandedOver) is dropped: the syncer's next reading
@@ -68,13 +68,15 @@ func convertedNotice(branch string, heads map[string]string) string {
 //     every kept one let go, what its Runs resolved is reopened for the
 //     next fixer (AbandonCandidateTx; a loop's findings with
 //     discardLoopCandidateTx), the heads go back to where it started, and
-//     the fix is redone directly: a running delivery goes to prFix (a
-//     loop's to its writer step) now; one parked on a person or its
-//     conductor, or stopped, goes there on its retry. Its commits stay on
-//     the candidate branch, which nothing deletes.
+//     the fix is redone directly at prFix (a loop's at its writer step),
+//     its Runs keyed apart (Retries): a running delivery, or one waiting
+//     on its conductor's decision, goes there at once; one parked on a
+//     person goes there on whatever resuming answer (Escalation.Redo); a
+//     stopped one on its retry. Its commits stay on the candidate branch,
+//     which nothing deletes.
 //
 // A candidate being promoted is left (CandidateMoving), as is a delivery
-// whose step a worker runs now (CandidateLeft): the next sweep converts
+// whose step a worker is running (CandidateLeft): the next sweep converts
 // them. Locks the task's Chat, then the row, as ConvertToQuietTx does;
 // idempotent. The caller commits tx.
 func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID string) (string, error) {
@@ -105,8 +107,8 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 	}
 	live := d.Live()
 	// Parked on a person (or a conductor's lost decision): its answer
-	// redoes the fix. A conductor's decision parked on is not about the
-	// candidate's work: dropped, and the fix redone now (below).
+	// redoes the fix. A conductor's decision waited on is not parked: it
+	// was about the candidate's work, dropped below with the fix redone.
 	parked := st.Escalation != nil || d.Step == "decide"
 	st.Policy.PullRequestFixes = PullRequestFixesDirect
 	st.HandedOver = nil
@@ -138,9 +140,8 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 			return "", err
 		}
 		next = "prFix"
-		// Parked on a person's answer about the candidate's work: redone
-		// directly, whatever they answer (below). A conductor's lost
-		// decision is not about the candidate's work: left as it was.
+		// The escalation parked on asked about the candidate's work: its
+		// answer redoes the fix. A conductor's lost decision did not.
 		redo := st.Escalation != nil && st.Escalation.Reason != ReasonConductorUnavailable
 		if c.Loop {
 			phase, err := discardLoopCandidateTx(ctx, tx, taskID, workflowID, st.Attempt, c.Round, nil)
@@ -189,9 +190,8 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 		}
 		// Parked or stopped: the person's answer (or the conductor's)
 		// fixes again from what the pull requests show, never resuming a
-		// Run of the candidate's. A parked one's escalation asked about
-		// the candidate's work: whatever resuming answer (retry, accept,
-		// amend, waive), the fix is redone directly (Escalation.Redo).
+		// Run of the candidate's; any resuming answer to a redo (retry,
+		// accept, amend, waive) goes straight to next (Escalation.Redo).
 		if e := st.Escalation; e != nil && redo {
 			e.Step, e.At, e.AtSignals, e.Redo = next, next, nil, true
 		} else if e != nil {

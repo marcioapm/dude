@@ -313,10 +313,11 @@ type Escalation struct {
 	// (State.Escalations, its wake's key), once told: 0 while no conductor
 	// was. A delivery handed to the conductor again is not told twice.
 	Told int `json:"told,omitempty"`
-	// Set by ConvertCandidateTx on an escalation parked with a candidate
-	// open: what it asked about was the candidate's, now dropped, so a
-	// retry, accept or amend all redo the fix directly (prFix), in the
-	// fresh key namespace the sweep gave the delivery (Retries).
+	// Set by ConvertCandidateTx, with At, on an escalation parked with a
+	// candidate open: what it asked about was the candidate's, dropped, so
+	// any resuming answer (retry, accept, amend, waive) redoes the fix
+	// directly at At, in the fresh key namespace the sweep gave the
+	// delivery (Retries).
 	Redo bool `json:"redo,omitempty"`
 }
 
