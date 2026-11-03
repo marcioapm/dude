@@ -22,6 +22,7 @@ import {
   EventTypes,
   newId,
   PROJECT_ONLY_DELIVERY_KEYS,
+  RETIRED_DELIVERY_KEYS,
   promptRoleSchema,
   resolveMachineSize,
   resolveHarness,
@@ -242,7 +243,9 @@ async function settingsResponse(ctx: RequestContext, projectId?: string): Promis
     const delivery = Object.fromEntries(
       // The policy a person sets: the factory's has more (conditional
       // reviewers) that nobody edits here.
-      (Object.keys(deliveryPolicySchema.shape) as Array<keyof FullDeliveryPolicy>).map((k) => [
+      (Object.keys(deliveryPolicySchema.shape) as Array<keyof FullDeliveryPolicy>)
+        .filter((k) => !(RETIRED_DELIVERY_KEYS as readonly string[]).includes(k))
+        .map((k) => [
         k,
         (PROJECT_ONLY_DELIVERY_KEYS as readonly string[]).includes(k)
           ? projectOnly(projectPolicy[k], factory[k])
@@ -380,6 +383,8 @@ function applyKeys(target: Json, changes: Json): Json {
 function applyPatch(models: AgentModels, policy: Json, patch: SettingsPatch): { models: AgentModels; policy: Json } {
   const nextModels = { ...(models as Record<string, Json>) };
   const policyChanges: Json = { ...patch.delivery };
+  // Retired keys are ignored: neither stored nor cleared.
+  for (const k of RETIRED_DELIVERY_KEYS) delete policyChanges[k];
   for (const [role, change] of Object.entries(patch.roles ?? {})) {
     const { enabled, ...fields } = change!;
     if (enabled !== undefined) {

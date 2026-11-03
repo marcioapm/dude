@@ -352,7 +352,6 @@ export const SETTINGS: SettingsResponse = {
     conductorEditLines: { value: 60, source: "organization" },
     conductorEditFiles: { value: 3, source: "organization" },
     pullRequest: { value: "open", source: "default" },
-    pullRequestFixes: { value: "direct", source: "default" },
   },
   network: {
     egress: { value: [], source: "organization" }, mode: { value: "add", source: "organization" },

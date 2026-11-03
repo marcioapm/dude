@@ -290,10 +290,10 @@ func TestASavedPromptsVariablesAreFilledAndTheTaskStillFollows(t *testing.T) {
 	}
 }
 
-// How fixes reach an open pull request is a project's setting, direct for
-// every project's new delivery unless it chose candidate; an organisation's
-// value is passed over. A delivery's frozen policy without the key is one
-// from before it existed: it stays candidate.
+// Every fix reaches an open pull request directly: a project that stored
+// candidate resolves to direct, in ResolvePolicy and for a new delivery; an
+// organisation's value is passed over. A delivery's frozen policy without
+// the key is one from before it existed: ConvertCandidates moves it.
 func TestDirectFixesIsAProjectOnlySettingFrozenPerDelivery(t *testing.T) {
 	p, err := ResolvePolicy(json.RawMessage(`{"pullRequestFixes":"candidate"}`), json.RawMessage(`{}`))
 	if err != nil {
@@ -303,8 +303,11 @@ func TestDirectFixesIsAProjectOnlySettingFrozenPerDelivery(t *testing.T) {
 		t.Errorf("an organisation's candidate was read: %q", got.PullRequestFixes)
 	}
 	p, _ = ResolvePolicy(nil, json.RawMessage(`{"pullRequestFixes":"candidate"}`))
-	if got := p.ForNewDelivery(); got.DirectFixes() || got.PullRequestFixes != PullRequestFixesCandidate {
-		t.Errorf("the project's candidate = %q", got.PullRequestFixes)
+	if !p.DirectFixes() || !p.ForNewDelivery().DirectFixes() {
+		t.Errorf("the project's stored candidate = %q, want direct", p.PullRequestFixes)
+	}
+	if got := (Policy{PullRequestFixes: PullRequestFixesCandidate}).ForNewDelivery(); !got.DirectFixes() {
+		t.Errorf("ForNewDelivery kept candidate: %q", got.PullRequestFixes)
 	}
 	if _, err := ResolvePolicy(nil, json.RawMessage(`{"pullRequestFixes":"later"}`)); err == nil {
 		t.Error("pullRequestFixes later was accepted")
@@ -315,7 +318,7 @@ func TestDirectFixesIsAProjectOnlySettingFrozenPerDelivery(t *testing.T) {
 	if slices.Contains(LivePolicyKeys, "pullRequestFixes") {
 		t.Error("pullRequestFixes is read live: a running delivery would change how it fixes")
 	}
-	// A delivery frozen before the key: candidate, until it ends.
+	// A delivery frozen before the key: candidate, until ConvertCandidates.
 	var frozen State
 	if err := json.Unmarshal([]byte(`{"taskId":"t","policy":{"maxReviewIterations":5}}`), &frozen); err != nil {
 		t.Fatal(err)
