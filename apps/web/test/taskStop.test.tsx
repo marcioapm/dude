@@ -164,15 +164,18 @@ describe("the Stop dialog", () => {
   });
 
   // Who decides attempt 2 "as now", from the task's decider and voice: a
-  // quiet conductor's and an accepted delivery's are Deliver's on the wire
-  // (policy); only a chatty conductor's is the conductor's.
+  // quiet conductor's, an accepted delivery's and one whose conductor has no
+  // model are Deliver's on the wire (policy); only a chatty conductor's is
+  // the conductor's.
   for (const c of [
     { name: "a quiet conductor", patch: { decider: "conductor", voice: "quiet" }, want: "deliver", sent: "policy",
       hint: "A quiet conductor takes Deliver's defaults" },
     { name: "a chatty conductor", patch: { decider: "conductor", voice: "chatty" }, want: "conductor", sent: "conductor",
       hint: "A new conductor, briefed with your note" },
-    { name: "an accepted delivery", patch: { decider: "policy", voice: null, acceptedDefaults: true }, want: "deliver", sent: "policy",
-      hint: "Deliver decides attempt 2 to the pull request on its own" },
+    { name: "an accepted delivery", patch: { decider: "policy", voice: null, policyBecause: "accepted" }, want: "deliver", sent: "policy",
+      hint: "Deliver decides attempt 2 to the pull request on its own, as you accepted its defaults." },
+    { name: "a delivery whose conductor has no model", patch: { decider: "policy", voice: null, policyBecause: "no_model" }, want: "deliver",
+      sent: "policy", hint: "Deliver decides attempt 2 to the pull request on its own: the conductor has no model." },
   ] as const) {
     test(`Stop and start attempt 2 of ${c.name}: ${c.want} is ticked as now, and ${c.sent} is sent`, async () => {
       const stops: StopRequest[] = [];

@@ -6,6 +6,7 @@
  */
 
 import { useId } from "react";
+import type { PolicyBecause } from "@dude/domain";
 import { DriverIcons } from "./DriverMark.tsx";
 import { Segmented } from "./ScreenHeader.tsx";
 import { cx } from "../util/cx.ts";
@@ -21,26 +22,31 @@ export interface DeciderFieldProps {
   /** Attempt N's: marked "as now", the default. */
   readonly previous: NextDecider;
   /**
-   * Its person accepted Deliver's defaults: Deliver decides the next
-   * attempt itself, with no quiet conductor (true), as the orchestrator
-   * keeps it.
+   * Why Deliver's policy decides the next attempt itself, with no quiet
+   * conductor, as the orchestrator keeps it: its person accepted Deliver's
+   * defaults, or its conductor has no model. Null or unset: a quiet
+   * conductor takes Deliver's defaults.
    */
-  readonly accepted?: boolean | undefined;
+  readonly because?: PolicyBecause | null | undefined;
   readonly className?: string | undefined;
 }
 
 const NAME: Record<NextDecider, string> = { conductor: "The conductor", deliver: "Deliver" };
 
-function hint(v: NextDecider, attempt: number, accepted: boolean): string {
+function hint(v: NextDecider, attempt: number, because: PolicyBecause | null): string {
   if (v === "conductor") {
     return `A new conductor, briefed with your note and what attempt ${attempt - 1} did. Each finished step comes back to it, in Chat, with you.`;
   }
-  return accepted
-    ? `Deliver decides attempt ${attempt} to the pull request on its own, as you accepted its defaults.`
-    : `A quiet conductor takes Deliver's defaults through attempt ${attempt} to the pull request; it speaks in Chat only when it needs you.`;
+  switch (because) {
+    case "accepted":
+      return `Deliver decides attempt ${attempt} to the pull request on its own, as you accepted its defaults.`;
+    case "no_model":
+      return `Deliver decides attempt ${attempt} to the pull request on its own: the conductor has no model.`;
+  }
+  return `A quiet conductor takes Deliver's defaults through attempt ${attempt} to the pull request; it speaks in Chat only when it needs you.`;
 }
 
-export function DeciderField({ attempt, value, onChange, previous, accepted = false, className }: DeciderFieldProps) {
+export function DeciderField({ attempt, value, onChange, previous, because = null, className }: DeciderFieldProps) {
   const hintId = useId();
   const label = `Who decides attempt ${attempt}`;
   return (
@@ -57,7 +63,7 @@ export function DeciderField({ attempt, value, onChange, previous, accepted = fa
             </span>
           ),
         }))} />
-      <span id={hintId} className={styles["hint"]}>{hint(value, attempt, accepted)}</span>
+      <span id={hintId} className={styles["hint"]}>{hint(value, attempt, because)}</span>
     </div>
   );
 }

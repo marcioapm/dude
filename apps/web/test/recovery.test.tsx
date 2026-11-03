@@ -144,15 +144,18 @@ describe("a stopped task", () => {
   });
 
   // Who decides attempt 2 "as now" on Start over, from the task's decider
-  // and voice: a quiet conductor's and an accepted delivery's are Deliver's
-  // on the wire (policy); only a chatty conductor's is the conductor's.
+  // and voice: a quiet conductor's, an accepted delivery's and one whose
+  // conductor has no model are Deliver's on the wire (policy); only a chatty
+  // conductor's is the conductor's.
   for (const c of [
     { name: "a quiet conductor", patch: { decider: "conductor", voice: "quiet" }, want: "deliver", sent: "policy",
       effect: "A quiet conductor takes attempt 2 to the pull request by Deliver's defaults" },
     { name: "a chatty conductor", patch: { decider: "conductor", voice: "chatty" }, want: "conductor", sent: "conductor",
       effect: "A new one, briefed with your note" },
-    { name: "an accepted delivery", patch: { decider: "policy", voice: null, acceptedDefaults: true }, want: "deliver", sent: "policy",
-      effect: "Deliver decides attempt 2 to the pull request on its own" },
+    { name: "an accepted delivery", patch: { decider: "policy", voice: null, policyBecause: "accepted" }, want: "deliver", sent: "policy",
+      effect: "Deliver decides attempt 2 to the pull request on its own, with your note, as you accepted its defaults." },
+    { name: "a delivery whose conductor has no model", patch: { decider: "policy", voice: null, policyBecause: "no_model" }, want: "deliver",
+      sent: "policy", effect: "Deliver decides attempt 2 to the pull request on its own, with your note: the conductor has no model." },
   ] as const) {
     test(`Start over of ${c.name}: ${c.want} is ticked as now, and ${c.sent} is sent`, async () => {
       const client = stoppedAs("aborted");

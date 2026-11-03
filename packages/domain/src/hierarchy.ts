@@ -474,6 +474,24 @@ export function deliverOpens(task: Voiced): boolean {
   return task.decider !== "conductor" || decidesQuietly(task);
 }
 
+/**
+ * Why Deliver's policy, not a quiet conductor, decides a delivery: its
+ * person accepted Deliver's defaults, or its conductor has no model.
+ */
+export const policyBecauseSchema = z.enum(["accepted", "no_model"]);
+export type PolicyBecause = z.infer<typeof policyBecauseSchema>;
+
+/**
+ * The why of the task.decider_changed that hands a delivery to Deliver's
+ * policy for each reason (the orchestrator's delivery.WhyAcceptedDefaults,
+ * delivery.WhyNoConductorModel; packages/domain/test/policy-why.json holds
+ * both sides to it).
+ */
+export const POLICY_WHY: Record<PolicyBecause, string> = {
+  accepted: "the person accepted Deliver's defaults",
+  no_model: "the conductor has no model",
+};
+
 /** Where a conducted delivery waits on its conductor (the orchestrator's decision points). */
 export const decisionPointSchema = z.enum([
   "start",
@@ -528,8 +546,12 @@ export const taskSchema = z.object({
   voice: voiceSchema.nullable().default(null),
   /** A person let its delivery finish quietly: a later message in Chat does not make it chatty again. */
   handedBack: z.boolean().default(false),
-  /** Its person accepted Deliver's defaults: Deliver's policy decides it, and a Start over on Deliver stays so (no quiet conductor). */
-  acceptedDefaults: z.boolean().default(false),
+  /**
+   * Why Deliver's policy decides it rather than a quiet conductor, from its
+   * latest change of decider: its person accepted Deliver's defaults
+   * ("accepted"), or its conductor has no model ("no_model"); null otherwise.
+   */
+  policyBecause: policyBecauseSchema.nullable().default(null),
   /** The decision its delivery waits on for the conductor, or null. */
   awaitingDecision: z.object({ point: decisionPointSchema }).nullable().default(null),
   /** Its delivery is parked until its reviewers' open questions are answered or withdrawn. */
