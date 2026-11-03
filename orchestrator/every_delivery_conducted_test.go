@@ -186,7 +186,7 @@ func TestFeedbackOnAQuietDeliveryReachesTheWorkingImplementerThroughItsConductor
 }
 
 // handBackAfterAccept hands an accepted delivery to its conductor, then back
-// to it quietly (POST /decider), as its owner may: the accept is no longer
+// to it quietly (POST /decider), as its owner may: the accept is not
 // its latest change of decider.
 func (w *world) handBackAfterAccept(owner, task string) {
 	w.t.Helper()
