@@ -137,14 +137,22 @@ func TestStartingOverAnAcceptedDeliveryKeepsItDeliversUnlessAsked(t *testing.T) 
 	}
 }
 
+// defaultsConducting is a conducting world whose conductor is on the
+// defaults-taking scripted model (fake/defaults) and whose decisions wait
+// an hour: any decision left to the wait shows as one not taken.
+func defaultsConducting(t *testing.T) *world {
+	w := conducting(t)
+	w.onModel("conductor", fakeagent.DefaultsModel)
+	w.waitingFor(time.Hour)
+	return w
+}
+
 // A conductor on the defaults-taking scripted model (fake/defaults, the
 // e2e suites' conductor) decides each decision it is woken for by
 // Deliver's defaults at once: Deliver's quiet delivery reaches its pull
 // request with no decision left to its wait, and none defaulted.
 func TestADefaultsTakingConductorDeliversToThePullRequest(t *testing.T) {
-	w := conducting(t)
-	w.onModel("conductor", fakeagent.DefaultsModel)
-	w.waitingFor(time.Hour)
+	w := defaultsConducting(t)
 	task := w.task()
 	w.deliverByAPI(task)
 	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })

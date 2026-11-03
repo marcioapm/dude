@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 )
 
 func (w *world) holdRound(task string) (round, commitsSince int) {
@@ -218,9 +217,7 @@ func TestUnderTheConductorFeedbackAtTheGateWakesTheConductor(t *testing.T) {
 // for land and are taken, none left to the wait. Back at the hold, the
 // question is asked again at the new heads, and its Open opens them.
 func TestFeedbackAtAQuietHoldClosesItsQuestionAndTheConductorDecidesTheFix(t *testing.T) {
-	w := conducting(t)
-	w.onModel("conductor", fakeagent.DefaultsModel)
-	w.waitingFor(time.Hour)
+	w := defaultsConducting(t)
 	// Parked on the person at once while the hold's question is open, as
 	// it is once the factory's grace before parking passes.
 	w.syncer.ParkAfter = time.Millisecond
