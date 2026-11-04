@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -741,6 +742,11 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 	if int(tag.RowsAffected()) != len(runIDs) {
 		return escalationErr("not_kept", "%s", mWhatStoppedNoLongerKeptResume)
 	}
+	// What the stop failed unread goes again first, as it was queued: a
+	// round's brief its agent never read is its work.
+	if err := RequeueUnreadTx(ctx, tx, runIDs); err != nil {
+		return err
+	}
 	if note == "" {
 		return nil
 	}
@@ -752,6 +758,59 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 	}
 	return nil
 }
+
+// RequeueUnreadTx queues again, for Runs taken back up, each directive
+// their stop failed unread (UnreadRunAborted): a new directive with the
+// same words, scope and conductor, resending it (resends: its images
+// follow, and the replay counts it heard once the copy is), in the order
+// they were queued. Before anything else the caller queues, so a resumed
+// round's agent reads its brief before the pick-up note. Once per
+// directive: one already resent, or read after all (a late receipt), is
+// not queued again; an interrupt alone, whose turn is over, carries
+// nothing.
+func RequeueUnreadTx(ctx context.Context, tx pgx.Tx, runIDs []string) error {
+	rows, err := tx.Query(ctx, `SELECT d.id, COALESCE(d.resends, d.id), d.organization_id, COALESCE(r.project_id, ''),
+			COALESCE(r.task_id, ''), d.run_id
+		FROM directives d JOIN runs r ON r.id = d.run_id
+		WHERE d.run_id = ANY($1) AND d.error = $2 AND d.failed_at IS NOT NULL AND d.delivered_at IS NULL
+		  AND d.interrupt_only IS NOT TRUE AND d.text <> ''
+		  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND c.resends = COALESCE(d.resends, d.id)
+		    AND c.created_at > d.created_at)
+		ORDER BY d.run_id, d.created_at, d.id`, runIDs, UnreadRunAborted)
+	if err != nil {
+		return err
+	}
+	type unread struct{ ID, Root, Org, Project, Task, Run string }
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[unread])
+	if err != nil {
+		return err
+	}
+	for i, u := range got {
+		id := ids.New(ids.Directive)
+		// Before what this transaction queues next (its created_at, now()),
+		// in their order: the syncer sends by created_at.
+		if _, err := tx.Exec(ctx, `INSERT INTO directives (id, organization_id, task_id, run_id, text, scope, conductor_run_id,
+				held_for, resends, interrupt_only, created_at)
+			SELECT $1, d.organization_id, d.task_id, d.run_id, d.text, d.scope, d.conductor_run_id, d.held_for, $3, false,
+				now() - make_interval(secs => $4::float8 / 1000)
+			FROM directives d WHERE d.id = $2`, id, u.ID, u.Root, len(got)-i); err != nil {
+			return err
+		}
+		ref := RunRef{Org: u.Org, ProjectID: u.Project, TaskID: u.Task, RunID: u.Run}
+		ev := ref.Event(EvDirectiveRequeued, ledger.ActorSystem, map[string]any{"directiveId": id, "resends": u.ID,
+			"reason": UnreadRunAborted})
+		ev.Source = ledger.SourceOrchestrator
+		if _, err := ledger.Append(ctx, tx, ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EvDirectiveRequeued is a directive a Run's stop failed unread, queued
+// again as the Run is taken back up. Payload: {directiveId (the new one),
+// resends (the one it gives again), reason}.
+const EvDirectiveRequeued = "run.directive.requeued"
 
 // PersonSaidTx is a person's note on a decision, verbatim, marked as their
 // words for the agent who acts on it next: "The task's owner, <name>,

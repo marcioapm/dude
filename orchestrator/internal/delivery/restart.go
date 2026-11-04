@@ -124,6 +124,11 @@ func restartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	if err := FailUnreadTx(ctx, tx, ref, time.Time{}, UnreadRunAborted); err != nil {
 		return "", err
 	}
+	// Its open question was cancelled with it: if that was all the task
+	// waited on a person for, it waits no more.
+	if err := EndCancelledWaitTx(ctx, tx, org, projectID, taskID); err != nil {
+		return "", err
+	}
 	if in.Replays == "" && reviewRange != nil && reviewRange.Of == RangeSinceLastRound {
 		reviewRange = nil
 	}

@@ -1054,6 +1054,36 @@ func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID str
 	return wakeQuestionHoldTx(ctx, tx, org, taskID)
 }
 
+// EndCancelledWaitTx puts the task back to the status it had before an
+// agent's question made it wait on a person, once that question was
+// cancelled — its Run replaced or ended (cancel_open_questions) — and
+// nothing else waits on a person. The candidate is the question.asked
+// whose waitCursor is still the task's latest status change, as for
+// EndConductorWait: a newer wait, or delivery moving the task on, is
+// never undone, and an escalation's own wait (waitBlocked) stands.
+func EndCancelledWaitTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string) error {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID); err != nil {
+		return err
+	}
+	var before string
+	err := tx.QueryRow(ctx, `SELECT e.payload->>'taskStatus' FROM tasks t
+		CROSS JOIN LATERAL (SELECT max(s.cursor) AS c FROM events s WHERE s.task_id = t.id AND s.event_type = $2) m
+		JOIN events e ON e.task_id = t.id AND e.cursor > m.c AND e.event_type = $3
+			AND (e.payload->>'waitCursor')::bigint = m.c AND e.payload->>'taskStatus' IS NOT NULL
+		JOIN questions q ON q.id = e.payload->>'questionId' AND q.status = 'cancelled'
+		WHERE t.id = $1 AND t.status = 'awaiting_input' AND NOT `+waitBlocked+`
+		ORDER BY e.cursor LIMIT 1`, taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&before)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = SetTaskStatusTx(ctx, tx, org, projectID, taskID, "awaiting_input", before,
+		"nothing waits on a person any more: the question's Run was replaced")
+	return err
+}
+
 // wakeQuestionHoldTx signals a delivery held by reviewer questions
 // (holdForQuestions) once nothing else on the task waits on a person: the
 // held step reads its questions again and goes on when none is open.
