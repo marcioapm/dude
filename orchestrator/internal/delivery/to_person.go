@@ -13,8 +13,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// Events of conductor-first escalation, declared ahead of their writers
-// (docs: conductor-first, PR2 and PR4a). Nothing emits them yet.
+// Events of conductor-first escalation (docs: conductor-first). Declared
+// for their writers; nothing emits them.
 const (
 	// A writer's question routed to its conductor rather than a person
 	// (ask_conductor): the task keeps running and nobody is notified.
@@ -25,15 +25,14 @@ const (
 )
 
 // Who holds an escalation (Escalation.Holder), or who a question is for
-// (questions.addressee). "" reads as HolderPerson: everything raised before
-// conductor-first was a person's.
+// (questions.addressee). "" reads as HolderPerson.
 const (
 	HolderPerson    = "person"
 	HolderConductor = "conductor"
 )
 
-// Why a person is asked (ToPerson.Why). Recorded for the reader of the
-// call, not written anywhere yet.
+// Why a person is asked (ToPerson.Why). For the reader of the call: no
+// row or event records it.
 const (
 	// The conductor's own question: ask_person, decide ask_person,
 	// request_limit.

@@ -10,7 +10,7 @@ import (
 )
 
 // TestTheScanSeesEveryKnownBypass: Test 1's detector
-// (scanPersonReach) flags each way round ToPersonTx its reviewers found
+// (scanPersonReach) flags each known way round ToPersonTx
 // (testdata/to_person_bypasses/bypass*.go), and none of the reads in
 // reads_only.go.
 func TestTheScanSeesEveryKnownBypass(t *testing.T) {

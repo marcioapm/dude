@@ -55,8 +55,8 @@ func TestPersonOnly(t *testing.T) {
 	}
 }
 
-// TestHeldByReadsEmptyAsPerson: an escalation raised before Holder was
-// written is a person's; one raised now records its holder and time.
+// TestHeldByReadsEmptyAsPerson: an escalation with no Holder is a
+// person's; heldBy records its holder and time.
 func TestHeldByReadsEmptyAsPerson(t *testing.T) {
 	if got := (&Escalation{}).HeldBy(); got != HolderPerson {
 		t.Fatalf("HeldBy of a holderless escalation = %q", got)

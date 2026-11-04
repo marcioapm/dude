@@ -313,12 +313,11 @@ type Escalation struct {
 	// directly at At, in the fresh key namespace the sweep gave the
 	// delivery (Retries).
 	Redo bool `json:"redo,omitempty"`
-	// Who decides it first: HolderPerson, or HolderConductor (a later PR;
-	// conductor-first). "" reads as HolderPerson (HeldBy): every
-	// escalation raised before it was a person's.
+	// Who decides it first: HolderPerson, or HolderConductor
+	// (conductor-first). "" reads as HolderPerson (HeldBy).
 	Holder string `json:"holder,omitempty"`
-	// When it was raised: a conductor's deadline counts from it. nil on
-	// one raised before it was recorded.
+	// When it was raised: a conductor's deadline counts from it. nil when
+	// not recorded.
 	RaisedAt *time.Time `json:"raisedAt,omitempty"`
 }
 

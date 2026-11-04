@@ -74,8 +74,8 @@ var awaitingInputSQL = regexp.MustCompile(`(?i)status\s*=\s*'awaiting_input'`)
 //     read (isRead);
 //   - a ToPersonTx call for a transitional reason.
 //
-// testdata/to_person_bypasses holds the ways round this its reviewers
-// found; TestTheScanSeesEveryKnownBypass keeps the scan seeing them.
+// testdata/to_person_bypasses holds the known ways round this;
+// TestTheScanSeesEveryKnownBypass keeps the scan seeing them.
 func TestNothingReachesAPersonButThroughToPersonTx(t *testing.T) {
 	root, err := filepath.Abs("..")
 	if err != nil {
