@@ -12,17 +12,13 @@ const askedForEvidence = "evidence_kind: failing_test | mutation | command | que
 
 // A reviewer's instruction file asks for each finding's evidence, in a
 // delivery whose conductor decides as the reviewer is submitted and in an
-// un-conducted (Deliver) one alike: every delivery's loop is the
-// conductor's.
+// un-conducted (Deliver) one alike.
 func TestAConductedLoopsReviewerIsAskedForEvidence(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		want bool
-	}{{"conducted", true}, {"deliver", true}} {
-		t.Run(c.name, func(t *testing.T) {
+	for _, name := range []string{"conducted", "deliver"} {
+		t.Run(name, func(t *testing.T) {
 			w := conducting(t)
 			task := w.task()
-			if c.name == "conducted" {
+			if name == "conducted" {
 				w.talk(task)
 				w.implemented(task)
 				w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
@@ -30,8 +26,8 @@ func TestAConductedLoopsReviewerIsAskedForEvidence(t *testing.T) {
 				w.deliver(task)
 			}
 			review := w.reviewOnLux(task)
-			if got := strings.Contains(w.instructionsOf(review), askedForEvidence); got != c.want {
-				t.Errorf("%s: the reviewer is asked for evidence: %v", c.name, got)
+			if !strings.Contains(w.instructionsOf(review), askedForEvidence) {
+				t.Errorf("%s: the reviewer is not asked for evidence", name)
 			}
 		})
 	}

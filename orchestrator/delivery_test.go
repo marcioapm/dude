@@ -379,9 +379,9 @@ func scriptedPolicy() delivery.Policy {
 	return p
 }
 
-// start starts the delivery workflow as the API does, with a policy. As
-// every start since C1 does (start.go), it marks the delivery as one a
-// conductor stands over: no test runs the legacy HadConductor=false loop.
+// start starts the delivery workflow as the API does, with a policy,
+// marked as one a conductor stood over (HadConductor), as StartTx marks
+// every delivery.
 func (w *world) start(taskID string, policy delivery.Policy) string {
 	id, _, err := w.runtime.Start(context.Background(), workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: w.org, IdempotencyKey: "delivery:" + taskID, TaskID: taskID,

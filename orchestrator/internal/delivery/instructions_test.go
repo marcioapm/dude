@@ -21,9 +21,8 @@ func TestGoldenInstructions(t *testing.T) {
 	}
 }
 
-// A reviewer's file, every delivery's since the loop is the conductor's
-// on every row: severity by outcome, each finding at medium or above with
-// its evidence, the fix bar; and its resumed round's message.
+// A reviewer's file: severity by outcome, each finding at medium or above
+// with its evidence, the fix bar; and its resumed round's message.
 func TestGoldenConductedLoopInstructions(t *testing.T) {
 	in := goldenTask()
 	in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
