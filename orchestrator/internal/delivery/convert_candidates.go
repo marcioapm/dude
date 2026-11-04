@@ -131,6 +131,9 @@ func convertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 	if midPromotion(d.Step, st) {
 		return CandidateStoppedMidPromotion, stopMidPromotionTx(ctx, tx, org, workflowID, d)
 	}
+	if refreshAfterLoopMove(d.Step, st) {
+		return CandidateConverted, finishLoopMoveTx(ctx, tx, workflowID, d)
+	}
 	live := d.Live()
 	// Parked on a person (or a conductor's lost decision): its answer
 	// redoes the fix. A conductor's decision waited on is not parked: it
@@ -329,17 +332,72 @@ const ReasonStoppedMidPromotion = "stopped_mid_promotion"
 const stoppedMidPromotionNotice = "This delivery was moving its fix onto the pull request when dude was upgraded; redo the fix (Try again) or check the pull request."
 
 // midPromotion says a delivery at step stands where only the deleted
-// promotion could go on from.
+// promotion could go on from: at its step, or at the refresh after a
+// loop candidate's promotion with the candidate still held (no old dude
+// wrote that, which cleared it first: refreshAfterLoopMove).
 func midPromotion(step string, st *State) bool {
-	return step == "promoteCandidate" || st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
+	return step == "promoteCandidate" || st.Candidate != nil && st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
+}
+
+// refreshAfterLoopMove says a delivery stands as an old dude left a loop
+// candidate's promotion mid-refresh: the candidate cleared, its commits on
+// the task branch, only the pull requests' refresh and the step that
+// opens one for a repository newly changed (beforePR) still to come. The
+// move is complete: nothing is redone (finishLoopMoveTx).
+func refreshAfterLoopMove(step string, st *State) bool {
+	return step != "promoteCandidate" && st.Candidate == nil && st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
 }
 
 // legacyTrace says a delivery at step, as decoded, still holds something
 // of the candidate path a step would run on: a candidate, or a promotion
-// (midPromotion). The retired key, a hand-over and an integration's polls
-// are not fields of State: dropped by any write.
+// (midPromotion, refreshAfterLoopMove). The retired key, a hand-over and
+// an integration's polls are not fields of State: dropped by any write.
 func legacyTrace(step string, st *State) bool {
-	return st.Candidate != nil || midPromotion(step, st)
+	return st.Candidate != nil || midPromotion(step, st) || refreshAfterLoopMove(step, st)
+}
+
+// finishLoopMoveTx goes on from a loop candidate's completed move
+// (refreshAfterLoopMove) as a direct fix that landed does: at prFixDone,
+// with the refresh's repositories as the fix's range, so that movedOnPR
+// asks reviewers again, opens a pull request for a repository newly
+// changed and refreshes every open pull request's body (refreshPromoted,
+// retried), then weighs what happened meanwhile (prFixLanded). Nothing is
+// fixed again and no person is asked. A stopped, halted or parked one
+// goes there on its retry. The caller holds the row.
+func finishLoopMoveTx(ctx context.Context, tx pgx.Tx, workflowID string, d *Delivery) error {
+	st := &d.State
+	var fixed map[string]string
+	for _, repo := range st.PromotedRefresh.Repos {
+		if h := st.Heads[repo]; h != "" {
+			if fixed == nil {
+				fixed = map[string]string{}
+			}
+			fixed[repo] = h
+		}
+	}
+	const next = "prFixDone"
+	st.PromotedRefresh, st.FixRange = nil, fixed
+	if e := st.Escalation; e != nil {
+		e.Step, e.At, e.AtSignals = next, "", nil
+	}
+	if e := st.Stopped; e != nil {
+		e.Step, e.At, e.AtSignals = next, "", nil
+	}
+	if h := st.Halt; h != nil {
+		h.At = next
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	if !d.Live() || st.Escalation != nil || d.Step == "decide" || d.Step == "recover" {
+		_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, step = CASE WHEN step = 'refreshPromoted' THEN $3 ELSE step END
+			WHERE id = $1`, workflowID, raw, next)
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, step = $3, status = 'waiting', wake_at = now(),
+		awaiting_signals = '[]'::jsonb, attempt = 0, last_error = NULL WHERE id = $1`, workflowID, raw, next)
+	return err
 }
 
 // convertLegacyTx is a delivery's step entry (steps.legacy) on a row
@@ -374,9 +432,11 @@ func convertLegacyTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID str
 // leaveMidPromotionTx lets go of what a delivery stopped mid-promotion
 // held (its candidate, the refresh, any Runs or queued work), with its
 // heads where the candidate started, and tells Chat. Returns the step
-// that fixes again.
+// that fixes again: the candidate's, or, with none (its fix gone or moved
+// already), the pull request step, which opens one for a repository
+// newly changed and waits on them: no fix with nothing to fix.
 func leaveMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string, st *State) (string, error) {
-	next := "prFix"
+	next := "openPullRequest"
 	branch := ""
 	if c := st.Candidate; c != nil {
 		if err := abortCandidateRunsTx(ctx, tx, org, st.TaskID, st); err != nil {
