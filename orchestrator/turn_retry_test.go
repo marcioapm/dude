@@ -297,6 +297,38 @@ func TestAConductorPausedMidRetryLetsItsDeadlineDefault(t *testing.T) {
 	w.until("the decision defaulted at its deadline", func() bool { return w.defaulted(task, delivery.DefaultedDeadline) == 1 })
 }
 
+func TestALongRetryBackOffDoesNotInterruptASilentConductor(t *testing.T) {
+	w := conducting(t)
+	w.waitingFor(time.Hour)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == delivery.RoleConductor {
+			b.FirstTurnErrors = []string{`API Error: Request rejected (429) · {"retry_after":900}`}
+			b.Hang = true
+		}
+		return b
+	}
+	task := w.task()
+	w.startQuiet(task)
+	w.until("the conductor retry held", func() bool {
+		id, _, _ := w.conductor(task)
+		return id != "" && w.turnRetries(id) == 1
+	})
+	run, _, _ := w.conductor(task)
+	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = now() - interval '11 minutes',
+		agent_busy_at = now() - interval '11 minutes' WHERE id = $1`, run)
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND interrupt`, run); n != 0 {
+		t.Fatalf("%d interrupts while the retry was held", n)
+	}
+	if in := w.lux.Inputs(w.luxRunFor(run).ID); len(in) != 0 {
+		t.Fatalf("inputs during retry back-off: %v", in)
+	}
+}
+
 // retryDue makes the Run's pending turn retry due now, as the test clock
 // passing its back-off.
 func (w *world) retryDue(run string) {

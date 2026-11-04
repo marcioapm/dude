@@ -404,6 +404,7 @@ const silentTalker = `(r.role IN ('conductor', 'brainstorm') AND r.phase IS NULL
 	AND r.status = 'running' AND r.lux_state = 'running' AND r.control = 'none'
 	AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL AND r.waiting_since IS NULL
 	AND r.open_tool_calls_at = '{}'
+	AND NOT ` + delivery.RetryPending + `
 	AND ` + talkerSilentSince + ` <= now() - make_interval(secs => $1::float8)
 	AND (` + silentStreak + ` = 0
 		OR ` + personRearmedSilence + `
