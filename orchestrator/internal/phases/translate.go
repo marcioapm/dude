@@ -1126,6 +1126,12 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 	}
 	t.FailedTurns = 0
 	t.TurnRetries = 0
+	// A message may have started a successful turn during retry back-off.
+	// Its success makes any held retry obsolete, even if this Run parks.
+	if _, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = 'the turn succeeded before its retry was sent'
+		WHERE run_id = $1 AND deliver_after IS NOT NULL AND sent_at IS NULL AND failed_at IS NULL`, t.run.ID); err != nil {
+		return err
+	}
 	// A turn that ends with a question to a peer unanswered waits on it,
 	// as if the agent had run `dude wait`: otherwise it would complete,
 	// and move to review, before the answer could land.

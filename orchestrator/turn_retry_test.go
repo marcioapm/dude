@@ -329,6 +329,60 @@ func TestALongRetryBackOffDoesNotInterruptASilentConductor(t *testing.T) {
 	}
 }
 
+func TestASuccessfulTurnCancelsItsHeldRetry(t *testing.T) {
+	w := conductorWorld(t)
+	w.syncer.ConductorWarm = time.Hour
+	task, _ := w.delivered()
+	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{FirstTurnErrors: []string{rateLimited}, Hang: true}
+	}
+	status, out := w.chat(task, "start")
+	if status != 201 {
+		t.Fatalf("start: %d %v", status, out)
+	}
+	run, _ := out["runId"].(string)
+	w.until("the retry held", func() bool { return w.turnRetries(run) == 1 })
+	if status, out := w.chat(task, "message"); status != 200 {
+		t.Fatalf("message: %d %v", status, out)
+	}
+	w.until("the message delivered during back-off", func() bool {
+		return len(w.lux.Inputs(w.luxRunFor(run).ID)) == 1
+	})
+	w.lux.EndTurn(w.luxRunFor(run).ID)
+	w.until("the successful turn settled", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL
+			AND COALESCE((harness_state->>'turnRetries')::int, 0) = 0`, run) == 1
+	})
+	w.syncer.ConductorWarm = time.Millisecond
+	w.until("the conductor parked", func() bool {
+		_, status, _ := w.conductor(task)
+		return status == "paused"
+	})
+	w.syncer.ConductorWarm = time.Hour
+	w.retryDue(run)
+	for range 5 {
+		w.pump()
+	}
+	if _, status, _ := w.conductor(task); status != "paused" {
+		t.Fatalf("stale retry resumed the conductor: %s", status)
+	}
+	if status, out := w.chat(task, "wake"); status != 200 {
+		t.Fatalf("wake: %d %v", status, out)
+	}
+	w.until("the wake delivered", func() bool { return len(w.lux.Inputs(w.luxRunFor(run).ID)) >= 2 })
+	for range 5 {
+		w.pump()
+	}
+	in := w.lux.Inputs(w.luxRunFor(run).ID)
+	if len(in) != 2 || !strings.Contains(in[0], "message") || !strings.Contains(in[1], "wake") {
+		t.Fatalf("inputs after due: %v, want [message, wake]", in)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND deliver_after IS NOT NULL
+		AND sent_at IS NULL AND failed_at IS NOT NULL AND error IS NOT NULL`, run); n != 1 {
+		t.Fatalf("%d held retries cancelled with a reason, want 1", n)
+	}
+}
+
 // retryDue makes the Run's pending turn retry due now, as the test clock
 // passing its back-off.
 func (w *world) retryDue(run string) {
