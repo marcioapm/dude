@@ -937,6 +937,7 @@ func TestConvertCandidatesLeavesATaskClosedAfterAStop(t *testing.T) {
 		  'reason', 'review_failed', 'step', 'review', 'at', 'awaitReview', 'detail', jsonb_build_object('runId', $2::text)))
 		WHERE task_id = $1`, w.wi, review)
 	mustExec(t, w.owner, `UPDATE tasks SET status = 'awaiting_input' WHERE id = $1`, w.wi)
+	candidate := w.state("candidate")
 	if code, body := w.decide(ana, w.wi, "stop", ""); code != 200 {
 		t.Fatalf("stop: %d %v", code, body)
 	}
@@ -950,14 +951,19 @@ func TestConvertCandidatesLeavesATaskClosedAfterAStop(t *testing.T) {
 	if w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND resolution IS NOT NULL`, w.wi) != 1 {
 		t.Fatalf("not closed")
 	}
+	// The decide step's entry converts the candidate before the stop is
+	// recorded (steps.legacy): the row a dude from before stored, stopped
+	// with its candidate, is put back as it was.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || jsonb_build_object('candidate', $2::jsonb) WHERE task_id = $1`, w.wi, candidate)
 	if w.state("candidate") == "" || w.state("stopped") == "" {
 		t.Fatalf("closed after a stop: candidate %q stopped %q: nothing to pin", w.state("candidate"), w.state("stopped"))
 	}
 	before := w.str(`SELECT state::text || step FROM workflow_runs WHERE task_id = $1`, w.wi)
+	notices := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'about' = 'candidate_converted'`, w.wi)
 	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
 		t.Errorf("swept %+v, want nothing", n)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'about' = 'candidate_converted'`, w.wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload->>'about' = 'candidate_converted'`, w.wi) - notices; n != 0 {
 		t.Errorf("%d notices for a closed task", n)
 	}
 	if after := w.str(`SELECT state::text || step FROM workflow_runs WHERE task_id = $1`, w.wi); after != before {
