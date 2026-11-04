@@ -871,8 +871,8 @@ func TestDismissAFinding(t *testing.T) {
 	}
 }
 
-// An escalation still goes to a person; the conductor is told, and only
-// the person decides.
+// An escalation reaches the conductor first, without a person ask; the
+// owner may nevertheless override it from the banner.
 func TestAnEscalationGoesToAPersonAndWakesTheConductor(t *testing.T) {
 	w := conducting(t)
 	scripted := w.lux.Decide
@@ -886,8 +886,9 @@ func TestAnEscalationGoesToAPersonAndWakesTheConductor(t *testing.T) {
 	w.talk(task)
 	w.must(task, "start_phase", `{"phase":"implement"}`)
 	w.until("the escalation", func() bool { return w.escalationReason(task) == "implement_failed" })
-	n := w.wokenWith(task, "Escalated to a person: implement failed")
-	if !strings.Contains(n, "Only the person decides") || !strings.Contains(n, "decide_escalation") {
+	n := w.wokenWith(task, "Escalation: implement failed")
+	w.conductorHeld(task)
+	if !strings.Contains(n, "Decide non-person-only actions directly") || !strings.Contains(n, "decide_escalation") {
 		t.Errorf("note: %q", n)
 	}
 	w.refused(task, "decide", `{"action":"next"}`, "decide it with decide_escalation")

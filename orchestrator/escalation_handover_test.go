@@ -47,7 +47,7 @@ func TestAnEscalationHandedToTheConductorTellsIt(t *testing.T) {
 	if d := w.decider(task); d != delivery.DeciderConductor {
 		t.Fatalf("decider %s after the Chat message", d)
 	}
-	w.wokenWith(task, "Escalated to a person: stuck")
+	w.wokenWith(task, "Escalation: stuck")
 	escalations := func() int {
 		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'escalation'`, task)
 	}
@@ -98,7 +98,7 @@ func TestAnEscalationHandedOverWhileItsStepRunsTellsTheConductor(t *testing.T) {
 	if d := w.decider(task); d != delivery.DeciderConductor {
 		t.Fatalf("decider %s after the Chat message", d)
 	}
-	w.wokenWith(task, "Escalated to a person: stuck")
+	w.wokenWith(task, "Escalation: stuck")
 	for range 3 {
 		w.pump()
 	}

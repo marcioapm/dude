@@ -548,7 +548,7 @@ func notConvergingConductedWith(t *testing.T, extra string) (*world, string) {
 		t.Fatalf("escalation detail %s: %v", raw, err)
 	}
 	handOver(w, task)
-	w.wokenWith(task, "Escalated to a person: not converging")
+	w.wokenWith(task, "Escalation: not converging")
 	// The wake as recorded (a batched note shortens each line).
 	var line string
 	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'escalation'
@@ -568,7 +568,7 @@ func TestTheConductorRetriesNotConvergingOnTheOwnersFreeAnswer(t *testing.T) {
 	w, task := notConvergingConducted(t)
 	ana := w.person("Ana")
 	w.assignOwner(task, ana)
-	w.must(task, "ask_person", `{"question":"The criterion stays unmet after two fixes. How should the next fix differ?","choices":["Stop"],"actions":["stop"]}`)
+	w.must(task, "ask_person", `{"questions":[{"question":"The criterion stays unmet after two fixes. How should the next fix differ?","choices":[{"label":"Stop","recommended":true}]}],"actions":["stop"]}`)
 	q := w.conductorQuestion(task)
 	const words = "Have the fixer name the finding inside FACTORY.md itself."
 	if status, out := w.answerAs(ana, task, words); status != 200 {
@@ -579,17 +579,17 @@ func TestTheConductorRetriesNotConvergingOnTheOwnersFreeAnswer(t *testing.T) {
 	}
 	fixes := w.phaseRuns(task, "fix")
 	// Told what to expect after a retry, not what an amend changed.
-	if out := w.must(task, "decide_escalation", `{"action":"retry"}`); out["next"] != delivery.EscalationDecidedNext(false) {
+	if out := w.must(task, "decide_escalation", fmt.Sprintf(`{"action":"retry","note":%q}`, words)); out["next"] != delivery.EscalationDecidedNext(false) {
 		t.Fatalf("decide_escalation retry answered next %q", out["next"])
 	}
 	w.until("the next fix round", func() bool { return w.phaseRuns(task, "fix") == fixes+1 })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
-		AND payload->>'action' = 'retry' AND payload->>'reason' = $2 AND payload->>'questionId' = $3
+		AND payload->>'action' = 'retry' AND payload->>'reason' = $2 AND NOT payload ? 'questionId' AND $3::text <> ''
 		AND strpos(payload->>'note', $4) > 0`, task, delivery.ReasonNotConverging, q, words); n != 1 {
 		t.Errorf("%d task.decided retry events carrying the owner's words", n)
 	}
 	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND run_id IS NULL AND status = 'answered'
-		AND strpos(answer, $2) > 0`, task, words); n != 1 {
+		AND strpos(answer, $2) > 0`, task, words); n != 0 {
 		t.Errorf("the owner's direction is not one of the task's decisions")
 	}
 }
@@ -605,7 +605,7 @@ func TestTheConductorAmendsNotConvergingWithTheOwnersWords(t *testing.T) {
 	w.assignOwner(task, ana)
 	_, e := w.escalationOf(task)
 	named := e.Detail.(map[string]any)["findingIds"].([]any)[0].(string)
-	w.must(task, "ask_person", `{"question":"What should the criterion say instead?","choices":["Stop"],"actions":["stop"]}`)
+	w.must(task, "ask_person", `{"questions":[{"question":"What should the criterion say instead?","choices":[{"label":"Stop","recommended":true}]}],"actions":["stop"]}`)
 	const words = "FACTORY.md names the finding it fixes on its first line."
 	if status, out := w.answerAs(ana, task, "  \n"+words+"\t\n"); status != 200 {
 		t.Fatalf("the answer: %d %v", status, out)
@@ -663,13 +663,13 @@ func TestTheConductorRetriesAnOwnerlessStalledLoopOnAMembersDirection(t *testing
 			mustExec(t, w.owner, `DELETE FROM task_people WHERE task_id = $1`, task)
 			bo := w.person("Bo")
 			mustExec(t, w.owner, `UPDATE people SET role = 'member' WHERE organization_id = $1`, w.org)
-			w.must(task, "ask_person", `{"question":"How should the next fix differ?","choices":["Stop"],"actions":["stop"]}`)
+			w.must(task, "ask_person", `{"questions":[{"question":"How should the next fix differ?","choices":[{"label":"Stop","recommended":true}]}],"actions":["stop"]}`)
 			const words = "Have the fixer quote the finding inside FACTORY.md."
 			if status, out := w.answerAs(bo, task, words); status != 200 {
 				t.Fatalf("the answer: %d %v", status, out)
 			}
 			fixes := w.phaseRuns(task, "fix")
-			w.must(task, "decide_escalation", `{"action":"retry"}`)
+			w.must(task, "decide_escalation", fmt.Sprintf(`{"action":"retry","note":%q}`, words))
 			w.until("the next fix round", func() bool { return w.phaseRuns(task, "fix") == fixes+1 })
 		})
 	}

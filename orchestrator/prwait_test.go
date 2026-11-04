@@ -236,7 +236,7 @@ func TestATestAtThePullRequestWaitThatKeepsFailingEscalates(t *testing.T) {
 	for range delivery.MaxTestFixRounds {
 		w.fixFailedTestAtPRWait(task)
 	}
-	w.until("the gate to stop", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	w.until("the gate to stop", func() bool { return w.escalationWaiting(task) })
 	if r := w.escalationReason(task); r != delivery.ReasonTestFailedCriteria {
 		t.Fatalf("escalated %q, want %s\n%s", r, delivery.ReasonTestFailedCriteria, w.describeRuns())
 	}

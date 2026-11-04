@@ -224,7 +224,7 @@ func TestAnAdoptedSourceChangedBeforeExecutionCannotRun(t *testing.T) {
 					s.ReceiveStatus = 403
 				}
 			})
-			w.until("source refusal", func() bool { return w.taskStatus(wi) == "awaiting_input" })
+			w.until("source refusal", func() bool { return w.escalationWaiting(wi) })
 			if got := w.phasesRun(wi); len(got) != 0 {
 				t.Fatalf("changed source started phases: %v", got)
 			}
@@ -660,10 +660,10 @@ func TestARetargetedAdoptedPullRequestOffersWaysOnThatWork(t *testing.T) {
 		pr := w.gh.Pull(n)
 		w.gh.Set(func(*fakegithub.Server) { pr.Base = "stack/base" })
 		first := w.adopting("pr", n, "feature/greet", "main")
-		w.until("source refusal", func() bool { return w.taskStatus(first) == "awaiting_input" })
+		w.until("source refusal", func() bool { return w.escalationWaiting(first) })
 		var reason string
 		_ = w.owner.QueryRow(context.Background(), `SELECT payload->'detail'->>'reason' FROM events
-			WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY occurred_at DESC LIMIT 1`, first).Scan(&reason)
+			WHERE task_id = $1 AND event_type = 'escalation.raised' ORDER BY occurred_at DESC LIMIT 1`, first).Scan(&reason)
 		if want := "GitHub's pull request (or branch) no longer matches what this task adopted: it was feature/greet → main, " +
 			"and is now feature/greet → stack/base. Put it back on GitHub and Try again, or stop this task and adopt it in a new one."; reason != want {
 			t.Fatalf("source_changed says %q", reason)
@@ -701,7 +701,7 @@ func TestStartOverAfterAnAttemptThatStoppedBeforeAnyRunStartsANewOne(t *testing.
 	task := w.adopting("pr", n, "feature/greet", "main")
 	stop := func(what string) {
 		t.Helper()
-		w.until(what+" to stop in adopt", func() bool { return w.taskStatus(task) == "awaiting_input" })
+		w.until(what+" to stop in adopt", func() bool { return w.escalationWaiting(task) })
 		if status, body := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "stop"}); status != 200 {
 			t.Fatalf("stop %s: %d %v", what, status, body)
 		}

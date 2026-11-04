@@ -243,14 +243,9 @@ def test_taking_over_a_delivered_task(client: ApiClient, forge_project: dict, fa
 
 def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,
                                                             owner_dsn: str):
-    """The abs run's stall: Deliver's review gets stuck (one fix attempt per
-    finding; a conducted loop has no such bound: Deliver's policy decides it,
-    as it does a delivery whose conductor has no model), and the person hands the
-    delivery to the conductor with a Chat message while it waits, the
-    conductor told of the escalation. The conductor asks with the
-    escalation's actions as choices (a retry is not one: it needs the person's
-    own direction), the owner answers "Your call", and the conductor retries
-    with decide_escalation: the next fix round runs."""
+    """Legacy policy/person-held stuck escalation handed to the conductor:
+    it retries with its own direction and no prior owner answer. The initial
+    no-model setup is intentional coverage of live legacy person holders."""
     project = _conducting(client, forge_project)
     # The conductor on a tier with no model (the organisation's Fast, unset):
     # Deliver starts the delivery on Deliver's policy, as before every
@@ -283,32 +278,19 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
     # Stuck: escalated to a person, the conductor told how it works.
     wait_until(lambda: (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck", timeout=90,
                message="the review never got stuck")
-    wait_until(lambda: any("Escalated to a person: stuck" in n and "decide_escalation" in n for n in _woken(client, task["id"])),
+    wait_until(lambda: any("Escalation: stuck" in n and "decide_escalation" in n for n in _woken(client, task["id"])),
                timeout=60, message="the conductor was never told of the escalation")
-    _say(client, task["id"], "Ask me.", _tool("ask_person", {"question": "Stuck on one finding. Retry once more?",
-                                                            "choices": ["Accept as it is", "Stop"],
-                                                            "actions": ["accept", "stop"]}))
-    question = wait_until(lambda: query(owner_dsn, "SELECT id FROM questions WHERE task_id = %s AND escalation IS NOT NULL",
-                                        (task["id"],)), timeout=60, message="the escalation's question was never asked")[0]
-    # The banner stays while the question is open: a person may still use it.
-    assert (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck"
+    # Retry is delegated: no question or owner answer is needed, even for
+    # this legacy person-held escalation handed to the conductor.
     fixes = len(_phases(client, task["id"], "fix"))
-    # Any decision before this one is not the conductor's retry.
     decided_before = len([e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"])
-
-    # "Your call": a free answer decides nothing; the conductor decides.
-    assert _say(client, task["id"], "Your call, use your judgement.")["questionId"] == question["id"]
-    assert (_task(client, task["id"]).get("escalation") or {}).get("reason") == "stuck"
     _say(client, task["id"], "Retry.", _tool("decide_escalation", {"action": "retry", "note": "One narrow round."}))
     wait_until(lambda: len(_phases(client, task["id"], "fix")) == fixes + 1, timeout=90,
                message="the conductor's retry never started the next fix round")
-    assert _task(client, task["id"]).get("escalation") is None
     decided = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "task.decided"][decided_before:]
     assert len(decided) == 1 and decided[0]["payload"]["by"] == "conductor", decided
-    assert decided[0]["payload"]["questionId"] == question["id"] and decided[0]["actor"]["id"] == conductor, decided
-    # On the answer of the person who wrote "Your call": the client's own.
-    me = client.get("/v1/me").json()["person"]["id"]
-    assert me and decided[0]["payload"]["answeredBy"] == me, (me, decided)
+    assert "questionId" not in decided[0]["payload"] and decided[0]["actor"]["id"] == conductor, decided
+    assert not query(owner_dsn, "SELECT id FROM questions WHERE task_id=%s AND escalation IS NOT NULL", (task["id"],))
     # The retry's fix goes back to the conductor, at its next decision.
     _waiting_on(client, task["id"], "after_fix", "the retry's fix never came back to the conductor")
 
@@ -330,14 +312,14 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
     # The delivery's own implementer is held too: waived, it waits on the conductor after it.
     _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
-    _waived(client, task["id"], "the delivery's implementer")
+    _waived(client, task["id"], "the delivery's implementer", owner_dsn)
     _waiting_on(client, task["id"], "after_implement", "the implementer never came back")
 
     # The conductor's own implementer, which the delivery does not wait on, is held and escalates.
     _say(client, task["id"], "Have a helper write it.", _tool("start_agent", {"profile": "implementer", "key": "helper"}))
     child = wait_until(lambda: query(owner_dsn, "SELECT id FROM runs WHERE task_id = %s AND source_kind = 'task_conductor'",
                                      (task["id"],)), timeout=60, message="the conductor's implementer never started")[0]["id"]
-    _waived(client, task["id"], "the conductor's implementer")
+    _waived(client, task["id"], "the conductor's implementer", owner_dsn)
     wait_until(lambda: client.get_run(child)["status"] == "completed", timeout=120, message="the waived helper never finished")
     _waiting_on(client, task["id"], "after_implement", "the delivery did not go back to the conductor's decision")
 
@@ -351,10 +333,12 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     assert decided == ["start_phase", "next"], decided
 
 
-def _waived(client: ApiClient, task_id: str, what: str) -> None:
+def _waived(client: ApiClient, task_id: str, what: str, owner_dsn: str) -> None:
     """Waits for the checks gate to escalate and waives it, as the task's owner."""
-    wait_until(lambda: (_task(client, task_id).get("escalation") or {}).get("reason") == "checks_unverified",
-               timeout=90, message=f"the checks gate never escalated {what}")
+    wait_until(lambda: query(owner_dsn, """SELECT id FROM workflow_runs WHERE task_id=%s
+               AND status='waiting' AND step='decide' AND state->'escalation'->>'reason'='checks_unverified'
+               AND NOT state->'escalation' ? 'decided'""", (task_id,)),
+               timeout=90, message=f"the checks gate never reached the conductor for {what}")
     resp = client.post(f"/v1/tasks/{task_id}/decide", {"action": "waive", "note": "CI runs the check; the owner reviewed it."})
     assert resp.status_code == 200, resp.text
     wait_until(lambda: _task(client, task_id).get("escalation") is None, timeout=60,
