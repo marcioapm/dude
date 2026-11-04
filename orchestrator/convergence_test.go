@@ -256,7 +256,7 @@ func TestConvergenceDecisionsReachNextRound(t *testing.T) {
 }
 
 // A medium regression counts toward the regression bound: the fix bar,
-// every delivery's, blocks on medium, whatever the project once said.
+// every delivery's, blocks on medium.
 func TestConvergenceRegressionCountsAMediumAtTheFixBar(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disabled=%v", disabled), func(t *testing.T) {

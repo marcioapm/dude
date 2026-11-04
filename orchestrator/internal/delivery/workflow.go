@@ -1034,8 +1034,9 @@ func (st *State) reviewRange() *ReviewRange {
 // roundRange is the range the next review round's reviewers cover: the
 // loop's range (reviewRange), else, in a later round (Round ≥ 1 done),
 // only what changed since the round before reviewed (RangeFixRound): from
-// the heads it reviewed to the heads now. Each round's base is the previous round's head, so the rounds
-// together cover every commit. Whenever that cannot be named for every
+// the heads it reviewed to the heads now. Each round's base is the
+// previous round's head, so the rounds together cover every commit.
+// Whenever that cannot be named for every
 // repository that moved — one the last round had no head for — or nothing
 // moved, the whole branch: a narrower range would leave commits unreviewed.
 // An integration's review is of its merge, whole.
