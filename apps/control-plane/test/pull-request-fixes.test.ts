@@ -1,6 +1,8 @@
 /**
- * Fixes on an open pull request through the settings API: the narrow
- * loop's bound (`maxPrFixReviewIterations`), layered as any bound is.
+ * Fixes on an open pull request through the settings API: every fix is
+ * direct, so the retired `pullRequestFixes` an old client sends is ignored,
+ * neither stored nor refused; and the narrow loop's bound
+ * (`maxPrFixReviewIterations`), layered as any bound is.
  *
  * Against a database of its own, migrated as a release is, and a stand-in
  * for the orchestrator that answers its defaults.
@@ -93,6 +95,22 @@ afterAll(async () => {
 const projectFixes = async () => ((await (await call("GET", `/v1/projects/${PROJECT}/settings`)).json()) as Json).delivery;
 
 describe("fixes on an open pull request", () => {
+  test("the retired pullRequestFixes an old client sends is ignored, on the organisation's and a project's", async () => {
+    for (const path of ["/v1/settings/organization", `/v1/projects/${PROJECT}/settings`]) {
+      const res = await call("PATCH", path, { delivery: { pullRequestFixes: "candidate", simplify: false } });
+      expect(res.status).toBe(200);
+      const delivery = ((await res.json()) as Json).delivery;
+      expect(delivery.pullRequestFixes).toBeUndefined();
+      expect(delivery.simplify.value).toBe(false);
+    }
+    const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
+    expect(delivery_policy).toEqual({ simplify: false });
+    const [{ delivery_policy: org }] = await owner`SELECT delivery_policy FROM organizations WHERE id = ${ORG}`;
+    expect(org).toEqual({ simplify: false });
+    await owner`UPDATE projects SET delivery_policy = '{}' WHERE id = ${PROJECT}`;
+    await owner`UPDATE organizations SET delivery_policy = '{}' WHERE id = ${ORG}`;
+  });
+
   test("the narrow loop's bound is a project's own over the factory's", async () => {
     expect((await projectFixes()).maxPrFixReviewIterations.source).toBe("organization");
     expect((await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { maxPrFixReviewIterations: 0 } })).status).toBe(400);
