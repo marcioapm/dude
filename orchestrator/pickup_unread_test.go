@@ -160,3 +160,97 @@ func TestARestartedRunsCancelledQuestionLeavesTheTaskNotWaiting(t *testing.T) {
 		t.Errorf("task %s after the restart, want running", got)
 	}
 }
+
+// B2 with another question open on the task: the restart cancels the
+// Run's own, but the task still waits on a person, and stays
+// awaiting_input.
+func TestARestartedRunsCancelledQuestionLeavesAnotherQuestionWaiting(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	task := w.task()
+	w.deliver(task)
+	w.until("the implementer to ask", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	run := w.implementer(task)
+	// Another Run of the task asked a person something, still open.
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, ended_at)
+		SELECT 'run_other_asker', organization_id, project_id, task_id, attempt, 'completed', 'review', now() FROM runs WHERE id = $1`, run)
+	mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, items)
+		SELECT 'q_other', organization_id, task_id, 'run_other_asker', 'Which one?', '[]', jsonb_build_array(jsonb_build_object('prompt', 'Which one?', 'options', '[]'::jsonb)) FROM runs WHERE id = $1`, run)
+	status, out := w.call("/internal/runs/"+run+"/restart", map[string]any{"note": "start again"})
+	if status != 200 && status != 201 {
+		t.Fatalf("restart: %d %v", status, out)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE run_id = $1 AND status = 'open'`, run); n != 0 {
+		t.Fatalf("the restarted Run's question is still open")
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE id = 'q_other' AND status = 'open'`); n != 1 {
+		t.Fatalf("the other question is no longer open")
+	}
+	for range 3 {
+		w.pump()
+	}
+	if got := w.taskStatus(task); got != "awaiting_input" {
+		t.Errorf("task %s after the restart with another question open, want awaiting_input", got)
+	}
+}
+
+// Several directives the Stop left unread are given back in the order
+// they were queued, all before the pick-up note: the findings, then a
+// person's steer sent after the fix round was created, then the note.
+func TestAResumedFixRoundIsGivenWhatItNeverReadInOrder(t *testing.T) {
+	w := resuming(t)
+	w.onModel("reviewer", fakeagent.StuckModel)
+	task := w.task()
+	ana := w.ownedBy(task, "Ana")
+	w.names(task, w.repoID)
+	w.start(task, resumingPolicy())
+	w.tickUntil("the fix round created", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task) == 1
+	})
+	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	if status, body := w.call("/internal/runs/"+fix+"/steer", map[string]any{"text": "also check the README"}); status != 201 {
+		t.Fatalf("steer: %d %v", status, body)
+	}
+	w.stop(ana, task, map[string]any{"note": "hold on"})
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND error = $2`, fix, delivery.UnreadRunAborted); n != 2 {
+		t.Fatalf("%d directives failed unread on the Stop, want the brief and the steer:\n%s", n, w.describeRuns())
+	}
+	w.until("the fix round kept", func() bool { return w.keptRun(fix) })
+	w.pickUp(ana, task, map[string]any{"action": "resume", "note": "go on with the findings"})
+	implID := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
+	w.until("the fixer to take up the note", func() bool {
+		lr := w.luxRunFor(implID)
+		if lr == nil {
+			return false
+		}
+		for _, in := range w.lux.Inputs(lr.ID) {
+			if strings.Contains(in, "go on with the findings") {
+				return true
+			}
+		}
+		return false
+	})
+	inputs := w.lux.Inputs(w.luxRunFor(implID).ID)
+	findings, steer, note := -1, -1, -1
+	for i, in := range inputs {
+		if strings.Contains(in, "## Review findings") && findings < 0 {
+			findings = i
+		}
+		if strings.Contains(in, "also check the README") && steer < 0 {
+			steer = i
+		}
+		if strings.Contains(in, "go on with the findings") {
+			note = i
+		}
+	}
+	if findings < 0 || steer < 0 || note < 0 || !(findings < steer && steer < note) {
+		t.Fatalf("the resumed fixer was given findings at %d, steer at %d, note at %d:\n%s", findings, steer, note,
+			strings.Join(inputs, "\n---\n"))
+	}
+}
