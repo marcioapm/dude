@@ -64,7 +64,7 @@ import { formatUsd, plural, type IconName } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, atFixBar, NOT_STARTED_STATUSES, POLICY_WHY, RESOLUTION_LABEL, TERMINAL_RUN_STATUSES, blockerList, decidesQuietly, isConductor, keyList, reviewerCategoryInSentence, runDoer, runLabel, type MachineResetPayload, type PersistedEvent, type TaskResolution, type TaskStatus } from "@dude/domain";
 import type { ApiClient, Artifact, Finding, MergeMethod, PullRequest, ReviewQuestion, Run, TaskDetail, TaskSource, Verification } from "../api/client.ts";
 import { ApiError } from "../api/client.ts";
-import { actorName, humanActor, planFrom } from "../api/conversation.ts";
+import { actorName, humanActor, planFrom, turnRetriedNotice } from "../api/conversation.ts";
 import { shortError } from "../escalation.ts";
 import { instant } from "../instant.ts";
 import { AGENT_CHATTER, cameBack, useReloadOnEvents } from "../hooks/useEventStream.ts";
@@ -1645,6 +1645,10 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
         break;
       case "question.answered":
         out.push({ ...base, who: face, text: <>{person} answered the {doer(e.runId)}</>, quote: String(p.answer ?? "") });
+        break;
+      case EventTypes.RunTurnRetried:
+        out.push({ ...base, who: <DudeMark size={32} />, text: <>The <b>{doer(e.runId)}</b>'s turn failed: {turnRetriedNotice(p)}</>,
+          open: session(e.runId) });
         break;
       case "run.paused":
         if (by) out.push({ ...base, who: face, text: <>{person} paused the {doer(e.runId)}</> });
