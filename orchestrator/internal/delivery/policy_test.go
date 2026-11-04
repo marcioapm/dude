@@ -20,29 +20,33 @@ func finding(severity, status string, attempts int, id string) FindingState {
 }
 
 func TestOnlyOpenFindingsOfABlockingSeverityBlock(t *testing.T) {
-	for sev, want := range map[string]bool{"blocking": true, "high": true, "medium": false, "note": false} {
-		if got := IsBlocking(policy, finding(sev, "open", 0, "f")); got != want {
+	for sev, want := range map[string]bool{"blocking": true, "high": true, "medium": true, "low": false, "note": false} {
+		if got := IsBlocking(finding(sev, "open", 0, "f")); got != want {
 			t.Errorf("%s: %v, want %v", sev, got, want)
 		}
 	}
 	// Fixed, moot, or a person decided to ship it: none hold up the task.
 	for _, status := range []string{"resolved", "superseded", "accepted"} {
-		if IsBlocking(policy, finding("blocking", status, 0, "f")) {
+		if IsBlocking(finding("blocking", status, 0, "f")) {
 			t.Errorf("a %s finding blocked", status)
 		}
 	}
 }
 
-func TestPolicyDecidesNotSeverity(t *testing.T) {
-	strict := policy
-	strict.BlockingSeverities = []string{"blocking", "high", "medium", "low", "note"}
-	if !IsBlocking(strict, finding("note", "open", 0, "f")) {
-		t.Error("a strict policy did not block a note")
+// A low finding a reviewer marked trivial is at the fix bar (atFixBar); a
+// person's item blocks whatever its severity, until it is handled.
+func TestATrivialLowIsAtTheFixBar(t *testing.T) {
+	low := finding("low", "open", 0, "f")
+	low.Trivial = true
+	if !IsBlocking(atFixBar([]FindingState{low})[0]) {
+		t.Error("a trivial low is not at the fix bar")
 	}
-	lax := policy
-	lax.BlockingSeverities = nil
-	if IsBlocking(lax, finding("blocking", "open", 0, "f")) {
-		t.Error("a lax policy blocked")
+	if IsBlocking(low) {
+		t.Error("a low blocks without the trivial rule")
+	}
+	human := FindingState{ID: "h", Status: "delivered", Human: true}
+	if !IsBlocking(human) {
+		t.Error("a person's delivered item does not block")
 	}
 }
 
@@ -50,7 +54,7 @@ func TestLoopExits(t *testing.T) {
 	if e := Exit(policy, nil, 1, Convergence{}); e == nil || e.Reason != "clear" {
 		t.Errorf("no findings: %+v, want clear — a review that found nothing is the good case", e)
 	}
-	if e := Exit(policy, []FindingState{finding("medium", "open", 0, "a"), finding("blocking", "resolved", 0, "b")}, 1, Convergence{}); e == nil || e.Reason != "clear" {
+	if e := Exit(policy, []FindingState{finding("low", "open", 0, "a"), finding("blocking", "resolved", 0, "b")}, 1, Convergence{}); e == nil || e.Reason != "clear" {
 		t.Errorf("nothing blocking: %+v", e)
 	}
 	if e := Exit(policy, []FindingState{finding("blocking", "open", 0, "a")}, 1, Convergence{}); e != nil {
@@ -108,8 +112,8 @@ func TestConvergenceExits(t *testing.T) {
 		{name: "criterion absent", mutate: func(p *Policy, f *FindingState) { f.HasCriterion = false }, want: "stuck", ids: []string{"criterion"}},
 		{name: "still disabled", mutate: func(p *Policy, f *FindingState) { p.MaxStillRounds = 0 }, want: "stuck", ids: []string{"criterion"}},
 		{name: "resolved is clear", mutate: func(p *Policy, f *FindingState) { f.Status = "resolved" }, want: "clear"},
-		{name: "medium nonblocking", mutate: func(p *Policy, f *FindingState) { f.Severity = "medium" }, want: "clear"},
-		{name: "medium dynamically blocking", mutate: func(p *Policy, f *FindingState) { f.Severity = "medium"; p.BlockingSeverities = []string{"medium"} }, want: "not_converging", ids: []string{"criterion"}},
+		{name: "low nonblocking", mutate: func(p *Policy, f *FindingState) { f.Severity = "low" }, want: "clear"},
+		{name: "medium blocking", mutate: func(p *Policy, f *FindingState) { f.Severity = "medium" }, want: "not_converging", ids: []string{"criterion"}},
 		{name: "human excluded", mutate: func(p *Policy, f *FindingState) { f.Human = true }, conv: Convergence{RegressionRounds: 2, FindingIDs: []string{"criterion"}}, want: "stuck"},
 		{name: "regression at bound", mutate: func(p *Policy, f *FindingState) { *f = regression }, conv: Convergence{RegressionRounds: 2, FindingIDs: []string{"regression", "missing"}}, want: "not_converging", ids: []string{"regression"}, rounds: 2},
 		{name: "still beside a regression below bound", conv: Convergence{RegressionRounds: 1, FindingIDs: []string{"other"}}, want: "not_converging", ids: []string{"criterion"}},

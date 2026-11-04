@@ -132,7 +132,7 @@ func (w *steps) carryForward(ctx context.Context, sc workflow.StepContext, st *S
 // verdicts as EvTestSkipped records them.
 func (w *steps) passedAsCriteriaRead(ctx context.Context, sc workflow.StepContext, st *State, runID string) ([]map[string]any, bool, error) {
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
-	if err != nil || len(in.Verdicts) == 0 || judgeGate(st.Policy, in).Outcome != "pass" {
+	if err != nil || len(in.Verdicts) == 0 || judgeGate(in).Outcome != "pass" {
 		return nil, false, err
 	}
 	var criteria []string

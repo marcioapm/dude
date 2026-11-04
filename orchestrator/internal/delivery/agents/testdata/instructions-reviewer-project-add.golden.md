@@ -146,7 +146,7 @@ about: F2
 
 `about` names the earlier finding the question is about, when it is about one. If you disagree with an earlier finding's `Done when`, ask a question about that finding instead of giving it a verdict: only a person changes a criterion.
 
-The conductor decides what is fixed, by a bar it sets for this task; its usual bar is every finding at `medium` or above, plus `low` ones marked `trivial: yes`. Mark `trivial: yes` only when the smallest fix is obvious, local and a few lines. A finding at `medium` or above states its `acceptance`; its `caused_by_fix` is `yes` when the problem is in code the last fix wrote.
+Every finding at `medium` or above, plus `low` ones marked `trivial: yes`, is sent back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. A conductor deciding the task may set its own bar. Mark `trivial: yes` only when the smallest fix is obvious, local and a few lines. A finding at `medium` or above states its `acceptance`; its `caused_by_fix` is `yes` when the problem is in code the last fix wrote.
 
 End your reply with a summary of the review, as one more YAML document; it is not a finding:
 

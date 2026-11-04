@@ -94,7 +94,7 @@ beforeAll(async () => {
         return orchestratorDown ? new Response("restarting", { status: 503 }) : Response.json(answer);
       }
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
-      return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
+      return Response.json({ requiredReviewers: ["correctness"], maxReviewIterations: 3,
         maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: true, parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5, pullRequest: "open" });
     },
   });

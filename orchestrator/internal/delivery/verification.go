@@ -212,18 +212,15 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 				}
 			}
 		}
-		// A blocking finding this test raised says why already. One an
+		// A finding at the fix bar this test raised says why already. One an
 		// earlier test raised is about what that test saw, not this failure.
 		var said bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_findings WHERE run_id = $1 AND status = 'open'
 			AND severity::text = ANY($2) AND title NOT LIKE $3 || '%')`,
-			runID, st.Policy.BlockingSeverities, EnvironmentPrefix).Scan(&said); err != nil || said {
+			runID, fixBar(st), EnvironmentPrefix).Scan(&said); err != nil || said {
 			return err
 		}
 		severity := "blocking"
-		if len(st.Policy.BlockingSeverities) > 0 && !slices.Contains(st.Policy.BlockingSeverities, severity) {
-			severity = st.Policy.BlockingSeverities[0]
-		}
 		for _, v := range verdicts {
 			// A carried failure keeps the person's acceptance, which settles
 			// it as it did in the round they decided (judgeGate skips it too).
@@ -317,14 +314,15 @@ type gate struct {
 }
 
 // judgeGate decides from the verdict and the tester's open findings. A
-// failure is a criterion that fails or a blocking finding of the tester's
+// failure is a criterion that fails or a finding of the tester's at the
+// fix bar (blocking, high, medium: every delivery's, as its review loop's)
 // that is not about its environment; failing outranks blocked, since a fix
 // is needed whatever else could not be checked. A person's decision on a
 // criterion settles it. An earlier test's finding is a failure only when
 // this test ran the application — judged some criterion and raised no
 // environment finding: one that did not has not judged it, so it is still
 // to be checked, not to be fixed.
-func judgeGate(p Policy, in gateInput) gate {
+func judgeGate(in gateInput) gate {
 	var failed, blocked gate
 	ran := slices.ContainsFunc(in.Verdicts, func(v StoredVerdict) bool {
 		return v.Status == VerdictPass || v.Status == VerdictFail || v.Status == VerdictNotApplicable
@@ -344,7 +342,7 @@ func judgeGate(p Policy, in gateInput) gate {
 		switch {
 		case f.Environment():
 			blocked.Findings = append(blocked.Findings, f.ID)
-		case !slices.Contains(p.BlockingSeverities, f.Severity):
+		case !slices.Contains(conductorFixSeverities, f.Severity):
 		case ran || f.RunID == in.RunID:
 			failed.Findings = append(failed.Findings, f.ID)
 		default:
@@ -383,7 +381,7 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	g := judgeGate(st.Policy, in)
+	g := judgeGate(in)
 	detail := map[string]any{"runId": runID, "criteria": db.NonNil(criteriaOf(in.Verdicts, g.Criteria)),
 		"findingIds": db.NonNil(g.Findings), "rounds": st.TestFixRounds}
 	switch g.Outcome {

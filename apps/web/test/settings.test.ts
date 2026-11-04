@@ -7,7 +7,6 @@ const proj = <T,>(value: T) => ({ value, source: "project" as const });
 
 const delivery: DeliverySettings = {
   requiredReviewers: org(["correctness"]),
-  blockingSeverities: org(["blocking", "high"]),
   maxReviewIterations: proj(3),
   maxAttemptsPerFinding: org(2),
   maxStillRounds: org(2),

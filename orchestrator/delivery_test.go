@@ -2070,7 +2070,9 @@ func TestAReviewersFindingsAreRecorded(t *testing.T) {
 	}
 }
 
-func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
+// A reviewer is told the fix bar, every delivery's: what its severities
+// cause.
+func TestAReviewerIsToldTheFixBar(t *testing.T) {
 	w := newWorld(t)
 	w.onModel("reviewer", "llm-review")
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -2080,11 +2082,9 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 		return fakelux.Behaviour{Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
 	}
 	wi := w.task()
-	policy := scriptedPolicy()
-	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
 	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
 		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
-	w.start(wi, policy)
+	w.start(wi, scriptedPolicy())
 	var prompt string
 	w.until("a review to reach lux", func() bool {
 		for _, r := range w.lux.Runs() {
@@ -2097,14 +2097,14 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 		}
 		return false
 	})
-	if !strings.Contains(prompt, "every finding at `medium` or above, plus `low` ones marked `trivial: yes`") {
+	if !strings.Contains(prompt, "Every finding at `medium` or above, plus `low` ones marked `trivial: yes`, is sent back") {
 		t.Errorf("the reviewer's instructions do not say the fix bar:\n%s", prompt)
 	}
 }
 
 // The tester's severities have the same consequences as a reviewer's, so
-// it is told the delivery's policy too.
-func TestATesterIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
+// it is told the fix bar too: blocking, high and medium.
+func TestATesterIsToldTheFixBar(t *testing.T) {
 	w := newWorld(t)
 	w.onModel("qa_browser", "llm-test")
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -2116,13 +2116,12 @@ func TestATesterIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 	wi := w.task()
 	policy := scriptedPolicy()
 	policy.Test = true
-	policy.BlockingSeverities = []string{"blocking", "high", "medium"}
 	mustExec(t, w.owner, `INSERT INTO task_repositories (organization_id, task_id, repository_id)
 		VALUES ($1, $2, $3)`, w.org, wi, w.repoID)
 	w.start(wi, policy)
 	w.until("a test to reach lux", func() bool { return w.specOf("test") != nil })
 	if prompt := w.instructionsOf(w.specOf("test").Labels["dude.run"]); !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
-		t.Errorf("the tester's instructions do not say the policy's blocking severities:\n%s", prompt)
+		t.Errorf("the tester's instructions do not say the fix bar:\n%s", prompt)
 	}
 }
 

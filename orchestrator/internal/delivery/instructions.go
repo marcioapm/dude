@@ -29,7 +29,9 @@ type InstructionsInput struct {
 	Web *Web
 	// A conductor with a checkout, which merges the base itself.
 	Checkouts bool
-	// The severities that send a change back (a reviewer's and a tester's).
+	// The severities that send a change back (a reviewer's and a tester's):
+	// the fix bar (runs.blocking_severities). Set, the severity contract is
+	// in the file; its text is fixed.
 	BlockingSeverities []string
 	// The organisation's saved prompt for the role (nil: none), and the
 	// project's with its mode ("add" or "replace"; "" has none).

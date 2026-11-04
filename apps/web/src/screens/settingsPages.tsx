@@ -10,7 +10,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AgentAvatar,
-  FINDING_SEVERITY_SPECS,
   MarkdownDocument,
   PromptHistory,
   Segmented,
@@ -36,7 +35,6 @@ import {
   HARNESS_LABEL,
   PROMPT_VARIABLES,
   PULL_REQUEST_CHOICE,
-  findingSeveritySchema,
   REVIEWER_CATEGORIES,
   REVIEWER_CATEGORY_LABEL,
   SETTINGS_ROLE_DESCRIPTION,
@@ -539,8 +537,6 @@ function HistoryDialog({ scope, role, onClose, onOpenRun }: {
 // Delivery
 // ---------------------------------------------------------------------------
 
-const SEVERITIES = findingSeveritySchema.options;
-
 export function DeliveryPage({ scope }: { scope: SettingsScope }) {
   const { settings } = scope;
   const d = settings.delivery;
@@ -556,7 +552,7 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
   const changes = deliveryPatch(d, form);
   const dirty = Object.keys(changes).length > 0;
   const setField = <K extends keyof FullDeliveryPolicy>(k: K, v: FullDeliveryPolicy[K]) => setForm((f) => ({ ...f, [k]: v }));
-  const toggle = <K extends "requiredReviewers" | "alwaysReviewers" | "blockingSeverities">(k: K, v: string, on: boolean) =>
+  const toggle = <K extends "requiredReviewers" | "alwaysReviewers">(k: K, v: string, on: boolean) =>
     setField(k, (on ? [...form[k], v] : form[k].filter((x) => x !== v)) as FullDeliveryPolicy[K]);
   const number = (k: keyof FullDeliveryPolicy, min: number, max: number, help: string, label: string) => (
     <SettingRow
@@ -580,7 +576,6 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
   );
   const valid =
     form.requiredReviewers.length > 0 &&
-    form.blockingSeverities.length > 0 &&
     [form.maxReviewIterations, form.maxAttemptsPerFinding, form.maxPrFixReviewIterations, form.parkAfterMinutes, form.conductorWarmMinutes, form.conductorEditLines,
       form.conductorEditFiles].every((n) => Number.isInteger(n) && n >= 1) &&
     [form.maxPrFixIterations, form.idleNudgeMinutes].every((n) => Number.isInteger(n) && n >= 0) &&
@@ -657,16 +652,6 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
               setNonProduct(e.target.value);
               setField("nonProductPaths", e.target.value.split(",").map((g) => g.trim()).filter(Boolean));
             }} />
-        </SettingRow>
-        <SettingRow
-          label="Findings that send it back"
-          help="Lower severities go into the pull request for a person to weigh."
-          source={<Source scope={scope} setting={d.blockingSeverities} reset={() => void scope.patch({ delivery: { blockingSeverities: null } }, "Severities reset")} />}
-        >
-          {SEVERITIES.map((s) => (
-            <Checkbox key={s} label={FINDING_SEVERITY_SPECS[s].label} disabled={!canEdit} checked={form.blockingSeverities.includes(s)}
-              onCheckedChange={(on) => toggle("blockingSeverities", s, on === true)} />
-          ))}
         </SettingRow>
       </SettingsSection>
       <SettingsSection title="Loop">

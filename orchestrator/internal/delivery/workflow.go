@@ -939,7 +939,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
-				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
+				p.Category, p.BlockingSeverities, p.FindingIDs = c, fixBar(st), toJudge[c]
 				// A round's own range is kept for a fresh reviewer: a large
 				// change since is still all the round has to review.
 				p.ReviewRange, p.KeepRange = reviewRange, st.fixLoop() || reviewRange != nil && reviewRange.Of == RangeFixRound
@@ -1212,8 +1212,7 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 // when to stop is the conductor's judgement, on the round wake's facts.
 func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *LoopExit {
 	if st.conductsRounds() {
-		bar, weighed := atFixBar(st, st.Policy, findings)
-		if slices.ContainsFunc(weighed, func(f FindingState) bool { return IsBlocking(bar, f) }) {
+		if slices.ContainsFunc(atFixBar(findings), IsBlocking) {
 			return nil
 		}
 		return &LoopExit{Reason: "clear"}
@@ -1230,8 +1229,7 @@ func (w *steps) policyExit(st *State, findings []FindingState, conv Convergence)
 		// Each cycle after a direct fix is a push its CI and reviewers see.
 		policy.MaxReviewIterations = st.Policy.prFixReviewBound()
 	}
-	policy, findings = atFixBar(st, policy, findings)
-	return Exit(policy, findings, st.Iteration, conv)
+	return Exit(policy, atFixBar(findings), st.Iteration, conv)
 }
 
 // loopFindings is what the review loop weighs: the reviewers' findings its
@@ -1603,7 +1601,7 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseTest, k, func(p *PhaseRun) {
-		p.BlockingSeverities, p.FindingIDs = st.Policy.BlockingSeverities, judge
+		p.BlockingSeverities, p.FindingIDs = fixBar(st), judge
 		p.Continue, p.CarryFrom = cont, st.CarryFrom
 		d.apply(p)
 	})

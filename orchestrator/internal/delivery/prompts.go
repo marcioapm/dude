@@ -27,7 +27,7 @@ type PromptInput struct {
 	// Implement and fix: people's feedback items given to the Run, in
 	// their own words, each to resolve or reply to.
 	Feedback []FeedbackItem
-	// Review phase: the severities that block, from the delivery's policy.
+	// Review and test phases: the fix bar (runs.blocking_severities).
 	BlockingSeverities []string
 	// Review phase limited to a range (PhaseRun.ReviewRange): the commit
 	// per repository it starts after, and why (RangeSimplify,
@@ -240,8 +240,8 @@ func earlierFindings(findings []Finding) string {
 	return render(earlierFindingsTmpl, findings)
 }
 
-// severityNote tells a reviewer what its severities cause, from the
-// policy: a reviewer that does not know `medium` lets a pull request open
+// severityNote tells a reviewer what its severities cause, the fix bar:
+// a reviewer that does not know `medium` lets a pull request open
 // rates an unmet acceptance criterion `medium`.
 func severityNote(role string, blocking []string) string {
 	if len(blocking) == 0 {

@@ -197,6 +197,17 @@ export interface SettingsResponse {
 const nullable = <T extends z.ZodTypeAny>(t: T) => t.nullable().optional();
 const policyShape = deliveryPolicySchema.shape;
 const field = <K extends keyof typeof policyShape>(k: K) => policyShape[k].unwrap() as z.ZodType<NonNullable<z.infer<(typeof policyShape)[K]>>>;
+/**
+ * Delivery keys dude no longer reads. A web tab or CLI from before may
+ * still send one: accepted, and dropped in settingsPatchSchema, the one
+ * place, so it is neither stored nor refused.
+ * - pullRequestFixes: every fix reaches an open pull request directly.
+ * - blockingSeverities: every delivery has the one fix bar (blocking,
+ *   high, medium, and a reviewer's low marked trivial).
+ */
+export const RETIRED_DELIVERY_KEYS = ["pullRequestFixes", "blockingSeverities"] as const;
+export type RetiredDeliveryKey = (typeof RETIRED_DELIVERY_KEYS)[number];
+
 export const settingsPatchSchema = z
   .object({
     roles: z
@@ -221,7 +232,6 @@ export const settingsPatchSchema = z
         requiredReviewers: nullable(field("requiredReviewers")),
         alwaysReviewers: nullable(field("alwaysReviewers")),
         nonProductPaths: nullable(field("nonProductPaths")),
-        blockingSeverities: nullable(field("blockingSeverities")),
         maxReviewIterations: nullable(field("maxReviewIterations")),
         maxAttemptsPerFinding: nullable(field("maxAttemptsPerFinding")),
         maxStillRounds: nullable(field("maxStillRounds")),
@@ -237,15 +247,15 @@ export const settingsPatchSchema = z
         conductorEditFiles: nullable(field("conductorEditFiles")),
         /** A project's only: refused on the organisation's settings. */
         pullRequest: nullable(field("pullRequest")),
-        /**
-         * Retired: every fix reaches an open pull request directly. A web
-         * tab or CLI from before may still send it: accepted, and dropped
-         * here, the one place, so it is neither stored nor refused.
-         */
-        pullRequestFixes: z.unknown().optional(),
+        /** Retired (RETIRED_DELIVERY_KEYS): accepted, and dropped below. */
+        ...Object.fromEntries(RETIRED_DELIVERY_KEYS.map((k) => [k, z.unknown().optional()])),
       })
       .strict()
-      .transform(({ pullRequestFixes: _retired, ...delivery }) => delivery)
+      .transform((delivery) => {
+        const kept: Record<string, unknown> = { ...delivery };
+        for (const k of RETIRED_DELIVERY_KEYS) delete kept[k];
+        return kept as Omit<typeof delivery, RetiredDeliveryKey>;
+      })
       .optional(),
     /**
      * An organisation's list, or a project's own and its mode (a project's

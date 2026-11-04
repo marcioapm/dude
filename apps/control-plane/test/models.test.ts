@@ -63,7 +63,7 @@ beforeAll(async () => {
     // for the process, and later suites in the same run save prompts on it.
     return Response.json(new URL(req.url).pathname.endsWith("builtin")
       ? Object.fromEntries(promptRoleSchema.options.map((role) => [role, "Built-in prompt"])) : {
-      requiredReviewers: ["correctness"], alwaysReviewers: ["correctness"], nonProductPaths: [".github/**"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
+      requiredReviewers: ["correctness"], alwaysReviewers: ["correctness"], nonProductPaths: [".github/**"], maxReviewIterations: 3,
       maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: true,
       parkAfterMinutes: 10, idleNudgeMinutes: 0, conductorWarmMinutes: 5, pullRequest: "open",
     });

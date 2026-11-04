@@ -213,7 +213,6 @@ export const deliveryPolicySchema = z
     alwaysReviewers: z.array(z.enum(REVIEWER_CATEGORIES)),
     /** Path globs that are not the product: a later review round that changed only these runs no required reviewer of its own, and a change of these alone after a passing test starts no tester. In-repo paths; to make a whole repository non-product, list its paths. */
     nonProductPaths: z.array(z.string().trim().min(1).max(200)).max(50),
-    blockingSeverities: z.array(findingSeveritySchema).min(1),
     maxReviewIterations: z.number().int().min(1).max(20),
     /** Fix attempts one finding may survive before it is escalated on its own. */
     maxAttemptsPerFinding: z.number().int().min(1).max(20),

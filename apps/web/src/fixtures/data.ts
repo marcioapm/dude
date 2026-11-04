@@ -337,7 +337,6 @@ export const SETTINGS: SettingsResponse = {
     requiredReviewers: { value: ["correctness"], source: "organization" },
     alwaysReviewers: { value: ["correctness"], source: "organization" },
     nonProductPaths: { value: [".github/**", "docs/**", "**/*.md"], source: "organization" },
-    blockingSeverities: { value: ["blocking", "high"], source: "organization" },
     maxReviewIterations: { value: 5, source: "organization" },
     maxAttemptsPerFinding: { value: 3, source: "organization" },
     maxStillRounds: { value: 2, source: "organization" },
