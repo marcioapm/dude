@@ -524,6 +524,7 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
   "run.idle_nudged": { notice: "nudged", text: () => "Quiet for a while: nudged to carry on or ask." },
   [EventTypes.RunTurnStopped]: { notice: "nudged", text: () => "Its model gave no answer for 10 minutes: dude stopped the turn." },
+  [EventTypes.RunTurnRetried]: { notice: "notice", text: turnRetriedNotice },
   [EventTypes.SessionReplaced]: { notice: "notice", text: () => "The agent restarted without its earlier conversation." },
   // The summary it kept stays in the event, for the ledger; it can run to pages.
   [EventTypes.ContextCompacted]: { notice: "notice", text: () => "The agent compacted its context." },
@@ -538,6 +539,21 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
     },
   },
 };
+
+/**
+ * A turn dude retries after a temporary model error (`run.turn.retried`),
+ * in one line: "Model busy (429). Retrying in 2m 23s (attempt 2 of 4)."
+ * The status is the one the agent's error names; an error that names none
+ * (a dropped stream) is a temporary model error.
+ */
+export function turnRetriedNotice(p: Record<string, unknown>): string {
+  const code = /\b(429|502|503|504|529)\b/.exec(typeof p.reason === "string" ? p.reason : "")?.[1];
+  const what = code ? `Model busy (${code}).` : "Temporary model error.";
+  const after = typeof p.after === "number" && p.after > 0 ? ` in ${formatDuration(p.after * 1000)}` : "";
+  const attempt = typeof p.attempt === "number"
+    ? ` (attempt ${p.attempt}${typeof p.maxAttempts === "number" ? ` of ${p.maxAttempts}` : ""})` : "";
+  return `${what} Retrying${after}${attempt}.`;
+}
 
 /** A resume's phases (`run.resume.timed`), in order, as its notice's hover names them: lux's in the stages' words, dude's in its own. */
 const RESUME_PHASES: ReadonlyArray<readonly [key: string, label: string]> = [
@@ -1597,6 +1613,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case "run.unparked":
       case "run.idle_nudged":
       case EventTypes.RunTurnStopped:
+      case EventTypes.RunTurnRetried:
       case EventTypes.SessionReplaced:
       case EventTypes.ContextCompacted:
       case EventTypes.RepositoryCloneFailed: {
