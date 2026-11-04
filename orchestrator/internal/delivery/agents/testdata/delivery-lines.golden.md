@@ -262,10 +262,6 @@ an implementer is working on this task; wait for it, or steer it
 
 Deliver decides this task: steer its agents, or ask the person to hand it to you.
 
-## refused-candidate
-
-a fix for the pull request is being reviewed and tested; publish once it has reached the pull request
-
 ## refused-behind
 
 your checkout is behind the task branch; `git merge lux/%s` first

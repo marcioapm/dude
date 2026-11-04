@@ -3,7 +3,6 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
-	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -151,22 +149,22 @@ func (w *world) phaseOrder(wi string) []string {
 // prFixWorld delivers a task with the tester on to an open pull request,
 // and arms a watch: once armed, every phase Run lux is asked for after it
 // records the pull request branch's head as it was then. tester plays the
-// candidate's tests (after arm), "" for the scripted pass.
+// tests run after arm, "" for the scripted pass.
 type prFixWorld struct {
 	*world
 	wi, branch, before string
 	// web's pull request head before the comment, with two repositories.
-	webBefore      string
-	armed          atomic.Bool
-	mu             chan struct{}
-	seen           []string // the PR branch's head at each Run lux started after arm
-	seenWeb        []string // web's, the same way
-	phases         []string
-	candidateTests atomic.Int32
-	// The candidate's tests, in order: the scripted tester's model each
+	webBefore string
+	armed     atomic.Bool
+	mu        chan struct{}
+	seen      []string // the PR branch's head at each Run lux started after arm
+	seenWeb   []string // web's, the same way
+	phases    []string
+	prTests   atomic.Int32
+	// The tests run after arm, in order: the scripted tester's model each
 	// plays; past the end, a pass.
 	testers []string
-	// Called as the candidate's first test starts.
+	// Called as the first test after arm starts.
 	onTest func()
 	// Changes what an armed Run does, by phase and its index among the
 	// armed Runs of that phase (from 1).
@@ -203,7 +201,7 @@ func newPRFixWorldAt(t *testing.T, at prAt, testers ...string) *prFixWorld {
 		<-w.mu
 		b := scripted(spec)
 		if phase == "test" {
-			n := int(w.candidateTests.Add(1))
+			n := int(w.prTests.Add(1))
 			if n == 1 && w.onTest != nil {
 				w.onTest()
 			}
@@ -249,15 +247,6 @@ func (w *prFixWorld) comment(body string) {
 	w.gh.Comment(1, "alice", body)
 }
 
-// fixReviewed waits, its agents done (agentsDone), for the fix on the pull
-// request's branch and the task back in review.
-func (w *prFixWorld) fixReviewed() {
-	w.t.Helper()
-	w.agentsDone(w.wi, "the fix on the pull request", func() bool {
-		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review"
-	})
-}
-
 // personAsked waits, its agents done (agentsDone), for the delivery to stop
 // for a person.
 func (w *prFixWorld) personAsked() {
@@ -279,35 +268,6 @@ func (w *prFixWorld) shownBeforeTheGate() []string {
 	return out
 }
 
-// refreshedBeforeTheMove counts the description refreshes about heads past
-// before (the candidate's) recorded before the pull request took the fix:
-// a candidate's verdict in the description of a pull request without it.
-func (w *prFixWorld) refreshedBeforeTheMove() int {
-	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.verification_updated'
-		AND payload->>'head' <> $2 AND cursor < COALESCE((SELECT min(cursor) FROM events WHERE task_id = $1
-		AND event_type = 'pull_request.fix_moved'), 9223372036854775807)`, w.wi, w.before)
-}
-
-// lastPrompt is the prompt of the last of specs, "" for none.
-func lastPrompt(specs []lux.Spec) string {
-	if len(specs) == 0 {
-		return ""
-	}
-	return specs[len(specs)-1].Workload.Prompt
-}
-
-// findingOnTheCandidatesSimplification is a play: the candidate's second
-// review, of the simplifier's diff, raises simplifierFinding, and the
-// third, of its fix, clears it.
-func findingOnTheCandidatesSimplification(phase string, n int, b *fakelux.Behaviour) {
-	switch {
-	case phase == "review" && n == 2:
-		b.Reply = simplifierFinding
-	case phase == "review" && n == 3:
-		b.Reply = "Reviewed the fix of the simplification.\n\n" + fakeagent.Verdict
-	}
-}
-
 func (w *prFixWorld) candidate() string { return w.gh.SHA(delivery.CandidateBranch(w.wi, 1)) }
 
 // state reads the delivery's state field as JSON text.
@@ -315,18 +275,6 @@ func (w *prFixWorld) state(field string) string {
 	var v string
 	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(state->>$2, '') FROM workflow_runs WHERE task_id = $1`, w.wi, field).Scan(&v)
 	return v
-}
-
-// rangesNaming are the prompts of the task's range reviews of of that
-// tell the reviewer repo's range from base.
-func (w *world) rangesNaming(of, repo, base string) int {
-	n := 0
-	for _, spec := range w.rangeSpecs(of) {
-		if strings.Contains(spec.Workload.Prompt, "in `"+repo+"`, `"+base+"..HEAD`") {
-			n++
-		}
-	}
-	return n
 }
 
 // The fix of the simplifier's diff changes a repository the simplifier did
@@ -378,167 +326,5 @@ func TestARepositoryAFixOfTheSimplifiersDiffChangesFirstIsReviewed(t *testing.T)
 		AND review_range->>'of' = $2 AND review_range->'base'->>'web' = $3 AND base_refs->>'web' = $4`,
 		wi, delivery.RangeSimplify, webBefore, webFixed); n != 1 {
 		t.Errorf("%d reviews of web's fix told its range", n)
-	}
-}
-
-// Someone pushes between promotion's read of a branch and its move: the
-// move is refused, the person's commit kept, and a pull request already
-// moved is recorded at its new head, its description about it.
-func TestAPushRacingThePromotionIsNeverOverwritten(t *testing.T) {
-	t.Skip("candidate path: deleted in B2")
-	w := newPRFixWorldIn(t, true)
-	w.play = func(phase string, n int, b *fakelux.Behaviour) {
-		if phase == "fix" && n == 1 {
-			b.Commit = map[string]string{"*:" + fakeagent.FixedFile: "addressed for both"}
-		}
-	}
-	var raced atomic.Bool
-	var theirs atomic.Value
-	w.web.Set(func(s *fakegithub.Server) {
-		s.Intercept = func(r *http.Request) int {
-			if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+w.branch) && raced.CompareAndSwap(false, true) {
-				theirs.Store(w.web.CommitOnTop(w.branch, "A person's own fix"))
-			}
-			return 0
-		}
-	})
-	webBody := w.web.Pull(1).Body
-	w.comment("Please rename the greeting.")
-	w.sync()
-	w.until("a person asked", func() bool { return w.taskStatus(w.wi) == "awaiting_input" })
-	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
-		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
-	}
-	person, _ := theirs.Load().(string)
-	if at := w.web.SHA(w.branch); person == "" || at != person {
-		t.Errorf("web is at %s, the person's commit %q", at, person)
-	}
-	var detail map[string]any
-	_ = w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&detail)
-	if detail["repo"] != "web" || detail["found"] != person || detail["expected"] != w.webBefore {
-		t.Errorf("detail = %v", detail)
-	}
-	// target moved before the race: recorded, and described, at its head.
-	moved := w.gh.SHA(w.branch)
-	if moved == w.before {
-		t.Fatal("target did not move before web's race")
-	}
-	var stored string
-	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(pr.head_sha, '') FROM pull_requests pr
-		JOIN repositories r ON r.id = pr.repository_id WHERE pr.task_id = $1 AND r.name = 'target'`, w.wi).Scan(&stored)
-	if stored != moved {
-		t.Errorf("target's pull request is recorded at %s; GitHub has %s", stored, moved)
-	}
-	var heads map[string]string
-	if err := json.Unmarshal([]byte(w.state("heads")), &heads); err != nil {
-		t.Fatal(err)
-	}
-	if heads["target"] != moved {
-		t.Errorf("delivery retained target at %s; GitHub has %s", heads["target"], moved)
-	}
-	if body := w.gh.Pull(1).Body; !strings.Contains(body, "target `"+moved[:7]+"`") {
-		t.Errorf("target's Verification is not about %s:\n%s", moved[:7], body)
-	}
-	// web refused the candidate: its description is not about it.
-	if b := w.web.Pull(1).Body; b != webBody {
-		t.Errorf("web's description changed though web never took the fix:\n%s\nwas:\n%s", b, webBody)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'
-		AND payload->>'repo' = 'target' AND payload->>'to' = $2`, w.wi, moved); n != 1 {
-		t.Errorf("%d moves of target recorded", n)
-	}
-}
-
-// A person's push after the promotion's GET but before its PATCH returns
-// 422: the escalation names their SHA, not the candidate's or the old head.
-func TestAPushBeforeTheRefPatchEscalatesWithThePersonsHead(t *testing.T) {
-	t.Skip("candidate path: deleted in B2")
-	w := newPRFixWorld(t)
-	var raced atomic.Bool
-	var theirs atomic.Value
-	w.gh.Set(func(s *fakegithub.Server) {
-		s.Intercept = func(r *http.Request) int {
-			if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+w.branch) && raced.CompareAndSwap(false, true) {
-				theirs.Store(w.gh.CommitOnTop(w.branch, "A person's racing push"))
-			}
-			return 0
-		}
-	})
-	w.comment("Please rename the greeting.")
-	w.personAsked()
-	person, _ := theirs.Load().(string)
-	if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
-		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
-	}
-	var detail map[string]any
-	if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&detail); err != nil {
-		t.Fatal(err)
-	}
-	if person == "" || w.gh.SHA(w.branch) != person || detail["found"] != person || detail["expected"] != w.before {
-		t.Errorf("person's head %q, branch %s, escalation %v", person, w.gh.SHA(w.branch), detail)
-	}
-}
-
-func TestADeletionBeforeTheRefPatchKeepsTheCheckedCandidate(t *testing.T) {
-	t.Skip("candidate path: deleted in B2")
-	for _, status := range []int{http.StatusUnprocessableEntity, http.StatusNotFound} {
-		t.Run(strconv.Itoa(status), func(t *testing.T) {
-			w := newPRFixWorld(t)
-			var raced atomic.Bool
-			var creates atomic.Int32
-			var checked string
-			// The pull request stays open: one merged meanwhile ends the
-			// delivery before any promotion (pr_ended_test.go).
-			w.onTest = func() { checked = w.candidate() }
-			w.gh.Set(func(s *fakegithub.Server) {
-				s.Intercept = func(r *http.Request) int {
-					if raced.Load() && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/git/refs") {
-						creates.Add(1)
-					}
-					if r.Method == "PATCH" && strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+w.branch) && raced.CompareAndSwap(false, true) {
-						if err := w.gh.DeleteBranch(w.branch); err != nil {
-							t.Errorf("delete source branch: %v", err)
-						}
-						if status == http.StatusNotFound {
-							return status
-						}
-					}
-					return 0
-				}
-			})
-			w.comment("Please rename the greeting.")
-			w.agentsDone(w.wi, "promotion settled", func() bool {
-				return raced.Load() && (w.taskStatus(w.wi) == "awaiting_input" || len(w.gh.Pulls()) > 1)
-			})
-			if at := w.gh.SHA(w.branch); at != "" {
-				t.Errorf("deleted source branch recreated at %s", at)
-			}
-			if n := creates.Load(); n != 0 {
-				t.Errorf("%d create-ref fallbacks during promotion", n)
-			}
-			if at := w.candidate(); checked == "" || at != checked {
-				t.Errorf("checked candidate %q was not retained: %q", checked, at)
-			}
-			if pulls := w.gh.Pulls(); len(pulls) != 1 {
-				t.Errorf("created a follow-up after source deletion: %v", pulls)
-			}
-			if p := w.gh.Pull(1); p.State != "open" {
-				t.Errorf("the pull request is %s, want open: %+v", p.State, p)
-			}
-			if r := w.escalationReason(w.wi); r != delivery.ReasonPullRequestMoved {
-				t.Fatalf("escalated %q\n%s", r, w.describeRuns())
-			}
-			var detail map[string]any
-			if err := w.owner.QueryRow(context.Background(), `SELECT payload->'detail' FROM events WHERE task_id = $1
-				AND event_type = 'question.asked' ORDER BY cursor DESC LIMIT 1`, w.wi).Scan(&detail); err != nil {
-				t.Fatal(err)
-			}
-			if detail["found"] != "" || detail["expected"] != w.before || detail["candidate"] != checked ||
-				detail["branch"] != delivery.CandidateBranch(w.wi, 1) || detail["repo"] != "target" {
-				t.Errorf("missing-ref refusal = %v", detail)
-			}
-		})
 	}
 }

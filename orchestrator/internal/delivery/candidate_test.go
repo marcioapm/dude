@@ -14,32 +14,24 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
-// A replayed BeforePR integration fix keeps the candidate decision its Run
-// was created with, whatever the other repository's pull request did since:
-// the Run publishes to the branch it was created for. A replayed pull
-// request fix, with no integration, keeps its candidate too.
-func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
+// A replayed integration or pull request fix waits on the Run its step
+// already created on the task branch, whatever the pull request did since,
+// and opens no candidate: every fix reaches its pull request directly.
+func TestAReplayedPullRequestFixWaitsOnItsRunAndOpensNoCandidate(t *testing.T) {
 	beforePR := &Integration{Repo: "web", Base: "main", Head: "bbb", BaseHead: "ccc", BeforePR: true}
 	for _, tc := range []struct {
 		name, prState string
 		integration   *Integration
-		// onCandidate creates the Run on the delivery's candidate branch,
-		// else on the task branch (runs.branch NULL).
-		onCandidate, candidate bool
 	}{
-		{"created on a candidate, the pull request merged since", "merged", beforePR, true, true},
-		{"created on the task branch, a pull request open now", "open", beforePR, false, false},
-		{"a pull request fix, not an integration, created on a candidate", "open", nil, true, true},
+		{"a BeforePR integration, the pull request merged since", "merged", beforePR},
+		{"a BeforePR integration, a pull request open now", "open", beforePR},
+		{"a pull request fix, not an integration", "open", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &State{TaskID: "wi_e", ProjectID: "prj_e", Attempt: 1, Branch: "dude/wi_e/attempt-1", PullRequestIDs: []string{"pr_t"},
 				Heads: map[string]string{"target": "aaa", "web": "bbb"}, Integration: tc.integration,
 				// A pull request fix is charged its round: one is left.
 				Policy: Policy{MaxPRFixIterations: 1}}
-			var runBranch string
-			if tc.onCandidate {
-				runBranch = st.candidateBranch()
-			}
 			app, owner := dbtest.Open(t)
 			org := dbtest.Org(t, owner)
 			ctx := context.Background()
@@ -52,8 +44,8 @@ func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
 				{`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_t', $1, 'prj_e', 'target', 'https://github.com/acme/target')`, nil},
 				{`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
 					VALUES ('pr_t', $1, 'prj_e', 'wi_e', 'repo_t', 1, 'https://github.com/acme/target/pull/1', 'dude/wi_e/attempt-1', 'main', 'aaa', 'Greet', $2::pull_request_state)`, []any{tc.prState}},
-				{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
-					VALUES ('run_fix', $1, 'prj_e', 'wi_e', 1, 'fix', 'implementer', 'agent', 'pending', '{"target":"aaa","web":"bbb"}', 'wf_e:prfix:1', NULLIF($2, ''))`, []any{runBranch}},
+				{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key)
+					VALUES ('run_fix', $1, 'prj_e', 'wi_e', 1, 'fix', 'implementer', 'agent', 'pending', '{"target":"aaa","web":"bbb"}', 'wf_e:prfix:1')`, nil},
 			} {
 				if _, err := owner.Exec(ctx, s.sql, append([]any{org}, s.args...)...); err != nil {
 					t.Fatal(err)
@@ -72,11 +64,8 @@ func TestAReplayedBeforePRIntegrationKeepsItsRunsCandidate(t *testing.T) {
 			if len(got.PendingRunIDs) != 1 || got.PendingRunIDs[0] != "run_fix" {
 				t.Fatalf("waits on %v, want the existing run_fix", got.PendingRunIDs)
 			}
-			if (got.Candidate != nil) != tc.candidate {
-				t.Fatalf("candidate %+v, want one: %v", got.Candidate, tc.candidate)
-			}
-			if got.Candidate != nil && got.Candidate.Branch != runBranch {
-				t.Fatalf("candidate on %q, want the Run's %q", got.Candidate.Branch, runBranch)
+			if got.Candidate != nil {
+				t.Fatalf("candidate %+v, want none", got.Candidate)
 			}
 		})
 	}
@@ -156,26 +145,18 @@ func TestDiscardingALoopCandidateReopensWhatItsRoundResolved(t *testing.T) {
 	}
 }
 
-// A loop writer's step recovers the Run it saved under either key, the
-// task branch's or the candidate's, whichever way the pull request went
-// since. A conductor-directed writer's is recovered too, and the step still
+// A loop writer's step recovers the Run it saved, whichever way the pull
+// request went since. A conductor-directed writer's is recovered too, and the step still
 // spends the direction; with no saved Run, the Run it creates carries the
 // conductor's mark.
 func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 	type variant struct {
-		candidate, directed, saved bool
+		directed, saved bool
 	}
-	var variants []variant
-	for _, directed := range []bool{false, true} {
-		for _, candidate := range []bool{false, true} {
-			variants = append(variants, variant{candidate, directed, true})
-		}
-	}
-	variants = append(variants, variant{directed: true})
+	variants := []variant{{false, true}, {true, true}, {directed: true}}
 	for _, phase := range []string{PhaseImplement, PhaseFix, PhaseSimplify} {
 		for _, v := range variants {
-			candidate := v.candidate
-			name := phase + map[bool]string{false: "/closed-to-open", true: "/open-to-closed"}[candidate]
+			name := phase + "/saved"
 			if !v.saved {
 				name = phase + "/no-saved-run"
 			}
@@ -193,11 +174,7 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 					st.Directed, st.Decisions = &Directed{Phase: phase, By: "run_conductor", Note: "n"}, 2
 				}
 				saved := *st
-				branch, prState := "", "open"
-				if candidate {
-					saved.Candidate = &Candidate{Round: 4}
-					branch, prState = st.candidateBranch(), "closed"
-				}
+				prState := "open"
 				if !v.saved {
 					// Closed: the step creates its Run on the task branch.
 					prState = "closed"
@@ -221,7 +198,7 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 				}
 				if v.saved {
 					seed = append(seed, stmt{`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, base_refs, creation_key, branch)
-					 VALUES ('run_saved', $1, 'prj_e', 'wi_e', 1, $2, 'implementer', 'agent', 'pending', '{"target":"saved"}', $3, NULLIF($4, ''))`, []any{phase, writerKey(sc, &saved, phase), branch}})
+					 VALUES ('run_saved', $1, 'prj_e', 'wi_e', 1, $2, 'implementer', 'agent', 'pending', '{"target":"saved"}', $3, NULL)`, []any{phase, writerKey(sc, &saved, phase)}})
 				}
 				for _, q := range seed {
 					if _, err := owner.Exec(ctx, q.sql, append([]any{org}, q.args...)...); err != nil {
@@ -257,17 +234,10 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 				if !reflect.DeepEqual(got.Heads, map[string]string{"target": "saved"}) {
 					t.Fatalf("base refs = %v", got.Heads)
 				}
-				if (got.Candidate != nil) != candidate {
+				if got.Candidate != nil {
 					t.Fatalf("candidate = %+v", got.Candidate)
 				}
-				wantRound := 3
-				if candidate {
-					wantRound = 4
-					if got.Candidate.Branch != branch || !reflect.DeepEqual(got.Candidate.From, got.Heads) {
-						t.Fatalf("candidate = %+v", got.Candidate)
-					}
-				}
-				if got.PRFixKey != wantRound || got.PRIteration != 1 || !reflect.DeepEqual(got.PRFixes, st.PRFixes) || got.PRFixCharged != nil {
+				if got.PRFixKey != 3 || got.PRIteration != 1 || !reflect.DeepEqual(got.PRFixes, st.PRFixes) || got.PRFixCharged != nil {
 					t.Fatalf("replay changed budgets: %+v", got)
 				}
 				if err := app.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -287,22 +257,12 @@ func TestLoopWritersReplayTheirSavedBranchAcrossPRStateChanges(t *testing.T) {
 	}
 }
 
-// A pull request's fix is checked on a branch of its own beside the task
-// branch, which a run's own branch name can never be.
-func TestTheCandidateBranchIsBesideTheTaskBranch(t *testing.T) {
+// A legacy candidate's branch (kept for the boot conversion and
+// NotLegacyCandidateRunSQL) sits beside the task branch, which a run's own
+// branch name can never be.
+func TestTheLegacyCandidateBranchIsBesideTheTaskBranch(t *testing.T) {
 	if got := CandidateBranch("t1", 2); got != "dude/t1/attempt-2-candidate" {
 		t.Errorf("CandidateBranch = %q", got)
-	}
-	st := &State{TaskID: "t1", Branch: "dude/t1/attempt-3"}
-	if got := st.candidateBranch(); got != "dude/t1/attempt-3-candidate" {
-		t.Errorf("a delivery's candidate = %q, want beside its own branch", got)
-	}
-	if got := (&State{TaskID: "t1"}).candidateBranch(); got != "dude/t1/attempt-1-candidate" {
-		t.Errorf("a delivery naming no branch: %q", got)
-	}
-	adopted := &State{TaskID: "t1", Attempt: 2, Branch: "feature/half", Source: &Source{Kind: SourcePR, HeadBranch: "feature/half"}}
-	if got := adopted.candidateBranch(); got != "dude/t1/attempt-2-candidate" {
-		t.Errorf("an adopted source's candidate = %q, want under dude/, never beside the person's branch", got)
 	}
 }
 

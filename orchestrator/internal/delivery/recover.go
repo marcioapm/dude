@@ -152,14 +152,14 @@ func ConductRecoverTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask RecoverAsk
 	return out, nil
 }
 
-// branchInUseTx says branch is the task branch of the attempt, its
-// candidate branch, or the head of one of the task's open pull requests.
+// branchInUseTx says branch is the task branch of the attempt, or the
+// head of one of the task's open pull requests.
 func branchInUseTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, branch string) (bool, error) {
 	tb, err := TaskBranchTx(ctx, tx, taskID, max(attempt, 1))
 	if err != nil {
 		return false, err
 	}
-	if branch == tb.Branch || branch == tb.Branch+candidateSuffix || branch == CandidateBranch(taskID, max(attempt, 1)) {
+	if branch == tb.Branch {
 		return true, nil
 	}
 	var open bool

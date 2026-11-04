@@ -42,10 +42,8 @@ func LockLiveWorkTx(ctx context.Context, tx pgx.Tx, taskID string) (string, erro
 // StopPhaseRunsTx aborts the task's live phase Runs, and runID with them
 // when given. It selects by task, not attempt: a phase Run still live on an
 // older attempt is stopped with the current one's. What they never read
-// fails, and a pull request fix being checked on its candidate stops short
-// of the pull request (its candidate stays in the state, so a recovery may
-// still promote it). With keep, each lux has is kept to resume. Returns
-// the Runs aborted.
+// fails. With keep, each lux has is kept to resume. Returns the Runs
+// aborted.
 func StopPhaseRunsTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, runID, reason string, keep bool) ([]string, error) {
 	rows, err := tx.Query(ctx, `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
 		control_reason = $3, ended_at = now(), keep = $4 AND lux_run_id IS NOT NULL
@@ -60,13 +58,6 @@ func StopPhaseRunsTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID, run
 	}
 	for _, id := range aborted {
 		if err := FailUnreadTx(ctx, tx, RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: id}, time.Time{}, UnreadRunAborted); err != nil {
-			return nil, err
-		}
-	}
-	if d, err := ReadDelivery(ctx, tx, taskID); err != nil {
-		return nil, err
-	} else if d != nil && d.Live() && d.State.Candidate != nil {
-		if err := AbandonCandidateTx(ctx, tx, org, taskID, d.State.Attempt, d.State.Candidate.Branch); err != nil {
 			return nil, err
 		}
 	}

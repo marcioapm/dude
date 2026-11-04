@@ -96,6 +96,12 @@ describe("escalationWords", () => {
     expect(pushed.sentence).toBe("Someone pushed to pull request web #4 while dude checked a fix for it. The fix was not moved over their commit: fix the feedback again from what the branch holds now, or wait on the pull request without it.");
   });
 
+  test("a delivery stopped mid-promotion says why, and what retry and wait do", () => {
+    const words = escalationWords({ reason: "stopped_mid_promotion", at, detail: { step: "promoteCandidate" } });
+    expect(words.short).toBe("Stopped while moving a fix");
+    expect(words.sentence).toBe("This delivery was moving its fix onto the pull request when dude was upgraded, and nothing finishes that move now. Try again to redo the fix from what the pull request holds, or check the pull request and wait on it.");
+  });
+
   test("a failed integration says what is true, why in words, the base as a name, and links its Run only", () => {
     const tried = escalationWords({ reason: "pull_request_conflict", at,
       detail: { repo: "web", number: 4, base: "release", integration: true, runId: "run_9", cause: "still_conflicting", error: "still conflicting after integration" } });

@@ -14,8 +14,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-const backstopRefusal = "an open pull request's branch moves only by promotion of a reviewed candidate: use start_phase fix with a note saying what to change"
-
 // backstop is a writer Run of w whose push of one commit to "target" has
 // landed, finished against a fake GitHub over a; the task branch exists
 // on GitHub at the commit the Run started from.
@@ -81,14 +79,16 @@ func (b *backstop) outcome() (status, reason string) {
 	return status, reason
 }
 
-// refused asserts the Run failed with the backstop's reason and that
-// GitHub never moved branch.
-func (b *backstop) refused(branch string) {
+// moved asserts the Run completed and GitHub moved branch once, to the
+// Run's commit.
+func (b *backstop) moved(branch string) {
 	b.w.t.Helper()
-	if status, reason := b.outcome(); status != "failed" || !strings.Contains(reason, backstopRefusal) {
-		b.w.t.Errorf("the Run: %s %q, want failed saying %q", status, reason, backstopRefusal)
+	if status, reason := b.outcome(); status != "completed" {
+		b.w.t.Errorf("the Run: %s %q, want completed", status, reason)
 	}
-	b.unmoved(branch)
+	if got := b.gh.BranchLog(branch); len(got) != 1 || got[0] != b.a.head() {
+		b.w.t.Errorf("%s moved to %v, want [%s]", branch, got, b.a.head())
+	}
 }
 
 // unmoved asserts GitHub never moved branch from the commit the Run
@@ -112,66 +112,33 @@ func (b *backstop) writer(phase string, branch any) phaseRun {
 	return r
 }
 
-// A writer Run still targeting a task branch whose pull request is open
-// (or a draft) fails at publish and moves nothing: as a workflow fix
-// (runs.branch NULL, the task branch resolved) and as a conductor's child
-// (runs.branch set to the task branch).
-func TestAPublishToAnOpenPullRequestsBranchFailsTheRun(t *testing.T) {
-	for _, state := range []string{"open", "draft"} {
+// A writer Run on a task branch whose pull request is open (or a draft)
+// publishes to it directly: every fix reaches its pull request, as a
+// workflow fix (runs.branch NULL, the task branch resolved) and as a
+// conductor's child (runs.branch set to the task branch). A task branch
+// whose pull request was closed or merged is moved the same way.
+func TestAPublishToAPullRequestsBranchMovesIt(t *testing.T) {
+	for _, state := range []string{"open", "draft", "closed", "merged"} {
 		t.Run("fix/"+state, func(t *testing.T) {
 			b := newBackstop(t, newResumeWorld(t))
 			r := b.writer(delivery.PhaseFix, nil)
 			b.pullRequest(b.branch, state)
 			b.finish(r)
-			b.refused(b.branch)
+			b.moved(b.branch)
 		})
 		t.Run("own-branch/"+state, func(t *testing.T) {
 			b := newBackstop(t, newResumeWorld(t))
 			r := b.writer(delivery.PhaseImplement, b.branch)
 			b.pullRequest(b.branch, state)
 			b.finish(r)
-			b.refused(b.branch)
-		})
-	}
-}
-
-// Controls: a candidate Run publishes to its candidate while the pull
-// request is open, and a task branch whose pull request was closed or
-// merged is moved as before.
-func TestAPublishBesideAnOpenPullRequestMovesItsBranch(t *testing.T) {
-	cases := []struct{ name, own, state string }{
-		{"candidate", "-candidate", "open"},
-		{"closed", "", "closed"},
-		{"merged", "", "merged"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			b := newBackstop(t, newResumeWorld(t))
-			target := b.branch + c.own
-			own := any(nil)
-			if c.own != "" {
-				own = target
-			}
-			r := b.writer(delivery.PhaseFix, own)
-			b.pullRequest(b.branch, c.state)
-			b.finish(r)
-			if status, reason := b.outcome(); status != "completed" {
-				t.Fatalf("the Run: %s %q, want completed", status, reason)
-			}
-			if got := b.gh.BranchLog(target); len(got) != 1 || got[0] != b.a.head() {
-				t.Errorf("%s moved to %v, want [%s]", target, got, b.a.head())
-			}
-			if c.own != "" && len(b.gh.BranchLog(b.branch)) != 0 {
-				t.Errorf("the pull request's branch moved: %v", b.gh.BranchLog(b.branch))
-			}
+			b.moved(b.branch)
 		})
 	}
 }
 
 // A writer Run on a branch whose pull request is open, whose push has
 // nothing to move (its commit is where it started, or the repo was
-// skipped), completes: the backstop fails only a publish that would move
-// the branch.
+// skipped), completes and moves nothing.
 func TestAPublishWithNothingCommittedBesideAnOpenPullRequestCompletes(t *testing.T) {
 	cases := []struct{ name, status string }{
 		{"nothing-committed", "up-to-date"},
@@ -192,10 +159,10 @@ func TestAPublishWithNothingCommittedBesideAnOpenPullRequestCompletes(t *testing
 }
 
 // A conductor's writer child admitted and started while no pull request
-// was open, whose push lands after one opened on the task branch, fails at
-// publish: the pull request's branch does not move, and its conductor's
-// child result says why.
-func TestAWriterChildWhosePushLandsAfterAPullRequestOpenedIsRefused(t *testing.T) {
+// was open, whose push lands after one opened on the task branch, reaches
+// the pull request directly: its branch moves to the child's commit, and
+// its conductor's child result says it completed with that commit.
+func TestAWriterChildWhosePushLandsAfterAPullRequestOpenedReachesIt(t *testing.T) {
 	w := newResumeWorld(t)
 	fake := fakelux.New("", "k", func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Hang: true} })
 	srv := httptest.NewServer(fake.Handler())
@@ -237,7 +204,7 @@ func TestAWriterChildWhosePushLandsAfterAPullRequestOpenedIsRefused(t *testing.T
 	}
 	r.LuxState = "running"
 	b.finish(r)
-	b.refused(b.branch)
+	b.moved(b.branch)
 
 	// Its exit collected by the artifact sweep, with nothing to collect.
 	w.exec(`UPDATE runs SET artifacts_due_at = NULL, artifacts_next_at = NULL WHERE id = $1`, r.ID)
@@ -253,7 +220,7 @@ func TestAWriterChildWhosePushLandsAfterAPullRequestOpenedIsRefused(t *testing.T
 		WHERE o.child_run_id = $1`, r.ID).Scan(&text); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(text, `"status": "failed"`) || !strings.Contains(text, backstopRefusal) {
+	if !strings.Contains(text, `"status": "completed"`) || !strings.Contains(text, b.a.head()) {
 		t.Errorf("the conductor's result: %s", text)
 	}
 }

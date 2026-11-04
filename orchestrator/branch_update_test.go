@@ -1,16 +1,11 @@
 package orchestrator_test
 
-// A writer's publish, or a checked fix's promotion, when the task branch
-// had its base merged in under it (abs#5477): by dude's own update-branch
-// in the sync that started the fix, by a person's Update branch on GitHub,
-// or by a later sync. The automatic update is not asked for by a sync that
-// has just signalled; one that lands anyway is merged with the writer's
-// commit, or the candidate's head, on GitHub. A person's own commit under
-// either is never merged over.
-//
-// A pull request's fix publishes to its candidate branch, which nobody
-// merges the base into: the phase publish's merge-in is exercised by the
-// review loop's fix, which publishes to the task branch itself.
+// A writer's publish when the task branch had its base merged in under it
+// (abs#5477): by dude's own update-branch in the sync that started the
+// fix, by a person's Update branch on GitHub, or by a later sync. The
+// automatic update is not asked for by a sync that has just signalled;
+// one that lands anyway is merged with the writer's commit on GitHub. A
+// person's own commit under either is never merged over.
 
 import (
 	"bytes"
@@ -260,8 +255,8 @@ func TestAFixIsRefusedOverABaseMergeNotMadeByGitHub(t *testing.T) {
 	}
 }
 
-// A delivery whose every publish fast-forwards, the pull request's fix to
-// its candidate included, never looks up whether a Run attempted a merge:
+// A delivery whose every publish fast-forwards, the pull request's fix
+// included, never looks up whether a Run attempted a merge:
 // only a branch holding a merge of the writer's commit asks.
 func TestAFastForwardPublishLooksUpNoMergeAttempt(t *testing.T) {
 	w := newWorld(t)

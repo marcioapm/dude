@@ -199,8 +199,9 @@ async function listPeers(ctx: RequestContext): Promise<Response> {
              SELECT cp.heads->repo.name->>'sha', cp.settled_at FROM conductor_publishes cp
                WHERE cp.task_id = t.id AND cp.status = 'published' AND cp.heads ? repo.name) h
              ORDER BY h.at DESC NULLS LAST LIMIT 1), '') AS sha,
-            -- delivery.TaskHeads' branch: the newest Run that has heads here, not the latest phase Run,
-            -- nor its own generated candidate (delivery.NotGeneratedCandidateSQL).
+            -- delivery.TaskHeads' branch: the newest Run that has heads here, not the latest phase Run.
+            -- Legacy: Runs of the deleted candidate path published to dude/<task>/attempt-N-candidate;
+            -- kept so old Runs' branches stay hidden (delivery.NotLegacyCandidateRunSQL).
            (SELECT rr.branch FROM runs rr WHERE rr.task_id = t.id AND rr.heads ? repo.name AND rr.branch IS NOT NULL
              AND rr.branch <> ('dude/' || rr.task_id || '/attempt-' || rr.attempt || '-candidate') ORDER BY rr.ended_at DESC NULLS LAST LIMIT 1) AS branch
          FROM task_repositories tr JOIN repositories repo ON repo.id = tr.repository_id

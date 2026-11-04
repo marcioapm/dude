@@ -229,13 +229,14 @@ func TestStartChildAdmission(t *testing.T) {
 	}
 }
 
-// While a pull request is open (or a draft) on the task branch, a
-// conductor's writer child is refused saying to use start_phase fix, and
-// no Run is made; a child that only reads still starts. A pull request
-// open on another branch of the task does not refuse: with the task
-// branch's closed, the writer starts. Restarted once it ended, with the
-// pull request open again, it is refused the same way and not replaced.
-func TestAWriterChildIsRefusedWhileAPullRequestIsOpen(t *testing.T) {
+// While a pull request open (or a draft) on the task branch shows a head
+// dude pushed that no review has covered, a conductor's writer child is
+// refused saying to review first, and no Run is made; a child that only
+// reads still starts. A pull request open on another branch of the task,
+// or the task branch's showing no push of dude's, does not refuse: every
+// fix reaches the pull request directly. Restarted once it ended, with the
+// push unreviewed again, it is refused the same way and not replaced.
+func TestAWriterChildIsRefusedWhileAPullRequestShowsAnUnreviewedPush(t *testing.T) {
 	for _, state := range []string{"open", "draft"} {
 		t.Run(state, func(t *testing.T) { writerChildRefusedWhilePullRequest(t, state) })
 	}
@@ -258,10 +259,12 @@ func writerChildRefusedWhilePullRequest(t *testing.T, state string) {
 	exec(`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
 		VALUES ('wf_c', $1, 'wi_c', 'task.delivery', 'c', 'waiting', 'awaitPullRequest',
 		'{"taskId":"wi_c","projectId":"prj_c","attempt":1,"branch":"dude/wi_c/attempt-1","heads":{"target":"aaa"},"pullRequestIds":["pr_c"]}')`, org)
-	// pr_old: an earlier attempt's branch, open all along.
+	// pr_old: an earlier attempt's branch, open all along, at a head dude pushed.
 	exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
 		VALUES ('pr_c', $1, 'prj_c', 'wi_c', 'repo_c', 1, 'https://github.com/acme/target/pull/1', 'dude/wi_c/attempt-1', 'main', 'aaa', 'C', $2::pull_request_state),
 		('pr_old', $1, 'prj_c', 'wi_c', 'repo_c', 2, 'https://github.com/acme/target/pull/2', 'dude/wi_c/attempt-0', 'main', 'bbb', 'C', 'open')`, org, state)
+	exec(`INSERT INTO events (id, organization_id, project_id, task_id, event_type, actor_type, actor_id, source, payload)
+		VALUES ('evt_old', $1, 'prj_c', 'wi_c', 'git.commit_created', 'agent', 'run_x', 'orchestrator', '{"repo":"target","headSha":"bbb"}')`, org)
 	s := &Store{DB: app}
 	start := func(profile string) (string, error) {
 		phase := PhaseForPromptRole(profile)
@@ -278,12 +281,21 @@ func writerChildRefusedWhilePullRequest(t *testing.T, state string) {
 	}
 	refused := func(what string, err error) {
 		t.Helper()
-		if !IsRefusal(err) || !strings.Contains(err.Error(), "a pull request is open on this branch") ||
-			!strings.Contains(err.Error(), "use start_phase fix") {
-			t.Errorf("%s with a pull request %s: %v, want refused saying to use start_phase fix", what, state, err)
+		if !IsRefusal(err) || !strings.Contains(err.Error(), "no review has covered yet") ||
+			!strings.Contains(err.Error(), "start_phase review") {
+			t.Errorf("%s with a pull request %s at an unreviewed push: %v, want refused saying to review first", what, state, err)
 		}
 	}
-	for _, profile := range []string{"implementer", "fixer", "simplifier"} {
+	// The pull request shows no push of dude's: a writer starts.
+	implID, err := start("implementer")
+	if err != nil {
+		t.Fatalf("implementer with a pull request %s showing no push of dude's: %v", state, err)
+	}
+	exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE id = $1`, implID)
+	// dude pushed aaa, the head the pull request shows, and nothing reviewed it.
+	exec(`INSERT INTO events (id, organization_id, project_id, task_id, event_type, actor_type, actor_id, source, payload)
+		VALUES ('evt_pushed', $1, 'prj_c', 'wi_c', 'git.commit_created', 'agent', 'run_x', 'orchestrator', '{"repo":"target","headSha":"aaa"}')`, org)
+	for _, profile := range []string{"fixer", "simplifier"} {
 		_, err := start(profile)
 		refused(profile, err)
 		if n := children(profile); n != 0 {
@@ -295,16 +307,6 @@ func writerChildRefusedWhilePullRequest(t *testing.T, state string) {
 			t.Errorf("%s with a pull request %s: %v, want started", profile, state, err)
 		}
 	}
-	exec(`UPDATE pull_requests SET state = 'closed' WHERE id = 'pr_c'`)
-	implID, err := start("implementer")
-	if err != nil {
-		t.Fatalf("implementer with the task branch's pull request closed, another branch's open: %v", err)
-	}
-	if n := children("implementer"); n != 1 {
-		t.Fatalf("%d implementer Runs, want 1", n)
-	}
-	exec(`UPDATE runs SET status = 'completed', ended_at = now() WHERE id = $1`, implID)
-	exec(`UPDATE pull_requests SET state = $1::pull_request_state WHERE id = 'pr_c'`, state)
 	_, err = s.RestartChild(ctx, org, "wi_c", implID, "again")
 	refused("the implementer restarted", err)
 	if n := children("implementer"); n != 1 {

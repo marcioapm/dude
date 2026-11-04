@@ -23,7 +23,6 @@ import (
 func directEditing(t *testing.T) (*editing, string) {
 	t.Helper()
 	e := newEditing(t)
-	setPolicy(e.world, e.task, `{"pullRequestFixes":"direct"}`)
 	e.wokenWith(e.task, "after implement")
 	head := e.pullRequestRow("open")
 	return e, head

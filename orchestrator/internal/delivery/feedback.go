@@ -55,10 +55,11 @@ const (
 const (
 	// The Run ended (failed, aborted) without publishing.
 	ReopenUnpublished = "unpublished"
-	// The Run published, and the commit is not in it; or its candidate
-	// round ended before the pull request took it.
+	// The Run published, and the commit is not in it; or (legacy) its
+	// candidate round ended before the pull request took it.
 	ReopenNotPublished = "not_published"
-	// Its candidate's pull request merged or closed while it was checked.
+	// Legacy: its candidate's pull request merged or closed while it was
+	// checked. Kept for old events.
 	ReopenPullRequestEnded = "pull_request_ended"
 )
 
@@ -1209,18 +1210,6 @@ func ResolutionHolds(ctx context.Context, cmp Comparer, repo, base, head, commit
 // open again for the next fixer. A resolution left out of held is
 // reopened: its commit was not published.
 func SettleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool) error {
-	return settleResolutionsTx(ctx, tx, org, runID, held, true)
-}
-
-// SettleCandidateResolutionsTx is SettleResolutionsTx for a Run that
-// published to a candidate branch: what does not hold is reopened, and
-// what holds stays pending (still blocking) until the pull request's
-// branch reaches the candidate's head (CandidateMovedTx).
-func SettleCandidateResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool) error {
-	return settleResolutionsTx(ctx, tx, org, runID, held, false)
-}
-
-func settleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held map[string]bool, verify bool) error {
 	pending, err := PendingResolutionsTx(ctx, tx, runID)
 	if err != nil {
 		return err
@@ -1228,10 +1217,9 @@ func settleResolutionsTx(ctx context.Context, tx pgx.Tx, org, runID string, held
 	for _, p := range pending {
 		ref := RunRef{Org: org, TaskID: p.TaskID, RunID: runID}
 		var err error
-		switch {
-		case !held[p.ID]:
+		if !held[p.ID] {
 			err = reopenResolutionTx(ctx, tx, ref, p.ID, ReopenNotPublished, "its commit is not in what was published")
-		case verify:
+		} else {
 			err = verifyResolutionTx(ctx, tx, ref, p.ID, p.Commit, p.Repo)
 		}
 		if err != nil {

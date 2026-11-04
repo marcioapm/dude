@@ -93,7 +93,6 @@ func (w *world) prOpen(wi string, at prAt) string {
 	ctx := context.Background()
 	policy := scriptedPolicy()
 	policy.Test = at.test
-	policy.PullRequestFixes = delivery.PullRequestFixesDirect
 	type prRepo struct {
 		name string
 		gh   *fakegithub.Server
@@ -519,7 +518,7 @@ func (w *world) upTo(task, phase string) string {
 // agentsDone runs task's delivery on, reading its pull requests from GitHub
 // before each pass (sync) and finishing each phase Run it starts as its
 // agent would (finished), until cond holds. What the delivery does with
-// GitHub — the pull request fix's candidate, its promotion, the refresh —
+// GitHub — the pull request fix's push, the refresh —
 // is the delivery's own code against the fake GitHub, and a step waiting
 // GitHub out (forgeWait) is waited for, as until does. A quiet
 // conductor's decision (every delivery Deliver starts has one) is its
@@ -560,7 +559,7 @@ func (w *world) quietConductorDecides(task string) {
 // finished writes what the syncer leaves once a pending phase Run's agent
 // finished its turn as the fake lux plays it (w.lux.Decide, asked with the
 // Run's labels and checkouts as its spec gives them): its commits pushed to
-// the Run's branch (the task branch, or its own: a candidate's) in the
+// the Run's branch (the task branch, or its own) in the
 // repositories it may write, the Run completed with what it published there
 // (runs.heads), its reply, files and commits in the ledger, a review's or
 // test's findings recorded by phases.RecordFindings, then run.completed. The

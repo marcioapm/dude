@@ -86,7 +86,7 @@ func PolicyFor(ctx context.Context, tx pgx.Tx, taskID string) (string, Policy, e
 	if err != nil {
 		return "", policy, fmt.Errorf("project %s: %w", projectID, err)
 	}
-	return projectID, policy.ForNewDelivery(), nil
+	return projectID, policy, nil
 }
 
 // PolicyError is a task's own policy that does not decode.

@@ -268,7 +268,7 @@ var notTheTool = map[string][]string{
 	"note": {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)",
 		"`low` or `note`", "`note` is an observation", "| low | note", "is a `note`", "a design note", "and a note)"},
 	"propose":  {"before you propose anything"},
-	"publish":  {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code"},
+	"publish":  {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code", "goes to the pull request when you publish"},
 	"verify":   {"could not verify", "`--no-verify`", "a reason a person could verify"},
 	"settings": {"and its own settings (which reviewers run"},
 	// wait_for's shell form, not wait_for_reply's.

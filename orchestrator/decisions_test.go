@@ -745,7 +745,7 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		w.until("feedback to decide on", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
 		w.wokenWith(task, "pull request feedback")
 		w.must(task, "start_phase", `{"phase":"fix"}`)
-		w.until("the fix", func() bool { return w.fixes(task) == 1 && w.taskStatus(task) == "review" })
+		w.directFixReviewed(task)
 		w.gh.Comment(1, "alice", "And the farewell.")
 		w.until("feedback again", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
 		w.refused(task, "start_phase", `{"phase":"fix"}`, "1 of 1 this review round")
@@ -765,7 +765,7 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		w.gh.Comment(1, "alice", "Please rename the greeting.")
 		w.until("feedback to decide on", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
 		w.must(task, "start_phase", `{"phase":"fix"}`)
-		w.until("the fix", func() bool { return w.fixes(task) == 1 && w.taskStatus(task) == "review" })
+		w.directFixReviewed(task)
 		w.gh.Comment(1, "alice", "And the farewell.")
 		w.until("feedback again", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
 		decided := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decided'`, task)
@@ -785,6 +785,17 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 
 // setPolicy changes the policy of the task's delivery, as a project's
 // would have set it at the start.
+// directFixReviewed waits for a pull request fix the conductor started to
+// reach the pull request, decides its narrow review round on (a conducted
+// loop parks after each), and waits until the delivery waits on the pull
+// request again.
+func (w *world) directFixReviewed(task string) {
+	w.t.Helper()
+	w.until("the fix's review", func() bool { return w.fixes(task) == 1 && w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(task) && w.taskStatus(task) == "review" })
+}
+
 func setPolicy(w *world, task, patch string) {
 	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{policy}', state->'policy' || $2::jsonb)
 		WHERE task_id = $1`, task, patch)

@@ -144,8 +144,8 @@ type Integration struct {
 	// The integration Run, or "server-<sha>" for a merge GitHub made
 	// (agentRun tells them apart).
 	RunID string `json:"runId,omitempty"`
-	// The merge is published on the candidate for an open pull request;
-	// what follows validates it.
+	// The merge is published on the task branch for an open pull
+	// request; what follows validates it.
 	Published bool   `json:"published,omitempty"`
 	MergeSHA  string `json:"mergeSha,omitempty"`
 	// Before the pull request opened (syncBeforePR): a person's wait goes
@@ -156,15 +156,7 @@ type Integration struct {
 	// that clean merge and nothing else. A head found moved (adopted) is
 	// not one.
 	ServerMerge bool `json:"serverMerge,omitempty"`
-	// Reads of the pull request after the integration published that
-	// found GitHub had not worked its mergeability out yet.
-	Polls int `json:"polls,omitempty"`
 }
-
-// unknownMergeabilityPolls bounds those reads, 1 s apart and doubling up
-// to a minute (about four minutes in all); past it the pull request
-// syncer's reads take over.
-const unknownMergeabilityPolls = 8
 
 // Why an integration escalated: the escalation's and its activity line's
 // cause, which the web words; the error is for logs and the Run's own.
@@ -191,13 +183,9 @@ func (st *State) attemptedIn(repo string) bool {
 	return false
 }
 
-// attemptCause is why an attempted pair escalates: one handed over to the
-// pull request syncer with GitHub undecided is dude's merge, still
-// conflicting; any other was attempted and not resolved.
-func (st *State) attemptCause(i *Integration) (string, string) {
-	if _, ok := st.HandedOver[i.pair()]; ok {
-		return causeStillConflicting, reasonStillConflicting
-	}
+// attemptCause is why an attempted pair escalates: it was attempted and
+// not resolved.
+func (st *State) attemptCause(*Integration) (string, string) {
 	return causePairAttempted, reasonPairAttempted
 }
 
@@ -303,11 +291,6 @@ func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext,
 	if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"cause": cause, "error": problem}); err != nil {
 		return workflow.Result{}, err
 	}
-	if c := st.Candidate; c != nil {
-		// Never promoted: what its Runs pushed stays on the candidate, and
-		// the delivery stands on what the pull requests show.
-		st.Heads, st.Candidate = maps.Clone(c.From), nil
-	}
 	return w.escalate(ctx, sc, st, "pull_request_conflict", detail)
 }
 
@@ -323,106 +306,6 @@ func (w *steps) integrationEvent(ctx context.Context, sc workflow.StepContext, s
 		// The workflow's step lease admits one runner of this step at a
 		// time, which is what makes this read-then-append write once.
 		return integrationEventTx(ctx, tx, sc.OrganizationID, st, st.Integration, action, extra)
-	})
-}
-
-// HandOverPending says, without locking the delivery, whether it holds an
-// integration handed over at repo's head that is not closed: what
-// HandOverMergedTx would write. false because the line (or a refusal) is on
-// record is final; false for want of a hand-over is not, so every sync asks
-// again. true is rechecked under the lock.
-func HandOverPending(ctx context.Context, tx pgx.Tx, taskID, repo, head string) (bool, error) {
-	d, err := ReadDelivery(ctx, tx, taskID)
-	if err != nil || d == nil {
-		return false, err
-	}
-	pair, i, ok := handedOverAt(d.State.HandedOver, repo, head)
-	if !ok {
-		return false, nil
-	}
-	closed, err := integrationClosed(ctx, tx, taskID, pair, &i)
-	return !closed, err
-}
-
-// handedOverAt is the integration handed over whose merge is repo's head,
-// and its pair.
-func handedOverAt(handed map[string]Integration, repo, head string) (string, Integration, bool) {
-	for pair, i := range handed {
-		if pair == repo+":"+head+":"+i.BaseHead {
-			return pair, i, true
-		}
-	}
-	return "", Integration{}, false
-}
-
-// integrationClosed says whether i, handed over under pair, has its
-// completed line or was refused: an attempt escalated as still conflicting
-// is the person's to decide, and is never completed. The refusal's attempt
-// names the integrated head (pair's), not the head i started from.
-func integrationClosed(ctx context.Context, tx pgx.Tx, taskID, pair string, i *Integration) (bool, error) {
-	if seen, err := integrationEventSeen(ctx, tx, taskID, "integration-completed", i.attempt()); err != nil || seen {
-		return seen, err
-	}
-	return integrationEventSeen(ctx, tx, taskID, "integration-refused", pair+":"+i.RunID)
-}
-
-// HandOverMergedTx is a reading that repo's pull request merges, at head,
-// after an integration left to the pull request syncer (State.HandedOver):
-// the integration's closing line, once. Any such reading closes it, the
-// first or a later one: a step that records the hand-over after one sync
-// read the delivery may also read the pull request before that sync's
-// reading commits, and the next reading of it as merging is then the one
-// that closes it.
-func HandOverMergedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo, head string) error {
-	// Locked: serialised with closeHandedOver, so the line's dedupe holds.
-	d, err := LoadDelivery(ctx, tx, taskID)
-	if err != nil || d == nil {
-		return err
-	}
-	return handOverMergedTx(ctx, tx, org, &d.State, repo, head)
-}
-
-func handOverMergedTx(ctx context.Context, tx pgx.Tx, org string, st *State, repo, head string) error {
-	pair, i, ok := handedOverAt(st.HandedOver, repo, head)
-	if !ok {
-		return nil
-	}
-	if closed, err := integrationClosed(ctx, tx, st.TaskID, pair, &i); err != nil || closed {
-		return err
-	}
-	return integrationEventTx(ctx, tx, org, st, &i, "integration-completed", map[string]any{"head": head})
-}
-
-// closeHandedOver writes the closing line of each handed-over integration
-// whose pull request is on record as merging at the handed-over head: the
-// syncer may have read it in the window before the hand-over was recorded,
-// and found nothing to close then.
-func (w *steps) closeHandedOver(ctx context.Context, sc workflow.StepContext, st *State) error {
-	if len(st.HandedOver) == 0 {
-		return nil
-	}
-	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-	if err != nil {
-		return err
-	}
-	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		// Serialises this with the syncer's hand-over (HandOverMergedTx).
-		if _, err := LoadDelivery(ctx, tx, st.TaskID); err != nil {
-			return err
-		}
-		for _, p := range states {
-			if p.State != forge.StateOpen && p.State != forge.StateDraft ||
-				p.Mergeable != forge.MergeClean && p.Mergeable != forge.MergeBehind {
-				continue
-			}
-			if err := handOverMergedTx(ctx, tx, sc.OrganizationID, st, p.Repo, p.HeadSHA); err != nil {
-				return err
-			}
-		}
-		if w.s.HandOverClosing != nil {
-			w.s.HandOverClosing(ctx, tx)
-		}
-		return nil
 	})
 }
 
@@ -465,8 +348,8 @@ func (w *steps) prepareIntegration(ctx context.Context, sc workflow.StepContext,
 		return false, err
 	}
 	// Integrating is update's, or a person's request. A pair dude already
-	// attempted is looked up whatever the setting, so a hand-over the
-	// syncer finds still conflicting escalates as dude's attempt.
+	// attempted is looked up whatever the setting, so one still
+	// conflicting escalates as dude's attempt.
 	integrate := gh.Settings.WhenBehind == "update" || stop.Requested
 	if !integrate && !st.attemptedIn(stop.Repo) {
 		return false, nil

@@ -168,7 +168,7 @@ func (w *steps) endedBeforeOpening(ctx context.Context, sc workflow.StepContext,
 }
 
 // endLoop ends the pull request loop wherever the delivery stands: the
-// task's live phase Runs aborted (a candidate abandoned with them), a
+// task's live phase Runs aborted, a
 // decision pending for the conductor dropped, an escalation waiting on a
 // person withdrawn; then the outcome is pullRequestEnded's.
 func (w *steps) endLoop(ctx context.Context, sc workflow.StepContext, st *State, states []PullRequestState) (workflow.Result, bool, error) {
@@ -208,7 +208,7 @@ func (w *steps) endLoop(ctx context.Context, sc workflow.StepContext, st *State,
 		st.Decision = nil
 		st.Decisions++
 	}
-	st.Escalation, st.Directed, st.Candidate, st.Integration, st.FixRange, st.PRFixAfter = nil, nil, nil, nil, nil, nil
+	st.Escalation, st.Directed, st.Integration, st.FixRange, st.PRFixAfter = nil, nil, nil, nil, nil
 	st.PendingRunIDs, st.ReviewRunIDs, st.PRFeedback, st.QuestionsHeld = nil, nil, nil, false
 	res, finished, err := w.pullRequestEnded(ctx, sc, st)
 	if res.State == nil {

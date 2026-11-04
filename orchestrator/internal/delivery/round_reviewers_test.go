@@ -131,9 +131,10 @@ func (r *laterRound) policy(raw string) {
 	r.st.Policy = p
 }
 
-// onCandidate puts the round on a pull request's candidate cut at aaa.
-func (r *laterRound) onCandidate() {
-	r.st.Candidate = &Candidate{Round: 1, Branch: CandidateBranch("wi_rr", 1), From: map[string]string{"repo": "aaa"}, Base: map[string]string{"repo": "aaa"}}
+// onDirectFix puts the round in a pull request fix's narrow loop over a
+// push that started at aaa.
+func (r *laterRound) onDirectFix() {
+	r.st.FixRange = map[string]string{"repo": "aaa"}
 }
 
 // completeRound marks every Run the test's review steps made completed at
@@ -452,27 +453,20 @@ func TestALaterRoundWithNoReviewerGoesOnClear(t *testing.T) {
 	}
 }
 
-// A pull request's CI-only fix on its candidate, in a project that runs no
-// reviewer always: promotion waits on a completed review at the candidate's
-// head, so the round runs the required reviewers rather than none.
-func TestAnEmptyRoundOnACandidateRunsTheRequiredReviewers(t *testing.T) {
+// A pull request's CI-only fix pushed directly, in a project that runs no
+// reviewer always: the pull request's gate waits on a completed review at
+// the pushed head, so the narrow round runs the required reviewers rather
+// than none.
+func TestAnEmptyRoundOnADirectFixRunsTheRequiredReviewers(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.policy(`{"alwaysReviewers":[]}`)
-	r.onCandidate()
-	res, err := r.steps.promoteCandidate(r.ctx, r.sc("promoteCandidate"))
-	if err != nil || res.Next != "review" {
-		t.Fatalf("promoteCandidate on an unreviewed head went to %q: %v", res.Next, err)
-	}
+	r.onDirectFix()
 	got, why, res := r.review()
 	if !slices.Equal(got, []string{"correctness", "tests", "performance"}) || len(res.AwaitSignals) == 0 {
 		t.Fatalf("reviewers %v, result %+v; want the required ones, awaited", got, res)
 	}
 	if !slices.Equal(why["tests"], []string{ReasonRequired}) {
 		t.Errorf("why %v", why)
-	}
-	r.completeRound()
-	if unreviewed, err := r.steps.s.unreviewedHeads(r.ctx, r.org, r.st, r.st.Candidate); err != nil || len(unreviewed) != 0 {
-		t.Fatalf("after the round, promotion still finds %v unreviewed: %v", unreviewed, err)
 	}
 }
 
@@ -481,7 +475,7 @@ func TestAnEmptyRoundOnACandidateRunsTheRequiredReviewers(t *testing.T) {
 func TestAnEmptyGateBoundRoundWithNoRequiredReviewerRunsTheFirstRounds(t *testing.T) {
 	r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
 	r.policy(`{"alwaysReviewers":[],"requiredReviewers":[]}`)
-	r.onCandidate()
+	r.onDirectFix()
 	got, why, _ := r.review()
 	if !slices.Equal(got, []string{"security", "database", "api", "frontend"}) || !slices.Equal(why["api"], []string{ReasonFirstRound}) {
 		t.Fatalf("reviewers %v %v", got, why)
@@ -567,7 +561,7 @@ func TestAlwaysReviewersAndNonProductPathsAreValidated(t *testing.T) {
 }
 
 // The boundaries of "later round": an integration's review, a new attempt,
-// a previous round that failed, and a pull request's fix on its candidate.
+// a previous round that failed, and a pull request's direct fix.
 func TestWhereALaterRoundStarts(t *testing.T) {
 	t.Run("an integration review is a first round", func(t *testing.T) {
 		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
@@ -597,7 +591,7 @@ func TestWhereALaterRoundStarts(t *testing.T) {
 	})
 	t.Run("a pull request's fix on its candidate is a later round", func(t *testing.T) {
 		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()
-		r.onCandidate()
+		r.onDirectFix()
 		got, why, _ := r.review()
 		if !slices.Equal(got, []string{"correctness"}) || !slices.Equal(why["correctness"], []string{ReasonAlways}) || r.compares != 1 {
 			t.Fatalf("reviewers %v %v, %d compares", got, why, r.compares)

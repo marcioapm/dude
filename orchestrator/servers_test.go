@@ -616,9 +616,9 @@ func TestAPreviewChecksOutTheBranchTheTaskPublished(t *testing.T) {
 	}
 }
 
-// A pull request's fix published to its candidate branch, which promotion
-// then deleted: the preview checks out the task branch the pull request
-// shows, never the candidate.
+// An old Run of the deleted candidate path published to a candidate
+// branch: the preview checks out the task branch the pull request shows,
+// never the candidate.
 func TestAPreviewNeverChecksOutACandidateBranch(t *testing.T) {
 	for _, branch := range []string{"", "feature/greeting-candidate", "dude/other-task/attempt-2-candidate"} {
 		t.Run(branch, func(t *testing.T) {

@@ -263,7 +263,7 @@ func TestInstructionsContractMatrix(t *testing.T) {
 		{"reviewer", "a weak or wrong finding costs a whole fix round.",
 			"No finding is better than a weak one: do not pad.",
 			[]string{"A suspected finding is `low` or `note` at most.", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:"}},
-		{"fixer", "Your fix is reviewed again, and on an open pull request it is checked on a candidate branch before the pull request moves.",
+		{"fixer", "Your fix is reviewed again, and on an open pull request it goes to the pull request when you publish, where its CI and reviewers see it, and is reviewed after: run the affected tests before you finish.",
 			"Fix what was raised, completely, and nothing else",
 			[]string{"For each problem, reproduce it first where it can be reproduced", "```yaml\nchecks:\n", "Only committed changes are kept."}},
 		{"simplifier", "Your diff is reviewed on its own, as a change that must not alter behaviour.",

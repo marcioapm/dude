@@ -64,9 +64,6 @@ type PromptInput struct {
 	// The task took over an existing branch: what it merges into, by
 	// repository. Empty for new work, whose base is the default branch.
 	Bases map[string]string
-	// The delivery's fixes reach its open pull requests directly
-	// (Policy.DirectFixes): its instruction file says so.
-	DirectFixes bool
 	// The review loop is the conductor's (State.ConductedLoop, at submit):
 	// a reviewer's instruction file asks for each finding's evidence.
 	ConductedLoop bool

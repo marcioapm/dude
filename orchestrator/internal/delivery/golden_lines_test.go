@@ -99,7 +99,6 @@ func TestGoldenDeliveryLines(t *testing.T) {
 	add("session-images-carried", imagesCarried)
 	add("refused-writer", refusedWriter)
 	add("refused-policy", refusedPolicy)
-	add("refused-candidate", refusedCandidate)
 	add("refused-behind", RefusedBehind)
 	add("refused-nothing", RefusedNothing)
 	add("refused-too-big", RefusedTooBig)

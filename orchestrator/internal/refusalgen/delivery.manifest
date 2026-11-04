@@ -67,7 +67,6 @@ rThisTaskHasNoDeliveryIn2               refusals/delivery/edits/this-task-has-no
 rYourCheckoutReadOnlyForThis            refusals/delivery/edits/your-checkout-read-only-for-this
 rYourCheckoutHasNoRepositoryYou         refusals/delivery/edits/your-checkout-has-no-repository-you
 rPublishYoursUnderWayYouAre             refusals/delivery/edits/publish-yours-under-way-you-are
-rPullRequestOpenOnBranch                refusals/delivery/edits/pull-request-open-on-branch
 rPullRequestPushUnreviewed              refusals/delivery/edits/pull-request-push-unreviewed
 rEscalationWasJustDecidedAskNothing     refusals/delivery/escalations/escalation-was-just-decided-ask-nothing
 rActionsAreForQuestionAboutEscalation   refusals/delivery/escalations/actions-are-for-question-about-escalation

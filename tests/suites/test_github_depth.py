@@ -216,7 +216,7 @@ def test_a_persons_push_is_where_the_next_fix_starts(client: ApiClient, forge_pr
     fix = wait_until(lambda: len(_fix_runs(client, task["id"])) > fixes and _fix_runs(client, task["id"])[-1], timeout=60,
                      message="the comment did not wake a fixer")
     assert theirs in fix["baseRefs"].values(), f"the fix did not start from the person's commit: {fix['baseRefs']}"
-    # Landed once reviewed and tested on its candidate: the branch moves past theirs.
+    # Landed on the pull request directly: the branch moves past theirs.
     wait_until(lambda: fake_github.branch_sha(pr["headBranch"]) != theirs and _task(client, task["id"])["status"] == "review",
                timeout=120, message="the fix did not land")
     assert "A person's own fix" in fake_github.branch_log(pr["headBranch"]), "the person's commit was lost"

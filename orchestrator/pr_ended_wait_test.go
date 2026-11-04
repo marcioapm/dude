@@ -183,50 +183,6 @@ func TestALaterFixOpensAPullRequestWhereTheWaitedPastCloseWasReopenedAndMerged(t
 	}
 }
 
-// A reviewer's question on a later round's fix, after the person waited
-// past target's close: the question holds the fix's promotion while web is
-// open, and the accepted close neither ends the delivery nor is asked about.
-func TestAQuestionAfterWaitingPastAMixedEndHoldsThePromotion(t *testing.T) {
-	t.Skip("candidate path: deleted in B2")
-	m := newMixedEnd(t)
-	m.waitPastTargetsClose()
-	scripted := m.lux.Decide
-	var asked atomic.Bool
-	m.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" && asked.CompareAndSwap(false, true) {
-			b.Reply += "\n" + questionDoc
-		}
-		return b
-	}
-	m.web.Comment(1, "alice", "And the subtitle, please.")
-	webHead := func() string { return m.web.SHA(m.web.Pull(1).Head) }
-	before := webHead()
-	m.until("the later fix held at its promotion", func() bool {
-		m.sync()
-		m.pump()
-		return m.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'promoteCandidate' AND status = 'waiting'`, m.task) == 1 ||
-			delivery.Ended(m.taskStatus(m.task)) || m.count(askedAboutCloses, m.task) > 1
-	})
-	m.afterEnd()
-	if s := m.taskStatus(m.task); s != "awaiting_input" {
-		t.Fatalf("task %s, want awaiting_input on the reviewer's question\n%s", s, m.describeRuns())
-	}
-	if n := m.count(`SELECT count(*) FROM review_questions WHERE task_id = $1 AND status = 'open'`, m.task); n != 1 {
-		t.Errorf("%d open reviewer questions, want 1", n)
-	}
-	if n := m.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'promoteCandidate' AND status = 'waiting'`, m.task); n != 1 {
-		t.Errorf("delivery not held at promoteCandidate\n%s", m.describeRuns())
-	}
-	if n := m.count(askedAboutCloses, m.task); n != 1 {
-		t.Errorf("asked %d times about target's close, want once", n)
-	}
-	// Answered, the held fix is promoted: the hold kept it, not endLoop's
-	// abandoning it over the close already waited past.
-	m.settle("key_owner_"+m.org, m.reviewQuestionOf(m.task), "answer")
-	m.until("the held fix promoted to web's pull request", func() bool { m.sync(); m.pump(); return webHead() != before })
-}
-
 // Work past the review loop after the person waited past target's close,
 // its fix changing target and web: target's pull request will not open, so
 // the delivery goes back to web's without asking Open or Draft, and says

@@ -83,7 +83,7 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 // step's choice of reviewers, and between the test step's skip
 // (carryForward) and its tester's Continue.
 func (w *steps) roundChange(ctx context.Context, sc workflow.StepContext, st *State, phase string, from map[string]string) (RoundChange, error) {
-	identity, _ := json.Marshal([]any{phase, st.Attempt, st.Iteration, st.Retries, st.PRIteration, st.Decisions, st.Candidate, from, st.Heads})
+	identity, _ := json.Marshal([]any{phase, st.Attempt, st.Iteration, st.Retries, st.PRIteration, st.Decisions, from, st.Heads})
 	cacheKey := roundDeltaKey(identity)
 	cached, err := w.cachedRoundDelta(ctx, sc, cacheKey)
 	if err != nil {

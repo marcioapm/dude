@@ -269,13 +269,12 @@ func TestConvergenceIgnoresFindingsOutsideTheReviewRange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newConvergenceWorld(t)
 			st := w.state()
-			st.Candidate = &delivery.Candidate{Branch: "candidate", Base: map[string]string{"api": "base"}}
+			st.FixRange = map[string]string{"api": "base"}
 			for i := 1; i <= 2; i++ {
 				fix, review := fmt.Sprintf("fix%d", i), fmt.Sprintf("review%d", i)
 				w.phase(t, fix, "fix", "", []string{"f"}, nil, i*3)
 				w.phase(t, review, "review", fix, []string{"f"}, map[string]string{"f": "still"}, i*3+1)
 				w.finding(t, fmt.Sprintf("new%d", i), review, "high", true)
-				w.exec(t, `UPDATE runs SET branch = 'candidate' WHERE id = $1`, fix)
 				w.exec(t, `UPDATE runs SET review_range = $2::jsonb WHERE id = $1`, review, inRange)
 			}
 			w.exec(t, `UPDATE runs SET review_range = $1::jsonb WHERE id = 'origin'`, inRange)
@@ -304,13 +303,12 @@ func TestConvergenceIgnoresFindingsOutsideTheReviewRange(t *testing.T) {
 	}
 }
 
-func TestConvergenceTxSeesUncommittedRowsAndCandidateAnchors(t *testing.T) {
+func TestConvergenceTxSeesUncommittedRowsAndDirectFixAnchors(t *testing.T) {
 	w := newConvergenceWorld(t)
 	st := w.state()
-	st.Candidate = &delivery.Candidate{Branch: "candidate", Base: map[string]string{"api": "base", "web": "base-web"}}
+	st.FixRange = map[string]string{"api": "base", "web": "base-web"}
 	w.phase(t, "fix", "fix", "", []string{"f"}, nil, 1)
 	w.phase(t, "review", "review", "fix", []string{"f"}, nil, 2)
-	w.exec(t, `UPDATE runs SET branch = 'candidate' WHERE id = 'fix'`)
 	for _, id := range []string{"origin", "review"} {
 		w.exec(t, `UPDATE runs SET review_range = '{"of":"pull_request_fix","base":{"api":"base"}}' WHERE id = $1`, id)
 	}
@@ -324,15 +322,10 @@ func TestConvergenceTxSeesUncommittedRowsAndCandidateAnchors(t *testing.T) {
 		}
 		return err
 	})
-	// A parent fix that published elsewhere is not this candidate's round.
-	w.exec(t, `UPDATE runs SET branch = 'other-candidate' WHERE id = 'fix'`)
+	// Another round's range (another push's base) is not this loop's.
+	st.FixRange["api"] = "different-round"
 	if got := w.convergence(t, st); got.StillRounds["f"] != 0 {
-		t.Fatalf("other branch's fix counted: %+v", got)
-	}
-	w.exec(t, `UPDATE runs SET branch = 'candidate' WHERE id = 'fix'`)
-	st.Candidate.Base["api"] = "different-round"
-	if got := w.convergence(t, st); got.StillRounds["f"] != 0 {
-		t.Fatalf("old candidate counted: %+v", got)
+		t.Fatalf("another round's fix counted: %+v", got)
 	}
 }
 

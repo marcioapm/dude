@@ -305,12 +305,12 @@ func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
 	})
 }
 
-// A fixer's Run on the pull request's candidate branch is a Run of the same
-// attempt: it may carry an implementer's attempt waiver.
-func TestACandidateFixOfTheAttemptCarriesTheWaiver(t *testing.T) {
+// A fixer's Run publishing to the pull request's branch directly is a Run
+// of the same attempt: it may carry an implementer's attempt waiver.
+func TestAPullRequestFixOfTheAttemptCarriesTheWaiver(t *testing.T) {
 	w := newHarnessWorld(t)
 	waive(w, w.otherRun(t, "run_impl", w.run.TaskID, 1), delivery.ScopeAttempt, heldFailure)
-	mustOwner(t, w, `UPDATE runs SET phase = 'fix', branch = $2 WHERE id = $1`, w.run.ID, delivery.CandidateBranch(w.run.TaskID, 1))
+	mustOwner(t, w, `UPDATE runs SET phase = 'fix', branch = NULL WHERE id = $1`, w.run.ID)
 	w.run.Phase = "fix"
 	checksReply(w, failingTest)
 	endTurn(w)

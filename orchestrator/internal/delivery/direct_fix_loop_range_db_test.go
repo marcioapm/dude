@@ -32,24 +32,24 @@ func (r *laterRound) reviewRangeOf() (of, fresh string) {
 }
 
 // A fresh reviewer for a large change keeps the range of a pull request's
-// fix loop on its candidate (the fix's, or its simplifier's diff's): the
-// loop's fix is sent only that range's findings. Off a candidate the range
-// (a simplifier's diff) is dropped for the whole branch, as before.
-func TestAFreshLargeDeltaReviewerKeepsTheCandidateLoopsRange(t *testing.T) {
+// direct fix loop (the pushed fix's, or its simplifier's diff's): the
+// loop's fix is sent only that range's findings. Outside that loop the
+// range (a simplifier's diff) is dropped for the whole branch, as before.
+func TestAFreshLargeDeltaReviewerKeepsTheDirectFixLoopsRange(t *testing.T) {
 	for _, c := range []struct {
-		name      string
-		candidate bool
-		simplify  bool
-		want      string
+		name     string
+		direct   bool
+		simplify bool
+		want     string
 	}{
-		{"the fix on a candidate", true, false, RangePullRequestFix},
-		{"its simplifier's diff on a candidate", true, true, RangeSimplify},
+		{"the fix pushed to the pull request", true, false, RangePullRequestFix},
+		{"its simplifier's diff in the fix loop", true, true, RangeSimplify},
 		{"a simplifier's diff with no pull request", false, true, "none"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := largeRound(t)
-			if c.candidate {
-				r.onCandidate()
+			if c.direct {
+				r.onDirectFix()
 			}
 			if c.simplify {
 				r.st.SimplifyBase = map[string]string{"repo": "aaa"}
@@ -62,12 +62,13 @@ func TestAFreshLargeDeltaReviewerKeepsTheCandidateLoopsRange(t *testing.T) {
 	}
 }
 
-// A pull request's fix loop on its candidate weighs only the findings it
-// would send a fix: an open blocking finding of a review outside its range
-// (run_rr1, of the whole branch) does not keep the loop going. One of the
-// loop's own does. The same holds for reviewExit, which a person's accept of
-// a not_converging escalation on the candidate goes to.
-func TestACandidateLoopsExitWeighsOnlyTheFindingsItsFixIsSent(t *testing.T) {
+// A pull request's direct fix loop weighs only the findings it would send
+// a fix: an open blocking finding of a review outside its range (run_rr1,
+// of the whole branch) does not keep the loop going. One of the loop's own
+// does: outside its range the round is done (prFixDone), not fixed again.
+// The same holds for reviewExit, which a person's accept of a
+// not_converging escalation in the loop goes to.
+func TestADirectFixLoopsExitWeighsOnlyTheFindingsItsFixIsSent(t *testing.T) {
 	type exitCase struct {
 		name string
 		step string
@@ -77,13 +78,16 @@ func TestACandidateLoopsExitWeighsOnlyTheFindingsItsFixIsSent(t *testing.T) {
 	var cases []exitCase
 	for _, step := range []string{"awaitReview", "reviewExit"} {
 		cases = append(cases,
-			exitCase{step + " outside the candidate's range", step, "", "simplify"},
-			exitCase{step + " of the candidate's fix", step, RangePullRequestFix, "fix"})
+			exitCase{step + " outside the loop's range", step, "", "prFixDone"},
+			exitCase{step + " of the loop's fix", step, RangePullRequestFix, "fix"})
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newLaterRound(t, "app/greet.go").firstRound()
-			r.onCandidate()
+			r.onDirectFix()
+			// Room for another cycle of the narrow loop: what is weighed,
+			// not the loop's bound, decides here.
+			r.st.Policy.MaxPRFixReviewIterations = 5
 			r.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, category,
 					base_refs, review_range, ended_at)
 				VALUES ('run_rr2', $1, 'prj_rr', 'wi_rr', 1, 'completed', 'review', 'reviewer', 'agent', 'correctness',

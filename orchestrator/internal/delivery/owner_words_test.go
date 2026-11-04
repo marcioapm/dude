@@ -270,11 +270,6 @@ func TestOwnerWaiverSurvivesPendingFixerWakes(t *testing.T) {
 					t.Fatal(err)
 				}
 				sc.State, _ = json.Marshal(res.State)
-				if at == "awaitPRFix" {
-					pending := res.State.(*State)
-					pending.Candidate = &Candidate{From: map[string]string{"api": "aaa"}, Branch: "candidate"}
-					sc.State, _ = json.Marshal(pending)
-				}
 				h.exec(`UPDATE runs SET status='completed', ended_at=now(), heads='{"api":{"sha":"bbb","changedPaths":["main.go"],"base":"aaa"}}' WHERE id='run_held'`)
 				sc.Signals = []workflow.Signal{{Name: SignalPhaseFinished, Payload: json.RawMessage(`{"runId":"run_held"}`)}}
 				res, err = wait(h.ctx, sc)

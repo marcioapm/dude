@@ -53,7 +53,7 @@ func TestDirectAWriterChildIsRefusedAtSubmitWhileThePullRequestsLastPushIsUnrevi
 			w.exec(`UPDATE tasks SET status='review' WHERE id=$1`, w.run.TaskID)
 			w.exec(`INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state)
 				VALUES('wf_child_pr',$1,$2,'task.delivery','child-pr','waiting','awaitPullRequest',
-				('{"attempt":' || $4 || ',"taskId":"' || $2 || '","projectId":"' || $3 || '","branch":"dude/' || $2 || '/attempt-1","policy":{"pullRequestFixes":"direct"}}')::jsonb)`,
+				('{"attempt":' || $4 || ',"taskId":"' || $2 || '","projectId":"' || $3 || '","branch":"dude/' || $2 || '/attempt-1"}')::jsonb)`,
 				w.run.Org, w.run.TaskID, w.run.ProjectID, strconv.Itoa(c.deliveryAttempt))
 			w.exec(`UPDATE runs SET attempt=$1 WHERE id IN ($2, 'run_parent')`, c.deliveryAttempt, w.run.ID)
 			w.exec(`UPDATE runs SET source_kind='task_conductor', parent_run_id='run_parent', child_profile='implementer',

@@ -1,8 +1,7 @@
 /**
  * Fixes on an open pull request through the settings API: every fix is
- * direct, so the retired `pullRequestFixes` is neither shown nor stored, and
- * a value an old client sends or a layer stored is never refused. And the
- * narrow loop's bound
+ * direct, so the retired `pullRequestFixes` an old client sends is ignored,
+ * neither stored nor refused; and the narrow loop's bound
  * (`maxPrFixReviewIterations`), layered as any bound is.
  *
  * Against a database of its own, migrated as a release is, and a stand-in
@@ -76,7 +75,7 @@ beforeAll(async () => {
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
       return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
         maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: true, parkAfterMinutes: 10, idleNudgeMinutes: 0,
-        conductorWarmMinutes: 5, pullRequest: "open", pullRequestFixes: "direct", maxPrFixReviewIterations: 2 });
+        conductorWarmMinutes: 5, pullRequest: "open", maxPrFixReviewIterations: 2 });
     },
   });
   useConfig(Config.load({ env: { ...process.env,
@@ -93,36 +92,23 @@ afterAll(async () => {
   await admin?.end();
 });
 
-const projectSettings = async () => ((await (await call("GET", `/v1/projects/${PROJECT}/settings`)).json()) as Json).delivery;
-const projectFixes = projectSettings;
+const projectFixes = async () => ((await (await call("GET", `/v1/projects/${PROJECT}/settings`)).json()) as Json).delivery;
 
 describe("fixes on an open pull request", () => {
-  test("every fix is direct: the settings no longer show the retired choice", async () => {
-    const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
-    expect(delivery_policy).toEqual({});
-    expect((await projectSettings()).pullRequestFixes).toBeUndefined();
-  });
-
-  test("a value an old client sends is accepted and ignored, on the organisation's and a project's", async () => {
+  test("the retired pullRequestFixes an old client sends is ignored, on the organisation's and a project's", async () => {
     for (const path of ["/v1/settings/organization", `/v1/projects/${PROJECT}/settings`]) {
-      const res = await call("PATCH", path, { delivery: { pullRequestFixes: "candidate" } });
+      const res = await call("PATCH", path, { delivery: { pullRequestFixes: "candidate", simplify: false } });
       expect(res.status).toBe(200);
-      expect(((await res.json()) as Json).delivery.pullRequestFixes).toBeUndefined();
+      const delivery = ((await res.json()) as Json).delivery;
+      expect(delivery.pullRequestFixes).toBeUndefined();
+      expect(delivery.simplify.value).toBe(false);
     }
     const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
-    expect(delivery_policy).toEqual({});
+    expect(delivery_policy).toEqual({ simplify: false });
     const [{ delivery_policy: org }] = await owner`SELECT delivery_policy FROM organizations WHERE id = ${ORG}`;
-    expect(org).toEqual({});
-  });
-
-  test("a value stored before is not refused: other settings still save, and the stored key stays untouched", async () => {
-    await owner`UPDATE projects SET delivery_policy = '{"pullRequestFixes":"candidate"}' WHERE id = ${PROJECT}`;
-    expect((await projectSettings()).pullRequestFixes).toBeUndefined();
-    const res = await call("PATCH", `/v1/projects/${PROJECT}/settings`, { delivery: { simplify: false } });
-    expect(res.status).toBe(200);
-    const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
-    expect(delivery_policy).toEqual({ pullRequestFixes: "candidate", simplify: false });
+    expect(org).toEqual({ simplify: false });
     await owner`UPDATE projects SET delivery_policy = '{}' WHERE id = ${PROJECT}`;
+    await owner`UPDATE organizations SET delivery_policy = '{}' WHERE id = ${ORG}`;
   });
 
   test("the narrow loop's bound is a project's own over the factory's", async () => {

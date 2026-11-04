@@ -28,7 +28,7 @@ func TestAStoredReviewLoopIsInertAndAnInFlightConductedDeliveryRunsTheConductedL
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
-		if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(got.ForNewDelivery(), want.ForNewDelivery()) {
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: resolves to %+v, want %+v", name, got, want)
 		}
 	}
@@ -38,14 +38,14 @@ func TestAStoredReviewLoopIsInertAndAnInFlightConductedDeliveryRunsTheConductedL
 		conducted bool
 	}{{DeciderConductor, true}, {DeciderPolicy, false}, {"", false}} {
 		var st State
-		frozen := `{"taskId":"t","decider":"` + c.decider + `","policy":{"maxReviewIterations":5,"pullRequestFixes":"candidate","reviewLoop":"policy"}}`
+		frozen := `{"taskId":"t","decider":"` + c.decider + `","policy":{"maxReviewIterations":5,"pullRequest":"draft","reviewLoop":"policy"}}`
 		if err := json.Unmarshal([]byte(frozen), &st); err != nil {
 			t.Fatalf("decider %q: %v", c.decider, err)
 		}
 		if st.ConductedLoop() != c.conducted {
 			t.Errorf("decider %q, frozen reviewLoop policy: ConductedLoop = %v, want %v", c.decider, st.ConductedLoop(), c.conducted)
 		}
-		if st.Policy.MaxReviewIterations != 5 || st.Policy.PullRequestFixes != PullRequestFixesCandidate {
+		if st.Policy.MaxReviewIterations != 5 || st.Policy.PullRequest != PullRequestDraft {
 			t.Errorf("decider %q: the rest of the frozen policy is lost: %+v", c.decider, st.Policy)
 		}
 	}

@@ -228,7 +228,6 @@ func TestSettingsExistingMemberContractLeavesAreClassified(t *testing.T) {
 	for _, k := range coveredDeliveryFields {
 		deliveryRules[k] = mapped
 	}
-	deliveryRules["pullRequestFixes"] = coverageRule{Excluded: "retired: accepted and ignored, every fix is direct"}
 	if err := classifyResponse(f.settingsRoute(t, "/schemas/delivery"), deliveryRules); err != nil {
 		t.Fatal(err)
 	}

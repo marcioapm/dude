@@ -237,10 +237,15 @@ export const settingsPatchSchema = z
         conductorEditFiles: nullable(field("conductorEditFiles")),
         /** A project's only: refused on the organisation's settings. */
         pullRequest: nullable(field("pullRequest")),
-        /** Retired (RETIRED_DELIVERY_KEYS): accepted from an old client, and ignored. */
+        /**
+         * Retired: every fix reaches an open pull request directly. A web
+         * tab or CLI from before may still send it: accepted, and dropped
+         * here, the one place, so it is neither stored nor refused.
+         */
         pullRequestFixes: z.unknown().optional(),
       })
       .strict()
+      .transform(({ pullRequestFixes: _retired, ...delivery }) => delivery)
       .optional(),
     /**
      * An organisation's list, or a project's own and its mode (a project's

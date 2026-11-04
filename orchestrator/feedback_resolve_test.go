@@ -16,12 +16,11 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
-	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
 // agentResolve is a fixer resolving a person's item through the agent
-// tools server, as its publish moves the candidate branch: the commit is
+// tools server, as its publish moves the pull request's branch: the commit is
 // pick(the commit target's checkout started from, the Run's new head);
 // also, further items it resolves with the same commit. compare, when set, sees each GitHub
 // compare request (its path) and may fail it with a status.
@@ -87,8 +86,7 @@ func (w *world) resolveAsItPublishesIn(gh *fakegithub.Server, repo, task, item s
 			_ = json.Unmarshal(body, &in)
 			token, hash := agenttools.NewToken()
 			mustExec(w.t, w.owner, `UPDATE runs SET mcp_token_hash = $2 WHERE id = $1`, fixer, hash)
-			// The candidate branch does not exist before the fix's first
-			// push: where the fixer started is its base_refs, by repository.
+			// Where the fixer started is its base_refs, by repository.
 			var before string
 			if err := w.owner.QueryRow(ctx, `SELECT COALESCE(base_refs->>$2, '') FROM runs WHERE id = $1`, fixer, baseOf).Scan(&before); err != nil {
 				w.t.Errorf("the fixer's base: %v", err)
@@ -153,9 +151,6 @@ func TestFeedbackAnAgentsResolutionHoldsOnlyForItsOwnPublishedCommit(t *testing.
 				w.until("the resolution verified", func() bool {
 					return w.count(`SELECT count(*) FROM feedback_items WHERE id = 'fbi_res' AND resolved_verified_at IS NOT NULL`) == 1
 				})
-				if w.promoted(wi) {
-					t.Error("a direct fix was promoted")
-				}
 			}
 			fixer, commit, answer := ar.state()
 			if !strings.HasPrefix(answer, "200 ") {
@@ -274,10 +269,7 @@ func TestFeedbackTwoResolutionsWithOneCommitCompareItOnce(t *testing.T) {
 	compares := slices.Clone(ar.compares)
 	ar.mu.Unlock()
 	// The fixer published to the pull request's head: its resolutions are
-	// verified as it finishes, with no promotion.
-	if w.promoted(wi) {
-		t.Error("a direct fix was promoted")
-	}
+	// verified as it finishes.
 	if n := w.count(`SELECT count(*) FROM feedback_items WHERE id IN ('fbi_res', 'fbi_two') AND status = 'resolved'
 		AND resolved_verified_at IS NOT NULL`); n != 2 {
 		t.Errorf("%d of 2 resolutions verified", n)
@@ -328,12 +320,6 @@ func TestFeedbackACompareRefusedForTheCredentialFailsTheRun(t *testing.T) {
 		AND payload->>'why' = 'not_published'`, fixer); n != 0 {
 		t.Errorf("a 401 on compare settled the item as not published %d times", n)
 	}
-}
-
-// promoted says a candidate of the task reached its pull request: the move
-// is recorded in the transaction that verifies the candidate's resolutions.
-func (w *world) promoted(task string) bool {
-	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvPullRequestFixMoved) > 0
 }
 
 // resolution reads an item's status and whether its resolution is verified.

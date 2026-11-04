@@ -334,7 +334,7 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		} else if err != nil {
 			return "", err
 		}
-		if st.Policy.DirectFixes() && p.Point != PointPRFeedback {
+		if p.Point != PointPRFeedback {
 			// No second writer past an unreviewed push of dude's on the
 			// pull request (I-3), as after a fix with then.wake after_fix.
 			// Not at the pull request's feedback (or conflict): there the

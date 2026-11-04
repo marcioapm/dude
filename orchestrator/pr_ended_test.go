@@ -166,8 +166,8 @@ func TestAMergeWhileAnEscalationWaitsOnAPersonFinishesTheTask(t *testing.T) {
 	}
 }
 
-// Merged while a pull request fixer is at work: the fixer is aborted, its
-// candidate abandoned, and the task done with no pull request of its own
+// Merged while a pull request fixer is at work: the fixer is aborted, and
+// the task done with no pull request of its own
 // for the fix and no step failing.
 func TestAMergeWhileAPullRequestFixerWorksStopsIt(t *testing.T) {
 	testAMergeWhileAPullRequestFixerWorksStopsIt(t)
@@ -233,35 +233,6 @@ func TestAFixFinishingAfterAnUnsignalledMergeOpensNothing(t *testing.T) {
 	}
 }
 
-// The same unsignalled merge, recorded while the fix's candidate is tested:
-// the checked candidate is not promoted (promoteCandidate's guard). The pull
-// request's branch never moves and the task is done.
-func TestACandidateCheckedAcrossAnUnsignalledMergeIsNotPromoted(t *testing.T) {
-	t.Skip("candidate path: deleted in B2")
-	w := newPRFixWorld(t)
-	w.onTest = func() {
-		w.gh.Merge(1)
-		mustExec(t, w.owner, `UPDATE pull_requests SET state = 'merged', merged_at = now() WHERE task_id = $1`, w.wi)
-	}
-	w.comment("Please rename the greeting.")
-	// Done, or the candidate promoted onto the merged branch.
-	w.agentsDone(w.wi, "the task to finish", func() bool { return w.taskStatus(w.wi) == "done" || w.gh.SHA(w.branch) != w.before })
-	if n := w.candidateTests.Load(); n != 1 {
-		t.Fatalf("%d candidate tests, want the one the merge landed in\n%s", n, w.describeRuns())
-	}
-	if at := w.gh.SHA(w.branch); at != w.before {
-		t.Errorf("the merged pull request's branch moved from %.8s to %.8s", w.before, at)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, w.wi); n != 0 {
-		t.Errorf("%d promotions recorded onto a merged pull request", n)
-	}
-	w.afterEnd()
-	w.assertEnded(w.wi, "done")
-	if n := len(w.gh.Pulls()); n != 1 {
-		t.Errorf("%d pull requests, want the merged one", n)
-	}
-}
-
 // Two repositories: one pull request merges while a fixer works for the
 // other. The fixer goes on and the task is not done; once the second
 // merges, it is.
@@ -308,7 +279,7 @@ func TestAMixedEndWhileASiblingsFixerWorksLetsTheFixLand(t *testing.T) {
 			b.Hang = fixers.Add(1) == 1
 			b.Commit = map[string]string{"web:TITLE.md": "the page title, fixed\n"}
 		case "simplify":
-			// The candidate changes web alone: nothing for target's closed one.
+			// The fix changes web alone: nothing for target's closed one.
 			b.Commit = nil
 		}
 		return b

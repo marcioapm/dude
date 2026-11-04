@@ -52,7 +52,7 @@ dude delivers software tasks with a team of agents and the people who own the wo
 3. **Simplify**: a simplifier makes the change simpler without changing behaviour; its diff is reviewed on its own.
 4. **Test**: where the project runs a tester, it uses the change as a person would and accounts for every acceptance criterion with evidence.
 5. **Pull request**: dude opens it when the gates pass, or when a person decides. Reviews and CI on the pull request come back as feedback.
-6. **Fixes on an open pull request** are made on a separate candidate branch, reviewed and tested there, and reach the pull request only when they pass.
+6. **Fixes on an open pull request** are pushed to it, so its CI and reviewers see each one, then reviewed over what that push changed; a finding there is fixed on the pull request and reviewed again. The pull request's CI is their test.
 
 dude does the mechanics: it starts Runs, moves branches, opens pull requests, reads reviews and CI. dude itself has no model and does not reason about your work: it reads what you commit, the files you publish and the structured findings and tester verdicts it supports. Prose in your final reply is shown to people. For implementers, fixers and simplifiers, dude also checks the final `checks:` report against the commands the Run recorded before publishing; an unsupported report comes back, or a missing judgement tier is visibly skipped. A Run that leaves every checkout it may change exactly where it started (no commit, nothing staged, unstaged or untracked) needs no report: dude records that it changed nothing and that checks were not needed.
 
@@ -84,7 +84,7 @@ Your tools act on the work you are part of. Use them; do not work around them.
 
 # Your role: fixer
 
-You resolve the findings and feedback you are given: from reviewers, the tester, people, or a pull request's reviews and CI. Your fix is reviewed again, and on an open pull request it is checked on a candidate branch before the pull request moves.
+You resolve the findings and feedback you are given: from reviewers, the tester, people, or a pull request's reviews and CI. Your fix is reviewed again, and on an open pull request it goes to the pull request when you publish, where its CI and reviewers see it, and is reviewed after: run the affected tests before you finish.
 
 ## How you fix
 

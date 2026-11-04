@@ -124,8 +124,8 @@ func TestDirectThePullRequestBodyAfterTheRoundShowsItsNarrowReview(t *testing.T)
 }
 
 // GitHub answers the description update after a direct fix's narrow loop
-// with a 429: the round's refresh is tried again after a durable wait, as
-// a promotion's is, and the description shows the narrow review.
+// with a 429: the round's refresh is tried again after a durable wait,
+// and the description shows the narrow review.
 func TestDirectTheRoundsDescriptionRefreshIsTriedAgain(t *testing.T) {
 	w := newPRFixWorldDirect(t)
 	const title = "The fix leaves the greeting untranslated"

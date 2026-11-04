@@ -227,7 +227,7 @@ func TestAwaitPRFixReplayChargesOnce(t *testing.T) {
 		}
 	}
 	w := &steps{s: &Store{DB: app}}
-	st := &State{TaskID: "wi_e", ProjectID: "prj_e", PullRequestIDs: []string{"pr_e"}, PRFixKey: 1, PRFixCharged: &PRFixCharge{Round: 1, Pending: true}, Candidate: &Candidate{From: map[string]string{"target": "abc"}}}
+	st := &State{TaskID: "wi_e", ProjectID: "prj_e", PullRequestIDs: []string{"pr_e"}, PRFixKey: 1, PRFixCharged: &PRFixCharge{Round: 1, Pending: true}}
 	for range 2 {
 		st.PendingRunIDs = []string{"run_e"}
 		raw, err := json.Marshal(st)
