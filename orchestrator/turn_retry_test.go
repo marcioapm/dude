@@ -243,10 +243,104 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 	}
 	// The retry is due and its turn goes through: the retries are over,
 	// and the deadline applies again as it stood.
-	mustExec(t, w.owner, `UPDATE runs SET next_attempt_at = now() WHERE id = $1`, conductor)
+	w.retryDue(conductor)
 	w.until("the retried turn through", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND COALESCE((harness_state->>'turnRetries')::int, 0) = 0`, conductor) == 1
 	})
 	w.lapse(task)
 	w.until("the decision defaulted at its deadline", func() bool { return w.defaulted(task, delivery.DefaultedDeadline) == 1 })
+}
+
+// retryDue makes the Run's pending turn retry due now, as the test clock
+// passing its back-off.
+func (w *world) retryDue(run string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE directives SET deliver_after = now() WHERE run_id = $1 AND deliver_after IS NOT NULL
+		AND sent_at IS NULL`, run)
+}
+
+// retryPending has the implementer's first turn fail on the 429 asking for
+// 143 s, and returns the task and implementer once the retry is queued:
+// its back-off not taken as over (RetryAhead 0), the retry waits.
+func (w *world) retryPending() (task, run string) {
+	w.t.Helper()
+	w.syncer.RetryAhead = 0
+	w.implementerFailing(func(b *fakelux.Behaviour) { b.FirstTurnErrors = []string{rateLimited}; b.Hang = true })
+	task = w.task()
+	w.deliver(task)
+	w.until("the implementer's turn retried", func() bool {
+		run = w.implementer(task)
+		return run != "" && w.turnRetries(run) == 1
+	})
+	return task, run
+}
+
+// A person's Pause while a turn retry waits out its back-off is acted on
+// at once: only the retry waits, not the Run (dude#F1: the Run's back-off
+// held every sweep action for up to ~16.5 min).
+func TestAPauseIsNotHeldByATurnRetrysBackOff(t *testing.T) {
+	w := newWorld(t)
+	_, run := w.retryPending()
+	if status, body := w.call("/internal/runs/"+run+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, body)
+	}
+	for range 5 {
+		w.pump()
+	}
+	if got := w.str(`SELECT status::text FROM runs WHERE id = $1`, run); got != "paused" {
+		t.Fatalf("the Run is %s five pumps after the pause, want paused:\n%s", got, w.describeRuns())
+	}
+}
+
+// An abort of the Run (a child's, a checks escalation's: control 'abort'
+// on a live Run) while a turn retry waits is acted on at once.
+func TestAnAbortIsNotHeldByATurnRetrysBackOff(t *testing.T) {
+	w := newWorld(t)
+	_, run := w.retryPending()
+	mustExec(t, w.owner, `UPDATE runs SET control = 'abort', control_requested_at = now(), control_reason = 'aborted', keep = false
+		WHERE id = $1`, run)
+	for range 5 {
+		w.pump()
+	}
+	// The abort is acted on: lux is told to cancel the Run.
+	if lr := w.luxRunFor(run); lr == nil || lr.State == "running" {
+		t.Fatalf("the lux Run is still running five pumps after the abort:\n%s", w.describeRuns())
+	}
+}
+
+// The retry itself is held for its back-off: not sent before the time the
+// 429 asked for, sent once the clock passes it.
+func TestATurnRetryIsHeldUntilItsBackOffIsOver(t *testing.T) {
+	w := newWorld(t)
+	_, run := w.retryPending()
+	var wait float64
+	if err := w.owner.QueryRow(context.Background(), `SELECT extract(epoch FROM deliver_after - now())::float8 FROM directives
+		WHERE run_id = $1 AND deliver_after IS NOT NULL`, run).Scan(&wait); err != nil {
+		t.Fatal(err)
+	}
+	if wait < 140 || wait > 160 {
+		t.Fatalf("the retry is held %v s, want the 143 s the 429 asked (+ up to 10 %%)", wait)
+	}
+	retried := func() bool {
+		lr := w.luxRunFor(run)
+		return lr != nil && len(w.lux.Inputs(lr.ID)) > 0
+	}
+	// The clock just short of the back-off's end: still held.
+	mustExec(t, w.owner, `UPDATE directives SET deliver_after = now() + interval '30 seconds' WHERE run_id = $1
+		AND deliver_after IS NOT NULL`, run)
+	for range 5 {
+		w.pump()
+	}
+	if retried() {
+		t.Fatalf("the retry was sent before its back-off was over")
+	}
+	if got := w.str(`SELECT status::text FROM runs WHERE id = $1`, run); got != "running" {
+		t.Fatalf("the Run is %s while its retry waits", got)
+	}
+	// Past it: sent.
+	w.retryDue(run)
+	w.until("the retry sent", retried)
+	if in := w.lux.Inputs(w.luxRunFor(run).ID); !strings.Contains(in[0], "temporary error from the model provider") {
+		t.Fatalf("the agent was given %q", in[0])
+	}
 }

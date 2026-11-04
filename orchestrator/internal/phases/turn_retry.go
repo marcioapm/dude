@@ -96,10 +96,11 @@ func turnRetryWait(attempt int, retryAfter time.Duration, jitter float64) time.D
 }
 
 // retryTurn retries a turn that failed on a temporary model error, when
-// it is not past maxTurnRetries: the agent is told to carry on (queued as
-// a directive, sent the usual way once the Run is due), and the Run is
-// backed off until then (next_attempt_at, which the sweep waits out before
-// sending it). A Run lux stopped meanwhile is resumed by the usual paths
+// it is not past maxTurnRetries: the agent is told to carry on, queued as
+// a directive held until the back-off is over (deliver_after), and sent
+// the usual way then. The Run itself is not backed off: a pause, an abort
+// or a park is acted on meanwhile. A Run lux stopped meanwhile is resumed
+// by the usual paths
 // (a talker parked by parkStopped, its directive unsent). Says whether it
 // retried; false leaves the failure to turnFailed.
 func (t *translator) retryTurn(ctx context.Context, tx pgx.Tx, s *Syncer, agentErr string) (bool, error) {
@@ -116,11 +117,16 @@ func (t *translator) retryTurn(ctx context.Context, tx pgx.Tx, s *Syncer, agentE
 	}
 	attempt := t.TurnRetries + 1
 	wait := turnRetryWait(attempt, retryAfter, rand.Float64())
-	if _, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(), delivery.Directive{Text: turnRetryNudge, Scope: "turn"}); err != nil {
+	id, _, err := delivery.QueueDirective(ctx, tx, t.run.ref(), delivery.Directive{Text: turnRetryNudge, Scope: "turn"})
+	if err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE runs SET next_attempt_at = GREATEST(next_attempt_at, now() + make_interval(secs => $2))
-		WHERE id = $1`, t.run.ID, wait.Seconds()); err != nil {
+	// Only the retry waits out the back-off (deliver_after, HeldBack): the
+	// Run's own back-off (next_attempt_at) would hold a person's pause, a
+	// child's abort and every other sweep action as long. RetryAhead, for
+	// tests, takes it as due that much earlier, as it does next_attempt_at.
+	if _, err := tx.Exec(ctx, `UPDATE directives SET deliver_after = now() + make_interval(secs => $2) WHERE id = $1`,
+		id, (wait - s.RetryAhead).Seconds()); err != nil {
 		return false, err
 	}
 	red, err := ledger.Redactor(ctx, tx, t.run.ID)
