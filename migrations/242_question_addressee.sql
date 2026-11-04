@@ -14,7 +14,9 @@
 -- EXCLUSIVE lock (nor holding runs' SHARE ROW EXCLUSIVE through one). Every
 -- existing row holds 'person' and NULL, which satisfies them: there is
 -- nothing for a scan to find. The deadline sweep's index is built
--- concurrently by 243, outside this lock.
+-- concurrently by 243, outside this lock; so are an index on each foreign
+-- key's column, by 244 and 245, so a runs or questions delete does not scan
+-- questions.
 ALTER TABLE questions
   ADD COLUMN addressee text NOT NULL DEFAULT 'person',
   ADD COLUMN answered_by_run text,
