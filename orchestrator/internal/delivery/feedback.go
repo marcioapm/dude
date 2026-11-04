@@ -59,7 +59,7 @@ const (
 	// candidate round ended before the pull request took it.
 	ReopenNotPublished = "not_published"
 	// Legacy: its candidate's pull request merged or closed while it was
-	// checked. Kept for old events and the candidate sweep.
+	// checked. Kept for old events.
 	ReopenPullRequestEnded = "pull_request_ended"
 )
 
