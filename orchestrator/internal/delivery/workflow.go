@@ -1,7 +1,6 @@
 package delivery
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -612,10 +611,6 @@ type steps struct {
 // signals that woke it; moved elsewhere, the row goes on from there.
 func (w *steps) legacy(step workflow.Step) workflow.Step {
 	return func(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
-		if sc.Step != "promoteCandidate" && !bytes.Contains(sc.State, []byte(`"candidate"`)) &&
-			!bytes.Contains(sc.State, []byte(`"promotedRefresh"`)) {
-			return step(ctx, sc)
-		}
 		st, err := load(sc)
 		if err != nil {
 			return workflow.Result{}, err
