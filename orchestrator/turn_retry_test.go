@@ -216,6 +216,7 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == delivery.RoleConductor {
 			// Longer than any test waits: the retry is pending until made due.
 			b.FirstTurnErrors = []string{`API Error: Request rejected (429) · {"error":"All provider keys are rate limited","retry_after":3600}`}
+			b.Hang = true
 		}
 		return b
 	}
@@ -241,9 +242,22 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, conductor); n != 1 {
 		t.Fatalf("the retrying conductor is not running: %s", w.describeRuns())
 	}
-	// The retry is due and its turn goes through: the retries are over,
-	// and the deadline applies again as it stood.
+	// Sending the retry does not end its protection: the retried turn
+	// must have time to decide, even if the deadline lapses mid-turn.
 	w.retryDue(conductor)
+	w.until("the retry running", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND deliver_after IS NOT NULL AND sent_at IS NOT NULL`, conductor) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NOT NULL AND turn_done_at IS NULL`, conductor) == 1
+	})
+	w.lapse(task)
+	for range 5 {
+		w.pump()
+	}
+	if n := w.defaulted(task, ""); n != 0 {
+		t.Fatalf("%d decisions defaulted while the retried turn ran", n)
+	}
+	// Once the turn succeeds the deadline applies again as it stood.
+	w.lux.EndTurn(w.luxRunFor(conductor).ID)
 	w.until("the retried turn through", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND COALESCE((harness_state->>'turnRetries')::int, 0) = 0`, conductor) == 1
 	})

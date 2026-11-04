@@ -797,8 +797,8 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 
 // ConductorRetrying (SQL, over tasks t): the task's live conductor is
 // retrying a turn that failed on a temporary model error (phases'
-// retryTurn): running, no control pending, its retry queued and not sent
-// yet (deliver_after) and its count of retries (harness_state
+// retryTurn): running, no control pending, a retry scheduled (deliver_after)
+// or its retried turn running, and its count of retries (harness_state
 // turnRetries) not reset. A paused, pausing or stopping conductor is not
 // retrying, whatever count it was left with. While it is, its quiet
 // decision's deadline does not default the decision (quietDecision):
@@ -810,7 +810,7 @@ const ConductorRetrying = `EXISTS (SELECT 1 FROM runs cr WHERE cr.task_id = t.id
 	AND cr.phase IS NULL AND cr.status = 'running' AND cr.control = 'none'
 	AND COALESCE((cr.harness_state->>'turnRetries')::int, 0) > 0
 	AND EXISTS (SELECT 1 FROM directives rd WHERE rd.run_id = cr.id AND rd.deliver_after IS NOT NULL
-		AND rd.sent_at IS NULL AND rd.failed_at IS NULL))`
+		AND rd.failed_at IS NULL))`
 
 // RetryingRecheck is how soon a quiet decision whose deadline passed while
 // its conductor retries (ConductorRetrying) is looked at again.
