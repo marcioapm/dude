@@ -9,7 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
-	"strings"
+	"os/exec"
 	"sync"
 	"testing"
 
@@ -38,7 +38,12 @@ func candidateWorld(t *testing.T) *prFixWorld {
 
 // midCandidateReview is a candidate world whose person's item (fbi_x) a
 // fixer resolved on the candidate, now under its candidate's review, which
-// hangs: returns the hanging review Run and the candidate's From.
+// hangs: returns the hanging review Run and the candidate's From. No live
+// path opens a candidate now, so the delivery is stored as a dude from
+// before the candidate path was deleted left it: the direct fix and its
+// narrow review run, then the fix's commit is moved to the candidate
+// branch, the pull request's head put back where it was, and the state,
+// Runs and resolution written as the candidate's.
 func midCandidateReview(t *testing.T) (*prFixWorld, string, string, map[string]string) {
 	t.Helper()
 	w := candidateWorld(t)
@@ -55,22 +60,49 @@ func midCandidateReview(t *testing.T) (*prFixWorld, string, string, map[string]s
 		t.Fatalf("submit: %d %v", code, body)
 	}
 	var review string
-	w.until("the candidate's review at work", func() bool {
+	w.until("the fix's review at work", func() bool {
 		review = w.str(`SELECT COALESCE(max(id), '') FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'running'
 			AND lux_state = 'running'`, w.wi)
 		return review != ""
 	})
+	if status, _ := w.resolution("fbi_x"); status != "resolved" {
+		t.Fatalf("fbi_x is %s, want resolved by the fix", status)
+	}
+	fixed := w.gh.SHA(w.branch)
+	if fixed == w.before {
+		t.Fatalf("the fix never published")
+	}
+	branch := delivery.CandidateBranch(w.wi, 1)
+	for _, args := range [][]string{{"update-ref", "refs/heads/" + branch, fixed, ""}, {"update-ref", "refs/heads/" + w.branch, w.before, fixed}} {
+		if out, err := exec.Command("git", append([]string{"-C", w.gh.Repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	from := map[string]string{"target": w.before}
+	mustExec(t, w.owner, `UPDATE runs SET branch = $2 WHERE task_id = $1 AND kind = 'agent'
+		AND created_at >= (SELECT max(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix')`, w.wi, branch)
+	mustExec(t, w.owner, `UPDATE feedback_items SET resolved_verified_at = NULL WHERE id = 'fbi_x'`)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state - 'fixRange' || jsonb_build_object('candidate',
+		jsonb_build_object('round', 1, 'branch', $2::text, 'from', $3::jsonb, 'base', $3::jsonb)) WHERE task_id = $1`,
+		w.wi, branch, `{"target":"`+w.before+`"}`)
 	var c delivery.Candidate
-	if err := json.Unmarshal([]byte(w.state("candidate")), &c); err != nil || c.Branch != delivery.CandidateBranch(w.wi, 1) {
+	if err := json.Unmarshal([]byte(w.state("candidate")), &c); err != nil || c.Branch != branch {
 		t.Fatalf("no candidate under review: %q %v\n%s", w.state("candidate"), err, w.describeRuns())
 	}
-	if status, _ := w.resolution("fbi_x"); status != "resolved" {
-		t.Fatalf("fbi_x is %s, want resolved on the candidate", status)
+	return w, ana, review, from
+}
+
+// noCandidateTrace checks the delivery carries nothing of the candidate
+// path the sweep selects on (delivery.CandidateRowsSQL): the retired key
+// out of its policy, no candidate, hand-over, integration polls or
+// promotion step.
+func (w *prFixWorld) noCandidateTrace() {
+	w.t.Helper()
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state->'policy' ? 'pullRequestFixes'
+		OR state ? 'candidate' OR state ? 'handedOver' OR state->'integration' ? 'polls'
+		OR state->'promotedRefresh'->>'next' = 'beforePR' OR step = 'promoteCandidate')`, w.wi); n != 0 {
+		w.t.Errorf("a trace of the candidate path is left: step %s, %s", w.step(), w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1`, w.wi))
 	}
-	if w.gh.SHA(w.branch) != w.before {
-		t.Fatalf("the pull request moved before promotion")
-	}
-	return w, ana, review, c.From
 }
 
 func (w *prFixWorld) step() string {
@@ -117,9 +149,7 @@ func (w *prFixWorld) candidateDropped(from map[string]string) {
 	if !maps.Equal(got, from) {
 		w.t.Errorf("heads %v, want the candidate's from %v", got, from)
 	}
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'policy'->>'pullRequestFixes' = 'direct'`, w.wi); n != 1 {
-		w.t.Errorf("the policy is not direct: %s", w.state("policy"))
-	}
+	w.noCandidateTrace()
 	if status, _ := w.resolution("fbi_x"); status != "open" {
 		w.t.Errorf("fbi_x is %s, want reopened", status)
 	}
@@ -198,25 +228,111 @@ func TestConvertCandidatesMakesADeliveryWithNoCandidateDirect(t *testing.T) {
 	}
 }
 
-// State C: a candidate being promoted is left for the next sweep, counted
-// moving, untouched.
-func TestConvertCandidatesLeavesAPromotionMoving(t *testing.T) {
-	w := candidateWorld(t)
-	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'promoteCandidate', wake_at = now() + interval '1 hour',
-		state = state || jsonb_build_object('candidate', jsonb_build_object('round', 1, 'branch', $2::text, 'from', state->'heads'))
-		WHERE task_id = $1`, w.wi, delivery.CandidateBranch(w.wi, 1))
-	before := w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1`, w.wi)
-	if n := w.convertCandidates(); n.StoppedMidPromotion != 1 || n.Converted != 0 {
-		t.Fatalf("swept %+v, want one moving", n)
+// stoppedMidPromotion checks a delivery stopped mid-promotion (by the
+// sweep or by the deleted step): its candidate let go with its heads back
+// where it started, the pull request's head never moved, the item
+// reopened, one notice in Chat, and the delivery waiting on a person at
+// decide on a stopped_mid_promotion escalation whose retry fixes again
+// (prFix), with retry, wait and stop offered.
+func (w *prFixWorld) stoppedMidPromotion(from map[string]string) {
+	w.t.Helper()
+	if w.state("candidate") != "" || w.state("promotedRefresh") != "" {
+		w.t.Errorf("candidate %q, refresh %q left", w.state("candidate"), w.state("promotedRefresh"))
 	}
-	if after := w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1`, w.wi); after != before || w.step() != "promoteCandidate" {
-		t.Errorf("a moving delivery changed:\n%s\n%s", before, after)
+	var got map[string]string
+	_ = json.Unmarshal([]byte(w.state("heads")), &got)
+	if !maps.Equal(got, from) {
+		w.t.Errorf("heads %v, want the candidate's from %v", got, from)
 	}
-	// Mid-refresh after a loop candidate's promotion: also moving.
-	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'refreshPromoted',
-		state = state - 'candidate' || '{"promotedRefresh":{"repos":["target"],"next":"beforePR"}}' WHERE task_id = $1`, w.wi)
-	if n := w.convertCandidates(); n.StoppedMidPromotion != 1 || n.Converted != 0 {
-		t.Fatalf("swept %+v, want one moving", n)
+	if w.gh.SHA(w.branch) != w.before {
+		w.t.Errorf("the pull request's head moved: %s, was %s", w.gh.SHA(w.branch), w.before)
+	}
+	w.noCandidateTrace()
+	if got := w.str(`SELECT step || '/' || status || '/' || COALESCE(state->'escalation'->>'reason', '') || '/' ||
+		COALESCE(state->'escalation'->>'step', '') FROM workflow_runs WHERE task_id = $1`, w.wi); got != "decide/waiting/stopped_mid_promotion/prFix" {
+		w.t.Errorf("step/status/reason/retry %s, want decide/waiting/stopped_mid_promotion/prFix", got)
+	}
+	if got := w.str(`SELECT status::text FROM tasks WHERE id = $1`, w.wi); got != "awaiting_input" {
+		w.t.Errorf("task %s, want awaiting_input", got)
+	}
+	if got := w.str(`SELECT COALESCE(max(payload->>'actions'), '') FROM events WHERE task_id = $1 AND event_type = 'question.asked'
+		AND payload->>'reason' = 'stopped_mid_promotion'`, w.wi); got != `["retry", "wait", "stop"]` {
+		w.t.Errorf("escalation actions %s, want retry, wait, stop", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'stopped_mid_promotion'
+		AND payload->>'text' LIKE '%moving its fix onto the pull request when dude was upgraded%'`, w.wi); n != 1 {
+		w.t.Errorf("%d notices of the stop, want 1", n)
+	}
+	if status, _ := w.resolution("fbi_x"); status != "open" {
+		w.t.Errorf("fbi_x is %s, want reopened", status)
+	}
+}
+
+// State C: a candidate being promoted when dude was upgraded. The code
+// that would finish the move is gone, and a branch may have moved: the
+// sweep stops it for a person (stoppedMidPromotion), counted, and their
+// retry fixes again directly, published to the pull request's head.
+func TestConvertCandidatesStopsAPromotionMidway(t *testing.T) {
+	w, ana, review, from := midCandidateReview(t)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'promoteCandidate', status = 'waiting', wake_at = now() + interval '1 hour',
+		awaiting_signals = '[]' WHERE task_id = $1`, w.wi)
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{StoppedMidPromotion: 1}) {
+		t.Fatalf("swept %+v, want one stopped mid-promotion", n)
+	}
+	w.stoppedMidPromotion(from)
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE `+delivery.CandidateRowsSQL+` AND task_id = $1`, w.wi); n != 0 {
+		t.Errorf("selected again after the stop")
+	}
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
+		t.Errorf("a second sweep did %+v", n)
+	}
+	if code, body := w.decide(ana, w.wi, "retry", ""); code != 200 {
+		t.Fatalf("retry: %d %v", code, body)
+	}
+	w.directlyFixedAgain(review)
+}
+
+// State C after a loop candidate's promotion: mid-refresh, bound for the
+// pull request's opening (next beforePR). Stopped as a promotion is.
+func TestConvertCandidatesStopsALoopPromotionsRefresh(t *testing.T) {
+	w, _, _, from := midCandidateReview(t)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'refreshPromoted', status = 'waiting', wake_at = now() + interval '1 hour',
+		awaiting_signals = '[]', state = state || '{"promotedRefresh":{"repos":["target"],"next":"beforePR"}}' WHERE task_id = $1`, w.wi)
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{StoppedMidPromotion: 1}) {
+		t.Fatalf("swept %+v, want one stopped mid-promotion", n)
+	}
+	w.stoppedMidPromotion(from)
+}
+
+// The deleted step: a delivery stored at promoteCandidate (or at the
+// refresh after a loop candidate's promotion) that the workflow resumes
+// without the sweep (left as moving, or raced) moves no branch, neither
+// panics nor completes: it stops for a person as the sweep would have.
+func TestDeletedPromotionStepStopsForAPerson(t *testing.T) {
+	for _, c := range []struct{ name, step, refresh string }{
+		{"promoteCandidate", "promoteCandidate", ""},
+		{"refreshPromoted/beforePR", "refreshPromoted", `{"promotedRefresh":{"repos":["target"],"next":"beforePR"}}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, ana, review, from := midCandidateReview(t)
+			refresh := c.refresh
+			if refresh == "" {
+				refresh = "{}"
+			}
+			mustExec(t, w.owner, `UPDATE workflow_runs SET step = $2, status = 'waiting', wake_at = now(), awaiting_signals = '[]',
+				state = state || $3::jsonb WHERE task_id = $1`, w.wi, c.step, refresh)
+			w.until("stopped for a person", func() bool {
+				if w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'failed', 'aborted')`, w.wi) != 0 {
+					t.Fatalf("the workflow ended at the deleted step: %s\n%s", w.step(), w.describeRuns())
+				}
+				return w.step() == "decide"
+			})
+			w.stoppedMidPromotion(from)
+			if code, body := w.decide(ana, w.wi, "retry", ""); code != 200 {
+				t.Fatalf("retry: %d %v", code, body)
+			}
+			w.directlyFixedAgain(review)
+		})
 	}
 }
 
@@ -422,37 +538,64 @@ func TestConvertCandidatesLetsAStoppedDeliveryRetryDirectly(t *testing.T) {
 	w.directlyFixedAgain(review)
 }
 
-// State G: a hand-over left on a delivery is dropped with the rest.
+// State G: a hand-over, or an integration's mergeability polls, left on a
+// delivery (keyless) is dropped with the rest.
 func TestConvertCandidatesDropsAHandOver(t *testing.T) {
-	w := candidateWorld(t)
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"policy":{"pullRequestFixes":"direct"}}'::jsonb
-		|| jsonb_build_object('policy', (state->'policy') || '{"pullRequestFixes":"direct"}',
-		  'handedOver', '{"target:abc:def":{"repo":"target","head":"abc","base":"def"}}'::jsonb) WHERE task_id = $1`, w.wi)
-	if n := w.convertCandidates(); n.Converted != 1 {
-		t.Fatalf("swept %+v", n)
-	}
-	if w.state("handedOver") != "" {
-		t.Errorf("the hand-over is still there: %s", w.state("handedOver"))
-	}
-	if got := w.step(); got != "awaitPullRequest" {
-		t.Errorf("step %s", got)
+	for name, trace := range map[string]string{
+		"handedOver":       `{"handedOver":{"target:abc:def":{"repo":"target","head":"abc","base":"def"}}}`,
+		"integrationPolls": `{"integration":{"repo":"target","number":1,"base":"main","head":"abc","baseHead":"def","polls":3}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newPRFixWorld(t)
+			// Keyless, as one frozen before the key existed.
+			mustExec(t, w.owner, `UPDATE workflow_runs SET state = (state #- '{policy,pullRequestFixes}') || $2::jsonb WHERE task_id = $1`, w.wi, trace)
+			if n := w.convertCandidates(); n != (delivery.CandidatesConverted{Converted: 1}) {
+				t.Fatalf("swept %+v", n)
+			}
+			w.noCandidateTrace()
+			if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
+				t.Errorf("a second sweep did %+v", n)
+			}
+			if got := w.step(); got != "awaitPullRequest" {
+				t.Errorf("step %s", got)
+			}
+		})
 	}
 }
 
 // Selection: a delivery frozen before pullRequestFixes was a key (most
-// live ones) still fixes through a candidate: the sweep makes it direct,
-// and touches nothing else (no Retries, no step).
-func TestConvertCandidatesMakesAKeylessDeliveryDirect(t *testing.T) {
-	w := candidateWorld(t)
+// live ones) fixed through a candidate too: with one open, the sweep
+// converts it as any other, and a second sweep selects nothing.
+func TestConvertCandidatesConvertsAKeylessDeliveryWithACandidate(t *testing.T) {
+	w, _, review, from := midCandidateReview(t)
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state #- '{policy,pullRequestFixes}' WHERE task_id = $1`, w.wi)
-	if n := w.convertCandidates(); n.Converted != 1 {
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{Converted: 1}) {
 		t.Fatalf("swept %+v, want the keyless delivery converted", n)
 	}
-	if got := w.state("policy"); !strings.Contains(got, `"pullRequestFixes": "direct"`) {
-		t.Errorf("policy %s, want direct", got)
+	w.candidateDropped(from)
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE `+delivery.CandidateRowsSQL+` AND task_id = $1`, w.wi); n != 0 {
+		t.Errorf("selected again after the sweep")
 	}
-	if got := w.step(); got != "awaitPullRequest" || w.state("retries") != "" {
-		t.Errorf("step %s, retries %q: want it left waiting, untouched", got, w.state("retries"))
+	w.directlyFixedAgain(review)
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
+		t.Errorf("a second sweep did %+v", n)
+	}
+}
+
+// Selection: a keyless delivery with no trace of the candidate path (as
+// every one frozen since direct fixes) is not selected: left as it is,
+// and its next fix publishes to the pull request.
+func TestConvertCandidatesLeavesAKeylessDeliveryWithNoTrace(t *testing.T) {
+	w := newPRFixWorld(t)
+	before := w.str(`SELECT state::text || step FROM workflow_runs WHERE task_id = $1`, w.wi)
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE `+delivery.CandidateRowsSQL+` AND task_id = $1`, w.wi); n != 0 {
+		t.Fatalf("a delivery with no trace of the candidate path is selected: %s", before)
+	}
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
+		t.Fatalf("swept %+v, want nothing", n)
+	}
+	if after := w.str(`SELECT state::text || step FROM workflow_runs WHERE task_id = $1`, w.wi); after != before {
+		t.Errorf("rewritten:\n%s\n%s", before, after)
 	}
 	w.comment("Please rename the greeting.")
 	w.until("the fix on the pull request", func() bool {

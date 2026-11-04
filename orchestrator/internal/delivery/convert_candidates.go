@@ -30,14 +30,19 @@ const (
 	CandidateNone = "none"
 )
 
-// candidateRowsSQL selects each task's latest delivery, only while it can
+// CandidateRowsSQL selects each task's latest delivery, only while it can
 // still go on (live, or stopped or halted for a recovery: an ended or
 // superseded one never reads its policy or candidate again, nor does one
-// whose task is done or closed, whose State.Stopped Close leaves), that still
-// has a candidate's state: the retired pullRequestFixes key in its frozen
-// policy, a candidate, a hand-over, or a step of the candidate's
-// promotion. A delivery without the key fixes directly as it is.
-const candidateRowsSQL = `workflow_type = '` + WorkflowType + `' AND task_id IS NOT NULL
+// whose task is done or closed, whose State.Stopped Close leaves), that
+// still carries a trace of the candidate path: the retired
+// pullRequestFixes key in its frozen policy, a candidate, a hand-over, an
+// integration's mergeability polls, or a step of the candidate's
+// promotion. Whether or not its policy has the key: a delivery frozen
+// before the key existed (most of them) fixed through a candidate too.
+// ConvertCandidateTx leaves none of these behind, so a second sweep
+// selects nothing. A delivery at refreshPromoted after a direct fix
+// (no next) is not one: that step is live.
+const CandidateRowsSQL = `workflow_type = '` + WorkflowType + `' AND task_id IS NOT NULL
 	AND (status IN ('running', 'waiting') OR state ? 'stopped' OR state ? 'halt')
 	AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = workflow_runs.task_id
 	  AND (t.status = 'done' OR t.resolution IS NOT NULL))
@@ -46,8 +51,9 @@ const candidateRowsSQL = `workflow_type = '` + WorkflowType + `' AND task_id IS 
 	AND COALESCE(
 	state->'policy' ? 'pullRequestFixes'
 	OR state ? 'candidate' OR state ? 'handedOver'
+	OR state->'integration' ? 'polls'
 	OR state->'promotedRefresh'->>'next' = 'beforePR'
-	OR step IN ('promoteCandidate', 'refreshPromoted'), false)`
+	OR step = 'promoteCandidate', false)`
 
 // convertedNotice is dude's line in Chat for a candidate it dropped.
 func convertedNotice(branch string, heads map[string]string) string {
@@ -92,7 +98,7 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 		return "", err
 	}
 	var leased, selected bool
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(locked_until > now(), false), `+candidateRowsSQL+`
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(locked_until > now(), false), `+CandidateRowsSQL+`
 		FROM workflow_runs WHERE id = $1 FOR UPDATE`, workflowID).Scan(&leased, &selected); err != nil {
 		if db.IsNotFound(err) {
 			return CandidateNone, nil
@@ -124,21 +130,8 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 	if c := st.Candidate; c != nil {
 		// What ran on it stops short of the pull request; nothing resumes it.
 		if live {
-			rows, err := tx.Query(ctx, `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
-				control_reason = 'every fix reaches the pull request directly now', ended_at = now(), keep = false
-				WHERE task_id = $1 AND kind = 'agent' AND phase IS NOT NULL AND source_kind IS NULL AND `+liveStatus+`
-				  AND (branch = $2 OR id = ANY($3)) RETURNING id`, taskID, c.Branch, db.NonNil(st.PendingRunIDs))
-			if err != nil {
+			if err := abortCandidateRunsTx(ctx, tx, org, taskID, st); err != nil {
 				return "", err
-			}
-			aborted, err := pgx.CollectRows(rows, pgx.RowTo[string])
-			if err != nil {
-				return "", err
-			}
-			for _, id := range aborted {
-				if err := FailUnreadTx(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: taskID, RunID: id}, time.Time{}, UnreadRunAborted); err != nil {
-					return "", err
-				}
 			}
 		}
 		if next, err = dropCandidateTx(ctx, tx, org, taskID, workflowID, st); err != nil {
@@ -223,7 +216,7 @@ type CandidatesConverted struct {
 
 // ConvertCandidates is the boot's sweep after ConvertInFlight, and part
 // of dude-orchestrator convert-deliveries: every delivery still on the
-// candidate path (candidateRowsSQL) is moved off it (ConvertCandidateTx),
+// candidate path (CandidateRowsSQL) is moved off it (ConvertCandidateTx),
 // each in its own transaction. Left is what the next sweep converts; run
 // again once a rolling deploy completes.
 func ConvertCandidates(ctx context.Context, database *db.DB) (CandidatesConverted, error) {
@@ -231,7 +224,7 @@ func ConvertCandidates(ctx context.Context, database *db.DB) (CandidatesConverte
 	type row struct{ Org, TaskID, ID string }
 	var rows []row
 	if err := database.InSystem(ctx, "convert-candidates", func(tx pgx.Tx) error {
-		r, err := tx.Query(ctx, `SELECT organization_id, task_id, id FROM workflow_runs WHERE `+candidateRowsSQL+`
+		r, err := tx.Query(ctx, `SELECT organization_id, task_id, id FROM workflow_runs WHERE `+CandidateRowsSQL+`
 			ORDER BY created_at`)
 		if err != nil {
 			return err
@@ -259,6 +252,28 @@ func ConvertCandidates(ctx context.Context, database *db.DB) (CandidatesConverte
 		}
 	}
 	return out, nil
+}
+
+// abortCandidateRunsTx aborts the live agent Runs of st's candidate (on its
+// branch, or waited on by the step): nothing resumes them.
+func abortCandidateRunsTx(ctx context.Context, tx pgx.Tx, org, taskID string, st *State) error {
+	rows, err := tx.Query(ctx, `UPDATE runs SET status = 'aborted', control = 'abort', control_requested_at = now(),
+		control_reason = 'every fix reaches the pull request directly now', ended_at = now(), keep = false
+		WHERE task_id = $1 AND kind = 'agent' AND phase IS NOT NULL AND source_kind IS NULL AND `+liveStatus+`
+		  AND (branch = $2 OR id = ANY($3)) RETURNING id`, taskID, st.Candidate.Branch, db.NonNil(st.PendingRunIDs))
+	if err != nil {
+		return err
+	}
+	aborted, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	for _, id := range aborted {
+		if err := FailUnreadTx(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: taskID, RunID: id}, time.Time{}, UnreadRunAborted); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dropCandidateTx lets go of st's candidate in tx: its kept Runs released,
@@ -302,8 +317,7 @@ const stoppedMidPromotionNotice = "This delivery was moving its fix onto the pul
 // midPromotion says a delivery at step stands where only the deleted
 // promotion could go on from.
 func midPromotion(step string, st *State) bool {
-	return step == "promoteCandidate" ||
-		step == "refreshPromoted" && st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
+	return step == "promoteCandidate" || st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
 }
 
 // leaveMidPromotionTx lets go of what a delivery stopped mid-promotion
@@ -314,6 +328,9 @@ func leaveMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string,
 	next := "prFix"
 	branch := ""
 	if c := st.Candidate; c != nil {
+		if err := abortCandidateRunsTx(ctx, tx, org, st.TaskID, st); err != nil {
+			return "", err
+		}
 		var err error
 		if next, err = dropCandidateTx(ctx, tx, org, st.TaskID, workflowID, st); err != nil {
 			return "", err
@@ -355,7 +372,9 @@ func stopMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string, 
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb WHERE id = $1`, workflowID, raw)
+		// Off the deleted step too, or the next sweep would select it again;
+		// what runs on a recovery is the retry's (Stopped, Halt), not this.
+		_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, step = $3 WHERE id = $1`, workflowID, raw, next)
 		return err
 	}
 	detail := map[string]any{"step": d.Step}

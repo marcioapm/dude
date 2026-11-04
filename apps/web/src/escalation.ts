@@ -206,6 +206,14 @@ export function escalationWords(e: Escalation): EscalationWords {
         runId,
       };
     }
+    case "stopped_mid_promotion":
+      // Legacy: a fix checked on its candidate branch was being moved onto the
+      // pull request when dude dropped that path; nothing finishes the move.
+      return {
+        short: "Stopped while moving a fix",
+        sentence: "This delivery was moving its fix onto the pull request when dude was upgraded, and nothing finishes that move now. Try again to redo the fix from what the pull request holds, or check the pull request and wait on it.",
+        runId,
+      };
     case "ci_stuck": {
       const which = typeof d.repo === "string" && d.repo ? `${d.repo} #${num("number")}` : `#${num("number")}`;
       return {
