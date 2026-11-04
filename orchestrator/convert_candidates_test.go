@@ -93,14 +93,12 @@ func midCandidateReview(t *testing.T) (*prFixWorld, string, string, map[string]s
 }
 
 // noCandidateTrace checks the delivery carries nothing of the candidate
-// path the sweep selects on (delivery.CandidateRowsSQL): the retired key
+// path the sweep selects on (delivery.CandidateTraceSQL): the retired key
 // out of its policy, no candidate, hand-over, integration polls or
 // promotion step.
 func (w *prFixWorld) noCandidateTrace() {
 	w.t.Helper()
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state->'policy' ? 'pullRequestFixes'
-		OR state ? 'candidate' OR state ? 'handedOver' OR state->'integration' ? 'polls'
-		OR state->'promotedRefresh'->>'next' = 'beforePR' OR step = 'promoteCandidate')`, w.wi); n != 0 {
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND `+delivery.CandidateTraceSQL, w.wi); n != 0 {
 		w.t.Errorf("a trace of the candidate path is left: step %s, %s", w.step(), w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1`, w.wi))
 	}
 }
