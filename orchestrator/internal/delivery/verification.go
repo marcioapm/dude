@@ -352,7 +352,7 @@ func judgeGate(in gateInput) gate {
 		switch {
 		case f.Environment():
 			blocked.Findings = append(blocked.Findings, f.ID)
-		case !slices.Contains(conductorFixSeverities, f.Severity):
+		case !slices.Contains(fixBarSeverities, f.Severity):
 		case ran || f.RunID == in.RunID:
 			failed.Findings = append(failed.Findings, f.ID)
 		default:

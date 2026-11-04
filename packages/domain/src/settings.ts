@@ -210,7 +210,7 @@ export type RetiredDeliveryKey = (typeof RETIRED_DELIVERY_KEYS)[number];
 
 /**
  * The one fix bar every delivery has (the orchestrator's
- * conductorFixSeverities): a finding at one of these severities is sent
+ * fixBarSeverities): a finding at one of these severities is sent
  * back to be fixed, and so is a low one its reviewer marked trivial.
  */
 export const FIX_BAR_SEVERITIES = ["blocking", "high", "medium"] as const;

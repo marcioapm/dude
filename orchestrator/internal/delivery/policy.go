@@ -94,19 +94,13 @@ type Policy struct {
 	MaxPRFixReviewIterations int `json:"maxPrFixReviewIterations"`
 }
 
-// conductorFixSeverities is the owner's fix bar, every delivery's review
-// loop's and tester's: every finding at medium or above, and, of a
-// reviewer's, a low marked trivial (atFixBar). No setting changes it.
-var conductorFixSeverities = []string{"blocking", "high", "medium"}
+// fixBarSeverities is the fix bar, every delivery's review loop's and
+// tester's (the web's FIX_BAR_SEVERITIES): every finding at medium or
+// above, and, of a reviewer's, a low marked trivial (atFixBar). No setting
+// changes it.
+var fixBarSeverities = []string{"blocking", "high", "medium"}
 
-// fixBar is the severities st's review loop blocks on: the conductor's
-// fix bar, every delivery's. Where findings are weighed one by one,
-// atFixBar adds the trivial-low rule.
-func fixBar(st *State) []string {
-	return conductorFixSeverities
-}
-
-// atFixBar is the loop's findings as the fix bar (fixBar, IsBlocking)
+// atFixBar is the loop's findings as the fix bar (IsBlocking)
 // weighs them: what blocks is every finding at medium or above, and every
 // low one marked trivial. Until the conductor runs the loop itself, the
 // policy's Exit routes it, and reviewers rate a wrong outcome medium
@@ -414,14 +408,14 @@ type Convergence struct {
 	FindingIDs       []string
 }
 
-// IsBlocking: only open findings at the fix bar (conductorFixSeverities)
+// IsBlocking: only open findings at the fix bar (fixBarSeverities)
 // block. A resolved one is fixed, a superseded one describes code that no
 // longer exists, and an accepted one is a person's decision to ship anyway.
 func IsBlocking(f FindingState) bool {
 	if f.Human {
 		return f.Status == "open" || f.Status == "delivered"
 	}
-	return f.Status == "open" && slices.Contains(conductorFixSeverities, f.Severity)
+	return f.Status == "open" && slices.Contains(fixBarSeverities, f.Severity)
 }
 
 // LoopExit says why the review loop should stop, or nil to keep going.

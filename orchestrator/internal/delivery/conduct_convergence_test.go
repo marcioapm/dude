@@ -134,7 +134,7 @@ func TestConductFixConvergenceAllowsUnstalledFindings(t *testing.T) {
 			case "blank criterion":
 				w.exec(t, `UPDATE review_findings SET acceptance = '   ' WHERE id = 'f'`)
 			case "nonblocking":
-				// Below a conducted loop's fix bar (fixBar): a low not
+				// Below the fix bar (fixBarSeverities): a low not
 				// marked trivial.
 				w.exec(t, `UPDATE review_findings SET severity = 'low' WHERE id = 'f'`)
 			case "tester":
