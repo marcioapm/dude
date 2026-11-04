@@ -218,7 +218,7 @@ type State struct {
 	// it decides). HandedBack cannot say this: an Open or Draft at
 	// Deliver's own Ask me first hold sets it on a delivery no conductor
 	// ever had. Set by every writer of DeciderConductor, and by every
-	// start; nothing reads it.
+	// start; a restart carries it over, and nothing decides on it.
 	HadConductor bool `json:"hadConductor,omitempty"`
 	// How the conductor speaks, when it decides (VoiceQuiet, VoiceChatty;
 	// "" is chatty). Written from outside the steps (the hand-back, a
