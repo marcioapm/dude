@@ -116,6 +116,9 @@ type Behaviour struct {
 	// cannot reach): turn_end carries it, formatted "session/prompt:
 	// <message> (<code>)", and the agent goes idle.
 	TurnError string
+	// The agent's first turns fail at once, one with each of these errors
+	// in order (as TurnError does), before it works as the rest says.
+	FirstTurnErrors []string
 	// A Hang is woken by any input, not only one after a resume.
 	WakeOnInput bool
 	// A Hang is never woken, a resume's input included: fakeagent.HangModel,
@@ -291,6 +294,8 @@ type Run struct {
 	// A writer's next round was just told it (writerRound): its tool calls
 	// are this turn's, once, as a first turn's are.
 	roundCalls bool
+	// The Behaviour's FirstTurnErrors already played.
+	firstFailed int
 	// Its next failTurns turns fail at once with failWith (FailTurns).
 	failTurns int
 	failWith  string
@@ -1919,6 +1924,12 @@ func (s *Server) turn(run *Run) {
 		run.busy = false
 		return
 	}
+	if run.firstFailed < len(b.FirstTurnErrors) {
+		run.firstFailed++
+		s.turnEnd(run, map[string]any{"stopReason": "", "error": b.FirstTurnErrors[run.firstFailed-1]}, true)
+		run.busy = false
+		return
+	}
 	if b.TurnError != "" {
 		s.turnEnd(run, map[string]any{"stopReason": "", "error": b.TurnError}, true)
 		run.busy = false
@@ -1927,7 +1938,10 @@ func (s *Server) turn(run *Run) {
 	for _, chunk := range chunks(b.Thought, 7) {
 		s.agent(run, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": chunk}})
 	}
-	if len(run.Inputs) == 0 {
+	// A first turn that failed (FirstTurnErrors) did none of its work: the
+	// turn retrying it is its first, its retry input aside.
+	first := len(run.Inputs) <= run.firstFailed
+	if first {
 		s.lookUp(run, b.Lookups)
 		s.playSubagent(run, b.Subagent)
 		// A writer kept in its turn says its checks report before it acts,
@@ -1961,7 +1975,6 @@ func (s *Server) turn(run *Run) {
 	}
 	// Its tools are part of its first turn's work, not repeated on every
 	// turn after; asking a person is one of them, and ends that turn.
-	first := len(run.Inputs) == 0
 	if first && b.Peer {
 		s.choosePeerPart(run)
 		b = run.behavior

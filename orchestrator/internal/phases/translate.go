@@ -163,6 +163,9 @@ type talkerState struct {
 	// ended last was one: a turn that did not fail resets the count.
 	FailedTurns int  `json:"failedTurns,omitempty"`
 	LastFailed  bool `json:"lastFailed,omitempty"`
+	// The retries of the turn in progress after temporary model errors
+	// (retryTurn); a turn that ends without failing resets it.
+	TurnRetries int `json:"turnRetries,omitempty"`
 	// What lux last warned about the agent (lux.warning), and in which
 	// placement: the reason for a session replaced in that placement only.
 	Warning      string `json:"warning,omitempty"`
@@ -1118,6 +1121,7 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 		return nil
 	}
 	t.FailedTurns = 0
+	t.TurnRetries = 0
 	// A turn that ends with a question to a peer unanswered waits on it,
 	// as if the agent had run `dude wait`: otherwise it would complete,
 	// and move to review, before the answer could land.
@@ -1385,6 +1389,14 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 			return err
 		}
 	}
+	// A temporary model error (a rate limit, an overloaded upstream, a
+	// dropped stream) is waited out and the turn retried, any role's;
+	// past the bound it fails as any other, saying it was retried.
+	if retried, err := t.retryTurn(ctx, tx, s, agentErr); retried || err != nil {
+		return err
+	}
+	reason = retriedReason(reason, t.TurnRetries)
+	t.TurnRetries = 0
 	if t.run.talker() {
 		t.LastFailed = true
 		if t.FailedTurns < maxFailedTurnResumes {
