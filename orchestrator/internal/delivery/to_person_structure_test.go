@@ -16,9 +16,8 @@ import (
 // toPersonInternals are ToPersonTx and the functions it is made of: the
 // only code that may ask a person on a task.
 var toPersonInternals = map[string]bool{
-	"delivery/to_person.go:ToPersonTx":         true,
-	"delivery/to_person.go:askPersonTx":        true,
-	"delivery/to_person.go:escalateToPersonTx": true,
+	"delivery/to_person.go:ToPersonTx":  true,
+	"delivery/to_person.go:askPersonTx": true,
 }
 
 // toPersonAllowed reach a person some other way, for good: a brainstorm

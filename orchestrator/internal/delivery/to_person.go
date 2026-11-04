@@ -84,22 +84,29 @@ func ToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) (string, error) {
 	default:
 		return "", fmt.Errorf("to person: unknown why %q", p.Why)
 	}
-	switch {
-	case len(p.Items) > 0:
+	if len(p.Items) > 0 {
 		if p.Escalation != nil {
 			return "", fmt.Errorf("to person: a question and an escalation at once")
 		}
 		return askPersonTx(ctx, tx, p.Ref, p.Items)
-	case p.Escalation != nil:
-		return "", escalateToPersonTx(ctx, tx, p)
-	default:
-		st := p.State
-		if st == nil {
-			return "", fmt.Errorf("to person: a hold with no delivery")
-		}
-		_, err := SetTaskStatusTx(ctx, tx, p.Ref.Org, st.ProjectID, st.TaskID, "", "awaiting_input", p.Reason)
+	}
+	// An escalation or a hold: the task waits on the person for Reason. An
+	// escalation's question.asked of kind escalation says so (the API's
+	// escalation).
+	st, e := p.State, p.Escalation
+	switch {
+	case e != nil && (st == nil || st.Escalation != e):
+		return "", fmt.Errorf("to person: an escalation that is not its delivery's")
+	case e != nil && e.HeldBy() != HolderPerson:
+		return "", fmt.Errorf("to person: an escalation held by %s", e.Holder)
+	case st == nil:
+		return "", fmt.Errorf("to person: a hold with no delivery")
+	}
+	if _, err := SetTaskStatusTx(ctx, tx, p.Ref.Org, st.ProjectID, st.TaskID, "", "awaiting_input", p.Reason); err != nil || e == nil {
 		return "", err
 	}
+	return "", emitTx(ctx, tx, p.Ref.Org, st, EvQuestionAsked,
+		map[string]any{"kind": "escalation", "reason": e.Reason, "detail": e.Detail, "actions": e.Actions()})
 }
 
 // heldBy marks the escalation raised now, held by holder. Called where it
@@ -116,23 +123,6 @@ func (e *Escalation) HeldBy() string {
 		return HolderPerson
 	}
 	return e.Holder
-}
-
-// escalateToPersonTx: the task waits on the person for the escalation, and
-// question.asked of kind escalation says so (the API's escalation).
-func escalateToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) error {
-	st, e := p.State, p.Escalation
-	if st == nil || st.Escalation != e {
-		return fmt.Errorf("to person: an escalation that is not its delivery's")
-	}
-	if e.HeldBy() != HolderPerson {
-		return fmt.Errorf("to person: an escalation held by %s", e.Holder)
-	}
-	if _, err := SetTaskStatusTx(ctx, tx, p.Ref.Org, st.ProjectID, st.TaskID, "", "awaiting_input", p.Reason); err != nil {
-		return err
-	}
-	return emitTx(ctx, tx, p.Ref.Org, st, EvQuestionAsked,
-		map[string]any{"kind": "escalation", "reason": e.Reason, "detail": e.Detail, "actions": e.Actions()})
 }
 
 // askPersonTx records a Run's question for a person, and the task waiting
