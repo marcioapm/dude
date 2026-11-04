@@ -3,7 +3,7 @@ package orchestrator_test
 // A turn that fails on a temporary model error — a rate limit, an
 // overloaded upstream, a stream cut off — is waited out and retried in the
 // same Run, any role's: no escalation for a blip. Past the bound the
-// failure is the Run's, as before; any other failure is not retried. A
+// failure is the Run's; any other failure is not retried. A
 // quiet conductor retrying keeps its decision from defaulting at its
 // deadline. Through the real syncer, workflow and API, the fake lux
 // speaking each harness's protocol.
@@ -119,7 +119,7 @@ func TestATransientTurnFailureIsRetriedAndTheRunGoesOn(t *testing.T) {
 	}
 }
 
-// Past maxTurnRetries the failure is the Run's, exactly as before: failed
+// Past maxTurnRetries the failure is the Run's, as any other: failed
 // with the agent's error, saying it was retried, and escalated as
 // implement_failed.
 func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
@@ -147,7 +147,7 @@ func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
 }
 
 // A failure that is not temporary — refused credentials, a bad request —
-// is not retried: the Run fails at once, as before.
+// is not retried: the Run fails at once.
 func TestANonTransientTurnFailureIsNotRetried(t *testing.T) {
 	for name, e := range map[string]string{
 		"auth": "session/prompt: Unauthorized: invalid x-api-key (401)",
@@ -203,12 +203,11 @@ func TestAReviewersTransientFailureIsRetried(t *testing.T) {
 	}
 }
 
-// A quiet conductor whose turn failed on a 429 is retrying it: its
-// decision's deadline passing does not default the decision while the
-// retry waits. Once the retried turn goes through, the conductor takes
-// its decision itself.
-func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
-	w := conducting(t)
+// conductorRetrying has a quiet conductor's first turn fail on a 429
+// asking for an hour, and returns once the retry is queued and the
+// decision is waited on.
+func conductorRetrying(t *testing.T) (w *world, task, conductor string) {
+	w = conducting(t)
 	w.waitingFor(time.Hour)
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -220,14 +219,23 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 		}
 		return b
 	}
-	task := w.task()
+	task = w.task()
 	w.startQuiet(task)
 	w.until("the conductor's turn retried", func() bool {
 		id, _, _ := w.conductor(task)
 		return id != "" && w.turnRetries(id) == 1
 	})
-	conductor, _, _ := w.conductor(task)
+	conductor, _, _ = w.conductor(task)
 	w.until("the decision waited on", func() bool { return w.decisionAt(task) != "" })
+	return w, task, conductor
+}
+
+// A quiet conductor whose turn failed on a 429 is retrying it: its
+// decision's deadline passing does not default the decision while the
+// retry waits. Once the retried turn goes through, the conductor takes
+// its decision itself.
+func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
+	w, task, conductor := conductorRetrying(t)
 	at := w.decisionAt(task)
 	w.lapse(task)
 	for range 5 {
@@ -267,26 +275,9 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 
 // A conductor paused while it waits out a retry's back-off is not
 // retrying any more: its count left behind does not hold the decision,
-// whose deadline defaults it as before the retries existed.
+// whose deadline defaults it.
 func TestAConductorPausedMidRetryLetsItsDeadlineDefault(t *testing.T) {
-	w := conducting(t)
-	w.waitingFor(time.Hour)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == delivery.RoleConductor {
-			b.FirstTurnErrors = []string{`API Error: Request rejected (429) · {"error":"All provider keys are rate limited","retry_after":3600}`}
-		}
-		return b
-	}
-	task := w.task()
-	w.startQuiet(task)
-	w.until("the conductor's turn retried", func() bool {
-		id, _, _ := w.conductor(task)
-		return id != "" && w.turnRetries(id) == 1
-	})
-	conductor, _, _ := w.conductor(task)
-	w.until("the decision waited on", func() bool { return w.decisionAt(task) != "" })
+	w, task, conductor := conductorRetrying(t)
 	if status, body := w.call("/internal/runs/"+conductor+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, body)
 	}
@@ -408,8 +399,8 @@ func (w *world) retryPending() (task, run string) {
 }
 
 // A person's Pause while a turn retry waits out its back-off is acted on
-// at once: only the retry waits, not the Run (dude#F1: the Run's back-off
-// held every sweep action for up to ~16.5 min).
+// at once: only the retry waits, not the Run (the Run's own back-off
+// would hold every sweep action as long).
 func TestAPauseIsNotHeldByATurnRetrysBackOff(t *testing.T) {
 	w := newWorld(t)
 	_, run := w.retryPending()

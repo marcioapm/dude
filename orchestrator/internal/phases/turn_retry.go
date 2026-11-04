@@ -100,9 +100,9 @@ func turnRetryWait(attempt int, retryAfter time.Duration, jitter float64) time.D
 // a directive held until the back-off is over (deliver_after), and sent
 // the usual way then. The Run itself is not backed off: a pause, an abort
 // or a park is acted on meanwhile. A Run lux stopped meanwhile is resumed
-// by the usual paths
-// (a talker parked by parkStopped, its directive unsent). Says whether it
-// retried; false leaves the failure to turnFailed.
+// by the usual paths (a talker parked by parkStopped, its directive
+// unsent). Says whether it retried; false leaves the failure to
+// turnFailed.
 func (t *translator) retryTurn(ctx context.Context, tx pgx.Tx, s *Syncer, agentErr string) (bool, error) {
 	transient, retryAfter := transientTurnError(agentErr)
 	if !transient || t.TurnRetries >= maxTurnRetries {

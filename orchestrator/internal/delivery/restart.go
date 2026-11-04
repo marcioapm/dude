@@ -231,26 +231,29 @@ func tierForRole(ctx context.Context, tx pgx.Tx, tier, role string) (string, err
 // A receipt that lands after still delivers it. at is the events' time;
 // zero is now.
 func FailUnreadTx(ctx context.Context, tx pgx.Tx, r RunRef, at time.Time, why string) error {
-	rows, err := tx.Query(ctx, `UPDATE directives SET failed_at = now(), error = $2
-		WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL RETURNING id`, r.RunID, why)
+	// With each, the feedback items it carried, released below: a Run
+	// taken back up is given them again with the directive
+	// (RequeueUnreadTx).
+	rows, err := tx.Query(ctx, `UPDATE directives d SET failed_at = now(), error = $2
+		WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL
+		RETURNING id, ARRAY(SELECT f.id FROM feedback_items f WHERE f.directive_id = d.id AND f.status = 'open' ORDER BY f.id)`,
+		r.RunID, why)
 	if err != nil {
 		return err
 	}
-	unread, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	type unreadDirective struct {
+		ID    string
+		Items []string
+	}
+	unread, err := pgx.CollectRows(rows, pgx.RowToStructByPos[unreadDirective])
 	if err != nil {
 		return err
 	}
-	for _, id := range unread {
+	for _, u := range unread {
+		id := u.ID
 		payload := map[string]any{"directiveId": id, "error": why}
-		// The feedback items it carried, released below: a Run taken back
-		// up is given them again with the directive (RequeueUnreadTx).
-		var items []string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(id ORDER BY id), '{}') FROM feedback_items
-			WHERE directive_id = $1 AND status = 'open'`, id).Scan(&items); err != nil {
-			return err
-		}
-		if len(items) > 0 {
-			payload["feedbackItemIds"] = items
+		if len(u.Items) > 0 {
+			payload["feedbackItemIds"] = u.Items
 		}
 		ev := r.Event(evDirectiveFailed, ledger.ActorSystem, payload)
 		ev.Source, ev.OccurredAt = ledger.SourceRunner, at
