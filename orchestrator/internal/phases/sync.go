@@ -3401,6 +3401,8 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&taskStatus); err != nil {
 				return err
 			}
+			// TODO(conductor-first PR4b): conducted, the conductor gets a
+			// stalled wake instead; otherwise through delivery.ToPersonTx.
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input",
 				"the agent went quiet"); err != nil {
 				return err

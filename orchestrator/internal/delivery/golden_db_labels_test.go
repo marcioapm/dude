@@ -141,7 +141,7 @@ func TestOnAnOwnedTaskOnlyTheOwnersNotedPickDecides(t *testing.T) {
 				if err != nil {
 					return "", err
 				}
-				id, err := AskItemsTx(ctx, tx, ref, composed)
+				id, err := ToPersonTx(ctx, tx, ToPerson{Ref: ref, Items: composed, Why: WhyConductor})
 				if err != nil {
 					return "", err
 				}

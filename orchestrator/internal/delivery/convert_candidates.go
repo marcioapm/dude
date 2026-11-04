@@ -492,13 +492,11 @@ func stopMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string, 
 		return err
 	}
 	detail := map[string]any{"step": d.Step}
-	st.Escalation = &Escalation{Reason: ReasonStoppedMidPromotion, Detail: detail, Step: next}
+	st.Escalation = (&Escalation{Reason: ReasonStoppedMidPromotion, Detail: detail, Step: next}).heldBy(HolderPerson)
 	st.Decision, st.Directed = nil, nil
-	if _, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "", "awaiting_input", ReasonStoppedMidPromotion); err != nil {
-		return err
-	}
-	if err := emitTx(ctx, tx, org, st, EvQuestionAsked, map[string]any{"kind": "escalation", "reason": ReasonStoppedMidPromotion,
-		"detail": detail, "actions": st.Escalation.Actions()}); err != nil {
+	// TODO(conductor-first PR2): conductor-held first (raiseEscalationTx).
+	if _, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: org}, State: st, Escalation: st.Escalation,
+		Reason: ReasonStoppedMidPromotion, Why: WhyEscalation}); err != nil {
 		return err
 	}
 	if st.conducted() {
