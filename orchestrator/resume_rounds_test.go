@@ -328,8 +328,10 @@ func TestAnUnresumableReviewerIsReplacedByAFreshRunGivenItsConversation(t *testi
 	if want := "`" + first.Base["target"] + "..HEAD`"; !strings.Contains(prompt, want) {
 		t.Errorf("the fresh reviewer does not review the commits since the last round (%s):\n%s", want, prompt)
 	}
+	// The round's own range (RangeFixRound): from the heads the last
+	// round reviewed.
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND review_range->>'of' = $2 AND review_range->'base'->>'target' = $3`,
-		fresh.ID, delivery.RangeSinceLastRound, first.Base["target"]); n != 1 {
+		fresh.ID, delivery.RangeFixRound, first.Base["target"]); n != 1 {
 		t.Error("the fresh reviewer's range is not since the last round")
 	}
 	if n := w.count(`SELECT count(*) FROM review_findings WHERE task_id = $1 AND status = 'resolved' AND resolved_by_run_id = $2 AND fix_attempts = 1`,
@@ -378,9 +380,10 @@ func TestABlankSessionOnResumeIsReplacedByAFreshRun(t *testing.T) {
 }
 
 // A fix that changed more than MaxResumeDeltaLines gets fresh eyes: a new
-// reviewer, no conversation, the whole branch, and the first round's lux
-// Run let go.
-func TestALargeChangeGetsAFreshReviewerOfTheWholeBranch(t *testing.T) {
+// reviewer, no conversation, and the first round's lux Run let go. Its
+// range is the round's own (RangeFixRound, kept: KeepRange), what changed
+// since the round before, as every later round's is.
+func TestALargeChangeGetsAFreshReviewer(t *testing.T) {
 	w := resuming(t)
 	w.onModel("reviewer", "llm-review")
 	wi := w.task()
@@ -402,16 +405,17 @@ func TestALargeChangeGetsAFreshReviewerOfTheWholeBranch(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND payload->>'fresh' = 'large_delta'`, second.ID); n != 1 {
 		t.Error("the re-review's run.created does not say it is fresh for a large change")
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND review_range IS NULL`, second.ID); n != 1 {
-		t.Error("the fresh re-review has a range, want the whole branch")
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND review_range->>'of' = $2 AND review_range->'base'->>'target' = $3`,
+		second.ID, delivery.RangeFixRound, first.Base["target"]); n != 1 {
+		t.Error("the fresh re-review's range is not the round's, since the last round")
 	}
 	luxReviews := w.luxRunsOf("review")
 	if len(luxReviews) < 2 || luxReviews[0].Resumed != 0 {
 		t.Fatalf("%d reviewers submitted, the first resumed %d times; want a second submitted and none resumed", len(luxReviews), luxReviews[0].Resumed)
 	}
 	p := luxReviews[1].Prompt()
-	if strings.Contains(p, "## The conversation so far") || strings.Contains(p, "..HEAD`") {
-		t.Errorf("the fresh re-review was given a conversation or a range:\n%s", p)
+	if strings.Contains(p, "## The conversation so far") {
+		t.Errorf("the fresh re-review was given a conversation:\n%s", p)
 	}
 	if !strings.Contains(p, "**F1**") {
 		t.Errorf("the fresh re-review is not given the finding to judge:\n%s", p)

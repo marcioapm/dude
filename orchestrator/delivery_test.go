@@ -379,12 +379,14 @@ func scriptedPolicy() delivery.Policy {
 	return p
 }
 
-// start starts the delivery workflow as the API does, with a policy.
+// start starts the delivery workflow as the API does, with a policy. As
+// every start since C1 does (start.go), it marks the delivery as one a
+// conductor stands over: no test runs the legacy HadConductor=false loop.
 func (w *world) start(taskID string, policy delivery.Policy) string {
 	id, _, err := w.runtime.Start(context.Background(), workflow.StartOptions{
 		Type: delivery.WorkflowType, OrganizationID: w.org, IdempotencyKey: "delivery:" + taskID, TaskID: taskID,
 		Input: delivery.State{TaskID: taskID, ProjectID: w.project,
-			Policy: policy, Branch: delivery.BranchFor(taskID, 1)},
+			Policy: policy, Branch: delivery.BranchFor(taskID, 1), HadConductor: true},
 	})
 	if err != nil {
 		w.t.Fatal(err)
@@ -2095,8 +2097,8 @@ func TestAReviewerIsToldWhatTheDeliverysPolicyBlocksOn(t *testing.T) {
 		}
 		return false
 	})
-	if !strings.Contains(prompt, "`blocking`, `high`, `medium` send the change back") {
-		t.Errorf("the reviewer's instructions do not say the policy's blocking severities:\n%s", prompt)
+	if !strings.Contains(prompt, "every finding at `medium` or above, plus `low` ones marked `trivial: yes`") {
+		t.Errorf("the reviewer's instructions do not say the fix bar:\n%s", prompt)
 	}
 }
 

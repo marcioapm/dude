@@ -16,12 +16,11 @@ func evidencedFinding(head, title string) string {
 		"\ndescription: D.\nscenario: S.\nevidence_kind: command\nevidence: cat FACTORY.md\n"
 }
 
-// The owner's fix bar in a conducted loop: until the conductor runs the
+// The owner's fix bar, every delivery's: until the conductor runs the
 // loop itself, the policy's exit routes it, and what blocks there is every
 // finding at medium or above and every low marked trivial. A medium finding
-// in a conducted delivery gets a fix round; the same finding in an
-// un-conducted (Deliver) delivery does not (BlockingSeverities). A low one
-// not marked trivial gets none in a conducted loop either.
+// gets a fix round in a conducted delivery and in one Deliver decides
+// alike. A low one not marked trivial gets none.
 func TestAConductedLoopFixesAMediumFindingThePolicyLoopShips(t *testing.T) {
 	for _, c := range []struct {
 		name          string
@@ -29,7 +28,7 @@ func TestAConductedLoopFixesAMediumFindingThePolicyLoopShips(t *testing.T) {
 		finding, next string
 	}{
 		{"medium, conducted", true, "severity: medium", "fix"},
-		{"medium, deliver", false, "severity: medium", "simplify"},
+		{"medium, deliver", false, "severity: medium", "fix"},
 		{"trivial low, conducted", true, "severity: low\ntrivial: yes", "fix"},
 		{"low, conducted", true, "severity: low\ntrivial: no", "simplify"},
 	} {
@@ -197,9 +196,9 @@ func TestAConductedLoopCountsAMediumRegression(t *testing.T) {
 	})
 }
 
-// A resumed reviewer of a conducted loop is asked, in its round message,
-// for each finding's evidence, as a fresh one's instructions ask; a Deliver
-// delivery's resumed reviewer is given the plain format.
+// A resumed reviewer is asked, in its round message, for each finding's
+// evidence, as a fresh one's instructions ask: a conducted delivery's and
+// a Deliver delivery's alike.
 func TestAResumedReviewerOfAConductedLoopIsAskedForEvidence(t *testing.T) {
 	for _, conducted := range []bool{true, false} {
 		t.Run(fmt.Sprintf("conducted=%v", conducted), func(t *testing.T) {
@@ -235,7 +234,7 @@ func TestAResumedReviewerOfAConductedLoopIsAskedForEvidence(t *testing.T) {
 					got = true
 				}
 			}
-			if got != conducted {
+			if !got {
 				t.Errorf("conducted=%v: the resumed reviewer's round message asks for evidence: %v\n%q", conducted, got, inputs)
 			}
 		})
