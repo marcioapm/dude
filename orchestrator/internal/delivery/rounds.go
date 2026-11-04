@@ -739,7 +739,7 @@ const decidedLimit = 20
 
 // DecidedFindingsTx is the reviewers' findings of the task's attempt (0:
 // its highest) that are no longer open, most recently decided first, at
-// most decidedLimit: what a conducted loop's later round is told not to
+// most decidedLimit: what the loop's later round is told not to
 // raise again.
 func DecidedFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) ([]DecidedFinding, error) {
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, status::text, COALESCE(resolved_by_run_id, ''), resolution_note

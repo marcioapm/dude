@@ -105,10 +105,9 @@ type PromptInput struct {
 	// Review phase: what earlier reviewers of its category asked
 	// (EarlierQuestionsTx).
 	Questions []EarlierQuestion
-	// Review phase: its round
-	// (runs.review_round), 0 for none, and the attempt's findings decided
-	// in earlier rounds (DecidedFindingsTx). Fix phase of one: the round
-	// whose findings it fixes.
+	// Review phase: its round (runs.review_round), 0 for none, and the
+	// attempt's findings decided in earlier rounds (DecidedFindingsTx).
+	// Fix phase: the round whose findings it fixes.
 	Round   int
 	Decided []DecidedFinding
 }
@@ -191,7 +190,7 @@ var reviewFocus = agentTexts("aspects/reviewer/", reviewerOrder...)
 const (
 	RangeSimplify       = "simplify"
 	RangePullRequestFix = "pull_request_fix"
-	// A conducted loop's later round: what changed since the round before
+	// The loop's later round: what changed since the round before
 	// it reviewed (State.roundRange).
 	RangeFixRound = "fix_round"
 )

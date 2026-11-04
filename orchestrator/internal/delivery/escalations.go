@@ -219,9 +219,9 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	}
 	if e.Reason == ReasonConductorUnavailable && in.Action == "accept" {
 		// Deliver's defaults finish the delivery: it is handed to Deliver,
-		// whose policy decides from here on, its bounds included, the fix
-		// bar staying the conductor's (HadConductor). Not handed back
-		// (HandedBack): a person's Chat takes it over again, as any.
+		// whose policy decides from here on, its bounds included. Not
+		// handed back (HandedBack): a person's Chat takes it over again,
+		// as any.
 		if _, err := SetDeciderTx(ctx, tx, org, wfID, &st, DeciderPolicy, "", WhyAcceptedDefaults,
 			in.ActorType, in.ActorID); err != nil {
 			return err

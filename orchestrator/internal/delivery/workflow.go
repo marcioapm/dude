@@ -94,7 +94,7 @@ type State struct {
 	// bound, and never part of a Run's key (Iteration is).
 	Round int `json:"round,omitempty"`
 	// The heads the loop's last completed review round reviewed, by
-	// repository: where a conducted loop's next round starts
+	// repository: where the loop's next round starts
 	// (RangeFixRound). Nil before the loop's first round.
 	RoundHeads map[string]string `json:"roundHeads,omitempty"`
 	// The heads the review round in flight checks out, set as its Runs
@@ -218,8 +218,7 @@ type State struct {
 	// it decides). HandedBack cannot say this: an Open or Draft at
 	// Deliver's own Ask me first hold sets it on a delivery no conductor
 	// ever had. Set by every writer of DeciderConductor, and by every
-	// start; nothing reads it since every delivery's loop has the
-	// conductor's bar, rounds and reviewer contract.
+	// start; nothing reads it.
 	HadConductor bool `json:"hadConductor,omitempty"`
 	// How the conductor speaks, when it decides (VoiceQuiet, VoiceChatty;
 	// "" is chatty). Written from outside the steps (the hand-back, a
@@ -1034,9 +1033,8 @@ func (st *State) reviewRange() *ReviewRange {
 
 // roundRange is the range the next review round's reviewers cover: the
 // loop's range (reviewRange), else, in a later round (Round ≥ 1 done),
-// only what changed since the round
-// before reviewed (RangeFixRound): from the heads it reviewed to the heads
-// now. Each round's base is the previous round's head, so the rounds
+// only what changed since the round before reviewed (RangeFixRound): from
+// the heads it reviewed to the heads now. Each round's base is the previous round's head, so the rounds
 // together cover every commit. Whenever that cannot be named for every
 // repository that moved — one the last round had no head for — or nothing
 // moved, the whole branch: a narrower range would leave commits unreviewed.
