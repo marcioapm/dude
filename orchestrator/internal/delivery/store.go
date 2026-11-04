@@ -823,19 +823,6 @@ func (s *Store) Emit(ctx context.Context, org string, st *State, typ string, pay
 	})
 }
 
-// SetTaskStatusAndEmit moves the task and records an event in one
-// transaction: an escalation's awaiting_input and its question.asked, which
-// the API reads as the task's escalation, are never seen one without the
-// other.
-func (s *Store) SetTaskStatusAndEmit(ctx context.Context, org string, st *State, status, reason, typ string, payload map[string]any) error {
-	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		if _, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "", status, reason); err != nil {
-			return err
-		}
-		return emitTx(ctx, tx, org, st, typ, payload)
-	})
-}
-
 // emitTx is Emit in the caller's transaction.
 func emitTx(ctx context.Context, tx pgx.Tx, org string, st *State, typ string, payload map[string]any) error {
 	_, err := ledger.Append(ctx, tx, ledger.Event{
@@ -972,60 +959,6 @@ func HasOpenQuestion(ctx context.Context, tx pgx.Tx, runID string) (bool, error)
 	var open bool
 	err := tx.QueryRow(ctx, `SELECT `+openQuestion+` FROM runs r WHERE r.id = $1`, runID).Scan(&open)
 	return open, err
-}
-
-// AskTx records an agent's question for a person, and the task waiting
-// on it. When the question is what moved the task, its event keeps the
-// status the task had before (taskStatus) and the move's own event
-// (waitCursor): the mark an answer to a conductor checks before putting
-// the task back (EndConductorWait).
-func AskTx(ctx context.Context, tx pgx.Tx, r RunRef, prompt string, options []string) (string, error) {
-	return AskItemsTx(ctx, tx, r, []QuestionItem{SingleItem(prompt, db.NonNil(options))})
-}
-
-// AskItemsTx is AskTx for an ask of one or more questions, normalized
-// (NormalizeItems): prompt and options keep what their readers show.
-func AskItemsTx(ctx context.Context, tx pgx.Tx, r RunRef, items []QuestionItem) (string, error) {
-	id := ids.New(ids.Question)
-	prompt, options := AskPrompt(items), AskOptions(items)
-	opts, _ := json.Marshal(options)
-	rawItems, _ := json.Marshal(items)
-	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, items)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)`, id, r.Org, r.TaskID, r.RunID, prompt, opts, rawItems); err != nil {
-		return "", err
-	}
-	var before string
-	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&before); err != nil {
-		return "", err
-	}
-	moved, err := SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input", "the agent asked a question")
-	if err != nil {
-		return "", err
-	}
-	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": options, "items": items}
-	if moved {
-		// The move's event is this transaction's latest for the task, whose
-		// row the move holds.
-		var cursor int64
-		if err := tx.QueryRow(ctx, `SELECT max(cursor) FROM events WHERE task_id = $1 AND event_type = $2`,
-			r.TaskID, EvTaskStatusChanged).Scan(&cursor); err != nil {
-			return "", err
-		}
-		payload["taskStatus"], payload["waitCursor"] = before, cursor
-	}
-	// A Run the conductor started asking a person wakes the conductor,
-	// which may answer for what it knows, or explain in Chat.
-	var phase string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(phase::text, '') FROM runs WHERE id = $1 AND conductor_run_id IS NOT NULL`,
-		r.RunID).Scan(&phase); err == nil {
-		if _, err := RecordWakeTx(ctx, tx, r.Org, r.TaskID, "question", "question:"+id, runAsksLine(phase, r.RunID, id)); err != nil {
-			return "", err
-		}
-	} else if !db.IsNotFound(err) {
-		return "", err
-	}
-	_, err = ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent, payload))
-	return id, err
 }
 
 // EndConductorWait puts the task back to the status it had before a

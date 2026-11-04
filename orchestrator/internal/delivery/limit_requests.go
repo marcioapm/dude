@@ -160,7 +160,7 @@ func RequestLimitTx(ctx context.Context, tx pgx.Tx, ref RunRef, in LimitAsk) (st
 	if err != nil {
 		return "", err
 	}
-	id, err := AskItemsTx(ctx, tx, ref, items)
+	id, err := ToPersonTx(ctx, tx, ToPerson{Ref: ref, Items: items, Why: WhyConductor})
 	if err != nil {
 		return "", err
 	}

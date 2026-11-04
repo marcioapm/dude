@@ -85,7 +85,7 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 	if err := tx.QueryRow(ctx, `SELECT awaiting_signals FROM workflow_runs WHERE id = $1`, d.WorkflowID).Scan(&atSignals); err != nil {
 		return err
 	}
-	st.Escalation = &Escalation{Reason: ReasonChecksUnverified, At: d.Step, AtSignals: atSignals, Detail: detail}
+	st.Escalation = (&Escalation{Reason: ReasonChecksUnverified, At: d.Step, AtSignals: atSignals, Detail: detail}).heldBy(HolderPerson)
 	if st.conducted() {
 		if _, err := tellEscalationTx(ctx, tx, org, d.WorkflowID, &st); err != nil {
 			return err
@@ -102,11 +102,10 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 	if err = waitOnPersonTx(ctx, tx, runID); err != nil {
 		return err
 	}
-	if _, err = SetTaskStatusTx(ctx, tx, org, st.ProjectID, taskID, "", "awaiting_input", ReasonChecksUnverified); err != nil {
-		return err
-	}
-	return emitTx(ctx, tx, org, &st, EvQuestionAsked, map[string]any{"kind": "escalation", "reason": ReasonChecksUnverified,
-		"detail": st.Escalation.Detail, "actions": st.Escalation.Actions()})
+	// TODO(conductor-first PR2): conductor-held first (raiseEscalationTx).
+	_, err = ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: org}, State: &st, Escalation: st.Escalation,
+		Reason: ReasonChecksUnverified, Why: WhyEscalation})
+	return err
 }
 
 // waitOnPersonTx starts the held Run's wait on a person (checksHeld), kept

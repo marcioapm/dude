@@ -154,7 +154,8 @@ func TestCohortStaggeredResults(t *testing.T) {
 	w.exec(`INSERT INTO events(id,organization_id,event_type,run_id,task_id,actor_type,actor_id,source,payload)
 		VALUES ('evt_private_report',$1,'agent.message',$2,'wi_life','agent',$2,'test','{"text":"PRIVATE raw report credential=do-not-project"}')`, w.org, members[0])
 	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		_, err := AskTx(w.ctx, tx, w.in.Parent.Run, "May I proceed?", []string{"Yes", "No"})
+		_, err := ToPersonTx(w.ctx, tx, ToPerson{Ref: w.in.Parent.Run, Why: WhyConductor,
+			Items: []QuestionItem{SingleItem("May I proceed?", []string{"Yes", "No"})}})
 		return err
 	}); err != nil {
 		t.Fatal(err)

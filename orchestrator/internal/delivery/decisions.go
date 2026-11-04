@@ -1004,7 +1004,11 @@ func (w *steps) parkAtGate(ctx context.Context, sc workflow.StepContext, st *Sta
 		return workflow.Result{}, err
 	}
 	if (st.adoptedBranch() || st.ChoiceGate) && st.deliverOpens() {
-		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", ReasonReadyForReview); err != nil {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Reason: ReasonReadyForReview,
+				Why: WhyPersonGate})
+			return err
+		}); err != nil {
 			return workflow.Result{}, err
 		}
 	}

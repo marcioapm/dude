@@ -67,7 +67,7 @@ type EscalationDecision struct {
 //	LockChat (where the path takes it) → the latest delivery (LoadDelivery)
 //	→ the task's row (LockTaskTx)
 //
-// as do the delivery's other writers (parked → AskTx → SetTaskStatusTx; an
+// as do the delivery's other writers (parked → ToPersonTx → SetTaskStatusTx; an
 // ending SetTaskStatusTx; markDone; recovery), the lifecycle writes
 // (lockLifecycleTask: Close, Reopen, Archive, Unarchive), a person's Stop
 // (StopAllTx: the Chat and the live conductor's row first, the phase Runs
