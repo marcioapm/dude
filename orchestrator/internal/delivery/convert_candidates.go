@@ -94,6 +94,15 @@ func convertedNotice(branch string, heads map[string]string) string {
 // left (CandidateLeft): the next sweep converts it. Locks the task's Chat, then the row, as ConvertToQuietTx does;
 // idempotent. The caller commits tx.
 func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID string) (string, error) {
+	return convertCandidateTx(ctx, tx, org, taskID, workflowID, false)
+}
+
+// convertCandidateTx is ConvertCandidateTx: the one conversion, run by
+// the boot's sweep and by a delivery's step entry (convertLegacy). byStep
+// says the caller is the step the workflow claimed for this row: it holds
+// the row's lease, so the row is converted rather than left, and so is
+// any trace the step would otherwise run on, whatever the sweep selects.
+func convertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID string, byStep bool) (string, error) {
 	if err := LockChat(ctx, tx, taskID); err != nil {
 		return "", err
 	}
@@ -105,15 +114,18 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 		}
 		return "", err
 	}
-	if !selected {
-		return CandidateNone, nil
-	}
 	d, err := loadDeliveryByID(ctx, tx, taskID, workflowID)
 	if err != nil || d == nil {
 		return CandidateNone, err
 	}
 	st := &d.State
-	if leased {
+	if byStep {
+		if !legacyTrace(d.Step, st) {
+			return CandidateNone, nil
+		}
+	} else if !selected {
+		return CandidateNone, nil
+	} else if leased {
 		return CandidateLeft, nil
 	}
 	if midPromotion(d.Step, st) {
@@ -123,7 +135,9 @@ func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 	// Parked on a person (or a conductor's lost decision): its answer
 	// redoes the fix. A conductor's decision waited on is not parked: it
 	// was about the candidate's work, dropped below with the fix redone.
-	parked := st.Escalation != nil || d.Step == "decide"
+	// A recovery about to run (its step's entry converting it) is too:
+	// the recovery's retry goes to the redo (Stopped, Halt).
+	parked := st.Escalation != nil || d.Step == "decide" || d.Step == "recover"
 	// The retired key and the hand-over go as the state is written back:
 	// neither is a field of State now.
 	next := ""
@@ -318,6 +332,43 @@ const stoppedMidPromotionNotice = "This delivery was moving its fix onto the pul
 // promotion could go on from.
 func midPromotion(step string, st *State) bool {
 	return step == "promoteCandidate" || st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
+}
+
+// legacyTrace says a delivery at step, as decoded, still holds something
+// of the candidate path a step would run on: a candidate, or a promotion
+// (midPromotion). The retired key, a hand-over and an integration's polls
+// are not fields of State: dropped by any write.
+func legacyTrace(step string, st *State) bool {
+	return st.Candidate != nil || midPromotion(step, st)
+}
+
+// convertLegacyTx is a delivery's step entry (steps.legacy) on a row
+// still holding a trace of the candidate path (legacyTrace), one the
+// boot's sweep left (CandidateLeft: leased by the pod before) or never
+// reached: the same conversion the sweep runs (convertCandidateTx), on
+// the row the step claimed. Returns where the row stands now: its step,
+// state, the signals it awaits and the time it wakes at (nil: due).
+func convertLegacyTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID string) (step string, st *State, awaiting []string, wake *time.Time, err error) {
+	if _, err = convertCandidateTx(ctx, tx, org, taskID, workflowID, true); err != nil {
+		return "", nil, nil, nil, err
+	}
+	var raw, signals []byte
+	var status string
+	if err = tx.QueryRow(ctx, `SELECT step, status::text, state, awaiting_signals, wake_at FROM workflow_runs WHERE id = $1`,
+		workflowID).Scan(&step, &status, &raw, &signals, &wake); err != nil {
+		return "", nil, nil, nil, err
+	}
+	st = &State{}
+	if err = json.Unmarshal(raw, st); err != nil {
+		return "", nil, nil, nil, err
+	}
+	if err = json.Unmarshal(signals, &awaiting); err != nil {
+		return "", nil, nil, nil, err
+	}
+	if wake != nil && !wake.After(time.Now()) {
+		wake = nil
+	}
+	return step, st, awaiting, wake, nil
 }
 
 // leaveMidPromotionTx lets go of what a delivery stopped mid-promotion

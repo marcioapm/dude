@@ -181,6 +181,65 @@ func TestConvertCandidatesRedoesAFixUnderReviewDirectly(t *testing.T) {
 	}
 }
 
+// A delivery whose step the old pod still leases when the sweep runs is
+// left (CandidateLeft), and no sweep comes back for it: once the lease
+// lapses and the workflow resumes it, its step's entry converts it as the
+// sweep would have, before any step runs on its candidate. Its fix is
+// redone directly; the candidate's unreviewed fix never reaches the pull
+// request's head.
+func TestConvertCandidatesLeftByTheSweepIsConvertedOnResume(t *testing.T) {
+	w, _, review, from := midCandidateReview(t)
+	unreviewed := w.gh.SHA(delivery.CandidateBranch(w.wi, 1))
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = 'old-pod', locked_until = now() + interval '1 hour' WHERE task_id = $1`, w.wi)
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{Left: 1}) {
+		t.Fatalf("swept %+v, want it left to the old pod", n)
+	}
+	if w.state("candidate") == "" {
+		t.Fatalf("the sweep converted a leased delivery")
+	}
+	// The old pod is gone: its lease lapses, and the workflow resumes the
+	// step it was at. The pull request's record shows its head as GitHub
+	// does (a candidate never moved it).
+	w.sync()
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = NULL, locked_until = now() - interval '1 second',
+		status = 'waiting', wake_at = now() WHERE task_id = $1`, w.wi)
+	w.until("converted on resume", func() bool { return w.state("candidate") == "" })
+	// Converted as the sweep converts: one notice, its heads put back
+	// where the candidate started, the item reopened for the redo, and
+	// nothing traced left.
+	w.noCandidateTrace()
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'candidate_converted'
+		AND payload->'heads' = $2::jsonb`, w.wi, `{"target":"`+w.before+`"}`); n != 1 {
+		t.Errorf("%d notices of the conversion with the candidate's from, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, review); n != 1 {
+		t.Errorf("the candidate's review was not aborted\n%s", w.describeRuns())
+	}
+	// Nothing of the candidate's reached the pull request's head: the
+	// first Run after the conversion is the direct fix, started from the
+	// candidate's from (heads == candidate.from) with the reopened item.
+	var first string
+	w.until("the first Run after the conversion", func() bool {
+		first = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND kind = 'agent' AND phase IS NOT NULL
+			AND created_at > (SELECT min(e.occurred_at) FROM events e WHERE e.task_id = $1 AND e.payload->>'about' = 'candidate_converted')
+			ORDER BY created_at, id LIMIT 1), '')`, w.wi)
+		return first != ""
+	})
+	if got := w.str(`SELECT phase::text || ' ' || COALESCE(base_refs->>'target', '') || ' ' || ('fbi_x' = ANY(feedback_item_ids))::text
+		FROM runs WHERE id = $1`, first); got != "fix "+w.before+" true" {
+		t.Errorf("the first Run after the conversion is %q, want a fix from %s given fbi_x\n%s", got, from["target"],
+			w.str(`SELECT string_agg(phase::text || ' ' || created_at::text || ' ' || COALESCE(base_refs->>'target', '') || ' ' || COALESCE(creation_key, ''), E'\n' ORDER BY created_at) FROM runs WHERE task_id = $1`, w.wi)+"\n"+
+				w.str(`SELECT string_agg(event_type || ' ' || occurred_at::text || ' ' || COALESCE(payload->>'about', ''), E'\n' ORDER BY occurred_at) FROM events WHERE task_id = $1`, w.wi))
+	}
+	w.directlyFixedAgain(review)
+	if got := w.gh.SHA(w.branch); got == unreviewed {
+		t.Errorf("the candidate's unreviewed fix %s reached the pull request's head", unreviewed)
+	}
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
+		t.Errorf("a second sweep did %+v", n)
+	}
+}
+
 // Two sweeps at once (two orchestrators booting) convert the delivery once.
 func TestConvertCandidatesTwiceAtOnceConvertsOnce(t *testing.T) {
 	w, _, review, from := midCandidateReview(t)
