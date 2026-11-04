@@ -202,11 +202,23 @@ const field = <K extends keyof typeof policyShape>(k: K) => policyShape[k].unwra
  * still send one: accepted, and dropped in settingsPatchSchema, the one
  * place, so it is neither stored nor refused.
  * - pullRequestFixes: every fix reaches an open pull request directly.
- * - blockingSeverities: every delivery has the one fix bar (blocking,
- *   high, medium, and a reviewer's low marked trivial).
+ * - blockingSeverities: every delivery has the one fix bar
+ *   (FIX_BAR_SEVERITIES, and a reviewer's low marked trivial).
  */
 export const RETIRED_DELIVERY_KEYS = ["pullRequestFixes", "blockingSeverities"] as const;
 export type RetiredDeliveryKey = (typeof RETIRED_DELIVERY_KEYS)[number];
+
+/**
+ * The one fix bar every delivery has (the orchestrator's
+ * conductorFixSeverities): a finding at one of these severities is sent
+ * back to be fixed, and so is a low one its reviewer marked trivial.
+ */
+export const FIX_BAR_SEVERITIES = ["blocking", "high", "medium"] as const;
+
+/** Whether a finding is at the fix bar: FIX_BAR_SEVERITIES, or a low marked trivial. */
+export function atFixBar(f: { severity: string; trivial?: boolean | null | undefined }): boolean {
+  return (FIX_BAR_SEVERITIES as readonly string[]).includes(f.severity) || (f.severity === "low" && f.trivial === true);
+}
 
 export const settingsPatchSchema = z
   .object({

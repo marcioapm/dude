@@ -688,7 +688,7 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
         {number("conductorEditFiles", 1, 1000, "Files the conductor may change in one publish; past it, it delegates.", "Files the conductor may change")}
       </SettingsSection>
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
-      {!valid ? <Callout tone="danger">Choose at least one reviewer and one blocking severity, and whole numbers in range.</Callout> : null}
+      {!valid ? <Callout tone="danger">Choose at least one reviewer, and whole numbers in range.</Callout> : null}
       {canEdit ? (
         <Button type="submit" variant="primary" disabled={busy || !dirty || !valid} data-testid="delivery-save">
           Save
