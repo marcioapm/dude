@@ -773,7 +773,7 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 		// the turn that would decide: its deadline does not default the
 		// decision while the retry is pending; looked at again shortly.
 		res := w.parkQuiet(st)
-		res.SleepUntil = now.UTC().Add(RetryingRecheck)
+		res.SleepUntil = now.UTC().Add(retryingRecheck)
 		return res, nil
 	}
 	if !said && inARow >= MaxDefaulted {
@@ -811,9 +811,9 @@ const ConductorRetrying = `EXISTS (SELECT 1 FROM runs cr WHERE cr.task_id = t.id
 	AND COALESCE((cr.harness_state->>'turnRetries')::int, 0) > 0
 	AND EXISTS (SELECT 1 FROM directives rd WHERE rd.run_id = cr.id AND ` + retryUnsent + `))`
 
-// RetryingRecheck is how soon a quiet decision whose deadline passed while
+// retryingRecheck is how soon a quiet decision whose deadline passed while
 // its conductor retries (ConductorRetrying) is looked at again.
-const RetryingRecheck = 30 * time.Second
+const retryingRecheck = 30 * time.Second
 
 // defaultsInARowTx is how many decisions in a row the task's delivery
 // (workflow wfID) left to Deliver's defaults: its decision_defaulted
