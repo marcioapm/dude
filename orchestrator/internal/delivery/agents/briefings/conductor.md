@@ -54,7 +54,7 @@ Your checkout is at that head.
 {{if .NoDelivery -}}
 No delivery is in progress: you are read-only.
 {{- else if .DeliverDecides -}}
-Deliver takes this task's decisions: its person accepted Deliver's defaults. You are read-only.
+Deliver takes this task's decisions by its own defaults: no conductor decides this delivery. You are read-only.
 {{- else -}}
 You take this task's decisions{{if .Quiet}}, quietly: dude starts the implementer and opens the pull request by the task's own choice, and a decision you leave past its wait goes on by Deliver's defaults{{end}}.
 {{- if .Escalated}} The delivery is stopped at an escalation for a person: {{.Escalated}}. Only the person decides it: explain and propose.

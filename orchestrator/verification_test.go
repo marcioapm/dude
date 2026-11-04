@@ -11,6 +11,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
@@ -434,5 +435,45 @@ func TestAFailureTheTesterGaveNoFindingForStillReachesTheFixer(t *testing.T) {
 	}
 	if got := w.verdicts(wi); strings.Join(got, ",") != "pass,pass" {
 		t.Errorf("verdicts = %v", got)
+	}
+}
+
+// The tester's gate holds the fix bar every delivery's review loop holds:
+// blocking, high and medium. A tester's medium finding, every criterion
+// passing, fails the test and goes to the fixer; the next test judges it
+// fixed and the pull request opens.
+func TestATestersMediumFindingFailsTheGateAndGoesToTheFixer(t *testing.T) {
+	w := newWorld(t)
+	// The first test passes every criterion and raises a medium; the next
+	// passes them again and judges it fixed (the scripted tester's own).
+	scripted, tests := w.lux.Decide, 0
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "test" {
+			if tests++; tests == 1 {
+				b.Reply = strings.Replace(fakeagent.Tester("fake/scripted", 2, 0).Reply, "---\nverdicts:\n  F1: fixed\n",
+					"---\nseverity: medium\ncategory: acceptance\ntitle: The goodbye flickers on a slow network\n"+
+						"description: Reproduced: on a throttled connection the goodbye renders twice.\n", 1)
+			}
+		}
+		return b
+	}
+	wi := w.testing("fake/scripted")
+	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if n := w.phaseRuns(wi, "test"); n != 2 {
+		t.Errorf("%d tests, want the failed one and the one after its fix\n%s", n, w.describeRuns())
+	}
+	var status, phase string
+	var attempts int
+	_ = w.owner.QueryRow(context.Background(), `SELECT f.status::text,
+			COALESCE((SELECT phase::text FROM runs WHERE id = f.resolved_by_run_id), ''), f.fix_attempts
+		FROM review_findings f JOIN runs r ON r.id = f.run_id AND r.phase = 'test'
+		WHERE f.task_id = $1 AND f.severity = 'medium'`, wi).Scan(&status, &phase, &attempts)
+	if status != "resolved" || phase != "test" || attempts != 1 {
+		t.Errorf("the tester's medium: %q by a %q Run after %d fixes, want resolved by the next test after 1\n%s", status, phase, attempts, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM runs r, review_findings f WHERE r.task_id = $1 AND r.phase = 'fix'
+		AND f.id = ANY(r.finding_ids) AND f.severity = 'medium'`, wi); n != 1 {
+		t.Errorf("%d fix Runs given the tester's medium, want 1", n)
 	}
 }

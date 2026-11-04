@@ -206,7 +206,7 @@ func TestACarriedAcceptanceOfAFailureKeepsTheGatePassing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := judgeGate(st.Policy, in)
+	g := judgeGate(in)
 	if g.Outcome != "fail" || !slices.Equal(g.Criteria, []int{2}) {
 		t.Fatalf("round 1 gate = %+v, want criterion 2 failing", g)
 	}
@@ -235,7 +235,7 @@ func TestACarriedAcceptanceOfAFailureKeepsTheGatePassing(t *testing.T) {
 	if in, err = s.gateInput(ctx, org, st, "run_a2"); err != nil {
 		t.Fatal(err)
 	}
-	if g := judgeGate(st.Policy, in); g.Outcome != "pass" {
+	if g := judgeGate(in); g.Outcome != "pass" {
 		t.Errorf("round 2 gate = %+v, want pass", g)
 	}
 }

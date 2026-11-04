@@ -271,7 +271,7 @@ func (w *world) prOpen(wi string, at prAt) string {
 				pushResult = string(raw)
 			}
 			if r.phase == delivery.PhaseReview || r == test {
-				blocking = policy.BlockingSeverities
+				blocking = []string{"blocking", "high", "medium"}
 			}
 			if r.phase == delivery.PhaseReview {
 				category = r.category

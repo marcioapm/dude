@@ -1,7 +1,8 @@
 /**
  * Fixes on an open pull request through the settings API: every fix is
  * direct, so the retired `pullRequestFixes` an old client sends is ignored,
- * neither stored nor refused; and the narrow loop's bound
+ * neither stored nor refused, as is the retired `blockingSeverities` (one
+ * fix bar for every delivery); and the narrow loop's bound
  * (`maxPrFixReviewIterations`), layered as any bound is.
  *
  * Against a database of its own, migrated as a release is, and a stand-in
@@ -73,7 +74,7 @@ beforeAll(async () => {
       const path = new URL(req.url).pathname;
       if (path === "/internal/network/defaults") return Response.json({ operator: [], always: [], model: null });
       if (path.endsWith("builtin")) return Response.json(Object.fromEntries(promptRoleSchema.options.map((r) => [r, "Built-in prompt"])));
-      return Response.json({ requiredReviewers: ["correctness"], blockingSeverities: ["blocking"], maxReviewIterations: 3,
+      return Response.json({ requiredReviewers: ["correctness"], maxReviewIterations: 3,
         maxAttemptsPerFinding: 2, maxPrFixIterations: 3, simplify: true, test: true, parkAfterMinutes: 10, idleNudgeMinutes: 0,
         conductorWarmMinutes: 5, pullRequest: "open", maxPrFixReviewIterations: 2 });
     },
@@ -101,6 +102,22 @@ describe("fixes on an open pull request", () => {
       expect(res.status).toBe(200);
       const delivery = ((await res.json()) as Json).delivery;
       expect(delivery.pullRequestFixes).toBeUndefined();
+      expect(delivery.simplify.value).toBe(false);
+    }
+    const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;
+    expect(delivery_policy).toEqual({ simplify: false });
+    const [{ delivery_policy: org }] = await owner`SELECT delivery_policy FROM organizations WHERE id = ${ORG}`;
+    expect(org).toEqual({ simplify: false });
+    await owner`UPDATE projects SET delivery_policy = '{}' WHERE id = ${PROJECT}`;
+    await owner`UPDATE organizations SET delivery_policy = '{}' WHERE id = ${ORG}`;
+  });
+
+  test("the retired blockingSeverities an old client sends is ignored, on the organisation's and a project's", async () => {
+    for (const path of ["/v1/settings/organization", `/v1/projects/${PROJECT}/settings`]) {
+      const res = await call("PATCH", path, { delivery: { blockingSeverities: ["blocking"], simplify: false } });
+      expect(res.status).toBe(200);
+      const delivery = ((await res.json()) as Json).delivery;
+      expect(delivery.blockingSeverities).toBeUndefined();
       expect(delivery.simplify.value).toBe(false);
     }
     const [{ delivery_policy }] = await owner`SELECT delivery_policy FROM projects WHERE id = ${PROJECT}`;

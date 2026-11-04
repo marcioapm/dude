@@ -36,7 +36,7 @@ Who hears it first depends on who is driving:
 - else the implementer or fixer still at work, at its next step;
 - else the delivery, which starts a fix.
 
-Open feedback always blocks: the review loop, opening the pull request, dude's Merge button and **Mark done** all wait until it is handled, whatever severities the delivery policy blocks on. A merge on GitHub's own page is not blocked.
+Open feedback always blocks: the review loop, opening the pull request, dude's Merge button and **Mark done** all wait until it is handled, whatever the fix bar says. A merge on GitHub's own page is not blocked.
 
 ## How agents handle feedback
 
@@ -49,7 +49,7 @@ You can reply, resolve or reopen an item yourself. A reopened item is routed aga
 
 ## Review findings
 
-Reviewers report **findings**: a severity, a category, a file and line, and a suggested fix. Which severities block is set in **Settings → Delivery**. See [Delivering a task](help:delivery#which-findings-block).
+Reviewers report **findings**: a severity, a category, a file and line, and a suggested fix. Which severities block is the same for every delivery. See [Delivering a task](help:delivery#which-findings-block).
 
 On the task, you can **accept** a finding, with a note. An accepted finding no longer blocks: it records a person's decision to ship it as it is, so the next reader can see it was considered. You can also reopen it.
 

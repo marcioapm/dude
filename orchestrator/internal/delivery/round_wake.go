@@ -60,16 +60,15 @@ var severityRank = map[string]int{"blocking": 0, "high": 1, "medium": 2, "low": 
 // the loop is long. round is the round's review Runs; findings the loop's
 // (loopFindings).
 func (w *steps) roundLine(ctx context.Context, sc workflow.StepContext, st *State, round []string, findings []FindingState) (string, error) {
-	bar, weighed := atFixBar(st, st.Policy, findings)
 	var atBar []string
 	below, people := 0, 0
-	for _, f := range weighed {
+	for _, f := range atFixBar(findings) {
 		switch {
 		case f.Human:
 			if f.Status == "open" || f.Status == "delivered" {
 				people++
 			}
-		case IsBlocking(bar, f):
+		case IsBlocking(f):
 			atBar = append(atBar, f.ID)
 		case f.Status == "open":
 			below++

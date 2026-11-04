@@ -29,7 +29,9 @@ type InstructionsInput struct {
 	Web *Web
 	// A conductor with a checkout, which merges the base itself.
 	Checkouts bool
-	// The severities that send a change back (a reviewer's and a tester's).
+	// The severities that send a change back (a reviewer's and a tester's):
+	// the fix bar (runs.blocking_severities). Set, the severity contract is
+	// in the file; its text is fixed.
 	BlockingSeverities []string
 	// The organisation's saved prompt for the role (nil: none), and the
 	// project's with its mode ("add" or "replace"; "" has none).
@@ -41,10 +43,6 @@ type InstructionsInput struct {
 	Context string
 	// What a saved prompt's {{task.*}} and {{run.*}} variables say.
 	Vars PromptVars
-	// The delivery's review loop is the conductor's (State.ConductedLoop)
-	// as the Run is submitted: a reviewer's severities are by outcome, and
-	// each finding at medium or above carries its evidence.
-	ConductedLoop bool
 	// A conductor's delivery's voice as the Run is submitted (State.Voice):
 	// quiet, its file says so and asks no pull-request question of it.
 	Voice string
@@ -107,9 +105,9 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 	return InstructionsInput{
 		Child: in.Child, SessionChild: in.SessionChild, Tools: in.Tools, CLI: in.CLI, Anywhere: in.Anywhere, Checkouts: len(in.Repositories) > 0, BlockingSeverities: in.BlockingSeverities,
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
-		Context:       in.Context,
-		Vars:          PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
-		ConductedLoop: in.ConductedLoop, Voice: in.Voice,
+		Context: in.Context,
+		Vars:    PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
+		Voice:   in.Voice,
 	}
 }
 

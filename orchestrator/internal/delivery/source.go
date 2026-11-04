@@ -268,8 +268,6 @@ type TaskBranch struct {
 	Branch string
 	Bases  map[string]string
 	Source *Source
-	// Its review loop is the conductor's now (State.ConductedLoop).
-	ConductedLoop bool
 	// How its conductor speaks, when one decides (State.Voice).
 	Voice string
 }
@@ -294,8 +292,7 @@ func TaskBranchTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (T
 	if st.Branch == "" {
 		st.Branch = BranchFor(taskID, attempt)
 	}
-	return TaskBranch{Branch: st.Branch, Bases: st.Bases, Source: st.Source,
-		ConductedLoop: st.ConductedLoop(), Voice: st.voice()}, nil
+	return TaskBranch{Branch: st.Branch, Bases: st.Bases, Source: st.Source, Voice: st.voice()}, nil
 }
 
 // TaskSource is the task's source, nil when it starts from new work.

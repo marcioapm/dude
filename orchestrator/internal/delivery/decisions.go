@@ -317,14 +317,6 @@ func (st *State) quietAt(point string) bool {
 // conductor decides, or a quiet one does.
 func (st *State) deliverOpens() bool { return !st.chatty() }
 
-// ConductedLoop says the review loop is the conductor's: the conductor
-// decides the delivery now. A delivery that was in flight before the
-// conducted loop existed gets it on its next round too. One a conductor
-// had (HadConductor), handed back to Deliver, keeps it: the fix bar it had
-// does not drop with the conductor. A delivery handed back before
-// HadConductor existed has no bit, and goes back to the project's bar.
-func (st *State) ConductedLoop() bool { return st.conducted() || st.HadConductor }
-
 // Phases is what the conductor may start at a decision point.
 func (d *Pending) Phases() []string {
 	switch d.Point {

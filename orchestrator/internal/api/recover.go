@@ -620,12 +620,11 @@ func (s *Server) startOver(ctx context.Context, tx pgx.Tx, org, taskID string, a
 			st.HandedBack = stopped.HandedBack
 		}
 	} else if next.noModel {
-		// Its quiet conductor has no model: Deliver's policy, the fix bar
-		// the conductor's, as StartTx starts one.
+		// Its quiet conductor has no model: Deliver's policy, as StartTx
+		// starts one.
 		st.Decider, st.HadConductor, st.Voice = delivery.DeciderPolicy, true, delivery.VoiceQuiet
 	} else {
-		// Deliver's policy, as the person who accepted its defaults left
-		// it; the conductor's fix bar it had stays (HadConductor).
+		// Deliver's policy, as the person who accepted its defaults left it.
 		st.Decider, st.HadConductor = delivery.DeciderPolicy, stopped.HadConductor
 	}
 	id, err := s.Workflow.StartTx(ctx, tx, workflow.StartOptions{

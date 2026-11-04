@@ -328,8 +328,10 @@ func TestTwoCommitsAfterARoundAreBothTheNextRounds(t *testing.T) {
 	w.allReviewed(task)
 }
 
-// A Deliver delivery's later round reviews the whole branch.
-func TestADeliverRoundTwoReviewsTheWholeBranch(t *testing.T) {
+// A Deliver delivery's later round reviews what changed since the round
+// before, as a conducted loop's does: every delivery's loop is the
+// conductor's.
+func TestADeliverRoundTwoReviewsWhatChangedSinceRoundOne(t *testing.T) {
 	w := roundsWorld(t)
 	task := w.task()
 	w.deliver(task)
@@ -337,8 +339,9 @@ func TestADeliverRoundTwoReviewsTheWholeBranch(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND status = 'completed' AND review_round = 2`, task) > 0
 	})
 	for _, r := range w.roundReviews(task) {
-		if r.Round <= 2 && r.Of != "" {
-			t.Errorf("Deliver's round %d reviews %q, want the whole branch", r.Round, r.Of)
+		want := map[bool]string{true: "", false: delivery.RangeFixRound}[r.Round == 1]
+		if r.Round <= 2 && r.Of != want {
+			t.Errorf("Deliver's round %d reviews %q, want %q", r.Round, r.Of, want)
 		}
 	}
 }
@@ -379,8 +382,8 @@ func (w *world) dismissShorter(task string) string {
 	return id
 }
 
-// A conducted loop's fixer is told its round and how a round is fixed;
-// a Deliver delivery's fixer is not, and its prompt has no round.
+// A fixer is told its round and how a round is fixed: a conducted loop's
+// and a Deliver delivery's alike.
 func TestTheConductedFixerIsToldItsRound(t *testing.T) {
 	for _, conducted := range []bool{true, false} {
 		t.Run(map[bool]string{true: "conducted", false: "deliver"}[conducted], func(t *testing.T) {
@@ -399,7 +402,7 @@ func TestTheConductedFixerIsToldItsRound(t *testing.T) {
 				return prompt != ""
 			})
 			// The paragraph as a conducted fixer of round 1 is given it.
-			told := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{ConductedLoop: true, Round: 1})
+			told := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{Round: 1})
 			plain := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{})
 			var first string
 			for _, part := range strings.Split(told, "\n\n") {
@@ -411,12 +414,12 @@ func TestTheConductedFixerIsToldItsRound(t *testing.T) {
 			if first == "" {
 				t.Fatalf("a conducted fixer's prompt adds nothing:\n%s", told)
 			}
-			if got := strings.Contains(prompt, first); got != conducted {
-				t.Errorf("fixer told its round: %v, want %v\n%s", got, conducted, prompt)
+			if !strings.Contains(prompt, first) {
+				t.Errorf("fixer not told its round\n%s", prompt)
 			}
 			round := w.count(`SELECT COALESCE(max(review_round), 0) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
-			if want := map[bool]int{true: 1, false: 0}[conducted]; round != want {
-				t.Errorf("the fix Run's round %d, want %d", round, want)
+			if round != 1 {
+				t.Errorf("the fix Run's round %d, want 1", round)
 			}
 		})
 	}

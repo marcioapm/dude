@@ -94,7 +94,7 @@ type State struct {
 	// bound, and never part of a Run's key (Iteration is).
 	Round int `json:"round,omitempty"`
 	// The heads the loop's last completed review round reviewed, by
-	// repository: where a conducted loop's next round starts
+	// repository: where the loop's next round starts
 	// (RangeFixRound). Nil before the loop's first round.
 	RoundHeads map[string]string `json:"roundHeads,omitempty"`
 	// The heads the review round in flight checks out, set as its Runs
@@ -215,10 +215,10 @@ type State struct {
 	HandedBack bool `json:"handedBack,omitempty"`
 	// A conductor has decided this delivery at some point (Talk it
 	// through, a takeover in Chat, the decisions given to it, a start over
-	// it decides): its review loop stays conducted (ConductedLoop) once
-	// handed back. HandedBack cannot say this: an Open or Draft at
+	// it decides). HandedBack cannot say this: an Open or Draft at
 	// Deliver's own Ask me first hold sets it on a delivery no conductor
-	// ever had. Set by every writer of DeciderConductor.
+	// ever had. Set by every writer of DeciderConductor, and by every
+	// start; a restart carries it over, and nothing decides on it.
 	HadConductor bool `json:"hadConductor,omitempty"`
 	// How the conductor speaks, when it decides (VoiceQuiet, VoiceChatty;
 	// "" is chatty). Written from outside the steps (the hand-back, a
@@ -938,7 +938,7 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		id, err := w.phase(ctx, sc, st, PhaseReview, k,
 			func(p *PhaseRun) {
-				p.Category, p.BlockingSeverities, p.FindingIDs = c, st.Policy.BlockingSeverities, toJudge[c]
+				p.Category, p.BlockingSeverities, p.FindingIDs = c, fixBarSeverities, toJudge[c]
 				// A round's own range is kept for a fresh reviewer: a large
 				// change since is still all the round has to review.
 				p.ReviewRange, p.KeepRange = reviewRange, st.fixLoop() || reviewRange != nil && reviewRange.Of == RangeFixRound
@@ -1032,11 +1032,11 @@ func (st *State) reviewRange() *ReviewRange {
 }
 
 // roundRange is the range the next review round's reviewers cover: the
-// loop's range (reviewRange), else, in a conducted loop's later round
-// (ConductedLoop, Round ≥ 1 done), only what changed since the round
-// before reviewed (RangeFixRound): from the heads it reviewed to the heads
-// now. Each round's base is the previous round's head, so the rounds
-// together cover every commit. Whenever that cannot be named for every
+// loop's range (reviewRange), else, in a later round (Round ≥ 1 done),
+// only what changed since the round before reviewed (RangeFixRound): from
+// the heads it reviewed to the heads now. Each round's base is the
+// previous round's head, so the rounds together cover every commit.
+// Whenever that cannot be named for every
 // repository that moved — one the last round had no head for — or nothing
 // moved, the whole branch: a narrower range would leave commits unreviewed.
 // An integration's review is of its merge, whole.
@@ -1044,7 +1044,7 @@ func (st *State) roundRange() *ReviewRange {
 	if r := st.reviewRange(); r != nil {
 		return r
 	}
-	if !st.ConductedLoop() || st.Round < 1 || st.Integration != nil {
+	if st.Round < 1 || st.Integration != nil {
 		return nil
 	}
 	base := map[string]string{}
@@ -1070,7 +1070,7 @@ func (st *State) roundRange() *ReviewRange {
 func (st *State) fixLoop() bool { return len(st.FixRange) > 0 }
 
 // conductsRounds says the conductor decides the review loop's rounds: the
-// delivery is conducted (conducted, not ConductedLoop: a delivery a conductor
+// delivery is conducted (conducted, not HadConductor: a delivery a conductor
 // had and handed back to Deliver is decided by the policy again, and keeps
 // the policy's exits, or its loop would never end), and its round parks for
 // the conductor.
@@ -1211,8 +1211,7 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 // when to stop is the conductor's judgement, on the round wake's facts.
 func (w *steps) loopExit(st *State, findings []FindingState, conv Convergence) *LoopExit {
 	if st.conductsRounds() {
-		bar, weighed := atFixBar(st, st.Policy, findings)
-		if slices.ContainsFunc(weighed, func(f FindingState) bool { return IsBlocking(bar, f) }) {
+		if slices.ContainsFunc(atFixBar(findings), IsBlocking) {
 			return nil
 		}
 		return &LoopExit{Reason: "clear"}
@@ -1229,8 +1228,7 @@ func (w *steps) policyExit(st *State, findings []FindingState, conv Convergence)
 		// Each cycle after a direct fix is a push its CI and reviewers see.
 		policy.MaxReviewIterations = st.Policy.prFixReviewBound()
 	}
-	policy, findings = atFixBar(st, policy, findings)
-	return Exit(policy, findings, st.Iteration, conv)
+	return Exit(policy, atFixBar(findings), st.Iteration, conv)
 }
 
 // loopFindings is what the review loop weighs: the reviewers' findings its
@@ -1428,10 +1426,8 @@ func (w *steps) fix(ctx context.Context, sc workflow.StepContext) (workflow.Resu
 	runID, err := w.phase(ctx, sc, st, PhaseFix, k, func(p *PhaseRun) {
 		p.FindingIDs, p.FeedbackItemIDs, p.CountAttempts = open, feedback, true
 		p.Continue = cont
-		if st.ConductedLoop() {
-			// The round whose findings it fixes, which its prompt names.
-			p.Round = st.Round
-		}
+		// The round whose findings it fixes, which its prompt names.
+		p.Round = st.Round
 		d.apply(p)
 	})
 	if err != nil {
@@ -1604,7 +1600,7 @@ func (w *steps) test(ctx context.Context, sc workflow.StepContext) (workflow.Res
 		return workflow.Result{}, err
 	}
 	runID, err := w.phase(ctx, sc, st, PhaseTest, k, func(p *PhaseRun) {
-		p.BlockingSeverities, p.FindingIDs = st.Policy.BlockingSeverities, judge
+		p.BlockingSeverities, p.FindingIDs = fixBarSeverities, judge
 		p.Continue, p.CarryFrom = cont, st.CarryFrom
 		d.apply(p)
 	})

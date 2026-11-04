@@ -50,9 +50,7 @@ The default `**/*.md` makes every Markdown file non-product, wherever it is. A p
 
 ## Which findings block
 
-A finding has a severity: Blocking, High, Medium, Low or Note. By default, **Blocking** and **High** findings send the work back to the fixer. Lower severities go into the pull request for a person to weigh.
-
-Change this in **Settings → Delivery → Findings that send it back**. At least one severity must be chosen.
+A finding has a severity: Blocking, High, Medium, Low or Note. **Blocking**, **High** and **Medium** findings send the work back to the fixer, and so does a reviewer's **Low** finding marked trivial (its fix obvious, local and a few lines). The tester's findings are weighed the same way: a Medium one fails the test and goes to the fixer. Lower severities go into the pull request for a person to weigh. Every delivery has this one bar; no setting changes it. A conductor deciding a task may set its own.
 
 Only open findings block. A finding that is resolved, superseded (its code no longer exists) or accepted by a person never blocks. Open feedback from people always blocks, whatever its severity. See [Questions and feedback](help:questions-and-feedback#feedback-on-a-task).
 
@@ -70,7 +68,7 @@ Every loop ends on a limit. These are set in **Settings → Delivery**, section 
 | Regression rounds | 2 | Consecutive fix rounds that resolve blockers but introduce new blockers declared caused by the fix. 0 disables. |
 | Pull request fix rounds | 3 | Fixes for pull request feedback, per review round, before the owner is asked. |
 
-Convergence counts only completed, non-replaced reviews of findings sent to both the reviewer and its parent fixer in the current attempt. Each fix is one round, however many reviews judged it: a finding is still for that round if a review said still and none said fixed. A fixed verdict or silence breaks a finding's still streak. Regression rounds group reviews of the same fix; each round must both resolve a blocking finding and raise a blocking finding declared caused by that fix, and the loop stops only while one of the newest round's fix-caused blockers is still open. Blocking severities come from the delivery's policy, not a fixed severity list. Human feedback and tester findings do not count toward these limits.
+Convergence counts only completed, non-replaced reviews of findings sent to both the reviewer and its parent fixer in the current attempt. Each fix is one round, however many reviews judged it: a finding is still for that round if a review said still and none said fixed. A fixed verdict or silence breaks a finding's still streak. Regression rounds group reviews of the same fix; each round must both resolve a blocking finding and raise a blocking finding declared caused by that fix, and the loop stops only while one of the newest round's fix-caused blockers is still open. Blocking means at the fix bar above. Human feedback and tester findings do not count toward these limits.
 
 With no blockers the loop is clear. Otherwise **Not converging** takes precedence over **Review stuck**, which takes precedence over **Review rounds used up**. Findings without acceptance criteria still use the attempts limit. Older deliveries whose frozen policy lacks the convergence limits keep them disabled.
 

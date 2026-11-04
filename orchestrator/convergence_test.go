@@ -255,7 +255,9 @@ func TestConvergenceDecisionsReachNextRound(t *testing.T) {
 	}
 }
 
-func TestConvergenceRegressionUsesProjectBlockingSeverities(t *testing.T) {
+// A medium regression counts toward the regression bound: the fix bar,
+// every delivery's, blocks on medium.
+func TestConvergenceRegressionCountsAMediumAtTheFixBar(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disabled=%v", disabled), func(t *testing.T) {
 			w := newWorld(t)
@@ -269,7 +271,6 @@ func TestConvergenceRegressionUsesProjectBlockingSeverities(t *testing.T) {
 				return fmt.Sprintf("```yaml\nverdicts:\n  F1: fixed\n---\nseverity: medium\ncategory: correctness\ntitle: Regression %d\ndescription: A new observable failure.\ncaused_by_fix: yes\n```\n", round-1)
 			})
 			p := scriptedPolicy()
-			p.BlockingSeverities = []string{"blocking", "high", "medium"}
 			p.MaxAttemptsPerFinding = 4
 			if disabled {
 				p.MaxRegressionRounds = 0

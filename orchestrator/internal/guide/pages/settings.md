@@ -40,7 +40,7 @@ Where neither sets a value, dude's built-in default applies.
 | Judgements | Which tier answers dude's one-question decisions | [Judgements](help:judgements#what-judgements-are) |
 | Machines | The machine sizes agents can run on | [Machines and images](help:machines-and-images#machine-sizes) |
 | Images | The container images agents work in | [Machines and images](help:machines-and-images#images) |
-| Delivery | Reviewers, blocking severities, loop limits, simplify, test, waiting and conductor's edits | [Delivering a task](help:delivery#the-pipeline) |
+| Delivery | Reviewers, loop limits, simplify, test, waiting and conductor's edits | [Delivering a task](help:delivery#the-pipeline) |
 | Servers (project) | Server definitions, branch previews and project secrets | [Servers and previews](help:servers-and-previews#server-definitions) |
 | Memory | Search, Memories and Index | [Memory](help:memory#what-memory-is) |
 

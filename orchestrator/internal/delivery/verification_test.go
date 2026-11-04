@@ -91,7 +91,6 @@ func TestTheBodyRefreshTouchesOnlyDudesMarkedSection(t *testing.T) {
 }
 
 func TestTheGateFailsBeforeItBlocksAndHonoursAPersonsDecision(t *testing.T) {
-	p := DefaultPolicy()
 	cases := []struct {
 		name string
 		in   gateInput
@@ -104,6 +103,8 @@ func TestTheGateFailsBeforeItBlocksAndHonoursAPersonsDecision(t *testing.T) {
 		{"accepted", gateInput{Verdicts: []StoredVerdict{{Criterion: 1, Status: "fail", Decision: "accepted"}}}, "pass"},
 		{"a blocking finding on passing criteria", gateInput{Verdicts: []StoredVerdict{{Criterion: 1, Status: "pass"}},
 			Findings: []TestFinding{{ID: "f", Severity: "high", Title: "Console error on load"}}}, "fail"},
+		{"a medium finding is at the fix bar", gateInput{Verdicts: []StoredVerdict{{Criterion: 1, Status: "pass"}},
+			Findings: []TestFinding{{ID: "f", Severity: "medium", Title: "Goodbye flickers"}}}, "fail"},
 		{"a note is not a failure", gateInput{Verdicts: []StoredVerdict{{Criterion: 1, Status: "pass"}},
 			Findings: []TestFinding{{ID: "f", Severity: "low", Title: "Slow"}}}, "pass"},
 		{"the environment", gateInput{Verdicts: []StoredVerdict{{Criterion: 1, Status: "pass"}},
@@ -120,7 +121,7 @@ func TestTheGateFailsBeforeItBlocksAndHonoursAPersonsDecision(t *testing.T) {
 			Findings: []TestFinding{{ID: "f1", Severity: "blocking", Title: "Criterion 1 is not met", RunID: "t1"}}}, "blocked"},
 	}
 	for _, c := range cases {
-		if got := judgeGate(p, c.in).Outcome; got != c.want {
+		if got := judgeGate(c.in).Outcome; got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
 	}
