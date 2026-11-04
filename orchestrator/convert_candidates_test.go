@@ -515,6 +515,48 @@ func TestConvertCandidatesStopsAStoppedDeliveryAtTheDeletedStepWithNoCandidate(t
 	}
 }
 
+// State C stopped: a delivery stopped by a person while its candidate was
+// being promoted (step and stopped.step promoteCandidate). The sweep lets
+// its candidate go and moves it off the deleted step, so a second sweep
+// selects nothing and tells Chat nothing more; the person's retry fixes
+// again directly.
+func TestConvertCandidatesStopsAStoppedPromotionOffTheDeletedStep(t *testing.T) {
+	w, ana, review, from := midCandidateReview(t)
+	w.stop(ana, w.wi, map[string]any{"note": "hold on"})
+	w.until("stopped", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
+	})
+	// A person's Stop records a halt (and a stop, where a Run was at
+	// work): each at the deleted step.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'promoteCandidate', state = state
+		|| jsonb_build_object('stopped', COALESCE(state->'stopped', '{}') || '{"step":"promoteCandidate"}')
+		|| CASE WHEN state ? 'halt' THEN jsonb_build_object('halt', state->'halt' || '{"at":"promoteCandidate"}') ELSE '{}' END
+		WHERE task_id = $1`, w.wi)
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{StoppedMidPromotion: 1}) {
+		t.Fatalf("swept %+v, want one stopped mid-promotion", n)
+	}
+	w.noCandidateTrace()
+	if got := w.str(`SELECT step || '/' || COALESCE(state->'stopped'->>'step', '') || '/' || COALESCE(state->'halt'->>'at', 'prFix')
+		FROM workflow_runs WHERE task_id = $1`, w.wi); got != "prFix/prFix/prFix" {
+		t.Errorf("step/stopped.step/halt.at %s, want prFix/prFix/prFix", got)
+	}
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{}) {
+		t.Errorf("a second sweep did %+v", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'stopped_mid_promotion'`, w.wi); n != 1 {
+		t.Errorf("%d notices of the stop, want 1", n)
+	}
+	var heads map[string]string
+	_ = json.Unmarshal([]byte(w.state("heads")), &heads)
+	if !maps.Equal(heads, from) {
+		t.Errorf("heads %v, want the candidate's from %v", heads, from)
+	}
+	if status, body := w.callAs(ana, "/internal/tasks/"+w.wi+"/recover", map[string]any{"action": "retry"}); status != 200 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	w.directlyFixedAgain(review)
+}
+
 // State D: parked on a person with a candidate open. The candidate goes,
 // the escalation stays, and a retry fixes again directly from the pull
 // request.
