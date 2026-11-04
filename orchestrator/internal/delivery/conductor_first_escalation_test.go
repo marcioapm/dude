@@ -11,6 +11,29 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
+func TestFailedEscalationBriefingWakesHandoverInsteadOfRestarting(t *testing.T) {
+	w := newGoldenWorld(t)
+	w.exec(t, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,ended_at)
+		VALUES('run_cond1',$1,'prj_g','wi_g',1,'failed','conductor','agent',now())`)
+	w.delivery(t, "decide", `{"taskId":"wi_g","projectId":"prj_g","decider":"conductor","escalation":{"reason":"implement_failed","holder":"conductor","raisedAt":"2026-01-01T00:00:00Z","step":"implement"}}`)
+	w.exec(t, `UPDATE workflow_runs SET wake_at=now()+interval '10 minutes' WHERE id='wfr_g'`)
+	for range 2 {
+		w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+			return WakeConductorTx(ctx, tx, w.org, "wi_g", 0)
+		})
+	}
+	var due bool
+	var conductors int
+	if err := w.owner.QueryRow(context.Background(), `SELECT wake_at<=now(),
+		(SELECT count(*) FROM runs WHERE task_id='wi_g' AND role='conductor')
+		FROM workflow_runs WHERE id='wfr_g'`).Scan(&due, &conductors); err != nil {
+		t.Fatal(err)
+	}
+	if !due || conductors != 1 {
+		t.Fatalf("failed briefing: due=%v conductors=%d", due, conductors)
+	}
+}
+
 func TestConductorFirstEscalationRoutes(t *testing.T) {
 	reasons := []string{"implement_failed", "fix_failed", "test_failed", "pr_fix_failed", "review_failed", "no_changes", "stuck", "exhausted", ReasonNotConverging, ReasonTestFailedCriteria, ReasonTestBlocked, ReasonChecksUnverified, "pull_request_conflict", "ci_stuck", ReasonPullRequestMoved, ReasonStoppedMidPromotion, "pull_request_closed", "pr_loop_exhausted", "source_gone", "source_changed", ReasonChoiceUnresolved, ReasonConductorUnavailable}
 	for _, mode := range []string{"available", "policy", "no_model", "failed"} {

@@ -116,6 +116,25 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 	if err := liveNow(); err != nil {
 		return "", err
 	}
+	if runID == "" {
+		// An escalation cannot be answered by repeatedly starting a conductor
+		// whose briefing failed. Wake its decision step for the serialized
+		// person handover instead; keep the news for a later recovery.
+		var failedEscalation bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_runs w
+			WHERE w.task_id=$1 AND w.status='waiting' AND w.step='decide'
+			AND w.state->'escalation' IS NOT NULL
+			AND NOT w.state->'escalation' ? 'decided'
+			AND (SELECT status='failed' FROM runs WHERE task_id=$1 AND role='conductor'
+				ORDER BY created_at DESC,id DESC LIMIT 1))`, taskID).Scan(&failedEscalation); err != nil {
+			return "", err
+		}
+		if failedEscalation {
+			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET wake_at=now() WHERE task_id=$1
+				AND status='waiting' AND step='decide' AND state->'escalation'->>'holder'='conductor'`, taskID)
+			return "", err
+		}
+	}
 	// A task a person stopped keeps its reasons until it is picked back up:
 	// a note would start a conductor beside the kept one.
 	if halted, err := HaltedTx(ctx, tx, taskID); err != nil || halted {
