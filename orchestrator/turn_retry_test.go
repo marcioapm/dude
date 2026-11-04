@@ -3,7 +3,7 @@ package orchestrator_test
 // A turn that fails on a temporary model error — a rate limit, an
 // overloaded upstream, a stream cut off — is waited out and retried in the
 // same Run, any role's: no escalation for a blip. Past the bound the
-// failure is the Run's, as before; any other failure is not retried. A
+// failure is the Run's; any other failure is not retried. A
 // quiet conductor retrying keeps its decision from defaulting at its
 // deadline. Through the real syncer, workflow and API, the fake lux
 // speaking each harness's protocol.
@@ -119,7 +119,7 @@ func TestATransientTurnFailureIsRetriedAndTheRunGoesOn(t *testing.T) {
 	}
 }
 
-// Past maxTurnRetries the failure is the Run's, exactly as before: failed
+// Past maxTurnRetries the failure is the Run's, as any other: failed
 // with the agent's error, saying it was retried, and escalated as
 // implement_failed.
 func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
@@ -147,7 +147,7 @@ func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
 }
 
 // A failure that is not temporary — refused credentials, a bad request —
-// is not retried: the Run fails at once, as before.
+// is not retried: the Run fails at once.
 func TestANonTransientTurnFailureIsNotRetried(t *testing.T) {
 	for name, e := range map[string]string{
 		"auth": "session/prompt: Unauthorized: invalid x-api-key (401)",
@@ -261,7 +261,7 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 
 // A conductor paused while it waits out a retry's back-off is not
 // retrying any more: its count left behind does not hold the decision,
-// whose deadline defaults it as before the retries existed.
+// whose deadline defaults it.
 func TestAConductorPausedMidRetryLetsItsDeadlineDefault(t *testing.T) {
 	w, task, conductor := conductorRetrying(t)
 	if status, body := w.call("/internal/runs/"+conductor+"/pause", map[string]any{}); status != 200 {
@@ -299,8 +299,8 @@ func (w *world) retryPending() (task, run string) {
 }
 
 // A person's Pause while a turn retry waits out its back-off is acted on
-// at once: only the retry waits, not the Run (dude#F1: the Run's back-off
-// held every sweep action for up to ~16.5 min).
+// at once: only the retry waits, not the Run (the Run's own back-off
+// would hold every sweep action as long).
 func TestAPauseIsNotHeldByATurnRetrysBackOff(t *testing.T) {
 	w := newWorld(t)
 	_, run := w.retryPending()
