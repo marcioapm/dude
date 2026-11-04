@@ -419,9 +419,8 @@ func convertLegacyTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID str
 		return "", nil, nil, nil, err
 	}
 	var raw, signals []byte
-	var status string
-	if err = tx.QueryRow(ctx, `SELECT step, status::text, state, awaiting_signals, wake_at FROM workflow_runs WHERE id = $1`,
-		workflowID).Scan(&step, &status, &raw, &signals, &wake); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT step, state, awaiting_signals, wake_at FROM workflow_runs WHERE id = $1`,
+		workflowID).Scan(&step, &raw, &signals, &wake); err != nil {
 		return "", nil, nil, nil, err
 	}
 	st = &State{}
