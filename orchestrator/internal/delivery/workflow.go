@@ -587,12 +587,15 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 		},
 	}
 	// A pull request's end reaches every step but the pull request wait,
-	// which reads it from pr.feedback.
+	// which reads it from pr.feedback. It is honoured before a legacy
+	// row's conversion (endable outside legacy): a conversion that moves
+	// the row consumes the signals that woke it, pr.ended among them.
 	for name, step := range def.Steps {
+		step = w.legacy(step)
 		if name != "awaitPullRequest" {
 			step = w.endable(step)
 		}
-		def.Steps[name] = w.legacy(step)
+		def.Steps[name] = step
 	}
 	return def
 }

@@ -253,6 +253,57 @@ func TestConvertCandidatesLeftByTheSweepIsConvertedOnResume(t *testing.T) {
 	}
 }
 
+// A delivery the sweep left whose pull request merges before its lease
+// lapses: the pr.ended that wakes it ends it (endable) before its step's
+// entry converts it, as the sweep's conversion would leave it to. The
+// signal is not consumed by the conversion's move to the redo: no fix
+// works or publishes on the merged pull request, and the task is done
+// the way an end makes it, with the candidate's Runs aborted.
+func TestConvertCandidatesLeftByTheSweepEndsOnAMergeBeforeConverting(t *testing.T) {
+	w, _, review, _ := midCandidateReview(t)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = 'old-pod', locked_until = now() + interval '1 hour' WHERE task_id = $1`, w.wi)
+	if n := w.convertCandidates(); n != (delivery.CandidatesConverted{Left: 1}) {
+		t.Fatalf("swept %+v, want it left to the old pod", n)
+	}
+	head := w.gh.SHA(w.branch)
+	merged := w.str(`SELECT now()::text`)
+	w.gh.Merge(1)
+	w.until("the merge recorded", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND state = 'merged'`, w.wi) == 1
+	})
+	if w.state("candidate") == "" {
+		t.Fatalf("converted while the old pod leased it")
+	}
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = NULL, locked_until = now() - interval '1 second',
+		status = 'waiting', wake_at = now() WHERE task_id = $1`, w.wi)
+	w.until("the delivery ended", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
+	})
+	if got := w.taskStatus(w.wi); got != "done" {
+		t.Errorf("task %s, want done by the merge", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
+		AND payload->>'reason' = 'pull requests merged'`, w.wi); n != 1 {
+		t.Errorf("%d moves to done by the merge (endable's), want 1\n%s", n,
+			w.str(`SELECT string_agg(event_type || ' ' || payload::text, E'\n' ORDER BY occurred_at) FROM events WHERE task_id = $1 AND event_type LIKE 'task.%'`, w.wi))
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND status = 'completed'
+		AND created_at > $2::timestamptz`, w.wi, merged); n != 0 {
+		t.Errorf("%d fix Runs completed on the merged pull request\n%s", n, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'agent' AND phase IS NOT NULL
+		AND status NOT IN ('aborted', 'completed', 'failed')`, w.wi); n != 0 {
+		t.Errorf("%d phase Runs still live after the end\n%s", n, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted'`, review); n != 1 {
+		t.Errorf("the candidate's review was not aborted\n%s", w.describeRuns())
+	}
+	if got := w.gh.SHA(w.branch); got != head {
+		t.Errorf("the merged pull request's branch moved from %s to %s", head, got)
+	}
+}
+
 // Two sweeps at once (two orchestrators booting) convert the delivery once.
 func TestConvertCandidatesTwiceAtOnceConvertsOnce(t *testing.T) {
 	w, _, review, from := midCandidateReview(t)
