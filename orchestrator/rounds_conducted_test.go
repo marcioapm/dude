@@ -402,7 +402,7 @@ func TestTheConductedFixerIsToldItsRound(t *testing.T) {
 				return prompt != ""
 			})
 			// The paragraph as a conducted fixer of round 1 is given it.
-			told := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{ConductedLoop: true, Round: 1})
+			told := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{Round: 1})
 			plain := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{})
 			var first string
 			for _, part := range strings.Split(told, "\n\n") {

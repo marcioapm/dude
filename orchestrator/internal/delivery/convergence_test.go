@@ -164,9 +164,11 @@ func TestConvergenceRegressionRequiresSameReviewerAndParentSentBlocker(t *testin
 		t.Fatalf("fixed finding of an uncompleted review counted: %+v", got)
 	}
 	w.exec(t, `UPDATE runs SET status = 'completed' WHERE id = 'origin'`)
-	st.Policy.BlockingSeverities = []string{"medium"}
+	// The fix bar (medium and above, every delivery's) decides what a
+	// fix-caused finding must be to count: a low one does not.
+	w.exec(t, `UPDATE review_findings SET severity = 'low' WHERE caused_by_fix`)
 	if got := w.convergence(t, st); got.RegressionRounds != 0 {
-		t.Fatalf("policy severities ignored: %+v", got)
+		t.Fatalf("the fix bar ignored: %+v", got)
 	}
 }
 
@@ -241,7 +243,7 @@ func TestConvergenceRegressionNeedsABlockingFixCausedFindingAndAFixedParent(t *t
 		name, verdict, severity string
 		still                   int
 	}{
-		{"medium fix-caused findings", "fixed", "medium", 0},
+		{"low fix-caused findings", "fixed", "low", 0},
 		{"still parent findings", "still", "high", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

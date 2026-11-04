@@ -21,24 +21,15 @@ func TestGoldenInstructions(t *testing.T) {
 	}
 }
 
-// A reviewer of a conducted loop (ConductedLoop): severity by outcome,
-// each finding at medium or above with its evidence, the conductor's fix
-// bar. Every other role's file is the policy loop's, byte for byte.
+// A reviewer's file, every delivery's since the loop is the conductor's
+// on every row: severity by outcome, each finding at medium or above with
+// its evidence, the fix bar; and its resumed round's message.
 func TestGoldenConductedLoopInstructions(t *testing.T) {
-	for _, role := range []string{"reviewer", "qa_browser", "fixer"} {
-		in := goldenTask()
-		in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
-		in.Repositories = readOnlyRepos()
-		policy := Instructions(role, "correctness", in.InstructionsInput())
-		in.ConductedLoop = true
-		conducted := Instructions(role, "correctness", in.InstructionsInput())
-		if role == "reviewer" {
-			golden(t, "instructions-reviewer-conducted-loop", conducted)
-		} else if conducted != policy {
-			t.Errorf("a %s's file changed in a conducted loop", role)
-		}
-	}
-	golden(t, "resume-review-conducted-loop", roundMessage(true, PhaseReview, map[string]string{"api": "aaa111"},
+	in := goldenTask()
+	in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+	in.Repositories = readOnlyRepos()
+	golden(t, "instructions-reviewer-conducted-loop", Instructions("reviewer", "correctness", in.InstructionsInput()))
+	golden(t, "resume-review-conducted-loop", RoundMessage(PhaseReview, map[string]string{"api": "aaa111"},
 		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], nil, []FixRange{{Repo: "api", Base: "aaa111", Head: "bbb222"}}, ""))
 }
 
@@ -164,7 +155,7 @@ func TestChildContractFollowsPublishes(t *testing.T) {
 }
 
 func TestInstructionsAspectsUseSharedSeverity(t *testing.T) {
-	const definition = "Severity: `blocking` is wrong behaviour on a supported path, data loss, a security boundary crossed, or an acceptance criterion not met; `high` will cause a real defect or outage under realistic use; `medium` is a real but bounded problem worth fixing; `low` is minor; `note` is an observation, not a request."
+	const definition = "Severity is what happens if this ships, never your taste."
 	const reference = "Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`."
 	for _, aspect := range reviewerOrder {
 		for mode, text := range underEveryMode("reviewer", aspect, InstructionsInput{Tools: true}) {

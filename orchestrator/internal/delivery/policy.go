@@ -101,27 +101,19 @@ type Policy struct {
 var conductorFixSeverities = []string{"blocking", "high", "medium"}
 
 // fixBar is the severities st's review loop blocks on: the conductor's
-// fix bar in a conducted loop (ConductedLoop), BlockingSeverities
-// otherwise. Where findings are weighed one by one, atFixBar adds the
-// trivial-low rule.
+// fix bar, every delivery's. Where findings are weighed one by one,
+// atFixBar adds the trivial-low rule.
 func fixBar(st *State) []string {
-	if st.ConductedLoop() {
-		return conductorFixSeverities
-	}
-	return st.Policy.BlockingSeverities
+	return conductorFixSeverities
 }
 
 // atFixBar is the loop's policy and findings as st's fix bar (fixBar)
-// weighs them. In a conducted loop what blocks is every finding at medium
-// or above, and every low one marked trivial, whatever BlockingSeverities
-// says. Until the conductor runs the loop itself, the policy's Exit routes
-// it, and a conducted round's reviewers rate a wrong outcome medium
+// weighs them: what blocks is every finding at medium or above, and every
+// low one marked trivial. Until the conductor runs the loop itself, the
+// policy's Exit routes it, and reviewers rate a wrong outcome medium
 // (contracts/review.md): without the bar such a finding would ship.
 func atFixBar(st *State, p Policy, findings []FindingState) (Policy, []FindingState) {
 	p.BlockingSeverities = fixBar(st)
-	if !st.ConductedLoop() {
-		return p, findings
-	}
 	out := slices.Clone(findings)
 	for i, f := range out {
 		if !f.Human && f.Severity == "low" && f.Trivial {
@@ -409,7 +401,7 @@ type FindingState struct {
 	Status      string
 	FixAttempts int
 	// The reviewer marked it trivial (review_findings.trivial; not said is
-	// not trivial): weighed only by the conductor's fix bar (ConductedLoop).
+	// not trivial): weighed by the fix bar (atFixBar).
 	Trivial bool `db:"-"`
 	// Not a column of review_findings: set only for a person's item.
 	Human        bool `db:"-"`

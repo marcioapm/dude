@@ -1614,9 +1614,9 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			if lastFix, err = delivery.LastFixTx(ctx, tx, parent); err != nil {
 				return err
 			}
-			// A conducted loop's reviewer is told what earlier rounds
+			// A later round's reviewer is told what earlier rounds
 			// decided, so it does not raise those again.
-			if taskBranch.ConductedLoop && reviewRound > 0 {
+			if reviewRound > 0 {
 				if decided, err = delivery.DecidedFindingsTx(ctx, tx, r.TaskID, r.Attempt); err != nil {
 					return err
 				}
@@ -1689,7 +1689,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, ConductedLoop: taskBranch.ConductedLoop, Adopted: adopted, LastFix: lastFix,
+		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
 		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh, Round: reviewRound, Decided: decided,
 	}
 	if reviewRange != nil {

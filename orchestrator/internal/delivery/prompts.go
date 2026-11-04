@@ -64,9 +64,6 @@ type PromptInput struct {
 	// The task took over an existing branch: what it merges into, by
 	// repository. Empty for new work, whose base is the default branch.
 	Bases map[string]string
-	// The review loop is the conductor's (State.ConductedLoop, at submit):
-	// a reviewer's instruction file asks for each finding's evidence.
-	ConductedLoop bool
 	// A conductor's: its delivery's voice at submit (State.Voice).
 	Voice string
 	// The existing pull request the task took over, when it did: its
@@ -108,7 +105,7 @@ type PromptInput struct {
 	// Review phase: what earlier reviewers of its category asked
 	// (EarlierQuestionsTx).
 	Questions []EarlierQuestion
-	// Review phase of a conducted loop (ConductedLoop): its round
+	// Review phase: its round
 	// (runs.review_round), 0 for none, and the attempt's findings decided
 	// in earlier rounds (DecidedFindingsTx). Fix phase of one: the round
 	// whose findings it fixes.
@@ -230,13 +227,10 @@ var reviewContract = render(mustTemplate("contracts/review"), InstructionsInput{
 // block and drops it, as it drops any document without a title.
 var reviewSummary = render(mustTemplate("contracts/review-summary"), nil)
 
-// findingFormat is the reviewer's: only a reviewer is shown the last fix,
-// so only it is asked for caused_by_fix (the template keys on .Role).
+// findingFormat is the reviewer's: each finding's evidence asked for, and,
+// as only a reviewer is shown the last fix, its caused_by_fix (the
+// template keys on .Role).
 var findingFormat = render(mustTemplate("contracts/finding-format"), InstructionsInput{}.data("reviewer"))
-
-// conductedFindingFormat is findingFormat in a conducted loop: each
-// finding's evidence asked for (ConductedLoop).
-var conductedFindingFormat = render(mustTemplate("contracts/finding-format"), InstructionsInput{ConductedLoop: true}.data("reviewer"))
 
 // earlierFindings asks a re-review to judge what the last round raised.
 // Whether a finding was fixed is the reviewer's call, made by reading the
@@ -387,7 +381,7 @@ func Prompt(phase string, in PromptInput) string {
 		if note := lastFixNote(in.LastFix); note != "" {
 			add(note)
 		}
-		if note := reviewRoundNote(in.ConductedLoop, in.Round, in.ReviewOf, in.Decided); note != "" {
+		if note := reviewRoundNote(in.Round, in.ReviewOf, in.Decided); note != "" {
 			add(note)
 		}
 
@@ -477,8 +471,8 @@ func fixSections(in PromptInput) []string {
 	if len(in.Feedback) > 0 {
 		sections = append(sections, FeedbackText(in.Feedback, in.CLI))
 	}
-	if in.ConductedLoop && in.Round > 0 {
-		// A conducted loop's fixer: its round, and how the round is fixed.
+	if in.Round > 0 {
+		// A later round's fixer: its round, and how the round is fixed.
 		sections = append(sections, render(fixRoundRulesTmpl, struct{ Round int }{in.Round}))
 	}
 	return sections

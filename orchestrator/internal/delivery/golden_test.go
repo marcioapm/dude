@@ -274,7 +274,7 @@ func TestGoldenConductedReviewRounds(t *testing.T) {
 		{ID: "fnd_3", Severity: "high", Title: "Export drops the last row", How: decidedHow("accepted", "", "")},
 	}
 	in := goldenTask()
-	in.Category, in.ConductedLoop, in.Round = "correctness", true, 1
+	in.Category, in.Round = "correctness", 1
 	golden(t, "prompt-review-round-1-conducted-loop", Prompt(PhaseReview, in))
 	in.Round, in.ReviewBase, in.ReviewOf, in.Decided = 2, map[string]string{"api": "aaa111"}, RangeFixRound, decided
 	in.Findings = goldenFindings()[:1]
@@ -285,18 +285,18 @@ func TestGoldenConductedReviewRounds(t *testing.T) {
 	// fix): round 1 and later rounds review that range, never the whole.
 	for _, of := range []string{RangeSimplify, RangePullRequestFix} {
 		ranged := goldenTask()
-		ranged.Category, ranged.ConductedLoop, ranged.Round = "correctness", true, 1
+		ranged.Category, ranged.Round = "correctness", 1
 		ranged.ReviewBase, ranged.ReviewOf = map[string]string{"api": "aaa111"}, of
 		golden(t, "prompt-review-round-1-conducted-"+of, Prompt(PhaseReview, ranged))
 		ranged.Round, ranged.Decided = 2, decided
 		golden(t, "prompt-review-round-2-conducted-"+of, Prompt(PhaseReview, ranged))
 	}
-	// Outside a conducted loop the round says nothing: today's bytes.
-	in.ConductedLoop = false
+	// Outside a round (Round 0) the prompt says nothing of one.
+	in.Round, in.ReviewBase, in.ReviewOf, in.Decided = 0, nil, "", nil
 	plain := goldenTask()
 	plain.Category = "correctness"
 	if Prompt(PhaseReview, in) != Prompt(PhaseReview, plain) {
-		t.Error("a review outside a conducted loop is told its round")
+		t.Error("a review outside a round is told its round")
 	}
 }
 
@@ -304,16 +304,16 @@ func TestGoldenConductedReviewRounds(t *testing.T) {
 // and resumed; a fixer outside one, today's bytes.
 func TestGoldenConductedFixRound(t *testing.T) {
 	in := goldenTask()
-	in.Findings, in.Tools, in.CLI, in.ConductedLoop, in.Round = goldenFindings(), true, true, true, 2
+	in.Findings, in.Tools, in.CLI, in.Round = goldenFindings(), true, true, 2
 	golden(t, "prompt-fix-round-2-conducted-loop", Prompt(PhaseFix, in))
 	from, to := map[string]string{"api": "aaa111"}, map[string]string{"api": "bbb222"}
 	golden(t, "resume-fix-round-2-conducted-loop", FixRoundMessage(from, to, false,
-		PromptInput{Findings: goldenFindings()[:1], ConductedLoop: true, Round: 2}))
+		PromptInput{Findings: goldenFindings()[:1], Round: 2}))
 	plain := goldenTask()
 	plain.Findings, plain.Tools, plain.CLI = goldenFindings(), true, true
-	in.ConductedLoop = false
+	in.Round = 0
 	if Prompt(PhaseFix, in) != Prompt(PhaseFix, plain) {
-		t.Error("a fixer outside a conducted loop is told its round")
+		t.Error("a fixer outside a round is told its round")
 	}
 }
 

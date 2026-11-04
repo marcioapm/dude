@@ -489,18 +489,10 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 		if err := tx.QueryRow(ctx, `SELECT mcp_token_hash IS NOT NULL FROM runs WHERE id = $1`, p.ID).Scan(&tools); err != nil {
 			return "", err
 		}
-		// A conducted loop's fixer is told its round, as a fresh one is.
-		conducted := false
-		if in.Round > 0 {
-			tb, err := TaskBranchTx(ctx, tx, in.TaskID, in.Attempt)
-			if err != nil {
-				return "", err
-			}
-			conducted = tb.ConductedLoop
-		}
+		// A later round's fixer is told its round, as a fresh one is.
 		message = FixRoundMessage(p.BaseRefs, in.BaseRefs, p.Phase != PhaseFix,
 			PromptInput{Findings: findings, PRFeedback: in.PRFeedback, Feedback: people, Tools: tools, CLI: tools && in.toolsService,
-				ConductedLoop: conducted, Round: in.Round})
+				Round: in.Round})
 		since, err := sinceLastRoundTx(ctx, tx, in.TaskID, p.ID)
 		if err != nil {
 			return "", err
@@ -525,19 +517,8 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 				return "", err
 			}
 		}
-		// A reviewer of a conducted loop is asked for each finding's
-		// evidence, as the delivery reads now (its instruction file was
-		// its predecessor's).
-		var conducted bool
-		if in.Phase == PhaseReview {
-			tb, err := TaskBranchTx(ctx, tx, in.TaskID, in.Attempt)
-			if err != nil {
-				return "", err
-			}
-			conducted = tb.ConductedLoop
-		}
-		message = roundMessage(conducted, in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
-		if conducted && in.Round > 0 {
+		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
+		if in.Phase == PhaseReview && in.Round > 0 {
 			// Its round, as a fresh reviewer's prompt has it.
 			decided, err := DecidedFindingsTx(ctx, tx, in.TaskID, in.Attempt)
 			if err != nil {
@@ -547,7 +528,7 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 			if in.ReviewRange != nil {
 				of = in.ReviewRange.Of
 			}
-			message += "\n\n" + reviewRoundNote(true, in.Round, of, decided)
+			message += "\n\n" + reviewRoundNote(in.Round, of, decided)
 		}
 		if in.Phase == PhaseTest {
 			checks, err := WriterChecksTx(ctx, tx, in.TaskID, in.Attempt)
@@ -662,22 +643,11 @@ func roundRanges(from, to map[string]string) []roundRange {
 // tester may carry criteria from ("" retests every one).
 func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
 	lastFix []FixRange, carry string) string {
-	return roundMessage(false, phase, from, to, reason, findings, questions, lastFix, carry)
-}
-
-// roundMessage is RoundMessage; conducted, for a reviewer of a conducted
-// loop (ConductedLoop): the format it reports in asks for each finding's
-// evidence, as its instruction file does.
-func roundMessage(conducted bool, phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
-	lastFix []FixRange, carry string) string {
 	list := ""
 	if len(findings) > 0 {
 		list = earlierFindings(findings)
 	}
 	format := findingFormat
-	if conducted {
-		format = conductedFindingFormat
-	}
 	return render(roundTmpl, struct {
 		Test                                 bool
 		Ranges                               []roundRange
@@ -804,11 +774,11 @@ func decidedHow(status, by, note string) string {
 	return status
 }
 
-// reviewRoundNote is contracts/review-round: a conducted loop's reviewer
-// told its round, what the round covers, and what earlier rounds decided.
-// "" outside a conducted loop or a round.
-func reviewRoundNote(conducted bool, round int, of string, decided []DecidedFinding) string {
-	if !conducted || round < 1 {
+// reviewRoundNote is contracts/review-round: a reviewer told its round,
+// what the round covers, and what earlier rounds decided. "" outside a
+// round.
+func reviewRoundNote(round int, of string, decided []DecidedFinding) string {
+	if round < 1 {
 		return ""
 	}
 	return render(reviewerRoundTmpl, struct {

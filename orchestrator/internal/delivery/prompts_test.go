@@ -262,7 +262,7 @@ func TestInstructionsContractMatrix(t *testing.T) {
 			nil}, // This role has a purpose and stance, but no post-stance contract.
 		{"reviewer", "a weak or wrong finding costs a whole fix round.",
 			"No finding is better than a weak one: do not pad.",
-			[]string{"A suspected finding is `low` or `note` at most.", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:"}},
+			[]string{"Every finding at `medium` or above carries its evidence", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:"}},
 		{"fixer", "Your fix is reviewed again, and on an open pull request it goes to the pull request when you publish, where its CI and reviewers see it, and is reviewed after: run the affected tests before you finish.",
 			"Fix what was raised, completely, and nothing else",
 			[]string{"For each problem, reproduce it first where it can be reproduced", "```yaml\nchecks:\n", "Only committed changes are kept."}},
@@ -462,8 +462,8 @@ func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"`Reproduced:`", "`Traced:`", "`Suspected:`", "same line as `description:`", "`low` or `note` at most",
-		"minimal local change", "`blocking` is wrong behaviour"} {
+	for _, want := range []string{"Severity is what happens if this ships", "carries its evidence",
+		"minimal local change", "out of scope unless the change makes it reachable"} {
 		if !strings.Contains(reviewContract, want) {
 			t.Errorf("the reviewer's contract lacks %q", want)
 		}
