@@ -203,12 +203,11 @@ func TestAReviewersTransientFailureIsRetried(t *testing.T) {
 	}
 }
 
-// A quiet conductor whose turn failed on a 429 is retrying it: its
-// decision's deadline passing does not default the decision while the
-// retry waits. Once the retried turn goes through, the conductor takes
-// its decision itself.
-func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
-	w := conducting(t)
+// conductorRetrying has a quiet conductor's first turn fail on a 429
+// asking for an hour, and returns once the retry is queued and the
+// decision is waited on.
+func conductorRetrying(t *testing.T) (w *world, task, conductor string) {
+	w = conducting(t)
 	w.waitingFor(time.Hour)
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
@@ -219,14 +218,23 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 		}
 		return b
 	}
-	task := w.task()
+	task = w.task()
 	w.startQuiet(task)
 	w.until("the conductor's turn retried", func() bool {
 		id, _, _ := w.conductor(task)
 		return id != "" && w.turnRetries(id) == 1
 	})
-	conductor, _, _ := w.conductor(task)
+	conductor, _, _ = w.conductor(task)
 	w.until("the decision waited on", func() bool { return w.decisionAt(task) != "" })
+	return w, task, conductor
+}
+
+// A quiet conductor whose turn failed on a 429 is retrying it: its
+// decision's deadline passing does not default the decision while the
+// retry waits. Once the retried turn goes through, the conductor takes
+// its decision itself.
+func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
+	w, task, conductor := conductorRetrying(t)
 	at := w.decisionAt(task)
 	w.lapse(task)
 	for range 5 {
@@ -255,24 +263,7 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 // retrying any more: its count left behind does not hold the decision,
 // whose deadline defaults it as before the retries existed.
 func TestAConductorPausedMidRetryLetsItsDeadlineDefault(t *testing.T) {
-	w := conducting(t)
-	w.waitingFor(time.Hour)
-	scripted := w.lux.Decide
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		b := scripted(spec)
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == delivery.RoleConductor {
-			b.FirstTurnErrors = []string{`API Error: Request rejected (429) · {"error":"All provider keys are rate limited","retry_after":3600}`}
-		}
-		return b
-	}
-	task := w.task()
-	w.startQuiet(task)
-	w.until("the conductor's turn retried", func() bool {
-		id, _, _ := w.conductor(task)
-		return id != "" && w.turnRetries(id) == 1
-	})
-	conductor, _, _ := w.conductor(task)
-	w.until("the decision waited on", func() bool { return w.decisionAt(task) != "" })
+	w, task, conductor := conductorRetrying(t)
 	if status, body := w.call("/internal/runs/"+conductor+"/pause", map[string]any{}); status != 200 {
 		t.Fatalf("pause: %d %v", status, body)
 	}
