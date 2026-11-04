@@ -214,9 +214,10 @@ func SessionProjects(ctx context.Context, tx pgx.Tx, sessionID string) ([]Linked
 // for one member's answer (ask_person with to): it goes with the answer,
 // not as it, so it is not sent while that question is open. Or a
 // directive not due yet (deliver_after: a turn retried after a temporary
-// model error, its back-off not over): only it waits, not the Run.
+// model error, its back-off not over): only it waits, not the Run. Never
+// NULL: NOT HeldBack must hold for a directive with no deliver_after.
 const HeldBack = `((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
-	OR d.deliver_after > now())`
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))`
 
 // RetryPending (SQL, over runs r): a retry of the Run's turn after a
 // temporary model error is queued and not sent yet (deliver_after is set
