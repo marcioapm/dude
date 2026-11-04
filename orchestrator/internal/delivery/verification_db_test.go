@@ -141,6 +141,50 @@ func TestAFailureGetsAFindingWhileAnEarlierTestsIsOpen(t *testing.T) {
 	}
 }
 
+// A test that fails a criterion and raises an unrelated medium, such as a
+// console warning, still gets dude's finding for the criterion: a tester
+// is told to give a failed criterion a blocking finding, so a medium does
+// not say why it failed, and the fixer must be told the criterion.
+func TestAFailedCriterionGetsItsFindingBesideAnUnrelatedMedium(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	for _, sql := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_m', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, acceptance_criteria, status)
+			VALUES ('wi_m', $1, 'prj_m', 1, 'Greet', 'greet', '["it greets"]', 'running')`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind, ended_at)
+			VALUES ('run_m', $1, 'prj_m', 'wi_m', 1, 'completed', 'test', 'qa_browser', 'agent', now())`,
+		`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description)
+			VALUES ('fnd_m', $1, 'wi_m', 'run_m', 'quality', 'medium', 'Console warns about a missing key', 'A React key warning.')`,
+		`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+			VALUES ('ev_m', $1, 'agent.message', 'run_m', 'wi_m', 'agent', 'run_m', 'test', jsonb_build_object('text',
+			E'` + "```yaml\\n---\\ncriterion: 1\\nstatus: fail\\nobserved: No greeting.\\n```" + `'))`,
+	} {
+		if _, err := owner.Exec(ctx, sql, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Store{DB: app}
+	st := &State{TaskID: "wi_m", ProjectID: "prj_m", Attempt: 1, TestRunID: "run_m", Policy: DefaultPolicy()}
+	if _, err := s.RecordVerdict(ctx, org, st, "run_m"); err != nil {
+		t.Fatal(err)
+	}
+	var criterion string
+	if err := owner.QueryRow(ctx, `SELECT id FROM review_findings WHERE run_id = 'run_m'
+		AND title = 'Acceptance criterion 1 fails: it greets'`).Scan(&criterion); err != nil {
+		t.Fatalf("no finding for the failed criterion beside the medium: %v", err)
+	}
+	in, err := s.gateInput(ctx, org, st, "run_m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := judgeGate(in)
+	if g.Outcome != "fail" || !slices.Contains(g.Findings, criterion) || !slices.Contains(g.Findings, "fnd_m") {
+		t.Errorf("gate = %+v, want fail with the criterion's finding %s and fnd_m", g, criterion)
+	}
+}
+
 // Two tests that each fail a criterion with no finding of their own raise
 // one finding for it: the second's failure is the open one's.
 func TestARepeatedFailureGetsOneFinding(t *testing.T) {
