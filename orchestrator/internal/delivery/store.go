@@ -74,9 +74,6 @@ type Store struct {
 	// Test hook: called in a step once it has read the gate's answer, before
 	// any authorization from it is recorded.
 	GateRead func()
-	// Test hook: called in closeHandedOver's transaction after its writes,
-	// before it commits.
-	HandOverClosing func(ctx context.Context, tx pgx.Tx)
 	// SyncPullRequest is prs.Syncer.Sync: an adopted pull request's feedback
 	// is recorded before its first reviewer starts. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
@@ -160,16 +157,16 @@ type PhaseRun struct {
 	// A review limited to a range of commits; nil reviews the whole branch.
 	ReviewRange *ReviewRange
 	// A fresh Run keeps ReviewRange: the range names the loop the review's
-	// findings belong to (a pull request's fix on its candidate,
+	// findings belong to (a pull request's fix,
 	// rangeFindings).
 	KeepRange bool
 	// Review: the loop's round it is part of (State.Round), stored as
 	// runs.review_round; 0 for none (a Run that is no loop's review).
 	Round int
 	// A publishing Run: the branch dude fast-forwards to what it pushed
-	// (runs.branch), "" for the task branch. A candidate for an open pull
-	// request's fix (CandidateBranch) is checked before the pull request
-	// shows it.
+	// (runs.branch), "" for the task branch. Runs made before pull
+	// request fixes went to the task branch directly may carry a
+	// "-candidate" branch: history, never set now.
 	Branch string
 	Child  bool
 	// Go on from the previous round of this phase and category

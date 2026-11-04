@@ -48,8 +48,6 @@ The conductor decided: {{.}}{{end}}{{end}}
 
 {{- define "refusals/words/policy"}}Deliver decides this task: steer its agents, or ask the person to hand it to you.{{end}}
 
-{{- define "refusals/words/candidate"}}a fix for the pull request is being reviewed and tested; publish once it has reached the pull request{{end}}
-
 {{- define "refusals/words/behind"}}your checkout is behind the task branch; `git merge lux/%s` first{{end}}
 
 {{- define "refusals/words/nothing"}}nothing to publish: you have no commits on top of the task branch's head{{end}}

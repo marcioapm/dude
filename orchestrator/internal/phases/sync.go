@@ -1689,7 +1689,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, DirectFixes: taskBranch.Direct, ConductedLoop: taskBranch.ConductedLoop, Adopted: adopted, LastFix: lastFix,
+		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, ConductedLoop: taskBranch.ConductedLoop, Adopted: adopted, LastFix: lastFix,
 		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh, Round: reviewRound, Decided: decided,
 	}
 	if reviewRange != nil {
@@ -2310,23 +2310,6 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 				return errRetry
 			}
 		}
-		// Read before the update below records the published branch on
-		// every Run: set already, it is a candidate Run's own.
-		var own string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(branch, '') FROM runs WHERE id = $1`, r.ID).Scan(&own); err != nil {
-			return err
-		}
-		if own != "" {
-			// A conductor's writer child is created on the task branch
-			// itself: what it publishes reaches the pull request directly.
-			tb, err := delivery.TaskBranchTx(ctx, tx, r.TaskID, r.Attempt)
-			if err != nil {
-				return err
-			}
-			if own == tb.Branch {
-				own = ""
-			}
-		}
 		// A reviewer's or tester's lux Run is kept, stopped, for its next
 		// round to take over (delivery.RoundContinues), until the keep
 		// window ends or the task lets it go (ReleaseKeptTx).
@@ -2354,12 +2337,8 @@ func (s *Syncer) finish(ctx context.Context, r phaseRun) (bool, error) {
 			}
 		}
 		// Feedback it resolved holds only for a commit it published to the
-		// pull request's branch; one on a candidate holds once promoted.
-		settle := delivery.SettleResolutionsTx
-		if own != "" {
-			settle = delivery.SettleCandidateResolutionsTx
-		}
-		if err := settle(ctx, tx, r.Org, r.ID, held); err != nil {
+		// pull request's branch.
+		if err := delivery.SettleResolutionsTx(ctx, tx, r.Org, r.ID, held); err != nil {
 			return err
 		}
 		if err := s.failUnread(ctx, tx, r, UnreadRunFinished); err != nil {
@@ -2531,9 +2510,9 @@ func lookupBase(bases map[string]string, repos []delivery.Repository, name strin
 // what it pushed, and works out what changed there. Returns runs.heads:
 // per repository changed, its new commit and changed paths; and the
 // branch moved: the task branch as its delivery keeps it (an adopted
-// source's head branch, or BranchFor's), or the one the Run was created
-// for (runs.branch: an open pull request's candidate fix, which the pull
-// request shows only once it is reviewed and tested).
+// source's head branch, or BranchFor's). Fixes reach the delivery's open
+// pull requests directly: a writer's admission is what holds a push to
+// the review after it.
 //
 // A fast-forward, never a force: if someone else moved a branch the update
 // is refused and the phase fails loudly rather than overwriting their work.
@@ -2559,15 +2538,6 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 	// The Run is kept for its next round once it completes (finish's keep):
 	// its per-Run branch is kept with it.
 	var keepBranch bool
-	// A pull request is open on branch: only promoteCandidate moves it, to
-	// a reviewed (and tested) candidate head. A writer that still targets it
-	// (one already running when the pull request opened) fails here. Not
-	// when the delivery's fixes reach its pull requests directly: there a
-	// writer's admission is what holds a push to the review after it.
-	var prOpen bool
-	// The Run publishes straight to the task branch of a delivery whose
-	// fixes reach its pull requests directly.
-	var direct bool
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
 		if repos, err = delivery.TaskRepositories(ctx, tx, r.TaskID); err != nil {
 			return err
@@ -2577,25 +2547,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 			return err
 		}
 		branch, bases = tb.Branch, tb.Bases
-		var own string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(r.branch, ''), `+keptForNextRound+` FROM runs r WHERE r.id = $1`, r.ID).
-			Scan(&own, &keepBranch); err != nil {
-			return err
-		}
-		// A conductor's writer child names the task branch itself: it
-		// publishes there as any direct writer does, not as a candidate.
-		if own == branch {
-			own = ""
-		}
-		if own != "" {
-			branch = own
-		}
-		if tb.Direct && own == "" {
-			direct = true
-			return nil
-		}
-		prOpen, err = delivery.PullRequestOpenOnTx(ctx, tx, r.TaskID, branch)
-		return err
+		return tx.QueryRow(ctx, `SELECT `+keptForNextRound+` FROM runs r WHERE r.id = $1`, r.ID).Scan(&keepBranch)
 	}); err != nil {
 		return nil, "", err
 	}
@@ -2634,9 +2586,6 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		}
 		if res.Commit == base {
 			continue // nothing committed there
-		}
-		if prOpen {
-			return nil, "", fmt.Errorf("not moving %s in %s: an open pull request's branch moves only by promotion of a reviewed candidate: use start_phase fix with a note saying what to change", branch, repo.Name)
 		}
 		if gh == nil {
 			var err error
@@ -2681,7 +2630,7 @@ func (s *Syncer) publish(ctx context.Context, r phaseRun) (map[string]delivery.R
 		})
 		if err != nil {
 			err = fmt.Errorf("move %s in %s to %s: %w", branch, repo.Name, short(res.Commit), err)
-			if direct && advance.NotFastForward(err) {
+			if advance.NotFastForward(err) {
 				// Someone else pushed to the pull request's branch: what the
 				// Run made stays on its own branch, kept with the Run.
 				err = &keptOnRunBranch{err: err, branch: res.Branch}

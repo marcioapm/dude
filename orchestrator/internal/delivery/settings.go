@@ -164,23 +164,8 @@ func ResolvePolicy(layers ...json.RawMessage) (Policy, error) {
 	if err := p.checkPullRequest(); err != nil {
 		return p, err
 	}
-	switch p.PullRequestFixes {
-	case "", PullRequestFixesDirect, PullRequestFixesCandidate:
-	default:
-		return p, fmt.Errorf("pullRequestFixes: %q is not candidate or direct", p.PullRequestFixes)
-	}
 	err := p.checkReviewerKeys()
 	return p, err
-}
-
-// ForNewDelivery is p as a delivery starting now freezes it: every
-// project, new and existing, fixes a new delivery's pull requests directly,
-// a stored candidate included. Not in ResolvePolicy's defaults: a frozen
-// State.Policy without the key is a delivery from before it, which
-// ConvertCandidates moves to direct at boot.
-func (p Policy) ForNewDelivery() Policy {
-	p.PullRequestFixes = PullRequestFixesDirect
-	return p
 }
 
 // withoutProjectOnlyKeys is an organisation's stored policy with the keys

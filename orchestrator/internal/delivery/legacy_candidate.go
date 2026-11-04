@@ -29,9 +29,12 @@ func CandidateBranch(taskID string, attempt int) string {
 
 const candidateSuffix = "-candidate"
 
-// NotGeneratedCandidateSQL (SQL, over runs aliased run) holds when the
-// Run's branch is not its own CandidateBranch: a fix not yet checked.
-func NotGeneratedCandidateSQL(run string) string {
+// NotLegacyCandidateRunSQL (SQL, over runs aliased run) holds when the
+// Run's branch is not its own CandidateBranch: kept so that an old Run of
+// the deleted candidate path, whose fix never reached the pull request,
+// stays out of previews, briefings and coordination (its TS copy is in
+// apps/control-plane/src/api/routes/coordination.ts).
+func NotLegacyCandidateRunSQL(run string) string {
 	return fmt.Sprintf(`%[1]s.branch <> ('dude/' || %[1]s.task_id || '/attempt-' || %[1]s.attempt || '%[2]s')`, run, candidateSuffix)
 }
 

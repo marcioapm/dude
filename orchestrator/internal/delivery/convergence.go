@@ -15,12 +15,6 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 	if err != nil {
 		return Convergence{}, err
 	}
-	// A candidate's fixes publish to its branch; a parent fix elsewhere is
-	// not part of the candidate's loop.
-	var candidateBranch *string
-	if st.checkingCandidate() {
-		candidateBranch = &st.Candidate.Branch
-	}
 	// Range containment matches rangeFindings: earlier anchors may be a subset
 	// of the current range after a fix starts changing another repository.
 	// Row estimates after filters on CTE columns are far below the real
@@ -51,7 +45,6 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 		WHERE r.phase = 'review' AND r.status = 'completed' AND r.replaced_by IS NULL
 			AND x.task_id = $1 AND x.attempt = r.attempt
 			AND x.phase = 'fix' AND x.replaced_by IS NULL AND r.created_at > $3
-			AND ($6::text IS NULL OR x.branch = $6)
 			AND ($4::jsonb = 'null'::jsonb OR (r.review_range->>'of' = $4::jsonb->>'of'
 				AND ($4::jsonb->'base') @> (r.review_range->'base')))
 	), shown AS MATERIALIZED (
@@ -78,7 +71,7 @@ func ConvergenceTx(ctx context.Context, tx pgx.Tx, st *State) (Convergence, erro
 		// $5 is the loop's fix bar by severity (fixBar). A low marked
 		// trivial blocks a conducted loop but is not counted here: a
 		// trivial low is no regression worth escalating on.
-		st.TaskID, st.Attempt, st.ConvergenceFrom, rangeJSON, fixBar(st), candidateBranch)
+		st.TaskID, st.Attempt, st.ConvergenceFrom, rangeJSON, fixBar(st))
 	if err != nil {
 		return Convergence{}, err
 	}

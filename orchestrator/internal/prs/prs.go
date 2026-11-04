@@ -50,9 +50,6 @@ type Syncer struct {
 	// having none before that is believed: CI registering on a push takes
 	// a moment, and some CI reports late. Zero means DefaultCIGrace.
 	CIGrace time.Duration
-	// Test hook: called in a hand-over's transaction once one is found to
-	// close, before the delivery is locked; an error rolls it back.
-	HandingOver func(ctx context.Context) error
 	// Test hook: called in a sync's compare-and-set transaction between
 	// writing the base sync requests it found integrated and those it found
 	// not, holding the first's row locks.
@@ -309,33 +306,6 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		status.Mergeable, status.BehindBy, status.UnresolvedThreads = pr.Mergeable, pr.BehindBy, pr.UnresolvedThreads
 	}
 
-	// A reading that a pull request merges closes any integration handed
-	// over at its head and not yet closed, whatever was on record before:
-	// the step may record the hand-over after an earlier sync looked for it
-	// and read the pull request before that sync's reading committed, so no
-	// one reading is sure to be the one. A refused attempt is closed too.
-	// Checked unlocked first, so a clean sync with nothing to close takes
-	// no workflow_runs lock. Committed before the reading below: if that
-	// fails, the next sync comes back here, and the line is not written
-	// twice. Its own transaction: it locks workflow_runs, which a publish
-	// recording holds while it updates pull_requests.
-	if isOpen(status.State) && (status.Mergeable == forge.MergeClean || status.Mergeable == forge.MergeBehind) {
-		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			pending, err := delivery.HandOverPending(ctx, tx, pr.TaskID, pr.RepoName, status.HeadSHA)
-			if err != nil || !pending {
-				return err
-			}
-			if s.HandingOver != nil {
-				if err := s.HandingOver(ctx); err != nil {
-					return err
-				}
-			}
-			return delivery.HandOverMergedTx(ctx, tx, org, pr.TaskID, pr.RepoName, status.HeadSHA)
-		}); err != nil {
-			return err
-		}
-	}
-
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		cursor := pr.FeedbackCursor
 		if n := len(listed); n > 0 {
@@ -564,9 +534,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	// old head. That only makes a merge under a writer rarer (another
 	// sync, a person's Update branch, GitHub's own still land one); what
 	// makes one harmless is the writer's publish merging itself in
-	// (advance.Branch), and promotion merging a checked candidate in over
-	// it (delivery promoteCandidate). Checking a candidate is never
-	// awaitPullRequest, so no update is asked for during it.
+	// (advance.Branch).
 	if status.Mergeable == forge.MergeBehind && gh.Settings.WhenBehind == "update" && workflowStep == "awaitPullRequest" && signal == nil {
 		s.updateBranch(ctx, org, gh, slug, pr, status.HeadSHA)
 	}

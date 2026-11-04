@@ -28,7 +28,7 @@ func convertDeliveries(ctx context.Context, database *db.DB, log *slog.Logger) {
 	}
 	log.Info("deliveries in flight handed to a quiet conductor", attrs...)
 	c, err := delivery.ConvertCandidates(pass, database)
-	attrs = []any{"converted", c.Converted, "moving", c.Moving, "left", c.Left}
+	attrs = []any{"converted", c.Converted, "stopped_mid_promotion", c.StoppedMidPromotion, "left", c.Left}
 	if err != nil {
 		log.Error("deliveries on a candidate not all moved to direct fixes; the next boot sweeps again",
 			append(attrs, "error", err)...)
@@ -64,7 +64,7 @@ func convertCommand(ctx context.Context, args []string, opts config.Options, std
 		return 1
 	}
 	c, err := delivery.ConvertCandidates(ctx, database)
-	fmt.Fprintf(stdout, "candidates: converted %d, moving %d, left %d\n", c.Converted, c.Moving, c.Left)
+	fmt.Fprintf(stdout, "candidates: converted %d, stopped_mid_promotion %d, left %d\n", c.Converted, c.StoppedMidPromotion, c.Left)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

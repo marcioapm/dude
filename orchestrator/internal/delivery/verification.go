@@ -377,12 +377,8 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	} else if wait > 0 {
 		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(wait)}, nil
 	}
-	if st.Candidate == nil {
-		// A candidate's verdict is on commits no pull request holds yet:
-		// its pull requests show it once promoted (candidateMoved).
-		w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
-		w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
-	}
+	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
+	w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
 	if err != nil {
 		return workflow.Result{}, err
@@ -395,18 +391,11 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 		if st.TestFixRounds < MaxTestFixRounds {
 			st.TestFixRounds++
 			st.TestFindingIDs, st.RetestDue = g.Findings, true
-			if st.checkingCandidate() {
-				return workflow.Result{Next: "fix", State: st}, nil
-			}
 			return w.next(ctx, sc, st, PointReviewed, "fix", testFailedLine(runID, g.Criteria, len(g.Findings), st.TestFixRounds))
 		}
 		return w.escalate(ctx, sc, st, ReasonTestFailedCriteria, detail)
 	case "blocked":
 		return w.escalate(ctx, sc, st, ReasonTestBlocked, detail)
-	}
-	if st.Candidate != nil {
-		// A pull request's fix, checked: the pull request takes it now.
-		return workflow.Result{Next: "promoteCandidate", State: st}, nil
 	}
 	return w.beforePR(ctx, sc, st, testPassedLine(runID))
 }
@@ -514,7 +503,7 @@ const verdictCommentTimeout = 30 * time.Second
 //
 // Two short transactions around the GitHub calls, none open across them:
 // what to post, then its record. No lock: the callers are steps of the
-// task's one delivery (testVerdict, candidateMoved, refreshPromoted), which
+// task's one delivery (testVerdict, refreshPromoted), which
 // never run at once, and an adopted pull request is one live task's.
 func (s *Store) CommentVerdict(ctx context.Context, org string, st *State, forges Forges) {
 	_ = s.commentVerdict(ctx, org, st, forges, true)

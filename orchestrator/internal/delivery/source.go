@@ -268,9 +268,6 @@ type TaskBranch struct {
 	Branch string
 	Bases  map[string]string
 	Source *Source
-	// Fixes reach its open pull requests directly (Policy.DirectFixes, as
-	// the delivery froze it).
-	Direct bool
 	// Its review loop is the conductor's now (State.ConductedLoop).
 	ConductedLoop bool
 	// How its conductor speaks, when one decides (State.Voice).
@@ -297,7 +294,7 @@ func TaskBranchTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (T
 	if st.Branch == "" {
 		st.Branch = BranchFor(taskID, attempt)
 	}
-	return TaskBranch{Branch: st.Branch, Bases: st.Bases, Source: st.Source, Direct: st.Policy.DirectFixes(),
+	return TaskBranch{Branch: st.Branch, Bases: st.Bases, Source: st.Source,
 		ConductedLoop: st.ConductedLoop(), Voice: st.voice()}, nil
 }
 
