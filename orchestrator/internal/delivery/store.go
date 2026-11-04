@@ -166,7 +166,7 @@ type PhaseRun struct {
 	// A publishing Run: the branch dude fast-forwards to what it pushed
 	// (runs.branch), "" for the task branch. Runs made before pull
 	// request fixes went to the task branch directly may carry a
-	// "-candidate" branch: history, never set now.
+	// "-candidate" branch: history, never set.
 	Branch string
 	Child  bool
 	// Go on from the previous round of this phase and category

@@ -155,10 +155,10 @@ type State struct {
 	// review loop after it covers only from there (RangeSimplify). Set by
 	// awaitSimplify when it published, cleared at the test.
 	SimplifyBase map[string]string `json:"simplifyBase,omitempty"`
-	// Legacy, read by ConvertCandidates and the promoteCandidate stop alone:
+	// Legacy, read by the conversion alone (convertCandidateTx, legacyTrace):
 	// an open pull request's fix being checked on its candidate branch, as
 	// a delivery stored before the candidate path was deleted may hold.
-	// Nothing sets it now.
+	// Nothing sets it.
 	Candidate *Candidate `json:"candidate,omitempty"`
 	// A pull request's fix pushed to it directly,
 	// while the narrow review loop over that push runs: where its range
@@ -527,7 +527,7 @@ type PromotedRefresh struct {
 	Tries int      `json:"tries,omitempty"`
 	Repos []string `json:"repos"`
 	// Legacy, read by ConvertCandidates alone: "beforePR" past a loop
-	// candidate's promotion (deleted). Never written now.
+	// candidate's promotion (deleted). Nothing writes it.
 	Next string `json:"next,omitempty"`
 }
 
@@ -2669,7 +2669,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 
 // ReasonPullRequestMoved: a pull request's branch moved while a fix for
 // it was checked on the deleted candidate branch. Legacy: no step raises
-// it now, but an escalation stored with it still offers its actions
+// it, but an escalation stored with it still offers its actions
 // (Escalation.Actions) and decide still carries them out.
 const ReasonPullRequestMoved = "pull_request_moved"
 

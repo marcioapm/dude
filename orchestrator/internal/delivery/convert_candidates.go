@@ -71,10 +71,10 @@ func convertedNotice(branch string, heads map[string]string) string {
 
 // ConvertCandidateTx moves one delivery (workflowID, of taskID) off the
 // candidate path, as every fix reaches its pull request directly. Legacy,
-// conversion only: no live path opens a candidate any more.
+// conversion only: no live path opens a candidate.
 //
 //   - the retired pullRequestFixes key leaves its frozen policy;
-//   - a hand-over (handedOver, no longer a State field) is dropped: the
+//   - a hand-over (handedOver, not a State field) is dropped: the
 //     syncer's next reading of a pull request still conflicting
 //     escalates it;
 //   - an open candidate goes no further: its live Runs are aborted and
@@ -91,7 +91,8 @@ func convertedNotice(branch string, heads map[string]string) string {
 // A candidate being promoted is stopped for a person
 // (CandidateStoppedMidPromotion, stopMidPromotionTx): the code that would
 // finish the move is gone. A delivery whose step a worker is running is
-// left (CandidateLeft): the next sweep converts it. Locks the task's Chat, then the row, as ConvertToQuietTx does;
+// left (CandidateLeft): the next sweep, or its step's entry, converts
+// it. Locks the task's Chat, then the row, as ConvertToQuietTx does;
 // idempotent. The caller commits tx.
 func ConvertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID string) (string, error) {
 	return convertCandidateTx(ctx, tx, org, taskID, workflowID, false)
@@ -143,7 +144,7 @@ func convertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 	// the recovery's retry goes to the redo (Stopped, Halt).
 	parked := st.Escalation != nil || d.Step == "decide" || d.Step == "recover"
 	// The retired key and the hand-over go as the state is written back:
-	// neither is a field of State now.
+	// neither is a field of State.
 	next := ""
 	if c := st.Candidate; c != nil {
 		// What ran on it stops short of the pull request; nothing resumes it.
@@ -323,8 +324,8 @@ func dropCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID str
 
 // ReasonStoppedMidPromotion: the delivery was moving a checked fix onto
 // its pull request (the deleted promoteCandidate, or the refresh after a
-// loop candidate's) when dude was upgraded. Nothing finishes that move
-// now, and a branch may have moved in one repository and not another: a
+// loop candidate's) when dude was upgraded. Nothing finishes that
+// move, and a branch may have moved in one repository and not another: a
 // person redoes the fix (retry, from what the pull requests hold) or
 // checks the pull request (wait).
 const ReasonStoppedMidPromotion = "stopped_mid_promotion"
