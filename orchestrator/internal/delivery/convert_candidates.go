@@ -431,22 +431,25 @@ func convertLegacyTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID str
 	return step, st, awaiting, wake, nil
 }
 
-// leaveMidPromotionTx lets go of what a delivery stopped mid-promotion
-// held (its candidate, the refresh, any Runs or queued work), with its
-// heads where the candidate started, and tells Chat. Returns the step
-// that fixes again: the candidate's, or, with none (its fix gone or moved
-// already), the pull request step, which opens one for a repository
-// newly changed and waits on them: no fix with nothing to fix.
-func leaveMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string, st *State) (string, error) {
-	next := "openPullRequest"
-	branch := ""
+// stopMidPromotionTx stops, for a person, a delivery found mid-promotion
+// (midPromotion). What it held is let go (its candidate, the refresh, any
+// Runs or queued work), with its heads where the candidate started, and
+// Chat is told. Its retry fixes again: at the candidate's step, or, with
+// none (its fix gone or moved already), at the pull request step, which
+// opens one for a repository newly changed and waits on them: no fix
+// with nothing to fix. A live one waits at decide on a
+// stopped_mid_promotion escalation; a stopped or halted one's retry goes
+// there too. The caller holds the row.
+func stopMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string, d *Delivery) error {
+	st := &d.State
+	next, branch := "openPullRequest", ""
 	if c := st.Candidate; c != nil {
 		if err := abortCandidateRunsTx(ctx, tx, org, st.TaskID, st); err != nil {
-			return "", err
+			return err
 		}
 		var err error
 		if next, err = dropCandidateTx(ctx, tx, org, st.TaskID, workflowID, st); err != nil {
-			return "", err
+			return err
 		}
 		if c.From != nil {
 			st.Heads = maps.Clone(c.From)
@@ -456,25 +459,14 @@ func leaveMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string,
 	st.Candidate, st.PromotedRefresh, st.SimplifyBase, st.FixRange, st.PRFixAfter, st.Pipeline = nil, nil, nil, nil, nil, nil
 	st.PendingRunIDs, st.ReviewRunIDs = nil, nil
 	// A promotion held for a reviewer's question (holdForQuestions) holds
-	// nothing now: left set, it would keep the task's waits blocked
+	// nothing: left set, it would keep the task's waits blocked
 	// (waitBlocked) for the rest of the delivery.
 	st.QuestionsHeld = false
 	if st.PRFixCharged != nil && st.PRFixCharged.Pending {
 		st.PRFixCharged = nil
 	}
-	return next, emitTx(ctx, tx, org, st, EvChatNotice, map[string]any{"about": ReasonStoppedMidPromotion,
-		"branch": branch, "text": stoppedMidPromotionNotice})
-}
-
-// stopMidPromotionTx stops, for a person, a delivery the sweep found
-// mid-promotion (midPromotion): what it held is let go
-// (leaveMidPromotionTx), and a live one waits at decide on a
-// stopped_mid_promotion escalation whose retry fixes again; a stopped or
-// halted one's retry fixes again too. The caller holds the row.
-func stopMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string, d *Delivery) error {
-	st := &d.State
-	next, err := leaveMidPromotionTx(ctx, tx, org, workflowID, st)
-	if err != nil {
+	if err := emitTx(ctx, tx, org, st, EvChatNotice, map[string]any{"about": ReasonStoppedMidPromotion,
+		"branch": branch, "text": stoppedMidPromotionNotice}); err != nil {
 		return err
 	}
 	st.Retries++
