@@ -86,26 +86,26 @@ func EscalateChecksTx(ctx context.Context, tx pgx.Tx, org, taskID, runID, messag
 		return err
 	}
 	st.Escalation = (&Escalation{Reason: ReasonChecksUnverified, At: d.Step, AtSignals: atSignals, Detail: detail}).heldBy(HolderPerson)
-	if st.conducted() {
-		if _, err := tellEscalationTx(ctx, tx, org, d.WorkflowID, &st); err != nil {
-			return err
-		}
+	if err := raiseEscalationTx(ctx, tx, org, d.WorkflowID, &st); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
+	var deadline *time.Time
+	if st.Escalation.HeldBy() == HolderConductor {
+		at := st.Escalation.RaisedAt.Add(ConductorAnswerWait)
+		deadline = &at
+	}
 	if _, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, step = 'decide', status = 'waiting',
-		awaiting_signals = '["human.decision"]', wake_at = NULL WHERE id = $1`, d.WorkflowID, raw); err != nil {
+		awaiting_signals = '["human.decision"]', wake_at = $3 WHERE id = $1`, d.WorkflowID, raw, deadline); err != nil {
 		return err
 	}
 	if err = waitOnPersonTx(ctx, tx, runID); err != nil {
 		return err
 	}
-	// TODO(conductor-first PR2): conductor-held first (raiseEscalationTx).
-	_, err = ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: org}, State: &st, Escalation: st.Escalation,
-		Reason: ReasonChecksUnverified, Why: WhyEscalation})
-	return err
+	return nil
 }
 
 // waitOnPersonTx starts the held Run's wait on a person (checksHeld), kept

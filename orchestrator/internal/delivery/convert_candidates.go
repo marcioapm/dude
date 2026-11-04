@@ -494,21 +494,19 @@ func stopMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string, 
 	detail := map[string]any{"step": d.Step}
 	st.Escalation = (&Escalation{Reason: ReasonStoppedMidPromotion, Detail: detail, Step: next}).heldBy(HolderPerson)
 	st.Decision, st.Directed = nil, nil
-	// TODO(conductor-first PR2): conductor-held first (raiseEscalationTx).
-	if _, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: org}, State: st, Escalation: st.Escalation,
-		Reason: ReasonStoppedMidPromotion, Why: WhyEscalation}); err != nil {
+	if err := raiseEscalationTx(ctx, tx, org, workflowID, st); err != nil {
 		return err
-	}
-	if st.conducted() {
-		if _, err := tellEscalationTx(ctx, tx, org, workflowID, st); err != nil {
-			return err
-		}
 	}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, step = 'decide', status = 'waiting', wake_at = NULL,
-		awaiting_signals = $3::jsonb, attempt = 0, last_error = NULL WHERE id = $1`, workflowID, raw, `["`+SignalHumanDecision+`"]`)
+	var deadline *time.Time
+	if st.Escalation.HeldBy() == HolderConductor {
+		at := st.Escalation.RaisedAt.Add(ConductorAnswerWait)
+		deadline = &at
+	}
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state = $2::jsonb, step = 'decide', status = 'waiting', wake_at = $4,
+		awaiting_signals = $3::jsonb, attempt = 0, last_error = NULL WHERE id = $1`, workflowID, raw, `["`+SignalHumanDecision+`"]`, deadline)
 	return err
 }

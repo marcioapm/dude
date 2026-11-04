@@ -141,7 +141,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	if err != nil {
 		return err
 	}
-	if d == nil || d.TaskStatus != "awaiting_input" || d.State.Escalation == nil || d.State.Escalation.Decided != nil {
+	if d == nil || (d.TaskStatus != "awaiting_input" && (d.State.Escalation == nil || d.State.Escalation.HeldBy() != HolderConductor || d.TaskStatus != "running")) || d.State.Escalation == nil || d.State.Escalation.Decided != nil {
 		return escalationErr("conflict", mDeliveryTaskNotWaitingForDecision, taskID)
 	}
 	st := d.State
@@ -172,6 +172,9 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 			return err
 		}
 	}
+	if in.Conductor != "" && PersonOnly(e.Reason, in.Action) && (in.QuestionID == "" || in.AnsweredBy == "") {
+		return escalationErr("bad_request", "only a person decides %s on %s: ask_person with one recommended choice", in.Action, e.Reason)
+	}
 	note := strings.TrimSpace(in.Note)
 	if NeedsNote(e.Reason, in.Action) && note == "" {
 		if !NeedsReason(e.Reason, in.Action) {
@@ -188,6 +191,8 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	said := ""
 	switch {
 	case note == "" || in.ActorType == ledger.ActorSystem:
+	case in.Conductor != "" && in.QuestionID == "":
+		said = "Your conductor said:\n" + note
 	case in.QuestionID != "" && in.Action != "amend":
 		said = note
 	default:
@@ -243,7 +248,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		WHERE id = $1`, wfID, next); err != nil {
 		return err
 	}
-	if note != "" {
+	if note != "" && (in.Conductor == "" || in.QuestionID != "") {
 		if err := RecordDecisionTx(ctx, tx, org, taskID, EscalationDecisionQuestion(e.Reason), note); err != nil {
 			return err
 		}
@@ -279,7 +284,7 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 func ChecksFinishedTx(ctx context.Context, tx pgx.Tx, org, taskID, repo string, number int) error {
 	// Locked before it is read: the escalation open now may be another.
 	_, d, err := LockEscalationTx(ctx, tx, taskID)
-	if err != nil || !waitsAtDecide(d) || d.TaskStatus != "awaiting_input" || !stuckOn(d.State.Escalation, repo, number) {
+	if err != nil || !waitsAtDecide(d) || !stuckOn(d.State.Escalation, repo, number) {
 		return err
 	}
 	var current string
@@ -414,6 +419,12 @@ func EscalationAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID,
 	}
 	if !waitsAtDecide(d) || EscalationKey(d.WorkflowID, d.State.Escalations) != key {
 		return nil
+	}
+	if PersonOnly(d.State.Escalation.Reason, actions[i]) && !NeedsNote(d.State.Escalation.Reason, actions[i]) {
+		ok, err := mayDecideNoted(ctx, tx, taskID, d.State.Escalation.Reason, actions[i], person)
+		if err != nil || !ok {
+			return err
+		}
 	}
 	note := escalationNote(prompt, answer, "")
 	if reason := d.State.Escalation.Reason; NeedsNote(reason, actions[i]) {
@@ -578,6 +589,25 @@ func EscalationQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, items []Ques
 				labels[j], c)
 		}
 	}
+	recommended := 0
+	for _, c := range item.Choices {
+		if c.Recommended {
+			recommended++
+		}
+	}
+	if recommended != 1 {
+		return "", nil, refusef("an escalation question needs exactly one recommended choice")
+	}
+	if d.State.Escalation.HeldBy() == HolderConductor {
+		d.State.Escalation.Holder = HolderPerson
+		raw, err := json.Marshal(d.State)
+		if err != nil {
+			return "", nil, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET state=$2::jsonb, wake_at=NULL WHERE id=$1`, d.WorkflowID, raw); err != nil {
+			return "", nil, err
+		}
+	}
 	return EscalationKey(d.WorkflowID, d.State.Escalations), []QuestionItem{item}, nil
 }
 
@@ -614,6 +644,18 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 	}
 	if !waitsAtDecide(d) || !d.State.conducted() {
 		return nil, refusef(rNoEscalationWaitsOnDecisionNow, escalationBanner)
+	}
+	if !PersonOnly(d.State.Escalation.Reason, action) {
+		err := DecideEscalationTx(ctx, tx, ref.Org, ref.TaskID, EscalationDecision{
+			Action: action, Note: note, ActorType: ledger.ActorAgent, ActorID: ref.RunID, Conductor: ref.RunID,
+		})
+		if e, ok := err.(EscalationError); ok {
+			return nil, refusef("%s", e.Msg)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"decided": action, "next": EscalationDecidedNext(false)}, nil
 	}
 	key := EscalationKey(d.WorkflowID, d.State.Escalations)
 	var qID, prompt, answer, by, asker string

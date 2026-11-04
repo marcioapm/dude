@@ -3001,29 +3001,15 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		}
 	}
 	st.PendingRunIDs = nil
-	// The task's wait and its question.asked, which the API reads as the
-	// task's escalation, in one transaction: never seen one without the
-	// other. TODO(conductor-first PR2): conductor-held first
-	// (raiseEscalationTx).
+	if st.conducted() {
+		st.Decision, st.Directed = nil, nil
+	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Escalation: st.Escalation,
-			Reason: reason, Why: WhyEscalation})
-		return err
+		return raiseEscalationTx(ctx, tx, sc.OrganizationID, sc.WorkflowRunID, st)
 	}); err != nil {
 		return workflow.Result{}, err
 	}
-	if st.conducted() {
-		// The person still decides; the conductor is told, to explain and
-		// propose in Chat. Once per escalation, however often replayed.
-		st.Decision, st.Directed = nil, nil
-		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-			_, err := tellEscalationTx(ctx, tx, sc.OrganizationID, sc.WorkflowRunID, st)
-			return err
-		}); err != nil {
-			return workflow.Result{}, err
-		}
-	}
-	return workflow.Result{Next: "decide", State: st, AwaitSignals: []string{SignalHumanDecision}}, nil
+	return w.escalationWait(st), nil
 }
 
 // RetryStep is where "try again" goes back to, from the step that stopped.
@@ -3042,7 +3028,23 @@ var RetryStep = map[string]string{
 	"awaitPRFix":  "prFix",
 }
 
-// decide carries out a person's decision on an escalation.
+func decisionActor(d *HumanDecision) string {
+	if d.Conductor != "" && d.QuestionID == "" {
+		return "the conductor"
+	}
+	return "a person"
+}
+
+func (w *steps) escalationWait(st *State) workflow.Result {
+	res := workflow.Result{Next: "decide", State: st, AwaitSignals: []string{SignalHumanDecision}}
+	if e := st.Escalation; e != nil && e.HeldBy() == HolderConductor && e.RaisedAt != nil {
+		res.SleepUntil = e.RaisedAt.Add(w.s.decisionWait())
+	}
+	return res
+}
+
+// decide carries out a decision on an escalation, or hands an unanswered
+// conductor-held item to the person once its deadline or availability fails.
 func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
 	st, err := load(sc)
 	if err != nil {
@@ -3051,7 +3053,45 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	// The decision is on the escalation, taken with the request; the signal
 	// only wakes this step to carry it out.
 	if st.Escalation == nil || st.Escalation.Decided == nil {
-		return workflow.Result{Next: "decide", State: st, AwaitSignals: []string{SignalHumanDecision}}, nil
+		if e := st.Escalation; e != nil && e.HeldBy() == HolderConductor {
+			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+				// Delivery then task, as on every decision path. Re-read under
+				// the delivery lock so an owner override cannot be overwritten.
+				_, current, err := LockEscalationTx(ctx, tx, st.TaskID)
+				if err != nil {
+					return err
+				}
+				if current != nil && current.State.Escalation != nil {
+					*st = current.State
+				}
+				e = st.Escalation
+				if e == nil || e.Decided != nil || e.HeldBy() != HolderConductor {
+					return nil
+				}
+				unavailable, err := conductorUnavailableTx(ctx, tx, st.TaskID, e.RaisedAt)
+				if err != nil {
+					return err
+				}
+				if !unavailable && e.RaisedAt != nil && time.Now().Before(e.RaisedAt.Add(w.s.decisionWait())) {
+					return nil
+				}
+				e.Holder = HolderPerson
+				if _, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Escalation: e, Reason: e.Reason, Why: WhyHandover}); err != nil {
+					return err
+				}
+				raw, err := json.Marshal(st)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(ctx, `UPDATE workflow_runs SET state=$2::jsonb WHERE id=$1`, sc.WorkflowRunID, raw)
+				return err
+			}); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		if st.Escalation == nil || st.Escalation.Decided == nil {
+			return w.escalationWait(st), nil
+		}
 	}
 	e, d := st.Escalation, st.Escalation.Decided
 	if !slices.Contains(e.Actions(), d.Action) {
@@ -3079,7 +3119,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// works to them. The sweep sets Redo only with At, and never on a
 		// conductor_unavailable escalation.
 		st.PersonSaid = d.Said
-		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", decisionActor(d)+" decided: "+d.Action); err != nil {
 			return workflow.Result{}, err
 		}
 		if e.Reason == ReasonNotConverging && d.Action == "amend" {
@@ -3092,7 +3132,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	if e.Reason == ReasonChecksUnverified {
 		if d.Action == "stop" {
-			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
+			e.Decided = nil
+			st.Stopped = e
+			return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", decisionActor(d)+" stopped it")
 		}
 		// A waiver lets the held turn finish without another agent turn.
 		// Its note belongs to the next Run the delivery starts.
@@ -3101,7 +3143,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		// The waits on a person reading their pull requests or the work are
 		// in review; every other step sets its own status, or is at work.
-		status, why := "running", "a person decided: "+d.Action
+		status, why := "running", decisionActor(d)+" decided: "+d.Action
 		if e.At == "awaitPullRequest" || e.At == "awaitRead" {
 			status = "review"
 		} else if e.At == "conductorDecision" && st.deliverOpens() && st.Decision != nil && st.Decision.Point == PointBeforePR {
@@ -3124,7 +3166,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		// Kept, so the task can be picked back up where it stopped.
 		e.Decided = nil
 		st.Stopped = e
-		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", "a person stopped it")
+		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "aborted", decisionActor(d)+" stopped it")
 	case "done":
 		st.PersonSaid = ""
 		return workflow.Result{State: st}, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "a person took what was merged")
@@ -3174,7 +3216,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")
 	}
-	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", "a person decided: "+d.Action); err != nil {
+	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", decisionActor(d)+" decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
 	}
 	if e.Reason == ReasonConductorUnavailable && st.Decision != nil {

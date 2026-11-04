@@ -1039,10 +1039,11 @@ const waitBlocked = `(` + waitBlockedElse + ` OR EXISTS (SELECT 1 FROM workflow_
 // repository request, an undecided escalation in its live workflow, or a
 // phase Run parked as idle or paused by a person, or with a person's pause
 // or resume still pending (dude's own control requests set dude_pause).
-const waitBlockedElse = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open')
+const waitBlockedElse = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open' AND q.addressee = 'person')
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.task_id = t.id AND q.status = 'pending' AND q.blocking)
 	OR EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = t.id AND wf.status IN ('running', 'waiting')
-		AND wf.state ? 'escalation' AND NOT wf.state->'escalation' ? 'decided')
+		AND wf.state ? 'escalation' AND NOT wf.state->'escalation' ? 'decided'
+		AND COALESCE(NULLIF(wf.state->'escalation'->>'holder', ''), 'person') = 'person')
 	OR EXISTS (SELECT 1 FROM runs p WHERE p.task_id = t.id AND p.phase IS NOT NULL
 		AND p.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
 		AND (p.dude_pause = 'idle' OR p.dude_pause IS NULL AND (p.status = 'paused' OR p.control <> 'none'))))`

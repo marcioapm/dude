@@ -486,7 +486,7 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 			return res, false, err
 		}
 		if e := current.Escalation; e != nil && e.Reason == ReasonChecksUnverified {
-			return workflow.Result{Next: "decide", State: &current, AwaitSignals: []string{SignalHumanDecision}}, true, nil
+			return w.escalationWait(&current), true, nil
 		}
 		// Handed to the conductor while the step escalated: told as escalate
 		// tells a conducted delivery's escalation.

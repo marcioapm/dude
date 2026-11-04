@@ -108,6 +108,64 @@ func ToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) (string, error) {
 		map[string]any{"kind": "escalation", "reason": e.Reason, "detail": e.Detail, "actions": e.Actions()})
 }
 
+// ConductorAnswerWait bounds both quiet and chatty escalation decisions.
+const ConductorAnswerWait = QuietDecisionWait
+
+// conductorUnavailableTx checks the latest conductor, not failed writer Runs.
+// At raise time any failed latest conductor is unavailable; during a wait only
+// a failure since the escalation was raised hands that item over.
+func conductorUnavailableTx(ctx context.Context, tx pgx.Tx, taskID string, since *time.Time) (bool, error) {
+	noModel, err := quietNoModelTx(ctx, tx, taskID)
+	if err != nil || noModel {
+		return noModel, err
+	}
+	var failed bool
+	err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT status = 'failed'
+		AND ($2::timestamptz IS NULL OR ended_at >= $2) FROM runs
+		WHERE task_id = $1 AND role = 'conductor' ORDER BY created_at DESC, id DESC LIMIT 1), false)`, taskID, since).Scan(&failed)
+	return failed, err
+}
+
+// raiseEscalationTx routes all newly raised escalations in the same transaction
+// as the status, audit and wake. Callers hold the delivery before the task.
+func raiseEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State) error {
+	e := st.Escalation
+	unavailable, err := conductorUnavailableTx(ctx, tx, st.TaskID, nil)
+	if err != nil {
+		return err
+	}
+	if st.conducted() && !unavailable && e.Reason != ReasonConductorUnavailable {
+		e.heldBy(HolderConductor)
+		if _, err := SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "", "running", "with the conductor: "+e.Reason); err != nil {
+			return err
+		}
+		personOnly := []string{}
+		for _, action := range e.Actions() {
+			if PersonOnly(e.Reason, action) {
+				personOnly = append(personOnly, action)
+			}
+		}
+		if err := emitTx(ctx, tx, org, st, EvEscalationRaised, map[string]any{
+			"reason": e.Reason, "detail": e.Detail, "actions": e.Actions(), "holder": e.Holder, "personOnly": personOnly,
+		}); err != nil {
+			return err
+		}
+	} else {
+		e.heldBy(HolderPerson)
+		why := WhyNoConductor
+		if st.conducted() {
+			why = WhyHandover
+		}
+		if _, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: org}, State: st, Escalation: e, Reason: e.Reason, Why: why}); err != nil {
+			return err
+		}
+	}
+	if st.conducted() {
+		_, err = tellEscalationTx(ctx, tx, org, wfID, st)
+	}
+	return err
+}
+
 // heldBy marks the escalation raised now, held by holder. Called where it
 // is raised, before the state that carries it is written.
 func (e *Escalation) heldBy(holder string) *Escalation {

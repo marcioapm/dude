@@ -50,10 +50,10 @@ func TestGoldenDecideEscalationRefusals(t *testing.T) {
 		setup                     []string
 	}{
 		{name: "not-waiting", step: "review", state: `{"taskId":"wi_g","projectId":"prj_g","attempt":1,"decider":"conductor"}`, action: "retry"},
-		{name: "not-answered", step: "decide", state: fmt.Sprintf(waiting, "stuck"), action: "retry"},
-		{name: "earlier-conductor", step: "decide", state: fmt.Sprintf(waiting, "stuck"), action: "retry",
+		{name: "not-answered", step: "decide", state: fmt.Sprintf(waiting, "review_failed"), action: "accept"},
+		{name: "earlier-conductor", step: "decide", state: fmt.Sprintf(waiting, "review_failed"), action: "accept",
 			setup: []string{answered("run_cond0", "per_ana")}},
-		{name: "not-owner", step: "decide", state: fmt.Sprintf(waiting, "stuck"), action: "retry",
+		{name: "not-owner", step: "decide", state: fmt.Sprintf(waiting, "review_failed"), action: "accept",
 			setup: []string{`INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ('wi_g', 'per_ana', $1, 0)`,
 				answered("run_cond1", "per_bo")}},
 		{name: "not-admin", step: "decide", state: fmt.Sprintf(waiting, ReasonTestFailedCriteria), action: "accept",
@@ -62,7 +62,7 @@ func TestGoldenDecideEscalationRefusals(t *testing.T) {
 		// failed test, the direction of a retry or amend.
 		{name: "choice-not-reason", step: "decide", state: fmt.Sprintf(waiting, ReasonTestFailedCriteria), action: "accept",
 			setup: []string{answered("run_cond1", "per_ana"), `UPDATE questions SET answer = 'Accept' WHERE id = 'qst_e'`}},
-		{name: "choice-not-direction-retry", step: "decide", state: fmt.Sprintf(waiting, "stuck"), action: "retry",
+		{name: "missing-conductor-direction-retry", step: "decide", state: fmt.Sprintf(waiting, "stuck"), action: "retry",
 			setup: []string{answered("run_cond1", "per_ana"), `UPDATE questions SET answer = 'Retry' WHERE id = 'qst_e'`}},
 		{name: "choice-not-direction-amend", step: "decide", state: fmt.Sprintf(waiting, ReasonNotConverging), action: "amend",
 			setup: []string{answered("run_cond1", "per_ana"), `UPDATE questions SET answer = 'Retry' WHERE id = 'qst_e'`}},
@@ -72,6 +72,7 @@ func TestGoldenDecideEscalationRefusals(t *testing.T) {
 			VALUES ('run_cond1', $1, 'prj_g', 'wi_g', 1, 'running', 'conductor', 'agent', '2026-01-02 09:00Z'),
 			('run_cond0', $1, 'prj_g', 'wi_g', 1, 'completed', 'conductor', 'agent', '2026-01-02 08:00Z')`)
 		w.delivery(t, c.step, c.state)
+		w.exec(t, `UPDATE tasks SET status = 'awaiting_input' WHERE id = 'wi_g'`)
 		for _, q := range c.setup {
 			w.exec(t, q)
 		}
@@ -135,7 +136,7 @@ func TestOnAnOwnedTaskOnlyTheOwnersNotedPickDecides(t *testing.T) {
 			w.exec(t, `INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES ('wi_g', 'per_ana', $1, 0)`)
 			w.delivery(t, "decide", `{"taskId":"wi_g","projectId":"prj_g","attempt":1,"decider":"conductor","escalation":{"reason":"`+ReasonChecksUnverified+`","step":"implement"}}`)
 			ref := RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
-			items := []QuestionItem{{Question: "Waive?", Choices: []Choice{{Note: "it predates the task"}, {Label: "Send it back"}}}}
+			items := []QuestionItem{{Question: "Waive?", Choices: []Choice{{Note: "it predates the task", Recommended: true}, {Label: "Send it back"}}}}
 			q := w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
 				key, composed, err := EscalationQuestion(ctx, tx, ref, items, []string{ActionWaive, "retry"})
 				if err != nil {

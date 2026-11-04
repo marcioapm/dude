@@ -44,12 +44,6 @@ var toPersonOffenders = map[string]string{
 	"phases/sync.go:requestPause": "PR4b",
 	// A1: a writer's ask_person goes to the person.
 	"agenttools/tools.go:askPerson": "PR4a",
-	// A6: dude's escalations go to the person first.
-	"delivery/workflow.go:escalate": "PR2",
-	// A7: the checks gate's bound goes to the person first.
-	"delivery/checks_escalation.go:EscalateChecksTx": "PR2",
-	// A9: a promotion stopped at boot goes to the person first.
-	"delivery/convert_candidates.go:stopMidPromotionTx": "PR2",
 }
 
 // transitionalWhys are ToPersonTx's reasons conductor-first removes: a call
