@@ -809,8 +809,7 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 const ConductorRetrying = `EXISTS (SELECT 1 FROM runs cr WHERE cr.task_id = t.id AND cr.role = 'conductor' AND cr.kind = 'agent'
 	AND cr.phase IS NULL AND cr.status = 'running' AND cr.control = 'none'
 	AND COALESCE((cr.harness_state->>'turnRetries')::int, 0) > 0
-	AND EXISTS (SELECT 1 FROM directives rd WHERE rd.run_id = cr.id AND rd.deliver_after IS NOT NULL
-		AND rd.sent_at IS NULL AND rd.failed_at IS NULL))`
+	AND EXISTS (SELECT 1 FROM directives rd WHERE rd.run_id = cr.id AND ` + retryUnsent + `))`
 
 // RetryingRecheck is how soon a quiet decision whose deadline passed while
 // its conductor retries (ConductorRetrying) is looked at again.
