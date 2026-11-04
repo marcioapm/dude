@@ -308,34 +308,29 @@ func reachesPerson(n ast.Node, consts map[string]string) []personReach {
 				out = append(out, personReach{n.Pos(), `"awaiting_input", not read`})
 			}
 		case *ast.Ident:
-			// A ToPersonTx call's reason, however it is passed.
-			if slices.Contains(transitionalWhys, n.Name) {
-				out = append(out, personReach{n.Pos(), "ToPersonTx for " + n.Name})
-			}
-			// The event type, however it travels to an emitter.
-			if n.Name == "EvQuestionAsked" && !isRead(n, parent, consts) {
-				out = append(out, personReach{n.Pos(), "EvQuestionAsked, not read"})
+			// A selector's name is judged with the selector (below).
+			if sel, ok := parent.(*ast.SelectorExpr); !ok || sel.Sel != n {
+				out = append(out, namesPerson(n, n.Name, parent, consts)...)
 			}
 		case *ast.SelectorExpr:
-			// delivery.EvQuestionAsked: judged here, with its own parent; its
-			// Sel is not visited as an Ident.
-			if n.Sel.Name == "EvQuestionAsked" && !isRead(n, parent, consts) {
-				out = append(out, personReach{n.Pos(), "EvQuestionAsked, not read"})
-			}
-			if slices.Contains(transitionalWhys, n.Sel.Name) {
-				out = append(out, personReach{n.Pos(), "ToPersonTx for " + n.Sel.Name})
-			}
-			ast.Inspect(n.X, func(m ast.Node) bool {
-				if m != nil {
-					out = append(out, reachesPerson(m, consts)...)
-				}
-				return false
-			})
-			stack = stack[:len(stack)-1]
-			return false
+			// delivery.EvQuestionAsked: judged as a whole, with its own parent.
+			out = append(out, namesPerson(n, n.Sel.Name, parent, consts)...)
 		}
 		return true
 	})
+	return out
+}
+
+// namesPerson: e, named name, is a ToPersonTx call's transitional reason
+// however it is passed, or the event type however it travels to an emitter.
+func namesPerson(e ast.Expr, name string, parent ast.Node, consts map[string]string) []personReach {
+	var out []personReach
+	if slices.Contains(transitionalWhys, name) {
+		out = append(out, personReach{e.Pos(), "ToPersonTx for " + name})
+	}
+	if name == "EvQuestionAsked" && !isRead(e, parent, consts) {
+		out = append(out, personReach{e.Pos(), "EvQuestionAsked, not read"})
+	}
 	return out
 }
 
