@@ -68,4 +68,3 @@ func (s *Store) runBaseRefs(ctx context.Context, org, runID string) (map[string]
 	})
 	return heads, branch, err
 }
-

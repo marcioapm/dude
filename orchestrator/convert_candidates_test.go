@@ -134,7 +134,7 @@ func (w *prFixWorld) candidateDropped(from map[string]string) {
 // request's head, with the reopened item; the candidate branch stays.
 func TestConvertCandidatesRedoesAFixUnderReviewDirectly(t *testing.T) {
 	w, _, review, from := midCandidateReview(t)
-	if n := w.convertCandidates(); n.Converted != 1 || n.Moving != 0 || n.Left != 0 {
+	if n := w.convertCandidates(); n.Converted != 1 || n.StoppedMidPromotion != 0 || n.Left != 0 {
 		t.Fatalf("swept %+v, want one converted", n)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'aborted' AND NOT keep`, review); n != 1 {
@@ -206,7 +206,7 @@ func TestConvertCandidatesLeavesAPromotionMoving(t *testing.T) {
 		state = state || jsonb_build_object('candidate', jsonb_build_object('round', 1, 'branch', $2::text, 'from', state->'heads'))
 		WHERE task_id = $1`, w.wi, delivery.CandidateBranch(w.wi, 1))
 	before := w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1`, w.wi)
-	if n := w.convertCandidates(); n.Moving != 1 || n.Converted != 0 {
+	if n := w.convertCandidates(); n.StoppedMidPromotion != 1 || n.Converted != 0 {
 		t.Fatalf("swept %+v, want one moving", n)
 	}
 	if after := w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1`, w.wi); after != before || w.step() != "promoteCandidate" {
@@ -215,7 +215,7 @@ func TestConvertCandidatesLeavesAPromotionMoving(t *testing.T) {
 	// Mid-refresh after a loop candidate's promotion: also moving.
 	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'refreshPromoted',
 		state = state - 'candidate' || '{"promotedRefresh":{"repos":["target"],"next":"beforePR"}}' WHERE task_id = $1`, w.wi)
-	if n := w.convertCandidates(); n.Moving != 1 || n.Converted != 0 {
+	if n := w.convertCandidates(); n.StoppedMidPromotion != 1 || n.Converted != 0 {
 		t.Fatalf("swept %+v, want one moving", n)
 	}
 }

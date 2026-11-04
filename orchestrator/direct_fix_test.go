@@ -21,8 +21,8 @@ func reviewFinding(title string) string {
 		"title: " + title + "\ndescription: \"Traced: FACTORY.md:1.\"\nsuggested_fix: Fix it.\n```\n"
 }
 
-// newPRFixWorldDirect is newPRFixWorld with the delivery frozen to push
-// its pull request fixes directly (pullRequestFixes direct).
+// newPRFixWorldDirect is newPRFixWorld with the tester on: every
+// delivery pushes its pull request fixes directly.
 func newPRFixWorldDirect(t *testing.T, testers ...string) *prFixWorld {
 	return newPRFixWorldAt(t, prAt{test: true}, testers...)
 }
@@ -323,8 +323,7 @@ func TestDirectAPersonsPushDuringTheFixFailsThePublishAndKeepsItsCommits(t *test
 func TestDirectAdoptedPullRequestsFirstLoopPublishesInPlace(t *testing.T) {
 	w := newWorld(t)
 	w.onModel("qa_browser", "fake/scripted")
-	// Direct as every project is that does not set it otherwise.
-	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"requiredReviewers":["correctness"],"test":true,"pullRequestFixes":"direct"}' WHERE id = $1`, w.project)
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = '{"requiredReviewers":["correctness"],"test":true}' WHERE id = $1`, w.project)
 	scripted := w.lux.Decide
 	var atSimplifyReview string
 	reviews := 0
@@ -344,11 +343,6 @@ func TestDirectAdoptedPullRequestsFirstLoopPublishesInPlace(t *testing.T) {
 	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReview)
 	w.startDelivery(wi)
 	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(wi) })
-	var frozen string
-	_ = w.owner.QueryRow(context.Background(), `SELECT state->'policy'->>'pullRequestFixes' FROM workflow_runs WHERE task_id = $1`, wi).Scan(&frozen)
-	if frozen != delivery.PullRequestFixesDirect {
-		t.Fatalf("the delivery froze pullRequestFixes %q", frozen)
-	}
 	if got := w.phasesRun(wi); !slices.Equal(got, []string{"review", "simplify", "review", "test"}) {
 		t.Fatalf("phases %v\n%s", got, w.describeRuns())
 	}
@@ -358,9 +352,6 @@ func TestDirectAdoptedPullRequestsFirstLoopPublishesInPlace(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND branch LIKE '%-candidate'`, wi); n != 0 {
 		t.Errorf("%d Runs on a candidate", n)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.fix_moved'`, wi); n != 0 {
-		t.Errorf("%d promotions", n)
 	}
 	for _, b := range []string{delivery.CandidateBranch(wi, 1), "feature/greet-candidate"} {
 		if w.gh.SHA(b) != "" || len(w.gh.BranchLog(b)) > 0 {
@@ -372,7 +363,7 @@ func TestDirectAdoptedPullRequestsFirstLoopPublishesInPlace(t *testing.T) {
 // The fixer of a delivery's pull request is told its fix goes to the pull
 // request when it publishes: every delivery's is direct.
 func TestDirectTheFixerIsToldItsFixGoesToThePullRequest(t *testing.T) {
-	for _, direct := range []bool{true} {
+	{
 		w := newPRFixWorldAt(t, prAt{test: true})
 		w.comment("Please rename the greeting.")
 		var fix string
@@ -382,18 +373,18 @@ func TestDirectTheFixerIsToldItsFixGoesToThePullRequest(t *testing.T) {
 			return fix != "" && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, fix) == 1
 		})
 		text := w.instructionsOf(fix)
-		want := delivery.Instructions("fixer", "", delivery.InstructionsInput{DirectFixes: direct})
+		want := delivery.Instructions("fixer", "", delivery.InstructionsInput{})
 		_, role, _ := strings.Cut(want, "# Your role: fixer\n\n")
 		role, _, _ = strings.Cut(role, "\n")
 		if !strings.Contains(text, role) {
-			t.Errorf("direct=%v: the fixer's file lacks its role's line %q", direct, role)
+			t.Errorf("the fixer's file lacks its role's line %q", role)
 		}
 	}
 }
 
 // Reviewers and testers never push: their specs name no push branch.
 func TestDirectReviewersAndTestersStillNeverPush(t *testing.T) {
-	for _, direct := range []bool{true} {
+	{
 		w := newPRFixWorldAt(t, prAt{test: true})
 		w.comment("Please rename the greeting.")
 		w.until("the fix's review", func() bool {
@@ -407,7 +398,7 @@ func TestDirectReviewersAndTestersStillNeverPush(t *testing.T) {
 				continue
 			}
 			if p := spec.Labels["dude.phase"]; (p == "review" || p == "test") && spec.Git != nil && spec.Git.Push != nil {
-				t.Errorf("direct=%v: a %s Run's spec pushes to %q", direct, p, spec.Git.Push.Branch)
+				t.Errorf("a %s Run's spec pushes to %q", p, spec.Git.Push.Branch)
 			}
 		}
 	}
@@ -451,12 +442,12 @@ func TestDirectNoBaseMergeIsAskedDuringAFixLoop(t *testing.T) {
 }
 
 // The factory's delivery defaults, which the settings pages show for a key
-// no layer sets, say direct fixes and a narrow loop of 2.
-func TestTheFactoryDefaultsSayDirectFixes(t *testing.T) {
+// no layer sets, say a narrow loop of 2 and carry no pullRequestFixes key.
+func TestTheFactoryDefaultsSayANarrowLoopOfTwo(t *testing.T) {
 	w := newWorld(t)
 	status, body := w.get("/internal/delivery-defaults", w.org)
 	var p delivery.Policy
-	if status != 200 || json.Unmarshal([]byte(body), &p) != nil || p.PullRequestFixes != delivery.PullRequestFixesDirect || p.MaxPRFixReviewIterations != 2 {
+	if status != 200 || json.Unmarshal([]byte(body), &p) != nil || p.MaxPRFixReviewIterations != 2 || strings.Contains(body, "pullRequestFixes") {
 		t.Errorf("delivery defaults %d: %s", status, body)
 	}
 }

@@ -93,7 +93,6 @@ func (w *world) prOpen(wi string, at prAt) string {
 	ctx := context.Background()
 	policy := scriptedPolicy()
 	policy.Test = at.test
-	policy.PullRequestFixes = delivery.PullRequestFixesDirect
 	type prRepo struct {
 		name string
 		gh   *fakegithub.Server

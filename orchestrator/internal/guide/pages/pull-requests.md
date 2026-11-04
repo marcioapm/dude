@@ -32,9 +32,11 @@ A comment that mentions `@dude` is not feedback for a fixer. It goes to the task
 
 ## How a fix reaches the pull request
 
-A fix for an open pull request is checked before the pull request shows it. The fixer works on a separate candidate branch. Its change is reviewed, simplified and tested like new work. Only when that passes does dude fast-forward the pull request's branch to it.
+A fix for an open pull request is pushed straight to the pull request's branch, so its CI and reviewers see it at once. Then dude reviews what that push changed. A finding there is fixed on the pull request and reviewed again, a few times at most before the owner is asked. CI is the test: no simplifier or tester runs after the pull request opens.
 
-If someone pushed to the pull request in the meantime, dude does not move it over their commit. It stops and asks: **The pull request moved**. You can fix the feedback again from what the branch holds now, or wait without it.
+dude never pushes to an open pull request twice without a review in between: until its last push has been reviewed, no agent may push again.
+
+If someone pushed to the pull request while a fix was running, dude does not push over their commit: that fix fails, and the next one starts from what the branch holds now.
 
 After a fix lands, dude asks again every reviewer whose last review was on an older commit. It never re-asks the author or a bot account.
 
@@ -67,7 +69,7 @@ The pull request buttons in dude — Merge, Update branch, re-run failed checks,
 
 A task keeps up with its base branch by **merging**, never rebasing. What happens is set in **Settings → GitHub → When a task's base moves ahead**:
 
-- **Keep it up to date** (default) — dude merges the base into the task's branch on GitHub and tests the new head. If the merge conflicts, an agent resolves it, the merge is reviewed and tested, and only then does the pull request move.
+- **Keep it up to date** (default) — dude merges the base into the task's branch on GitHub and tests the new head. If the merge conflicts, an agent resolves it and the merge is reviewed; before the pull request opens it is also tested.
 - **Only tell the task's people** — nothing merges by itself. The pull request card offers **Resolve conflicts**, which only the task's owner can press.
 
 If dude could not resolve a conflict, it asks you: **Could not resolve conflicts**. Try again, or resolve it yourself and wait on it again.

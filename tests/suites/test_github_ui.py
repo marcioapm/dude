@@ -50,7 +50,7 @@ def test_the_pull_request_panel_shows_github_and_acts_on_it(
     fake_github.review(n, "CHANGES_REQUESTED", "Please keep fetchRevenue.", reviewer="cy")
     wait_until(lambda: [r for r in client.task_runs(task["id"]) if r["phase"] == "fix" and r["status"] == "completed"
                         and r["createdAt"] > pr["createdAt"]], timeout=90, message="the change request was not fixed")
-    # Landed: reviewed and tested on its candidate, then on the pull request.
+    # Landed: pushed to the pull request, then reviewed over that push.
     _until_fix_lands(client, task["id"], fake_github, pr["headBranch"], opened_at)
     fake_github.commit("main", "Someone else's work")
     fake_github.set_unresolved(n, 2)

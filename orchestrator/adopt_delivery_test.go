@@ -78,9 +78,9 @@ func TestAPullRequestToContinueIsImplementedOnBeforeItsReview(t *testing.T) {
 		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest'`, wi) == 1
 	})
 	// The implementer's work and jerv's comment's fix reached the person's
-	// pull request directly, never by promotion.
-	if w.fixes(wi) != 1 || w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvPullRequestFixMoved) != 0 {
-		t.Errorf("fixes %d, or a promotion recorded\n%s", w.fixes(wi), w.describeRuns())
+	// pull request directly.
+	if w.fixes(wi) != 1 {
+		t.Errorf("fixes %d\n%s", w.fixes(wi), w.describeRuns())
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND branch LIKE '%-candidate'`, wi); n != 0 {
 		t.Errorf("%d Runs on a candidate", n)

@@ -12,22 +12,27 @@ import (
 	"context"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
-	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 var bodyPatch = regexp.MustCompile(`/issues/\d+$`)
+
+// stateStep is the delivery's workflow step.
+func (w *prFixWorld) stateStep() string {
+	w.t.Helper()
+	var step string
+	if err := w.owner.QueryRow(context.Background(), `SELECT step FROM workflow_runs WHERE task_id = $1`, w.wi).Scan(&step); err != nil {
+		w.t.Fatal(err)
+	}
+	return step
+}
 
 // bodyPatches counts gh's pull request description PATCHes once armed,
 // failing the first fail of them with a 502.
@@ -303,84 +308,6 @@ func TestAPromotionRefreshesASiblingPullRequestItDidNotMove(t *testing.T) {
 		if body := server.Pull(1).Body; !strings.Contains(body, want) {
 			t.Errorf("%s's description is not about the heads (%s):\n%s", repo, want, body)
 		}
-	}
-}
-
-// The orchestrator restarts while the refresh waits, and a run of the
-// refresh is lost before its transition commits: each time the refresh
-// alone runs again; the promotion's move is made and recorded once.
-func TestARestartDuringAPromotedRefreshRetryDoesNotPromoteAgain(t *testing.T) {
-	t.Skip("candidate path: deleted in B2")
-	w := newPRFixWorld(t)
-	var armed atomic.Bool
-	var refPatches atomic.Int32
-	var bodies atomic.Int32
-	w.gh.Set(func(s *fakegithub.Server) {
-		s.Intercept = func(r *http.Request) int {
-			if !armed.Load() || r.Method != "PATCH" {
-				return 0
-			}
-			if strings.HasSuffix(r.URL.Path, "/git/refs/heads/"+w.branch) {
-				refPatches.Add(1)
-			}
-			if bodyPatch.MatchString(r.URL.Path) && bodies.Add(1) <= 2 {
-				return http.StatusBadGateway
-			}
-			return 0
-		}
-	})
-	armed.Store(true)
-	w.comment("Please rename the greeting.")
-	w.untilTheFixIsOnThePullRequest()
-	w.elapseRefreshWait(w.wi, 1)
-
-	// A restart: another orchestrator process, its own poller, from what
-	// the database holds. Its first run of the refresh is lost before it
-	// commits, as a crash mid-step loses it.
-	w.runtime = workflow.New(w.app, "restarted", w.log)
-	def := delivery.Workflow(&delivery.Store{DB: w.app}, forge.Resolver{DB: w.app})
-	var mu sync.Mutex
-	var ran []string
-	var lost atomic.Bool
-	def.BeforeCommit = func(_, step, next string) {
-		mu.Lock()
-		ran = append(ran, step)
-		mu.Unlock()
-		if step == "refreshPromoted" && lost.CompareAndSwap(false, true) {
-			mustExec(t, w.owner, `UPDATE workflow_runs SET locked_until = now() - interval '1 second' WHERE task_id = $1`, w.wi)
-		}
-	}
-	w.runtime.Register(def)
-	// The lost run's failure (the second) is not recorded; its replay, at
-	// once and from the one wait recorded, is the third update, which lands.
-	w.pump()
-	if !lost.Load() || w.state("promotedRefresh") != "" {
-		t.Fatalf("the lost run's transition landed or was not replayed at once: %s", w.state("promotedRefresh"))
-	}
-	w.settledBackOnThePullRequest()
-	if bodies.Load() != 3 {
-		t.Errorf("%d description updates; want the lost one replayed, 3 updates", bodies.Load())
-	}
-	mu.Lock()
-	steps := slices.Clone(ran)
-	mu.Unlock()
-	if len(steps) < 2 || steps[0] != "refreshPromoted" || steps[1] != "refreshPromoted" {
-		t.Errorf("after the restart the steps ran %v, want the refresh, lost, then again", steps)
-	}
-	for _, s := range steps {
-		if s == "promoteCandidate" {
-			t.Errorf("the promotion ran again after the restart: %v", steps)
-		}
-	}
-	if n := refPatches.Load(); n != 1 {
-		t.Errorf("the pull request's branch was moved %d times", n)
-	}
-	if n := w.moves(w.wi); n != 1 {
-		t.Errorf("%d moves recorded", n)
-	}
-	head := w.gh.SHA(w.branch)
-	if body := w.gh.Pull(1).Body; !strings.Contains(body, "Tested at `"+head[:7]+"`.") {
-		t.Errorf("the description is not about %s:\n%s", head[:7], body)
 	}
 }
 

@@ -213,7 +213,6 @@ func TestGoldenDirectFixesInstructions(t *testing.T) {
 		in := goldenTask()
 		in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
 		in.Repositories = readOnlyRepos()
-		in.DirectFixes = true
 		golden(t, "instructions-"+role+"-direct", Instructions(role, "correctness", in.InstructionsInput()))
 	}
 }
