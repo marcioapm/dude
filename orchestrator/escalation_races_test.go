@@ -289,7 +289,7 @@ func TestChatWhileTheTaskEndsWaitsForIt(t *testing.T) {
 }
 
 // The conductor's ask_person at a decision point holds the Chat lock and
-// the delivery (parked) and then moves the task (AskTx), while a banner
+// the delivery (parked) and then moves the task (ToPersonTx), while a banner
 // request arrives: the banner waits on the delivery holding nothing the ask
 // needs, the question is asked, and the banner, finding no escalation, is
 // refused with 409. Neither is a deadlock victim.
