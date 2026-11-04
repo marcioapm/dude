@@ -166,8 +166,8 @@ func TestAMergeWhileAnEscalationWaitsOnAPersonFinishesTheTask(t *testing.T) {
 	}
 }
 
-// Merged while a pull request fixer is at work: the fixer is aborted, its
-// candidate abandoned, and the task done with no pull request of its own
+// Merged while a pull request fixer is at work: the fixer is aborted, and
+// the task done with no pull request of its own
 // for the fix and no step failing.
 func TestAMergeWhileAPullRequestFixerWorksStopsIt(t *testing.T) {
 	testAMergeWhileAPullRequestFixerWorksStopsIt(t)
@@ -279,7 +279,7 @@ func TestAMixedEndWhileASiblingsFixerWorksLetsTheFixLand(t *testing.T) {
 			b.Hang = fixers.Add(1) == 1
 			b.Commit = map[string]string{"web:TITLE.md": "the page title, fixed\n"}
 		case "simplify":
-			// The candidate changes web alone: nothing for target's closed one.
+			// The fix changes web alone: nothing for target's closed one.
 			b.Commit = nil
 		}
 		return b

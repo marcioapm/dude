@@ -561,7 +561,7 @@ func TestAlwaysReviewersAndNonProductPathsAreValidated(t *testing.T) {
 }
 
 // The boundaries of "later round": an integration's review, a new attempt,
-// a previous round that failed, and a pull request's fix on its candidate.
+// a previous round that failed, and a pull request's direct fix.
 func TestWhereALaterRoundStarts(t *testing.T) {
 	t.Run("an integration review is a first round", func(t *testing.T) {
 		r := newLaterRound(t, ".github/workflows/x.yml").firstRound()

@@ -424,7 +424,7 @@ func TestALargeChangeGetsAFreshReviewerOfTheWholeBranch(t *testing.T) {
 // An adopted pull request's first review is of the whole branch; a person
 // pushes to it before the loop's fix, and the next round's resumed
 // reviewer is told to review from the head the first round reviewed to the
-// candidate's: the person's commit and the fix, not the fix alone and not
+// fix's: the person's commit and the fix, not the fix alone and not
 // the whole branch again.
 func TestAnAdoptedPullRequestsNextRoundReviewsSinceTheLastReviewedHeadWithAPersonsPush(t *testing.T) {
 	w := resuming(t)

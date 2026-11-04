@@ -3448,8 +3448,8 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 		return w.taskStatus(wi) == "running"
 	})
 	w.gh.SetChecks("none")
-	// On the pull request: its candidate's own reviews set the task to
-	// review too, before the simplifier and the move.
+	// On the pull request: the fix's own reviews set the task to review
+	// too.
 	w.until("the fix in review", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		return w.gh.SHA(head) != before && w.taskStatus(wi) == "review"
