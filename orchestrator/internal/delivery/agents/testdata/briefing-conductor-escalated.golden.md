@@ -33,7 +33,7 @@ Your checkout is at that head.
 
 ## Decisions
 
-You take this task's decisions. The delivery is stopped at an escalation for a person: not converging. Only the person decides it: explain and propose.
+You take this task's decisions. The delivery waits at an escalation: not converging. Decide non-person-only actions with decide_escalation; ask the owner only for a person-only action, with one recommended choice.
 
 ## On this epic: Billing export
 

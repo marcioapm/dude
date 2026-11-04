@@ -284,7 +284,7 @@ scope %q is not one this decision takes: "run", or "attempt" only when waiving u
 
 ## refusals/domain/escalations/needs-direction-note
 
-%s needs a note with the person's direction
+%s needs a note with direction for the next fix
 
 ## refusals/domain/chat-links/gone
 

@@ -1,6 +1,6 @@
 # decide_escalation
 
-Decide the escalation the delivery is stopped at (retry, accept, amend, waive, resume, done, wait or stop, as it offers), only after the owner answered your question about this escalation in their own words. Otherwise the person decides on the banner, or by picking a choice. Actions requiring a note are offered as choices only with the note you propose (ask_person): stuck retry; not_converging retry, accept or amend; accepting a failed test; waiving a check. Here, use the person's own direction or reason, not permission to choose for them. Allowed once per escalation.
+Decide an offered non-person-only escalation action directly, without an owner answer: resume, retry, wait or stop, with your note. You may explicitly extend stuck, exhausted or not_converging with further rounds and direction; no fixed retry ceiling. Accepting past blocking findings, waivers, amending criteria, done on pull_request_closed, retry on pr_loop_exhausted and all conductor_unavailable actions require the owner-authorized question/answer path. Ask one question with exactly one recommended choice and a proposed reason where required; the owner's pick decides directly. For a valid free-text owner answer, use their words for a person-only decision. Allowed once per escalation.
 
 ```json
 {

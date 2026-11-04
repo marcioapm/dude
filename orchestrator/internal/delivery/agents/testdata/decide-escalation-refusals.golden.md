@@ -22,9 +22,9 @@ only the task's owner or an organisation admin can accept this; a person decides
 
 the owner's answer to your question qst_e is one of its choices, not their reason: to accept, they say why in their own words, or decide on the banner
 
-## choice-not-direction-retry
+## missing-conductor-direction-retry
 
-the owner's answer to your question qst_e is one of its choices, not their direction: to retry, they say how in their own words, or decide on the banner
+retry needs a note with the person's direction
 
 ## choice-not-direction-amend
 

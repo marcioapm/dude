@@ -32,23 +32,23 @@ Your review · security Run run_rev failed: lux: the host went away xxxxxxxxxxxx
 
 ## escalated-stuck
 
-Escalated to a person: stuck. Its actions: retry, accept, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person, the actions as choices; a choice whose action needs the person's reason or direction carries the one you propose as its note, which the owner's pick makes theirs. A free answer of the owner lets you decide_escalation. Retry needs direction for the next fix: offer it with the direction you propose as its note.
+Escalation: stuck. Actions: retry, accept, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. Retry needs your direction for the next fix in its note.
 
 ## escalated-test-failed
 
-Escalated to a person: test failed criteria. Its actions: retry, accept, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person, the actions as choices; a choice whose action needs the person's reason or direction carries the one you propose as its note, which the owner's pick makes theirs. A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs a reason: the note you propose, or the person's own. Criteria: 2 (fail): Paying sends a receipt.
+Escalation: test failed criteria. Actions: retry, accept, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs a reason: the note you propose, or the person's own. Criteria: 2 (fail): Paying sends a receipt.
 
 ## escalated-test-blocked
 
-Escalated to a person: test blocked. Its actions: retry, waive, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person, the actions as choices; a choice whose action needs the person's reason or direction carries the one you propose as its note, which the owner's pick makes theirs. A free answer of the owner lets you decide_escalation. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs a reason: the note you propose, or the person's own. Criteria: 1 (blocked): The export downloads.
+Escalation: test blocked. Actions: retry, waive, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs a reason: the note you propose, or the person's own. Criteria: 1 (blocked): The export downloads.
 
 ## escalated-checks
 
-Escalated to a person: checks unverified. Its actions: retry, waive, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person, the actions as choices; a choice whose action needs the person's reason or direction carries the one you propose as its note, which the owner's pick makes theirs. A free answer of the owner lets you decide_escalation. The checks not verified: npm run test:legacy: not-run — not passed by the judge: no later phase runs the legacy Vue jest suite (judgement: no); missing checks: the legacy Vue jest run covers the changed component (judgement: yes).
+Escalation: checks unverified. Actions: retry, waive, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The checks not verified: npm run test:legacy: not-run — not passed by the judge: no later phase runs the legacy Vue jest suite (judgement: no); missing checks: the legacy Vue jest run covers the changed component (judgement: yes).
 
 ## escalated-checks-many
 
-Escalated to a person: checks unverified. Its actions: retry, waive, stop. Only the person decides: explain and propose (the banner works too). Ask with ask_person, the actions as choices; a choice whose action needs the person's reason or direction carries the one you propose as its note, which the owner's pick makes theirs. A free answer of the owner lets you decide_escalation. The checks not verified: make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; and 3 more.
+Escalation: checks unverified. Actions: retry, waive, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The checks not verified: make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; and 3 more.
 
 ## escalation-answered
 
