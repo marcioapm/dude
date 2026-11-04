@@ -579,9 +579,9 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			"refreshPromoted":   w.refreshPromoted,
 			// Legacy: the deleted candidate promotion's step, where a
 			// delivery stored before the deletion may still sit. Its entry
-			// (legacy) converts it as the boot's sweep does, never moving
-			// a branch: its body never runs.
-			"promoteCandidate": w.stoppedMidPromotion,
+			// (legacy) stops it as the boot's sweep does, never moving a
+			// branch: its body never runs.
+			"promoteCandidate": promoteCandidate,
 			"prFixDone":        w.prFixDone,
 			"decide":           w.decide,
 			"recover":          w.recover,
@@ -2856,9 +2856,6 @@ func (w *steps) refreshPromoted(ctx context.Context, sc workflow.StepContext) (w
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if midPromotion(sc.Step, st) {
-		return w.stoppedMidPromotion(ctx, sc)
-	}
 	if pr := st.PromotedRefresh; pr != nil {
 		if len(pr.Repos) > 0 {
 			pr.Tries++
@@ -2876,29 +2873,10 @@ func (w *steps) refreshPromoted(ctx context.Context, sc workflow.StepContext) (w
 	return w.prFixLanded(ctx, sc, st)
 }
 
-// stoppedMidPromotion is the step for a delivery stored mid-promotion
-// (midPromotion) that the boot's sweep (ConvertCandidates) did not reach:
-// the code that moved a candidate onto the pull request is deleted, so it
-// moves nothing. What it held is let go (leaveMidPromotionTx) and it stops
-// for a person, whose retry fixes again from the pull requests' heads.
-func (w *steps) stoppedMidPromotion(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
-	st, err := load(sc)
-	if err != nil {
-		return workflow.Result{}, err
-	}
-	var next string
-	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
-		next, err = leaveMidPromotionTx(ctx, tx, sc.OrganizationID, sc.WorkflowRunID, st)
-		return err
-	}); err != nil {
-		return workflow.Result{}, err
-	}
-	st.Retries++
-	res, err := w.escalate(ctx, sc, st, ReasonStoppedMidPromotion, map[string]any{"step": sc.Step})
-	if err == nil {
-		st.Escalation.Step = next
-	}
-	return res, err
+// promoteCandidate is the deleted step's body: steps.legacy converts
+// every row at it (stopMidPromotionTx) before any body runs.
+func promoteCandidate(context.Context, workflow.StepContext) (workflow.Result, error) {
+	return workflow.Result{}, errors.New("promoteCandidate: the deleted step ran without its entry's conversion")
 }
 
 // pullRequestEnded: one of the task's pull requests was merged or
@@ -2998,9 +2976,6 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	case ReasonConductorUnavailable:
 		// Its retry waits on the conductor's decision again (decide).
 		st.Escalation.Step = "conductorDecision"
-	case ReasonStoppedMidPromotion:
-		// The fix again, from what the pull requests hold now.
-		st.Escalation.Step = "prFix"
 	}
 	if st.Escalation.Step == "" && slices.Contains(st.Escalation.Actions(), "retry") {
 		// A retry with nowhere to go back to would end the workflow while
