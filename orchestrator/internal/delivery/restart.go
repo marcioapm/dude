@@ -241,7 +241,18 @@ func FailUnreadTx(ctx context.Context, tx pgx.Tx, r RunRef, at time.Time, why st
 		return err
 	}
 	for _, id := range unread {
-		ev := r.Event(evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": why})
+		payload := map[string]any{"directiveId": id, "error": why}
+		// The feedback items it carried, released below: a Run taken back
+		// up is given them again with the directive (RequeueUnreadTx).
+		var items []string
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(id ORDER BY id), '{}') FROM feedback_items
+			WHERE directive_id = $1 AND status = 'open'`, id).Scan(&items); err != nil {
+			return err
+		}
+		if len(items) > 0 {
+			payload["feedbackItemIds"] = items
+		}
+		ev := r.Event(evDirectiveFailed, ledger.ActorSystem, payload)
 		ev.Source, ev.OccurredAt = ledger.SourceRunner, at
 		if _, err := ledger.Append(ctx, tx, ev); err != nil {
 			return err

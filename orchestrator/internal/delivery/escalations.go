@@ -767,7 +767,9 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 // round's agent reads its brief before the pick-up note. Once per
 // directive: one already resent, or read after all (a late receipt), is
 // not queued again; an interrupt alone, whose turn is over, carries
-// nothing; nor is a turn's nudge (scope turn).
+// nothing; nor is a turn's nudge (scope turn) or a conductor's steer.
+// The copy carries the original's unread peer messages and released
+// feedback items.
 func RequeueUnreadTx(ctx context.Context, tx pgx.Tx, runIDs []string) error {
 	rows, err := tx.Query(ctx, `SELECT d.id, COALESCE(d.resends, d.id), d.organization_id, COALESCE(r.project_id, ''),
 			COALESCE(r.task_id, ''), d.run_id
@@ -777,6 +779,11 @@ func RequeueUnreadTx(ctx context.Context, tx pgx.Tx, runIDs []string) error {
 		  -- A turn's nudge (a turn retry, a move's or idle carry-on) was
 		  -- about the turn the stop ended: not given again.
 		  AND d.scope <> 'turn'
+		  -- A conductor's steer: its conductor was told it failed
+		  -- (SteerSettledTx, steer_failed for its root) and steers again
+		  -- as it sees fit; a copy would be read under a root it never
+		  -- issued.
+		  AND d.conductor_run_id IS NULL
 		  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND c.resends = COALESCE(d.resends, d.id)
 		    AND c.created_at > d.created_at)
 		ORDER BY d.run_id, d.created_at, d.id`, runIDs, UnreadRunAborted)
@@ -797,6 +804,26 @@ func RequeueUnreadTx(ctx context.Context, tx pgx.Tx, runIDs []string) error {
 			SELECT $1, d.organization_id, d.task_id, d.run_id, d.text, d.scope, d.conductor_run_id, d.held_for, $3, false,
 				now() - make_interval(secs => $4::float8 / 1000)
 			FROM directives d WHERE d.id = $2`, id, u.ID, u.Root, len(got)-i); err != nil {
+			return err
+		}
+		// What it carried goes with the copy: the peer messages still
+		// unread, and the feedback items its stop released (named on its
+		// run.directive.failed) that nobody has been given since. The copy
+		// read marks them read and heard (CoordinationReadTx,
+		// FeedbackHeardTx).
+		if _, err := tx.Exec(ctx, `UPDATE peer_messages SET directive_id = $2, delivered_run_id = $3
+			WHERE directive_id = $1 AND read_at IS NULL`, u.ID, id, u.Run); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `WITH given AS (
+				UPDATE feedback_items f SET directive_id = $2, delivered_run_id = $3, updated_at = now()
+				FROM events e WHERE e.run_id = $3 AND e.event_type = $4 AND e.payload->>'directiveId' = $1
+				  AND f.id IN (SELECT jsonb_array_elements_text(e.payload->'feedbackItemIds'))
+				  AND f.status = 'open' AND f.directive_id IS NULL AND f.delivered_run_id IS NULL
+				RETURNING f.id)
+			UPDATE runs SET feedback_item_ids = feedback_item_ids || ARRAY(
+				SELECT id FROM given EXCEPT SELECT unnest(feedback_item_ids)) WHERE id = $3`,
+			u.ID, id, u.Run, evDirectiveFailed); err != nil {
 			return err
 		}
 		ref := RunRef{Org: u.Org, ProjectID: u.Project, TaskID: u.Task, RunID: u.Run}
