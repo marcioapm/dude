@@ -767,13 +767,16 @@ func ResumeKeptTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string,
 // round's agent reads its brief before the pick-up note. Once per
 // directive: one already resent, or read after all (a late receipt), is
 // not queued again; an interrupt alone, whose turn is over, carries
-// nothing.
+// nothing; nor is a turn's nudge (scope turn).
 func RequeueUnreadTx(ctx context.Context, tx pgx.Tx, runIDs []string) error {
 	rows, err := tx.Query(ctx, `SELECT d.id, COALESCE(d.resends, d.id), d.organization_id, COALESCE(r.project_id, ''),
 			COALESCE(r.task_id, ''), d.run_id
 		FROM directives d JOIN runs r ON r.id = d.run_id
 		WHERE d.run_id = ANY($1) AND d.error = $2 AND d.failed_at IS NOT NULL AND d.delivered_at IS NULL
 		  AND d.interrupt_only IS NOT TRUE AND d.text <> ''
+		  -- A turn's nudge (a turn retry, a move's or idle carry-on) was
+		  -- about the turn the stop ended: not given again.
+		  AND d.scope <> 'turn'
 		  AND NOT EXISTS (SELECT 1 FROM directives c WHERE c.run_id = d.run_id AND c.resends = COALESCE(d.resends, d.id)
 		    AND c.created_at > d.created_at)
 		ORDER BY d.run_id, d.created_at, d.id`, runIDs, UnreadRunAborted)
