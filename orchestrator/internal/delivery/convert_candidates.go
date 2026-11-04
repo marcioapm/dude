@@ -131,7 +131,8 @@ func convertCandidateTx(ctx context.Context, tx pgx.Tx, org, taskID, workflowID 
 	if midPromotion(d.Step, st) {
 		return CandidateStoppedMidPromotion, stopMidPromotionTx(ctx, tx, org, workflowID, d)
 	}
-	if refreshAfterLoopMove(d.Step, st) {
+	if loopMoveRefresh(st) {
+		// Not midPromotion: its candidate is gone.
 		return CandidateConverted, finishLoopMoveTx(ctx, tx, workflowID, d)
 	}
 	live := d.Live()
@@ -334,30 +335,31 @@ const stoppedMidPromotionNotice = "This delivery was moving its fix onto the pul
 // midPromotion says a delivery at step stands where only the deleted
 // promotion could go on from: at its step, or at the refresh after a
 // loop candidate's promotion with the candidate still held (no old dude
-// wrote that, which cleared it first: refreshAfterLoopMove).
+// wrote that, which cleared it first: loopMoveRefresh).
 func midPromotion(step string, st *State) bool {
-	return step == "promoteCandidate" || st.Candidate != nil && st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
+	return step == "promoteCandidate" || st.Candidate != nil && loopMoveRefresh(st)
 }
 
-// refreshAfterLoopMove says a delivery stands as an old dude left a loop
-// candidate's promotion mid-refresh: the candidate cleared, its commits on
-// the task branch, only the pull requests' refresh and the step that
-// opens one for a repository newly changed (beforePR) still to come. The
-// move is complete: nothing is redone (finishLoopMoveTx).
-func refreshAfterLoopMove(step string, st *State) bool {
-	return step != "promoteCandidate" && st.Candidate == nil && st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
+// loopMoveRefresh says st holds the refresh after a loop candidate's
+// promotion, bound for the step that opens a pull request for a
+// repository newly changed (beforePR). Without the candidate (as an old
+// dude left it mid-refresh, its commits on the task branch) the move is
+// complete: nothing is redone (finishLoopMoveTx).
+func loopMoveRefresh(st *State) bool {
+	return st.PromotedRefresh != nil && st.PromotedRefresh.Next == "beforePR"
 }
 
 // legacyTrace says a delivery at step, as decoded, still holds something
-// of the candidate path a step would run on: a candidate, or a promotion
-// (midPromotion, refreshAfterLoopMove). The retired key, a hand-over and
-// an integration's polls are not fields of State: dropped by any write.
+// of the candidate path a step would run on: a candidate, the deleted
+// promotion's step, or a loop move's refresh. The Go side of
+// CandidateRowsSQL's trace: the retired key, a hand-over and an
+// integration's polls are not fields of State, dropped by any write.
 func legacyTrace(step string, st *State) bool {
-	return st.Candidate != nil || midPromotion(step, st) || refreshAfterLoopMove(step, st)
+	return step == "promoteCandidate" || st.Candidate != nil || loopMoveRefresh(st)
 }
 
 // finishLoopMoveTx goes on from a loop candidate's completed move
-// (refreshAfterLoopMove) as a direct fix that landed does: at prFixDone,
+// (loopMoveRefresh, no candidate) as a direct fix that landed does: at prFixDone,
 // with the refresh's repositories as the fix's range, so that movedOnPR
 // asks reviewers again, opens a pull request for a repository newly
 // changed and refreshes every open pull request's body (refreshPromoted,
