@@ -294,6 +294,7 @@ func TestAnOwnerAuthoredPullRequestsFixAsksItsReviewerAsTheApp(t *testing.T) {
 	w.gh.Review(1, "jerv", "COMMENTED")
 
 	head := w.prFixPushed(wi)
+	w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(wi) })
 	for range 3 {
 		w.sync()
 		w.pump()
