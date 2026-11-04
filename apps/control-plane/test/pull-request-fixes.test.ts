@@ -114,7 +114,7 @@ describe("fixes on an open pull request", () => {
 
   test("the retired blockingSeverities an old client sends is ignored, on the organisation's and a project's", async () => {
     for (const path of ["/v1/settings/organization", `/v1/projects/${PROJECT}/settings`]) {
-      const res = await call("PATCH", path, { delivery: { simplify: false } });
+      const res = await call("PATCH", path, { delivery: { blockingSeverities: ["blocking"], simplify: false } });
       expect(res.status).toBe(200);
       const delivery = ((await res.json()) as Json).delivery;
       expect(delivery.blockingSeverities).toBeUndefined();
