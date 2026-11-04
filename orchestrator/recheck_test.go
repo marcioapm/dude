@@ -149,22 +149,22 @@ func (w *world) phaseOrder(wi string) []string {
 // prFixWorld delivers a task with the tester on to an open pull request,
 // and arms a watch: once armed, every phase Run lux is asked for after it
 // records the pull request branch's head as it was then. tester plays the
-// candidate's tests (after arm), "" for the scripted pass.
+// tests run after arm, "" for the scripted pass.
 type prFixWorld struct {
 	*world
 	wi, branch, before string
 	// web's pull request head before the comment, with two repositories.
-	webBefore      string
-	armed          atomic.Bool
-	mu             chan struct{}
-	seen           []string // the PR branch's head at each Run lux started after arm
-	seenWeb        []string // web's, the same way
-	phases         []string
-	candidateTests atomic.Int32
-	// The candidate's tests, in order: the scripted tester's model each
+	webBefore string
+	armed     atomic.Bool
+	mu        chan struct{}
+	seen      []string // the PR branch's head at each Run lux started after arm
+	seenWeb   []string // web's, the same way
+	phases    []string
+	prTests   atomic.Int32
+	// The tests run after arm, in order: the scripted tester's model each
 	// plays; past the end, a pass.
 	testers []string
-	// Called as the candidate's first test starts.
+	// Called as the first test after arm starts.
 	onTest func()
 	// Changes what an armed Run does, by phase and its index among the
 	// armed Runs of that phase (from 1).
@@ -201,7 +201,7 @@ func newPRFixWorldAt(t *testing.T, at prAt, testers ...string) *prFixWorld {
 		<-w.mu
 		b := scripted(spec)
 		if phase == "test" {
-			n := int(w.candidateTests.Add(1))
+			n := int(w.prTests.Add(1))
 			if n == 1 && w.onTest != nil {
 				w.onTest()
 			}
