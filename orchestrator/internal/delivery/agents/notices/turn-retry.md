@@ -1,0 +1,1 @@
+Your last turn ended on a temporary error from the model provider (a rate limit, an overload or a dropped connection), so dude waited and is retrying it. Carry on where you left off: your work and conversation are as you left them.

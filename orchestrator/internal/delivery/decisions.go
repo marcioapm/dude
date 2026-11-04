@@ -743,7 +743,7 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 // claimed, status running.
 func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, error) {
 	d := st.Decision
-	var noModel, failed, said bool
+	var noModel, failed, said, retrying bool
 	var now time.Time
 	var inARow int
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
@@ -754,7 +754,8 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 			return err
 		}
 		return tx.QueryRow(ctx, `SELECT COALESCE((SELECT status = 'failed' AND ended_at > $2 FROM runs
-			WHERE task_id = $1 AND role = 'conductor' ORDER BY created_at DESC LIMIT 1), false)`, st.TaskID, *d.Since).Scan(&failed)
+			WHERE task_id = $1 AND role = 'conductor' ORDER BY created_at DESC LIMIT 1), false),
+			EXISTS (SELECT 1 FROM tasks t WHERE t.id = $1 AND `+ConductorRetrying+`)`, st.TaskID, *d.Since).Scan(&failed, &retrying)
 	}); err != nil {
 		return workflow.Result{}, err
 	}
@@ -766,6 +767,14 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	reason := defaultedReason(d, noModel, failed, now)
 	if reason == "" {
 		return w.parkQuiet(st), nil
+	}
+	if reason == DefaultedDeadline && retrying {
+		// The conductor is waiting out a temporary model error to retry
+		// the turn that would decide: its deadline does not default the
+		// decision while the retry is pending; looked at again shortly.
+		res := w.parkQuiet(st)
+		res.SleepUntil = now.UTC().Add(retryingRecheck)
+		return res, nil
 	}
 	if !said && inARow >= MaxDefaulted {
 		res, err := w.escalate(ctx, sc, st, ReasonConductorUnavailable, map[string]any{"point": d.Point, "defaulted": inARow,
@@ -785,6 +794,26 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 	st.Decisions++
 	return workflow.Result{Next: d.Policy, State: st}, nil
 }
+
+// ConductorRetrying (SQL, over tasks t): the task's live conductor is
+// retrying a turn that failed on a temporary model error (phases'
+// retryTurn): running, no control pending, a retry scheduled (deliver_after)
+// or its retried turn running, and its count of retries (harness_state
+// turnRetries) not reset. A paused, pausing or stopping conductor is not
+// retrying, whatever count it was left with. While it is, its quiet
+// decision's deadline does not default the decision (quietDecision):
+// skipped rather than extended, because how long the retries take is not
+// known when the first is scheduled (each failure may ask for its own
+// wait), and once they end — the turn done, or the bound reached and the
+// Run failed or parked as before — the deadline applies as it stood.
+const ConductorRetrying = `EXISTS (SELECT 1 FROM runs cr WHERE cr.task_id = t.id AND cr.role = 'conductor' AND cr.kind = 'agent'
+	AND cr.phase IS NULL AND cr.status = 'running' AND cr.control = 'none'
+	AND COALESCE((cr.harness_state->>'turnRetries')::int, 0) > 0
+	AND EXISTS (SELECT 1 FROM directives rd WHERE rd.run_id = cr.id AND ` + retryLive + `))`
+
+// retryingRecheck is how soon a quiet decision whose deadline passed while
+// its conductor retries (ConductorRetrying) is looked at again.
+const retryingRecheck = 30 * time.Second
 
 // defaultsInARowTx is how many decisions in a row the task's delivery
 // (workflow wfID) left to Deliver's defaults: its decision_defaulted

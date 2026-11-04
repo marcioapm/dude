@@ -987,6 +987,33 @@ func EndConductorWait(ctx context.Context, tx pgx.Tx, org, projectID, taskID str
 	return wakeQuestionHoldTx(ctx, tx, org, taskID)
 }
 
+// EndCancelledWaitTx puts the task back to the status it had before an
+// agent's question made it wait on a person, once that question was
+// cancelled — its Run replaced or ended (cancel_open_questions) — and
+// nothing else waits on a person. The candidate is the question.asked
+// whose waitCursor is still the task's latest status change, as for
+// EndConductorWait: a newer wait, or delivery moving the task on, is
+// never undone, and an escalation's own wait (waitBlocked) stands.
+func EndCancelledWaitTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string) error {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tasks WHERE id = $1 FOR NO KEY UPDATE`, taskID); err != nil {
+		return err
+	}
+	var before string
+	err := tx.QueryRow(ctx, questionWaitFrom+`
+		JOIN questions q ON q.id = e.payload->>'questionId' AND q.status = 'cancelled'
+		`+questionWaitWhere+` AND NOT `+waitBlocked+`
+		ORDER BY e.cursor LIMIT 1`, taskID, EvTaskStatusChanged, EvQuestionAsked).Scan(&before)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = SetTaskStatusTx(ctx, tx, org, projectID, taskID, "awaiting_input", before,
+		"nothing waits on a person any more: the question's Run was replaced")
+	return err
+}
+
 // wakeQuestionHoldTx signals a delivery held by reviewer questions
 // (holdForQuestions) once nothing else on the task waits on a person: the
 // held step reads its questions again and goes on when none is open.
@@ -1019,15 +1046,24 @@ func ConductorOwnsWait(ctx context.Context, tx pgx.Tx, taskID string) (bool, err
 
 // conductorWait (SQL; $1 task, $2 status-change and $3 question-asked event
 // types) selects the saved status of each conductor question.asked whose
-// waitCursor is still the task's latest status change. The question's event
-// follows its status change in the same transaction, so only the task's
-// events after that change are read.
-const conductorWait = `SELECT e.payload->>'taskStatus' FROM tasks t
+// waitCursor is still the task's latest status change.
+const conductorWait = questionWaitFrom + `
+	JOIN runs r ON r.id = e.run_id AND r.role = 'conductor'
+	` + questionWaitWhere
+
+// questionWaitFrom and questionWaitWhere (SQL; the parameters as
+// conductorWait's) frame a query over the question.asked events e whose
+// waitCursor is still the task t's latest status change, t waiting on a
+// person; a caller joins what narrows them in between. The question's
+// event follows its status change in the same transaction, so only the
+// task's events after that change are read.
+const (
+	questionWaitFrom = `SELECT e.payload->>'taskStatus' FROM tasks t
 	CROSS JOIN LATERAL (SELECT max(s.cursor) AS c FROM events s WHERE s.task_id = t.id AND s.event_type = $2) m
 	JOIN events e ON e.task_id = t.id AND e.cursor > m.c AND e.event_type = $3
-		AND (e.payload->>'waitCursor')::bigint = m.c AND e.payload->>'taskStatus' IS NOT NULL
-	JOIN runs r ON r.id = e.run_id AND r.role = 'conductor'
-	WHERE t.id = $1 AND t.status = 'awaiting_input'`
+		AND (e.payload->>'waitCursor')::bigint = m.c AND e.payload->>'taskStatus' IS NOT NULL`
+	questionWaitWhere = `WHERE t.id = $1 AND t.status = 'awaiting_input'`
+)
 
 // waitBlocked (SQL, over tasks t): something on the task still waits on a
 // person: waitBlockedElse, or its live delivery held by reviewers' open

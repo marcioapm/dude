@@ -659,7 +659,11 @@ func TestAClaudeResultThatFailedFailsItsOwnTurn(t *testing.T) {
 	}{
 		{"error in result", [][]map[string]any{{claudeEnd, luxIdle, claudeResultLine(map[string]any{"is_error": true, "result": "API Error: 500"})}}, "failed"},
 		{"error_during_execution", [][]map[string]any{{claudeEnd, luxIdle},
-			{claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution", "errors": []any{"API Error: 529 overloaded"}})}}, "failed"},
+			{claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution", "errors": []any{"API Error: 500 Internal server error"}})}}, "failed"},
+		// A temporary one (overloaded) is retried (turn_retry.go): the turn
+		// is over, not done, and the Run goes on.
+		{"error_during_execution, overloaded", [][]map[string]any{{claudeEnd, luxIdle},
+			{claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution", "errors": []any{"API Error: 529 overloaded"}})}}, "running"},
 		{"error_during_execution, null result", [][]map[string]any{{claudeEnd, luxIdle,
 			claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution", "result": nil})}}, "failed"},
 		{"interrupted", [][]map[string]any{{claudeEnd, claudeResultLine(map[string]any{"is_error": true, "subtype": "error_during_execution",

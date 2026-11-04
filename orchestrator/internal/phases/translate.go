@@ -163,6 +163,9 @@ type talkerState struct {
 	// ended last was one: a turn that did not fail resets the count.
 	FailedTurns int  `json:"failedTurns,omitempty"`
 	LastFailed  bool `json:"lastFailed,omitempty"`
+	// The retries of the turn in progress after temporary model errors
+	// (retryTurn); a turn that ends without failing resets it.
+	TurnRetries int `json:"turnRetries,omitempty"`
 	// What lux last warned about the agent (lux.warning), and in which
 	// placement: the reason for a session replaced in that placement only.
 	Warning      string `json:"warning,omitempty"`
@@ -469,6 +472,10 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
 		}
 		if lux.Terminal(state) {
+			// Stopped, parked or paused: a turn retry pending is over with
+			// the turn (the sweep's pause clears the stored count too; this
+			// save must not write it back).
+			t.TurnRetries = 0
 			// A start that failed names the stage it failed in.
 			stage, err := t.failedStage(ctx, tx, f.Epoch, was)
 			if err != nil {
@@ -1118,6 +1125,13 @@ func (t *translator) idle(ctx context.Context, tx pgx.Tx, s *Syncer) error {
 		return nil
 	}
 	t.FailedTurns = 0
+	t.TurnRetries = 0
+	// A message may have started a successful turn during retry back-off.
+	// Its success makes any held retry obsolete, even if this Run parks.
+	if _, err := tx.Exec(ctx, `UPDATE directives SET failed_at = now(), error = 'the turn succeeded before its retry was sent'
+		WHERE run_id = $1 AND deliver_after IS NOT NULL AND sent_at IS NULL AND failed_at IS NULL`, t.run.ID); err != nil {
+		return err
+	}
 	// A turn that ends with a question to a peer unanswered waits on it,
 	// as if the agent had run `dude wait`: otherwise it would complete,
 	// and move to review, before the answer could land.
@@ -1385,6 +1399,14 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 			return err
 		}
 	}
+	// A temporary model error (a rate limit, an overloaded upstream, a
+	// dropped stream) is waited out and the turn retried, any role's;
+	// past the bound it fails as any other, saying it was retried.
+	if retried, err := t.retryTurn(ctx, tx, s, agentErr); retried || err != nil {
+		return err
+	}
+	reason = retriedReason(reason, t.TurnRetries)
+	t.TurnRetries = 0
 	if t.run.talker() {
 		t.LastFailed = true
 		if t.FailedTurns < maxFailedTurnResumes {
