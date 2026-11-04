@@ -376,7 +376,7 @@ func finishLoopMoveTx(ctx context.Context, tx pgx.Tx, workflowID string, d *Deli
 		}
 	}
 	const next = "prFixDone"
-	st.PromotedRefresh, st.FixRange = nil, fixed
+	st.PromotedRefresh, st.FixRange, st.QuestionsHeld = nil, fixed, false
 	if e := st.Escalation; e != nil {
 		e.Step, e.At, e.AtSignals = next, "", nil
 	}
@@ -453,6 +453,10 @@ func leaveMidPromotionTx(ctx context.Context, tx pgx.Tx, org, workflowID string,
 	}
 	st.Candidate, st.PromotedRefresh, st.SimplifyBase, st.FixRange, st.PRFixAfter, st.Pipeline = nil, nil, nil, nil, nil, nil
 	st.PendingRunIDs, st.ReviewRunIDs = nil, nil
+	// A promotion held for a reviewer's question (holdForQuestions) holds
+	// nothing now: left set, it would keep the task's waits blocked
+	// (waitBlocked) for the rest of the delivery.
+	st.QuestionsHeld = false
 	if st.PRFixCharged != nil && st.PRFixCharged.Pending {
 		st.PRFixCharged = nil
 	}

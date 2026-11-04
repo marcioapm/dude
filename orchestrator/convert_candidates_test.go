@@ -557,6 +557,43 @@ func TestConvertCandidatesStopsAStoppedPromotionOffTheDeletedStep(t *testing.T) 
 	w.directlyFixedAgain(review)
 }
 
+// A promotion an old dude held for a reviewer's question
+// (holdForQuestions at promoteCandidate, QuestionsHeld) holds nothing once
+// converted: QuestionsHeld goes with it, or the task's waits would stay
+// blocked (waitBlocked) for the rest of the delivery and a later
+// conductor-question wait would never be ended. Both promotion shapes.
+func TestConvertCandidatesLetsGoOfAPromotionsQuestionHold(t *testing.T) {
+	for _, c := range []struct{ name, want string }{
+		{"promoteCandidate", "StoppedMidPromotion"},
+		{"refreshAfterALoopsMove", "Converted"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var w *prFixWorld
+			if c.name == "promoteCandidate" {
+				w, _, _, _ = midCandidateReview(t)
+				mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'promoteCandidate', status = 'waiting', wake_at = NULL,
+					awaiting_signals = $2::jsonb WHERE task_id = $1`, w.wi, `["`+delivery.SignalReviewQuestion+`", "human.feedback"]`)
+			} else {
+				w = newPRFixWorld(t)
+				loopMovedMidRefresh(t, w, "1 hour")
+			}
+			mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"questionsHeld": true}' WHERE task_id = $1`, w.wi)
+			n := w.convertCandidates()
+			if got := map[string]int{"Converted": n.Converted, "StoppedMidPromotion": n.StoppedMidPromotion}[c.want]; got != 1 || n.Left != 0 {
+				t.Fatalf("swept %+v, want one %s", n, c.want)
+			}
+			if got := w.state("questionsHeld"); got != "" && got != "false" {
+				t.Errorf("questionsHeld %s after the conversion", got)
+			}
+			// waitBlocked's own reading of a live delivery's hold.
+			if n := w.count(`SELECT count(*) FROM workflow_runs wf WHERE wf.task_id = $1 AND wf.status IN ('running', 'waiting')
+				AND COALESCE((wf.state->>'questionsHeld')::boolean, false)`, w.wi); n != 0 {
+				t.Errorf("the task's waits are still blocked by the promotion's question hold")
+			}
+		})
+	}
+}
+
 // State D: parked on a person with a candidate open. The candidate goes,
 // the escalation stays, and a retry fixes again directly from the pull
 // request.
