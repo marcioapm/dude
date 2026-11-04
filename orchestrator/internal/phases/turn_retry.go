@@ -109,8 +109,10 @@ func (t *translator) retryTurn(ctx context.Context, tx pgx.Tx, s *Syncer, agentE
 		return false, nil
 	}
 	var live bool
+	// Locked: a Stop or pause committing meanwhile (StopPhaseRunsTx fails
+	// what is unread) is seen here, not raced by a retry queued after it.
 	if err := tx.QueryRow(ctx, `SELECT status IN ('scheduled', 'starting', 'running') AND lux_stop_reason IS NULL
-		AND control = 'none' FROM runs WHERE id = $1`, t.run.ID).Scan(&live); err != nil || !live {
+		AND control = 'none' FROM runs WHERE id = $1 FOR UPDATE`, t.run.ID).Scan(&live); err != nil || !live {
 		// A Run dude is stopping, pausing or has ended is not retried: what
 		// stops it decides.
 		return false, err

@@ -434,6 +434,19 @@ func (s *Server) FailInput(id, requestID, reason string) {
 	}
 }
 
+// FailTurn ends a busy agent's turn now with err, as a turn the model
+// failed (TurnError's shape), and the agent goes idle.
+func (s *Server) FailTurn(id, err string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil || run.State != "running" || !run.busy {
+		return
+	}
+	s.turnEnd(run, map[string]any{"stopReason": "", "error": err}, true)
+	run.busy = false
+}
+
 // EndTurn ends a busy agent's turn as the agent would on its own (a Hang
 // agent finishing, not interrupted): what it was steered with and has not
 // read is read now, as the input of its next turn.

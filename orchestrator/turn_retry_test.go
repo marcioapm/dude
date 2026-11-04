@@ -376,3 +376,43 @@ func TestATurnRetryIsHeldUntilItsBackOffIsOver(t *testing.T) {
 		t.Fatalf("the agent was given %q", in[0])
 	}
 }
+
+// A Pause or Stop pending as a 429 turn ends is not raced by a retry: the
+// Run is not retried, and ends as the control decides.
+func TestATurnFailingUnderAPendingControlIsNotRetried(t *testing.T) {
+	for _, c := range []struct{ name, path, want string }{
+		{"pause", "/pause", "paused failed"},
+		{"stop", "/abort", "aborted"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.syncer.RetryAhead = 20 * time.Minute
+			w.implementerFailing(func(b *fakelux.Behaviour) { b.Hang = true })
+			task := w.task()
+			w.deliver(task)
+			var run string
+			w.until("the implementer working", func() bool {
+				run = w.implementer(task)
+				lr := w.luxRunFor(run)
+				return run != "" && lr != nil && lr.State == "running" &&
+					w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NOT NULL`, run) == 1
+			})
+			if status, body := w.call("/internal/runs/"+run+c.path, map[string]any{}); status != 200 {
+				t.Fatalf("%s: %d %v", c.name, status, body)
+			}
+			w.lux.FailTurn(w.luxRunFor(run).ID, rateLimited)
+			w.until("the Run to end as its control decides", func() bool {
+				return strings.Contains(c.want, w.str(`SELECT status::text FROM runs WHERE id = $1`, run))
+			})
+			for range 5 {
+				w.pump()
+			}
+			if n := w.turnRetries(run); n != 0 {
+				t.Fatalf("%d run.turn.retried under a pending %s", n, c.name)
+			}
+			if got := w.str(`SELECT status::text FROM runs WHERE id = $1`, run); !strings.Contains(c.want, got) {
+				t.Fatalf("the Run is %s, want %s", got, c.want)
+			}
+		})
+	}
+}
