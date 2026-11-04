@@ -48,7 +48,12 @@ const CandidateRowsSQL = `workflow_type = '` + WorkflowType + `' AND task_id IS 
 	  AND (t.status = 'done' OR t.resolution IS NOT NULL))
 	AND NOT EXISTS (SELECT 1 FROM workflow_runs n WHERE n.task_id = workflow_runs.task_id
 	  AND n.workflow_type = workflow_runs.workflow_type AND n.created_at > workflow_runs.created_at)
-	AND COALESCE(
+	AND ` + CandidateTraceSQL
+
+// CandidateTraceSQL (over workflow_runs) holds while a delivery's row
+// carries a trace of the candidate path (CandidateRowsSQL); legacyTrace
+// is its reading of a decoded State.
+const CandidateTraceSQL = `COALESCE(
 	state->'policy' ? 'pullRequestFixes'
 	OR state ? 'candidate' OR state ? 'handedOver'
 	OR state->'integration' ? 'polls'
