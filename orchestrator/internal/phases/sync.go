@@ -987,7 +987,8 @@ func (s *Syncer) parkStopped(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'paused', dude_pause = $2, lux_stop_reason = $3,
-			control_requested_at = NULL WHERE r.id = $1 AND `+delivery.Parkable, r.ID, r.parkKind(), stopPause)
+			control_requested_at = NULL, harness_state = r.harness_state - 'turnRetries'
+			WHERE r.id = $1 AND `+delivery.Parkable, r.ID, r.parkKind(), stopPause)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -3017,7 +3018,10 @@ func (s *Syncer) pause(ctx context.Context, r phaseRun) error {
 		return err
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'none', control_requested_at = NULL
+		// A turn retry pending is over with the turn: the count starts
+		// again after the resume (ConductorRetrying reads it).
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'none', control_requested_at = NULL,
+			harness_state = harness_state - 'turnRetries'
 			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`, r.ID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err

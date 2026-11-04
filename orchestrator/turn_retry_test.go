@@ -251,6 +251,38 @@ func TestAConductorRetryingATransientFailureKeepsItsDecision(t *testing.T) {
 	w.until("the decision defaulted at its deadline", func() bool { return w.defaulted(task, delivery.DefaultedDeadline) == 1 })
 }
 
+// A conductor paused while it waits out a retry's back-off is not
+// retrying any more: its count left behind does not hold the decision,
+// whose deadline defaults it as before the retries existed.
+func TestAConductorPausedMidRetryLetsItsDeadlineDefault(t *testing.T) {
+	w := conducting(t)
+	w.waitingFor(time.Hour)
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		b := scripted(spec)
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.role"] == delivery.RoleConductor {
+			b.FirstTurnErrors = []string{`API Error: Request rejected (429) · {"error":"All provider keys are rate limited","retry_after":3600}`}
+		}
+		return b
+	}
+	task := w.task()
+	w.startQuiet(task)
+	w.until("the conductor's turn retried", func() bool {
+		id, _, _ := w.conductor(task)
+		return id != "" && w.turnRetries(id) == 1
+	})
+	conductor, _, _ := w.conductor(task)
+	w.until("the decision waited on", func() bool { return w.decisionAt(task) != "" })
+	if status, body := w.call("/internal/runs/"+conductor+"/pause", map[string]any{}); status != 200 {
+		t.Fatalf("pause: %d %v", status, body)
+	}
+	w.until("the conductor paused", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused'`, conductor) == 1
+	})
+	w.lapse(task)
+	w.until("the decision defaulted at its deadline", func() bool { return w.defaulted(task, delivery.DefaultedDeadline) == 1 })
+}
+
 // retryDue makes the Run's pending turn retry due now, as the test clock
 // passing its back-off.
 func (w *world) retryDue(run string) {

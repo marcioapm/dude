@@ -472,6 +472,10 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			return s.event(ctx, tx, t.run, evRunStarted, ledger.ActorSystem, map[string]any{"status": statusRunning})
 		}
 		if lux.Terminal(state) {
+			// Stopped, parked or paused: a turn retry pending is over with
+			// the turn (the sweep's pause clears the stored count too; this
+			// save must not write it back).
+			t.TurnRetries = 0
 			// A start that failed names the stage it failed in.
 			stage, err := t.failedStage(ctx, tx, f.Epoch, was)
 			if err != nil {
