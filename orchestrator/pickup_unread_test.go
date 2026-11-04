@@ -1,11 +1,9 @@
 package orchestrator_test
 
-// dude#224's replay: a fix round continuing the implementer's session was
-// stopped by a person before its agent read its brief (the review's
-// findings), and Resume gave it only the pick-up note. A pick-up gives a
-// resumed Run what it never read, ahead of the note; and a Run's open
-// question cancelled because the Run was replaced leaves the task waiting
-// on nobody.
+// A pick-up gives a resumed Run what its stop left unread (a fix round's
+// brief, stopped by a person before its agent read it), ahead of the
+// pick-up note; and a Run's open question cancelled because the Run was
+// replaced leaves the task waiting on nobody.
 
 import (
 	"context"
@@ -60,23 +58,67 @@ func (w *world) tickUntil(what string, cond func() bool) {
 	w.t.Fatalf("timed out waiting for %s\nruns:\n%s", what, w.describeRuns())
 }
 
-// The replay's exact sequence: the fix round continues the implementer
+// fixRoundCreated starts a resuming delivery whose review finds
+// something, and returns as the step creates the fix round, before the
+// sweep resumes the implementer's lux Run with its brief; ana owns the
+// task.
+func fixRoundCreated(t *testing.T) (w *world, task, ana, fix string) {
+	w = resuming(t)
+	w.onModel("reviewer", fakeagent.StuckModel)
+	task = w.task()
+	ana = w.ownedBy(task, "Ana")
+	w.names(task, w.repoID)
+	w.start(task, resumingPolicy())
+	w.tickUntil("the fix round created", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task) == 1
+	})
+	return w, task, ana, w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+}
+
+// implementerAsking delivers a task whose implementer asks a person
+// something, every other phase hanging, and returns once the task waits
+// on the answer.
+func implementerAsking(t *testing.T) (w *world, task, run string) {
+	w = newWorld(t)
+	w.withTools()
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
+	}
+	task = w.task()
+	w.deliver(task)
+	w.until("the implementer to ask", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	return w, task, w.implementer(task)
+}
+
+// resumedInputs waits for the task's implementer, resumed, to be given
+// the pick-up note, and returns everything its lux Run was given.
+func (w *world) resumedInputs(task, note string) []string {
+	w.t.Helper()
+	implID := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
+	w.until("the fixer to take up the note", func() bool {
+		lr := w.luxRunFor(implID)
+		if lr == nil {
+			return false
+		}
+		for _, in := range w.lux.Inputs(lr.ID) {
+			if strings.Contains(in, note) {
+				return true
+			}
+		}
+		return false
+	})
+	return w.lux.Inputs(w.luxRunFor(implID).ID)
+}
+
+// The fix round continues the implementer
 // (run.continues how=resume) with the findings queued as its brief; the
 // owner's Stop comes before the agent reads it, failing the brief; Resume
 // with a note. The agent is given the findings, then the note.
 func TestAResumedFixRoundIsGivenTheBriefItNeverRead(t *testing.T) {
-	w := resuming(t)
-	w.onModel("reviewer", fakeagent.StuckModel)
-	task := w.task()
-	ana := w.ownedBy(task, "Ana")
-	w.names(task, w.repoID)
-	w.start(task, resumingPolicy())
-	// The fix round is caught as the step creates it, before the sweep
-	// resumes the implementer's lux Run with its brief.
-	w.tickUntil("the fix round created", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task) == 1
-	})
-	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	w, task, ana, fix := fixRoundCreated(t)
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'how' = $3`,
 		fix, delivery.EvRunContinues, delivery.ContinuesResume); n != 1 {
 		t.Fatalf("the fix round does not continue the implementer's session")
@@ -93,20 +135,7 @@ func TestAResumedFixRoundIsGivenTheBriefItNeverRead(t *testing.T) {
 	}
 	w.until("the fix round kept", func() bool { return w.keptRun(fix) })
 	w.pickUp(ana, task, map[string]any{"action": "resume", "note": "go on with the findings"})
-	w.until("the fixer to take up its brief", func() bool {
-		lr := w.luxRunFor(w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task))
-		if lr == nil {
-			return false
-		}
-		for _, in := range w.lux.Inputs(lr.ID) {
-			if strings.Contains(in, "go on with the findings") {
-				return true
-			}
-		}
-		return false
-	})
-	impl := w.luxRunFor(w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task))
-	inputs := w.lux.Inputs(impl.ID)
+	inputs := w.resumedInputs(task, "go on with the findings")
 	findings, note := -1, -1
 	for i, in := range inputs {
 		if strings.Contains(in, "## Review findings") && findings < 0 {
@@ -125,22 +154,11 @@ func TestAResumedFixRoundIsGivenTheBriefItNeverRead(t *testing.T) {
 	}
 }
 
-// B2: a Run asked a person something and is restarted; its question is
+// A Run asked a person something and is restarted; its question is
 // cancelled with it. Nothing else waits on a person: the task leaves
 // awaiting_input for what the delivery is doing.
 func TestARestartedRunsCancelledQuestionLeavesTheTaskNotWaiting(t *testing.T) {
-	w := newWorld(t)
-	w.withTools()
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
-			return fakelux.Behaviour{Hang: true}
-		}
-		return fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
-	}
-	task := w.task()
-	w.deliver(task)
-	w.until("the implementer to ask", func() bool { return w.taskStatus(task) == "awaiting_input" })
-	run := w.implementer(task)
+	w, task, run := implementerAsking(t)
 	if n := w.count(`SELECT count(*) FROM questions WHERE run_id = $1 AND status = 'open'`, run); n != 1 {
 		t.Fatalf("%d open questions on the implementer", n)
 	}
@@ -161,22 +179,11 @@ func TestARestartedRunsCancelledQuestionLeavesTheTaskNotWaiting(t *testing.T) {
 	}
 }
 
-// B2 with another question open on the task: the restart cancels the
+// A restarted Run's question cancelled with another open on the task: the restart cancels the
 // Run's own, but the task still waits on a person, and stays
 // awaiting_input.
 func TestARestartedRunsCancelledQuestionLeavesAnotherQuestionWaiting(t *testing.T) {
-	w := newWorld(t)
-	w.withTools()
-	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] != "implement" {
-			return fakelux.Behaviour{Hang: true}
-		}
-		return fakelux.Behaviour{Ask: fakeagent.Question, Reply: "Done.", Commit: map[string]string{"a.md": "x\n"}, Message: "work"}
-	}
-	task := w.task()
-	w.deliver(task)
-	w.until("the implementer to ask", func() bool { return w.taskStatus(task) == "awaiting_input" })
-	run := w.implementer(task)
+	w, task, run := implementerAsking(t)
 	// Another Run of the task asked a person something, still open.
 	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, ended_at)
 		SELECT 'run_other_asker', organization_id, project_id, task_id, attempt, 'completed', 'review', now() FROM runs WHERE id = $1`, run)
@@ -204,16 +211,7 @@ func TestARestartedRunsCancelledQuestionLeavesAnotherQuestionWaiting(t *testing.
 // they were queued, all before the pick-up note: the findings, then a
 // person's steer sent after the fix round was created, then the note.
 func TestAResumedFixRoundIsGivenWhatItNeverReadInOrder(t *testing.T) {
-	w := resuming(t)
-	w.onModel("reviewer", fakeagent.StuckModel)
-	task := w.task()
-	ana := w.ownedBy(task, "Ana")
-	w.names(task, w.repoID)
-	w.start(task, resumingPolicy())
-	w.tickUntil("the fix round created", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task) == 1
-	})
-	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, task)
+	w, task, ana, fix := fixRoundCreated(t)
 	if status, body := w.call("/internal/runs/"+fix+"/steer", map[string]any{"text": "also check the README"}); status != 201 {
 		t.Fatalf("steer: %d %v", status, body)
 	}
@@ -223,20 +221,7 @@ func TestAResumedFixRoundIsGivenWhatItNeverReadInOrder(t *testing.T) {
 	}
 	w.until("the fix round kept", func() bool { return w.keptRun(fix) })
 	w.pickUp(ana, task, map[string]any{"action": "resume", "note": "go on with the findings"})
-	implID := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
-	w.until("the fixer to take up the note", func() bool {
-		lr := w.luxRunFor(implID)
-		if lr == nil {
-			return false
-		}
-		for _, in := range w.lux.Inputs(lr.ID) {
-			if strings.Contains(in, "go on with the findings") {
-				return true
-			}
-		}
-		return false
-	})
-	inputs := w.lux.Inputs(w.luxRunFor(implID).ID)
+	inputs := w.resumedInputs(task, "go on with the findings")
 	findings, steer, note := -1, -1, -1
 	for i, in := range inputs {
 		if strings.Contains(in, "## Review findings") && findings < 0 {
