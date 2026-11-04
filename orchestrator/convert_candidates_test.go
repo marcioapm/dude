@@ -2,8 +2,8 @@ package orchestrator_test
 
 // Every fix reaches its pull request directly: the boot sweep moves every
 // delivery still on the candidate path to direct fixes (delivery.ConvertCandidates),
-// whatever state its candidate is in. Through the real workflow, API and
-// fake lux and GitHub.
+// whatever state its candidate is in, and a delivery's step entry converts
+// one the sweep left. Through the real workflow, API and fake lux and GitHub.
 
 import (
 	"context"
@@ -109,6 +109,25 @@ func (w *prFixWorld) step() string {
 	return w.str(`SELECT step FROM workflow_runs WHERE task_id = $1`, w.wi)
 }
 
+// stopped has ana stop the delivery, and waits for it to stop.
+func (w *prFixWorld) stopped(ana string) {
+	w.t.Helper()
+	w.stop(ana, w.wi, map[string]any{"note": "hold on"})
+	w.until("stopped", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
+	})
+}
+
+// headsBackAt checks the delivery's heads are where its candidate started.
+func (w *prFixWorld) headsBackAt(from map[string]string) {
+	w.t.Helper()
+	var got map[string]string
+	_ = json.Unmarshal([]byte(w.state("heads")), &got)
+	if !maps.Equal(got, from) {
+		w.t.Errorf("heads %v, want the candidate's from %v", got, from)
+	}
+}
+
 // directlyFixedAgain waits for the fix the sweep sent the delivery to: a
 // fix Run with no branch of its own, given fbi_x, published to the pull
 // request's head; the candidate branch still on GitHub.
@@ -144,11 +163,7 @@ func (w *prFixWorld) candidateDropped(from map[string]string) {
 	if w.state("candidate") != "" {
 		w.t.Errorf("the candidate is still in state: %s", w.state("candidate"))
 	}
-	var got map[string]string
-	_ = json.Unmarshal([]byte(w.state("heads")), &got)
-	if !maps.Equal(got, from) {
-		w.t.Errorf("heads %v, want the candidate's from %v", got, from)
-	}
+	w.headsBackAt(from)
 	w.noCandidateTrace()
 	if status, _ := w.resolution("fbi_x"); status != "open" {
 		w.t.Errorf("fbi_x is %s, want reopened", status)
@@ -298,11 +313,7 @@ func (w *prFixWorld) stoppedMidPromotion(from map[string]string) {
 	if w.state("candidate") != "" || w.state("promotedRefresh") != "" {
 		w.t.Errorf("candidate %q, refresh %q left", w.state("candidate"), w.state("promotedRefresh"))
 	}
-	var got map[string]string
-	_ = json.Unmarshal([]byte(w.state("heads")), &got)
-	if !maps.Equal(got, from) {
-		w.t.Errorf("heads %v, want the candidate's from %v", got, from)
-	}
+	w.headsBackAt(from)
 	if w.gh.SHA(w.branch) != w.before {
 		w.t.Errorf("the pull request's head moved: %s, was %s", w.gh.SHA(w.branch), w.before)
 	}
@@ -447,30 +458,22 @@ func TestDeletedPromotionStepFinishesALoopMovesRefresh(t *testing.T) {
 // or raced) moves no branch, neither panics nor completes: it stops for a
 // person as the sweep would have.
 func TestDeletedPromotionStepStopsForAPerson(t *testing.T) {
-	for _, c := range []struct{ name, step, refresh string }{
-		{"promoteCandidate", "promoteCandidate", ""},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			w, ana, review, from := midCandidateReview(t)
-			refresh := c.refresh
-			if refresh == "" {
-				refresh = "{}"
+	t.Run("promoteCandidate", func(t *testing.T) {
+		w, ana, review, from := midCandidateReview(t)
+		mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'promoteCandidate', status = 'waiting', wake_at = now(),
+			awaiting_signals = '[]' WHERE task_id = $1`, w.wi)
+		w.until("stopped for a person", func() bool {
+			if w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'failed', 'aborted')`, w.wi) != 0 {
+				t.Fatalf("the workflow ended at the deleted step: %s\n%s", w.step(), w.describeRuns())
 			}
-			mustExec(t, w.owner, `UPDATE workflow_runs SET step = $2, status = 'waiting', wake_at = now(), awaiting_signals = '[]',
-				state = state || $3::jsonb WHERE task_id = $1`, w.wi, c.step, refresh)
-			w.until("stopped for a person", func() bool {
-				if w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'failed', 'aborted')`, w.wi) != 0 {
-					t.Fatalf("the workflow ended at the deleted step: %s\n%s", w.step(), w.describeRuns())
-				}
-				return w.step() == "decide"
-			})
-			w.stoppedMidPromotion(from)
-			if code, body := w.decide(ana, w.wi, "retry", ""); code != 200 {
-				t.Fatalf("retry: %d %v", code, body)
-			}
-			w.directlyFixedAgain(review)
+			return w.step() == "decide"
 		})
-	}
+		w.stoppedMidPromotion(from)
+		if code, body := w.decide(ana, w.wi, "retry", ""); code != 200 {
+			t.Fatalf("retry: %d %v", code, body)
+		}
+		w.directlyFixedAgain(review)
+	})
 }
 
 // Selection: a stopped delivery whose only trace is the deleted step (its
@@ -481,10 +484,7 @@ func TestConvertCandidatesStopsAStoppedDeliveryAtTheDeletedStepWithNoCandidate(t
 	w := newPRFixWorld(t)
 	ana := w.person("Ana")
 	w.assignOwner(w.wi, ana)
-	w.stop(ana, w.wi, map[string]any{"note": "hold on"})
-	w.until("stopped", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
-	})
+	w.stopped(ana)
 	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'promoteCandidate', state = ((state #- '{policy,pullRequestFixes}') - 'candidate')
 		|| CASE WHEN state ? 'stopped' THEN jsonb_build_object('stopped', state->'stopped' || '{"step":"promoteCandidate"}') ELSE '{}' END
 		|| CASE WHEN state ? 'halt' THEN jsonb_build_object('halt', state->'halt' || '{"at":"promoteCandidate"}') ELSE '{}' END
@@ -522,10 +522,7 @@ func TestConvertCandidatesStopsAStoppedDeliveryAtTheDeletedStepWithNoCandidate(t
 // again directly.
 func TestConvertCandidatesStopsAStoppedPromotionOffTheDeletedStep(t *testing.T) {
 	w, ana, review, from := midCandidateReview(t)
-	w.stop(ana, w.wi, map[string]any{"note": "hold on"})
-	w.until("stopped", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
-	})
+	w.stopped(ana)
 	// A person's Stop records a halt (and a stop, where a Run was at
 	// work): each at the deleted step.
 	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'promoteCandidate', state = state
@@ -546,11 +543,7 @@ func TestConvertCandidatesStopsAStoppedPromotionOffTheDeletedStep(t *testing.T) 
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'stopped_mid_promotion'`, w.wi); n != 1 {
 		t.Errorf("%d notices of the stop, want 1", n)
 	}
-	var heads map[string]string
-	_ = json.Unmarshal([]byte(w.state("heads")), &heads)
-	if !maps.Equal(heads, from) {
-		t.Errorf("heads %v, want the candidate's from %v", heads, from)
-	}
+	w.headsBackAt(from)
 	if status, body := w.callAs(ana, "/internal/tasks/"+w.wi+"/recover", map[string]any{"action": "retry"}); status != 200 {
 		t.Fatalf("retry: %d %v", status, body)
 	}
@@ -776,10 +769,7 @@ func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
 // goes, the kept Runs are let go, and a retry fixes again directly.
 func TestConvertCandidatesLetsAStoppedDeliveryRetryDirectly(t *testing.T) {
 	w, ana, review, from := midCandidateReview(t)
-	w.stop(ana, w.wi, map[string]any{"note": "hold on"})
-	w.until("stopped", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
-	})
+	w.stopped(ana)
 	if w.state("candidate") == "" {
 		t.Fatalf("the stop dropped the candidate")
 	}
@@ -870,10 +860,7 @@ func TestConvertCandidatesLeavesAKeylessDeliveryWithNoTrace(t *testing.T) {
 // left as it is: no notice, and the live attempt's kept Run stays kept.
 func TestConvertCandidatesLeavesASupersededAttempt(t *testing.T) {
 	w, ana, _, _ := midCandidateReview(t)
-	w.stop(ana, w.wi, map[string]any{"note": "hold on"})
-	w.until("stopped", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('completed', 'aborted')`, w.wi) == 1
-	})
+	w.stopped(ana)
 	old := w.str(`SELECT id FROM workflow_runs WHERE task_id = $1`, w.wi)
 	w.pickUp(ana, w.wi, map[string]any{"action": "restart"})
 	w.until("the next attempt", func() bool {
