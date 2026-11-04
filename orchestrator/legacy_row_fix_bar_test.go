@@ -14,9 +14,19 @@ import (
 // A stored legacy row — no hadConductor in its state, decided by Deliver's
 // policy, as a delivery started before C1 is — runs its review loop as a
 // new no-model delivery does: its reviewer is briefed with the conducted
-// contract (asked for each finding's evidence), and a medium finding is at
-// the fix bar, so it gets a fix round rather than shipping.
+// contract (asked for each finding's evidence), and a medium finding, or a
+// low one marked trivial, is at the fix bar, so it gets a fix round rather
+// than shipping. The fix carries the round whose findings it fixes.
 func TestALegacyRowRunsItsReviewRoundOnTheFixedBar(t *testing.T) {
+	for _, c := range []struct{ name, severity string }{
+		{"medium", "severity: medium"},
+		{"trivial low", "severity: low\ntrivial: yes"},
+	} {
+		t.Run(c.name, func(t *testing.T) { legacyRowFixBar(t, c.severity) })
+	}
+}
+
+func legacyRowFixBar(t *testing.T, severity string) {
 	w := newWorld(t)
 	w.onModel("reviewer", "llm-review")
 	scripted := w.lux.Decide
@@ -26,7 +36,7 @@ func TestALegacyRowRunsItsReviewRoundOnTheFixedBar(t *testing.T) {
 		switch labels["dude.phase"] {
 		case "review":
 			if reviews++; reviews == 1 {
-				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding("severity: medium", "FACTORY.md says the wrong thing") + "```\n"}
+				return fakelux.Behaviour{Reply: "```yaml\n" + evidencedFinding(severity, "FACTORY.md says the wrong thing") + "```\n"}
 			}
 			return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: fixed\n```\n"}
 		case "fix":
@@ -53,6 +63,9 @@ func TestALegacyRowRunsItsReviewRoundOnTheFixedBar(t *testing.T) {
 	}
 	w.until("the next phase", func() bool { return w.phaseRuns(task, "fix")+w.phaseRuns(task, "simplify") > 0 })
 	if w.phaseRuns(task, "fix") == 0 {
-		t.Errorf("a legacy row's medium finding shipped: no fix round, want one (the fixed bar)\n%s", w.describeRuns())
+		t.Fatalf("a legacy row's finding (%s) shipped: no fix round, want one (the fixed bar)\n%s", severity, w.describeRuns())
+	}
+	if n := w.count(`SELECT COALESCE(max(review_round), 0) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task); n != 1 {
+		t.Errorf("a legacy row's fix carries review round %d, want 1 (the round whose findings it fixes)", n)
 	}
 }
