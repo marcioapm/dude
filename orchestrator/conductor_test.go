@@ -1009,8 +1009,9 @@ func TestAConductorsWaitEndsWhenItsLastBlockerSettles(t *testing.T) {
 		var qid string
 		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 			var err error
-			qid, err = delivery.AskTx(context.Background(), tx,
-				delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: implementer}, "Which file?", nil)
+			qid, err = delivery.ToPersonTx(context.Background(), tx, delivery.ToPerson{
+				Ref:   delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: implementer},
+				Items: []delivery.QuestionItem{delivery.SingleItem("Which file?", []string{})}, Why: delivery.WhyWriter})
 			return err
 		}); err != nil {
 			w.t.Fatal(err)

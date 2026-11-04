@@ -313,6 +313,13 @@ type Escalation struct {
 	// directly at At, in the fresh key namespace the sweep gave the
 	// delivery (Retries).
 	Redo bool `json:"redo,omitempty"`
+	// Who decides it first: HolderPerson, or HolderConductor (a later PR;
+	// conductor-first). "" reads as HolderPerson (HeldBy): every
+	// escalation raised before it was a person's.
+	Holder string `json:"holder,omitempty"`
+	// When it was raised: a conductor's deadline counts from it. nil on
+	// one raised before it was recorded.
+	RaisedAt *time.Time `json:"raisedAt,omitempty"`
 }
 
 // Actions says what a person may do about it: go back and try again,
@@ -1893,7 +1900,10 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 // awaitOwnerAuthorization parks a publication until its frozen owner
 // connects GitHub; the branch stays pushed and no retry budget is spent.
 func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepContext, st *State, cause error) (workflow.Result, error) {
-	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", cause.Error()); err != nil {
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Reason: cause.Error(), Why: WhyCredential})
+		return err
+	}); err != nil {
 		return workflow.Result{}, err
 	}
 	return workflow.Result{Next: "openPullRequest", State: st, AwaitSignals: []string{SignalGitHubAuthorized}}, nil
@@ -2950,7 +2960,7 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 // (decide). Nothing goes on by itself: no agent works, and no timer
 // resumes it.
 func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State, reason string, detail any) (workflow.Result, error) {
-	st.Escalation = &Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}
+	st.Escalation = (&Escalation{Reason: reason, Detail: detail, Step: RetryStep[sc.Step]}).heldBy(HolderPerson)
 	// A queued review goes with what stopped: the person decides first.
 	st.Pipeline = nil
 	switch reason {
@@ -2992,8 +3002,15 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		}
 	}
 	st.PendingRunIDs = nil
-	if err := w.s.SetTaskStatusAndEmit(ctx, sc.OrganizationID, st, "awaiting_input", reason, EvQuestionAsked,
-		map[string]any{"kind": "escalation", "reason": reason, "detail": detail, "actions": st.Escalation.Actions()}); err != nil {
+	// The task's wait and its question.asked, which the API reads as the
+	// task's escalation, in one transaction: never seen one without the
+	// other. TODO(conductor-first PR2): conductor-held first
+	// (raiseEscalationTx).
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Escalation: st.Escalation,
+			Reason: reason, Why: WhyEscalation})
+		return err
+	}); err != nil {
 		return workflow.Result{}, err
 	}
 	if st.conducted() {
@@ -3085,13 +3102,17 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 		}
 		// The waits on a person reading their pull requests or the work are
 		// in review; every other step sets its own status, or is at work.
-		status := "running"
+		status, why := "running", "a person decided: "+d.Action
 		if e.At == "awaitPullRequest" || e.At == "awaitRead" {
 			status = "review"
 		} else if e.At == "conductorDecision" && st.deliverOpens() && st.Decision != nil && st.Decision.Point == PointBeforePR {
-			status = "awaiting_input"
+			// Back to the person's own gate, which waits on them.
+			return resumeEscalationAt(st, e), w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+				_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Reason: why, Why: WhyPersonGate})
+				return err
+			})
 		}
-		return resumeEscalationAt(st, e), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, "a person decided: "+d.Action)
+		return resumeEscalationAt(st, e), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, why)
 	}
 	// A wait decision may dispatch work immediately, before the ordinary
 	// retry path below. Genuine waiting still spends the note in waitForPR.

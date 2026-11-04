@@ -557,7 +557,8 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 		if note == "" {
 			return nil, refuseText(rSayWhatAskPersonInNote)
 		}
-		id, err := AskTx(ctx, tx, ref, clip(note, noteChars), nil)
+		id, err := ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: WhyConductor,
+			Items: []QuestionItem{SingleItem(clip(note, noteChars), nil)}})
 		if err != nil {
 			return nil, err
 		}
@@ -567,7 +568,7 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 	if note != "" {
 		prompt = clip(note, noteChars) + "\n\n" + GateQuestion
 	}
-	id, err := askGate(ctx, tx, ref, &d.State, prompt)
+	id, err := askGate(ctx, tx, ref, &d.State, prompt, WhyConductor)
 	if err != nil {
 		return nil, err
 	}
@@ -577,12 +578,14 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 
 // askGate asks the pull request gate's question on the conductor's Run, at
 // the heads the delivery is at; refused while the head is a conductor's
-// commit nothing has reviewed.
-func askGate(ctx context.Context, tx pgx.Tx, ref RunRef, st *State, prompt string) (string, error) {
+// commit nothing has reviewed. why: the conductor's decide(ask_person), or
+// the person's own gate a hold entered (askGateTx).
+func askGate(ctx context.Context, tx pgx.Tx, ref RunRef, st *State, prompt, why string) (string, error) {
 	if err := untestedRefusal(ctx, tx, st); err != nil {
 		return "", err
 	}
-	id, err := AskTx(ctx, tx, ref, prompt, GateChoices)
+	id, err := ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: why,
+		Items: []QuestionItem{SingleItem(prompt, GateChoices)}})
 	if err != nil {
 		return "", err
 	}
@@ -614,7 +617,7 @@ func askGateTx(ctx context.Context, tx pgx.Tx, org string, st *State) error {
 	if err != nil {
 		return err
 	}
-	_, err = askGate(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID}, st, gatePrompt(st))
+	_, err = askGate(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID}, st, gatePrompt(st), WhyPersonGate)
 	return err
 }
 

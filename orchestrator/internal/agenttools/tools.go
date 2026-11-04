@@ -550,7 +550,13 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	} else if delivery.HasChoiceNote(items) {
 		return askOut{}, refuseText(rChoiceNoteIsConductorForQuestionAbout)
 	}
-	id, err := delivery.AskItemsTx(ctx, tx, c.run(), items)
+	// TODO(conductor-first PR4a): a writer asks its conductor
+	// (ask_conductor); the person only when no conductor decides.
+	why := delivery.WhyWriter
+	if c.Role == delivery.RoleConductor {
+		why = delivery.WhyConductor
+	}
+	id, err := delivery.ToPersonTx(ctx, tx, delivery.ToPerson{Ref: c.run(), Items: items, Why: why})
 	if err != nil {
 		return askOut{}, err
 	}

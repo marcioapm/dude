@@ -113,6 +113,8 @@ func (w *steps) holdForQuestions(ctx context.Context, sc workflow.StepContext, s
 	}
 	st.QuestionsHeld = true
 	if len(open) > 0 {
+		// TODO(conductor-first PR4b): no awaiting_input while the conductor
+		// holds every open question; forwarded ones through ToPersonTx.
 		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reasonQuestionsOpen); err != nil {
 			return workflow.Result{}, false, err
 		}
