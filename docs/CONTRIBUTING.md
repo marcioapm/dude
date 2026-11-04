@@ -158,7 +158,7 @@ follows only a close that happened. The owner or an admin.
 `agents/`.
 
 ```
-implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ fix] → [test] → open PR → wait ⟲ (fix on the candidate → review ⟲ fix → simplify → [review of its diff ⟲ fix] → test → move the PR branch) → done
+implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ fix] → [test] → open PR → wait ⟲ (fix pushed to the PR branch → review of its range ⟲ fix) → done
 ```
 
 - Each phase is a Run with `phase`, `role`, `base_ref` (the commit it starts
@@ -175,8 +175,8 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   item's branch to it through GitHub, never forcing. The next phase checks
   out that commit.
 - **A task branch only ever fast-forwards**, but for one case
-  (`internal/advance`: a phase's publish, a conductor's, and the promotion
-  of a pull request's checked candidate): a writer refused only because
+  (`internal/advance`: a phase's publish and a conductor's): a writer
+  refused only because
   its base was merged into the branch under it — dude's own update, a
   person's **Update branch**, GitHub's — is merged in on GitHub
   (`/merges`), and that merge is the next phase's start, or the pull
@@ -251,7 +251,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   path); under the conductor it is woken with it and may answer it
   (`answer_review_question`), which is not a person's decision. A person's
   answer is one of the task's decisions. An open one holds the pull
-  request's opening and a checked fix's promotion (`holdForQuestions`,
+  request's opening (`holdForQuestions`,
   task `awaiting_input`) until it is settled (`review.question_settled`).
 - **The tester is on by default and gates the pull request**
   (`delivery/verification.go`). It ends its reply with one YAML document
@@ -266,10 +266,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   and `waive` on those two need a note and may be taken by the owner or an
   organization admin; they are recorded on the verdict. The tester's
   findings are judged by the next test, never by a reviewer. A verdict
-  whose heads what the branch holds has moved past is shown stale; while a
-  pull request's fix is checked, that is the heads the candidate started
-  from (`candidate.from`), and a verdict at the candidate's own heads is
-  shown as the candidate's, not on the pull request yet.
+  whose heads what the branch holds has moved past is shown stale.
 - **Nothing reaches the tester or the pull request unreviewed.** A
   simplifier that changed something is followed by a review round over its
   diff alone (`runs.review_range`, `{of: "simplify", base}`: the reviewer is
@@ -278,111 +275,54 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   then goes to the test, never to the simplifier again. The round starts
   whoever decides; under the conductor its findings are the conductor's to
   triage, as any round's are.
-- **A fix for an open pull request is checked before the pull request shows
-  it.** `prFix` starts from the pull request's heads on GitHub, and the fix
-  Run, and every fix of it, publishes to the candidate branch
-  (`dude/<task>/attempt-N-candidate`, `runs.branch`), not the task branch.
-  The fix's range is reviewed (`{of: "pull_request_fix"}`), the review loop
-  runs with its bounds, the simplifier runs on the candidate (when the
-  policy's `simplify` is on) and its diff alone is reviewed (`{of:
-  "simplify"}`, from the candidate's head before it), as for new work; a
-  fix of either review stays on the candidate. A failed test's fix is
-  reviewed over the fix's range, then simplified again. The tester checks
-  every criterion, and only once the
-  gate passes or a person settles it does `promoteCandidate` fast-forward
-  each pull request's branch to the candidate (`gh.FastForwardExisting`,
-  never forced) and refresh, for every open pull request of the task, the
-  description's marked Review and Verification sections (`refreshBodies`,
-  the verdict refresh's machinery), or the verdict comment of an adopted
-  one; a pull request whose refresh GitHub failed is tried again, twice
-  more, and the last failure is recorded. Each try is counted when its
-  step commits, so a crash or lost lease during a try's GitHub calls
-  replays that try uncounted, and a replayed last try can record its
-  failure again: the tries are at least once each, not at most three.
-  When a push race lets only some branches move, only those are
-  refreshed. A candidate's verdict never reaches a pull request before that.
-  A branch someone pushed to meanwhile is not moved: `pull_request_moved`
-  asks a person (retry from their commit, or wait). Reviews are asked again
-  after the move. The round counts once against `MaxPRFixIterations`, in
-  `prFix`, and once against `FixRoundsPerPR` of each open pull request
-  whose repository its fix published commits to, in `awaitPRFix`: a fix
-  that commits nothing spends none of the pull requests' budget, and
-  `prFix` refuses only a pull request whose budget is already spent. A
-  retry gives the budget back only for a round that was charged
-  (`pull_request_moved`, not `pr_fix_failed`). These steps are mechanics under the
-  conductor too; it is told only at escalations. A conductor's publish is
-  refused while a candidate is checked. `ci_stuck` counts from when the
-  current head's checks went pending; finished checks close it as dude's `wait`.
-- **What an open pull request may show.** While a pull request is open, its
-  branch moves only by `promoteCandidate`, to a candidate head that was
-  reviewed and, when the policy tests, tested. This holds for a pull request
-  fix, an open pull request's integration, the integration fixer of a base
-  merge that conflicts before another repository's pull request opens while
-  one is already open (that fixer may change the open one too), and every
-  review-loop writer (implement, fix, simplify) that starts while a pull
-  request is open on the task branch (`writerCandidate`): an adopted pull
-  request's first loop, a review or test the conductor starts at the pull
-  request wait and the loop after it, and a fix after a failed test of a
-  clean base merge before another repository's pull request opens. A
-  person's push meanwhile refuses the promotion (`pull_request_moved`); the
-  pull request stays at their commit. An adopted pull request is reviewed
-  whole once; with resumed reviewers (`resumeRounds`) each later round
-  normally reviews what changed since the head the reviewer last reviewed,
-  a person's pushes included. It falls back to a full, fresh review when
-  rounds do not resume, the reviewer's conversation cannot be resumed or
-  replayed, GitHub cannot measure the change, or the change is over
-  `MaxResumeDeltaLines` (300 lines). A refused loop candidate's retry is
-  the writer the round opened with, and the findings it resolved only on
-  the discarded heads are open again for it. A conductor's publish and its writer
-  children are refused while a pull request is open; `start_phase fix` is
-  the way to change it. Deliberately outside it are base merges GitHub
-  makes: dude's `update-branch` when a pull request is behind, a person's
-  **Update branch**, and a promotion merged onto a head GitHub already
-  merged the base into. For those, GitHub's "Dismiss stale pull request
-  approvals when new commits are pushed" is the recommended branch
-  protection setting. A clean base merge GitHub makes before the pull
-  request opens (`syncBeforePR`) counts as reviewed: it is tested, and the
-  pull request opens at it. A person's Chat message may lead the conductor
-  to request reviewers, re-run checks, mark a pull request ready or resolve
-  threads, within the conductor's limits; it can never merge a pull request
-  or press **Update branch**. As a backstop, `Syncer.publish` fails any
-  writer Run whose publish would move a branch with a pull request open
-  (as recorded when the publish starts), before it moves anything ("an
-  open pull request's branch moves only by promotion of a reviewed
-  candidate"), such as a conductor's writer child already running when the
-  pull request opened; its conductor's child result says why. A Run that
-  committed nothing completes. Under `whenBehind: tell`, a pull request
-  dude opens while a conductor's writer child is still publishing is not
-  seen by that publish; under `update` (the default) `syncBeforePR` waits
-  for live writers, so the window does not exist there.
-- **Fixes on an open pull request, direct.** The above is the
-  `candidate` mode of a project's `pullRequestFixes`. Every new delivery
-  resolves to `direct` unless its project set `candidate` (the rollback);
-  the mode is frozen in `State.Policy` when the delivery starts, and a
-  delivery frozen before the key existed reads as `candidate` until it
-  ends (`Policy.DirectFixes`). In `direct` mode no candidate is opened:
-  `prFix` starts from the pull request's heads and its fix publishes to the
-  task branch, which is the pull request's head, so its CI and reviewers
-  see it at once. Then a narrow review of that push's range
-  (`State.FixRange`, `{of: "pull_request_fix"}`) runs, and a finding there is
-  fixed on the pull request and reviewed again, at most
+- **A fix for an open pull request is pushed to it directly.** `prFix`
+  starts from the pull request's heads on GitHub and its fix publishes to
+  the task branch, which is the pull request's head, so its CI and
+  reviewers see it at once. Then a narrow review of that push's range
+  (`State.FixRange`, `{of: "pull_request_fix"}`) runs, and a finding there
+  is fixed on the pull request and reviewed again, at most
   `maxPrFixReviewIterations` (2) times before it escalates as the review
   loop does. There is no simplifier and no tester after the pull request
   opens: CI is the test, and the conductor may still `start_phase test`.
-  Reviewers are asked again once, when the loop is clear (`prFixDone`). A
-  person's push under a running fix makes its publish fail
-  (`pr_fix_failed`); nothing is forced. A conductor's publish and its
-  writer children may reach the open pull request, but never twice past
+  Reviewers are asked again once, when the loop is clear (`prFixDone`).
+  The round counts once against `MaxPRFixIterations`, in `prFix`, and once
+  against `FixRoundsPerPR` of each open pull request whose repository its
+  fix published commits to, in `awaitPRFix`: a fix that commits nothing
+  spends none of the pull requests' budget, and `prFix` refuses only a pull
+  request whose budget is already spent. A person's push under a running
+  fix makes its publish fail (`pr_fix_failed`); nothing is forced. These
+  steps are mechanics under the conductor too; it is told only at
+  escalations. `ci_stuck` counts from when the current head's checks went
+  pending; finished checks close it as dude's `wait`. Checks feedback read
+  at a head the pull request no longer shows starts no fix
+  (`forge.Signal.Head`).
+- **dude's push to an open pull request is reviewed before its next one
+  (I-3).** A conductor's publish and every writer (its children, implement,
+  fix, simplify) may reach the open pull request, but never twice past
   review: while a pull request shows a head dude pushed that no completed
   review started from, they are refused with `start_phase review`
-  (`unreviewedPRHeadTx`); a person's push is never such a head. A conflict
-  on the open pull request is a message to the conductor at the pull
-  request feedback decision. Under the policy, the integration fixer merges
-  the base onto the pull request's branch, its merge is reviewed and not
-  tested, and the delivery waits again with no mergeability polling and no
-  hand-over: the next sync's conflicting reading at the attempted pair
-  escalates. Checks feedback read at a head the pull request no longer
-  shows starts no fix (`forge.Signal.Head`), in both modes.
+  (`unreviewedPRHeadTx`); a person's push is never such a head. An adopted
+  pull request is reviewed whole once; with resumed reviewers
+  (`resumeRounds`) each later round normally reviews what changed since the
+  head the reviewer last reviewed, a person's pushes included. It falls
+  back to a full, fresh review when rounds do not resume, the reviewer's
+  conversation cannot be resumed or replayed, GitHub cannot measure the
+  change, or the change is over `MaxResumeDeltaLines` (300 lines).
+  Deliberately outside it are base merges GitHub makes: dude's
+  `update-branch` when a pull request is behind and a person's **Update
+  branch**. For those, GitHub's "Dismiss stale pull request approvals when
+  new commits are pushed" is the recommended branch protection setting. A
+  clean base merge GitHub makes before the pull request opens
+  (`syncBeforePR`) counts as reviewed: it is tested, and the pull request
+  opens at it. A person's Chat message may lead the conductor to request
+  reviewers, re-run checks, mark a pull request ready or resolve threads,
+  within the conductor's limits; it can never merge a pull request or
+  press **Update branch**. A conflict on the open pull request is a
+  message to the conductor at the pull request feedback decision; under
+  the policy, the integration fixer merges the base onto the pull request's
+  branch, its merge is reviewed and not tested, and the delivery waits
+  again with no mergeability polling: the next sync's conflicting reading
+  at the attempted pair escalates.
 - **Every Deliver loop ends on a declared bound**: `MaxReviewIterations`,
   `MaxAttemptsPerFinding`, `MaxStillRounds`, `MaxRegressionRounds`,
   `MaxPRFixIterations`. Convergence asks for the owner's direction when a
@@ -407,10 +347,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
 - **A conducted loop has no counters.** While the conductor decides
   (`State.conducted`), no review round, fix attempt, still or regression
   count refuses its tools or escalates its round: a round exits clear (no
-  open finding at the fix bar) or parks for the conductor (`loopExit`),
-  except a candidate's fix loop (`pullRequestFixes: candidate`,
-  `checkingCandidate`), which keeps the policy's bounds
-  (`conductsRounds`).
+  open finding at the fix bar) or parks for the conductor (`loopExit`).
   When to stop is the conductor's judgement, on the facts each round's wake
   states (`wakes/round.md`), which from round 8 suggests asking the person.
   A delivery handed back to Deliver is the policy's again, bounds included.
@@ -479,11 +416,8 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   resolve keeping both sides' intent, then an internal review that runs
   `git show --remerge-diff` on the merge, then the policy's test; the
   conductor never runs tests. On an open pull request the integration is
-  checked as a pull request fix is: the integration Run, and every fix of
-  its review and test, publish to the candidate branch, and
-  `promoteCandidate` fast-forwards the pull request to the merge only once
-  its review (and the policy's test) passed; whether it still conflicts is
-  read after that. A pair already tried, an integration Run
+  pushed to it as a pull request fix is, and its merge is reviewed after
+  (see above). A pair already tried, an integration Run
   that finishes without publishing to the conflicting repository (no
   merge: nothing to review), or a pull request
   still conflicting afterwards, escalates `pull_request_conflict` with
@@ -529,7 +463,7 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   directed review and the simplifier's range keep their own categories.
   The round's `run.created` carries `reasons`; a round with no reviewer
   goes straight to `awaitReview`, unless a gate waits on a completed review
-  at its heads (`st.Candidate`, or an untested conductor head): then
+  at its heads (an unreviewed pull request push, or an untested conductor head): then
   `requiredReviewers` run, else the first round's (`steps.gateReviewers`).
   The choice is kept in the Owned `reviewChoice` with the round's creation
   key and heads, so a replayed step at those heads creates the same round.
@@ -566,8 +500,8 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   `aborted`. Once none is left open, the end reaches the delivery at
   whatever step it is parked on (`delivery/pr_ended.go`): live phase Runs
   are aborted, a pending conductor decision dropped and an escalation
-  withdrawn (`task.decided` by the system), and a finished fix is dropped
-  rather than opened or promoted. One closed beside one still open is the
+  withdrawn (`task.decided` by the system), and a finished fix opens no
+  pull request. One closed beside one still open is the
   pull request wait's to ask a person about (or, held by a reviewer's
   question, that hold's); the step at work goes on. A person who chooses
   wait is not asked about those closes again (`State.WaitedPastClosed`):
@@ -616,21 +550,12 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   open and delivered items as blocking whatever the severities. Every
   implement, fix and pull request fix is given the open items
   (`runs.feedback_item_ids`), each a fix attempt bounded as a finding's.
-  A pull request fix checked on its candidate gives its fixers the open
-  items, but the candidate's review loop weighs its findings alone: what
-  its fixers leave open is taken up after promotion (or a fix that changed
-  nothing) by another `prFix`, within `MaxPRFixIterations`. An
+  What a pull request fix leaves open is taken up by another `prFix`,
+  within `MaxPRFixIterations`. An
   agent replies (`replied` holds nothing) or resolves with a commit, which
   holds until its Run publishes and GitHub's compare shows the commit in
-  the published head and new since the Run's base. A resolution on a
-  candidate is checked against the candidate's head as its Run finishes
-  (reopened if it does not hold), but becomes verified only at promotion
-  (`CandidateMovedTx`, in the repositories moved): until then it blocks as
-  an open item does. A round that ends without promotion (refused by a
-  person's push, a retry's `prFix`, a person's stop or a Run abort)
-  reopens it for the next fixer. A candidate is promoted even while an item
-  its fixers were given is still open; the gates above hold that item. A
-  merge on GitHub's own page is not blocked.
+  the published head and new since the Run's base. A merge on GitHub's
+  own page is not blocked.
 - **Steering** goes to the agent as a message, read at its next step: the
   harness takes it while a tool runs and the model reads it before its
   next call, in the same turn, without cancelling the tool. A harness that

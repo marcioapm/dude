@@ -203,15 +203,6 @@ export const PULL_REQUEST_CHOICE: Record<PullRequestChoice, { label: string; hin
 };
 
 /**
- * Delivery keys dude no longer reads. `pullRequestFixes`: every fix reaches
- * an open pull request directly, whatever a project chose. Still accepted
- * (optional), so a stored or sent value is never refused, and ignored: the
- * settings neither show nor store it.
- */
-export const RETIRED_DELIVERY_KEYS = ["pullRequestFixes"] as const;
-export type RetiredDeliveryKey = (typeof RETIRED_DELIVERY_KEYS)[number];
-
-/**
  * How a project's work is delivered, over the factory's defaults. Each field
  * left out keeps the default; a task's own overrides layer on top.
  */
@@ -250,12 +241,10 @@ export const deliveryPolicySchema = z
      * first. A project's setting only: an organisation never sets it.
      */
     pullRequest: z.enum(PULL_REQUEST_CHOICES),
-    /** Retired (RETIRED_DELIVERY_KEYS): accepted and ignored. */
-    pullRequestFixes: z.unknown(),
   })
   .partial()
   .strict();
-export type DeliveryPolicy = Omit<z.infer<typeof deliveryPolicySchema>, RetiredDeliveryKey>;
+export type DeliveryPolicy = z.infer<typeof deliveryPolicySchema>;
 /** A delivery policy with every field set: the factory's defaults, or a project's over them. */
 export type FullDeliveryPolicy = { [K in keyof DeliveryPolicy]-?: NonNullable<DeliveryPolicy[K]> };
 
@@ -849,8 +838,8 @@ export const runSchema = z.object({
   findingIds: z.array(z.string()).default([]),
   /**
    * A review limited to a range: what it checks — "simplify" (the
-   * simplifier's diff) or "pull_request_fix" (a fix for an open pull
-   * request, on its candidate branch) or "fix_round" (a conducted loop's
+   * simplifier's diff) or "pull_request_fix" (a fix pushed to an open
+   * pull request) or "fix_round" (a conducted loop's
    * later round: what changed since the round before). Null reviews the
    * whole branch.
    */
@@ -1063,16 +1052,12 @@ export type CriterionVerdict = z.infer<typeof criterionVerdictSchema>;
 /**
  * A test Run's verdict: the heads (repository → commit) it tested, and
  * whether what the branch holds has moved past them since (`stale`).
- * While a pull request's fix is checked on its candidate branch, the
- * candidate's own verdict is `candidate`: not on the pull request yet,
- * and never stale for it.
  */
 export const verificationSchema = z.object({
   runId: z.string(),
   attempt: z.number().int(),
   heads: z.record(z.string(), z.string()),
   stale: z.boolean(),
-  candidate: z.boolean().optional(),
   createdAt: z.string(),
   criteria: z.array(criterionVerdictSchema),
 });

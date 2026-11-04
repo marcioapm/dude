@@ -1,7 +1,7 @@
 /**
- * Fixes on an open pull request are always direct: neither a project's
- * Delivery page nor the organisation's offers the retired choice. Mounted
- * in happy-dom against the fixture client.
+ * Fixes on an open pull request: a project's Delivery page and the
+ * organisation's offer the narrow loop's bound. Mounted in happy-dom
+ * against the fixture client.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -18,7 +18,7 @@ afterEach(async () => {
   mounted = [];
 });
 
-test("a project's Delivery page has no Fixes on an open pull request: every fix is direct", async () => {
+test("a project's Delivery page offers the pull request fix review rounds", async () => {
   const client = new FixtureClient("a");
   const { container: c, unmount } = await mount(
     <TooltipProvider>
@@ -30,12 +30,10 @@ test("a project's Delivery page has no Fixes on an open pull request: every fix 
   );
   mounted.push(unmount);
   await until(() => c.querySelector("[data-testid=delivery-form]"), "the Delivery page");
-  expect(c.querySelectorAll("[data-testid=delivery-pullRequestFixes]").length).toBe(0);
-  expect(c.textContent).not.toContain("Fixes on an open pull request");
   expect(c.querySelectorAll("[data-testid=delivery-maxPrFixReviewIterations]").length).toBe(1);
 });
 
-test("the organisation's Delivery page has no Fixes on an open pull request", async () => {
+test("the organisation's Delivery page offers the pull request fix review rounds", async () => {
   const client = new FixtureClient("a");
   const { container, unmount } = await mount(
     <TooltipProvider>
@@ -47,6 +45,5 @@ test("the organisation's Delivery page has no Fixes on an open pull request", as
   );
   mounted.push(unmount);
   await until(() => container.querySelector("[data-testid=delivery-form]"), "the Delivery page");
-  expect(container.querySelectorAll("[data-testid=delivery-pullRequestFixes]").length).toBe(0);
   expect(container.querySelectorAll("[data-testid=delivery-maxPrFixReviewIterations]").length).toBe(1);
 });

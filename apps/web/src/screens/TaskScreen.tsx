@@ -1314,7 +1314,7 @@ export function whyItRan(run: Run, index: number, phases: readonly Run[], findin
     }
   }
   // A pull request's fix is reviewed, simplified, its simplification
-  // reviewed and tested on its candidate. An adopted pull request is
+  // reviewed and tested (older ones on a candidate branch). An adopted pull request is
   // recorded as opened before its first test: only a feedback fix before a
   // step makes it one of that fix.
   const ofPullRequestFix = () => earlier.some((r) => r.attempt === run.attempt &&

@@ -237,8 +237,6 @@ export const settingsPatchSchema = z
         conductorEditFiles: nullable(field("conductorEditFiles")),
         /** A project's only: refused on the organisation's settings. */
         pullRequest: nullable(field("pullRequest")),
-        /** Retired (RETIRED_DELIVERY_KEYS): accepted from an old client, and ignored. */
-        pullRequestFixes: z.unknown().optional(),
       })
       .strict()
       .optional(),

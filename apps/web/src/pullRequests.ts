@@ -176,7 +176,7 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
         "rerun-failed": [`re-ran ${plural(Number(p.rerun ?? 0), "failed check")} on ${pr}`],
         reviewers: [`asked ${Array.isArray(p.logins) ? (p.logins as string[]).join(" and ") : "someone"} to review ${pr}`],
         "resolve-conflicts": [p.status === "queued" ? `queued conflict resolution for ${pr}; the next capable writer will integrate the base` : `asked dude to resolve the conflicts on ${pr}`],
-        "base-sync-writing": [`writer ${str(p.runId)} is integrating `, ...base, ` in ${str(p.repo)}; public PR publication still requires candidate review`],
+        "base-sync-writing": [`writer ${str(p.runId)} is integrating `, ...base, ` in ${str(p.repo)}; the merge is reviewed like any other fix`],
         "merge-base": ["merged ", ...base, ` into ${target} on GitHub; tested again if it touched the task's files`],
         "integration-started": ["started resolving ", `${target}'s conflicts with `, ...base],
         "integration-completed": ["resolved ", `${target}'s conflicts with `, ...base, ", then reviewed and tested it"],

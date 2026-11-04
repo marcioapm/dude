@@ -115,7 +115,7 @@ export function PullRequestActions({ client, pr, defaultMethod, onChanged, resol
   // action.
   let conflict: PullRequestActionSlots["conflict"];
   if (pr.baseSyncStatus === "queued" || pr.baseSyncStatus === "resolving") {
-    facts.base = <span data-testid="pr-base-sync-status">{pr.baseSyncStatus === "queued" ? "Conflict resolution queued for the next writer" : "Writer integrating base; candidate review gates still apply"}</span>;
+    facts.base = <span data-testid="pr-base-sync-status">{pr.baseSyncStatus === "queued" ? "Conflict resolution queued for the next writer" : "Writer integrating base; reviewed like any fix"}</span>;
   } else if (pr.baseSyncStatus === "complete" && pr.behindBy === 0 && pr.mergeable !== "conflicting") {
     // A request completed earlier says nothing of a base that moved since:
     // behind again, the PR offers Update branch as before.

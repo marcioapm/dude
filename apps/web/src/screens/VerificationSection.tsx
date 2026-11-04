@@ -35,7 +35,6 @@ export function VerificationSection({ client, verifications, artifacts, onOpenRu
   return (
     <div className="taskVerification">
       <VerificationGroup data-testid="verification" data-run={latest.runId} heads={latest.heads} stale={latest.stale}
-        candidate={latest.candidate}
         actions={
           <Button size="sm" variant="quiet" trailingIcon="arrow-right" onClick={() => onOpenRun(latest.runId)} data-testid="verification-run">
             Open the test
