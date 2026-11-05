@@ -18,7 +18,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, ask_person_about_escalation, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
+from helpers import relay_writer_question, finish_question_relay, ApiClient, ask_person_about_escalation, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -1312,6 +1312,29 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
     assert console_errors == []
 
 
+def test_a_writer_parked_on_its_conductor_does_not_ask_the_owner_for_input(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    task = client.create_task(forge_project["id"], "The conductor holds this question")
+    assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
+    writer = wait_until(lambda: next((r for r in client.task_runs(task["id"])
+        if r["phase"] == "implement" and r["status"] == "paused"), None), timeout=30, message="writer never parked")
+    assert any(e["eventType"] == "question.routed" for e in client.events(runId=writer["id"]))
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == "running"
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/session/{writer['id']}")
+    expect(page.get_by_test_id("chat-notice").and_(page.locator('[data-kind="parked"]'))).to_contain_text("waits for the conductor")
+    expect(page.get_by_placeholder("Waiting for the conductor's answer.")).to_be_disabled()
+    expect(page.get_by_test_id("question-form")).to_have_count(0)
+    expect(page.get_by_test_id("waiting-on")).to_have_count(0)
+    expect(page.get_by_test_id("task-header")).not_to_contain_text("Needs you")
+    # Existing owner override access is not removed by holder-aware wording.
+    expect(page.get_by_role("button", name="Resume", exact=True)).to_be_visible()
+    assert console_errors == []
+
+
 def test_a_parked_agent_is_answered_from_its_chat(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
@@ -1321,20 +1344,22 @@ def test_a_parked_agent_is_answered_from_its_chat(
         "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Ask, then wait")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
-    implement = wait_until(
-        lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "paused"), None),
-        timeout=30, message="the waiting agent was never parked")
+    writer, human = relay_writer_question(client, item["id"])
+    asking = wait_until(
+        lambda: (r if (r := client.get_run(human["runId"]))["status"] == "paused" else None),
+        timeout=30, message="the asking conductor was never parked")
 
     sign_in(page, web_url, org["api_key"])
-    page.goto(f"{web_url}#/session/{implement['id']}")
+    page.goto(f"{web_url}#/session/{asking['id']}")
     expect(page.get_by_test_id("chat-notice").and_(page.locator('[data-kind="parked"]'))).to_contain_text("Parked while it waits for you")
     # Paused, yet its question's turn takes the answer: that is what resumes it.
     page.get_by_test_id("question-turn").get_by_role("radio", name="yes", exact=True).click()
-    wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
-               timeout=30, message="the answer did not resume the parked agent")
+    finish_question_relay(client, item["id"], writer, human)
+    wait_until(lambda: client.get_run(writer["runId"])["status"] == "completed",
+               timeout=30, message="the relayed answer did not resume the writer")
     # Once timed, its return says how long it took, its phases on hover:
     # exactly the numbers of its run.resume.timed.
-    _expect_resume_notice(page, client, implement["id"], "Taken back up", "Taken back up")
+    _expect_resume_notice(page, client, asking["id"], "Taken back up", "Taken back up")
     assert console_errors == []
 
 
@@ -1552,8 +1577,7 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     item = client.create_task(forge_project["id"], "Ask the owner")
     assert item["owner"]["name"] == "e2e user"
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
-    question = wait_until(lambda: next(iter(client.get("/v1/questions", params={"taskId": item["id"]}).json()["questions"]), None),
-                          timeout=30, message="the agent never asked")
+    writer, question = relay_writer_question(client, item["id"])
     bo_key = create_api_key(env.owner_dsn, org["id"], name="Bo")
     bo = ApiClient(env.control_plane_url, bo_key)
     people = bo.get("/v1/people").json()["people"]
@@ -1610,8 +1634,7 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     page.goto(f"{web_url}#/session/{question['runId']}")
     expect(page.get_by_test_id("waiting-on")).to_have_count(0)
     page.get_by_test_id("question-turn").get_by_role("radio", name="yes", exact=True).click()
-    wait_until(lambda: client.get("/v1/questions", params={"taskId": item["id"]}).json()["questions"][0]["status"] == "answered",
-               timeout=30, message="Bo's answer was not taken")
+    finish_question_relay(bo, item["id"], writer, question)
     assert console_errors == []
 
 

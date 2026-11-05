@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, wait_until, relay_writer_question, finish_question_relay
 
 
 def _call(name: str, **args) -> str:
@@ -48,7 +48,7 @@ def test_the_conductor_relays_a_fixers_question_and_reads_the_limits(client: Api
         "Thanks.",
     ]), author="ana")
     fixer = wait_until(lambda: next((e["runId"] for e in client.events(taskId=task["id"], limit=1000)
-                                     if e["eventType"] == "question.asked" and e.get("runId")
+                                     if e["eventType"] == "question.routed" and e.get("runId")
                                      and "alias" in e["payload"].get("prompt", "")), None),
                        timeout=120, message="the fixer never asked")
 
@@ -62,7 +62,7 @@ def test_the_conductor_relays_a_fixers_question_and_reads_the_limits(client: Api
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "\n".join([
         "Is anyone waiting on us? And how many fix rounds are left?",
         _call("run_chat", run=fixer),
-        _call("say", text="Waiting: {{last.openQuestion.prompt}} for {{last.openQuestion.for}}"),
+        _call("say", text="Waiting: {{last.openQuestion.prompt}}"),
         _call("limits"),
         _call("say", text="Rounds: {{last.fixRounds.perReviewRound.limit}} per round ({{last.fixRounds.perReviewRound.source}}), "
                           "{{last.fixRounds.perPullRequest.limit}} per pull request ({{last.fixRounds.perPullRequest.source}}), "
@@ -72,10 +72,19 @@ def test_the_conductor_relays_a_fixers_question_and_reads_the_limits(client: Api
     said_now = wait_until(lambda: next((t for t in _said(client, conductor)[said:] if "Rounds: " in t), None),
                           timeout=90, message="the conductor never said what it read")
     lines = said_now.split("\n")
-    assert "Waiting: Keep greet() as an alias of hello()? for the task's people" in lines, lines
+    assert "Waiting: Keep greet() as an alias of hello()?" in lines, lines
+    # run_chat's legacy `for` does not expose addressee on this pinned head;
+    # question.routed above establishes the actual holder. Do not pin its
+    # misleading person wording or change production Go on this test branch.
     rounds = next(t for t in lines if t.startswith("Rounds: "))
     assert rounds == ("Rounds: 5 per round (delivery policy), 8 per pull request (organisation GitHub settings), "
                       "binding delivery policy"), rounds
 
     calls = [e["payload"]["tool"] for e in client.events(runId=conductor, limit=1000) if e["eventType"] == "agent.tool.dude"]
     assert "run_chat" in calls and "limits" in calls, calls
+
+    writer, human = relay_writer_question(client, task["id"], fixer)
+    assert human["prompt"] == "Keep greet() as an alias of hello()?"
+    answer = client.post(f"/v1/questions/{human['id']}/answer", {"text": "Keep it"})
+    assert answer.status_code == 200, answer.text
+    finish_question_relay(client, task["id"], writer, human)
