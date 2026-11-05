@@ -260,3 +260,29 @@ func TestConductorQuestionSweepUsesPartialIndex(t *testing.T) {
 		t.Fatalf("the sweep does not use the partial index:\n%s", plan)
 	}
 }
+
+// ToPersonTx's hand-over is idempotent by itself (its own WHERE
+// addressee='conductor' AND status='open'), not only through the sweep's
+// read: a second call hands nothing over and asks nobody again.
+func TestHandOverIsIdempotentAtTheChokepoint(t *testing.T) {
+	f := setup(t)
+	_, _, qid := relayWorld(t, f)
+	for i := range 2 {
+		var got string
+		if err := f.app.InOrg(context.Background(), f.org, func(tx pgx.Tx) error {
+			var err error
+			got, err = delivery.ToPersonTx(context.Background(), tx, delivery.ToPerson{
+				Ref: delivery.RunRef{Org: f.org, ProjectID: f.project, TaskID: f.item}, Why: delivery.WhyHandover,
+				HandOver: qid, Reason: "its conductor did not answer in time"})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if (got != "") != (i == 0) {
+			t.Fatalf("call %d handed over %q", i, got)
+		}
+	}
+	if n := f.qn(t, `SELECT count(*) FROM events WHERE event_type='question.asked' AND payload->>'questionId'=$1`, qid); n != 1 {
+		t.Fatalf("question.asked=%d", n)
+	}
+}

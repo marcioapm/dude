@@ -285,3 +285,26 @@ func TestIdleParkWakesConductorWhenConducted(t *testing.T) {
 		t.Fatalf("question.asked=%d", n)
 	}
 }
+
+// The writer's Run ended (its question cancelled with it) while the relay
+// was open: the person's answer closes the relay and forwards nothing,
+// saying so.
+func TestRelayAnswerAfterWriterQuestionClosedForwardsNothing(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	qid := s.writerAsks("Which API shape?")
+	relay := s.relays(qid)
+	mustExec(t, s.owner, `UPDATE questions SET status='cancelled' WHERE id=$1`, qid)
+	status, out := s.call("/internal/questions/"+relay+"/answer", map[string]any{"text": "B"})
+	if status != 200 {
+		t.Fatalf("owner %d %v", status, out)
+	}
+	if r, _ := out["relay"].(map[string]any); r["forwarded"] != false || r["status"] != "cancelled" {
+		t.Fatalf("relay outcome %v", out["relay"])
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='cancelled'`, qid); n != 1 {
+		t.Fatal("a closed writer question was answered")
+	}
+	if n := s.count(`SELECT count(*) FROM directives WHERE run_id=$1`, s.implementer); n != 0 {
+		t.Fatalf("writer directives=%d", n)
+	}
+}
