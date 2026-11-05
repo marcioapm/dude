@@ -8,6 +8,7 @@ control plane and orchestrator processes as other E2E tests.
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -152,18 +153,32 @@ def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClie
     _judge(client, fake_github)
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
     task = _start(client, fake_github, CHECKS_MODELS["unbacked"])
+    raised = wait_until(lambda: [e for e in client.events(taskId=task["id"])
+                                 if e["eventType"] == "escalation.raised"],
+                        timeout=90, message="checks gate did not reach the conductor")
+    assert raised[-1]["payload"]["holder"] == "conductor"
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == "running"
+    assert not [e for e in client.events(taskId=task["id"]) if e["eventType"] == "question.asked"]
+    proposal = {"questions": [{"question": "The checks are unverified. Waive this report?",
+                               "choices": [{"note": "CI hardware was unavailable; owner reviewed the risk.",
+                                            "recommended": True}, {"label": "Retry"}]}],
+                "actions": ["waive", "retry"]}
+    asked = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "tool: ask_person " + json.dumps(proposal)})
+    assert asked.status_code in (200, 201), asked.text
     wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "awaiting_input",
-               timeout=90, message="checks gate did not escalate")
-    detail = client.get(f"/v1/tasks/{task['id']}").json()
-    assert "checks_unverified" in str(detail)
+               timeout=90, message="the conductor did not ask the person")
+    assert raised[-1]["payload"]["reason"] == "checks_unverified"
     refused = client.post(f"/v1/tasks/{task['id']}/decide", {"action": "waive", "note": ""})
     assert refused.status_code == 400, refused.text
-    accepted = client.post(f"/v1/tasks/{task['id']}/decide", {"action": "waive", "note": "CI hardware was unavailable; owner reviewed the risk."})
-    assert accepted.status_code == 200, accepted.text
+    accepted = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "Waive: CI hardware was unavailable; owner reviewed the risk."})
+    assert accepted.status_code in (200, 201), accepted.text
+    # Chat makes the delivery chatty; return to its existing quiet defaults
+    # after the owner pick, so later review decisions do not require chat.
+    assert client.post(f"/v1/tasks/{task['id']}/decider", {"decider": "policy"}).status_code == 200
     _wait_pr(client, fake_github, task["id"])
     # Later backed fixer and simplifier reports do not hide the waiver or its reason.
     assert _rows(_checks_section(fake_github.pulls[1].body)) == (
-        "Checks were waived by a person:\n- Implementer: CI hardware was unavailable; owner reviewed the risk.", [
+        "Checks were waived by a person:\n- Implementer: The conductor proposed: The checks are unverified. Waive this report? The owner answered: Waive: CI hardware was unavailable; owner reviewed the risk.", [
             ("Implementer", "waived", []),
             ("Fixer", "backed", [("missing checks", "pass")]),
             ("Simplifier", "backed", [("missing checks", "pass")]),

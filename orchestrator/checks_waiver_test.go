@@ -22,8 +22,9 @@ const clockNote = "TestClock needs a hardware clock CI lacks."
 
 // checksEscalations counts the checks escalations the task was asked.
 func (w *world) checksEscalations(wi string) int {
-	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked'
-		AND payload->>'kind' = 'escalation' AND payload->>'reason' = $2`, wi, delivery.ReasonChecksUnverified)
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1
+		AND (event_type = 'escalation.raised' OR (event_type = 'question.asked' AND payload->>'kind' = 'escalation'))
+		AND payload->>'reason' = $2`, wi, delivery.ReasonChecksUnverified)
 }
 
 // failingUntilEscalated runs a delivery whose writers are all on model and

@@ -112,6 +112,18 @@ const headerDriver = (p: HTMLElement) => p.querySelector<HTMLElement>("[data-tes
 const openSwitch = (chip: HTMLElement) =>
   act(async () => void chip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })));
 
+test("the running conductor-held escalation keeps the owner's override controls", async () => {
+  const client = new DecisionsClient({status: "running", decider: "conductor", owner: null,
+    escalation: {reason: "implement_failed", holder: "conductor", status: "pending", detail: null, actions: ["retry", "stop"], at: at(0)}});
+  let stopped = false;
+  client.decide = async (_id, action) => { stopped = action === "stop"; return {action}; };
+  const p = await page(client);
+  await until(() => p.querySelector<HTMLButtonElement>("[data-testid=escalation-stop]"), "owner override");
+  expect(p.textContent).toContain("The conductor is handling this");
+  await click(p.querySelector<HTMLButtonElement>("[data-testid=escalation-stop]")!);
+  expect(stopped).toBe(true);
+});
+
 describe("starting a task", () => {
   const toTab = async (p: HTMLElement, name: string) => {
     const tab = [...p.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.startsWith(name))!;

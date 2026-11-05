@@ -37,7 +37,7 @@ one line on what it means or why (at most 300 characters)
 {{- end}}
 
 {{- define "tools/ask_person/questions.choices.recommended" -}}
-the one you would pick, shown as your suggestion; at most one per question
+the one you would pick, shown as your suggestion; exactly one on an escalation question, at most one otherwise
 {{- end}}
 
 {{- define "tools/ask_person/questions.multiple" -}}

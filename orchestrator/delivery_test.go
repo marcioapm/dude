@@ -4486,11 +4486,11 @@ func TestUnreadableCheckRunsBlockAMergeAndSayWhy(t *testing.T) {
 	}
 }
 
-// escalationReason is why the task's delivery last stopped for a person.
+// escalationReason is the latest raised escalation, regardless of its holder.
 func (w *world) escalationReason(wi string) string {
 	var r string
 	if err := w.owner.QueryRow(context.Background(), `SELECT payload->>'reason' FROM events WHERE task_id = $1
-		AND event_type = 'question.asked' AND payload->>'kind' = 'escalation' ORDER BY cursor DESC LIMIT 1`, wi).Scan(&r); err != nil && err != pgx.ErrNoRows {
+		AND (event_type = 'escalation.raised' OR (event_type = 'question.asked' AND payload->>'kind' = 'escalation')) ORDER BY cursor DESC LIMIT 1`, wi).Scan(&r); err != nil && err != pgx.ErrNoRows {
 		w.t.Fatal(err)
 	}
 	return r

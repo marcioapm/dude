@@ -54,7 +54,7 @@ Ask a person for decisions only a person can make — the task is ambiguous in a
                 },
                 "recommended": {
                   "type": "boolean",
-                  "description": "the one you would pick, shown as your suggestion; at most one per question"
+                  "description": "the one you would pick, shown as your suggestion; exactly one on an escalation question, at most one otherwise"
                 },
                 "note": {
                   "type": "string",

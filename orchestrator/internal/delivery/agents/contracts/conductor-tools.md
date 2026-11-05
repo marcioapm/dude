@@ -19,7 +19,7 @@
 		"decide" (.Wrap "decide takes the decision waited on (" (.List ", " ", " "" "next" "ask_person" "ask_person" "" "wait" "" "open_pull_request") ")")
 		"dismiss_finding" "dismiss_finding leaves a finding as it is, with the reason"
 		"answer_review_question" "answer_review_question answers a reviewer's question with a fact you established, or withdraws it as moot (a reviewer's question is for a person or for you, never for a fixer)") ". Each is refused, saying why, when it is not yours to take.")
-	"decide_escalation" "decide_escalation decides an escalation the owner handed you with a free answer to your question about it."
+	"decide_escalation" "decide_escalation decides non-person-only escalations directly with your explanation; person-only actions need the owner's answer to your recommended question."
 	"" (.Wrap "" (.List "; " "; "
 		"steer" "steer tells a running phase Run of this task, or one of your own child agents, something, whoever decides (interrupt stops its turn)"
 		"restart_run" "restart_run replaces one the delivery waits on with a fresh Run in its step (a note, optionally another tier)"

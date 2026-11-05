@@ -230,6 +230,57 @@ func conductorRetrying(t *testing.T) (w *world, task, conductor string) {
 	return w, task, conductor
 }
 
+// The actual syncer queues a retry after a transient model error. Expiring
+// a conductor-held escalation while that retry waits, then runs, must not
+// ask a person; finishing the turn restores the original deadline.
+func TestRetryingConductorKeepsItsEscalationThroughBackoffAndBusyTurn(t *testing.T) {
+	w, task, conductor := conductorRetrying(t)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step='decide',wake_at=now(),
+		state=(state-'decision') || jsonb_build_object('escalation',jsonb_build_object(
+		'reason','implement_failed','step','implement','holder','conductor',
+		'raisedAt',now()-interval '1 hour'))
+		WHERE task_id=$1 AND workflow_type='task.delivery' AND status IN ('waiting','running')`, task)
+	check := func() {
+		t.Helper()
+		mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at=now() WHERE task_id=$1 AND workflow_type='task.delivery'`, task)
+		for range 3 {
+			w.pump()
+		}
+		if got := w.str(`SELECT state->'escalation'->>'holder' FROM workflow_runs WHERE task_id=$1 AND workflow_type='task.delivery' ORDER BY created_at DESC LIMIT 1`, task); got != delivery.HolderConductor {
+			t.Fatalf("retrying escalation holder=%s", got)
+		}
+		if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='question.asked' AND payload->>'kind'='escalation'`, task); n != 0 {
+			t.Fatalf("asked person %d times during legitimate retry", n)
+		}
+		var wait float64
+		if err := w.owner.QueryRow(context.Background(), `SELECT extract(epoch FROM wake_at-now())::float8 FROM workflow_runs WHERE task_id=$1 AND workflow_type='task.delivery' ORDER BY created_at DESC LIMIT 1`, task).Scan(&wait); err != nil {
+			t.Fatal(err)
+		}
+		if wait <= 0 || wait > 31 {
+			t.Fatalf("recheck in %v seconds; want bounded 30s", wait)
+		}
+	}
+	check()
+	w.retryDue(conductor)
+	w.until("the retry sent and busy", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND deliver_after IS NOT NULL AND sent_at IS NOT NULL`, conductor) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id=$1 AND agent_busy_at IS NOT NULL AND turn_done_at IS NULL`, conductor) == 1
+	})
+	check()
+	w.lux.EndTurn(w.luxRunFor(conductor).ID)
+	w.until("the retry count reset", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND COALESCE((harness_state->>'turnRetries')::int,0)=0`, conductor) == 1
+	})
+	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at=now() WHERE task_id=$1 AND workflow_type='task.delivery'`, task)
+	w.until("the expired escalation handed over", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='question.asked' AND payload->>'kind'='escalation'`, task); n != 1 {
+		t.Fatalf("handover count=%d, want exactly one", n)
+	}
+}
+
 // A quiet conductor whose turn failed on a 429 is retrying it: its
 // decision's deadline passing does not default the decision while the
 // retry waits. Once the retried turn goes through, the conductor takes

@@ -417,8 +417,9 @@ def wait_for_run_status(client: ApiClient, run_id: str, status: str, timeout: fl
 def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, message: str = "") -> dict:
     """Wait for a task's escalation, and return the task with it.
 
-    Wait for the actual escalation object derived from `question.asked`,
-    rather than inferring its presence from the task's status.
+    Wait for the actual escalation object (conductor-held or person-held),
+    rather than inferring its presence or holder from the task's status.
+    This does not hand it over or decide it.
     """
 
     def check():
@@ -427,6 +428,30 @@ def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, 
 
     return wait_until(check, timeout=timeout, message=message or f"task {task_id} never escalated")
 
+
+
+def ask_person_about_escalation(
+    client: ApiClient, task_id: str, *, question: str, actions: list[str], recommended: str,
+) -> dict:
+    """Explicitly ask the scripted conductor to hand an escalation to its owner.
+
+    This asks only: it never answers the question or authorizes a decision.
+    Callers supply the offered actions and recommendation for their scenario.
+    """
+    assert recommended in actions
+    proposal = {"questions": [{"question": question, "choices": [
+        {"label": action, "recommended": action == recommended} for action in actions
+    ]}], "actions": actions}
+    asked = client.post(f"/v1/tasks/{task_id}/chat", {"text": "tool: ask_person " + json.dumps(proposal)})
+    assert asked.status_code in (200, 201), asked.text
+
+    def handed_over():
+        task = client.get(f"/v1/tasks/{task_id}").json()
+        if task["status"] == "awaiting_input" and (task.get("escalation") or {}).get("holder") == "person":
+            return task
+        return None
+
+    return wait_until(handed_over, timeout=60, message="the conductor did not hand the escalation to the person")
 
 
 def finish_simplifier_review(client: ApiClient, owner_dsn: str, task_id: str, reason: str = "fine as it is") -> list[str]:

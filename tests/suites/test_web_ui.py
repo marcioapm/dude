@@ -18,7 +18,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
+from helpers import ApiClient, ask_person_about_escalation, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -1665,16 +1665,21 @@ def test_a_project_can_have_its_changes_tested_in_a_browser(
 def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    """With no model for the implementer its Run fails, and delivery stops for
-    a person. The task says why at the top and on the failed step, "Waiting on
+    """With no model for the implementer its Run fails. The conductor hands
+    delivery to a person. The task says why at the top and on the failed step, "Waiting on
     you" gives the reason, and the Run's chat ends on the error rather than a
     composer nobody would hear."""
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Nobody to implement it")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
-    task = wait_for_escalation(client, item["id"], timeout=60, message="delivery never stopped for a person")
-    assert task["status"] == "awaiting_input"
+    task = wait_for_escalation(client, item["id"], timeout=60, message="failure never reached the conductor")
+    assert task["status"] == "running" and task["escalation"]["holder"] == "conductor"
     assert task["escalation"]["reason"] == "implement_failed", task["escalation"]
+    task = ask_person_about_escalation(
+        client, item["id"], question="Implementer failed: configure its model and try again?",
+        actions=["retry", "stop"], recommended="retry",
+    )
+    assert task["status"] == "awaiting_input"
     implement = next(r for r in task["runs"] if r["phase"] == "implement")
 
     sign_in(page, web_url, org["api_key"])
@@ -1712,7 +1717,13 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
     item = client.create_task(forge_project["id"], "Implement it once it can")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
-    task = wait_for_escalation(client, item["id"], timeout=60, message="delivery never stopped for a person")
+    task = wait_for_escalation(client, item["id"], timeout=60, message="failure never reached the conductor")
+    assert task["status"] == "running" and task["escalation"]["holder"] == "conductor"
+    assert task["escalation"]["reason"] == "implement_failed"
+    task = ask_person_about_escalation(
+        client, item["id"], question="Implementer failed: configure its model and try again?",
+        actions=["retry", "stop"], recommended="retry",
+    )
     assert task["status"] == "awaiting_input"
     assert task["escalation"]["actions"] == ["retry", "stop"]
 

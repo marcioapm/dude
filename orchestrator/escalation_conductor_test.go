@@ -1,9 +1,7 @@
 package orchestrator_test
 
-// An escalation under the conductor: the person still decides, and the
-// owner's answer to the conductor's question about it counts — a choice
-// decides it as the banner does; a free answer lets the conductor decide it
-// (decide_escalation), once, on that answer.
+// Escalations under the conductor: delegated actions use its direction;
+// person-only actions require the owner's pick or authorized free answer.
 
 import (
 	"context"
@@ -18,11 +16,10 @@ import (
 )
 
 // escalationQuestion is the conductor's question about a stuck review, its
-// choices each naming the escalation action it stands for. A stuck retry
-// needs the owner's direction, so it is never a choice: the owner asks for
-// it in their own words.
-const escalationQuestion = `{"question":"Stuck on the finding. I propose one more narrow fix round; say how, or pick one.",
-	"choices":["Accept as it is","Stop"],"actions":["accept","stop"]}`
+// choices each naming the escalation action it stands for. The conductor
+// recommends acceptance; retries need explicit direction in their note.
+const escalationQuestion = `{"questions":[{"question":"Stuck on the finding. I propose one more narrow fix round; say how, or pick one.",
+	"choices":[{"label":"Accept as it is","recommended":true},{"label":"Stop"}]}],"actions":["accept","stop"]}`
 
 // stuck is a delivery whose review is stuck on its finding (one fix attempt
 // per finding): Deliver's loop escalates stuck (a conducted loop has no such
@@ -33,7 +30,7 @@ func stuck(t *testing.T) (*world, string) {
 	w := conducting(t)
 	task := stuckDelivered(w)
 	handOver(w, task)
-	w.wokenWith(task, "Escalated to a person: stuck")
+	w.wokenWith(task, "Escalation: stuck")
 	return w, task
 }
 
@@ -90,6 +87,27 @@ func (w *world) decided(task string) map[string]any {
 	return out
 }
 
+// escalationWaiting observes a persisted undecided escalation, not a person's
+// wait. It neither advances deadlines nor supplies an authorization.
+func (w *world) escalationWaiting(task string) bool {
+	return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1
+		AND status='waiting' AND step='decide' AND state->'escalation' IS NOT NULL
+		AND NOT state->'escalation' ? 'decided'`, task) == 1
+}
+
+// conductorHeld checks the separate routing contract before any person ask.
+func (w *world) conductorHeld(task string) {
+	w.t.Helper()
+	w.until("the conductor-held escalation", func() bool { return w.escalationWaiting(task) })
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id=$1
+		AND state->'escalation'->>'holder'='conductor'`, task); n != 1 || w.taskStatus(task) != "running" {
+		w.t.Fatalf("not conductor-held and working: %s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='question.asked'`, task); n != 0 {
+		w.t.Fatalf("%d person asks before the conductor asks", n)
+	}
+}
+
 // answerAs answers the conductor's open question as a person.
 func (w *world) answerAs(person, task, text string) (int, map[string]any) {
 	w.t.Helper()
@@ -124,10 +142,16 @@ func TestTheOwnersChoiceDecidesTheEscalation(t *testing.T) {
 				if d := w.decided(task); d != nil {
 					t.Fatalf("a free answer decided the escalation: %v", d)
 				}
-				w.must(task, "decide_escalation", `{"action":"retry"}`)
+				w.must(task, "decide_escalation", `{"action":"retry","note":"Retry once more, only on the greeting's wording."}`)
 			}
 			w.until("the delivery to go on", func() bool { return w.phaseRuns(task, c.phase) == before+1 })
-			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
+			if c.by == "conductor" {
+				if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='task.decided'
+					AND payload->>'action'='retry' AND payload->>'by'='conductor'
+					AND NOT payload ? 'questionId' AND payload->>'note'=$2`, task, c.answer); n != 1 {
+					t.Errorf("%d delegated retries with the conductor's direction", n)
+				}
+			} else if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
 				AND payload->>'action' = $2 AND payload->>'questionId' = $3 AND COALESCE(payload->>'by', '') = $6
 				AND payload->>'answeredBy' = (SELECT person_id FROM api_keys WHERE id = $4)
 				AND strpos(payload->>'note', 'The owner answered: '||$5) > 0
@@ -168,9 +192,9 @@ func TestAYourCallAnswerHandsTheConductorTheDecision(t *testing.T) {
 	ana := w.person("Ana")
 	w.assignOwner(task, ana)
 	// Before any answer: refused, pointing at the banner.
-	w.refused(task, "decide_escalation", `{"action":"retry"}`, "banner")
+	w.refused(task, "decide_escalation", `{"action":"accept"}`, "banner")
 	w.must(task, "ask_person", escalationQuestion)
-	w.refused(task, "decide_escalation", `{"action":"retry"}`, "banner")
+	w.refused(task, "decide_escalation", `{"action":"accept"}`, "banner")
 	q := w.conductorQuestion(task)
 	if status, out := w.answerAs(ana, task, "Your call, use your judgement."); status != 200 {
 		t.Fatalf("the answer: %d %v", status, out)
@@ -189,13 +213,13 @@ func TestAYourCallAnswerHandsTheConductorTheDecision(t *testing.T) {
 	w.until("back to the conductor after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
 	conductor, _, _ := w.conductor(task)
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
-		AND payload->>'by' = 'conductor' AND payload->>'questionId' = $2 AND actor_id = $3
-		AND payload->>'answeredBy' = (SELECT person_id FROM api_keys WHERE id = $4)
-		AND strpos(payload->>'note', 'The owner answered: Your call, use your judgement.') > 0`, task, q, conductor, ana); n != 1 {
+		AND payload->>'by' = 'conductor' AND NOT payload ? 'questionId' AND actor_id = $3
+		AND $2::text <> '' AND $4::text <> ''
+		AND payload->>'note' = 'One narrow round on the finding.'`, task, q, conductor, ana); n != 1 {
 		t.Errorf("%d task.decided events by the conductor on the owner's answer", n)
 	}
 	if n := w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND run_id IS NULL
-		AND strpos(answer, 'One narrow round on the finding.') > 0`, task); n != 1 {
+		AND strpos(answer, 'One narrow round on the finding.') > 0`, task); n != 0 {
 		t.Errorf("the conductor's note is not one of the task's decisions")
 	}
 }
@@ -235,7 +259,7 @@ func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 				AND NOT state->'escalation' ? 'decided'`, task) == 1
 		})
 		// Ana's answer to the first escalation's question is no answer to this one.
-		w.refused(task, "decide_escalation", `{"action":"retry"}`, "the owner has not answered your question about this escalation")
+		w.refused(task, "decide_escalation", `{"action":"accept"}`, "the owner has not answered your question about this escalation")
 	})
 	t.Run("an answer by someone no longer the owner", func(t *testing.T) {
 		w, task := stuck(t)
@@ -246,7 +270,7 @@ func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 			t.Fatalf("the answer: %d %v", status, out)
 		}
 		w.assignOwner(task, bo)
-		w.refused(task, "decide_escalation", `{"action":"retry"}`, "banner")
+		w.refused(task, "decide_escalation", `{"action":"accept"}`, "banner")
 	})
 	t.Run("not at decide", func(t *testing.T) {
 		// Everything else holds: an undecided escalation, and the current
@@ -255,7 +279,7 @@ func TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation(t *testing.T) {
 		w.conductorSpecOf(task)
 		// Waiting, as at decide, but at another step; nothing signals it.
 		mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'review' WHERE task_id = $1`, task)
-		w.refused(task, "decide_escalation", `{"action":"retry"}`, "no escalation waits on a decision now")
+		w.refused(task, "decide_escalation", `{"action":"accept"}`, "no escalation waits on a decision now")
 		if d := w.decided(task); d != nil {
 			t.Errorf("decided away from decide: %v", d)
 		}
@@ -277,7 +301,9 @@ func TestTheBannerSettlesTheConductorsEscalationQuestion(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description)
 		SELECT 'fnd_tested', organization_id, task_id, id, 'acceptance', 'blocking', 'Criterion 1 is not met', 'No greeting.'
 		FROM runs WHERE id = 'run_tested'`)
-	if status, out := w.call("/internal/tasks/"+task+"/decide", map[string]any{"action": "accept"}); status != 200 {
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "accept"}); status != 200 {
 		t.Fatalf("the banner: %d %v", status, out)
 	}
 	if n := w.count(`SELECT count(*) FROM questions WHERE id = $1 AND status = 'cancelled'`, q); n != 1 {
@@ -366,7 +392,7 @@ func TestAReplacementConductorDecidesOnlyOnItsOwnQuestion(t *testing.T) {
 	if next, _, _ := w.conductor(task); next == first {
 		t.Fatal("no conductor took over")
 	}
-	w.refused(task, "decide_escalation", `{"action":"stop"}`, "an earlier conductor's question, not yours: ask them again")
+	w.refused(task, "decide_escalation", `{"action":"accept"}`, "an earlier conductor's question, not yours: ask them again")
 	if d := w.decided(task); d != nil {
 		t.Errorf("decided on the earlier conductor's answer: %v", d)
 	}
@@ -383,12 +409,12 @@ func testBlocked(t *testing.T, owner func(w *world, task string)) (*world, strin
 	w.implemented(task)
 	w.carriedOut(task, "start_phase", `{"phase":"test"}`)
 	w.until("blocked", func() bool { return w.escalationReason(task) == delivery.ReasonTestBlocked })
-	w.wokenWith(task, "Escalated to a person: test blocked")
+	w.wokenWith(task, "Escalation: test blocked")
 	return w, task
 }
 
-const blockedQuestion = `{"question":"The app would not start. Test again, or stop?",
-	"choices":["Test again","Stop"],"actions":["retry","stop"]}`
+const blockedQuestion = `{"questions":[{"question":"The app would not start. Test again, or stop?",
+	"choices":[{"label":"Test again","recommended":true},{"label":"Stop"}]}],"actions":["retry","stop"]}`
 
 // waiverNote is the note recorded on the task's waived criteria, "" for none.
 func (w *world) waiverNote(task string) string {
@@ -475,7 +501,7 @@ func TestAWaiverOnSeveralPicksIsNotTheOwnersWords(t *testing.T) {
 	var ana string
 	w, task := testBlocked(t, func(w *world, task string) { ana = w.person("Ana"); w.assignOwner(task, ana) })
 	w.must(task, "ask_person", `{"questions":[{"header":"Next","question":"Test again, or stop?","multiple":true,
-		"choices":[{"label":"Test again"},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
+		"choices":[{"label":"Test again","recommended":true},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
 	if status, out := w.callAs(ana, "/internal/questions/"+w.conductorQuestion(task)+"/answer",
 		map[string]any{"answers": []map[string]any{{"choices": []int{0, 1}}}}); status != 200 {
 		t.Fatalf("the answer: %d %v", status, out)
@@ -483,7 +509,7 @@ func TestAWaiverOnSeveralPicksIsNotTheOwnersWords(t *testing.T) {
 	w.refused(task, "decide_escalation", `{"action":"waive"}`, "not their reason")
 	// A choice's label typed back beside a pick is not a reason either.
 	w.must(task, "ask_person", `{"questions":[{"header":"Next","question":"Test again, or stop?","multiple":true,
-		"choices":[{"label":"Test again"},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
+		"choices":[{"label":"Test again","recommended":true},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
 	if status, out := w.callAs(ana, "/internal/questions/"+w.conductorQuestion(task)+"/answer",
 		map[string]any{"answers": []map[string]any{{"choices": []int{0}, "text": "Stop"}}}); status != 200 {
 		t.Fatalf("the second answer: %d %v", status, out)

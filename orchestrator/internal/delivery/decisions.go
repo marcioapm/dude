@@ -470,6 +470,26 @@ type Routed struct {
 // and a park at the hold of the task's Ask me first reads the choice again
 // (choiceReleasedAtCommitTx).
 func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, res workflow.Result) (workflow.Result, bool, error) {
+	if st, ok := res.State.(*State); ok && sc.Step == "decide" && res.Next == "decide" && st.Escalation != nil && st.Escalation.Decided == nil {
+		// The step's delivery lock ended before the runtime transaction. An
+		// acknowledged decision or ask_person in that gap owns this checkpoint,
+		// not the pending snapshot. No task lock is needed to preserve it.
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id=$1 FOR NO KEY UPDATE`, sc.WorkflowRunID).Scan(&raw); err != nil {
+			return res, false, err
+		}
+		var current State
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return res, false, err
+		}
+		if current.Escalation != nil && current.Escalation.Decided != nil {
+			// Run the accepted decision next even if its signal was already
+			// among this tick's claimed signals and will be consumed on commit.
+			return workflow.Result{Next: "decide", State: &current}, true, nil
+		}
+		wait, err := w.escalationWaitTx(ctx, tx, &current)
+		return wait, true, err
+	}
 	if sc.Step != "decide" {
 		var raw []byte
 		// NO KEY UPDATE: it conflicts with LoadDelivery's FOR UPDATE, so a
@@ -486,7 +506,7 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 			return res, false, err
 		}
 		if e := current.Escalation; e != nil && e.Reason == ReasonChecksUnverified {
-			return workflow.Result{Next: "decide", State: &current, AwaitSignals: []string{SignalHumanDecision}}, true, nil
+			return w.escalationWait(&current), true, nil
 		}
 		// Handed to the conductor while the step escalated: told as escalate
 		// tells a conducted delivery's escalation.

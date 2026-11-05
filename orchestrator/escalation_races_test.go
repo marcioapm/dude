@@ -123,7 +123,7 @@ func (w *world) held(fn func(tx pgx.Tx) error) (release func() error) {
 func TestTheBannerRacingTheConductorsDecisionIsRefused(t *testing.T) {
 	w, task, ana, ref := handedOver(t)
 	release := w.held(func(tx pgx.Tx) error {
-		_, err := delivery.ConductDecideEscalation(context.Background(), tx, ref, "retry", "")
+		_, err := delivery.ConductDecideEscalation(context.Background(), tx, ref, "accept", "")
 		return err
 	})
 	banner := make(chan int, 1)
@@ -138,8 +138,8 @@ func TestTheBannerRacingTheConductorsDecisionIsRefused(t *testing.T) {
 	if status := <-banner; status != 409 {
 		t.Errorf("the racing banner: %d, want 409", status)
 	}
-	if d := w.decided(task); d["action"] != "retry" || d["conductor"] != ref.RunID {
-		t.Errorf("the decision is %v, want the conductor's retry", d)
+	if d := w.decided(task); d["action"] != "accept" || d["conductor"] != ref.RunID {
+		t.Errorf("the decision is %v, want the conductor's person-authorized accept", d)
 	}
 	if n := w.decisions(task); n != 1 {
 		t.Errorf("%d task.decided events, want 1", n)
@@ -206,7 +206,7 @@ func TestTheOwnerChangingDuringTheConductorsDecisionRefusesIt(t *testing.T) {
 	decided := make(chan error, 1)
 	go func() {
 		decided <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
-			_, err := delivery.ConductDecideEscalation(ctx, tx, ref, "retry", "")
+			_, err := delivery.ConductDecideEscalation(ctx, tx, ref, "accept", "")
 			return err
 		})
 	}()
@@ -438,7 +438,7 @@ func handedOverWithBo(t *testing.T) (*world, string, string, delivery.RunRef) {
 func TestRemovingTheOwnerDuringTheConductorsDecisionWaitsForIt(t *testing.T) {
 	w, task, ana, ref := handedOverWithBo(t)
 	release := w.held(func(tx pgx.Tx) error {
-		_, err := delivery.ConductDecideEscalation(context.Background(), tx, ref, "retry", "")
+		_, err := delivery.ConductDecideEscalation(context.Background(), tx, ref, "accept", "")
 		return err
 	})
 	ctx := context.Background()
@@ -455,8 +455,8 @@ func TestRemovingTheOwnerDuringTheConductorsDecisionWaitsForIt(t *testing.T) {
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if d := w.decided(task); d["action"] != "retry" || d["conductor"] != ref.RunID {
-		t.Errorf("the decision is %v, want the conductor's retry", d)
+	if d := w.decided(task); d["action"] != "accept" || d["conductor"] != ref.RunID {
+		t.Errorf("the decision is %v, want the conductor's person-authorized accept", d)
 	}
 	if n := w.count(`SELECT count(*) FROM people WHERE id = $1 AND removed_at IS NOT NULL`, ana); n != 1 {
 		t.Error("Ana was not removed")
@@ -476,7 +476,7 @@ func TestTheConductorsDecisionAfterTheOwnersRemovalIsRefused(t *testing.T) {
 	decided := make(chan error, 1)
 	go func() {
 		decided <- w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
-			_, err := delivery.ConductDecideEscalation(ctx, tx, ref, "retry", "")
+			_, err := delivery.ConductDecideEscalation(ctx, tx, ref, "accept", "")
 			return err
 		})
 	}()

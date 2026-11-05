@@ -205,7 +205,7 @@ func TestWorkPastTheReviewLoopAfterWaitingPastACloseAsksNoOpenOrDraft(t *testing
 	}
 	w.until("waiting on the pull requests", func() bool { return w.waitingOnPR(task) })
 	w.gh.Close(1)
-	w.until("the person asked", func() bool { w.sync(); w.pump(); return w.taskStatus(task) == "awaiting_input" })
+	w.until("the conductor receives the close", func() bool { w.sync(); w.pump(); return w.escalationWaiting(task) })
 	if r := w.escalationReason(task); r != "pull_request_closed" {
 		t.Fatalf("escalated %q\n%s", r, w.describeRuns())
 	}

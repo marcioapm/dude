@@ -18,7 +18,7 @@ import requests
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, open_overview_section, sign_in, wait_for_escalation, wait_until
+from helpers import ApiClient, ask_person_about_escalation, create_api_key, open_overview_section, sign_in, wait_for_escalation, wait_until
 
 CRITERIA = ["The page greets the visitor by name", "The page says goodbye on the way out"]
 
@@ -100,10 +100,19 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     neither owner nor admin is refused it. Waived, the pull request opens,
     saying who waived what and why."""
     task = _deliver_with_tester(client, forge_project, "fake/test-blocked", "Greet behind a login")
-    stopped = wait_for_escalation(client, task["id"], timeout=120, message="the blocked test never stopped for a person")
+    stopped = wait_for_escalation(client, task["id"], timeout=120, message="the blocked test never reached the conductor")
+    assert stopped["status"] == "running" and stopped["escalation"]["holder"] == "conductor"
     assert stopped["escalation"]["reason"] == "test_blocked", stopped["escalation"]
     assert stopped["escalation"]["actions"] == ["retry", "waive", "stop"]
     assert [r["phase"] for r in stopped["runs"]].count("fix") == 1, "a blocked test must not send a fix"
+    # A waiver choice needs a proposed reason. Do not supply one: the person
+    # must give their own reason through the banner, not approve a hidden note.
+    stopped = ask_person_about_escalation(
+        client, task["id"], question="Test blocked: check by hand before deciding whether to waive?",
+        actions=["retry", "stop"], recommended="stop",
+    )
+    assert stopped["status"] == "awaiting_input"
+    assert stopped["escalation"]["reason"] == "test_blocked", stopped["escalation"]
 
     bo = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], name="Bo"))
     refused = bo.post(f"/v1/tasks/{task['id']}/decide", {"action": "waive", "note": "Looks fine to me."})
@@ -123,6 +132,9 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     escalation.get_by_test_id("escalation-waive").click()
     expect(page.get_by_test_id("escalation")).to_have_count(0)
 
+    # The explicit Chat handover made the conductor chatty. The waiver is
+    # already the person's; let its later delivery decisions finish quietly.
+    assert client.post(f"/v1/tasks/{task['id']}/decider", {"decider": "policy"}).status_code == 200
     pr = _pull_request(client, task["id"])
     body = fake_github.pulls[pr["number"]].body
     assert "- **blocked, waived by e2e user: Checked by hand on staging.**" in body, body

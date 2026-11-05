@@ -81,7 +81,7 @@ func TestTheOwnersPickOfANotedStuckRetryDirectsTheNextFix(t *testing.T) {
 	w.onModel("fixer", "llm-fix")
 	fixes := w.phaseRuns(task, "fix")
 	w.must(task, "ask_person", `{"questions":[{"question":"Stuck on the finding. Retry with a narrower fix?",
-		"choices":[{"note":"`+direction+`"},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
+		"choices":[{"note":"`+direction+`","recommended":true},{"label":"Stop"}]}],"actions":["retry","stop"]}`)
 	if status, out := w.answerAs(ana, task, "Retry: "+direction); status != 200 {
 		t.Fatalf("the answer: %d %v", status, out)
 	}
@@ -112,7 +112,7 @@ func TestTheOwnersPickOfANotedAmendMakesTheNoteTheCriterion(t *testing.T) {
 	named := e.Detail.(map[string]any)["findingIds"].([]any)[0].(string)
 	const criterion = "FACTORY.md names the finding it fixes on its first line."
 	w.must(task, "ask_person", `{"questions":[{"question":"The criterion stays unmet after two fixes. Amend it?",
-		"choices":[{"note":"`+criterion+`"},{"label":"Stop"}]}],"actions":["amend","stop"]}`)
+		"choices":[{"note":"`+criterion+`","recommended":true},{"label":"Stop"}]}],"actions":["amend","stop"]}`)
 	if status, out := w.answerAs(ana, task, "Amend: "+criterion); status != 200 {
 		t.Fatalf("the answer: %d %v", status, out)
 	}
@@ -186,7 +186,7 @@ func TestOnAnOwnerlessTaskOnlyAnAdminsPickOfANotedWaiverDecides(t *testing.T) {
 // verified and why, so it never has to guess.
 func TestTheChecksEscalationsWakeNamesTheUnverifiedChecks(t *testing.T) {
 	w, task := checksHeld(t)
-	note := w.wokenWith(task, "Escalated to a person: checks unverified")
+	note := w.wokenWith(task, "Escalation: checks unverified")
 	if want := "The checks not verified: " + fakeagent.FailingCommand + ": TestClock needs a hardware clock — not passed by the judge: the recorded call says so."; !strings.Contains(note, want) {
 		t.Errorf("the wake lacks %q:\n%s", want, note)
 	}

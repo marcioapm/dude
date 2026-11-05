@@ -57,7 +57,7 @@ No delivery is in progress: you are read-only.
 Deliver takes this task's decisions by its own defaults: no conductor decides this delivery. You are read-only.
 {{- else -}}
 You take this task's decisions{{if .Quiet}}, quietly: dude starts the implementer and opens the pull request by the task's own choice, and a decision you leave past its wait goes on by Deliver's defaults{{end}}.
-{{- if .Escalated}} The delivery is stopped at an escalation for a person: {{.Escalated}}. Only the person decides it: explain and propose.
+{{- if .Escalated}} The delivery waits at an escalation: {{.Escalated}}. Decide non-person-only actions with decide_escalation; ask the owner only for a person-only action, with one recommended choice.
 {{- else if .Waiting}} The delivery waits on one now: {{.Waiting}}.
 {{- else}} The delivery is at {{.Step}}; you are woken at its next decision.
 {{- end}}
