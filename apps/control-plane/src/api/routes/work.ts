@@ -157,7 +157,7 @@ export function escalationJson(alias = "tasks"): string {
   return `COALESCE((SELECT json_build_object(
       'reason', w.state->'escalation'->>'reason', 'detail', w.state->'escalation'->'detail',
       'holder', 'conductor', 'status', 'pending',
-      'actions', COALESCE(w.state->'escalation'->'actions', e.payload->'actions', '["stop"]'::jsonb) - CASE WHEN EXISTS (SELECT 1 FROM runs
+      'actions', COALESCE(w.state->'escalation'->'actions', raised.payload->'actions', '["stop"]'::jsonb) - CASE WHEN EXISTS (SELECT 1 FROM runs
         WHERE runs.id = w.state->'escalation'->'detail'->>'runId' AND run_kept(runs)) THEN '' ELSE 'resume' END,
       'at', w.state->'escalation'->>'raisedAt')
     FROM workflow_runs w
@@ -165,7 +165,7 @@ export function escalationJson(alias = "tasks"): string {
       AND e.event_type='escalation.raised' AND e.payload->>'reason'=w.state->'escalation'->>'reason'
       AND e.occurred_at >= w.created_at
       AND e.payload->'detail' IS NOT DISTINCT FROM w.state->'escalation'->'detail'
-      ORDER BY e.cursor DESC LIMIT 1) e ON true
+      ORDER BY e.cursor DESC LIMIT 1) raised ON true
     WHERE w.id=(SELECT latest.id FROM workflow_runs latest WHERE latest.task_id=${alias}.id
       AND latest.workflow_type='task.delivery' ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)
       AND w.status IN ('running','waiting') AND w.step='decide'
