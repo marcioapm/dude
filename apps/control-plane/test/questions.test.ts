@@ -176,6 +176,14 @@ test("a writer's question for its conductor is not a person's; a person's still 
   const mine = sessionsOf(again, "wi_cq_mine") as Array<Session & { role: string; status: string }>;
   expect(mine.map((s) => [s.role, s.status, s.activity ?? null]))
     .toEqual([["conductor", "running", null], ["implementer", "awaiting_input", null]]);
+  // Parked by dude with no open question at all: no conductor owes it,
+  // paused as before.
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+              VALUES ('wi_park_none', ${ORG}, ${PROJECT}, 15, 'Parked, nothing asked', 'running')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
+              VALUES ('run_park_none', ${ORG}, ${PROJECT}, 'wi_park_none', 1, 'paused', 'implement', 'implementer', 'person')`;
+  const none = sessionsOf(await get<Nav>("/v1/navigation"), "wi_park_none") as Array<Session & { role: string; status: string }>;
+  expect(none.map((s) => [s.role, s.status, s.activity ?? null])).toEqual([["implementer", "awaiting_input", null]]);
 
   // The open list: what needs a person.
   const questionIds = async (query = "") =>
