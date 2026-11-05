@@ -529,7 +529,9 @@ func (c Caller) tools() []tool {
 }
 
 func (c Caller) findTool(name string) (tool, bool) {
-	if c.SessionID != "" && c.Role != delivery.RoleBrainstorm && name == "ask_person" {
+	// Session ask_person uses the session definition; automation also resolves
+	// only against its advertised tools. Both retain c.tools' grant checks.
+	if c.AutomationID != "" || (c.SessionID != "" && c.Role != delivery.RoleBrainstorm && name == "ask_person") {
 		for _, t := range c.tools() {
 			if t.name == name {
 				return t, true
@@ -537,15 +539,7 @@ func (c Caller) findTool(name string) (tool, bool) {
 		}
 		return tool{}, false
 	}
-	if c.AutomationID == "" {
-		return find(name, c.Role, c.grants)
-	}
-	for _, t := range c.tools() {
-		if t.name == name {
-			return t, true
-		}
-	}
-	return tool{}, false
+	return find(name, c.Role, c.grants)
 }
 
 // renamed: tools' names before "work item" became "task". A Run already
