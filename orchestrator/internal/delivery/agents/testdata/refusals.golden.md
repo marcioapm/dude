@@ -1522,3 +1522,7 @@ dude holds this delivery before its pull request for the person's Open or Draft:
 
 already given to %[2]s, which has their words: %[1]s. Do not steer them to it again; pass only the items it does not have
 
+## refusals/delivery/conductor-question/current-run
+
+This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only.
+

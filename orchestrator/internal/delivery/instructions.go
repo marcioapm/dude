@@ -124,8 +124,8 @@ type instructionData struct {
 	InstructionsInput
 	Role string
 	// Which of the tools dude.md names this Run has.
-	Ask, Event, CreateTask, Repository, RunDiff, SyncBase, SearchMemory, Remember, RequestMachine bool
-	ChildToolNames                                                                                string
+	Ask, AskConductor, Event, CreateTask, Repository, RunDiff, SyncBase, SearchMemory, Remember, RequestMachine bool
+	ChildToolNames                                                                                              string
 	// How a role that reads GitHub reads what was written outside dude.
 	ExternalTextNote string
 	// What the Run reaches of the web (webOf).
@@ -215,7 +215,7 @@ func (in InstructionsInput) data(role string) instructionData {
 			childTools = append(childTools, t)
 		}
 	}
-	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"], Event: has["emit_event"],
+	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"] || in.Tools && !in.Child && grants.Tool("ask_conductor"), AskConductor: in.Tools && !in.Child && grants.Tool("ask_conductor"), Event: has["emit_event"],
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
 		SearchMemory: has["search_memory"], Remember: has["remember"], RequestMachine: has["request_machine"],
 		ChildToolNames:   joinList(childTools, ", ", ", and "),

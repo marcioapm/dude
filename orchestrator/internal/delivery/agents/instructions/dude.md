@@ -26,7 +26,9 @@ dude does the mechanics: it starts Runs, moves branches, opens pull requests, re
 ## What you have
 {{if .Tools -}}
 Your tools act on the work you are part of. Use them; do not work around them.
-{{- if .Ask}}
+{{- if .AskConductor}}
+- **Ask your conductor**: `ask_conductor`, when you cannot proceed without guidance. Several questions go in one call. End your turn; the answer comes back as your next message and your work is kept. If no conductor is available, dude asks the person instead. Tool access remains grant-gated.
+{{- else if .Ask}}
 - **Ask a person**: `ask_person`, when you cannot go on without a decision only a person can make. Several questions go in one call. The answer comes back as your next message, even hours later; your work is kept meanwhile.
 {{- end}}
 {{- if .Remember}}
