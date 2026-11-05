@@ -295,25 +295,37 @@ describe("EmailChipsInput", () => {
     const input = byRole(el, "textbox", "Emails") as HTMLInputElement;
     await type(input, "a@x.io, b@x.io, nope");
     await key(input, "Enter");
-    const visible = (n: Element) => [...n.querySelectorAll(":scope > span:not(.ds-sr-only)")].map((x) => x.textContent).join("");
+    // Every visible word in a chip, whatever the element, but not the screen-reader text or the ✕.
+    const visible = (n: Element): string => [...n.childNodes].map((c) => c.nodeType === 3 ? c.textContent ?? ""
+      : c instanceof Element && !c.classList.contains("ds-sr-only") && c.tagName !== "BUTTON" ? visible(c) : "").join("").trim();
     expect(visible(el.querySelector("li[data-state=member]")!)).toBe("b@x.io");
     expect(visible(el.querySelector("li[data-state=invalid]")!)).toBe("nope");
-    const reasons = [...el.querySelectorAll("[data-testid=chip-reasons] li")].map((li) => [li.getAttribute("data-reason"), li.textContent]);
-    expect(reasons).toEqual([["member", "b@x.ioalready in Acme"], ["invalid", "nopenot an email"]]);
+    const reasons = [...el.querySelectorAll("[data-testid=chip-reasons] li")].map((li) => ({
+      kind: li.getAttribute("data-reason"), text: li.textContent ?? "",
+    }));
+    expect(reasons.map((r) => r.kind)).toEqual(["member", "invalid"]);
+    expect(reasons[0]!.text).toContain("b@x.io");
+    expect(reasons[0]!.text).toContain("already in Acme");
+    expect(reasons[1]!.text).toContain("nope");
+    expect(reasons[1]!.text).toContain("not an email");
     // Taken addresses are not listed again.
     expect(el.querySelector("[data-testid=chip-reasons] [data-reason=valid]")).toBeNull();
   });
 
-  test("Remove left out keeps only the addresses that will be invited", async () => {
-    const el = await mount(<Chips />);
+  test("Remove left out keeps the invited and the renewed, and gives the field its focus back", async () => {
+    const el = await mount(<Chips classify={(e) => (e === "old@x.io" ? { kind: "renew", note: "invitation expired: Invite renews it" } : e === "lin@x.io" ? { kind: "invited", note: "already invited" } : null)} />);
     const input = byRole(el, "textbox", "Emails") as HTMLInputElement;
-    await type(input, "a@x.io, lin@x.io, nope, a@x.io");
+    await type(input, "a@x.io, old@x.io, lin@x.io, nope, a@x.io");
     await key(input, "Enter");
-    expect(chips(el).length).toBe(4);
-    await act(async () => byRole(el, "button", "Remove left out").click());
-    expect(chips(el)).toEqual(["valid:a@x.io"]);
+    expect(chips(el).length).toBe(5);
+    const remove = byRole(el, "button", "Remove left out") as HTMLButtonElement;
+    remove.focus();
+    await act(async () => remove.click());
+    expect(chips(el)).toEqual(["valid:a@x.io", "renew:old@x.io"]);
+    expect(document.activeElement).toBe(input);
     expect(el.querySelector("[data-testid=chip-remove-left-out]")).toBeNull();
-    expect(el.querySelector("[data-testid=chip-reasons]")).toBeNull();
+    // The renewed address keeps its line: it is not left out, but it is not plain either.
+    expect([...el.querySelectorAll("[data-testid=chip-reasons] li")].map((li) => li.getAttribute("data-reason"))).toEqual(["renew"]);
   });
 
   test("the hint shows only while the field is empty; Tab makes a chip", async () => {

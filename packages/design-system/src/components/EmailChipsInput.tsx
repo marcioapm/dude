@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useId, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import { cx } from "../util/cx.ts";
 import { Icon, type IconName } from "../icons/index.tsx";
 import { IconButton } from "../primitives/Button.tsx";
@@ -74,6 +74,26 @@ export function EmailChipsInput({ entries, onChange, views, label = "Emails", hi
   const explained = entries.map((e, i) => ({ e, view: views[i] ?? { kind: "valid" as const } })).filter(({ view }) => view.kind !== "valid");
   const leftOut = explained.some(({ view }) => !TAKEN.has(view.kind));
   const showHint = Boolean(hint) && entries.length === 0;
+  // Typing changes only the draft; the reasons list depends on the entries and their views alone.
+  const reasons = useMemo(() => explained.length ? (
+        <ul className={styles["reasons"]} aria-label="Left out or renewed" data-testid="chip-reasons">
+          {explained.map(({ e, view }) => {
+            const spec = CHIP[view.kind];
+            return (
+              <li key={e.key} className={styles["reason"]} data-tone={spec.tone} data-reason={view.kind}>
+                {spec.icon ? <Icon name={spec.icon} size={12} className={styles["icon"]} /> : null}
+                <span className={styles["reasonMail"]}>{e.email ?? e.raw}</span>
+                <span className={styles["reasonWhy"]}>{view.note ?? (view.kind === "invalid" ? "not an email" : view.kind === "duplicate" ? "twice in the list" : spec.words)}</span>
+                {view.action ? (
+                  <button type="button" className={styles["action"]} disabled={disabled} onClick={() => view.action!.onClick()}>
+                    {view.action.label}
+                  </button>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+  ) : null, [entries, views, disabled]);
   return (
     <div className={cx(styles["field"], className)} data-testid={rest["data-testid"]}>
       <label className={styles["label"]} htmlFor={id}>{label}</label>
@@ -109,30 +129,12 @@ export function EmailChipsInput({ entries, onChange, views, label = "Emails", hi
         <p id={summaryId} className={styles["summary"]} aria-live="polite" data-testid="chip-summary">{summary}</p>
         {leftOut ? (
           <button type="button" className={styles["action"]} disabled={disabled} data-testid="chip-remove-left-out"
-            onClick={() => onChange(entries.filter((_, i) => TAKEN.has((views[i] ?? { kind: "valid" }).kind)))}>
+            onClick={() => { onChange(entries.filter((_, i) => TAKEN.has((views[i] ?? { kind: "valid" }).kind))); input.current?.focus(); }}>
             Remove left out
           </button>
         ) : null}
       </div>
-      {explained.length ? (
-        <ul className={styles["reasons"]} aria-label="Left out or renewed" data-testid="chip-reasons">
-          {explained.map(({ e, view }) => {
-            const spec = CHIP[view.kind];
-            return (
-              <li key={e.key} className={styles["reason"]} data-tone={spec.tone} data-reason={view.kind}>
-                {spec.icon ? <Icon name={spec.icon} size={12} className={styles["icon"]} /> : null}
-                <span className={styles["reasonMail"]}>{e.email ?? e.raw}</span>
-                <span className={styles["reasonWhy"]}>{view.note ?? (view.kind === "invalid" ? "not an email" : view.kind === "duplicate" ? "twice in the list" : spec.words)}</span>
-                {view.action ? (
-                  <button type="button" className={styles["action"]} disabled={disabled} onClick={() => view.action!.onClick()}>
-                    {view.action.label}
-                  </button>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
+      {reasons}
     </div>
   );
 }
