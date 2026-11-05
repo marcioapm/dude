@@ -41,10 +41,15 @@ func AskConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, items []Question
 		return "", false, refuseText(rQuestionRequiresCurrentRun)
 	}
 	var current bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE id=$1 AND task_id=$2 AND status IN ('running','starting') AND attempt=task_attempt($2))`, ref.RunID, ref.TaskID).Scan(&current); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE id=$1 AND task_id=$2 AND status IN ('pending','scheduled','starting','running') AND attempt=task_attempt($2))`, ref.RunID, ref.TaskID).Scan(&current); err != nil {
 		return "", false, err
 	}
 	if !current {
+		return "", false, refuseText(rQuestionRequiresCurrentRun)
+	}
+	if open, err := HasOpenQuestion(ctx, tx, ref.RunID); err != nil {
+		return "", false, err
+	} else if open {
 		return "", false, refuseText(rQuestionRequiresCurrentRun)
 	}
 	unavailable, err := conductorUnavailableTx(ctx, tx, ref.TaskID, nil)
