@@ -514,6 +514,34 @@ describe("/v1/me across organisations", () => {
     }
   });
 
+  test("a writer's question for its conductor is not waiting on you; a person's is", async () => {
+    const org = `${acme}_cq`;
+    await owner`INSERT INTO organizations (id, name, slug) VALUES (${org}, 'Conducted', ${org})`;
+    const email = at("cy");
+    const you = await member(owner, org, email);
+    await owner`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES (${`prj_${org}`}, ${org}, 'P', 'p', 'CQ')`;
+    // Running tasks, each with a live conductor and a writer: one asking its
+    // conductor (running), one parked on its conductor, one asking a person.
+    for (const [n, status, pause, addressee] of [[1, "running", null, "conductor"], [2, "paused", "person", "conductor"],
+      [3, "running", null, "person"]] as const) {
+      const id = `wi_${org}_${n}`;
+      await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+        VALUES (${id}, ${org}, ${`prj_${org}`}, ${n}, ${`T${n}`}, 'running')`;
+      await owner`INSERT INTO task_people (task_id, person_id, organization_id, position) VALUES (${id}, ${you}, ${org}, 0)`;
+      await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+        VALUES (${`run_${id}_c`}, ${org}, ${`prj_${org}`}, ${id}, 1, 'running', NULL, 'conductor')`;
+      await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
+        VALUES (${`run_${id}_w`}, ${org}, ${`prj_${org}`}, ${id}, 1, ${status}, 'implement', 'implementer', ${pause})`;
+      await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, addressee)
+        VALUES (${`q_${id}`}, ${org}, ${id}, ${`run_${id}_w`}, 'Which?', '[]', ${addressee})`;
+    }
+    const got = await as(email, "GET", "/v1/me", undefined, null);
+    const mine = (got.body.organizations as Json[]).find((o) => o.id === org);
+    expect(mine).toMatchObject({ personId: you, waitingOnYou: 1 });
+    const nav = (await as(email, "GET", "/v1/navigation", undefined, org)).body as { projects: NavProject[] };
+    expect(waitingSplit(attentionItems(nav.projects), you).yours.map((i) => i.task.id)).toEqual([`wi_${org}_3`]);
+  });
+
   test("locate finds an id in your other organisation, and says nothing of one that is not yours", async () => {
     const email = at("ida");
     await member(owner, acme, email);

@@ -1,10 +1,12 @@
 ---
 title: Questions and feedback
-covers: [tool:ask_person, tool:request_repository, tool:feedback, tool:feedback_reply, tool:feedback_resolve, tool:dismiss_finding, tool:answer_review_question]
+covers: [tool:ask_conductor, tool:answer_question, tool:ask_person, tool:request_repository, tool:feedback, tool:feedback_reply, tool:feedback_resolve, tool:dismiss_finding, tool:answer_review_question]
 ---
 Agents ask you things, and you tell agents things. This page covers answering an agent's question, deciding a repository request, leaving feedback on a task, accepting review findings, and answering a reviewer's question.
 
 ## When an agent asks you a question
+
+Writers with the grant use `ask_conductor` first. Their task keeps running while the asking Run waits; no human question notification is emitted. The conductor uses `answer_question` to answer a current writer once, with its Run recorded as the author. When there is no available conductor at ask time, dude uses the existing person-question path. If the conductor needs the owner, it asks with `ask_person`, waits, then answers the writer itself. Automatic relay forwarding and deadline handover for these questions are not available yet.
 
 An agent that needs a decision only a person can make asks with `ask_person`. It can ask up to 4 questions at once, each with up to 6 suggested answers; you can always answer in your own words too. Its turn ends, and the Run is **waiting** until you answer.
 

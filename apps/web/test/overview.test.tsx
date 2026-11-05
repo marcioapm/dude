@@ -170,6 +170,16 @@ describe("needs you", () => {
     expect(several.map((q) => q.text)).toEqual(["2 questions: Scope, Route"]);
   });
 
+  test("a writer's question routed to its conductor does not need you; one asked of a person still does", async () => {
+    const routed = ev("question.routed", { kind: "agent", questionId: "q_r", addressee: "conductor", prompt: "English?" });
+    expect(openAgentQuestions([routed])).toEqual([]);
+    const page = await overview(withEvents(fx(), [routed]));
+    await until(() => page.querySelector("[data-testid=overview-summary]"), "the overview");
+    expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+    // The person fallback (or the conductor's relay) is question.asked: it does.
+    expect(openAgentQuestions([routed, asked("q_p")]).map((q) => q.questionId)).toEqual(["q_p"]);
+  });
+
   test("other tabs keep the task's notices above the tabs, without the Overview's needs-you region", async () => {
     const page = await overview(withEvents(fx("stalled"), [asked("q_1")]), { tab: "findings" });
     await until(() => page.querySelector("[data-testid=stalled]"), "the stalled notice");

@@ -18,7 +18,7 @@ You turn the task into working, tested code on the task's branch. Reviewers, a s
 {{if and (not .Child) (.Granted "sync_base")}}{{template "contracts/base-integration" .}}{{end}}
 {{- if .Ask}}
 
-## Asking a person
+## Asking your conductor
 {{template "contracts/ask" .}}
 {{- end}}
 
@@ -38,6 +38,6 @@ checks:
 - This block reports your checks to people; dude checks it against the commands this Run recorded before publishing. A report that is missing, unparseable or not backed comes back to you. A judgement tier may be off, in which case dude says it skipped model-checking; that is visible to people.
 - A check that fails for a reason you believe predates your change (missing generated code, a dependency, an error count that was there before): show it. Run the same command in a separate checkout (for example a git worktree) of the commit of the target branch this task builds on, the merge base of your starting commit and that branch, and report `fail` with both results in `evidence`. Not the commit you started from and not with your change set aside: that commit holds this task's earlier work. dude passes it only when the recorded output shows the same failure at the task's base and none in files this task changed; a failure the task brought in must be fixed.
 - Manual or browser checks of how the interface behaves are the tester's: report them `not-run` with that reason, and do not work around a missing browser.
-{{if or .Child (.Granted "ask_person") -}}
+{{if or .Child (.Granted "ask_conductor") -}}
 {{template "contracts/failed-check" .}}
 {{- end}}

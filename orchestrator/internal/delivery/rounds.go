@@ -547,6 +547,20 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 	return withPersonSaid(strings.TrimSpace(in.PersonNote), message), nil
 }
 
+// PeopleDecisionsTx selects human-authored decisions, including owner overrides
+// of conductor-addressed questions. Agent guidance stays in Run history and
+// must not acquire the task contract's human authority. A predecessor limits
+// the selection to decisions made since its round ended.
+func PeopleDecisionsTx(ctx context.Context, tx pgx.Tx, taskID, predecessor string) ([]Decision, error) {
+	rows, err := tx.Query(ctx, `SELECT q.prompt,q.answer FROM questions q
+		WHERE q.task_id=$1 AND q.status='answered' AND q.answer IS NOT NULL AND q.answered_by_run IS NULL
+		AND ($2='' OR q.answered_at > (SELECT ended_at FROM runs WHERE id=$2)) ORDER BY q.answered_at`, taskID, predecessor)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[Decision])
+}
+
 // sinceLastRoundTx is what a resumed writer was not told and a fresh one's
 // prompt carries (its task section): the task as it is now, when its
 // title, goal or criteria were edited after the predecessor's round ended
@@ -563,13 +577,7 @@ func sinceLastRoundTx(ctx context.Context, tx pgx.Tx, taskID, predecessor string
 		FROM tasks t WHERE t.id = $1`, taskID, predecessor).Scan(&title, &goal, &criteria, &edited); err != nil {
 		return "", err
 	}
-	rows, err := tx.Query(ctx, `SELECT q.prompt, q.answer FROM questions q
-		WHERE q.task_id = $1 AND q.status = 'answered' AND q.answer IS NOT NULL
-		  AND q.answered_at > (SELECT ended_at FROM runs WHERE id = $2) ORDER BY q.answered_at`, taskID, predecessor)
-	if err != nil {
-		return "", err
-	}
-	decisions, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Decision])
+	decisions, err := PeopleDecisionsTx(ctx, tx, taskID, predecessor)
 	if err != nil {
 		return "", err
 	}

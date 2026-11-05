@@ -76,6 +76,11 @@ interface RunRow {
   question: string | null;
   /** "Waiting on ABS-2" while it waits on a peer's reply. */
   peerWait: string | null;
+  /**
+   * Parked by dude on a question its conductor answers first
+   * (questions.addressee 'conductor'): the conductor owes it, not a person.
+   */
+  conductorWait: boolean;
 }
 
 /**
@@ -112,11 +117,12 @@ function attemptStatus(all: RunRow[]): RunStatus {
  * A Run as a session row: what it asks of a person, if anything, else its
  * status. A conductor dude parked between messages is quiet — waiting, not
  * waiting on you: nobody owes it anything. So is a Run parked on a peer's
- * reply: the peer owes it, not a person.
+ * reply: the peer owes it, not a person. So is a writer parked on a
+ * question for its conductor.
  */
 function sessionStatus(r: RunRow): SessionStatus {
   if (r.question) return "awaiting_input";
-  if ((isConductor(r) || r.peerWait) && r.status === "paused") return "pending";
+  if ((isConductor(r) || r.peerWait || r.conductorWait) && r.status === "paused") return "pending";
   return SESSION_STATUS[r.status];
 }
 
@@ -262,13 +268,10 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
              -- blocked on a person. Open questions die with their Run.
              -- Or a repository it asked for, pending a person's decision.
              -- Several questions at once read as how many and their headers.
+             -- A person's question only: one for its conductor
+             -- (addressee 'conductor') asks nothing of a person.
              COALESCE(
-               (SELECT CASE WHEN jsonb_array_length(q.items) > 1
-                         THEN 'asks ' || jsonb_array_length(q.items) || ' questions · ' ||
-                              (SELECT string_agg(i->>'header', ', ' ORDER BY n) FROM jsonb_array_elements(q.items) WITH ORDINALITY AS t(i, n))
-                         ELSE q.prompt END
-                FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
-                ORDER BY q.asked_at DESC LIMIT 1),
+               asked.person,
                (SELECT CASE q.access WHEN 'write' THEN 'Change ' ELSE 'Read ' END || repo.name || '?'
                 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
                 WHERE q.run_id = ranked.id AND q.status = 'pending' ORDER BY q.created_at DESC LIMIT 1)
@@ -279,16 +282,34 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
               JOIN tasks wt ON wt.id = m.to_task_id JOIN projects wp ON wp.id = wt.project_id
               WHERE w.run_id = ranked.id AND w.closed_at IS NULL
                 AND ranked.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
-              ORDER BY w.since DESC LIMIT 1) AS "peerWait"
+              ORDER BY w.since DESC LIMIT 1) AS "peerWait",
+             -- Parked by dude (dude_pause 'person', phases' requestPause)
+             -- on its conductor's open question: the conductor owes it.
+             -- A person's own pause clears dude_pause and stays theirs.
+             (ranked.status = 'paused' AND ranked.dude_pause = 'person'
+              AND COALESCE(asked.conductor, false)) AS "conductorWait"
       FROM (
         SELECT r.id, r.task_id AS "taskId", r.attempt, r.status, r.phase,
-               r.role, r.category, r.created_at,
+               r.role, r.category, r.created_at, r.dude_pause,
                dense_rank() OVER (PARTITION BY r.task_id ORDER BY r.attempt DESC) AS rank
         FROM runs r
         -- The agents: a branch preview is a task's servers, not one of them;
         -- a session's agent is no task's.
         WHERE r.kind = 'agent' AND r.task_id IS NOT NULL
       ) ranked
+      -- Its open questions, read once for both: the newest a person's
+      -- (question), and whether one is its conductor's (conductorWait).
+      -- One probe per Run, not two: a second keeps the plan past
+      -- PostgreSQL's JIT inline/optimize costs, slower than the work.
+      LEFT JOIN LATERAL (
+        SELECT (array_agg(CASE WHEN jsonb_array_length(q.items) > 1
+                            THEN 'asks ' || jsonb_array_length(q.items) || ' questions · ' ||
+                                 (SELECT string_agg(i->>'header', ', ' ORDER BY n) FROM jsonb_array_elements(q.items) WITH ORDINALITY AS t(i, n))
+                            ELSE q.prompt END ORDER BY q.asked_at DESC)
+                  FILTER (WHERE q.addressee = 'person'))[1] AS person,
+               bool_or(q.addressee = 'conductor') AS conductor
+        FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
+      ) asked ON true
       WHERE rank <= ${ATTEMPTS_PER_TASK}
       -- The task's conductor first in its attempt, as in its Sessions.
       ORDER BY "taskId", attempt, (role = 'conductor' AND phase IS NULL) DESC, created_at`) as RunRow[];

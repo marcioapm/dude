@@ -12,6 +12,7 @@
 		"search_memory" "search_memory"
 		"get_memory" "get_memory") ".")
 	"ask_person" "ask_person asks the person up to 4 questions at once and waits for the answer; end your turn after it."
+	"answer_question" "answer_question answers a current writer's open conductor-addressed question. Establish facts first; if only the owner can decide, ask them, wait, then answer the writer yourself. Automatic forwarding and deadline handover are not available yet."
 	"create_task" "create_task records a change as a new task, for a person to deliver."
 	"" (.Wrap "While you take the decisions: " (.List "; " "; "
 		"update_task" "update_task writes an agreed goal or acceptance criteria into the task, before the implementer"

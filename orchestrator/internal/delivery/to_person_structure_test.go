@@ -42,8 +42,6 @@ var toPersonOffenders = map[string]string{
 	"delivery/review_questions.go:holdForQuestions": "PR4b",
 	// A12: the idle park sets awaiting_input.
 	"phases/sync.go:requestPause": "PR4b",
-	// A1: a writer's ask_person goes to the person.
-	"agenttools/tools.go:askPerson": "PR4a",
 }
 
 // transitionalWhys are ToPersonTx's reasons conductor-first removes: a call
@@ -70,6 +68,12 @@ var awaitingInputSQL = regexp.MustCompile(`(?i)status\s*=\s*'awaiting_input'`)
 //
 // testdata/to_person_bypasses holds the known ways round this;
 // TestTheScanSeesEveryKnownBypass keeps the scan seeing them.
+func TestConductorQuestionInsertCannotReachAPerson(t *testing.T) {
+	if !strings.HasSuffix(ConductorQuestionInsertSQL, "'conductor')") || !strings.Contains(ConductorQuestionInsertSQL, "items,addressee)") {
+		t.Fatal("conductor question insert must explicitly address its row to conductor")
+	}
+}
+
 func TestNothingReachesAPersonButThroughToPersonTx(t *testing.T) {
 	root, err := filepath.Abs("..")
 	if err != nil {
@@ -289,7 +293,7 @@ func reachesPerson(n ast.Node, consts map[string]string) []personReach {
 				return true
 			}
 			// An answered row (RecordDecisionTx) asks nobody.
-			if openQuestionInsert.MatchString(s) && !strings.Contains(s, "'answered'") {
+			if openQuestionInsert.MatchString(s) && !strings.Contains(s, "'answered'") && s != ConductorQuestionInsertSQL {
 				out = append(out, personReach{n.Pos(), "INSERT INTO questions"})
 			}
 			if awaitingInputSQL.MatchString(s) && setSQL.MatchString(s) {

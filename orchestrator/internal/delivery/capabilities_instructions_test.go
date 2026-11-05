@@ -13,6 +13,29 @@ import (
 // The instruction file names the tools the Run's capabilities grant: the
 // role's defaults name what they always did, and a Run whose capabilities
 // lack one is not told of it.
+func TestQuestionSectionChoiceFollowsGrants(t *testing.T) {
+	for _, role := range []string{"implementer", "fixer", "investigator"} {
+		full := capabilities.Default(toolRoleOf(role))
+		for _, g := range []capabilities.Grants{full, full.Without(capabilities.AskConductor), {}} {
+			for _, child := range []bool{false, true} {
+				d := (InstructionsInput{Tools: true, Grants: &g, Child: child}).data(role)
+				if d.AskConductor != (g.Tool("ask_conductor") && !child) {
+					t.Errorf("%s child=%v: wrong question section choice", role, child)
+				}
+			}
+		}
+	}
+}
+
+func TestGoldenQuestionReducedGrants(t *testing.T) {
+	for _, role := range []string{"implementer", "conductor"} {
+		full := capabilities.Default(role)
+		for name, g := range map[string]capabilities.Grants{"without-question": full.Without(capabilities.AskConductor, capabilities.Ask, capabilities.Conduct), "empty": {}} {
+			golden(t, "instructions-"+role+"-"+name, Instructions(role, "correctness", InstructionsInput{Tools: true, CLI: true, Grants: &g}))
+		}
+	}
+}
+
 func TestTheInstructionFileFollowsTheRunsCapabilities(t *testing.T) {
 	for _, role := range []string{"implementer", "fixer", RoleConductor, "investigator"} {
 		in := InstructionsInput{Tools: true, CLI: true}

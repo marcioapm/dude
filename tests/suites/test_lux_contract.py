@@ -449,8 +449,11 @@ def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_a
         wait_until(lambda: (implementer() or {}).get("status") == "paused", timeout=180, interval=1,
                    message="the waiting agent was never parked on lux")
         stopped_epoch = _stopped_epoch(client, env, implementer()["id"])
-        question = client.get("/v1/questions").json()["questions"]
-        question = next(q for q in question if q["taskId"] == task["id"])
+        # The writer asked its conductor (PR4a), so the question is not on
+        # the open list of what needs a person: read it by task; its owner
+        # answers it directly, which resumes the parked writer the same way.
+        question = client.get("/v1/questions", params={"taskId": task["id"]}).json()["questions"]
+        question = next(q for q in question if q["runId"] == implementer()["id"] and q["status"] == "open")
         assert client.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"}).status_code == 200
         wait_until(lambda: implementer()["status"] == "completed", timeout=180, interval=1,
                    message="the answer did not resume the parked agent on lux")

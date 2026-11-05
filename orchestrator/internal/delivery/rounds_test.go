@@ -308,11 +308,21 @@ func TestAResumedFixerIsToldTheTaskEditedAndDecidedSinceItsRound(t *testing.T) {
 	w.exec(t, `INSERT INTO questions (id, organization_id, task_id, prompt, items, status, answer, answered_at)
 		VALUES ('q_old', $1, $2, 'Old question?', '[{"question":"Old question?"}]', 'answered', 'old answer', now() - interval '2 hours'),
 		       ('q_new', $1, $2, 'Floats or cents?', '[{"question":"Floats or cents?"}]', 'answered', 'use cents, not floats', now())`, w.org, w.task)
+	w.exec(t, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role) VALUES('run_conductor',$1,$2,$3,1,'completed','conductor')`, w.org, w.project, w.task)
+	w.exec(t, `INSERT INTO questions(id,organization_id,task_id,prompt,status,answer,answered_at,answered_by_run,addressee) VALUES('q_guidance',$1,$2,'Agent inference?','answered','Not a person decision',now(),'run_conductor','conductor')`, w.org, w.task)
 	id := w.fix(t, "f1")
 	if got := w.str(t, `SELECT COALESCE(continues_how, '') FROM runs WHERE id = $1`, id); got != delivery.ContinuesResume {
 		t.Fatalf("the fix %s, want the implementer resumed", got)
 	}
 	text := w.str(t, `SELECT text FROM directives WHERE run_id = $1`, id)
+	marker := "Decided by people during this work (part of the task; do not ask again):"
+	start := strings.Index(text, marker)
+	if start < 0 {
+		t.Fatal("missing people section")
+	}
+	if section := strings.SplitN(text[start:], "\n\n", 2)[0]; section != marker+"\n- Q: Floats or cents?\n  A: use cents, not floats" {
+		t.Fatalf("people section=%q", section)
+	}
 	for _, want := range []string{"the task was changed", "- amounts are in cents", "Floats or cents?", "use cents, not floats"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the round message lacks %q:\n%s", want, text)

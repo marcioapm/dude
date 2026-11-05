@@ -1578,12 +1578,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			}
 		}
 		// What people decided on this task, across its Runs.
-		rows, err := tx.Query(ctx, `SELECT prompt, answer FROM questions
-			WHERE task_id = $1 AND status = 'answered' AND answer IS NOT NULL ORDER BY answered_at`, r.TaskID)
+		decisions, err = delivery.PeopleDecisionsTx(ctx, tx, r.TaskID, "")
 		if err != nil {
-			return err
-		}
-		if decisions, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery.Decision]); err != nil {
 			return err
 		}
 		// The findings the workflow chose for this Run, exactly and in its
@@ -3385,7 +3381,8 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 		// answers and decisions that end it are stamped.
 		var parkedAt time.Time
 		err := tx.QueryRow(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(),
-			control_reason = CASE WHEN $3 = 'person' AND NOT `+delivery.PersonAsk+` THEN $5 ELSE $2 END,
+			control_reason = CASE WHEN $3 = 'person' AND EXISTS (SELECT 1 FROM questions q WHERE q.run_id=r.id AND q.status='open' AND q.addressee='conductor') THEN 'parked while it waits for its conductor'
+			 WHEN $3 = 'person' AND NOT `+delivery.PersonAsk+` THEN $5 ELSE $2 END,
 			dude_pause = $3
 			WHERE r.id = $1 AND r.control = 'none' AND r.status = 'running'
 			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+`))

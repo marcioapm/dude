@@ -22,6 +22,7 @@ const (
 	Memory          Key = "memory"
 	RunBasics       Key = "run.basics"
 	Ask             Key = "ask"
+	AskConductor    Key = "ask.conductor"
 	Machines        Key = "machines"
 	Coordination    Key = "coordination"
 	FeedbackHandle  Key = "feedback.handle"
@@ -81,6 +82,7 @@ var All = []Capability{
 		Tools: []string{"emit_event", "run_diff", "request_repository"}},
 	{Key: Ask, Description: "Ask a person a question and wait for the answer.",
 		Tools: []string{"ask_person"}},
+	{Key: AskConductor, Description: "Ask your task's conductor a question; a person answers when no conductor is available.", Tools: []string{"ask_conductor"}},
 	{Key: Machines, Description: "List machine sizes and move to a bigger machine.",
 		Tools: []string{"list_machine_sizes", "request_machine"}},
 	// Reviewers, the simplifier and QA read their peers, never write: a
@@ -101,7 +103,7 @@ var All = []Capability{
 		Tools: []string{"findings", "pull_requests"}},
 	{Key: Conduct, Description: "Drive the task's delivery: start phases and agents, steer and restart Runs, decide, update the task, publish, and act on its pull requests.",
 		Tools: []string{"start_phase", "start_agent", "steer", "restart_run", "decide", "dismiss_finding", "answer_review_question",
-			"decide_escalation", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
+			"decide_escalation", "answer_question", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
 	{Key: Cohorts, Description: "Start an atomic cohort of independent child agents and receive one completion digest.", Tools: []string{"start_agents"}},
 	{Key: ChildInspect, Description: "Inspect own in-task child Runs' stored results and bounded reports.", Tools: []string{"read_run"}},
 	{Key: RunStop, Description: "Stop a child agent you started that is stuck or no longer needed; its result comes back as aborted.",
@@ -147,13 +149,13 @@ var Defaults = map[string][]Key{
 		BaseSync, GitHubRead, DeliveryRead, Conduct, Cohorts, ChildInspect, RunStop, Wait, RunRecover, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, SettingsRead, WebSearch, WebFetch},
 	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, RunsRead,
 		PRRefresh, SettingsRead, WebSearch, WebFetch},
-	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle,
+	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, AskConductor, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
 	"reviewer":     {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},
 	"fixer":        {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},
 	"simplifier":   {TasksRead, Memory, RunBasics, Machines, BaseSync, WebSearch, WebFetch},
 	"qa_browser":   {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},
-	"investigator": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, WebSearch, WebFetch},
+	"investigator": {TasksRead, TasksCreate, Memory, RunBasics, AskConductor, Machines, Coordination, WebSearch, WebFetch},
 	"":             {TasksRead, Memory, RunBasics, WebSearch, WebFetch},
 }
 
@@ -181,6 +183,12 @@ type Grants struct {
 // per-agent override is applied here, in tx, and nowhere else.
 func Resolve(ctx context.Context, tx pgx.Tx, a Agent) (Grants, error) {
 	g := Default(a.Role)
+	// Session investigators have no task conductor; retain their existing
+	// person-question channel, resolved here for every surface.
+	if a.Session != "" && g.Has(AskConductor) {
+		g = g.Without(AskConductor)
+		g.keys = append(g.keys, Ask)
+	}
 	fromChatKeys := FromChat[a.Role]
 	if a.Session == "" || !g.Has(SessionName) && len(fromChatKeys) == 0 {
 		return g, nil

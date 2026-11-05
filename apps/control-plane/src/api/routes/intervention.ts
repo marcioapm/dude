@@ -60,7 +60,9 @@ async function listQuestions(ctx: RequestContext): Promise<Response> {
       SELECT ${scope.sql.unsafe(QUESTION_SELECT)} FROM questions q
       WHERE (${runId}::text IS NULL OR run_id = ${runId})
         AND (${taskId}::text IS NULL OR task_id = ${taskId})
-        AND (${runId}::text IS NOT NULL OR ${taskId}::text IS NOT NULL OR status = 'open')
+        -- The open list is what needs a person: a writer's question for
+        -- its conductor (addressee 'conductor') is the conductor's.
+        AND (${runId}::text IS NOT NULL OR ${taskId}::text IS NOT NULL OR (status = 'open' AND addressee = 'person'))
         AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = q.run_id AND r.session_id IS NOT NULL
                         AND session_role(r.session_id, ${ctx.principal.personId}) IS NULL)
       ORDER BY asked_at DESC LIMIT 200`) as Array<Record<string, unknown>>;

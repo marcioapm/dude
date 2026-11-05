@@ -27,7 +27,7 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, create_api_key, provision_person, query, sign_in, wait_until
+from helpers import ApiClient, create_api_key, provision_person, query, sign_in, wait_until, relay_writer_question, finish_question_relay
 
 SHOTS = Path(os.environ.get("DUDE_TEST_SHOTS", "/var/tmp/cimg-dude-shots"))
 
@@ -350,7 +350,9 @@ def test_a_screenshot_goes_beside_an_open_question(
     task = client.create_task(forge_project["id"], "Phone layout")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None), timeout=60, message="no run")
-    wait_until(lambda: client.get(f"/v1/questions?runId={run['id']}").json()["questions"], timeout=60, message="no question")
+    writer, human = relay_writer_question(client, task["id"], run["id"])
+    # The attachment/answer subject is the conductor's real person question.
+    run = client.get_run(human["runId"])
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
@@ -371,6 +373,7 @@ def test_a_screenshot_goes_beside_an_open_question(
     page.get_by_test_id("question-turn").get_by_role("radio", name="no", exact=True).click()
     wait_until(lambda: client.get(f"/v1/questions?runId={run['id']}").json()["questions"][0]["status"] == "answered",
                timeout=15, message="the click did not answer it")
+    finish_question_relay(client, task["id"], writer, human)
     assert console_errors == []
 
 
@@ -385,7 +388,8 @@ def test_several_answers_carry_a_screenshot_in_their_note(
     task = client.create_task(forge_project["id"], "Phone layout, two questions")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None), timeout=60, message="no run")
-    wait_until(lambda: client.get(f"/v1/questions?runId={run['id']}").json()["questions"], timeout=60, message="no questions")
+    writer, human = relay_writer_question(client, task["id"], run["id"])
+    run = client.get_run(human["runId"])
     page.set_viewport_size({"width": 1440, "height": 900})
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{run['id']}")
@@ -407,6 +411,7 @@ def test_several_answers_carry_a_screenshot_in_their_note(
     luxed = wait_until(lambda: fake_lux_images(env, lux_run_id(owner_dsn, run["id"])).get(payload["directiveId"]),
                        timeout=30, message="lux never got it")
     assert [a["name"] for a in luxed] == ["phone.png"]
+    finish_question_relay(client, task["id"], writer, human)
     assert console_errors == []
 
 

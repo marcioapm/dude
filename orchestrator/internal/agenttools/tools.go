@@ -33,6 +33,8 @@ var tools = []tool{
 	define("list_tasks", listTasks),
 	define("list_epics", listEpics),
 	define("ask_person", askPerson),
+	define("ask_conductor", askPerson),
+	define("answer_question", answerQuestion),
 	define("emit_event", emitEvent).limit(eventsPerRun),
 	define("list_repositories", listRepositories),
 	define("request_repository", requestRepository).limit(requestsPerRun),
@@ -550,13 +552,18 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	} else if delivery.HasChoiceNote(items) {
 		return askOut{}, refuseText(rChoiceNoteIsConductorForQuestionAbout)
 	}
-	// TODO(conductor-first PR4a): a writer asks its conductor
-	// (ask_conductor); the person only when no conductor decides.
-	why := delivery.WhyWriter
-	if c.Role == delivery.RoleConductor {
-		why = delivery.WhyConductor
+	if c.Role != delivery.RoleConductor {
+		id, routed, err := delivery.AskConductorTx(ctx, tx, c.run(), items)
+		if err != nil {
+			_, err = conducted(id, err)
+			return askOut{}, err
+		}
+		if routed {
+			return askOut{QuestionID: id, Next: "End your turn. Your conductor will answer in your next message; your work is kept meanwhile."}, nil
+		}
+		return askOut{QuestionID: id, Next: askNext(false)}, nil
 	}
-	id, err := delivery.ToPersonTx(ctx, tx, delivery.ToPerson{Ref: c.run(), Items: items, Why: why})
+	id, err := delivery.ToPersonTx(ctx, tx, delivery.ToPerson{Ref: c.run(), Items: items, Why: delivery.WhyConductor})
 	if err != nil {
 		return askOut{}, err
 	}
@@ -569,6 +576,18 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 		return askOut{QuestionID: id, Next: askNext(true)}, nil
 	}
 	return askOut{QuestionID: id, Next: askNext(false)}, nil
+}
+
+type answerQuestionIn struct {
+	ID      string                `json:"id"`
+	Answer  string                `json:"answer,omitempty"`
+	Answers []delivery.ItemAnswer `json:"answers,omitempty"`
+}
+
+func answerQuestion(ctx context.Context, tx pgx.Tx, c Caller, in answerQuestionIn) (map[string]string, error) {
+	id, err := delivery.ConductAnswerQuestion(ctx, tx, c.run(), in.ID, in.Answer, in.Answers)
+	id, err = conducted(id, err)
+	return map[string]string{"directiveId": id}, err
 }
 
 // askNext is what ask_person tells the agent to do next; escalation, for a
