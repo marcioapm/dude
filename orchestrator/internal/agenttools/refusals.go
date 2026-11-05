@@ -123,7 +123,6 @@ const (
 	rQuestionRequiredQuestionOrQuestions1  = "a question is required: question, or questions (1 to %d)"
 	rActionsGoWithOneQuestionQuestion      = "actions go with one question (question and choices), about an escalation"
 	rActionsAreConductorForQuestionAbout   = "actions are a conductor's, for a question about an escalation"
-	rRelayIsConductor                      = "relay is a conductor's, for a writer's question it asks the person; ask your own question without it"
 	rChoiceNoteIsConductorForQuestionAbout = "a choice's note is a conductor's, for a question about an escalation: put what you mean in the choice's label or description"
 	rTypeLowercaseWordsJoinedByDots        = "type %q: lowercase words joined by dots, like progress or tests.finished"
 	rDataTooLargeAtMost16                  = "data too large: at most 16 KB"

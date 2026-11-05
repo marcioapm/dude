@@ -551,10 +551,9 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	if open {
 		return askOut{}, refuseText(rYouAlreadyHaveQuestionWaitingFor)
 	}
+	// Only the conductor's ask_person has relay: a writer's ask_person is
+	// its ask_conductor (find), whose input has none.
 	if in.Relay != "" {
-		if c.Role != delivery.RoleConductor {
-			return askOut{}, refuseText(rRelayIsConductor)
-		}
 		// Chat, delivery, task, then the writer's question: before
 		// EscalationQuestion's delivery and task.
 		if _, err := conducted("", delivery.CheckRelayTx(ctx, tx, c.run(), in.Relay)); err != nil {
