@@ -9,7 +9,7 @@ GitHub that delivers signed webhooks.
 from __future__ import annotations
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, query, wait_until
+from helpers import ApiClient, ask_person_about_escalation, create_api_key, query, wait_for_escalation, wait_until
 
 
 def _pull_requests(client: ApiClient, task_id: str) -> list[dict]:
@@ -78,10 +78,19 @@ def test_a_draft_is_private_and_a_batch_at_the_pull_request_wait_holds_it_until_
                 and query(env.owner_dsn, "SELECT 1 FROM runs WHERE id = %s AND %s = ANY(feedback_item_ids)", (r["id"], item["id"]))]
 
     # A fixer is given it, in the person's words; the scripted fixer answers
-    # nothing, so another is, until the pull request fix bound asks a person.
+    # nothing, so another is, until the pull request fix bound escalates.
     wait_until(lambda: fixers_given(), timeout=60, message="no fixer given the item")
-    wait_until(lambda: _task(client, task["id"])["status"] == "awaiting_input", timeout=90,
-               message="the unanswered item never reached the fix bound")
+    escalated = wait_for_escalation(client, task["id"], timeout=90,
+                                    message="the unanswered item never reached the fix bound")
+    assert escalated["status"] == "running" and escalated["escalation"]["holder"] == "conductor"
+    assert escalated["escalation"]["reason"] == "pr_loop_exhausted"
+    # Resetting the fix budget is PersonOnly. The conductor asks, but nobody
+    # authorizes another round: the item must keep holding the pull request.
+    handed_over = ask_person_about_escalation(
+        client, task["id"], question="Allow another round for the unanswered feedback?",
+        actions=["retry", "stop"], recommended="stop",
+    )
+    assert handed_over["status"] == "awaiting_input"
     reason = query(env.owner_dsn, "SELECT state->'escalation'->>'reason' AS r FROM workflow_runs WHERE task_id = %s",
                    (task["id"],))[0]["r"]
     assert reason == "pr_loop_exhausted", reason

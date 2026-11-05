@@ -15,7 +15,7 @@ import time
 import requests
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, execute, query, wait_for_escalation, wait_until
+from helpers import ApiClient, ask_person_about_escalation, execute, query, wait_for_escalation, wait_until
 
 
 def _pull_requests(client: ApiClient, task_id: str) -> list[dict]:
@@ -233,7 +233,13 @@ def test_a_conflict_stops_for_a_person_and_waits_again_once_resolved(
     assert client.patch("/v1/forge/settings", {"whenBehind": "tell"}).status_code == 200
     task, pr = _open_pr(client, forge_project)
     fake_github.set_conflicting(pr["number"])
-    t = wait_for_escalation(client, task["id"], timeout=30, message="a conflict did not stop for a person")
+    t = wait_for_escalation(client, task["id"], timeout=30, message="a conflict never reached the conductor")
+    assert t["status"] == "running" and t["escalation"]["holder"] == "conductor"
+    assert t["escalation"]["reason"] == "pull_request_conflict"
+    t = ask_person_about_escalation(
+        client, task["id"], question="Resolve the conflict, then wait again?",
+        actions=["wait", "stop"], recommended="wait",
+    )
     assert t["status"] == "awaiting_input"
     assert t["escalation"]["reason"] == "pull_request_conflict"
     # Nobody has approved it yet, which the Rules put before a conflict.
