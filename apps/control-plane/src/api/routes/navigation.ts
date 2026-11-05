@@ -351,10 +351,15 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
       ORDER BY r.created_at`) as EdgeRow[];
     // What its conductor holds of a person's asks (migration 248's partial
     // indexes): a reviewer's question or a repository request dude gave
-    // the conductor first. One grouped read, not a probe per task.
+    // the conductor first. One grouped read, not a probe per task. A
+    // reviewer's question only of the current attempt of a live delivery
+    // (as the handover reads it): a stopped task's is no one's to hear now.
     const conductorHeld = (await sql`
       SELECT task_id AS "taskId", bool_or(kind = 'review_question') AS question, bool_or(kind = 'repository_request') AS request FROM (
-        SELECT task_id, 'review_question' AS kind FROM review_questions WHERE status = 'open' AND addressee = 'conductor'
+        SELECT q.task_id, 'review_question' AS kind FROM review_questions q WHERE q.status = 'open' AND q.addressee = 'conductor'
+          AND EXISTS (SELECT 1 FROM runs ar WHERE ar.id = q.run_id AND ar.attempt = task_attempt(q.task_id))
+          AND EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = q.task_id AND w.workflow_type = 'task.delivery'
+            AND w.status IN ('running', 'waiting'))
         UNION ALL
         SELECT task_id, 'repository_request' FROM repository_requests WHERE status = 'pending' AND addressee = 'conductor'
       ) held GROUP BY task_id`) as Array<{ taskId: string; question: boolean; request: boolean }>;

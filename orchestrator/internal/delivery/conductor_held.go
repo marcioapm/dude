@@ -137,9 +137,15 @@ const heldDue = `EXISTS (SELECT 1 FROM workflow_runs hw WHERE hw.id = (SELECT w.
 
 // ReviewQuestionsDueSQL (SQL, $1 the wait in seconds) selects the open
 // conductor-held reviewer questions dude hands over now: id, organization,
-// task. Through review_questions_conductor_open_idx.
+// task. Through review_questions_conductor_open_idx. Only of the task's
+// current attempt (heldCurrentAttempt): an earlier attempt's is moot, and
+// withdrawn when its delivery ends (migration 248).
 const ReviewQuestionsDueSQL = `SELECT q.id, q.organization_id, q.task_id FROM review_questions q
-	WHERE q.status = 'open' AND q.addressee = 'conductor' AND ` + heldDue + ` ORDER BY q.created_at, q.id`
+	WHERE q.status = 'open' AND q.addressee = 'conductor' AND ` + heldCurrentAttempt + ` AND ` + heldDue + ` ORDER BY q.created_at, q.id`
+
+// heldCurrentAttempt (SQL, over a reviewer question aliased q): asked by a
+// review Run of the task's current attempt, as holdForQuestions reads them.
+const heldCurrentAttempt = `EXISTS (SELECT 1 FROM runs ar WHERE ar.id = q.run_id AND ar.attempt = task_attempt(q.task_id))`
 
 // RepositoryRequestsDueSQL is ReviewQuestionsDueSQL's for pending
 // conductor-held repository requests, through
@@ -158,7 +164,7 @@ func HandOverReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, taskID, id st
 	}
 	var due bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_questions q WHERE q.id = $2 AND q.task_id = $3
-		AND q.status = 'open' AND q.addressee = 'conductor' AND `+heldDue+`)`, wait.Seconds(), id, taskID).Scan(&due); err != nil || !due {
+		AND q.status = 'open' AND q.addressee = 'conductor' AND `+heldCurrentAttempt+` AND `+heldDue+`)`, wait.Seconds(), id, taskID).Scan(&due); err != nil || !due {
 		return false, err
 	}
 	_, moved, err := reviewQuestionToPersonTx(ctx, tx, org, taskID, d, id, WhyHandover)
