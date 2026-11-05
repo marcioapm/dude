@@ -18,7 +18,7 @@ import requests
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import ApiClient, create_api_key, open_overview_section, sign_in, wait_for_escalation, wait_until
+from helpers import ApiClient, ask_person_about_escalation, create_api_key, open_overview_section, sign_in, wait_for_escalation, wait_until
 
 CRITERIA = ["The page greets the visitor by name", "The page says goodbye on the way out"]
 
@@ -100,10 +100,17 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     neither owner nor admin is refused it. Waived, the pull request opens,
     saying who waived what and why."""
     task = _deliver_with_tester(client, forge_project, "fake/test-blocked", "Greet behind a login")
-    stopped = wait_for_escalation(client, task["id"], timeout=120, message="the blocked test never stopped for a person")
+    stopped = wait_for_escalation(client, task["id"], timeout=120, message="the blocked test never reached the conductor")
+    assert stopped["status"] == "running" and stopped["escalation"]["holder"] == "conductor"
     assert stopped["escalation"]["reason"] == "test_blocked", stopped["escalation"]
     assert stopped["escalation"]["actions"] == ["retry", "waive", "stop"]
     assert [r["phase"] for r in stopped["runs"]].count("fix") == 1, "a blocked test must not send a fix"
+    stopped = ask_person_about_escalation(
+        client, task["id"], question="Test blocked: waive the criteria after checking by hand?",
+        actions=["retry", "waive", "stop"], recommended="waive",
+    )
+    assert stopped["status"] == "awaiting_input"
+    assert stopped["escalation"]["reason"] == "test_blocked", stopped["escalation"]
 
     bo = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], name="Bo"))
     refused = bo.post(f"/v1/tasks/{task['id']}/decide", {"action": "waive", "note": "Looks fine to me."})
