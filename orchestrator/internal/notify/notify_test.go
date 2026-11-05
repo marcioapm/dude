@@ -715,3 +715,42 @@ func TestAFailedAutomationReachesWhomItsEventNames(t *testing.T) {
 		}
 	}
 }
+
+// A writer's question routed to its conductor (question.routed, ask_conductor)
+// is the conductor's to answer: no person is told, and the notifier does not
+// even read it as an ask. The person fallback and the conductor's relay are
+// question.asked, and are still pushed.
+func TestAQuestionRoutedToTheConductorIsNotPushed(t *testing.T) {
+	w, ids := newPushWorld(t, "owner")
+	ctx := context.Background()
+	org := w.org
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'RTE')`, "prj_"+org, org)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 7, 'Routed')`, "wi_"+org, org, "prj_"+org)
+	w.exec(`INSERT INTO task_people (task_id, organization_id, person_id, position) VALUES ($1, $2, $3, 0)`, "wi_"+org, org, ids["owner"])
+	w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+		VALUES ($1, $2, $3, $4, 1, 'running', 'implement', 'implementer')`, "run_"+org, org, "prj_"+org, "wi_"+org)
+	var routed int64
+	if err := w.owner.QueryRow(ctx, `INSERT INTO events (id, organization_id, event_type, project_id, task_id, run_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'question.routed', $3, $4, $5, 'agent', $5, 'orchestrator', $6) RETURNING cursor`,
+		"evt_routed_"+org, org, "prj_"+org, "wi_"+org, "run_"+org,
+		`{"kind":"agent","questionId":"qst_r","addressee":"conductor","prompt":"Which locale?"}`).Scan(&routed); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, run_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'question.asked', $3, $4, $5, 'agent', $5, 'orchestrator', $6)`,
+		"evt_asked_"+org, org, "prj_"+org, "wi_"+org, "run_"+org, `{"kind":"agent","questionId":"qst_p","prompt":"Ship it?"}`)
+	w.sweep(w.notifier(), 3)
+	var read bool
+	if err := w.owner.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM push_sent WHERE cursor = $1)`, routed).Scan(&read); err != nil {
+		t.Fatal(err)
+	}
+	if read {
+		t.Errorf("the notifier read question.routed as an ask (push_sent has cursor %d)", routed)
+	}
+	b := w.browsers[ids["owner"]]
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.got) != 1 || b.got[0].Body != "Ship it?" {
+		t.Fatalf("the owner's browser got %+v; want only the person's question", b.got)
+	}
+}
