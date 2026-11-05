@@ -568,6 +568,13 @@ describe("Activity's started lines", () => {
       .toEqual(["The fixer&#x27;s checks were not verified"]);
   });
 
+  test("conductor escalation decisions name the conductor, not dude or a person", () => {
+    for (const action of ["stop", "retry"]) {
+      const decision = { ...created(null, { action, by: "conductor", note: "Try a smaller fix." }), eventType: "task.decided", actor: { type: "agent", id: "run_conductor" } } as PersistedEvent;
+      expect(said([decision], [])).toEqual([`The conductor decided how delivery goes on: ${action}`]);
+    }
+  });
+
   test("a checks-finished decision is dude's, while a person's decision names them", () => {
     const decision = { ...created(null, { action: "wait" }), eventType: "task.decided" } as PersistedEvent;
     expect(said([decision], [])).toEqual([`${dudeName(TASK_ID)} decided how delivery goes on: wait`]);

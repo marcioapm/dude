@@ -374,7 +374,7 @@ export function withWaitingFor(projects: NavProject[]): NavProject[] {
   const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean }): NavTask => {
     const { decider, conductorLive, ...rest } = t;
     const driven = decider ? { ...rest, driver: driverMode(decider, conductorLive === true) } : rest;
-    if (t.escalation) return { ...driven, heldForReview: false, waitingFor: escalationWords(t.escalation).short };
+    if (t.escalation) return { ...driven, heldForReview: false, waitingFor: `${t.escalation.holder === "conductor" ? "With the conductor: " : ""}${escalationWords(t.escalation).short}` };
     return t.heldForReview ? { ...driven, waitingFor: READY_FOR_REVIEW_WAITING } : driven;
   };
   return projects.map((p) => ({

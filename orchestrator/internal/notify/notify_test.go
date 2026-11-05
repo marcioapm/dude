@@ -14,10 +14,16 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
 )
@@ -178,6 +184,14 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 		"evt_s_"+org, org, "prj_"+org, "wi_"+org, "run_"+org, `{"conducted":false,"text":"Your implement Run has made no progress for 2.0 h."}`,
 		"evt_sc_"+org)
 
+	// Conductor stops are delivered to the owner once; retries and raised
+	// conductor-held escalations are not person questions or pushes.
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'task.decided', $3, $4, 'agent', 'conductor', 'orchestrator', '{"by":"conductor","action":"stop","note":"The approach is not converging."}'),
+		       ($5, $2, 'task.decided', $3, $4, 'agent', 'conductor', 'orchestrator', '{"by":"conductor","action":"retry"}'),
+		       ($6, $2, 'escalation.raised', $3, $4, 'system', 'workflow', 'orchestrator', '{"holder":"conductor"}')`,
+		"evt_stop_"+org, org, "prj_"+org, "wi_"+org, "evt_retry_"+org, "evt_raised_"+org)
+
 	// Other tests' asks may be swept too; ours must be among them.
 	for range 5 {
 		if _, err := n.Sweep(ctx); err != nil {
@@ -186,18 +200,23 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	}
 	mine.mu.Lock()
 	defer mine.mu.Unlock()
-	if len(mine.got) != 3 {
-		t.Fatalf("the owner's browser got %d notifications, want 3: %+v", len(mine.got), mine.got)
+	if len(mine.got) != 4 {
+		t.Fatalf("the owner's browser got %d notifications, want 4: %+v", len(mine.got), mine.got)
 	}
 	// Sent concurrently, so in any order.
-	var m, stalled notify.Message
+	var m, stalled, stopped notify.Message
 	for _, g := range mine.got {
 		switch g.Title {
+		case "TEXT-19 was stopped by the conductor":
+			stopped = g
 		case "TEXT-19 · Implementer asks":
 			m = g
 		case "TEXT-19 · Implementer has made no progress":
 			stalled = g
 		}
+	}
+	if stopped.Body != "The approach is not converging." || stopped.URL != "#/o/"+org+"/task/wi_"+org {
+		t.Errorf("the conductor stop's notification = %+v", stopped)
 	}
 	// Links name the organisation (its slug is its id here, dbtest.Org).
 	if stalled.Body != "Your implement Run has made no progress for 2.0 h." || stalled.URL != "#/o/"+org+"/task/wi_"+org {
@@ -220,6 +239,257 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	var gone bool
 	if err := owner.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = $1)`, push.URL+"/stale").Scan(&gone); err != nil || !gone {
 		t.Errorf("a subscription its push service says is gone was kept")
+	}
+}
+
+// A stop that commits behind a later sent ask must still be sweepable. Use
+// explicit ledger cursors and the database clock, not sleeps or commit races.
+func TestLateConductorStopHoldsWatermark(t *testing.T) {
+	w, ids := newPushWorld(t, "owner")
+	ctx := context.Background()
+	n := w.notifier()
+	w.exec(`UPDATE push_config SET after_cursor = 0`)
+	w.exec(`INSERT INTO events (cursor, id, organization_id, event_type, occurred_at, actor_type, actor_id, source, payload) OVERRIDING SYSTEM VALUE
+		VALUES (500, $1, $2, 'task.decided', now() - interval '11 minutes', 'agent', 'conductor', 'orchestrator',
+		        '{"by":"conductor","action":"stop","note":"Not converging"}'),
+		       (1000, $3, $2, 'question.asked', now() - interval '11 minutes', 'agent', 'agent', 'orchestrator', '{}')`,
+		"evt_stop_"+w.org, w.org, "evt_sent_"+w.org)
+	w.exec(`INSERT INTO push_sent (cursor) VALUES (1000)`)
+	assertState := func(wantCursor int64, wantSent int) {
+		t.Helper()
+		var cursor int64
+		var sent int
+		if err := w.owner.QueryRow(ctx, `SELECT after_cursor, (SELECT count(*) FROM push_sent) FROM push_config`).Scan(&cursor, &sent); err != nil {
+			t.Fatal(err)
+		}
+		if cursor != wantCursor || sent != wantSent {
+			t.Fatalf("watermark=%d, sent=%d; want watermark=%d, sent=%d", cursor, sent, wantCursor, wantSent)
+		}
+	}
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState(499, 1)
+	if handled, err := n.Sweep(ctx); err != nil || handled != 1 {
+		t.Fatalf("stop sweep handled=%d, err=%v; want 1", handled, err)
+	}
+	assertState(499, 2)
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState(1000, 0)
+	w.sweep(w.notifier(), 3)
+	assertState(1000, 0)
+	b := w.browsers[ids["owner"]]
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.got) != 1 || b.got[0].Body != "Not converging" || !strings.Contains(b.got[0].Title, "was stopped by the conductor") {
+		t.Fatalf("decrypted deliveries=%+v; want only the conductor stop, once", b.got)
+	}
+}
+
+// The global watermark must wait for recent sent events while a lower cursor
+// is still uncommitted. This exercises Advance's real runtime arguments, within
+// the bounded ten-minute contract (not protection for indefinitely open txs).
+func TestGlobalWatermarkWaitsForRecentLateCommit(t *testing.T) {
+	w, ids := newPushWorld(t, "owner")
+	ctx := context.Background()
+	n := w.notifier()
+	w.exec(`UPDATE push_config SET after_cursor = 0`)
+	late, err := pgx.ConnectConfig(ctx, w.owner.Config().Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer late.Close(ctx)
+	tx, err := late.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var lower, higher int64
+	if err := tx.QueryRow(ctx, `INSERT INTO events (id, organization_id, event_type, occurred_at, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'task.decided', now() - interval '9 minutes', 'agent', 'conductor', 'orchestrator',
+		        '{"by":"conductor","action":"stop","note":"Late stop"}') RETURNING cursor`,
+		"evt_late_"+w.org, w.org).Scan(&lower); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.owner.QueryRow(ctx, `INSERT INTO events (id, organization_id, event_type, occurred_at, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'question.asked', now() - interval '9 minutes', 'agent', 'agent', 'orchestrator',
+		        '{"prompt":"Recent ask"}') RETURNING cursor`, "evt_recent_"+w.org, w.org).Scan(&higher); err != nil {
+		t.Fatal(err)
+	}
+	if lower >= higher {
+		t.Fatalf("insert order: lower=%d, higher=%d", lower, higher)
+	}
+	assertState := func(phase string, wantCursor int64, wantSent []int64, wantDeliveries int) {
+		t.Helper()
+		var cursor int64
+		var sent []int64
+		if err := w.owner.QueryRow(ctx, `SELECT after_cursor,
+			ARRAY(SELECT cursor FROM push_sent ORDER BY cursor) FROM push_config`).Scan(&cursor, &sent); err != nil {
+			t.Fatal(err)
+		}
+		if cursor != wantCursor || !slices.Equal(sent, wantSent) {
+			t.Fatalf("%s: watermark=%d, receipts=%v; want watermark=%d, receipts=%v", phase, cursor, sent, wantCursor, wantSent)
+		}
+		b := w.browsers[ids["owner"]]
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if len(b.got) != wantDeliveries || (len(b.got) > 0 && b.got[0].Body != "Recent ask") ||
+			(len(b.got) > 1 && (b.got[1].Body != "Late stop" || !strings.Contains(b.got[1].Title, "was stopped by the conductor"))) {
+			t.Fatalf("%s: decrypted deliveries=%+v; want recent ask then late stop, %d total", phase, b.got, wantDeliveries)
+		}
+	}
+	sweepOne := func() {
+		t.Helper()
+		if handled, err := n.Sweep(ctx); err != nil || handled != 1 {
+			t.Fatalf("sweep handled=%d, err=%v; want 1", handled, err)
+		}
+	}
+	sweepOne() // Only the higher event is visible; send it through the real notifier.
+	assertState("higher sent, lower uncommitted", 0, []int64{higher}, 1)
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState("advance while lower uncommitted", 0, []int64{higher}, 1)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState("lower committed, still recent", 0, []int64{higher}, 1)
+	sweepOne()
+	assertState("lower delivered", 0, []int64{lower, higher}, 2)
+	w.sweep(w.notifier(), 2) // Restart and idle sweeps must retain recent receipts.
+	assertState("recent idle sweeps", 0, []int64{lower, higher}, 2)
+
+	// Advance separately after settlement; use the eligibility clock read by
+	// production (occurred_at), without sleeping or changing the SQL argument.
+	w.exec(`UPDATE events SET occurred_at = now() - interval '11 minutes' WHERE cursor IN ($1, $2)`, lower, higher)
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState("settled advance and cleanup", higher, nil, 2)
+	w.sweep(w.notifier(), 2)
+	assertState("settled restart", higher, nil, 2)
+}
+
+// notificationQueryTrace records statements issued by the real notifier, so
+// the plan checks cannot drift into testing a copied/simplified SQL predicate.
+// Only the dedicated test pool uses it; notifier queries run serially.
+type notificationQueryTrace struct {
+	queries []pgx.TraceQueryStartData
+}
+
+func (q *notificationQueryTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	q.queries = append(q.queries, data)
+	return ctx
+}
+
+func (*notificationQueryTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// This opt-in fixture pays for 100k ledger rows once, in a disposable database
+// cloned from actual migrations. It protects the original asks partial index
+// in BOTH actual statements, not the separate conductor-stop access path.
+// Run with DUDE_NOTIFY_PLAN_TEST=1; no timing threshold or exact plan tree.
+func TestNotificationQueriesKeepAsksPartialIndex(t *testing.T) {
+	if os.Getenv("DUDE_NOTIFY_PLAN_TEST") != "1" {
+		t.Skip("set DUDE_NOTIFY_PLAN_TEST=1 for the 100k-row ledger plan regression")
+	}
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	trace := &notificationQueryTrace{}
+	cfg := app.Pool.Config()
+	cfg.ConnConfig.Tracer = trace
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	n := &notify.Notifier{DB: &db.DB{Pool: pool}, Log: slog.New(slog.DiscardHandler)}
+	if _, _, err := n.Keys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
+		SELECT 'evt_history_' || i, $1, 'agent.message', 'agent', 'agent', 'runner',
+		       jsonb_build_object('text', repeat('irrelevant ledger history ', 8))
+		FROM generate_series(1, 100000) i`, org)
+	exec(`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
+		VALUES ('evt_ask', $1, 'question.asked', 'agent', 'agent', 'orchestrator', '{"prompt":"Continue?"}'),
+		       ('evt_stop', $1, 'task.decided', 'agent', 'conductor', 'orchestrator', '{"by":"conductor","action":"stop"}')`, org)
+	exec(`ANALYZE events`)
+	trace.queries = nil
+	if _, err := n.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	queries := map[string]pgx.TraceQueryStartData{}
+	for _, q := range trace.queries {
+		switch {
+		case strings.HasPrefix(q.SQL, "SELECT e.cursor, e.organization_id, o.slug, e.event_type, COALESCE(e.run_id"):
+			queries["selection"] = q
+		case strings.HasPrefix(q.SQL, "UPDATE push_config SET after_cursor"):
+			queries["pending-minimum"] = q
+		}
+	}
+	if len(queries) != 2 {
+		t.Fatalf("captured %d notifier statements, want selection and pending-minimum", len(queries))
+	}
+	for _, name := range []string{"selection", "pending-minimum"} {
+		t.Run(name, func(t *testing.T) {
+			q := queries[name]
+			tx, err := owner.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err := tx.Exec(ctx, `SET LOCAL ROLE dude_sweeper`); err != nil {
+				t.Fatal(err)
+			}
+			var raw []byte
+			if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+q.SQL, q.Args...).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var plan any
+			if err := json.Unmarshal(raw, &plan); err != nil {
+				t.Fatal(err)
+			}
+			var usesAsksIndex func(any) bool
+			usesAsksIndex = func(v any) bool {
+				switch node := v.(type) {
+				case map[string]any:
+					if node["Index Name"] == "events_asks_v2_idx" {
+						return true
+					}
+					for _, child := range node {
+						if usesAsksIndex(child) {
+							return true
+						}
+					}
+				case []any:
+					for _, child := range node {
+						if usesAsksIndex(child) {
+							return true
+						}
+					}
+				}
+				return false
+			}
+			if !usesAsksIndex(plan) {
+				t.Fatalf("actual %s query lost asks partial-index access with 100k irrelevant events; plan: %s", name, raw)
+			}
+			t.Logf("actual %s query uses events_asks_v2_idx with 100000 irrelevant events", name)
+		})
 	}
 }
 

@@ -1,6 +1,26 @@
 package notify
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestConductorStopNotifiesWithoutAskingAPerson(t *testing.T) {
+	if !strings.Contains(conductorStops, "'task.decided'") {
+		t.Fatal("notification sweep does not read task.decided")
+	}
+	a := ask{Type: "task.decided", TaskID: "task_1", Task: "WC-214", Slug: "web", Payload: []byte(`{"by":"conductor","action":"stop","note":"The approach is not converging."}`)}
+	m, ok := messageFor(a)
+	if !ok || m.Title != "WC-214 was stopped by the conductor" || m.Body != "The approach is not converging." || !strings.Contains(m.URL, "task/task_1") {
+		t.Fatalf("stop: %v %+v", ok, m)
+	}
+	for _, payload := range []string{`{"by":"conductor","action":"retry"}`, `{"by":"person","action":"stop"}`} {
+		a.Payload = []byte(payload)
+		if _, ok := messageFor(a); ok {
+			t.Fatalf("unexpected notification: %s", payload)
+		}
+	}
+}
 
 // An agent asking several questions reads as how many and their headers;
 // one question as its text, as before.
