@@ -625,7 +625,9 @@ async function notifierStatements(): Promise<string[]> {
     if (!value) throw new Error(`missing notifier constant ${name}`);
     return value;
   };
-  const events = `(SELECT * FROM events WHERE event_type IN ${literal("asks")} UNION ALL SELECT * FROM events WHERE ${literal("conductorStops")})`;
+  const union = source.match(/^const notifiedEvents = (.+)$/m)?.[1];
+  if (!union) throw new Error("missing notifier notifiedEvents constant");
+  const events = union.split(" + ").map((part) => part.startsWith('"') ? JSON.parse(part) : literal(part)).join("");
   const sweep = source.match(/rows, err := tx.Query\(ctx, `([\s\S]*?)`\)/)?.[1];
   const advance = source.match(/tx.Exec\(ctx, `(UPDATE push_config SET after_cursor[\s\S]*?)`,/)?.[1];
   if (!sweep || !advance) throw new Error("missing notifier sweep/advance SQL");
