@@ -5,6 +5,10 @@ package delivery
 
 const (
 	rQuestionRequiresCurrentRun             = "This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only."
+	rReviewQuestionNotHeld                  = "reviewer question %s is not an open question of this task held by you: only one dude gave you first, still open, is forwarded"
+	rRepositoryRequestNotHeld               = "repository request %s is not a pending request of this task held by you: only one dude gave you first, still pending, is decided or forwarded"
+	rRepositoryRequestAction                = "say deny, approve or forward: one of the three"
+	rRepositoryRequestAskThePerson          = "only the task's owner approves %s: forward it to them (decide_repository_request with forward), or deny it"
 	rThisTaskYouAreReadOnly                 = "this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees"
 	rThisTaskHasNoDeliveryIn                = "this task has no delivery in progress to decide for"
 	rDeliverTakesThisTaskDecisionsNot       = "Deliver takes this task's decisions, not you: you are read-only. A person hands them to you by writing in Chat; until then, answer and advise"

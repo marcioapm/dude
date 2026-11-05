@@ -62,6 +62,8 @@ var tools = []tool{
 	define("decide", decide),
 	define("dismiss_finding", dismissFinding),
 	define("answer_review_question", answerReviewQuestion),
+	define("forward_review_question", forwardReviewQuestion),
+	define("decide_repository_request", decideRepositoryRequest),
 	define("decide_escalation", decideEscalation),
 	define("update_task", updateTask),
 	around(define("reply_on_pull_request", replyOnPullRequest).before(forgeFor), postReply, recordReply),
@@ -703,30 +705,42 @@ func requestRepository(ctx context.Context, tx pgx.Tx, c Caller, in requestRepoI
 	if in.Write {
 		access = "write"
 	}
+	// Conductor-first: a conducted task's conductor decides it first.
+	addressee, err := delivery.RouteRepositoryRequestTx(ctx, tx, c.run(), c.Role)
+	if err != nil {
+		return requestRepoOut{}, err
+	}
 	id := ids.New(ids.RepoRequest)
-	tag, err := tx.Exec(ctx, `INSERT INTO repository_requests (id, organization_id, task_id, run_id, repository_id, access, reason, blocking)
-		VALUES ($1, $2, $3, $4, $5, $6::repository_access, $7, $8) ON CONFLICT DO NOTHING`,
-		id, c.Org, c.TaskID, c.RunID, repo.ID, access, reason, in.Wait)
+	tag, err := tx.Exec(ctx, `INSERT INTO repository_requests (id, organization_id, task_id, run_id, repository_id, access, reason, blocking, addressee)
+		VALUES ($1, $2, $3, $4, $5, $6::repository_access, $7, $8, $9) ON CONFLICT DO NOTHING`,
+		id, c.Org, c.TaskID, c.RunID, repo.ID, access, reason, in.Wait, addressee)
 	if err != nil {
 		return requestRepoOut{}, err
 	}
 	if tag.RowsAffected() == 0 {
 		return requestRepoOut{}, refuse(rYouAlreadyAskedForPersonHas, repo.Name)
 	}
-	if _, err := ledger.Append(ctx, tx, c.event(delivery.EvRepositoryRequested,
-		map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason})); err != nil {
+	payload := map[string]any{"requestId": id, "repository": repo.Name, "repositoryId": repo.ID, "access": access, "reason": reason}
+	if addressee == delivery.HolderConductor {
+		payload["addressee"] = addressee
+		if err := delivery.RepositoryRoutedTx(ctx, tx, c.event(delivery.EvRepositoryRouted, payload), id, repo.Name, access, reason); err != nil {
+			return requestRepoOut{}, err
+		}
+		return requestRepoOut{RequestID: id, Status: "pending", Next: requestRepositoryNext(repo.Name, in.Wait, true)}, nil
+	}
+	if err := delivery.RepositoryRequestToPersonTx(ctx, tx, c.event(delivery.EvRepositoryRequested, payload), delivery.WhyNoConductor); err != nil {
 		return requestRepoOut{}, err
 	}
-	return requestRepoOut{RequestID: id, Status: "pending", Next: requestRepositoryNext(repo.Name, in.Wait)}, nil
+	return requestRepoOut{RequestID: id, Status: "pending", Next: requestRepositoryNext(repo.Name, in.Wait, false)}, nil
 }
 
 // requestRepositoryNext is what request_repository tells the agent to do
 // next about repo; wait, when it asked to wait for the decision.
-func requestRepositoryNext(repo string, wait bool) string {
+func requestRepositoryNext(repo string, wait, conductor bool) string {
 	return requestRepositoryResult.Render(struct {
-		Repo string
-		Wait bool
-	}{repo, wait})
+		Repo            string
+		Wait, Conductor bool
+	}{repo, wait, conductor})
 }
 
 // ---- list_repositories ----------------------------------------------------

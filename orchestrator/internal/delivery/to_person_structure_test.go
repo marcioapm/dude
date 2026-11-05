@@ -18,6 +18,8 @@ import (
 var toPersonInternals = map[string]bool{
 	"delivery/to_person.go:ToPersonTx":  true,
 	"delivery/to_person.go:askPersonTx": true,
+	// A conductor-held reviewer question given to the person.
+	"delivery/to_person.go:askReviewQuestionTx": true,
 }
 
 // toPersonAllowed reach a person some other way, for good: a brainstorm
@@ -38,8 +40,6 @@ var toPersonReaders = map[string]string{
 // with the PR that removes it, which its code names in a
 // TODO(conductor-first PRn). This list only shrinks.
 var toPersonOffenders = map[string]string{
-	// A10: reviewer questions set awaiting_input whoever decides.
-	"delivery/review_questions.go:holdForQuestions": "PR4b",
 	// A12: the idle park sets awaiting_input.
 	"phases/sync.go:requestPause": "PR4b",
 }

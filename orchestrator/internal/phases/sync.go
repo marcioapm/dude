@@ -77,6 +77,9 @@ type Syncer struct {
 	// How long reasons to wake a conductor are gathered after the last
 	// arrived before one note delivers them (DUDE_WAKE_WINDOW; 0: WakeWindow).
 	WakeWindow time.Duration
+	// How long a conductor holds a reviewer's question or a repository
+	// request before dude hands it to the person (0: ConductorAnswerWait).
+	HeldAskWait time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -677,6 +680,11 @@ func (s *Syncer) beforeDue(ctx context.Context) error {
 		if err := s.evaluateWaits(ctx); err != nil {
 			s.Log.Warn("evaluating conductors' waits failed", "error", err)
 		}
+	}
+	// Conductor-held reviewer questions and repository requests due to
+	// the person: before the wakes, whose notes they may settle.
+	if err := s.handOverHeldAsks(ctx); err != nil {
+		s.Log.Warn("handing conductor-held asks to the person failed", "error", err)
 	}
 	if p.failed || p.wakes || ran {
 		if err := s.wakeConductors(ctx); err != nil {
@@ -4188,6 +4196,14 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 		if category == "" {
 			category = "correctness"
 		}
+		// Conductor-first: its conductor's while one decides the delivery
+		// and is available; the person's otherwise.
+		addressee := delivery.HolderPerson
+		if len(questions) > 0 {
+			if addressee, err = delivery.ReviewQuestionAddresseeTx(ctx, tx, taskID); err != nil {
+				return err
+			}
+		}
 		for i, q := range questions {
 			var finding *string
 			if q.About > 0 && q.About <= len(shown) {
@@ -4195,16 +4211,16 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			}
 			id := ids.New(ids.ReviewQuestion)
 			tag, err := tx.Exec(ctx, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, finding_id,
-					question, why_it_matters, evidence_checked, needed_from)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (run_id, n) DO NOTHING`,
-				id, org, taskID, runID, i+1, category, finding, q.Question, q.Why, q.Evidence, q.NeededFrom)
+					question, why_it_matters, evidence_checked, needed_from, addressee)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (run_id, n) DO NOTHING`,
+				id, org, taskID, runID, i+1, category, finding, q.Question, q.Why, q.Evidence, q.NeededFrom, addressee)
 			if err != nil {
 				return err
 			}
 			if tag.RowsAffected() == 0 {
 				continue
 			}
-			payload := map[string]any{"questionId": id, "n": i + 1, "category": category, "neededFrom": q.NeededFrom}
+			payload := map[string]any{"questionId": id, "n": i + 1, "category": category, "neededFrom": q.NeededFrom, "addressee": addressee}
 			if finding != nil {
 				payload["findingId"] = *finding
 			}
