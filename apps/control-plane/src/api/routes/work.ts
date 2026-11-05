@@ -147,16 +147,32 @@ const SESSION_SELECT = `
   created_at AS "createdAt", ended_at AS "endedAt"`;
 
 /**
- * The SELECT expression for a task's open escalation, `{reason, detail, at}`
- * or null, for the `tasks` rows under `alias`: the workflow's last
- * `question.asked` of kind "escalation" (delivery.escalate), while the task
- * still waits on a person — nothing has moved it out of awaiting_input
- * since. The workflow ends on it, so there is at most one worth showing.
+ * The existing owner override response: the latest live delivery's undecided
+ * conductor-held escalation, or the legacy person-held question. Never replay
+ * an old conductor escalation event as the current escalation.
  */
 export function escalationJson(alias = "tasks"): string {
   // Resume only while the Run that failed is still kept to resume
   // (run_kept, migration 070): after that, the other ways are left.
-  return `(SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail',
+  return `COALESCE((SELECT json_build_object(
+      'reason', w.state->'escalation'->>'reason', 'detail', w.state->'escalation'->'detail',
+      'holder', 'conductor', 'status', 'pending',
+      'actions', COALESCE(w.state->'escalation'->'actions', e.payload->'actions', '["stop"]'::jsonb) - CASE WHEN EXISTS (SELECT 1 FROM runs
+        WHERE runs.id = w.state->'escalation'->'detail'->>'runId' AND run_kept(runs)) THEN '' ELSE 'resume' END,
+      'at', w.state->'escalation'->>'raisedAt')
+    FROM workflow_runs w
+    LEFT JOIN LATERAL (SELECT payload FROM events e WHERE e.task_id=w.task_id
+      AND e.event_type='escalation.raised' AND e.payload->>'reason'=w.state->'escalation'->>'reason'
+      AND e.occurred_at >= w.created_at
+      AND e.payload->'detail' IS NOT DISTINCT FROM w.state->'escalation'->'detail'
+      ORDER BY e.cursor DESC LIMIT 1) e ON true
+    WHERE w.id=(SELECT latest.id FROM workflow_runs latest WHERE latest.task_id=${alias}.id
+      AND latest.workflow_type='task.delivery' ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)
+      AND w.status IN ('running','waiting') AND w.step='decide'
+      AND w.state->'escalation'->>'holder'='conductor' AND NOT w.state->'escalation' ? 'decided'
+      AND ${alias}.status='running'),
+    (SELECT json_build_object('reason', e.payload->>'reason', 'detail', e.payload->'detail',
+    'holder', 'person', 'status', 'pending',
     'actions', COALESCE(e.payload->'actions', '["stop"]'::jsonb) - CASE WHEN EXISTS (SELECT 1 FROM runs
         WHERE runs.id = e.payload->'detail'->>'runId' AND run_kept(runs)) THEN '' ELSE 'resume' END,
     'at', e.occurred_at)
@@ -168,7 +184,7 @@ export function escalationJson(alias = "tasks"): string {
     -- Decided: the workflow is carrying it out.
     AND NOT EXISTS (SELECT 1 FROM events d WHERE d.task_id = ${alias}.id AND d.event_type = 'task.decided'
       AND d.cursor > e.cursor)
-  ORDER BY e.cursor DESC LIMIT 1) AS escalation`;
+  ORDER BY e.cursor DESC LIMIT 1)) AS escalation`;
 }
 
 // ---------------------------------------------------------------------------

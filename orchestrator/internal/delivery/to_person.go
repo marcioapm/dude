@@ -130,6 +130,7 @@ func conductorUnavailableTx(ctx context.Context, tx pgx.Tx, taskID string, since
 // as the status, audit and wake. Callers hold the delivery before the task.
 func raiseEscalationTx(ctx context.Context, tx pgx.Tx, org, wfID string, st *State) error {
 	e := st.Escalation
+	e.Offered = e.Actions()
 	unavailable, err := conductorUnavailableTx(ctx, tx, st.TaskID, nil)
 	if err != nil {
 		return err

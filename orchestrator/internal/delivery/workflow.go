@@ -316,6 +316,8 @@ type Escalation struct {
 	// Who decides it first: HolderPerson, or HolderConductor
 	// (conductor-first). "" reads as HolderPerson (HeldBy).
 	Holder string `json:"holder,omitempty"`
+	// Offered actions for the existing owner override response, from Actions.
+	Offered []string `json:"actions,omitempty"`
 	// When it was raised: a conductor's deadline counts from it. nil when
 	// not recorded.
 	RaisedAt *time.Time `json:"raisedAt,omitempty"`

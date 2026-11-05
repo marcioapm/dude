@@ -121,6 +121,7 @@ export function EscalationPanel({ client, task, findings = [], you, youAdmin = f
   return (
     <Callout tone="attention" data-testid="escalation" data-reason={reason}>
       <div className="escalation">
+        {task.escalation.holder === "conductor" ? <p className="escalationWaiting">The conductor is handling this.{actions.length > 0 ? " You can override its decision here." : ""}</p> : null}
         <p>
           <strong>{words.short}.</strong> {words.parts ? <MonoWords words={words.parts} /> : words.sentence}{" "}
           {words.runId ? (

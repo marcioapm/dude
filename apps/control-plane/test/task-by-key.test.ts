@@ -105,6 +105,31 @@ test("runs are newest attempt first, then newest creation, then descending id", 
   expect(body.runs.every((run) => run.kind === "agent" && !!run.createdAt)).toBe(true);
 });
 
+test("a live conductor-held escalation is visible for owner override, never a decided or prior-attempt one", async () => {
+  await owner`INSERT INTO tasks(id,organization_id,project_id,number,title,status) VALUES('wi_override','org_a','prj_a',20,'Override','running')`;
+  const state = { taskId: "wi_override", attempt: 1, decider: "conductor", escalation: { reason: "implement_failed", holder: "conductor", actions: ["retry", "stop"], raisedAt: "2026-11-01T00:00:00Z", detail: { runId: "run_bad", error: "Implementation failed" } } };
+  await owner`INSERT INTO workflow_runs(id,organization_id,workflow_type,idempotency_key,task_id,status,step,state)
+    VALUES('wf_override','org_a','task.delivery','override','wi_override','waiting','decide',${JSON.stringify(state)}::text::jsonb)`;
+  await owner`INSERT INTO events(id,organization_id,event_type,task_id,actor_type,actor_id,source,payload)
+    VALUES('ev_override','org_a','escalation.raised','wi_override','system','workflow','orchestrator',${JSON.stringify({reason: "implement_failed", actions: ["retry", "stop"]})}::text::jsonb)`;
+  expect((await owner`SELECT state->'escalation'->>'holder' AS holder FROM workflow_runs WHERE id='wf_override'`)[0].holder).toBe("conductor");
+  const read = async () => {
+    const res = await router.handle(new Request("http://dude.test/v1/tasks/wi_override", {headers: {authorization: `Bearer ${ana.key}`}}));
+    expect(res.status).toBe(200);
+    const body = await res.json() as {escalation: unknown; status: string};
+    expect(body.status).toBe("running");
+    return body;
+  };
+  expect((await read()).escalation).toMatchObject({reason: "implement_failed", holder: "conductor", status: "pending", actions: ["retry", "stop"], detail: state.escalation.detail});
+  await owner`UPDATE workflow_runs SET state=jsonb_set(state,'{escalation,decided}','{"action":"stop"}') WHERE id='wf_override'`;
+  expect((await read()).escalation).toBeNull();
+  await owner`UPDATE workflow_runs SET state=${JSON.stringify(state)}::text::jsonb, status='completed' WHERE id='wf_override'`;
+  expect((await read()).escalation).toBeNull();
+  await owner`INSERT INTO workflow_runs(id,organization_id,workflow_type,idempotency_key,task_id,status,step,state)
+    VALUES('wf_next','org_a','task.delivery','next','wi_override','waiting','implement','{"taskId":"wi_override","attempt":2}')`;
+  expect((await read()).escalation).toBeNull();
+});
+
 test("an unknown key, and another organisation's task, are not found", async () => {
   for (const ref of ["WEB-8", "API-3", "wi_b3"]) {
     expect({ ref, status: (await get(ref)).status }).toEqual({ ref, status: 404 });

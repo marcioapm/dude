@@ -637,6 +637,9 @@ export const stopResultSchema = z.object({
 export type StopResult = z.infer<typeof stopResultSchema>;
 
 export const escalationSchema = z.object({
+  /** Who holds the live escalation; omitted on older responses. */
+  holder: z.enum(["conductor", "person"]).optional(),
+  status: z.literal("pending").optional(),
   reason: z.string(),
   /** Per reason: `runId` and `error` for a phase that failed, `findingIds`, `iterations`, PR counts. */
   detail: z.record(z.string(), z.unknown()).nullable().default(null),
