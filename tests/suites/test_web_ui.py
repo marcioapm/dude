@@ -1552,6 +1552,10 @@ def test_everything_waiting_on_you_is_in_one_place(
         "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
     asking = client.create_task(forge_project["id"], "Ask first", repositories=[{"id": target["id"]}])
     client.post(f"/v1/tasks/{asking['id']}/deliver")
+    # The writer asks its conductor first (PR4a): that question is not open
+    # for a person (/v1/questions lists only a person's). The conductor's
+    # relay through ask_person is the question waiting on you.
+    relay_writer_question(client, asking["id"])
     wait_until(lambda: client.get("/v1/questions").json()["questions"], timeout=30, message="no question")
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"implementer": "fake/wait"})})
     requesting = client.create_task(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
