@@ -84,9 +84,9 @@ type Syncer struct {
 	// The hourly rate of the machine a Run runs on, recorded with each Run
 	// when it is submitted (DUDE_MACHINE_USD_PER_HOUR); zero records none.
 	MachineUSDPerHour float64
-	// For tests: the sweep takes a back-off (next_attempt_at) as due this
-	// much earlier, so a retry a minute out is exercised without the wait.
-	// Zero outside tests.
+	// For tests: the sweep takes a back-off (next_attempt_at, and a turn
+	// retry's deliver_after) as due this much earlier, so a retry a minute
+	// out is exercised without the wait. Zero outside tests.
 	RetryAhead time.Duration
 	// For tests: how long a conductor's input waits for its checkout's
 	// sync to be reported; zero is checkoutSyncWait.
@@ -320,7 +320,9 @@ const runFrom = `runs r LEFT JOIN projects p ON p.id = r.project_id JOIN organiz
 // nudge once it has had one.
 const quiet = `(r.status = 'running' AND r.lux_state = 'running' AND r.agent_busy_at IS NOT NULL
 	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND cardinality(r.open_tool_calls) = 0
-	AND ` + quietSince + ` < now() - make_interval(secs => lim.idle_secs))`
+	AND ` + quietSince + ` < now() - make_interval(secs => lim.idle_secs)
+	-- Waiting out a retry's back-off is not going quiet.
+	AND NOT ` + delivery.RetryPending + `)`
 
 // quietSince (SQL): when the agent last did anything, or was nudged.
 const quietSince = `GREATEST(COALESCE(r.agent_active_at, r.agent_busy_at), r.idle_nudged_at)`
@@ -402,6 +404,7 @@ const silentTalker = `(r.role IN ('conductor', 'brainstorm') AND r.phase IS NULL
 	AND r.status = 'running' AND r.lux_state = 'running' AND r.control = 'none'
 	AND r.agent_busy_at IS NOT NULL AND r.turn_done_at IS NULL AND r.waiting_since IS NULL
 	AND r.open_tool_calls_at = '{}'
+	AND NOT ` + delivery.RetryPending + `
 	AND ` + talkerSilentSince + ` <= now() - make_interval(secs => $1::float8)
 	AND (` + silentStreak + ` = 0
 		OR ` + personRearmedSilence + `
@@ -985,7 +988,8 @@ func (s *Syncer) parkStopped(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'paused', dude_pause = $2, lux_stop_reason = $3,
-			control_requested_at = NULL WHERE r.id = $1 AND `+delivery.Parkable, r.ID, r.parkKind(), stopPause)
+			control_requested_at = NULL, harness_state = r.harness_state - 'turnRetries'
+			WHERE r.id = $1 AND `+delivery.Parkable, r.ID, r.parkKind(), stopPause)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -3015,7 +3019,10 @@ func (s *Syncer) pause(ctx context.Context, r phaseRun) error {
 		return err
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'none', control_requested_at = NULL
+		// A turn retry pending is over with the turn: the count starts
+		// again after the resume (ConductorRetrying reads it).
+		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'none', control_requested_at = NULL,
+			harness_state = harness_state - 'turnRetries'
 			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`, r.ID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err

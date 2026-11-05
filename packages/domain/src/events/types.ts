@@ -312,6 +312,13 @@ export const EventTypes = {
    * when the interrupt cancels its turn).
    */
   DirectiveFailed: "run.directive.failed",
+  /**
+   * A directive the Run's stop failed unread ("the run was aborted before
+   * the agent read it"), queued again as the Run is taken back up, ahead
+   * of the pick-up note. Payload: `{ directiveId, resends, reason }`:
+   * `directiveId` the new one, `resends` the one it gives again.
+   */
+  DirectiveRequeued: "run.directive.requeued",
   RunPaused: "run.paused",
   /**
    * dude parked a Run itself: it waits on a person, went quiet, or its
@@ -333,6 +340,16 @@ export const EventTypes = {
    * request). Payload: `{ runId, silentSecs, directiveId }`.
    */
   RunTurnStopped: "run.turn_stopped",
+  /**
+   * The agent's turn failed on a temporary model error (a 429, 502, 503,
+   * 504 or 529, a connection closed mid-response, a dropped stream), and
+   * dude retries it in the same Run once `after` seconds have passed: the
+   * agent is told to carry on. Payload: `{ attempt, maxAttempts, after,
+   * reason, retryAfter }`: `reason` the agent's error, `retryAfter` true
+   * when the error said how long to wait. Past `maxAttempts` the failure
+   * is the Run's (`run.failed`), its error naming the retries.
+   */
+  RunTurnRetried: "run.turn.retried",
   /**
    * A person asked for a paused Run to be resumed. Payload: `{ reason,
    * requestedAt }`: `requestedAt` is when they asked, as the database

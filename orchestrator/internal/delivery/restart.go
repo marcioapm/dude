@@ -124,6 +124,11 @@ func restartRunTx(ctx context.Context, tx pgx.Tx, org, taskID string, in Restart
 	if err := FailUnreadTx(ctx, tx, ref, time.Time{}, UnreadRunAborted); err != nil {
 		return "", err
 	}
+	// Its open question was cancelled with it: if that was all the task
+	// waited on a person for, it waits no more.
+	if err := EndCancelledWaitTx(ctx, tx, org, projectID, taskID); err != nil {
+		return "", err
+	}
 	if in.Replays == "" && reviewRange != nil && reviewRange.Of == RangeSinceLastRound {
 		reviewRange = nil
 	}
@@ -226,17 +231,31 @@ func tierForRole(ctx context.Context, tx pgx.Tx, tier, role string) (string, err
 // A receipt that lands after still delivers it. at is the events' time;
 // zero is now.
 func FailUnreadTx(ctx context.Context, tx pgx.Tx, r RunRef, at time.Time, why string) error {
-	rows, err := tx.Query(ctx, `UPDATE directives SET failed_at = now(), error = $2
-		WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL RETURNING id`, r.RunID, why)
+	// With each, the feedback items it carried, released below: a Run
+	// taken back up is given them again with the directive
+	// (RequeueUnreadTx).
+	rows, err := tx.Query(ctx, `UPDATE directives d SET failed_at = now(), error = $2
+		WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL
+		RETURNING id, ARRAY(SELECT f.id FROM feedback_items f WHERE f.directive_id = d.id AND f.status = 'open' ORDER BY f.id)`,
+		r.RunID, why)
 	if err != nil {
 		return err
 	}
-	unread, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	type unreadDirective struct {
+		ID    string
+		Items []string
+	}
+	unread, err := pgx.CollectRows(rows, pgx.RowToStructByPos[unreadDirective])
 	if err != nil {
 		return err
 	}
-	for _, id := range unread {
-		ev := r.Event(evDirectiveFailed, ledger.ActorSystem, map[string]any{"directiveId": id, "error": why})
+	for _, u := range unread {
+		id := u.ID
+		payload := map[string]any{"directiveId": id, "error": why}
+		if len(u.Items) > 0 {
+			payload["feedbackItemIds"] = u.Items
+		}
+		ev := r.Event(evDirectiveFailed, ledger.ActorSystem, payload)
 		ev.Source, ev.OccurredAt = ledger.SourceRunner, at
 		if _, err := ledger.Append(ctx, tx, ev); err != nil {
 			return err

@@ -212,8 +212,23 @@ func SessionProjects(ctx context.Context, tx pgx.Tx, sessionID string) ([]Linked
 
 // HeldBack (SQL, over directives d): a message held while the agent waits
 // for one member's answer (ask_person with to): it goes with the answer,
-// not as it, so it is not sent while that question is open.
-const HeldBack = `(d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))`
+// not as it, so it is not sent while that question is open. Or a
+// directive not due yet (deliver_after: a turn retried after a temporary
+// model error, its back-off not over): only it waits, not the Run. Never
+// NULL: NOT HeldBack must hold for a directive with no deliver_after.
+const HeldBack = `((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))`
+
+// RetryPending (SQL, over runs r): a retry of the Run's turn after a
+// temporary model error is queued and not sent yet (deliver_after is set
+// only on one).
+const RetryPending = `EXISTS (SELECT 1 FROM directives rd WHERE rd.run_id = r.id AND ` + retryUnsent + `)`
+
+// retryLive (SQL, over directives rd): a turn retry queued or in flight.
+const retryLive = `rd.deliver_after IS NOT NULL AND rd.failed_at IS NULL`
+
+// retryUnsent (SQL, over directives rd): a turn retry not sent yet.
+const retryUnsent = retryLive + ` AND rd.sent_at IS NULL`
 
 // LiveBrainstorm (SQL, over runs r): the session's agent that can still
 // hear a message — at most one (runs_live_brainstorm_idx).
