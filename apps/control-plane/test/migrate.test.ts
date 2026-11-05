@@ -617,7 +617,8 @@ test("247 upgrades 246 with the global conductor-stop index outside a transactio
   }
 }, 120_000);
 
-/** The actual notifier statements, including joins and watermark bounds, not a probe stand-in. */
+/** Supplemental SQL/migration checks: source statements with a fixed ten-minute argument.
+ * Runtime settlement arguments are covered by the real Go notifier tests. */
 async function notifierStatements(): Promise<string[]> {
   const source = await readFile(join(ROOT, "orchestrator/internal/notify/notify.go"), "utf8");
   const literal = (name: string) => {
@@ -634,7 +635,7 @@ async function notifierStatements(): Promise<string[]> {
   return [sweep, advance].map((q) => q.replaceAll("`+notifiedEvents+`", events).replaceAll("$1", "600"));
 }
 
-test("notification watermark retains a late-committing conductor stop", async () => {
+test("notification SQL retains a late-committing conductor stop with fixed settlement", async () => {
   const url = await createDatabase();
   await migrate(url, { log: () => {} });
   const sql = new SQL(url);

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -285,6 +286,93 @@ func TestLateConductorStopHoldsWatermark(t *testing.T) {
 	if len(b.got) != 1 || b.got[0].Body != "Not converging" || !strings.Contains(b.got[0].Title, "was stopped by the conductor") {
 		t.Fatalf("decrypted deliveries=%+v; want only the conductor stop, once", b.got)
 	}
+}
+
+// The global watermark must wait for recent sent events while a lower cursor
+// is still uncommitted. This exercises Advance's real runtime arguments, within
+// the bounded ten-minute contract (not protection for indefinitely open txs).
+func TestGlobalWatermarkWaitsForRecentLateCommit(t *testing.T) {
+	w, ids := newPushWorld(t, "owner")
+	ctx := context.Background()
+	n := w.notifier()
+	w.exec(`UPDATE push_config SET after_cursor = 0`)
+	late, err := pgx.ConnectConfig(ctx, w.owner.Config().Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer late.Close(ctx)
+	tx, err := late.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var lower, higher int64
+	if err := tx.QueryRow(ctx, `INSERT INTO events (id, organization_id, event_type, occurred_at, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'task.decided', now() - interval '9 minutes', 'agent', 'conductor', 'orchestrator',
+		        '{"by":"conductor","action":"stop","note":"Late stop"}') RETURNING cursor`,
+		"evt_late_"+w.org, w.org).Scan(&lower); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.owner.QueryRow(ctx, `INSERT INTO events (id, organization_id, event_type, occurred_at, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'question.asked', now() - interval '9 minutes', 'agent', 'agent', 'orchestrator',
+		        '{"prompt":"Recent ask"}') RETURNING cursor`, "evt_recent_"+w.org, w.org).Scan(&higher); err != nil {
+		t.Fatal(err)
+	}
+	if lower >= higher {
+		t.Fatalf("insert order: lower=%d, higher=%d", lower, higher)
+	}
+	assertState := func(phase string, wantCursor int64, wantSent []int64, wantDeliveries int) {
+		t.Helper()
+		var cursor int64
+		var sent []int64
+		if err := w.owner.QueryRow(ctx, `SELECT after_cursor,
+			ARRAY(SELECT cursor FROM push_sent ORDER BY cursor) FROM push_config`).Scan(&cursor, &sent); err != nil {
+			t.Fatal(err)
+		}
+		if cursor != wantCursor || !slices.Equal(sent, wantSent) {
+			t.Fatalf("%s: watermark=%d, receipts=%v; want watermark=%d, receipts=%v", phase, cursor, sent, wantCursor, wantSent)
+		}
+		b := w.browsers[ids["owner"]]
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if len(b.got) != wantDeliveries || (len(b.got) > 0 && b.got[0].Body != "Recent ask") ||
+			(len(b.got) > 1 && (b.got[1].Body != "Late stop" || !strings.Contains(b.got[1].Title, "was stopped by the conductor"))) {
+			t.Fatalf("%s: decrypted deliveries=%+v; want recent ask then late stop, %d total", phase, b.got, wantDeliveries)
+		}
+	}
+	sweepOne := func() {
+		t.Helper()
+		if handled, err := n.Sweep(ctx); err != nil || handled != 1 {
+			t.Fatalf("sweep handled=%d, err=%v; want 1", handled, err)
+		}
+	}
+	sweepOne() // Only the higher event is visible; send it through the real notifier.
+	assertState("higher sent, lower uncommitted", 0, []int64{higher}, 1)
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState("advance while lower uncommitted", 0, []int64{higher}, 1)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState("lower committed, still recent", 0, []int64{higher}, 1)
+	sweepOne()
+	assertState("lower delivered", 0, []int64{lower, higher}, 2)
+	w.sweep(w.notifier(), 2) // Restart and idle sweeps must retain recent receipts.
+	assertState("recent idle sweeps", 0, []int64{lower, higher}, 2)
+
+	// Advance separately after settlement; use the eligibility clock read by
+	// production (occurred_at), without sleeping or changing the SQL argument.
+	w.exec(`UPDATE events SET occurred_at = now() - interval '11 minutes' WHERE cursor IN ($1, $2)`, lower, higher)
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState("settled advance and cleanup", higher, nil, 2)
+	w.sweep(w.notifier(), 2)
+	assertState("settled restart", higher, nil, 2)
 }
 
 // notificationQueryTrace records statements issued by the real notifier, so
