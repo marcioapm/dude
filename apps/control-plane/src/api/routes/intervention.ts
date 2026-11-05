@@ -86,12 +86,14 @@ async function listRepositoryRequests(ctx: RequestContext): Promise<Response> {
   const requests = await withOrg(ctx.principal.organizationId, async (scope) => {
     return (await scope.sql`
       SELECT q.id, q.run_id AS "runId", q.task_id AS "taskId", q.repository_id AS "repositoryId",
-        r.name AS "repositoryName", q.access, q.reason, q.status, q.error, q.decided_at AS "decidedAt",
+        r.name AS "repositoryName", q.access, q.reason, q.status, q.addressee, q.error, q.decided_at AS "decidedAt",
         q.created_at AS "createdAt"
       FROM repository_requests q JOIN repositories r ON r.id = q.repository_id
       WHERE (${runId}::text IS NULL OR q.run_id = ${runId})
         AND (${taskId}::text IS NULL OR q.task_id = ${taskId})
-        AND (${runId}::text IS NOT NULL OR ${taskId}::text IS NOT NULL OR q.status = 'pending')
+        -- The open list is what needs a person: one its conductor holds
+        -- (addressee 'conductor') is the conductor's.
+        AND (${runId}::text IS NOT NULL OR ${taskId}::text IS NOT NULL OR (q.status = 'pending' AND q.addressee = 'person'))
       ORDER BY q.created_at DESC LIMIT 200`) as Array<Record<string, unknown>>;
   });
   return json({ repositoryRequests: requests });
