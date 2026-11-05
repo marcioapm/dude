@@ -95,7 +95,9 @@
 .reason[data-tone="bad"] .icon {
   color: var(--ds-tone-danger-fg);
 }
-.text {
+.text,
+.reasonMail,
+.reasonWhy {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -152,10 +154,6 @@
 }
 .reasonMail {
   flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--ds-color-text-secondary);
 }
 .reason[data-tone="bad"] .reasonMail {
@@ -163,10 +161,6 @@
 }
 .reasonWhy {
   flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .action {
   flex: none;
@@ -192,7 +186,6 @@
   .reason {
     display: grid;
     grid-template-columns: 12px minmax(0, 1fr) auto;
-    column-gap: var(--ds-space-6);
   }
   .reason > .icon {
     grid-row: 1;
