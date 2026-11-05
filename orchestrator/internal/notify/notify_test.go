@@ -14,10 +14,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 	"github.com/marciomartins/dude/orchestrator/internal/notify"
 )
@@ -233,6 +238,170 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	var gone bool
 	if err := owner.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = $1)`, push.URL+"/stale").Scan(&gone); err != nil || !gone {
 		t.Errorf("a subscription its push service says is gone was kept")
+	}
+}
+
+// A stop that commits behind a later sent ask must still be sweepable. Use
+// explicit ledger cursors and the database clock, not sleeps or commit races.
+func TestLateConductorStopHoldsWatermark(t *testing.T) {
+	w, ids := newPushWorld(t, "owner")
+	ctx := context.Background()
+	n := w.notifier()
+	w.exec(`UPDATE push_config SET after_cursor = 0`)
+	w.exec(`INSERT INTO events (cursor, id, organization_id, event_type, occurred_at, actor_type, actor_id, source, payload) OVERRIDING SYSTEM VALUE
+		VALUES (500, $1, $2, 'task.decided', now() - interval '11 minutes', 'agent', 'conductor', 'orchestrator',
+		        '{"by":"conductor","action":"stop","note":"Not converging"}'),
+		       (1000, $3, $2, 'question.asked', now() - interval '11 minutes', 'agent', 'agent', 'orchestrator', '{}')`,
+		"evt_stop_"+w.org, w.org, "evt_sent_"+w.org)
+	w.exec(`INSERT INTO push_sent (cursor) VALUES (1000)`)
+	assertState := func(wantCursor int64, wantSent int) {
+		t.Helper()
+		var cursor int64
+		var sent int
+		if err := w.owner.QueryRow(ctx, `SELECT after_cursor, (SELECT count(*) FROM push_sent) FROM push_config`).Scan(&cursor, &sent); err != nil {
+			t.Fatal(err)
+		}
+		if cursor != wantCursor || sent != wantSent {
+			t.Fatalf("watermark=%d, sent=%d; want watermark=%d, sent=%d", cursor, sent, wantCursor, wantSent)
+		}
+	}
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState(499, 1)
+	if handled, err := n.Sweep(ctx); err != nil || handled != 1 {
+		t.Fatalf("stop sweep handled=%d, err=%v; want 1", handled, err)
+	}
+	assertState(499, 2)
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertState(1000, 0)
+	w.sweep(w.notifier(), 3)
+	assertState(1000, 0)
+	b := w.browsers[ids["owner"]]
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.got) != 1 || b.got[0].Body != "Not converging" || !strings.Contains(b.got[0].Title, "was stopped by the conductor") {
+		t.Fatalf("decrypted deliveries=%+v; want only the conductor stop, once", b.got)
+	}
+}
+
+// notificationQueryTrace records statements issued by the real notifier, so
+// the plan checks cannot drift into testing a copied/simplified SQL predicate.
+// Only the dedicated test pool uses it; notifier queries run serially.
+type notificationQueryTrace struct {
+	queries []pgx.TraceQueryStartData
+}
+
+func (q *notificationQueryTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	q.queries = append(q.queries, data)
+	return ctx
+}
+
+func (*notificationQueryTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// This opt-in fixture pays for 100k ledger rows once, in a disposable database
+// cloned from actual migrations. It protects the original asks partial index
+// in BOTH actual statements, not the separate conductor-stop access path.
+// Run with DUDE_NOTIFY_PLAN_TEST=1; no timing threshold or exact plan tree.
+func TestNotificationQueriesKeepAsksPartialIndex(t *testing.T) {
+	if os.Getenv("DUDE_NOTIFY_PLAN_TEST") != "1" {
+		t.Skip("set DUDE_NOTIFY_PLAN_TEST=1 for the 100k-row ledger plan regression")
+	}
+	app, owner := dbtest.Open(t)
+	ctx := context.Background()
+	org := dbtest.Org(t, owner)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	trace := &notificationQueryTrace{}
+	cfg := app.Pool.Config()
+	cfg.ConnConfig.Tracer = trace
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	n := &notify.Notifier{DB: &db.DB{Pool: pool}, Log: slog.New(slog.DiscardHandler)}
+	if _, _, err := n.Keys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
+		SELECT 'evt_history_' || i, $1, 'agent.message', 'agent', 'agent', 'runner',
+		       jsonb_build_object('text', repeat('irrelevant ledger history ', 8))
+		FROM generate_series(1, 100000) i`, org)
+	exec(`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
+		VALUES ('evt_ask', $1, 'question.asked', 'agent', 'agent', 'orchestrator', '{"prompt":"Continue?"}'),
+		       ('evt_stop', $1, 'task.decided', 'agent', 'conductor', 'orchestrator', '{"by":"conductor","action":"stop"}')`, org)
+	exec(`ANALYZE events`)
+	trace.queries = nil
+	if _, err := n.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Advance(ctx); err != nil {
+		t.Fatal(err)
+	}
+	queries := map[string]pgx.TraceQueryStartData{}
+	for _, q := range trace.queries {
+		switch {
+		case strings.HasPrefix(q.SQL, "SELECT e.cursor, e.organization_id, o.slug, e.event_type, COALESCE(e.run_id"):
+			queries["selection"] = q
+		case strings.HasPrefix(q.SQL, "UPDATE push_config SET after_cursor"):
+			queries["pending-minimum"] = q
+		}
+	}
+	if len(queries) != 2 {
+		t.Fatalf("captured %d notifier statements, want selection and pending-minimum", len(queries))
+	}
+	for _, name := range []string{"selection", "pending-minimum"} {
+		t.Run(name, func(t *testing.T) {
+			q := queries[name]
+			tx, err := owner.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err := tx.Exec(ctx, `SET LOCAL ROLE dude_sweeper`); err != nil {
+				t.Fatal(err)
+			}
+			var raw []byte
+			if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+q.SQL, q.Args...).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var plan any
+			if err := json.Unmarshal(raw, &plan); err != nil {
+				t.Fatal(err)
+			}
+			var usesAsksIndex func(any) bool
+			usesAsksIndex = func(v any) bool {
+				switch node := v.(type) {
+				case map[string]any:
+					if node["Index Name"] == "events_asks_v2_idx" {
+						return true
+					}
+					for _, child := range node {
+						if usesAsksIndex(child) {
+							return true
+						}
+					}
+				case []any:
+					for _, child := range node {
+						if usesAsksIndex(child) {
+							return true
+						}
+					}
+				}
+				return false
+			}
+			if !usesAsksIndex(plan) {
+				t.Fatalf("actual %s query lost asks partial-index access with 100k irrelevant events; plan: %s", name, raw)
+			}
+			t.Logf("actual %s query uses events_asks_v2_idx with 100000 irrelevant events", name)
+		})
 	}
 }
 
