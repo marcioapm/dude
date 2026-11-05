@@ -52,7 +52,7 @@ func AskConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, items []Question
 	} else if open {
 		return "", false, refuseText(rQuestionRequiresCurrentRun)
 	}
-	unavailable, err := conductorUnavailableTx(ctx, tx, ref.TaskID, nil)
+	unavailable, err := questionConductorUnavailableTx(ctx, tx, ref.TaskID)
 	if err != nil {
 		return "", false, err
 	}
@@ -80,6 +80,37 @@ func AskConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, items []Question
 	return id, true, err
 }
 
+// questionConductorUnavailableTx keeps a usable live conductor even if its
+// configured tier was removed. Without one, resolve the real role settings for
+// either voice; a question cannot wait for a model that cannot be started.
+func questionConductorUnavailableTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
+	var live bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runs r WHERE r.task_id=$1 AND `+LiveConductor+` AND NOT COALESCE(`+Ending+`,false))`, taskID).Scan(&live); err != nil {
+		return false, err
+	}
+	if live {
+		return false, nil
+	}
+	_, noModel, err := quietFactsTx(ctx, tx, taskID)
+	if err != nil || noModel {
+		return noModel, err
+	}
+	return conductorUnavailableTx(ctx, tx, taskID, nil)
+}
+
+// LockAnswerTx is the common prelock for task question answers. Call it before
+// locking any question or Run: Chat → delivery → task → question → Run.
+func LockAnswerTx(ctx context.Context, tx pgx.Tx, taskID string) (*Delivery, error) {
+	if taskID == "" {
+		return nil, nil
+	}
+	if err := LockChat(ctx, tx, taskID); err != nil {
+		return nil, err
+	}
+	_, d, err := LockEscalationTx(ctx, tx, taskID)
+	return d, err
+}
+
 // ConductAnswerQuestion settles only a current writer's conductor-addressed
 // question. Chat, delivery and task locks precede question/run locks, as on
 // the owner's answer path. Closing the row and queuing its directive are atomic.
@@ -87,11 +118,8 @@ func ConductAnswerQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id, answe
 	if err := liveConductor(ctx, tx, ref); err != nil {
 		return "", err
 	}
-	d, err := LoadDelivery(ctx, tx, ref.TaskID)
+	d, err := LockAnswerTx(ctx, tx, ref.TaskID)
 	if err != nil {
-		return "", err
-	}
-	if err := LockTaskTx(ctx, tx, ref.TaskID); err != nil {
 		return "", err
 	}
 	halted, err := HaltedTx(ctx, tx, ref.TaskID)

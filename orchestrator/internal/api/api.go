@@ -809,25 +809,13 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 	}
 	var out map[string]any
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		// A conductor's question may decide the task's escalation: the
-		// task's Chat lock, its delivery and task are taken before the
-		// question, in delivery.LockEscalationTx's order, and the owner is
-		// read after. The Chat lock first, as Chat answering the same
-		// question takes it: a publish holds it with the conductor's Run
-		// before the delivery. A question's task and Run never change, so
-		// reading them unlocked is safe.
-		var taskID, role string
-		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(q.task_id, ''), COALESCE(r.role::text, '') FROM questions q
-			JOIN runs r ON r.id = q.run_id WHERE q.id = $1`, questionID).Scan(&taskID, &role); err != nil && !db.IsNotFound(err) {
+		// Task and Run identity are immutable; prelock before question/Run.
+		var taskID string
+		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(task_id, '') FROM questions WHERE id=$1`, questionID).Scan(&taskID); err != nil && !db.IsNotFound(err) {
 			return err
 		}
-		if role == delivery.RoleConductor {
-			if err := delivery.LockChat(r.Context(), tx, taskID); err != nil {
-				return err
-			}
-			if _, _, err := delivery.LockEscalationTx(r.Context(), tx, taskID); err != nil {
-				return escalationFailure(err)
-			}
+		if _, err := delivery.LockAnswerTx(r.Context(), tx, taskID); err != nil {
+			return escalationFailure(err)
 		}
 		var runID, status, prompt string
 		var items []delivery.QuestionItem

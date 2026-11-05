@@ -110,10 +110,8 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 		if err != nil {
 			return err
 		}
-		// The message may answer the conductor's question about the
-		// escalation: the task's row after the delivery decideFor locked,
-		// before the question (delivery.LockEscalationTx's order).
-		if err := delivery.LockTaskTx(r.Context(), tx, taskID); err != nil {
+		// Shared answer prelock before taking any question/Run locks.
+		if _, err := delivery.LockAnswerTx(r.Context(), tx, taskID); err != nil {
 			return err
 		}
 		var runID string
