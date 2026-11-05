@@ -2200,7 +2200,7 @@ more transcript lines (37.8 vs 30.1) and 35% more sidebar tree rows (23 vs
 | `<Sidebar collapsed onCollapsedChange railMark railSessions railFooter />` | a second, hand-drawn rail beside the sidebar, or a rail on a phone |
 | `<ModelPicker tiers organization value onChange />` in the composer's `toAside` and the rail's Model block, a tier with no model disabled with its reason | a `Select` of every tier × harness |
 | `<OrgSwitcher you current memberships invitations />` as the band's footer and `variant="rail"` in the rail | a second organisation menu in the header, or a `Select` of organisations |
-| `<EmailChipsInput entries views={emailChipViews(entries, classify)} />` | a `Textarea` of comma-separated addresses, or a chip that says "invalid" in red alone |
+| `<EmailChipsInput entries views={emailChipViews(entries, classify)} />` | a `Textarea` of comma-separated addresses, a chip that says "invalid" in red alone, or a reason written inside the chip |
 
 ## Components
 
@@ -2757,21 +2757,29 @@ are in `docs/design/accounts.md`):
   organisations to switch between (API-key sign-in), so every sign-in mode
   reaches them through the one menu.
 - **EmailChipsInput** — email addresses as chips, for an invite: `Input`'s
-  field box holding chips and a bare input. Enter, a comma, a semicolon, a
-  space or leaving the field make chips of what is typed; a paste is split
-  by line, comma and semicolon (`parseEmailEntries`): `Name <email>` keeps
-  the name, a tab-separated row's cell with an `@` is the address and its
-  first other cell the name; addresses are trimmed and lower-cased.
-  Backspace in the empty field takes the last chip back; each chip has its
-  ✕ (named "Remove <address>"). The caller says what each chip means with
-  `views` (`emailChipViews(entries, classify)`, which decides `invalid`
-  and `duplicate` itself): `valid` ✓, `renew` (expired, renewed with the
-  same link), `invalid` (danger), `member` and `duplicate` (struck
-  through), `invited` (with one inline `action`, "Copy their link"). Each
-  is told by glyph and words, and a screen reader hears "will be
-  invited" or "left out". The line under the field (`emailChipSummary`,
-  live, describing the field) counts them: "2 new · 1 renewed · 1 not an
-  email … The other 4 are left out."
+  field box, one control tall (`--ds-size-control-md`), growing with its
+  chips to five rows and then scrolling, holding chips and a bare input.
+  Enter, a comma, a semicolon, a space, Tab or leaving the field make
+  chips of what is typed; a paste is split by line, comma and semicolon
+  (`parseEmailEntries`): `Name <email>` keeps the name, a tab-separated
+  row's cell with an `@` is the address and its first other cell the name;
+  addresses are trimmed and lower-cased. Backspace in the empty field takes
+  the last chip back; each chip has its ✕ (named "Remove <address>"). The
+  caller says what each chip means with `views` (`emailChipViews(entries,
+  classify)`, which decides `invalid` and `duplicate` itself). **A chip
+  carries the address only** (`--ds-size-chip` tall, `--ds-radius-mark`,
+  name semibold before the muted address); its state is its tone and
+  glyph: `valid` plain, `renew` ↻ (expired, renewed with the same link),
+  `invalid` danger with ⚠, `member`, `invited` and `duplicate` struck
+  through on a hairline. A screen reader hears the reason and "will be
+  invited", "will be renewed" or "left out" on the chip. Under the field:
+  the count line (`emailChipSummary`, live, describing the field: "3 to
+  invite (1 renewed) · 4 left out") with **Remove left out** at its end,
+  then one line per address that is not plainly invited — glyph, address,
+  the view's `note` (or "not an email" / "twice in the list"), and its one
+  `action` ("Copy their link"). Each reason is said there once, never in
+  the chip. The `hint` shows only while the field is empty. Under 520px a
+  reason drops under its address.
 - **InvitationLinkList** — each invitee with their link, to send
   themselves: name over address, role and "renewed, same link"; the link
   in mono; **Copy** named "Copy <who>'s link". On the sunken shade, rows a

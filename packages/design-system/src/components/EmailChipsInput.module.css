@@ -1,12 +1,13 @@
 /*
- * The invite's email field: Input's field box holding chips and a bare
- * input. Each chip's tone is told by its glyph and words too.
+ * The invite's email field: Input's field box, one control tall, holding
+ * address chips and a bare input. A chip carries the address only; why one
+ * is left out or renewed is said once, in the list under the field.
  */
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: var(--ds-space-4);
+  gap: var(--ds-space-6);
   min-width: 0;
 }
 .label {
@@ -19,10 +20,10 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--ds-space-4);
-  min-height: 88px;
-  max-height: 240px;
+  min-height: var(--ds-size-control-md);
+  max-height: calc(var(--ds-size-control-md) * 5);
   overflow: auto;
-  padding: var(--ds-space-6);
+  padding: var(--ds-space-4) var(--ds-space-6);
   background: var(--ds-color-field-bg);
   border: 1px solid var(--ds-color-border);
   border-radius: var(--ds-radius-control);
@@ -44,10 +45,10 @@
   list-style: none;
 }
 .input {
-  flex: 1;
-  min-width: 180px;
+  flex: 1 1 140px;
+  min-width: 120px;
   height: var(--ds-size-chip);
-  padding: 0;
+  padding: 0 var(--ds-space-2);
   border: 0;
   outline: none;
   background: none;
@@ -63,41 +64,36 @@
   align-items: center;
   gap: var(--ds-space-4);
   max-width: 100%;
-  min-height: var(--ds-size-chip);
-  padding: 0 var(--ds-space-2) 0 var(--ds-space-8);
-  border-radius: var(--ds-radius-full);
+  height: var(--ds-size-chip);
+  padding: 0 0 0 var(--ds-space-8);
+  border-radius: var(--ds-radius-mark);
   background: var(--ds-color-active-wash);
-  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
-  font-size: var(--ds-text-xs);
+  font-size: var(--ds-text-sm);
+  line-height: 1;
   color: var(--ds-color-text-primary);
 }
 .chip[data-tone="bad"] {
   background: var(--ds-tone-danger-bg);
-  box-shadow: inset 0 0 0 1px var(--ds-tone-danger-border);
-}
-.chip[data-tone="info"] {
-  background: var(--ds-tone-info-bg);
-  box-shadow: inset 0 0 0 1px var(--ds-tone-info-border);
+  color: var(--ds-tone-danger-fg);
 }
 .chip[data-tone="skip"] {
   background: transparent;
-  box-shadow: inset 0 0 0 1px var(--ds-color-border);
+  box-shadow: inset 0 0 0 1px var(--ds-color-border-subtle);
   color: var(--ds-color-text-muted);
 }
-.chip[data-tone="skip"] .mail {
+.chip[data-tone="skip"] .text {
   text-decoration: line-through;
 }
 .icon {
   flex: none;
 }
-.chip[data-tone="ok"] .icon {
-  color: var(--ds-tone-success-fg);
-}
-.chip[data-tone="bad"] .icon {
-  color: var(--ds-tone-danger-fg);
-}
-.chip[data-tone="info"] .icon {
+.chip[data-tone="info"] .icon,
+.reason[data-tone="info"] .icon {
   color: var(--ds-tone-info-fg);
+}
+.chip[data-tone="bad"] .icon,
+.reason[data-tone="bad"] .icon {
+  color: var(--ds-tone-danger-fg);
 }
 .text {
   min-width: 0;
@@ -111,25 +107,79 @@
 .name + .mail {
   color: var(--ds-color-text-muted);
 }
-.note {
+.remove {
+  --btn-h: var(--ds-size-chip);
+  width: var(--ds-size-chip);
+  --btn-fg: var(--ds-color-text-muted);
+  border-radius: var(--ds-radius-mark);
+}
+.hint {
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-text-muted);
+}
+.summaryRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ds-space-8);
+}
+.summaryRow[hidden] {
+  display: none;
+}
+.summary {
+  margin: 0;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.reasons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ds-text-sm);
+}
+.reason {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-6);
+  min-width: 0;
+  color: var(--ds-color-text-muted);
+}
+.reason[data-tone="bad"] {
+  color: var(--ds-tone-danger-fg);
+}
+.reasonMail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ds-color-text-secondary);
 }
-.note::before {
-  content: "· ";
+.reason[data-tone="bad"] .reasonMail {
+  color: inherit;
 }
-.chip[data-tone="bad"] .note {
-  color: var(--ds-tone-danger-fg);
+.reasonWhy {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .action {
-  padding: 0 var(--ds-space-4);
+  flex: none;
+  padding: 0 var(--ds-space-2);
   border: 0;
   border-radius: var(--ds-radius-mark);
   background: none;
   color: var(--ds-color-accent-text);
   font: inherit;
+  font-size: var(--ds-text-sm);
   font-weight: var(--ds-weight-semibold);
   white-space: nowrap;
+  cursor: pointer;
 }
 .action:hover {
   text-decoration: underline;
@@ -138,21 +188,27 @@
   outline: none;
   box-shadow: 0 0 0 var(--ds-focus-ring-width) var(--ds-color-focus-ring);
 }
-.remove {
-  --btn-h: 18px;
-  width: 18px;
-  --btn-fg: var(--ds-color-text-muted);
-  border-radius: var(--ds-radius-full);
-}
-.hint {
-  font-size: var(--ds-text-xs);
-  color: var(--ds-color-text-muted);
-}
-.summary {
-  margin: 0;
-  font-size: var(--ds-text-sm);
-  color: var(--ds-color-text-secondary);
-}
-.summary:empty {
-  display: none;
+@media (max-width: 520px) {
+  .reason {
+    display: grid;
+    grid-template-columns: 12px minmax(0, 1fr) auto;
+    column-gap: var(--ds-space-6);
+  }
+  .reason > .icon {
+    grid-row: 1;
+  }
+  .reasonMail {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .reasonWhy {
+    grid-column: 2;
+    grid-row: 2;
+    white-space: normal;
+    font-size: var(--ds-text-xs);
+  }
+  .reason > .action {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
 }
