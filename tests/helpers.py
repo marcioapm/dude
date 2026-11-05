@@ -430,19 +430,24 @@ def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, 
 
 
 
-def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None = None) -> tuple[dict, dict]:
+def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None = None, *, explicit_relay: bool = False) -> tuple[dict, dict]:
     """Explicit PR4a relay: two questions, no automatic PR4b relay implied.
 
     The writer's routed question remains conductor-held. The scripted conductor
     asks the same items of the real owner through ask_person; callers exercise
     that person's question (including attachments and ownership) in its Chat.
+    Only explicit_relay opts into PR4b's linked, automatic human forwarding;
+    existing callers retain the separate conductor answer turn.
     """
     routed = wait_until(lambda: next((e for e in client.events(taskId=task_id, limit=1000)
         if e["eventType"] == "question.routed" and (writer_id is None or e["runId"] == writer_id)), None),
         timeout=60, message="the writer never routed its question")
     writer = {"id": routed["payload"]["questionId"], "runId": routed["runId"]}
+    ask = {"questions": routed["payload"]["items"]}
+    if explicit_relay:
+        ask["relay"] = writer["id"]
     response = client.post(f"/v1/tasks/{task_id}/chat", {"text": "Relay this writer question to the owner.\n"
-        + "tool: ask_person " + json.dumps({"questions": routed["payload"]["items"]})})
+        + "tool: ask_person " + json.dumps(ask)})
     assert response.status_code in (200, 201), response.text
     conductor = response.json()["runId"]
     human = wait_until(lambda: next((q for q in client.get("/v1/questions", params={"runId": conductor}).json()["questions"]

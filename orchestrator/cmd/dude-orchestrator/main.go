@@ -107,6 +107,22 @@ func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) 
 	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
 }
 
+// testConductorAnswerWait is an opt-in process-start test clock, deliberately
+// outside the runtime configuration schema and project settings. Zero leaves
+// Syncer's production default (delivery.ConductorAnswerWait) unchanged.
+func testConductorAnswerWait(getenv func(string) string) (time.Duration, error) {
+	const key = "DUDE_TEST_CONDUCTOR_ANSWER_WAIT"
+	value := getenv(key)
+	if value == "" {
+		return 0, nil
+	}
+	wait, err := time.ParseDuration(value)
+	if err != nil || wait <= 0 {
+		return 0, fmt.Errorf("%s must be a positive Go duration", key)
+	}
+	return wait, nil
+}
+
 func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -119,6 +135,10 @@ func run(log *slog.Logger) error {
 		fmt.Fprintln(os.Stderr, missing.Error())
 		os.Exit(2)
 	}
+	if err != nil {
+		return err
+	}
+	answerWait, err := testConductorAnswerWait(os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -191,7 +211,8 @@ func run(log *slog.Logger) error {
 		DB: database, Lux: luxClient, Objects: objectStore,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log, Judge: judgeService,
 		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm, WakeWindow: set.WakeWindow, KeepFor: set.KeepStopped,
-		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
+		ConductorAnswerWait: answerWait,
+		DiffEvery:           set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 		// A pass stops waiting for a slow Run or publish after 2 s, so the
 		// next pass reaches every other one; the slow one keeps its slot.
 		SweepWait: 2 * time.Second,
