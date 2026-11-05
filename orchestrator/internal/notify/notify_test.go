@@ -178,6 +178,14 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 		"evt_s_"+org, org, "prj_"+org, "wi_"+org, "run_"+org, `{"conducted":false,"text":"Your implement Run has made no progress for 2.0 h."}`,
 		"evt_sc_"+org)
 
+	// Conductor stops are delivered to the owner once; retries and raised
+	// conductor-held escalations are not person questions or pushes.
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'task.decided', $3, $4, 'agent', 'conductor', 'orchestrator', '{"by":"conductor","action":"stop","note":"The approach is not converging."}'),
+		       ($5, $2, 'task.decided', $3, $4, 'agent', 'conductor', 'orchestrator', '{"by":"conductor","action":"retry"}'),
+		       ($6, $2, 'escalation.raised', $3, $4, 'system', 'workflow', 'orchestrator', '{"holder":"conductor"}')`,
+		"evt_stop_"+org, org, "prj_"+org, "wi_"+org, "evt_retry_"+org, "evt_raised_"+org)
+
 	// Other tests' asks may be swept too; ours must be among them.
 	for range 5 {
 		if _, err := n.Sweep(ctx); err != nil {
@@ -186,18 +194,23 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	}
 	mine.mu.Lock()
 	defer mine.mu.Unlock()
-	if len(mine.got) != 3 {
-		t.Fatalf("the owner's browser got %d notifications, want 3: %+v", len(mine.got), mine.got)
+	if len(mine.got) != 4 {
+		t.Fatalf("the owner's browser got %d notifications, want 4: %+v", len(mine.got), mine.got)
 	}
 	// Sent concurrently, so in any order.
-	var m, stalled notify.Message
+	var m, stalled, stopped notify.Message
 	for _, g := range mine.got {
 		switch g.Title {
+		case "TEXT-19 was stopped by the conductor":
+			stopped = g
 		case "TEXT-19 · Implementer asks":
 			m = g
 		case "TEXT-19 · Implementer has made no progress":
 			stalled = g
 		}
+	}
+	if stopped.Body != "The approach is not converging." || stopped.URL != "#/o/"+org+"/task/wi_"+org {
+		t.Errorf("the conductor stop's notification = %+v", stopped)
 	}
 	// Links name the organisation (its slug is its id here, dbtest.Org).
 	if stalled.Body != "Your implement Run has made no progress for 2.0 h." || stalled.URL != "#/o/"+org+"/task/wi_"+org {
