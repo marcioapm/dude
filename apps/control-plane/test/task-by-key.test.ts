@@ -125,6 +125,7 @@ test("a live conductor-held escalation is visible for owner override, never a de
   expect((await read()).escalation).toBeNull();
   await owner`UPDATE workflow_runs SET state=${JSON.stringify(state)}::text::jsonb, status='completed' WHERE id='wf_override'`;
   expect((await read()).escalation).toBeNull();
+  await owner`UPDATE workflow_runs SET status='waiting' WHERE id='wf_override'`;
   await owner`INSERT INTO workflow_runs(id,organization_id,workflow_type,idempotency_key,task_id,status,step,state)
     VALUES('wf_next','org_a','task.delivery','next','wi_override','waiting','implement','{"taskId":"wi_override","attempt":2}')`;
   expect((await read()).escalation).toBeNull();
