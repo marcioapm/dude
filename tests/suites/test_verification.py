@@ -105,9 +105,11 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     assert stopped["escalation"]["reason"] == "test_blocked", stopped["escalation"]
     assert stopped["escalation"]["actions"] == ["retry", "waive", "stop"]
     assert [r["phase"] for r in stopped["runs"]].count("fix") == 1, "a blocked test must not send a fix"
+    # A waiver choice needs a proposed reason. Do not supply one: the person
+    # must give their own reason through the banner, not approve a hidden note.
     stopped = ask_person_about_escalation(
-        client, task["id"], question="Test blocked: waive the criteria after checking by hand?",
-        actions=["retry", "waive", "stop"], recommended="waive",
+        client, task["id"], question="Test blocked: check by hand before deciding whether to waive?",
+        actions=["retry", "stop"], recommended="stop",
     )
     assert stopped["status"] == "awaiting_input"
     assert stopped["escalation"]["reason"] == "test_blocked", stopped["escalation"]
