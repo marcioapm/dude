@@ -9,15 +9,16 @@ import styles from "./EmailChipsInput.module.css";
  * Each kind's tone and glyph. A chip shows the address only; its tone says
  * whether it is taken (plain), renewed (glyph), not an email (danger) or
  * left out (struck through). The reason is said in words once, in the list
- * under the field, and to a screen reader on the chip itself.
+ * under the field (the view's note, else `reason`), and to a screen reader
+ * on the chip itself (`words`).
  */
-const CHIP: Record<EmailChipKind, { readonly tone: "ok" | "info" | "bad" | "skip"; readonly icon: IconName | null; readonly words: string }> = {
-  valid: { tone: "ok", icon: null, words: "will be invited" },
-  renew: { tone: "info", icon: "retry", words: "will be renewed" },
-  invalid: { tone: "bad", icon: "warning", words: "left out" },
-  member: { tone: "skip", icon: "human", words: "left out" },
-  invited: { tone: "skip", icon: "link", words: "left out" },
-  duplicate: { tone: "skip", icon: "minus", words: "left out" },
+const CHIP: Record<EmailChipKind, { readonly tone: "ok" | "info" | "bad" | "skip"; readonly icon: IconName | null; readonly words: string; readonly reason: string }> = {
+  valid: { tone: "ok", icon: null, words: "will be invited", reason: "will be invited" },
+  renew: { tone: "info", icon: "retry", words: "will be renewed", reason: "will be renewed" },
+  invalid: { tone: "bad", icon: "warning", words: "left out", reason: "not an email" },
+  member: { tone: "skip", icon: "human", words: "left out", reason: "left out" },
+  invited: { tone: "skip", icon: "link", words: "left out", reason: "left out" },
+  duplicate: { tone: "skip", icon: "minus", words: "left out", reason: "twice in the list" },
 };
 
 export interface EmailChipsInputProps {
@@ -83,7 +84,7 @@ export function EmailChipsInput({ entries, onChange, views, label = "Emails", hi
               <li key={e.key} className={styles["reason"]} data-tone={spec.tone} data-reason={view.kind}>
                 {spec.icon ? <Icon name={spec.icon} size={12} className={styles["icon"]} /> : null}
                 <span className={styles["reasonMail"]}>{e.email ?? e.raw}</span>
-                <span className={styles["reasonWhy"]}>{view.note ?? (view.kind === "invalid" ? "not an email" : view.kind === "duplicate" ? "twice in the list" : spec.words)}</span>
+                <span className={styles["reasonWhy"]}>{view.note ?? spec.reason}</span>
                 {view.action ? (
                   <button type="button" className={styles["action"]} disabled={disabled} onClick={() => view.action!.onClick()}>
                     {view.action.label}
