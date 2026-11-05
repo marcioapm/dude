@@ -16,12 +16,20 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import ssl
+import subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, query, sign_in, wait_until
+from helpers import ApiClient, create_api_key, create_organization, query, relay_writer_question, sign_in, wait_until, webhook_secret
+from env import TestEnvironment as Environment
+from fake_github import FakeGitHub
+from suites.test_delivery import (_stopped_epoch, _timed_resume, _resume_row_in_order,
+                                 _unparked_and_timed_name_the_placement_after)
 
 SHOTS = Path(os.environ["DUDE_TEST_SHOTS"]) if os.environ.get("DUDE_TEST_SHOTS") else None
 
@@ -254,4 +262,187 @@ def test_write_to_the_agent_instead_leaves_the_question_open(
     wait_until(lambda: any(e["eventType"] == "chat.message" and e["payload"].get("text") == "Which file has the retry?"
                            for e in client.events(runId=run, limit=1000)), timeout=30, message="the message never went")
     assert client.get(f"/v1/questions?runId={run}").json()["questions"][0]["status"] == "open"
+    assert console_errors == []
+
+
+@pytest.fixture
+def deadline_stack(tmp_path):
+    """Only this isolated process opts into a 30s wait. Real TLS push delivery
+    goes to a local stand-in provider, with valid browser-generated keys."""
+    cert, key = tmp_path / "push.crt", tmp_path / "push.key"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", str(key), "-out", str(cert), "-days", "1",
+                    "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost"],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pushes = []
+
+    class PushService(BaseHTTPRequestHandler):
+        def do_POST(self):
+            pushes.append({"body": self.rfile.read(int(self.headers["content-length"])),
+                           "authorization": self.headers.get("authorization")})
+            self.send_response(201)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), PushService)
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(cert, key)
+    server.socket = tls.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    # run_tests.py exports its log directory for fixture reconstruction. This
+    # second live stack must not share fake-lux/slack address files with it.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("DUDE_TEST_LOG_DIR", str(tmp_path / "deadline-logs"))
+        stack = Environment(orchestrator_env={"DUDE_TEST_CONDUCTOR_ANSWER_WAIT": "30s", "SSL_CERT_FILE": str(cert)})
+    forge = FakeGitHub(stack.git_root, owner="deadline")
+    try:
+        stack.setup()
+        assert stack.wait_healthy(timeout=30)
+        forge.start()
+        org_id = create_organization(stack.owner_dsn, "deadline-owner")
+        api_key = create_api_key(stack.owner_dsn, org_id)
+        api = ApiClient(stack.control_plane_url, api_key)
+        credential = api.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": forge.api_url})
+        assert credential.status_code == 200, credential.text
+        forge.webhook_url = stack.control_plane_url + credential.json()["webhookPath"]
+        forge.webhook_secret = webhook_secret(stack.owner_dsn, org_id)
+        project = api.create_project(name="Deadline", slug="deadline", agentModels=api.on_models({
+            "conductor": "fake/scripted", "implementer": "fake/ask",
+            "reviewer": "fake/scripted", "simplifier": "fake/scripted"}),
+            deliveryPolicy={"requiredReviewers": ["correctness"], "test": False},
+            repositories=[{"name": "greeter", "url": forge.clone_url, "defaultBranch": "main"}])
+        yield stack, api, api_key, project, f"https://localhost:{server.server_port}/push", pushes
+    finally:
+        forge.stop()
+        stack.teardown()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _writer_asks(client: ApiClient, project: dict, owner_dsn: str) -> tuple[dict, dict, dict]:
+    # Explicit conductor tool call, no defaults-taking/auto-authorizing model.
+    models = {**project["agentModels"], **client.on_models({"conductor": "fake/scripted", "implementer": "fake/ask"})}
+    assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
+    task = client.create_task(project["id"], "Writer asks before editing")
+    started = client.post(f"/v1/tasks/{task['id']}/chat", {"text": 'tool: start_phase {"phase":"implement"}'})
+    assert started.status_code in (200, 201), started.text
+    routed = wait_until(lambda: next((e for e in client.events(taskId=task["id"], limit=1000)
+                                      if e["eventType"] == "question.routed"), None), timeout=60)
+    writer = client.get_run(routed["runId"])
+    assert writer["phase"] == "implement" and writer["attempt"] == 1, writer
+    assert query(owner_dsn, "SELECT id, run_id, addressee, status FROM questions WHERE id = %s",
+                 (routed["payload"]["questionId"],)) == [{"id": routed["payload"]["questionId"],
+                 "run_id": writer["id"], "addressee": "conductor", "status": "open"}]
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] != "awaiting_input"
+    return task, writer, routed
+
+
+def _held_in_browser(page: Page, web_url: str, api_key: str, task: dict) -> None:
+    sign_in(page, web_url, api_key, at=f"#/task/{task['id']}")
+    nav = page.locator(f'[data-nav-key="task:{task["id"]}"]')
+    expect(nav).to_be_visible(timeout=30_000)
+    expect(nav).not_to_have_attribute("data-triage", "needs_you")
+    page.goto(f"{web_url}#/waiting")
+    expect(page.get_by_test_id("inbox").get_by_role("listitem")).to_have_count(0)
+
+
+def _assert_human_resume(client: ApiClient, env, owner_dsn: str, task: dict, writer: dict,
+                         question_id: str, stopped_epoch: int, *, linked: bool = False) -> None:
+    timed = _timed_resume(client, writer["id"], "answer")
+    _unparked_and_timed_name_the_placement_after(client, env, owner_dsn, writer["id"], timed, stopped_epoch)
+    _resume_row_in_order(owner_dsn, writer["id"], timed)
+    events = client.events(runId=writer["id"], limit=1000)
+    answered = [e for e in events if e["eventType"] == "question.answered" and e["payload"]["questionId"] == question_id]
+    assert len(answered) == 1, answered
+    if linked:
+        assert answered[0]["payload"]["by"] == "person", answered
+    attribution = query(owner_dsn, "SELECT answered_by_person, answered_by_run FROM questions WHERE id = %s", (question_id,))[0]
+    assert attribution["answered_by_person"] and attribution["answered_by_run"] is None, attribution
+    assert query(owner_dsn, "SELECT actor_type FROM events WHERE cursor = %s", (answered[0]["cursor"],))[0]["actor_type"] != "agent"
+    delivered = [e for e in events if e["eventType"] == "run.directive.delivered"
+                 and e["payload"].get("directiveId") == answered[0]["payload"]["directiveId"]]
+    assert len(delivered) == 1, delivered
+    directives = query(owner_dsn, "SELECT text FROM directives WHERE run_id = %s", (writer["id"],))
+    assert len(directives) == 1, directives
+    if linked:
+        assert "It is their decision" in directives[0]["text"], directives
+    current = client.get_run(writer["id"])
+    assert current["phase"] == writer["phase"] and current["attempt"] == writer["attempt"]
+    assert current["taskId"] == task["id"] and timed["runId"] == writer["id"]
+    assert len([e for e in events if e["eventType"] == "run.unparked"]) == 1
+
+
+@pytest.mark.ui
+def test_linked_writer_relay_has_one_owner_card_and_one_human_resume(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, env, console_errors: list
+):
+    task, run, routed = _writer_asks(client, forge_project, owner_dsn)
+    _held_in_browser(page, web_url, org["api_key"], task)
+    wait_until(lambda: client.get_run(run["id"])["status"] == "paused", timeout=30)
+    stopped = _stopped_epoch(env, owner_dsn, run["id"])
+    writer, human = relay_writer_question(client, task["id"], run["id"], explicit_relay=True)
+    assert writer["id"] == routed["payload"]["questionId"]
+    assert query(owner_dsn, "SELECT relays FROM questions WHERE id = %s", (human["id"],)) == [{"relays": writer["id"]}]
+    page.reload()
+    rows = page.get_by_test_id("inbox").get_by_role("listitem")
+    expect(rows).to_have_count(1, timeout=30_000)
+    expect(rows).to_contain_text("Should FACTORY.md be in English?")
+    expect(page.locator(f'[data-nav-key="task:{task["id"]}"]')).to_have_attribute("data-triage", "needs_you")
+    rows.get_by_role("button", name="Answer", exact=True).click()
+    expect(page.get_by_test_id("question-turn")).to_have_count(1)
+    page.get_by_test_id("question-turn").get_by_role("radio", name="yes", exact=True).click()
+    expect(page.get_by_test_id("question-record").last).to_contain_text("yes", timeout=30_000)
+    assert query(owner_dsn, "SELECT status, answer, answered_by_run FROM questions WHERE id IN (%s, %s) ORDER BY id",
+                 (writer["id"], human["id"])) == [
+                     {"status": "answered", "answer": "yes", "answered_by_run": None},
+                     {"status": "answered", "answer": "yes", "answered_by_run": None}]
+    _assert_human_resume(client, env, owner_dsn, task, run, writer["id"], stopped, linked=True)
+    asked = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "question.asked"]
+    assert len(asked) == 1 and asked[0]["payload"]["questionId"] == human["id"]
+    page.goto(f"{web_url}#/waiting")
+    expect(page.get_by_test_id("inbox").get_by_role("listitem")).to_have_count(0)
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_writer_deadline_hands_original_question_to_owner_and_pushes_once(page: Page, deadline_stack, console_errors: list):
+    stack, client, api_key, project, endpoint, pushes = deadline_stack
+    web_url = stack.start_web()
+    sign_in(page, web_url, api_key)
+    keys = page.evaluate("""async () => {
+        const pair = await crypto.subtle.generateKey({name:'ECDH', namedCurve:'P-256'}, true, ['deriveBits']);
+        const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+        const enc = a => btoa(String.fromCharCode(...a)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
+        return {p256dh: enc(publicKey), auth: enc(crypto.getRandomValues(new Uint8Array(16)))};
+    }""")
+    registered = client.post("/v1/push/subscriptions", {"endpoint": endpoint, "keys": keys})
+    assert registered.status_code == 201, registered.text
+    task, run, routed = _writer_asks(client, project, stack.owner_dsn)
+    qid = routed["payload"]["questionId"]
+    _held_in_browser(page, web_url, api_key, task)
+    assert pushes == []
+    wait_until(lambda: client.get_run(run["id"])["status"] == "paused", timeout=20)
+    stopped = _stopped_epoch(stack, stack.owner_dsn, run["id"])
+    wait_until(lambda: query(stack.owner_dsn, "SELECT id FROM questions WHERE id = %s AND addressee = 'person'", (qid,)),
+               timeout=45, message="runtime sweep never handed the original question to the person")
+    expect(page.locator(f'[data-nav-key="task:{task["id"]}"]')).to_have_attribute("data-triage", "needs_you", timeout=30_000)
+    rows = page.get_by_test_id("inbox").get_by_role("listitem")
+    expect(rows).to_have_count(1, timeout=30_000)
+    expect(rows).to_contain_text("Should FACTORY.md be in English?")
+    wait_until(lambda: pushes, timeout=15, message="no actual HTTP push arrived")
+    assert len(pushes) == 1 and pushes[0]["body"] and pushes[0]["authorization"].startswith("vapid ")
+    handed = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "question.asked"]
+    assert len(handed) == 1 and handed[0]["runId"] == run["id"]
+    assert handed[0]["payload"]["questionId"] == qid and handed[0]["payload"]["handedOverFrom"] == "conductor"
+    assert query(stack.owner_dsn, "SELECT id, run_id FROM questions WHERE task_id = %s", (task["id"],)) == [{"id": qid, "run_id": run["id"]}]
+    rows.get_by_role("button", name="Answer", exact=True).click()
+    page.get_by_test_id("question-turn").get_by_role("radio", name="yes", exact=True).click()
+    _assert_human_resume(client, stack, stack.owner_dsn, task, run, qid, stopped)
+    # Later sweeps occur during the resume: no duplicate handover or push.
+    assert len(pushes) == 1
+    assert len([e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "question.asked"]) == 1
     assert console_errors == []
