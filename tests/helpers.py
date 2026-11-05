@@ -430,6 +430,47 @@ def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, 
 
 
 
+def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None = None) -> tuple[dict, dict]:
+    """Explicit PR4a relay: two questions, no automatic PR4b relay implied.
+
+    The writer's routed question remains conductor-held. The scripted conductor
+    asks the same items of the real owner through ask_person; callers exercise
+    that person's question (including attachments and ownership) in its Chat.
+    """
+    routed = wait_until(lambda: next((e for e in client.events(taskId=task_id, limit=1000)
+        if e["eventType"] == "question.routed" and (writer_id is None or e["runId"] == writer_id)), None),
+        timeout=60, message="the writer never routed its question")
+    writer = {"id": routed["payload"]["questionId"], "runId": routed["runId"]}
+    response = client.post(f"/v1/tasks/{task_id}/chat", {"text": "Relay this writer question to the owner.\n"
+        + "tool: ask_person " + json.dumps({"questions": routed["payload"]["items"]})})
+    assert response.status_code in (200, 201), response.text
+    conductor = response.json()["runId"]
+    human = wait_until(lambda: next((q for q in client.get("/v1/questions", params={"runId": conductor}).json()["questions"]
+        if q["status"] == "open"), None), timeout=30, message="the conductor never asked the owner")
+    assert human["id"] != writer["id"] and human["runId"] == conductor
+    assert human["prompt"] == routed["payload"]["prompt"]
+    return writer, human
+
+
+def finish_question_relay(client: ApiClient, task_id: str, writer: dict, human: dict) -> None:
+    """Read the real person's recorded answer and explicitly give it to the writer."""
+    answered = wait_until(lambda: next((q for q in client.get("/v1/questions", params={"runId": human["runId"]}).json()["questions"]
+        if q["id"] == human["id"] and q["status"] == "answered"), None),
+        timeout=30, message="the owner never answered the relayed question")
+    response = client.post(f"/v1/tasks/{task_id}/chat", {"text": "Return the owner's answer to the writer.\n"
+        + "tool: answer_question " + json.dumps({"id": writer["id"], "answers": answered["answers"]})})
+    assert response.status_code in (200, 201), response.text
+    events = wait_until(lambda: [e for e in client.events(runId=writer["runId"])
+        if e["eventType"] == "question.answered" and e["payload"]["questionId"] == writer["id"]],
+        timeout=30, message="the conductor never returned the owner's answer")
+    assert len(events) == 1 and events[0]["payload"]["by"] == "conductor"
+    directive = events[0]["payload"]["directiveId"]
+    receipts = wait_until(lambda: [e for e in client.events(runId=writer["runId"])
+        if e["eventType"] == "run.directive.delivered" and e["payload"].get("directiveId") == directive],
+        timeout=30, message="the writer never read its conductor's answer")
+    assert len(receipts) == 1
+
+
 def ask_person_about_escalation(
     client: ApiClient, task_id: str, *, question: str, actions: list[str], recommended: str,
 ) -> dict:

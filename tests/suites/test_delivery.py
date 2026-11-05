@@ -17,7 +17,7 @@ import pytest
 import requests
 
 from fake_github import FakeGitHub
-from helpers import RESUME_PHASE_PAIRS, ApiClient, assert_timed_is_its_row, query, wait_until
+from helpers import relay_writer_question, finish_question_relay, RESUME_PHASE_PAIRS, ApiClient, assert_timed_is_its_row, query, wait_until
 
 
 def test_work_on_no_repository_is_delivered_as_what_the_agents_publish(client: ApiClient):
@@ -253,8 +253,7 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
     def open_questions():
         return client.get("/v1/questions").json()["questions"]
 
-    wait_until(lambda: open_questions(), timeout=30, message="the agent's question never reached the API")
-    question = open_questions()[0]
+    writer, question = relay_writer_question(client, task["id"])
     assert question["prompt"] == "Should FACTORY.md be in English?"
     assert question["options"] == ["yes", "no"]
     assert client.get(f"/v1/tasks/{task['id']}").json()["status"] == "awaiting_input"
@@ -265,19 +264,22 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
                 for run in wi["runs"] for s in run["sessions"]]
     assert any(s["status"] == "awaiting_input" and s.get("activity") == question["prompt"] for s in sessions), sessions
 
-    # Not answered within the grace period: parked, holding nothing.
-    wait_until(
-        lambda: any(r["phase"] == "implement" and r["status"] == "paused" for r in client.task_runs(task["id"])),
-        timeout=30, message="the waiting agent was never parked",
-    )
-    run = next(r for r in client.task_runs(task["id"]) if r["phase"] == "implement")
+    # The conductor's person question parks too; the writer remains held by
+    # its separate routed question until the explicit return below.
+    wait_until(lambda: client.get_run(question["runId"])["status"] == "paused",
+               timeout=30, message="the asking conductor was never parked")
+    run = client.get_run(question["runId"])
+    wait_until(lambda: client.get_run(writer["runId"])["status"] == "paused",
+               timeout=30, message="the writer never parked")
     types = [e.get("eventType", e.get("type")) for e in client.events(runId=run["id"])]
     assert "run.parked" in types, types
     stopped_epoch = _stopped_epoch(env, owner_dsn, run["id"])
+    writer_stopped_epoch = _stopped_epoch(env, owner_dsn, writer["runId"])
 
     resp = client.post(f"/v1/questions/{question['id']}/answer", {"text": "yes"})
     assert resp.status_code == 200, resp.text
-    assert open_questions() == []
+    assert not [q for q in open_questions() if q["id"] == question["id"] and q["status"] == "open"]
+    finish_question_relay(client, task["id"], writer, question)
     wait_until(
         lambda: any(r["phase"] == "implement" and r["status"] == "completed" for r in client.task_runs(task["id"])),
         timeout=30, message="the implementer never carried on after the answer",
@@ -290,6 +292,11 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
     row = _resume_row_in_order(owner_dsn, run["id"], timed)
     answered = query(owner_dsn, "SELECT answered_at FROM questions WHERE id = %s", (question["id"],))[0]["answered_at"]
     assert row["woken_at"] == answered, (row["woken_at"], answered)
+    writer_timed = _timed_resume(client, writer["runId"], "answer")
+    _unparked_and_timed_name_the_placement_after(client, env, owner_dsn, writer["runId"], writer_timed, writer_stopped_epoch)
+    writer_row = _resume_row_in_order(owner_dsn, writer["runId"], writer_timed)
+    returned_at = query(owner_dsn, "SELECT answered_at FROM questions WHERE id = %s", (writer["id"],))[0]["answered_at"]
+    assert writer_row["woken_at"] == returned_at
 
 
 # A resume's phases, in the order run.resume.timed lists them.
