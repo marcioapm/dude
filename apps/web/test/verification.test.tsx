@@ -108,7 +108,7 @@ test("a verdict the branch has moved past is marked stale", async () => {
 
 // -- the banner --
 
-async function banner(reason: string, actions: EscalationAction[], opts: { owner?: string; you?: string; admin?: boolean; findings?: Finding[]; detail?: Record<string, unknown> } = {}) {
+async function banner(reason: string, actions: EscalationAction[], opts: { holder?: "conductor" | "person"; owner?: string; you?: string; admin?: boolean; findings?: Finding[]; detail?: Record<string, unknown> } = {}) {
   const client = new FixtureClient("a");
   const sent: Array<[EscalationAction, string] | [EscalationAction, string, string]> = [];
   client.decide = async (_task, action, note, scope) => {
@@ -116,7 +116,7 @@ async function banner(reason: string, actions: EscalationAction[], opts: { owner
     return { action };
   };
   const task = { ...taskFor("a"), owner: { id: opts.owner ?? YOU, name: opts.owner ? "Ana" : "Márcio", photoUrl: null, online: false },
-    escalation: { reason, actions, at: "2026-10-01T00:00:00Z",
+    escalation: { reason, actions, holder: opts.holder, at: "2026-10-01T00:00:00Z",
       detail: opts.detail ?? { runId: "run_test", criteria: [{ criterion: 2, text: "it pays", status: "blocked" }], findingIds: [] } } };
   const { container, unmount } = await mount(
     <EscalationPanel client={client} findings={opts.findings ?? []} task={task as Parameters<typeof EscalationPanel>[0]["task"]} you={opts.you ?? YOU}
@@ -134,6 +134,20 @@ async function typeNote(page: HTMLElement, text: string) {
   });
   return field;
 }
+
+test("a conductor-held escalation is informational, with owner retry and stop overrides", async () => {
+  for (const action of ["retry", "stop"] as const) {
+    const { page, sent } = await banner("implement_failed", ["retry", "stop"], { holder: "conductor" });
+    expect(page.textContent).toContain("With the conductor");
+    expect(page.getAttribute("data-holder")).toBe("conductor");
+    expect(page.textContent).not.toContain("Waiting for");
+    await click(page.querySelector(`[data-testid=escalation-${action}]`)!);
+    expect(sent).toEqual([[action, ""]]);
+  }
+  const member = await banner("implement_failed", ["retry", "stop"], { holder: "conductor", owner: "per_ana", you: "per_bo" });
+  expect(member.page.textContent).not.toContain("Waiting for Ana");
+  expect(member.page.querySelector("[data-testid=escalation-stop]")).toBeNull();
+});
 
 test("a blocked test names the criteria, and a waiver is not sent without a reason", async () => {
   const { page, sent } = await banner("test_blocked", ["retry", "waive", "stop"]);

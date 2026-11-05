@@ -6,7 +6,7 @@
  */
 
 import { afterEach, expect, test } from "bun:test";
-import { Board, type NavProject } from "@dude/design-system";
+import { Board, projectCounts, type NavProject } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { SessionsList } from "@dude/domain";
 import { READY_FOR_REVIEW_WAITING, withWaitingFor } from "../src/api/client.ts";
@@ -28,6 +28,15 @@ const tree = (): NavProject[] => withWaitingFor([{ id: "p_web", name: "Web", tas
     statusSince: new Date(Date.now() - 22 * 60_000).toISOString(), heldForReview: true, decider: "policy", conductorLive: false },
 ] }] as unknown as NavProject[]);
 const sessions: SessionsList = { sessions: [], questions: [], invitations: [] };
+
+test("conductor-held escalation names its holder without creating a needs-you item", () => {
+  for (const holder of ["conductor", "person"] as const) {
+    const projects = withWaitingFor([{ id: "p", name: "Web", tasks: [{ id: "t", key: "WEB-1", title: "Failed", status: holder === "conductor" ? "running" : "awaiting_input",
+      people: [me], escalation: { reason: "implement_failed", holder, actions: ["retry", "stop"], at: "2026-11-01" } }] }] as unknown as NavProject[]);
+    expect(projects[0]!.tasks![0]!.waitingFor).toBe(holder === "conductor" ? "With the conductor: Implementer failed" : "Implementer failed");
+    expect(projectCounts(projects[0]!, YOU).needs_you).toBe(holder === "conductor" ? 0 : 1);
+  }
+});
 
 test("the tree's held task waits for its owner's review, with no pull request yet", () => {
   const [project] = tree();
