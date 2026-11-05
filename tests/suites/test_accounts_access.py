@@ -143,7 +143,10 @@ def test_the_first_admin_joins_and_invites_two_people_with_the_chip_editor(page:
     expect(reasons.locator("li[data-reason=invalid]")).to_contain_text("not an email")
     expect(reasons.locator("li[data-reason=member]")).to_contain_text(admin)
     expect(reasons.locator("li[data-reason=member]")).to_contain_text("already in Initech")
-    expect(page.locator("li[data-state=member]")).not_to_contain_text("already in Initech")
+    # The chip shows the address alone; the reason is said under the field (and to a screen reader).
+    shown = page.locator("li[data-state=member]").evaluate(
+        "li => { const c = li.cloneNode(true); c.querySelectorAll('.ds-sr-only, button').forEach((n) => n.remove()); return c.textContent.trim(); }")
+    assert shown == admin
     page.get_by_test_id("invite-submit").click()
     links = page.get_by_test_id("invite-links")
     expect(page.get_by_role("dialog").get_by_role("heading", level=2)).to_have_text("2 invitations to Initech")
