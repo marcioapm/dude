@@ -142,7 +142,8 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 	if err != nil {
 		return err
 	}
-	if d == nil || (d.TaskStatus != "awaiting_input" && (d.State.Escalation == nil || d.State.Escalation.HeldBy() != HolderConductor || d.TaskStatus != "running")) || d.State.Escalation == nil || d.State.Escalation.Decided != nil {
+	if d == nil || d.State.Escalation == nil || d.State.Escalation.Decided != nil ||
+		(d.TaskStatus != "awaiting_input" && (d.TaskStatus != "running" || d.State.Escalation.HeldBy() != HolderConductor)) {
 		return escalationErr("conflict", mDeliveryTaskNotWaitingForDecision, taskID)
 	}
 	st := d.State
