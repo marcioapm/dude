@@ -336,6 +336,77 @@ func TestConductorDecidesWithoutOwnerAnswer(t *testing.T) {
 	}
 }
 
+func TestRetryingEscalationDeadlineRechecksAndHandsOverOnce(t *testing.T) {
+	for _, terminal := range []string{"completed", "paused", "failed", "failed_early", "abort", "no_model", "no_model_early", "retry_failed", "stale_count"} {
+		t.Run(terminal, func(t *testing.T) {
+			w := newGoldenWorld(t)
+			ctx := context.Background()
+			w.exec(t, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,harness_state)
+				VALUES('run_cond1',$1,'prj_g','wi_g',1,'running','conductor','agent','{"turnRetries":1}')`)
+			w.exec(t, `INSERT INTO directives(id,organization_id,task_id,run_id,text,scope,deliver_after)
+				VALUES('dir_retry',$1,'wi_g','run_cond1','Retry temporary failure','turn',now()+interval '1 hour')`)
+			at := time.Now().UTC().Add(-ConductorAnswerWait - time.Minute)
+			w.delivery(t, "decide", fmt.Sprintf(`{"taskId":"wi_g","projectId":"prj_g","decider":"conductor","escalation":{"reason":"implement_failed","step":"implement","holder":"conductor","raisedAt":%q}}`, at.Format(time.RFC3339Nano)))
+			rt := workflow.New(w.app, "retry-deadline-test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+			rt.Register(Workflow(&Store{DB: w.app}, nil))
+			check := func(held bool) {
+				t.Helper()
+				w.exec(t, `UPDATE workflow_runs SET wake_at=now() WHERE id='wfr_g'`)
+				before := time.Now().UTC()
+				if _, err := rt.Tick(ctx, 1); err != nil {
+					t.Fatal(err)
+				}
+				var holder, status string
+				var wake *time.Time
+				var asked int
+				if err := w.owner.QueryRow(ctx, `SELECT state->'escalation'->>'holder',wake_at,
+					(SELECT status::text FROM tasks WHERE id='wi_g'),
+					(SELECT count(*) FROM events WHERE task_id='wi_g' AND event_type='question.asked')
+					FROM workflow_runs WHERE id='wfr_g'`).Scan(&holder, &wake, &status, &asked); err != nil {
+					t.Fatal(err)
+				}
+				if held {
+					if holder != HolderConductor || status != "running" || asked != 0 {
+						t.Fatalf("retry handed to person: holder=%s status=%s asked=%d", holder, status, asked)
+					}
+					if wake == nil || wake.Before(before.Add(29*time.Second)) || wake.After(time.Now().Add(31*time.Second)) {
+						t.Fatalf("retry wake=%v; want bounded 30-second recheck", wake)
+					}
+				} else if holder != HolderPerson || status != "awaiting_input" || asked != 1 || wake != nil {
+					t.Fatalf("handover holder=%s status=%s asked=%d wake=%v", holder, status, asked, wake)
+				}
+			}
+			check(true) // queued backoff beyond the original deadline
+			w.exec(t, `UPDATE directives SET sent_at=now() WHERE id='dir_retry'`)
+			check(true) // sent, before the harness's busy notification
+			w.exec(t, `UPDATE runs SET agent_busy_at=now(),turn_done_at=NULL WHERE id='run_cond1'`)
+			w.exec(t, `UPDATE directives SET delivered_at=now() WHERE id='dir_retry'`)
+			check(true) // delivered and busy still legitimately retrying
+			if terminal == "failed_early" || terminal == "no_model_early" {
+				w.exec(t, `UPDATE workflow_runs SET state=jsonb_set(state,'{escalation,raisedAt}',to_jsonb(now())) WHERE id='wfr_g'`)
+			}
+			switch terminal {
+			case "completed":
+				w.exec(t, `UPDATE runs SET harness_state='{}',turn_done_at=now(),agent_busy_at=NULL WHERE id='run_cond1'`)
+			case "paused":
+				w.exec(t, `UPDATE runs SET status='paused' WHERE id='run_cond1'`)
+			case "failed", "failed_early":
+				w.exec(t, `UPDATE runs SET status='failed',ended_at=now() WHERE id='run_cond1'`)
+			case "abort":
+				w.exec(t, `UPDATE runs SET control='abort' WHERE id='run_cond1'`)
+			case "no_model", "no_model_early":
+				w.exec(t, `UPDATE workflow_runs SET state=state||'{"voice":"quiet"}' WHERE id='wfr_g'`)
+			case "retry_failed":
+				w.exec(t, `UPDATE directives SET failed_at=now() WHERE id='dir_retry'`)
+			case "stale_count":
+				w.exec(t, `DELETE FROM directives WHERE id='dir_retry'`)
+			}
+			check(false)
+			check(false)
+		})
+	}
+}
+
 func TestConductorEscalationDeadlineHandsOverOnce(t *testing.T) {
 	for _, mode := range []string{"deadline", "failed", "no_model", "pending"} {
 		t.Run(mode, func(t *testing.T) {

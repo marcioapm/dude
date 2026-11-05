@@ -487,7 +487,8 @@ func (w *steps) recheck(ctx context.Context, tx pgx.Tx, sc workflow.StepContext,
 			// among this tick's claimed signals and will be consumed on commit.
 			return workflow.Result{Next: "decide", State: &current}, true, nil
 		}
-		return w.escalationWait(&current), true, nil
+		wait, err := w.escalationWaitTx(ctx, tx, &current)
+		return wait, true, err
 	}
 	if sc.Step != "decide" {
 		var raw []byte

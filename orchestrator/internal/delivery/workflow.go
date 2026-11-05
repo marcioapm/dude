@@ -3045,6 +3045,36 @@ func (w *steps) escalationWait(st *State) workflow.Result {
 	return res
 }
 
+// escalationWaitTx applies the same live-retry predicate as quietDecision.
+// Availability wins over a stale retry marker; a legitimate retry is checked
+// again in 30 seconds without moving the escalation's original deadline.
+func (w *steps) escalationWaitTx(ctx context.Context, tx pgx.Tx, st *State) (workflow.Result, error) {
+	res := w.escalationWait(st)
+	e := st.Escalation
+	if e == nil || e.Decided != nil || e.HeldBy() != HolderConductor {
+		return res, nil
+	}
+	unavailable, err := conductorUnavailableTx(ctx, tx, st.TaskID, e.RaisedAt)
+	if err != nil {
+		return res, err
+	}
+	if unavailable {
+		res.SleepUntil = time.Now().UTC()
+		return res, nil
+	}
+	if e.RaisedAt != nil && time.Now().Before(res.SleepUntil) {
+		return res, nil
+	}
+	var retrying bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tasks t WHERE t.id=$1 AND `+ConductorRetrying+`)`, st.TaskID).Scan(&retrying); err != nil {
+		return res, err
+	}
+	if retrying {
+		res.SleepUntil = time.Now().UTC().Add(retryingRecheck)
+	}
+	return res, nil
+}
+
 // decide carries out a decision on an escalation, or hands an unanswered
 // conductor-held item to the person once its deadline or availability fails.
 func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
@@ -3055,6 +3085,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	// The decision is on the escalation, taken with the request; the signal
 	// only wakes this step to carry it out.
 	if st.Escalation == nil || st.Escalation.Decided == nil {
+		var waiting workflow.Result
 		if e := st.Escalation; e != nil && e.HeldBy() == HolderConductor {
 			if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 				// Delivery then task, as on every decision path. Re-read under
@@ -3070,11 +3101,11 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 				if e == nil || e.Decided != nil || e.HeldBy() != HolderConductor {
 					return nil
 				}
-				unavailable, err := conductorUnavailableTx(ctx, tx, st.TaskID, e.RaisedAt)
+				waiting, err = w.escalationWaitTx(ctx, tx, st)
 				if err != nil {
 					return err
 				}
-				if !unavailable && e.RaisedAt != nil && time.Now().Before(e.RaisedAt.Add(w.s.decisionWait())) {
+				if time.Now().Before(waiting.SleepUntil) {
 					return nil
 				}
 				e.Holder = HolderPerson
@@ -3092,6 +3123,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			}
 		}
 		if st.Escalation == nil || st.Escalation.Decided == nil {
+			if st.Escalation != nil && st.Escalation.HeldBy() == HolderConductor && !waiting.SleepUntil.IsZero() {
+				return waiting, nil
+			}
 			return w.escalationWait(st), nil
 		}
 	}
