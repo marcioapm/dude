@@ -490,6 +490,11 @@ const AGENTS_OWN: ReadonlySet<Turn["kind"]> = new Set(["tool", "message", "thoug
 
 /** Why dude paused a Run itself (Run.dudePause), as the transcript and the composer say it. */
 export type DudePause = NonNullable<Run["dudePause"]>;
+export const CONDUCTOR_WAIT_WORDS = {
+  parked: "Parked while it waits for the conductor — nothing is held; the conductor's answer resumes it.",
+  composer: "Waiting for the conductor's answer.",
+};
+
 export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }> = {
   person: {
     parked: "Parked while it waits for you — nothing is held; your answer resumes it.",
@@ -684,6 +689,8 @@ export interface Conversation {
   contextWindow: number;
   /** The question the agent is waiting on, if it is. */
   openQuestion: QuestionTurn | null;
+  /** Current writer question routed to its conductor, never an owner answer form. */
+  conductorQuestionId: string | null;
   /** The repository request waiting on a person's decision, if one is. */
   openRequest: RepositoryRequestTurn | null;
   /** The wait on a peer's reply this Run is in, if it is. */
@@ -745,6 +752,7 @@ export interface Projection {
   /** Run + directive scoped correlation, including receipts that precede their queued event. */
   cohortDeliveries: Map<string, CohortResultTurn | string>;
   questionsById: Map<string, QuestionTurn>;
+  conductorQuestionId: string | null;
   repoRequestsById: Map<string, RepositoryRequestTurn>;
   /** Where the progress row is in `turns`, once there is one. */
   progressIndex: number | null;
@@ -861,6 +869,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     steersByDirective: new Map(),
     cohortDeliveries: new Map(),
     questionsById: new Map(),
+    conductorQuestionId: null,
     repoRequestsById: new Map(),
     progressIndex: null,
     plan: [],
@@ -1546,6 +1555,15 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case "question.routed": {
+        if (payload.kind === "agent" && payload.addressee === "conductor" && typeof payload.questionId === "string") {
+          state.conductorQuestionId = payload.questionId;
+          state.activity = null;
+          state.activeTool = null;
+        }
+        break;
+      }
+
       case EventTypes.QuestionAsked: {
         // The workflow escalating to a person is a question too, but not one
         // this agent asked, and not one answered here.
@@ -1572,6 +1590,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.QuestionClosed: {
+        if (payload.questionId === state.conductorQuestionId) state.conductorQuestionId = null;
         // Settled elsewhere: no answer will come, and none is asked for.
         const question = state.questionsById.get(String(payload.questionId ?? ""));
         if (question && question.answeredAt === null) {
@@ -1582,6 +1601,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.QuestionAnswered: {
+        if (payload.questionId === state.conductorQuestionId) state.conductorQuestionId = null;
         const question = state.questionsById.get(String(payload.questionId ?? ""));
         const directiveId = typeof payload.directiveId === "string" ? payload.directiveId : null;
         const attachments = attachmentsOf(payload.attachments);
@@ -1618,7 +1638,9 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.ContextCompacted:
       case EventTypes.RepositoryCloneFailed: {
         const { notice, text } = NOTICES[event.eventType]!;
-        const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: text(payload), at: event.occurredAt };
+        const words = event.eventType === "run.parked" && payload.reason === "person" && state.conductorQuestionId
+          ? CONDUCTOR_WAIT_WORDS.parked : text(payload);
+        const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: words, at: event.occurredAt };
         if (notice === "unparked" && typeof payload.epoch === "number") {
           // Its timing came first and was said on its own: that notice is
           // this return.
@@ -1923,6 +1945,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       contextTokens: state.contextTokens,
       contextWindow: state.contextWindow,
       openQuestion: openQuestion(state),
+      conductorQuestionId: state.conductorQuestionId,
       openRequest: openRequest(state),
       openWait: [...state.peerWaits.values()].findLast((w) => w.ended === null) ?? null,
       activity: state.activity,
@@ -1973,6 +1996,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     contextWindow: state.contextWindow,
     // A finished Run asks nothing, whatever it asked before it ended.
     openQuestion: null,
+    conductorQuestionId: null,
     openRequest: null,
     openWait: null,
     activity: null,

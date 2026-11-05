@@ -1127,6 +1127,24 @@ describe("tokens", () => {
 });
 
 describe("an agent that asks", () => {
+  test("a writer parked on a routed question waits for its conductor, not the owner", () => {
+    const events = [
+      ev("question.routed", { kind: "agent", questionId: "qst_writer", addressee: "conductor", prompt: "English?" }),
+      ev("run.parked", { reason: "person" }),
+    ];
+    const waiting = project(events, "paused");
+    expect(waiting.openQuestion).toBeNull();
+    expect(waiting.conductorQuestionId).toBe("qst_writer");
+    expect(waiting.activity).toBeNull();
+    expect(waiting.turns).toContainEqual(expect.objectContaining({ kind: "notice", notice: "parked",
+      text: "Parked while it waits for the conductor — nothing is held; the conductor's answer resumes it." }));
+    // Only the matching answer/close releases the hold; terminal Runs wait on nobody.
+    expect(project([...events, ev(EventTypes.QuestionAnswered, { questionId: "another" })], "paused").conductorQuestionId).toBe("qst_writer");
+    expect(project([...events, ev(EventTypes.QuestionAnswered, { questionId: "qst_writer" })]).conductorQuestionId).toBeNull();
+    expect(project([...events, ev(EventTypes.QuestionClosed, { questionId: "qst_writer" })]).conductorQuestionId).toBeNull();
+    expect(project(events, "completed").conductorQuestionId).toBeNull();
+  });
+
   test("the question waits for an answer, and once answered its turn is the record: no second turn", () => {
     const events = [
       ev(EventTypes.QuestionAsked, { kind: "agent", questionId: "qst_1", prompt: "Sort the table?", options: ["yes", "no"] }),
