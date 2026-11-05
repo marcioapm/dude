@@ -197,3 +197,42 @@ test("a writer's question for its conductor is not a person's; a person's still 
   expect(await questionIds("?runId=run_cq_run")).toEqual(["q_cq_run"]);
   expect(await questionIds("?taskId=wi_cq_park")).toEqual(["q_cq_park"]);
 });
+
+/**
+ * dude hands a writer's question its conductor did not take to the person
+ * (the same row, addressee flipped to 'person'): the parked writer reads as
+ * waiting on you with its prompt, no longer as its conductor's wait, and
+ * the question is in Needs you and the open list. While the conductor's
+ * relay of a writer's question is open, the person has exactly one
+ * question: the relay; the writer still reads as its conductor's wait.
+ */
+test("a handed-over writer question needs you; a relayed one is asked once", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+              VALUES ('wi_ho', ${ORG}, ${PROJECT}, 20, 'Handed over', 'awaiting_input'),
+                     ('wi_rl', ${ORG}, ${PROJECT}, 21, 'Relayed', 'awaiting_input')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
+              VALUES ('run_ho_cond', ${ORG}, ${PROJECT}, 'wi_ho', 1, 'running', NULL, 'conductor', NULL),
+                     ('run_ho', ${ORG}, ${PROJECT}, 'wi_ho', 1, 'paused', 'implement', 'implementer', 'person'),
+                     ('run_rl_cond', ${ORG}, ${PROJECT}, 'wi_rl', 1, 'running', NULL, 'conductor', NULL),
+                     ('run_rl', ${ORG}, ${PROJECT}, 'wi_rl', 1, 'paused', 'implement', 'implementer', 'person')`;
+  await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, addressee)
+              VALUES ('q_ho', ${ORG}, 'wi_ho', 'run_ho', 'Handed to you?', '[]', 'conductor'),
+                     ('q_rl', ${ORG}, 'wi_rl', 'run_rl', 'Writer asks?', '[]', 'conductor')`;
+  await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, addressee, relays)
+              VALUES ('q_rl_relay', ${ORG}, 'wi_rl', 'run_rl_cond', 'Owner: A or B?', '[]', 'person', 'q_rl')`;
+  await owner`UPDATE questions SET addressee = 'person' WHERE id = 'q_ho'`;
+
+  const nav = await get<Nav>("/v1/navigation");
+  const rows = (task: string) => (sessionsOf(nav, task) as Array<Session & { role: string; status: string }>)
+    .map((s) => [s.role, s.status, s.activity ?? null]);
+  expect(rows("wi_ho")).toEqual([["conductor", "running", null], ["implementer", "awaiting_input", "Handed to you?"]]);
+  expect(rows("wi_rl")).toEqual([["conductor", "awaiting_input", "Owner: A or B?"], ["implementer", "pending", null]]);
+  const { countTasks } = await import("../../../packages/design-system/src/util/navModel.ts");
+  const tasks = nav.projects.flatMap((p) => p.tasks);
+  const needs = (id: string) => countTasks(tasks.filter((t) => t.id === id) as never).needs_you;
+  expect([needs("wi_ho"), needs("wi_rl")]).toEqual([1, 1]);
+  const open = (await get<{ questions: Array<{ id: string }> }>("/v1/questions")).questions.map((q) => q.id);
+  expect(open).toContain("q_ho");
+  expect(open).toContain("q_rl_relay");
+  expect(open).not.toContain("q_rl");
+});
