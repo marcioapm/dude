@@ -113,6 +113,102 @@ func TestPendingEscalationTransitionPreservesCommittedChanges(t *testing.T) {
 	}
 }
 
+func TestFailedEscalationWakeBatchFairness(t *testing.T) {
+	w := newGoldenWorld(t)
+	ctx := context.Background()
+	w.exec(t, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind) VALUES('run_cond1',$1,'prj_g','wi_g',1,'failed','conductor','agent')`)
+	w.delivery(t, "decide", `{"taskId":"wi_g","projectId":"prj_g","decider":"conductor","escalation":{"reason":"implement_failed","holder":"conductor","step":"implement","raisedAt":"2026-01-01T00:00:00Z"}}`)
+	w.exec(t, `UPDATE workflow_runs SET wake_at=now()+interval '1 hour' WHERE id='wfr_g'`)
+	w.exec(t, `INSERT INTO conductor_wakes(id,organization_id,task_id,kind,key,line,created_at) VALUES('cw_g',$1,'wi_g','escalation','test','Decision waits',now()-interval '1 hour')`)
+	eligible := func() bool {
+		var yes bool
+		if err := w.owner.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conductor_wakes c WHERE c.task_id='wi_g' AND `+Wakeable+`)`, 0).Scan(&yes); err != nil {
+			t.Fatal(err)
+		}
+		return yes
+	}
+	if !eligible() {
+		t.Fatal("conductor handover not eligible")
+	}
+	for range 2 {
+		w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+			return WakeConductorTx(ctx, tx, w.org, "wi_g", 0)
+		})
+	}
+	var scheduled time.Time
+	if err := w.owner.QueryRow(ctx, `SELECT wake_at FROM workflow_runs WHERE id='wfr_g'`).Scan(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	if eligible() {
+		t.Fatal("already scheduled handover remains eligible")
+	}
+	w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+		return WakeConductorTx(ctx, tx, w.org, "wi_g", 0)
+	})
+	var again time.Time
+	if err := w.owner.QueryRow(ctx, `SELECT wake_at FROM workflow_runs WHERE id='wfr_g'`).Scan(&again); err != nil {
+		t.Fatal(err)
+	}
+	if !again.Equal(scheduled) {
+		t.Fatal("due handover wake rewritten")
+	}
+	var raw []byte
+	if err := w.owner.QueryRow(ctx, `SELECT state FROM workflow_runs WHERE id='wfr_g'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	s := &steps{s: &Store{DB: w.app}}
+	if _, err := s.decide(ctx, workflow.StepContext{OrganizationID: w.org, WorkflowRunID: "wfr_g", Step: "decide", State: raw}); err != nil {
+		t.Fatal(err)
+	}
+	if eligible() {
+		t.Error("person handover remains eligible")
+	}
+	w.exec(t, `INSERT INTO tasks(id,organization_id,project_id,number,title,goal,status)
+		SELECT 'wi_block'||n,$1,'prj_g',100+n,'Blocked','Blocked','awaiting_input' FROM generate_series(1,199) n`)
+	w.exec(t, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind)
+		SELECT 'run_block'||n,$1,'prj_g','wi_block'||n,1,'failed','conductor','agent' FROM generate_series(1,199) n`)
+	w.exec(t, `INSERT INTO workflow_runs(id,organization_id,workflow_type,idempotency_key,task_id,status,step,state)
+		SELECT 'wf_block'||n,$1,'task.delivery','block'||n,'wi_block'||n,'waiting','decide',jsonb_build_object('taskId','wi_block'||n,'decider','conductor','escalation','{"reason":"implement_failed","holder":"person"}'::jsonb) FROM generate_series(1,199) n`)
+	w.exec(t, `INSERT INTO conductor_wakes(id,organization_id,task_id,kind,key,line,created_at)
+		SELECT 'cw_block'||n,$1,'wi_block'||n,'escalation','test','Decision waits',now()-interval '1 hour' FROM generate_series(1,199) n`)
+	w.exec(t, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,turn_done_at) VALUES('run_healthy',$1,'prj_g','wi_p1',1,'running','conductor','agent',now())`)
+	w.exec(t, `INSERT INTO conductor_wakes(id,organization_id,task_id,kind,key,line,created_at) VALUES('cw_healthy',$1,'wi_p1','escalation','test','Healthy news',now()-interval '1 minute')`)
+	for sweep := 0; sweep < 2; sweep++ {
+		rows, err := w.owner.Query(ctx, `SELECT c.task_id FROM conductor_wakes c WHERE `+Wakeable+` GROUP BY c.task_id ORDER BY min(c.created_at) LIMIT 200`, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		healthy := false
+		for _, id := range ids {
+			if id == "wi_p1" {
+				healthy = true
+			}
+			w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) { return WakeConductorTx(ctx, tx, w.org, id, 0) })
+		}
+		if sweep == 0 && !healthy {
+			t.Errorf("full batch starved healthy task: %d selected", len(ids))
+		}
+		if sweep == 1 && len(ids) != 0 {
+			t.Errorf("settled healthy wake still selected or blocked batch: %d", len(ids))
+		}
+	}
+	var pending, asked int
+	if err := w.owner.QueryRow(ctx, `SELECT (SELECT count(*) FROM conductor_wakes WHERE delivered_at IS NULL AND task_id<>'wi_p1'),(SELECT count(*) FROM events WHERE task_id='wi_g' AND event_type='question.asked')`).Scan(&pending, &asked); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 200 || asked != 1 {
+		t.Fatalf("lost news or duplicate handover: pending=%d asked=%d", pending, asked)
+	}
+	w.exec(t, `UPDATE runs SET status='running',turn_done_at=now() WHERE id='run_cond1'`)
+	if !eligible() {
+		t.Fatal("recovered conductor not eligible")
+	}
+}
+
 func TestFailedEscalationBriefingWakesHandoverInsteadOfRestarting(t *testing.T) {
 	w := newGoldenWorld(t)
 	w.exec(t, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind,ended_at)

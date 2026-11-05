@@ -121,17 +121,13 @@ func WakeConductorTx(ctx context.Context, tx pgx.Tx, org, taskID string, windowS
 		// whose briefing failed. Wake its decision step for the serialized
 		// person handover instead; keep the news for a later recovery.
 		var failedEscalation bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_runs w
-			WHERE w.task_id=$1 AND w.status='waiting' AND w.step='decide'
-			AND w.state->'escalation' IS NOT NULL
-			AND NOT w.state->'escalation' ? 'decided'
-			AND (SELECT status='failed' FROM runs WHERE task_id=$1 AND role='conductor'
-				ORDER BY created_at DESC,id DESC LIMIT 1))`, taskID).Scan(&failedEscalation); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT `+failedEscalationSQL+` FROM (SELECT $1::text AS task_id) c`, taskID).Scan(&failedEscalation); err != nil {
 			return "", err
 		}
 		if failedEscalation {
 			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET wake_at=now() WHERE task_id=$1
-				AND status='waiting' AND step='decide' AND state->'escalation'->>'holder'='conductor'`, taskID)
+				AND status='waiting' AND step='decide' AND state->'escalation'->>'holder'='conductor'
+				AND (wake_at IS NULL OR wake_at > now())`, taskID)
 			return "", err
 		}
 	}
@@ -616,6 +612,15 @@ func quietNoModelTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error)
 	return quiet, err
 }
 
+// failedEscalationSQL (over c.task_id) is the handler's briefing-failure
+// suppression. Keep reasons pending until recovery, without restarting it.
+const failedEscalationSQL = `EXISTS (SELECT 1 FROM workflow_runs w
+	WHERE w.task_id=c.task_id AND w.status='waiting' AND w.step='decide'
+	AND w.state->'escalation' IS NOT NULL
+	AND NOT w.state->'escalation' ? 'decided'
+	AND (SELECT status='failed' FROM runs WHERE task_id=c.task_id AND role='conductor'
+		ORDER BY created_at DESC,id DESC LIMIT 1))`
+
 // Wakeable (SQL, over conductor_wakes c, $1 the window in seconds): a task
 // with pending reasons that can be delivered now — none but feedback
 // arrived within the window, one may call a turn (feedback only once due:
@@ -645,6 +650,11 @@ var Wakeable = func() string {
 	// burst's rows. ORDER BY min(c.created_at) is then the oldest reason
 	// that can call a turn; the set selected is the same.
 	return `c.delivered_at IS NULL
+	AND NOT (` + failedEscalationSQL + `
+		AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id=c.task_id AND ` + LiveConductor + `)
+		AND NOT EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id=c.task_id
+			AND w.status='waiting' AND w.step='decide' AND w.state->'escalation'->>'holder'='conductor'
+			AND (w.wake_at IS NULL OR w.wake_at > now())))
 	AND (c.kind <> '` + WakeFeedback + `' OR c.created_at < now() - make_interval(secs => ` + feedbackQuietSecs + `))
 	AND NOT COALESCE((SELECT ` + haltedDelivery + ` FROM workflow_runs w WHERE w.task_id = c.task_id` + latestDelivery + `), false)
 	AND NOT ((SELECT ` + quietNoModel + ` FROM (SELECT c.task_id) qn)
