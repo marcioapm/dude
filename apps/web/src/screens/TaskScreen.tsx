@@ -1644,7 +1644,9 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
           text: <>{p.by === "conductor" ? <b>The conductor</b> : person} steered the {doer(e.runId)}</>, quote: String(p.text ?? "") });
         break;
       case "question.answered":
-        out.push({ ...base, who: face, text: <>{person} answered the {doer(e.runId)}</>, quote: String(p.answer ?? "") });
+        // A writer's question its conductor answered (ask_conductor) is the conductor's answer, as its steer is.
+        out.push({ ...base, who: p.by === "conductor" ? <AgentAvatar role="conductor" size="lg" /> : face,
+          text: <>{p.by === "conductor" ? <b>The conductor</b> : person} answered the {doer(e.runId)}</>, quote: String(p.answer ?? "") });
         break;
       case EventTypes.RunTurnRetried:
         out.push({ ...base, who: <DudeMark size={32} />, text: <>The <b>{doer(e.runId)}</b>'s turn failed: {turnRetriedNotice(p)}</>,

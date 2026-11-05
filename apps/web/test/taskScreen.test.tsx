@@ -575,6 +575,21 @@ describe("Activity's started lines", () => {
     }
   });
 
+  test("a conductor's answer to a writer names the conductor; a person's answer still names them", () => {
+    const runs = [run("r_impl", "implement", "implementer")];
+    const answered = (actor: PersistedEvent["actor"], payload: Record<string, unknown>) =>
+      ({ ...created("r_impl", payload), eventType: "question.answered", actor }) as PersistedEvent;
+    const byConductor = answered({ type: "agent", id: "run_conductor" } as PersistedEvent["actor"],
+      { questionId: "q1", answer: "Yes", by: "conductor", askingRunId: "r_impl" });
+    expect(said([byConductor], runs)).toEqual(["The conductor answered the implementer"]);
+    const people = { names: new Map<string, string>(), byId: new Map(), you: null } as unknown as Parameters<typeof activityLines>[1];
+    const [line] = activityLines([byConductor], people, runs, [], 1);
+    expect(line!.quote).toBe("Yes");
+    expect(renderToStaticMarkup(<>{line!.who}</>)).not.toBe("");
+    expect(said([answered({ type: "human", id: "ana", name: "Ana" } as PersistedEvent["actor"], { questionId: "q2", answer: "No" })], runs))
+      .toEqual(["Ana answered the implementer"]);
+  });
+
   test("a checks-finished decision is dude's, while a person's decision names them", () => {
     const decision = { ...created(null, { action: "wait" }), eventType: "task.decided" } as PersistedEvent;
     expect(said([decision], [])).toEqual([`${dudeName(TASK_ID)} decided how delivery goes on: wait`]);
