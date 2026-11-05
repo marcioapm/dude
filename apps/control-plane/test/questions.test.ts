@@ -159,6 +159,24 @@ test("a writer's question for its conductor is not a person's; a person's still 
   const needs = (id: string) => countTasks(tasks.filter((t) => t.id === id) as never).needs_you;
   expect([needs("wi_cq_run"), needs("wi_cq_park"), needs("wi_pq"), needs("wi_pq_park")]).toEqual([0, 0, 1, 1]);
 
+  // A person's own pause (dude_pause NULL) stays theirs, even on an open
+  // question for its conductor: paused as before, not the conductor's wait.
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+              VALUES ('wi_cq_mine', ${ORG}, ${PROJECT}, 14, 'Routed, paused by a person', 'running')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
+              VALUES ('run_cq_mine_cond', ${ORG}, ${PROJECT}, 'wi_cq_mine', 1, 'running', NULL, 'conductor', NULL),
+                     ('run_cq_mine', ${ORG}, ${PROJECT}, 'wi_cq_mine', 1, 'paused', 'implement', 'implementer', NULL)`;
+  await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, addressee)
+              VALUES ('q_cq_mine', ${ORG}, 'wi_cq_mine', 'run_cq_mine', 'Routed, then paused?', '[]', 'conductor')`;
+  // Of a person's open questions, the newest reads.
+  await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, addressee, asked_at)
+              VALUES ('q_pq_older', ${ORG}, 'wi_pq', 'run_pq', 'Asked before?', '[]', 'person', now() - interval '1 hour')`;
+  const again = await get<Nav>("/v1/navigation");
+  expect(sessionsOf(again, "wi_pq").map((s) => s.activity ?? null)).toEqual([null, "For a person?"]);
+  const mine = sessionsOf(again, "wi_cq_mine") as Array<Session & { role: string; status: string }>;
+  expect(mine.map((s) => [s.role, s.status, s.activity ?? null]))
+    .toEqual([["conductor", "running", null], ["implementer", "awaiting_input", null]]);
+
   // The open list: what needs a person.
   const questionIds = async (query = "") =>
     (await get<{ questions: Array<{ id: string }> }>(`/v1/questions${query}`)).questions.map((q) => q.id);
