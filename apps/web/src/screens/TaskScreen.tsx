@@ -739,7 +739,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // Nothing at work: what it waits on, from the recorded state alone.
   const waitingWords = earlier ? `Attempt ${shown} was set aside: nothing in it runs again, and its records are only to read.`
     : asking ? `Waiting on ${asking.toName ?? (owner ? firstName(owner.name) : "a person")} to answer.`
-    : item.escalation ? "Waiting on a person's decision, above."
+    : item.escalation ? item.escalation.holder === "conductor" ? "With the conductor, above. You can override its decision." : "Waiting on a person's decision, above."
     : held ? "Held before the pull request, above."
     : item.status === "review" ? (prs.length > 0 ? "Nothing is running: the pull request waits on its review and checks." : "Nothing is running: the work waits to be read.")
     : item.status === "done" ? "Done: nothing runs." : ["failed", "aborted"].includes(item.status) ? "Stopped: nothing runs."
@@ -1710,7 +1710,7 @@ export function activityLines(events: readonly PersistedEvent[], people: People,
             : `${p.from == null ? "" : `${side(p.from)} → `}${side(p.to)}${p.voice === "quiet" ? ", quiet" : ""}` });
         break;
       case "task.decided":
-        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{by ? person : <b>{dude}</b>} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
+        out.push({ ...base, who: face ?? <DudeMark size={32} />, text: <>{p.by === "conductor" ? <b>The conductor</b> : by ? person : <b>{dude}</b>} decided how delivery goes on: {String(p.action ?? "")}</>, quote: p.note ? String(p.note) : undefined });
         break;
       case EventTypes.MachineReset: {
         // A person's Reset of a raised machine: on the task, with the Run it moved when one was live.

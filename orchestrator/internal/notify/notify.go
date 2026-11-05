@@ -35,6 +35,11 @@ import (
 // same.
 const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled', 'automation.failed')"
 
+// Keep the indexed asks predicate intact. Conductor stops are news, read
+// separately rather than broadening that partial index's predicate.
+const conductorStops = "(event_type = 'task.decided' AND payload->>'by' = 'conductor' AND payload->>'action' = 'stop')"
+const notifiedEvents = "(SELECT * FROM events WHERE event_type IN " + asks + " UNION ALL SELECT * FROM events WHERE " + conductorStops + ")"
+
 // Notifier sends Web Push for new asks.
 type Notifier struct {
 	DB  *db.DB
@@ -168,7 +173,7 @@ func (n *Notifier) sweepAsks(ctx context.Context, public, private string) (int, 
 					WHERE session_role(e.session_id, x.person) IN ('owner', 'chat'))
 					ELSE owner.person_id END, ''),
 				COALESCE(e.session_id, ''), e.payload
-			FROM events e
+			FROM `+notifiedEvents+` e
 			JOIN organizations o ON o.id = e.organization_id
 			LEFT JOIN tasks w ON w.id = e.task_id
 			LEFT JOIN LATERAL (
@@ -180,7 +185,6 @@ func (n *Notifier) sweepAsks(ctx context.Context, public, private string) (int, 
 			LEFT JOIN projects p ON p.id = w.project_id
 			LEFT JOIN runs r ON r.id = e.run_id
 			WHERE e.cursor > (SELECT after_cursor FROM push_config)
-			  AND e.event_type IN `+asks+`
 			  AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)
 			ORDER BY e.cursor LIMIT 100`)
 		if err != nil {
@@ -278,9 +282,8 @@ func (n *Notifier) advance(ctx context.Context) error {
 		if _, err := tx.Exec(ctx, `UPDATE push_config SET after_cursor = GREATEST(after_cursor, LEAST(
 				COALESCE((SELECT max(s.cursor) FROM push_sent s JOIN events e ON e.cursor = s.cursor
 				          WHERE e.occurred_at < now() - make_interval(secs => $1)), 0),
-				COALESCE((SELECT min(e.cursor) - 1 FROM events e
+				COALESCE((SELECT min(e.cursor) - 1 FROM `+notifiedEvents+` e
 				          WHERE e.cursor > push_config.after_cursor
-				            AND e.event_type IN `+asks+`
 				            AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.cursor = e.cursor)), 9223372036854775807)))`,
 			settle.Seconds()); err != nil {
 			return err
@@ -410,6 +413,15 @@ func messageFor(a ask) (Message, bool) {
 		} else {
 			msg.Title, msg.Body = who+" asks", str("prompt")
 		}
+	case "task.decided":
+		// Delegated stops are news for the owner, never a question. Retries
+		// and decisions made by a person do not need another notification.
+		if str("by") != "conductor" || str("action") != "stop" {
+			return msg, false
+		}
+		msg.Tag, msg.URL = "task:"+a.TaskID, link(a, "task/"+a.TaskID)
+		msg.Title = strings.TrimSpace(a.Task + " was stopped by the conductor")
+		msg.Body = str("note")
 	case delivery.EvReadyToMerge:
 		msg.Title = strings.TrimSpace(a.Task + " is ready to merge")
 		msg.Body = "Approved, with its checks passing. Merging is yours."

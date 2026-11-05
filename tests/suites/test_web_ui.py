@@ -13,6 +13,8 @@ token.
 from __future__ import annotations
 
 import re
+import os
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -1675,6 +1677,27 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     task = wait_for_escalation(client, item["id"], timeout=60, message="failure never reached the conductor")
     assert task["status"] == "running" and task["escalation"]["holder"] == "conductor"
     assert task["escalation"]["reason"] == "implement_failed", task["escalation"]
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{item['id']}")
+    escalation = page.get_by_test_id("escalation")
+    expect(escalation).to_contain_text("With the conductor")
+    expect(escalation).to_have_attribute("data-holder", "conductor")
+    expect(escalation).to_have_attribute("data-tone", "info")
+    expect(page.locator(f'[data-nav-key="task:{item["id"]}"]')).not_to_have_attribute("data-triage", "needs_you")
+    expect(escalation.get_by_test_id("escalation-stop")).to_be_visible()
+    expect(page.get_by_test_id("task-screen")).not_to_contain_text("Waiting on a person's decision")
+    navigation = client.get("/v1/navigation").json()["projects"]
+    nav_task = next(t for p in navigation for t in p.get("tasks", []) if t["id"] == item["id"])
+    assert nav_task["status"] == "running" and nav_task["escalation"]["holder"] == "conductor"
+    page.goto(f"{web_url}#/waiting")
+    expect(page.get_by_test_id("inbox").get_by_role("listitem")).to_have_count(0)
+    page.goto(f"{web_url}#/task/{item['id']}")
+    shots = os.environ.get("DUDE_TEST_SCREENSHOTS")
+    if shots:
+        for theme in ("light", "dark"):
+            page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+            expect(escalation).to_be_visible()
+            page.screenshot(path=str(Path(shots) / f"conductor-escalation-{theme}.png"))
     task = ask_person_about_escalation(
         client, item["id"], question="Implementer failed: configure its model and try again?",
         actions=["retry", "stop"], recommended="retry",
@@ -1686,6 +1709,9 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     page.goto(f"{web_url}#/task/{item['id']}")
     escalation = page.get_by_test_id("escalation")
     expect(escalation).to_contain_text("Implementer failed")
+    expect(escalation).to_have_attribute("data-holder", "person")
+    expect(escalation).to_have_attribute("data-tone", "attention")
+    expect(page.locator(f'[data-nav-key="task:{item["id"]}"]')).to_have_attribute("data-triage", "needs_you")
     expect(escalation).to_contain_text("The Implementer runs on Coder, which names no model yet. An admin sets it in Models.")
     expect(page.get_by_test_id("phase").first).to_contain_text("which names no model yet")
     expect(page).to_have_title("GREE-1 · Nobody to implement it — dude")
@@ -1720,11 +1746,8 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
     task = wait_for_escalation(client, item["id"], timeout=60, message="failure never reached the conductor")
     assert task["status"] == "running" and task["escalation"]["holder"] == "conductor"
     assert task["escalation"]["reason"] == "implement_failed"
-    task = ask_person_about_escalation(
-        client, item["id"], question="Implementer failed: configure its model and try again?",
-        actions=["retry", "stop"], recommended="retry",
-    )
-    assert task["status"] == "awaiting_input"
+    # The owner can override while the conductor still holds it; no handover
+    # or person question is needed to retry.
     assert task["escalation"]["actions"] == ["retry", "stop"]
 
     sign_in(page, web_url, org["api_key"])
@@ -1745,6 +1768,28 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
     decided = [e for e in client.events(taskId=item["id"]) if e["eventType"] == "task.decided"]
     assert decided and decided[0]["payload"] == {"reason": "implement_failed", "action": "retry",
                                                  "note": "The model is configured now."}, decided
+    assert console_errors == []
+
+
+def test_owner_can_stop_a_conductor_held_escalation_with_the_keyboard(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+):
+    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
+    item = client.create_task(forge_project["id"], "Stop while the conductor decides")
+    assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
+    task = wait_for_escalation(client, item["id"], timeout=60)
+    assert task["escalation"]["holder"] == "conductor"
+    sign_in(page, web_url, org["api_key"])
+    page.goto(f"{web_url}#/task/{item['id']}")
+    stop = page.get_by_test_id("escalation-stop")
+    stop.focus()
+    expect(stop).to_be_focused()
+    stop.press("Enter")
+    expect(page.get_by_test_id("escalation")).to_have_count(0)
+    wait_until(lambda: client.get(f"/v1/tasks/{item['id']}").json()["status"] == "aborted", timeout=30)
+    assert not [e for e in client.events(taskId=item["id"]) if e["eventType"] == "question.asked"]
+    page.reload()
+    expect(page.get_by_test_id("escalation")).to_have_count(0)
     assert console_errors == []
 
 

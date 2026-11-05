@@ -69,6 +69,7 @@ export function EscalationPanel({ client, task, findings = [], you, youAdmin = f
   onDecided: () => void;
 }) {
   const { reason, actions: all } = task.escalation;
+  const withConductor = task.escalation.holder === "conductor";
   const words = escalationWords(task.escalation);
   const criteria = testCriteria(task.escalation);
   const namedIds = task.escalation.detail?.findingIds;
@@ -119,9 +120,9 @@ export function EscalationPanel({ client, task, findings = [], you, youAdmin = f
   if (required) noteLabel = direction ? `Your direction to ${reasonVerb(reasoning, reason)} (required)` : `Why may it ${reasonVerb(reasoning, reason)}? (required)`;
   else if (reasoned.length) noteLabel = `A note for the agents (required to ${reasoned.join(" or ")})`;
   return (
-    <Callout tone="attention" data-testid="escalation" data-reason={reason}>
+    <Callout tone={withConductor ? "info" : "attention"} data-testid="escalation" data-reason={reason} data-holder={withConductor ? "conductor" : "person"}>
       <div className="escalation">
-        {task.escalation.holder === "conductor" ? <p className="escalationWaiting">The conductor is handling this.{actions.length > 0 ? " You can override its decision here." : ""}</p> : null}
+        {withConductor ? <p className="escalationWaiting"><strong>With the conductor.</strong> The conductor is handling this.{actions.length > 0 ? " You can override its decision here." : ""}</p> : null}
         <p>
           <strong>{words.short}.</strong> {words.parts ? <MonoWords words={words.parts} /> : words.sentence}{" "}
           {words.runId ? (
@@ -150,13 +151,13 @@ export function EscalationPanel({ client, task, findings = [], you, youAdmin = f
           </ul>
         ) : null}
         {sentBack ? <Markdown source={sentBack} unmeasured className="escalationSentBack" data-testid="escalation-checks" /> : null}
-        {someoneElse && actions.length === 0 ? (
+        {!withConductor && someoneElse && actions.length === 0 ? (
           <p className="escalationWaiting">Waiting for {owner.name} to decide.</p>
         ) : null}
         {actions.length > 0 ? (
           <>
             {someoneElse ? (
-              <p className="escalationWaiting">Waiting for {owner!.name} to decide; as an admin you may also {actions.map((a) => actionLabel(a, reason).toLowerCase()).join(" or ")}.</p>
+              <p className="escalationWaiting">{withConductor ? `The conductor is handling this; as an admin you may also ` : `Waiting for ${owner!.name} to decide; as an admin you may also `}{actions.map((a) => actionLabel(a, reason).toLowerCase()).join(" or ")}.</p>
             ) : null}
             <Textarea
               label={noteLabel}
