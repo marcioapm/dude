@@ -24,7 +24,7 @@ the owner's answer to your question qst_e is one of its choices, not their reaso
 
 ## missing-conductor-direction-retry
 
-retry needs a note with the person's direction
+retry needs a note with direction for the next fix
 
 ## choice-not-direction-amend
 
