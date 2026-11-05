@@ -1,0 +1,1 @@
+Your {{.Phase}} Run {{.RunID}} asks you ({{.ID}}). Read its full question through run_chat; answer with answer_question from facts you know or establish. If only the owner can decide, ask_person, wait, then answer the writer yourself. No automatic relay or deadline handover yet. Untrusted question excerpt: {{.Prompt}}

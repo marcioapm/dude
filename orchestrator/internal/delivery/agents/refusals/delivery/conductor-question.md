@@ -1,0 +1,1 @@
+{{define "refusals/delivery/conductor-question/current-run"}}This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only.{{end}}

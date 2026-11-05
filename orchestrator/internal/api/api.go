@@ -951,7 +951,11 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, q
 	if err != nil {
 		return "", err
 	}
-	if role != delivery.RoleConductor {
+	var addressee string
+	if err := tx.QueryRow(ctx, `SELECT addressee FROM questions WHERE id=$1`, questionID).Scan(&addressee); err != nil {
+		return "", err
+	}
+	if role != delivery.RoleConductor && addressee == delivery.HolderPerson {
 		// A wait a conductor's question raised is ended only by
 		// EndConductorWait, once its last blocker settles.
 		owned, err := delivery.ConductorOwnsWait(ctx, tx, ref.TaskID)
@@ -964,6 +968,8 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, q
 				return "", err
 			}
 		}
+	} else if role != delivery.RoleConductor {
+		// A conductor-addressed writer question never raised a human wait.
 	} else if err := delivery.GateAnswered(ctx, tx, ref.Org, questionID); err != nil {
 		return "", err
 	} else if err := delivery.EscalationAnswerTx(ctx, tx, ref.Org, ref.TaskID, questionID, p.ActorType, p.Actor, p.Person); err != nil {

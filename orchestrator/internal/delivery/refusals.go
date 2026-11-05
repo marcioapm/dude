@@ -4,6 +4,7 @@
 package delivery
 
 const (
+	rQuestionRequiresCurrentRun             = "This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only."
 	rThisTaskYouAreReadOnly                 = "this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees"
 	rThisTaskHasNoDeliveryIn                = "this task has no delivery in progress to decide for"
 	rDeliverTakesThisTaskDecisionsNot       = "Deliver takes this task's decisions, not you: you are read-only. A person hands them to you by writing in Chat; until then, answer and advise"

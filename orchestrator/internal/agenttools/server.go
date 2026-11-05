@@ -231,6 +231,24 @@ func (s *Server) Handler() http.Handler {
 			}
 			if json.Unmarshal(body, &envelope) == nil && envelope.Method == "tools/call" && len(envelope.ID) > 0 {
 				caller.CallID = "mcp:" + string(envelope.ID)
+				// Canonicalize compatibility aliases before the MCP SDK's own
+				// dispatch, without advertising them in tools/list.
+				var call map[string]json.RawMessage
+				var params map[string]json.RawMessage
+				if json.Unmarshal(body, &call) == nil && json.Unmarshal(call["params"], &params) == nil {
+					var name string
+					if json.Unmarshal(params["name"], &name) == nil {
+						if t, ok := caller.findTool(name); ok && t.name != name {
+							params["name"], _ = json.Marshal(t.name)
+							if r.Header.Get("Mcp-Name") != "" {
+								r.Header.Set("Mcp-Name", t.name)
+							}
+							call["params"], _ = json.Marshal(params)
+							body, _ = json.Marshal(call)
+							r.Body = io.NopCloser(bytes.NewReader(body))
+						}
+					}
+				}
 			}
 		}
 		if caller.CallID == "" {
@@ -489,6 +507,20 @@ func (c Caller) agent() capabilities.Agent {
 }
 
 func (c Caller) tools() []tool {
+	if c.SessionID != "" && c.Role != delivery.RoleBrainstorm {
+		out := granted(c.Role, c.grants)
+		for i, t := range out {
+			if t.name == "ask_person" {
+				for _, s := range brainstormTools {
+					if s.name == "ask_person" {
+						out[i] = s
+						break
+					}
+				}
+			}
+		}
+		return out
+	}
 	if c.AutomationID != "" {
 		create, _ := find("create_task", c.Role, c.grants)
 		return append(append([]tool{create}, githubReadTools...), automationCommentTool, postToChatTool)
@@ -497,6 +529,14 @@ func (c Caller) tools() []tool {
 }
 
 func (c Caller) findTool(name string) (tool, bool) {
+	if c.SessionID != "" && c.Role != delivery.RoleBrainstorm && name == "ask_person" {
+		for _, t := range c.tools() {
+			if t.name == name {
+				return t, true
+			}
+		}
+		return tool{}, false
+	}
 	if c.AutomationID == "" {
 		return find(name, c.Role, c.grants)
 	}
@@ -517,6 +557,11 @@ var renamed = map[string]string{"list_work": "list_tasks", "create_work_item": "
 // find is the tool an agent with grants, as role, calls by name: a
 // session's agent has its own tools under the names others use.
 func find(name, role string, grants capabilities.Grants) (tool, bool) {
+	// Live writers may still have the old instructions. Resolve the alias
+	// before checking grants: withdrawing ask.conductor also withdraws it.
+	if name == "ask_person" && role != delivery.RoleConductor && !sessionAgent(role) {
+		name = "ask_conductor"
+	}
 	if now, ok := renamed[name]; ok {
 		name = now
 	}

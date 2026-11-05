@@ -1,0 +1,1 @@
+Ask your task's conductor up to four questions when you cannot proceed. Use the same question/choices or questions form as ask_person. End your turn; the answer arrives as your next message. If no conductor is available, dude asks the person instead. Actions and choice notes are conductor-only and are refused here.

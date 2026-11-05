@@ -342,7 +342,11 @@ func run(args []string, out io.Writer) error {
 			body["scope"] = "organization"
 		}
 		return show(out, *asJSON, call("remember", body))
-	case "ask":
+	case "ask", "ask-conductor":
+		askTool := "ask_person"
+		if cmd == "ask-conductor" {
+			askTool = "ask_conductor"
+		}
 		var choices, actions many
 		fs.Var(&choices, "choice", "an answer to offer (repeatable)")
 		fs.Var(&actions, "action", "a conductor's, at an escalation: the action each choice stands for, in order (repeatable)")
@@ -357,7 +361,7 @@ func run(args []string, out io.Writer) error {
 				!strings.HasPrefix(strings.TrimSpace(*questions), "[") {
 				return errors.New(askUsage)
 			}
-			return show(out, *asJSON, call("ask_person", map[string]any{"questions": json.RawMessage(*questions)}))
+			return show(out, *asJSON, call(askTool, map[string]any{"questions": json.RawMessage(*questions)}))
 		}
 		if len(args) != 1 {
 			return errors.New(askUsage)
@@ -366,7 +370,24 @@ func run(args []string, out io.Writer) error {
 		if len(actions) > 0 {
 			body["actions"] = []string(actions)
 		}
-		return show(out, *asJSON, call("ask_person", body))
+		return show(out, *asJSON, call(askTool, body))
+	case "answer-question":
+		answers := fs.String("answers-json", "", "one answer per question, as a JSON array")
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		body := map[string]any{}
+		if *answers != "" && len(args) == 1 && json.Valid([]byte(*answers)) {
+			body["id"] = args[0]
+			body["answers"] = json.RawMessage(*answers)
+		} else if *answers == "" && len(args) == 2 {
+			body["id"] = args[0]
+			body["answer"] = args[1]
+		} else {
+			return errors.New("usage: dude answer-question ID ANSWER | ID --answers-json JSON")
+		}
+		return show(out, *asJSON, call("answer_question", body))
 	case "event":
 		data := fs.String("data", "", "JSON to go with it")
 		args, err := parse(fs, rest)
