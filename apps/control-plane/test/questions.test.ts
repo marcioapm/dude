@@ -115,3 +115,58 @@ test("an agent asking several questions reads as how many and their headers; one
   expect(one.questions[0]!.items).toEqual([{ header: "", question: "Proceed?", multiple: false,
     choices: [{ label: "Yes", description: "", recommended: false }, { label: "No", description: "", recommended: false }] }]);
 });
+
+/**
+ * A writer's question for its conductor (questions.addressee 'conductor',
+ * ask_conductor) asks nothing of a person: not on the board's sessions, not
+ * in Needs you, not in the open list of what needs a person — whether the
+ * writer still runs or dude parked it on that question. A person's
+ * question (the fallback with no conductor, or the conductor's ask_person
+ * relay) still does.
+ */
+test("a writer's question for its conductor is not a person's; a person's still is", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+              VALUES ('wi_cq_run', ${ORG}, ${PROJECT}, 10, 'Routed, running', 'running'),
+                     ('wi_cq_park', ${ORG}, ${PROJECT}, 11, 'Routed, parked', 'running'),
+                     ('wi_pq', ${ORG}, ${PROJECT}, 12, 'Relayed to a person', 'running'),
+                     ('wi_pq_park', ${ORG}, ${PROJECT}, 13, 'Person, parked', 'running')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+              VALUES ('run_cq_cond', ${ORG}, ${PROJECT}, 'wi_cq_run', 1, 'running', NULL, 'conductor'),
+                     ('run_cq_run', ${ORG}, ${PROJECT}, 'wi_cq_run', 1, 'running', 'implement', 'implementer'),
+                     ('run_cq_park_cond', ${ORG}, ${PROJECT}, 'wi_cq_park', 1, 'running', NULL, 'conductor'),
+                     ('run_pq_cond', ${ORG}, ${PROJECT}, 'wi_pq', 1, 'running', NULL, 'conductor'),
+                     ('run_pq', ${ORG}, ${PROJECT}, 'wi_pq', 1, 'running', 'implement', 'implementer')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
+              VALUES ('run_cq_park', ${ORG}, ${PROJECT}, 'wi_cq_park', 1, 'paused', 'implement', 'implementer', 'person'),
+                     ('run_pq_park', ${ORG}, ${PROJECT}, 'wi_pq_park', 1, 'paused', 'implement', 'implementer', 'person')`;
+  await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, addressee)
+              VALUES ('q_cq_run', ${ORG}, 'wi_cq_run', 'run_cq_run', 'Routed?', '[]', 'conductor'),
+                     ('q_cq_park', ${ORG}, 'wi_cq_park', 'run_cq_park', 'Routed and parked?', '[]', 'conductor'),
+                     ('q_pq', ${ORG}, 'wi_pq', 'run_pq', 'For a person?', '[]', 'person'),
+                     ('q_pq_park', ${ORG}, 'wi_pq_park', 'run_pq_park', 'Parked for a person?', '[]', 'person')`;
+
+  type StatusNav = { projects: Array<{ tasks: Array<{ id: string; runs: Array<{ sessions: Array<{ role: string; status: string; activity?: string }> }> }> }> };
+  const nav = await get<StatusNav>("/v1/navigation");
+  const rows = (task: string) => sessionsOf(nav as unknown as Nav, task) as unknown as Array<{ role: string; status: string; activity?: string }>;
+  expect(rows("wi_cq_run").map((s) => [s.role, s.status, s.activity ?? null])).toEqual([["conductor", "running", null], ["implementer", "running", null]]);
+  // Parked on its conductor: the conductor owes it, as a peer wait — not awaiting_input.
+  expect(rows("wi_cq_park").map((s) => [s.role, s.status, s.activity ?? null])).toEqual([["conductor", "running", null], ["implementer", "pending", null]]);
+  expect(rows("wi_pq").map((s) => [s.role, s.status, s.activity ?? null])).toEqual([["conductor", "running", null], ["implementer", "awaiting_input", "For a person?"]]);
+  expect(rows("wi_pq_park").map((s) => [s.role, s.status, s.activity ?? null])).toEqual([["implementer", "awaiting_input", "Parked for a person?"]]);
+  // Needs you, by the board's own rule.
+  const { countTasks } = await import("../../../packages/design-system/src/util/navModel.ts");
+  const tasks = nav.projects.flatMap((p) => p.tasks).filter((t) => ["wi_cq_run", "wi_cq_park", "wi_pq", "wi_pq_park"].includes(t.id));
+  const needs = (id: string) => countTasks(tasks.filter((t) => t.id === id) as never).needs_you;
+  expect([needs("wi_cq_run"), needs("wi_cq_park"), needs("wi_pq"), needs("wi_pq_park")]).toEqual([0, 0, 1, 1]);
+
+  // The open list: what needs a person.
+  const open = await get<{ questions: Array<{ id: string }> }>("/v1/questions");
+  const ids = open.questions.map((q) => q.id);
+  expect(ids).toContain("q_pq");
+  expect(ids).toContain("q_pq_park");
+  expect(ids).not.toContain("q_cq_run");
+  expect(ids).not.toContain("q_cq_park");
+  // A Run's or task's own list still has every question it asked.
+  expect((await get<{ questions: Array<{ id: string }> }>("/v1/questions?runId=run_cq_run")).questions.map((q) => q.id)).toEqual(["q_cq_run"]);
+  expect((await get<{ questions: Array<{ id: string }> }>("/v1/questions?taskId=wi_cq_park")).questions.map((q) => q.id)).toEqual(["q_cq_park"]);
+});

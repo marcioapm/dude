@@ -76,6 +76,11 @@ interface RunRow {
   question: string | null;
   /** "Waiting on ABS-2" while it waits on a peer's reply. */
   peerWait: string | null;
+  /**
+   * Parked by dude on a question its conductor answers first
+   * (questions.addressee 'conductor'): the conductor owes it, not a person.
+   */
+  conductorWait: boolean;
 }
 
 /**
@@ -112,11 +117,12 @@ function attemptStatus(all: RunRow[]): RunStatus {
  * A Run as a session row: what it asks of a person, if anything, else its
  * status. A conductor dude parked between messages is quiet — waiting, not
  * waiting on you: nobody owes it anything. So is a Run parked on a peer's
- * reply: the peer owes it, not a person.
+ * reply: the peer owes it, not a person. So is a writer parked on a
+ * question for its conductor.
  */
 function sessionStatus(r: RunRow): SessionStatus {
   if (r.question) return "awaiting_input";
-  if ((isConductor(r) || r.peerWait) && r.status === "paused") return "pending";
+  if ((isConductor(r) || r.peerWait || r.conductorWait) && r.status === "paused") return "pending";
   return SESSION_STATUS[r.status];
 }
 
@@ -262,12 +268,14 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
              -- blocked on a person. Open questions die with their Run.
              -- Or a repository it asked for, pending a person's decision.
              -- Several questions at once read as how many and their headers.
+             -- A person's question only: one for its conductor
+             -- (addressee 'conductor') asks nothing of a person.
              COALESCE(
                (SELECT CASE WHEN jsonb_array_length(q.items) > 1
                          THEN 'asks ' || jsonb_array_length(q.items) || ' questions · ' ||
                               (SELECT string_agg(i->>'header', ', ' ORDER BY n) FROM jsonb_array_elements(q.items) WITH ORDINALITY AS t(i, n))
                          ELSE q.prompt END
-                FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
+                FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open' AND q.addressee = 'person'
                 ORDER BY q.asked_at DESC LIMIT 1),
                (SELECT CASE q.access WHEN 'write' THEN 'Change ' ELSE 'Read ' END || repo.name || '?'
                 FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
@@ -279,10 +287,16 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
               JOIN tasks wt ON wt.id = m.to_task_id JOIN projects wp ON wp.id = wt.project_id
               WHERE w.run_id = ranked.id AND w.closed_at IS NULL
                 AND ranked.status IN ('pending', 'scheduled', 'starting', 'running', 'paused')
-              ORDER BY w.since DESC LIMIT 1) AS "peerWait"
+              ORDER BY w.since DESC LIMIT 1) AS "peerWait",
+             -- Parked by dude (dude_pause 'person', phases' requestPause)
+             -- on its conductor's open question: the conductor owes it.
+             -- A person's own pause clears dude_pause and stays theirs.
+             (ranked.status = 'paused' AND ranked.dude_pause = 'person'
+              AND EXISTS (SELECT 1 FROM questions q WHERE q.run_id = ranked.id
+                AND q.status = 'open' AND q.addressee = 'conductor')) AS "conductorWait"
       FROM (
         SELECT r.id, r.task_id AS "taskId", r.attempt, r.status, r.phase,
-               r.role, r.category, r.created_at,
+               r.role, r.category, r.created_at, r.dude_pause,
                dense_rank() OVER (PARTITION BY r.task_id ORDER BY r.attempt DESC) AS rank
         FROM runs r
         -- The agents: a branch preview is a task's servers, not one of them;
