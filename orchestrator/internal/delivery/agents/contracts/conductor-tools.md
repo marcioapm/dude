@@ -19,7 +19,9 @@
 		"start_phase" "start_phase starts implement, review (some or all categories), fix (some or all findings), simplify or test"
 		"decide" (.Wrap "decide takes the decision waited on (" (.List ", " ", " "" "next" "ask_person" "ask_person" "" "wait" "" "open_pull_request") ")")
 		"dismiss_finding" "dismiss_finding leaves a finding as it is, with the reason"
-		"answer_review_question" "answer_review_question answers a reviewer's question with a fact you established, or withdraws it as moot (a reviewer's question is for a person or for you, never for a fixer)") ". Each is refused, saying why, when it is not yours to take.")
+		"answer_review_question" "answer_review_question answers a reviewer's question with a fact you established, or withdraws it as moot (a reviewer's question is for a person or for you, never for a fixer)"
+		"forward_review_question" "forward_review_question gives a reviewer's question dude gave you first to the person, when only they can say the fact"
+		"decide_repository_request" "decide_repository_request denies an agent's request for another repository, approves read access to one of this project's, or forwards it to the owner, who alone approves write access or another project's") ". Each is refused, saying why, when it is not yours to take.")
 	"decide_escalation" "decide_escalation decides non-person-only escalations directly with your explanation; person-only actions need the owner's answer to your recommended question."
 	"" (.Wrap "" (.List "; " "; "
 		"steer" "steer tells a running phase Run of this task, or one of your own child agents, something, whoever decides (interrupt stops its turn)"

@@ -402,3 +402,16 @@ func capabilityUnlocking(tool string) capabilities.Key {
 	}
 	return ""
 }
+
+// The conductor's instruction file without conduct.asks, as a golden: the
+// wording a conductor that can neither forward a reviewer's question nor
+// decide a repository request reads.
+func TestGoldenInstructionsWithoutHeldAsks(t *testing.T) {
+	less := capabilities.Default(RoleConductor).Without(capabilities.AsksHeld)
+	in := goldenTask()
+	in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+	in.Repositories = readOnlyRepos()
+	ii := in.InstructionsInput()
+	ii.Grants = &less
+	golden(t, "instructions-conductor-without-held-asks", Instructions(RoleConductor, "correctness", ii))
+}

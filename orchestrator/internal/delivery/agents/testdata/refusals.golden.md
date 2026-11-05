@@ -1526,3 +1526,19 @@ already given to %[2]s, which has their words: %[1]s. Do not steer them to it ag
 
 This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only.
 
+## refusals/delivery/conductor-held/ask-the-person
+
+only the task's owner approves %s: forward it to them (decide_repository_request with forward), or deny it
+
+## refusals/delivery/conductor-held/repository-action
+
+say deny, approve or forward: one of the three
+
+## refusals/delivery/conductor-held/repository-request
+
+repository request %s is not a pending request of this task held by you: only one dude gave you first, still pending, is decided or forwarded
+
+## refusals/delivery/conductor-held/review-question
+
+reviewer question %s is not an open question of this task held by you: only one dude gave you first, still open, is forwarded
+
