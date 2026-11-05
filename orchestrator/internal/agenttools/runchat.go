@@ -182,6 +182,14 @@ func (w wrapper) chatMessage(typ, actorType, actorID, name string, p map[string]
 	if typ == delivery.EvRunSteered {
 		m.Kind = "steer"
 	}
+	// Event content and kind do not depend on who supplied the answer.
+	if typ == "question.answered" {
+		m.Kind = "answer"
+		text, _ = p["answer"].(string)
+		if note, _ := p["note"].(string); strings.TrimSpace(note) != "" {
+			text = strings.TrimSpace(text + "\n\n" + note)
+		}
+	}
 	gh, _ := p["github"].(map[string]any)
 	login, _ := gh["login"].(string)
 	switch {
@@ -195,13 +203,6 @@ func (w wrapper) chatMessage(typ, actorType, actorID, name string, p map[string]
 		// The Run's own reply on GitHub (reply_on_pull_request, by "fixer").
 		m.From, m.Text = "agent", w.own(text)
 		return m
-	case typ == "question.answered":
-		m.Kind = "answer"
-		answer, _ := p["answer"].(string)
-		if note, _ := p["note"].(string); strings.TrimSpace(note) != "" {
-			answer = strings.TrimSpace(answer + "\n\n" + note)
-		}
-		text = answer
 	}
 	m.From = "person"
 	if login != "" || strings.HasPrefix(actorID, "github:") {

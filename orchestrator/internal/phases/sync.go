@@ -1578,12 +1578,8 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 			}
 		}
 		// What people decided on this task, across its Runs.
-		rows, err := tx.Query(ctx, `SELECT prompt, answer FROM questions
-			WHERE task_id = $1 AND status = 'answered' AND answer IS NOT NULL ORDER BY answered_at`, r.TaskID)
+		decisions, err = delivery.PeopleDecisionsTx(ctx, tx, r.TaskID, "")
 		if err != nil {
-			return err
-		}
-		if decisions, err = pgx.CollectRows(rows, pgx.RowToStructByPos[delivery.Decision]); err != nil {
 			return err
 		}
 		// The findings the workflow chose for this Run, exactly and in its
