@@ -82,7 +82,7 @@ func TestARepositoryRequestGoesToTheConductorFirst(t *testing.T) {
 // request it does not hold, and an unknown action.
 func TestTheConductorDecidesARepositoryRequest(t *testing.T) {
 	type tc struct {
-		name, repo, action string
+		name, repo, action   string
 		write, crossProject  bool
 		status               int
 		want, access, holder string

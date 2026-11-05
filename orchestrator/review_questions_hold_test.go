@@ -217,7 +217,9 @@ func (w *world) conductedHold(task string) { w.conductedHoldAfter(task, func() {
 
 // conductedHoldAfter is conductedHold running beforeOpen just before the
 // conductor decides to open the pull request.
-func (w *world) conductedHoldAfter(task string, beforeOpen func()) { w.conductedHoldBy(task, beforeOpen, true) }
+func (w *world) conductedHoldAfter(task string, beforeOpen func()) {
+	w.conductedHoldBy(task, beforeOpen, true)
+}
 
 // conductedHoldBy is conductedHoldAfter; held by the conductor or, when
 // beforeOpen forwarded the question, by the person.
