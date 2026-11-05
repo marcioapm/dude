@@ -18,7 +18,7 @@ import pytest
 import requests
 
 from env import REPO_ROOT, find_free_port
-from helpers import provision_person, ApiClient, create_api_key, execute, open_my_settings, open_org_settings, query, sign_in, wait_until
+from helpers import provision_person, ApiClient, create_api_key, execute, open_my_settings, open_org_settings, query, relay_writer_question, sign_in, wait_until
 
 
 @pytest.fixture
@@ -425,6 +425,10 @@ def test_waiting_on_you_is_split_by_whose_it_is(
     assert bo_client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     wait_until(lambda: client.get("/v1/questions", params={"taskId": task["id"]}).json()["questions"], timeout=30,
                message="the agent never asked")
+    # The writer asked its conductor, which waits on no one; Bo's conductor
+    # relays it to Bo (PR4a's explicit relay): that question is the one on Bo.
+    _, human = relay_writer_question(bo_client, task["id"])
+    assert human["taskId"] == task["id"]
 
     # Bo: his, counted on "Waiting on you" and listed as his in the inbox.
     _sign_in(page, web_url, bo_client.api_key)
