@@ -78,6 +78,11 @@ type ToPerson struct {
 	// (addressee flipped). Idempotent: a question no longer open with the
 	// conductor is handed over by nobody, and "" is returned.
 	HandOver string
+	// A conductor-held ask given to the person (conductor_held.go): a
+	// reviewer's question, with State its delivery, or a repository
+	// request.
+	reviewQuestion *reviewQuestionAsk
+	repository     *repositoryAsk
 }
 
 // ToPersonTx is the one way anything on a task reaches a person: it
@@ -100,6 +105,14 @@ func ToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) (string, error) {
 			return "", fmt.Errorf("to person: a hand-over is of one question, for WhyHandover")
 		}
 		return handOverQuestionTx(ctx, tx, p.Ref, p.HandOver, p.Reason)
+	}
+	if p.reviewQuestion != nil {
+		return "", askReviewQuestionTx(ctx, tx, p)
+	}
+	if p.repository != nil {
+		// The asking Run's repository.requested: the person is notified.
+		_, err := ledger.Append(ctx, tx, p.repository.Event)
+		return "", err
 	}
 	if len(p.Items) > 0 {
 		if p.Escalation != nil {
@@ -127,6 +140,24 @@ func ToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) (string, error) {
 	}
 	return "", emitTx(ctx, tx, p.Ref.Org, st, EvQuestionAsked,
 		map[string]any{"kind": "escalation", "reason": e.Reason, "detail": e.Detail, "actions": e.Actions()})
+}
+
+// askReviewQuestionTx asks the person a reviewer's question the conductor
+// held: question.asked of kind review_question, which pushes, and the task
+// waiting on them while the delivery's step is held by it
+// (holdForQuestions, which also holds it from then on).
+func askReviewQuestionTx(ctx context.Context, tx pgx.Tx, p ToPerson) error {
+	q, st := p.reviewQuestion, p.State
+	if st == nil {
+		return fmt.Errorf("to person: a reviewer's question with no delivery")
+	}
+	if st.QuestionsHeld {
+		if _, err := SetTaskStatusTx(ctx, tx, p.Ref.Org, st.ProjectID, st.TaskID, "", "awaiting_input", p.Reason); err != nil {
+			return err
+		}
+	}
+	return emitTx(ctx, tx, p.Ref.Org, st, EvQuestionAsked, map[string]any{"kind": "review_question", "questionId": q.ID,
+		"prompt": q.Question, "reviewRunId": q.RunID, "handedOverFrom": HolderConductor, "via": q.Via})
 }
 
 // ConductorAnswerWait bounds both quiet and chatty escalation decisions.

@@ -22,6 +22,11 @@ var toPersonInternals = map[string]bool{
 	// it and an asked question share.
 	"delivery/to_person.go:handOverQuestionTx": true,
 	"delivery/to_person.go:personWaitTx":       true,
+	// A conductor-held reviewer question given to the person.
+	"delivery/to_person.go:askReviewQuestionTx": true,
+	// Guarded flips used only to hand held asks through ToPersonTx.
+	"delivery/conductor_held.go:reviewQuestionToPersonTx":    true,
+	"delivery/conductor_held.go:repositoryRequestToPersonTx": true,
 }
 
 // toPersonAllowed reach a person some other way, for good: a brainstorm
@@ -41,10 +46,7 @@ var toPersonReaders = map[string]string{
 // for a reason conductor-first takes away (WhyWriter, WhyEscalation): each
 // with the PR that removes it, which its code names in a
 // TODO(conductor-first PRn). This list only shrinks.
-var toPersonOffenders = map[string]string{
-	// A10: reviewer questions set awaiting_input whoever decides.
-	"delivery/review_questions.go:holdForQuestions": "PR4b",
-}
+var toPersonOffenders = map[string]string{}
 
 // transitionalWhys are ToPersonTx's reasons conductor-first removes: a call
 // naming one is an offender.

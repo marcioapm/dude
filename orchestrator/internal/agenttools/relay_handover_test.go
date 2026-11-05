@@ -143,7 +143,7 @@ func TestConductorAnswerWithdrawsOpenRelay(t *testing.T) {
 	}
 }
 
-func handOver(t *testing.T, f *fixture, qid string, wait time.Duration) bool {
+func handOverWriterQuestion(t *testing.T, f *fixture, qid string, wait time.Duration) bool {
 	t.Helper()
 	var got bool
 	if err := f.app.InOrg(context.Background(), f.org, func(tx pgx.Tx) error {
@@ -205,10 +205,10 @@ func TestConductorQuestionHandOverPredicates(t *testing.T) {
 				t.Fatalf("due=%v want %v", got, want)
 			}
 			// Twice: the second finds nothing to hand over.
-			if got := handOver(t, f, qid, wait); got != want {
+			if got := handOverWriterQuestion(t, f, qid, wait); got != want {
 				t.Fatalf("handed over=%v want %v", got, want)
 			}
-			if handOver(t, f, qid, wait) {
+			if handOverWriterQuestion(t, f, qid, wait) {
 				t.Fatal("handed over twice")
 			}
 			asked := f.qn(t, `SELECT count(*) FROM events WHERE task_id=$1 AND event_type='question.asked' AND payload->>'handedOverFrom'='conductor' AND payload->>'questionId'=$2`, f.item, qid)

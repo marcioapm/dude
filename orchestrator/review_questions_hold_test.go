@@ -51,7 +51,11 @@ func (w *world) asksFirst(finding bool, doc string) {
 // heldAtThePullRequest waits for the delivery to be held at the pull
 // request step by an open question: the task waiting on a person, no pull
 // request opened, no escalation, and stays so across more passes.
-func (w *world) heldAtThePullRequest(wi string) {
+func (w *world) heldAtThePullRequest(wi string) { w.heldAtThePullRequestBy(wi, false) }
+
+// heldAtThePullRequestBy is heldAtThePullRequest; with conductor, every
+// open question is the conductor's: the task waits on nobody.
+func (w *world) heldAtThePullRequestBy(wi string, conductor bool) {
 	w.t.Helper()
 	w.until("the delivery held at the pull request, or a pull request", func() bool {
 		return len(w.gh.Pulls()) > 0 ||
@@ -66,8 +70,8 @@ func (w *world) heldAtThePullRequest(wi string) {
 	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1`, wi); n != 0 {
 		w.t.Fatalf("%d pull request rows with a question open", n)
 	}
-	if s := w.taskStatus(wi); s != "awaiting_input" {
-		w.t.Fatalf("task %s while held, want awaiting_input", s)
+	if s := w.taskStatus(wi); (s == "awaiting_input") == conductor {
+		w.t.Fatalf("task %s while held (by the conductor: %v)", s, conductor)
 	}
 	if s := w.escalationReason(wi); s != "" {
 		w.t.Fatalf("the delivery escalated %s instead of holding", s)
@@ -207,12 +211,19 @@ func TestASettledQuestionReleasesAConductedHold(t *testing.T) {
 
 // conductedHold takes a conducted delivery whose reviewer asked a question
 // to the pull request gate, has the person answer Open and the conductor
-// decide to open it, and waits until it is held there by the question.
+// decide to open it, and waits until it is held there by the question,
+// which is the conductor's: the task waits on nobody.
 func (w *world) conductedHold(task string) { w.conductedHoldAfter(task, func() {}) }
 
 // conductedHoldAfter is conductedHold running beforeOpen just before the
 // conductor decides to open the pull request.
 func (w *world) conductedHoldAfter(task string, beforeOpen func()) {
+	w.conductedHoldBy(task, beforeOpen, true)
+}
+
+// conductedHoldBy is conductedHoldAfter; held by the conductor or, when
+// beforeOpen forwarded the question, by the person.
+func (w *world) conductedHoldBy(task string, beforeOpen func(), conductor bool) {
 	w.t.Helper()
 	w.must(task, "decide", `{"action":"next"}`)
 	w.finishSimplifierReview(task)
@@ -223,23 +234,24 @@ func (w *world) conductedHoldAfter(task string, beforeOpen func()) {
 	}
 	beforeOpen()
 	w.must(task, "decide", `{"action":"open_pull_request"}`)
-	w.heldAtThePullRequest(task)
+	w.heldAtThePullRequestBy(task, conductor)
 }
 
 // Two waits on a person, the reviewer's question holding the pull request
-// and a question the conductor asked the owner before deciding to open it,
-// end only together, in either order: after the first answer the task stays
-// awaiting_input with no status change and nothing opens; after the second,
-// one pull request opens in review.
+// (the conductor forwarded it) and a question the conductor asked the owner
+// before deciding to open it, end only together, in either order: after the
+// first answer the task stays awaiting_input with no status change and
+// nothing opens; after the second, one pull request opens in review.
 func TestReleasingTheHoldLeavesAnotherQuestionWaiting(t *testing.T) {
 	for _, askFirst := range []bool{false, true} {
 		t.Run(fmt.Sprintf("askFirst=%v", askFirst), func(t *testing.T) {
 			w, task, id := questioned(t)
 			ana := w.person("Ana")
-			w.conductedHoldAfter(task, func() {
+			w.conductedHoldBy(task, func() {
 				w.assignOwner(task, ana)
+				w.must(task, "forward_review_question", `{"id":"`+id+`"}`)
 				w.must(task, "ask_person", `{"question":"May the export run at night?"}`)
-			})
+			}, false)
 			ask := w.conductorQuestion(task)
 			if ask == "" {
 				t.Fatal("the conductor's question was not recorded")
@@ -297,5 +309,40 @@ func TestAnEarlierAttemptsQuestionHoldsNothingAfterStartOver(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM review_questions q JOIN runs r ON r.id = q.run_id
 		WHERE q.task_id = $1 AND q.status = 'open' AND r.attempt = 1`, wi); n != 1 {
 		t.Errorf("%d attempt-1 questions open, want the one", n)
+	}
+}
+
+// Conductor-first (A10): under the conductor a reviewer's question is the
+// conductor's: held at the pull request with the task running, no
+// question.asked. forward_review_question gives it to the person: one
+// question.asked, the task waiting on them; a second forward is refused.
+// The owner answers it (or, unforwarded, overrides the conductor), and the
+// pull request opens.
+func TestAForwardedReviewQuestionWaitsOnThePerson(t *testing.T) {
+	for _, forward := range []bool{true, false} {
+		t.Run(fmt.Sprintf("forward=%v", forward), func(t *testing.T) {
+			w, task, id := questioned(t)
+			if n := w.count(`SELECT count(*) FROM review_questions WHERE id = $1 AND addressee = 'conductor'`, id); n != 1 {
+				t.Fatalf("the question is not the conductor's")
+			}
+			w.conductedHold(task)
+			ana := w.ownedBy(task, "Ana")
+			asked := func() int {
+				return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'questionId' = $2`, task, id)
+			}
+			if n := asked(); n != 0 {
+				t.Fatalf("%d question.asked for a conductor's question", n)
+			}
+			if forward {
+				w.must(task, "forward_review_question", `{"id":"`+id+`"}`)
+				w.refused(task, "forward_review_question", `{"id":"`+id+`"}`, "held by you")
+				w.until("the task waiting on the person", func() bool { return w.taskStatus(task) == "awaiting_input" })
+				if n := asked(); n != 1 {
+					t.Fatalf("%d question.asked after forwarding, want one", n)
+				}
+			}
+			w.settle(ana, id, "answer")
+			w.until("the pull request in review", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+		})
 	}
 }

@@ -251,11 +251,10 @@ func HandOverDueTx(ctx context.Context, tx pgx.Tx, org, id string, wait time.Dur
 // its delivery is live and conducted, and a conductor is available.
 func ConductorTakesTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 	d, err := ReadDelivery(ctx, tx, taskID)
-	if err != nil || d == nil || !d.Live() || !d.State.conducted() {
+	if err != nil {
 		return false, err
 	}
-	unavailable, err := questionConductorUnavailableTx(ctx, tx, taskID)
-	return !unavailable, err
+	return conductorHeldTx(ctx, tx, taskID, d)
 }
 
 // RecordIdleParkTx is a conducted task's idle park of Run r (the agent

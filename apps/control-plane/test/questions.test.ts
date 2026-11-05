@@ -222,6 +222,7 @@ test("a handed-over writer question needs you; a relayed one is asked once", asy
               VALUES ('q_rl_relay', ${ORG}, 'wi_rl', 'run_rl_cond', 'Owner: A or B?', '[]', 'person', 'q_rl')`;
   await owner`UPDATE questions SET addressee = 'person' WHERE id = 'q_ho'`;
 
+
   const nav = await get<Nav>("/v1/navigation");
   const rows = (task: string) => (sessionsOf(nav, task) as Array<Session & { role: string; status: string }>)
     .map((s) => [s.role, s.status, s.activity ?? null]);
@@ -235,4 +236,51 @@ test("a handed-over writer question needs you; a relayed one is asked once", asy
   expect(open).toContain("q_ho");
   expect(open).toContain("q_rl_relay");
   expect(open).not.toContain("q_rl");
+});
+
+/**
+ * Conductor-first (A10, A11): held reviewer/repository asks are not a person's.
+ */
+test("a repository request or reviewer question its conductor holds is not a person's", async () => {
+  await owner`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+              VALUES ('repo_q_web', ${ORG}, ${PROJECT}, 'web', 'git://h/web.git', 'main')`;
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+              VALUES ('wi_rr_held', ${ORG}, ${PROJECT}, 30, 'Request held', 'running'),
+                     ('wi_rr_park', ${ORG}, ${PROJECT}, 31, 'Request held, parked', 'running'),
+                     ('wi_rr_fwd', ${ORG}, ${PROJECT}, 32, 'Request forwarded', 'running'),
+                     ('wi_rvq_held', ${ORG}, ${PROJECT}, 33, 'Reviewer question held', 'running')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+              VALUES ('run_rr_held', ${ORG}, ${PROJECT}, 'wi_rr_held', 1, 'running', 'implement', 'implementer'),
+                     ('run_rr_fwd', ${ORG}, ${PROJECT}, 'wi_rr_fwd', 1, 'running', 'implement', 'implementer'),
+                     ('run_rvq_rev', ${ORG}, ${PROJECT}, 'wi_rvq_held', 1, 'completed', 'review', 'reviewer')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
+              VALUES ('run_rr_park', ${ORG}, ${PROJECT}, 'wi_rr_park', 1, 'paused', 'implement', 'implementer', 'person')`;
+  await owner`INSERT INTO repository_requests (id, organization_id, task_id, run_id, repository_id, access, reason, blocking, addressee)
+              VALUES ('rrq_held', ${ORG}, 'wi_rr_held', 'run_rr_held', 'repo_q_web', 'read', 'r', false, 'conductor'),
+                     ('rrq_park', ${ORG}, 'wi_rr_park', 'run_rr_park', 'repo_q_web', 'write', 'r', true, 'conductor'),
+                     ('rrq_fwd', ${ORG}, 'wi_rr_fwd', 'run_rr_fwd', 'repo_q_web', 'write', 'r', false, 'person')`;
+  await owner`INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee)
+              VALUES ('rvq_held', ${ORG}, 'wi_rvq_held', 'run_rvq_rev', 1, 'correctness', 'UTC?', 'conductor')`;
+
+  const nav = await get<Nav>("/v1/navigation");
+  const rows = (task: string) => (sessionsOf(nav, task) as Array<Session & { role: string; status: string }>)
+    .map((s) => [s.role, s.status, s.activity ?? null]);
+  expect(rows("wi_rr_held")).toEqual([["implementer", "running", null]]);
+  expect(rows("wi_rr_park")).toEqual([["implementer", "pending", null]]);
+  expect(rows("wi_rr_fwd")).toEqual([["implementer", "awaiting_input", "Change web?"]]);
+  const tasks = nav.projects.flatMap((p) => p.tasks) as Array<{ id: string; conductorHeld?: string }>;
+  const held = (id: string) => tasks.find((t) => t.id === id)?.conductorHeld ?? null;
+  expect([held("wi_rr_held"), held("wi_rr_park"), held("wi_rr_fwd"), held("wi_rvq_held")])
+    .toEqual(["repository_request", "repository_request", null, "review_question"]);
+  const { countTasks } = await import("../../../packages/design-system/src/util/navModel.ts");
+  const needs = (id: string) => countTasks(tasks.filter((t) => t.id === id) as never).needs_you;
+  expect([needs("wi_rr_held"), needs("wi_rr_park"), needs("wi_rr_fwd"), needs("wi_rvq_held")]).toEqual([0, 0, 1, 0]);
+
+  const open = (await get<{ repositoryRequests: Array<{ id: string }> }>("/v1/repository-requests")).repositoryRequests.map((r) => r.id);
+  expect(open).toContain("rrq_fwd");
+  expect(open).not.toContain("rrq_held");
+  expect(open).not.toContain("rrq_park");
+  // A task's own list still has every request.
+  expect((await get<{ repositoryRequests: Array<{ id: string }> }>("/v1/repository-requests?taskId=wi_rr_held")).repositoryRequests.map((r) => r.id))
+    .toEqual(["rrq_held"]);
 });

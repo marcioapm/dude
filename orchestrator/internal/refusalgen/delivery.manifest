@@ -4,6 +4,10 @@ rQuestionRequiresCurrentRun             refusals/delivery/conductor-question/cur
 rRelayRequiresOpenWriterQuestion        refusals/delivery/conductor-question/relay-open-writer
 rRelayAlreadyOpen                       refusals/delivery/conductor-question/relay-already-open
 rRelayNotEscalation                     refusals/delivery/conductor-question/relay-not-escalation
+rReviewQuestionNotHeld                  refusals/delivery/conductor-held/review-question
+rRepositoryRequestNotHeld               refusals/delivery/conductor-held/repository-request
+rRepositoryRequestAction                refusals/delivery/conductor-held/repository-action
+rRepositoryRequestAskThePerson          refusals/delivery/conductor-held/ask-the-person
 rThisTaskYouAreReadOnly                 refusals/delivery/conduct/this-task-you-are-read-only
 rThisTaskHasNoDeliveryIn                refusals/delivery/conduct/this-task-has-no-delivery-in
 rDeliverTakesThisTaskDecisionsNot       refusals/delivery/conduct/deliver-takes-this-task-decisions-not

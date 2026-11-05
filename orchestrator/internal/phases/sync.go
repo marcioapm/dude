@@ -80,6 +80,9 @@ type Syncer struct {
 	// How long a writer's question may wait on its conductor before it is
 	// handed to the person (0: delivery.ConductorAnswerWait; tests shorten it).
 	ConductorAnswerWait time.Duration
+	// How long a conductor holds a reviewer's question or a repository
+	// request before dude hands it to the person (0: delivery.ConductorAnswerWait).
+	HeldAskWait time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -585,7 +588,7 @@ const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 // instead of opening a transaction per step. A step whose probe found
 // nothing would have selected no rows. Probe failure runs every step.
 type pending struct {
-	brainstorms, silent, unheard, unheardBrainstorms, stalls, waits, handovers, failed, wakes bool
+	brainstorms, silent, unheard, unheardBrainstorms, stalls, waits, handovers, heldAsks, failed, wakes bool
 }
 
 // What each of those steps selects from (SQL), shared by its query and its
@@ -621,6 +624,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 			{stalledRuns, &p.stalls, []any{delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds()}},
 			{openWaits, &p.waits, nil},
 			{delivery.ConductorQuestionsDue, &p.handovers, []any{s.answerWait().Seconds()}},
+			{`((` + delivery.ReviewQuestionsDueSQL + `) UNION ALL (` + delivery.RepositoryRequestsDueSQL + `)) held`, &p.heldAsks, []any{s.heldAskWait().Seconds()}},
 			{failedForWake, &p.failed, nil},
 			{wakeableWakes, &p.wakes, []any{window.Seconds()}},
 		} {
@@ -631,7 +635,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 	})
 	if err != nil {
 		s.Log.Warn("probing the sweep's steps failed; running them all", "error", err)
-		return pending{true, true, true, true, true, true, true, true, true}
+		return pending{true, true, true, true, true, true, true, true, true, true}
 	}
 	return p
 }
@@ -689,6 +693,13 @@ func (s *Syncer) beforeDue(ctx context.Context) error {
 		ran = true
 		if err := s.handOverQuestions(ctx); err != nil {
 			s.Log.Warn("handing conductors' questions to people failed", "error", err)
+		}
+	}
+	// Reviewer questions and repository requests have their own due probe.
+	if p.heldAsks || ran {
+		ran = true
+		if err := s.handOverHeldAsks(ctx); err != nil {
+			s.Log.Warn("handing conductor-held asks to the person failed", "error", err)
 		}
 	}
 	if p.failed || p.wakes || ran {
@@ -4261,6 +4272,14 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 		if category == "" {
 			category = "correctness"
 		}
+		// Conductor-first: its conductor's while one decides the delivery
+		// and is available; the person's otherwise.
+		addressee := delivery.HolderPerson
+		if len(questions) > 0 {
+			if addressee, err = delivery.ReviewQuestionAddresseeTx(ctx, tx, taskID); err != nil {
+				return err
+			}
+		}
 		for i, q := range questions {
 			var finding *string
 			if q.About > 0 && q.About <= len(shown) {
@@ -4268,16 +4287,16 @@ func recordFindingsTx(ctx context.Context, tx pgx.Tx, org, runID string, finding
 			}
 			id := ids.New(ids.ReviewQuestion)
 			tag, err := tx.Exec(ctx, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, finding_id,
-					question, why_it_matters, evidence_checked, needed_from)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (run_id, n) DO NOTHING`,
-				id, org, taskID, runID, i+1, category, finding, q.Question, q.Why, q.Evidence, q.NeededFrom)
+					question, why_it_matters, evidence_checked, needed_from, addressee)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (run_id, n) DO NOTHING`,
+				id, org, taskID, runID, i+1, category, finding, q.Question, q.Why, q.Evidence, q.NeededFrom, addressee)
 			if err != nil {
 				return err
 			}
 			if tag.RowsAffected() == 0 {
 				continue
 			}
-			payload := map[string]any{"questionId": id, "n": i + 1, "category": category, "neededFrom": q.NeededFrom}
+			payload := map[string]any{"questionId": id, "n": i + 1, "category": category, "neededFrom": q.NeededFrom, "addressee": addressee}
 			if finding != nil {
 				payload["findingId"] = *finding
 			}

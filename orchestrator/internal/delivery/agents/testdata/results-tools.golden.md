@@ -22,6 +22,14 @@ Do not wait or check for it: a person may take a while. Carry on with what you c
 
 End your turn now. When a person decides, you are resumed: with docs checked out, and told where, or told it was declined.
 
+## request-repository-conductor
+
+Do not wait or check for it: your conductor decides it, and may ask a person, who may take a while. Carry on with what you can without docs. If it is approved while you work, you will be paused and resumed with it checked out, and told where, in a message; if not, a message will say so.
+
+## request-repository-conductor-wait
+
+End your turn now. When your conductor, or a person it asks, decides, you are resumed: with docs checked out, and told where, or told it was declined.
+
 ## wait-for-reply
 
 End your turn now. GLD-8's reply resumes you as your next message; if none comes within the project's grace, your Run is parked until it does.

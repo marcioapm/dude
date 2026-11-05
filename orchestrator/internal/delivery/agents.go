@@ -96,6 +96,7 @@ var (
 	publishRefusedTmpl         = mustTemplate("wakes/publish-refused")
 	publishStalledTmpl         = mustTemplate("wakes/publish-stalled")
 	reviewQuestionWakeTmpl     = mustTemplate("wakes/review-question")
+	repositoryRequestWakeTmpl  = mustTemplate("wakes/repository-request")
 	reviewQuestionAnsweredTmpl = mustTemplate("wakes/review-question-answered")
 	runAsksTmpl                = mustTemplate("wakes/run-asks")
 	handedOverTmpl             = mustTemplate("wakes/question-handed-over")
