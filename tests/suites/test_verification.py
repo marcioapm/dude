@@ -132,6 +132,9 @@ def test_a_test_that_cannot_run_the_app_waits_for_a_person_to_waive_it(
     escalation.get_by_test_id("escalation-waive").click()
     expect(page.get_by_test_id("escalation")).to_have_count(0)
 
+    # The explicit Chat handover made the conductor chatty. The waiver is
+    # already the person's; let its later delivery decisions finish quietly.
+    assert client.post(f"/v1/tasks/{task['id']}/decider", {"decider": "policy"}).status_code == 200
     pr = _pull_request(client, task["id"])
     body = fake_github.pulls[pr["number"]].body
     assert "- **blocked, waived by e2e user: Checked by hand on staging.**" in body, body
