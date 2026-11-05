@@ -1313,7 +1313,7 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
 
 
 def test_a_writer_parked_on_its_conductor_does_not_ask_the_owner_for_input(
-    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
+    page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
         "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
@@ -1332,6 +1332,12 @@ def test_a_writer_parked_on_its_conductor_does_not_ask_the_owner_for_input(
     expect(page.get_by_test_id("task-header")).not_to_contain_text("Needs you")
     # Existing owner override access is not removed by holder-aware wording.
     expect(page.get_by_role("button", name="Resume", exact=True)).to_be_visible()
+    # A colleague must not be told that the owner owes an answer either.
+    bo_key = create_api_key(env.owner_dsn, org["id"], name="Bo")
+    sign_in(page, web_url, bo_key)
+    page.goto(f"{web_url}#/session/{writer['id']}")
+    expect(page.get_by_placeholder("Waiting for the conductor's answer.")).to_be_disabled()
+    expect(page.get_by_placeholder("Waiting for e2e user to answer.")).to_have_count(0)
     assert console_errors == []
 
 

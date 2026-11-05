@@ -847,9 +847,9 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   disabled={(run.status === "paused" && !conversation.openQuestion) ||
                     (conversation.openQuestion !== null && waitingOn !== undefined)}
                   disabledReason={
-                    waitingOn && (conversation.openQuestion || run.dudePause === "person")
+                    run.dudePause === "person" && conversation.conductorQuestionId ? CONDUCTOR_WAIT_WORDS.composer
+                      : waitingOn && (conversation.openQuestion || run.dudePause === "person")
                       ? `Waiting for ${waitingOn} to ${!conversation.openQuestion && conversation.openRequest ? "decide" : "answer"}.`
-                      : run.dudePause === "person" && conversation.conductorQuestionId ? CONDUCTOR_WAIT_WORDS.composer
                       : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
                       : "This run is paused. Resume it to steer."
                   }
