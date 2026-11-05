@@ -4,12 +4,114 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
+
+func TestPendingEscalationTransitionPreservesCommittedChanges(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		for _, actor := range []string{"owner", "conductor", "ask_person"} {
+			t.Run(fmt.Sprintf("expired=%v/%s", expired, actor), func(t *testing.T) {
+				w := newGoldenWorld(t)
+				ctx := context.Background()
+				w.exec(t, `INSERT INTO task_people(task_id,person_id,organization_id,position) VALUES('wi_g','per_ana',$1,0)`)
+				w.exec(t, `INSERT INTO runs(id,organization_id,project_id,task_id,attempt,status,role,kind) VALUES('run_cond1',$1,'prj_g','wi_g',1,'running','conductor','agent')`)
+				at := time.Now().UTC()
+				if expired {
+					at = at.Add(-time.Hour)
+				}
+				w.delivery(t, "decide", fmt.Sprintf(`{"taskId":"wi_g","projectId":"prj_g","decider":"conductor","escalation":{"reason":"implement_failed","step":"implement","holder":"conductor","raisedAt":%q}}`, at.Format(time.RFC3339Nano)))
+				w.exec(t, `UPDATE workflow_runs SET wake_at=now() WHERE id='wfr_g'`)
+				rt := workflow.New(w.app, "checkpoint-test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+				def := Workflow(&Store{DB: w.app}, nil)
+				calls := 0
+				def.BeforeCommit = func(id, step, next string) {
+					calls++
+					w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+						switch actor {
+						case "owner":
+							return "", DecideEscalationTx(ctx, tx, w.org, "wi_g", EscalationDecision{Action: "stop", Person: "per_ana", ActorType: "person", ActorID: "per_ana"})
+						case "conductor":
+							_, err := ConductDecideEscalation(ctx, tx, RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}, "stop", "Stop this attempt.")
+							return "", err
+						default:
+							_, _, err := EscalationQuestion(ctx, tx, RunRef{Org: w.org, TaskID: "wi_g", RunID: "run_cond1"}, []QuestionItem{{Question: "Stop this attempt?", Choices: []Choice{{Label: "Stop", Recommended: true}, {Label: "Retry"}}}}, []string{"stop", "retry"})
+							return "", err
+						}
+					})
+				}
+				rt.Register(def)
+				if _, err := rt.Tick(ctx, 1); err != nil {
+					t.Fatal(err)
+				}
+				if calls != 1 {
+					t.Fatalf("hook calls=%d", calls)
+				}
+				got, err := rt.Get(ctx, w.org, "wfr_g")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var after State
+				if err := json.Unmarshal(got.State, &after); err != nil {
+					t.Fatal(err)
+				}
+				if actor == "ask_person" {
+					if after.Escalation.HeldBy() != HolderPerson {
+						t.Fatalf("lost holder/wake: %+v %+v", after.Escalation, got)
+					}
+				} else if after.Escalation.Decided == nil || after.Escalation.Decided.Action != "stop" {
+					t.Fatalf("committed %s stop erased: %s", actor, got.State)
+				}
+				var wake *time.Time
+				if err := w.owner.QueryRow(ctx, `SELECT wake_at FROM workflow_runs WHERE id='wfr_g'`).Scan(&wake); err != nil {
+					t.Fatal(err)
+				}
+				if wake != nil {
+					t.Fatalf("stale deadline restored: %v", wake)
+				}
+				def.BeforeCommit = nil
+				if _, err := rt.Tick(ctx, 1); err != nil {
+					t.Fatal(err)
+				}
+				var decisions, questions, asks int
+				if err := w.owner.QueryRow(ctx, `SELECT (SELECT count(*) FROM events WHERE task_id='wi_g' AND event_type='task.decided'), (SELECT count(*) FROM questions WHERE task_id='wi_g'), (SELECT count(*) FROM events WHERE task_id='wi_g' AND event_type='question.asked')`).Scan(&decisions, &questions, &asks); err != nil {
+					t.Fatal(err)
+				}
+				wantDecisions, wantQuestions := 1, 0
+				if actor == "ask_person" && !expired {
+					wantDecisions, wantQuestions = 0, 0
+				}
+				if actor == "ask_person" && expired {
+					wantDecisions, wantQuestions = 0, 0
+				}
+				wantAsks := 0
+				if expired {
+					wantAsks = 1
+				}
+				if asks != wantAsks {
+					t.Fatalf("extra person asks=%d want=%d", asks, wantAsks)
+				}
+				if actor != "ask_person" {
+					var status string
+					if err := w.owner.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id='wi_g'`).Scan(&status); err != nil {
+						t.Fatal(err)
+					}
+					if status != "aborted" {
+						t.Fatalf("stop not carried out: %s", status)
+					}
+				}
+				if decisions != wantDecisions || questions != wantQuestions {
+					t.Fatalf("duplicate/orphan effects: decisions=%d questions=%d", decisions, questions)
+				}
+			})
+		}
+	}
+}
 
 func TestFailedEscalationBriefingWakesHandoverInsteadOfRestarting(t *testing.T) {
 	w := newGoldenWorld(t)
