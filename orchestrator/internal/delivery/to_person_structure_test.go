@@ -18,6 +18,10 @@ import (
 var toPersonInternals = map[string]bool{
 	"delivery/to_person.go:ToPersonTx":  true,
 	"delivery/to_person.go:askPersonTx": true,
+	// A writer's question handed to the person (WhyHandover), and the wait
+	// it and an asked question share.
+	"delivery/to_person.go:handOverQuestionTx": true,
+	"delivery/to_person.go:personWaitTx":       true,
 }
 
 // toPersonAllowed reach a person some other way, for good: a brainstorm
@@ -40,8 +44,6 @@ var toPersonReaders = map[string]string{
 var toPersonOffenders = map[string]string{
 	// A10: reviewer questions set awaiting_input whoever decides.
 	"delivery/review_questions.go:holdForQuestions": "PR4b",
-	// A12: the idle park sets awaiting_input.
-	"phases/sync.go:requestPause": "PR4b",
 }
 
 // transitionalWhys are ToPersonTx's reasons conductor-first removes: a call
@@ -51,6 +53,9 @@ var transitionalWhys = []string{"WhyWriter", "WhyEscalation"}
 var openQuestionInsert = regexp.MustCompile(`(?is)INSERT\s+INTO\s+questions\b`)
 var awaitingInputSQL = regexp.MustCompile(`(?i)status\s*=\s*'awaiting_input'`)
 
+// toPersonSQL: an existing question addressed to a person (a hand-over).
+var toPersonSQL = regexp.MustCompile(`(?i)\bSET\s+addressee\s*=\s*'person'`)
+
 // TestNothingReachesAPersonButThroughToPersonTx: nothing creates an open
 // question for a person, emits question.asked, or moves a task to
 // awaiting_input except ToPersonTx, the allowed, and the offenders listed,
@@ -59,7 +64,8 @@ var awaitingInputSQL = regexp.MustCompile(`(?i)status\s*=\s*'awaiting_input'`)
 //
 // What the scan flags (reachesPerson), in function bodies and in file-level
 // const and var values alike:
-//   - SQL that inserts an open question or sets status = 'awaiting_input';
+//   - SQL that inserts an open question, sets status = 'awaiting_input',
+//     or addresses an existing question to a person (a hand-over);
 //   - any reference to EvQuestionAsked, or the literal "question.asked";
 //   - any "awaiting_input" literal, wherever it goes (a local, a var, a
 //     helper's argument, a parameterised SQL's argument), unless it is a
@@ -295,6 +301,9 @@ func reachesPerson(n ast.Node, consts map[string]string) []personReach {
 			// An answered row (RecordDecisionTx) asks nobody.
 			if openQuestionInsert.MatchString(s) && !strings.Contains(s, "'answered'") && s != ConductorQuestionInsertSQL {
 				out = append(out, personReach{n.Pos(), "INSERT INTO questions"})
+			}
+			if toPersonSQL.MatchString(s) {
+				out = append(out, personReach{n.Pos(), "SET addressee = 'person'"})
 			}
 			if awaitingInputSQL.MatchString(s) && setSQL.MatchString(s) {
 				out = append(out, personReach{n.Pos(), "SET status = 'awaiting_input'"})

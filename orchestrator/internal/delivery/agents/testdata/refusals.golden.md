@@ -674,6 +674,10 @@ a thread reply is 1 to %d characters; this one is %d: summarise it in a few line
 
 this turn's message was typed in dude, not in the chat: nothing was posted; answer in this session
 
+## refusals/tools/tools/relay-is-conductor
+
+relay is a conductor's, for a writer's question it asks the person; ask your own question without it
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
@@ -1525,4 +1529,16 @@ already given to %[2]s, which has their words: %[1]s. Do not steer them to it ag
 ## refusals/delivery/conductor-question/current-run
 
 This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only.
+
+## refusals/delivery/conductor-question/relay-already-open
+
+%s is relayed to the person already (%s): their answer goes to the Run. End your turn and wait for it
+
+## refusals/delivery/conductor-question/relay-not-escalation
+
+relay is for a writer's question, not a question about the escalation: ask about the escalation without relay
+
+## refusals/delivery/conductor-question/relay-open-writer
+
+relay names a writer's question to relay to the person: it must be open, addressed to you, and asked by a current writer Run of this task (%s is not). Read the Run's question with run_chat
 

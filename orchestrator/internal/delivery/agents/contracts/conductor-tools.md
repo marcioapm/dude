@@ -12,7 +12,7 @@
 		"search_memory" "search_memory"
 		"get_memory" "get_memory") ".")
 	"ask_person" "ask_person asks the person up to 4 questions at once and waits for the answer; end your turn after it."
-	"answer_question" "answer_question answers a current writer's open conductor-addressed question. Establish facts first; if only the owner can decide, ask them, wait, then answer the writer yourself. Automatic forwarding and deadline handover are not available yet."
+	"answer_question" (print "answer_question answers a current writer's open conductor-addressed question, from what you know or can establish." (.List "" "" "ask_person" " If only the person can decide, ask them with ask_person and relay: <questionId>: their answer goes to the Run directly.") " A question you do not take in time, or cannot take, dude hands to the person.")
 	"create_task" "create_task records a change as a new task, for a person to deliver."
 	"" (.Wrap "While you take the decisions: " (.List "; " "; "
 		"update_task" "update_task writes an agreed goal or acceptance criteria into the task, before the implementer"

@@ -5,6 +5,9 @@ package delivery
 
 const (
 	rQuestionRequiresCurrentRun             = "This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only."
+	rRelayRequiresOpenWriterQuestion        = "relay names a writer's question to relay to the person: it must be open, addressed to you, and asked by a current writer Run of this task (%s is not). Read the Run's question with run_chat"
+	rRelayAlreadyOpen                       = "%s is relayed to the person already (%s): their answer goes to the Run. End your turn and wait for it"
+	rRelayNotEscalation                     = "relay is for a writer's question, not a question about the escalation: ask about the escalation without relay"
 	rThisTaskYouAreReadOnly                 = "this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees"
 	rThisTaskHasNoDeliveryIn                = "this task has no delivery in progress to decide for"
 	rDeliverTakesThisTaskDecisionsNot       = "Deliver takes this task's decisions, not you: you are read-only. A person hands them to you by writing in Chat; until then, answer and advise"

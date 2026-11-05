@@ -33,7 +33,7 @@ var tools = []tool{
 	define("list_tasks", listTasks),
 	define("list_epics", listEpics),
 	define("ask_person", askPerson),
-	define("ask_conductor", askPerson),
+	define("ask_conductor", askConductor),
 	define("answer_question", answerQuestion),
 	define("emit_event", emitEvent).limit(eventsPerRun),
 	define("list_repositories", listRepositories),
@@ -485,6 +485,7 @@ type askIn struct {
 	Choices   []string    `json:"choices,omitempty"`
 	Questions []askItemIn `json:"questions,omitempty"`
 	Actions   []string    `json:"actions,omitempty"`
+	Relay     string      `json:"relay,omitempty"`
 }
 
 type askOut struct {
@@ -518,6 +519,19 @@ func askItems(question string, choices []string, questions []askItemIn) ([]deliv
 	return conducted(delivery.NormalizeItems(items))
 }
 
+// askConductorIn is ask_person's input without what is the conductor's
+// own (relay): a writer's ask_conductor.
+type askConductorIn struct {
+	Question  string      `json:"question,omitempty"`
+	Choices   []string    `json:"choices,omitempty"`
+	Questions []askItemIn `json:"questions,omitempty"`
+	Actions   []string    `json:"actions,omitempty"`
+}
+
+func askConductor(ctx context.Context, tx pgx.Tx, c Caller, in askConductorIn) (askOut, error) {
+	return askPerson(ctx, tx, c, askIn{Question: in.Question, Choices: in.Choices, Questions: in.Questions, Actions: in.Actions})
+}
+
 // askPerson records a question for a person — or up to four, answered
 // together. The agent ends its turn; the answer arrives as its next
 // message — parked in between if the person takes longer than the
@@ -537,6 +551,16 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 	if open {
 		return askOut{}, refuseText(rYouAlreadyHaveQuestionWaitingFor)
 	}
+	if in.Relay != "" {
+		if c.Role != delivery.RoleConductor {
+			return askOut{}, refuseText(rRelayIsConductor)
+		}
+		// Chat, delivery, task, then the writer's question: before
+		// EscalationQuestion's delivery and task.
+		if _, err := conducted("", delivery.CheckRelayTx(ctx, tx, c.run(), in.Relay)); err != nil {
+			return askOut{}, err
+		}
+	}
 	// A conductor's question while its task's escalation waits on a person
 	// is that escalation's question.
 	var escalation string
@@ -547,6 +571,10 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 			return askOut{}, err
 		}
 		items = composed
+		if escalation != "" && in.Relay != "" {
+			_, err = conducted("", delivery.RelayNotEscalation())
+			return askOut{}, err
+		}
 	} else if len(in.Actions) > 0 {
 		return askOut{}, refuseText(rActionsAreConductorForQuestionAbout)
 	} else if delivery.HasChoiceNote(items) {
@@ -563,9 +591,12 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 		}
 		return askOut{QuestionID: id, Next: askNext(false)}, nil
 	}
-	id, err := delivery.ToPersonTx(ctx, tx, delivery.ToPerson{Ref: c.run(), Items: items, Why: delivery.WhyConductor})
+	id, err := delivery.ToPersonTx(ctx, tx, delivery.ToPerson{Ref: c.run(), Items: items, Why: delivery.WhyConductor, Relays: in.Relay})
 	if err != nil {
 		return askOut{}, err
+	}
+	if in.Relay != "" {
+		return askOut{QuestionID: id, Next: askRelayNext}, nil
 	}
 	if escalation != "" {
 		acts, _ := json.Marshal(in.Actions)
@@ -589,6 +620,9 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, c Caller, in answerQuestionI
 	id, err = conducted(id, err)
 	return map[string]string{"directiveId": id}, err
 }
+
+// askRelayNext is what a relaying ask_person tells the conductor.
+const askRelayNext = "End your turn. The person's answer goes to the writer's Run directly, and to you as your next message."
 
 // askNext is what ask_person tells the agent to do next; escalation, for a
 // conductor's question about its task's escalation.

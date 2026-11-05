@@ -844,7 +844,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			return err
 		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
-		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, items, answered, principalOf(r))
+		directiveID, relay, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, items, answered, principalOf(r))
 		if err != nil {
 			return err
 		}
@@ -859,6 +859,9 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": answered.Text, "answeredAt": answeredAt,
 			"answers": answered.Answers, "attachments": db.NonNil(attached)}
 		payload := answeredPayload(questionID, directiveID, answered)
+		if relay != nil {
+			out["relay"], payload["relay"] = relay, relay
+		}
 		if len(attached) > 0 {
 			payload["attachments"] = attached
 		}
@@ -923,56 +926,70 @@ func answeredPayload(questionID, directiveID string, a delivery.Answered) map[st
 // waits on a person (delivery.EndConductorWait), which any answer may be the
 // last of.
 func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt string,
-	items []delivery.QuestionItem, a delivery.Answered, p principal) (string, error) {
+	items []delivery.QuestionItem, a delivery.Answered, p principal) (string, *delivery.RelayOutcome, error) {
 	name, err := delivery.PersonName(ctx, tx, p.Person)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	answers, _ := json.Marshal(a.Answers)
 	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $5::jsonb, answered_at = now(),
 		answered_by = (SELECT id FROM users WHERE id = $3), answered_by_person = NULLIF($4, '') WHERE id = $1`,
 		questionID, a.Text, p.Actor, p.Person, answers); err != nil {
-		return "", err
-	}
-	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{
-		Text: delivery.AnswerDirective(prompt, items, a, name, false), Scope: "run"})
-	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	var addressee string
 	if err := tx.QueryRow(ctx, `SELECT addressee FROM questions WHERE id=$1`, questionID).Scan(&addressee); err != nil {
-		return "", err
+		return "", nil, err
+	}
+	// The conductor's relay of a writer's question: the person's answer
+	// answers the writer's too, as theirs (design §1.4). A writer's
+	// question answered directly leaves its relays moot: withdrawn.
+	var relay *delivery.RelayOutcome
+	text := delivery.AnswerDirective(prompt, items, a, name, false)
+	if role == delivery.RoleConductor {
+		relay, err = delivery.ForwardRelayTx(ctx, tx, ref, questionID, items, a,
+			delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})
+		if err != nil {
+			return "", nil, err
+		}
+		text += delivery.RelayOutcomeLine(relay)
+	} else if err := delivery.CancelRelaysTx(ctx, tx, ref, questionID, "person"); err != nil {
+		return "", nil, err
+	}
+	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: text, Scope: "run"})
+	if err != nil {
+		return "", nil, err
 	}
 	if role != delivery.RoleConductor && addressee == delivery.HolderPerson {
 		// A wait a conductor's question raised is ended only by
 		// EndConductorWait, once its last blocker settles.
 		owned, err := delivery.ConductorOwnsWait(ctx, tx, ref.TaskID)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if !owned {
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", "running",
 				"a person answered the agent"); err != nil {
-				return "", err
+				return "", nil, err
 			}
 		}
 	} else if role != delivery.RoleConductor {
 		// A conductor-addressed writer question never raised a human wait.
 	} else if err := delivery.GateAnswered(ctx, tx, ref.Org, questionID); err != nil {
-		return "", err
+		return "", nil, err
 	} else if err := delivery.EscalationAnswerTx(ctx, tx, ref.Org, ref.TaskID, questionID, p.ActorType, p.Actor, p.Person); err != nil {
 		// The owner picked a choice of the conductor's question about the
 		// escalation: decided, as from the banner.
-		return "", escalationFailure(err)
+		return "", nil, escalationFailure(err)
 	} else if err := delivery.LimitAnswerTx(ctx, tx, ref, questionID, a,
 		delivery.Approver{Person: p.Person, ActorType: p.ActorType, ActorID: p.Actor, Admin: p.Admin}); err != nil {
 		var refused delivery.LimitApprovalError
 		if errors.As(err, &refused) {
-			return "", fail(http.StatusForbidden, "not_admin", "%s", refused.Msg)
+			return "", nil, fail(http.StatusForbidden, "not_admin", "%s", refused.Msg)
 		}
-		return "", err
+		return "", nil, err
 	}
-	return directiveID, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
+	return directiveID, relay, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
 }
 
 // mayAnswer is who may answer a question: the task's owner, as for any; or,

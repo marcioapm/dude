@@ -6,7 +6,7 @@ Agents ask you things, and you tell agents things. This page covers answering an
 
 ## When an agent asks you a question
 
-Writers with the grant use `ask_conductor` first. Their task keeps running while the asking Run waits; no human question notification is emitted. The conductor uses `answer_question` to answer a current writer once, with its Run recorded as the author. When there is no available conductor at ask time, dude uses the existing person-question path. If the conductor needs the owner, it asks with `ask_person`, waits, then answers the writer itself. Automatic relay forwarding and deadline handover for these questions are not available yet.
+Writers with the grant use `ask_conductor` first. Their task keeps running while the asking Run waits; no human question notification is emitted. The conductor uses `answer_question` to answer a current writer once, with its Run recorded as the author. When there is no available conductor at ask time, dude uses the existing person-question path. If only the owner can decide, the conductor asks them with `ask_person` and `relay` set to the writer's question: your answer goes to the writer directly, as yours, and the conductor is told. A question the conductor does not answer within ten minutes, or cannot answer because it failed or has no model, is handed to you, and shows under Needs you.
 
 An agent that needs a decision only a person can make asks with `ask_person`. It can ask up to 4 questions at once, each with up to 6 suggested answers; you can always answer in your own words too. Its turn ends, and the Run is **waiting** until you answer.
 

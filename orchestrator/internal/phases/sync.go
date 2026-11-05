@@ -77,6 +77,9 @@ type Syncer struct {
 	// How long reasons to wake a conductor are gathered after the last
 	// arrived before one note delivers them (DUDE_WAKE_WINDOW; 0: WakeWindow).
 	WakeWindow time.Duration
+	// How long a writer's question may wait on its conductor before it is
+	// handed to the person (0: delivery.ConductorAnswerWait; tests shorten it).
+	ConductorAnswerWait time.Duration
 	// How soon after an edit a Run's live diff is read, how often while its
 	// agent works (DUDE_DIFF_EVERY), and how often once several reads found
 	// nothing new; zero takes the defaults.
@@ -581,7 +584,9 @@ const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 // pending lets idle sweeps probe all pre-due selections in one round trip
 // instead of opening a transaction per step. A step whose probe found
 // nothing would have selected no rows. Probe failure runs every step.
-type pending struct{ brainstorms, silent, unheard, unheardBrainstorms, stalls, waits, failed, wakes bool }
+type pending struct {
+	brainstorms, silent, unheard, unheardBrainstorms, stalls, waits, handovers, failed, wakes bool
+}
 
 // What each of those steps selects from (SQL), shared by its query and its
 // probe so the two cannot disagree.
@@ -615,6 +620,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 			{delivery.UnheardBrainstorm, &p.unheardBrainstorms, nil},
 			{stalledRuns, &p.stalls, []any{delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds()}},
 			{openWaits, &p.waits, nil},
+			{delivery.ConductorQuestionsDue, &p.handovers, []any{s.answerWait().Seconds()}},
 			{failedForWake, &p.failed, nil},
 			{wakeableWakes, &p.wakes, []any{window.Seconds()}},
 		} {
@@ -625,7 +631,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 	})
 	if err != nil {
 		s.Log.Warn("probing the sweep's steps failed; running them all", "error", err)
-		return pending{true, true, true, true, true, true, true, true}
+		return pending{true, true, true, true, true, true, true, true, true}
 	}
 	return p
 }
@@ -676,6 +682,13 @@ func (s *Syncer) beforeDue(ctx context.Context) error {
 		ran = true
 		if err := s.evaluateWaits(ctx); err != nil {
 			s.Log.Warn("evaluating conductors' waits failed", "error", err)
+		}
+	}
+	// Before the wakes too: a hand-over's news joins the note due with it.
+	if p.handovers || ran {
+		ran = true
+		if err := s.handOverQuestions(ctx); err != nil {
+			s.Log.Warn("handing conductors' questions to people failed", "error", err)
 		}
 	}
 	if p.failed || p.wakes || ran {
@@ -1115,6 +1128,45 @@ func (s *Syncer) wakeConductors(ctx context.Context) error {
 		})
 		if err != nil {
 			s.Log.Warn("waking a conductor failed", "task", f.TaskID, "error", err)
+		}
+	}
+	return nil
+}
+
+func (s *Syncer) answerWait() time.Duration {
+	if s.ConductorAnswerWait > 0 {
+		return s.ConductorAnswerWait
+	}
+	return delivery.ConductorAnswerWait
+}
+
+// handOverQuestions hands writers' questions their conductors did not take
+// in time, or cannot take, to the person (design §1.7): found without a
+// lock (delivery.ConductorQuestionsDue, over the partial index
+// questions_conductor_open_idx), each then handed over in its own
+// organization's transaction, which reads it again under the task's locks
+// (delivery.HandOverDueTx): two sweeps hand it over once.
+func (s *Syncer) handOverQuestions(ctx context.Context) error {
+	type due struct{ ID, Org string }
+	var todo []due
+	wait := s.answerWait()
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT q.id, q.organization_id FROM `+delivery.ConductorQuestionsDue+`
+			ORDER BY q.asked_at, q.id`, wait.Seconds())
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[due])
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, q := range todo {
+		if err := s.DB.InOrg(ctx, q.Org, func(tx pgx.Tx) error {
+			_, err := delivery.HandOverDueTx(ctx, tx, q.Org, q.ID, wait)
+			return err
+		}); err != nil {
+			s.Log.Warn("handing a conductor's question to the person failed", "question", q.ID, "error", err)
 		}
 	}
 	return nil
@@ -3402,14 +3454,35 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			// in review); put back when the Run is taken up again. Not for a
 			// conductor's: it changes nothing about the task, and its park
 			// shows in Chat.
-			if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&taskStatus); err != nil {
+			//
+			// Conducted, with a conductor to take it (as a writer's question:
+			// delivery.ConductorTakesTx), its conductor decides instead —
+			// restart, steer or leave it — and no person is asked (A12).
+			takes, err := delivery.ConductorTakesTx(ctx, tx, r.TaskID)
+			if err != nil {
 				return err
 			}
-			// TODO(conductor-first PR4b): conducted, the conductor gets a
-			// stalled wake instead; otherwise through delivery.ToPersonTx.
-			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input",
-				"the agent went quiet"); err != nil {
-				return err
+			ref := delivery.RunRef{Org: r.Org, ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: r.ID}
+			if takes {
+				if err := delivery.RecordIdleParkTx(ctx, tx, ref, r.Phase, parkedAt); err != nil {
+					return err
+				}
+			} else {
+				if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&taskStatus); err != nil {
+					return err
+				}
+				// No conductor decides it (WhyNoConductor), or the one that
+				// does cannot take it now (WhyHandover).
+				why := delivery.WhyNoConductor
+				if d, err := delivery.ReadDelivery(ctx, tx, r.TaskID); err != nil {
+					return err
+				} else if d != nil && d.State.Decider == delivery.DeciderConductor {
+					why = delivery.WhyHandover
+				}
+				if _, err := delivery.ToPersonTx(ctx, tx, delivery.ToPerson{Ref: ref, Why: why,
+					Reason: "the agent went quiet"}); err != nil {
+					return err
+				}
 			}
 		}
 		return s.event(ctx, tx, r, evParked, ledger.ActorSystem,
