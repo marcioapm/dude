@@ -194,8 +194,8 @@ func CancelRelaysTx(ctx context.Context, tx pgx.Tx, ref RunRef, id, by string) e
 // has it already), and asked longer ago than the wait, or since asked the
 // task's latest conductor failed, or its quiet conductor has no model.
 //
-// TODO(conductor-first PR4b-2): reviewer questions with the conductor hand
-// over through the same deadline.
+// Reviewer questions and repository requests use their own held-ask sweep
+// (ReviewQuestionsDueSQL and RepositoryRequestsDueSQL), not writer relays.
 const ConductorQuestionsDue = `questions q CROSS JOIN LATERAL (SELECT q.task_id) qn(task_id)
 	WHERE q.status = 'open' AND q.addressee = 'conductor' AND q.task_id IS NOT NULL
 	  AND NOT EXISTS (SELECT 1 FROM questions rq WHERE rq.relays = q.id AND rq.status = 'open')
