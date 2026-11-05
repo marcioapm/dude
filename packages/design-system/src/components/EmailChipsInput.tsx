@@ -21,6 +21,8 @@ const CHIP: Record<EmailChipKind, { readonly tone: "ok" | "info" | "bad" | "skip
   duplicate: { tone: "skip", icon: "minus", words: "left out", reason: "twice in the list" },
 };
 
+const PLAIN: EmailChipView = { kind: "valid" };
+
 export interface EmailChipsInputProps {
   readonly entries: ReadonlyArray<EmailEntry>;
   readonly onChange: (entries: EmailEntry[]) => void;
@@ -71,29 +73,30 @@ export function EmailChipsInput({ entries, onChange, views, label = "Emails", hi
     e.preventDefault();
     commit(draft + e.clipboardData.getData("text"));
   };
+  const viewAt = (i: number) => views[i] ?? PLAIN;
   const summary = emailChipSummary(views);
-  const explained = entries.map((e, i) => ({ e, view: views[i] ?? { kind: "valid" as const } })).filter(({ view }) => view.kind !== "valid");
+  const explained = entries.map((e, i) => ({ e, view: viewAt(i) })).filter(({ view }) => view.kind !== "valid");
   const leftOut = explained.some(({ view }) => !TAKEN.has(view.kind));
   const showHint = Boolean(hint) && entries.length === 0;
   // Typing changes only the draft; the reasons list depends on the entries and their views alone.
   const reasons = useMemo(() => explained.length ? (
-        <ul className={styles["reasons"]} aria-label="Left out or renewed" data-testid="chip-reasons">
-          {explained.map(({ e, view }) => {
-            const spec = CHIP[view.kind];
-            return (
-              <li key={e.key} className={styles["reason"]} data-tone={spec.tone} data-reason={view.kind}>
-                {spec.icon ? <Icon name={spec.icon} size={12} className={styles["icon"]} /> : null}
-                <span className={styles["reasonMail"]}>{e.email ?? e.raw}</span>
-                <span className={styles["reasonWhy"]}>{view.note ?? spec.reason}</span>
-                {view.action ? (
-                  <button type="button" className={styles["action"]} disabled={disabled} onClick={() => view.action!.onClick()}>
-                    {view.action.label}
-                  </button>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
+    <ul className={styles["reasons"]} aria-label="Left out or renewed" data-testid="chip-reasons">
+      {explained.map(({ e, view }) => {
+        const spec = CHIP[view.kind];
+        return (
+          <li key={e.key} className={styles["reason"]} data-tone={spec.tone} data-reason={view.kind}>
+            {spec.icon ? <Icon name={spec.icon} size={12} className={styles["icon"]} /> : null}
+            <span className={styles["reasonMail"]}>{e.email ?? e.raw}</span>
+            <span className={styles["reasonWhy"]}>{view.note ?? spec.reason}</span>
+            {view.action ? (
+              <button type="button" className={styles["action"]} disabled={disabled} onClick={() => view.action!.onClick()}>
+                {view.action.label}
+              </button>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
   ) : null, [entries, views, disabled]);
   return (
     <div className={cx(styles["field"], className)} data-testid={rest["data-testid"]}>
@@ -102,7 +105,7 @@ export function EmailChipsInput({ entries, onChange, views, label = "Emails", hi
         {entries.length ? (
           <ul className={styles["chips"]} role="list" aria-label={label}>
             {entries.map((e, i) => {
-              const view = views[i] ?? { kind: "valid" as const };
+              const view = viewAt(i);
               const spec = CHIP[view.kind];
               const shown = e.email ?? e.raw;
               return (
@@ -130,7 +133,7 @@ export function EmailChipsInput({ entries, onChange, views, label = "Emails", hi
         <p id={summaryId} className={styles["summary"]} aria-live="polite" data-testid="chip-summary">{summary}</p>
         {leftOut ? (
           <button type="button" className={styles["action"]} disabled={disabled} data-testid="chip-remove-left-out"
-            onClick={() => { onChange(entries.filter((_, i) => TAKEN.has((views[i] ?? { kind: "valid" }).kind))); input.current?.focus(); }}>
+            onClick={() => { onChange(entries.filter((_, i) => TAKEN.has(viewAt(i).kind))); input.current?.focus(); }}>
             Remove left out
           </button>
         ) : null}
