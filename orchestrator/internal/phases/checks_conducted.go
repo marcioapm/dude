@@ -69,13 +69,7 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 		if err = tx.QueryRow(ctx, `SELECT agent_session_epoch FROM runs WHERE id = $1`, r.ID).Scan(&epoch); err != nil {
 			return err
 		}
-		if asked, overdue, err = delivery.ChecksAskedTx(ctx, tx, r.ID, turn); err != nil {
-			return err
-		}
-		if verdict, err = delivery.ConductedChecksTx(ctx, tx, r.ID, turn); err != nil || verdict != nil {
-			return err
-		}
-		unavailable, err = delivery.ChecksConductorUnavailableTx(ctx, tx, r.TaskID)
+		asked, verdict, overdue, unavailable, err = checksAskTx(ctx, tx, r, turn)
 		return err
 	})
 	if err != nil {
@@ -130,21 +124,28 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 	return d, err
 }
 
+// checksAskTx reads where the gate's ask about r's turn stands: what was
+// asked (nil for nothing), the conductor's verdict on the turn (nil for
+// none), whether the ask's deadline passed, and, with no verdict, whether
+// the conductor is unavailable.
+func checksAskTx(ctx context.Context, tx pgx.Tx, r phaseRun, turn int64) (asked *delivery.ChecksAsked, verdict *delivery.ConductedChecks, overdue, unavailable bool, err error) {
+	if asked, overdue, err = delivery.ChecksAskedTx(ctx, tx, r.ID, turn); err != nil {
+		return
+	}
+	if verdict, err = delivery.ConductedChecksTx(ctx, tx, r.ID, turn); err != nil || verdict != nil {
+		return
+	}
+	unavailable, err = delivery.ChecksConductorUnavailableTx(ctx, tx, r.TaskID)
+	return
+}
+
 // checksAskOpenTx says the gate asked the conductor about r's turn and is
 // still waiting on that ask: no verdict on the turn, its deadline not
 // passed, and the conductor not unavailable. askConductor would find it
 // pending; checksBeforePush answers so before inspecting anything.
 func checksAskOpenTx(ctx context.Context, tx pgx.Tx, r phaseRun, turn int64) (bool, error) {
-	asked, overdue, err := delivery.ChecksAskedTx(ctx, tx, r.ID, turn)
-	if err != nil || asked == nil || overdue {
-		return false, err
-	}
-	verdict, err := delivery.ConductedChecksTx(ctx, tx, r.ID, turn)
-	if err != nil || verdict != nil {
-		return false, err
-	}
-	unavailable, err := delivery.ChecksConductorUnavailableTx(ctx, tx, r.TaskID)
-	return !unavailable, err
+	asked, verdict, overdue, unavailable, err := checksAskTx(ctx, tx, r, turn)
+	return err == nil && asked != nil && verdict == nil && !overdue && !unavailable, err
 }
 
 func hasResult(checks []delivery.Check, result string) bool {
