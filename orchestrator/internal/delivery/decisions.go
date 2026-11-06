@@ -895,16 +895,25 @@ func conductorAsksTx(ctx context.Context, tx pgx.Tx, taskID string) (held bool, 
 }
 
 // conductorAsksSQL is conductorAsksTx's statement ($1 the task). A
-// question settled before the wait began gives a window already over.
+// question settled before the wait began gives a window already over. The
+// task's question.closed events are read once, aggregated by question, and
+// joined: not once per question (it runs every askingRecheck while held).
+// A question its Run's end cancelled (runs_cancel_open_questions,
+// migration 015) has neither an answer nor a question.closed event: it
+// gives no settle time, and the deadline applies as it stood. The CASE on
+// an open question of an ended Run does not apply on the supported path
+// (every status change of a Run fires that trigger); kept for a question
+// left open on a Run whose end did not pass through it (a row written
+// ended, a question added after the end), whose end is then its settle
+// time rather than none.
 const conductorAsksSQL = `SELECT
 		EXISTS (SELECT 1 FROM questions q JOIN runs r ON r.id = q.run_id
 			WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = 'person' AND ` + LiveConductor + `
 			AND NOT COALESCE(` + Ending + `, false)),
-		(SELECT max(GREATEST(q.answered_at,
-				(SELECT max(e.occurred_at) FROM events e WHERE e.task_id = $1 AND e.event_type = '` + EvQuestionClosed + `'
-					AND e.payload->>'questionId' = q.id),
-				CASE WHEN q.status = 'open' THEN r.ended_at END))
+		(SELECT max(GREATEST(q.answered_at, c.at, CASE WHEN q.status = 'open' THEN r.ended_at END))
 			FROM questions q JOIN runs r ON r.id = q.run_id AND r.role = 'conductor'
+			LEFT JOIN (SELECT e.payload->>'questionId' AS qid, max(e.occurred_at) AS at FROM events e
+				WHERE e.task_id = $1 AND e.event_type = '` + EvQuestionClosed + `' GROUP BY 1) c ON c.qid = q.id
 			WHERE q.task_id = $1 AND q.addressee = 'person' AND q.asked_at <= now())`
 
 // retryingRecheck is how soon a quiet decision whose deadline passed while
