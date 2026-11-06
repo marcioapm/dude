@@ -420,3 +420,27 @@ func TestRelayAnswerAfterWriterQuestionClosedForwardsNothing(t *testing.T) {
 		t.Fatalf("writer directives=%d", n)
 	}
 }
+
+// An image alone answers the conductor's relay too: the writer's question
+// is answered (in words saying so), not refused with a 500 that rolls the
+// person's answer back. A refusal of the relayed answer is a 422.
+func TestAnImageOnlyRelayAnswerIsForwarded(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	b := s.withImages()
+	qid := s.writerAsks("Which layout?")
+	relay := s.relays(qid)
+	s.upload(b, "att_layout", s.task, "layout.png", screenshot)
+	status, out := s.call("/internal/questions/"+relay+"/answer", map[string]any{"text": "", "attachmentIds": []string{"att_layout"}})
+	if status != 200 {
+		t.Fatalf("image-only relay answer %d %v", status, out)
+	}
+	if r, _ := out["relay"].(map[string]any); r["forwarded"] != true {
+		t.Fatalf("relay outcome %v", out["relay"])
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id IN ($1,$2) AND status='answered'`, qid, relay); n != 2 {
+		t.Fatalf("answered=%d", n)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND answer LIKE '%answered with an image%'`, qid); n != 1 {
+		t.Fatal("the writer's answer does not say it was an image")
+	}
+}

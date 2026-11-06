@@ -845,6 +845,10 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
 		directiveID, relay, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, items, answered, principalOf(r))
+		if bad := (delivery.AnswerRefusal{}); errors.As(err, &bad) {
+			// An answer the question it relays refuses: the person's to fix.
+			return fail(http.StatusUnprocessableEntity, "invalid", "%s", bad.Msg)
+		}
 		if err != nil {
 			return err
 		}
