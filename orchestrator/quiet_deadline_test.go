@@ -8,6 +8,7 @@ package orchestrator_test
 
 import (
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -383,8 +384,16 @@ func TestAQuietDecisionHandedBackAfterChattyWaitsAfresh(t *testing.T) {
 	w.waitingFor(time.Hour)
 	task := w.task()
 	w.quietAfterImplement(task)
-	if status, out := w.chat(task, "let me talk this one through"); status != 201 {
-		t.Fatalf("chat: %d %v", status, out)
+	// The implementer's checks report may have started the conductor
+	// already (every pushing writer's gate asks it): the person's message
+	// then goes to that Run (200), else it starts one (201).
+	live, _, _ := w.conductor(task)
+	status, out := w.chat(task, "let me talk this one through")
+	if want := map[bool]int{true: 200, false: 201}[live != ""]; status != want || (live != "" && out["runId"] != live) {
+		t.Fatalf("chat (conductor %q before it): %d %v, want %d", live, status, out, want)
+	}
+	if got := w.deciderState(task); !strings.HasPrefix(got, "conductor/chatty/") {
+		t.Fatalf("the person's message left the decision %s, want chatty", got)
 	}
 	// The quiet wait's wake comes, and finds the decision chatty; its old
 	// deadline is long past by the time it is handed back.
