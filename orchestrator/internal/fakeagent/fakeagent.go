@@ -470,19 +470,29 @@ func DefaultsCalls(input string, quiet bool) [][2]string {
 	return [][2]string{DefaultsCall}
 }
 
+// ShownAtBase and DeferredToLater are what a scripted writer's evidence
+// says of a failure that fails the same at the task's base and of a check
+// a later phase runs (ChecksDefaults).
+const (
+	ShownAtBase     = "fails the same at"
+	DeferredToLater = "a later phase runs it"
+)
+
 // checksWake matches a checks wake's call to decide (delivery's
 // wakes/checks) and each reported check in it.
 var (
 	checksWakeRun   = regexp.MustCompile(`decide_checks \(runId (\S+), turn (\d+)\)`)
-	checksWakeCheck = regexp.MustCompile(`("(?:[^"\\]|\\.)*") reported (pass|fail|not-run):`)
+	checksWakeCheck = regexp.MustCompile(`("(?:[^"\\]|\\.)*") reported (pass|fail|not-run) \(evidence (.*?)\):`)
 )
 
 // ChecksDefaults is what a DefaultsModel conductor decides on a checks
-// wake: what Deliver's defaults would, with no conductor. A reported pass
-// passes, as today's skip does; every failure or check not run is
-// rejected, so only a person passes it after the rounds; nothing missing.
-// It never passes a failure: a test that wants one passed has the
-// conductor decide it in Chat ("tool: decide_checks …").
+// wake. A reported pass is backed; nothing is missing. A failure is
+// pre-existing only when the wake names the task's base and the report's
+// evidence says it fails the same there (ShownAtBase), as a conductor that
+// read the Run's calls at the base would; a check not run is deferred only
+// when its evidence says a later phase runs it (DeferredToLater). Anything
+// else is rejected, so only a person passes it after the rounds. dude still
+// refuses a verdict its rules do not allow (no base, a fail deferred).
 func ChecksDefaults(input string) [][2]string {
 	var out [][2]string
 	for _, m := range checksWakeRun.FindAllStringSubmatchIndex(input, -1) {
@@ -497,9 +507,14 @@ func ChecksDefaults(input string) [][2]string {
 			if err := json.Unmarshal([]byte(c[1]), &command); err != nil {
 				continue
 			}
-			verdict := "reject"
-			if c[2] == "pass" {
+			verdict, evidence := "reject", c[3]
+			switch {
+			case c[2] == "pass":
 				verdict = "backed"
+			case c[2] == "fail" && strings.Contains(rest, "pre-existing at the task's base (") && strings.Contains(evidence, ShownAtBase):
+				verdict = "preexisting"
+			case c[2] == "not-run" && strings.Contains(evidence, DeferredToLater):
+				verdict = "deferred"
 			}
 			checks = append(checks, map[string]string{"command": command, "verdict": verdict, "reason": "Deliver's defaults: " + c[2]})
 		}
@@ -975,6 +990,10 @@ const (
 	ChecksNewFailureModel   = "fake/checks-new-failure"
 	ChecksOtherFailureModel = "fake/checks-other-failure"
 	ChecksBaseShownModel    = "fake/checks-base-shown"
+	// ChecksDeferredModel is ChecksBaseShownModel that also reports a
+	// browser check not run, which a later phase runs.
+	ChecksDeferredModel = "fake/checks-deferred"
+	DeferredCommand     = "open the greeting page in a browser"
 	FailingCommand          = "make test"
 	OtherFailingCommand     = "make lint"
 	// BaseDir is where BaseCommand checks the task's base out.
@@ -1010,6 +1029,10 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 	case model == ChecksBaseShownModel:
 		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
 			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"}), true
+	case model == ChecksDeferredModel:
+		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
+			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"},
+				[3]string{DeferredCommand, "not-run", "needs a browser: " + DeferredToLater}), true
 	case model == ChecksOtherFailureModel:
 		return [][3]string{{OtherFailingCommand, "lint: 1 issue\nexit status 1", "1"}},
 			ChecksReport([3]string{OtherFailingCommand, "fail", "one lint issue"}), true
@@ -1019,7 +1042,8 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 
 // everyWriterReports are the checks models whose report every writer
 // phase makes, not the implementer's alone.
-var everyWriterReports = map[string]bool{ChecksPreexistingModel: true, ChecksNewFailureModel: true, ChecksOtherFailureModel: true, ChecksBaseShownModel: true}
+var everyWriterReports = map[string]bool{ChecksPreexistingModel: true, ChecksNewFailureModel: true, ChecksOtherFailureModel: true, ChecksBaseShownModel: true,
+	ChecksDeferredModel: true}
 
 // For is the agent's step for a phase Run. fixed says whether the tree it
 // starts from already has the fixer's file — which only the reviewer reads.

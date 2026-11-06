@@ -146,6 +146,17 @@ func hasResult(checks []delivery.Check, result string) bool {
 	return false
 }
 
+// checksWakeEvidenceMax bounds each check's quoted evidence in the wake;
+// the whole report is in the Run's Chat (run_chat).
+const checksWakeEvidenceMax = 80
+
+func clipTo(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return cutRunes(s[:n], false) + "…"
+}
+
 // checksWakeLine is the conductor's wake: the Run, its turn, and one
 // question per reported check, then whether one is missing.
 func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase) string {
@@ -155,7 +166,9 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase) string
 	}
 	qs := make([]question, len(a.Check))
 	for i, c := range a.Check {
-		qs[i] = question{oneLine(c.Command), c.Result, oneLine(c.Evidence), a.Waivers[i]}
+		// The agent's evidence is its own words: quoted as external text,
+		// cut so every check's question fits the wake.
+		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), a.Waivers[i]}
 	}
 	return checksWake.Render(struct {
 		Phase, RunID, Bases string
