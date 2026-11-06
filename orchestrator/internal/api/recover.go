@@ -212,8 +212,12 @@ func (s *Server) recoveryOptions(w http.ResponseWriter, r *http.Request, org str
 	taskID := r.PathValue("id")
 	var t stoppedTask
 	var refused *string
+	var conductor map[string]any
 	if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) (err error) {
 		if t, err = loadStopped(r.Context(), tx, taskID, false); err != nil {
+			return err
+		}
+		if conductor, err = conductorRecovery(r.Context(), tx, taskID); err != nil {
 			return err
 		}
 		return tx.QueryRow(r.Context(), `SELECT task_start_refusal($1)`, taskID).Scan(&refused)
@@ -230,8 +234,41 @@ func (s *Server) recoveryOptions(w http.ResponseWriter, r *http.Request, org str
 	}
 	write(w, http.StatusOK, map[string]any{"taskId": taskID, "actions": db.NonNil(actions),
 		"attempt": t.Attempt, "keptUntil": t.KeptUntil, "refused": refused,
-		"retryNeedsNote": t.State.Stopped != nil && delivery.NeedsNote(t.State.Stopped.Reason, "retry")})
+		"retryNeedsNote": t.State.Stopped != nil && delivery.NeedsNote(t.State.Stopped.Reason, "retry"),
+		"conductor": conductor})
 	return nil
+}
+
+// conductorRecovery is the task's latest conductor, for Try again on it
+// (delivery.RetryConductor): its Run, status and error, the person's
+// question lost with it (delivery.LostQuestionTx), and whether Try again
+// is offered — it failed and no conductor is live. nil for no conductor.
+func conductorRecovery(ctx context.Context, tx pgx.Tx, taskID string) (map[string]any, error) {
+	var runID, status, runErr string
+	var live bool
+	err := tx.QueryRow(ctx, `SELECT r.id, r.status::text, COALESCE(r.error, ''),
+			EXISTS (SELECT 1 FROM runs l WHERE l.task_id = r.task_id AND l.role = 'conductor' AND l.kind = 'agent'
+				AND l.status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))
+		FROM runs r WHERE r.task_id = $1 AND r.role = 'conductor' AND r.kind = 'agent' ORDER BY r.created_at DESC LIMIT 1`,
+		taskID).Scan(&runID, &status, &runErr, &live)
+	if db.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"runId": runID, "status": status, "error": db.Nullable(runErr),
+		"lostQuestion": nil, "retry": status == "failed" && !live}
+	if status == "failed" {
+		q, err := delivery.LostQuestionTx(ctx, tx, runID)
+		if err != nil {
+			return nil, err
+		}
+		if q != nil {
+			out["lostQuestion"] = map[string]any{"id": q.ID, "prompt": q.Prompt}
+		}
+	}
+	return out, nil
 }
 
 // recoverTask picks a stopped task back up. Start over may name who decides
