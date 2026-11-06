@@ -16,6 +16,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
+from env import TestEnvironment
 from helpers import ApiClient, sign_in, wait_until
 
 
@@ -57,9 +58,20 @@ def _credential(client: ApiClient, fake_github: FakeGitHub) -> None:
     assert credential.status_code == 200, credential.text
 
 
-def _no_judge_call(client: ApiClient) -> None:
-    # The checks gate never asks the judgement tier: no checks judgement
-    # call is recorded (the tier routes chat).
+def _judgement_tier(client: ApiClient, env: TestEnvironment) -> int:
+    # A judgement tier set, on the judge stub (judge-e2e): were the checks
+    # gate to ask it, the stub would see the request and a call would be
+    # recorded. Returns where the stub's record of such requests stands.
+    resp = client.put("/v1/judgements/settings", {"tierId": client.tier_for("judge-e2e")})
+    assert resp.status_code == 200, resp.text
+    return len(env.judge_unrouted())
+
+
+def _no_judge_call(client: ApiClient, env: TestEnvironment, since: int) -> None:
+    # The checks gate never asks the judgement tier, set as it is: the stub
+    # got no request but chat routing's since the test set it, and no checks
+    # judgement call is recorded.
+    assert env.judge_unrouted()[since:] == []
     calls = client.get("/v1/judgements", params={"asker": "phases.checks"})
     assert calls.status_code == 200, calls.text
     assert calls.json()["calls"] == [], calls.json()
@@ -126,8 +138,9 @@ def _rows(checks: str) -> tuple[str, list[tuple[str, str, list[tuple[str, str]]]
     return headline, rows
 
 @pytest.mark.e2e
-def test_backed_report_the_conductor_backs_publishes_and_is_visible(client: ApiClient, fake_github: FakeGitHub):
+def test_backed_report_the_conductor_backs_publishes_and_is_visible(client: ApiClient, env: TestEnvironment, fake_github: FakeGitHub):
     _credential(client, fake_github)
+    since = _judgement_tier(client, env)
     task = _start(client, fake_github, CHECKS_MODELS["honest"])
     _wait_pr(client, fake_github, task["id"])
 
@@ -146,12 +159,13 @@ def test_backed_report_the_conductor_backs_publishes_and_is_visible(client: ApiC
         ("Simplifier", "backed", [("missing checks", "pass")]),
     ])
     assert all(c.get("by") == "conductor" for v in verdicts for c in v["payload"]["checks"]), verdicts
-    _no_judge_call(client)
+    _no_judge_call(client, env, since)
 
 
 @pytest.mark.e2e
-def test_failing_command_is_sent_back_then_corrected_turn_publishes(client: ApiClient, fake_github: FakeGitHub):
+def test_failing_command_is_sent_back_then_corrected_turn_publishes(client: ApiClient, env: TestEnvironment, fake_github: FakeGitHub):
     _credential(client, fake_github)
+    since = _judgement_tier(client, env)
     task = _start(client, fake_github, CHECKS_MODELS["fixed"])
     wait_until(lambda: len(_checks_for_task(client, task["id"])) >= 2,
                timeout=90, message="checks report was not judged twice")
@@ -163,6 +177,7 @@ def test_failing_command_is_sent_back_then_corrected_turn_publishes(client: ApiC
     assert "make check" in str(events[0]["payload"])
     run_events = client.events(runId=_implementer(client, task["id"])["id"])
     assert any(e["eventType"] == "run.directive.delivered" for e in run_events)
+    _no_judge_call(client, env, since)
 
 
 @pytest.mark.e2e
@@ -204,11 +219,12 @@ def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClie
 
 
 @pytest.mark.e2e
-def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient, fake_github: FakeGitHub):
+def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient, env: TestEnvironment, fake_github: FakeGitHub):
     # No send-back allowed: a failure the conductor did not pass would
     # escalate at once. The conductor (fake/defaults) decides it pre-existing
     # from dude's recording of the run at the task's base.
     _credential(client, fake_github)
+    since = _judgement_tier(client, env)
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 0}).status_code == 200
     task = _start(client, fake_github, CHECKS_MODELS["base-shown"])
     _wait_pr(client, fake_github, task["id"])
@@ -227,16 +243,17 @@ def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient,
     headline, rows = _rows(_checks_section(fake_github.pulls[1].body))
     assert "the conductor passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)" in headline, headline
     assert rows[0] == ("Implementer", "passed by the conductor", [("make test", "pre-existing"), ("missing checks", "pass")])
-    _no_judge_call(client)
+    _no_judge_call(client, env, since)
 
 
 @pytest.mark.e2e
 @pytest.mark.ui
-def test_no_conductor_publishes_with_skip_advice(page: Page, web_url: str, client: ApiClient, fake_github: FakeGitHub):
+def test_no_conductor_publishes_with_skip_advice(page: Page, web_url: str, client: ApiClient, env: TestEnvironment, fake_github: FakeGitHub):
     # A delivery no conductor decides (Deliver's policy: the conductor's
     # tier has no model): its all-pass reports are not verified, published
     # with the skip recorded. (A conducted delivery's are decided by its
-    # conductor: the test below.)
+    # conductor: the test below.) A judgement tier set is never asked.
+    since = _judgement_tier(client, env)
     task = _start(client, fake_github, CHECKS_MODELS["unbacked"], conductor=False)
     assert client.get(f"/v1/tasks/{task['id']}").json()["decider"] == "policy"
     _wait_pr(client, fake_github, task["id"])
@@ -249,6 +266,7 @@ def test_no_conductor_publishes_with_skip_advice(page: Page, web_url: str, clien
         ("Fixer", "not verified", []),
         ("Simplifier", "not verified", []),
     ])
+    _no_judge_call(client, env, since)
 
     # The same outcome is visible in the actual task screen's Activity tab.
     sign_in(page, web_url, client.api_key, at=f"#/tasks/{task['id']}", board=False)

@@ -353,6 +353,19 @@ class TestEnvironment:
     def chat_route_mismatches_path(self) -> Path:
         return self.log_dir / f"chat-route-mismatches-{self.run_id}.log"
 
+    @property
+    def judge_unrouted_path(self) -> Path:
+        return self.log_dir / f"judge-unrouted-{self.run_id}.log"
+
+    def judge_unrouted(self) -> list[str]:
+        """Every request the judge stub got that was not a chat routing
+        call, one line each (the start of its first message), as recorded by
+        whichever process runs the stub. Only chat routing (and the
+        Judgements page's test question) asks the judgement tier: a checks
+        gate asking it shows up here."""
+        path = self.judge_unrouted_path
+        return path.read_text().splitlines() if path.exists() else []
+
     def chat_route_mismatches(self) -> list[str]:
         """The routing calls the judge stub could not read (ChatRouteMismatch),
         as recorded by whichever process runs the stub."""
@@ -436,6 +449,8 @@ class TestEnvironment:
         mismatches = self.chat_route_mismatches_path
         # A kept log directory may hold an earlier run's file.
         mismatches.unlink(missing_ok=True)
+        unrouted = self.judge_unrouted_path
+        unrouted.unlink(missing_ok=True)
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -459,8 +474,11 @@ class TestEnvironment:
                     self.end_headers()
                     self.wfile.write(response)
                     return
-                # Anything but a routing call finds no proxy: the connection
-                # closes with no answer, as an unreachable host's does.
+                # Anything but a routing call is recorded, then finds no
+                # proxy: the connection closes with no answer, as an
+                # unreachable host's does.
+                first = next((m.get("content") for m in messages if isinstance(m, dict)), "")
+                record_chat_route_mismatch(unrouted, f"{self.path} {str(first)[:200]}")
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
             def log_message(self, *_args):
