@@ -33,9 +33,46 @@ jobs:
         working-directory: orchestrator
         run: go test -exec /usr/bin/true ./...
 
-  go:
+  # gofmt and go vet need no database: a job of their own, beside the shards.
+  go-lint:
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+
+      - name: gofmt
+        working-directory: orchestrator
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -l lists:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        working-directory: orchestrator
+        run: go vet ./...
+
+  # Every Go test, split over 6 runners. scripts/go-test.sh lists each
+  # package's tests and cuts them into 6 machines x 4 lanes (test processes
+  # at once on a runner's 4 CPUs), round-robin by sorted name; each runner
+  # runs its own slice. The partition depends only on the tests and the two
+  # numbers, so every runner computes the same one; GO_TEST_LANES is fixed
+  # here rather than taken from nproc so that a runner with other CPUs
+  # cannot disagree. The race run of forge and phases is cut the same way.
+  # On one runner the suite took 1,446 s plus 249 s of -race (5 Nov).
+  go-shard:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        machine: [1, 2, 3, 4, 5, 6]
+    name: go (${{ matrix.machine }}/6)
     services:
       postgres:
         image: pgvector/pgvector:pg17-trixie
@@ -83,41 +120,71 @@ jobs:
             [ "$value" = off ] || { echo "$setting is still $value" >&2; exit 1; }
           done
 
-      - name: gofmt
-        working-directory: orchestrator
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "gofmt -l lists:"; echo "$unformatted"; exit 1
-          fi
-
-      - name: go vet
-        working-directory: orchestrator
-        run: go vet ./...
-
-      # The root package's tests run one at a time and alone set the job's
-      # length: split over 2 processes, each took 1,412-1,500 s by #385 and
-      # #386 against a 25 min per-process limit, so the script splits them
-      # over 3 (no other package over 170 s; the others take about 600 s).
       # dbtest skips a test when Postgres is unreachable; here that is broken
       # setup, so it fails.
-      - name: go test, and no test skipped for want of a database
+      - name: go test, this runner's slice, and no test skipped for want of a database
         env:
-          SHARDS: 3
+          GO_TEST_MACHINE: ${{ matrix.machine }}/6
+          GO_TEST_LANES: 4
         run: scripts/go-test.sh
-
-      # forge's concurrency tests assert only under the race detector; phases runs its followers on goroutines of their own.
-      - name: go test -race, forge and phases
-        working-directory: orchestrator
-        run: go test -race -count=1 ./internal/forge ./internal/phases
 
       - name: Upload the go test log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: go-test-log
+          name: go-test-log-${{ matrix.machine }}
           path: ${{ runner.temp }}/go-test.log
           if-no-files-found: ignore
+
+      # The partition and the results this runner saw, for the go job's check
+      # that the runners together ran every test once.
+      - name: Upload the tests run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-ran-${{ matrix.machine }}
+          path: |
+            ${{ runner.temp }}/go-test-partition.tsv
+            ${{ runner.temp }}/go-test-ran.txt
+          if-no-files-found: ignore
+
+  # Branch protection requires a check named go: it passes only when lint
+  # and every shard passed (a cancelled or skipped one fails it) and the
+  # shards, between them, reported a result for every test exactly once.
+  go:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    needs: [go-lint, go-shard]
+    if: always()
+    steps:
+      - name: Lint and every shard passed
+        env:
+          LINT: ${{ needs.go-lint.result }}
+          SHARDS: ${{ needs.go-shard.result }}
+        run: |
+          echo "go-lint: $LINT; go-shard: $SHARDS"
+          [ "$LINT" = success ] && [ "$SHARDS" = success ]
+
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: go-test-ran-*
+          path: ${{ runner.temp }}/ran
+
+      - name: The shards ran every test exactly once
+        run: |
+          ran="${{ runner.temp }}/ran"
+          for i in 1 2 3 4 5 6; do
+            [ -s "$ran/go-test-ran-$i/go-test-partition.tsv" ] || { echo "shard $i left no partition" >&2; exit 1; }
+            cmp "$ran/go-test-ran-1/go-test-partition.tsv" "$ran/go-test-ran-$i/go-test-partition.tsv" ||
+              { echo "shards 1 and $i computed different partitions" >&2; exit 1; }
+          done
+          awk -F'\t' '{print $4 " " $6 " " $7}' "$ran/go-test-ran-1/go-test-partition.tsv" | LC_ALL=C sort >"$ran/expected"
+          echo "$(wc -l <"$ran/expected") (test, variant) pairs in the partition"
+          python3 scripts/go_partition.py union "$ran/expected" "$ran"/go-test-ran-*/go-test-ran.txt
 
   ts:
     runs-on: ubuntu-26.04
@@ -157,9 +224,9 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: The E2E harness's own checks (shard split, browser channel, ui auto-mark)
+      - name: The E2E harness's own checks (shard split, browser channel, ui auto-mark), and the Go test partition's
         working-directory: tests
-        run: uv run pytest suites/test_shard.py suites/test_harness.py -q
+        run: uv run pytest suites/test_shard.py suites/test_harness.py suites/test_go_partition.py -q
 
   e2e:
     runs-on: ubuntu-26.04
