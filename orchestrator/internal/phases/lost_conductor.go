@@ -89,9 +89,9 @@ func (s *Syncer) startPlaceholder(ctx context.Context, r phaseRun) error {
 	})
 }
 
-// closeFailedQuestions settles, for a conductor r failing in tx with
-// reason, the person questions the status change is about to cancel
-// (015's trigger): their ids, for questionsClosed once it has.
+// closeFailedQuestions locks, for a conductor r failing in tx, the person
+// questions the status change is about to cancel (015's trigger): their
+// ids, for questionsClosed once it has.
 func closeFailedQuestions(ctx context.Context, tx pgx.Tx, r phaseRun) ([]string, error) {
 	if !r.conductor() {
 		return nil, nil
