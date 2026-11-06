@@ -1,4 +1,4 @@
--- 250_checks_wakes.sql — checks: the checks gate asks a conducted task's
+-- 253_checks_wakes.sql — checks: the checks gate asks a conducted task's
 -- conductor to decide a writer's checks report (delivery.WakeChecks), its
 -- line the report's summary and one question per check, bounded at 2,000
 -- characters (conductor_wakes_line_check).

@@ -123,6 +123,133 @@ func (w *world) answerAs(person, task, text string) (int, map[string]any) {
 // decision says it came from that answer. A stuck retry is no choice: the
 // owner asks for it in their own words, the conductor retries on them, and
 // the next fix round starts, the decision carrying those words.
+func TestRetryReaskedEscalationChoiceMakesTheRealDecision(t *testing.T) {
+	w, task := stuck(t)
+	ana, bo := w.person("Ana"), w.person("Bo")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", escalationQuestion)
+	q := w.conductorQuestion(task)
+	old := w.str(`SELECT run_id FROM questions WHERE id=$1`, q)
+	w.failedOnceHeard(old)
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/retry", map[string]any{}); status != 201 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	fresh := w.conductorQuestion(task)
+	if fresh == "" || fresh == q {
+		t.Fatalf("fresh question %q", fresh)
+	}
+	if status, _ := w.pick(bo, fresh, 0); status != 403 {
+		t.Fatalf("nonowner answer: %d", status)
+	}
+	if status, body := w.pick(ana, fresh, 0); status != 200 {
+		t.Fatalf("accept: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='task.decided'
+		AND payload->>'questionId'=$2 AND payload->>'action'='accept'`, task, fresh); n != 1 {
+		t.Fatalf("%d actual accept decisions", n)
+	}
+	if w.str(`SELECT status::text FROM questions WHERE id=$1`, q) != "cancelled" {
+		t.Fatal("lost audit row changed")
+	}
+	if status, _ := w.pick(ana, fresh, 0); status != 409 {
+		t.Fatalf("duplicate: %d", status)
+	}
+}
+
+// The conductor fails with its escalation question open, and the owner then
+// decides the escalation on the banner: Try again asks nothing again, says
+// why, and leaves the task waiting on no moot question.
+func TestRetryDoesNotReaskAnEscalationDecidedSince(t *testing.T) {
+	w, task := stuck(t)
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", escalationQuestion)
+	q := w.conductorQuestion(task)
+	old := w.str(`SELECT run_id FROM questions WHERE id=$1`, q)
+	w.failedOnceHeard(old)
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "stop"}); status != 200 {
+		t.Fatalf("decide: %d %v", status, body)
+	}
+	if d := w.decided(task); d["action"] != "stop" {
+		t.Fatalf("decided %v", d)
+	}
+	status, body := w.callAs(ana, "/internal/tasks/"+task+"/retry", map[string]any{})
+	if status != 201 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	next, _ := body["runId"].(string)
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id=$1 AND status='open'`, task); n != 0 {
+		t.Fatalf("%d questions open after the retry", n)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE run_id=$1`, next); n != 0 {
+		t.Fatalf("%d questions asked again on the fresh conductor", n)
+	}
+	for range 4 {
+		w.pump()
+	}
+	if st := w.taskStatus(task); st == "awaiting_input" {
+		t.Fatalf("task %s on a moot question", st)
+	}
+	if prompt := w.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id=$1`, next); !strings.Contains(prompt, "the escalation was decided since") {
+		t.Errorf("the briefing does not say why it was not asked again:\n%s", prompt)
+	}
+}
+
+// The conductor fails with its escalation question open; the owner decides
+// that escalation on the banner, and the delivery escalates again (a new
+// key) before Try again: the old escalation's question is not asked again,
+// and anything asked carries the escalation waiting now.
+func TestRetryDoesNotReaskAnEscalationOvertakenByAnother(t *testing.T) {
+	w, task := stuck(t)
+	ana := w.person("Ana")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", escalationQuestion)
+	q := w.conductorQuestion(task)
+	oldKey := w.str(`SELECT escalation FROM questions WHERE id=$1`, q)
+	old := w.str(`SELECT run_id FROM questions WHERE id=$1`, q)
+	w.failedOnceHeard(old)
+	// Decided on the banner, on a delivery Deliver's policy decides
+	// (written directly, as in TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation),
+	// whose retry escalates again.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"decider":"policy"}' WHERE task_id = $1`, task)
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "retry", "note": "Try the greeting's wording only."}); status != 200 {
+		t.Fatalf("decide: %d %v", status, body)
+	}
+	w.until("the second escalation waiting at decide", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting' AND step = 'decide'
+			AND state->'escalation' IS NOT NULL AND NOT state->'escalation' ? 'decided'`, task) == 1
+	})
+	// Handed to the conductor again: it is told of this escalation, its key
+	// the next (State.Escalations).
+	if status, out := w.callAs(ana, "/internal/tasks/"+task+"/decider", map[string]any{"decider": delivery.DeciderConductor}); status != 200 {
+		t.Fatalf("hand-over: %d %v", status, out)
+	}
+	w.until("the second escalation told", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting' AND step = 'decide'
+			AND (state->>'escalations')::int = 2 AND state->'escalation' IS NOT NULL
+			AND NOT state->'escalation' ? 'decided'`, task) == 1
+	})
+	wf := w.str(`SELECT id FROM workflow_runs WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1`, task)
+	current := delivery.EscalationKey(wf, 2)
+	if current == oldKey {
+		t.Fatalf("the second escalation has the first's key %s", oldKey)
+	}
+	status, body := w.callAs(ana, "/internal/tasks/"+task+"/retry", map[string]any{})
+	if status != 201 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	next, _ := body["runId"].(string)
+	if n := w.count(`SELECT count(*) FROM questions WHERE run_id=$1 AND COALESCE(escalation, '') <> $2`, next, current); n != 0 {
+		t.Fatalf("%d questions asked again on the fresh conductor not about escalation %s", n, current)
+	}
+	if n := w.count(`SELECT count(*) FROM questions WHERE task_id=$1 AND status='open' AND escalation=$2`, task, oldKey); n != 0 {
+		t.Fatalf("%d open questions about the decided escalation", n)
+	}
+	if prompt := w.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id=$1`, next); !strings.Contains(prompt, "the escalation was decided since") {
+		t.Errorf("the briefing does not say why it was not asked again:\n%s", prompt)
+	}
+}
+
 func TestTheOwnersChoiceDecidesTheEscalation(t *testing.T) {
 	for _, c := range []struct{ answer, action, phase, by string }{
 		{"Retry once more, only on the greeting's wording.", "retry", "fix", "conductor"},
