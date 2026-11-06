@@ -44,8 +44,10 @@ func prefixed(prefix string) func(string) bool {
 func TestOnlyWhatNoLiveRunUsesIsDroppedAsStale(t *testing.T) {
 	ctx := context.Background()
 	a := admin(t)
-	// Unique names two hours old, so nothing else on the server matches.
-	old := time.Now().Add(-2 * time.Hour).UnixNano()
+	// Old for this test's one-minute cutoff, but not for a sibling binary's
+	// one-hour cleanup. Otherwise its setup can collect these unlocked
+	// fixtures before this test asserts what was dropped.
+	old := time.Now().Add(-2 * time.Minute).UnixNano()
 	crashed, held, open := fmt.Sprintf("dude_gotest_%d", old), fmt.Sprintf("dude_gotest_%d", old+1), fmt.Sprintf("dude_gotest_%d", old+2)
 	young := fmt.Sprintf("dude_gotest_%d", time.Now().UnixNano())
 	upgrade := fmt.Sprintf("dude_gotest_upgrade_%d_1", old)
@@ -69,7 +71,7 @@ func TestOnlyWhatNoLiveRunUsesIsDroppedAsStale(t *testing.T) {
 	mine := func(name string) bool {
 		return slices.ContainsFunc([]string{crashed, held, open, young, upgrade}, func(p string) bool { return strings.HasPrefix(name, p) })
 	}
-	dropped := dropStale(ctx, a, time.Hour, mine)
+	dropped := dropStale(ctx, a, time.Minute, mine)
 	slices.Sort(dropped)
 	want := []string{crashed, crashed + "_1", upgrade}
 	slices.Sort(want)
