@@ -58,6 +58,7 @@ import type {
   Verification,
   RecoverAction,
   RecoveryOptions,
+  TaskQuestion,
   StopRequest,
   StopResult,
   Repository,
@@ -165,6 +166,7 @@ export type {
   VerdictStatus,
   RecoverAction,
   RecoveryOptions,
+  TaskQuestion,
   StopRequest,
   StopResult,
   Person,
@@ -348,6 +350,12 @@ export interface TaskDetail extends Task {
   escalation: Escalation | null;
   /** The machines its agents raised, by role, names resolved by the control plane; empty when none. */
   agentMachines: AgentMachine[];
+  /**
+   * The current attempt's questions as the server holds them (#404): the
+   * open ones, which "Needs you" reads, and those its latest conductor lost
+   * as it failed, which Try again asks again. Absent from an older control plane.
+   */
+  questions?: TaskQuestion[];
 }
 
 /** What a message in a task's Chat reached: its conductor, made by it or not. */

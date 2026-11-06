@@ -146,9 +146,11 @@ export interface QuestionTurn {
   /**
    * Why it closed unanswered: decided on the banner, withdrawn (its one
    * recipient left the session), or left_gate (Deliver's hold it asked
-   * about was left: the work went back for a fix).
+   * about was left: the work went back for a fix), lost (lux lost the
+   * conductor's Run that asked it: the answer was not heard, #404) or
+   * run_failed (its Run failed otherwise: no longer needed).
    */
-  closedBy?: "decision" | "withdrawn" | "left_gate";
+  closedBy?: "decision" | "withdrawn" | "left_gate" | "lost" | "run_failed";
   /** In a brainstorm session: the one member it is put to (ask_person `to`); null for anyone who can chat. */
   to: ActorRef | null;
 }
@@ -1626,7 +1628,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const question = state.questionsById.get(String(payload.questionId ?? ""));
         if (question && question.answeredAt === null) {
           question.closedAt = event.occurredAt;
-          question.closedBy = payload.by === "withdrawn" || payload.by === "left_gate" ? payload.by : "decision";
+          question.closedBy = payload.by === "withdrawn" || payload.by === "left_gate" || payload.by === "lost" || payload.by === "run_failed"
+            ? payload.by : "decision";
         }
         break;
       }

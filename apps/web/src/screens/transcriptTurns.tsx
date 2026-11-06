@@ -6,7 +6,7 @@
  * screen's own lines among them by time.
  */
 
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, createContext, useContext, useState, type ReactNode } from "react";
 import { ChatEvent, ChatMessage, ChatNotice, ChatProgress, MentionChip, QuestionCard, ThinkingBlock, ToolCallCard } from "@dude/design-system/components";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { Button, Callout } from "@dude/design-system/primitives";
@@ -364,12 +364,35 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
 
 /** The question's turn in a transcript (AskTurn marks it), for the transcript to keep in view. */
 /** A question closed unanswered, by why (QuestionTurn.closedBy), as its card's tag says it. */
-export const SETTLED_BY: Record<NonNullable<QuestionTurn["closedBy"]>, string> = {
+export const SETTLED_BY: Record<Exclude<NonNullable<QuestionTurn["closedBy"]>, "run_failed">, string> = {
   decision: "Decided on the banner",
   withdrawn: "Withdrawn",
   // Deliver's hold it asked about was left: feedback sent the work back.
   left_gate: "Went back for a fix",
+  // lux lost the conductor's Run that asked it (#404): an answer given was never heard.
+  lost: "Not heard: dude lost the conductor that asked this",
 };
+
+/** Why a question settled, as its card's tag says it: none for one its Run took with it on failing ("No longer needed"). */
+function settledWords(turn: QuestionTurn, lost: boolean): string | undefined {
+  if (lost && turn.answeredAt === null) return SETTLED_BY.lost;
+  if (turn.closedAt === null || turn.closedBy === "run_failed") return undefined;
+  return SETTLED_BY[turn.closedBy ?? "decision"];
+}
+
+/**
+ * The task's questions as the server holds them (#404), for the question
+ * cards of its Chat: those still open, though their turn is in an ended
+ * Run's transcript (a question moved to the conductor that replaces a lost
+ * one), and the way to answer them there; and those lost with their Run.
+ */
+export interface QuestionTruth {
+  readonly open: ReadonlySet<string>;
+  readonly lost: ReadonlySet<string>;
+  readonly answer?: ((turn: QuestionTurn, submission: QuestionSubmission) => Promise<boolean>) | undefined;
+}
+const NO_TRUTH: QuestionTruth = { open: new Set(), lost: new Set() };
+export const QuestionTruthContext = createContext<QuestionTruth>(NO_TRUTH);
 
 export const questionTurnSelector = (questionId: string) => `[data-question="${CSS.escape(questionId)}"]`;
 
@@ -391,13 +414,18 @@ export interface AskActions {
  * reader (its draft kept in this browser until sent), the record once
  * answered, as it was otherwise.
  */
-function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
+function AskTurn({ turn, role, ended, people, waitingOn, ask: given }: {
   turn: QuestionTurn; role: AgentRole; ended: boolean; people: People; waitingOn: string | undefined; ask: AskActions | undefined;
 }) {
-  const { key, draft, keep, forget } = useAnswerDraft(people.you, turn, ended);
+  // An ended Run's question the server still holds open (moved to the Run that replaced it): answered here all the same.
+  const truth = useContext(QuestionTruthContext);
+  const stillOpen = ended && truth.open.has(turn.questionId) && turn.answeredAt === null;
+  const ask = given ?? (stillOpen && truth.answer ? { answer: truth.answer } : undefined);
+  const live = !ended || stillOpen;
+  const { key, draft, keep, forget } = useAnswerDraft(people.you, turn, !live);
   const whom = turn.to ? questionFor(turn.to, people) : waitingOn;
   const by = actorName(turn.answeredBy, people.names);
-  const open = !ended && turn.answeredAt === null && turn.closedAt === null && whom === undefined && ask !== undefined;
+  const open = live && turn.answeredAt === null && turn.closedAt === null && whom === undefined && ask !== undefined;
   // The note's images are for several questions; one question has no note.
   const tray = open && turn.items.length > 1 ? ask.tray : undefined;
   return (
@@ -413,8 +441,8 @@ function AskTurn({ turn, role, ended, people, waitingOn, ask }: {
       answeredAt={turn.answeredAt}
       answers={turn.answers}
       answeredBy={by ? firstName(by) : undefined}
-      dismissed={ended && turn.answeredAt === null}
-      settledBy={turn.closedAt === null ? undefined : SETTLED_BY[turn.closedBy ?? "decision"]}
+      dismissed={!live && turn.answeredAt === null}
+      settledBy={stillOpen ? undefined : settledWords(turn, truth.lost.has(turn.questionId))}
       waitingOn={whom}
       onlyThey={turn.to !== null}
       {...(open ? {
