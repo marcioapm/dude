@@ -11,7 +11,7 @@ import { ChatEvent, ChatMessage, ChatNotice, ChatProgress, MentionChip, Question
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { Button, Callout } from "@dude/design-system/primitives";
 import { firstName, type IconName } from "@dude/design-system";
-import type { AgentRole, AttachmentInfo, PersistedEvent } from "@dude/domain";
+import type { AgentRole, AttachmentInfo } from "@dude/domain";
 import {
   READ_WHEN_BACK, READ_WHEN_STARTED, actorName, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
@@ -362,7 +362,6 @@ export function renderTurn(turn: Turn, role: AgentRole, contextWindow: number, e
   }
 }
 
-/** The question's turn in a transcript (AskTurn marks it), for the transcript to keep in view. */
 /** A question closed unanswered, by why (QuestionTurn.closedBy), as its card's tag says it. */
 export const SETTLED_BY: Record<Exclude<NonNullable<QuestionTurn["closedBy"]>, "run_failed">, string> = {
   decision: "Decided on the banner",
