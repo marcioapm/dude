@@ -167,7 +167,7 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
     const qs = task.questions ?? [];
     return {
       open: new Set(qs.filter((q) => q.status === "open" && q.addressee === "person").map((q) => q.id)),
-      lost: new Set(qs.filter((q) => q.status === "cancelled" && q.endedBy === "lost").map((q) => q.id)),
+      lost: new Set(qs.filter((q) => q.status === "cancelled" && (q.endedBy === "lost" || (!q.endedBy && (q.askerError ?? "").includes("lux no longer has")))).map((q) => q.id)),
       answer: async (turn, s) => {
         setProblem(null);
         try {

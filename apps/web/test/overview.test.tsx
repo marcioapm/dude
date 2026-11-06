@@ -10,7 +10,7 @@ import type { PersistedEvent } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { ORG, PROJECT, RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
-import type { TaskMetrics } from "../src/api/client.ts";
+import { ApiError, type TaskMetrics, type TaskQuestion } from "../src/api/client.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { openAgentQuestions, recordedActivity } from "../src/screens/TaskOverview.tsx";
@@ -144,6 +144,85 @@ describe("running now", () => {
 describe("needs you", () => {
   const asked = (questionId: string, extra: Record<string, unknown> = {}) =>
     ev("question.asked", { kind: "agent", questionId, prompt: "Keep the invoice option on monthly plans?", toName: "Ana Ribeiro", ...extra });
+
+  const serverQuestion = (more: Partial<TaskQuestion> = {}): TaskQuestion => ({
+    id: "q_server", runId: RUN_ID, status: "open", addressee: "person", prompt: "Server's question?", items: [],
+    askedAt: new Date().toISOString(), toPerson: null, askerError: null, endedBy: null, ...more,
+  });
+  function withQuestions(client: FixtureClient, questions: TaskQuestion[], conductor = false) {
+    const get = client.getTask.bind(client);
+    client.getTask = async (id) => {
+      const t = await get(id);
+      return { ...t, questions, runs: t.runs.map((r) => r.id === RUN_ID && conductor
+        ? { ...r, role: "conductor" as const, phase: null, status: "failed" as const, endedAt: new Date().toISOString() } : r) };
+    };
+    return client;
+  }
+
+  for (const status of ["cancelled", "answered", "expired"] as const) {
+    test(`server ${status} question never needs you, even with an unclosed asked event`, async () => {
+      const client = withQuestions(withEvents(fx(), [asked("q_server")]), [serverQuestion({ status })]);
+      const page = await overview(client);
+      expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+    });
+  }
+
+  test("server empty questions overrides an unclosed asked event", async () => {
+    const page = await overview(withQuestions(withEvents(fx(), [asked("q_server")]), []));
+    expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+  });
+
+  test("server other-attempt question does not need you", async () => {
+    const client = withQuestions(fx("restarted"), [serverQuestion({ runId: "run_a1_impl" })]);
+    const page = await overview(client);
+    expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+  });
+
+  test("open question rebound to a placeholder needs you without a new asked event", async () => {
+    const client = withQuestions(fx(), [serverQuestion()]);
+    const get = client.getTask.bind(client);
+    client.getTask = async (id) => {
+      const t = await get(id);
+      return { ...t, runs: t.runs.map((r) => r.id === RUN_ID
+        ? { ...r, role: "conductor" as const, phase: null, status: "paused" as const, dudePause: "person" as const, luxRunId: null } : r) };
+    };
+    const page = await overview(client);
+    const region = page.querySelector("[data-testid=needs-you]");
+    expect(text(region)).toContain("Server's question?");
+    expect(text(region)).toContain("Conductor asks");
+    expect(text(region)).toContain("Answer in Chat");
+  });
+
+  for (const retry of [false, true]) {
+    test(`lost asker card is shown iff recover.conductor.retry (${retry})`, async () => {
+      const client = withQuestions(fx(), [serverQuestion({ status: "cancelled", askerError: "lux no longer has this Run" })], true);
+      client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null,
+        conductor: { runId: RUN_ID, status: "failed", error: "lux no longer has this Run", lostQuestion: { id: "q_server", prompt: "Server's question?" }, retry } });
+      const page = await overview(client);
+      await settle();
+      expect(Boolean(page.querySelector("[data-testid=lost-asker]"))).toBe(retry);
+      expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+    });
+  }
+
+  test("Try again calls /retry, waits pending, and shows a 409's server message", async () => {
+    const client = withQuestions(fx(), [serverQuestion({ status: "cancelled", endedBy: "lost" })], true);
+    client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null,
+      conductor: { runId: RUN_ID, status: "failed", error: "lux no longer has this Run", lostQuestion: { id: "q_server", prompt: "Server's question?" }, retry: true } });
+    const called: string[] = [];
+    let refuse: (e: Error) => void = () => {};
+    client.retryConductor = (id) => { called.push(id); return new Promise((_resolve, reject) => { refuse = reject; }); };
+    const page = await overview(client);
+    const button = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=lost-asker-retry]"), "Try again");
+    await click(button);
+    expect(called).toEqual([TASK_ID]);
+    expect(button.disabled).toBe(true);
+    expect(text(button)).toBe("Trying again…");
+    await act(async () => refuse(new ApiError(409, "conflict", "A live conductor already has this task.")));
+    await settle();
+    expect(text(page.querySelector("[data-testid=lost-asker-problem]"))).toBe("A live conductor already has this task.");
+    expect(button.disabled).toBe(false);
+  });
 
   test("an agent's open question is quoted once, above the figures, naming who can answer, with the way to it", async () => {
     const opened: string[] = [];
