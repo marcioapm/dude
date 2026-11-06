@@ -387,6 +387,8 @@ function settledWords(turn: QuestionTurn, lost: boolean): string | undefined {
  * one), and the way to answer them there; and those lost with their Run.
  */
 export interface QuestionTruth {
+  /** Present even when empty: no event-derived question may remain live. */
+  readonly authoritative?: boolean;
   readonly open: ReadonlySet<string>;
   readonly lost: ReadonlySet<string>;
   readonly answer?: ((turn: QuestionTurn, submission: QuestionSubmission) => Promise<boolean>) | undefined;
@@ -421,7 +423,7 @@ function AskTurn({ turn, role, ended, people, waitingOn, ask: given }: {
   const truth = useContext(QuestionTruthContext);
   const stillOpen = ended && truth.open.has(turn.questionId) && turn.answeredAt === null;
   const ask = given ?? (stillOpen && truth.answer ? { answer: truth.answer } : undefined);
-  const live = !ended || stillOpen;
+  const live = truth.authoritative ? truth.open.has(turn.questionId) : !ended || stillOpen;
   const { key, draft, keep, forget } = useAnswerDraft(people.you, turn, !live);
   const whom = turn.to ? questionFor(turn.to, people) : waitingOn;
   const by = actorName(turn.answeredBy, people.names);

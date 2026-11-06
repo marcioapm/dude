@@ -116,6 +116,8 @@ export interface ChatVariant {
   answer: (questionId: string, answers: ReadonlyArray<QuestionAnswer>, note: string) => Promise<unknown>;
   /** Try again on a conductor that failed: a fresh one takes what it never read. */
   retry?: (() => Promise<unknown>) | undefined;
+  /** The server offers Try again on this failed conductor's ended turn. */
+  retryEnded?: boolean | undefined;
   /** What the rail says of the task, beside the conductor's own facts. */
   briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
   /** The task's earlier conductors' conversations, above this one's turns. */
@@ -626,6 +628,14 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     : turn.kind === "ended" && turn.start ? <StartRow key={turn.id} start={turn.start} role={role}
         taken={turn.taken || retryTaken === turn.id} woken={turn.woken}
         onRetry={turn.retried || busy ? undefined : chat ? conductorRetry(turn.id) : onStartRetry} />
+    : turn.kind === "ended" && turn.outcome === "failed" && !turn.start && chat?.retryEnded ? (
+      <Fragment key={turn.id}>
+        {renderTurn(turn, role, conversation.contextWindow, true, people, dude)}
+        <Button size="sm" variant="secondary" disabled={busy} onClick={conductorRetry(turn.id)} data-testid="conductor-ended-retry">
+          {busy ? "Trying again…" : "Try again"}
+        </Button>
+      </Fragment>
+    )
     : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask, peerContext, now);
   // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.
   // A pool that cannot run this Run at all is pinned above (only an admin can change it): the row then keeps its

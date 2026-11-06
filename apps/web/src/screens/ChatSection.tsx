@@ -166,6 +166,7 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   const truth = useMemo<QuestionTruth>(() => {
     const qs = task.questions ?? [];
     return {
+      authoritative: task.questions !== undefined,
       open: new Set(qs.filter((q) => q.status === "open" && q.addressee === "person").map((q) => q.id)),
       lost: new Set(qs.filter((q) => q.status === "cancelled" && (q.endedBy === "lost" || (!q.endedBy && (q.askerError ?? "").includes("lux no longer has")))).map((q) => q.id)),
       answer: async (turn, s) => {
@@ -329,9 +330,10 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
     return task.handedBack ? <>To <b>Conductor</b> · answers only, Deliver decides</> : <>To <b>Conductor</b> · sending gives it the decisions</>;
   }, [inProgress, first.readOnly, task.decider, task.voice, task.handedBack]);
   const stoppedWords = stoppedHere ? STOPPED_COMPOSER : undefined;
-  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines: currentLines, above, readOnly: gateHeld,
+  const retryEnded = canRetry && recovery?.conductor?.retry === true && recovery.conductor.runId === conductorId && !lost;
+  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, retryEnded, briefedWith, before, cost: conductorCost, lines: currentLines, above, readOnly: gateHeld,
     to, briefedBefore: briefedAgain, stopped: stoppedWords }),
-    [head, send, answer, retry, briefedWith, before, conductorCost, currentLines, above, gateHeld, to, briefedAgain, stoppedWords]);
+    [head, send, answer, retry, retryEnded, briefedWith, before, conductorCost, currentLines, above, gateHeld, to, briefedAgain, stoppedWords]);
 
   if (conductorId) {
     return (
