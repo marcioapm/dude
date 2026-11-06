@@ -1506,7 +1506,16 @@ Each of these cost real time.
   lux has already reported as over rules anything out.
 - **Don't run `bun test` with a dev backend up** against the same database;
   keep test and dev databases apart. The Go tests make a database of their
-  own per binary, cloned from a migrated template.
+  own per test, cloned from a template each test process migrates.
+- **Run the Go suite with `scripts/go-test.sh`**, not `go test ./...`: it
+  runs one test process per CPU (`GO_TEST_LANES`), splitting the large
+  packages by test, and fails on a database skip or a test with no result.
+  Tests within a process stay sequential, so never add `t.Parallel()` to a
+  test that changes a package global. `GO_TEST_LANES=12 scripts/go-test.sh`
+  can try more lanes than CPUs on an I/O-bound host; `scripts/go-test.sh
+  --partition` prints the partition without running tests. `RUNNER_TEMP` is
+  optional; when set it holds `go-test.log`, `go-test-partition.tsv` and
+  `go-test-ran.txt`. Postgres is at `DUDE_TEST_PG` (default `localhost:5433`).
 - **Migration 014 is still being edited** until it ships. A database that
   applied an earlier version needs its checksum updated in
   `schema_migrations` (or recreate it).
@@ -1564,18 +1573,20 @@ runs it as a lux-fake script.
 
 `.github/workflows/ci.yml` runs on every pull request and every push to
 `main`; a newer push to the same pull request or branch cancels the older run.
-The `go`, `ts` and `e2e` jobs each have their own
+The `go (n/6)`, `ts` and `e2e` jobs each have their own
 `pgvector/pgvector:pg17-trixie` on `localhost:5433`.
 
 | Job | Runs |
 | --- | --- |
-| `go` | In `orchestrator`: `gofmt -l .` must list nothing, `go vet ./...`, `go test -p 4 -timeout 25m ./...` (the root package alone took about 9.5 minutes on CI, close to go test's default 10-minute limit per binary), then `go test -race -count=1 ./internal/forge ./internal/phases` (forge's concurrency tests assert only under the race detector; phases runs its followers on goroutines of their own). The step fails if any test skipped with dbtest's `no test database`: in CI an unreachable Postgres is broken setup, not a pass. |
-| `ts` | `bun run typecheck`, `bun run migrate` then `bun test` with `DATABASE_URL` at that Postgres, and `tests/suites/test_shard.py` (the shard split, no environment). |
+| `go-lint` | In `orchestrator`: `gofmt -l .` must list nothing, and `go vet ./...`. No database. |
+| `go (n/6)` (`go-shard`) | `GO_TEST_MACHINE=n/6 GO_TEST_LANES=4 scripts/go-test.sh`: the script lists every package's tests and cuts them, round-robin by sorted name, into 6 runners × 4 test processes; each runner runs its slice. `cmd/dude-cli` and `internal/agenttools` run whole in one process (their TestMain checks the whole run); `internal/forge` and `internal/phases` run a second time under `-race` (forge's concurrency tests assert only under the race detector; phases runs its followers on goroutines of their own), cut the same way. A shard fails if any test failed, skipped with dbtest's `no test database` (in CI an unreachable Postgres is broken setup, not a pass), or lacks a result. Its log is uploaded when it fails. |
+| `go` | Needs `go-lint` and every `go (n/6)`; fails unless all succeeded (a cancelled or skipped shard fails it), and unless the shards' reported results together cover the partition exactly once. Branch protection requires this check. |
+| `ts` | `bun run typecheck`, `bun run migrate` then `bun test` with `DATABASE_URL` at that Postgres, and `tests/suites/test_shard.py` and `test_go_partition.py` (the E2E shard split and the Go test partition, no environment). |
 | `e2e (n/6)` | `tests/run_tests.py --shard n/6`, with Google Chrome for the browser suites and Docker for the test S3. The log directory is uploaded when a shard fails. |
 | `image-builder` | `scripts/test-image-builder.sh`, after delegating the `cpu` and `memory` cgroup controllers to the runner's user manager, in a scope of that user's systemd. |
 | `cli` (`cli.yml`, only when the CLI, `apps/control-plane/src/api`, `packages/domain/src` or the `cli-*` tests change) | No database: `go vet` (linux and windows) and `go test` of `./cmd/dude-cli/...`, then `cli-routes.test.ts` and `cli-bodies.test.ts`; and `go vet` + `go test` on macOS (`cli-macos`). Windows is built and vetted, not run. 5-minute limit. |
 
-Expected skips in `go`: the podman tests in `internal/images` (they need
+Expected skips in `go (n/6)`: the podman tests in `internal/images` (they need
 `DUDE_PODMAN_TEST_REGISTRY`, set by `scripts/test-image-builder.sh`) and
 `TestRealEmbedderFindsByMeaning` (needs `DUDE_EMBEDDINGS_URL`/`_KEY`). In
 `e2e`: `test_publishing_preflight_contacts_test_gateway` (needs
