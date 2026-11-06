@@ -430,6 +430,13 @@ def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, 
 
 
 
+def _routed_to_conductor(client: ApiClient, task_id: str, event_type: str, run_id: str | None, message: str) -> dict:
+    """The task's first event_type (of run_id, when given): an ask dude gave its conductor first."""
+    return wait_until(lambda: next((e for e in client.events(taskId=task_id, limit=1000)
+        if e["eventType"] == event_type and (run_id is None or e["runId"] == run_id)), None),
+        timeout=60, message=message)
+
+
 def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None = None, *, explicit_relay: bool = False) -> tuple[dict, dict]:
     """Explicit PR4a relay: two questions, no automatic PR4b relay implied.
 
@@ -439,9 +446,7 @@ def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None
     Only explicit_relay opts into PR4b's linked, automatic human forwarding;
     existing callers retain the separate conductor answer turn.
     """
-    routed = wait_until(lambda: next((e for e in client.events(taskId=task_id, limit=1000)
-        if e["eventType"] == "question.routed" and (writer_id is None or e["runId"] == writer_id)), None),
-        timeout=60, message="the writer never routed its question")
+    routed = _routed_to_conductor(client, task_id, "question.routed", writer_id, "the writer never routed its question")
     writer = {"id": routed["payload"]["questionId"], "runId": routed["runId"]}
     ask = {"questions": routed["payload"]["items"]}
     if explicit_relay:
@@ -468,9 +473,8 @@ def forward_repository_request(client: ApiClient, task_id: str, run_id: str | No
     person's (one repository.requested). Returns the routed event's payload
     with the asking runId.
     """
-    routed = wait_until(lambda: next((e for e in client.events(taskId=task_id, limit=1000)
-        if e["eventType"] == "repository.routed" and (run_id is None or e["runId"] == run_id)), None),
-        timeout=60, message="the agent's repository request never reached its conductor")
+    routed = _routed_to_conductor(client, task_id, "repository.routed", run_id,
+        "the agent's repository request never reached its conductor")
     request = {**routed["payload"], "runId": routed["runId"]}
     response = client.post(f"/v1/tasks/{task_id}/chat", {"text": "Forward this repository request to the owner.\n"
         + "tool: decide_repository_request " + json.dumps({"id": request["requestId"], "action": "forward"})})
