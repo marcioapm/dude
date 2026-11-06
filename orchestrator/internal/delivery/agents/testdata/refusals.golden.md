@@ -1526,3 +1526,39 @@ already given to %[2]s, which has their words: %[1]s. Do not steer them to it ag
 
 This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only.
 
+## refusals/delivery/conduct/answer-kept-open-before-pr
+
+the person's answer to %s is kept: open_pull_request is decided at the decision before the pull request, where it is cited if it still holds. This decision (%s) is one of %s; do not ask the person again
+
+## refusals/delivery/conduct/answer-no-longer-authorizes
+
+the person's answer to %s no longer authorizes the opening: %s. Ask again (decide ask_person)
+
+## refusals/delivery/conduct/choice-action-is-one-of
+
+choice %q: action %q is one of open or draft (it opens the pull request, as the person picked), or none
+
+## refusals/delivery/conduct/choices-are-for-ask-person
+
+choices and recommend are for decide ask_person
+
+## refusals/delivery/conduct/choices-need-two
+
+offer at least two choices, or none for a question answered in the person's own words
+
+## refusals/delivery/conduct/gate-choices-are-fixed
+
+before the pull request the choices are fixed (%s): say which you recommend with recommend, not choices
+
+## refusals/delivery/conduct/options-only-in-prose
+
+the note lists the answers as prose (%q): give them as choices (label, and action open or draft for a choice that opens the pull request), so the person can pick one
+
+## refusals/delivery/conduct/recommend-is-for-the-gate
+
+recommend is for the question before the pull request; on another question mark one choice recommended
+
+## refusals/delivery/conduct/recommend-is-one-of
+
+recommend %q: it is one of %s
+
