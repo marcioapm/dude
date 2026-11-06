@@ -207,14 +207,9 @@ func childFamilySnapshot(w *resumeWorld) string {
 	return raw
 }
 
-// A person aborting a conductor's (or a session's) child while the syncer
-// records a batch of that child's lifecycle in one transaction. The batch
-// holds the child's row and has updated it once; the abort takes the
-// parent's row, then (a task's child) the delivery and the task, and waits
-// for the child. The batch's second UPDATE re-checks the child's foreign
-// keys to the parent (KEY SHARE), which the parent's lock must not
-// exclude: both commit, the child is aborted, its parent and sibling stay
-// live, and nothing else about the task changes.
+// Replacing a lost conductor (delivery.ReplaceLostConductorTx) while the
+// syncer records a batch of its child's lifecycle: both commit, and the
+// conductor's open question moves to the replacement.
 func TestLostConductorReplacementBesideChildLifecycleDoesNotDeadlock(t *testing.T) {
 	w := newResumeWorld(t)
 	child := childFamily(w, false)
@@ -243,6 +238,14 @@ func TestLostConductorReplacementBesideChildLifecycleDoesNotDeadlock(t *testing.
 	}
 }
 
+// A person aborting a conductor's (or a session's) child while the syncer
+// records a batch of that child's lifecycle in one transaction. The batch
+// holds the child's row and has updated it once; the abort takes the
+// parent's row, then (a task's child) the delivery and the task, and waits
+// for the child. The batch's second UPDATE re-checks the child's foreign
+// keys to the parent (KEY SHARE), which the parent's lock must not
+// exclude: both commit, the child is aborted, its parent and sibling stay
+// live, and nothing else about the task changes.
 func TestAChildAbortBesideItsLifecycleBatchDoesNotDeadlock(t *testing.T) {
 	for _, parent := range []string{"task conductor", "session"} {
 		t.Run(parent, func(t *testing.T) {

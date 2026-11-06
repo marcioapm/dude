@@ -74,12 +74,9 @@ func (w *world) grants(task string) int {
 	return w.count(`SELECT COALESCE(jsonb_array_length(state->'limitGrants'), 0) FROM workflow_runs WHERE task_id = $1`, task)
 }
 
-// The fix-round limit per review round: the question goes to the task's
-// people with Allow and No; the owner, a member, may not approve (only an
-// admin changes the delivery policy) and their approval records nothing; a
-// second request while it is open is refused; the admin's approval grants
-// exactly one more round, which limits shows with who granted it, and the
-// check allows that round and not another.
+// Try again on a conductor that failed with its limit request open asks it
+// again: the typed request moves to the fresh question, which still takes
+// an admin's approval and grants exactly once.
 func TestRetryReasksLimitRequestWithoutLosingAdminAuthorization(t *testing.T) {
 	w, task, ana, cy := limitRequestAt(t)
 	q, _ := w.must(task, "request_limit", `{"limit":"perReviewRound","to":3,"reason":"one more round"}`)["questionId"].(string)
@@ -120,6 +117,12 @@ func TestRetryReasksLimitRequestWithoutLosingAdminAuthorization(t *testing.T) {
 	}
 }
 
+// The fix-round limit per review round: the question goes to the task's
+// people with Allow and No; the owner, a member, may not approve (only an
+// admin changes the delivery policy) and their approval records nothing; a
+// second request while it is open is refused; the admin's approval grants
+// exactly one more round, which limits shows with who granted it, and the
+// check allows that round and not another.
 func TestAnAdminRaisesTheFixRoundsForOneTask(t *testing.T) {
 	w, task, ana, cy := limitRequestAt(t)
 	bo := w.person("Bo")
