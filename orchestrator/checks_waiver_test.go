@@ -18,11 +18,18 @@ func (w *world) decideScoped(as, wi, action, note, scope string) (int, map[strin
 // clockNote is the owner's note on a waiver of fakeagent's preexisting failure.
 const clockNote = "TestClock needs a hardware clock CI lacks."
 
-// checksEscalations counts the checks escalations the task was asked.
+// checksEscalations counts the checks escalations raised on the task, not
+// the events about them. One is raised either to its conductor
+// (escalation.raised) or straight to a person (question.asked of kind
+// escalation). A conductor-held one handed to a person later records its
+// question.asked too, next after its escalation.raised (one escalation is
+// open at a time): that hand-over is the same escalation, not counted again.
 func (w *world) checksEscalations(wi string) int {
-	return w.count(`SELECT count(*) FROM events WHERE task_id = $1
-		AND (event_type = 'escalation.raised' OR (event_type = 'question.asked' AND payload->>'kind' = 'escalation'))
-		AND payload->>'reason' = $2`, wi, delivery.ReasonChecksUnverified)
+	return w.count(`SELECT count(*) FROM (
+			SELECT event_type, lag(event_type) OVER (ORDER BY cursor) AS before FROM events WHERE task_id = $1
+			AND (event_type = 'escalation.raised' OR (event_type = 'question.asked' AND payload->>'kind' = 'escalation'))
+			AND payload->>'reason' = $2) e
+		WHERE e.event_type = 'escalation.raised' OR e.before IS DISTINCT FROM 'escalation.raised'`, wi, delivery.ReasonChecksUnverified)
 }
 
 // failingUntilEscalated runs a delivery whose writers are all on model and
