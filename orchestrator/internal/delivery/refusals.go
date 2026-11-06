@@ -39,7 +39,6 @@ const (
 	rChoicesNeedTwo                         = "offer at least two choices, or none for a question answered in the person's own words"
 	rChoiceActionIsOneOf                    = "choice %q: action %q is one of open or draft (it opens the pull request, as the person picked), or none"
 	rGateChoicesAreFixed                    = "before the pull request the choices are fixed (%s): say which you recommend with recommend, not choices"
-	rRecommendIsForTheGate                  = "recommend is for the question before the pull request; on another question mark one choice recommended"
 	rRecommendIsOneOf                       = "recommend %q: it is one of %s"
 	rAnswerNoLongerAuthorizes               = "the person's answer to %s no longer authorizes the opening: %s. Ask again (decide ask_person)"
 	rAnswerKeptOpenBeforePR                 = "the person's answer to %s is kept: open_pull_request is decided at the decision before the pull request, where it is cited if it still holds. This decision (%s) is one of %s; do not ask the person again"

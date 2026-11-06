@@ -80,8 +80,6 @@
 
 {{- define "refusals/delivery/conduct/gate-choices-are-fixed"}}before the pull request the choices are fixed (%s): say which you recommend with recommend, not choices{{end}}
 
-{{- define "refusals/delivery/conduct/recommend-is-for-the-gate"}}recommend is for the question before the pull request; on another question mark one choice recommended{{end}}
-
 {{- define "refusals/delivery/conduct/recommend-is-one-of"}}recommend %q: it is one of %s{{end}}
 
 {{- define "refusals/delivery/conduct/answer-no-longer-authorizes"}}the person's answer to %s no longer authorizes the opening: %s. Ask again (decide ask_person){{end}}

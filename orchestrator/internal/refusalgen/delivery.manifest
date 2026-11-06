@@ -35,7 +35,6 @@ rOptionsOnlyInProse                     refusals/delivery/conduct/options-only-i
 rChoicesNeedTwo                         refusals/delivery/conduct/choices-need-two
 rChoiceActionIsOneOf                    refusals/delivery/conduct/choice-action-is-one-of
 rGateChoicesAreFixed                    refusals/delivery/conduct/gate-choices-are-fixed
-rRecommendIsForTheGate                  refusals/delivery/conduct/recommend-is-for-the-gate
 rRecommendIsOneOf                       refusals/delivery/conduct/recommend-is-one-of
 rAnswerNoLongerAuthorizes               refusals/delivery/conduct/answer-no-longer-authorizes
 rAnswerKeptOpenBeforePR                 refusals/delivery/conduct/answer-kept-open-before-pr

@@ -886,8 +886,9 @@ const askingRecheck = 30 * time.Second
 // conductorAsksTx says whether the task's live conductor waits on a person:
 // a question of its Run, addressed to a person, still open. Else settled
 // is when the latest such question asked by a conductor of the task was
-// settled since (answered, closed, or its Run ended), nil for none: the
-// quiet decision's deadline restarts in full from then. Neither suspends
+// settled since (answered, or withdrawn with a question.closed event), nil
+// for none: the quiet decision's deadline restarts in full from then. One
+// its Run's end cancelled gives none: the deadline applies as it stood. Neither suspends
 // nor counts toward MaxDefaulted: no decision is defaulted meanwhile.
 func conductorAsksTx(ctx context.Context, tx pgx.Tx, taskID string) (held bool, settled *time.Time, err error) {
 	err = tx.QueryRow(ctx, conductorAsksSQL, taskID).Scan(&held, &settled)

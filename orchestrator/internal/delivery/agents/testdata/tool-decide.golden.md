@@ -48,7 +48,7 @@ Take the decision the delivery waits on: next (what Deliver would do now), ask_p
     },
     "recommend": {
       "type": "string",
-      "description": "ask_person before the pull request: the fixed choice you recommend (Open, Draft, Show me the diff or Another round; Open when left out)"
+      "description": "ask_person: the label of the choice you recommend. Before the pull request one of the fixed choices (Open, Draft, Show me the diff or Another round; Open when left out); elsewhere one of your choices (or mark it recommended)"
     }
   },
   "required": [

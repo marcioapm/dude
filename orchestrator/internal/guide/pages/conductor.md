@@ -46,11 +46,11 @@ With `start_agents`, it starts 1–8 independent children as one durable cohort.
 
 ## Opening the pull request
 
-Before the pull request, the conductor asks you a fixed question: **Open**, **Draft**, **Show me the diff**, or **Another round**, with the one it recommends marked (Open unless it says otherwise). It opens the pull request only after you answer Open or Draft, at the task's current commit.
+Before the pull request, the conductor asks you a fixed question: **Open**, **Draft**, **Show me the diff**, or **Another round**, with the one it recommends marked (Open unless it says otherwise). It opens the pull request only after you answer Open or Draft, at the task's current commit. An earlier answer of yours that opens the pull request (a choice with action open or draft on the conductor's question) carries forward while it holds; it stops holding for good once you are asked again or answer the conductor otherwise, and your newest answer always wins.
 
 The conductor's questions earlier in the delivery offer their answers as choices you can pick, never only as prose. A choice that opens the pull request (for example "Open the PR so CI measures") is kept: when the delivery reaches the pull request, the conductor opens it citing your answer instead of asking again — as a draft if you chose a draft. Your answer holds only for the same delivery and attempt, while nothing fails that you were not asked about, and while the only new commits are the simplifier's, which do not change behaviour. A fix or implement round, your own push, a base merge, or a newly failing criterion or blocking finding means it asks you again.
 
-While the conductor waits on your answer, the delivery does not go on by Deliver's defaults: its 10-minute decision deadline is paused, and starts again in full once you answer or the question is closed.
+While the conductor waits on your answer, the delivery does not go on by Deliver's defaults: its 10-minute decision deadline is paused, and starts again in full once you answer or dude withdraws the question. If the conductor itself ends (or its container is gone for good) with the question still open, the question is cancelled with no time to settle: the deadline applies as it stood, so Deliver's default may go on at once.
 
 ## Escalations under the conductor
 

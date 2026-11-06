@@ -29,5 +29,5 @@ the one you would pick, at most one
 {{- end}}
 
 {{- define "tools/decide/recommend" -}}
-ask_person before the pull request: the fixed choice you recommend (Open, Draft, Show me the diff or Another round; Open when left out)
+ask_person: the label of the choice you recommend. Before the pull request one of the fixed choices (Open, Draft, Show me the diff or Another round; Open when left out); elsewhere one of your choices (or mark it recommended)
 {{- end}}

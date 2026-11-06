@@ -1554,10 +1554,6 @@ before the pull request the choices are fixed (%s): say which you recommend with
 
 the note lists the answers as prose (%q): give them as choices (label, and action open or draft for a choice that opens the pull request), so the person can pick one
 
-## refusals/delivery/conduct/recommend-is-for-the-gate
-
-recommend is for the question before the pull request; on another question mark one choice recommended
-
 ## refusals/delivery/conduct/recommend-is-one-of
 
 recommend %q: it is one of %s

@@ -399,6 +399,8 @@ func TestANewerAnswerOverridesAnEarlierOpenAnswer(t *testing.T) {
 		w.until("the earlier answer voided", func() bool {
 			return w.str(`SELECT COALESCE(state->'openAuthority'->'voided'->>'why', '') FROM workflow_runs WHERE task_id = $1`, task) != ""
 		})
+		// Void, it is not said to be kept.
+		w.refused(task, "decide", `{"action":"open_pull_request"}`, "is not a decision at")
 		w.carriedOut(task, "start_phase", `{"phase":"simplify"}`)
 		w.agentsDone(task, "the simplifier's narrow review", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 		w.finishSimplifierReview(task)
