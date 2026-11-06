@@ -81,15 +81,18 @@ func ReplaceLostConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, why stri
 			     OR ((r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL) AND COALESCE(r.push_request_id, '') = ''))
 			AND (EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open' AND q.addressee = 'person')
 			     -- An answer heard before the loss and still unread: the cheap
-			     -- unread probe first, so the correlated join runs only then.
+			     -- unread probe first, so the correlated join runs only then,
+			     -- driven by the Run's few unsettled directives (each the
+			     -- answer's, by events_run_answer_directive_idx, 252) rather
+			     -- than by every question it was ever answered.
 			     OR (EXISTS (SELECT 1 FROM directives ux WHERE ux.run_id = r.id AND ux.delivered_at IS NULL AND ux.failed_at IS NULL)
-			     AND EXISTS (SELECT 1 FROM questions q
-			         JOIN events e ON e.run_id = q.run_id AND e.organization_id = q.organization_id AND e.task_id = q.task_id
-			           AND e.event_type = 'question.answered' AND e.payload->>'questionId' = q.id
-			         JOIN directives x ON x.id = e.payload->>'directiveId' AND x.run_id = q.run_id
-			           AND x.organization_id = q.organization_id AND x.task_id = q.task_id
-			         WHERE q.run_id = r.id AND q.organization_id = r.organization_id AND q.task_id = r.task_id
+			     AND EXISTS (SELECT 1 FROM directives x
+			         JOIN events e ON e.run_id = x.run_id AND e.organization_id = x.organization_id AND e.task_id = x.task_id
+			           AND e.event_type = 'question.answered' AND e.payload->>'directiveId' = x.id
+			         JOIN questions q ON q.id = e.payload->>'questionId' AND q.run_id = x.run_id
+			           AND q.organization_id = x.organization_id AND q.task_id = x.task_id
 			           AND q.status = 'answered' AND q.addressee = 'person'
+			         WHERE x.run_id = r.id AND x.organization_id = r.organization_id AND x.task_id = r.task_id
 			           AND x.delivered_at IS NULL AND x.failed_at IS NULL))),
 			r.started_by
 		FROM runs r WHERE r.id = $1 FOR NO KEY UPDATE`, ref.RunID).Scan(&eligible, &startedBy)
