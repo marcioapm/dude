@@ -16,10 +16,7 @@ import (
 // the question's id.
 func relayWorld(t *testing.T, f *fixture) (writer, conductor, qid string) {
 	t.Helper()
-	writer = f.run(t, "run_writer", "implementer", "running")
-	conductor = f.run(t, "run_conductor", "conductor", "running")
-	mustExec(t, f.owner, `UPDATE runs SET phase=NULL WHERE id='run_conductor'`)
-	questionDelivery(t, f, `{"attempt":1,"decider":"conductor"}`)
+	writer, conductor = conductedWorld(t, f, `{"attempt":1,"decider":"conductor"}`)
 	var ask struct{ QuestionID string }
 	if status := f.postAs(t, writer, "ask_conductor", `{"question":"Which API shape?"}`, &ask); status != 200 || ask.QuestionID == "" {
 		t.Fatalf("ask=%d", status)

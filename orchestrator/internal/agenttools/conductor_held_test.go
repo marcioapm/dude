@@ -17,16 +17,24 @@ import (
 func heldFixture(t *testing.T, state string) (*fixture, string, string) {
 	t.Helper()
 	f := setup(t)
-	writer := f.run(t, "run_writer", "implementer", "running")
-	conductor := f.run(t, "run_conductor", "conductor", "running")
-	mustExec(t, f.owner, `UPDATE runs SET phase=NULL WHERE id='run_conductor'`)
-	questionDelivery(t, f, state)
+	writer, conductor := conductedWorld(t, f, state)
 	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ('repo_web', $1, $2, 'web', 'git://h/acme/web.git', 'main')`, f.org, f.project)
 	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_other', $1, 'O', 'prj_other', 'OTH')`, f.org)
 	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 		VALUES ('repo_infra', $1, 'prj_other', 'infra', 'git://h/acme/infra.git', 'main')`, f.org)
 	return f, writer, conductor
+}
+
+// conductedWorld is a running writer and its task's live conductor, the
+// delivery's state state: their tokens.
+func conductedWorld(t *testing.T, f *fixture, state string) (writer, conductor string) {
+	t.Helper()
+	writer = f.run(t, "run_writer", "implementer", "running")
+	conductor = f.run(t, "run_conductor", "conductor", "running")
+	mustExec(t, f.owner, `UPDATE runs SET phase=NULL WHERE id='run_conductor'`)
+	questionDelivery(t, f, state)
+	return writer, conductor
 }
 
 func (f *fixture) scalar(t *testing.T, sql string, args ...any) string {
