@@ -226,7 +226,25 @@ func conductorRetrying(t *testing.T) (w *world, task, conductor string) {
 		return id != "" && w.turnRetries(id) == 1
 	})
 	conductor, _, _ = w.conductor(task)
+	// The turn that failed is the one the implementer's checks report
+	// started (every pushing writer's gate asks the conductor first): the
+	// gate holds the implementer for its wait (ChecksAnswerWait), then falls
+	// back. Its wait passes on the test clock, this ask's alone; the
+	// conductor is still retrying when the decision after implement is
+	// waited on, which is what these tests are about.
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND conductor_run_id = $3`,
+		task, delivery.WakeChecks, conductor); n != 1 {
+		t.Fatalf("the retried turn is not the checks report's (%d)", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvRunChecksConducted); n != 0 {
+		t.Fatalf("a retrying conductor decided %d checks reports", n)
+	}
+	mustExec(t, w.owner, `UPDATE events SET payload = jsonb_set(payload, '{deadline}', to_jsonb(now() - interval '1 second'))
+		WHERE task_id = $1 AND event_type = $2`, task, delivery.EvRunChecksAsked)
 	w.until("the decision waited on", func() bool { return w.decisionAt(task) != "" })
+	if id, _, _ := w.conductor(task); id != conductor || w.turnRetries(conductor) != 1 {
+		t.Fatalf("the conductor %s (retries %d) is not the one retrying, %s", id, w.turnRetries(conductor), conductor)
+	}
 	return w, task, conductor
 }
 
