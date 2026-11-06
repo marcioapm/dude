@@ -80,10 +80,16 @@ func ReplaceLostConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, why stri
 			AND ((r.status = 'paused' AND r.dude_pause IN ('person', 'conductor'))
 			     OR ((r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL) AND COALESCE(r.push_request_id, '') = ''))
 			AND (EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open' AND q.addressee = 'person')
-			     OR (EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'answered' AND q.addressee = 'person')
-			         AND EXISTS (SELECT 1 FROM directives x WHERE x.run_id = r.id AND x.delivered_at IS NULL AND x.failed_at IS NULL))),
+			     OR EXISTS (SELECT 1 FROM questions q
+			         JOIN events e ON e.run_id = q.run_id AND e.organization_id = q.organization_id AND e.task_id = q.task_id
+			           AND e.event_type = 'question.answered' AND e.payload->>'questionId' = q.id
+			         JOIN directives x ON x.id = e.payload->>'directiveId' AND x.run_id = q.run_id
+			           AND x.organization_id = q.organization_id AND x.task_id = q.task_id
+			         WHERE q.run_id = r.id AND q.organization_id = r.organization_id AND q.task_id = r.task_id
+			           AND q.status = 'answered' AND q.addressee = 'person'
+			           AND x.delivered_at IS NULL AND x.failed_at IS NULL)),
 			r.started_by
-		FROM runs r WHERE r.id = $1 FOR UPDATE`, ref.RunID).Scan(&eligible, &startedBy)
+		FROM runs r WHERE r.id = $1 FOR NO KEY UPDATE`, ref.RunID).Scan(&eligible, &startedBy)
 	if db.IsNotFound(err) || err == nil && !eligible {
 		return "", nil
 	}
@@ -217,20 +223,22 @@ func askedName(ctx context.Context, tx pgx.Tx, taskID, runID string) (string, er
 // waiting on when it ended: the newest cancelled with it and not closed
 // for a reason of its own (a decision, the gate left, withdrawn).
 type LostQuestion struct {
-	ID, Prompt string
-	Items      []QuestionItem
-	GateHeads  json.RawMessage
+	ID, Prompt                   string
+	Items                        []QuestionItem
+	GateHeads                    json.RawMessage
+	Escalation, ToPerson, Relays *string
+	Actions                      json.RawMessage
 }
 
 // LostQuestionTx is the Run's LostQuestion, nil for none.
 func LostQuestionTx(ctx context.Context, tx pgx.Tx, runID string) (*LostQuestion, error) {
 	var q LostQuestion
-	err := tx.QueryRow(ctx, `SELECT q.id, q.prompt, q.items, q.pr_gate_heads FROM questions q
+	err := tx.QueryRow(ctx, `SELECT q.id, q.prompt, q.items, q.pr_gate_heads, q.escalation, q.actions, q.to_person, q.relays FROM questions q
 		WHERE q.run_id = $1 AND q.addressee = 'person' AND q.status = 'cancelled'
-		  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.run_id = q.run_id AND e.event_type = $2
-		    AND e.payload->>'questionId' = q.id AND COALESCE(e.payload->>'by', '') NOT IN ($3, $4))
-		ORDER BY q.asked_at DESC, q.id DESC LIMIT 1`, runID, EvQuestionClosed, QuestionLost, QuestionRunFailed).
-		Scan(&q.ID, &q.Prompt, &q.Items, &q.GateHeads)
+		  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.run_id = q.run_id AND e.event_type = 'question.closed'
+		    AND e.payload->>'questionId' = q.id AND COALESCE(e.payload->>'by', '') NOT IN ($2, $3))
+		ORDER BY q.asked_at DESC, q.id DESC LIMIT 1`, runID, QuestionLost, QuestionRunFailed).
+		Scan(&q.ID, &q.Prompt, &q.Items, &q.GateHeads, &q.Escalation, &q.Actions, &q.ToPerson, &q.Relays)
 	if db.IsNotFound(err) {
 		return nil, nil
 	}
@@ -309,8 +317,24 @@ func reaskTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery) (string, e
 // question, or why it was not asked.
 func reask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, q *LostQuestion) (string, string, error) {
 	if len(q.GateHeads) == 0 || string(q.GateHeads) == "null" {
-		id, err := ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: WhyConductor, Items: q.Items})
-		return id, "", err
+		p := ToPerson{Ref: ref, Why: WhyConductor, Items: q.Items}
+		if q.Relays != nil {
+			p.Relays = *q.Relays
+		}
+		id, err := ToPersonTx(ctx, tx, p)
+		if err != nil {
+			return "", "", err
+		}
+		// These are typed links, never inferred from the prompt. Preserve the
+		// cancelled audit row and restore the new question's decision routing.
+		if _, err := tx.Exec(ctx, `UPDATE questions SET escalation = $2, actions = $3, to_person = $4 WHERE id = $1`,
+			id, q.Escalation, q.Actions, q.ToPerson); err != nil {
+			return "", "", err
+		}
+		if err := rebindLimitRequestTx(ctx, tx, ref.TaskID, q.ID, id); err != nil {
+			return "", "", err
+		}
+		return id, "", nil
 	}
 	if d == nil || !d.AtGate() {
 		return "", "the delivery is no longer at the pull request gate", nil

@@ -215,6 +215,34 @@ func childFamilySnapshot(w *resumeWorld) string {
 // keys to the parent (KEY SHARE), which the parent's lock must not
 // exclude: both commit, the child is aborted, its parent and sibling stay
 // live, and nothing else about the task changes.
+func TestLostConductorReplacementBesideChildLifecycleDoesNotDeadlock(t *testing.T) {
+	w := newResumeWorld(t)
+	child := childFamily(w, false)
+	w.exec(`UPDATE runs SET waiting_since = now(), turn_done_at = now() WHERE id = 'run_parent'`)
+	w.exec(`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, items, addressee)
+		VALUES ('q_lost_parent', $1, $2, 'run_parent', 'Continue?', '[{"question":"Continue?"}]', 'person')`, w.run.Org, w.run.TaskID)
+	var next string
+	batchErr, replacementErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error {
+		return app.InOrg(ctx, child.Org, func(tx pgx.Tx) (err error) {
+			next, err = delivery.ReplaceLostConductorTx(ctx, tx, delivery.RunRef{Org: child.Org, ProjectID: child.ProjectID,
+				TaskID: child.TaskID, RunID: "run_parent"}, "lost in race", delivery.Parked)
+			return err
+		})
+	})
+	if err != nil || batchErr != nil || replacementErr != nil {
+		t.Fatalf("race %v; batch (deadlock %v): %v; replacement (deadlock %v): %v", err,
+			isDeadlock(batchErr), batchErr, isDeadlock(replacementErr), replacementErr)
+	}
+	assertBatchCommitted(t, w)
+	var holder string
+	if err := w.owner.QueryRow(w.ctx, `SELECT run_id FROM questions WHERE id = 'q_lost_parent' AND status = 'open'`).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if next == "" || holder != next {
+		t.Fatalf("question holder %q, replacement %q", holder, next)
+	}
+}
+
 func TestAChildAbortBesideItsLifecycleBatchDoesNotDeadlock(t *testing.T) {
 	for _, parent := range []string{"task conductor", "session"} {
 		t.Run(parent, func(t *testing.T) {

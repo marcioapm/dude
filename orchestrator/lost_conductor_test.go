@@ -2,6 +2,8 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // lostAtGate is a conducted task parked at the pull request gate on the
@@ -49,6 +52,40 @@ func (w *world) untilLost(old string) {
 // question. The question stays open, on a placeholder conductor in the
 // lost one's slot that costs nothing (no lux Run) until the person answers;
 // the task still waits on them.
+func TestExplicitResumeDoesNotSubmitAnUnansweredPlaceholder(t *testing.T) {
+	w := conducting(t)
+	_, old, q := w.lostAtGate()
+	w.untilLost(old)
+	next := w.replacementOf(old)
+	submitted := len(w.lux.Runs())
+	if status, out := w.call("/internal/runs/"+next+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, out)
+	}
+	for range 8 {
+		w.pump()
+	}
+	if w.str(`SELECT status::text FROM questions WHERE id = $1`, q) != "open" || w.luxRunOf(next) != "" || len(w.lux.Runs()) != submitted {
+		t.Fatalf("unanswered placeholder submitted: %s", w.describeRuns())
+	}
+	if c := w.str(`SELECT control::text FROM runs WHERE id = $1`, next); c != "none" {
+		t.Fatalf("meaningless resume left due: %s", c)
+	}
+}
+
+func TestRetryOnLiveConductorAndPlaceholderIsConflict(t *testing.T) {
+	w := conducting(t)
+	task, old, _ := w.lostAtGate()
+	if status, out := w.call("/internal/tasks/"+task+"/retry", map[string]any{}); status != 409 {
+		t.Fatalf("live retry: %d %v", status, out)
+	}
+	w.untilLost(old)
+	for range 2 {
+		if status, out := w.call("/internal/tasks/"+task+"/retry", map[string]any{}); status != 409 {
+			t.Fatalf("stale retry after automatic replacement: %d %v", status, out)
+		}
+	}
+}
+
 func TestAConductorLostWhileParkedOnTheGateKeepsTheQuestionOpen(t *testing.T) {
 	w := conducting(t)
 	task, old, q := w.lostAtGate()
@@ -89,6 +126,17 @@ func TestAConductorLostWhileParkedOnTheGateKeepsTheQuestionOpen(t *testing.T) {
 func TestTheAnswerToALostConductorsQuestionReachesItsReplacement(t *testing.T) {
 	w := conducting(t)
 	task, old, q := w.lostAtGate()
+	const replaySentinel = "PREDECESSOR-REPLAY-404-unique-purple-otter"
+	fullQuestion := w.str(`SELECT prompt FROM questions WHERE id = $1`, q)
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		_, err := ledger.Append(context.Background(), tx, delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: old}.Event("agent.message", ledger.ActorAgent, map[string]any{"text": replaySentinel}))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Use the real prompt renderer for the replacement; scripted harnesses
+	// intentionally reduce a briefing to an echo, unsuitable for this check.
+	w.onModel("conductor", "claude-opus-5-5")
 	w.untilLost(old)
 	if status, out := w.call("/internal/questions/"+q+"/answer", map[string]any{"text": "Draft"}); status != 200 {
 		t.Fatalf("answer Draft: %d %v", status, out)
@@ -98,6 +146,18 @@ func TestTheAnswerToALostConductorsQuestionReachesItsReplacement(t *testing.T) {
 		t.Fatal("no replacement")
 	}
 	w.until("the replacement on lux", func() bool { return w.luxRunOf(next) != "" })
+	spec := w.conductorSpecOf(task)
+	for _, required := range []string{old, fullQuestion, replaySentinel, "answer is your next message", "do not ask again"} {
+		// Spec is JSON, so normalize its escapes before checking the full
+		// question as text, not just the gate's choice labels.
+		var decoded any
+		if err := json.Unmarshal([]byte(spec), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(fmt.Sprint(decoded), required) {
+			t.Errorf("submitted Spec missing %q: %s", required, spec)
+		}
+	}
 	prompt := w.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id = $1`, next)
 	if !strings.Contains(prompt, "lux lost your predecessor's Run") || !strings.Contains(prompt, "Open / Draft") {
 		t.Errorf("the replacement's briefing does not say its predecessor was lost at the gate:\n%s", prompt)
@@ -159,6 +219,38 @@ func TestALostConductorIsReplacedOnceAcrossFollowerAndSweep(t *testing.T) {
 
 // 5. The person answered just before the loss was found: the answer goes
 // to the replacement as its first message, its briefing naming the lost Run.
+func TestHistoricalAnswerAndUnrelatedChatAreNotAnUnreadAnswer(t *testing.T) {
+	w := conducting(t)
+	w.syncer.ParkAfter = time.Hour
+	task := w.task()
+	old := w.talk(task)
+	q, _ := w.must(task, "ask_person", `{"questions":[{"question":"Historical colour?","choices":[{"label":"Blue"},{"label":"Red"}]}]}`)["questionId"].(string)
+	if status, body := w.call("/internal/questions/"+q+"/answer", map[string]any{"text": "Blue"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("old answer heard", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
+	})
+	if status, body := w.chat(task, "Unrelated new README work"); status >= 300 {
+		t.Fatalf("chat: %d %v", status, body)
+	}
+	var next string
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		next, err = delivery.ReplaceLostConductorTx(context.Background(), tx, delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: old}, "probe", delivery.Parked)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if next != "" {
+		t.Fatalf("unrelated Chat treated as historical answer: %s", next)
+	}
+	w.lux.ForgetRun(w.luxRunOf(old))
+	w.untilLost(old)
+	if w.replacementOf(old) != "" { t.Fatal("historical answer took the lost-waiting replacement path") }
+	w.until("unread Chat handed over normally", func() bool { return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND role='conductor' AND id<>$2`, task, old) == 1 })
+	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND id<>$2 AND prompt LIKE '%lux lost your predecessor%'`, task, old) != 0 { t.Fatal("normal handover has misleading lost-answer briefing") }
+}
+
 func TestAnAnswerCommittedAsTheConductorIsLostStartsTheReplacementWithIt(t *testing.T) {
 	w := conducting(t)
 	w.syncer.ParkAfter = time.Millisecond
@@ -200,6 +292,16 @@ func TestALostQuietConductorDoesNotDefaultTheDecision(t *testing.T) {
 	w.implemented(task)
 	w.carriedOut(task, "start_phase", `{"phase":"simplify"}`)
 	w.agentsDone(task, "the simplifier's narrow review", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.wokenWith(task, "review")
+	w.until("genuinely heard wakes settled before loss", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0 &&
+			w.count(`SELECT count(*) FROM conductor_wake_attempts a LEFT JOIN directives x ON x.id=a.directive_id
+			 WHERE a.conductor_run_id=$1 AND a.failed_at IS NULL AND a.heard_at IS NULL
+			 AND (a.directive_id IS NULL OR (x.delivered_at IS NULL AND x.failed_at IS NULL))`, old) == 0
+	})
+	if w.count(`SELECT count(*) FROM conductor_wake_attempts WHERE conductor_run_id=$1`, old) == 0 {
+		t.Fatal("no real wake was heard")
+	}
 	w.must(task, "decide", `{"action":"ask_person","note":"Dismiss the finding?"}`)
 	w.until("the conductor waiting on the person", func() bool {
 		return w.count(`SELECT count(*) FROM questions WHERE run_id = $1 AND status = 'open' AND addressee = 'person'`, old) == 1 &&
@@ -211,6 +313,10 @@ func TestALostQuietConductorDoesNotDefaultTheDecision(t *testing.T) {
 		WHERE task_id = $1 AND step = 'conductorDecision'`, task)
 	w.lux.ForgetRun(w.luxRunOf(old))
 	w.untilLost(old)
+	next := w.replacementOf(old)
+	if next == "" || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND lux_run_id IS NULL`, next) != 1 {
+		t.Fatalf("expected paused replacement before checking defaults: %s", w.describeRuns())
+	}
 	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, task)
 	for range 5 {
 		w.pump()
@@ -351,6 +457,90 @@ func TestALostConductorWithNoPersonQuestionFailsAsBefore(t *testing.T) {
 // Risk 1: a placeholder (paused for a person, no lux Run) reads as a parked
 // conductor. Stopping the task ends it, with no lux call, and cancels its
 // question; nothing sweeps it as a stall, a cost or a resume.
+func TestCloseAndArchiveEndPlaceholderWithoutSubmitting(t *testing.T) {
+	for _, action := range []string{"close", "archive"} {
+		t.Run(action, func(t *testing.T) {
+			w := conducting(t)
+			task, old, q := w.lostAtGate()
+			w.untilLost(old)
+			next := w.replacementOf(old)
+			submitted := len(w.lux.Runs())
+			if status, body := w.callAs(w.ownedBy(task, "Ana"), "/internal/tasks/"+task+"/"+action, map[string]any{"resolution": "wont_do"}); status != 200 {
+				t.Fatalf("%s: %d %v", action, status, body)
+			}
+			for range 5 {
+				w.pump()
+			}
+			if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status IN ('aborted','completed','failed') AND lux_run_id IS NULL`, next) != 1 || len(w.lux.Runs()) != submitted {
+				t.Fatalf("placeholder submitted or live: %s", w.describeRuns())
+			}
+			if w.str(`SELECT status::text FROM questions WHERE id=$1`, q) != "cancelled" || w.taskStatus(task) == "awaiting_input" {
+				t.Fatal("ended task still waiting on question")
+			}
+		})
+	}
+}
+
+func TestRecoverDoesNotOfferRetryForLiveConductors(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	assertRecovery := func(run string) {
+		t.Helper()
+		status, raw := w.get("/internal/tasks/"+task+"/recover", w.org)
+		var body map[string]any
+		if err := json.Unmarshal([]byte(raw), &body); err != nil {
+			t.Fatal(err)
+		}
+		if status != 200 {
+			t.Fatalf("recover: %d %s", status, raw)
+		}
+		if run == "" {
+			if body["conductor"] != nil {
+				t.Fatalf("no conductor: %s", raw)
+			}
+			return
+		}
+		c := obj(body["conductor"])
+		if c["runId"] != run || c["retry"] != false || c["lostQuestion"] != nil {
+			t.Fatalf("live recovery: %s", raw)
+		}
+	}
+	assertRecovery("")
+	old := w.talk(task)
+	assertRecovery(old)
+	w.must(task, "ask_person", `{"questions":[{"question":"Continue?"}]}`)
+	w.until("conductor waiting", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND (waiting_since IS NOT NULL OR turn_done_at IS NOT NULL)`, old) == 1
+	})
+	w.lux.ForgetRun(w.luxRunOf(old))
+	w.untilLost(old)
+	assertRecovery(w.replacementOf(old))
+}
+
+func TestNonLostFailureClassifiesAndReleasesItsQuestion(t *testing.T) {
+	w := conducting(t)
+	w.syncer.ParkAfter = time.Millisecond
+	task := w.task()
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	q := w.conductorQuestion(task)
+	old := w.str(`SELECT run_id FROM questions WHERE id=$1`, q)
+	w.untilParked(old)
+	if err := w.syncer.Lux.Cancel(context.Background(), w.luxRunOf(old)); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := w.call("/internal/runs/"+old+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.untilLost(old)
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='question.closed' AND payload->>'runId'=$1 AND payload->>'questionId'=$2 AND payload->>'by'='run_failed'`, old, q) != 1 {
+		t.Fatal("no exact nonlost question.closed")
+	}
+	if w.str(`SELECT status::text FROM questions WHERE id=$1`, q) != "cancelled" || w.taskStatus(task) == "awaiting_input" {
+		t.Fatal("failed question still blocks task")
+	}
+}
+
 func TestStoppingATaskEndsItsPlaceholderConductor(t *testing.T) {
 	w := conducting(t)
 	task, old, q := w.lostAtGate()

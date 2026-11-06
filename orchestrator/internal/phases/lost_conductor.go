@@ -54,11 +54,22 @@ func (s *Syncer) startPlaceholder(ctx context.Context, r phaseRun) error {
 			return err
 		}
 		var old string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT o.id FROM runs o WHERE o.replaced_by = r.id ORDER BY o.created_at DESC LIMIT 1), '')
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT o.id FROM runs o WHERE o.task_id = r.task_id AND o.replaced_by = r.id ORDER BY o.created_at DESC LIMIT 1), '')
 			FROM runs r WHERE r.id = $1 AND r.status = 'paused' AND r.lux_run_id IS NULL FOR UPDATE OF r`, r.ID).Scan(&old); err != nil {
 			if err == pgx.ErrNoRows {
 				return nil
 			}
+			return err
+		}
+		// Resumable also accepts explicit Resume. It is not an answer: check
+		// again under Chat so neither a stale selection nor control can spend
+		// model use while the person still has an open question.
+		var open bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE run_id = $1 AND status = 'open' AND addressee = 'person')`, r.ID).Scan(&open); err != nil {
+			return err
+		}
+		if open {
+			_, err := tx.Exec(ctx, `UPDATE runs SET control = 'none', control_requested_at = NULL, control_reason = NULL WHERE id = $1`, r.ID)
 			return err
 		}
 		prompt, err := delivery.LostBriefing(ctx, tx, r.ref(), old)

@@ -225,7 +225,7 @@ func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	var latest, status, briefing string
 	var ran bool
 	var baseRefs map[string]string
-	err := tx.QueryRow(ctx, `SELECT r.id, r.status::text, r.prompt, r.started_at IS NOT NULL, r.base_refs FROM runs r
+	err := tx.QueryRow(ctx, `SELECT r.id, r.status::text, COALESCE(r.prompt, ''), r.started_at IS NOT NULL, r.base_refs FROM runs r
 		WHERE r.task_id = $1 AND r.role = 'conductor' AND r.kind = 'agent' ORDER BY r.created_at DESC LIMIT 1`,
 		taskID).Scan(&latest, &status, &briefing, &ran, &baseRefs)
 	if db.IsNotFound(err) {

@@ -123,6 +123,42 @@ func (w *world) answerAs(person, task, text string) (int, map[string]any) {
 // decision says it came from that answer. A stuck retry is no choice: the
 // owner asks for it in their own words, the conductor retries on them, and
 // the next fix round starts, the decision carrying those words.
+func TestRetryReaskedEscalationChoiceMakesTheRealDecision(t *testing.T) {
+	w, task := stuck(t)
+	ana, bo := w.person("Ana"), w.person("Bo")
+	w.assignOwner(task, ana)
+	w.must(task, "ask_person", escalationQuestion)
+	q := w.conductorQuestion(task)
+	old := w.str(`SELECT run_id FROM questions WHERE id=$1`, q)
+	w.until("all conductor input heard", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
+	})
+	mustExec(t, w.owner, `UPDATE runs SET status='failed', error='lux no longer has this Run', ended_at=now() WHERE id=$1`, old)
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/retry", map[string]any{}); status != 201 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	fresh := w.conductorQuestion(task)
+	if fresh == "" || fresh == q {
+		t.Fatalf("fresh question %q", fresh)
+	}
+	if status, _ := w.pick(bo, fresh, 0); status != 403 {
+		t.Fatalf("nonowner answer: %d", status)
+	}
+	if status, body := w.pick(ana, fresh, 0); status != 200 {
+		t.Fatalf("accept: %d %v", status, body)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='task.decided'
+		AND payload->>'questionId'=$2 AND payload->>'action'='accept'`, task, fresh); n != 1 {
+		t.Fatalf("%d actual accept decisions", n)
+	}
+	if w.str(`SELECT status::text FROM questions WHERE id=$1`, q) != "cancelled" {
+		t.Fatal("lost audit row changed")
+	}
+	if status, _ := w.pick(ana, fresh, 0); status != 409 {
+		t.Fatalf("duplicate: %d", status)
+	}
+}
+
 func TestTheOwnersChoiceDecidesTheEscalation(t *testing.T) {
 	for _, c := range []struct{ answer, action, phase, by string }{
 		{"Retry once more, only on the greeting's wording.", "retry", "fix", "conductor"},

@@ -80,6 +80,46 @@ func (w *world) grants(task string) int {
 // second request while it is open is refused; the admin's approval grants
 // exactly one more round, which limits shows with who granted it, and the
 // check allows that round and not another.
+func TestRetryReasksLimitRequestWithoutLosingAdminAuthorization(t *testing.T) {
+	w, task, ana, cy := limitRequestAt(t)
+	q, _ := w.must(task, "request_limit", `{"limit":"perReviewRound","to":3,"reason":"one more round"}`)["questionId"].(string)
+	old := w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
+	w.until("the request turn finished and input heard", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, old) == 1 &&
+			w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
+	})
+	mustExec(t, w.owner, `UPDATE runs SET status = 'failed', error = 'lux no longer has this Run', ended_at = now() WHERE id = $1`, old)
+	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/retry", map[string]any{}); status != 201 {
+		t.Fatalf("retry as owner: %d %v", status, body)
+	}
+	fresh := w.conductorQuestion(task)
+	if fresh == "" || fresh == q {
+		t.Fatalf("no fresh question: %q", fresh)
+	}
+	if status, body := w.pick(ana, fresh, 0); status != 403 || obj(body["error"])["code"] != "not_admin" {
+		t.Fatalf("member owner approval: %d %v", status, body)
+	}
+	if status, body := w.pick(cy, fresh, 9); status != 422 {
+		t.Fatalf("invalid answer: %d %v", status, body)
+	}
+	if status, body := w.pick(cy, fresh, 0); status != 200 {
+		t.Fatalf("admin approval: %d %v", status, body)
+	}
+	if status, _ := w.pick(cy, fresh, 0); status != 409 {
+		t.Fatalf("duplicate approval: %d", status)
+	}
+	if w.grants(task) != 1 || w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'limit.granted'`, task) != 1 {
+		t.Fatal("grant not recorded exactly once")
+	}
+	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "cancelled" {
+		t.Fatalf("audit row %s", st)
+	}
+	round := obj(field(w.limitsOf(task), "fixRounds", "perReviewRound"))
+	if num(round["base"]) != 2 || num(round["limit"]) != 3 || num(round["remaining"]) != 1 {
+		t.Fatalf("bound: %v", round)
+	}
+}
+
 func TestAnAdminRaisesTheFixRoundsForOneTask(t *testing.T) {
 	w, task, ana, cy := limitRequestAt(t)
 	bo := w.person("Bo")
