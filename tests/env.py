@@ -167,40 +167,6 @@ def lux_env() -> dict:
     return env
 
 
-CHECKS_NOTICES = REPO_ROOT / "orchestrator" / "internal" / "delivery" / "agents" / "notices" / "checks.md"
-
-
-def _checks_questions() -> list[str]:
-    """The fixed opening of the checks gate's Backed, Missing and pre-existing
-    questions: each template's text up to its first action, as the
-    orchestrator sends it."""
-    text = CHECKS_NOTICES.read_text()
-    out = []
-    for name in ("notices/checks/backed", "notices/checks/missing", "notices/checks/preexisting"):
-        start = text.index('{{define "' + name + '"}}') + len('{{define "' + name + '"}}')
-        out.append(text[start:text.index("{{", start)])
-    return out
-
-
-def _preexisting_answer(question: str) -> str:
-    """The scripted answer to the pre-existing question: yes when the Run
-    recorded the reported command's failure in a checkout of the target
-    branch's commit the context names as the task's base (a call naming
-    ../task-base at that commit) with the same FAIL lines as its own run."""
-    listed = question.split("### The commit of each target branch this task builds on\n- ", 1)
-    sha = listed[1].split("\n", 1)[0].split(" at ")[-1] if len(listed) == 2 else ""
-    calls = question.split("### The tool calls this Run recorded, in order", 1)[-1].split("\n- ")[1:]
-    base = head = None
-    for call in calls:
-        fails = sorted({line.strip() for line in call.split("\n") if line.strip().startswith("FAIL: ")})
-        if "../task-base" in call:
-            if sha and f"../task-base {sha}" in call:
-                base = fails
-        else:
-            head = fails
-    return "yes" if base and base == head else "no"
-
-
 # The chat routing call's built-in instructions open with this (chat.BuiltInInstructions).
 CHAT_ROUTING_OPENING = "You route a message someone wrote to dude"
 # What else marks a routing call, should the opening change: its answer's shape.
@@ -355,10 +321,10 @@ class TestEnvironment:
     gallery_proc: subprocess.Popen | None = field(default=None, repr=False)
     # Access mode's edge and backend, when a suite started them (start_access).
     _access_procs: list = field(default_factory=list, repr=False)
-    # The fake judgement proxy answers only the checks gate's questions:
-    # Backed yes unless the context has a recorded error; Missing is no.
-    # Every other request gets no answer, as from a proxy nothing answers.
-    # It is local and deterministic, never a real model call.
+    # The fake judgement proxy answers only chat routing's calls (the
+    # judgement tier routes chat; the checks gate never asks it). Every
+    # other request gets no answer, as from a proxy nothing answers. It is
+    # local and deterministic, never a real model call.
     judge_server: ThreadingHTTPServer | None = field(default=None, repr=False)
     judge_thread: threading.Thread | None = field(default=None, repr=False)
     workspace_root: str = field(init=False)
@@ -467,7 +433,6 @@ class TestEnvironment:
         self.lux_url = f"http://{addr_file.read_text()}"
 
     def _start_judge(self) -> None:
-        questions = _checks_questions()
         mismatches = self.chat_route_mismatches_path
         # A kept log directory may hold an earlier run's file.
         mismatches.unlink(missing_ok=True)
@@ -477,7 +442,6 @@ class TestEnvironment:
                 length = int(self.headers.get("content-length", "0"))
                 body = json.loads(self.rfile.read(length) or b"{}")
                 messages = body.get("messages", [])
-                question = " ".join(str(m.get("content", "")) for m in messages)
                 try:
                     routed = _chat_route(messages)
                 except ChatRouteMismatch as e:
@@ -495,30 +459,10 @@ class TestEnvironment:
                     self.end_headers()
                     self.wfile.write(response)
                     return
-                if not any(q in question for q in questions):
-                    # Anything but the checks gate's own questions finds no
-                    # proxy: the connection closes with no answer, as an
-                    # unreachable host's does.
-                    self.close_connection = True
-                    self.connection.shutdown(socket.SHUT_RDWR)
-                    return
-                context = question.lower()
-                decision = "no" if "missing" in context else "yes"
-                if questions[2] in question:
-                    decision = _preexisting_answer(question)
-                elif "status: error" in context or "fail: testgreeting" in context or "exit status 1" in context:
-                    # Judge the latest recorded completion: an earlier
-                    # failed turn is not evidence against the corrected turn.
-                    last = context.rsplit("status:", 1)[-1]
-                    if "error" in last or "exit code 1" in last or "exit status 1" in last:
-                        decision = "no"
-                answer = json.dumps({"decision": decision, "confidence": 0.99, "reasoning": "scripted e2e judgement"})
-                response = json.dumps({"model": "judge-e2e", "choices": [{"message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}).encode()
-                self.send_response(200)
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(response)))
-                self.end_headers()
-                self.wfile.write(response)
+                # Anything but a routing call finds no proxy: the connection
+                # closes with no answer, as an unreachable host's does.
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
             def log_message(self, *_args):
                 pass
         self.judge_server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -546,7 +490,7 @@ class TestEnvironment:
                 "DUDE_LAYER_IMAGE": TEST_LAYER,
                 # No real agent credentials in the suite; fake models only,
                 # and memory searched by words. The URL is the fake
-                # judgement proxy, which answers the checks gate alone.
+                # judgement proxy, which answers chat routing alone.
                 "DUDE_LLM_URL": self.judge_url,
                 "DUDE_LLM_KEY": "",
                 "DUDE_EMBEDDINGS_URL": "off",

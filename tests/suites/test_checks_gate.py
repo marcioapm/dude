@@ -1,9 +1,10 @@
 """Checks-gate delivery through the real API and web stack.
 
-The fake lux runs one of the scripted checks models. The organisation's
-judgement tier is configured through the public judgements API; the fake
-LLM proxy is the suite's configured endpoint, so the suite uses the same
-control plane and orchestrator processes as other E2E tests.
+The fake lux runs one of the scripted checks models. The task's conductor
+(fake/defaults) decides each checks report with decide_checks from the
+calls dude recorded; the judgement tier routes chat and is never asked.
+The suite uses the same control plane and orchestrator processes as other
+E2E tests.
 """
 
 from __future__ import annotations
@@ -50,12 +51,18 @@ def _project(client: ApiClient, fake_github: FakeGitHub, model: str, conductor: 
     )
 
 
-def _judge(client: ApiClient, fake_github: FakeGitHub, model: str = "judge-e2e") -> None:
+def _credential(client: ApiClient, fake_github: FakeGitHub) -> None:
+    # The forge credential: publishing, and its checksFixRounds setting.
     credential = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": fake_github.api_url})
     assert credential.status_code == 200, credential.text
-    tier = client.tier_for(model)
-    resp = client.put("/v1/judgements/settings", {"tierId": tier})
-    assert resp.status_code == 200, resp.text
+
+
+def _no_judge_call(client: ApiClient) -> None:
+    # The checks gate never asks the judgement tier: no checks judgement
+    # call is recorded (the tier routes chat).
+    calls = client.get("/v1/judgements", params={"asker": "phases.checks"})
+    assert calls.status_code == 200, calls.text
+    assert calls.json()["calls"] == [], calls.json()
 
 
 def _start(client: ApiClient, fake_github: FakeGitHub, model: str, conductor: bool = True) -> dict:
@@ -105,7 +112,7 @@ def _checks_section(body: str) -> str:
 def _rows(checks: str) -> tuple[str, list[tuple[str, str, list[tuple[str, str]]]]]:
     """The account's headline (to its blank line) and each gated Run's (role, status, [(command, result)]), in order.
 
-    A check's judge reasoning and call id are the proxy's and are left out."""
+    A check's reason and decision are left out."""
     headline, _, rest = checks.partition("\n\n")
     rows: list[tuple[str, str, list[tuple[str, str]]]] = []
     for line in rest.split("\n"):
@@ -119,8 +126,8 @@ def _rows(checks: str) -> tuple[str, list[tuple[str, str, list[tuple[str, str]]]
     return headline, rows
 
 @pytest.mark.e2e
-def test_backed_report_judged_yes_publishes_and_is_visible(client: ApiClient, fake_github: FakeGitHub):
-    _judge(client, fake_github)
+def test_backed_report_the_conductor_backs_publishes_and_is_visible(client: ApiClient, fake_github: FakeGitHub):
+    _credential(client, fake_github)
     task = _start(client, fake_github, CHECKS_MODELS["honest"])
     _wait_pr(client, fake_github, task["id"])
 
@@ -138,11 +145,13 @@ def test_backed_report_judged_yes_publishes_and_is_visible(client: ApiClient, fa
         ("Fixer", "backed", [("missing checks", "pass")]),
         ("Simplifier", "backed", [("missing checks", "pass")]),
     ])
+    assert all(c.get("by") == "conductor" for v in verdicts for c in v["payload"]["checks"]), verdicts
+    _no_judge_call(client)
 
 
 @pytest.mark.e2e
 def test_failing_command_is_sent_back_then_corrected_turn_publishes(client: ApiClient, fake_github: FakeGitHub):
-    _judge(client, fake_github)
+    _credential(client, fake_github)
     task = _start(client, fake_github, CHECKS_MODELS["fixed"])
     wait_until(lambda: len(_checks_for_task(client, task["id"])) >= 2,
                timeout=90, message="checks report was not judged twice")
@@ -158,7 +167,7 @@ def test_failing_command_is_sent_back_then_corrected_turn_publishes(client: ApiC
 
 @pytest.mark.e2e
 def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClient, fake_github: FakeGitHub):
-    _judge(client, fake_github)
+    _credential(client, fake_github)
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
     task = _start(client, fake_github, CHECKS_MODELS["unbacked"])
     raised = wait_until(lambda: [e for e in client.events(taskId=task["id"])
@@ -198,9 +207,8 @@ def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClie
 def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient, fake_github: FakeGitHub):
     # No send-back allowed: a failure the conductor did not pass would
     # escalate at once. The conductor (fake/defaults) decides it pre-existing
-    # from the evidence of the run at the task's base; a judgement tier is
-    # set, and is never asked on a conducted delivery.
-    _judge(client, fake_github)
+    # from dude's recording of the run at the task's base.
+    _credential(client, fake_github)
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 0}).status_code == 200
     task = _start(client, fake_github, CHECKS_MODELS["base-shown"])
     _wait_pr(client, fake_github, task["id"])
@@ -219,18 +227,16 @@ def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient,
     headline, rows = _rows(_checks_section(fake_github.pulls[1].body))
     assert "the conductor passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)" in headline, headline
     assert rows[0] == ("Implementer", "passed by the conductor", [("make test", "pre-existing"), ("missing checks", "pass")])
+    _no_judge_call(client)
 
 
 @pytest.mark.e2e
 @pytest.mark.ui
 def test_no_conductor_publishes_with_skip_advice(page: Page, web_url: str, client: ApiClient, fake_github: FakeGitHub):
     # A delivery no conductor decides (Deliver's policy: the conductor's
-    # tier has no model) with judgements off: its all-pass reports are not
-    # verified, published with the skip recorded. (A conducted delivery's
-    # are decided by its conductor: the test below.)
-    # Off is the fixture's default. Make that explicit so this remains true
-    # when the suite's organization fixture gains a default tier later.
-    assert client.put("/v1/judgements/settings", {"tierId": None}).status_code == 200
+    # tier has no model): its all-pass reports are not verified, published
+    # with the skip recorded. (A conducted delivery's are decided by its
+    # conductor: the test below.)
     task = _start(client, fake_github, CHECKS_MODELS["unbacked"], conductor=False)
     assert client.get(f"/v1/tasks/{task['id']}").json()["decider"] == "policy"
     _wait_pr(client, fake_github, task["id"])
@@ -239,21 +245,21 @@ def test_no_conductor_publishes_with_skip_advice(page: Page, web_url: str, clien
     assert events and events[-1]["payload"].get("skipped") is True
     body = fake_github.pulls[1].body
     assert _rows(_checks_section(body)) == ("Checks not verified: no conductor decided them.", [
-        ("Implementer", "not model-checked", []),
-        ("Fixer", "not model-checked", []),
-        ("Simplifier", "not model-checked", []),
+        ("Implementer", "not verified", []),
+        ("Fixer", "not verified", []),
+        ("Simplifier", "not verified", []),
     ])
 
     # The same outcome is visible in the actual task screen's Activity tab.
     sign_in(page, web_url, client.api_key, at=f"#/tasks/{task['id']}", board=False)
-    activity = page.get_by_text(re.compile("not model-checked|checks", re.IGNORECASE))
+    activity = page.get_by_text(re.compile("not verified by a conductor", re.IGNORECASE))
     expect(activity.first).to_be_visible(timeout=30_000)
 
 
 @pytest.mark.e2e
 def test_with_no_judgement_tier_the_conductor_still_decides_checks(client: ApiClient, fake_github: FakeGitHub):
-    # The conducted counterpart: judgements off changes nothing on a
-    # conducted delivery. The conductor reads the recorded calls (make check
+    # The conducted counterpart: the judgement tier (chat routing) plays no
+    # part in checks. The conductor reads the recorded calls (make check
     # exited 1, reported pass), decides the pass unbacked, and the report is
     # sent back, never published, then escalated to the conductor.
     assert client.put("/v1/judgements/settings", {"tierId": None}).status_code == 200
