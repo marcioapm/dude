@@ -487,6 +487,52 @@ func TestACarriedWaiverIsAskedAboutAloneForItsFailure(t *testing.T) {
 	}
 }
 
+// A candidate attempt waiver does not force that failure to carry: the
+// conductor may establish it independently at the task base, or reject it.
+func TestAWaiverEligibleFailureMayStillBePreexisting(t *testing.T) {
+	for _, verdict := range []string{delivery.VerdictPreexisting, delivery.VerdictReject} {
+		t.Run(verdict, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			startedFrom(w)
+			cond := conducted(w)
+			waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+			checksReply(w, failingTest)
+			endTurn(w)
+			if pass, acted := w.gate(); pass || acted {
+				t.Fatalf("undecided gate: pass %v acted %v", pass, acted)
+			}
+			a := w.asked()
+			if len(a.Check) != 1 || a.Check[0].Command != "make test" || a.Check[0].Result != delivery.CheckFail ||
+				len(a.Waivers) != 1 || a.Waivers[0] == nil || len(a.Bases) != 1 || a.Bases[0].SHA == "" {
+				t.Fatalf("want one failure with both a candidate waiver and a task base: %+v", a)
+			}
+			cursor, err := w.decide(cond, delivery.DecideChecks{RunID: w.run.ID, Turn: w.turn(),
+				Checks: []delivery.ConductedCheck{{Command: "make test", Verdict: verdict,
+					Reason: "compared independently with the task base, not accepted as the waived failure"}},
+				Missing: delivery.ConductedMissing{Verdict: delivery.MissingNone, Reason: "nothing missing"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPass := verdict == delivery.VerdictPreexisting
+			if pass, acted := w.gate(); pass != wantPass || !acted {
+				t.Fatalf("decided gate: pass %v acted %v, want pass %v", pass, acted, wantPass)
+			}
+			got := recordedJudgement(w)
+			if got.Verified != wantPass || got.ConductorPassed != wantPass || got.Carried || len(got.Verdicts) != 2 {
+				t.Fatalf("judgement %+v", got)
+			}
+			v := got.Verdicts[0]
+			wantResult := delivery.CheckFail
+			if wantPass {
+				wantResult = delivery.CheckPreexisting
+			}
+			if v.Command != "make test" || v.Result != wantResult || v.Waiver != nil || v.By != "conductor" || v.DecisionCursor != cursor {
+				t.Fatalf("verdict %+v", v)
+			}
+		})
+	}
+}
+
 func recordedJudgement(w *harnessWorld) checksDecision {
 	w.t.Helper()
 	var got checksDecision

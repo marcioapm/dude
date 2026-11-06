@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,67 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 )
+
+// Real ledger fixtures use the same task-level payloads as raiseEscalationTx
+// and ToPersonTx: neither event has a run_id; identity is in detail.runId.
+func TestChecksEscalationsCountLifecycles(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		events   []string
+		question string
+		want     int
+	}{
+		{"direct only", nil, "run_a", 1},
+		{"conductor handover", []string{"escalation.raised"}, "run_a", 1},
+		{"decided then unrelated direct", []string{"escalation.raised", "task.decided"}, "run_b", 2},
+		{"same run retry", []string{"escalation.raised", "task.decided"}, "run_a", 2},
+		{"different run without handover", []string{"escalation.raised"}, "run_b", 2},
+		{"stopped", []string{"escalation.raised", "task.stopped"}, "run_a", 2},
+		{"restarted", []string{"escalation.raised", "task.recovered"}, "run_a", 2},
+		{"reset", []string{"escalation.raised", "machine.reset"}, "run_a", 2},
+		{"replacement raise", []string{"escalation.raised", "escalation.raised"}, "run_a", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			wi := w.task()
+			store := &delivery.Store{DB: w.app}
+			st := &delivery.State{TaskID: wi, ProjectID: w.project}
+			emit := func(typ, run string) {
+				t.Helper()
+				payload := map[string]any{"reason": delivery.ReasonChecksUnverified,
+					"detail":  map[string]any{"runId": run, "message": "held", "rounds": 2},
+					"actions": []string{"retry", "stop", "waive"}}
+				switch typ {
+				case "escalation.raised":
+					payload["holder"] = "conductor"
+					payload["personOnly"] = []string{"waive"}
+				case "question.asked":
+					payload["kind"] = "escalation"
+				case "task.decided":
+					payload = map[string]any{"action": "retry", "reason": delivery.ReasonChecksUnverified}
+				default:
+					// Stop/recovery/reset events need not name checks at all.
+					payload = map[string]any{"action": "restart"}
+				}
+				if err := store.Emit(context.Background(), w.org, st, typ, payload); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, typ := range tc.events {
+				emit(typ, "run_a")
+			}
+			// Normal handover emits a status change between raise and question.
+			if err := store.Emit(context.Background(), w.org, st, delivery.EvTaskStatusChanged,
+				map[string]any{"status": "awaiting_input"}); err != nil {
+				t.Fatal(err)
+			}
+			emit("question.asked", tc.question)
+			if got := w.checksEscalations(wi); got != tc.want {
+				t.Fatalf("counted %d escalations, want %d", got, tc.want)
+			}
+		})
+	}
+}
 
 // decideScoped is decide with a waiver's scope.
 func (w *world) decideScoped(as, wi, action, note, scope string) (int, map[string]any) {
@@ -18,18 +80,24 @@ func (w *world) decideScoped(as, wi, action, note, scope string) (int, map[strin
 // clockNote is the owner's note on a waiver of fakeagent's preexisting failure.
 const clockNote = "TestClock needs a hardware clock CI lacks."
 
-// checksEscalations counts the checks escalations raised on the task, not
-// the events about them. One is raised either to its conductor
-// (escalation.raised) or straight to a person (question.asked of kind
-// escalation). A conductor-held one handed to a person later records its
-// question.asked too, next after its escalation.raised (one escalation is
-// open at a time): that hand-over is the same escalation, not counted again.
+// checksEscalations counts raises, not the events about them. A person
+// question is a handover only when the preceding lifecycle event is a raise
+// with the same reason and detail (including runId). Decisions and recovery
+// boundaries end that pairing even when a retry reuses the same writer Run.
+// Status/wake events are not boundaries: handover itself emits those.
 func (w *world) checksEscalations(wi string) int {
 	return w.count(`SELECT count(*) FROM (
-			SELECT event_type, lag(event_type) OVER (ORDER BY cursor) AS before FROM events WHERE task_id = $1
-			AND (event_type = 'escalation.raised' OR (event_type = 'question.asked' AND payload->>'kind' = 'escalation'))
-			AND payload->>'reason' = $2) e
-		WHERE e.event_type = 'escalation.raised' OR e.before IS DISTINCT FROM 'escalation.raised'`, wi, delivery.ReasonChecksUnverified)
+			SELECT event_type, payload,
+				lag(event_type) OVER (ORDER BY cursor) AS before,
+				lag(payload) OVER (ORDER BY cursor) AS prior
+			FROM events WHERE task_id = $1 AND (
+				event_type IN ('escalation.raised', 'task.decided', 'task.stopped', 'task.recovered',
+					'task.closed', 'task.reopened', 'run.restarted', 'machine.reset')
+				OR (event_type = 'question.asked' AND payload->>'kind' = 'escalation'))
+		) e WHERE payload->>'reason' = $2 AND (event_type = 'escalation.raised'
+			OR (event_type = 'question.asked' AND NOT COALESCE(
+				before = 'escalation.raised' AND prior->>'reason' = payload->>'reason'
+				AND prior->'detail' = payload->'detail', false)))`, wi, delivery.ReasonChecksUnverified)
 }
 
 // failingUntilEscalated runs a delivery whose writers are all on model and
