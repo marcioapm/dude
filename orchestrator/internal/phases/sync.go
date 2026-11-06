@@ -894,6 +894,8 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.end(ctx, r)
 	case r.Status == statusPending && r.LuxRunID == "":
 		return true, s.submit(ctx, r)
+	case r.placeholder() && r.Resumable:
+		return true, s.startPlaceholder(ctx, r)
 	case r.Status == statusPaused:
 		return s.whilePaused(ctx, r)
 	case r.Control == "abort":
@@ -2161,6 +2163,18 @@ func (s *Syncer) applyBatch(ctx context.Context, t *translator, batch []lux.Fram
 			redactors.None(t.run.ID)
 		}
 		ctx := ledger.WithRedactors(ctx, redactors)
+		// A later UPDATE of this Run rechecks its cross-Run foreign keys,
+		// even when their values did not change. Take those KEY SHARE locks
+		// before this Run: an owner's relay answer holds the conductor and
+		// then inserts a directive referencing its writer. Taking the writer
+		// first would deadlock with that answer. Order shared parents by id;
+		// NO KEY UPDATE lifecycle writers remain compatible with these locks.
+		if _, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id IN (
+			SELECT parent_run_id FROM runs WHERE id = $1
+			UNION SELECT conductor_run_id FROM runs WHERE id = $1)
+			AND id <> $1 ORDER BY id FOR KEY SHARE`, t.run.ID); err != nil {
+			return err
+		}
 		// The Run's row before any directive: the order abort and the
 		// Run's other ends take them in (FailUnreadTx), so a receipt in
 		// this batch and an abort wait for each other, never deadlock.
@@ -3174,6 +3188,9 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 		lr.State = "resuming"
 	}
 	if le, ok := lux.AsError(err); ok && le.Status == http.StatusNotFound {
+		if r.conductor() {
+			return true, s.lostConductor(ctx, r, "lux no longer has the run")
+		}
 		if replaced, rerr := s.replaceRound(ctx, r, "lux no longer has the run"); replaced || rerr != nil {
 			return true, rerr
 		}
@@ -3962,9 +3979,16 @@ func (s *Syncer) failed(ctx context.Context, r phaseRun, reason string, keep boo
 				return err
 			}
 		}
+		closed, err := closeFailedQuestions(ctx, tx, r)
+		if err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'failed', error = $2, ended_at = now(), keep = $3
 			WHERE id = $1 AND status NOT IN ('completed', 'failed', 'aborted')`, r.ID, reason, keep)
 		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		if err := s.questionsClosed(ctx, tx, r, reason, closed); err != nil {
 			return err
 		}
 		return s.failedTx(ctx, tx, r, reason)
@@ -4125,6 +4149,9 @@ const retryWait = `GREATEST(LEAST(make_interval(secs => $2 * power(2, LEAST(` + 
 // the Run instead of retrying it forever.
 func (s *Syncer) retryLater(ctx context.Context, r phaseRun, cause error) error {
 	if lux.IsNotFound(cause) {
+		if r.conductor() {
+			return s.lostConductor(ctx, r, "")
+		}
 		// The follower can see a lost lux Run before whilePaused does: a
 		// continuation is replaced in its slot by a replay all the same.
 		if replaced, err := s.replaceRound(ctx, r, "lux no longer has the run"); replaced || err != nil {

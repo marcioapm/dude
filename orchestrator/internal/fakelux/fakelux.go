@@ -1664,6 +1664,11 @@ func (s *Server) Handler() http.Handler {
 	})
 	// A child session of a Run's agent, one step at a time (children.go).
 	mux.HandleFunc("POST /fake/runs/{id}/child", s.childHandler)
+	// lux losing a Run (ForgetRun): every call about it answers 404.
+	mux.HandleFunc("POST /fake/runs/{id}/forget", func(w http.ResponseWriter, r *http.Request) {
+		s.ForgetRun(r.PathValue("id"))
+		writeJSON(w, 200, map[string]any{"forgotten": true})
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+s.Key {
 			writeErr(w, 401, "unauthorized", "invalid API key")

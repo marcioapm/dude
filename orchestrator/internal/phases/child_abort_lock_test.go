@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -205,6 +206,147 @@ func childFamilySnapshot(w *resumeWorld) string {
 		w.t.Fatal(err)
 	}
 	return raw
+}
+
+// An owner's relay answer holds the conductor while forwarding to its writer.
+// A writer lifecycle batch rechecks conductor_run_id on its later UPDATEs,
+// including translator.save: the two paths must not form a cross-Run cycle.
+func TestRelayAnswerBesideWriterLifecycleDoesNotDeadlock(t *testing.T) {
+	for _, first := range []string{"writer", "answer"} {
+		t.Run(first+"-first", func(t *testing.T) {
+			w := newResumeWorld(t)
+			child := childFamily(w, false)
+			w.exec(`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, items, addressee, relays)
+				VALUES ('q_writer', $1, $2, 'run_child', 'Which API?', '[{"question":"Which API?"}]', 'conductor', NULL),
+				('q_relay', $1, $2, 'run_parent', 'A or B?', '[{"question":"A or B?"}]', 'person', 'q_writer')`, child.Org, child.TaskID)
+			var relation uint32
+			var tuples string
+			if err := w.owner.QueryRow(w.ctx, `SELECT 'runs'::regclass::oid, string_agg(id || '=' || ctid::text, ', ' ORDER BY id) FROM runs`).Scan(&relation, &tuples); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("runs relation OID=%d tuples=%s", relation, tuples)
+			ref := child.ref()
+			ref.RunID = "run_parent"
+			answer := func(ctx context.Context, tx pgx.Tx) error {
+				if _, err := tx.Exec(ctx, `SELECT id FROM questions WHERE id='q_relay' FOR UPDATE`); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `SELECT 1 FROM runs WHERE id='run_parent' FOR UPDATE`); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE questions SET status='answered', answer='B', answered_at=now() WHERE id='q_relay'`); err != nil {
+					return err
+				}
+				a := delivery.Answered{Text: "B", Answers: []delivery.ItemAnswer{{Text: "B"}}}
+				out, err := delivery.ForwardRelayTx(ctx, tx, ref, "q_relay", []delivery.QuestionItem{{Question: "A or B?"}}, a,
+					delivery.Writer{ActorType: "human"})
+				if err != nil {
+					return err
+				}
+				if out == nil || !out.Forwarded {
+					return fmt.Errorf("relay not forwarded: %v", out)
+				}
+				_, _, err = delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: "B", Scope: "run"})
+				return err
+			}
+			if first == "writer" {
+				batchErr, answerErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error {
+					return app.InOrg(ctx, child.Org, func(tx pgx.Tx) error {
+						if _, err := delivery.LockAnswerTx(ctx, tx, child.TaskID); err != nil {
+							return err
+						}
+						return answer(ctx, tx)
+					})
+				})
+				if err != nil || batchErr != nil || answerErr != nil {
+					t.Fatalf("schedule=%v batch=%v answer=%v", err, batchErr, answerErr)
+				}
+			} else {
+				ctx, cancel := context.WithTimeout(w.ctx, 15*time.Second)
+				defer cancel()
+				tr := &translator{run: child}
+				if err := w.s.DB.InOrg(ctx, child.Org, func(tx pgx.Tx) error { return tr.load(ctx, tx) }); err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan error, 1)
+				err := w.s.DB.InOrg(ctx, child.Org, func(tx pgx.Tx) error {
+					if _, err := delivery.LockAnswerTx(ctx, tx, child.TaskID); err != nil {
+						return err
+					}
+					if _, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id='run_parent' FOR UPDATE`); err != nil {
+						return err
+					}
+					pid := int32(tx.Conn().PgConn().PID())
+					go func() {
+						done <- w.s.applyBatch(ctx, tr, []lux.Frame{luxState(1, "starting"), luxState(1, "running"),
+							cursorFrame(record(1, "lux.warning", map[string]any{"message": "after the lifecycle"}), "c-family")})
+					}()
+					for {
+						var blocked bool
+						if err := w.owner.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+							WHERE datname=current_database() AND $1::int=ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked); err != nil {
+							return err
+						}
+						if blocked {
+							break
+						}
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						case <-time.After(5 * time.Millisecond):
+						}
+					}
+					return answer(ctx, tx)
+				})
+				batchErr := <-done
+				if err != nil || batchErr != nil {
+					t.Fatalf("answer=%v batch=%v", err, batchErr)
+				}
+			}
+			assertBatchCommitted(t, w)
+			var answered, directives, events int
+			if err := w.owner.QueryRow(w.ctx, `SELECT
+				(SELECT count(*) FROM questions WHERE id IN ('q_writer','q_relay') AND status='answered' AND answer='B' AND answered_by_run IS NULL),
+				(SELECT count(*) FROM directives WHERE run_id IN ('run_parent','run_child')),
+				(SELECT count(*) FROM events WHERE run_id='run_child' AND event_type='question.answered' AND payload->>'by'='person')`).Scan(&answered, &directives, &events); err != nil {
+				t.Fatal(err)
+			}
+			if answered != 2 || directives != 2 || events != 1 {
+				t.Fatalf("answered=%d directives=%d writer answer events=%d", answered, directives, events)
+			}
+		})
+	}
+}
+
+// Replacing a lost conductor (delivery.ReplaceLostConductorTx) while the
+// syncer records a batch of its child's lifecycle: both commit, and the
+// conductor's open question moves to the replacement.
+func TestLostConductorReplacementBesideChildLifecycleDoesNotDeadlock(t *testing.T) {
+	w := newResumeWorld(t)
+	child := childFamily(w, false)
+	w.exec(`UPDATE runs SET waiting_since = now(), turn_done_at = now() WHERE id = 'run_parent'`)
+	w.exec(`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, items, addressee)
+		VALUES ('q_lost_parent', $1, $2, 'run_parent', 'Continue?', '[{"question":"Continue?"}]', 'person')`, w.run.Org, w.run.TaskID)
+	var next string
+	batchErr, replacementErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error {
+		return app.InOrg(ctx, child.Org, func(tx pgx.Tx) (err error) {
+			next, err = delivery.ReplaceLostConductorTx(ctx, tx, delivery.RunRef{Org: child.Org, ProjectID: child.ProjectID,
+				TaskID: child.TaskID, RunID: "run_parent"}, "lost in race")
+			return err
+		})
+	})
+	if err != nil || batchErr != nil || replacementErr != nil {
+		t.Fatalf("race %v; batch (deadlock %v): %v; replacement (deadlock %v): %v", err,
+			isDeadlock(batchErr), batchErr, isDeadlock(replacementErr), replacementErr)
+	}
+	assertBatchCommitted(t, w)
+	var holder string
+	if err := w.owner.QueryRow(w.ctx, `SELECT run_id FROM questions WHERE id = 'q_lost_parent' AND status = 'open'`).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if next == "" || holder != next {
+		t.Fatalf("question holder %q, replacement %q", holder, next)
+	}
 }
 
 // A person aborting a conductor's (or a session's) child while the syncer

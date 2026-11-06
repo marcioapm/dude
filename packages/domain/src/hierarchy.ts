@@ -612,8 +612,41 @@ export const recoveryOptionsSchema = z.object({
   refused: z.enum(["closed", "archived"]).nullable().optional(),
   /** Try again needs the person's direction as its note: delivery stopped at a review loop not converging or stuck. */
   retryNeedsNote: z.boolean().optional(),
+  /**
+   * The task's latest conductor, for Try again on it (#404): its Run, status
+   * and error, the person's question lost with it, and whether Try again is
+   * offered (it failed and no conductor is live). Null with no conductor;
+   * absent from an older orchestrator.
+   */
+  conductor: z.object({
+    runId: z.string(),
+    status: z.string(),
+    error: z.string().nullable(),
+    lostQuestion: z.object({ id: z.string(), prompt: z.string() }).nullable(),
+    retry: z.boolean(),
+  }).nullable().optional(),
 });
 export type RecoveryOptions = z.infer<typeof recoveryOptionsSchema>;
+
+/**
+ * A question of a task's current attempt as the server holds it
+ * (`GET /v1/tasks/:id`'s `questions`, #404): open, or cancelled with its
+ * latest conductor when that failed. `endedBy` is its question.closed's by
+ * ("lost", "run_failed", ...), null when it was cancelled with no event.
+ */
+export const taskQuestionSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  status: z.enum(["open", "answered", "cancelled", "expired"]),
+  addressee: z.string(),
+  prompt: z.string(),
+  items: z.array(z.unknown()),
+  askedAt: z.string(),
+  toPerson: z.string().nullable(),
+  askerError: z.string().nullable(),
+  endedBy: z.string().nullable(),
+});
+export type TaskQuestion = z.infer<typeof taskQuestionSchema>;
 
 /**
  * A person's Stop of the whole task (`POST /v1/tasks/:id/stop`): every live

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 
 from env import TestEnvironment
+import requests
 from fake_github import FakeGitHub
 from helpers import ApiClient, finish_simplifier_review, query, wait_until
 
@@ -143,6 +144,62 @@ def test_talk_it_through_to_a_pull_request(client: ApiClient, forge_project: dic
     assert [r for r in runs if r["id"] in narrow and r["reviewOf"] == "simplify" and r["conductorRunId"] is None], runs
     decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
     assert decided == ["start_phase", "next", "start_phase", "start_phase", "next", "next", "open_pull_request"], decided
+
+
+def test_a_conductor_lost_at_the_gate_still_hears_the_answer(client: ApiClient, forge_project: dict, fake_github: FakeGitHub,
+                                                            owner_dsn: str, env):
+    """dude#404: lux loses the conductor's Run while it waits on the
+    person's answer at the pull request gate. The question stays open, on
+    the Run that replaces it in its slot; the answer starts that one, and
+    the gate opens a draft."""
+    project = _conducting(client, forge_project)
+    task = client.create_task(project["id"], "Greet in Portuguese, its conductor lost at the gate")
+    assert client.post(f"/v1/tasks/{task['id']}/talk").status_code == 201
+    _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
+    _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
+    _waiting_on(client, task["id"], "after_implement", "the implementer never came back")
+    _say(client, task["id"], "Review it.", _tool("decide", {"action": "next"}))
+    _waiting_on(client, task["id"], "after_review", "the review round never came back to the conductor")
+    _say(client, task["id"], "Fix it.", _tool("start_phase", {"phase": "fix"}))
+    _waiting_on(client, task["id"], "after_fix", "the fix never came back to the conductor")
+    _say(client, task["id"], "Again.", _tool("start_phase", {"phase": "review", "categories": ["correctness"]}))
+    wait_until(lambda: len(_phases(client, task["id"], "review")) == 2, timeout=60, message="no second review")
+    _waiting_on(client, task["id"], "after_review", "the clean round never came back to the conductor")
+    _say(client, task["id"], "Clean; go on.", _tool("decide", {"action": "next"}))
+    finish_simplifier_review(client, owner_dsn, task["id"])
+    _waiting_on(client, task["id"], "before_pull_request", "the delivery never waited before the pull request")
+
+    # 1. Asked at the gate; the conductor's turn ends waiting on the person.
+    _say(client, task["id"], "Ask me.", _tool("decide", {"action": "ask_person"}))
+    question = wait_until(lambda: query(owner_dsn, """SELECT q.id, q.run_id FROM questions q JOIN runs r ON r.id = q.run_id
+        WHERE q.task_id = %s AND q.pr_gate_heads IS NOT NULL AND q.status = 'open' AND r.waiting_since IS NOT NULL""", (task["id"],)),
+        timeout=60, message="the gate's question was never asked")[0]
+    old = question["run_id"]
+    lux_run = query(owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (old,))[0]["lux_run_id"]
+
+    # 2. lux loses the conductor's Run.
+    requests.post(f"{env.fake_lux_url}/fake/runs/{lux_run}/forget",
+                  headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10).raise_for_status()
+    wait_until(lambda: client.get_run(old)["status"] == "failed", timeout=60, message="the lost conductor never ended")
+
+    # 3. The question is still open, on the Run in its slot; the task still waits on the person.
+    held = query(owner_dsn, "SELECT status::text AS status, run_id FROM questions WHERE id = %s", (question["id"],))[0]
+    assert held["status"] == "open", held
+    assert held["run_id"] != old
+    placeholder = query(owner_dsn, "SELECT status::text AS status, lux_run_id FROM runs WHERE id = %s", (held["run_id"],))[0]
+    assert placeholder == {"status": "paused", "lux_run_id": None}, placeholder
+    assert _task(client, task["id"])["status"] == "awaiting_input"
+    assert [q["id"] for q in _task(client, task["id"])["questions"] if q["status"] == "open"] == [question["id"]]
+
+    # 4. The answer: 200, and it starts the replacement, which opens a draft.
+    resp = client.post(f"/v1/questions/{question['id']}/answer", {"text": "Draft"})
+    assert resp.status_code == 200, resp.text
+    wait_until(lambda: query(owner_dsn, "SELECT 1 FROM directives WHERE run_id = %s AND delivered_at IS NOT NULL AND text LIKE %s",
+                             (held["run_id"], "%Draft%")), timeout=90, message="the answer never reached the replacement")
+    _say(client, task["id"], "Opening.", _tool("decide", {"action": "open_pull_request"}))
+    prs = wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],
+                     timeout=90, message="the pull request never opened")
+    assert len(prs) == 1 and prs[0]["state"] == "draft", prs
 
 
 def _parked(client: ApiClient, run_id: str, message: str) -> None:

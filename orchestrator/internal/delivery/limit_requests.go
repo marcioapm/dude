@@ -242,6 +242,27 @@ func IsLimitRequestTx(ctx context.Context, tx pgx.Tx, taskID, questionID string)
 	return slices.ContainsFunc(d.State.LimitRequests, func(r LimitRequest) bool { return r.QuestionID == questionID }), nil
 }
 
+// rebindLimitRequestTx preserves the owning subsystem's typed request and
+// authorization when Retry recreates its cancelled question. The caller holds
+// the delivery lock; no authority is reconstructed from question prose.
+func rebindLimitRequestTx(ctx context.Context, tx pgx.Tx, taskID, old, fresh string) error {
+	d, err := LoadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return err
+	}
+	changed := false
+	for i := range d.State.LimitRequests {
+		if d.State.LimitRequests[i].QuestionID == old {
+			d.State.LimitRequests[i].QuestionID = fresh
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return setLimitState(ctx, tx, d.WorkflowID, d.State.LimitGrants, d.State.LimitRequests)
+}
+
 // Approver is who answered a limit request: the person, and whether they
 // administer the organisation, which raising a fix-round limit takes.
 type Approver struct {
