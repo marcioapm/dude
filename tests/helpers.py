@@ -457,6 +457,32 @@ def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None
     return writer, human
 
 
+def forward_repository_request(client: ApiClient, task_id: str, run_id: str | None = None) -> dict:
+    """The conductor forwards a repository request it holds (PR4b, A11).
+
+    On a conducted task an agent's repository request is its conductor's
+    first (repository.routed, addressee conductor): no card, nothing in
+    Waiting on you. The scripted conductor forwards it through
+    decide_repository_request, driven over the task's Chat as
+    relay_writer_question drives ask_person; the request is then the
+    person's (one repository.requested). Returns the routed event's payload
+    with the asking runId.
+    """
+    routed = wait_until(lambda: next((e for e in client.events(taskId=task_id, limit=1000)
+        if e["eventType"] == "repository.routed" and (run_id is None or e["runId"] == run_id)), None),
+        timeout=60, message="the agent's repository request never reached its conductor")
+    request = {**routed["payload"], "runId": routed["runId"]}
+    response = client.post(f"/v1/tasks/{task_id}/chat", {"text": "Forward this repository request to the owner.\n"
+        + "tool: decide_repository_request " + json.dumps({"id": request["requestId"], "action": "forward"})})
+    assert response.status_code in (200, 201), response.text
+    requested = wait_until(lambda: [e for e in client.events(runId=request["runId"])
+        if e["eventType"] == "repository.requested" and e["payload"].get("requestId") == request["requestId"]],
+        timeout=30, message="the conductor never forwarded the repository request")
+    assert len(requested) == 1, requested
+    assert requested[0]["payload"].get("handedOverFrom") == "conductor", requested
+    return request
+
+
 def finish_question_relay(client: ApiClient, task_id: str, writer: dict, human: dict) -> None:
     """Read the real person's recorded answer and explicitly give it to the writer."""
     answered = wait_until(lambda: next((q for q in client.get("/v1/questions", params={"runId": human["runId"]}).json()["questions"]
