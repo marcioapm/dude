@@ -88,6 +88,9 @@ type Server struct {
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
+	// Test hook: after the tool transaction finishes, before refusal reporting
+	// or outside work. No decision locks remain held here.
+	AfterTransaction func(context.Context, string)
 	// Test hook: resolves a caller's capabilities; nil, capabilities.Resolve.
 	resolve func(context.Context, pgx.Tx, capabilities.Agent) (capabilities.Grants, error)
 }
@@ -828,12 +831,34 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		return err
 	}
 	var checked any
+	var committedRefusal *refusal
 	err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if err := withinLimits(ctx, tx, c, t); err != nil {
 			return err
 		}
 		result, err := t.run(ctx, tx, c, args)
 		if err != nil {
+			var r refusal
+			if t.name == "decide" && errors.As(err, &r) && r.invalidOpenAuthority != nil {
+				// This domain outcome is reached after reads only, under Chat
+				// and delivery locks. Commit solely the invalidation and audit,
+				// never a taken decision or outside action. All other errors
+				// keep the usual rollback contract.
+				a := r.invalidOpenAuthority
+				voided, fail := delivery.VoidOpenAuthorityTx(ctx, tx, c.TaskID, a.QuestionID, a.Why)
+				if fail != nil {
+					return fail
+				}
+				if voided != "" {
+					refusalID, fail = ledger.Append(ctx, tx, c.event(delivery.EvOpenAuthorityVoided,
+						map[string]any{"questionId": a.QuestionID, "why": a.Why}))
+					if fail != nil {
+						return fail
+					}
+				}
+				committedRefusal = &r
+				return nil
+			}
 			return err
 		}
 		if t.outside != nil {
@@ -862,6 +887,18 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 		}
 		return record(tx, result)
 	})
+	if s.AfterTransaction != nil {
+		s.AfterTransaction(ctx, t.name)
+	}
+	if committedRefusal != nil {
+		if err != nil {
+			// Commit failed (including cancellation): do not claim the
+			// semantic invalidation succeeded, or report it separately.
+			refusalID = ""
+			return nil, err
+		}
+		return nil, *committedRefusal
+	}
 	var refused refusal
 	if errors.As(err, &refused) {
 		refusalID = s.recordRefusal(ctx, c, t, refused)
@@ -912,15 +949,6 @@ func childToolAllowed(name string) bool {
 func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused refusal) (eventID string) {
 	if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if refused.event != nil {
-			if refused.event.typ == delivery.EvOpenAuthorityVoided {
-				// The person's answer found not to hold is void for good,
-				// though the call that found it rolled back.
-				qid, _ := refused.event.payload["questionId"].(string)
-				why, _ := refused.event.payload["why"].(string)
-				if voided, err := delivery.VoidOpenAuthorityTx(ctx, tx, c.TaskID, qid, why); err != nil || voided == "" {
-					return err
-				}
-			}
 			var err error
 			eventID, err = ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
 			return err
@@ -989,6 +1017,8 @@ type refusal struct {
 	code    string
 	event   *refusedEvent
 	blocked *delivery.BlockedError
+	// Only decide's read-only authority check may commit this refusal.
+	invalidOpenAuthority *delivery.InvalidOpenAuthority
 	// A start refused as archived or closed: its reason.
 	lifecycle string
 	// Refused for the run's call budget (withinLimits, and post_to_chat's minute count).
