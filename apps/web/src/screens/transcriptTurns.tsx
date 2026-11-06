@@ -392,7 +392,7 @@ export interface QuestionTruth {
   readonly open: ReadonlySet<string>;
   readonly lost: ReadonlySet<string>;
   /** Server settlements across conductor ledgers, joined to the original ask before projection. */
-  readonly settlements?: readonly PersistedEvent[];
+  readonly settlements?: import("./questionSettlements.ts").SettlementIndex;
   readonly waitingOn?: string | undefined;
   readonly answer?: ((turn: QuestionTurn, submission: QuestionSubmission) => Promise<boolean>) | undefined;
 }

@@ -29,6 +29,7 @@ import { instant } from "../instant.ts";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { DriverControl } from "./DriverSwitch.tsx";
+import { useSettlementIndex } from "./questionSettlements.ts";
 
 export interface ChatSectionProps {
   client: ApiClient;
@@ -164,11 +165,7 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   const lost = useMemo(() => lostQuestion(recovery, task.questions ?? []), [recovery, task.questions]);
   const questionsKey = (task.questions ?? []).map((q) => `${q.id}:${q.status}:${q.endedBy ?? ""}`).join(",");
   const waitingOn = task.owner && people.you && task.owner.id !== people.you ? task.owner.name : undefined;
-  const settlements = useMemo(() => {
-    const conductors = new Set(task.runs.filter(isConductor).map((r) => r.id));
-    return events.filter((e) => e.runId && conductors.has(e.runId) &&
-      (e.eventType === EventTypes.QuestionAnswered || e.eventType === EventTypes.QuestionClosed));
-  }, [events, task.runs]);
+  const settlements = useSettlementIndex(task.id, task.runs, events);
   const truth = useMemo<QuestionTruth>(() => {
     const qs = task.questions ?? [];
     return {

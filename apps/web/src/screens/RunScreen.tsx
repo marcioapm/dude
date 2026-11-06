@@ -69,6 +69,7 @@ import { ChangesPanel } from "./ChangesPanel.tsx";
 import { useFeedbackFocus } from "../feedback.tsx";
 import { limitsHint, useAttachmentLimits, useImageTray, useSentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
+import { useLedgerSettlements } from "./questionSettlements.ts";
 import { raisedProvenance, type RaisedMachine } from "../machines.ts";
 import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
 import {
@@ -1101,16 +1102,14 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
       cancelled = true;
     };
   }, [ledgers, runId, attempt]);
+  const settlements = useLedgerSettlements(events, truth.settlements);
   const turns = useMemo(() => {
     if (!events) return [];
     // Rebound answers live on the replacement ledger; the original ask remains here.
-    const ids = new Set(events.filter((e) => e.eventType === EventTypes.QuestionAsked).map((e) => e.payload.questionId));
-    const seen = new Set(events.map((e) => e.eventId));
-    const settlements = (truth.settlements ?? []).filter((e) => ids.has(e.payload.questionId) && !seen.has(e.eventId));
     const all = project([...events, ...settlements].sort((a, b) => a.cursor - b.cursor), status).turns;
     if (retried) for (const t of all) if (t.kind === "human" && t.failed === NOT_STARTED) t.failed = NOT_STARTED_RETRIED;
     return asides(all);
-  }, [events, status, retried, truth.settlements]);
+  }, [events, status, retried, settlements]);
   if (failed && !events) {
     return (
       <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
