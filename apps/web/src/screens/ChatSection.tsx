@@ -29,7 +29,7 @@ import { instant } from "../instant.ts";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { DriverControl } from "./DriverSwitch.tsx";
-import { useSettlementIndex } from "./questionSettlements.ts";
+import { SettlementContext, useSettlementIndex } from "./questionSettlements.ts";
 
 export interface ChatSectionProps {
   client: ApiClient;
@@ -163,14 +163,13 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   // The questions as the server holds them (#404): one still open whose turn sits in an ended conductor's
   // transcript (moved to the conductor replacing a lost one) is answered there; one lost with its Run says so.
   const lost = useMemo(() => lostQuestion(recovery, task.questions ?? []), [recovery, task.questions]);
-  const questionsKey = (task.questions ?? []).map((q) => `${q.id}:${q.status}:${q.endedBy ?? ""}`).join(",");
+  const questionsKey = JSON.stringify([task.questions !== undefined, (task.questions ?? []).map((q) => [q.id, q.status, q.addressee, q.endedBy, q.askerError])]);
   const waitingOn = task.owner && people.you && task.owner.id !== people.you ? task.owner.name : undefined;
   const settlements = useSettlementIndex(task.id, task.runs, events);
   const truth = useMemo<QuestionTruth>(() => {
     const qs = task.questions ?? [];
     return {
       authoritative: task.questions !== undefined,
-      settlements,
       waitingOn,
       open: new Set(qs.filter((q) => q.status === "open" && q.addressee === "person").map((q) => q.id)),
       lost: new Set(qs.filter((q) => q.status === "cancelled" && (q.endedBy === "lost" || (!q.endedBy && (q.askerError ?? "").includes("lux no longer has")))).map((q) => q.id)),
@@ -186,7 +185,7 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
         }
       },
     };
-  }, [questionsKey, answer, onSent, settlements, waitingOn]); // eslint-disable-line react-hooks/exhaustive-deps -- the questions, by their ids and statuses
+  }, [questionsKey, answer, onSent, waitingOn]); // eslint-disable-line react-hooks/exhaustive-deps -- the questions, by their UI truth
   const lostRun = lost ? task.runs.find((r) => r.id === lost.runId) : undefined;
   const lostLine = useMemo(() => {
     if (!lost) return null;
@@ -343,10 +342,12 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   if (conductorId) {
     return (
       <QuestionTruthContext.Provider value={truth}>
+        <SettlementContext.Provider value={settlements}>
         <div className="taskChat" data-testid="task-chat">
           <RunScreen key={conductorId} client={client} runId={conductorId} onBack={onBack} task={owner} chat={chat} />
           {problem ? <Callout tone="danger" data-testid="chat-problem">{problem}</Callout> : null}
         </div>
+        </SettlementContext.Provider>
       </QuestionTruthContext.Provider>
     );
   }
@@ -354,6 +355,7 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   const you = people.you ? people.names.get(people.you) : undefined;
   return (
     <QuestionTruthContext.Provider value={truth}>
+    <SettlementContext.Provider value={settlements}>
     <div className="taskChat" data-testid="task-chat">
       <div className="runScreen" data-view="chat">
         <ChatTranscript
@@ -387,6 +389,7 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </div>
     </div>
+    </SettlementContext.Provider>
     </QuestionTruthContext.Provider>
   );
 }

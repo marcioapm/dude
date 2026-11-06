@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { createContext, useMemo, useState } from "react";
 import { EventTypes, isConductor, type PersistedEvent, type Run } from "@dude/domain";
 
 export type SettlementIndex = ReadonlyMap<string, readonly PersistedEvent[]>;
+export const SettlementContext = createContext<SettlementIndex | undefined>(undefined);
 const EMPTY: readonly PersistedEvent[] = [];
 
 /** Reconcile only against the current API ledger: removed settlements are not retained. */
@@ -21,7 +22,7 @@ export function settlementIndex(taskId: string, runs: readonly Run[], events: re
     // Compare content, not just eventId: reloads can correct an actor or answer in place.
     out.set(id, old && JSON.stringify(old) === JSON.stringify(bucket) ? old : bucket);
   }
-  return out;
+  return previous && previous.size === out.size && [...out].every(([id, bucket]) => previous.get(id) === bucket) ? previous : out;
 }
 
 export function useSettlementIndex(taskId: string, runs: readonly Run[], events: readonly PersistedEvent[]): SettlementIndex {

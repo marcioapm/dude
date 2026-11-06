@@ -69,13 +69,13 @@ import { ChangesPanel } from "./ChangesPanel.tsx";
 import { useFeedbackFocus } from "../feedback.tsx";
 import { limitsHint, useAttachmentLimits, useImageTray, useSentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
-import { useLedgerSettlements } from "./questionSettlements.ts";
+import { SettlementContext, useLedgerSettlements } from "./questionSettlements.ts";
 import { raisedProvenance, type RaisedMachine } from "../machines.ts";
 import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
 import {
   PeerRail, useCoordination, usePeerContext, waitWords,
 } from "../coordination.tsx";
-import { QuestionTruthContext, asides, clock, interleaved, questionTurnSelector, renderTurn, viewedContext, type AskActions, type SteerActions, type ViewedTurn } from "./transcriptTurns.tsx";
+import { asides, clock, interleaved, questionTurnSelector, renderTurn, viewedContext, type AskActions, type SteerActions, type ViewedTurn } from "./transcriptTurns.tsx";
 // SessionScreen, ChatSection, the mockups and tests import these from RunScreen.
 export { asides, clock, interleaved, pendingReason, questionTurnSelector, renderTurn, viewedContext } from "./transcriptTurns.tsx";
 export type { SteerActions, ViewedTurn } from "./transcriptTurns.tsx";
@@ -1082,13 +1082,10 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
   /** The Chat's other lines of its time (Runs it started, decisions it was waited on for), placed among its turns by time. */
   lines?: ReadonlyArray<{ id: string; at: string; node: ReactNode }>;
 }) {
-  const people = usePeople();
-  const images = useSentImages(ledgers.client);
-  const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
   const [events, setEvents] = useState<PersistedEvent[] | null>(() => ledgers.cached(runId));
   const [failed, setFailed] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const truth = useContext(QuestionTruthContext);
+  const index = useContext(SettlementContext);
   useEffect(() => {
     if (ledgers.cached(runId)) return;
     let cancelled = false;
@@ -1102,14 +1099,7 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
       cancelled = true;
     };
   }, [ledgers, runId, attempt]);
-  const settlements = useLedgerSettlements(events, truth.settlements);
-  const turns = useMemo(() => {
-    if (!events) return [];
-    // Rebound answers live on the replacement ledger; the original ask remains here.
-    const all = project([...events, ...settlements].sort((a, b) => a.cursor - b.cursor), status).turns;
-    if (retried) for (const t of all) if (t.kind === "human" && t.failed === NOT_STARTED) t.failed = NOT_STARTED_RETRIED;
-    return asides(all);
-  }, [events, status, retried, settlements]);
+  const settlements = useLedgerSettlements(events, index);
   if (failed && !events) {
     return (
       <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
@@ -1127,6 +1117,27 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
   }
   // Its lines do not depend on its ledger: they show while it is read.
   if (!events) return lines.length ? <>{lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}</> : null;
+  return <EndedConductorBody client={ledgers.client} runId={runId} events={events} settlements={settlements} status={status} retried={retried} lines={lines} />;
+});
+
+const EndedConductorBody = memo(function EndedConductorBody({ client, runId, events, settlements, status, retried, lines }: {
+  client: ApiClient;
+  runId: string;
+  events: readonly PersistedEvent[];
+  settlements: readonly PersistedEvent[];
+  status: RunDetail["status"];
+  retried: boolean;
+  lines: typeof NO_LINES;
+}) {
+  const people = usePeople();
+  const images = useSentImages(client);
+  const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
+  const turns = useMemo(() => {
+    // Rebound answers live on the replacement ledger; the original ask remains here.
+    const all = project([...events, ...settlements].sort((a, b) => a.cursor - b.cursor), status).turns;
+    if (retried) for (const t of all) if (t.kind === "human" && t.failed === NOT_STARTED) t.failed = NOT_STARTED_RETRIED;
+    return asides(all);
+  }, [events, status, retried, settlements]);
   const dude = dudeName(events[0]?.taskId ?? "");
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const render = (turn: Turn) => renderTurn(turn, "conductor", 0, true, people, dude, undefined, undefined, undefined, shown);
