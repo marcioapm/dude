@@ -476,6 +476,10 @@ func DefaultsCalls(input string, quiet bool) [][2]string {
 const (
 	ShownAtBase     = "fails the same at"
 	DeferredToLater = "a later phase runs it"
+	// BackedByCall is what a checks wake says of a reported pass whose
+	// command dude recorded the Run running with exit 0 (phases'
+	// recordedCalls).
+	BackedByCall = "dude recorded its latest call of it: exit 0)"
 )
 
 // checksWake matches a checks wake's call to decide (delivery's
@@ -486,7 +490,11 @@ var (
 )
 
 // ChecksDefaults is what a DefaultsModel conductor decides on a checks
-// wake. A reported pass is backed; nothing is missing. A failure is
+// wake. A reported pass is backed only when the wake says dude recorded
+// the Run's latest call of that command ending with exit 0 (BackedByCall);
+// otherwise (no call recorded, a non-zero exit, no exit code) it is
+// unbacked, as a careful conductor reading the recorded calls would say.
+// Nothing is missing. A failure is
 // pre-existing only when the wake names the task's base and the report's
 // evidence says it fails the same there (ShownAtBase), as a conductor that
 // read the Run's calls at the base would; a check not run is deferred only
@@ -502,15 +510,27 @@ func ChecksDefaults(input string) [][2]string {
 			rest = rest[:next[0]]
 		}
 		var checks []map[string]string
-		for _, c := range checksWakeCheck.FindAllStringSubmatch(rest, -1) {
+		found := checksWakeCheck.FindAllStringSubmatchIndex(rest, -1)
+		for k, ci := range found {
+			c := make([]string, 4)
+			for g := range c {
+				c[g] = rest[ci[2*g]:ci[2*g+1]]
+			}
+			// The question about this check: up to the next one.
+			question := rest[ci[1]:]
+			if k+1 < len(found) {
+				question = rest[ci[1]:found[k+1][0]]
+			}
 			var command string
 			if err := json.Unmarshal([]byte(c[1]), &command); err != nil {
 				continue
 			}
 			verdict, evidence := "reject", c[3]
 			switch {
-			case c[2] == "pass":
+			case c[2] == "pass" && strings.Contains(question, BackedByCall):
 				verdict = "backed"
+			case c[2] == "pass":
+				verdict = "unbacked"
 			case c[2] == "fail" && strings.Contains(rest, "pre-existing at the task's base (") && strings.Contains(evidence, ShownAtBase):
 				verdict = "preexisting"
 			case c[2] == "not-run" && strings.Contains(evidence, DeferredToLater):

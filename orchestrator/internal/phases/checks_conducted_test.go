@@ -392,8 +392,11 @@ func TestDecideChecksRefusals(t *testing.T) {
 func TestTheDefaultsConductorReadsTheChecksWake(t *testing.T) {
 	a := delivery.ChecksAsked{Turn: 42, Check: []delivery.Check{
 		{Command: `make "it"`, Result: delivery.CheckPass}, {Command: "make test", Result: delivery.CheckFail},
-		{Command: "e2e", Result: delivery.CheckNotRun}}}
-	line := checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, nil)
+		{Command: "e2e", Result: delivery.CheckNotRun}, {Command: "make lint", Result: delivery.CheckPass},
+		{Command: "make vet", Result: delivery.CheckPass}}}
+	// dude recorded make "it" exiting 0, make lint exiting 1, and no call
+	// of make vet: only the first pass is backed.
+	line := checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, nil, []string{"exit 0", "", "", "exit 1", "none recorded"})
 	calls := fakeagent.ChecksDefaults("Since you last heard: " + line)
 	if len(calls) != 1 || calls[0][0] != "decide_checks" {
 		t.Fatalf("%q from %q", calls, line)
@@ -402,10 +405,11 @@ func TestTheDefaultsConductorReadsTheChecksWake(t *testing.T) {
 	if err := json.Unmarshal([]byte(calls[0][1]), &in); err != nil {
 		t.Fatal(err)
 	}
-	if in.RunID != "run_x" || in.Turn != 42 || len(in.Checks) != 3 || in.Checks[0].Command != `make "it"` ||
+	if in.RunID != "run_x" || in.Turn != 42 || len(in.Checks) != 5 || in.Checks[0].Command != `make "it"` ||
 		in.Checks[0].Verdict != delivery.VerdictBacked || in.Checks[1].Verdict != delivery.VerdictReject ||
-		in.Checks[2].Verdict != delivery.VerdictReject || in.Missing.Verdict != delivery.MissingNone {
-		t.Fatalf("%+v", in)
+		in.Checks[2].Verdict != delivery.VerdictReject || in.Checks[3].Verdict != delivery.VerdictUnbacked ||
+		in.Checks[4].Verdict != delivery.VerdictUnbacked || in.Missing.Verdict != delivery.MissingNone {
+		t.Fatalf("%+v from %q", in, line)
 	}
 }
 

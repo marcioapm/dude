@@ -7,6 +7,7 @@ package orchestrator_test
 // syncer, tool server and fake lux.
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -81,5 +82,46 @@ func TestAnUndecidedReportedFailureIsSentBackAtTheDeadline(t *testing.T) {
 	}
 	if len(w.gh.Pulls()) != 0 {
 		t.Fatal("published an undecided failure")
+	}
+}
+
+// A reported pass the recorded calls do not back (the command ran and
+// failed; the report says pass) is decided unbacked by the conductor that
+// reads them: sent back, each round counted, never published, and at the
+// bound escalated, held by the conductor, then handed to a person at its
+// deadline.
+func TestAnUnbackedPassTheConductorReadsIsSentBackThenEscalates(t *testing.T) {
+	w := defaultsConducting(t)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":1}' WHERE organization_id = $1`, w.org)
+	w.onModel("implementer", fakeagent.ChecksUnbackedModel)
+	task := w.task()
+	w.deliverByAPI(task)
+	w.until("the checks escalation", func() bool { return w.escalationReason(task) == delivery.ReasonChecksUnverified })
+	impl := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' ORDER BY created_at LIMIT 1`, task)
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND actor_type = 'agent'
+		AND payload->'checks'->0->>'verdict' = 'unbacked'`, impl, delivery.EvRunChecksConducted); n != 2 {
+		t.Fatalf("%d unbacked verdicts from the conductor, want one per turn (2)", n)
+	}
+	if got := w.judged(task); strings.Join(got, ",") != "unverified,unverified" {
+		t.Errorf("judged %v, want each turn unverified", got)
+	}
+	if n := len(w.sentBack(task)); n != 1 {
+		t.Errorf("sent back %d times, want the organisation's 1 round", n)
+	}
+	if n := w.implementerPushes(task); n != 0 || len(w.gh.Pulls()) != 0 {
+		t.Fatalf("%d pushes, %d pull requests of an unbacked report", n, len(w.gh.Pulls()))
+	}
+	w.conductorHeld(task)
+	// The conductor decides nothing past its wait: the escalation goes to
+	// a person.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now(), state = jsonb_set(state, '{escalation,raisedAt}', to_jsonb(now() - interval '1 hour'))
+		WHERE task_id = $1 AND workflow_type = 'task.delivery' AND status = 'waiting'`, task)
+	w.until("the escalation handed to a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	if got := w.str(`SELECT state->'escalation'->>'holder' FROM workflow_runs WHERE task_id = $1 AND workflow_type = 'task.delivery'
+		ORDER BY created_at DESC LIMIT 1`, task); got != delivery.HolderPerson {
+		t.Errorf("held by %q after the deadline, want the person", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, task); n != 1 {
+		t.Errorf("%d escalation questions asked of a person, want 1", n)
 	}
 }

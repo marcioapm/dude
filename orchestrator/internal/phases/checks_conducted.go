@@ -3,6 +3,7 @@ package phases
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -122,7 +123,11 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 		if a.TestPhase, err = deliveryTests(ctx, tx, r.TaskID); err != nil {
 			return err
 		}
-		return delivery.AskChecksTx(ctx, tx, r.ref(), a, checksWakeLine(r, a, bases))
+		calls, err := recordedCalls(ctx, tx, r.ID, checks)
+		if err != nil {
+			return err
+		}
+		return delivery.AskChecksTx(ctx, tx, r.ref(), a, checksWakeLine(r, a, bases, calls))
 	})
 	d.pending = true
 	return d, err
@@ -157,18 +162,73 @@ func clipTo(s string, n int) string {
 	return cutRunes(s[:n], false) + "…"
 }
 
+// recordedCalls says, per reported pass, how the Run's latest recorded
+// shell call of that command ended: "exit N", "completed" (no exit code
+// recorded), "error" or "failed" (no exit code), or "none recorded". It is
+// dude's own reading of the ledger, not the agent's words: the conductor
+// backs a pass by it (or by reading the calls with run_chat).
+func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delivery.Check) ([]string, error) {
+	out := make([]string, len(checks))
+	wanted := false
+	for i, c := range checks {
+		if c.Result == delivery.CheckPass {
+			out[i], wanted = "none recorded", true
+		}
+	}
+	if !wanted {
+		return out, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT c.payload->'input'->>'command', d.payload->>'status', d.payload->'exitCode'
+		FROM events c JOIN events d ON d.run_id = c.run_id AND d.event_type = $3 AND d.payload->>'callId' = c.payload->>'callId'
+		WHERE c.run_id = $1 AND c.event_type = $2 AND c.payload->'input' ? 'command'
+		ORDER BY d.cursor`, runID, evToolCalled, evToolCompleted)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var command, status *string
+		var exit *float64
+		if err := rows.Scan(&command, &status, &exit); err != nil {
+			return nil, err
+		}
+		if command == nil {
+			continue
+		}
+		ran := oneLine(*command)
+		for i, c := range checks {
+			if c.Result != delivery.CheckPass || !strings.Contains(ran, oneLine(c.Command)) {
+				continue
+			}
+			switch {
+			case exit != nil:
+				out[i] = fmt.Sprintf("exit %d", int(*exit))
+			case status != nil && *status != "":
+				out[i] = *status
+			default:
+				out[i] = "completed"
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
 // checksWakeLine is the conductor's wake: the Run, its turn, and one
-// question per reported check, then whether one is missing.
-func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase) string {
+// question per reported check, then whether one is missing. calls is
+// recordedCalls of the report (nil: none read).
+func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls []string) string {
 	type question struct {
-		Command, Result, Evidence string
-		Waiver                    *delivery.CarriedWaiver
+		Command, Result, Evidence, Call string
+		Waiver                          *delivery.CarriedWaiver
 	}
 	qs := make([]question, len(a.Check))
 	for i, c := range a.Check {
 		// The agent's evidence is its own words: quoted as external text,
 		// cut so every check's question fits the wake.
-		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), a.Waivers[i]}
+		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), "", a.Waivers[i]}
+		if i < len(calls) {
+			qs[i].Call = calls[i]
+		}
 	}
 	return checksWake.Render(struct {
 		Phase, RunID, Bases string
