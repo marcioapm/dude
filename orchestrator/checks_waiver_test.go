@@ -1,14 +1,12 @@
 package orchestrator_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
-	"github.com/marciomartins/dude/orchestrator/internal/judge"
 )
 
 // decideScoped is decide with a waiver's scope.
@@ -29,13 +27,15 @@ func (w *world) checksEscalations(wi string) int {
 
 // failingUntilEscalated runs a delivery whose writers are all on model and
 // report a failure, with no send-back allowed, to its first checks
-// escalation, judged by j.
-func (w *world) failingUntilEscalated(model string, j *scriptedJudge) string {
+// escalation with a person, decided by c (nil: a fresh scripted
+// conductor).
+func (w *world) failingUntilEscalated(model string, c *checksConductor) string {
 	w.t.Helper()
 	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
 	w.onModel("simplifier", model)
-	wi := w.checksDelivery(model, j)
+	wi := w.checksDelivery(model, c)
 	w.until("the checks escalation", func() bool { return w.checksEscalations(wi) == 1 })
+	w.until("the escalation with a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	return wi
 }
 
@@ -45,7 +45,7 @@ func (w *world) baseShownUntilPulled() string {
 	w.t.Helper()
 	mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
 	w.onModel("simplifier", fakeagent.ChecksBaseShownModel)
-	wi := w.checksDelivery(fakeagent.ChecksBaseShownModel, &scriptedJudge{})
+	wi := w.checksDelivery(fakeagent.ChecksBaseShownModel, nil)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	return wi
 }
@@ -86,7 +86,7 @@ func TestAnAttemptWaiverIsRefusedWhereThereIsNothingToCarry(t *testing.T) {
 // never another member.
 func TestOnlyTheOwnerOrAnAdminWaivesForTheAttempt(t *testing.T) {
 	w := newWorld(t)
-	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, nil)
 	owner, admin, member := w.people(wi)
 	// The escalation names the failures an attempt waiver would cover.
 	if got := w.ids(`SELECT payload->'detail'->>'failures' FROM events WHERE task_id = $1 AND event_type = 'question.asked'`, wi); len(got) != 1 ||
@@ -132,21 +132,18 @@ func (w *world) gateJudged(wi string) []string {
 		WHERE r.task_id = $1 AND e.event_type = $2 ORDER BY e.cursor`, wi, delivery.EvRunChecksJudged)
 }
 
-// waiverQuestions counts the waiver questions j was asked.
-func (j *scriptedJudge) waiverQuestions() int {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	n := 0
-	for _, a := range j.asked {
-		if strings.Contains(a.Question, "waived a reported failure") {
-			n++
-		}
-	}
-	return n
+// waiverAsks counts the waivers the gate asked the conductor about, over
+// the task's checks asks: one per reported failure an attempt waiver may
+// cover.
+func (w *world) waiverAsks(wi string) int {
+	w.t.Helper()
+	return w.count(`SELECT COALESCE(sum((SELECT count(*) FROM jsonb_object_keys(COALESCE(payload->'waivers', '{}'::jsonb)))), 0)
+		FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvRunChecksAsked)
 }
 
 // A writer that shows its failure the same at the target branch's commit
-// the task builds on passes without a person: every writer's report is judged pre-existing,
+// the task builds on passes without a person: the conductor decides every
+// writer's report pre-existing,
 // nothing is sent back or escalated, and the work reaches the pull request.
 func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 	w := newWorld(t)
@@ -158,14 +155,14 @@ func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 		t.Errorf("%d checks escalations", n)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->'checks'->0->>'result' = $3
-		AND payload->'checks'->0->>'callId' = 'mcall_test' AND (payload->>'judgePassed')::bool`, wi, delivery.EvRunChecksJudged, delivery.CheckPreexisting); n != 3 {
+		AND payload->'checks'->0->>'by' = 'conductor' AND (payload->>'judgePassed')::bool`, wi, delivery.EvRunChecksJudged, delivery.CheckPreexisting); n != 3 {
 		t.Errorf("%d judgements recording the failure pre-existing, want each writer's", n)
 	}
-	// The pull request names the judge's pass as its own result, never a
-	// plain pass or a person's waiver.
-	account := checksSection(w.gh.Pull(1).Body)
+	// The pull request names the conductor's pass as its own result, never
+	// a plain pass or a person's waiver.
+	account := decisionsNamed(checksSection(w.gh.Pull(1).Body))
 	for _, want := range []string{"the conductor passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)",
-		"- **Implementer** — passed by the judge\n  - `" + fakeagent.FailingCommand + "` — **pre-existing** — the recorded call says so (`mcall_test`)"} {
+		"- **Implementer** — passed by the conductor\n  - `" + fakeagent.FailingCommand + "` — **pre-existing** — " + checksReason + " (decision)"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("PR account lacks %q:\n%s", want, account)
 		}
@@ -176,7 +173,7 @@ func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 }
 
 // The same writer when lux's git.checkout for the implementer trails its
-// turn's end by seconds: its report is judged once the task base is
+// turn's end by seconds: its report is asked about once the task base is
 // recorded, not rejected for lacking one and escalated.
 func TestAFailureShownAtTheTaskBasePassesWithoutAPersonEvenWhenTheCheckoutEventLags(t *testing.T) {
 	w := newWorld(t)
@@ -202,7 +199,7 @@ func TestAFailureShownAtTheTaskBasePassesWithoutAPersonEvenWhenTheCheckoutEventL
 // The same writer without a run at the task base is held as before.
 func TestAFailureNotShownAtTheTaskBaseIsHeld(t *testing.T) {
 	w := newWorld(t)
-	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, nil)
 	if n := len(w.gh.Pulls()); n != 0 {
 		t.Errorf("%d pull requests", n)
 	}
@@ -212,14 +209,15 @@ func TestAFailureNotShownAtTheTaskBaseIsHeld(t *testing.T) {
 	}
 }
 
-// An unchanged simplifier after an attempt waiver asks the judge nothing.
-func TestAnUnchangedSimplifierAfterAnAttemptWaiverNeedsNoJudge(t *testing.T) {
+// An unchanged simplifier after an attempt waiver asks the conductor
+// nothing.
+func TestAnUnchangedSimplifierAfterAnAttemptWaiverAsksNothing(t *testing.T) {
 	w := newWorld(t)
 	w.scriptedSimplifier(nil)
 	w.checksTested = true
 	w.onModel("qa_browser", "claude-test")
-	j := &scriptedJudge{}
-	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
+	c := &checksConductor{}
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, c)
 	owner, _, _ := w.people(wi)
 	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
@@ -228,10 +226,10 @@ func TestAnUnchangedSimplifierAfterAnAttemptWaiverNeedsNoJudge(t *testing.T) {
 	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:unverified,implement:waived,fix:carried,simplify:unchanged" {
 		t.Errorf("judged %s", got)
 	}
-	if n := w.simplifierAsked(wi, j); n != 0 {
-		t.Errorf("%d judge calls for the unchanged simplifier", n)
+	if n := w.simplifierAsked(wi, c); n != 0 {
+		t.Errorf("%d verdicts about the unchanged simplifier", n)
 	}
-	if n := j.waiverQuestions(); n != 1 {
+	if n := w.waiverAsks(wi); n != 1 {
 		t.Errorf("%d waiver questions, want the changed fixer's alone", n)
 	}
 	account := checksSection(w.gh.Pull(1).Body)
@@ -258,12 +256,12 @@ func TestAnUnchangedSimplifierAfterAnAttemptWaiverNeedsNoJudge(t *testing.T) {
 }
 
 // The owner accepts the implementer's failure for the attempt: the fixer
-// and simplifier report the same failure, the judge finds it the same, and
+// and simplifier report the same failure, the conductor finds it the same, and
 // the work reaches the pull request with no further escalation.
 func TestAnAttemptWaiverIsCarriedByLaterRunsWithTheSameFailure(t *testing.T) {
 	w := newWorld(t)
-	j := &scriptedJudge{}
-	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
+	c := &checksConductor{}
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, c)
 	owner, _, _ := w.people(wi)
 	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
@@ -275,16 +273,16 @@ func TestAnAttemptWaiverIsCarriedByLaterRunsWithTheSameFailure(t *testing.T) {
 	if n := w.checksEscalations(wi); n != 1 {
 		t.Errorf("%d checks escalations, want the implementer's alone", n)
 	}
-	if n := j.waiverQuestions(); n != 2 {
-		t.Errorf("%d waiver questions, want one each for the fixer and simplifier", n)
+	if n := w.waiverAsks(wi); n != 2 || c.waived() != 2 {
+		t.Errorf("asked about %d waivers, carried %d, want one each for the fixer and simplifier", n, c.waived())
 	}
 	// The pull request says the later Runs carried the person's waiver, of
 	// whose report, who waived it and why; never that they were backed.
 	implementer := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi)
-	carried := "  - `" + fakeagent.FailingCommand + "` — **waived** — the recorded call says so — carried from Ana's waiver of the Implementer's report (`" +
-		implementer + "`) (`mcall_test`)\n" +
-		"  - `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
-	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were waived by a person:\n"+
+	carried := "  - `" + fakeagent.FailingCommand + "` — **waived** — " + checksReason + " — carried from Ana's waiver of the Implementer's report (`" +
+		implementer + "`) (decision)\n" +
+		"  - `missing checks` — **pass** — " + checksReason + " (decision)"
+	if got, want := decisionsNamed(checksSection(w.gh.Pull(1).Body)), "Checks were waived by a person:\n"+
 		"- Implementer: "+clockNote+"\n"+
 		"- Fixer: carried the Implementer's waiver of the same failure: "+clockNote+"\n"+
 		"- Simplifier: carried the Implementer's waiver of the same failure: "+clockNote+"\n\n"+
@@ -300,14 +298,17 @@ func TestAnAttemptWaiverIsCarriedByLaterRunsWithTheSameFailure(t *testing.T) {
 func TestAResumedFixerCarriesTheImplementersWaiver(t *testing.T) {
 	w := resuming(t)
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
-	j := &scriptedJudge{}
-	w.syncer.Judge = j
+	w.checks = &checksConductor{}
+	w.lux.ManualChecks = true
+	w.syncer.ConductorWarm = time.Hour
+	w.withTools()
 	w.onModel("implementer", fakeagent.ChecksPreexistingModel)
 	w.onModel("simplifier", fakeagent.ChecksPreexistingModel)
 	wi := w.task()
 	w.names(wi, w.repoID)
-	w.start(wi, resumingPolicy())
+	w.startConducted(wi, resumingPolicy())
 	w.until("the checks escalation", func() bool { return w.checksEscalations(wi) == 1 })
+	w.until("the escalation with a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	owner, _, _ := w.people(wi)
 	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
@@ -322,26 +323,24 @@ func TestAResumedFixerCarriesTheImplementersWaiver(t *testing.T) {
 }
 
 // What the owner's waiver does not cover goes back as before: a further
-// failure under the same command (the judge says no), another command
-// (never asked), a waiver for the Run alone (never asked), or no
-// judgement tier, an unsure or failing judge (never a skip).
+// failure under the same command (the conductor finds it not the same),
+// another command (never asked), a waiver for the Run alone (never asked),
+// or a conductor that rejects the failure it might carry (never a pass).
 func TestAFailureTheWaiverDoesNotCoverIsHeld(t *testing.T) {
 	for _, tc := range []struct {
 		name, fixer, scope string
-		judge              *scriptedJudge
+		conductor          *checksConductor
 		asked              int
 	}{
-		{"a new failure under the same command", fakeagent.ChecksNewFailureModel, delivery.ScopeAttempt, &scriptedJudge{}, 1},
-		{"another command", fakeagent.ChecksOtherFailureModel, delivery.ScopeAttempt, &scriptedJudge{}, 0},
-		{"a waiver for the Run alone", fakeagent.ChecksPreexistingModel, "", &scriptedJudge{}, 0},
-		{"no judgement tier", fakeagent.ChecksPreexistingModel, delivery.ScopeAttempt, nil, 0},
-		{"an unsure judge", fakeagent.ChecksPreexistingModel, delivery.ScopeAttempt, &scriptedJudge{answer: judge.Unsure}, 1},
-		{"a failing judge", fakeagent.ChecksPreexistingModel, delivery.ScopeAttempt, &scriptedJudge{err: errors.New("proxy timed out")}, 1},
+		{"a new failure under the same command", fakeagent.ChecksNewFailureModel, delivery.ScopeAttempt, &checksConductor{}, 1},
+		{"another command", fakeagent.ChecksOtherFailureModel, delivery.ScopeAttempt, &checksConductor{}, 0},
+		{"a waiver for the Run alone", fakeagent.ChecksPreexistingModel, "", &checksConductor{}, 0},
+		{"a conductor that rejects it", fakeagent.ChecksPreexistingModel, delivery.ScopeAttempt, &checksConductor{reject: true}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
 			w.onModel("fixer", tc.fixer)
-			wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, tc.judge)
+			wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, tc.conductor)
 			owner, _, _ := w.people(wi)
 			if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, tc.scope); code != 200 {
 				t.Fatalf("the owner's waiver: %d %v", code, body)
@@ -350,10 +349,11 @@ func TestAFailureTheWaiverDoesNotCoverIsHeld(t *testing.T) {
 			if got := strings.Join(w.gateJudged(wi), ","); got != "implement:unverified,implement:waived,fix:unverified" {
 				t.Errorf("judged %s", got)
 			}
-			if tc.judge != nil {
-				if n := tc.judge.waiverQuestions(); n != tc.asked {
-					t.Errorf("%d waiver questions, want %d", n, tc.asked)
-				}
+			if n := w.waiverAsks(wi); n != tc.asked {
+				t.Errorf("asked about %d waivers, want %d", n, tc.asked)
+			}
+			if n := tc.conductor.waived(); n != 0 {
+				t.Errorf("%d failures carried", n)
 			}
 			if n := len(w.gh.Pulls()); n != 0 {
 				t.Errorf("%d pull requests opened past a held fixer", n)
@@ -368,12 +368,13 @@ func TestAFailureTheWaiverDoesNotCoverIsHeld(t *testing.T) {
 func TestAFailureTheWaiverDoesNotCoverMayBeWaivedForTheAttempt(t *testing.T) {
 	w := newWorld(t)
 	w.onModel("fixer", fakeagent.ChecksNewFailureModel)
-	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, &scriptedJudge{})
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, nil)
 	owner, _, _ := w.people(wi)
 	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
 	}
 	w.until("the fixer's checks escalation", func() bool { return w.checksEscalations(wi) == 2 })
+	w.until("the fixer's escalation with a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	failures := `[{"result": "fail", "command": "make test", "evidence": "TestClock needs a hardware clock"}]`
 	if got := w.ids(`SELECT payload->'detail'->>'failures' FROM events WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY cursor`, wi); len(got) != 2 ||
 		got[1] != failures {
@@ -382,7 +383,7 @@ func TestAFailureTheWaiverDoesNotCoverMayBeWaivedForTheAttempt(t *testing.T) {
 	// The held message keeps the agent's evidence and says why the waiver
 	// does not cover it.
 	want := "Your checks report was not verified. Nothing from this Run has been pushed.\n\n" +
-		"- make test: TestClock needs a hardware clock — the Implementer's waiver does not cover this failure: the recorded call says so — not passed by the conductor: the recorded call says so (judgement: no)\n\n" +
+		"- make test: TestClock needs a hardware clock — not passed by the conductor: " + checksReason + " (verdict: reject)\n\n" +
 		"A reported failure that predates this task passes once this Run's own tool calls show the same command failing the same way at the commit of the target branch this task builds on (target: main at "
 	if got := w.ids(`SELECT payload->'detail'->>'message' FROM events WHERE task_id = $1 AND event_type = 'question.asked' ORDER BY cursor`, wi); len(got) != 2 || !strings.HasPrefix(got[1], want) {
 		t.Errorf("the fixer's held message is %q, want %q", got, want)
@@ -403,21 +404,22 @@ func TestAFailureTheWaiverDoesNotCoverMayBeWaivedForTheAttempt(t *testing.T) {
 func TestRetryAndStopAfterACarriedWaiverAndStartOverInheritsNothing(t *testing.T) {
 	w := newWorld(t)
 	w.onModel("fixer", fakeagent.ChecksNewFailureModel)
-	j := &scriptedJudge{}
-	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
+	c := &checksConductor{}
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, c)
 	owner, _, _ := w.people(wi)
 	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		t.Fatalf("the owner's attempt waiver: %d %v", code, body)
 	}
 	w.until("the fixer's checks escalation", func() bool { return w.checksEscalations(wi) == 2 })
+	w.until("the fixer's escalation with a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	if code, body := w.decide(owner, wi, "retry", ""); code != 200 {
 		t.Fatalf("retry: %d %v", code, body)
 	}
 	// Sent back, the fixer reports the same new failure, still weighed
 	// against the waiver, and is held again.
 	w.until("the fixer held again", func() bool { return w.checksEscalations(wi) == 3 })
-	if n := j.waiverQuestions(); n != 2 {
-		t.Errorf("%d waiver questions, want the fixer's two turns", n)
+	if n := w.waiverAsks(wi); n != 2 {
+		t.Errorf("asked about %d waivers, want the fixer's two turns", n)
 	}
 	if code, body := w.decide(owner, wi, "stop", ""); code != 200 {
 		t.Fatalf("stop: %d %v", code, body)
@@ -427,8 +429,8 @@ func TestRetryAndStopAfterACarriedWaiverAndStartOverInheritsNothing(t *testing.T
 		t.Fatalf("start over: %d %v", code, body)
 	}
 	w.until("the new attempt's implementer held", func() bool { return w.checksEscalations(wi) == 4 })
-	if n := j.waiverQuestions(); n != 2 {
-		t.Errorf("%d waiver questions, want none about the new attempt", n)
+	if n := w.waiverAsks(wi); n != 2 {
+		t.Errorf("asked about %d waivers, want none about the new attempt", n)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt = 2 AND phase = 'implement'`, wi); n != 1 {
 		t.Errorf("%d implementers in the new attempt", n)
@@ -437,16 +439,18 @@ func TestRetryAndStopAfterACarriedWaiverAndStartOverInheritsNothing(t *testing.T
 
 // stoppedAtTheFixersEscalation is a delivery whose implementer's failure
 // the owner waived for the attempt, stopped by the owner's Stop while the
-// fixer's further failure waits on a person: j was asked once, about it.
-func (w *world) stoppedAtTheFixersEscalation(j *scriptedJudge) (wi, owner string) {
+// fixer's further failure waits on a person: the conductor was asked once
+// about the waiver, about it.
+func (w *world) stoppedAtTheFixersEscalation() (wi, owner string) {
 	w.t.Helper()
 	w.onModel("fixer", fakeagent.ChecksNewFailureModel)
-	wi = w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
+	wi = w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, nil)
 	owner, _, _ = w.people(wi)
 	if code, body := w.decideScoped(owner, wi, delivery.ActionWaive, clockNote, delivery.ScopeAttempt); code != 200 {
 		w.t.Fatalf("the owner's attempt waiver: %d %v", code, body)
 	}
 	w.until("the fixer's checks escalation", func() bool { return w.checksEscalations(wi) == 2 })
+	w.until("the fixer's escalation with a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	w.stop(owner, wi, map[string]any{})
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'escalation' IS NULL
 		AND state->'stopped'->>'reason' = $2`, wi, delivery.ReasonChecksUnverified); n != 1 {
@@ -455,8 +459,8 @@ func (w *world) stoppedAtTheFixersEscalation(j *scriptedJudge) (wi, owner string
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvRunChecksDecided); n != 1 {
 		w.t.Fatalf("%d checks decisions, want the waiver alone: the Stop decides none", n)
 	}
-	if n := j.waiverQuestions(); n != 1 {
-		w.t.Fatalf("%d waiver questions before the pick-up, want the fixer's", n)
+	if n := w.waiverAsks(wi); n != 1 {
+		w.t.Fatalf("asked about %d waivers before the pick-up, want the fixer's", n)
 	}
 	return wi, owner
 }
@@ -466,12 +470,11 @@ func (w *world) stoppedAtTheFixersEscalation(j *scriptedJudge) (wi, owner string
 // weighed against it.
 func TestStartingOverAfterAStopAtTheChecksGateCarriesNoWaiver(t *testing.T) {
 	w := newWorld(t)
-	j := &scriptedJudge{}
-	wi, owner := w.stoppedAtTheFixersEscalation(j)
+	wi, owner := w.stoppedAtTheFixersEscalation()
 	w.pickUp(owner, wi, map[string]any{"action": "restart"})
 	w.until("the new attempt's implementer held", func() bool { return w.checksEscalations(wi) == 3 })
-	if n := j.waiverQuestions(); n != 1 {
-		t.Errorf("%d waiver questions, want none about the new attempt", n)
+	if n := w.waiverAsks(wi); n != 1 {
+		t.Errorf("asked about %d waivers, want none about the new attempt", n)
 	}
 	if got := w.ids(`SELECT r.attempt::text FROM events e JOIN runs r ON r.id = e.run_id WHERE e.task_id = $1
 		AND e.event_type = $2 AND r.phase = 'implement' AND NOT e.payload ? 'waived' ORDER BY e.cursor`, wi, delivery.EvRunChecksJudged); strings.Join(got, ",") != "1,2" {
@@ -487,14 +490,13 @@ func TestStartingOverAfterAStopAtTheChecksGateCarriesNoWaiver(t *testing.T) {
 // waiver once more before it is held.
 func TestResumingAfterAStopAtTheChecksGateKeepsTheAttemptsWaiver(t *testing.T) {
 	w := newWorld(t)
-	j := &scriptedJudge{}
-	wi, owner := w.stoppedAtTheFixersEscalation(j)
+	wi, owner := w.stoppedAtTheFixersEscalation()
 	fixer := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix'`, wi)
 	w.until("the fixer kept", func() bool { return w.keptRun(fixer) })
 	w.pickUp(owner, wi, map[string]any{"action": "resume"})
 	w.until("the fixer held again", func() bool { return w.checksEscalations(wi) == 3 })
-	if n := j.waiverQuestions(); n != 2 {
-		t.Errorf("%d waiver questions, want the resumed fixer's too", n)
+	if n := w.waiverAsks(wi); n != 2 {
+		t.Errorf("asked about %d waivers, want the resumed fixer's too", n)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND attempt <> 1`, wi); n != 0 {
 		t.Errorf("%d Runs outside the first attempt after Resume", n)
