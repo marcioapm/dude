@@ -31,6 +31,15 @@ rPersonHasNotBeenAskedDecide            refusals/delivery/conduct/person-has-not
 rPersonHasNotAnsweredYetEnd             refusals/delivery/conduct/person-has-not-answered-yet-end
 rPersonAnsweredAtEarlierHeadWork        refusals/delivery/conduct/person-answered-at-earlier-head-work
 rPersonAnsweredNotOpenOrDraft           refusals/delivery/conduct/person-answered-not-open-or-draft
+rOptionsOnlyInProse                     refusals/delivery/conduct/options-only-in-prose
+rChoicesNeedTwo                         refusals/delivery/conduct/choices-need-two
+rChoiceActionIsOneOf                    refusals/delivery/conduct/choice-action-is-one-of
+rGateChoicesAreFixed                    refusals/delivery/conduct/gate-choices-are-fixed
+rRecommendIsForTheGate                  refusals/delivery/conduct/recommend-is-for-the-gate
+rRecommendIsOneOf                       refusals/delivery/conduct/recommend-is-one-of
+rAnswerNoLongerAuthorizes               refusals/delivery/conduct/answer-no-longer-authorizes
+rAnswerKeptOpenBeforePR                 refusals/delivery/conduct/answer-kept-open-before-pr
+rChoicesAreForAskPerson                 refusals/delivery/conduct/choices-are-for-ask-person
 rSayWhyDismissedReasonShownWith         refusals/delivery/conduct/say-why-dismissed-reason-shown-with
 rNotFindingThisTaskFindingsLists        refusals/delivery/conduct/not-finding-this-task-findings-lists
 rAlready                                refusals/delivery/conduct/already

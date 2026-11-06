@@ -381,12 +381,26 @@ func startPhase(ctx context.Context, tx pgx.Tx, c Caller, in startPhaseIn) (map[
 }
 
 type decideIn struct {
-	Action string `json:"action"`
-	Note   string `json:"note,omitempty"`
+	Action    string           `json:"action"`
+	Note      string           `json:"note,omitempty"`
+	Choices   []decideChoiceIn `json:"choices,omitempty"`
+	Recommend string           `json:"recommend,omitempty"`
+}
+
+type decideChoiceIn struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Action      string `json:"action,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
 }
 
 func decide(ctx context.Context, tx pgx.Tx, c Caller, in decideIn) (map[string]any, error) {
-	return conducted(delivery.ConductDecide(ctx, tx, c.run(), strings.TrimSpace(in.Action), in.Note))
+	ask := delivery.DecideAsk{Recommend: in.Recommend}
+	for _, ch := range in.Choices {
+		ask.Choices = append(ask.Choices, delivery.DecideChoice{Label: ch.Label, Description: ch.Description,
+			Action: ch.Action, Recommended: ch.Recommended})
+	}
+	return conducted(delivery.ConductDecideAsk(ctx, tx, c.run(), strings.TrimSpace(in.Action), in.Note, ask))
 }
 
 type dismissIn struct {

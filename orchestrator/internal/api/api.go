@@ -960,6 +960,10 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, q
 		// A conductor-addressed writer question never raised a human wait.
 	} else if err := delivery.GateAnswered(ctx, tx, ref.Org, questionID); err != nil {
 		return "", err
+	} else if err := delivery.OpenAnswerTx(ctx, tx, ref.Org, ref.TaskID, questionID, p.Person); err != nil {
+		// The owner picked a choice that opens the pull request: kept as
+		// the opening's authority, cited before the pull request.
+		return "", err
 	} else if err := delivery.EscalationAnswerTx(ctx, tx, ref.Org, ref.TaskID, questionID, p.ActorType, p.Actor, p.Person); err != nil {
 		// The owner picked a choice of the conductor's question about the
 		// escalation: decided, as from the banner.

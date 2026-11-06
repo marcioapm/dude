@@ -215,6 +215,9 @@ func take(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, t Taken) erro
 	}
 	if t.Action == "open_pull_request" {
 		payload["draft"] = t.Draft
+		if t.Authorized != nil {
+			payload["authorizedBy"] = t.Authorized
+		}
 	}
 	if t.Then != nil {
 		then := map[string]any{"review": t.Then.Review, "wake": t.Then.Wake}
@@ -491,6 +494,12 @@ var (
 // ConductDecide is decide: the next step, asking the person, waiting on the
 // pull request, or opening it.
 func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note string) (map[string]any, error) {
+	return ConductDecideAsk(ctx, tx, ref, action, note, DecideAsk{})
+}
+
+// ConductDecideAsk is decide with ask_person's structured question: its
+// choices (each with the action it carries) and the one recommended.
+func ConductDecideAsk(ctx context.Context, tx pgx.Tx, ref RunRef, action, note string, in DecideAsk) (map[string]any, error) {
 	d, err := parked(ctx, tx, ref)
 	if err != nil {
 		return nil, err
@@ -498,11 +507,19 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 	p, st := d.State.Decision, &d.State
 	note = strings.TrimSpace(note)
 	if !slices.Contains(p.Actions(), action) {
+		if action == "open_pull_request" && st.OpenAuthority != nil {
+			// The person's answer is kept: it is cited at the decision
+			// before the pull request, if it still holds there.
+			return nil, refusef(rAnswerKeptOpenBeforePR, st.OpenAuthority.QuestionID, pointLabel[p.Point], listOr(p.Actions()))
+		}
 		return nil, refusef(rNotDecisionAtOneOrStart, action, pointLabel[p.Point], listOr(p.Actions()))
+	}
+	if action != "ask_person" && (len(in.Choices) > 0 || strings.TrimSpace(in.Recommend) != "") {
+		return nil, refuseText(rChoicesAreForAskPerson)
 	}
 	switch action {
 	case "ask_person":
-		return ask(ctx, tx, ref, d, note)
+		return ask(ctx, tx, ref, d, note, in)
 	case "next":
 		if p.Point == PointStart {
 			if err := refuseBlockedStart(ctx, tx, ref, st); err != nil {
@@ -527,16 +544,35 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 			return nil, refusef(rFeedbackItemsFromPeopleAreNot, n)
 		}
 		draft, err := GateAnswer(ctx, tx, st)
+		var cited *CitedAnswer
+		if IsRefusal(err) {
+			// No Open or Draft to the gate's question at these heads: a
+			// person's earlier answer that opens it, if it still holds.
+			a, ok, why, aerr := openAuthorityTx(ctx, tx, d.WorkflowID, st)
+			switch {
+			case aerr != nil:
+				return nil, aerr
+			case ok:
+				draft, err = a.Choice == ChoiceDraft, nil
+				cited = &CitedAnswer{QuestionID: a.QuestionID, AnsweredBy: a.AnsweredBy, Choice: a.Choice}
+			case a != nil:
+				err = refusef(rAnswerNoLongerAuthorizes, a.QuestionID, why)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
 		if err := AuthorizeGateTx(ctx, tx, d.WorkflowID, st, draft); err != nil {
 			return nil, err
 		}
-		if err := take(ctx, tx, ref, d, Taken{Action: action, Note: clip(note, noteChars), Draft: draft}); err != nil {
+		if err := take(ctx, tx, ref, d, Taken{Action: action, Note: clip(note, noteChars), Draft: draft, Authorized: cited}); err != nil {
 			return nil, err
 		}
-		return map[string]any{"decided": action, "next": render(conductorOpensTmpl, draft)}, nil
+		out := map[string]any{"decided": action, "next": render(conductorOpensTmpl, draft)}
+		if cited != nil {
+			out["authorizedBy"] = cited
+		}
+		return out, nil
 	}
 	if err := take(ctx, tx, ref, d, Taken{Action: action, Note: clip(note, noteChars)}); err != nil {
 		return nil, err
@@ -546,8 +582,13 @@ func ConductDecide(ctx context.Context, tx pgx.Tx, ref RunRef, action, note stri
 
 // ask is decide(ask_person): a question for the person, on the
 // conductor's Run, while the delivery keeps waiting. Before the pull
-// request it is the gate's question, at the task's head.
-func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (map[string]any, error) {
+// request it is the gate's question, at the task's head: its choices are
+// the fixed ones, each with its action, the one the conductor recommends
+// marked (Open when it says none), the note its context. Elsewhere the
+// note is the question, with the choices given (each with the action it
+// carries, open or draft or none); with none, the person answers in their
+// own words, and a note listing the answers as prose is refused.
+func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string, in DecideAsk) (map[string]any, error) {
 	if open, err := HasOpenQuestion(ctx, tx, ref.RunID); err != nil {
 		return nil, err
 	} else if open {
@@ -557,36 +598,57 @@ func ask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, note string) (
 		if note == "" {
 			return nil, refuseText(rSayWhatAskPersonInNote)
 		}
-		id, err := ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: WhyConductor,
-			Items: []QuestionItem{SingleItem(clip(note, noteChars), nil)}})
+		items, actions, err := decideItems(note, in)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"questionId": id, "next": conductorAsked}, nil
+		id, err := ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: WhyConductor, Items: items})
+		if err != nil {
+			return nil, err
+		}
+		if err := setQuestionActionsTx(ctx, tx, id, actions); err != nil {
+			return nil, err
+		}
+		out := map[string]any{"questionId": id, "next": conductorAsked}
+		if labels := items[0].Labels(); len(labels) > 0 {
+			out["choices"] = labels
+		}
+		return out, nil
+	}
+	if len(in.Choices) > 0 {
+		return nil, refusef(rGateChoicesAreFixed, listOr(GateChoices))
+	}
+	choices, actions, err := gateRecommended(in.Recommend)
+	if err != nil {
+		return nil, err
 	}
 	prompt := GateQuestion
 	if note != "" {
 		prompt = clip(note, noteChars) + "\n\n" + GateQuestion
 	}
-	id, err := askGate(ctx, tx, ref, &d.State, prompt, WhyConductor)
+	id, err := askGate(ctx, tx, ref, &d.State, prompt, WhyConductor, choices, actions)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"questionId": id, "choices": GateChoices,
+	return map[string]any{"questionId": id, "choices": GateChoices, "recommended": choices[slices.IndexFunc(choices, func(c Choice) bool { return c.Recommended })].Label,
 		"next": conductorAskedGate}, nil
 }
 
 // askGate asks the pull request gate's question on the conductor's Run, at
 // the heads the delivery is at; refused while the head is a conductor's
 // commit nothing has reviewed. why: the conductor's decide(ask_person), or
-// the person's own gate a hold entered (askGateTx).
-func askGate(ctx context.Context, tx pgx.Tx, ref RunRef, st *State, prompt, why string) (string, error) {
+// the person's own gate a hold entered (askGateTx). choices are the gate's
+// (GateChoices, one perhaps recommended), actions what each carries.
+func askGate(ctx context.Context, tx pgx.Tx, ref RunRef, st *State, prompt, why string, choices []Choice, actions []string) (string, error) {
 	if err := untestedRefusal(ctx, tx, st); err != nil {
 		return "", err
 	}
 	id, err := ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: why,
-		Items: []QuestionItem{SingleItem(prompt, GateChoices)}})
+		Items: []QuestionItem{{Question: prompt, Choices: choices}}})
 	if err != nil {
+		return "", err
+	}
+	if err := setQuestionActionsTx(ctx, tx, id, actions); err != nil {
 		return "", err
 	}
 	heads, _ := json.Marshal(nonNilMap(st.Heads))
@@ -617,7 +679,8 @@ func askGateTx(ctx context.Context, tx pgx.Tx, org string, st *State) error {
 	if err != nil {
 		return err
 	}
-	_, err = askGate(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID}, st, gatePrompt(st), WhyPersonGate)
+	_, err = askGate(ctx, tx, RunRef{Org: org, ProjectID: st.ProjectID, TaskID: st.TaskID, RunID: runID}, st, gatePrompt(st), WhyPersonGate,
+		SingleItem("", GateChoices).Choices, nil)
 	return err
 }
 

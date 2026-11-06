@@ -34,6 +34,7 @@ var (
 	wakeFeedbackMergedTmpl     = mustTemplate("briefings/wake-feedback-merged")
 	conductorStartsTmpl        = mustTemplate("contracts/conductor-starts")
 	conductorOpensTmpl         = mustTemplate("contracts/conductor-opens")
+	authorityLineTmpl          = mustTemplate("wakes/facts/open-authorized")
 	digestTmpl                 = mustTemplate("briefings/digest")
 	digestMessagesTmpl         = mustTemplate("briefings/digest-messages")
 	digestNotesTmpl            = mustTemplate("briefings/digest-notes")

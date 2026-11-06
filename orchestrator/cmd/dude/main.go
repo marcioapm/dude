@@ -771,15 +771,33 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("wait_for", body))
 	case "decide":
-		note := fs.String("note", "", "why; for ask_person, the question")
+		note := fs.String("note", "", "why; for ask_person, the question (before the pull request, its context)")
+		var choices, actions many
+		fs.Var(&choices, "choice", "ask_person: an answer to offer (repeatable); not before the pull request, whose are fixed")
+		fs.Var(&actions, "action", "ask_person: what each choice carries, in order: open, draft or none (repeatable)")
+		recommend := fs.String("recommend", "", "ask_person: the choice you recommend (before the pull request: Open by default)")
 		args, err := parse(fs, rest)
 		if err != nil {
 			return err
 		}
-		if len(args) != 1 {
-			return errors.New("usage: dude decide next|ask_person|wait|open_pull_request [--note N]")
+		if len(args) != 1 || len(actions) > len(choices) {
+			return errors.New("usage: dude decide next|ask_person|wait|open_pull_request [--note N] [--choice C [--action open|draft|none]]... [--recommend C]")
 		}
-		return show(out, *asJSON, call("decide", map[string]any{"action": args[0], "note": *note}))
+		body := map[string]any{"action": args[0], "note": *note}
+		if len(choices) > 0 {
+			list := make([]map[string]any, len(choices))
+			for i, c := range choices {
+				list[i] = map[string]any{"label": c}
+				if i < len(actions) && actions[i] != "none" {
+					list[i]["action"] = actions[i]
+				}
+			}
+			body["choices"] = list
+		}
+		if *recommend != "" {
+			body["recommend"] = *recommend
+		}
+		return show(out, *asJSON, call("decide", body))
 	case "escalation decide":
 		note := fs.String("note", "", "what you decided and why")
 		args, err := parse(fs, rest)
@@ -1237,7 +1255,12 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              the pull request's checks are final (or at D, at most 24h);
                                              no conditions is a timer; end your turn after
   dude decide ACTION [--note N]              a conductor's: next, ask_person, wait or
-                                             open_pull_request (after the person answered Open)
+                                             open_pull_request (after the person answered Open
+                                             or Draft, or picked an open or draft choice of
+                                             yours that still holds)
+    [--choice C [--action open|draft|none]]  ask_person: answers to offer, each with what it
+    [--recommend C]                          carries; before the pull request the choices are
+                                             fixed and --recommend marks one (Open by default)
   dude finding dismiss ID --reason R         a conductor's: leave an open finding as it is
   dude escalation decide ACTION [--note N]   a conductor's: decide the escalation the delivery is stopped
                                              at, only after the owner answered your question about it in
