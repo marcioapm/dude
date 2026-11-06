@@ -174,3 +174,58 @@ func mustOwner(t *testing.T, w *harnessWorld, sql string, args ...any) {
 		t.Fatal(err)
 	}
 }
+
+// Beside a failure carried on a person's waiver, the conductor still
+// decides the rest: a reported pass passes only backed, and a missing
+// check it names holds the report, carried failure and all.
+func TestBesideACarriedFailureThePassesAreBackedAndMissingIsAsked(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		pass, missing string
+		verified      bool
+	}{
+		{"backed, nothing missing", delivery.VerdictBacked, delivery.MissingNone, true},
+		{"an unbacked pass", delivery.VerdictUnbacked, delivery.MissingNone, false},
+		{"a missing check", delivery.VerdictBacked, delivery.MissingFound, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			cond := conducted(w)
+			waive(w, w.run, delivery.ScopeAttempt, heldFailure)
+			checksReply(w, failingTest+reportedPass)
+			endTurn(w)
+			if pass, _ := w.gate(); pass {
+				t.Fatal("passed before the conductor decided")
+			}
+			a := w.asked()
+			if a.Waivers[0] == nil || a.Waivers[1] != nil {
+				t.Fatalf("asked about %+v, want the failure's waiver alone", a.Waivers)
+			}
+			if _, err := w.decide(cond, delivery.DecideChecks{RunID: w.run.ID, Turn: w.turn(),
+				Checks: []delivery.ConductedCheck{
+					{Command: "make test", Verdict: delivery.VerdictSameAsWaived, WaiverCursor: a.Waivers[0].Cursor, Reason: "the same TestClock failure"},
+					{Command: "make lint", Verdict: tc.pass, Reason: "the recorded call"}},
+				Missing: delivery.ConductedMissing{Verdict: tc.missing, Reason: "no test of the clock fallback"}}); err != nil {
+				t.Fatal(err)
+			}
+			if pass, acted := w.gate(); pass != tc.verified || !acted {
+				t.Fatalf("pass %v acted %v, want %v", pass, acted, tc.verified)
+			}
+			got := recordedJudgement(w)
+			// The failure reads as waived either way; the decision says it
+			// carried a waiver only when it passed.
+			if got.Verified != tc.verified || got.Carried != tc.verified || got.Verdicts[0].Result != delivery.CheckWaived {
+				t.Fatalf("%+v", got)
+			}
+			if want := map[bool]string{true: delivery.CheckPass, false: "unverified"}[tc.pass == delivery.VerdictBacked]; got.Verdicts[1].Result != want {
+				t.Errorf("the pass recorded %q, want %q", got.Verdicts[1].Result, want)
+			}
+			if tc.missing == delivery.MissingFound {
+				last := got.Verdicts[len(got.Verdicts)-1]
+				if last.Command != delivery.MissingChecks || last.Result != "unverified" {
+					t.Errorf("the missing check recorded %+v", last)
+				}
+			}
+		})
+	}
+}
