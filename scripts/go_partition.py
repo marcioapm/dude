@@ -15,11 +15,12 @@ slots. A package is cut into chunks of tests, each chunk one test process
 (ORDER is its place in its lane's queue): a package whose TestMain checks
 the whole run (--whole) is one chunk run without -test.run (WHOLE is 1);
 every other package is cut, round-robin by sorted test name, into as many
-chunks as can keep slots busy, and no chunk holds more than MAX_CHUNK tests,
+chunks as there are slots besides the whole packages' (or all, when slots
+are few), and no chunk holds more than MAX_CHUNK tests,
 so no process runs near go test's time limit. A --race package is cut the
 same way once more for its run under the race detector (VARIANT race). Chunks go, largest
-first, to the slot with the fewest tests so far; ties break on names and
-slot numbers. So the result is a pure function of the set of tests, M, L
+first, to the slot with the fewest tests so far among those holding no other
+chunk of their package; ties break on names and slot numbers. So the result is a pure function of the set of tests, M, L
 and the two package lists: every machine computes the same partition and
 runs its own slice of it.
 
@@ -50,13 +51,17 @@ MIN_CHUNK = 20
 def chunks(tests: dict[str, list[str]], slots: int, whole: set[str], race: set[str]):
     """(variant, whole, package, tests) per chunk, deterministic."""
     out = []
+    # A package run whole holds its slot for long (agenttools: 285 tests, the
+    # slowest process on CI), so a cut package is cut for the other slots.
+    whole_here = len(whole & tests.keys())
+    room = slots - whole_here if slots > 2 * whole_here else slots
     for pkg in sorted(tests):
         names = sorted(set(tests[pkg]))
         for variant in ("-", "race") if pkg in race else ("-",):
             if pkg in whole:
                 out.append((variant, True, pkg, names))
                 continue
-            k = max(-(-len(names) // MAX_CHUNK), min(slots, len(names) // MIN_CHUNK), 1)
+            k = max(-(-len(names) // MAX_CHUNK), min(room, len(names) // MIN_CHUNK), 1)
             for i in range(min(k, len(names))):
                 out.append((variant, False, pkg, names[i::k]))
     return out
@@ -73,13 +78,20 @@ def split(rows: Iterable[tuple[str, str]], machines: int, lanes: int,
     slots = machines * lanes
     load = [0] * slots
     queue: list[list] = [[] for _ in range(slots)]
-    # Weighed by test count: the race run of forge and phases took 249 s on
-    # CI for 592 tests, about the rate of the other packages.
-    weight = lambda c: len(c[3])
+    # Weighed by test count, largest chunk first, so a package run whole
+    # (agenttools: 285 tests) takes a slot before the cut ones fill in. A
+    # chunk avoids slots holding a chunk of its own package and variant while
+    # any is left: the root package's tests are slower than the rest (about
+    # 1.4 s each against 0.3 on 8 lanes), and two root chunks in one lane
+    # made it the last by minutes.
+    used: dict[tuple, set[int]] = defaultdict(set)
     for c in sorted(chunks(tests, slots, set(whole), set(race)),
-                    key=lambda c: (-weight(c), c[2], c[0], c[3])):
-        s = min(range(slots), key=lambda s: (load[s], s))
-        load[s] += weight(c)
+                    key=lambda c: (-len(c[3]), c[2], c[0], c[3])):
+        mine = used[(c[0], c[2])]
+        free = [s for s in range(slots) if s not in mine] or list(range(slots))
+        s = min(free, key=lambda s: (load[s], s))
+        mine.add(s)
+        load[s] += len(c[3])
         queue[s].append(c)
     out = []
     for s in range(slots):

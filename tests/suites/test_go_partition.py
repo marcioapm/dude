@@ -68,12 +68,12 @@ def test_whole_run_packages_are_never_cut(m, lanes):
 
 
 def test_large_packages_are_cut_across_lanes():
-    rows = split(1, 8)
+    rows = split(1, 10)
     for pkg, variant in ((".", "-"), ("internal/delivery", "-"), ("internal/phases", "-"),
                          ("internal/chat", "-"), ("internal/phases", "race")):
         processes = {(r[1], r[2]) for r in rows if r[5] == pkg and r[3] == variant}
-        assert len(processes) == 8, pkg
-        assert len({lane for lane, _ in processes}) > 1, pkg
+        # Ten lanes, two of them for the packages run whole.
+        assert len({lane for lane, _ in processes}) == 8, pkg
 
 
 def test_lanes_carry_about_the_same_number_of_tests():
@@ -87,8 +87,10 @@ def test_round_robin_by_sorted_name():
     rows = split(1, 8)
     root = sorted(t for p, t in LISTED if p == ".")
     lane_of = {r[6]: r[1] for r in rows if r[5] == "." and r[3] == "-"}
+    k = len(set(lane_of.values()))
+    assert k == 6  # 8 lanes, less one each for cmd/dude-cli and agenttools
     for i, t in enumerate(root):
-        assert lane_of[t] == lane_of[root[i % 8]]
+        assert lane_of[t] == lane_of[root[i % k]]
 
 
 def test_machines_carry_about_the_same_number_of_tests():
