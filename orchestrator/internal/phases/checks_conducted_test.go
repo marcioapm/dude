@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -488,6 +489,44 @@ func TestAPendingAskShortcutYieldsToTheFallback(t *testing.T) {
 			}
 			if got := recordedJudgement(w.harnessWorld); !got.Skipped {
 				t.Fatalf("%+v", got)
+			}
+		})
+	}
+}
+
+// dude's reading of a reported pass's latest call is of that command, not
+// of any later call that merely contains it: a failed `verify` followed by
+// `echo verify` exiting 0 reads "exit 1". A call that only contains the
+// command (piped, ORed, grepped, a longer command) is not one of it; a
+// `cd X && ` before it is.
+func TestRecordedCallsReadTheReportedCommandNotOneContainingIt(t *testing.T) {
+	for _, c := range []struct {
+		name, reported string
+		calls          [][2]any // command, exit
+		want           string
+	}{
+		{"a later echo of it", "verify", [][2]any{{"verify", 1}, {"echo verify", 0}}, "exit 1"},
+		{"ORed with true", "make test", [][2]any{{"make test || true", 0}}, "none recorded"},
+		{"grepped for", "make test", [][2]any{{"make test", 2}, {`grep "make test" Makefile`, 0}}, "exit 2"},
+		{"a longer command", "go test ./...", [][2]any{{"go test ./... -run X", 0}}, "none recorded"},
+		{"the command itself, last", "go test ./...", [][2]any{{"go test ./... -run X", 1}, {"go  test\n./...", 0}}, "exit 0"},
+		{"in its directory", "make test", [][2]any{{"cd api && make test", 0}}, "exit 0"},
+		{"in a directory, then more", "make test", [][2]any{{"cd api && make test && echo ok", 0}}, "none recorded"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			for i, call := range c.calls {
+				bashCall(w, fmt.Sprintf("call_%d", i), call[0].(string), "out", call[1].(int))
+			}
+			var got []string
+			if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
+				got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: c.reported, Result: delivery.CheckPass}})
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0] != c.want {
+				t.Fatalf("read %q, want %q", got, c.want)
 			}
 		})
 	}

@@ -212,9 +212,9 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delive
 		if command == nil {
 			continue
 		}
-		ran := oneLine(*command)
+		ran := ofCommand(*command)
 		for i, c := range checks {
-			if c.Result != delivery.CheckPass || !strings.Contains(ran, oneLine(c.Command)) {
+			if c.Result != delivery.CheckPass || ran != oneLine(c.Command) {
 				continue
 			}
 			switch {
@@ -228,6 +228,21 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delive
 		}
 	}
 	return out, rows.Err()
+}
+
+// ofCommand is the command a recorded shell call ran, one-lined, for
+// recordedCalls to compare with a reported one: the call as it was, less a
+// single leading "cd DIR && " (the command run in a directory). A call that
+// only contains the command (piped, ORed, echoed, grepped for, with more
+// arguments) is not a call of it.
+func ofCommand(command string) string {
+	ran := oneLine(command)
+	if rest, ok := strings.CutPrefix(ran, "cd "); ok {
+		if dir, after, ok := strings.Cut(rest, " && "); ok && dir != "" && !strings.ContainsAny(dir, " ;|&") {
+			return after
+		}
+	}
+	return ran
 }
 
 // checksWakeLine is the conductor's wake: the Run, its turn, and one
