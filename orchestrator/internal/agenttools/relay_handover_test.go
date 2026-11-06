@@ -40,7 +40,7 @@ func (f *fixture) qn(t *testing.T, sql string, args ...any) int {
 // question; it is refused for anything but a writer's question still with
 // this conductor, and for a second relay while the first is open.
 func TestRelayValidation(t *testing.T) {
-	for _, mode := range []string{"ok", "wrong-task", "stale-attempt", "closed", "person-addressed", "writer-caller", "twice", "unknown"} {
+	for _, mode := range []string{"ok", "wrong-task", "stale-attempt", "closed", "person-addressed", "writer-caller", "twice", "unknown", "escalation", "halted", "ended"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setup(t)
 			writer, conductor, qid := relayWorld(t, f)
@@ -74,8 +74,20 @@ func TestRelayValidation(t *testing.T) {
 				mustExec(t, f.owner, `UPDATE runs SET phase=NULL WHERE id='run_conductor2'`)
 			case "unknown":
 				qid = "q_nope"
+			case "escalation":
+				// The task's escalation waits at decide, held by the person.
+				mustExec(t, f.owner, `UPDATE workflow_runs SET step='decide', state=state||'{"escalation":{"reason":"stuck","holder":"person"}}'`)
+			case "halted":
+				mustExec(t, f.owner, `UPDATE workflow_runs SET state=state||'{"halt":{}}'`)
+			case "ended":
+				mustExec(t, f.owner, `UPDATE tasks SET status='done' WHERE id=$1`, f.item)
 			}
-			status, out := f.post(t, caller, "ask_person", fmt.Sprintf(`{"question":"Owner: A or B?","relay":%q}`, qid))
+			body := fmt.Sprintf(`{"question":"Owner: A or B?","relay":%q}`, qid)
+			if mode == "escalation" {
+				// A well-formed question about the escalation, but a relay.
+				body = fmt.Sprintf(`{"questions":[{"question":"Stop?","choices":[{"label":"Stop","recommended":true}]}],"actions":["stop"],"relay":%q}`, qid)
+			}
+			status, out := f.post(t, caller, "ask_person", body)
 			if mode == "ok" {
 				if status != 200 {
 					t.Fatalf("relay %d %v", status, out)
@@ -103,6 +115,8 @@ func TestRelayValidation(t *testing.T) {
 			case "writer-caller":
 				// A writer's ask_person is its ask_conductor, which has no relay.
 				want = `unknown field "relay"`
+			case "escalation":
+				want = "not a question about the escalation"
 			}
 			if !strings.Contains(msg, want) {
 				t.Fatalf("%s: %s, want %q", mode, msg, want)

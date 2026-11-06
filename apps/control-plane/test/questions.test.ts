@@ -248,11 +248,23 @@ test("a repository request or reviewer question its conductor holds is not a per
               VALUES ('wi_rr_held', ${ORG}, ${PROJECT}, 30, 'Request held', 'running'),
                      ('wi_rr_park', ${ORG}, ${PROJECT}, 31, 'Request held, parked', 'running'),
                      ('wi_rr_fwd', ${ORG}, ${PROJECT}, 32, 'Request forwarded', 'running'),
-                     ('wi_rvq_held', ${ORG}, ${PROJECT}, 33, 'Reviewer question held', 'running')`;
+                     ('wi_rvq_held', ${ORG}, ${PROJECT}, 33, 'Reviewer question held', 'running'),
+                     ('wi_rvq_answered', ${ORG}, ${PROJECT}, 34, 'Reviewer question answered', 'running'),
+                     ('wi_rvq_stopped', ${ORG}, ${PROJECT}, 35, 'Reviewer question, task stopped', 'aborted'),
+                     ('wi_rvq_old', ${ORG}, ${PROJECT}, 36, 'Reviewer question of an earlier attempt', 'running')`;
+  // A live delivery for each but the stopped one (aborted: kept for a pick-up).
+  await owner`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+              VALUES ('wf_rvq_held', ${ORG}, 'wi_rvq_held', 'task.delivery', 'rvq_held', 'waiting', 'review', '{"attempt":1}'),
+                     ('wf_rvq_answered', ${ORG}, 'wi_rvq_answered', 'task.delivery', 'rvq_answered', 'waiting', 'review', '{"attempt":1}'),
+                     ('wf_rvq_stopped', ${ORG}, 'wi_rvq_stopped', 'task.delivery', 'rvq_stopped', 'aborted', 'review', '{"attempt":1}'),
+                     ('wf_rvq_old', ${ORG}, 'wi_rvq_old', 'task.delivery', 'rvq_old', 'waiting', 'review', '{"attempt":2}')`;
   await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
               VALUES ('run_rr_held', ${ORG}, ${PROJECT}, 'wi_rr_held', 1, 'running', 'implement', 'implementer'),
                      ('run_rr_fwd', ${ORG}, ${PROJECT}, 'wi_rr_fwd', 1, 'running', 'implement', 'implementer'),
-                     ('run_rvq_rev', ${ORG}, ${PROJECT}, 'wi_rvq_held', 1, 'completed', 'review', 'reviewer')`;
+                     ('run_rvq_rev', ${ORG}, ${PROJECT}, 'wi_rvq_held', 1, 'completed', 'review', 'reviewer'),
+                     ('run_rvq_ans', ${ORG}, ${PROJECT}, 'wi_rvq_answered', 1, 'completed', 'review', 'reviewer'),
+                     ('run_rvq_stop', ${ORG}, ${PROJECT}, 'wi_rvq_stopped', 1, 'completed', 'review', 'reviewer'),
+                     ('run_rvq_old', ${ORG}, ${PROJECT}, 'wi_rvq_old', 1, 'completed', 'review', 'reviewer')`;
   await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
               VALUES ('run_rr_park', ${ORG}, ${PROJECT}, 'wi_rr_park', 1, 'paused', 'implement', 'implementer', 'person')`;
   await owner`INSERT INTO repository_requests (id, organization_id, task_id, run_id, repository_id, access, reason, blocking, addressee)
@@ -260,7 +272,11 @@ test("a repository request or reviewer question its conductor holds is not a per
                      ('rrq_park', ${ORG}, 'wi_rr_park', 'run_rr_park', 'repo_q_web', 'write', 'r', true, 'conductor'),
                      ('rrq_fwd', ${ORG}, 'wi_rr_fwd', 'run_rr_fwd', 'repo_q_web', 'write', 'r', false, 'person')`;
   await owner`INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee)
-              VALUES ('rvq_held', ${ORG}, 'wi_rvq_held', 'run_rvq_rev', 1, 'correctness', 'UTC?', 'conductor')`;
+              VALUES ('rvq_held', ${ORG}, 'wi_rvq_held', 'run_rvq_rev', 1, 'correctness', 'UTC?', 'conductor'),
+                     ('rvq_stop', ${ORG}, 'wi_rvq_stopped', 'run_rvq_stop', 1, 'correctness', 'UTC?', 'conductor'),
+                     ('rvq_old', ${ORG}, 'wi_rvq_old', 'run_rvq_old', 1, 'correctness', 'UTC?', 'conductor')`;
+  await owner`INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee, status, answer, answered_at)
+              VALUES ('rvq_ans', ${ORG}, 'wi_rvq_answered', 'run_rvq_ans', 1, 'correctness', 'UTC?', 'conductor', 'answered', 'yes', now())`;
 
   const nav = await get<Nav>("/v1/navigation");
   const rows = (task: string) => (sessionsOf(nav, task) as Array<Session & { role: string; status: string }>)
@@ -272,6 +288,8 @@ test("a repository request or reviewer question its conductor holds is not a per
   const held = (id: string) => tasks.find((t) => t.id === id)?.conductorHeld ?? null;
   expect([held("wi_rr_held"), held("wi_rr_park"), held("wi_rr_fwd"), held("wi_rvq_held")])
     .toEqual(["repository_request", "repository_request", null, "review_question"]);
+  // Answered, of a stopped task, or of an earlier attempt: nobody's to hear now.
+  expect([held("wi_rvq_answered"), held("wi_rvq_stopped"), held("wi_rvq_old")]).toEqual([null, null, null]);
   const { countTasks } = await import("../../../packages/design-system/src/util/navModel.ts");
   const needs = (id: string) => countTasks(tasks.filter((t) => t.id === id) as never).needs_you;
   expect([needs("wi_rr_held"), needs("wi_rr_park"), needs("wi_rr_fwd"), needs("wi_rvq_held")]).toEqual([0, 0, 1, 0]);
