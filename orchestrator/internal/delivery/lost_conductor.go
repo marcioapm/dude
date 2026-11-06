@@ -80,14 +80,17 @@ func ReplaceLostConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, why stri
 			AND ((r.status = 'paused' AND r.dude_pause IN ('person', 'conductor'))
 			     OR ((r.turn_done_at IS NOT NULL OR r.waiting_since IS NOT NULL) AND COALESCE(r.push_request_id, '') = ''))
 			AND (EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open' AND q.addressee = 'person')
-			     OR EXISTS (SELECT 1 FROM questions q
+			     -- An answer heard before the loss and still unread: the cheap
+			     -- unread probe first, so the correlated join runs only then.
+			     OR (EXISTS (SELECT 1 FROM directives ux WHERE ux.run_id = r.id AND ux.delivered_at IS NULL AND ux.failed_at IS NULL)
+			     AND EXISTS (SELECT 1 FROM questions q
 			         JOIN events e ON e.run_id = q.run_id AND e.organization_id = q.organization_id AND e.task_id = q.task_id
 			           AND e.event_type = 'question.answered' AND e.payload->>'questionId' = q.id
 			         JOIN directives x ON x.id = e.payload->>'directiveId' AND x.run_id = q.run_id
 			           AND x.organization_id = q.organization_id AND x.task_id = q.task_id
 			         WHERE q.run_id = r.id AND q.organization_id = r.organization_id AND q.task_id = r.task_id
 			           AND q.status = 'answered' AND q.addressee = 'person'
-			           AND x.delivered_at IS NULL AND x.failed_at IS NULL)),
+			           AND x.delivered_at IS NULL AND x.failed_at IS NULL))),
 			r.started_by
 		FROM runs r WHERE r.id = $1 FOR NO KEY UPDATE`, ref.RunID).Scan(&eligible, &startedBy)
 	if db.IsNotFound(err) || err == nil && !eligible {
