@@ -80,6 +80,8 @@ class Receipt:
                 "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=TESTS_DIR, text=True).strip(),
                 "marker": config.option.markexpr, "keyword": config.option.keyword,
                 "browser": config.getoption("browser", default=[]),
+                "browser_options": {key: config.getoption(key, default=None) for key in
+                                    ("browser_channel", "headed", "device", "base_url")},
                 "browser_channel": os.environ.get("DUDE_TEST_BROWSER_CHANNEL", "chrome"),
                 "browser_executable": os.environ.get("DUDE_TEST_BROWSER_EXECUTABLE", ""),
                 "platform": [platform.system(), platform.machine()], "denominator": m,

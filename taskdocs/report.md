@@ -19,7 +19,10 @@
 - Full 1/1 execution launched detached at 19:46 UTC with `full.log`, `full-exit.json`, JUnit and direct receipt. At 19:49 UTC: 19 passed terminal results, receipt unfinished as expected. No silent foreground wait.
 - Collection gate: all 18 plans (six-way and twelve-way) succeed, exact-once selected unions and raw whole-file assignments verified in **18.43s**. Baseline **736 raw / 666 selected**, new **745 / 675**; **zero removed**, nine added harness IDs, exact names in `collection-proof.json`.
 - Initial implementation commit: `6d597478f`. Review tightened aggregate universe/assignment validation and teardown exception exit preservation. Net mechanism/test change remains around the requested 400-line ceiling; no additional framework is being added.
-- Full runtime and final receipt equivalence pending; no runtime or CI speedup claim yet.
+- Full 1/1 attempt **NOT VERIFIED**: 56 terminal results retained; execution stopped making visible progress in `test_feedback_ui.py` after two dots. At ~11 minutes I interrupted the harness during diagnosis; therefore no valid completion fence or natural exit artifact exists. The pytest child did not promptly respond to SIGINT and was terminated. This is an interrupted gate, not a passing/full-coverage claim; no assertion, timeout, fixture pump or test skip was changed. `full-receipt.json` remains `complete=false`, `pytest_complete=false`.
+- Real **12/12 shard probe** launched detached at 19:58 UTC using the same execution pipeline, receipt/JUnit/durations and Chromium fallback. Results pending.
+- `actionlint` installed locally and CI workflow validation exits 0. Python compile (via uv interpreter; bare `python` unavailable) exits 0, as does `git diff --check`.
+- Full runtime and final receipt equivalence remain unverified; no runtime or CI speedup claim. This change is not called ready without the requested full execution proof.
 
 ## Artifacts
 This report is intentionally versioned per request. Collection snapshots, receipts, JUnit, logs and patch backup will be retained in this checkout under `taskdocs/` when available; caches and temporary services are not report artifacts.
