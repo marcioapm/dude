@@ -542,16 +542,7 @@ func TestRecordedCallsReadTheReportedCommandNotOneContainingIt(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
-			for i, call := range c.calls {
-				bashCall(w, fmt.Sprintf("call_%d", i), call[0].(string), "out", call[1].(int))
-			}
-			var got []string
-			if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
-				got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: c.reported, Result: delivery.CheckPass}}, nil)
-				return err
-			}); err != nil {
-				t.Fatal(err)
-			}
+			got := w.recordedAfter(c.calls, c.reported, delivery.CheckPass, nil)
 			if len(got) != 1 || got[0] != c.want {
 				t.Fatalf("read %q, want %q", got, c.want)
 			}
@@ -706,19 +697,27 @@ func TestRecordedCallsReadAFailureAtTheBase(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
-			for i, call := range c.calls {
-				bashCall(w, fmt.Sprintf("call_%d", i), call[0].(string), "out", call[1].(int))
-			}
-			var got []string
-			if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
-				got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: "make test", Result: delivery.CheckFail}}, bases)
-				return err
-			}); err != nil {
-				t.Fatal(err)
-			}
+			got := w.recordedAfter(c.calls, "make test", delivery.CheckFail, bases)
 			if len(got) != 1 || got[0] != c.want {
 				t.Fatalf("read %q, want %q", got, c.want)
 			}
 		})
 	}
+}
+
+// recordedAfter records calls (command, exit) as the Run's shell calls and
+// is recordedCalls of one reported check, command with result.
+func (w *harnessWorld) recordedAfter(calls [][2]any, command, result string, bases []taskBase) []string {
+	w.t.Helper()
+	for i, call := range calls {
+		bashCall(w, fmt.Sprintf("call_%d", i), call[0].(string), "out", call[1].(int))
+	}
+	var got []string
+	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
+		got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: command, Result: result}}, bases)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	return got
 }
