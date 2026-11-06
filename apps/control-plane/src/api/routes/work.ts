@@ -509,8 +509,10 @@ async function taskQuestions(scope: OrgScope, id: string): Promise<unknown[]> {
   return [...await scope.sql`
     SELECT q.id, q.run_id AS "runId", q.status::text AS status, q.addressee, q.prompt, q.items,
       q.asked_at AS "askedAt", q.to_person AS "toPerson", r.error AS "askerError",
-      (SELECT e.payload->>'by' FROM events e WHERE e.run_id = q.run_id AND e.event_type = 'question.closed'
-        AND e.payload->>'questionId' = q.id ORDER BY e.cursor DESC LIMIT 1) AS "endedBy"
+      CASE WHEN q.status = 'cancelled' THEN
+        (SELECT e.payload->>'by' FROM events e WHERE e.run_id = q.run_id AND e.event_type = 'question.closed'
+          AND e.payload->>'questionId' = q.id ORDER BY e.cursor DESC LIMIT 1)
+        END AS "endedBy"
     FROM questions q JOIN runs r ON r.id = q.run_id
     WHERE q.task_id = ${id} AND r.attempt = task_attempt(${id})
       AND (q.status = 'open' OR (q.status = 'cancelled' AND r.role = 'conductor' AND r.status = 'failed'

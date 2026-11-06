@@ -246,9 +246,15 @@ func TestHistoricalAnswerAndUnrelatedChatAreNotAnUnreadAnswer(t *testing.T) {
 	}
 	w.lux.ForgetRun(w.luxRunOf(old))
 	w.untilLost(old)
-	if w.replacementOf(old) != "" { t.Fatal("historical answer took the lost-waiting replacement path") }
-	w.until("unread Chat handed over normally", func() bool { return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND role='conductor' AND id<>$2`, task, old) == 1 })
-	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND id<>$2 AND prompt LIKE '%lux lost your predecessor%'`, task, old) != 0 { t.Fatal("normal handover has misleading lost-answer briefing") }
+	if w.replacementOf(old) != "" {
+		t.Fatal("historical answer took the lost-waiting replacement path")
+	}
+	w.until("unread Chat handed over normally", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND role='conductor' AND id<>$2`, task, old) == 1
+	})
+	if w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND id<>$2 AND prompt LIKE '%lux lost your predecessor%'`, task, old) != 0 {
+		t.Fatal("normal handover has misleading lost-answer briefing")
+	}
 }
 
 func TestAnAnswerCommittedAsTheConductorIsLostStartsTheReplacementWithIt(t *testing.T) {
@@ -457,6 +463,36 @@ func TestALostConductorWithNoPersonQuestionFailsAsBefore(t *testing.T) {
 // Risk 1: a placeholder (paused for a person, no lux Run) reads as a parked
 // conductor. Stopping the task ends it, with no lux call, and cancels its
 // question; nothing sweeps it as a stall, a cost or a resume.
+func TestLostConductorPreservesHeldRepositoryRequestUntilForwarding(t *testing.T) {
+	w, task, _, request := heldRequest(t, true)
+	w.syncer.ParkAfter = time.Hour
+	w.syncer.HeldAskWait = time.Hour
+	old, _, _ := w.conductor(task)
+	w.must(task, "ask_person", `{"questions":[{"question":"Which direction?"}]}`)
+	w.until("conductor done asking", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND turn_done_at IS NOT NULL`, old) == 1
+	})
+	w.lux.ForgetRun(w.luxRunOf(old))
+	w.untilLost(old)
+	if w.replacementOf(old) == "" {
+		t.Fatal("no replacement")
+	}
+	for range 5 {
+		w.pump()
+	}
+	if w.count(`SELECT count(*) FROM repository_requests WHERE id=$1 AND addressee='conductor' AND status='pending'`, request) != 1 || w.events(task, "repository.requested") != 0 {
+		t.Fatal("conductor-held typed repository request silently became person's")
+	}
+	q := w.conductorQuestion(task)
+	if status, body := w.call("/internal/questions/"+q+"/answer", map[string]any{"text": "Please forward the repository request"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.must(task, "decide_repository_request", `{"id":"`+request+`","action":"forward"}`)
+	if w.count(`SELECT count(*) FROM repository_requests WHERE id=$1 AND addressee='person'`, request) != 1 || w.events(task, "repository.requested") != 1 {
+		t.Fatal("explicit forwarding did not transfer exactly once")
+	}
+}
+
 func TestCloseAndArchiveEndPlaceholderWithoutSubmitting(t *testing.T) {
 	for _, action := range []string{"close", "archive"} {
 		t.Run(action, func(t *testing.T) {

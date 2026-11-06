@@ -92,7 +92,7 @@ test("an open question re-bound to a placeholder is the task's; one lost with it
     await tx`UPDATE questions SET run_id = ${`${org}_r1`} WHERE id = ${`${org}_q0`}`;
   });
   let got = await questions();
-  expect(got.map((q) => [q.id, q.status, q.runId])).toEqual([[`${org}_q0`, "open", `${org}_r1`]]);
+  expect(got).toEqual([expect.objectContaining({ id: `${org}_q0`, status: "open", runId: `${org}_r1`, addressee: "person", endedBy: null })]);
   expect(got[0]!.addressee).toBe("person");
   expect(got[0]!.endedBy).toBeNull();
 
@@ -106,13 +106,45 @@ test("an open question re-bound to a placeholder is the task's; one lost with it
     VALUES (${`${org}_ev`}, ${org}, ${project}, ${task}, ${`${org}_r2`}, 'question.closed', 'system', 'dude', 'orchestrator',
       ${{ questionId: `${org}_q2`, by: "lost", runId: `${org}_r2` }})`;
   got = await questions();
-  expect(got.map((q) => [q.id, q.status, q.endedBy, q.askerError])).toEqual([
-    [`${org}_q2`, "cancelled", "lost", "lux no longer has this Run"],
-  ]);
+  expect(got).toEqual([expect.objectContaining({ id: `${org}_q2`, status: "cancelled", endedBy: "lost", askerError: "lux no longer has this Run" })]);
 
   // Once a newer conductor runs, the old one's cancelled question is no one's.
   await run(`${org}_r3`, "running");
   expect(await questions()).toEqual([]);
+});
+
+test("questions exclude completed cancellations and previous attempts, and correlate the latest close by run and question", async () => {
+  await owner`UPDATE runs SET status='completed' WHERE task_id=${task} AND status IN ('running','paused')`;
+  await run(`${org}_completed`, "running");
+  await ask(`${org}_completed_q`, `${org}_completed`);
+  await owner`UPDATE runs SET status='completed' WHERE id=${`${org}_completed`}`;
+  let response = await call("GET", `/v1/tasks/${task}`);
+  let body = await response.json() as { questions: unknown[] };
+  expect(body.questions).toEqual([]);
+
+  await run(`${org}_previous`, "completed");
+  // A retained previous-attempt open question must not become current.
+  await ask(`${org}_previous_q`, `${org}_previous`);
+  await run(`${org}_latest`, "running");
+  await owner`UPDATE runs SET attempt=2 WHERE id=${`${org}_latest`}`;
+  await ask(`${org}_a`, `${org}_latest`);
+  await ask(`${org}_b`, `${org}_latest`);
+  await owner`UPDATE runs SET status='failed', error='failed now' WHERE id=${`${org}_latest`}`;
+  const close = async (suffix: string, runId: string, questionId: string, by: string) => {
+    await owner`INSERT INTO events (id, organization_id, project_id, task_id, run_id, event_type, actor_type, actor_id, source, payload)
+      VALUES (${`${org}_${suffix}`}, ${org}, ${project}, ${task}, ${runId}, 'question.closed', 'system', 'dude', 'orchestrator', ${ { questionId, by } })`;
+  };
+  await close("ca1", `${org}_latest`, `${org}_a`, "obsolete");
+  await close("cb", `${org}_latest`, `${org}_b`, "run_failed");
+  await close("ca2", `${org}_latest`, `${org}_a`, "lost");
+  await close("unrelated", `${org}_latest`, "not-this-question", "withdrawn");
+  await close("other_run", `${org}_previous`, `${org}_a`, "wrong-run");
+  response = await call("GET", `/v1/tasks/${task}`);
+  body = await response.json() as { questions: unknown[] };
+  expect(body.questions).toEqual([
+    expect.objectContaining({ id: `${org}_a`, runId: `${org}_latest`, status: "cancelled", endedBy: "lost" }),
+    expect.objectContaining({ id: `${org}_b`, runId: `${org}_latest`, status: "cancelled", endedBy: "run_failed" }),
+  ]);
 });
 
 test("/recover passes the orchestrator's conductor through", async () => {
