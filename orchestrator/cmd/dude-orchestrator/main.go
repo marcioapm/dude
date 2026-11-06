@@ -109,7 +109,8 @@ func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) 
 
 // testConductorAnswerWait is an opt-in process-start test clock, deliberately
 // outside the runtime configuration schema and project settings. Zero leaves
-// Syncer's production default (delivery.ConductorAnswerWait) unchanged.
+// Syncer's production defaults (delivery.ConductorAnswerWait, for both
+// ConductorAnswerWait and HeldAskWait) unchanged; run gives it to both.
 func testConductorAnswerWait(getenv func(string) string) (time.Duration, error) {
 	const key = "DUDE_TEST_CONDUCTOR_ANSWER_WAIT"
 	value := getenv(key)
@@ -121,6 +122,19 @@ func testConductorAnswerWait(getenv func(string) string) (time.Duration, error) 
 		return 0, fmt.Errorf("%s must be a positive Go duration", key)
 	}
 	return wait, nil
+}
+
+// withTestWaits gives the syncer the opt-in test clock (zero: nothing
+// changes): how long the conductor has to answer a writer's question
+// (ConductorAnswerWait) and to settle a reviewer's question, a repository
+// request or an idle park it holds (HeldAskWait) before dude hands it to
+// the person.
+func withTestWaits(s *phases.Syncer, wait time.Duration) {
+	if wait <= 0 {
+		return
+	}
+	s.ConductorAnswerWait = wait
+	s.HeldAskWait = wait
 }
 
 func run(log *slog.Logger) error {
@@ -211,12 +225,12 @@ func run(log *slog.Logger) error {
 		DB: database, Lux: luxClient, Objects: objectStore,
 		Forges: forges, Agent: agent, Registry: registryLogin, Log: log, Judge: judgeService,
 		ParkAfter: set.ParkAfter, IdleAfter: set.IdleAfter, ConductorWarm: set.ConductorWarm, WakeWindow: set.WakeWindow, KeepFor: set.KeepStopped,
-		ConductorAnswerWait: answerWait,
-		DiffEvery:           set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
+		DiffEvery: set.DiffEvery, MachineUSDPerHour: set.MachineUSDPerHour,
 		// A pass stops waiting for a slow Run or publish after 2 s, so the
 		// next pass reaches every other one; the slow one keeps its slot.
 		SweepWait: 2 * time.Second,
 	}
+	withTestWaits(syncer, answerWait)
 	defer syncer.Stop()
 	// Resumes whose timing an earlier process committed but never
 	// published; in the background, so startup does not wait on it.
