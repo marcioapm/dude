@@ -617,18 +617,20 @@ func TestTryAgainDoesNotReaskARelayAnsweredAfterTheHandOver(t *testing.T) {
 	}
 }
 
-// The writer's Run ended (its question cancelled with it), then Try again:
-// there is no one to relay to, so nothing is asked again. (The task's
-// status is not asserted: the writer's end here is written directly, not
-// through a path that ends the wait its relay raised.)
+// The person restarts the writer's Run (it ends, its question cancelled
+// with it and the wait its relay raised ended), then Try again: there is
+// no one to relay to, so nothing is asked again, and the task is not left
+// waiting on a moot question.
 func TestTryAgainDoesNotReaskARelayWhoseWriterEnded(t *testing.T) {
 	s := newSteering(t, conducting(t))
 	qid, _, _ := s.relayLost()
-	mustExec(t, s.owner, `UPDATE runs SET status='failed', error='writer gone', ended_at=now() WHERE id=$1`, s.implementer)
+	if status, out := s.call("/internal/runs/"+s.implementer+"/restart", map[string]any{"note": "start again"}); status != 200 {
+		t.Fatalf("restart the writer: %d %v", status, out)
+	}
 	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='cancelled'`, qid); n != 1 {
 		t.Fatal("the writer's question was not cancelled with its Run")
 	}
-	s.notReasked(qid, "the writer's question was settled since", false)
+	s.notReasked(qid, "the writer's question was settled since", true)
 }
 
 // Another relay of the writer's question is open already (the person has
