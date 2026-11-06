@@ -117,8 +117,6 @@ def main(argv=None) -> int:
             finally:
                 state["phases"]["teardown"] = time.monotonic() - started
                 state.update(exit_code=code, complete=code == 0 and teardown_ok)
-                if not teardown_ok:
-                    state.update(exit_code=code or 1, complete=False)
                 write(receipt, state)
                 print("E2E phases (seconds): " + json.dumps(state["phases"]), flush=True)
         return code
