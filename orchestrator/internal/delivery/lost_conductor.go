@@ -325,7 +325,7 @@ func reask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, q *LostQuest
 		// An escalation question only while the delivery still waits at
 		// that escalation's decision: one decided since (the banner) is moot.
 		if q.Escalation != nil && (!waitsAtDecide(d) || EscalationKey(d.WorkflowID, d.State.Escalations) != *q.Escalation) {
-			return "", "the escalation was decided since", nil
+			return "", notReaskedDecided, nil
 		}
 		p := ToPerson{Ref: ref, Why: WhyConductor, Items: q.Items}
 		if q.Relays != nil {
@@ -351,18 +351,18 @@ func reask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, q *LostQuest
 		return id, "", nil
 	}
 	if d == nil || !d.AtGate() {
-		return "", "the delivery is no longer at the pull request gate", nil
+		return "", notReaskedLeftGate, nil
 	}
 	var asked, now map[string]string
 	_ = json.Unmarshal(q.GateHeads, &asked)
 	now = nonNilMap(d.State.Heads)
 	if !sameHeads(asked, now) {
-		return "", "the work moved on since: the heads are not the ones it was asked about", nil
+		return "", notReaskedMoved, nil
 	}
 	if untested, err := UntestedConductorHeadTx(ctx, tx, ref.TaskID, d.State.Heads); err != nil {
 		return "", "", err
 	} else if untested {
-		return "", "the head is a conductor's commit nothing has reviewed", nil
+		return "", notReaskedUntested, nil
 	}
 	// The gate's choices and the actions they carry (#406) as asked: the
 	// recommendation the conductor made, and Open/Draft's open and draft.
@@ -413,11 +413,16 @@ func stillRelays(ctx context.Context, tx pgx.Tx, ref RunRef, id string) (string,
 	return "", nil
 }
 
-// Why a lost relay is not asked again (stillRelays).
+// Why a lost question is not asked again (reask, stillRelays), in the
+// fresh conductor's briefing.
 const (
-	relayHanded  = "the writer's question was handed to the person since"
-	relaySettled = "the writer's question was settled since"
-	relayAsked   = "the writer's question is already asked"
+	notReaskedDecided  = "the escalation was decided since"
+	notReaskedLeftGate = "the delivery is no longer at the pull request gate"
+	notReaskedMoved    = "the work moved on since: the heads are not the ones it was asked about"
+	notReaskedUntested = "the head is a conductor's commit nothing has reviewed"
+	relayHanded        = "the writer's question was handed to the person since"
+	relaySettled       = "the writer's question was settled since"
+	relayAsked         = "the writer's question is already asked"
 )
 
 func sameHeads(a, b map[string]string) bool {
