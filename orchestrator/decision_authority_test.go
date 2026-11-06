@@ -571,3 +571,16 @@ func TestDecideChoicesAreRefusedWhereTheyDoNotApply(t *testing.T) {
 		t.Errorf("%d gate questions asked", n)
 	}
 }
+
+// Nothing opens while the person is being asked: a question of the
+// conductor's to the person still open holds an earlier answer back.
+func TestAnOpenAnswerWaitsWhileThePersonIsAsked(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.reachGateAnswered(task)
+	w.must(task, "ask_person", `{"question":"Should the greeting also say goodbye?","choices":["Yes","No"]}`)
+	w.refused(task, "decide", `{"action":"open_pull_request"}`, "waiting for an answer")
+	if len(w.gh.Pulls()) != 0 {
+		t.Error("a pull request opened while the person was asked")
+	}
+}
