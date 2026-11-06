@@ -1,9 +1,12 @@
 package orchestrator_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
@@ -372,5 +375,35 @@ func TestStoppingATaskEndsItsPlaceholderConductor(t *testing.T) {
 	}
 	if lr := w.luxRunOf(next); lr != "" {
 		t.Errorf("the stopped placeholder was submitted to lux as %s", lr)
+	}
+}
+
+// 4c. A Run already replaced as lost (lux_lost_at) is never replaced again,
+// even should it read as live and waiting once more: the routine's own
+// guard, not only the status the second caller re-reads.
+func TestARunReplacedAsLostIsNotReplacedTwice(t *testing.T) {
+	w := conducting(t)
+	task, old, _ := w.lostAtGate()
+	w.untilLost(old)
+	next := w.replacementOf(old)
+	if next == "" {
+		t.Fatal("no replacement")
+	}
+	// The placeholder out of the way, the lost Run made to read as a live
+	// parked conductor with a person's question open again.
+	mustExec(t, w.owner, `UPDATE runs SET status = 'completed', ended_at = now() WHERE id = $1`, next)
+	mustExec(t, w.owner, `UPDATE runs SET status = 'paused', dude_pause = 'person', ended_at = NULL WHERE id = $1`, old)
+	mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, addressee)
+		VALUES ('q_again', $1, $2, $3, 'Again?', 'person')`, w.org, task, old)
+	var again string
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		again, err = delivery.ReplaceLostConductorTx(context.Background(), tx,
+			delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: old}, "", delivery.Parked)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if again != "" {
+		t.Errorf("replaced a second time, by %s", again)
 	}
 }
