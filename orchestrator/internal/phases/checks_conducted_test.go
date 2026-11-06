@@ -781,6 +781,9 @@ func TestRecordedCallsReadAFailureAtTheBase(t *testing.T) {
 		{"exit 1 bash's cd returned", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 1, "bash: line 1: cd: api: No such file or directory"}}, "unclear: exit 1, which a step before it may have returned"},
 		{"exit 2 with no output", "", [][]any{{"git checkout " + sha + " && make test", 2, ""}}, "unclear: exit 2, which a step before it may have returned"},
 		{"exit 2 of make", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 2, "--- FAIL: TestClock (0.00s)\n    clock_test.go:12: got 3, want 2\nFAIL\nexit status 1\nmake: *** [Makefile:4: test] Error 1"}}, "exit 2"},
+		// cd - goes back where the shell was, not down.
+		{"cd - after entering the worktree", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && cd - && make test", 2}}, "none recorded"},
+		{"cd -x after a checkout in place", "", [][]any{{"git checkout " + sha + " && cd -P && make test", 2}}, "none recorded"},
 		// error: is a step's failure as git's shapes or as the first line;
 		// a test framework's later in the output is the command's.
 		{"a test's error: line", "", [][]any{{"git checkout " + sha + " && make test", 1, "running 1 test\ntest clock ... FAILED\nerror: expected 2, got 3\nFAIL"}}, "exit 1"},

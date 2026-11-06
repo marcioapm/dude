@@ -265,9 +265,10 @@ func inDir(command string) (dir, rest string) {
 }
 
 // plainDir is a cd's argument dude reads as a directory: one word, nothing
-// the shell would expand or chain.
+// the shell would expand or chain, and no option ("-" goes back to the
+// previous directory, "-P" and "-L" to the home one).
 func plainDir(dir string) bool {
-	return dir != "" && !strings.ContainsAny(dir, " ;|&<>$`'\"\\*?~(){}")
+	return dir != "" && !strings.HasPrefix(dir, "-") && !strings.ContainsAny(dir, " ;|&<>$`'\"\\*?~(){}")
 }
 
 // sameCommand says a recorded shell call ran the reported command: both
