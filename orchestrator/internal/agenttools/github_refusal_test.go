@@ -9,8 +9,55 @@ import (
 	"strings"
 	"testing"
 
+	"encoding/json"
+	"github.com/jackc/pgx/v5"
+	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"io"
+	"log/slog"
 )
+
+// Committing invalid authority is not a general commit-on-error contract:
+// a tool which writes and then ordinarily refuses/errors still rolls back.
+func TestOrdinaryToolErrorsStillRollBackWrites(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	for _, sql := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('p', $1, 'P', 'p', 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('t', $1, 'p', 1, 'Original')`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, status) VALUES ('r', $1, 'p', 't', 1, 'implement', 'implementer', 'running')`,
+	} {
+		if _, err := owner.Exec(ctx, sql, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Server{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	for _, want := range []error{refuse("ordinary refusal"), errors.New("ordinary error"),
+		refusal{msg: "not decide", invalidOpenAuthority: &delivery.InvalidOpenAuthority{QuestionID: "q", Why: "invalid"}}} {
+		t.Run(want.Error(), func(t *testing.T) {
+			outside := false
+			tool := tool{name: "rollback_probe", run: func(ctx context.Context, tx pgx.Tx, _ Caller, _ json.RawMessage) (any, error) {
+				if _, err := tx.Exec(ctx, `UPDATE tasks SET title = 'must roll back' WHERE id = 't'`); err != nil {
+					return nil, err
+				}
+				return nil, want
+			}, outside: func(context.Context, Caller, any) (any, error) { outside = true; return nil, nil }}
+			_, err := s.call(ctx, Caller{Org: org, RunID: "r", TaskID: "t", ProjectID: "p"}, tool, json.RawMessage(`{}`))
+			if err == nil || err.Error() != want.Error() || outside {
+				t.Fatalf("err=%v outside=%v", err, outside)
+			}
+			var title string
+			if err := owner.QueryRow(ctx, `SELECT title FROM tasks WHERE id = 't'`).Scan(&title); err != nil {
+				t.Fatal(err)
+			}
+			if title != "Original" {
+				t.Fatalf("errored tool committed unrelated write: %q", title)
+			}
+		})
+	}
+}
 
 // githubAnswering is a Caller whose GitHub is h.
 func githubAnswering(t *testing.T, h http.HandlerFunc) Caller {

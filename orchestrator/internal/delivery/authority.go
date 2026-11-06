@@ -71,9 +71,9 @@ type AuthorityVoid struct {
 }
 
 // EvOpenAuthorityVoided: a person's open answer no longer authorizes the
-// opening, for good. Payload: {questionId, why}. A refused decide records
-// it after its call rolls back (Refusal.Event), and the void with it
-// (VoidOpenAuthorityTx).
+// opening, for good. Payload: {questionId, why}. A refused decide commits
+// the void and this event under its original decision locks, before returning
+// the semantic refusal (InvalidOpenAuthority).
 const EvOpenAuthorityVoided = "conductor.open_authority_voided"
 
 // VoidOpenAuthorityTx latches the authority given by questionID as void
@@ -98,11 +98,21 @@ func VoidOpenAuthorityTx(ctx context.Context, tx pgx.Tx, taskID, questionID, why
 	return voided[0], nil
 }
 
-// voidRefusal is refusal msg, recording as it rolls back that a's
-// authority is void for why (EvOpenAuthorityVoided).
+// InvalidOpenAuthority is the sole refusal whose invalidation must commit
+// before returning it. ConductDecideAsk has only read and acquired Chat and
+// delivery locks when producing this outcome: no decision, gate authorization,
+// or unrelated tool writes have happened. The caller commits the question-
+// specific void and its actor's audit in that same transaction, not an arbitrary
+// errored tool. The original question is captured under those locks.
+type InvalidOpenAuthority struct {
+	QuestionID string
+	Why        string
+}
+
+// voidRefusal asks the tool transaction owner to commit this invalidation
+// before exposing the original refusal. Ordinary Refusal.Event rolls back.
 func voidRefusal(msg string, a *OpenAuthority, why string) error {
-	return Refusal{Msg: msg, Event: &RefusalEvent{Type: EvOpenAuthorityVoided,
-		Payload: map[string]any{"questionId": a.QuestionID, "why": why}}}
+	return Refusal{Msg: msg, InvalidOpenAuthority: &InvalidOpenAuthority{QuestionID: a.QuestionID, Why: why}}
 }
 
 // AuthorityMove is a commit since the answer that does not void it: the
@@ -208,9 +218,9 @@ func authorityFactsTx(ctx context.Context, tx pgx.Tx, wfID string, st *State) (A
 // wins, and nothing opens while they are being asked: a gate question
 // asked since the answer leaves gateErr as it is (and the authority void);
 // an open question of the conductor's to the person is waited for. An
-// authority found not to hold is void for good, recorded as the refused
-// call rolls back (EvOpenAuthorityVoided). err is the refusal; fail a
-// failure to read.
+// authority found not to hold is void for good, committed with its audit
+// before releasing the decision locks (InvalidOpenAuthority). err is the
+// refusal; fail a failure to read.
 func authorityOpens(ctx context.Context, tx pgx.Tx, ref RunRef, wfID string, st *State, gateErr error) (draft bool, cited *CitedAnswer, err, fail error) {
 	a := st.OpenAuthority
 	if a == nil {

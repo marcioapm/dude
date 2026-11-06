@@ -31,6 +31,9 @@ type Refusal struct {
 	// An event the caller records, by the calling Run, after the refused
 	// call rolls back: what the refusal changed (a rerun's claim released).
 	Event *RefusalEvent
+	// The read-only decide/open check found this answer invalid. Unlike
+	// Event, its state and audit must commit under the decision locks.
+	InvalidOpenAuthority *InvalidOpenAuthority
 }
 
 // RefusalEvent is a Refusal's event: its type and payload.
