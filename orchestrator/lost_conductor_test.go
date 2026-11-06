@@ -12,6 +12,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // lostAtGate is a conducted task parked at the pull request gate on the
@@ -147,15 +148,13 @@ func TestTheAnswerToALostConductorsQuestionReachesItsReplacement(t *testing.T) {
 	}
 	w.until("the replacement on lux", func() bool { return w.luxRunOf(next) != "" })
 	spec := w.conductorSpecOf(task)
-	for _, required := range []string{old, fullQuestion, replaySentinel, "answer is your next message", "do not ask again"} {
-		// Spec is JSON, so normalize its escapes before checking the full
-		// question as text, not just the gate's choice labels.
-		var decoded any
-		if err := json.Unmarshal([]byte(spec), &decoded); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(fmt.Sprint(decoded), required) {
-			t.Errorf("submitted Spec missing %q: %s", required, spec)
+	var submitted lux.Spec
+	if err := json.Unmarshal([]byte(spec), &submitted); err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{old, "to answer:\n" + fmt.Sprintf("%q", fullQuestion), replaySentinel, "answer is your next message", "do not ask again"} {
+		if !strings.Contains(submitted.Workload.Prompt, required) {
+			t.Errorf("submitted prompt missing %q:\n%s", required, submitted.Workload.Prompt)
 		}
 	}
 	prompt := w.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id = $1`, next)
