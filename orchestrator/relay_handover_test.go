@@ -462,10 +462,7 @@ func (s *steering) relayLost() (qid, relay, person string) {
 	relay = s.relays(qid)
 	person = s.str(`SELECT person_id FROM api_keys WHERE id=$1`, s.person("Ana"))
 	mustExec(s.t, s.owner, `UPDATE questions SET to_person=$2 WHERE id=$1`, relay, person)
-	s.until("all conductor input heard", func() bool {
-		return s.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, s.conductor) == 0
-	})
-	mustExec(s.t, s.owner, `UPDATE runs SET status='failed', error='lux no longer has this Run', ended_at=now() WHERE id=$1`, s.conductor)
+	s.failedOnceHeard(s.conductor)
 	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='cancelled'`, relay); n != 1 {
 		s.t.Fatal("the relay was not cancelled with its conductor")
 	}

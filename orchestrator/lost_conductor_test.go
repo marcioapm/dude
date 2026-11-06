@@ -336,6 +336,23 @@ func TestALostQuietConductorDoesNotDefaultTheDecision(t *testing.T) {
 	}
 }
 
+// failedAsLuxLost fails conductor run as main did when lux lost it: no
+// question.closed, its open questions cancelled by the status change.
+func (w *world) failedAsLuxLost(run string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE runs SET status = 'failed', error = 'lux no longer has this Run', ended_at = now() WHERE id = $1`, run)
+}
+
+// failedOnceHeard waits until conductor run was delivered everything it was
+// sent, then fails it as main did when lux lost it (failedAsLuxLost).
+func (w *world) failedOnceHeard(run string) {
+	w.t.Helper()
+	w.until("all conductor input heard", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, run) == 0
+	})
+	w.failedAsLuxLost(run)
+}
+
 // failedAsOnMain is main's end state for the issue: the conductor failed
 // with lux's 404, its gate question cancelled with no event, everything
 // it was sent delivered. Returns the task, the failed conductor and the
@@ -356,7 +373,7 @@ func (w *world) failedAsOnMainAsking(decide string) (task, old, q string) {
 	q = w.str(`SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
 	old = w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
 	w.untilParked(old)
-	mustExec(w.t, w.owner, `UPDATE runs SET status = 'failed', error = 'lux no longer has this Run', ended_at = now() WHERE id = $1`, old)
+	w.failedAsLuxLost(old)
 	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "cancelled" {
 		w.t.Fatalf("the question is %s", st)
 	}

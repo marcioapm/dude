@@ -130,10 +130,7 @@ func TestRetryReaskedEscalationChoiceMakesTheRealDecision(t *testing.T) {
 	w.must(task, "ask_person", escalationQuestion)
 	q := w.conductorQuestion(task)
 	old := w.str(`SELECT run_id FROM questions WHERE id=$1`, q)
-	w.until("all conductor input heard", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
-	})
-	mustExec(t, w.owner, `UPDATE runs SET status='failed', error='lux no longer has this Run', ended_at=now() WHERE id=$1`, old)
+	w.failedOnceHeard(old)
 	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/retry", map[string]any{}); status != 201 {
 		t.Fatalf("retry: %d %v", status, body)
 	}
@@ -169,10 +166,7 @@ func TestRetryDoesNotReaskAnEscalationDecidedSince(t *testing.T) {
 	w.must(task, "ask_person", escalationQuestion)
 	q := w.conductorQuestion(task)
 	old := w.str(`SELECT run_id FROM questions WHERE id=$1`, q)
-	w.until("all conductor input heard", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
-	})
-	mustExec(t, w.owner, `UPDATE runs SET status='failed', error='lux no longer has this Run', ended_at=now() WHERE id=$1`, old)
+	w.failedOnceHeard(old)
 	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/decide", map[string]any{"action": "stop"}); status != 200 {
 		t.Fatalf("decide: %d %v", status, body)
 	}
@@ -213,10 +207,7 @@ func TestRetryDoesNotReaskAnEscalationOvertakenByAnother(t *testing.T) {
 	q := w.conductorQuestion(task)
 	oldKey := w.str(`SELECT escalation FROM questions WHERE id=$1`, q)
 	old := w.str(`SELECT run_id FROM questions WHERE id=$1`, q)
-	w.until("all conductor input heard", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
-	})
-	mustExec(t, w.owner, `UPDATE runs SET status='failed', error='lux no longer has this Run', ended_at=now() WHERE id=$1`, old)
+	w.failedOnceHeard(old)
 	// Decided on the banner, on a delivery Deliver's policy decides
 	// (written directly, as in TestDecideEscalationNeedsTheOwnersAnswerToThisEscalation),
 	// whose retry escalates again.

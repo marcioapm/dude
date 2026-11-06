@@ -104,10 +104,7 @@ func TestTheDecisionDeadlineWaitsForAQuestionOfALostConductor(t *testing.T) {
 	})
 	t.Run("asked again by Try again", func(t *testing.T) {
 		w, task, old := setup(t)
-		w.until("all conductor input heard", func() bool {
-			return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
-		})
-		mustExec(t, w.owner, `UPDATE runs SET status = 'failed', error = 'lux no longer has this Run', ended_at = now() WHERE id = $1`, old)
+		w.failedOnceHeard(old)
 		status, out := w.call("/internal/tasks/"+task+"/retry", map[string]any{})
 		if status != 201 {
 			t.Fatalf("Try again: %d %v", status, out)
@@ -128,10 +125,7 @@ func TestAnOpenAnswerGivenBeforeTheLossStillAuthorizesAfterTryAgain(t *testing.T
 	task := w.task()
 	q := w.askedAndAnsweredOpen(task, "open")
 	old, _, _ := w.conductor(task)
-	w.until("all conductor input heard", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
-	})
-	mustExec(t, w.owner, `UPDATE runs SET status = 'failed', error = 'lux no longer has this Run', ended_at = now() WHERE id = $1`, old)
+	w.failedOnceHeard(old)
 	status, out := w.call("/internal/tasks/"+task+"/retry", map[string]any{})
 	if status != 201 {
 		t.Fatalf("Try again: %d %v", status, out)
