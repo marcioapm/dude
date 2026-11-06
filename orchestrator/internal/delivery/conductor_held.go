@@ -44,15 +44,29 @@ func conductorHeldTx(ctx context.Context, tx pgx.Tx, taskID string, d *Delivery)
 // task is for: HolderConductor while conductorHeldTx holds, else
 // HolderPerson (as every question was before conductor-first).
 func ReviewQuestionAddresseeTx(ctx context.Context, tx pgx.Tx, taskID string) (string, error) {
-	d, err := ReadDelivery(ctx, tx, taskID)
-	if err != nil {
+	held, err := ConductorTakesTx(ctx, tx, taskID)
+	switch {
+	case err != nil:
 		return "", err
+	case held:
+		return HolderConductor, nil
 	}
-	held, err := conductorHeldTx(ctx, tx, taskID, d)
-	if err != nil || !held {
-		return HolderPerson, err
+	return HolderPerson, nil
+}
+
+// refuseUnconducted refuses a conductor's settling of an ask it holds
+// unless d, the task's locked delivery, is live and conducted: the task
+// ended, no delivery in progress, or the delivery not conducted.
+func refuseUnconducted(d *Delivery) error {
+	switch {
+	case d != nil && Ended(d.TaskStatus):
+		return refusef(rThisTaskYouAreReadOnly, d.TaskStatus)
+	case d == nil || !d.Live():
+		return refuseText(rThisTaskHasNoDeliveryIn)
+	case !d.State.conducted():
+		return refuseText(rDeliverTakesThisTaskDecisionsNot)
 	}
-	return HolderConductor, nil
+	return nil
 }
 
 // reviewQuestionAsk is a reviewer's question as ToPersonTx asks the person.
@@ -74,13 +88,8 @@ func ForwardReviewQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id string
 	if err != nil {
 		return SettledReviewQuestion{}, err
 	}
-	switch {
-	case d != nil && Ended(d.TaskStatus):
-		return SettledReviewQuestion{}, refusef(rThisTaskYouAreReadOnly, d.TaskStatus)
-	case d == nil || !d.Live():
-		return SettledReviewQuestion{}, refuseText(rThisTaskHasNoDeliveryIn)
-	case !d.State.conducted():
-		return SettledReviewQuestion{}, refuseText(rDeliverTakesThisTaskDecisionsNot)
+	if err := refuseUnconducted(d); err != nil {
+		return SettledReviewQuestion{}, err
 	}
 	out, moved, err := reviewQuestionToPersonTx(ctx, tx, ref.Org, ref.TaskID, d, id, WhyConductor)
 	if err != nil || !moved {
@@ -407,13 +416,8 @@ func ConductDecideRepositoryRequest(ctx context.Context, tx pgx.Tx, ref RunRef, 
 	if req == nil || req.Status != "pending" || req.Addressee != HolderConductor {
 		return RepositoryDecision{}, refusef(rRepositoryRequestNotHeld, id)
 	}
-	switch {
-	case d != nil && Ended(d.TaskStatus):
-		return RepositoryDecision{}, refusef(rThisTaskYouAreReadOnly, d.TaskStatus)
-	case d == nil || !d.Live():
-		return RepositoryDecision{}, refuseText(rThisTaskHasNoDeliveryIn)
-	case !d.State.conducted():
-		return RepositoryDecision{}, refuseText(rDeliverTakesThisTaskDecisionsNot)
+	if err := refuseUnconducted(d); err != nil {
+		return RepositoryDecision{}, err
 	}
 	if action == RepositoryForward {
 		moved, err := repositoryRequestToPersonTx(ctx, tx, ref.Org, req, WhyConductor)

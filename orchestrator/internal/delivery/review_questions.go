@@ -164,13 +164,8 @@ func ConductAnswerReviewQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id,
 	if err != nil {
 		return SettledReviewQuestion{}, err
 	}
-	switch {
-	case d != nil && Ended(d.TaskStatus):
-		return SettledReviewQuestion{}, refusef(rThisTaskYouAreReadOnly, d.TaskStatus)
-	case d == nil || !d.Live():
-		return SettledReviewQuestion{}, refuseText(rThisTaskHasNoDeliveryIn)
-	case !d.State.conducted():
-		return SettledReviewQuestion{}, refuseText(rDeliverTakesThisTaskDecisionsNot)
+	if err := refuseUnconducted(d); err != nil {
+		return SettledReviewQuestion{}, err
 	}
 	if withdraw == (strings.TrimSpace(answer) != "") {
 		return SettledReviewQuestion{}, refuseText(rAnswerOrWithdrawReviewQuestion)
