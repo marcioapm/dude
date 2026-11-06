@@ -51,33 +51,26 @@ func (s *Syncer) handOverHeldAsks(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	for _, q := range questions {
-		if err := s.DB.InOrg(ctx, q.Org, func(tx pgx.Tx) error {
-			_, err := delivery.HandOverReviewQuestionTx(ctx, tx, q.Org, q.TaskID, q.ID, wait)
-			return err
-		}); err != nil {
-			s.Log.Warn("handing a reviewer's question to the person failed", "question", q.ID, "error", err)
-		}
-	}
-	for _, r := range requests {
-		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := delivery.HandOverRepositoryRequestTx(ctx, tx, r.Org, r.TaskID, r.ID, wait)
-			return err
-		}); err != nil {
-			s.Log.Warn("handing a repository request to the person failed", "request", r.ID, "error", err)
-		}
-	}
+	s.handOverEach(ctx, questions, wait, delivery.HandOverReviewQuestionTx, "handing a reviewer's question to the person failed", "question")
+	s.handOverEach(ctx, requests, wait, delivery.HandOverRepositoryRequestTx, "handing a repository request to the person failed", "request")
 	// An idle park its conductor neither steered nor restarted: the person
 	// is asked to look at it, as when no conductor decides.
-	for _, r := range parks {
-		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := delivery.HandOverIdleParkTx(ctx, tx, r.Org, r.TaskID, r.ID, wait)
+	s.handOverEach(ctx, parks, wait, delivery.HandOverIdleParkTx, "handing an idle park to the person failed", "run")
+	return nil
+}
+
+// handOverEach hands each item over in its own organization's
+// transaction; a failure is logged (as key) and the rest go on.
+func (s *Syncer) handOverEach(ctx context.Context, items []heldAsk, wait time.Duration,
+	handOver func(context.Context, pgx.Tx, string, string, string, time.Duration) (bool, error), failed, key string) {
+	for _, h := range items {
+		if err := s.DB.InOrg(ctx, h.Org, func(tx pgx.Tx) error {
+			_, err := handOver(ctx, tx, h.Org, h.TaskID, h.ID, wait)
 			return err
 		}); err != nil {
-			s.Log.Warn("handing an idle park to the person failed", "run", r.ID, "error", err)
+			s.Log.Warn(failed, key, h.ID, "error", err)
 		}
 	}
-	return nil
 }
 
 func collectHeld(ctx context.Context, tx pgx.Tx, sql string, wait time.Duration) ([]heldAsk, error) {
