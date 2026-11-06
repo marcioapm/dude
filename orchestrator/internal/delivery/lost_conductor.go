@@ -313,12 +313,18 @@ func reaskTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery) (string, e
 
 // reask asks the lost question again on the new conductor, without a
 // model call: a gate question only while the delivery is at the gate at
-// the heads it was asked at, and not at an untested head; a relay
+// the heads it was asked at, and not at an untested head; an escalation
+// question only while that escalation still waits on its decision; a relay
 // only while the writer's question may still be relayed (stillRelays), and
 // not at all once it was handed to the person. Returns the new question, or
 // why it was not asked.
 func reask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, q *LostQuestion) (string, string, error) {
 	if len(q.GateHeads) == 0 || string(q.GateHeads) == "null" {
+		// An escalation question only while the delivery still waits at
+		// that escalation's decision: one decided since (the banner) is moot.
+		if q.Escalation != nil && (!waitsAtDecide(d) || EscalationKey(d.WorkflowID, d.State.Escalations) != *q.Escalation) {
+			return "", "the escalation was decided since", nil
+		}
 		p := ToPerson{Ref: ref, Why: WhyConductor, Items: q.Items}
 		if q.Relays != nil {
 			relays, handed, err := stillRelays(ctx, tx, ref, *q.Relays)
