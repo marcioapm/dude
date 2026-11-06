@@ -13,7 +13,7 @@
 # sorted name, and places every chunk in one lane of one of M machines. A
 # package whose TestMain checks the whole run (cmd/dude-cli, agenttools) is
 # never cut: it runs as one process without -test.run. forge and phases also
-# run once more, whole, under the race detector, as a chunk of their own.
+# run once more under the race detector, cut into chunks the same way.
 # Each test gets its own database clone (internal/dbtest), so processes do
 # not share state. The partition depends only on the listed tests, M and N:
 # CI's runners, given the same GO_TEST_LANES, compute the same one and each
