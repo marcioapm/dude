@@ -80,6 +80,27 @@ func TestDecideItems(t *testing.T) {
 	if err != nil || len(items[0].Choices) != 0 || actions != nil {
 		t.Errorf("a free question: %v %v %v", items, actions, err)
 	}
+	// Free questions with a fraction, a path, or a list of context before
+	// the question: not options.
+	for _, note := range []string{
+		"Should the limit be 1 / 2 of the budget?",
+		"Is src/a / b the right path?",
+		"Criterion 1 failed:\n- the e2e suite did not run\n- no container runtime\nHow do you want to go on?",
+		"Steps done:\n1. implemented\n2. reviewed\nWhat should the PR title be?",
+	} {
+		if _, _, err := decideItems(note, DecideAsk{}); err != nil {
+			t.Errorf("%q: %v, want asked in the person's own words", note, err)
+		}
+	}
+	// The sim's notes, refused: its options as prose.
+	for _, note := range []string{
+		"You chose to open the PR so CI measures, and the tester could not measure criterion 1. Open / Draft / Show me the diff / Another round? I recommend Open.",
+		"How do we go on?\n- Open the PR so CI measures\n- Run Docker locally",
+	} {
+		if _, _, err := decideItems(note, DecideAsk{}); !IsRefusal(err) {
+			t.Errorf("%q: %v, want refused", note, err)
+		}
+	}
 	items, actions, err = decideItems("Criterion 1 cannot be checked here. How to go on?", DecideAsk{Choices: []DecideChoice{
 		{Label: "Open the PR so CI measures", Action: ChoiceOpen}, {Label: "Run Docker locally"}, {Label: "Accept partly met"}},
 		Recommend: "Open the PR so CI measures"})

@@ -437,17 +437,30 @@ func gateRecommended(recommend string) ([]Choice, []string, error) {
 }
 
 // proseOptions says a note lists the answers to choose from as prose: a
-// question with " / "-separated alternatives, or two or more lines that
-// are list items. Conservative: it reads only these two shapes, and is
+// question line with two or more " / " separating words (not a fraction
+// or a path: no digit and no "/" in the word on either side), or two or
+// more list items after the note's last line ending in "?" (options follow
+// the question; a list before it is context) — or anywhere, in a note with
+// no such line. Conservative: it reads only these two shapes, and is
 // asked only of a question with no choices at a decision point whose
 // answers have actions.
 func proseOptions(note string) (string, bool) {
-	items := 0
-	for _, line := range strings.Split(note, "\n") {
+	lines := strings.Split(note, "\n")
+	for _, line := range lines {
 		l := strings.TrimSpace(line)
-		if strings.Count(l, " / ") >= 1 && strings.Contains(l, "?") {
+		if strings.Contains(l, "?") && alternatives(l) >= 2 {
 			return clip(oneLine(l), 120), true
 		}
+	}
+	after := 0
+	for i, line := range lines {
+		if strings.HasSuffix(strings.TrimSpace(line), "?") {
+			after = i + 1
+		}
+	}
+	items := 0
+	for _, line := range lines[after:] {
+		l := strings.TrimSpace(line)
 		if strings.HasPrefix(l, "- ") || strings.HasPrefix(l, "* ") || len(l) > 2 && l[0] >= '1' && l[0] <= '9' && (l[1] == '.' || l[1] == ')') {
 			items++
 		}
@@ -456,6 +469,27 @@ func proseOptions(note string) (string, bool) {
 		return clip(oneLine(note), 120), true
 	}
 	return "", false
+}
+
+// alternatives is how many " / " in line separate two words, neither with
+// a digit or a "/" of its own (a fraction's, a path's).
+func alternatives(line string) int {
+	parts := strings.Split(line, " / ")
+	n := 0
+	for i := 1; i < len(parts); i++ {
+		before, after := strings.Fields(parts[i-1]), strings.Fields(parts[i])
+		if len(before) == 0 || len(after) == 0 {
+			continue
+		}
+		if plainWord(before[len(before)-1]) && plainWord(after[0]) {
+			n++
+		}
+	}
+	return n
+}
+
+func plainWord(w string) bool {
+	return !strings.ContainsAny(w, "0123456789/\\")
 }
 
 // decideItems is decide ask_person's question away from the gate: the
