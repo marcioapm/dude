@@ -26,17 +26,25 @@ CHECKS_MODELS = {
 }
 
 
-def _project(client: ApiClient, fake_github: FakeGitHub, model: str) -> dict:
+def _project(client: ApiClient, fake_github: FakeGitHub, model: str, conductor: bool = True) -> dict:
+    models = client.on_models({
+        "implementer": model,
+        "reviewer": "fake/scripted",
+        "simplifier": "fake/scripted",
+        # Deliver's quiet conductor takes Deliver's defaults, and decides
+        # checks reports from the calls dude recorded (decide_checks).
+        "conductor": "fake/defaults",
+    })
+    if not conductor:
+        # The conductor on a tier with no model (the organisation's Fast,
+        # unset): Deliver starts on Deliver's policy, no conductor deciding.
+        fast = {t["name"]: t for t in client.get("/v1/models/tiers").json()["tiers"]}["Fast"]
+        assert not fast["model"], fast
+        models = {**models, "conductor": {"tier": fast["id"]}}
     return client.create_project(
         name="Checks gate",
-        slug=f"checks-{fake_github.api_port}-{model.replace('/', '-')}",
-        agentModels=client.on_models({
-            "implementer": model,
-            "reviewer": "fake/scripted",
-            "simplifier": "fake/scripted",
-            # Deliver's quiet conductor takes Deliver's defaults.
-            "conductor": "fake/defaults",
-        }),
+        slug=f"checks-{fake_github.api_port}-{model.replace('/', '-')}-{'conducted' if conductor else 'policy'}",
+        agentModels=models,
         deliveryPolicy={"requiredReviewers": ["correctness"], "test": False},
         repositories=[{"name": "checks", "url": fake_github.clone_url, "defaultBranch": "main"}],
     )
@@ -50,11 +58,11 @@ def _judge(client: ApiClient, fake_github: FakeGitHub, model: str = "judge-e2e")
     assert resp.status_code == 200, resp.text
 
 
-def _start(client: ApiClient, fake_github: FakeGitHub, model: str) -> dict:
+def _start(client: ApiClient, fake_github: FakeGitHub, model: str, conductor: bool = True) -> dict:
     # The forge credential is needed for publishing and for its checksFixRounds setting.
     credential = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": fake_github.api_url})
     assert credential.status_code in (200, 409), credential.text
-    project = _project(client, fake_github, model)
+    project = _project(client, fake_github, model, conductor)
     task = client.create_task(project["id"], "Verify the checks gate")
     started = client.post(f"/v1/tasks/{task['id']}/deliver")
     assert started.status_code == 201, started.text
@@ -188,7 +196,10 @@ def test_exhausted_rounds_escalates_and_reasoned_waive_publishes(client: ApiClie
 
 @pytest.mark.e2e
 def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient, fake_github: FakeGitHub):
-    # No send-back allowed: a failure the judge did not pass would ask a person at once.
+    # No send-back allowed: a failure the conductor did not pass would
+    # escalate at once. The conductor (fake/defaults) decides it pre-existing
+    # from the evidence of the run at the task's base; a judgement tier is
+    # set, and is never asked on a conducted delivery.
     _judge(client, fake_github)
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 0}).status_code == 200
     task = _start(client, fake_github, CHECKS_MODELS["base-shown"])
@@ -197,22 +208,31 @@ def test_reported_preexisting_failure_passes_without_a_person(client: ApiClient,
     events = _checks_events(client, _implementer(client, task["id"])["id"])
     assert len(events) == 1 and events[0]["payload"]["verified"] is True, events
     first = events[0]["payload"]["checks"][0]
-    assert first["command"] == "make test" and first["result"] == "pre-existing" and first["callId"], first
+    # The verdict cites the conductor's decision (run.checks.conducted), not a judge call.
+    conducted = [e for e in client.events(runId=_implementer(client, task["id"])["id"]) if e["eventType"] == "run.checks.conducted"]
+    assert len(conducted) == 1 and conducted[0]["payload"]["checks"][0]["verdict"] == "preexisting", conducted
+    assert first["command"] == "make test" and first["result"] == "pre-existing" and first["by"] == "conductor" \
+        and first["decisionCursor"] == conducted[0]["cursor"], first
     activity = client.events(taskId=task["id"])
     assert not any(e["eventType"] == "question.asked" for e in activity)
     assert not any(e["eventType"] == "run.checks.decided" for e in activity)
     headline, rows = _rows(_checks_section(fake_github.pulls[1].body))
-    assert "the judge passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)" in headline, headline
-    assert rows[0] == ("Implementer", "passed by the judge", [("make test", "pre-existing"), ("missing checks", "pass")])
+    assert "the conductor passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)" in headline, headline
+    assert rows[0] == ("Implementer", "passed by the conductor", [("make test", "pre-existing"), ("missing checks", "pass")])
 
 
 @pytest.mark.e2e
 @pytest.mark.ui
-def test_no_judgement_tier_publishes_with_skip_advice(page: Page, web_url: str, client: ApiClient, fake_github: FakeGitHub):
+def test_no_conductor_publishes_with_skip_advice(page: Page, web_url: str, client: ApiClient, fake_github: FakeGitHub):
+    # A delivery no conductor decides (Deliver's policy: the conductor's
+    # tier has no model) with judgements off: its all-pass reports are not
+    # verified, published with the skip recorded. (A conducted delivery's
+    # are decided by its conductor: the test below.)
     # Off is the fixture's default. Make that explicit so this remains true
     # when the suite's organization fixture gains a default tier later.
     assert client.put("/v1/judgements/settings", {"tierId": None}).status_code == 200
-    task = _start(client, fake_github, CHECKS_MODELS["unbacked"])
+    task = _start(client, fake_github, CHECKS_MODELS["unbacked"], conductor=False)
+    assert client.get(f"/v1/tasks/{task['id']}").json()["decider"] == "policy"
     _wait_pr(client, fake_github, task["id"])
     run = _implementer(client, task["id"])
     events = _checks_events(client, run["id"])
@@ -228,3 +248,26 @@ def test_no_judgement_tier_publishes_with_skip_advice(page: Page, web_url: str, 
     sign_in(page, web_url, client.api_key, at=f"#/tasks/{task['id']}", board=False)
     activity = page.get_by_text(re.compile("not model-checked|checks", re.IGNORECASE))
     expect(activity.first).to_be_visible(timeout=30_000)
+
+
+@pytest.mark.e2e
+def test_with_no_judgement_tier_the_conductor_still_decides_checks(client: ApiClient, fake_github: FakeGitHub):
+    # The conducted counterpart: judgements off changes nothing on a
+    # conducted delivery. The conductor reads the recorded calls (make check
+    # exited 1, reported pass), decides the pass unbacked, and the report is
+    # sent back, never published, then escalated to the conductor.
+    assert client.put("/v1/judgements/settings", {"tierId": None}).status_code == 200
+    assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
+    task = _start(client, fake_github, CHECKS_MODELS["unbacked"])
+    assert client.get(f"/v1/tasks/{task['id']}").json()["decider"] == "conductor"
+    raised = wait_until(lambda: [e for e in client.events(taskId=task["id"])
+                                 if e["eventType"] == "escalation.raised"],
+                        timeout=90, message="checks gate did not reach the conductor")
+    assert raised[-1]["payload"]["reason"] == "checks_unverified" and raised[-1]["payload"]["holder"] == "conductor"
+    run = _implementer(client, task["id"])
+    conducted = [e for e in client.events(runId=run["id"]) if e["eventType"] == "run.checks.conducted"]
+    assert len(conducted) == 2 and all(e["payload"]["checks"][0]["verdict"] == "unbacked" for e in conducted), conducted
+    events = _checks_events(client, run["id"])
+    assert [e["payload"]["verified"] for e in events] == [False, False], events
+    assert not any(e["payload"].get("skipped") for e in events), events
+    assert not fake_github.pulls
