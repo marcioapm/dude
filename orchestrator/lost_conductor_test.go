@@ -342,10 +342,17 @@ func TestALostQuietConductorDoesNotDefaultTheDecision(t *testing.T) {
 // question.
 func (w *world) failedAsOnMain() (task, old, q string) {
 	w.t.Helper()
+	return w.failedAsOnMainAsking(`{"action":"ask_person"}`)
+}
+
+// failedAsOnMainAsking is failedAsOnMain with the conductor's own decide
+// ask_person, e.g. one that recommends another of the gate's choices.
+func (w *world) failedAsOnMainAsking(decide string) (task, old, q string) {
+	w.t.Helper()
 	w.syncer.ParkAfter = time.Millisecond
 	task = w.task()
 	w.reachGate(task)
-	w.must(task, "decide", `{"action":"ask_person"}`)
+	w.must(task, "decide", decide)
 	q = w.str(`SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
 	old = w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
 	w.untilParked(old)

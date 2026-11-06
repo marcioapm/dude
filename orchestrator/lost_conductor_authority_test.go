@@ -14,13 +14,17 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
-// Try again asks the lost gate question again with the gate's choices, Open
-// recommended as the conductor asked it, and the actions they carry: the
-// person's Open on it opens the pull request.
+// Try again asks the lost gate question again with the gate's choices, the
+// recommendation as the conductor made it (Draft here, not the gate's
+// default Open), and the actions they carry: the person's Open on it opens
+// the pull request.
 func TestTryAgainReasksTheGateQuestionWithItsChoicesAndActions(t *testing.T) {
 	w := conducting(t)
-	task, _, q := w.failedAsOnMain()
+	task, _, q := w.failedAsOnMainAsking(`{"action":"ask_person","recommend":"Draft"}`)
 	_, lostChoices, lostActions := w.questionShape(q)
+	if len(lostChoices) != len(delivery.GateChoices) || lostChoices[0].Recommended || !lostChoices[1].Recommended {
+		t.Fatalf("the lost question's choices %+v: want Draft recommended as the conductor asked", lostChoices)
+	}
 	status, out := w.call("/internal/tasks/"+task+"/retry", map[string]any{})
 	if status != 201 {
 		t.Fatalf("Try again: %d %v", status, out)
@@ -38,6 +42,9 @@ func TestTryAgainReasksTheGateQuestionWithItsChoicesAndActions(t *testing.T) {
 		if c.Label != delivery.GateChoices[i] || c.Recommended != lostChoices[i].Recommended {
 			t.Errorf("choice %d %+v, want %q recommended=%v as asked", i, c, delivery.GateChoices[i], lostChoices[i].Recommended)
 		}
+	}
+	if choices[0].Recommended || !choices[1].Recommended {
+		t.Errorf("fresh choices %+v: want Draft recommended, not Open", choices)
 	}
 	if strings.Join(actions, ",") != strings.Join(lostActions, ",") || len(actions) < 2 || actions[0] != "open" || actions[1] != "draft" {
 		t.Errorf("actions %v, want %v (open, draft)", actions, lostActions)
