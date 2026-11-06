@@ -328,3 +328,49 @@ func TestALostConductorThatCannotBeReplacedSaysSoAndFreesTheTask(t *testing.T) {
 		t.Errorf("the task still waits on the person for a question nobody will hear")
 	}
 }
+
+// 9b. A conductor lux lost with no person's question open holds nothing to
+// keep: it fails as before, and the next message starts a fresh one.
+func TestALostConductorWithNoPersonQuestionFailsAsBefore(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	old := w.talk(task)
+	w.lux.ForgetRun(w.luxRunOf(old))
+	w.untilLost(old)
+	if next := w.replacementOf(old); next != "" {
+		t.Fatalf("replaced by %s with nothing a person was asked", next)
+	}
+	if e := w.str(`SELECT COALESCE(error, '') FROM runs WHERE id = $1`, old); e != "lux no longer has this Run" {
+		t.Errorf("failed with %q", e)
+	}
+}
+
+// Risk 1: a placeholder (paused for a person, no lux Run) reads as a parked
+// conductor. Stopping the task ends it, with no lux call, and cancels its
+// question; nothing sweeps it as a stall, a cost or a resume.
+func TestStoppingATaskEndsItsPlaceholderConductor(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.lostAtGate()
+	w.untilLost(old)
+	next := w.replacementOf(old)
+	if next == "" {
+		t.Fatal("no placeholder")
+	}
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_run_id IS NULL
+		AND stall_reported_at IS NULL AND lux_cost_next_at IS NULL`, next); n != 1 {
+		t.Fatalf("the placeholder was swept as a live Run:\n%s", w.describeRuns())
+	}
+	w.stop(w.ownedBy(task, "Ana"), task, map[string]any{})
+	w.until("the placeholder ended", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('aborted', 'failed', 'completed')`, next) == 1
+	})
+	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "cancelled" {
+		t.Errorf("question %s after the stop", st)
+	}
+	if lr := w.luxRunOf(next); lr != "" {
+		t.Errorf("the stopped placeholder was submitted to lux as %s", lr)
+	}
+}
