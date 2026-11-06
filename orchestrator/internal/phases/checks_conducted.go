@@ -421,10 +421,11 @@ func checksOutBase(step string, bases []taskBase) (worktree string, ok bool) {
 
 // stepFailing matches a line a step before the command prints when it
 // fails: a cd's in bash ("bash: line 1: cd: api: No such file or
-// directory") or dash ("sh: 1: cd: can't cd to api"), any of dash's own
-// ("sh: 1: "), and git's fatal lines and the error lines of a checkout or
-// switch.
-var stepFailing = regexp.MustCompile(`(?m)(^|: )cd: |can't cd|^sh: \d+: |^fatal: |^error: (pathspec|Your local changes|unknown switch)`)
+// directory"), dash ("sh: 1: cd: can't cd to api") or zsh ("zsh:cd:1: no
+// such file or directory: api"), any of dash's own ("sh: 1: "), and git's
+// fatal lines and the error lines of a checkout or switch (a checkout
+// mid-merge prints "f: needs merge" to stdout before its error).
+var stepFailing = regexp.MustCompile(`(?m)(^|: )cd: |can't cd|zsh:cd:\d+: |^sh: \d+: |^fatal: |^error: (pathspec|Your local changes|you need to resolve|unknown switch)`)
 
 // stepFailed says output shows a step before the command failing: a line
 // stepFailing matches, or an "error: " line first, before the command
