@@ -3,8 +3,9 @@ package orchestrator_test
 // Stop and Close of a task whose delivery is held at the pull request by a
 // reviewer's open question (delivery.holdForQuestions): no Run is live, the
 // question stays open (attempt-scoped, it holds nothing once the delivery
-// ends), and neither an answer after the end nor the conductor publishes
-// anything or starts a conductor.
+// ends) except a conductor-held one on a Close, which is withdrawn with the
+// attempt (migration 248), and neither an answer after the end nor the
+// conductor publishes anything or starts a conductor.
 
 import (
 	"strings"
@@ -72,6 +73,50 @@ func (w *world) answeredAfterTheEnd(task, ana, id, status string) {
 	}
 }
 
+// withdrawnWithTheClose checks a conductor-held question the Close
+// withdrew: withdrawn, the owner's answer afterwards refused (409) and
+// unrecorded, and, pumped, nothing is published, no conductor is woken or
+// started, no reviewer-question wake is pending and the task stays aborted.
+func (w *world) withdrawnWithTheClose(task, ana, id string) {
+	w.t.Helper()
+	if n := w.count(`SELECT count(*) FROM review_questions WHERE id = $1 AND status = 'withdrawn'`, id); n != 1 {
+		w.t.Fatalf("the conductor-held question is %s after the Close, want withdrawn",
+			w.str(`SELECT status FROM review_questions WHERE id = $1`, id))
+	}
+	conductors := len(w.conductorRuns(task))
+	woken := w.events(task, "conductor.woken")
+	answered := w.events(task, delivery.EvReviewQuestionAnswered)
+	if status, out := w.callAs(ana, "/internal/review-questions/"+id+"/answer", map[string]any{"answer": "Exactly one retry."}); status != 409 {
+		w.t.Fatalf("the owner answering a withdrawn question: %d %v, want 409", status, out)
+	}
+	if n := w.count(`SELECT count(*) FROM review_questions WHERE id = $1 AND status = 'withdrawn'`, id); n != 1 {
+		w.t.Fatalf("the refused answer changed the question")
+	}
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	if n := len(w.gh.Pulls()); n != 0 {
+		w.t.Fatalf("%d pull requests opened after the task was closed", n)
+	}
+	if s := w.taskStatus(task); s != "aborted" {
+		w.t.Fatalf("after the refused answer the task is %s, want aborted", s)
+	}
+	if n := w.events(task, delivery.EvReviewQuestionAnswered) - answered; n != 0 {
+		w.t.Errorf("%d answers recorded for a withdrawn question", n)
+	}
+	if n := len(w.conductorRuns(task)) - conductors; n != 0 {
+		w.t.Errorf("%d conductors started after the Close", n)
+	}
+	if n := w.events(task, "conductor.woken") - woken; n != 0 {
+		w.t.Errorf("a conductor was woken %d times after the Close", n)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'review-question:%'
+		AND delivered_at IS NULL`, task); n != 0 {
+		w.t.Errorf("%d reviewer-question wakes pending for a closed task", n)
+	}
+}
+
 // Stop of a held delivery: aborted, its workflow aborted, the question left
 // open and nothing published at once; under the conductor, the conductor
 // can no longer answer it. The owner's answer after the Stop is recorded
@@ -127,9 +172,11 @@ func TestStoppingATaskHeldByAReviewerQuestion(t *testing.T) {
 	}
 }
 
-// Close (Won't do) of a held delivery: closed, its workflow completed, the
-// question left open, and the owner's answer afterwards publishes nothing
-// and wakes no conductor.
+// Close (Won't do) of a held delivery: closed, its workflow completed.
+// Under the policy the question is the person's and is left open; the
+// owner's answer afterwards publishes nothing and wakes no conductor. Under
+// the conductor the question is the conductor's, moot once the attempt
+// ends: the Close withdraws it, and the owner's answer is refused (409).
 func TestClosingATaskHeldByAReviewerQuestion(t *testing.T) {
 	for _, conducted := range []bool{false, true} {
 		name := map[bool]string{false: "policy", true: "conductor"}[conducted]
@@ -144,10 +191,18 @@ func TestClosingATaskHeldByAReviewerQuestion(t *testing.T) {
 			if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'completed'`, task); n != 1 {
 				t.Fatalf("the delivery did not end: %s", w.str(`SELECT status FROM workflow_runs WHERE task_id = $1`, task))
 			}
-			if n := w.count(`SELECT count(*) FROM review_questions WHERE id = $1 AND status = 'open'`, id); n != 1 {
-				t.Errorf("the reviewer's question is no longer open after the Close")
+			if !conducted {
+				if n := w.count(`SELECT count(*) FROM review_questions WHERE id = $1 AND status = 'open'`, id); n != 1 {
+					t.Errorf("the reviewer's question is no longer open after the Close")
+				}
+				w.answeredAfterTheEnd(task, ana, id, "aborted")
+			} else {
+				// A question its conductor still holds dies with the attempt
+				// (migration 248): the Close withdraws it, so nobody is asked
+				// an abandoned attempt's question, and the owner's answer
+				// afterwards is refused cleanly.
+				w.withdrawnWithTheClose(task, ana, id)
 			}
-			w.answeredAfterTheEnd(task, ana, id, "aborted")
 			if r := w.resolutionOf(task); r != "wont_do" {
 				t.Errorf("after the answer the closed task's resolution is %s", r)
 			}
