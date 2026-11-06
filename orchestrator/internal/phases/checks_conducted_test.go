@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
@@ -376,5 +378,28 @@ func TestDecideChecksRefusals(t *testing.T) {
 	}
 	if pass, _ := w.gate(); pass {
 		t.Fatal("a rejected failure passed")
+	}
+}
+
+// The scripted DefaultsModel conductor reads the real checks wake: its
+// decide_checks backs passes and rejects every failure or not-run check,
+// one verdict per reported check, in order — never passing a failure.
+func TestTheDefaultsConductorReadsTheChecksWake(t *testing.T) {
+	a := delivery.ChecksAsked{Turn: 42, Check: []delivery.Check{
+		{Command: `make "it"`, Result: delivery.CheckPass}, {Command: "make test", Result: delivery.CheckFail},
+		{Command: "e2e", Result: delivery.CheckNotRun}}}
+	line := checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, nil)
+	calls := fakeagent.ChecksDefaults("Since you last heard: " + line)
+	if len(calls) != 1 || calls[0][0] != "decide_checks" {
+		t.Fatalf("%q from %q", calls, line)
+	}
+	var in delivery.DecideChecks
+	if err := json.Unmarshal([]byte(calls[0][1]), &in); err != nil {
+		t.Fatal(err)
+	}
+	if in.RunID != "run_x" || in.Turn != 42 || len(in.Checks) != 3 || in.Checks[0].Command != `make "it"` ||
+		in.Checks[0].Verdict != delivery.VerdictBacked || in.Checks[1].Verdict != delivery.VerdictReject ||
+		in.Checks[2].Verdict != delivery.VerdictReject || in.Missing.Verdict != delivery.MissingNone {
+		t.Fatalf("%+v", in)
 	}
 }

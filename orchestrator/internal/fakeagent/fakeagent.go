@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -456,10 +458,57 @@ func TakesDefaults(input string) bool {
 // delivery's own next decision or its next fix takes it up, as under
 // Deliver. None while it is chatty: a person drives its decisions.
 func DefaultsCalls(input string, quiet bool) [][2]string {
-	if !quiet || !TakesDefaults(input) {
+	if !quiet {
+		return nil
+	}
+	if calls := ChecksDefaults(input); len(calls) > 0 {
+		return calls
+	}
+	if !TakesDefaults(input) {
 		return nil
 	}
 	return [][2]string{DefaultsCall}
+}
+
+// checksWake matches a checks wake's call to decide (delivery's
+// wakes/checks) and each reported check in it.
+var (
+	checksWakeRun   = regexp.MustCompile(`decide_checks \(runId (\S+), turn (\d+)\)`)
+	checksWakeCheck = regexp.MustCompile(`("(?:[^"\\]|\\.)*") reported (pass|fail|not-run):`)
+)
+
+// ChecksDefaults is what a DefaultsModel conductor decides on a checks
+// wake: what Deliver's defaults would, with no conductor. A reported pass
+// passes, as today's skip does; every failure or check not run is
+// rejected, so only a person passes it after the rounds; nothing missing.
+// It never passes a failure: a test that wants one passed has the
+// conductor decide it in Chat ("tool: decide_checks …").
+func ChecksDefaults(input string) [][2]string {
+	var out [][2]string
+	for _, m := range checksWakeRun.FindAllStringSubmatchIndex(input, -1) {
+		run, turn := input[m[2]:m[3]], input[m[4]:m[5]]
+		rest := input[m[1]:]
+		if next := checksWakeRun.FindStringIndex(rest); next != nil {
+			rest = rest[:next[0]]
+		}
+		var checks []map[string]string
+		for _, c := range checksWakeCheck.FindAllStringSubmatch(rest, -1) {
+			var command string
+			if err := json.Unmarshal([]byte(c[1]), &command); err != nil {
+				continue
+			}
+			verdict := "reject"
+			if c[2] == "pass" {
+				verdict = "backed"
+			}
+			checks = append(checks, map[string]string{"command": command, "verdict": verdict, "reason": "Deliver's defaults: " + c[2]})
+		}
+		n, _ := strconv.Atoi(turn)
+		args, _ := json.Marshal(map[string]any{"runId": run, "turn": n, "checks": checks,
+			"missing": map[string]string{"verdict": "none", "reason": "Deliver's defaults"}})
+		out = append(out, [2]string{"decide_checks", string(args)})
+	}
+	return out
 }
 
 // Quiet says a conductor decides its delivery quietly, from its briefing
