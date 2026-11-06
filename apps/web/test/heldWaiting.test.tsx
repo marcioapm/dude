@@ -9,7 +9,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Board, projectCounts, type NavProject } from "@dude/design-system";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { SessionsList } from "@dude/domain";
-import { READY_FOR_REVIEW_WAITING, withWaitingFor } from "../src/api/client.ts";
+import { CONDUCTOR_HELD_WAITING, READY_FOR_REVIEW_WAITING, withWaitingFor } from "../src/api/client.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
 import { PeopleProvider } from "../src/people.tsx";
@@ -35,6 +35,16 @@ test("conductor-held escalation names its holder without creating a needs-you it
       people: [me], escalation: { reason: "implement_failed", holder, actions: ["retry", "stop"], at: "2026-11-01" } }] }] as unknown as NavProject[]);
     expect(projects[0]!.tasks![0]!.waitingFor).toBe(holder === "conductor" ? "With the conductor: Implementer failed" : "Implementer failed");
     expect(projectCounts(projects[0]!, YOU).needs_you).toBe(holder === "conductor" ? 0 : 1);
+  }
+});
+
+test("a task its conductor holds a reviewer's question or repository request for is with the conductor, not needs you", () => {
+  for (const held of ["review_question", "repository_request"] as const) {
+    const projects = withWaitingFor([{ id: "p", name: "Web", tasks: [{ id: "t", key: "WEB-1", title: "Held", status: "running",
+      people: [me], conductorHeld: held, decider: "conductor", conductorLive: true }] }] as unknown as NavProject[]);
+    expect(projects[0]!.tasks![0]!.waitingFor).toBe(CONDUCTOR_HELD_WAITING[held]);
+    expect(projects[0]!.tasks![0]!.waitingFor).toStartWith("With the conductor: ");
+    expect(projectCounts(projects[0]!, YOU).needs_you).toBe(0);
   }
 });
 

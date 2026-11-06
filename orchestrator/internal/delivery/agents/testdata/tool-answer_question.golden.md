@@ -1,6 +1,6 @@
 # answer_question
 
-Answer an open conductor-addressed question from a current Run of this task with facts you know or established. Supply id and either answer (one question) or answers (one per item, choices as zero-based indices and/or text). The writer receives your answer once. Closed, stale, person-addressed and other-task questions are refused. If only the owner can decide, ask them with ask_person, wait for their answer, then answer the writer yourself; automatic forwarding is not available yet.
+Answer an open conductor-addressed question from a current Run of this task with facts you know or established. Supply id and either answer (one question) or answers (one per item, choices as zero-based indices and/or text). The writer receives your answer once. Closed, stale, person-addressed and other-task questions are refused. If only the person can decide, ask them with ask_person and relay set to its id: their answer goes to the Run directly. Not answered in time, dude hands it to the person.
 
 ```json
 {

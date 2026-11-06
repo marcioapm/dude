@@ -171,13 +171,17 @@ func (s *Server) converse(w http.ResponseWriter, r *http.Request, org string, ms
 			if err := mayAnswer(r.Context(), tx, taskID, questionID, p, answered); err != nil {
 				return err
 			}
-			directiveID, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, items, answered, p)
+			directiveID, relay, err := answerQuestion(r.Context(), tx, ref, delivery.RoleConductor, questionID, prompt, items, answered, p)
 			if err != nil {
 				return err
 			}
 			out = map[string]any{"runId": runID, "taskId": taskID, "created": false, "questionId": questionID,
 				"directiveId": directiveID, "decider": decider}
-			return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", p, answeredPayload(questionID, directiveID, answered))
+			payload := answeredPayload(questionID, directiveID, answered)
+			if relay != nil {
+				out["relay"], payload["relay"] = relay, relay
+			}
+			return humanEvent(r.Context(), tx, org, runID, ri, "question.answered", p, payload)
 		}
 
 		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: text, Scope: "run"})

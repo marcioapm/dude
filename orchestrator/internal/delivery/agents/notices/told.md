@@ -63,3 +63,7 @@ It came from the pull request, not Chat, and hands you no decisions: answer it t
 {{- with .Earlier}} What attempt {{.N}} did: {{if .Runs}}{{join .Runs ", "}}{{else}}no Run{{end}}{{range .PullRequests}}; pull request {{.Repo}}#{{.Number}} {{if .Kept}}stays open: this attempt goes on with it, on its branch{{else}}was closed{{end}}{{end}}.{{end}} Its delivery waits on your first decision: read the task, the conversation so far and the code, then start the work (start_phase), or ask {{.Who}} what you need to know.
 {{- else}} They asked a new conductor to try again on this attempt: you. The conversation and Runs above are what the stopped conductor did; go on from where it stopped, differently if the note says so.
 {{- end}}{{end}}
+
+{{- define "notices/told/relayed"}}{{with .}}{{.}}{{else}}The person{{end}} answered your question; your conductor asked them for you. It is their decision.{{end}}
+
+{{- define "notices/told/relay-outcome"}}{{if .Forwarded}}dude gave this answer to the writer's question {{.QuestionID}}, as the person's: its Run goes on with it.{{else}}The writer's question {{.QuestionID}} was {{if eq .Status "handed_over"}}handed to the person{{else}}{{.Status}}{{end}} already: nothing was forwarded.{{end}}{{end}}

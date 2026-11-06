@@ -107,6 +107,36 @@ func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) 
 	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
 }
 
+// testConductorAnswerWait is an opt-in process-start test clock, deliberately
+// outside the runtime configuration schema and project settings. Zero leaves
+// Syncer's production defaults (delivery.ConductorAnswerWait, for both
+// ConductorAnswerWait and HeldAskWait) unchanged; run gives it to both.
+func testConductorAnswerWait(getenv func(string) string) (time.Duration, error) {
+	const key = "DUDE_TEST_CONDUCTOR_ANSWER_WAIT"
+	value := getenv(key)
+	if value == "" {
+		return 0, nil
+	}
+	wait, err := time.ParseDuration(value)
+	if err != nil || wait <= 0 {
+		return 0, fmt.Errorf("%s must be a positive Go duration", key)
+	}
+	return wait, nil
+}
+
+// withTestWaits gives the syncer the opt-in test clock (zero: nothing
+// changes): how long the conductor has to answer a writer's question
+// (ConductorAnswerWait) and to settle a reviewer's question, a repository
+// request or an idle park it holds (HeldAskWait) before dude hands it to
+// the person.
+func withTestWaits(s *phases.Syncer, wait time.Duration) {
+	if wait <= 0 {
+		return
+	}
+	s.ConductorAnswerWait = wait
+	s.HeldAskWait = wait
+}
+
 func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -119,6 +149,10 @@ func run(log *slog.Logger) error {
 		fmt.Fprintln(os.Stderr, missing.Error())
 		os.Exit(2)
 	}
+	if err != nil {
+		return err
+	}
+	answerWait, err := testConductorAnswerWait(os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -196,6 +230,7 @@ func run(log *slog.Logger) error {
 		// next pass reaches every other one; the slow one keeps its slot.
 		SweepWait: 2 * time.Second,
 	}
+	withTestWaits(syncer, answerWait)
 	defer syncer.Stop()
 	// Resumes whose timing an earlier process committed but never
 	// published; in the background, so startup does not wait on it.
