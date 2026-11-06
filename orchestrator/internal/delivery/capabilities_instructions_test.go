@@ -408,7 +408,7 @@ func capabilityUnlocking(tool string) capabilities.Key {
 // only what the Run was given.
 func TestGoldenInstructionsChecksDecide(t *testing.T) {
 	for name, less := range map[string]capabilities.Grants{
-		"instructions-conductor-without-checks":       capabilities.Default(RoleConductor).Without(capabilities.ChecksDecide),
+		"instructions-conductor-without-checks":        capabilities.Default(RoleConductor).Without(capabilities.ChecksDecide),
 		"instructions-conductor-checks-without-verify": capabilities.Default(RoleConductor).Without(capabilities.Verify, capabilities.RunsRead),
 	} {
 		in := goldenTask()

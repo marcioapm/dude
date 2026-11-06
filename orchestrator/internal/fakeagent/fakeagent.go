@@ -994,8 +994,8 @@ const (
 	// browser check not run, which a later phase runs.
 	ChecksDeferredModel = "fake/checks-deferred"
 	DeferredCommand     = "open the greeting page in a browser"
-	FailingCommand          = "make test"
-	OtherFailingCommand     = "make lint"
+	FailingCommand      = "make test"
+	OtherFailingCommand = "make lint"
 	// BaseDir is where BaseCommand checks the task's base out.
 	BaseDir     = "../task-base"
 	BaseCommand = "git worktree add " + BaseDir + " " + AtMain + " && make -C " + BaseDir + " test"
