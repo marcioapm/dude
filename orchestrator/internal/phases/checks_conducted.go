@@ -133,6 +133,23 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 	return d, err
 }
 
+// checksAskOpenTx says the gate asked the conductor about r's turn and is
+// still waiting on that ask: no verdict on the turn, its deadline not
+// passed, and the conductor not unavailable. askConductor would find it
+// pending; checksBeforePush answers so before inspecting anything.
+func checksAskOpenTx(ctx context.Context, tx pgx.Tx, r phaseRun, turn int64) (bool, error) {
+	asked, overdue, err := delivery.ChecksAskedTx(ctx, tx, r.ID, turn)
+	if err != nil || asked == nil || overdue {
+		return false, err
+	}
+	verdict, err := delivery.ConductedChecksTx(ctx, tx, r.ID, turn)
+	if err != nil || verdict != nil {
+		return false, err
+	}
+	unavailable, err := delivery.ChecksConductorUnavailableTx(ctx, tx, r.TaskID)
+	return !unavailable, err
+}
+
 // checksAsked is what the gate asked the conductor about turn.
 func (s *Syncer) checksAsked(ctx context.Context, r phaseRun, turn int64) (asked *delivery.ChecksAsked, overdue bool, err error) {
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {

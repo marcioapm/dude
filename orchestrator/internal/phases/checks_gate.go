@@ -114,6 +114,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	var epoch int
 	var previous *checksDecision
 	var rounds int
+	var pending bool
 	var rawSettings []byte
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
@@ -132,6 +133,13 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 		if !db.IsNotFound(err) {
 			return err
 		}
+		// Asked about this turn and not yet decided, within the wait, with
+		// the conductor still there: pending as before. The ask was made
+		// only once the turn was found changed (unchangedBeforePush), so
+		// nothing is inspected again while it is open.
+		if pending, err = checksAskOpenTx(ctx, tx, r, turn); err != nil || pending {
+			return err
+		}
 		// Rounds are the send-backs since a person last decided on this
 		// Run's checks: a retry gives the agent the configured rounds again.
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id=$1 AND event_type=$2 AND payload->>'verified'='false'
@@ -147,6 +155,9 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	})
 	if err != nil {
 		return false, false, err
+	}
+	if pending {
+		return false, false, nil
 	}
 	if previous != nil && (!previous.Unchanged || previous.Epoch == epoch) {
 		return previous.Verified, false, nil

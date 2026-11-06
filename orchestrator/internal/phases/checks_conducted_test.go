@@ -439,3 +439,56 @@ func TestAVerdictPassesOnlyWhatTheAskAllowed(t *testing.T) {
 		})
 	}
 }
+
+// A pending conducted gate does not inspect the Run's checkouts again on
+// every pass: the ask was made only once the turn was found changed, and
+// until the verdict, the deadline or the conductor's loss nothing about the
+// turn it asked about can change. One lux exec for the turn, however many
+// sweeps pass while the conductor decides.
+func TestAPendingChecksAskIsNotInspectedEveryPass(t *testing.T) {
+	w := newUnchangedWorld(t, "api")
+	cond := conducted(w.harnessWorld)
+	w.write("api", "new.txt", "work\n")
+	checksReply(w.harnessWorld, passingChecks)
+	w.endTurn()
+	for range 6 {
+		if pass, acted := w.harnessWorld.gate(); pass || acted {
+			t.Fatalf("pending gate: pass %v acted %v", pass, acted)
+		}
+	}
+	if n := w.lux.execCount(); n != 1 {
+		t.Fatalf("%d lux execs over 6 pending passes, want 1", n)
+	}
+	if _, err := w.decide(cond, backedAll(w.run.ID, w.turn())); err != nil {
+		t.Fatal(err)
+	}
+	if pass, acted := w.harnessWorld.gate(); !pass || !acted {
+		t.Fatalf("after the verdict: pass %v acted %v", pass, acted)
+	}
+}
+
+// The same holds the other way: with the ask past its deadline, or the
+// conductor lost, the pending shortcut never stands in for the fallback.
+func TestAPendingAskShortcutYieldsToTheFallback(t *testing.T) {
+	for _, c := range []string{"overdue", "unavailable"} {
+		t.Run(c, func(t *testing.T) {
+			w := newUnchangedWorld(t, "api")
+			cond := conducted(w.harnessWorld)
+			w.write("api", "new.txt", "work\n")
+			checksReply(w.harnessWorld, passingChecks)
+			w.endTurn()
+			w.harnessWorld.gate()
+			if c == "overdue" {
+				w.overdue()
+			} else {
+				mustOwner(t, w.harnessWorld, `UPDATE runs SET status = 'failed', ended_at = now() WHERE id = $1`, cond)
+			}
+			if pass, acted := w.harnessWorld.gate(); !pass || !acted {
+				t.Fatalf("pass %v acted %v, want the fallback's skip", pass, acted)
+			}
+			if got := recordedJudgement(w.harnessWorld); !got.Skipped {
+				t.Fatalf("%+v", got)
+			}
+		})
+	}
+}
