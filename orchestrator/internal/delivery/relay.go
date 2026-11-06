@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -143,7 +144,10 @@ func ForwardRelayTx(ctx context.Context, tx pgx.Tx, ref RunRef, relayID string, 
 // relayedAnswers are the person's answers a to the relay, as answers to
 // the writer's items: item by item when the relay asks as many questions
 // (each in words: the relay's choices are the conductor's, not the
-// writer's), else the whole answer for each.
+// writer's), else the whole answer for each. An answer with no words (the
+// person answered with an image only, which goes to the conductor's Run
+// with its answer) is forwarded as relayedImageOnly, so the writer is not
+// left asked.
 func relayedAnswers(items, relayItems []QuestionItem, a Answered) []ItemAnswer {
 	out := make([]ItemAnswer, len(items))
 	for i := range out {
@@ -151,10 +155,17 @@ func relayedAnswers(items, relayItems []QuestionItem, a Answered) []ItemAnswer {
 		if len(items) == len(relayItems) && len(a.Answers) == len(relayItems) {
 			text = itemAnswerText(relayItems[i], a.Answers[i], asTyped)
 		}
+		if strings.TrimSpace(text) == "" {
+			text = relayedImageOnly
+		}
 		out[i] = ItemAnswer{Text: clipRunes(text, AnswerTextMax)}
 	}
 	return out
 }
+
+// relayedImageOnly is the writer's answer when the person answered the
+// relay with an image and no words: the image is the conductor's to pass on.
+const relayedImageOnly = "(the person answered with an image, which your conductor has)"
 
 func clipRunes(s string, n int) string {
 	if r := []rune(s); len(r) > n {
@@ -259,13 +270,80 @@ func ConductorTakesTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, erro
 
 // RecordIdleParkTx is a conducted task's idle park of Run r (the agent
 // went quiet and did not answer a nudge): the conductor's stalled wake,
-// keyed per park, instead of the task waiting on a person (A12). It
-// decides to restart, steer or leave it.
+// keyed per park, instead of the task waiting on a person (A12). It steers
+// the Run (which resumes it: ConductSteerFeedback) or restarts it; one it
+// leaves parked is handed to the person (IdleParksDueSQL).
 func RecordIdleParkTx(ctx context.Context, tx pgx.Tx, r RunRef, phase string, parkedAt time.Time) error {
-	line := render(idleParkedTmpl, struct{ Phase, RunID, Options string }{phase, r.RunID, ConductorOptions(false)})
+	line := render(idleParkedTmpl, struct{ Phase, RunID string }{phase, r.RunID})
 	_, err := RecordWakeTx(ctx, tx, r.Org, r.TaskID, WakeStalled, "stalled:idle:"+r.RunID+":"+parkedAt.UTC().Format(time.RFC3339Nano), line)
 	return err
 }
+
+// reasonIdleHandover is the task's status reason while a conducted idle
+// park its conductor left waits on the person; EndConductorWait puts the
+// task back once nothing waits on a person.
+const reasonIdleHandover = "the agent went quiet: handed to you from the conductor"
+
+// idleParked (SQL, a FROM clause) is each phase Run of a conducted task
+// dude parked as idle that nobody has taken up (no resume asked, the task
+// not waiting on a person), as q with task_id and created_at the park's
+// start (its latest run.parked), for heldDue.
+const idleParked = `(SELECT r.id, r.organization_id, r.task_id,
+		(SELECT e.occurred_at FROM events e WHERE e.run_id = r.id AND e.event_type IN ('run.parked', 'run.unparked')
+		 ORDER BY e.cursor DESC LIMIT 1) AS created_at
+	FROM runs r JOIN tasks t ON t.id = r.task_id
+	WHERE r.status = 'paused' AND r.dude_pause = 'idle' AND r.control = 'none' AND r.phase IS NOT NULL
+	  AND r.source_kind IS NULL AND r.role <> 'conductor'
+	  AND t.status NOT IN ('awaiting_input', 'done', 'failed', 'aborted')) q`
+
+// IdleParksDueSQL (SQL, $1 the wait in seconds) selects the idle-parked
+// phase Runs dude hands to the person now (heldDue: the conductor left it
+// past the wait, failed since, has no model, or no longer decides): id,
+// organization, task.
+const IdleParksDueSQL = `SELECT q.id, q.organization_id, q.task_id FROM ` + idleParked + `
+	WHERE q.created_at IS NOT NULL AND ` + heldDue + ` ORDER BY q.created_at, q.id`
+
+// HandOverIdleParkTx hands Run runID's idle park its conductor left to the
+// person, if it is still due under the locks (Chat → delivery → task, then
+// the Run): the task waits on them (awaiting_input), as an idle park of a
+// task no conductor decides does. False when it is not due any more.
+func HandOverIdleParkTx(ctx context.Context, tx pgx.Tx, org, taskID, runID string, wait time.Duration) (bool, error) {
+	d, err := LockAnswerTx(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return false, err
+	}
+	var projectID string
+	err = tx.QueryRow(ctx, `SELECT r.project_id FROM runs r WHERE r.id = $1 FOR UPDATE`, runID).Scan(&projectID)
+	if db.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var due bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+idleParked+` WHERE q.id = $2 AND q.task_id = $3
+		AND q.created_at IS NOT NULL AND `+heldDue+`)`, wait.Seconds(), runID, taskID).Scan(&due); err != nil || !due {
+		return false, err
+	}
+	var before string
+	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, taskID).Scan(&before); err != nil {
+		return false, err
+	}
+	ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
+	if _, err = ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: WhyHandover, Reason: reasonIdleHandover}); err != nil {
+		return false, err
+	}
+	// The status the resume puts back, as an idle park's own run.parked
+	// keeps it for a task no conductor decides (phases.whilePaused).
+	_, err = ledger.Append(ctx, tx, ref.Event(EvIdleHandedOver, ledger.ActorSystem,
+		map[string]any{"reason": "idle", "taskStatus": before, "handedOverFrom": HolderConductor}))
+	return err == nil, err
+}
+
+// EvIdleHandedOver is a conducted idle park its conductor left, handed to
+// the person (HandOverIdleParkTx); its taskStatus is what a resume puts
+// the task back to.
+const EvIdleHandedOver = "run.idle_handed_over"
 
 // RelayNotEscalation refuses a relay on the conductor's question about its
 // task's escalation.

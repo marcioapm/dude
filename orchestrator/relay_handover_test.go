@@ -247,10 +247,10 @@ func TestHandsOverWhenConductorFailed(t *testing.T) {
 	}
 }
 
-// A12: a conducted task's phase agent that goes quiet is parked, and its
-// conductor decides — the task does not wait on a person.
-func TestIdleParkWakesConductorWhenConducted(t *testing.T) {
-	w := conducting(t)
+// idleParkedWorld is a conducted task whose implementer hangs mid-turn
+// and is parked as idle (A12), its conductor woken: the task and the Run.
+func idleParkedWorld(t *testing.T, w *world) (string, string) {
+	t.Helper()
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
@@ -272,17 +272,129 @@ func TestIdleParkWakesConductorWhenConducted(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause='idle'`, implementer) == 1
 	})
 	w.syncer.IdleAfter = time.Hour
+	return task, implementer
+}
+
+func (w *world) inputsTo(run, text string) int {
+	n := 0
+	for _, r := range w.lux.Runs() {
+		if r.ID == w.luxRunOf(run) {
+			for _, input := range append(append([]string{}, r.Inputs...), r.ResumeInputs...) {
+				if strings.Contains(input, text) {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
+// A12: a conducted task's phase agent that goes quiet is parked, and its
+// conductor decides — the task does not wait on a person. Its steer is
+// what takes the Run up again: the Run resumes and hears it, once.
+func TestIdleParkWakesConductorWhenConducted(t *testing.T) {
+	w := conducting(t)
+	task, implementer := idleParkedWorld(t, w)
 	for range 3 {
 		w.pump()
 	}
 	if got := w.taskStatus(task); got == "awaiting_input" {
 		t.Fatal("a conducted idle park asked the person")
 	}
-	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND kind='stalled' AND key LIKE 'stalled:idle:'||$2||':%'`, task, implementer); n != 1 {
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND kind='stalled' AND key LIKE 'stalled:idle:'||$2||':%'
+		AND line LIKE '%your steer resumes it%' AND line NOT LIKE '%Leave it%'`, task, implementer); n != 1 {
 		t.Fatalf("stalled wakes=%d", n)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='question.asked'`, task); n != 0 {
 		t.Fatalf("question.asked=%d", n)
+	}
+	w.must(task, "steer", fmt.Sprintf(`{"run":%q,"text":"Carry on: write the handler first."}`, implementer))
+	w.until("the steered Run to resume", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running'`, implementer) == 1
+	})
+	w.until("the steer delivered", func() bool { return w.inputsTo(implementer, "write the handler first") >= 1 })
+	for range 5 {
+		w.pump()
+	}
+	if n := w.inputsTo(implementer, "write the handler first"); n != 1 {
+		t.Fatalf("steer heard %d times", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.unparked'`, implementer); n != 1 {
+		t.Fatalf("run.unparked=%d", n)
+	}
+	if got := w.taskStatus(task); got == "awaiting_input" {
+		t.Fatalf("task %s", got)
+	}
+}
+
+// An idle park its conductor leaves (no steer, no restart) is not a
+// silent stall: past the wait it is handed to the person, who sees it in
+// Needs you; their Resume takes it up and puts the task back.
+func TestALeftIdleParkIsHandedToThePerson(t *testing.T) {
+	w := conducting(t)
+	w.syncer.HeldAskWait = 500 * time.Millisecond
+	task, implementer := idleParkedWorld(t, w)
+	w.until("the task to wait on the person", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.idle_handed_over'`, implementer); n != 1 {
+		t.Fatalf("handed over %d times", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause='idle'`, implementer); n != 1 {
+		t.Fatal("the Run is no longer parked")
+	}
+	if status, out := w.call("/internal/runs/"+implementer+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume %d %v", status, out)
+	}
+	w.until("the Run resumed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running'`, implementer) == 1
+	})
+	w.until("the task back", func() bool { return w.taskStatus(task) != "awaiting_input" })
+	// Put back by the resume itself, to the status the hand-over kept.
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='task.status_changed'
+		AND payload->>'reason'='a person resumed the agent'`, task); n != 1 {
+		t.Fatalf("restored by the resume %d times", n)
+	}
+}
+
+// S9: a conducted idle park whose conductor is not available (a quiet
+// delivery with no conductor model) waits on the person at once, and
+// wakes no conductor.
+func TestIdleParkWithNoConductorModelAsksThePerson(t *testing.T) {
+	w := conducting(t)
+	w.syncer.HeldAskWait = time.Hour
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
+			return fakelux.Behaviour{Hang: true}
+		}
+		return scripted(spec)
+	}
+	task := w.task()
+	w.talk(task)
+	w.must(task, "start_phase", `{"phase":"implement"}`)
+	var implementer string
+	w.until("the implementer to run", func() bool {
+		_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'
+			AND status = 'running' AND lux_state = 'running'`, task).Scan(&implementer)
+		return implementer != ""
+	})
+	// Quiet, its conductor gone, and no model to run another on.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = state || '{"voice":"quiet"}' WHERE task_id = $1`, task)
+	mustExec(t, w.owner, `UPDATE runs SET status = 'completed', ended_at = now() WHERE task_id = $1 AND role = 'conductor'`, task)
+	mustExec(t, w.owner, `UPDATE organizations SET default_agent_models = '{}'`)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = '{}'`)
+	w.syncer.IdleAfter = 300 * time.Millisecond
+	w.until("the implementer to be parked as idle", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused' AND dude_pause='idle'`, implementer) == 1
+	})
+	w.syncer.IdleAfter = time.Hour
+	if got := w.taskStatus(task); got != "awaiting_input" {
+		t.Fatalf("task %s", got)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND key LIKE 'stalled:idle:%'`, task); n != 0 {
+		t.Fatalf("stalled wakes=%d", n)
 	}
 }
 

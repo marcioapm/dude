@@ -624,7 +624,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 			{stalledRuns, &p.stalls, []any{delivery.StallWindow.Seconds(), delivery.StallSameFacts.Seconds()}},
 			{openWaits, &p.waits, nil},
 			{delivery.ConductorQuestionsDue, &p.handovers, []any{s.answerWait().Seconds()}},
-			{`((` + delivery.ReviewQuestionsDueSQL + `) UNION ALL (` + delivery.RepositoryRequestsDueSQL + `)) held`, &p.heldAsks, []any{s.heldAskWait().Seconds()}},
+			{`((` + delivery.ReviewQuestionsDueSQL + `) UNION ALL (` + delivery.RepositoryRequestsDueSQL + `) UNION ALL (` + delivery.IdleParksDueSQL + `)) held`, &p.heldAsks, []any{s.heldAskWait().Seconds()}},
 			{failedForWake, &p.failed, nil},
 			{wakeableWakes, &p.wakes, []any{window.Seconds()}},
 		} {
@@ -3236,6 +3236,16 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		parked := err == nil && last == evParked
+		if parked && taskStatus == "" {
+			// A conducted idle park its conductor left was handed to the
+			// person since (delivery.HandOverIdleParkTx): the status to put
+			// back is the hand-over's.
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(h.payload->>'taskStatus', '') FROM events h
+				WHERE h.run_id = $1 AND h.event_type = $2 AND h.cursor > (SELECT max(p.cursor) FROM events p WHERE p.run_id = $1 AND p.event_type = $3)
+				ORDER BY h.cursor DESC LIMIT 1`, r.ID, delivery.EvIdleHandedOver, evParked).Scan(&taskStatus); err != nil && !db.IsNotFound(err) {
+				return err
+			}
+		}
 		if parked && taskStatus != "" && r.TaskID != "" && r.SourceKind == "" {
 			// The flag its idle park raised, lowered.
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "awaiting_input", taskStatus,

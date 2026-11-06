@@ -1,1 +1,1 @@
-Your {{.Phase}} Run {{.RunID}} went quiet mid-turn and did not answer a nudge: dude parked it, and no person was asked. {{.Options}}
+Your {{.Phase}} Run {{.RunID}} went quiet mid-turn and did not answer a nudge: dude parked it, and no person was asked. Steer it (your steer resumes it with your words), or restart_run(run, note, tier). If you do neither, dude hands it to the person.

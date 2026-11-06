@@ -37,13 +37,16 @@ func (s *Syncer) heldAskWait() time.Duration {
 // two can be run side by side.
 func (s *Syncer) handOverHeldAsks(ctx context.Context) error {
 	wait := s.heldAskWait()
-	var questions, requests []heldAsk
+	var questions, requests, parks []heldAsk
 	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
 		var err error
 		if questions, err = collectHeld(ctx, tx, delivery.ReviewQuestionsDueSQL, wait); err != nil {
 			return err
 		}
-		requests, err = collectHeld(ctx, tx, delivery.RepositoryRequestsDueSQL, wait)
+		if requests, err = collectHeld(ctx, tx, delivery.RepositoryRequestsDueSQL, wait); err != nil {
+			return err
+		}
+		parks, err = collectHeld(ctx, tx, delivery.IdleParksDueSQL, wait)
 		return err
 	}); err != nil {
 		return err
@@ -62,6 +65,16 @@ func (s *Syncer) handOverHeldAsks(ctx context.Context) error {
 			return err
 		}); err != nil {
 			s.Log.Warn("handing a repository request to the person failed", "request", r.ID, "error", err)
+		}
+	}
+	// An idle park its conductor neither steered nor restarted: the person
+	// is asked to look at it, as when no conductor decides.
+	for _, r := range parks {
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+			_, err := delivery.HandOverIdleParkTx(ctx, tx, r.Org, r.TaskID, r.ID, wait)
+			return err
+		}); err != nil {
+			s.Log.Warn("handing an idle park to the person failed", "run", r.ID, "error", err)
 		}
 	}
 	return nil
