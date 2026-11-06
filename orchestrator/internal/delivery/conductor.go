@@ -240,10 +240,12 @@ func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 	failed := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: latest}
 	if ran {
 		next, err := handOver(ctx, tx, failed, true, latest)
-		if err == nil && next == "" {
-			err = ErrNothingToRetry
+		if err != nil || next != "" {
+			return next, err
 		}
-		return next, err
+		// Nothing unread: a fresh conductor with the conversation so far,
+		// asked again what was lost with it (ReplaceLostConductorTx).
+		return ReplaceLostConductorTx(ctx, tx, failed, "", Reask)
 	}
 	// A conductor dude woke whose wake note the syncer already put back
 	// (BriefingUnheardTx): its reasons wake the next conductor, which a
