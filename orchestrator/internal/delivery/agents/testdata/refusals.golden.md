@@ -1590,3 +1590,7 @@ that Run is not a writer Run of this task's current attempt: decide only the che
 
 same_as_waived for %q must cite the waiver it matches: waiverCursor %d
 
+## refusals/delivery/checks/reason-long
+
+a reason is at most %d characters, and %s's is %d: say what decides the verdict, the Run's Chat keeps the rest
+
