@@ -269,6 +269,7 @@ func TestRelayAnswerBesideWriterLifecycleDoesNotDeadlock(t *testing.T) {
 					t.Fatal(err)
 				}
 				done := make(chan error, 1)
+				launched := false
 				err := w.s.DB.InOrg(ctx, child.Org, func(tx pgx.Tx) error {
 					if _, err := delivery.LockAnswerTx(ctx, tx, child.TaskID); err != nil {
 						return err
@@ -277,6 +278,7 @@ func TestRelayAnswerBesideWriterLifecycleDoesNotDeadlock(t *testing.T) {
 						return err
 					}
 					pid := int32(tx.Conn().PgConn().PID())
+					launched = true
 					go func() {
 						done <- w.s.applyBatch(ctx, tr, []lux.Frame{luxState(1, "starting"), luxState(1, "running"),
 							cursorFrame(record(1, "lux.warning", map[string]any{"message": "after the lifecycle"}), "c-family")})
@@ -298,7 +300,10 @@ func TestRelayAnswerBesideWriterLifecycleDoesNotDeadlock(t *testing.T) {
 					}
 					return answer(ctx, tx)
 				})
-				batchErr := <-done
+				var batchErr error
+				if launched {
+					batchErr = <-done
+				}
 				if err != nil || batchErr != nil {
 					t.Fatalf("answer=%v batch=%v", err, batchErr)
 				}
