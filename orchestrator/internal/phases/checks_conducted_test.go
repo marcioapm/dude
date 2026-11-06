@@ -165,8 +165,13 @@ func TestConductorVerdictPassesPreexistingAndIsAudited(t *testing.T) {
 	if actorType != ledger.ActorAgent || actorID != cond || conductorRun != cond || payloadTurn != turn {
 		t.Fatalf("audit %s %s %s %d", actorType, actorID, conductorRun, payloadTurn)
 	}
-	// Decided: a second verdict on the turn is refused.
-	if _, err := w.decide(cond, delivery.DecideChecks{RunID: w.run.ID, Turn: turn}); !delivery.IsRefusal(err) {
+	// Decided: a second, otherwise valid, verdict on the turn is refused.
+	again := delivery.DecideChecks{RunID: w.run.ID, Turn: turn,
+		Checks: []delivery.ConductedCheck{
+			{Command: "npx tsc --noEmit", Verdict: delivery.VerdictReject, Reason: "changed my mind"},
+			{Command: "make lint", Verdict: delivery.VerdictBacked, Reason: "call head"}},
+		Missing: delivery.ConductedMissing{Verdict: delivery.MissingNone, Reason: "fine"}}
+	if _, err := w.decide(cond, again); !delivery.IsRefusal(err) || !strings.Contains(err.Error(), "not waiting") {
 		t.Fatalf("a second verdict: %v", err)
 	}
 }
@@ -401,5 +406,32 @@ func TestTheDefaultsConductorReadsTheChecksWake(t *testing.T) {
 		in.Checks[0].Verdict != delivery.VerdictBacked || in.Checks[1].Verdict != delivery.VerdictReject ||
 		in.Checks[2].Verdict != delivery.VerdictReject || in.Missing.Verdict != delivery.MissingNone {
 		t.Fatalf("%+v", in)
+	}
+}
+
+// The gate's own reading of a verdict passes nothing the ask did not
+// allow, whatever was recorded: a pre-existing verdict with no base, or a
+// same_as_waived citing another waiver, rejects the failure.
+func TestAVerdictPassesOnlyWhatTheAskAllowed(t *testing.T) {
+	checks := []delivery.Check{{Command: "make test", Result: delivery.CheckFail, Evidence: "x"}}
+	for name, tc := range map[string]struct {
+		asked   *delivery.ChecksAsked
+		verdict delivery.ConductedCheck
+		want    bool
+	}{
+		"preexisting with a base":    {&delivery.ChecksAsked{Bases: []delivery.ChecksBase{{Repo: "r", Branch: "main", SHA: "abc"}}}, delivery.ConductedCheck{Command: "make test", Verdict: delivery.VerdictPreexisting, Reason: "r"}, true},
+		"preexisting with no base":   {&delivery.ChecksAsked{}, delivery.ConductedCheck{Command: "make test", Verdict: delivery.VerdictPreexisting, Reason: "r"}, false},
+		"preexisting with no ask":    {nil, delivery.ConductedCheck{Command: "make test", Verdict: delivery.VerdictPreexisting, Reason: "r"}, false},
+		"the waiver it cites":        {&delivery.ChecksAsked{Waivers: map[int]*delivery.CarriedWaiver{0: {Cursor: 7}}}, delivery.ConductedCheck{Command: "make test", Verdict: delivery.VerdictSameAsWaived, WaiverCursor: 7, Reason: "r"}, true},
+		"another waiver":             {&delivery.ChecksAsked{Waivers: map[int]*delivery.CarriedWaiver{0: {Cursor: 7}}}, delivery.ConductedCheck{Command: "make test", Verdict: delivery.VerdictSameAsWaived, WaiverCursor: 8, Reason: "r"}, false},
+		"a deferred failure":         {&delivery.ChecksAsked{}, delivery.ConductedCheck{Command: "make test", Verdict: delivery.VerdictDeferred, Reason: "r"}, false},
+		"a verdict on another check": {&delivery.ChecksAsked{Bases: []delivery.ChecksBase{{SHA: "abc"}}}, delivery.ConductedCheck{Command: "make lint", Verdict: delivery.VerdictPreexisting, Reason: "r"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := &delivery.ConductedChecks{Checks: []delivery.ConductedCheck{tc.verdict}, Missing: delivery.ConductedMissing{Verdict: delivery.MissingNone}, Cursor: 3}
+			if got := verdictDecision(checksDecision{}, checks, tc.asked, v); got.Verified != tc.want {
+				t.Fatalf("verified %v, want %v: %+v", got.Verified, tc.want, got)
+			}
+		})
 	}
 }
