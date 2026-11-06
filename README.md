@@ -232,7 +232,7 @@ web app, never importing the implementation.
 ```bash
 bun run typecheck
 DATABASE_URL="postgres://dude:dude@localhost:5433/dude" bun test   # TypeScript
-(cd orchestrator && go test ./...)                                  # Go
+scripts/go-test.sh                                                 # Go, every test, one process per CPU
 
 cd tests
 uv run python run_tests.py              # full E2E suite (~2 minutes)
@@ -241,6 +241,12 @@ uv run python run_tests.py --keep       # keep the database to debug
 uv run python run_tests.py --lux        # the contract suite, against a real lux
 uv run python run_tests.py suites/test_web_ui.py   # one suite
 ```
+
+`scripts/go-test.sh` runs the whole Go suite against Postgres at
+`DUDE_TEST_PG` (default `localhost:5433`), split by test over
+`GO_TEST_LANES` test processes (default the CPU count); `--partition` prints
+which process runs each test. For one package, `cd orchestrator && go test
+-count=1 ./internal/chat`.
 
 Each E2E run gets its own database, free ports and a log directory (printed
 at the start; set `DUDE_TEST_LOG_DIR` to choose it) holding the backend's,
