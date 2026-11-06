@@ -346,3 +346,23 @@ func TestAForwardedReviewQuestionWaitsOnThePerson(t *testing.T) {
 		})
 	}
 }
+
+// S8: held by the conductor alone, the reviewer's question does not put
+// back a task that waits on the conductor's own question to the person:
+// the task stays awaiting_input however often the held step runs.
+func TestAConductorHeldQuestionKeepsTheConductorsOwnPersonWait(t *testing.T) {
+	w, task, id := questioned(t)
+	w.conductedHoldBy(task, func() {
+		w.must(task, "ask_person", `{"question":"May the export run at night?"}`)
+	}, false)
+	if n := w.count(`SELECT count(*) FROM review_questions WHERE id = $1 AND status = 'open' AND addressee = 'conductor'`, id); n != 1 {
+		t.Fatal("the reviewer's question is not the conductor's")
+	}
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	if s := w.taskStatus(task); s != "awaiting_input" {
+		t.Fatalf("task %s while the conductor's own question waits on the person", s)
+	}
+}
