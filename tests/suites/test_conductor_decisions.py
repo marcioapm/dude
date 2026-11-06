@@ -305,7 +305,6 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     project = _conducting(client, forge_project)
     models = {**project["agentModels"], **client.on_models({"implementer": "fake/checks-unbacked"})}
     assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
-    assert client.put("/v1/judgements/settings", {"tierId": client.tier_for("judge-e2e")}).status_code == 200
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
     task = client.create_task(project["id"], "Greet, with a helper the checks gate holds")
     conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
