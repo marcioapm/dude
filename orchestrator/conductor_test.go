@@ -1043,6 +1043,15 @@ func TestAConductorsWaitEndsWhenItsLastBlockerSettles(t *testing.T) {
 			if status != 200 || req.RequestID == "" {
 				w.t.Fatalf("request_repository: %d %s", status, body)
 			}
+			// On a conducted task the request is its conductor's first
+			// (A11), which does not keep the person's wait (a conductor-held
+			// request is pinned by TestAConductorHeldRequestDoesNotKeepThe-
+			// PersonWaiting). The conductor forwards it: now a person holds
+			// it, and it is that person-held request this case is about.
+			w.must(task, "decide_repository_request", `{"id":"`+req.RequestID+`","action":"forward"}`)
+			if n := w.count(`SELECT count(*) FROM repository_requests WHERE id = $1 AND status = 'pending' AND addressee = 'person'`, req.RequestID); n != 1 {
+				w.t.Fatalf("the forwarded request is not the person's")
+			}
 			return func() {
 				if status, body := w.call("/internal/repository-requests/"+req.RequestID+"/decide", map[string]any{"approve": false}); status != 200 {
 					w.t.Fatalf("deny: %d %v", status, body)

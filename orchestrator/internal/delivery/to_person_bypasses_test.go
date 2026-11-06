@@ -25,7 +25,9 @@ func TestTheScanSeesEveryKnownBypass(t *testing.T) {
 		"bypass4_event_var.go": {"zzEmit", "zzAppend"},
 		// 5: awaiting_input as a parameterised SQL's argument.
 		"bypass5_param_sql.go": {"zzParkParam"},
-		"reads_only.go":        nil,
+		// 6: an existing question addressed to a person (a hand-over).
+		"bypass6_handover_sql.go": {"zzHandOver"},
+		"reads_only.go":           nil,
 	}
 	files, err := filepath.Glob("testdata/to_person_bypasses/*.go")
 	if err != nil || len(files) != len(want) {

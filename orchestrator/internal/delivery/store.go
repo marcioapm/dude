@@ -1072,11 +1072,13 @@ const waitBlocked = `(` + waitBlockedElse + ` OR EXISTS (SELECT 1 FROM workflow_
 	AND wf.status IN ('running', 'waiting') AND COALESCE((wf.state->>'questionsHeld')::boolean, false)))`
 
 // waitBlockedElse (SQL, over tasks t): an open question, a pending blocking
-// repository request, an undecided escalation in its live workflow, or a
+// repository request (each a person's: one its conductor holds waits on
+// the conductor, not on a person; its Run still waits, PersonAsk), an
+// undecided escalation in its live workflow, or a
 // phase Run parked as idle or paused by a person, or with a person's pause
 // or resume still pending (dude's own control requests set dude_pause).
 const waitBlockedElse = `(EXISTS (SELECT 1 FROM questions q WHERE q.task_id = t.id AND q.status = 'open' AND q.addressee = 'person')
-	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.task_id = t.id AND q.status = 'pending' AND q.blocking)
+	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.task_id = t.id AND q.status = 'pending' AND q.blocking AND q.addressee = 'person')
 	OR EXISTS (SELECT 1 FROM workflow_runs wf WHERE wf.task_id = t.id AND wf.status IN ('running', 'waiting')
 		AND wf.state ? 'escalation' AND NOT wf.state->'escalation' ? 'decided'
 		AND COALESCE(NULLIF(wf.state->'escalation'->>'holder', ''), 'person') = 'person')

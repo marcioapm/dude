@@ -144,6 +144,14 @@ func ConductSteerFeedback(ctx context.Context, tx pgx.Tx, ref RunRef, runID, tex
 			return Steered{}, "", err
 		}
 	}
+	// A phase Run dude parked as idle waits for a Resume (resumable): the
+	// conductor's steer is that resume, as a person's Resume would be, or
+	// the words would wait for ever. Under the Chat lock and the Run's row
+	// (taken above); only an idle park nobody asked about yet.
+	if _, err := tx.Exec(ctx, `UPDATE runs SET control = 'resume', control_requested_at = now(), control_reason = 'steered by its conductor'
+		WHERE id = $1 AND status = 'paused' AND dude_pause = 'idle' AND control = 'none'`, runID); err != nil {
+		return Steered{}, "", err
+	}
 	var lands string
 	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT payload->>'lands' FROM events WHERE run_id = $1
 			AND event_type IN ('run.directive.accepted', 'agent.prompt.delivered') AND payload ? 'lands'

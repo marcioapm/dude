@@ -554,6 +554,7 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 func PeopleDecisionsTx(ctx context.Context, tx pgx.Tx, taskID, predecessor string) ([]Decision, error) {
 	rows, err := tx.Query(ctx, `SELECT q.prompt,q.answer FROM questions q
 		WHERE q.task_id=$1 AND q.status='answered' AND q.answer IS NOT NULL AND q.answered_by_run IS NULL
+		AND NOT EXISTS (SELECT 1 FROM questions w WHERE w.id=q.relays AND w.status='answered' AND w.answered_by_run IS NULL)
 		AND ($2='' OR q.answered_at > (SELECT ended_at FROM runs WHERE id=$2)) ORDER BY q.answered_at`, taskID, predecessor)
 	if err != nil {
 		return nil, err

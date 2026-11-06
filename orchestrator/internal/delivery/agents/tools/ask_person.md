@@ -47,3 +47,7 @@ the person may pick several choices (default one)
 {{- define "tools/ask_person/actions" -}}
 a conductor's, while an escalation waits on a person, with question and choices: the escalation action each choice stands for, one per choice, in order (retry, accept, resume, done, wait, stop); the owner picking a choice decides the escalation with it. A choice whose action needs the person's reason or direction (waive, accept of a failed test, a stuck retry, a non-converging loop's retry, accept or amend) carries the one you propose as its note, in questions' choices
 {{- end}}
+
+{{- define "tools/ask_person/relay" -}}
+a conductor's: the id of a writer's open question to you that only the person can decide (q_…). Ask it in your own words; the person's answer goes to that Run directly, as theirs, and to you
+{{- end}}

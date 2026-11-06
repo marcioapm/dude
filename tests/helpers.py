@@ -430,19 +430,29 @@ def wait_for_escalation(client: ApiClient, task_id: str, timeout: float = 30.0, 
 
 
 
-def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None = None) -> tuple[dict, dict]:
+def _routed_to_conductor(client: ApiClient, task_id: str, event_type: str, run_id: str | None, message: str) -> dict:
+    """The task's first event_type (of run_id, when given): an ask dude gave its conductor first."""
+    return wait_until(lambda: next((e for e in client.events(taskId=task_id, limit=1000)
+        if e["eventType"] == event_type and (run_id is None or e["runId"] == run_id)), None),
+        timeout=60, message=message)
+
+
+def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None = None, *, explicit_relay: bool = False) -> tuple[dict, dict]:
     """Explicit PR4a relay: two questions, no automatic PR4b relay implied.
 
     The writer's routed question remains conductor-held. The scripted conductor
     asks the same items of the real owner through ask_person; callers exercise
     that person's question (including attachments and ownership) in its Chat.
+    Only explicit_relay opts into PR4b's linked, automatic human forwarding;
+    existing callers retain the separate conductor answer turn.
     """
-    routed = wait_until(lambda: next((e for e in client.events(taskId=task_id, limit=1000)
-        if e["eventType"] == "question.routed" and (writer_id is None or e["runId"] == writer_id)), None),
-        timeout=60, message="the writer never routed its question")
+    routed = _routed_to_conductor(client, task_id, "question.routed", writer_id, "the writer never routed its question")
     writer = {"id": routed["payload"]["questionId"], "runId": routed["runId"]}
+    ask = {"questions": routed["payload"]["items"]}
+    if explicit_relay:
+        ask["relay"] = writer["id"]
     response = client.post(f"/v1/tasks/{task_id}/chat", {"text": "Relay this writer question to the owner.\n"
-        + "tool: ask_person " + json.dumps({"questions": routed["payload"]["items"]})})
+        + "tool: ask_person " + json.dumps(ask)})
     assert response.status_code in (200, 201), response.text
     conductor = response.json()["runId"]
     human = wait_until(lambda: next((q for q in client.get("/v1/questions", params={"runId": conductor}).json()["questions"]
@@ -450,6 +460,31 @@ def relay_writer_question(client: ApiClient, task_id: str, writer_id: str | None
     assert human["id"] != writer["id"] and human["runId"] == conductor
     assert human["prompt"] == routed["payload"]["prompt"]
     return writer, human
+
+
+def forward_repository_request(client: ApiClient, task_id: str, run_id: str | None = None) -> dict:
+    """The conductor forwards a repository request it holds (PR4b, A11).
+
+    On a conducted task an agent's repository request is its conductor's
+    first (repository.routed, addressee conductor): no card, nothing in
+    Waiting on you. The scripted conductor forwards it through
+    decide_repository_request, driven over the task's Chat as
+    relay_writer_question drives ask_person; the request is then the
+    person's (one repository.requested). Returns the routed event's payload
+    with the asking runId.
+    """
+    routed = _routed_to_conductor(client, task_id, "repository.routed", run_id,
+        "the agent's repository request never reached its conductor")
+    request = {**routed["payload"], "runId": routed["runId"]}
+    response = client.post(f"/v1/tasks/{task_id}/chat", {"text": "Forward this repository request to the owner.\n"
+        + "tool: decide_repository_request " + json.dumps({"id": request["requestId"], "action": "forward"})})
+    assert response.status_code in (200, 201), response.text
+    requested = wait_until(lambda: [e for e in client.events(runId=request["runId"])
+        if e["eventType"] == "repository.requested" and e["payload"].get("requestId") == request["requestId"]],
+        timeout=30, message="the conductor never forwarded the repository request")
+    assert len(requested) == 1, requested
+    assert requested[0]["payload"].get("handedOverFrom") == "conductor", requested
+    return request
 
 
 def finish_question_relay(client: ApiClient, task_id: str, writer: dict, human: dict) -> None:

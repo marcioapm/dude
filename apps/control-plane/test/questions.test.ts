@@ -197,3 +197,108 @@ test("a writer's question for its conductor is not a person's; a person's still 
   expect(await questionIds("?runId=run_cq_run")).toEqual(["q_cq_run"]);
   expect(await questionIds("?taskId=wi_cq_park")).toEqual(["q_cq_park"]);
 });
+
+/**
+ * dude hands a writer's question its conductor did not take to the person
+ * (the same row, addressee flipped to 'person'): the parked writer reads as
+ * waiting on you with its prompt, no longer as its conductor's wait, and
+ * the question is in Needs you and the open list. While the conductor's
+ * relay of a writer's question is open, the person has exactly one
+ * question: the relay; the writer still reads as its conductor's wait.
+ */
+test("a handed-over writer question needs you; a relayed one is asked once", async () => {
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+              VALUES ('wi_ho', ${ORG}, ${PROJECT}, 20, 'Handed over', 'awaiting_input'),
+                     ('wi_rl', ${ORG}, ${PROJECT}, 21, 'Relayed', 'awaiting_input')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
+              VALUES ('run_ho_cond', ${ORG}, ${PROJECT}, 'wi_ho', 1, 'running', NULL, 'conductor', NULL),
+                     ('run_ho', ${ORG}, ${PROJECT}, 'wi_ho', 1, 'paused', 'implement', 'implementer', 'person'),
+                     ('run_rl_cond', ${ORG}, ${PROJECT}, 'wi_rl', 1, 'running', NULL, 'conductor', NULL),
+                     ('run_rl', ${ORG}, ${PROJECT}, 'wi_rl', 1, 'paused', 'implement', 'implementer', 'person')`;
+  await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, addressee)
+              VALUES ('q_ho', ${ORG}, 'wi_ho', 'run_ho', 'Handed to you?', '[]', 'conductor'),
+                     ('q_rl', ${ORG}, 'wi_rl', 'run_rl', 'Writer asks?', '[]', 'conductor')`;
+  await owner`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, addressee, relays)
+              VALUES ('q_rl_relay', ${ORG}, 'wi_rl', 'run_rl_cond', 'Owner: A or B?', '[]', 'person', 'q_rl')`;
+  await owner`UPDATE questions SET addressee = 'person' WHERE id = 'q_ho'`;
+
+
+  const nav = await get<Nav>("/v1/navigation");
+  const rows = (task: string) => (sessionsOf(nav, task) as Array<Session & { role: string; status: string }>)
+    .map((s) => [s.role, s.status, s.activity ?? null]);
+  expect(rows("wi_ho")).toEqual([["conductor", "running", null], ["implementer", "awaiting_input", "Handed to you?"]]);
+  expect(rows("wi_rl")).toEqual([["conductor", "awaiting_input", "Owner: A or B?"], ["implementer", "pending", null]]);
+  const { countTasks } = await import("../../../packages/design-system/src/util/navModel.ts");
+  const tasks = nav.projects.flatMap((p) => p.tasks);
+  const needs = (id: string) => countTasks(tasks.filter((t) => t.id === id) as never).needs_you;
+  expect([needs("wi_ho"), needs("wi_rl")]).toEqual([1, 1]);
+  const open = (await get<{ questions: Array<{ id: string }> }>("/v1/questions")).questions.map((q) => q.id);
+  expect(open).toContain("q_ho");
+  expect(open).toContain("q_rl_relay");
+  expect(open).not.toContain("q_rl");
+});
+
+/**
+ * Conductor-first (A10, A11): held reviewer/repository asks are not a person's.
+ */
+test("a repository request or reviewer question its conductor holds is not a person's", async () => {
+  await owner`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+              VALUES ('repo_q_web', ${ORG}, ${PROJECT}, 'web', 'git://h/web.git', 'main')`;
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, status)
+              VALUES ('wi_rr_held', ${ORG}, ${PROJECT}, 30, 'Request held', 'running'),
+                     ('wi_rr_park', ${ORG}, ${PROJECT}, 31, 'Request held, parked', 'running'),
+                     ('wi_rr_fwd', ${ORG}, ${PROJECT}, 32, 'Request forwarded', 'running'),
+                     ('wi_rvq_held', ${ORG}, ${PROJECT}, 33, 'Reviewer question held', 'running'),
+                     ('wi_rvq_answered', ${ORG}, ${PROJECT}, 34, 'Reviewer question answered', 'running'),
+                     ('wi_rvq_stopped', ${ORG}, ${PROJECT}, 35, 'Reviewer question, task stopped', 'aborted'),
+                     ('wi_rvq_old', ${ORG}, ${PROJECT}, 36, 'Reviewer question of an earlier attempt', 'running')`;
+  // A live delivery for each but the stopped one (aborted: kept for a pick-up).
+  await owner`INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
+              VALUES ('wf_rvq_held', ${ORG}, 'wi_rvq_held', 'task.delivery', 'rvq_held', 'waiting', 'review', '{"attempt":1}'),
+                     ('wf_rvq_answered', ${ORG}, 'wi_rvq_answered', 'task.delivery', 'rvq_answered', 'waiting', 'review', '{"attempt":1}'),
+                     ('wf_rvq_stopped', ${ORG}, 'wi_rvq_stopped', 'task.delivery', 'rvq_stopped', 'aborted', 'review', '{"attempt":1}'),
+                     ('wf_rvq_old', ${ORG}, 'wi_rvq_old', 'task.delivery', 'rvq_old', 'waiting', 'review', '{"attempt":2}')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role)
+              VALUES ('run_rr_held', ${ORG}, ${PROJECT}, 'wi_rr_held', 1, 'running', 'implement', 'implementer'),
+                     ('run_rr_fwd', ${ORG}, ${PROJECT}, 'wi_rr_fwd', 1, 'running', 'implement', 'implementer'),
+                     ('run_rvq_rev', ${ORG}, ${PROJECT}, 'wi_rvq_held', 1, 'completed', 'review', 'reviewer'),
+                     ('run_rvq_ans', ${ORG}, ${PROJECT}, 'wi_rvq_answered', 1, 'completed', 'review', 'reviewer'),
+                     ('run_rvq_stop', ${ORG}, ${PROJECT}, 'wi_rvq_stopped', 1, 'completed', 'review', 'reviewer'),
+                     ('run_rvq_old', ${ORG}, ${PROJECT}, 'wi_rvq_old', 1, 'completed', 'review', 'reviewer')`;
+  await owner`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, dude_pause)
+              VALUES ('run_rr_park', ${ORG}, ${PROJECT}, 'wi_rr_park', 1, 'paused', 'implement', 'implementer', 'person')`;
+  await owner`INSERT INTO repository_requests (id, organization_id, task_id, run_id, repository_id, access, reason, blocking, addressee)
+              VALUES ('rrq_held', ${ORG}, 'wi_rr_held', 'run_rr_held', 'repo_q_web', 'read', 'r', false, 'conductor'),
+                     ('rrq_park', ${ORG}, 'wi_rr_park', 'run_rr_park', 'repo_q_web', 'write', 'r', true, 'conductor'),
+                     ('rrq_fwd', ${ORG}, 'wi_rr_fwd', 'run_rr_fwd', 'repo_q_web', 'write', 'r', false, 'person')`;
+  await owner`INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee)
+              VALUES ('rvq_held', ${ORG}, 'wi_rvq_held', 'run_rvq_rev', 1, 'correctness', 'UTC?', 'conductor'),
+                     ('rvq_stop', ${ORG}, 'wi_rvq_stopped', 'run_rvq_stop', 1, 'correctness', 'UTC?', 'conductor'),
+                     ('rvq_old', ${ORG}, 'wi_rvq_old', 'run_rvq_old', 1, 'correctness', 'UTC?', 'conductor')`;
+  await owner`INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee, status, answer, answered_at)
+              VALUES ('rvq_ans', ${ORG}, 'wi_rvq_answered', 'run_rvq_ans', 1, 'correctness', 'UTC?', 'conductor', 'answered', 'yes', now())`;
+
+  const nav = await get<Nav>("/v1/navigation");
+  const rows = (task: string) => (sessionsOf(nav, task) as Array<Session & { role: string; status: string }>)
+    .map((s) => [s.role, s.status, s.activity ?? null]);
+  expect(rows("wi_rr_held")).toEqual([["implementer", "running", null]]);
+  expect(rows("wi_rr_park")).toEqual([["implementer", "pending", null]]);
+  expect(rows("wi_rr_fwd")).toEqual([["implementer", "awaiting_input", "Change web?"]]);
+  const tasks = nav.projects.flatMap((p) => p.tasks) as Array<{ id: string; conductorHeld?: string }>;
+  const held = (id: string) => tasks.find((t) => t.id === id)?.conductorHeld ?? null;
+  expect([held("wi_rr_held"), held("wi_rr_park"), held("wi_rr_fwd"), held("wi_rvq_held")])
+    .toEqual(["repository_request", "repository_request", null, "review_question"]);
+  // Answered, of a stopped task, or of an earlier attempt: nobody's to hear now.
+  expect([held("wi_rvq_answered"), held("wi_rvq_stopped"), held("wi_rvq_old")]).toEqual([null, null, null]);
+  const { countTasks } = await import("../../../packages/design-system/src/util/navModel.ts");
+  const needs = (id: string) => countTasks(tasks.filter((t) => t.id === id) as never).needs_you;
+  expect([needs("wi_rr_held"), needs("wi_rr_park"), needs("wi_rr_fwd"), needs("wi_rvq_held")]).toEqual([0, 0, 1, 0]);
+
+  const open = (await get<{ repositoryRequests: Array<{ id: string }> }>("/v1/repository-requests")).repositoryRequests.map((r) => r.id);
+  expect(open).toContain("rrq_fwd");
+  expect(open).not.toContain("rrq_held");
+  expect(open).not.toContain("rrq_park");
+  // A task's own list still has every request.
+  expect((await get<{ repositoryRequests: Array<{ id: string }> }>("/v1/repository-requests?taskId=wi_rr_held")).repositoryRequests.map((r) => r.id))
+    .toEqual(["rrq_held"]);
+});

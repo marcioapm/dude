@@ -69,6 +69,20 @@ type ToPerson struct {
 	// The task's status reason, for an escalation or a hold.
 	Reason string
 	Why    string
+	// Relays, on the conductor's question (Items, WhyConductor): the
+	// writer's conductor-addressed question it relays (questions.relays).
+	// The person's answer answers both (ForwardRelayTx).
+	Relays string
+	// HandOver, for WhyHandover with no Items: the writer's open
+	// conductor-addressed question handed to the person as it is
+	// (addressee flipped). Idempotent: a question no longer open with the
+	// conductor is handed over by nobody, and "" is returned.
+	HandOver string
+	// A conductor-held ask given to the person (conductor_held.go): a
+	// reviewer's question, with State its delivery, or a repository
+	// request.
+	reviewQuestion *reviewQuestionAsk
+	repository     *repositoryAsk
 }
 
 // ToPersonTx is the one way anything on a task reaches a person: it
@@ -83,11 +97,28 @@ func ToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) (string, error) {
 	default:
 		return "", fmt.Errorf("to person: unknown why %q", p.Why)
 	}
+	if p.Relays != "" && (p.Why != WhyConductor || len(p.Items) == 0) {
+		return "", fmt.Errorf("to person: only the conductor's own question relays one")
+	}
+	if p.HandOver != "" {
+		if p.Why != WhyHandover || len(p.Items) > 0 || p.Escalation != nil {
+			return "", fmt.Errorf("to person: a hand-over is of one question, for WhyHandover")
+		}
+		return handOverQuestionTx(ctx, tx, p.Ref, p.HandOver, p.Reason)
+	}
+	if p.reviewQuestion != nil {
+		return "", askReviewQuestionTx(ctx, tx, p)
+	}
+	if p.repository != nil {
+		// The asking Run's repository.requested: the person is notified.
+		_, err := ledger.Append(ctx, tx, p.repository.Event)
+		return "", err
+	}
 	if len(p.Items) > 0 {
 		if p.Escalation != nil {
 			return "", fmt.Errorf("to person: a question and an escalation at once")
 		}
-		return askPersonTx(ctx, tx, p.Ref, p.Items)
+		return askPersonTx(ctx, tx, p.Ref, p.Items, p.Relays)
 	}
 	// An escalation or a hold: the task waits on the person for Reason. An
 	// escalation's question.asked of kind escalation says so (the API's
@@ -98,14 +129,35 @@ func ToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) (string, error) {
 		return "", fmt.Errorf("to person: an escalation that is not its delivery's")
 	case e != nil && e.HeldBy() != HolderPerson:
 		return "", fmt.Errorf("to person: an escalation held by %s", e.Holder)
+	case st == nil && p.Ref.TaskID == "":
+		return "", fmt.Errorf("to person: a hold with no task")
 	case st == nil:
-		return "", fmt.Errorf("to person: a hold with no delivery")
+		// A hold of the task the Ref names (an idle park's).
+		st = &State{ProjectID: p.Ref.ProjectID, TaskID: p.Ref.TaskID}
 	}
 	if _, err := SetTaskStatusTx(ctx, tx, p.Ref.Org, st.ProjectID, st.TaskID, "", "awaiting_input", p.Reason); err != nil || e == nil {
 		return "", err
 	}
 	return "", emitTx(ctx, tx, p.Ref.Org, st, EvQuestionAsked,
 		map[string]any{"kind": "escalation", "reason": e.Reason, "detail": e.Detail, "actions": e.Actions()})
+}
+
+// askReviewQuestionTx asks the person a reviewer's question the conductor
+// held: question.asked of kind review_question, which pushes, and the task
+// waiting on them while the delivery's step is held by it
+// (holdForQuestions, which also holds it from then on).
+func askReviewQuestionTx(ctx context.Context, tx pgx.Tx, p ToPerson) error {
+	q, st := p.reviewQuestion, p.State
+	if st == nil {
+		return fmt.Errorf("to person: a reviewer's question with no delivery")
+	}
+	if st.QuestionsHeld {
+		if _, err := SetTaskStatusTx(ctx, tx, p.Ref.Org, st.ProjectID, st.TaskID, "", "awaiting_input", p.Reason); err != nil {
+			return err
+		}
+	}
+	return emitTx(ctx, tx, p.Ref.Org, st, EvQuestionAsked, map[string]any{"kind": "review_question", "questionId": q.ID,
+		"prompt": q.Question, "reviewRunId": q.RunID, "handedOverFrom": HolderConductor, "via": q.Via})
 }
 
 // ConductorAnswerWait bounds both quiet and chatty escalation decisions.
@@ -189,47 +241,86 @@ func (e *Escalation) HeldBy() string {
 // (waitCursor): the mark an answer to a conductor checks before putting
 // the task back (EndConductorWait). Items are normalized (NormalizeItems):
 // prompt and options keep what their readers show.
-func askPersonTx(ctx context.Context, tx pgx.Tx, r RunRef, items []QuestionItem) (string, error) {
+func askPersonTx(ctx context.Context, tx pgx.Tx, r RunRef, items []QuestionItem, relays string) (string, error) {
 	id := ids.New(ids.Question)
 	prompt, options := AskPrompt(items), AskOptions(items)
 	opts, _ := json.Marshal(options)
 	rawItems, _ := json.Marshal(items)
-	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, items, addressee)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, 'person')`, id, r.Org, r.TaskID, r.RunID, prompt, opts, rawItems); err != nil {
-		return "", err
-	}
-	var before string
-	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&before); err != nil {
-		return "", err
-	}
-	moved, err := SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input", "the agent asked a question")
-	if err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, options, items, addressee, relays)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, 'person', NULLIF($8, ''))`, id, r.Org, r.TaskID, r.RunID, prompt, opts, rawItems, relays); err != nil {
 		return "", err
 	}
 	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": options, "items": items}
+	if relays != "" {
+		payload["relays"] = relays
+	}
+	return id, personWaitTx(ctx, tx, r, id, payload, "the agent asked a question", true)
+}
+
+// handOverQuestionTx hands a writer's open question for its conductor to
+// the person (WhyHandover): the same row, addressed to the person now, the
+// task waiting on them, and question.asked saying where it came from. The
+// conductor is told, as news. Nothing when it is no longer open with the
+// conductor: answered, cancelled, or handed over already.
+func handOverQuestionTx(ctx context.Context, tx pgx.Tx, r RunRef, id, why string) (string, error) {
+	var prompt string
+	var options, items json.RawMessage
+	err := tx.QueryRow(ctx, `UPDATE questions SET addressee = 'person' WHERE id = $1 AND task_id = $2
+		AND addressee = 'conductor' AND status = 'open' RETURNING run_id, prompt, options, items`, id, r.TaskID).
+		Scan(&r.RunID, &prompt, &options, &items)
+	if db.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	payload := map[string]any{"kind": "agent", "questionId": id, "prompt": prompt, "options": options, "items": items,
+		"handedOverFrom": HolderConductor, "handedOverBecause": why}
+	if err := personWaitTx(ctx, tx, r, id, payload, "handed to you from the conductor: "+why, false); err != nil {
+		return "", err
+	}
+	// News, not a call to act (heldWakePrefix): the person answers it now.
+	_, err = RecordWakeTx(ctx, tx, r.Org, r.TaskID, "question", heldWakePrefix+"handover:"+id,
+		render(handedOverTmpl, struct{ ID, RunID, Why string }{id, r.RunID, why}))
+	return id, err
+}
+
+// personWaitTx is the task waiting on a person for question id of Run r,
+// asked or handed over: awaiting_input, and question.asked with payload.
+// tellConductor records the conductor's wake for a Run it started.
+func personWaitTx(ctx context.Context, tx pgx.Tx, r RunRef, id string, payload map[string]any, reason string, tellConductor bool) error {
+	var before string
+	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, r.TaskID).Scan(&before); err != nil {
+		return err
+	}
+	moved, err := SetTaskStatusTx(ctx, tx, r.Org, r.ProjectID, r.TaskID, "", "awaiting_input", reason)
+	if err != nil {
+		return err
+	}
 	if moved {
 		// The move's event is this transaction's latest for the task, whose
 		// row the move holds.
 		var cursor int64
 		if err := tx.QueryRow(ctx, `SELECT max(cursor) FROM events WHERE task_id = $1 AND event_type = $2`,
 			r.TaskID, EvTaskStatusChanged).Scan(&cursor); err != nil {
-			return "", err
+			return err
 		}
 		payload["taskStatus"], payload["waitCursor"] = before, cursor
 	}
 	// A Run the conductor started asking a person wakes the conductor,
 	// which may answer for what it knows, or explain in Chat.
 	var phase string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(phase::text, '') FROM runs WHERE id = $1 AND conductor_run_id IS NOT NULL`,
+	if !tellConductor {
+	} else if err := tx.QueryRow(ctx, `SELECT COALESCE(phase::text, '') FROM runs WHERE id = $1 AND conductor_run_id IS NOT NULL`,
 		r.RunID).Scan(&phase); err == nil {
 		if _, err := RecordWakeTx(ctx, tx, r.Org, r.TaskID, "question", "question:"+id, runAsksLine(phase, r.RunID, id)); err != nil {
-			return "", err
+			return err
 		}
 	} else if !db.IsNotFound(err) {
-		return "", err
+		return err
 	}
 	_, err = ledger.Append(ctx, tx, r.Event(EvQuestionAsked, ledger.ActorAgent, payload))
-	return id, err
+	return err
 }
 
 // PersonOnly says only a person may take the action on an escalation of

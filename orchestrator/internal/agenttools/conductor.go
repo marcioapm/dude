@@ -428,6 +428,32 @@ func answerReviewQuestion(ctx context.Context, tx pgx.Tx, c Caller, in answerRev
 	return conducted(map[string]any{"id": out.ID, "status": out.Status}, err)
 }
 
+type forwardReviewQuestionIn struct {
+	ID string `json:"id"`
+}
+
+func forwardReviewQuestion(ctx context.Context, tx pgx.Tx, c Caller, in forwardReviewQuestionIn) (map[string]any, error) {
+	out, err := delivery.ForwardReviewQuestion(ctx, tx, c.run(), strings.TrimSpace(in.ID))
+	if err == nil && c.env.kick != nil {
+		c.env.kick()
+	}
+	return conducted(map[string]any{"id": out.ID, "status": out.Status, "addressee": "person"}, err)
+}
+
+type decideRepositoryRequestIn struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+	Note   string `json:"note,omitempty"`
+}
+
+func decideRepositoryRequest(ctx context.Context, tx pgx.Tx, c Caller, in decideRepositoryRequestIn) (map[string]any, error) {
+	out, err := delivery.ConductDecideRepositoryRequest(ctx, tx, c.run(), strings.TrimSpace(in.ID), strings.TrimSpace(in.Action), strings.TrimSpace(in.Note))
+	if err == nil && c.env.kick != nil {
+		c.env.kick()
+	}
+	return conducted(map[string]any{"id": out.ID, "status": out.Status}, err)
+}
+
 type decideEscalationIn struct {
 	Action string `json:"action"`
 	Note   string `json:"note,omitempty"`

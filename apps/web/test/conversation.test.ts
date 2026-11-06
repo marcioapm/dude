@@ -16,7 +16,7 @@ import { EventRow } from "@dude/design-system/components";
 import { renderTurn, summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { Machine, MachineMove, MachineRaisedPayload, MachineRefusedPayload, MachineRequestedPayload, MachineResetPayload, PersistedEvent } from "@dude/domain";
-import { actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolUsage, type HumanTurn, type ToolTurn } from "../src/api/conversation.ts";
+import { CONDUCTOR_REQUEST_WORDS, CONDUCTOR_WAIT_WORDS, PAUSE_WORDS, conductorWaitComposer, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolUsage, type HumanTurn, type ToolTurn } from "../src/api/conversation.ts";
 import { stepsOf, startVerbOf } from "../src/startCue.tsx";
 import { roleLabel } from "../src/machines.ts";
 import { modelCostShown } from "../src/api/client.ts";
@@ -1143,6 +1143,59 @@ describe("an agent that asks", () => {
     expect(project([...events, ev(EventTypes.QuestionAnswered, { questionId: "qst_writer" })]).conductorQuestionId).toBeNull();
     expect(project([...events, ev(EventTypes.QuestionClosed, { questionId: "qst_writer" })]).conductorQuestionId).toBeNull();
     expect(project(events, "completed").conductorQuestionId).toBeNull();
+  });
+
+  test("a writer parked on a repository request its conductor holds waits for the conductor; forwarded, for you", () => {
+    const routed = [
+      ev("repository.routed", { requestId: "rrq_1", repository: "web", access: "read", reason: "the client", addressee: "conductor" }),
+      ev("run.parked", { reason: "person" }),
+    ];
+    const held = project(routed, "paused");
+    expect(held.conductorRequestId).toBe("rrq_1");
+    expect(held.openRequest).toBeNull();
+    expect(held.turns.filter((t) => t.kind === "repositoryRequest")).toEqual([]);
+    expect(held.turns).toContainEqual(expect.objectContaining({ kind: "notice", notice: "parked", text: CONDUCTOR_REQUEST_WORDS.parked }));
+    expect(conductorWaitComposer(held)).toBe(CONDUCTOR_REQUEST_WORDS.composer);
+    expect(CONDUCTOR_REQUEST_WORDS.composer).not.toContain("decide its request above");
+
+    // The conductor forwards it: the person's card, and the parked notice and composer are theirs.
+    const forwarded = project([...routed, ev("repository.requested", { requestId: "rrq_1", repository: "web", access: "read",
+      reason: "the client", handedOverFrom: "conductor", via: "forward" })], "paused");
+    expect(forwarded.conductorRequestId).toBeNull();
+    expect(forwarded.openRequest).toMatchObject({ requestId: "rrq_1", repository: "web" });
+    const parked = forwarded.turns.filter((t) => t.kind === "notice" && t.notice === "parked");
+    expect(parked).toEqual([expect.objectContaining({ text: PAUSE_WORDS.person.parked })]);
+    expect(conductorWaitComposer(forwarded)).toBeNull();
+    expect(PAUSE_WORDS.person.composer).toContain("decide its request above");
+
+    // Decided by the conductor itself: nothing waits on anyone.
+    const decided = project([...routed, ev("repository.approved", { requestId: "rrq_1", by: "conductor" })], "paused");
+    expect(decided.conductorRequestId).toBeNull();
+    expect(conductorWaitComposer(decided)).toBeNull();
+
+    // A request made straight to the person (no conductor) keeps the person's words.
+    const direct = project([ev("repository.requested", { requestId: "rrq_2", repository: "web", access: "read", reason: "x" }),
+      ev("run.parked", { reason: "person" })], "paused");
+    expect(direct.turns).toContainEqual(expect.objectContaining({ kind: "notice", notice: "parked", text: PAUSE_WORDS.person.parked }));
+    expect(conductorWaitComposer(direct)).toBeNull();
+    // A writer question routed to its conductor keeps its own words.
+    expect(conductorWaitComposer(project([ev("question.routed", { kind: "agent", questionId: "q", addressee: "conductor" }),
+      ev("run.parked", { reason: "person" })], "paused"))).toBe(CONDUCTOR_WAIT_WORDS.composer);
+    expect(project(routed, "completed").conductorRequestId).toBeNull();
+  });
+
+  test("an idle park its conductor left is handed to you, in one line", () => {
+    const { turns } = project([
+      ev("run.parked", { reason: "idle" }),
+      ev("run.idle_handed_over", { reason: "idle", taskStatus: "running", handedOverFrom: "conductor", role: "implementer" }),
+    ], "paused");
+    expect(turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.text)).toEqual([
+      PAUSE_WORDS.idle.parked,
+      "The conductor did not act on the quiet implementer; it is handed to you.",
+    ]);
+    // An event from before it named the role.
+    expect(project([ev("run.idle_handed_over", { reason: "idle" })], "paused").turns)
+      .toContainEqual(expect.objectContaining({ kind: "notice", text: "The conductor did not act on the quiet agent; it is handed to you." }));
   });
 
   test("the question waits for an answer, and once answered its turn is the record: no second turn", () => {
