@@ -645,14 +645,10 @@ func conductorScript(briefing, model string) string {
 	}
 	var b strings.Builder
 	calls := ConductorCalls(message)
-	if model == DefaultsModel && !session {
-		calls = append(calls, DefaultsCalls(message, Quiet(briefing, nil))...)
-		// A checks wake that started it is in its briefing, not its message.
-		if Quiet(briefing, nil) && len(ChecksDefaults(message)) == 0 {
-			calls = append(calls, ChecksDefaults(briefing)...)
-		}
+	if model == DefaultsModel && !session && Quiet(briefing, nil) && TakesDefaults(message) {
+		calls = append(calls, DefaultsCall)
 	}
-	if !session {
+	if !session && !strings.Contains(briefing, ManualChecks) {
 		// Any scripted conductor answers a checks wake no call decided
 		// (ChecksAnswer): the message's, else the briefing's that started it.
 		calls = append(calls, ChecksAnswer(message, calls)...)

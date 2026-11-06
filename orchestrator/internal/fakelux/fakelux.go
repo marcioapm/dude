@@ -2040,12 +2040,16 @@ func (s *Server) turn(run *Run) {
 		// first prompt's script carries them already:
 		// fakeagent.ConductorScriptFor).
 		if b.Defaults && !first {
-			defaults := fakeagent.DefaultsCalls(input, fakeagent.QuietSince(b.Quiet, run.Inputs))
-			defaults = append(defaults, fakeagent.ChecksAnswer(input, append(calls, defaults...))...)
+			// An explicit decide_checks in the input owns that decision.
+			defaults := [][2]string{}
+			if fakeagent.QuietSince(b.Quiet, run.Inputs) && fakeagent.TakesDefaults(input) {
+				defaults = append(defaults, fakeagent.DefaultsCall)
+			}
+			if !manual {
+				defaults = append(defaults, fakeagent.ChecksAnswer(input, calls)...)
+			}
 			for _, c := range defaults {
-				if !manual || c[0] != "decide_checks" {
-					s.callTool(run, c[0], c[1])
-				}
+				s.callTool(run, c[0], c[1])
 			}
 		}
 	}
