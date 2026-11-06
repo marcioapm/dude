@@ -444,3 +444,114 @@ func TestAnImageOnlyRelayAnswerIsForwarded(t *testing.T) {
 		t.Fatal("the writer's answer does not say it was an image")
 	}
 }
+
+// relayLost is a writer's question W relayed by the conductor as R, the
+// writer parked on it, all the conductor's input heard, and then the
+// conductor's Run failing as lux losing it does (R cancelled with it). The
+// person's id is set on R as whom it is for. Returns W, R and the person.
+func (s *steering) relayLost() (qid, relay, person string) {
+	s.t.Helper()
+	s.syncer.ConductorAnswerWait = time.Hour
+	s.syncer.ParkAfter = 100 * time.Millisecond
+	qid = s.writerAsks("Which API shape?")
+	s.lux.FinishTools(s.luxRunOf(s.implementer))
+	s.lux.EndTurn(s.luxRunOf(s.implementer))
+	s.until("writer parked with conductor", func() bool {
+		return s.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='paused'`, s.implementer) == 1
+	})
+	relay = s.relays(qid)
+	person = s.str(`SELECT person_id FROM api_keys WHERE id=$1`, s.person("Ana"))
+	mustExec(s.t, s.owner, `UPDATE questions SET to_person=$2 WHERE id=$1`, relay, person)
+	s.until("all conductor input heard", func() bool {
+		return s.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, s.conductor) == 0
+	})
+	mustExec(s.t, s.owner, `UPDATE runs SET status='failed', error='lux no longer has this Run', ended_at=now() WHERE id=$1`, s.conductor)
+	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='cancelled'`, relay); n != 1 {
+		s.t.Fatal("the relay was not cancelled with its conductor")
+	}
+	return qid, relay, person
+}
+
+// Try again before any sweep: the writer's question is still the
+// conductor's, so the lost relay is asked again as a relay, for the same
+// person; its answer reaches the writer, once.
+func TestTryAgainReasksALostRelayThatStillRelays(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	qid, relay, person := s.relayLost()
+	status, out := s.call("/internal/tasks/"+s.task+"/retry", map[string]any{})
+	if status != 201 {
+		t.Fatalf("Try again: %d %v", status, out)
+	}
+	next, _ := out["runId"].(string)
+	fresh := s.str(`SELECT COALESCE((SELECT id FROM questions WHERE run_id=$1 AND status='open' AND addressee='person'), '')`, next)
+	if fresh == "" || fresh == relay {
+		t.Fatalf("no fresh question: %q", fresh)
+	}
+	if got := s.str(`SELECT COALESCE(relays, '') FROM questions WHERE id=$1`, fresh); got != qid {
+		t.Fatalf("the fresh question relays %q, want %q", got, qid)
+	}
+	if got := s.str(`SELECT COALESCE(to_person, '') FROM questions WHERE id=$1`, fresh); got != person {
+		t.Fatalf("the fresh question is for %q, want %q", got, person)
+	}
+	status, out = s.call("/internal/questions/"+fresh+"/answer", map[string]any{"text": "Shape B, after the retry"})
+	if status != 200 {
+		t.Fatalf("answer %d %v", status, out)
+	}
+	if r, _ := out["relay"].(map[string]any); r["forwarded"] != true || r["questionId"] != qid {
+		t.Fatalf("relay outcome %v", out["relay"])
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='answered'`, qid); n != 1 {
+		t.Fatal("the writer's question was not answered")
+	}
+	s.until("writer told", func() bool { return s.inputsWith(s.implementer, "Shape B, after the retry") >= 1 })
+	for range 5 {
+		s.pump()
+	}
+	if n := s.inputsWith(s.implementer, "Shape B, after the retry"); n != 1 {
+		t.Fatalf("writer told %d times", n)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE event_type='question.answered' AND payload->>'questionId'=$1`, qid); n != 1 {
+		t.Fatalf("writer answered %d times", n)
+	}
+}
+
+// Try again after the sweeps handed the writer's question itself to the
+// person (its conductor failed): it is not relayed again, so the person
+// has it once, and their answer reaches the writer once.
+func TestTryAgainDoesNotRelayAWriterQuestionHandedToThePerson(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	qid, _, _ := s.relayLost()
+	for range 4 {
+		s.pump()
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='open' AND addressee='person'`, qid); n != 1 {
+		t.Fatal("the sweeps did not hand the writer's question to the person")
+	}
+	status, out := s.call("/internal/tasks/"+s.task+"/retry", map[string]any{})
+	if status != 201 {
+		t.Fatalf("Try again: %d %v", status, out)
+	}
+	next, _ := out["runId"].(string)
+	if n := s.count(`SELECT count(*) FROM questions WHERE task_id=$1 AND status='open' AND addressee='person' AND (id=$2 OR relays=$2)`, s.task, qid); n != 1 {
+		t.Fatalf("the person has %d open questions for the writer's", n)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE run_id=$1`, next); n != 0 {
+		t.Fatalf("%d questions asked again on the fresh conductor", n)
+	}
+	if prompt := s.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id=$1`, next); !strings.Contains(prompt, "the writer's question was handed to the person since") {
+		t.Errorf("the briefing does not say why it was not asked again:\n%s", prompt)
+	}
+	if status, out := s.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "Shape B, handed over"}); status != 200 {
+		t.Fatalf("answer %d %v", status, out)
+	}
+	s.until("writer told", func() bool { return s.inputsWith(s.implementer, "Shape B, handed over") >= 1 })
+	for range 5 {
+		s.pump()
+	}
+	if n := s.inputsWith(s.implementer, "Shape B, handed over"); n != 1 {
+		t.Fatalf("writer told %d times", n)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE task_id=$1 AND status='open' AND addressee='person'`, s.task); n != 0 {
+		t.Fatalf("%d person questions still open", n)
+	}
+}

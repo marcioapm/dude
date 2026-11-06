@@ -313,13 +313,22 @@ func reaskTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery) (string, e
 
 // reask asks the lost question again on the new conductor, without a
 // model call: a gate question only while the delivery is at the gate at
-// the heads it was asked at, and not at an untested head. Returns the new
-// question, or why it was not asked.
+// the heads it was asked at, and not at an untested head; a relay
+// only while the writer's question may still be relayed (stillRelays), and
+// not at all once it was handed to the person. Returns the new question, or
+// why it was not asked.
 func reask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, q *LostQuestion) (string, string, error) {
 	if len(q.GateHeads) == 0 || string(q.GateHeads) == "null" {
 		p := ToPerson{Ref: ref, Why: WhyConductor, Items: q.Items}
 		if q.Relays != nil {
-			p.Relays = *q.Relays
+			relays, handed, err := stillRelays(ctx, tx, ref, *q.Relays)
+			if err != nil {
+				return "", "", err
+			}
+			if handed {
+				return "", "the writer's question was handed to the person since", nil
+			}
+			p.Relays = relays
 		}
 		id, err := ToPersonTx(ctx, tx, p)
 		if err != nil {
@@ -352,6 +361,32 @@ func reask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, q *LostQuest
 	}
 	id, err := askGate(ctx, tx, ref, &d.State, q.Prompt, WhyConductor)
 	return id, "", err
+}
+
+// stillRelays rechecks, under the locks reask holds (Chat → delivery →
+// task, then the question and its Run, as CheckRelayTx takes them), that
+// the lost relay's writer question id may still be relayed: open with the
+// conductor, asked by a current writer Run, and relayed by no other open
+// question. Returns id when it may, "" when not; handed when the writer's
+// question is the person's own now (the hand-over sweep gave it to them),
+// so asking again would ask them twice.
+func stillRelays(ctx context.Context, tx pgx.Tx, ref RunRef, id string) (relays string, handed bool, err error) {
+	var writer, prompt string
+	var items []QuestionItem
+	err = tx.QueryRow(ctx, openWriterQuestion, id, ref.TaskID, ref.Org).Scan(&writer, &prompt, &items)
+	if db.IsNotFound(err) {
+		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE id = $1 AND task_id = $2
+			AND status = 'open' AND addressee = 'person')`, id, ref.TaskID).Scan(&handed)
+		return "", handed, err
+	}
+	if err != nil {
+		return "", false, err
+	}
+	var open bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE relays = $1 AND status = 'open')`, id).Scan(&open); err != nil || open {
+		return "", false, err
+	}
+	return id, false, nil
 }
 
 func sameHeads(a, b map[string]string) bool {
