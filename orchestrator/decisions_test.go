@@ -117,6 +117,9 @@ func (w *world) conductorSpecOf(task string) string {
 	id, _, _ := w.conductor(task)
 	w.until("the conductor on lux", func() bool { return w.luxRunOf(id) != "" })
 	for _, r := range w.lux.Runs() {
+		if r == nil { // forgotten (ForgetRun)
+			continue
+		}
 		var spec lux.Spec
 		_ = json.Unmarshal(r.Spec, &spec)
 		if spec.Labels["dude.run"] == id {

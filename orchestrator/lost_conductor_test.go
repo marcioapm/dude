@@ -1,0 +1,316 @@
+package orchestrator_test
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+)
+
+// lostAtGate is a conducted task parked at the pull request gate on the
+// conductor's ask_person, its conductor paused for the person, and lux then
+// losing the conductor's Run. Returns the task, the lost conductor and the
+// gate question.
+func (w *world) lostAtGate() (task, old, question string) {
+	w.t.Helper()
+	// Waiting on the person, its turn over, and still followed: lux's 404
+	// reaches the follower (the issue's sequence, phases.retryLater).
+	w.syncer.ParkAfter = time.Hour
+	task = w.task()
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	question = w.str(`SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
+	old = w.str(`SELECT run_id FROM questions WHERE id = $1`, question)
+	w.until("the conductor waiting on the person", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND waiting_since IS NOT NULL`, old) == 1
+	})
+	w.lux.ForgetRun(w.luxRunOf(old))
+	return task, old, question
+}
+
+// replacementOf is the Run that replaced a lost one, "" for none.
+func (w *world) replacementOf(old string) string {
+	return w.str(`SELECT COALESCE(replaced_by, '') FROM runs WHERE id = $1`, old)
+}
+
+// untilLost pumps until lux's loss of old was found and old ended.
+func (w *world) untilLost(old string) {
+	w.t.Helper()
+	w.until("the lost conductor to end", func() bool {
+		return w.str(`SELECT status::text FROM runs WHERE id = $1`, old) == "failed"
+	})
+}
+
+// 1. The issue's case: lux loses the conductor parked on the gate's
+// question. The question stays open, on a placeholder conductor in the
+// lost one's slot that costs nothing (no lux Run) until the person answers;
+// the task still waits on them.
+func TestAConductorLostWhileParkedOnTheGateKeepsTheQuestionOpen(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.lostAtGate()
+	submitted := len(w.lux.Runs())
+	w.untilLost(old)
+	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "open" {
+		t.Fatalf("the gate question is %s once lux lost its conductor, want open", st)
+	}
+	next := w.replacementOf(old)
+	if next == "" || w.str(`SELECT run_id FROM questions WHERE id = $1`, q) != next {
+		t.Fatalf("the question is on %s, want the replacement %q", w.str(`SELECT run_id FROM questions WHERE id = $1`, q), next)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person' AND lux_run_id IS NULL
+		AND role = 'conductor'`, next); n != 1 {
+		t.Errorf("the replacement is not a parked placeholder:\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_lost_at IS NOT NULL`, old); n != 1 {
+		t.Error("the lost Run has no lux_lost_at")
+	}
+	for range 3 {
+		w.pump()
+	}
+	if s := w.taskStatus(task); s != "awaiting_input" {
+		t.Errorf("task %s, want awaiting_input", s)
+	}
+	if n := len(w.lux.Runs()); n != submitted {
+		t.Errorf("%d lux Runs submitted before the person answered", n-submitted)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'questionId' = $3`,
+		next, delivery.EvQuestionRebound, q); n != 1 {
+		t.Errorf("%d question.rebound events", n)
+	}
+}
+
+// 2. The answer to it, through the question's own endpoint, reaches the
+// replacement: started then, briefed on the lost Run, the answer its first
+// message, and the gate opens a draft.
+func TestTheAnswerToALostConductorsQuestionReachesItsReplacement(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.lostAtGate()
+	w.untilLost(old)
+	if status, out := w.call("/internal/questions/"+q+"/answer", map[string]any{"text": "Draft"}); status != 200 {
+		t.Fatalf("answer Draft: %d %v", status, out)
+	}
+	next := w.replacementOf(old)
+	if next == "" {
+		t.Fatal("no replacement")
+	}
+	w.until("the replacement on lux", func() bool { return w.luxRunOf(next) != "" })
+	prompt := w.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id = $1`, next)
+	if !strings.Contains(prompt, "lux lost your predecessor's Run") || !strings.Contains(prompt, "Open / Draft") {
+		t.Errorf("the replacement's briefing does not say its predecessor was lost at the gate:\n%s", prompt)
+	}
+	w.until("the answer delivered", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL AND text LIKE '%Draft%'`, next) > 0
+	})
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+	if !w.gh.Pulls()[0].Draft {
+		t.Error("Draft opened a pull request ready for review")
+	}
+}
+
+// 3. The answer in Chat answers the question on the placeholder; no new
+// conductor is started with it.
+func TestAChatAnswerToALostConductorsQuestionAnswersIt(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.lostAtGate()
+	w.untilLost(old)
+	status, out := w.chat(task, "Open")
+	if status != 200 || out["questionId"] != q || out["created"] == true {
+		t.Fatalf("Chat answer: %d %v", status, out)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 2 {
+		t.Errorf("%d conductors, want the lost one and its replacement", n)
+	}
+}
+
+// 4. The follower and the sweep both find the loss: one replacement, one
+// question.rebound.
+func TestALostConductorIsReplacedOnceAcrossFollowerAndSweep(t *testing.T) {
+	w := conducting(t)
+	w.syncer.ParkAfter = time.Millisecond
+	task := w.task()
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	q := w.str(`SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
+	old := w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
+	// Forgotten while it is still followed: before the park.
+	w.lux.ForgetRun(w.luxRunOf(old))
+	w.untilLost(old)
+	for range 4 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor' AND replaced_by IS NULL`, task); n != 1 {
+		t.Errorf("%d conductors not replaced, want 1:\n%s", n, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 2 {
+		t.Errorf("%d conductors, want the lost one and one replacement", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE event_type = $1 AND payload->>'questionId' = $2`, delivery.EvQuestionRebound, q); n != 1 {
+		t.Errorf("%d question.rebound events, want 1", n)
+	}
+	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "open" {
+		t.Errorf("question %s", st)
+	}
+}
+
+// 5. The person answered just before the loss was found: the answer goes
+// to the replacement as its first message, its briefing naming the lost Run.
+func TestAnAnswerCommittedAsTheConductorIsLostStartsTheReplacementWithIt(t *testing.T) {
+	w := conducting(t)
+	w.syncer.ParkAfter = time.Millisecond
+	task := w.task()
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	q := w.str(`SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
+	old := w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
+	w.untilParked(old)
+	w.lux.ForgetRun(w.luxRunOf(old))
+	// Answered on the old Run, still paused in dude.
+	if status, out := w.call("/internal/questions/"+q+"/answer", map[string]any{"text": "Draft"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, out)
+	}
+	w.untilLost(old)
+	next := w.replacementOf(old)
+	if next == "" {
+		t.Fatalf("no replacement:\n%s", w.describeRuns())
+	}
+	w.until("the replacement on lux", func() bool { return w.luxRunOf(next) != "" })
+	briefed := w.str(`SELECT COALESCE((SELECT payload->>'text' FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor DESC LIMIT 1), '')`,
+		next, delivery.EvConductorBriefed)
+	if !strings.Contains(briefed, "lux lost your predecessor's Run ("+old+")") {
+		t.Errorf("the replacement's briefing does not name the lost Run:\n%s", briefed)
+	}
+	w.until("the answer delivered to it", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL AND text LIKE '%Draft%'`, next) > 0
+	})
+}
+
+// 6. A quiet conductor lost before its decision's deadline: its replacement
+// is the latest conductor, not failed, so the decision is not defaulted.
+func TestALostQuietConductorDoesNotDefaultTheDecision(t *testing.T) {
+	w := conducting(t)
+	task, old, _ := w.lostAtGate()
+	w.untilLost(old)
+	// Quiet, its decision's deadline an hour off, and the step woken now:
+	// it reads the latest conductor.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(jsonb_set(state, '{voice}', '"quiet"'),
+			'{decision,decideBy}', to_jsonb(now() + interval '1 hour')), wake_at = now()
+		WHERE task_id = $1 AND step = 'conductorDecision'`, task)
+	for range 5 {
+		w.pump()
+	}
+	if w.decisionAt(task) != delivery.PointBeforePR {
+		t.Errorf("the gate's decision was taken: %s", w.workflowState(task))
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvDecisionDefaulted); n != 0 {
+		t.Errorf("%d decisions defaulted after lux lost the conductor", n)
+	}
+}
+
+// failedAsOnMain is main's end state for the issue: the conductor failed
+// with lux's 404, its gate question cancelled with no event, everything
+// it was sent delivered. Returns the task, the failed conductor and the
+// question.
+func (w *world) failedAsOnMain() (task, old, q string) {
+	w.t.Helper()
+	w.syncer.ParkAfter = time.Millisecond
+	task = w.task()
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	q = w.str(`SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
+	old = w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
+	w.untilParked(old)
+	mustExec(w.t, w.owner, `UPDATE runs SET status = 'failed', error = 'lux no longer has this Run', ended_at = now() WHERE id = $1`, old)
+	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "cancelled" {
+		w.t.Fatalf("the question is %s", st)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, old); n != 0 {
+		w.t.Fatalf("%d directives unread", n)
+	}
+	return task, old, q
+}
+
+// 7. Try again on a failed conductor with nothing unread starts a fresh
+// conductor, and dude asks the lost gate question again on it at the same
+// heads.
+func TestTryAgainOnAFailedConductorWithNothingUnreadReasks(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.failedAsOnMain()
+	status, out := w.call("/internal/tasks/"+task+"/retry", map[string]any{})
+	if status != 201 {
+		t.Fatalf("Try again: %d %v", status, out)
+	}
+	next, _ := out["runId"].(string)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND role = 'conductor' AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, next); n != 1 {
+		t.Fatalf("no fresh conductor %q:\n%s", next, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND payload->>'retries' = $2`, next, old); n != 1 {
+		t.Error("its run.created does not name the Run it retries")
+	}
+	if n := w.count(`SELECT count(*) FROM questions q JOIN workflow_runs wf ON wf.task_id = q.task_id
+		WHERE q.run_id = $1 AND q.status = 'open' AND q.id <> $2 AND q.prompt = (SELECT prompt FROM questions WHERE id = $2)
+		AND q.pr_gate_heads = wf.state->'heads'`, next, q); n != 1 {
+		t.Errorf("%d gate questions asked again on the fresh conductor, want 1", n)
+	}
+	prompt := w.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id = $1`, next)
+	if !strings.Contains(prompt, "failed (lux no longer has this Run) while it waited on") || !strings.Contains(prompt, "dude asked") {
+		t.Errorf("the briefing does not say its predecessor failed waiting:\n%s", prompt)
+	}
+}
+
+// 7b. The gate's heads moved since the lost question was asked: it is not
+// asked again, and the briefing says why.
+func TestTryAgainDoesNotReaskAGateQuestionAtOtherHeads(t *testing.T) {
+	w := conducting(t)
+	task, _, q := w.failedAsOnMain()
+	mustExec(t, w.owner, `UPDATE questions SET pr_gate_heads = '{"elsewhere":"0000"}'::jsonb WHERE id = $1`, q)
+	status, out := w.call("/internal/tasks/"+task+"/retry", map[string]any{})
+	if status != 201 {
+		t.Fatalf("Try again: %d %v", status, out)
+	}
+	next, _ := out["runId"].(string)
+	if n := w.count(`SELECT count(*) FROM questions WHERE run_id = $1`, next); n != 0 {
+		t.Errorf("%d questions asked again at heads the work moved on from", n)
+	}
+	if prompt := w.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id = $1`, next); !strings.Contains(prompt, "the work moved on since") {
+		t.Errorf("the briefing does not say why it was not asked again:\n%s", prompt)
+	}
+}
+
+// 8. /recover offers Try again for the failed conductor, naming the lost
+// question.
+func TestRecoverOffersTryAgainForAFailedConductor(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.failedAsOnMain()
+	status, body := w.get("/internal/tasks/"+task+"/recover", w.org)
+	if status != 200 || !strings.Contains(body, `"conductor":{`) || !strings.Contains(body, `"retry":true`) ||
+		!strings.Contains(body, `"lostQuestion":{"id":"`+q+`"`) || !strings.Contains(body, `"runId":"`+old+`"`) {
+		t.Fatalf("recover: %d %s", status, body)
+	}
+}
+
+// 9. A lost conductor that cannot be replaced (a publish of its is moving
+// the task branch) fails as before, but says so: question.closed {by:
+// lost}, and the task no longer waits on the person.
+func TestALostConductorThatCannotBeReplacedSaysSoAndFreesTheTask(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.lostAtGate()
+	w.noPublishes = true
+	mustExec(t, w.owner, `INSERT INTO conductor_publishes (id, organization_id, task_id, run_id, request_id, attempt, status)
+		SELECT 'cpub_moving', organization_id, task_id, id, 'req_moving', attempt, 'moving' FROM runs WHERE id = $1`, old)
+	w.untilLost(old)
+	if next := w.replacementOf(old); next != "" {
+		t.Fatalf("replaced by %s while its publish moved", next)
+	}
+	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "cancelled" {
+		t.Errorf("question %s, want cancelled", st)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'questionId' = $3
+		AND payload->>'by' = 'lost'`, old, delivery.EvQuestionClosed, q); n != 1 {
+		t.Errorf("%d question.closed {by: lost}", n)
+	}
+	if s := w.taskStatus(task); s == "awaiting_input" {
+		t.Errorf("the task still waits on the person for a question nobody will hear")
+	}
+}
