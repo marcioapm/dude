@@ -170,21 +170,15 @@ func ReplaceLostConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, why stri
 		}
 	}
 	next := RunRef{Org: ref.Org, ProjectID: ref.ProjectID, TaskID: ref.TaskID, RunID: id}
-	dude := func(r RunRef, typ string, payload map[string]any) error {
-		e := r.Event(typ, ledger.ActorSystem, payload)
-		e.ActorID = "dude"
-		_, err := ledger.Append(ctx, tx, e)
-		return err
-	}
-	if err := dude(ref, "run.failed", map[string]any{"status": "failed", "error": reason, "luxLost": true, "replacedBy": id}); err != nil {
+	if err := dudeRunEventTx(ctx, tx, ref, "run.failed", map[string]any{"status": "failed", "error": reason, "luxLost": true, "replacedBy": id}); err != nil {
 		return "", err
 	}
-	if err := dude(next, EvRunCreated, map[string]any{"role": RoleConductor, "publishes": false, "baseRefs": baseRefs,
+	if err := dudeRunEventTx(ctx, tx, next, EvRunCreated, map[string]any{"role": RoleConductor, "publishes": false, "baseRefs": baseRefs,
 		"replaces": ref.RunID, "why": "lux_lost"}); err != nil {
 		return "", err
 	}
 	for _, q := range moved {
-		if err := dude(next, EvQuestionRebound, map[string]any{"questionId": q, "from": ref.RunID, "to": id}); err != nil {
+		if err := dudeRunEventTx(ctx, tx, next, EvQuestionRebound, map[string]any{"questionId": q, "from": ref.RunID, "to": id}); err != nil {
 			return "", err
 		}
 	}
@@ -192,7 +186,7 @@ func ReplaceLostConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, why stri
 	if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&parkedAt); err != nil {
 		return "", err
 	}
-	if err := dude(next, "run.parked", map[string]any{"reason": "person", "parkedAt": parkedAt,
+	if err := dudeRunEventTx(ctx, tx, next, "run.parked", map[string]any{"reason": "person", "parkedAt": parkedAt,
 		"message": "lux lost the conductor's Run while it waited for " + name + "; your question is still open. " +
 			"Answering starts a fresh conductor with the conversation so far."}); err != nil {
 		return "", err
@@ -288,10 +282,8 @@ func reaskTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery) (string, e
 	if _, err := tx.Exec(ctx, `UPDATE runs SET replaced_by = $2 WHERE id = $1 AND replaced_by IS NULL`, ref.RunID, id); err != nil {
 		return "", err
 	}
-	e := next.Event(EvRunCreated, ledger.ActorSystem, map[string]any{"role": RoleConductor, "publishes": false,
-		"baseRefs": baseRefs, "retries": ref.RunID})
-	e.ActorID = "dude"
-	if _, err := ledger.Append(ctx, tx, e); err != nil {
+	if err := dudeRunEventTx(ctx, tx, next, EvRunCreated, map[string]any{"role": RoleConductor, "publishes": false,
+		"baseRefs": baseRefs, "retries": ref.RunID}); err != nil {
 		return "", err
 	}
 	l := lostBrief{Old: ref.RunID, Failed: true, Error: failedWith}
@@ -311,10 +303,15 @@ func reaskTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery) (string, e
 	if _, err := tx.Exec(ctx, `UPDATE runs SET prompt = $2 WHERE id = $1`, id, prompt); err != nil {
 		return "", err
 	}
-	b := next.Event(EvConductorBriefed, ledger.ActorSystem, map[string]any{"text": prompt})
-	b.ActorID = "dude"
-	_, err = ledger.Append(ctx, tx, b)
-	return id, err
+	return id, dudeRunEventTx(ctx, tx, next, EvConductorBriefed, map[string]any{"text": prompt})
+}
+
+// dudeRunEventTx records an event dude itself makes about Run r.
+func dudeRunEventTx(ctx context.Context, tx pgx.Tx, r RunRef, typ string, payload map[string]any) error {
+	e := r.Event(typ, ledger.ActorSystem, payload)
+	e.ActorID = "dude"
+	_, err := ledger.Append(ctx, tx, e)
+	return err
 }
 
 // reask asks the lost question again on the new conductor, without a
