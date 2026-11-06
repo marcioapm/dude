@@ -260,9 +260,10 @@ func inDir(command string) (dir, rest string) {
 }
 
 // plainDir is a cd's argument dude reads as a directory: one word, nothing
-// the shell would expand or chain.
+// the shell would expand or chain, and no option ("-" goes back to the
+// previous directory, "-P" and "-L" to the home one).
 func plainDir(dir string) bool {
-	return dir != "" && !strings.ContainsAny(dir, " ;|&<>$`'\"\\*?~(){}")
+	return dir != "" && !strings.HasPrefix(dir, "-") && !strings.ContainsAny(dir, " ;|&<>$`'\"\\*?~(){}")
 }
 
 // sameCommand says a recorded shell call ran the reported command: both
@@ -418,9 +419,28 @@ func checksOutBase(step string, bases []taskBase) (worktree string, ok bool) {
 	return "", false
 }
 
-// stepFailed matches what a step before the command prints when it fails:
-// bash's cd, and git's fatal and error lines.
-var stepFailed = regexp.MustCompile(`(?m)(^|: )cd: |^fatal: |^error: `)
+// stepFailing matches a line a step before the command prints when it
+// fails: a cd's in bash ("bash: line 1: cd: api: No such file or
+// directory") or dash ("sh: 1: cd: can't cd to api"), any of dash's own
+// ("sh: 1: "), and git's fatal lines and the error lines of a checkout or
+// switch.
+var stepFailing = regexp.MustCompile(`(?m)(^|: )cd: |can't cd|^sh: \d+: |^fatal: |^error: (pathspec|Your local changes|unknown switch)`)
+
+// stepFailed says output shows a step before the command failing: a line
+// stepFailing matches, or an "error: " line first, before the command
+// printed anything. A test's "error: expected 2, got 3" later in the
+// output is the command's.
+func stepFailed(output string) bool {
+	if stepFailing.MatchString(output) {
+		return true
+	}
+	for line := range strings.Lines(output) {
+		if line = strings.TrimSpace(line); line != "" {
+			return strings.HasPrefix(line, "error: ")
+		}
+	}
+	return false
+}
 
 // baseReading: reading is how a base call that exited exit ran, for the conductor:
 // "exit N" only when the exit is the command's own. A call ends with the
@@ -431,10 +451,11 @@ var stepFailed = regexp.MustCompile(`(?m)(^|: )cd: |^fatal: |^error: `)
 //   - with a step other than checking out and entering a directory before
 //     the command (others), any other non-zero exit may be that step's:
 //     unclear;
-//   - 1, the exit bash's cd and git checkout or switch return on failure,
-//     is the command's only when the call's recorded output is there and
-//     shows no step before it failing (stepFailed); unclear otherwise;
-//   - 2 to 125, which neither returns, is the command's.
+//   - 1 to 125 is the command's only when the call's recorded output is
+//     there and shows no step before it failing (stepFailed); unclear
+//     otherwise. A cd fails with 1 in bash but 2 in dash (/bin/sh on the
+//     runtime image), git checkout and switch with 1, so no exit in the
+//     range is the command's alone.
 //
 // Only "exit N" is dude's word that the command failed at the base.
 func (b *baseCall) reading(exit int, output string) string {
@@ -446,7 +467,7 @@ func (b *baseCall) reading(exit int, output string) string {
 		return fmt.Sprintf("did not run or was stopped: exit %d", exit)
 	case b.others:
 		return unclear
-	case exit == 1 && (strings.TrimSpace(output) == "" || stepFailed.MatchString(output)):
+	case strings.TrimSpace(output) == "" || stepFailed(output):
 		return unclear
 	}
 	return fmt.Sprintf("exit %d", exit)
