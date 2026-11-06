@@ -466,7 +466,7 @@ func TestACarriedWaiverIsAskedAboutAloneForItsFailure(t *testing.T) {
 	if a.Waivers[0] != nil || a.Waivers[1] == nil || len(a.Bases) != 1 {
 		t.Fatalf("asked %+v", a)
 	}
-	if !strings.Contains(w.checksWake(), fmt.Sprintf(`Check 2, "make test", may be the failure the implementer's waiver accepted: same_as_waived cites waiverCursor %d.`, a.Waivers[1].Cursor)) {
+	if !strings.Contains(w.checksWake(), fmt.Sprintf(`Check 2, "make test", may be the failure the Implementer's waiver accepted: same_as_waived cites waiverCursor %d.`, a.Waivers[1].Cursor)) {
 		t.Fatalf("wake %q", w.checksWake())
 	}
 	if _, err := w.decide(cond, delivery.DecideChecks{RunID: w.run.ID, Turn: w.turn(),
