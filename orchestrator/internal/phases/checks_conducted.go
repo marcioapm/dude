@@ -69,10 +69,10 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 		if err = tx.QueryRow(ctx, `SELECT agent_session_epoch FROM runs WHERE id = $1`, r.ID).Scan(&epoch); err != nil {
 			return err
 		}
-		if verdict, err = delivery.ConductedChecksTx(ctx, tx, r.ID, turn); err != nil || verdict != nil {
+		if asked, overdue, err = delivery.ChecksAskedTx(ctx, tx, r.ID, turn); err != nil {
 			return err
 		}
-		if asked, overdue, err = delivery.ChecksAskedTx(ctx, tx, r.ID, turn); err != nil {
+		if verdict, err = delivery.ConductedChecksTx(ctx, tx, r.ID, turn); err != nil || verdict != nil {
 			return err
 		}
 		unavailable, err = delivery.ChecksConductorUnavailableTx(ctx, tx, r.TaskID)
@@ -82,9 +82,6 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 		return d, err
 	}
 	if verdict != nil {
-		if asked, _, err = s.checksAsked(ctx, r, turn); err != nil {
-			return d, err
-		}
 		return verdictDecision(d, checks, asked, verdict), nil
 	}
 	if overdue || unavailable {
@@ -148,15 +145,6 @@ func checksAskOpenTx(ctx context.Context, tx pgx.Tx, r phaseRun, turn int64) (bo
 	}
 	unavailable, err := delivery.ChecksConductorUnavailableTx(ctx, tx, r.TaskID)
 	return !unavailable, err
-}
-
-// checksAsked is what the gate asked the conductor about turn.
-func (s *Syncer) checksAsked(ctx context.Context, r phaseRun, turn int64) (asked *delivery.ChecksAsked, overdue bool, err error) {
-	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		asked, overdue, err = delivery.ChecksAskedTx(ctx, tx, r.ID, turn)
-		return err
-	})
-	return asked, overdue, err
 }
 
 func hasResult(checks []delivery.Check, result string) bool {
