@@ -82,14 +82,16 @@ export function openAgentQuestions(events: readonly PersistedEvent[], all = fals
 /**
  * The person's question lost with the task's latest conductor (#404),
  * when Try again is offered on it (`recover.conductor.retry`): the one
- * `/recover` names, else the newest the server holds cancelled with that
- * conductor. Null when Try again is not offered, or nothing was lost.
+ * `/recover` names. Only a legacy payload without that field falls back
+ * to a question explicitly closed by loss/failure, never a deliberate settlement.
  */
 export function lostQuestion(recovery: RecoveryOptions | null | undefined, questions: readonly TaskQuestion[]): LostAsk | null {
   const c = recovery?.conductor;
   if (!c || !c.retry || c.status !== "failed") return null;
+  if ("lostQuestion" in c && c.lostQuestion === null) return null;
   const held = questions.filter((q) => q.status === "cancelled" && q.addressee === "person" && q.runId === c.runId);
-  const q = (c.lostQuestion ? held.find((h) => h.id === c.lostQuestion!.id) : undefined) ?? held.at(-1);
+  const q = c.lostQuestion ? held.find((h) => h.id === c.lostQuestion!.id)
+    : held.findLast((h) => h.endedBy === "lost" || h.endedBy === "run_failed");
   if (!c.lostQuestion && !q) return null;
   return {
     questionId: c.lostQuestion?.id ?? q!.id,

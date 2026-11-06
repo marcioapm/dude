@@ -10,10 +10,10 @@ import type { PersistedEvent } from "@dude/domain";
 import { act, click, mount, settle, until } from "./dom.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
 import { ORG, PROJECT, RUN_ID, TASK_ID } from "../src/fixtures/data.ts";
-import { ApiError, type TaskMetrics, type TaskQuestion } from "../src/api/client.ts";
+import { ApiError, type RecoveryOptions, type TaskMetrics, type TaskQuestion } from "../src/api/client.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
-import { openAgentQuestions, recordedActivity } from "../src/screens/TaskOverview.tsx";
+import { lostQuestion, lostWhy, openAgentQuestions, recordedActivity } from "../src/screens/TaskOverview.tsx";
 
 let mounted: Array<() => Promise<void>> = [];
 beforeEach(() => localStorage.clear());
@@ -142,6 +142,10 @@ describe("running now", () => {
 });
 
 describe("needs you", () => {
+  test("lost and run_failed recovery explain their different failure reasons", () => {
+    expect(lostWhy({ endedBy: "lost", error: null })).toBe("The conductor's Run was lost before you answered (lux no longer has it).");
+    expect(lostWhy({ endedBy: "run_failed", error: "worker crashed" })).toBe("The conductor's Run failed before you answered: worker crashed.");
+  });
   const asked = (questionId: string, extra: Record<string, unknown> = {}) =>
     ev("question.asked", { kind: "agent", questionId, prompt: "Keep the invoice option on monthly plans?", toName: "Ana Ribeiro", ...extra });
 
@@ -158,6 +162,26 @@ describe("needs you", () => {
     };
     return client;
   }
+
+  for (const endedBy of ["decision", "withdrawn", "left_gate", "lost", "run_failed", null] as const) {
+    for (const explicit of [false, true]) {
+      test(`lost question endedBy=${endedBy}, explicit null=${explicit}`, () => {
+        const recovery: RecoveryOptions = { taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null,
+          conductor: { runId: RUN_ID, status: "failed", error: "failed", retry: true, lostQuestion: null } };
+        // Legacy wire payloads predate this required field in the current API type.
+        if (!explicit) Reflect.deleteProperty(recovery.conductor!, "lostQuestion");
+        const q = serverQuestion({ status: "cancelled", endedBy });
+        expect(lostQuestion(recovery, [q])?.questionId ?? null).toBe(!explicit && (endedBy === "lost" || endedBy === "run_failed") ? q.id : null);
+      });
+    }
+  }
+
+  test("the server's real lost question wins over newer cancelled rows", () => {
+    const recovery: RecoveryOptions = { taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null,
+      conductor: { runId: RUN_ID, status: "failed", error: "failed", retry: true, lostQuestion: { id: "q_real", prompt: "Real?" } } };
+    expect(lostQuestion(recovery, [serverQuestion({ id: "q_real", status: "cancelled", endedBy: "run_failed", prompt: "Real?" }),
+      serverQuestion({ id: "q_decided", status: "cancelled", endedBy: "decision" })])).toMatchObject({ questionId: "q_real", text: "Real?" });
+  });
 
   for (const status of ["cancelled", "answered", "expired"] as const) {
     test(`server ${status} question never needs you, even with an unclosed asked event`, async () => {
@@ -222,6 +246,29 @@ describe("needs you", () => {
     await settle();
     expect(text(page.querySelector("[data-testid=lost-asker-problem]"))).toBe("A live conductor already has this task.");
     expect(button.disabled).toBe(false);
+  });
+
+  test("successful Try again reloads the task and replaces the lost card with the new open question", async () => {
+    const client = fx();
+    const get = client.getTask.bind(client);
+    let retried = false;
+    let readsAfterRetry = 0;
+    client.getTask = async (id) => {
+      if (retried) readsAfterRetry++;
+      const task = await get(id);
+      return { ...task, questions: [serverQuestion({ id: retried ? "q_new" : "q_server", status: retried ? "open" : "cancelled", endedBy: retried ? null : "lost" })],
+        runs: task.runs.map((r) => r.id === RUN_ID ? { ...r, role: "conductor" as const, phase: null, status: retried ? "paused" as const : "failed" as const } : r) };
+    };
+    client.recoveryOptions = async () => ({ taskId: TASK_ID, actions: [], attempt: 1, keptUntil: null,
+      conductor: { runId: RUN_ID, status: retried ? "paused" : "failed", error: null, retry: !retried, lostQuestion: retried ? null : { id: "q_server", prompt: "Server's question?" } } });
+    client.retryConductor = async () => { retried = true; return { runId: RUN_ID, taskId: TASK_ID, created: true }; };
+    const page = await overview(client);
+    const button = await until(() => page.querySelector<HTMLButtonElement>("[data-testid=lost-asker-retry]"), "Try again");
+    await click(button);
+    const needs = await until(() => page.querySelector("[data-testid=needs-you][data-question=q_new]"), "the reloaded new question");
+    expect(needs.textContent).toContain("Server's question?");
+    expect(readsAfterRetry).toBeGreaterThan(0);
+    expect(page.querySelectorAll("[data-testid=lost-asker]").length).toBe(0);
   });
 
   test("an agent's open question is quoted once, above the figures, naming who can answer, with the way to it", async () => {

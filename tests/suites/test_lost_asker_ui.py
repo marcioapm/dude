@@ -7,8 +7,9 @@ the question moves to the Run that replaces it and stays open, so the
 Overview keeps "Needs you"; the person answers from there (in Chat, on the
 old Run's turn), the replacement hears it, and "Needs you" clears.
 
-(b) The conductor fails with nothing unread while it waits (main's end
-state for the issue: the question cancelled with the Run, no event): the
+(b) An artificial already-lost marker bypasses automatic replacement to
+exercise the legacy/fallback cancelled-question UI. This is NOT the normal
+backend lost-run path, which (a) exercises without injected state. The
 Overview does not say "Needs you" for it; it shows the lost-asker card with
 the question and Try again, which starts a fresh conductor that dude asks
 again, and "Needs you" returns.
@@ -26,7 +27,7 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, execute, query, sign_in, wait_until
+from helpers import ApiClient, execute, provision_person, query, sign_in, wait_until
 
 SHOTS = Path(os.environ["DUDE_TEST_SHOTS"]) if os.environ.get("DUDE_TEST_SHOTS") else None
 
@@ -64,9 +65,10 @@ def _needs_you(page: Page):
 def test_a_question_moved_off_a_lost_conductor_still_needs_you_and_its_answer_is_heard(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, env, console_errors: list
 ):
+    _, client = provision_person(client, env, "Ben Baker", f"ben-{os.urandom(4).hex()}@acme.dev", role="admin")
     task, old, question = _asking(client, forge_project, owner_dsn, "Invoice option, its conductor lost")
     page.set_viewport_size({"width": 1440, "height": 1000})
-    sign_in(page, web_url, org["api_key"], at=f"#/task/{task['id']}")
+    sign_in(page, web_url, client.api_key, at=f"#/task/{task['id']}")
     expect(_needs_you(page)).to_be_visible(timeout=30_000)
     expect(_needs_you(page)).to_contain_text("Keep the invoice option on monthly plans?")
     _shoot(page, "a-1-needs-you-before")
@@ -97,6 +99,20 @@ def test_a_question_moved_off_a_lost_conductor_still_needs_you_and_its_answer_is
         AND text LIKE %s""", (placeholder, "%Keep it%")), timeout=90, message="the answer never reached the replacement")
     assert query(owner_dsn, "SELECT status::text AS status FROM questions WHERE id = %s", (question,)) == [{"status": "answered"}]
 
+    # The old card must record the server answer, not become a cancellation.
+    expect(turn).to_contain_text("Keep it")
+    expect(turn).to_contain_text("Ben")
+    expect(turn).to_have_attribute("data-state", "answered")
+    expect(turn).not_to_contain_text("No longer needed")
+    expect(turn.get_by_role("radio")).to_have_count(0)
+    _shoot(page, "a-3-rebound-answer")
+    page.reload()
+    expect(turn).to_contain_text("Ben", timeout=30_000)
+    expect(turn).to_have_attribute("data-state", "answered")
+    expect(turn).to_contain_text("Keep it")
+    expect(turn).not_to_contain_text("No longer needed")
+    _shoot(page, "a-4-rebound-answer-reloaded")
+
     # Heard: nothing needs the person any more.
     page.goto(f"{web_url}/#/task/{task['id']}")
     expect(page.get_by_test_id("task-overview")).to_be_visible(timeout=30_000)
@@ -110,7 +126,7 @@ def test_a_conductor_failed_with_its_question_offers_try_again_which_asks_again(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, env, console_errors: list
 ):
     task, old, question = _asking(client, forge_project, owner_dsn, "Invoice option, its conductor failed")
-    # Exercise the fallback, rather than the automatic replacement from (a):
+    # Artificial legacy/fallback fixture, NOT the supported normal loss path:
     # this Run already has a recorded loss, so it cannot be replaced twice.
     # lux's real 404 then fails it and cancels its question with by='lost'.
     execute(owner_dsn, "UPDATE runs SET lux_lost_at = now() WHERE id = %s", (old,))
@@ -150,6 +166,9 @@ def test_a_conductor_failed_with_its_question_offers_try_again_which_asks_again(
     expect(_needs_you(page)).to_be_visible(timeout=30_000)
     expect(_needs_you(page)).to_have_attribute("data-question", asked["id"])
     expect(_needs_you(page)).to_contain_text("Keep the invoice option on monthly plans?")
+    expect(page.get_by_test_id("lost-asker")).to_have_count(0)
+    page.reload()
+    expect(_needs_you(page)).to_have_attribute("data-question", asked["id"], timeout=30_000)
     expect(page.get_by_test_id("lost-asker")).to_have_count(0)
     _shoot(page, "b-3-needs-you-after-try-again")
     assert console_errors == []

@@ -11,7 +11,7 @@ import { ChatEvent, ChatMessage, ChatNotice, ChatProgress, MentionChip, Question
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { Button, Callout } from "@dude/design-system/primitives";
 import { firstName, type IconName } from "@dude/design-system";
-import type { AgentRole, AttachmentInfo } from "@dude/domain";
+import type { AgentRole, AttachmentInfo, PersistedEvent } from "@dude/domain";
 import {
   READ_WHEN_BACK, READ_WHEN_STARTED, actorName, toolLabel, type GithubRef, type HumanTurn, type PromptTurn, type QuestionTurn, type SteerWait, type ToolTurn, type Turn,
 } from "../api/conversation.ts";
@@ -391,6 +391,9 @@ export interface QuestionTruth {
   readonly authoritative?: boolean;
   readonly open: ReadonlySet<string>;
   readonly lost: ReadonlySet<string>;
+  /** Server settlements across conductor ledgers, joined to the original ask before projection. */
+  readonly settlements?: readonly PersistedEvent[];
+  readonly waitingOn?: string | undefined;
   readonly answer?: ((turn: QuestionTurn, submission: QuestionSubmission) => Promise<boolean>) | undefined;
 }
 const NO_TRUTH: QuestionTruth = { open: new Set(), lost: new Set() };
@@ -425,7 +428,7 @@ function AskTurn({ turn, role, ended, people, waitingOn, ask: given }: {
   const ask = given ?? (stillOpen && truth.answer ? { answer: truth.answer } : undefined);
   const live = truth.authoritative ? truth.open.has(turn.questionId) : !ended || stillOpen;
   const { key, draft, keep, forget } = useAnswerDraft(people.you, turn, !live);
-  const whom = turn.to ? questionFor(turn.to, people) : waitingOn;
+  const whom = (ended ? truth.waitingOn : undefined) ?? (turn.to ? questionFor(turn.to, people) : waitingOn);
   const by = actorName(turn.answeredBy, people.names);
   const open = live && turn.answeredAt === null && turn.closedAt === null && whom === undefined && ask !== undefined;
   // The note's images are for several questions; one question has no note.

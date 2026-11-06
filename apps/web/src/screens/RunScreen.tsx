@@ -10,7 +10,7 @@
  * wrong, not watched continuously.
  */
 
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
   ChatMessage,
@@ -74,7 +74,7 @@ import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresenta
 import {
   PeerRail, useCoordination, usePeerContext, waitWords,
 } from "../coordination.tsx";
-import { asides, clock, interleaved, questionTurnSelector, renderTurn, viewedContext, type AskActions, type SteerActions, type ViewedTurn } from "./transcriptTurns.tsx";
+import { QuestionTruthContext, asides, clock, interleaved, questionTurnSelector, renderTurn, viewedContext, type AskActions, type SteerActions, type ViewedTurn } from "./transcriptTurns.tsx";
 // SessionScreen, ChatSection, the mockups and tests import these from RunScreen.
 export { asides, clock, interleaved, pendingReason, questionTurnSelector, renderTurn, viewedContext } from "./transcriptTurns.tsx";
 export type { SteerActions, ViewedTurn } from "./transcriptTurns.tsx";
@@ -1087,6 +1087,7 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
   const [events, setEvents] = useState<PersistedEvent[] | null>(() => ledgers.cached(runId));
   const [failed, setFailed] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const truth = useContext(QuestionTruthContext);
   useEffect(() => {
     if (ledgers.cached(runId)) return;
     let cancelled = false;
@@ -1102,10 +1103,14 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
   }, [ledgers, runId, attempt]);
   const turns = useMemo(() => {
     if (!events) return [];
-    const all = project(events, status).turns;
+    // Rebound answers live on the replacement ledger; the original ask remains here.
+    const ids = new Set(events.filter((e) => e.eventType === EventTypes.QuestionAsked).map((e) => e.payload.questionId));
+    const seen = new Set(events.map((e) => e.eventId));
+    const settlements = (truth.settlements ?? []).filter((e) => ids.has(e.payload.questionId) && !seen.has(e.eventId));
+    const all = project([...events, ...settlements].sort((a, b) => a.cursor - b.cursor), status).turns;
     if (retried) for (const t of all) if (t.kind === "human" && t.failed === NOT_STARTED) t.failed = NOT_STARTED_RETRIED;
     return asides(all);
-  }, [events, status, retried]);
+  }, [events, status, retried, truth.settlements]);
   if (failed && !events) {
     return (
       <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>

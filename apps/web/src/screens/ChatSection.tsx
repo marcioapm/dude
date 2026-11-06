@@ -163,10 +163,18 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
   // transcript (moved to the conductor replacing a lost one) is answered there; one lost with its Run says so.
   const lost = useMemo(() => lostQuestion(recovery, task.questions ?? []), [recovery, task.questions]);
   const questionsKey = (task.questions ?? []).map((q) => `${q.id}:${q.status}:${q.endedBy ?? ""}`).join(",");
+  const waitingOn = task.owner && people.you && task.owner.id !== people.you ? task.owner.name : undefined;
+  const settlements = useMemo(() => {
+    const conductors = new Set(task.runs.filter(isConductor).map((r) => r.id));
+    return events.filter((e) => e.runId && conductors.has(e.runId) &&
+      (e.eventType === EventTypes.QuestionAnswered || e.eventType === EventTypes.QuestionClosed));
+  }, [events, task.runs]);
   const truth = useMemo<QuestionTruth>(() => {
     const qs = task.questions ?? [];
     return {
       authoritative: task.questions !== undefined,
+      settlements,
+      waitingOn,
       open: new Set(qs.filter((q) => q.status === "open" && q.addressee === "person").map((q) => q.id)),
       lost: new Set(qs.filter((q) => q.status === "cancelled" && (q.endedBy === "lost" || (!q.endedBy && (q.askerError ?? "").includes("lux no longer has")))).map((q) => q.id)),
       answer: async (turn, s) => {
@@ -181,7 +189,7 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
         }
       },
     };
-  }, [questionsKey, answer, onSent]); // eslint-disable-line react-hooks/exhaustive-deps -- the questions, by their ids and statuses
+  }, [questionsKey, answer, onSent, settlements, waitingOn]); // eslint-disable-line react-hooks/exhaustive-deps -- the questions, by their ids and statuses
   const lostRun = lost ? task.runs.find((r) => r.id === lost.runId) : undefined;
   const lostLine = useMemo(() => {
     if (!lost) return null;
