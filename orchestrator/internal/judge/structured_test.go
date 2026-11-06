@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 type route struct {
@@ -92,5 +93,21 @@ func TestStructuredRedactsItsErrorAndStillUnwraps(t *testing.T) {
 	_, err := w.svc.Structured(context.Background(), w.org, ask)
 	if !errors.Is(err, ErrUnparseable) || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "[REDACTED:DUDE_LLM_KEY]") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// A call sent is recorded even when the caller's ctx ends before the
+// model answers (the record has its own bound, recordTimeout).
+func TestStructuredRecordsACallPastTheCallersDeadline(t *testing.T) {
+	release := make(chan struct{})
+	w := setup(t, func(http.ResponseWriter) { <-release }, true)
+	t.Cleanup(func() { close(release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := w.svc.Structured(ctx, w.org, routing); err == nil || err.Error() != "no answer from the LLM proxy before the caller's deadline" {
+		t.Errorf("err = %v", err)
+	}
+	if c := w.calls(t); len(c) != 1 || c[0].Status != "error" || c[0].Error == nil || c[0].HTTPStatus != nil {
+		t.Errorf("recorded %+v", c)
 	}
 }

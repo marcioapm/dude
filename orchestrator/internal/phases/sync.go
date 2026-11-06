@@ -42,29 +42,17 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
 	"github.com/marciomartins/dude/orchestrator/internal/images"
-	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/objects"
 	"github.com/marciomartins/dude/orchestrator/internal/registry"
 )
 
-type ChecksJudge interface {
-	Judge(context.Context, string, judge.Ask) (judge.Judgement, error)
-}
-
 type Syncer struct {
 	DB     *db.DB
 	Lux    lux.Client
 	Forges delivery.Forges
-	Judge  ChecksJudge
-	// JudgeUnconducted keeps the judgement tier deciding the checks of a
-	// delivery no conductor decides, for the judge's own tests until PR5b
-	// removes the judge from phases. The orchestrator never sets it: such a
-	// delivery's non-passes are a person's (noConductor). A conducted
-	// delivery never reaches the judge, whatever it says.
-	JudgeUnconducted bool
-	Agent            AgentConfig
+	Agent  AgentConfig
 	// The login for the registry agent images come from; nil for none.
 	Registry registry.Provider
 	// Where the images people attach are read from; nil when no bucket is

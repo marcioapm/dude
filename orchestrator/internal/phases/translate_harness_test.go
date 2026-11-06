@@ -47,9 +47,7 @@ func newHarnessWorld(t *testing.T) *harnessWorld {
 		}
 	}
 	run := phaseRun{ID: "run_" + org, Org: org, ProjectID: "prj_" + org, TaskID: "wi_" + org, Phase: "implement", Status: statusRunning}
-	// JudgeUnconducted: the judge's own tests (until PR5b) on a Run with no
-	// conducted delivery; the conducted gate's tests turn it off.
-	w := &harnessWorld{t: t, s: &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), JudgeUnconducted: true}, owner: owner, run: run}
+	w := &harnessWorld{t: t, s: &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, owner: owner, run: run}
 	w.restart()
 	return w
 }

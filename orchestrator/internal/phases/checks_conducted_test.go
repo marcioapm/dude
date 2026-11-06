@@ -3,7 +3,6 @@ package phases
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,13 +12,11 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
-	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // conducted gives the harness's task a live delivery its conductor decides
-// and a live conductor Run, and turns the judge into one that fails the
-// test when asked.
+// and a live conductor Run.
 func conducted(w *harnessWorld) string {
 	w.t.Helper()
 	mustOwner(w.t, w, `INSERT INTO workflow_runs (id, organization_id, task_id, workflow_type, idempotency_key, status, step, state)
@@ -28,17 +25,7 @@ func conducted(w *harnessWorld) string {
 	cond := "run_cond_" + w.run.Org
 	mustOwner(w.t, w, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, lux_run_id, lux_state)
 		VALUES ($1, $2, $3, $4, 1, 'conductor', 'agent', 'running', 'lux_cond', 'running')`, cond, w.run.Org, w.run.ProjectID, w.run.TaskID)
-	w.s.JudgeUnconducted = true
-	w.s.Judge = judgeMustNot{w.t}
 	return cond
-}
-
-// judgeMustNot fails the test if the gate asks it anything.
-type judgeMustNot struct{ t *testing.T }
-
-func (j judgeMustNot) Judge(context.Context, string, judge.Ask) (judge.Judgement, error) {
-	j.t.Error("the judge was asked")
-	return judge.Judgement{}, errors.New("must not be called")
 }
 
 func (w *harnessWorld) conductorRef(cond string) delivery.RunRef {
@@ -212,8 +199,8 @@ func backedAll(runID string, turn int64) delivery.DecideChecks {
 		Missing: delivery.ConductedMissing{Verdict: delivery.MissingNone, Reason: "nothing else changed"}}
 }
 
-// A delivery no conductor decides keeps today's untiered path: the judge
-// is not asked, a failure is rejected for a person, passes skip.
+// A delivery no conductor decides keeps the untiered verdict: nothing is
+// asked, a failure is rejected for a person, passes skip.
 func TestPolicyDeliveryChecksAsUntiered(t *testing.T) {
 	for _, tc := range []struct {
 		name, reply string
@@ -222,12 +209,13 @@ func TestPolicyDeliveryChecksAsUntiered(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
 			delivering(w, false)
-			w.s.JudgeUnconducted = false
-			w.s.Judge = judgeMustNot{t}
 			checksReply(w, tc.reply)
 			endTurn(w)
 			if pass, acted := w.gate(); pass != tc.pass || !acted {
 				t.Fatalf("pass %v acted %v", pass, acted)
+			}
+			if n := w.countEvents(delivery.EvRunChecksAsked); n != 0 {
+				t.Fatalf("asked %d times with no conductor", n)
 			}
 			got := recordedJudgement(w)
 			if tc.pass {

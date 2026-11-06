@@ -42,7 +42,7 @@ type Structured struct {
 }
 
 // Structured asks the organisation's judgement tier a structured question,
-// once, and records it as Judge records a question. ErrOff and ErrNoModel
+// once, and records the call. ErrOff and ErrNoModel
 // send nothing and record nothing; any other failure is recorded.
 func (s Service) Structured(ctx context.Context, org string, ask StructuredAsk) (Structured, error) {
 	var (
@@ -53,8 +53,8 @@ func (s Service) Structured(ctx context.Context, org string, ask StructuredAsk) 
 		if tier, err = orgTier(ctx, tx); err != nil {
 			return err
 		}
-		red, err = redactor(ctx, tx, s.LLM.Key, nil, tier.Headers)
-		return err
+		red = redactor(s.LLM.Key, tier.Headers)
+		return nil
 	})
 	if err != nil {
 		return Structured{}, err
@@ -125,17 +125,13 @@ func redactedErr(red *redact.Redactor, err error) error {
 // text stored before Structured did. With no tier readable, only the key.
 func (s Service) Redact(ctx context.Context, org, text string) string {
 	var headers map[string]string
-	var red *redact.Redactor
-	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+	_ = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		if tier, err := orgTier(ctx, tx); err == nil {
 			headers = tier.Headers
 		}
-		var err error
-		red, err = redactor(ctx, tx, s.LLM.Key, nil, headers)
-		return err
-	}); err != nil && s.LLM.Key != "" {
-		red = redact.FromList([]redact.Secret{{Name: "DUDE_LLM_KEY", Value: s.LLM.Key}})
-	}
+		return nil
+	})
+	red := redactor(s.LLM.Key, headers)
 	if red.Empty() {
 		return text
 	}
