@@ -540,11 +540,25 @@ func ChecksDefaults(input string) [][2]string {
 		}
 		n, _ := strconv.Atoi(turn)
 		args, _ := json.Marshal(map[string]any{"runId": run, "turn": n, "checks": checks,
-			"missing": map[string]string{"verdict": "none", "reason": "Deliver's defaults"}})
+			"missing": map[string]string{"verdict": "none", "reason": checksDefaultsReason}})
 		out = append(out, [2]string{"decide_checks", string(args)})
 	}
 	return out
 }
+
+// DefaultChecksCall says call is a decide_checks ChecksDefaults wrote (its
+// "Deliver's defaults" missing reason), not one a test's script names.
+func DefaultChecksCall(call [2]string) bool {
+	if call[0] != "decide_checks" {
+		return false
+	}
+	var in struct {
+		Missing struct{ Reason string } `json:"missing"`
+	}
+	return json.Unmarshal([]byte(call[1]), &in) == nil && in.Missing.Reason == checksDefaultsReason
+}
+
+const checksDefaultsReason = "Deliver's defaults"
 
 // ManualChecks is a test script's instruction to keep checks decisions
 // explicit (for example a Chat script that later calls decide_checks).

@@ -2030,6 +2030,12 @@ func (s *Server) turn(run *Run) {
 		for _, in := range run.Inputs {
 			manual = manual || strings.Contains(in, fakeagent.ManualChecks)
 		}
+		if first && s.ManualChecks {
+			// The first turn's script may carry the defaults' answer to a
+			// checks wake its briefing holds (fakeagent.ChecksAnswer, written
+			// before the prompt reached lux): the test decides checks itself.
+			calls = slices.DeleteFunc(calls, fakeagent.DefaultChecksCall)
+		}
 		if !first && !manual && !b.Defaults {
 			calls = append(calls, fakeagent.ChecksAnswer(input, calls)...)
 		}

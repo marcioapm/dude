@@ -86,6 +86,75 @@ func TestAnUndecidedReportedFailureIsSentBackAtTheDeadline(t *testing.T) {
 	}
 }
 
+// A writer parked on the checks ask (its grace over before the conductor
+// decided) resumes once on the verdict, and the gate reads that verdict for
+// the very turn it asked about: the resume starts no new agent turn that
+// would orphan it and ask again, and the work publishes verified.
+func TestAParkedChecksAskResumesOnceOnTheVerdictAndPublishes(t *testing.T) {
+	w := defaultsConducting(t)
+	w.lux.ManualChecks = true // The test is the conductor deciding checks.
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	w.onModel("implementer", fakeagent.ChecksHonestModel)
+	task := w.task()
+	w.deliverByAPI(task)
+	w.until("the conductor asked about the report", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvRunChecksAsked) == 1
+	})
+	// The Run whose pushing turn the gate asked about.
+	impl := w.str(`SELECT run_id FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvRunChecksAsked)
+	turn := w.str(`SELECT payload->>'turn' FROM events WHERE run_id = $1 AND event_type = $2`, impl, delivery.EvRunChecksAsked)
+	w.untilParked(impl)
+	if resumed, _ := w.luxResumes(impl); resumed != 0 {
+		t.Fatalf("resumed %d times before the verdict", resumed)
+	}
+	w.must(task, "decide_checks", `{"runId":"`+impl+`","turn":`+turn+`,"checks":[{"command":"`+fakeagent.CheckCommand+
+		`","verdict":"backed","reason":"the recorded call exited 0"}],"missing":{"verdict":"none","reason":"nothing obvious"}}`)
+	w.until("the asked turn judged", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, impl, delivery.EvRunChecksJudged) > 0
+	})
+	// Later writers' reports (the review's fix) are the test's to decide
+	// too: each backed as it is asked, until the work publishes.
+	w.until("the pull request", func() bool {
+		w.backOpenAsks(task)
+		return len(w.gh.Pulls()) == 1
+	})
+	if resumed, _ := w.luxResumes(impl); resumed != 1 {
+		t.Errorf("resumed %d times, want once on the verdict", resumed)
+	}
+	if got := w.str(`SELECT COALESCE(max(cursor), 0)::text FROM events WHERE run_id = $1 AND event_type = 'agent.session.stopped'`, impl); got != turn {
+		t.Errorf("the latest turn is %s after the resume, want the asked turn %s", got, turn)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, impl, delivery.EvRunChecksAsked); n != 1 {
+		t.Errorf("asked %d times, want once", n)
+	}
+	if got := w.ids(`SELECT (payload->>'verified') FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor`, impl, delivery.EvRunChecksJudged); strings.Join(got, ",") != "true" {
+		t.Errorf("judged %v, want the asked turn verified once", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'turn' = $3
+		AND (payload->>'verified')::bool AND (payload->'checks'->0->>'decisionCursor')::bigint = (SELECT cursor FROM events WHERE run_id = $1 AND event_type = $4)`,
+		impl, delivery.EvRunChecksJudged, turn, delivery.EvRunChecksConducted); n != 1 {
+		t.Errorf("%d judgements of turn %s citing the verdict", n, turn)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, impl); n != 1 {
+		t.Error("the resumed implementer did not complete")
+	}
+}
+
+// backOpenAsks decides, as the task's conductor, every checks ask not yet
+// decided or judged: each reported pass backed, anything else rejected.
+func (w *world) backOpenAsks(task string) {
+	w.t.Helper()
+	for _, id := range w.ids(`SELECT a.id FROM events a WHERE a.task_id = $1 AND a.event_type = $2 AND NOT EXISTS (SELECT 1 FROM events v
+		WHERE v.run_id = a.run_id AND v.event_type IN ($3, $4) AND v.payload->>'turn' = a.payload->>'turn')`,
+		task, delivery.EvRunChecksAsked, delivery.EvRunChecksConducted, delivery.EvRunChecksJudged) {
+		args := w.str(`SELECT jsonb_build_object('runId', run_id, 'turn', (payload->>'turn')::bigint,
+			'checks', (SELECT jsonb_agg(jsonb_build_object('command', c->>'command', 'reason', 'the test decides',
+				'verdict', CASE WHEN c->>'result' = 'pass' THEN 'backed' ELSE 'reject' END)) FROM jsonb_array_elements(payload->'checks') c),
+			'missing', jsonb_build_object('verdict', 'none', 'reason', 'nothing obvious'))::text FROM events WHERE id = $1`, id)
+		w.as(task, "decide_checks", args)
+	}
+}
+
 // A reported pass the recorded calls do not back (the command ran and
 // failed; the report says pass) is decided unbacked by the conductor that
 // reads them: sent back, each round counted, never published, and at the
