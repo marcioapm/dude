@@ -14,7 +14,9 @@ import { AttemptDivider, ChatComposer, ChatMessage, ChatNotice, ChatRunLine, Cha
 import { Button, Callout } from "@dude/design-system/primitives";
 import { firstName, formatDuration, formatUsd } from "@dude/design-system";
 import { DECISION_POINT_LABEL, EventTypes, NOT_STARTED_STATUSES, decidesQuietly, deliverOpens, isConductor, type Finding, type PersistedEvent, type PullRequest, type Run, type RunStatus } from "@dude/domain";
-import { ApiError, type ApiClient, type Person, type SentAnswer, type TaskDetail } from "../api/client.ts";
+import { ApiError, type ApiClient, type Person, type RecoveryOptions, type SentAnswer, type TaskDetail } from "../api/client.ts";
+import { LostAsker, lostQuestion } from "./TaskOverview.tsx";
+import { QuestionTruthContext, type QuestionTruth } from "./transcriptTurns.tsx";
 import { actorName, humanActor, steerWait, type HumanTurn } from "../api/conversation.ts";
 import { conductedLines, runWhat, type ConductedLine, type ConductorSteer } from "../conducted.ts";
 import { dudeName } from "../DudeMark.tsx";
@@ -27,6 +29,7 @@ import { instant } from "../instant.ts";
 import { RunReplacement, runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
 import type { DriverControl } from "./DriverSwitch.tsx";
+import { SettlementContext, useSettlementIndex } from "./questionSettlements.ts";
 
 export interface ChatSectionProps {
   client: ApiClient;
@@ -53,6 +56,10 @@ export interface ChatSectionProps {
   driverControl: DriverControl;
   /** The reader may switch who decides: the owner's (or anyone's, unassigned) current attempt, never an earlier one. */
   canSwitchDriver: boolean;
+  /** How the task can be picked back up: its latest conductor's Try again (#404). */
+  recovery?: RecoveryOptions | null | undefined;
+  /** The reader may Try again on a failed conductor (the owner's current attempt). */
+  canRetry?: boolean | undefined;
 }
 
 /** A task's Start overs, by the attempt each started: who, when, and their note. */
@@ -105,7 +112,7 @@ function runFacts(run: Run, cost: RunCost | undefined): string[] {
   return facts;
 }
 
-export function ChatSection({ client, task, conductorId: latestConductor, earlier: earlierConductors = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, onBack, driverControl, canSwitchDriver }: ChatSectionProps) {
+export function ChatSection({ client, task, conductorId: latestConductor, earlier: earlierConductors = [], ledgers, findings, pullRequests, events, owner, version, onSent, onOpenRun, onBack, driverControl, canSwitchDriver, recovery = null, canRetry = false }: ChatSectionProps) {
   const people = usePeople();
   // The task's current attempt, as its page has it (attemptsOf): under Deliver, attempt N+1 may have no conductor of its own.
   const current = useMemo(() => attemptsOf(task.runs)[0] ?? null, [task.runs]);
@@ -152,6 +159,41 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
     await client.retryConductor(task.id);
     onSent();
   }, [client, task.id, onSent]);
+
+  // The questions as the server holds them (#404): one still open whose turn sits in an ended conductor's
+  // transcript (moved to the conductor replacing a lost one) is answered there; one lost with its Run says so.
+  const lost = useMemo(() => lostQuestion(recovery, task.questions ?? []), [recovery, task.questions]);
+  const questionsKey = JSON.stringify([task.questions !== undefined, (task.questions ?? []).map((q) => [q.id, q.status, q.addressee, q.endedBy, q.askerError])]);
+  const waitingOn = task.owner && people.you && task.owner.id !== people.you ? task.owner.name : undefined;
+  const settlements = useSettlementIndex(task.id, task.runs, events);
+  const truth = useMemo<QuestionTruth>(() => {
+    const qs = task.questions ?? [];
+    return {
+      authoritative: task.questions !== undefined,
+      waitingOn,
+      open: new Set(qs.filter((q) => q.status === "open" && q.addressee === "person").map((q) => q.id)),
+      lost: new Set(qs.filter((q) => q.status === "cancelled" && (q.endedBy === "lost" || (!q.endedBy && (q.askerError ?? "").includes("lux no longer has")))).map((q) => q.id)),
+      answer: async (turn, s) => {
+        setProblem(null);
+        try {
+          await answer(turn.questionId, s.answers, s.note);
+          onSent();
+          return true;
+        } catch (err) {
+          setProblem(err instanceof ApiError ? `Could not send the answer: ${err.message}` : "Could not send the answer.");
+          return false;
+        }
+      },
+    };
+  }, [questionsKey, answer, onSent, waitingOn]); // eslint-disable-line react-hooks/exhaustive-deps -- the questions, by their UI truth
+  const lostRun = lost ? task.runs.find((r) => r.id === lost.runId) : undefined;
+  const lostLine = useMemo(() => {
+    if (!lost) return null;
+    const name = lost.toPerson ? people.names.get(lost.toPerson) : undefined;
+    const who = name ? firstName(name) : task.owner ? firstName(task.owner.name) : "The person";
+    return { id: `lost-asker:${lost.questionId}`, at: lostRun?.endedAt ?? new Date().toISOString(),
+      node: <LostAsker lost={lost} who={who} compact retry={canRetry ? () => client.retryConductor(task.id) : undefined} onRetried={onSent} /> };
+  }, [lost, lostRun?.endedAt, people.names, task.owner, canRetry, client, task.id, onSent]);
 
   const feedback = events.filter((e) => e.eventType === "pull_request.commented").length;
   const open = findings.filter((f) => f.status === "open").length;
@@ -231,8 +273,10 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
     }));
   }, [conducted, events, task.runs, task.source, pullRequests, current]);
   const isEarlierLine = (id: string) => current !== null && (lineAttempts.get(id) ?? current) < current;
-  const currentLines = useMemo(() => stopLines.filter((l) => !isEarlierLine(l.id)), [stopLines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- isEarlierLine reads lineAttempts and current
-  const plainLines = useMemo(() => lines.filter((l) => !isEarlierLine(l.id)), [lines, lineAttempts, current]); // eslint-disable-line react-hooks/exhaustive-deps -- as currentLines
+  const currentLines = useMemo(() => [...stopLines.filter((l) => !isEarlierLine(l.id)), ...(lostLine ? [lostLine] : [])],
+    [stopLines, lineAttempts, current, lostLine]); // eslint-disable-line react-hooks/exhaustive-deps -- isEarlierLine reads lineAttempts and current
+  const plainLines = useMemo(() => [...lines.filter((l) => !isEarlierLine(l.id)), ...(lostLine ? [lostLine] : [])],
+    [lines, lineAttempts, current, lostLine]); // eslint-disable-line react-hooks/exhaustive-deps -- as currentLines
   const before = useMemo(() => {
     const node = (r: { id: string; status: RunStatus }, lines?: typeof stopLines) =>
       <EndedConductor key={r.id} ledgers={ledgers} runId={r.id} status={r.status} retried={retried.has(r.id)} {...(lines ? { lines } : {})} />;
@@ -290,21 +334,28 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
     return task.handedBack ? <>To <b>Conductor</b> · answers only, Deliver decides</> : <>To <b>Conductor</b> · sending gives it the decisions</>;
   }, [inProgress, first.readOnly, task.decider, task.voice, task.handedBack]);
   const stoppedWords = stoppedHere ? STOPPED_COMPOSER : undefined;
-  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, briefedWith, before, cost: conductorCost, lines: currentLines, above, readOnly: gateHeld,
+  const retryEnded = canRetry && recovery?.conductor?.retry === true && recovery.conductor.runId === conductorId && !lost;
+  const chat = useMemo<ChatVariant>(() => ({ head, send, answer, retry, retryEnded, briefedWith, before, cost: conductorCost, lines: currentLines, above, readOnly: gateHeld,
     to, briefedBefore: briefedAgain, stopped: stoppedWords }),
-    [head, send, answer, retry, briefedWith, before, conductorCost, currentLines, above, gateHeld, to, briefedAgain, stoppedWords]);
+    [head, send, answer, retry, retryEnded, briefedWith, before, conductorCost, currentLines, above, gateHeld, to, briefedAgain, stoppedWords]);
 
   if (conductorId) {
     return (
-      <div className="taskChat" data-testid="task-chat">
-        <RunScreen key={conductorId} client={client} runId={conductorId} onBack={onBack} task={owner} chat={chat} />
-        {problem ? <Callout tone="danger" data-testid="chat-problem">{problem}</Callout> : null}
-      </div>
+      <QuestionTruthContext.Provider value={truth}>
+        <SettlementContext.Provider value={settlements}>
+        <div className="taskChat" data-testid="task-chat">
+          <RunScreen key={conductorId} client={client} runId={conductorId} onBack={onBack} task={owner} chat={chat} />
+          {problem ? <Callout tone="danger" data-testid="chat-problem">{problem}</Callout> : null}
+        </div>
+        </SettlementContext.Provider>
+      </QuestionTruthContext.Provider>
     );
   }
 
   const you = people.you ? people.names.get(people.you) : undefined;
   return (
+    <QuestionTruthContext.Provider value={truth}>
+    <SettlementContext.Provider value={settlements}>
     <div className="taskChat" data-testid="task-chat">
       <div className="runScreen" data-view="chat">
         <ChatTranscript
@@ -338,6 +389,8 @@ export function ChatSection({ client, task, conductorId: latestConductor, earlie
         {problem ? <Callout tone="danger">{problem}</Callout> : null}
       </div>
     </div>
+    </SettlementContext.Provider>
+    </QuestionTruthContext.Provider>
   );
 }
 

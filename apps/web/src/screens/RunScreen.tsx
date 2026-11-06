@@ -10,7 +10,7 @@
  * wrong, not watched continuously.
  */
 
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AgentPlan,
   ChatMessage,
@@ -69,6 +69,7 @@ import { ChangesPanel } from "./ChangesPanel.tsx";
 import { useFeedbackFocus } from "../feedback.tsx";
 import { limitsHint, useAttachmentLimits, useImageTray, useSentImages } from "../hooks/useImages.tsx";
 import type { EndedLedgers } from "./endedLedgers.ts";
+import { SettlementContext, useLedgerSettlements } from "./questionSettlements.ts";
 import { raisedProvenance, type RaisedMachine } from "../machines.ts";
 import { RunReplacement, runRestartedText, runStatusLabel } from "../runPresentation.tsx";
 import {
@@ -116,6 +117,8 @@ export interface ChatVariant {
   answer: (questionId: string, answers: ReadonlyArray<QuestionAnswer>, note: string) => Promise<unknown>;
   /** Try again on a conductor that failed: a fresh one takes what it never read. */
   retry?: (() => Promise<unknown>) | undefined;
+  /** The server offers Try again on this failed conductor's ended turn. */
+  retryEnded?: boolean | undefined;
   /** What the rail says of the task, beside the conductor's own facts. */
   briefedWith: ReadonlyArray<{ label: string; value: ReactNode; mono?: boolean }>;
   /** The task's earlier conductors' conversations, above this one's turns. */
@@ -626,6 +629,14 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
     : turn.kind === "ended" && turn.start ? <StartRow key={turn.id} start={turn.start} role={role}
         taken={turn.taken || retryTaken === turn.id} woken={turn.woken}
         onRetry={turn.retried || busy ? undefined : chat ? conductorRetry(turn.id) : onStartRetry} />
+    : turn.kind === "ended" && turn.outcome === "failed" && !turn.start && chat?.retryEnded ? (
+      <Fragment key={turn.id}>
+        {renderTurn(turn, role, conversation.contextWindow, true, people, dude)}
+        <Button size="sm" variant="secondary" disabled={busy} onClick={conductorRetry(turn.id)} data-testid="conductor-ended-retry">
+          {busy ? "Trying again…" : "Try again"}
+        </Button>
+      </Fragment>
+    )
     : renderTurn(turn, role, conversation.contextWindow, !isLive || readOnly, people, dude, decide, waitingOn, steer, shown, networkNote, ask, peerContext, now);
   // While its agent starts: the row where its first turn will be, lux's wait reason under a slow stage.
   // A pool that cannot run this Run at all is pinned above (only an admin can change it): the row then keeps its
@@ -1071,12 +1082,10 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
   /** The Chat's other lines of its time (Runs it started, decisions it was waited on for), placed among its turns by time. */
   lines?: ReadonlyArray<{ id: string; at: string; node: ReactNode }>;
 }) {
-  const people = usePeople();
-  const images = useSentImages(ledgers.client);
-  const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
   const [events, setEvents] = useState<PersistedEvent[] | null>(() => ledgers.cached(runId));
   const [failed, setFailed] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const index = useContext(SettlementContext);
   useEffect(() => {
     if (ledgers.cached(runId)) return;
     let cancelled = false;
@@ -1090,12 +1099,7 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
       cancelled = true;
     };
   }, [ledgers, runId, attempt]);
-  const turns = useMemo(() => {
-    if (!events) return [];
-    const all = project(events, status).turns;
-    if (retried) for (const t of all) if (t.kind === "human" && t.failed === NOT_STARTED) t.failed = NOT_STARTED_RETRIED;
-    return asides(all);
-  }, [events, status, retried]);
+  const settlements = useLedgerSettlements(events, index);
   if (failed && !events) {
     return (
       <div className="chatEarlier" data-testid="earlier-conductor" data-run={runId}>
@@ -1113,6 +1117,27 @@ export const EndedConductor = memo(function EndedConductor({ ledgers, runId, sta
   }
   // Its lines do not depend on its ledger: they show while it is read.
   if (!events) return lines.length ? <>{lines.map((l) => <Fragment key={l.id}>{l.node}</Fragment>)}</> : null;
+  return <EndedConductorBody client={ledgers.client} runId={runId} events={events} settlements={settlements} status={status} retried={retried} lines={lines} />;
+});
+
+const EndedConductorBody = memo(function EndedConductorBody({ client, runId, events, settlements, status, retried, lines }: {
+  client: ApiClient;
+  runId: string;
+  events: readonly PersistedEvent[];
+  settlements: readonly PersistedEvent[];
+  status: RunDetail["status"];
+  retried: boolean;
+  lines: typeof NO_LINES;
+}) {
+  const people = usePeople();
+  const images = useSentImages(client);
+  const [viewing, setViewing] = useState<{ turn: ViewedTurn; index: number } | null>(null);
+  const turns = useMemo(() => {
+    // Rebound answers live on the replacement ledger; the original ask remains here.
+    const all = project([...events, ...settlements].sort((a, b) => a.cursor - b.cursor), status).turns;
+    if (retried) for (const t of all) if (t.kind === "human" && t.failed === NOT_STARTED) t.failed = NOT_STARTED_RETRIED;
+    return asides(all);
+  }, [events, status, retried, settlements]);
   const dude = dudeName(events[0]?.taskId ?? "");
   const shown = { images, open: (turn: ViewedTurn, index: number) => setViewing({ turn, index }) };
   const render = (turn: Turn) => renderTurn(turn, "conductor", 0, true, people, dude, undefined, undefined, undefined, shown);
