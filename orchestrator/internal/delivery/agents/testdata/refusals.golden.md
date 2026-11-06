@@ -1526,3 +1526,39 @@ already given to %[2]s, which has their words: %[1]s. Do not steer them to it ag
 
 This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only.
 
+## refusals/delivery/checks/incomplete
+
+decide every reported check, in the report's order and by its exact command, one verdict each: %s
+
+## refusals/delivery/checks/missing
+
+missing needs verdict none or missing, and a reason
+
+## refusals/delivery/checks/needs-reason
+
+every verdict needs its reason: %q has none
+
+## refusals/delivery/checks/no-base
+
+preexisting needs a recorded commit of the target branch this task builds on, and this report has none: reject the failure instead
+
+## refusals/delivery/checks/not-latest-turn
+
+that is not the Run's latest turn: its latest is %d, and a verdict on an earlier turn is never read. Decide the turn the latest checks wake names
+
+## refusals/delivery/checks/not-waiting
+
+the checks gate is not waiting on you for that Run's turn: it was decided already, or it was never asked of you
+
+## refusals/delivery/checks/run-not-of-task
+
+that Run is not a writer Run of this task's current attempt: decide only the checks reports your task's Runs ask you about
+
+## refusals/delivery/checks/verdict-not-allowed
+
+%q is not a verdict for %q, reported %s: use one of %s
+
+## refusals/delivery/checks/waiver-cursor
+
+same_as_waived for %q must cite the waiver it matches: waiverCursor %d
+

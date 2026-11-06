@@ -33,6 +33,9 @@ type gatedJudgement struct {
 type gatedCheck struct {
 	Command, Result, Decision, Reason, CallID, WaiverReason, JudgeReason string
 	Waiver                                                               *CarriedWaiver
+	// A conducted verdict: its run.checks.conducted cursor, by "conductor".
+	DecisionCursor int64
+	By             string
 }
 
 // status is a gated Run's outcome as its row in the pull request names it,
@@ -50,7 +53,11 @@ func (j gatedJudgement) status() string {
 		return "not backed"
 	}
 	var backed, carried, judged bool
+	who := "the judge"
 	for _, c := range j.Checks {
+		if c.By == "conductor" {
+			who = "the conductor"
+		}
 		switch c.Result {
 		case CheckPass:
 			// Missing's answer backs no reported check.
@@ -63,13 +70,13 @@ func (j gatedJudgement) status() string {
 	}
 	switch {
 	case carried && judged:
-		return "waiver carried; passed by the judge"
+		return "waiver carried; passed by " + who
 	case carried:
 		return "waiver carried"
 	case judged && backed:
-		return "backed; the rest passed by the judge"
+		return "backed; the rest passed by " + who
 	case judged:
-		return "passed by the judge"
+		return "passed by " + who
 	}
 	return "backed"
 }
@@ -271,6 +278,9 @@ func checksRow(j gatedJudgement) string {
 		}
 		if c.CallID != "" {
 			fmt.Fprintf(&b, " (%s)", codeSpan(checksField(c.CallID)))
+		}
+		if c.By == "conductor" && c.DecisionCursor != 0 {
+			fmt.Fprintf(&b, " (the conductor's decision, event %d)", c.DecisionCursor)
 		}
 		b.WriteByte('\n')
 	}

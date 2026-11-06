@@ -164,7 +164,7 @@ func TestAFailureShownAtTheTaskBasePassesWithoutAPerson(t *testing.T) {
 	// The pull request names the judge's pass as its own result, never a
 	// plain pass or a person's waiver.
 	account := checksSection(w.gh.Pull(1).Body)
-	for _, want := range []string{"the judge passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)",
+	for _, want := range []string{"the conductor passed failures that fail the same at the commit of the target branch the task builds on (pre-existing)",
 		"- **Implementer** — passed by the judge\n  - `" + fakeagent.FailingCommand + "` — **pre-existing** — the recorded call says so (`mcall_test`)"} {
 		if !strings.Contains(account, want) {
 			t.Errorf("PR account lacks %q:\n%s", want, account)

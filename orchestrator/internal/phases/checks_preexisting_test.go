@@ -484,7 +484,7 @@ func TestAMultiLineReasonIsOneCheckOfTheSendBack(t *testing.T) {
 	if n := strings.Count(msg, "\n- "); n != 1 || !strings.Contains(msg, "the calls show - base: 95 errors - head: 96 errors") {
 		t.Fatalf("%d check lines:\n%s", n, msg)
 	}
-	if got := d.unverified(); len(got) != 1 || got[0].Command != "npx tsc --noEmit" || !strings.HasPrefix(got[0].Reason, "94 errors — not passed by the judge") {
+	if got := d.unverified(); len(got) != 1 || got[0].Command != "npx tsc --noEmit" || !strings.HasPrefix(got[0].Reason, "94 errors — not passed by the conductor") {
 		t.Fatalf("unverified %+v", got)
 	}
 }
