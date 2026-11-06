@@ -356,6 +356,20 @@ func TestDecideChecksRefusals(t *testing.T) {
 		t.Fatalf("not asked: %v", err)
 	}
 	w.gate()
+	// A writer Run of the task's previous attempt, asked about and not
+	// settled: of the task, but not of its current attempt (2).
+	mustOwner(t, w, `UPDATE runs SET attempt = 2 WHERE task_id = $1`, w.run.TaskID)
+	mustOwner(t, w, `UPDATE workflow_runs SET state = jsonb_set(state, '{attempt}', '2') WHERE task_id = $1`, w.run.TaskID)
+	mustOwner(t, w, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status)
+		SELECT 'run_old_'||organization_id, organization_id, project_id, task_id, 1, 'implement', 'completed' FROM runs WHERE id = $1`, w.run.ID)
+	mustOwner(t, w, `INSERT INTO events (id, organization_id, run_id, event_type, actor_type, actor_id, source, payload)
+		SELECT 'evt_old_stop', organization_id, 'run_old_'||organization_id, 'agent.session.stopped', 'agent', 'x', 'orchestrator', '{}'
+		FROM runs WHERE id = $1`, w.run.ID)
+	oldTurn := int64(w.count(`SELECT cursor FROM events WHERE id = 'evt_old_stop'`))
+	mustOwner(t, w, `INSERT INTO events (id, organization_id, run_id, event_type, actor_type, actor_id, source, payload)
+		SELECT 'evt_old_ask', organization_id, 'run_old_'||organization_id, event_type, actor_type, actor_id, source,
+			jsonb_set(payload, '{turn}', to_jsonb($3::bigint))
+		FROM events WHERE run_id = $1 AND event_type = $2`, w.run.ID, delivery.EvRunChecksAsked, oldTurn)
 	for name, tc := range map[string]struct {
 		mutate func(*delivery.DecideChecks)
 		caller string
@@ -370,6 +384,8 @@ func TestDecideChecksRefusals(t *testing.T) {
 		"no reason":                       {func(d *delivery.DecideChecks) { d.Checks[1].Reason = " " }, cond, "needs its reason"},
 		"no missing":                      {func(d *delivery.DecideChecks) { d.Missing = delivery.ConductedMissing{} }, cond, "missing needs"},
 		"non-conductor caller":            {func(*delivery.DecideChecks) {}, w.run.ID, "no longer"},
+		"extra":                           {func(d *delivery.DecideChecks) { d.Checks = append(d.Checks, d.Checks[0]) }, cond, "decide every reported check"},
+		"a previous attempt's writer":     {func(d *delivery.DecideChecks) { d.RunID, d.Turn = "run_old_"+w.run.Org, oldTurn }, cond, "not a writer Run of this task"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := ok()
@@ -431,9 +447,15 @@ func TestAVerdictPassesOnlyWhatTheAskAllowed(t *testing.T) {
 		"another waiver":             {&delivery.ChecksAsked{Waivers: map[int]*delivery.CarriedWaiver{0: {Cursor: 7}}}, delivery.ConductedCheck{Command: "make test", Verdict: delivery.VerdictSameAsWaived, WaiverCursor: 8, Reason: "r"}, false},
 		"a deferred failure":         {&delivery.ChecksAsked{}, delivery.ConductedCheck{Command: "make test", Verdict: delivery.VerdictDeferred, Reason: "r"}, false},
 		"a verdict on another check": {&delivery.ChecksAsked{Bases: []delivery.ChecksBase{{SHA: "abc"}}}, delivery.ConductedCheck{Command: "make lint", Verdict: delivery.VerdictPreexisting, Reason: "r"}, false},
+		"an unbacked pass":           {&delivery.ChecksAsked{}, delivery.ConductedCheck{Command: "make lint", Verdict: delivery.VerdictUnbacked, Reason: "r"}, false},
+		"a backed pass":              {&delivery.ChecksAsked{}, delivery.ConductedCheck{Command: "make lint", Verdict: delivery.VerdictBacked, Reason: "r"}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := &delivery.ConductedChecks{Checks: []delivery.ConductedCheck{tc.verdict}, Missing: delivery.ConductedMissing{Verdict: delivery.MissingNone}, Cursor: 3}
+			checks := checks
+			if tc.verdict.Command == "make lint" && tc.verdict.Verdict != delivery.VerdictPreexisting {
+				checks = []delivery.Check{{Command: "make lint", Result: delivery.CheckPass, Evidence: "clean"}}
+			}
 			if got := verdictDecision(checksDecision{}, checks, tc.asked, v); got.Verified != tc.want {
 				t.Fatalf("verified %v, want %v: %+v", got.Verified, tc.want, got)
 			}
@@ -529,5 +551,79 @@ func TestRecordedCallsReadTheReportedCommandNotOneContainingIt(t *testing.T) {
 				t.Fatalf("read %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// The conductor saying a check is obviously missing holds the report as an
+// unbacked pass does: not passed, sent back naming what is missing, the
+// recorded missing-checks verdict unverified.
+func TestAMissingCheckVerdictHoldsTheReport(t *testing.T) {
+	w := newHarnessWorld(t)
+	cond := conducted(w)
+	checksReply(w, passingChecks)
+	endTurn(w)
+	w.gate()
+	in := backedAll(w.run.ID, w.turn())
+	in.Missing = delivery.ConductedMissing{Verdict: delivery.MissingFound, Reason: "no test of the new parser"}
+	if _, err := w.decide(cond, in); err != nil {
+		t.Fatal(err)
+	}
+	if pass, acted := w.gate(); pass || !acted {
+		t.Fatalf("pass %v acted %v", pass, acted)
+	}
+	got := recordedJudgement(w)
+	last := got.Verdicts[len(got.Verdicts)-1]
+	if got.Verified || last.Command != delivery.MissingChecks || last.Result != "unverified" || last.Reason != "no test of the new parser" {
+		t.Fatalf("%+v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND text LIKE 'Your checks report was not verified%'
+		AND text LIKE '%no test of the new parser%'`, w.run.ID); n != 1 {
+		t.Fatalf("%d send-backs naming the missing check", n)
+	}
+}
+
+// A Run parked on its checks ask is not resumed while the ask is open, and
+// is once its deadline passes, so the gate's fallback runs.
+func TestAParkedChecksWaitResumesAtItsDeadline(t *testing.T) {
+	w := newHarnessWorld(t)
+	conducted(w)
+	checksReply(w, passingChecks)
+	endTurn(w)
+	w.gate()
+	mustOwner(t, w, `UPDATE runs SET status = 'paused', dude_pause = 'person' WHERE id = $1`, w.run.ID)
+	q := `SELECT ` + resumable + ` FROM ` + runFrom + ` WHERE r.id = $4`
+	ok := func() (b bool) {
+		t.Helper()
+		if err := w.owner.QueryRow(context.Background(), q, 600.0, 0.0, 600.0, w.run.ID).Scan(&b); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	if ok() {
+		t.Fatal("resumable while the ask is open")
+	}
+	w.overdue()
+	if !ok() {
+		t.Fatal("not resumed at the deadline")
+	}
+}
+
+// A verdict that arrives after the deadline's fallback judged the turn is
+// refused: the turn is settled, and nothing contradicts its judgement.
+func TestALateVerdictAfterTheFallbackIsRefused(t *testing.T) {
+	w := newHarnessWorld(t)
+	cond := conducted(w)
+	checksReply(w, passingChecks)
+	endTurn(w)
+	w.gate()
+	w.overdue()
+	if pass, acted := w.gate(); !pass || !acted {
+		t.Fatalf("fallback: pass %v acted %v", pass, acted)
+	}
+	if _, err := w.decide(cond, backedAll(w.run.ID, w.turn())); !delivery.IsRefusal(err) || !strings.Contains(err.Error(), "not waiting") {
+		t.Fatalf("a late verdict: %v", err)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, w.run.ID, delivery.EvRunChecksConducted); n != 0 {
+		t.Fatalf("%d verdicts recorded after the fallback", n)
 	}
 }
