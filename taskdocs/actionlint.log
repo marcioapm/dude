@@ -1,4 +1,0 @@
-[33m.github/workflows/ci.yml[0m[90m:[0m380[90m:[0m9[90m: [0m[1mshellcheck reported issue in this script: SC2155:warning:1:8: Declare and assign separately to avoid masking return values[0m[90m [shellcheck]
-[0m[90m    |
-[0m[90m380 | [0m        run: |
-[90m    | [0m[32m        ^~~~[0m
