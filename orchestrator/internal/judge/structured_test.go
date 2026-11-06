@@ -74,9 +74,39 @@ func TestStructuredFailsClosedAndStillRecords(t *testing.T) {
 	if _, err := off.svc.Structured(context.Background(), off.org, routing); !errors.Is(err, ErrOff) || off.proxy.count() != 0 {
 		t.Fatalf("off: %v, %d sent", err, off.proxy.count())
 	}
-	down := setup(t, func(w http.ResponseWriter) { w.WriteHeader(http.StatusBadGateway) }, true)
-	if _, err := down.svc.Structured(context.Background(), down.org, routing); err == nil || len(down.calls(t)) != 1 {
-		t.Fatalf("a proxy error: %v", err)
+	// A tier with no model: ErrNoModel, nothing sent, nothing recorded.
+	noModel := setup(t, answering(`{"route":"task"}`), true)
+	if _, err := noModel.owner.Exec(context.Background(), `UPDATE model_tiers SET model = NULL WHERE id = $1`, noModel.tierID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := noModel.svc.Structured(context.Background(), noModel.org, routing); !errors.Is(err, ErrNoModel) || noModel.proxy.count() != 0 {
+		t.Fatalf("no model: %v, %d sent", err, noModel.proxy.count())
+	}
+	if c := noModel.calls(t); len(c) != 0 {
+		t.Fatalf("no model: recorded %+v", c)
+	}
+	// A proxy error echoing the proxy key and the tier's header value: the
+	// stored row has neither, in its error or its response.
+	const key = "sk-down-key-0123456789"
+	down := setup(t, func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("bad key " + key + " with X-Team acme-header-value"))
+	}, true)
+	down.svc.LLM.Key = key
+	_, err = down.svc.Structured(context.Background(), down.org, routing)
+	c := down.calls(t)
+	if err == nil || len(c) != 1 || c[0].Status != "error" || c[0].Error == nil {
+		t.Fatalf("a proxy error: %v, recorded %+v", err, c)
+	}
+	stored := *c[0].Error
+	if c[0].Response != nil {
+		stored += "\n" + *c[0].Response
+	}
+	if !strings.Contains(stored, "bad key") {
+		t.Fatalf("the proxy's error is not stored: %q", stored)
+	}
+	if strings.Contains(stored, key) || strings.Contains(stored, "acme-header-value") || strings.Contains(err.Error(), key) {
+		t.Fatalf("stored %q, returned %v: the key or header value is not redacted", stored, err)
 	}
 }
 
