@@ -12,12 +12,12 @@
  * API does not give is left out, never estimated or made up.
  */
 
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AgentAvatar, DiffStat, Disclosure, Duration, MetricGroup, MetricTile, RunningList, RunningRow, StatusMark, Timeline, TimelineItem, planProgress } from "@dude/design-system/components";
 import { Button, Callout } from "@dude/design-system/primitives";
 import { plural } from "@dude/design-system";
 import { DEFAULT_RUN_ROLE, EventTypes, TERMINAL_RUN_STATUSES, isConductor, runLabel, type PersistedEvent, type TaskBranchDiff } from "@dude/domain";
-import type { ApiClient, PullRequest, Run, TaskMetrics } from "../api/client.ts";
+import { ApiError, type ApiClient, type PullRequest, type RecoveryOptions, type Run, type TaskMetrics, type TaskQuestion } from "../api/client.ts";
 import { planFrom } from "../api/conversation.ts";
 import { runStatusLabel, runStatusShown } from "../runPresentation.tsx";
 import { short, useBranchDiff } from "../branchReview.ts";
@@ -34,24 +34,143 @@ export interface OpenQuestion {
   readonly at: string;
 }
 
-/** The agents' questions still open, oldest first, read from the task's ledger (`question.asked` of kind agent). */
-export function openAgentQuestions(events: readonly PersistedEvent[]): OpenQuestion[] {
+/** A question's words: the one asked, or how many and their headers. */
+function questionText(items: readonly unknown[], prompt: string): string {
+  const rows = items.filter((i): i is { header?: unknown; question?: unknown } => typeof i === "object" && i !== null);
+  const asked = rows.map((i) => (typeof i.question === "string" ? i.question : "")).filter(Boolean);
+  const headers = rows.map((i) => (typeof i.header === "string" ? i.header : "")).filter(Boolean);
+  return rows.length > 1 ? `${rows.length} questions${headers.length ? `: ${headers.join(", ")}` : ""}` : asked[0] ?? prompt;
+}
+
+/**
+ * The questions that need a person now, oldest first, as the server holds
+ * them (`TaskDetail.questions`, #404): open and put to a person, whatever
+ * their Run (one moved to the conductor replacing a lost one is still open).
+ * Cancelled, answered or expired ones never need you. Who it is put to is
+ * named from `names`, else from the ledger's question.asked (`events`).
+ */
+export function openPersonQuestions(questions: readonly TaskQuestion[], names: ReadonlyMap<string, string> = new Map(),
+  events: readonly PersistedEvent[] = []): OpenQuestion[] {
+  const asked = new Map(openAgentQuestions(events, true).map((q) => [q.questionId, q]));
+  return questions.filter((q) => q.status === "open" && q.addressee === "person").map((q) => ({
+    questionId: q.id, runId: q.runId, text: questionText(q.items, q.prompt),
+    toName: (q.toPerson ? names.get(q.toPerson) : undefined) ?? asked.get(q.id)?.toName ?? null, at: q.askedAt,
+  }));
+}
+
+/**
+ * The agents' questions still open, oldest first, read from the task's
+ * ledger (`question.asked` of kind agent): what a page shows only while the
+ * control plane gives no `questions` (an older one), as the ledger cannot
+ * say a question was cancelled with its Run. `all` keeps settled ones too.
+ */
+export function openAgentQuestions(events: readonly PersistedEvent[], all = false): OpenQuestion[] {
   const open = new Map<string, OpenQuestion>();
   for (const e of events) {
     const p = e.payload ?? {};
     const id = typeof p.questionId === "string" ? p.questionId : "";
     if (e.eventType === EventTypes.QuestionAsked && p.kind === "agent" && id && e.runId) {
-      const items = Array.isArray(p.items) ? p.items.filter((i): i is { header?: unknown; question?: unknown } => typeof i === "object" && i !== null) : [];
-      const asked = items.map((i) => (typeof i.question === "string" ? i.question : "")).filter(Boolean);
-      const headers = items.map((i) => (typeof i.header === "string" ? i.header : "")).filter(Boolean);
-      const text = items.length > 1 ? `${items.length} questions${headers.length ? `: ${headers.join(", ")}` : ""}`
-        : asked[0] ?? (typeof p.prompt === "string" ? p.prompt : "");
+      const text = questionText(Array.isArray(p.items) ? p.items : [], typeof p.prompt === "string" ? p.prompt : "");
       open.set(id, { questionId: id, runId: e.runId, text, toName: typeof p.toName === "string" && p.toName ? p.toName : null, at: e.occurredAt });
-    } else if ((e.eventType === EventTypes.QuestionAnswered || e.eventType === EventTypes.QuestionClosed) && id) {
+    } else if (!all && (e.eventType === EventTypes.QuestionAnswered || e.eventType === EventTypes.QuestionClosed) && id) {
       open.delete(id);
     }
   }
   return [...open.values()];
+}
+
+/**
+ * The person's question lost with the task's latest conductor (#404),
+ * when Try again is offered on it (`recover.conductor.retry`): the one
+ * `/recover` names. Only a legacy payload without that field falls back
+ * to a question explicitly closed by loss/failure, never a deliberate settlement.
+ */
+export function lostQuestion(recovery: RecoveryOptions | null | undefined, questions: readonly TaskQuestion[]): LostAsk | null {
+  const c = recovery?.conductor;
+  if (!c || !c.retry || c.status !== "failed") return null;
+  if ("lostQuestion" in c && c.lostQuestion === null) return null;
+  const held = questions.filter((q) => q.status === "cancelled" && q.addressee === "person" && q.runId === c.runId);
+  const q = c.lostQuestion ? held.find((h) => h.id === c.lostQuestion!.id)
+    : held.findLast((h) => h.endedBy === "lost" || h.endedBy === "run_failed");
+  if (!c.lostQuestion && !q) return null;
+  return {
+    questionId: c.lostQuestion?.id ?? q!.id,
+    runId: c.runId,
+    text: q ? questionText(q.items, q.prompt) : c.lostQuestion!.prompt,
+    toPerson: q?.toPerson ?? null,
+    endedBy: q?.endedBy ?? null,
+    error: c.error ?? q?.askerError ?? null,
+  };
+}
+
+/** A person's question that died with its conductor's Run, which Try again asks again. */
+export interface LostAsk {
+  readonly questionId: string;
+  readonly runId: string;
+  readonly text: string;
+  readonly toPerson: string | null;
+  /** Its question.closed's by: "lost" when lux lost the Run, else how it failed; null when no event said. */
+  readonly endedBy: string | null;
+  /** Why the Run failed, as recorded. */
+  readonly error: string | null;
+}
+
+/** Why the answer was not heard, in the card's words: lux lost the Run, or it failed otherwise. */
+export function lostWhy(lost: Pick<LostAsk, "endedBy" | "error">): string {
+  if (lost.endedBy === "lost" || (lost.error ?? "").includes("lux no longer has")) {
+    return "The conductor's Run was lost before you answered (lux no longer has it).";
+  }
+  return `The conductor's Run failed before you answered${lost.error ? `: ${lost.error}` : ""}.`;
+}
+
+/**
+ * The lost asker (#404): the conductor that asked the person a question
+ * failed before the answer was heard. The question, why, and Try again,
+ * which starts a fresh conductor with the conversation so far that asks
+ * again. Pending while it runs; a refusal (409) says the server's words.
+ */
+export function LostAsker({ lost, who, retry, onRetried, compact = false }: {
+  lost: LostAsk; who: string;
+  /** Try again (`POST /v1/tasks/:id/retry`); none for a reader who cannot. */
+  retry: (() => Promise<unknown>) | undefined;
+  onRetried?: (() => void) | undefined;
+  compact?: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const tryAgain = retry ? async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await retry();
+      onRetried?.();
+    } catch (err) {
+      setProblem(err instanceof ApiError ? err.message : "Could not try again: the request failed.");
+    } finally {
+      setBusy(false);
+    }
+  } : undefined;
+  return (
+    <Callout tone="attention" fill={!compact} data-testid="lost-asker" data-question={lost.questionId} data-run={lost.runId}>
+      <div className="needsYou">
+        <div className="needsYouText">
+          <p className="needsYouWho">{who}’s answer was not heard · Conductor asked</p>
+          <p className="needsYouAsk">“{lost.text}”</p>
+          <p data-testid="lost-asker-why">
+            dude lost the conductor that asked this — your answer wasn’t heard. {lostWhy(lost)}{" "}
+            Try again starts a fresh conductor with the conversation so far, and it asks you again.
+          </p>
+          {problem ? <p role="alert" className="ds-danger" data-testid="lost-asker-problem">{problem}</p> : null}
+        </div>
+        {tryAgain ? (
+          <Button variant="primary" size="sm" onClick={() => void tryAgain()} disabled={busy} data-testid="lost-asker-retry"
+            aria-busy={busy || undefined}>
+            {busy ? "Trying again…" : "Try again"}
+          </Button>
+        ) : null}
+      </div>
+    </Callout>
+  );
 }
 
 /**
