@@ -452,6 +452,30 @@ describe("the Chat tab", () => {
     expect(client.sent).toEqual([`${TASK_ID}:q_1:[{"choices":[0],"text":""}]`]);
   });
 
+  test("a live Run's event cannot keep a cancelled server question asking for input", async () => {
+    const asking = [...conductorEvents(), ev("question.asked", { kind: "agent", questionId: "q_server_cancelled", prompt: "Still needed?", options: ["Yes", "No"] })];
+    const client = new ChatClient({ status: "running" }, asking);
+    const get = client.getTask.bind(client);
+    client.getTask = async (id) => ({ ...await get(id), questions: [] });
+    const page = await chatPage(client);
+    await until(() => page.querySelector("[data-testid=question-turn]"), "the question record");
+    expect(page.querySelectorAll("[data-testid=question-turn] [role=radio]").length).toBe(0);
+    expect(page.querySelector("[data-testid=question-turn]")?.textContent).toContain("No longer needed");
+  });
+
+  test("a question closed by lost names the unheard answer, run_failed keeps No longer needed", async () => {
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_lost", prompt: "Lost?", options: ["Yes"] }),
+      ev("question.closed", { questionId: "q_lost", by: "lost" }),
+      ev("question.asked", { kind: "agent", questionId: "q_failed", prompt: "Failed?", options: ["Yes"] }),
+      ev("question.closed", { questionId: "q_failed", by: "run_failed" })];
+    const page = await chatPage(new ChatClient({ status: "failed" }, asking));
+    await until(() => page.querySelector("[data-question=q_failed]"), "the failed question");
+    expect(page.querySelector("[data-question=q_lost]")?.textContent).toContain("Not heard: dude lost the conductor that asked this");
+    expect(page.querySelector("[data-question=q_failed]")?.textContent).toContain("No longer needed");
+    expect(page.querySelectorAll("[data-testid=question-turn] [role=radio]").length).toBe(0);
+  });
+
   test("Write to the agent instead: the composer comes back, and what is written leaves the question open", async () => {
     const asking = [...conductorEvents(),
       ev("question.asked", { kind: "agent", questionId: "q_2", prompt: "Make it a follow-up task?", options: ["Yes", "No"] }, { type: "agent", id: CONDUCTOR })];
