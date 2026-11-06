@@ -107,7 +107,7 @@ func TestChecksRestartRetainsOnlyAcceptedCurrentTurn(t *testing.T) {
 		t.Fatalf("%v %v", ok, err)
 	}
 	// An independent Syncer consults the ledger, not an in-memory result.
-	restarted := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
+	restarted := &Syncer{DB: w.s.DB, JudgeUnconducted: true, Judge: &checksFake{err: errors.New("must not be called")}}
 	ok, _, err = restarted.checksBeforePush(context.Background(), w.run)
 	if err != nil || !ok {
 		t.Fatalf("restart: %v %v", ok, err)
@@ -146,12 +146,12 @@ func TestChecksARestartNeverPassesAnUnjudgedOrRejectedTurn(t *testing.T) {
 		t.Fatalf("%d verdicts recorded for an interrupted judgement", n)
 	}
 	// The next process judges it again, here rejecting it...
-	again := &Syncer{DB: w.s.DB, Judge: &checksFake{backed: judge.No, missing: judge.No}}
+	again := &Syncer{DB: w.s.DB, JudgeUnconducted: true, Judge: &checksFake{backed: judge.No, missing: judge.No}}
 	if ok, _, err := again.checksBeforePush(context.Background(), w.run); ok || err != nil {
 		t.Fatalf("judged again: pass %v, %v", ok, err)
 	}
 	// ...and one after that reads the rejection, asking nobody.
-	after := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
+	after := &Syncer{DB: w.s.DB, JudgeUnconducted: true, Judge: &checksFake{err: errors.New("must not be called")}}
 	if ok, _, err := after.checksBeforePush(context.Background(), w.run); ok || err != nil {
 		t.Fatalf("after the rejection: pass %v, %v", ok, err)
 	}

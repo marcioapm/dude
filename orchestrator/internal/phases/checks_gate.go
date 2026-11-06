@@ -76,8 +76,8 @@ type checksDecision struct {
 	// word alone: pre-existing at the task's base, or deferred to a later
 	// phase. Its JSON name is the judge's, so older rows read the same.
 	ConductorPassed bool            `json:"judgePassed,omitempty"`
-	Verdicts    []checksVerdict `json:"checks"`
-	Message     string          `json:"message"`
+	Verdicts        []checksVerdict `json:"checks"`
+	Message         string          `json:"message"`
 	// The commit of each repository's target branch the task builds on,
 	// for the send-back.
 	bases []taskBase
@@ -226,6 +226,9 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 	conducted, err := s.conductedDelivery(ctx, r)
 	if err != nil {
 		return d, err
+	}
+	if !conducted && s.JudgeUnconducted {
+		return s.judgeChecksByJudge(ctx, r)
 	}
 	if !conducted {
 		// No conductor decides this delivery: only a person can pass a

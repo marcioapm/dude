@@ -58,7 +58,13 @@ type Syncer struct {
 	Lux    lux.Client
 	Forges delivery.Forges
 	Judge  ChecksJudge
-	Agent  AgentConfig
+	// JudgeUnconducted keeps the judgement tier deciding the checks of a
+	// delivery no conductor decides, for the judge's own tests until PR5b
+	// removes the judge from phases. The orchestrator never sets it: such a
+	// delivery's non-passes are a person's (noConductor). A conducted
+	// delivery never reaches the judge, whatever it says.
+	JudgeUnconducted bool
+	Agent            AgentConfig
 	// The login for the registry agent images come from; nil for none.
 	Registry registry.Provider
 	// Where the images people attach are read from; nil when no bucket is

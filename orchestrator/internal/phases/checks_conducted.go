@@ -229,4 +229,3 @@ func verdictDecision(d checksDecision, checks []delivery.Check, asked *delivery.
 	}
 	return d
 }
-

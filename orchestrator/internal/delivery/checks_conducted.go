@@ -56,18 +56,18 @@ type ChecksBase struct{ Repo, Branch, SHA string }
 
 // ChecksAsked is what the gate asked the conductor about one turn.
 type ChecksAsked struct {
-	Turn  int64   `json:"turn"`
-	Epoch int     `json:"epoch"`
+	Turn  int64 `json:"turn"`
+	Epoch int   `json:"epoch"`
 	// When the gate stops waiting (ChecksAnswerWait from the ask).
 	Deadline time.Time `json:"deadline"`
-	Check []Check `json:"checks"`
+	Check    []Check   `json:"checks"`
 	// Waivers: per reported check (by index), the attempt waiver it may be
 	// the same failure as.
 	Waivers map[int]*CarriedWaiver `json:"waivers,omitempty"`
 	// Bases: the target-branch commits a failure is measured against,
 	// "repo: branch at sha".
 	Bases     []ChecksBase `json:"bases,omitempty"`
-	TestPhase bool     `json:"testPhase,omitempty"`
+	TestPhase bool         `json:"testPhase,omitempty"`
 }
 
 // ConductedCheck is the conductor's verdict on one reported check.
@@ -197,7 +197,7 @@ func ConductChecksTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks
 		return 0, err
 	}
 	var ofTask bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1 AND task_id = $2 AND role <> 'conductor'
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1 AND task_id = $2 AND phase IS NOT NULL AND role IS DISTINCT FROM 'conductor'
 		AND attempt = task_attempt($2))`, in.RunID, ref.TaskID).Scan(&ofTask); err != nil {
 		return 0, err
 	}

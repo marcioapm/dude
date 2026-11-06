@@ -332,7 +332,7 @@ func TestAFailureTheJudgeDoesNotFindPreexistingIsSentBack(t *testing.T) {
 				got.Verdicts[0].Result != delivery.CheckFail || got.Verdicts[0].JudgeReason == "" {
 				t.Fatalf("recorded %+v, asked %d", got, len(fake.asked))
 			}
-			for _, want := range []string{"- npx tsc --noEmit: 95 errors on the parent, 95 with the change, none in changed files — not passed by the judge: " + tc.reason,
+			for _, want := range []string{"- npx tsc --noEmit: 95 errors on the parent, 95 with the change, none in changed files — not passed by the conductor: " + tc.reason,
 				"this task builds on (target: main at " + h.Main + ")", "in a separate checkout of that commit"} {
 				if !strings.Contains(got.Message, want) {
 					t.Errorf("the send-back lacks %q:\n%s", want, got.Message)
@@ -436,7 +436,7 @@ func TestAFailureTheWaiverDoesNotCoverMayStillBePreexisting(t *testing.T) {
 			if shown && (v.Result != delivery.CheckPreexisting || v.Waiver != nil) {
 				t.Fatalf("verdict %+v", v)
 			}
-			if !shown && (v.Result != delivery.CheckFail || !strings.Contains(v.WaiverReason, "does not cover") || !strings.Contains(v.JudgeReason, "not passed by the judge")) {
+			if !shown && (v.Result != delivery.CheckFail || !strings.Contains(v.WaiverReason, "does not cover") || !strings.Contains(v.JudgeReason, "not passed by the conductor")) {
 				t.Fatalf("verdict %+v", v)
 			}
 		})
@@ -477,7 +477,7 @@ func TestWithNoTierTheSendBackSaysOnlyAPersonCanPassAFailure(t *testing.T) {
 func TestAMultiLineReasonIsOneCheckOfTheSendBack(t *testing.T) {
 	d := checksDecision{Verdicts: []checksVerdict{
 		{Command: "npx tsc --noEmit", Result: delivery.CheckFail, Reason: "94 errors",
-			JudgeReason: "not passed by the judge: the calls show\n- base: 95 errors\n- head: 96 errors"},
+			JudgeReason: "not passed by the conductor: the calls show\n- base: 95 errors\n- head: 96 errors"},
 		{Command: "make lint", Result: delivery.CheckPass},
 	}}
 	msg := d.sendBack()

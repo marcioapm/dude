@@ -359,11 +359,11 @@ func TestARestartJudgesAWaivedFailureAgain(t *testing.T) {
 	if n := w.countEvents(delivery.EvRunChecksJudged); n != 0 {
 		t.Fatalf("%d verdicts recorded for an interrupted judgement", n)
 	}
-	again := &Syncer{DB: w.s.DB, Judge: &waiverFake{waived: judge.Yes}}
+	again := &Syncer{DB: w.s.DB, JudgeUnconducted: true, Judge: &waiverFake{waived: judge.Yes}}
 	if ok, _, err := again.checksBeforePush(context.Background(), w.run); !ok || err != nil {
 		t.Fatalf("judged again: pass %v, %v", ok, err)
 	}
-	after := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
+	after := &Syncer{DB: w.s.DB, JudgeUnconducted: true, Judge: &checksFake{err: errors.New("must not be called")}}
 	if ok, _, err := after.checksBeforePush(context.Background(), w.run); !ok || err != nil {
 		t.Fatalf("after the carried verdict: pass %v, %v", ok, err)
 	}
