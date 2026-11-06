@@ -234,6 +234,14 @@ func setLimitState(ctx context.Context, tx pgx.Tx, wfID string, grants []LimitGr
 
 // IsLimitRequestTx says the question is a limit request of the task's
 // delivery still waiting on its answer.
+func IsLimitRequestTx(ctx context.Context, tx pgx.Tx, taskID, questionID string) (bool, error) {
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return false, err
+	}
+	return slices.ContainsFunc(d.State.LimitRequests, func(r LimitRequest) bool { return r.QuestionID == questionID }), nil
+}
+
 // rebindLimitRequestTx preserves the owning subsystem's typed request and
 // authorization when Retry recreates its cancelled question. The caller holds
 // the delivery lock; no authority is reconstructed from question prose.
@@ -253,14 +261,6 @@ func rebindLimitRequestTx(ctx context.Context, tx pgx.Tx, taskID, old, fresh str
 		return nil
 	}
 	return setLimitState(ctx, tx, d.WorkflowID, d.State.LimitGrants, d.State.LimitRequests)
-}
-
-func IsLimitRequestTx(ctx context.Context, tx pgx.Tx, taskID, questionID string) (bool, error) {
-	d, err := ReadDelivery(ctx, tx, taskID)
-	if err != nil || d == nil {
-		return false, err
-	}
-	return slices.ContainsFunc(d.State.LimitRequests, func(r LimitRequest) bool { return r.QuestionID == questionID }), nil
 }
 
 // Approver is who answered a limit request: the person, and whether they
