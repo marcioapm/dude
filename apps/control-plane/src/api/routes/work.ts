@@ -497,6 +497,28 @@ export async function taskIdOf(scope: OrgScope, ref: string): Promise<string | n
   return byKey[0]?.id ?? null;
 }
 
+/**
+ * The current attempt's questions as the server holds them (#404): every
+ * open one, which is what the task waits on a person for, and those of its
+ * latest conductor cancelled as that conductor failed, which a person's
+ * Try again asks again. `endedBy` is the question.closed's by ("lost",
+ * "run_failed", ...), null for a question cancelled with no event (Runs
+ * failed before migration 250).
+ */
+async function taskQuestions(scope: OrgScope, id: string): Promise<unknown[]> {
+  return [...await scope.sql`
+    SELECT q.id, q.run_id AS "runId", q.status::text AS status, q.addressee, q.prompt, q.items,
+      q.asked_at AS "askedAt", q.to_person AS "toPerson", r.error AS "askerError",
+      (SELECT e.payload->>'by' FROM events e WHERE e.run_id = q.run_id AND e.event_type = 'question.closed'
+        AND e.payload->>'questionId' = q.id ORDER BY e.cursor DESC LIMIT 1) AS "endedBy"
+    FROM questions q JOIN runs r ON r.id = q.run_id
+    WHERE q.task_id = ${id} AND r.attempt = task_attempt(${id})
+      AND (q.status = 'open' OR (q.status = 'cancelled' AND r.role = 'conductor' AND r.status = 'failed'
+        AND r.id = (SELECT l.id FROM runs l WHERE l.task_id = ${id} AND l.role = 'conductor'
+          ORDER BY l.created_at DESC, l.id DESC LIMIT 1)))
+    ORDER BY q.asked_at, q.id`];
+}
+
 async function getTask(ctx: RequestContext): Promise<Response> {
   const ref = ctx.params.id!;
   const task = await withOrg(ctx.principal.organizationId, async (scope) => {
@@ -511,7 +533,7 @@ async function getTask(ctx: RequestContext): Promise<Response> {
     const runs = await scope.sql`
       SELECT ${runSelect(scope.sql)} FROM runs WHERE task_id = ${id}
       ORDER BY attempt DESC, created_at DESC, id DESC`;
-    return { ...rows[0], id, runs };
+    return { ...rows[0], id, runs, questions: await taskQuestions(scope, id) };
   });
 
   if (!task) throw notFound(`task ${ref} not found`);
