@@ -587,6 +587,10 @@ func conductorScript(briefing, model string) string {
 	calls := ConductorCalls(message)
 	if model == DefaultsModel && !session {
 		calls = append(calls, DefaultsCalls(message, Quiet(briefing, nil))...)
+		// A checks wake that started it is in its briefing, not its message.
+		if Quiet(briefing, nil) && len(ChecksDefaults(message)) == 0 {
+			calls = append(calls, ChecksDefaults(briefing)...)
+		}
 	}
 	for _, c := range calls {
 		if Local(c[0]) {
