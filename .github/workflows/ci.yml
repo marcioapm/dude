@@ -234,8 +234,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
-    name: e2e (${{ matrix.shard }}/6)
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    name: e2e (${{ matrix.shard }}/12)
     services:
       postgres:
         image: pgvector/pgvector:pg17-trixie
@@ -285,7 +285,17 @@ jobs:
         working-directory: tests
         env:
           DUDE_TEST_LOG_DIR: ${{ runner.temp }}/e2e-logs
-        run: uv run python run_tests.py --shard ${{ matrix.shard }}/6
+        run: uv run python run_tests.py --shard ${{ matrix.shard }}/12 --durations=30 --junitxml=${{ runner.temp }}/e2e-junit.xml --receipt=${{ runner.temp }}/receipt.json
+
+      - name: Upload E2E receipt and JUnit (including failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/receipt.json
+            ${{ runner.temp }}/e2e-junit.xml
+          if-no-files-found: error
 
       - name: Upload the e2e logs
         if: failure()
@@ -294,6 +304,43 @@ jobs:
           name: e2e-logs-${{ matrix.shard }}
           path: ${{ runner.temp }}/e2e-logs
           if-no-files-found: ignore
+
+  e2e-coverage:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    needs: [e2e]
+    if: always()
+    steps:
+      - name: All twelve runners succeeded
+        env:
+          SHARDS: ${{ needs.e2e.result }}
+        run: test "$SHARDS" = success
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-results-*
+          path: ${{ runner.temp }}/e2e-results
+      - name: Exact selected coverage and identical plans
+        working-directory: tests
+        run: uv run python e2e_receipt.py "${{ runner.temp }}/e2e-results" 12
+
+  # Keep the six existing branch-protection names, never blind success aliases.
+  e2e-required:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    needs: [e2e-coverage]
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    name: e2e (${{ matrix.shard }}/6)
+    steps:
+      - name: Coverage aggregate explicitly succeeded
+        env:
+          COVERAGE: ${{ needs.e2e-coverage.result }}
+        run: test "$COVERAGE" = success
 
   # dude-image-builder's podman tests need rootless podman on cgroup v2 with
   # the cpu and memory controllers delegated to the user, as on a build host.
