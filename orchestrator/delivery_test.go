@@ -864,18 +864,22 @@ func (w *world) names(wi, repoID string) {
 
 // callTool calls one of dude's tools as a Run's agent, with the token its
 // spec carries.
+// toolsAuth is the Authorization a Run's spec gives its tools.
+func toolsAuth(spec lux.Spec) string {
+	for _, s := range spec.Secrets {
+		if s.Name == "DUDE_TOOLS_AUTH" {
+			return s.Value
+		}
+	}
+	return ""
+}
+
 func (w *world) callTool(tools, luxRunSpec string, tool string, args string) (int, string) {
 	w.t.Helper()
 	var spec lux.Spec
 	_ = json.Unmarshal([]byte(luxRunSpec), &spec)
-	var auth string
-	for _, s := range spec.Secrets {
-		if s.Name == "DUDE_TOOLS_AUTH" {
-			auth = s.Value
-		}
-	}
 	req, _ := http.NewRequest("POST", tools+"/tools/"+tool, strings.NewReader(args))
-	req.Header.Set("Authorization", auth)
+	req.Header.Set("Authorization", toolsAuth(spec))
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		w.t.Fatal(err)
