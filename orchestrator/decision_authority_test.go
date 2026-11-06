@@ -9,12 +9,220 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+// The transaction boundary is deliberately held before any post-transaction
+// refusal reporting. Another real caller must already see the durable void,
+// even if the first HTTP client disconnects at precisely that boundary.
+func TestInvalidOpenAuthorityCommitsBeforeReturningRefusal(t *testing.T) {
+	for _, disconnect := range []bool{false, true} {
+		t.Run(map[bool]string{false: "concurrent caller", true: "HTTP disconnect"}[disconnect], func(t *testing.T) {
+			w := conducting(t)
+			task := w.task()
+			w.reachGateAnswered(task)
+			q := w.str(`SELECT state->'openAuthority'->>'questionId' FROM workflow_runs WHERE task_id = $1`, task)
+			mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title)
+				SELECT 'fnd_atomic', organization_id, id, (SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' LIMIT 1),
+				'correctness', 'high', 'A new blocker' FROM tasks WHERE id = $1`, task)
+			paused, resume, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log,
+				AfterTransaction: func(ctx context.Context, tool string) {
+					if tool == "decide" {
+						once.Do(func() {
+							close(paused)
+							if disconnect {
+								<-ctx.Done()
+							}
+							<-resume
+						})
+					}
+				}}).Handler())
+			t.Cleanup(tools.Close)
+			var spec lux.Spec
+			_ = json.Unmarshal([]byte(w.conductorSpecOf(task)), &spec)
+			var auth string
+			for _, s := range spec.Secrets {
+				if s.Name == "DUDE_TOOLS_AUTH" {
+					auth = s.Value
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			req, _ := http.NewRequestWithContext(ctx, "POST", tools.URL+"/tools/decide", strings.NewReader(`{"action":"open_pull_request"}`))
+			req.Header.Set("Authorization", auth)
+			type result struct {
+				status int
+				body   string
+				err    error
+			}
+			done := make(chan result, 1)
+			go func() {
+				defer close(finished)
+				r, err := http.DefaultClient.Do(req)
+				if err != nil {
+					done <- result{err: err}
+					return
+				}
+				defer r.Body.Close()
+				b, _ := io.ReadAll(r.Body)
+				done <- result{status: r.StatusCode, body: string(b)}
+			}()
+			<-paused
+			if disconnect {
+				cancel()
+				close(resume)
+				<-done
+				<-finished
+				// This attack is sequential after the disconnected handler
+				// has finished, not just concurrent with its reporting.
+				tools.Close()
+			}
+			// This read is outside the first transaction, before a second tool
+			// acquires Chat. Reporting has not run and cannot repair the result.
+			if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'openAuthority' ? 'voided'`, task); n != 1 {
+				t.Errorf("authority not durably void at transaction boundary: %d", n)
+			}
+			w.must(task, "dismiss_finding", `{"id":"fnd_atomic","reason":"Not applicable to this change"}`)
+			status, out := w.as(task, "decide", `{"action":"open_pull_request"}`)
+			if status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "no longer authorizes") {
+				t.Errorf("old answer reused after dismissal: %d %v", status, out)
+			}
+			for range 3 {
+				w.pump()
+			}
+			if n := len(w.gh.Pulls()); n != 0 {
+				t.Errorf("old authority opened %d real fake-GitHub PRs", n)
+			}
+			if !disconnect {
+				close(resume)
+				r := <-done
+				<-finished
+				if r.err != nil || r.status != 422 || !strings.Contains(r.body, "fnd_atomic") {
+					t.Errorf("original refusal: %+v", r)
+				}
+				tools.Close()
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'questionId' = $3`, task, delivery.EvOpenAuthorityVoided, q); n != 1 {
+				t.Errorf("void audit count = %d, want exactly one", n)
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND actor_type = 'agent' AND actor_id = $3 AND run_id = $3
+				AND payload->>'why' LIKE '%fnd_atomic%'`, task, delivery.EvOpenAuthorityVoided, spec.Labels["dude.run"]); n != 1 {
+				t.Errorf("void audit lost caller/reason: %d", n)
+			}
+		})
+	}
+}
+
+// HTTP and MCP preserve the same refusal words; a repeated refusal is not
+// a second void. A fresh owner answer can replace the old void while the old
+// HTTP handler is still paused, and its eventual return must not void it.
+func TestInvalidOpenAuthorityRefusalAndFreshAnswer(t *testing.T) {
+	for _, action := range []string{"open", "draft"} {
+		t.Run(action, func(t *testing.T) {
+			w := conducting(t)
+			task := w.task()
+			w.reachGateAnswered(task)
+			old := w.authority(task)
+			mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{openAuthority,attempt}', '7') WHERE task_id = $1`, task)
+			paused, resume := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, AfterTransaction: func(_ context.Context, tool string) {
+				if tool == "decide" {
+					once.Do(func() { close(paused); <-resume })
+				}
+			}}).Handler())
+			t.Cleanup(srv.Close)
+			specText := w.conductorSpecOf(task)
+			done := make(chan string, 1)
+			go func() {
+				status, body := w.callTool(srv.URL, specText, "decide", `{"action":"open_pull_request"}`)
+				done <- fmt.Sprintf("%d %s", status, body)
+			}()
+			<-paused
+			// A second transport sees exactly the same semantic refusal.
+			var spec lux.Spec
+			_ = json.Unmarshal([]byte(specText), &spec)
+			var auth string
+			for _, s := range spec.Secrets {
+				if s.Name == "DUDE_TOOLS_AUTH" {
+					auth = s.Value
+				}
+			}
+			cs, err := mcp.NewClient(&mcp.Implementation{Name: "authority-test", Version: "1"}, nil).Connect(context.Background(),
+				&mcp.StreamableClientTransport{Endpoint: w.syncer.Agent.ToolsURL, DisableStandaloneSSE: true, MaxRetries: -1,
+					HTTPClient: &http.Client{Transport: headerTransport{"Authorization", auth}}}, nil)
+			if err != nil {
+				close(resume)
+				t.Fatal(err)
+			}
+			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "decide", Arguments: map[string]any{"action": "open_pull_request"}})
+			cs.Close()
+			want := fmt.Sprintf("answer to %s no longer authorizes", old)
+			text := ""
+			if res != nil {
+				for _, c := range res.Content {
+					if v, ok := c.(*mcp.TextContent); ok {
+						text += v.Text
+					}
+				}
+			}
+			if err != nil || res == nil || !res.IsError || !strings.Contains(strings.ToLower(text), want) {
+				t.Errorf("MCP refusal: %v %+v %q", err, res, text)
+			}
+			// At the gate decide asks the gate's fixed question, not a new
+			// carry-forward question. Seed its action metadata just as decide
+			// ask_person does away from the gate; answering uses the real API.
+			out := w.must(task, "ask_person", `{"question":"Open on the facts now?","choices":["Ship now","Wait"]}`)
+			qid, _ := out["questionId"].(string)
+			if qid == "" {
+				qid = w.conductorQuestion(task)
+			}
+			mustExec(t, w.owner, `UPDATE questions SET actions = jsonb_build_array($2::text, '') WHERE id = $1`, qid, action)
+			if status, out := w.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "Ship now"}); status != 200 {
+				t.Errorf("fresh answer: %d %v", status, out)
+			}
+			if w.authority(task) != qid {
+				t.Errorf("fresh answer did not replace old authority")
+			}
+			close(resume)
+			body := <-done
+			srv.Close()
+			if !strings.HasPrefix(body, "422 ") || !strings.Contains(body, text) {
+				t.Errorf("HTTP/MCP mismatch: %q / %q", body, text)
+			}
+			if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'openAuthority' ? 'voided'`, task); n != 0 {
+				t.Errorf("old refusal voided newer answer")
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'questionId' = $3`, task, delivery.EvOpenAuthorityVoided, old); n != 1 {
+				t.Errorf("old audit count = %d", n)
+			}
+			out = w.must(task, "decide", `{"action":"open_pull_request"}`)
+			by, _ := out["authorizedBy"].(map[string]any)
+			if by["questionId"] != qid || by["choice"] != action {
+				t.Errorf("fresh authority not cited: %v", out)
+			}
+			w.until("fresh authorized pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			if w.gh.Pulls()[0].Draft != (action == "draft") {
+				t.Errorf("fresh draft choice not respected")
+			}
+		})
+	}
+}
 
 // openChoices is the sim's question at a decision point, as choices: the
 // first opens the pull request (action open, or draft).
