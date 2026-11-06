@@ -482,7 +482,10 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls 
 			qs[i].Call = calls[i]
 		}
 		if w := a.Waivers[i]; w != nil {
-			ws = append(ws, waiver{i + 1, oneLine(c.Command), w.Role, w.Cursor})
+			// Clipped, as evidence is: the waivers come first, and a long
+			// command must not push a later waiver's cursor out of the
+			// clipped line. Check N names the check in full below.
+			ws = append(ws, waiver{i + 1, clipTo(oneLine(c.Command), checksWakeEvidenceMax), w.Role, w.Cursor})
 		}
 	}
 	return checksWake.Render(struct {

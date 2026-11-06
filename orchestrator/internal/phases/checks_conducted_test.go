@@ -688,6 +688,24 @@ func TestTheChecksWakeLeadsWithBasesAndWaiverCursors(t *testing.T) {
 	}
 }
 
+// A waived check's long command is clipped in its waiver sentence, so
+// every waiver's cursor still leads the clipped wake.
+func TestTheChecksWakeClipsWaivedCommands(t *testing.T) {
+	a := delivery.ChecksAsked{Turn: 9, Waivers: map[int]*delivery.CarriedWaiver{}}
+	for i := range 8 {
+		a.Check = append(a.Check, delivery.Check{Command: fmt.Sprintf("go test ./pkg%d/... -run '%s'", i, strings.Repeat("TestSomethingRatherLong|", 20)),
+			Result: delivery.CheckFail, Evidence: "FAIL"})
+		a.Waivers[i] = &delivery.CarriedWaiver{Role: "implementer", Cursor: int64(7000 + i)}
+	}
+	line := []rune(checksWakeLine(phaseRun{ID: "run_x", Phase: "fix"}, a, nil, nil))
+	head := string(line[:min(len(line), 2000)])
+	for i := range 8 {
+		if want := fmt.Sprintf("waiverCursor %d", 7000+i); !strings.Contains(head, want) {
+			t.Errorf("the clipped wake lacks %q: %s", want, head)
+		}
+	}
+}
+
 // The scripted conductor takes a failure as pre-existing only on dude's
 // recording of it failing at the base, never on the writer's evidence
 // saying so.
