@@ -450,26 +450,6 @@ func TakesDefaults(input string) bool {
 	return strings.Contains(input, "Decision waiting:") || strings.Contains(input, "Review round ")
 }
 
-// DefaultsCalls are what a DefaultsModel conductor that decides quietly
-// does with an input, as Deliver's policy would: woken for a decision
-// (TakesDefaults), take Deliver's defaults (DefaultsCall). People's
-// feedback asks for no call: the submit steered a working implementer or
-// fixer with it already (step 3b, PR C2), and with nothing at work the
-// delivery's own next decision or its next fix takes it up, as under
-// Deliver. None while it is chatty: a person drives its decisions.
-func DefaultsCalls(input string, quiet bool) [][2]string {
-	if !quiet {
-		return nil
-	}
-	if calls := ChecksDefaults(input); len(calls) > 0 {
-		return calls
-	}
-	if !TakesDefaults(input) {
-		return nil
-	}
-	return [][2]string{DefaultsCall}
-}
-
 // ShownAtBase and DeferredToLater are what a scripted writer's evidence
 // says of a failure that fails the same at the task's base and of a check
 // a later phase runs (ChecksDefaults).
