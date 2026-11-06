@@ -257,6 +257,10 @@ def test_with_no_judgement_tier_the_conductor_still_decides_checks(client: ApiCl
     # exited 1, reported pass), decides the pass unbacked, and the report is
     # sent back, never published, then escalated to the conductor.
     assert client.put("/v1/judgements/settings", {"tierId": None}).status_code == 200
+    # checksFixRounds is the forge credential's setting: connect it first
+    # (as _start does), or the PATCH is refused not_connected (409).
+    credential = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": fake_github.api_url})
+    assert credential.status_code in (200, 409), credential.text
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
     task = _start(client, fake_github, CHECKS_MODELS["unbacked"])
     assert client.get(f"/v1/tasks/{task['id']}").json()["decider"] == "conductor"
