@@ -233,4 +233,5 @@ const (
 	rChecksNoBase                           = "preexisting needs a recorded commit of the target branch this task builds on, and this report has none: reject the failure instead"
 	rChecksWaiverCursor                     = "same_as_waived for %q must cite the waiver it matches: waiverCursor %d"
 	rChecksMissingVerdict                   = "missing needs verdict none or missing, and a reason"
+	rChecksReasonLong                       = "a reason is at most %d characters, and %s's is %d: say what decides the verdict, the Run's Chat keeps the rest"
 )

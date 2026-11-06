@@ -238,7 +238,7 @@ def test_no_conductor_publishes_with_skip_advice(page: Page, web_url: str, clien
     events = _checks_events(client, run["id"])
     assert events and events[-1]["payload"].get("skipped") is True
     body = fake_github.pulls[1].body
-    assert _rows(_checks_section(body)) == ("Checks not model-checked, set a judgement tier in the organisation's settings.", [
+    assert _rows(_checks_section(body)) == ("Checks not verified: no conductor decided them.", [
         ("Implementer", "not model-checked", []),
         ("Fixer", "not model-checked", []),
         ("Simplifier", "not model-checked", []),

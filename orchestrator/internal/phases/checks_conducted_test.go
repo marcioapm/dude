@@ -384,6 +384,8 @@ func TestDecideChecksRefusals(t *testing.T) {
 		"no reason":                       {func(d *delivery.DecideChecks) { d.Checks[1].Reason = " " }, cond, "needs its reason"},
 		"no missing":                      {func(d *delivery.DecideChecks) { d.Missing = delivery.ConductedMissing{} }, cond, "missing needs"},
 		"non-conductor caller":            {func(*delivery.DecideChecks) {}, w.run.ID, "no longer"},
+		"a reason too long":               {func(d *delivery.DecideChecks) { d.Checks[0].Reason = strings.Repeat("é", 2001) }, cond, "a reason is at most 2000 characters"},
+		"a missing reason too long":       {func(d *delivery.DecideChecks) { d.Missing.Reason = strings.Repeat("x", 2001) }, cond, "and missing's is 2001"},
 		"extra":                           {func(d *delivery.DecideChecks) { d.Checks = append(d.Checks, d.Checks[0]) }, cond, "decide every reported check"},
 		"a previous attempt's writer":     {func(d *delivery.DecideChecks) { d.RunID, d.Turn = "run_old_"+w.run.Org, oldTurn }, cond, "not a writer Run of this task"},
 	} {
@@ -395,7 +397,10 @@ func TestDecideChecksRefusals(t *testing.T) {
 			}
 		})
 	}
-	if _, err := w.decide(cond, ok()); err != nil {
+	// At the bound, accepted.
+	bounded := ok()
+	bounded.Checks[0].Reason, bounded.Missing.Reason = strings.Repeat("é", 2000), strings.Repeat("x", 2000)
+	if _, err := w.decide(cond, bounded); err != nil {
 		t.Fatal(err)
 	}
 	if pass, _ := w.gate(); pass {

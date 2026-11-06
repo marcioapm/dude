@@ -363,7 +363,7 @@ func TestWithNoJudgementTierTheChecksAreSkippedAndPublished(t *testing.T) {
 	if got := w.judged(wi); strings.Join(got, ",") != "skipped" {
 		t.Errorf("judged %v, want the skip recorded", got)
 	}
-	if got, want := checksSection(w.gh.Pull(1).Body), "Checks not model-checked, set a judgement tier in the organisation's settings.\n\n"+
+	if got, want := checksSection(w.gh.Pull(1).Body), "Checks not verified: no conductor decided them.\n\n"+
 		"- **Implementer** — not model-checked\n"+
 		"- **Fixer** — not model-checked\n"+
 		"- **Simplifier** — not model-checked"; got != want {

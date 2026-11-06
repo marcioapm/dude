@@ -7,3 +7,4 @@
 {{define "refusals/delivery/checks/no-base"}}preexisting needs a recorded commit of the target branch this task builds on, and this report has none: reject the failure instead{{end}}
 {{define "refusals/delivery/checks/waiver-cursor"}}same_as_waived for %q must cite the waiver it matches: waiverCursor %d{{end}}
 {{define "refusals/delivery/checks/missing"}}missing needs verdict none or missing, and a reason{{end}}
+{{define "refusals/delivery/checks/reason-long"}}a reason is at most %d characters, and %s's is %d: say what decides the verdict, the Run's Chat keeps the rest{{end}}

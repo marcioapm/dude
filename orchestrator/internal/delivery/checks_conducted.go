@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -245,6 +246,10 @@ func ConductChecksTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks
 	return cursor, err
 }
 
+// checksReasonMax bounds a verdict's reason, and missing's: a reason goes
+// into the writer's send-back and the ledger verbatim.
+const checksReasonMax = 2000
+
 // checkVerdicts refuses a verdict set that does not decide what was asked.
 func checkVerdicts(asked *ChecksAsked, in DecideChecks) error {
 	if len(in.Checks) != len(asked.Check) {
@@ -257,6 +262,9 @@ func checkVerdicts(asked *ChecksAsked, in DecideChecks) error {
 		}
 		if strings.TrimSpace(v.Reason) == "" {
 			return refusef(rChecksNeedsReason, c.Command)
+		}
+		if n := utf8.RuneCountInString(v.Reason); n > checksReasonMax {
+			return refusef(rChecksReasonLong, checksReasonMax, fmt.Sprintf("%q", c.Command), n)
 		}
 		allowed := []string{VerdictBacked, VerdictUnbacked}
 		switch c.Result {
@@ -283,6 +291,9 @@ func checkVerdicts(asked *ChecksAsked, in DecideChecks) error {
 	}
 	if in.Missing.Verdict != MissingNone && in.Missing.Verdict != MissingFound || strings.TrimSpace(in.Missing.Reason) == "" {
 		return refuseText(rChecksMissingVerdict)
+	}
+	if n := utf8.RuneCountInString(in.Missing.Reason); n > checksReasonMax {
+		return refusef(rChecksReasonLong, checksReasonMax, "missing", n)
 	}
 	return nil
 }

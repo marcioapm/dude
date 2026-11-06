@@ -301,7 +301,7 @@ func TestAnUnchangedRunIsItsOwnStatusInTheChecksAccount(t *testing.T) {
 	}, {
 		"after a skipped implementer",
 		[]gatedJudgement{{Role: "Implementer", Verified: true, Skipped: true}, unchanged},
-		"### Checks\nChecks not model-checked, set a judgement tier in the organisation's settings.\n\n" +
+		"### Checks\nChecks not verified: no conductor decided them.\n\n" +
 			"- **Implementer** — not model-checked\n- **Simplifier** — no changes; checks not needed",
 	}, {
 		"after a backed implementer",

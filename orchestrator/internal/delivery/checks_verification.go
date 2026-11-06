@@ -169,7 +169,7 @@ func checksAccountText(runs []gatedJudgement, room int) string {
 	b.WriteString("### Checks\n")
 	switch {
 	case skipped:
-		b.WriteString("Checks not model-checked, set a judgement tier in the organisation's settings.\n")
+		b.WriteString("Checks not verified: no conductor decided them.\n")
 	case len(waivers) > 0:
 		b.WriteString("Checks were waived by a person:\n")
 		// Each reason clipped, as the test gate's are; the whole one is in
