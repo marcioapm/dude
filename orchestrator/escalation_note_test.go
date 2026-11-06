@@ -18,6 +18,7 @@ import (
 // checks_unverified, the conductor told.
 func checksHeld(t *testing.T) (*world, string) {
 	w := conducting(t)
+	w.lux.ManualChecks = true // rejectChecks takes the decision itself.
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
 	w.onModel("implementer", fakeagent.ChecksPreexistingModel)
 	task := w.task()

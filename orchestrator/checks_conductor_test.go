@@ -57,6 +57,7 @@ func TestAConductorVerdictPublishesAReportedFailureWithoutAPerson(t *testing.T) 
 // back and counts a round, as an untiered rejection does.
 func TestAnUndecidedReportedFailureIsSentBackAtTheDeadline(t *testing.T) {
 	w := conducting(t)
+	w.lux.ManualChecks = true // Deliberately exercise an unanswered ask.
 	w.waitingFor(time.Hour)
 	w.onModel("implementer", fakeagent.ChecksPreexistingModel)
 	w.syncer.ParkAfter = time.Hour

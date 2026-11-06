@@ -1,11 +1,31 @@
 package fakeagent_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 )
+
+func TestScriptedConductorAnswersChecksUnlessExplicit(t *testing.T) {
+	wake := `decide_checks (runId run_1, turn 2) "make test" reported pass (evidence ran): is the pass backed (dude recorded its latest call of it: exit 0)?`
+	for _, model := range []string{"fake/scripted", fakeagent.DefaultsModel} {
+		script := fakeagent.ConductorScriptFor("## The task\n\nT-1\n\n## Owner's message\n\n"+wake, model)
+		if strings.Count(script, "http dude POST /tools/decide_checks ") != 1 || !strings.Contains(script, `"verdict":"backed"`) {
+			t.Errorf("%s did not decide checks once: %s", model, script)
+		}
+	}
+	if calls := fakeagent.ChecksAnswer(wake, [][2]string{{"decide_checks", `{}`}}); len(calls) != 0 {
+		t.Fatal("overrode an explicit decision")
+	}
+	if calls := fakeagent.ChecksAnswer(fakeagent.ManualChecks+"\n"+wake, nil); len(calls) != 0 {
+		t.Fatal("overrode a manual script")
+	}
+	if calls := fakeagent.ChecksAnswer("Decision waiting: after implement", nil); len(calls) != 0 {
+		t.Fatal("took an ordinary delivery decision")
+	}
+}
 
 // Every scripted writer ends with a checks report the gate can read; a
 // reviewer and a tester hand back none.

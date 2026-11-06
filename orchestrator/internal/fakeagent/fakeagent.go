@@ -546,6 +546,31 @@ func ChecksDefaults(input string) [][2]string {
 	return out
 }
 
+// ManualChecks is a test script's instruction to keep checks decisions
+// explicit (for example a Chat script that later calls decide_checks).
+const ManualChecks = "Test script decides checks explicitly."
+
+// ChecksAnswer is what any scripted conductor (fake/scripted as well as
+// DefaultsModel, quiet or chatty) does with a checks wake in input that
+// its calls so far (the ones the input names, and Deliver's defaults)
+// leave undecided: it decides it as ChecksDefaults reads it, through the
+// real decide_checks, so a writer's turn is never held for the conductor's
+// whole wait only because the scripted agent ignores the ask. A pass is
+// backed only on a recorded exit 0; dude still validates every verdict.
+// None when a call already decides checks: a test's script that takes the
+// decision itself keeps it.
+func ChecksAnswer(input string, calls [][2]string) [][2]string {
+	if strings.Contains(input, ManualChecks) {
+		return nil
+	}
+	for _, c := range calls {
+		if c[0] == "decide_checks" {
+			return nil
+		}
+	}
+	return ChecksDefaults(input)
+}
+
 // Quiet says a conductor decides its delivery quietly, from its briefing
 // and the inputs since, oldest first: the briefing says so, or the latest
 // change of voice it was told is to quiet. DefaultsModel takes Deliver's
@@ -626,6 +651,12 @@ func conductorScript(briefing, model string) string {
 		if Quiet(briefing, nil) && len(ChecksDefaults(message)) == 0 {
 			calls = append(calls, ChecksDefaults(briefing)...)
 		}
+	}
+	if !session {
+		// Any scripted conductor answers a checks wake no call decided
+		// (ChecksAnswer): the message's, else the briefing's that started it.
+		calls = append(calls, ChecksAnswer(message, calls)...)
+		calls = append(calls, ChecksAnswer(briefing, calls)...)
 	}
 	for _, c := range calls {
 		if Local(c[0]) {

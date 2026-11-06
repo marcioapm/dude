@@ -311,6 +311,7 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
     _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
     # The delivery's own implementer is held too: waived, it waits on the conductor after it.
+    _say(client, task["id"], "Test script decides checks explicitly.")
     _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
     _waived(client, task["id"], "the delivery's implementer", owner_dsn)
     _waiting_on(client, task["id"], "after_implement", "the implementer never came back")

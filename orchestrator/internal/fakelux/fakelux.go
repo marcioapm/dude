@@ -656,6 +656,9 @@ type Server struct {
 	// Decide is the scripted agent (New with no decide): a resumed
 	// reviewer or tester plays its step for its new tree (replay).
 	scriptedAgent bool
+	// ManualChecks leaves checks wakes to the test's explicit decide_checks
+	// calls (or a deliberately unanswered deadline test).
+	ManualChecks bool
 	// NoNestedHost: no host in the pool offers nested containers, so a Run
 	// asking for them waits, submitted, saying so in its stateReason, as
 	// lux's scheduler does (internal/server/hostfit.go).
@@ -2020,15 +2023,29 @@ func (s *Server) turn(run *Run) {
 		if !first {
 			input = run.Inputs[len(run.Inputs)-1]
 		}
-		for _, c := range fakeagent.ConductorCalls(conductorAsked(input, first)) {
+		calls := fakeagent.ConductorCalls(conductorAsked(input, first))
+		// Checks are a gate on every pushing turn, independent of the
+		// chatty/quiet delivery decisions. Explicit scripts keep priority.
+		manual := s.ManualChecks || strings.Contains(run.Prompt(), fakeagent.ManualChecks)
+		for _, in := range run.Inputs {
+			manual = manual || strings.Contains(in, fakeagent.ManualChecks)
+		}
+		if !first && !manual && !b.Defaults {
+			calls = append(calls, fakeagent.ChecksAnswer(input, calls)...)
+		}
+		for _, c := range calls {
 			s.callTool(run, c[0], c[1])
 		}
 		// Deliver's defaults, taken at a later input it is woken for (its
 		// first prompt's script carries them already:
 		// fakeagent.ConductorScriptFor).
 		if b.Defaults && !first {
-			for _, c := range fakeagent.DefaultsCalls(input, fakeagent.QuietSince(b.Quiet, run.Inputs)) {
-				s.callTool(run, c[0], c[1])
+			defaults := fakeagent.DefaultsCalls(input, fakeagent.QuietSince(b.Quiet, run.Inputs))
+			defaults = append(defaults, fakeagent.ChecksAnswer(input, append(calls, defaults...))...)
+			for _, c := range defaults {
+				if !manual || c[0] != "decide_checks" {
+					s.callTool(run, c[0], c[1])
+				}
 			}
 		}
 	}
