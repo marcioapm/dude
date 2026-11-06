@@ -13,18 +13,35 @@ import (
 )
 
 // checksHeld is a conducted delivery whose implementer's reported failure
-// the judge did not pass and no send-back is allowed for: escalated
+// the conductor did not pass (decide_checks reject: the gate asks the
+// conductor, not the judge) and no send-back is allowed for: escalated
 // checks_unverified, the conductor told.
 func checksHeld(t *testing.T) (*world, string) {
 	w := conducting(t)
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
-	w.syncer.Judge = &scriptedJudge{}
 	w.onModel("implementer", fakeagent.ChecksPreexistingModel)
 	task := w.task()
 	w.talk(task)
 	w.must(task, "start_phase", `{"phase":"implement"}`)
+	w.rejectChecks(task, "the recorded call says so.")
 	w.until("the checks escalation", func() bool { return w.escalationReason(task) == delivery.ReasonChecksUnverified })
 	return w, task
+}
+
+// rejectChecks waits for the gate to ask the task's conductor about the
+// implementer's checks report and, as that conductor, rejects every
+// reported check through decide_checks with reason.
+func (w *world) rejectChecks(task, reason string) {
+	w.t.Helper()
+	w.until("the conductor asked about the report", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvRunChecksAsked) == 1
+	})
+	run := w.str(`SELECT run_id FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvRunChecksAsked)
+	turn := w.str(`SELECT payload->>'turn' FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvRunChecksAsked)
+	checks := w.str(`SELECT jsonb_agg(jsonb_build_object('command', c->>'command', 'verdict', 'reject', 'reason', $3::text))::text
+		FROM events, jsonb_array_elements(payload->'checks') c WHERE task_id = $1 AND event_type = $2`,
+		task, delivery.EvRunChecksAsked, reason)
+	w.must(task, "decide_checks", `{"runId":"`+run+`","turn":`+turn+`,"checks":`+checks+`,"missing":{"verdict":"none","reason":"nothing obvious"}}`)
 }
 
 // noted is the conductor's question about a checks escalation offering a
