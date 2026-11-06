@@ -163,19 +163,19 @@ describe("needs you", () => {
     test(`server ${status} question never needs you, even with an unclosed asked event`, async () => {
       const client = withQuestions(withEvents(fx(), [asked("q_server")]), [serverQuestion({ status })]);
       const page = await overview(client);
-      expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+      expect(page.querySelectorAll("[data-testid=needs-you]").length).toBe(0);
     });
   }
 
   test("server empty questions overrides an unclosed asked event", async () => {
     const page = await overview(withQuestions(withEvents(fx(), [asked("q_server")]), []));
-    expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=needs-you]").length).toBe(0);
   });
 
   test("server other-attempt question does not need you", async () => {
     const client = withQuestions(fx("restarted"), [serverQuestion({ runId: "run_a1_impl" })]);
     const page = await overview(client);
-    expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=needs-you]").length).toBe(0);
   });
 
   test("open question rebound to a placeholder needs you without a new asked event", async () => {
@@ -201,7 +201,7 @@ describe("needs you", () => {
       const page = await overview(client);
       await settle();
       expect(Boolean(page.querySelector("[data-testid=lost-asker]"))).toBe(retry);
-      expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+      expect(page.querySelectorAll("[data-testid=needs-you]").length).toBe(0);
     });
   }
 
@@ -254,7 +254,7 @@ describe("needs you", () => {
     expect(openAgentQuestions([routed])).toEqual([]);
     const page = await overview(withEvents(fx(), [routed]));
     await until(() => page.querySelector("[data-testid=overview-summary]"), "the overview");
-    expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=needs-you]").length).toBe(0);
     // The person fallback (or the conductor's relay) is question.asked: it does.
     expect(openAgentQuestions([routed, asked("q_p")]).map((q) => q.questionId)).toEqual(["q_p"]);
   });
@@ -262,7 +262,7 @@ describe("needs you", () => {
   test("other tabs keep the task's notices above the tabs, without the Overview's needs-you region", async () => {
     const page = await overview(withEvents(fx("stalled"), [asked("q_1")]), { tab: "findings" });
     await until(() => page.querySelector("[data-testid=stalled]"), "the stalled notice");
-    expect(page.querySelector("[data-testid=needs-you]")).toBeNull();
+    expect(page.querySelectorAll("[data-testid=needs-you]").length).toBe(0);
     expect(page.querySelector("[data-testid=task-notices]")!.closest("[data-testid=task-overview]")).toBeNull();
   });
 

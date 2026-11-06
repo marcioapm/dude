@@ -107,11 +107,17 @@ def test_a_question_moved_off_a_lost_conductor_still_needs_you_and_its_answer_is
 
 @pytest.mark.ui
 def test_a_conductor_failed_with_its_question_offers_try_again_which_asks_again(
-    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, console_errors: list
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, owner_dsn: str, env, console_errors: list
 ):
     task, old, question = _asking(client, forge_project, owner_dsn, "Invoice option, its conductor failed")
-    # Failed as main left the issue's task: lux's 404, the question cancelled with the Run, no event, nothing unread.
-    execute(owner_dsn, "UPDATE runs SET status = 'failed', error = 'lux no longer has this Run', ended_at = now() WHERE id = %s", (old,))
+    # Exercise the fallback, rather than the automatic replacement from (a):
+    # this Run already has a recorded loss, so it cannot be replaced twice.
+    # lux's real 404 then fails it and cancels its question with by='lost'.
+    execute(owner_dsn, "UPDATE runs SET lux_lost_at = now() WHERE id = %s", (old,))
+    lux_run = query(owner_dsn, "SELECT lux_run_id FROM runs WHERE id = %s", (old,))[0]["lux_run_id"]
+    requests.post(f"{env.fake_lux_url}/fake/runs/{lux_run}/forget",
+                  headers={"authorization": f"Bearer {env.lux_key}"}, timeout=10).raise_for_status()
+    wait_until(lambda: client.get_run(old)["status"] == "failed", timeout=60, message="the lost conductor never failed")
     assert query(owner_dsn, "SELECT status::text AS status FROM questions WHERE id = %s", (question,)) == [{"status": "cancelled"}]
     recover = client.get(f"/v1/tasks/{task['id']}/recover").json()
     assert recover["conductor"]["retry"] is True, recover
