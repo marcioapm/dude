@@ -47,6 +47,7 @@ const (
 	PRRefresh       Key = "pr.refresh"
 	LimitsRead      Key = "limits.read"
 	LimitsRequest   Key = "limits.request"
+	AsksHeld        Key = "conduct.asks"
 	Verify          Key = "verify"
 	ChecksDecide    Key = "checks.decide"
 	SettingsRead    Key = "settings.read"
@@ -107,6 +108,8 @@ var All = []Capability{
 			"decide_escalation", "answer_question", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
 	{Key: ChecksDecide, Description: "Decide a writer's checks report the checks gate asks about: whether each pass is backed, a failure pre-existing or the waived one, a not-run check deferred, and whether a check is missing.",
 		Tools: []string{"decide_checks"}},
+	{Key: AsksHeld, Description: "Forward a reviewer's question dude gave you first to the person, and decide agents' repository requests: deny, approve read access to one of the project's repositories, or forward to the owner.",
+		Tools: []string{"forward_review_question", "decide_repository_request"}},
 	{Key: Cohorts, Description: "Start an atomic cohort of independent child agents and receive one completion digest.", Tools: []string{"start_agents"}},
 	{Key: ChildInspect, Description: "Inspect own in-task child Runs' stored results and bounded reports.", Tools: []string{"read_run"}},
 	{Key: RunStop, Description: "Stop a child agent you started that is stuck or no longer needed; its result comes back as aborted.",
@@ -149,7 +152,7 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, Cohorts, ChildInspect, RunStop, Wait, RunRecover, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, ChecksDecide, SettingsRead, WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, AsksHeld, Cohorts, ChildInspect, RunStop, Wait, RunRecover, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, ChecksDecide, SettingsRead, WebSearch, WebFetch},
 	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, RunsRead,
 		PRRefresh, SettingsRead, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, AskConductor, Machines, Coordination, FeedbackHandle,

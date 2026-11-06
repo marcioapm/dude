@@ -1526,6 +1526,34 @@ already given to %[2]s, which has their words: %[1]s. Do not steer them to it ag
 
 This requires an open conductor-addressed question on a current writer Run of your live, unhalted task, and an answer to each item. Read the Run's question and answer that question only.
 
+## refusals/delivery/conductor-question/relay-already-open
+
+%s is relayed to the person already (%s): their answer goes to the Run. End your turn and wait for it
+
+## refusals/delivery/conductor-question/relay-not-escalation
+
+relay is for a writer's question, not a question about the escalation: ask about the escalation without relay
+
+## refusals/delivery/conductor-question/relay-open-writer
+
+relay names a writer's question to relay to the person: it must be open, addressed to you, and asked by a current writer Run of this task (%s is not). Read the Run's question with run_chat
+
+## refusals/delivery/conductor-held/ask-the-person
+
+only the task's owner approves %s: forward it to them (decide_repository_request with forward), or deny it
+
+## refusals/delivery/conductor-held/repository-action
+
+say deny, approve or forward: one of the three
+
+## refusals/delivery/conductor-held/repository-request
+
+repository request %s is not a pending request of this task held by you: only one dude gave you first, still pending, is decided or forwarded
+
+## refusals/delivery/conductor-held/review-question
+
+reviewer question %s is not an open question of this task held by you: only one dude gave you first, still open, is forwarded
+
 ## refusals/delivery/checks/incomplete
 
 decide every reported check, in the report's order and by its exact command, one verdict each: %s

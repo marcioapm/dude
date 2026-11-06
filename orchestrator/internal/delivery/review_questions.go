@@ -68,12 +68,16 @@ const SignalPullRequestEnded = "pr.ended"
 const (
 	reasonQuestionsOpen    = "a reviewer's question waits on an answer"
 	reasonQuestionsSettled = "reviewers' questions settled"
+	// Every open one is its conductor's (review_questions.addressee).
+	reasonQuestionsWithConductor = "with the conductor: a reviewer's question"
 )
 
 // holdForQuestions parks step while the delivery's attempt has an open
 // reviewer question: the pull request is not opened, nor a checked fix
 // promoted to it, past a question nobody answered. The task waits on a
-// person; an answer or a withdrawal, the conductor's included, signals the
+// person (ToPersonTx) unless every open question is its conductor's
+// (addressee 'conductor'): then it keeps running, and nobody is asked. An
+// answer, a withdrawal or a forward, the conductor's included, signals the
 // step to run again. People's feedback wakes it too: it goes to a fixer
 // first, as the step would send it.
 //
@@ -83,10 +87,18 @@ const (
 // holds, waitBlocked keeps EndConductorWait from ending that wait.
 func (w *steps) holdForQuestions(ctx context.Context, sc workflow.StepContext, st *State, step string) (workflow.Result, bool, error) {
 	var open []OpenReviewQuestion
-	blocked := false
+	blocked, conductors := false, false
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
-		if open, err = openReviewQuestionsTx(ctx, tx, st.TaskID, st.Attempt, nil); err != nil || len(open) > 0 || !st.QuestionsHeld {
+		if open, err = openReviewQuestionsTx(ctx, tx, st.TaskID, st.Attempt, nil); err != nil {
 			return err
+		}
+		if len(open) > 0 {
+			// Every open one the conductor's: nobody is waited on for them.
+			if conductors, err = heldReviewQuestionsTx(ctx, tx, st.TaskID, open); err != nil || !conductors {
+				return err
+			}
+		} else if !st.QuestionsHeld {
+			return nil
 		}
 		return tx.QueryRow(ctx, `SELECT `+waitBlockedElse+` FROM tasks t WHERE t.id = $1`, st.TaskID).Scan(&blocked)
 	}); err != nil {
@@ -113,9 +125,24 @@ func (w *steps) holdForQuestions(ctx context.Context, sc workflow.StepContext, s
 	}
 	st.QuestionsHeld = true
 	if len(open) > 0 {
-		// TODO(conductor-first PR4b): no awaiting_input while the conductor
-		// holds every open question; forwarded ones through ToPersonTx.
-		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "awaiting_input", reasonQuestionsOpen); err != nil {
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			if conductors {
+				// Held by the conductor alone: the task keeps running, and
+				// one a person's wait left waiting is put back.
+				if blocked {
+					return nil
+				}
+				_, err := SetTaskStatusTx(ctx, tx, sc.OrganizationID, st.ProjectID, st.TaskID, "awaiting_input", "running", reasonQuestionsWithConductor)
+				return err
+			}
+			why := WhyNoConductor
+			if st.conducted() {
+				// Forwarded, handed over, or the person's from before.
+				why = WhyHandover
+			}
+			_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Reason: reasonQuestionsOpen, Why: why})
+			return err
+		}); err != nil {
 			return workflow.Result{}, false, err
 		}
 	}
@@ -132,17 +159,13 @@ func ConductAnswerReviewQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id,
 	if err := liveConductor(ctx, tx, ref); err != nil {
 		return SettledReviewQuestion{}, err
 	}
-	d, err := ReadDelivery(ctx, tx, ref.TaskID)
+	// Chat → delivery → task before the question (LockAnswerTx).
+	d, err := LockAnswerTx(ctx, tx, ref.TaskID)
 	if err != nil {
 		return SettledReviewQuestion{}, err
 	}
-	switch {
-	case d != nil && Ended(d.TaskStatus):
-		return SettledReviewQuestion{}, refusef(rThisTaskYouAreReadOnly, d.TaskStatus)
-	case d == nil || !d.Live():
-		return SettledReviewQuestion{}, refuseText(rThisTaskHasNoDeliveryIn)
-	case !d.State.conducted():
-		return SettledReviewQuestion{}, refuseText(rDeliverTakesThisTaskDecisionsNot)
+	if err := refuseUnconducted(d); err != nil {
+		return SettledReviewQuestion{}, err
 	}
 	if withdraw == (strings.TrimSpace(answer) != "") {
 		return SettledReviewQuestion{}, refuseText(rAnswerOrWithdrawReviewQuestion)
@@ -260,8 +283,7 @@ func settleReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, status, tex
 		return out, err
 	}
 	// A step held by open questions reads them again (holdForQuestions).
-	if err := workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalReviewQuestion, map[string]any{"questionId": id},
-		"review-question:"+id); err != nil {
+	if err := signalReviewQuestionTx(ctx, tx, org, d.WorkflowID, id); err != nil {
 		return out, err
 	}
 	if !by.conductor() && d.State.conducted() {

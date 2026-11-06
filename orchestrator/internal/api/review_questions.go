@@ -42,6 +42,12 @@ func (s *Server) settleReviewQuestion(withdraw bool) handler {
 			if err := ownerOnly(r.Context(), tx, taskID, p.Person, "answer"); err != nil {
 				return err
 			}
+			// Chat → delivery → task before the question, as the
+			// conductor's answer and forward take them: the owner may
+			// settle one its conductor holds.
+			if _, err := delivery.LockAnswerTx(r.Context(), tx, taskID); err != nil {
+				return escalationFailure(err)
+			}
 			by := delivery.ReviewQuestionBy{Person: p.Person, ActorType: p.ActorType, ActorID: p.Actor}
 			var err error
 			if withdraw {

@@ -361,6 +361,15 @@ export interface ChatSent {
   decider?: Decider;
 }
 
+/** An ask dude gave the task's conductor first (navigation's conductorHeld): a reviewer's question or a repository request. */
+export type ConductorHeld = "review_question" | "repository_request";
+
+/** What a task whose conductor holds an ask waits for, on the board and in the tree: never a person. */
+export const CONDUCTOR_HELD_WAITING: Record<ConductorHeld, string> = {
+  review_question: "With the conductor: a reviewer's question",
+  repository_request: "With the conductor: a repository request",
+};
+
 /** What a task held before its pull request waits for, on the board and in the tree. */
 export const READY_FOR_REVIEW_WAITING = "Ready for your review: no pull request yet";
 
@@ -371,10 +380,11 @@ export const READY_FOR_REVIEW_WAITING = "Ready for your review: no pull request 
  * and as its driver.
  */
 export function withWaitingFor(projects: NavProject[]): NavProject[] {
-  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean }): NavTask => {
-    const { decider, conductorLive, ...rest } = t;
+  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean; conductorHeld?: ConductorHeld }): NavTask => {
+    const { decider, conductorLive, conductorHeld, ...rest } = t;
     const driven = decider ? { ...rest, driver: driverMode(decider, conductorLive === true) } : rest;
     if (t.escalation) return { ...driven, heldForReview: false, waitingFor: `${t.escalation.holder === "conductor" ? "With the conductor: " : ""}${escalationWords(t.escalation).short}` };
+    if (conductorHeld) return { ...driven, waitingFor: CONDUCTOR_HELD_WAITING[conductorHeld] };
     return t.heldForReview ? { ...driven, waitingFor: READY_FOR_REVIEW_WAITING } : driven;
   };
   return projects.map((p) => ({

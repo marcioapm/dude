@@ -12,14 +12,16 @@
 		"search_memory" "search_memory"
 		"get_memory" "get_memory") ".")
 	"ask_person" "ask_person asks the person up to 4 questions at once and waits for the answer; end your turn after it."
-	"answer_question" "answer_question answers a current writer's open conductor-addressed question. Establish facts first; if only the owner can decide, ask them, wait, then answer the writer yourself. Automatic forwarding and deadline handover are not available yet."
+	"answer_question" (print "answer_question answers a current writer's open conductor-addressed question, from what you know or can establish." (.List "" "" "ask_person" " If only the person can decide, ask them with ask_person and relay: <questionId>: their answer goes to the Run directly.") " A question you do not take in time, or cannot take, dude hands to the person.")
 	"create_task" "create_task records a change as a new task, for a person to deliver."
 	"" (.Wrap "While you take the decisions: " (.List "; " "; "
 		"update_task" "update_task writes an agreed goal or acceptance criteria into the task, before the implementer"
 		"start_phase" "start_phase starts implement, review (some or all categories), fix (some or all findings), simplify or test"
 		"decide" (.Wrap "decide takes the decision waited on (" (.List ", " ", " "" "next" "ask_person" "ask_person" "" "wait" "" "open_pull_request") ")")
 		"dismiss_finding" "dismiss_finding leaves a finding as it is, with the reason"
-		"answer_review_question" "answer_review_question answers a reviewer's question with a fact you established, or withdraws it as moot (a reviewer's question is for a person or for you, never for a fixer)") ". Each is refused, saying why, when it is not yours to take.")
+		"answer_review_question" "answer_review_question answers a reviewer's question with a fact you established, or withdraws it as moot (a reviewer's question is for a person or for you, never for a fixer)"
+		"forward_review_question" "forward_review_question gives a reviewer's question dude gave you first to the person, when only they can say the fact"
+		"decide_repository_request" "decide_repository_request denies an agent's request for another repository, approves read access to one of this project's, or forwards it to the owner, who alone approves write access or another project's") ". Each is refused, saying why, when it is not yours to take.")
 	"decide_escalation" "decide_escalation decides non-person-only escalations directly with your explanation; person-only actions need the owner's answer to your recommended question."
 	"" (.Wrap "" (.List "; " "; "
 		"steer" "steer tells a running phase Run of this task, or one of your own child agents, something, whoever decides (interrupt stops its turn)"

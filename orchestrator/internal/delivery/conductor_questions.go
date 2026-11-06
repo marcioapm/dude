@@ -131,11 +131,7 @@ func ConductAnswerQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id, answe
 	}
 	var writer, prompt string
 	var items []QuestionItem
-	err = tx.QueryRow(ctx, `SELECT q.run_id,q.prompt,q.items FROM questions q JOIN runs r ON r.id=q.run_id
- WHERE q.id=$1 AND q.task_id=$2 AND q.organization_id=$3 AND q.status='open' AND q.addressee='conductor'
- AND r.task_id=q.task_id AND r.attempt=task_attempt(q.task_id) AND r.role<>'conductor'
- AND r.status IN ('running','paused')
- FOR UPDATE OF q,r`, id, ref.TaskID, ref.Org).Scan(&writer, &prompt, &items)
+	err = tx.QueryRow(ctx, openWriterQuestion, id, ref.TaskID, ref.Org).Scan(&writer, &prompt, &items)
 	if err != nil {
 		if db.IsNotFound(err) {
 			return "", refuseText(rQuestionRequiresCurrentRun)
@@ -158,6 +154,10 @@ func ConductAnswerQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id, answe
 	}
 	writerRef := ref
 	writerRef.RunID = writer
+	// A relay of it to the person is moot now: withdrawn, not left asked.
+	if err := CancelRelaysTx(ctx, tx, ref, id, "conductor"); err != nil {
+		return "", err
+	}
 	directive, _, err := QueueDirective(ctx, tx, writerRef, Directive{Text: "Your conductor answered.\n" + AnswerDirective(prompt, items, a, "Your conductor", false), Scope: "run"})
 	if err != nil {
 		return "", err

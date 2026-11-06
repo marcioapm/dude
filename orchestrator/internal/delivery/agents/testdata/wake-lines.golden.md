@@ -114,11 +114,11 @@ Your implement Run run_impl asks the person a question (qst_3): read it in its c
 
 ## review-question
 
-Reviewer correctness (run_rev) asks rvq_1, needed from product: Do invoices close in UTC or in the organisation's zone? wwwwwwwwwwwww… Answer it with answer_review_question only if you established the fact, else ask the person.
+Reviewer correctness (run_rev) asks rvq_1, needed from product: Do invoices close in UTC or in the organisation's zone? wwwwwwwwwwwww… Answer it with answer_review_question only if you established the fact, else forward it to the person with forward_review_question.
 
 ## review-question-no-needed-from
 
-Reviewer security (run_rev) asks rvq_2: Who may export? Answer it with answer_review_question only if you established the fact, else ask the person.
+Reviewer security (run_rev) asks rvq_2: Who may export? Answer it with answer_review_question only if you established the fact, else forward it to the person with forward_review_question.
 
 ## review-question-answered
 

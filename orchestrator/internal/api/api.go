@@ -844,7 +844,11 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 			return err
 		}
 		ref := delivery.RunRef{Org: org, ProjectID: ri.ProjectID, TaskID: ri.TaskID, RunID: runID}
-		directiveID, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, items, answered, principalOf(r))
+		directiveID, relay, err := answerQuestion(r.Context(), tx, ref, ri.Role, questionID, prompt, items, answered, principalOf(r))
+		if bad := (delivery.AnswerRefusal{}); errors.As(err, &bad) {
+			// An answer the question it relays refuses: the person's to fix.
+			return fail(http.StatusUnprocessableEntity, "invalid", "%s", bad.Msg)
+		}
 		if err != nil {
 			return err
 		}
@@ -859,6 +863,9 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, org string) erro
 		out = map[string]any{"id": questionID, "runId": runID, "status": "answered", "answer": answered.Text, "answeredAt": answeredAt,
 			"answers": answered.Answers, "attachments": db.NonNil(attached)}
 		payload := answeredPayload(questionID, directiveID, answered)
+		if relay != nil {
+			out["relay"], payload["relay"] = relay, relay
+		}
 		if len(attached) > 0 {
 			payload["attachments"] = attached
 		}
@@ -923,56 +930,70 @@ func answeredPayload(questionID, directiveID string, a delivery.Answered) map[st
 // waits on a person (delivery.EndConductorWait), which any answer may be the
 // last of.
 func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, questionID, prompt string,
-	items []delivery.QuestionItem, a delivery.Answered, p principal) (string, error) {
+	items []delivery.QuestionItem, a delivery.Answered, p principal) (string, *delivery.RelayOutcome, error) {
 	name, err := delivery.PersonName(ctx, tx, p.Person)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	answers, _ := json.Marshal(a.Answers)
 	if _, err := tx.Exec(ctx, `UPDATE questions SET status = 'answered', answer = $2, answers = $5::jsonb, answered_at = now(),
 		answered_by = (SELECT id FROM users WHERE id = $3), answered_by_person = NULLIF($4, '') WHERE id = $1`,
 		questionID, a.Text, p.Actor, p.Person, answers); err != nil {
-		return "", err
-	}
-	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{
-		Text: delivery.AnswerDirective(prompt, items, a, name, false), Scope: "run"})
-	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	var addressee string
 	if err := tx.QueryRow(ctx, `SELECT addressee FROM questions WHERE id=$1`, questionID).Scan(&addressee); err != nil {
-		return "", err
+		return "", nil, err
+	}
+	// The conductor's relay of a writer's question: the person's answer
+	// answers the writer's too, as theirs (design §1.4). A writer's
+	// question answered directly leaves its relays moot: withdrawn.
+	var relay *delivery.RelayOutcome
+	text := delivery.AnswerDirective(prompt, items, a, name, false)
+	if role == delivery.RoleConductor {
+		relay, err = delivery.ForwardRelayTx(ctx, tx, ref, questionID, items, a,
+			delivery.Writer{ActorType: p.ActorType, ActorID: p.Actor, Person: p.Person})
+		if err != nil {
+			return "", nil, err
+		}
+		text += delivery.RelayOutcomeLine(relay)
+	} else if err := delivery.CancelRelaysTx(ctx, tx, ref, questionID, "person"); err != nil {
+		return "", nil, err
+	}
+	directiveID, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: text, Scope: "run"})
+	if err != nil {
+		return "", nil, err
 	}
 	if role != delivery.RoleConductor && addressee == delivery.HolderPerson {
 		// A wait a conductor's question raised is ended only by
 		// EndConductorWait, once its last blocker settles.
 		owned, err := delivery.ConductorOwnsWait(ctx, tx, ref.TaskID)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if !owned {
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID, "awaiting_input", "running",
 				"a person answered the agent"); err != nil {
-				return "", err
+				return "", nil, err
 			}
 		}
 	} else if role != delivery.RoleConductor {
 		// A conductor-addressed writer question never raised a human wait.
 	} else if err := delivery.GateAnswered(ctx, tx, ref.Org, questionID); err != nil {
-		return "", err
+		return "", nil, err
 	} else if err := delivery.EscalationAnswerTx(ctx, tx, ref.Org, ref.TaskID, questionID, p.ActorType, p.Actor, p.Person); err != nil {
 		// The owner picked a choice of the conductor's question about the
 		// escalation: decided, as from the banner.
-		return "", escalationFailure(err)
+		return "", nil, escalationFailure(err)
 	} else if err := delivery.LimitAnswerTx(ctx, tx, ref, questionID, a,
 		delivery.Approver{Person: p.Person, ActorType: p.ActorType, ActorID: p.Actor, Admin: p.Admin}); err != nil {
 		var refused delivery.LimitApprovalError
 		if errors.As(err, &refused) {
-			return "", fail(http.StatusForbidden, "not_admin", "%s", refused.Msg)
+			return "", nil, fail(http.StatusForbidden, "not_admin", "%s", refused.Msg)
 		}
-		return "", err
+		return "", nil, err
 	}
-	return directiveID, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
+	return directiveID, relay, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
 }
 
 // mayAnswer is who may answer a question: the task's owner, as for any; or,
@@ -1302,7 +1323,10 @@ func escalationFailure(err error) error {
 // decideRepositoryRequest: a person approves or denies an agent's request
 // for another repository. Approved, the repository joins the task and
 // the Run is paused, to be resumed with it cloned (the syncer does both);
-// denied, the agent is told. Either way it is recorded.
+// denied, the agent is told. Either way it is recorded. Only the task's
+// owner decides (ownerOnly): an organization admin who is not the owner
+// may not, write access above all (delivery.RepositoryAccessOwnerOnly).
+// The owner may decide one its conductor holds, overriding it.
 func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request, org string) error {
 	id := r.PathValue("id")
 	var body struct {
@@ -1314,79 +1338,32 @@ func (s *Server) decideRepositoryRequest(w http.ResponseWriter, r *http.Request,
 	}
 	var out map[string]any
 	err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
-		var runID string
-		if err := tx.QueryRow(r.Context(), `SELECT run_id FROM repository_requests WHERE id = $1`, id).Scan(&runID); err != nil {
-			if db.IsNotFound(err) {
-				return fail(http.StatusNotFound, "not_found", "repository request %s not found", id)
-			}
+		// Chat → delivery → task → Run → request (the canonical order; a
+		// Run ending takes its row before its requests).
+		req, err := delivery.LockRepositoryRequestTx(r.Context(), tx, id)
+		if err != nil {
+			return escalationFailure(err)
+		}
+		if req == nil {
+			return fail(http.StatusNotFound, "not_found", "repository request %s not found", id)
+		}
+		if err := stillOpen("repository request", id, req.Status, "pending"); err != nil {
 			return err
 		}
-		// The Run first, then the request: the order a Run ending takes them
-		// in (its trigger cancels pending requests), so the two never deadlock.
-		ri, err := loadRun(r.Context(), tx, runID)
+		if err := ownerOnly(r.Context(), tx, req.TaskID, principalOf(r).Person, "decide"); err != nil {
+			return err
+		}
+		p := principalOf(r)
+		decided, ok, err := delivery.DecideRepositoryRequestTx(r.Context(), tx, org, req,
+			delivery.RepositoryDecider{ActorType: p.ActorType, ActorID: p.Actor}, body.Approve, body.Note)
 		if err != nil {
 			return err
 		}
-		var taskID, repoID, repoName, access, status string
-		if err := tx.QueryRow(r.Context(), `SELECT q.task_id, q.repository_id, repo.name, q.access::text, q.status::text
-			FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id WHERE q.id = $1 FOR UPDATE OF q`, id).
-			Scan(&taskID, &repoID, &repoName, &access, &status); err != nil {
-			return err
+		if !ok {
+			return fail(http.StatusConflict, "conflict", "repository request %s is already decided", id)
 		}
-		if err := stillOpen("repository request", id, status, "pending"); err != nil {
-			return err
-		}
-		if err := ownerOnly(r.Context(), tx, taskID, principalOf(r).Person, "decide"); err != nil {
-			return err
-		}
-		decision := "denied"
-		if body.Approve {
-			decision = "approved"
-		}
-		if _, err := tx.Exec(r.Context(), `UPDATE repository_requests SET status = $2::repository_request_status,
-			decided_by = $3, decided_at = now() WHERE id = $1`, id, decision, actor(r)); err != nil {
-			return err
-		}
-		if body.Approve {
-			// The task works on it from now on — every later phase gets it too.
-			if _, err := tx.Exec(r.Context(), `INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
-				VALUES ($1, $2, $3, $4::repository_access) ON CONFLICT (task_id, repository_id) DO NOTHING`,
-				org, taskID, repoID, access); err != nil {
-				return err
-			}
-			// The lux Run has it already (a person took it off the task
-			// and back): nothing to bring, so it is settled now — nothing
-			// would ever clone it.
-			tag, err := tx.Exec(r.Context(), `UPDATE repository_requests q SET status = 'cloned'
-				FROM runs run WHERE q.id = $1 AND run.id = q.run_id AND lux_name($2) = ANY (run.lux_repositories)`, id, repoName)
-			if err != nil {
-				return err
-			}
-			if tag.RowsAffected() > 0 {
-				// Told, as a steer is: that starts the turn it may be waiting
-				// for, and is the input a parked one is resumed with.
-				text := fmt.Sprintf("A person approved your request: %s is already checked out at %s. Carry on.", repoName, phases.RepoPath(repoName))
-				if _, _, err := insertDirective(r.Context(), tx, org, runID, ri, text, "run", "", false); err != nil {
-					return err
-				}
-			}
-		} else {
-			// Told as a steer is, so the agent hears it on its next turn.
-			text := fmt.Sprintf("Your request for %s was declined.", repoName)
-			if n := strings.TrimSpace(body.Note); n != "" {
-				text += " " + n
-			}
-			if _, _, err := insertDirective(r.Context(), tx, org, runID, ri, text, "run", "", false); err != nil {
-				return err
-			}
-		}
-		out = map[string]any{"id": id, "status": decision}
-		// It may have been the last thing the task waited on a person for.
-		if err := delivery.EndConductorWait(r.Context(), tx, org, ri.ProjectID, taskID); err != nil {
-			return err
-		}
-		return humanEvent(r.Context(), tx, org, runID, ri, "repository."+decision, principalOf(r),
-			map[string]any{"requestId": id, "repository": repoName, "access": access, "note": body.Note})
+		out = map[string]any{"id": id, "status": decided.Status}
+		return nil
 	})
 	if err != nil {
 		return err
