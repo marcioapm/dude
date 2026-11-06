@@ -220,7 +220,7 @@ func TestLostConductorReplacementBesideChildLifecycleDoesNotDeadlock(t *testing.
 	batchErr, replacementErr, err := raceLifecycleBatch(w, child, func(ctx context.Context, app *db.DB) error {
 		return app.InOrg(ctx, child.Org, func(tx pgx.Tx) (err error) {
 			next, err = delivery.ReplaceLostConductorTx(ctx, tx, delivery.RunRef{Org: child.Org, ProjectID: child.ProjectID,
-				TaskID: child.TaskID, RunID: "run_parent"}, "lost in race", delivery.Parked)
+				TaskID: child.TaskID, RunID: "run_parent"}, "lost in race")
 			return err
 		})
 	})

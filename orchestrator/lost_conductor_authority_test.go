@@ -68,7 +68,7 @@ func TestTheDecisionDeadlineWaitsForAQuestionOfALostConductor(t *testing.T) {
 		w.must(task, "ask_person", `{"question":"Criterion 1 cannot be measured here. Open the PR so CI measures?","choices":["Yes","No"]}`)
 		q := w.conductorQuestion(task)
 		old := w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
-		// Started (Try again's Reask is for a conductor that ran) and its
+		// Started (Try again's ReaskLostConductorTx is for a conductor that ran) and its
 		// turn over: waiting on the person, or done with the turn when it
 		// did not hold it (translate's idle).
 		w.until("the conductor waiting on the person", func() bool {

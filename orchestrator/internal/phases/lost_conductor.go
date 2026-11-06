@@ -26,7 +26,7 @@ func (s *Syncer) lostConductor(ctx context.Context, r phaseRun, why string) erro
 	}
 	var next string
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) (err error) {
-		next, err = delivery.ReplaceLostConductorTx(ctx, tx, r.ref(), why, delivery.Parked)
+		next, err = delivery.ReplaceLostConductorTx(ctx, tx, r.ref(), why)
 		return err
 	}); err != nil {
 		return err

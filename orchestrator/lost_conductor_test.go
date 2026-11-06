@@ -235,7 +235,7 @@ func TestHistoricalAnswerAndUnrelatedChatAreNotAnUnreadAnswer(t *testing.T) {
 	}
 	var next string
 	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
-		next, err = delivery.ReplaceLostConductorTx(context.Background(), tx, delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: old}, "probe", delivery.Parked)
+		next, err = delivery.ReplaceLostConductorTx(context.Background(), tx, delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: old}, "probe")
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -647,7 +647,7 @@ func TestARunReplacedAsLostIsNotReplacedTwice(t *testing.T) {
 	var again string
 	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
 		again, err = delivery.ReplaceLostConductorTx(context.Background(), tx,
-			delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: old}, "", delivery.Parked)
+			delivery.RunRef{Org: w.org, ProjectID: w.project, TaskID: task, RunID: old}, "")
 		return err
 	}); err != nil {
 		t.Fatal(err)

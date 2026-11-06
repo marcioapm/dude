@@ -25,53 +25,25 @@ const (
 	QuestionRunFailed = "run_failed"
 )
 
-// LostMode is how ReplaceLostConductorTx replaces a conductor.
-type LostMode int
-
-const (
-	// Parked: lux lost a live conductor that held nothing in flight and
-	// waited on a person. It ends failed, and a placeholder takes its
-	// slot and its questions, started only once the person answers.
-	Parked LostMode = iota
-	// Reask: Try again on a failed conductor with nothing unread. A fresh
-	// conductor, briefed on the failure, with the question lost with it
-	// asked again by dude.
-	Reask
-)
-
 // LostByLux says a conductor's failure reason is lux no longer having its
 // Run: the question.closed it settles its questions with says "lost".
 func LostByLux(reason string) bool {
 	return strings.Contains(reason, "lux no longer has")
 }
 
-// ReplaceLostConductorTx replaces the task's conductor ref. In Parked
-// mode, lux lost it while it held nothing in flight: it is ended failed
-// with lux_lost_at, and a replacement is inserted in its slot paused for
-// the person with no lux Run (lux_run_id NULL, no prompt yet: written when
-// the person's answer starts it, LostBriefing). Its open questions, waits
-// and unread input move to the replacement, so the question stays open and
-// its answer reaches it. Returns "" when it cannot be replaced (not a live
-// conductor, publishing, halted, nothing a person is asked): the caller
-// fails it as before. The caller holds no lock.
-//
-// In Reask mode (RetryConductor; the caller holds the Chat lock) ref
-// already failed: a fresh conductor is started pending, briefed on the
-// failure, and the person question lost with ref is asked again on it by
-// dude (a gate question only at the heads it was asked at).
-func ReplaceLostConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string, mode LostMode) (string, error) {
-	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
-		return "", err
-	}
-	projectID, d, err := LockEscalationTx(ctx, tx, ref.TaskID)
+// ReplaceLostConductorTx replaces the task's conductor ref, which lux lost
+// while it held nothing in flight and waited on a person: it is ended
+// failed with lux_lost_at, and a replacement is inserted in its slot paused
+// for the person with no lux Run (lux_run_id NULL, no prompt yet: written
+// when the person's answer starts it, LostBriefing). Its open questions,
+// waits and unread input move to the replacement, so the question stays
+// open and its answer reaches it. Returns "" when it cannot be replaced (not
+// a live conductor, publishing, halted, nothing a person is asked): the
+// caller fails it as before. The caller holds no lock.
+func ReplaceLostConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string) (string, error) {
+	d, err := lockLostTx(ctx, tx, &ref)
 	if err != nil {
 		return "", err
-	}
-	if ref.ProjectID == "" {
-		ref.ProjectID = projectID
-	}
-	if mode == Reask {
-		return reaskTx(ctx, tx, ref, d)
 	}
 	var eligible bool
 	var startedBy *string
@@ -248,9 +220,31 @@ func LostQuestionTx(ctx context.Context, tx pgx.Tx, runID string) (*LostQuestion
 	return &q, nil
 }
 
-// reaskTx is ReplaceLostConductorTx's Reask: a fresh conductor for the
-// failed ref, pending, asked again what was lost with ref.
-func reaskTx(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery) (string, error) {
+// lockLostTx takes the locks replacing a conductor needs, Chat then the
+// delivery (LockEscalationTx), and fills ref's project when it has none.
+func lockLostTx(ctx context.Context, tx pgx.Tx, ref *RunRef) (*Delivery, error) {
+	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
+		return nil, err
+	}
+	projectID, d, err := LockEscalationTx(ctx, tx, ref.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if ref.ProjectID == "" {
+		ref.ProjectID = projectID
+	}
+	return d, nil
+}
+
+// ReaskLostConductorTx is Try again on the failed conductor ref with nothing
+// unread (RetryConductor; the caller holds the Chat lock): a fresh conductor
+// is started pending, briefed on the failure, and the person question lost
+// with ref is asked again on it by dude (reask).
+func ReaskLostConductorTx(ctx context.Context, tx pgx.Tx, ref RunRef) (string, error) {
+	d, err := lockLostTx(ctx, tx, &ref)
+	if err != nil {
+		return "", err
+	}
 	var failedWith string
 	var baseRefs map[string]string
 	var startedBy *string

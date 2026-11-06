@@ -244,8 +244,8 @@ func RetryConductor(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 			return next, err
 		}
 		// Nothing unread: a fresh conductor with the conversation so far,
-		// asked again what was lost with it (ReplaceLostConductorTx).
-		return ReplaceLostConductorTx(ctx, tx, failed, "", Reask)
+		// asked again what was lost with it (ReaskLostConductorTx).
+		return ReaskLostConductorTx(ctx, tx, failed)
 	}
 	// A conductor dude woke whose wake note the syncer already put back
 	// (BriefingUnheardTx): its reasons wake the next conductor, which a
