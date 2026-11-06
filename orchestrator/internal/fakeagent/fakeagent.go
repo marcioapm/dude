@@ -544,11 +544,19 @@ func DefaultChecksCall(call [2]string) bool {
 const checksDefaultsReason = "Deliver's defaults"
 
 // failedAtBase says a checks wake's question about a reported failure
-// carries dude's recording of the command failing at the task's base: a
-// non-zero exit (FailedAtBase), not the writer's own word that it did.
+// carries dude's recording of the command failing at the task's base: an
+// exit of 1 to 125 (FailedAtBase), not the writer's own word that it did.
+// 126 and up is the command not run (not executable, not found, git's
+// fatal 128) or stopped, never a failure there; any other reading dude
+// gives (unclear, did not run, a status with no exit) does not say exit.
 func failedAtBase(question string) bool {
 	_, after, ok := strings.Cut(question, FailedAtBase)
-	return ok && !strings.HasPrefix(after, "0)")
+	if !ok {
+		return false
+	}
+	code, _, ok := strings.Cut(after, ")")
+	n, err := strconv.Atoi(code)
+	return ok && err == nil && n >= 1 && n <= 125
 }
 
 // ManualChecks is a test script's instruction to keep checks decisions
