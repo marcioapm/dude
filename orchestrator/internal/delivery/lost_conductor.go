@@ -449,7 +449,6 @@ type lostBrief struct {
 	Choices      []string
 	Reasked      string
 	NotReasked   string
-	Answered     bool
 }
 
 // LostBriefing is the briefing of the replacement conductor ref of a Run
@@ -464,13 +463,12 @@ func LostBriefing(ctx context.Context, tx pgx.Tx, ref RunRef, oldRunID string) (
 		return "", err
 	}
 	var items []QuestionItem
-	var status string
-	err = tx.QueryRow(ctx, `SELECT q.prompt, q.items, q.status::text FROM questions q
+	err = tx.QueryRow(ctx, `SELECT q.prompt, q.items FROM questions q
 		WHERE q.run_id IN ($1, $2) AND q.addressee = 'person' ORDER BY q.asked_at DESC, q.id DESC LIMIT 1`,
-		ref.RunID, oldRunID).Scan(&l.Prompt, &items, &status)
+		ref.RunID, oldRunID).Scan(&l.Prompt, &items)
 	if err != nil && !db.IsNotFound(err) {
 		return "", err
 	}
-	l.Choices, l.Answered = AskOptions(items), status == "answered"
+	l.Choices = AskOptions(items)
 	return briefing(ctx, tx, ref.TaskID, ref.RunID, "", render(lostRunTmpl, l), rebrief)
 }
