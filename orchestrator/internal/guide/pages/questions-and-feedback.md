@@ -1,12 +1,12 @@
 ---
 title: Questions and feedback
-covers: [tool:ask_conductor, tool:answer_question, tool:ask_person, tool:request_repository, tool:feedback, tool:feedback_reply, tool:feedback_resolve, tool:dismiss_finding, tool:answer_review_question]
+covers: [tool:ask_conductor, tool:answer_question, tool:ask_person, tool:request_repository, tool:feedback, tool:feedback_reply, tool:feedback_resolve, tool:dismiss_finding, tool:answer_review_question, tool:forward_review_question, tool:decide_repository_request]
 ---
 Agents ask you things, and you tell agents things. This page covers answering an agent's question, deciding a repository request, leaving feedback on a task, accepting review findings, and answering a reviewer's question.
 
 ## When an agent asks you a question
 
-Writers with the grant use `ask_conductor` first. Their task keeps running while the asking Run waits; no human question notification is emitted. The conductor uses `answer_question` to answer a current writer once, with its Run recorded as the author. When there is no available conductor at ask time, dude uses the existing person-question path. If the conductor needs the owner, it asks with `ask_person`, waits, then answers the writer itself. Automatic relay forwarding and deadline handover for these questions are not available yet.
+Writers with the grant use `ask_conductor` first. Their task keeps running while the asking Run waits; no human question notification is emitted. The conductor uses `answer_question` to answer a current writer once, with its Run recorded as the author. When there is no available conductor at ask time, dude uses the existing person-question path. If only the owner can decide, the conductor asks them with `ask_person` and `relay` set to the writer's question: your answer goes to the writer directly, as yours, and the conductor is told. A question the conductor does not answer within ten minutes, or cannot answer because it failed or has no model, is handed to you, and shows under Needs you.
 
 An agent that needs a decision only a person can make asks with `ask_person`. It can ask up to 4 questions at once, each with up to 6 suggested answers; you can always answer in your own words too. Its turn ends, and the Run is **waiting** until you answer.
 
@@ -20,7 +20,9 @@ A question is cancelled when its Run ends. Answering a cancelled question says s
 
 An agent can ask for another of the project's repositories with `request_repository` — to read code its work depends on, or (an implementer) to change it too. A repository it changes gets its own pull request.
 
-Only the task's owner can approve or decline. The agent carries on meanwhile if it can. If it cannot go on without the repository, it waits, and your decision resumes it.
+Only the task's owner can approve or decline: an organization admin who is not the owner cannot. The agent carries on meanwhile if it can. If it cannot go on without the repository, it waits, and the decision resumes it.
+
+Under the conductor, the request goes to the conductor first, and you are not notified. With `decide_repository_request` the conductor can decline it, approve **read** access to a repository of the same project, or forward it to you. Write access, or a repository of another project, is always the owner's to approve: the conductor forwards those. If the conductor does not decide within 10 minutes, fails, or has no model, dude gives the request to you. You can decide it yourself at any time.
 
 ## Feedback on a task
 
@@ -65,7 +67,7 @@ The task's owner answers it there, or withdraws it with a reason when it no long
 
 **While a reviewer's question is open, dude does not open the pull request**, and does not move a fix onto an open pull request. Review and fixing of the other findings go on. The task waits on you until every question of the attempt is answered or withdrawn.
 
-Under the conductor, the conductor is told of each question. It answers with `answer_review_question` only when it has established the fact itself; otherwise it asks you. Its answer is recorded as the conductor's, not as your decision.
+Under the conductor, the question goes to the conductor first: the task keeps running, shows as with the conductor, and you are not notified. The conductor answers with `answer_review_question` only when it has established the fact itself, or withdraws it. Otherwise it gives the question to you with `forward_review_question`, and the task waits on you. Its answer is recorded as the conductor's, not as your decision. If the conductor does not settle the question within 10 minutes, fails, or has no model, dude gives it to you. You can answer it yourself at any time.
 
 ## Escalations
 

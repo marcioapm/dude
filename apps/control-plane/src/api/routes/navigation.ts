@@ -270,12 +270,9 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
              -- Several questions at once read as how many and their headers.
              -- A person's question only: one for its conductor
              -- (addressee 'conductor') asks nothing of a person.
-             COALESCE(
-               asked.person,
-               (SELECT CASE q.access WHEN 'write' THEN 'Change ' ELSE 'Read ' END || repo.name || '?'
-                FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
-                WHERE q.run_id = ranked.id AND q.status = 'pending' ORDER BY q.created_at DESC LIMIT 1)
-             ) AS question,
+             -- A repository request its conductor holds (addressee
+             -- 'conductor') asks nothing of a person either.
+             COALESCE(asked.person, requested.person) AS question,
              -- The peer task its open wait is on: it waits on another agent, not on a person.
              (SELECT 'Waiting on ' || wp.key_prefix || '-' || wt.number
               FROM peer_waits w JOIN peer_messages m ON m.id = w.message_id
@@ -287,7 +284,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
              -- on its conductor's open question: the conductor owes it.
              -- A person's own pause clears dude_pause and stays theirs.
              (ranked.status = 'paused' AND ranked.dude_pause = 'person'
-              AND COALESCE(asked.conductor, false)) AS "conductorWait"
+              AND (COALESCE(asked.conductor, false) OR COALESCE(requested.conductor, false))) AS "conductorWait"
       FROM (
         SELECT r.id, r.task_id AS "taskId", r.attempt, r.status, r.phase,
                r.role, r.category, r.created_at, r.dude_pause,
@@ -310,6 +307,16 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
                bool_or(q.addressee = 'conductor') AS conductor
         FROM questions q WHERE q.run_id = ranked.id AND q.status = 'open'
       ) asked ON true
+      -- Its pending repository requests, read once the same way (one probe,
+      -- as the scalar subquery it replaces): the newest a person's, and
+      -- whether one is its conductor's.
+      LEFT JOIN LATERAL (
+        SELECT (array_agg(CASE q.access WHEN 'write' THEN 'Change ' ELSE 'Read ' END || repo.name || '?' ORDER BY q.created_at DESC)
+                  FILTER (WHERE q.addressee = 'person'))[1] AS person,
+               bool_or(q.addressee = 'conductor') AS conductor
+        FROM repository_requests q JOIN repositories repo ON repo.id = q.repository_id
+        WHERE q.run_id = ranked.id AND q.status = 'pending'
+      ) requested ON true
       WHERE rank <= ${ATTEMPTS_PER_TASK}
       -- The task's conductor first in its attempt, as in its Sessions.
       ORDER BY "taskId", attempt, (role = 'conductor' AND phase IS NULL) DESC, created_at`) as RunRow[];
@@ -342,6 +349,20 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
       LEFT JOIN merged fm ON fm.task_id = f.id
       LEFT JOIN merged tm ON tm.task_id = t.id
       ORDER BY r.created_at`) as EdgeRow[];
+    // What its conductor holds of a person's asks (migration 248's partial
+    // indexes): a reviewer's question or a repository request dude gave
+    // the conductor first. One grouped read, not a probe per task. A
+    // reviewer's question only of the current attempt of a live delivery
+    // (as the handover reads it): a stopped task's is no one's to hear now.
+    const conductorHeld = (await sql`
+      SELECT task_id AS "taskId", bool_or(kind = 'review_question') AS question, bool_or(kind = 'repository_request') AS request FROM (
+        SELECT q.task_id, 'review_question' AS kind FROM review_questions q WHERE q.status = 'open' AND q.addressee = 'conductor'
+          AND EXISTS (SELECT 1 FROM runs ar WHERE ar.id = q.run_id AND ar.attempt = task_attempt(q.task_id))
+          AND EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = q.task_id AND w.workflow_type = 'task.delivery'
+            AND w.status IN ('running', 'waiting'))
+        UNION ALL
+        SELECT task_id, 'repository_request' FROM repository_requests WHERE status = 'pending' AND addressee = 'conductor'
+      ) held GROUP BY task_id`) as Array<{ taskId: string; question: boolean; request: boolean }>;
     const autoStarts = (await sql`
       SELECT a.task_id AS "taskId", a.how, a.set_at AS at, person_ref(p) AS by
       FROM task_auto_starts a JOIN people p ON p.id = a.set_by_person`) as Array<{ taskId: string; how: "deliver" | "talk"; at: string; by: PersonRef }>;
@@ -352,6 +373,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     const archivedByProject = new Map(archivedCounts.map((a) => [a.projectId, a.n]));
     const relations = relationsByTask(edges);
     const autoByTask = new Map(autoStarts.map((a) => [a.taskId, a]));
+    const heldByTask = new Map(conductorHeld.map((h) => [h.taskId, h]));
     const runsByTask = groupBy(runs, (r) => r.taskId);
     const tasksByEpic = groupBy(tasks, (w) => w.epicId);
     const tasksByProject = groupBy(
@@ -368,6 +390,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
       const blockedBy = notStarted ? (rel?.blockedBy ?? []).filter((b) => b.open).map((b) => b.task) : [];
       const blocks = (rel?.blocks ?? []).filter((b) => b.open).map((b) => b.task);
       const auto = autoByTask.get(w.id);
+      const held = heldByTask.get(w.id);
       return {
         id: w.id,
         key: w.key,
@@ -389,6 +412,8 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         conductorLive: w.conductorLive,
         // Held before its pull request for its owner's review: the card's "Ready for review".
         ...(w.heldForReview ? { heldForReview: true } : {}),
+        // An ask its conductor holds: "With the conductor", never Needs you.
+        ...(held ? { conductorHeld: held.question ? "review_question" : "repository_request" } : {}),
         blockedBy,
         // What it holds up: not-started dependants, while it has not merged.
         blocks: w.merged ? [] : blocks,

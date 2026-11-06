@@ -20,7 +20,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import relay_writer_question, finish_question_relay, ApiClient, ask_person_about_escalation, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
+from helpers import relay_writer_question, forward_repository_request, finish_question_relay, ApiClient, ask_person_about_escalation, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -1299,6 +1299,8 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
                            timeout=30, message="no implementer")
     wait_until(lambda: client.get("/v1/repository-requests", params={"runId": implement["id"]}).json()["repositoryRequests"],
                timeout=30, message="the agent never asked")
+    # Conducted: the request is its conductor's first; the conductor gives it to the person.
+    forward_repository_request(client, item["id"], implement["id"])
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
@@ -1465,12 +1467,22 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
 
     sign_in(page, web_url, org["api_key"])
     page.goto(f"{web_url}#/session/{implement['id']}")
-    expect(page.get_by_test_id("chat-notice").and_(page.locator('[data-kind="parked"]'))).to_contain_text("Parked while it waits for you")
+    parked = page.get_by_test_id("chat-notice").and_(page.locator('[data-kind="parked"]'))
+    # Conducted: its conductor holds the request first, and the chat says so — not "decide its request above".
+    expect(parked).to_contain_text("Parked while it waits for the conductor")
+    expect(page.get_by_placeholder("Waiting for the conductor to decide its request.")).to_be_disabled()
+    expect(page.get_by_placeholder("decide its request above")).to_have_count(0)
+    expect(page.get_by_test_id("repository-request")).to_have_count(0)
+    # The conductor forwards it: now it waits for you, with the card to decide.
+    forward_repository_request(client, item["id"], implement["id"])
+    expect(parked).to_contain_text("Parked while it waits for you")
     # No question to answer: the composer says what does resume it.
     expect(page.get_by_placeholder("decide its request above")).to_be_visible()
     page.get_by_test_id("repository-request").get_by_role("button", name="Approve").click()
     wait_until(lambda: client.get_run(implement["id"])["status"] == "completed",
                timeout=30, message="the approval did not resume the parked agent")
+    unparked = [e for e in client.events(runId=implement["id"]) if e["eventType"] == "run.unparked"]
+    assert len(unparked) == 1, unparked
     assert console_errors == []
 
 
@@ -1560,6 +1572,9 @@ def test_everything_waiting_on_you_is_in_one_place(
     client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"implementer": "fake/wait"})})
     requesting = client.create_task(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
     client.post(f"/v1/tasks/{requesting['id']}/deliver")
+    # Its request is its conductor's first (PR4b): not open for a person
+    # until the conductor forwards it.
+    forward_repository_request(client, requesting["id"])
     wait_until(lambda: client.get("/v1/repository-requests").json()["repositoryRequests"], timeout=30, message="no request")
 
     sign_in(page, web_url, org["api_key"])

@@ -49,7 +49,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, CONDUCTOR_WAIT_WORDS, PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type HumanTurn, type QuestionTurn, type Turn,
+  NOT_STARTED, NOT_STARTED_RETRIED, conductorWaitComposer, PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type HumanTurn, type QuestionTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries } from "../childThreads.tsx";
@@ -847,7 +847,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                   disabled={(run.status === "paused" && !conversation.openQuestion) ||
                     (conversation.openQuestion !== null && waitingOn !== undefined)}
                   disabledReason={
-                    run.dudePause === "person" && conversation.conductorQuestionId ? CONDUCTOR_WAIT_WORDS.composer
+                    run.dudePause === "person" && conductorWaitComposer(conversation) ? conductorWaitComposer(conversation)!
                       : waitingOn && (conversation.openQuestion || run.dudePause === "person")
                       ? `Waiting for ${waitingOn} to ${!conversation.openQuestion && conversation.openRequest ? "decide" : "answer"}.`
                       : run.dudePause ? PAUSE_WORDS[run.dudePause].composer
