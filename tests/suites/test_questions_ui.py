@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, create_api_key, create_organization, query, relay_writer_question, sign_in, wait_until, webhook_secret
+from helpers import ApiClient, create_api_key, create_organization, forward_repository_request, query, relay_writer_question, sign_in, wait_until, webhook_secret
 from env import TestEnvironment as Environment
 from fake_github import FakeGitHub
 from suites.test_delivery import (_stopped_epoch, _timed_resume, _resume_row_in_order,
@@ -314,7 +314,7 @@ def deadline_stack(tmp_path):
             "reviewer": "fake/scripted", "simplifier": "fake/scripted"}),
             deliveryPolicy={"requiredReviewers": ["correctness"], "test": False},
             repositories=[{"name": "greeter", "url": forge.clone_url, "defaultBranch": "main"}])
-        yield stack, api, api_key, project, f"https://localhost:{server.server_port}/push", pushes
+        yield stack, api, api_key, project, f"https://localhost:{server.server_port}/push", pushes, forge
     finally:
         forge.stop()
         stack.teardown()
@@ -408,17 +408,22 @@ def test_linked_writer_relay_has_one_owner_card_and_one_human_resume(
     assert console_errors == []
 
 
-@pytest.mark.ui
-def test_writer_deadline_hands_original_question_to_owner_and_pushes_once(page: Page, deadline_stack, console_errors: list):
-    stack, client, api_key, project, endpoint, pushes = deadline_stack
-    web_url = stack.start_web()
-    sign_in(page, web_url, api_key)
-    keys = page.evaluate("""async () => {
+def _push_keys(page: Page) -> dict:
+    """Valid browser-generated Web Push keys, from the page's own crypto."""
+    return page.evaluate("""async () => {
         const pair = await crypto.subtle.generateKey({name:'ECDH', namedCurve:'P-256'}, true, ['deriveBits']);
         const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
         const enc = a => btoa(String.fromCharCode(...a)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
         return {p256dh: enc(publicKey), auth: enc(crypto.getRandomValues(new Uint8Array(16)))};
     }""")
+
+
+@pytest.mark.ui
+def test_writer_deadline_hands_original_question_to_owner_and_pushes_once(page: Page, deadline_stack, console_errors: list):
+    stack, client, api_key, project, endpoint, pushes, _forge = deadline_stack
+    web_url = stack.start_web()
+    sign_in(page, web_url, api_key)
+    keys = _push_keys(page)
     registered = client.post("/v1/push/subscriptions", {"endpoint": endpoint, "keys": keys})
     assert registered.status_code == 201, registered.text
     task, run, routed = _writer_asks(client, project, stack.owner_dsn)
@@ -445,4 +450,107 @@ def test_writer_deadline_hands_original_question_to_owner_and_pushes_once(page: 
     # Later sweeps occur during the resume: no duplicate handover or push.
     assert len(pushes) == 1
     assert len([e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "question.asked"]) == 1
+    assert console_errors == []
+
+
+def _requesting(client: ApiClient, project: dict, forge, title: str) -> tuple[dict, dict, dict]:
+    """A conducted task whose implementer (fake/wait) asks to read the
+    project's "web" repository and parks on it: the task, the writer Run and
+    its repository.routed payload. The request is its conductor's (PR4b A11):
+    the task waits on nobody, no repository.requested."""
+    web = forge.add_repository("web")
+    added = client.post(f"/v1/projects/{project['id']}/repositories", {"name": "web", "url": web.clone_url})
+    assert added.status_code in (200, 201), added.text
+    target = next(r for r in client.get(f"/v1/projects/{project['id']}").json()["repositories"] if r["name"] != "web")
+    models = {**project["agentModels"], **client.on_models({"conductor": "fake/scripted", "implementer": "fake/wait"})}
+    assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
+    task = client.create_task(project["id"], title, repositories=[{"id": target["id"]}])
+    started = client.post(f"/v1/tasks/{task['id']}/chat", {"text": 'tool: start_phase {"phase":"implement"}'})
+    assert started.status_code in (200, 201), started.text
+    routed = wait_until(lambda: next((e for e in client.events(taskId=task["id"], limit=1000)
+                                      if e["eventType"] == "repository.routed"), None), timeout=60,
+                        message="the writer's request never reached its conductor")
+    assert routed["payload"]["addressee"] == "conductor" and routed["payload"]["repository"] == "web", routed
+    writer = wait_until(lambda: (r if (r := client.get_run(routed["runId"]))["status"] == "paused"
+                                 and r.get("dudePause") == "person" else None),
+                        timeout=30, message="the writer never parked on its request")
+    assert writer["phase"] == "implement", writer
+    assert not [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "repository.requested"]
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] != "awaiting_input"
+    return task, writer, routed["payload"]
+
+
+def _approved_once(client: ApiClient, owner_dsn: str, task: dict, writer: dict, request_id: str) -> None:
+    """The owner's read approval brought the repository and resumed the writer exactly once."""
+    wait_until(lambda: client.get_run(writer["id"])["status"] == "completed",
+               timeout=60, message="the approval did not resume the parked writer")
+    events = client.events(runId=writer["id"], limit=1000)
+    approved = [e for e in events if e["eventType"] == "repository.approved" and e["payload"].get("requestId") == request_id]
+    assert len(approved) == 1 and approved[0]["payload"].get("by") == "person", approved
+    assert len([e for e in events if e["eventType"] == "run.unparked"]) == 1
+    assert query(owner_dsn, "SELECT status, addressee FROM repository_requests WHERE id = %s", (request_id,)) == [
+        {"status": "cloned", "addressee": "person"}]
+    assert query(owner_dsn, "SELECT count(*) AS n FROM task_repositories tr JOIN repositories r ON r.id = tr.repository_id "
+                 "WHERE tr.task_id = %s AND r.name = 'web' AND tr.access = 'read'", (task["id"],)) == [{"n": 1}]
+
+
+@pytest.mark.ui
+def test_a_repository_request_the_conductor_forwards_is_approved_in_needs_you_and_resumes_once(
+    page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, fake_github, owner_dsn: str, console_errors: list
+):
+    task, writer, request = _requesting(client, forge_project, fake_github, "Needs the client, conductor first")
+    # The conductor's: not in Needs you, and the writer says it waits for its conductor.
+    _held_in_browser(page, web_url, org["api_key"], task)
+    page.goto(f"{web_url}#/session/{writer['id']}")
+    parked = page.get_by_test_id("chat-notice").and_(page.locator('[data-kind="parked"]'))
+    expect(parked).to_contain_text("Parked while it waits for the conductor", timeout=30_000)
+    expect(page.get_by_placeholder("Waiting for the conductor to decide its request.")).to_be_disabled()
+    expect(page.get_by_test_id("repository-request")).to_have_count(0)
+
+    forward_repository_request(client, task["id"], writer["id"])
+    page.goto(f"{web_url}#/waiting")
+    rows = page.get_by_test_id("inbox").get_by_role("listitem")
+    expect(rows).to_have_count(1, timeout=30_000)
+    expect(rows).to_contain_text("Read web?")
+    expect(page.locator(f'[data-nav-key="task:{task["id"]}"]')).to_have_attribute("data-triage", "needs_you")
+    rows.get_by_role("button", name="Answer", exact=True).click()
+    card = page.get_by_test_id("repository-request")
+    expect(card).to_contain_text("Read web")
+    expect(parked).to_contain_text("Parked while it waits for you")
+    card.get_by_role("button", name="Approve").click()
+    _approved_once(client, owner_dsn, task, writer, request["requestId"])
+    page.goto(f"{web_url}#/waiting")
+    expect(page.get_by_test_id("inbox").get_by_role("listitem")).to_have_count(0)
+    assert console_errors == []
+
+
+@pytest.mark.ui
+def test_a_repository_request_the_conductor_leaves_is_handed_over_and_pushes_once(page: Page, deadline_stack, console_errors: list):
+    stack, client, api_key, project, endpoint, pushes, forge = deadline_stack
+    web_url = stack.start_web()
+    sign_in(page, web_url, api_key)
+    registered = client.post("/v1/push/subscriptions", {"endpoint": endpoint, "keys": _push_keys(page)})
+    assert registered.status_code == 201, registered.text
+    task, writer, request = _requesting(client, project, forge, "Needs the client, conductor silent")
+    _held_in_browser(page, web_url, api_key, task)
+    assert pushes == []
+    # The scripted conductor does nothing: the runtime's sweep hands it over after the 30s wait.
+    wait_until(lambda: query(stack.owner_dsn, "SELECT id FROM repository_requests WHERE id = %s AND addressee = 'person'",
+                             (request["requestId"],)), timeout=60, message="the sweep never handed the request to the person")
+    expect(page.locator(f'[data-nav-key="task:{task["id"]}"]')).to_have_attribute("data-triage", "needs_you", timeout=30_000)
+    rows = page.get_by_test_id("inbox").get_by_role("listitem")
+    expect(rows).to_have_count(1, timeout=30_000)
+    expect(rows).to_contain_text("Read web?")
+    wait_until(lambda: pushes, timeout=15, message="no actual HTTP push arrived")
+    assert len(pushes) == 1 and pushes[0]["body"] and pushes[0]["authorization"].startswith("vapid ")
+    requested = [e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "repository.requested"]
+    assert len(requested) == 1 and requested[0]["runId"] == writer["id"], requested
+    assert requested[0]["payload"]["requestId"] == request["requestId"]
+    assert requested[0]["payload"]["handedOverFrom"] == "conductor", requested
+    rows.get_by_role("button", name="Answer", exact=True).click()
+    page.get_by_test_id("repository-request").get_by_role("button", name="Approve").click()
+    _approved_once(client, stack.owner_dsn, task, writer, request["requestId"])
+    # Later sweeps ran during the resume: no second handover or push.
+    assert len(pushes) == 1
+    assert len([e for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "repository.requested"]) == 1
     assert console_errors == []
