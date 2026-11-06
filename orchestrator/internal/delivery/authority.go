@@ -58,6 +58,51 @@ type OpenAuthority struct {
 	// Commits since the answer that keep it: each from a source in
 	// AuthorityCommitSources, in order.
 	Moves []AuthorityMove `json:"moves,omitempty"`
+	// Voided: once found not to hold, or overtaken by the person being
+	// asked again or answering since, it never holds again; only a new
+	// answer of the person's gives a new authority.
+	Voided *AuthorityVoid `json:"voided,omitempty"`
+}
+
+// AuthorityVoid is why and when an authority stopped holding, for good.
+type AuthorityVoid struct {
+	Why string    `json:"why"`
+	At  time.Time `json:"at"`
+}
+
+// EvOpenAuthorityVoided: a person's open answer no longer authorizes the
+// opening, for good. Payload: {questionId, why}. A refused decide records
+// it after its call rolls back (Refusal.Event), and the void with it
+// (VoidOpenAuthorityTx).
+const EvOpenAuthorityVoided = "conductor.open_authority_voided"
+
+// VoidOpenAuthorityTx latches the authority given by questionID as void
+// on the task's deliveries (any, when questionID is ""), with why; an
+// authority void already, or given by another answer, is left as it is.
+// It returns the question of the authority it voided, "" for none.
+func VoidOpenAuthorityTx(ctx context.Context, tx pgx.Tx, taskID, questionID, why string) (string, error) {
+	raw, err := json.Marshal(AuthorityVoid{Why: why, At: time.Now().UTC().Truncate(time.Microsecond)})
+	if err != nil {
+		return "", err
+	}
+	rows, err := tx.Query(ctx, `UPDATE workflow_runs SET state = jsonb_set(state, '{openAuthority,voided}', $3::jsonb)
+		WHERE task_id = $1 AND jsonb_typeof(state->'openAuthority') = 'object' AND NOT state->'openAuthority' ? 'voided'
+		AND ($2 = '' OR state->'openAuthority'->>'questionId' = $2) RETURNING state->'openAuthority'->>'questionId'`, taskID, questionID, raw)
+	if err != nil {
+		return "", err
+	}
+	voided, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil || len(voided) == 0 {
+		return "", err
+	}
+	return voided[0], nil
+}
+
+// voidRefusal is refusal msg, recording as it rolls back that a's
+// authority is void for why (EvOpenAuthorityVoided).
+func voidRefusal(msg string, a *OpenAuthority, why string) error {
+	return Refusal{Msg: msg, Event: &RefusalEvent{Type: EvOpenAuthorityVoided,
+		Payload: map[string]any{"questionId": a.QuestionID, "why": why}}}
 }
 
 // AuthorityMove is a commit since the answer that does not void it: the
@@ -93,6 +138,8 @@ func OpenAuthorityValid(a *OpenAuthority, now AuthorityFacts) (bool, string) {
 	switch {
 	case a == nil:
 		return false, "no answer is recorded"
+	case a.Voided != nil:
+		return false, a.Voided.Why
 	case a.Choice != ChoiceOpen && a.Choice != ChoiceDraft:
 		return false, fmt.Sprintf("the answer chose %q, not open or draft", a.Choice)
 	case a.WorkflowID != now.WorkflowID:
@@ -154,6 +201,57 @@ func authorityFactsTx(ctx context.Context, tx pgx.Tx, wfID string, st *State) (A
 	return f, err
 }
 
+// authorityOpens is open_pull_request's fallback once the gate's question
+// gave no Open or Draft (gateErr, its refusal): the delivery's authority
+// opens it — draft or not, and the answer cited — only while it holds and
+// nothing newer of the person's overrides it. The person's newest answer
+// wins, and nothing opens while they are being asked: a gate question
+// asked since the answer leaves gateErr as it is (and the authority void);
+// an open question of the conductor's to the person is waited for. An
+// authority found not to hold is void for good, recorded as the refused
+// call rolls back (EvOpenAuthorityVoided). err is the refusal; fail a
+// failure to read.
+func authorityOpens(ctx context.Context, tx pgx.Tx, ref RunRef, wfID string, st *State, gateErr error) (draft bool, cited *CitedAnswer, err, fail error) {
+	a := st.OpenAuthority
+	if a == nil {
+		return false, nil, gateErr, nil
+	}
+	var gateSince, asking bool
+	if fail = tx.QueryRow(ctx, `SELECT
+			EXISTS (SELECT 1 FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND asked_at >= $2),
+			EXISTS (SELECT 1 FROM questions q JOIN runs r ON r.id = q.run_id AND r.role = 'conductor'
+				WHERE q.task_id = $1 AND q.addressee = 'person' AND q.status = 'open')`,
+		st.TaskID, a.At).Scan(&gateSince, &asking); fail != nil {
+		return false, nil, nil, fail
+	}
+	switch {
+	case gateSince:
+		// The gate's question, asked since (which voided it, askGate):
+		// its answer, or its wait, is the person's newest word.
+		return false, nil, gateErr, nil
+	case a.Voided != nil:
+		return false, nil, refusef(rAnswerNoLongerAuthorizes, a.QuestionID, a.Voided.Why), nil
+	case asking:
+		return false, nil, refuseText(rYouAlreadyHaveQuestionWaitingFor), nil
+	}
+	facts, fail := authorityFactsTx(ctx, tx, wfID, st)
+	if fail != nil {
+		return false, nil, nil, fail
+	}
+	if ok, why := OpenAuthorityValid(a, facts); !ok {
+		return false, nil, voidRefusal(fmt.Sprintf(rAnswerNoLongerAuthorizes, a.QuestionID, why), a, why), nil
+	}
+	return a.Choice == ChoiceDraft, &CitedAnswer{QuestionID: a.QuestionID, AnsweredBy: a.AnsweredBy, Choice: a.Choice}, nil, nil
+}
+
+// Why an authority is void, besides OpenAuthorityValid's reasons: the
+// person was asked the gate's question since, or answered the conductor
+// otherwise since.
+const (
+	authorityAskedAgain    = "the person was asked again since"
+	authorityAnsweredLater = "the person answered the conductor otherwise since"
+)
+
 // openAuthorityTx is the delivery's authority to open now: the recorded
 // one, and whether it holds (and why not).
 func openAuthorityTx(ctx context.Context, tx pgx.Tx, wfID string, st *State) (*OpenAuthority, bool, string, error) {
@@ -190,15 +288,17 @@ func OpenAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, perso
 	if db.IsNotFound(err) {
 		return nil
 	}
-	if err != nil || escalation != "" || gate {
+	if err != nil {
 		return err
 	}
 	var options, actions []string
 	_ = json.Unmarshal(rawOpts, &options)
 	_ = json.Unmarshal(rawActions, &actions)
 	i := choiceOf(options, answer)
-	if i < 0 || i >= len(actions) || actions[i] != ChoiceOpen && actions[i] != ChoiceDraft {
-		return nil
+	if escalation != "" || gate || i < 0 || i >= len(actions) || actions[i] != ChoiceOpen && actions[i] != ChoiceDraft {
+		// The person's newest answer to the conductor does not open it:
+		// an earlier one that did no longer stands.
+		return voidAnsweredTx(ctx, tx, org, taskID, questionID)
 	}
 	_, d, err := LockEscalationTx(ctx, tx, taskID)
 	if err != nil || d == nil || !d.Live() || !d.State.conducted() || len(d.State.PullRequestIDs) > 0 {
@@ -230,6 +330,38 @@ func OpenAnswerTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, perso
 	return emitTx(ctx, tx, org, &d.State, EvOpenAuthorized, map[string]any{"questionId": questionID, "answeredBy": person,
 		"choice": a.Choice, "heads": a.Heads, "criteria": a.Criteria, "findings": a.Findings, "workflowId": a.WorkflowID,
 		"attempt": a.Attempt})
+}
+
+// voidAnsweredTx voids the task's authority, given by another answer than
+// questionID's, once the person answered the conductor's questionID
+// otherwise (newest answer wins).
+func voidAnsweredTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID string) error {
+	var qid string
+	err := tx.QueryRow(ctx, `SELECT state->'openAuthority'->>'questionId' FROM workflow_runs
+		WHERE task_id = $1 AND jsonb_typeof(state->'openAuthority') = 'object' AND NOT state->'openAuthority' ? 'voided'
+		AND state->'openAuthority'->>'questionId' <> $2 ORDER BY created_at DESC LIMIT 1`, taskID, questionID).Scan(&qid)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return voidTx(ctx, tx, org, taskID, qid, authorityAnsweredLater)
+}
+
+// voidTx latches the authority questionID gave as void (VoidOpenAuthorityTx)
+// and records it.
+func voidTx(ctx context.Context, tx pgx.Tx, org, taskID, questionID, why string) error {
+	voided, err := VoidOpenAuthorityTx(ctx, tx, taskID, questionID, why)
+	if err != nil || voided == "" {
+		return err
+	}
+	var project string
+	if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, taskID).Scan(&project); err != nil {
+		return err
+	}
+	return emitTx(ctx, tx, org, &State{TaskID: taskID, ProjectID: project}, EvOpenAuthorityVoided,
+		map[string]any{"questionId": voided, "why": why})
 }
 
 // recordAuthorityMoveTx records a commit of source (one of

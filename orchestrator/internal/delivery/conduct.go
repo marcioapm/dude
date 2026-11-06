@@ -507,7 +507,7 @@ func ConductDecideAsk(ctx context.Context, tx pgx.Tx, ref RunRef, action, note s
 	p, st := d.State.Decision, &d.State
 	note = strings.TrimSpace(note)
 	if !slices.Contains(p.Actions(), action) {
-		if action == "open_pull_request" && st.OpenAuthority != nil {
+		if action == "open_pull_request" && st.OpenAuthority != nil && st.OpenAuthority.Voided == nil && len(st.PullRequestIDs) == 0 {
 			// The person's answer is kept: it is cited at the decision
 			// before the pull request, if it still holds there.
 			return nil, refusef(rAnswerKeptOpenBeforePR, st.OpenAuthority.QuestionID, pointLabel[p.Point], listOr(p.Actions()))
@@ -547,16 +547,12 @@ func ConductDecideAsk(ctx context.Context, tx pgx.Tx, ref RunRef, action, note s
 		var cited *CitedAnswer
 		if IsRefusal(err) {
 			// No Open or Draft to the gate's question at these heads: a
-			// person's earlier answer that opens it, if it still holds.
-			a, ok, why, aerr := openAuthorityTx(ctx, tx, d.WorkflowID, st)
-			switch {
-			case aerr != nil:
+			// person's earlier answer that opens it, if it still holds and
+			// nothing newer of the person's overrides it.
+			var aerr error
+			draft, cited, err, aerr = authorityOpens(ctx, tx, ref, d.WorkflowID, st, err)
+			if aerr != nil {
 				return nil, aerr
-			case ok:
-				draft, err = a.Choice == ChoiceDraft, nil
-				cited = &CitedAnswer{QuestionID: a.QuestionID, AnsweredBy: a.AnsweredBy, Choice: a.Choice}
-			case a != nil:
-				err = refusef(rAnswerNoLongerAuthorizes, a.QuestionID, why)
 			}
 		}
 		if err != nil {
@@ -649,6 +645,11 @@ func askGate(ctx context.Context, tx pgx.Tx, ref RunRef, st *State, prompt, why 
 		return "", err
 	}
 	if err := setQuestionActionsTx(ctx, tx, id, actions); err != nil {
+		return "", err
+	}
+	// The person asked again: an earlier answer that opens it is over;
+	// this question's answer is their newest word.
+	if err := voidTx(ctx, tx, ref.Org, st.TaskID, "", authorityAskedAgain); err != nil {
 		return "", err
 	}
 	heads, _ := json.Marshal(nonNilMap(st.Heads))

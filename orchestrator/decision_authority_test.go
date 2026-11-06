@@ -313,3 +313,78 @@ func TestTheDecisionDeadlineWaitsForThePersonTheConductorAsked(t *testing.T) {
 		})
 	})
 }
+
+// The person's newest word wins over an earlier open answer: once the
+// gate's question is asked since, its answer — or its wait — is what
+// counts, so Another round or Show me the diff opens nothing, nor does the
+// question still being open. A later answer to another question of the
+// conductor's that does not open it voids the earlier one too.
+func TestANewerAnswerOverridesAnEarlierOpenAnswer(t *testing.T) {
+	for _, c := range []struct{ name, answer, want string }{
+		{"the gate question still open", "", "has not answered"},
+		{"answered Another round", "Another round", "not Open or Draft"},
+		{"answered Show me the diff", "Show me the diff", "not Open or Draft"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := conducting(t)
+			task := w.task()
+			w.reachGateAnswered(task)
+			w.must(task, "decide", `{"action":"ask_person"}`)
+			if c.answer != "" {
+				w.chat(task, c.answer)
+				w.until("the gate question answered", func() bool {
+					return w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'answered'`, task) == 1
+				})
+			}
+			w.refused(task, "decide", `{"action":"open_pull_request"}`, c.want)
+			w.pump()
+			if n := len(w.gh.Pulls()); n != 0 {
+				t.Errorf("%d pull requests opened against the person's newest word", n)
+			}
+			if v := w.str(`SELECT COALESCE(state->'openAuthority'->'voided'->>'why', '') FROM workflow_runs WHERE task_id = $1`, task); v == "" {
+				t.Error("the earlier answer is not voided by the gate question asked since")
+			}
+		})
+	}
+	t.Run("a later answer that does not open", func(t *testing.T) {
+		w := conducting(t)
+		task := w.task()
+		w.askedAndAnsweredOpen(task, "open")
+		w.must(task, "ask_person", `{"question":"Should the greeting also say goodbye?","choices":["Yes","No"]}`)
+		w.refused(task, "decide", `{"action":"open_pull_request"}`, "is kept")
+		w.answerAs(w.person("Ana"), task, "No")
+		w.until("the earlier answer voided", func() bool {
+			return w.str(`SELECT COALESCE(state->'openAuthority'->'voided'->>'why', '') FROM workflow_runs WHERE task_id = $1`, task) != ""
+		})
+		w.carriedOut(task, "start_phase", `{"phase":"simplify"}`)
+		w.agentsDone(task, "the simplifier's narrow review", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+		w.finishSimplifierReview(task)
+		w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+		w.refused(task, "decide", `{"action":"open_pull_request"}`, "answered the conductor otherwise since")
+		if len(w.gh.Pulls()) != 0 {
+			t.Error("a pull request opened")
+		}
+	})
+}
+
+// An answer found not to hold is void for good: the conductor dismissing
+// the finding that voided it does not bring it back; only the person
+// answering again does.
+func TestAVoidedOpenAnswerStaysVoid(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.reachGateAnswered(task)
+	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title)
+		SELECT 'fnd_new', organization_id, id, (SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' LIMIT 1),
+		'correctness', 'high', 'A new one' FROM tasks WHERE id = $1`, task)
+	w.refused(task, "decide", `{"action":"open_pull_request"}`, "fnd_new")
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvOpenAuthorityVoided); n != 1 {
+		t.Errorf("%d voided events, want 1", n)
+	}
+	w.must(task, "dismiss_finding", `{"id":"fnd_new","reason":"not in scope"}`)
+	w.refused(task, "decide", `{"action":"open_pull_request"}`, "fnd_new blocks now")
+	if n := len(w.gh.Pulls()); n != 0 {
+		t.Fatalf("%d pull requests opened on a voided answer", n)
+	}
+	w.asksTheGateAgain(task)
+}

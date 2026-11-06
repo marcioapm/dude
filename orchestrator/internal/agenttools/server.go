@@ -912,6 +912,15 @@ func childToolAllowed(name string) bool {
 func (s *Server) recordRefusal(ctx context.Context, c Caller, t tool, refused refusal) (eventID string) {
 	if logged := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
 		if refused.event != nil {
+			if refused.event.typ == delivery.EvOpenAuthorityVoided {
+				// The person's answer found not to hold is void for good,
+				// though the call that found it rolled back.
+				qid, _ := refused.event.payload["questionId"].(string)
+				why, _ := refused.event.payload["why"].(string)
+				if voided, err := delivery.VoidOpenAuthorityTx(ctx, tx, c.TaskID, qid, why); err != nil || voided == "" {
+					return err
+				}
+			}
 			var err error
 			eventID, err = ledger.Append(ctx, tx, c.event(refused.event.typ, refused.event.payload))
 			return err

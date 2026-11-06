@@ -642,8 +642,13 @@ func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, 
 			st.OpenAuthority = a
 			if facts, err := authorityFactsTx(ctx, tx, sc.WorkflowRunID, st); err != nil {
 				return workflow.Result{}, err
-			} else if ok, _ := OpenAuthorityValid(a, facts); ok {
+			} else if ok, why := OpenAuthorityValid(a, facts); ok {
 				line = strings.TrimSpace(line + " " + authorityLine(a))
+			} else if a.Voided == nil {
+				// Found not to hold: void for good.
+				if err := voidTx(ctx, tx, sc.OrganizationID, st.TaskID, a.QuestionID, why); err != nil {
+					return workflow.Result{}, err
+				}
 			}
 		}
 	}
