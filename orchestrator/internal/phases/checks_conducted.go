@@ -123,7 +123,7 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 		if a.TestPhase, err = deliveryTests(ctx, tx, r.TaskID); err != nil {
 			return err
 		}
-		calls, err := recordedCalls(ctx, tx, r.ID, checks)
+		calls, err := recordedCalls(ctx, tx, r.ID, checks, bases)
 		if err != nil {
 			return err
 		}
@@ -181,14 +181,17 @@ func clipTo(s string, n int) string {
 
 // recordedCalls says, per reported pass, how the Run's latest recorded
 // shell call of that command ended: "exit N", "completed" (no exit code
-// recorded), "error" or "failed" (no exit code), or "none recorded". It is
-// dude's own reading of the ledger, not the agent's words: the conductor
-// backs a pass by it (or by reading the calls with run_chat).
-func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delivery.Check) ([]string, error) {
+// recorded), "error" or "failed" (no exit code), or "none recorded"; and,
+// per reported failure when the task has bases, how its latest call at one
+// of them ended: a call naming a base's commit whose last step (after its
+// last " && ") is the command. It is dude's own reading of the ledger, not
+// the agent's words: the conductor backs a pass, or a failure as
+// pre-existing, by it (or by reading the calls with run_chat).
+func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delivery.Check, bases []taskBase) ([]string, error) {
 	out := make([]string, len(checks))
 	wanted := false
 	for i, c := range checks {
-		if c.Result == delivery.CheckPass {
+		if c.Result == delivery.CheckPass || c.Result == delivery.CheckFail && len(bases) > 0 {
 			out[i], wanted = "none recorded", true
 		}
 	}
@@ -212,9 +215,12 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delive
 		if command == nil {
 			continue
 		}
-		ran := ofCommand(*command)
+		ran, atBase := ofCommand(*command), atBase(*command, bases)
 		for i, c := range checks {
-			if c.Result != delivery.CheckPass || ran != oneLine(c.Command) {
+			switch {
+			case c.Result == delivery.CheckPass && ran == oneLine(c.Command):
+			case c.Result == delivery.CheckFail && atBase == oneLine(c.Command):
+			default:
 				continue
 			}
 			switch {
@@ -228,6 +234,21 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delive
 		}
 	}
 	return out, rows.Err()
+}
+
+// atBase is the command a recorded call ran at one of the task's bases:
+// its last step (after its last " && "), one-lined, when the call names a
+// base's commit (its full SHA, or the first 12 characters); "" otherwise.
+func atBase(command string, bases []taskBase) string {
+	ran := oneLine(command)
+	for _, b := range bases {
+		if len(b.SHA) >= 12 && strings.Contains(ran, b.SHA[:12]) {
+			if i := strings.LastIndex(ran, " && "); i >= 0 {
+				return ran[i+len(" && "):]
+			}
+		}
+	}
+	return ""
 }
 
 // ofCommand is the command a recorded shell call ran, one-lined, for
@@ -245,29 +266,41 @@ func ofCommand(command string) string {
 	return ran
 }
 
-// checksWakeLine is the conductor's wake: the Run, its turn, and one
-// question per reported check, then whether one is missing. calls is
-// recordedCalls of the report (nil: none read).
+// checksWakeLine is the conductor's wake: the Run, its turn, the task's
+// bases and the waivers a failure may carry (first: the line is clipped,
+// and a later check's question loses only its evidence), then one question
+// per reported check, then whether one is missing. calls is recordedCalls
+// of the report (nil: none read).
 func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls []string) string {
 	type question struct {
 		Command, Result, Evidence, Call string
-		Waiver                          *delivery.CarriedWaiver
+		Waiver                          bool
+	}
+	type waiver struct {
+		N             int
+		Command, Role string
+		Cursor        int64
 	}
 	qs := make([]question, len(a.Check))
+	var ws []waiver
 	for i, c := range a.Check {
 		// The agent's evidence is its own words: quoted as external text,
 		// cut so every check's question fits the wake.
-		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), "", a.Waivers[i]}
+		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), "", a.Waivers[i] != nil}
 		if i < len(calls) {
 			qs[i].Call = calls[i]
+		}
+		if w := a.Waivers[i]; w != nil {
+			ws = append(ws, waiver{i + 1, oneLine(c.Command), w.Role, w.Cursor})
 		}
 	}
 	return checksWake.Render(struct {
 		Phase, RunID, Bases string
 		Turn                int64
+		Waivers             []waiver
 		Checks              []question
 		TestPhase           bool
-	}{r.Phase, r.ID, joinBases(bases), a.Turn, qs, a.TestPhase})
+	}{r.Phase, r.ID, joinBases(bases), a.Turn, ws, qs, a.TestPhase})
 }
 
 // verdictDecision is the gate's decision from the conductor's verdict, as

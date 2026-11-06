@@ -547,7 +547,7 @@ func TestRecordedCallsReadTheReportedCommandNotOneContainingIt(t *testing.T) {
 			}
 			var got []string
 			if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
-				got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: c.reported, Result: delivery.CheckPass}})
+				got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: c.reported, Result: delivery.CheckPass}}, nil)
 				return err
 			}); err != nil {
 				t.Fatal(err)
@@ -630,5 +630,95 @@ func TestALateVerdictAfterTheFallbackIsRefused(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, w.run.ID, delivery.EvRunChecksConducted); n != 0 {
 		t.Fatalf("%d verdicts recorded after the fallback", n)
+	}
+}
+
+// The wake puts the task's bases and each waiver's cursor before the
+// per-check questions: with eight long failing checks, the line clipped,
+// every cursor and base is still there for same_as_waived and preexisting.
+// The incomplete refusal lists the commands and the cursors again.
+func TestTheChecksWakeLeadsWithBasesAndWaiverCursors(t *testing.T) {
+	a := delivery.ChecksAsked{Turn: 9, Waivers: map[int]*delivery.CarriedWaiver{}}
+	for i := range 8 {
+		a.Check = append(a.Check, delivery.Check{Command: fmt.Sprintf("go test ./pkg%d/... -run TestSomethingRatherLong", i), Result: delivery.CheckFail,
+			Evidence: strings.Repeat("FAIL: TestSomethingRatherLong (0.00s) expected the greeting ", 3)})
+	}
+	a.Waivers[5] = &delivery.CarriedWaiver{Role: "implementer", Cursor: 4242}
+	a.Waivers[7] = &delivery.CarriedWaiver{Role: "fixer", Cursor: 4343}
+	bases := []taskBase{{Repo: "api", Branch: "main", SHA: "0123456789abcdef0123456789abcdef01234567"}}
+	line := []rune(checksWakeLine(phaseRun{ID: "run_x", Phase: "fix"}, a, bases, nil))
+	if len(line) <= 2000 {
+		t.Fatalf("the wake is %d characters: not long enough to be clipped", len(line))
+	}
+	head := string(line[:2000])
+	for _, want := range []string{"waiverCursor 4242", "waiverCursor 4343", "api: main at 0123456789abcdef0123456789abcdef01234567"} {
+		if !strings.Contains(head, want) {
+			t.Errorf("the clipped wake lacks %q: %s", want, head)
+		}
+	}
+	if strings.Index(head, "waiverCursor 4343") > strings.Index(head, "reported fail") {
+		t.Errorf("a waiver's cursor comes after the questions: %s", head)
+	}
+}
+
+// The scripted conductor takes a failure as pre-existing only on dude's
+// recording of it failing at the base, never on the writer's evidence
+// saying so.
+func TestTheDefaultsConductorNeedsARecordedBaseCall(t *testing.T) {
+	a := delivery.ChecksAsked{Turn: 3, Check: []delivery.Check{{Command: "make test", Result: delivery.CheckFail,
+		Evidence: "TestClock " + fakeagent.ShownAtBase + " the starting commit"}}}
+	bases := []taskBase{{Repo: "target", Branch: "main", SHA: "0123456789abcdef0123456789abcdef01234567"}}
+	for _, c := range []struct {
+		name, call, want string
+	}{
+		{"no call at the base", "none recorded", delivery.VerdictReject},
+		{"passing at the base", "exit 0", delivery.VerdictReject},
+		{"failing at the base", "exit 2", delivery.VerdictPreexisting},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			line := checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, bases, []string{c.call})
+			calls := fakeagent.ChecksDefaults(line)
+			var in delivery.DecideChecks
+			if len(calls) != 1 || json.Unmarshal([]byte(calls[0][1]), &in) != nil || len(in.Checks) != 1 {
+				t.Fatalf("%q from %q", calls, line)
+			}
+			if in.Checks[0].Verdict != c.want {
+				t.Fatalf("decided %s, want %s, from %q", in.Checks[0].Verdict, c.want, line)
+			}
+		})
+	}
+}
+
+// dude reads a failure's call at the base: a call naming a base's commit
+// whose last step is the command.
+func TestRecordedCallsReadAFailureAtTheBase(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	bases := []taskBase{{Repo: "target", Branch: "main", SHA: sha}}
+	for _, c := range []struct {
+		name  string
+		calls [][2]any
+		want  string
+	}{
+		{"at the base", [][2]any{{"git worktree add ../b " + sha + " && cd ../b && make test", 2}, {"make test", 2}}, "exit 2"},
+		{"at another commit", [][2]any{{"git worktree add ../b fedcba9876543210 && cd ../b && make test", 2}}, "none recorded"},
+		{"only at the head", [][2]any{{"make test", 2}}, "none recorded"},
+		{"another command at the base", [][2]any{{"git worktree add ../b " + sha + " && cd ../b && make lint", 2}}, "none recorded"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			for i, call := range c.calls {
+				bashCall(w, fmt.Sprintf("call_%d", i), call[0].(string), "out", call[1].(int))
+			}
+			var got []string
+			if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
+				got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: "make test", Result: delivery.CheckFail}}, bases)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0] != c.want {
+				t.Fatalf("read %q, want %q", got, c.want)
+			}
+		})
 	}
 }

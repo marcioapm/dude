@@ -253,12 +253,12 @@ const checksReasonMax = 2000
 // checkVerdicts refuses a verdict set that does not decide what was asked.
 func checkVerdicts(asked *ChecksAsked, in DecideChecks) error {
 	if len(in.Checks) != len(asked.Check) {
-		return refusef(rChecksIncomplete, checksCommands(asked.Check))
+		return refusef(rChecksIncomplete, checksCommands(asked))
 	}
 	for i, c := range asked.Check {
 		v := in.Checks[i]
 		if strings.TrimSpace(v.Command) != strings.TrimSpace(c.Command) {
-			return refusef(rChecksIncomplete, checksCommands(asked.Check))
+			return refusef(rChecksIncomplete, checksCommands(asked))
 		}
 		if strings.TrimSpace(v.Reason) == "" {
 			return refusef(rChecksNeedsReason, c.Command)
@@ -298,10 +298,15 @@ func checkVerdicts(asked *ChecksAsked, in DecideChecks) error {
 	return nil
 }
 
-func checksCommands(checks []Check) string {
-	out := make([]string, len(checks))
-	for i, c := range checks {
+// checksCommands lists what was asked, in order: each command, with the
+// cursor a same_as_waived verdict on it cites when it may carry a waiver.
+func checksCommands(asked *ChecksAsked) string {
+	out := make([]string, len(asked.Check))
+	for i, c := range asked.Check {
 		out[i] = fmt.Sprintf("%q", c.Command)
+		if w := asked.Waivers[i]; w != nil {
+			out[i] += fmt.Sprintf(" (waiverCursor %d)", w.Cursor)
+		}
 	}
 	if len(out) == 0 {
 		return "none"

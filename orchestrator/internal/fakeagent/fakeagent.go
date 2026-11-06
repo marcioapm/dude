@@ -480,6 +480,9 @@ const (
 	// command dude recorded the Run running with exit 0 (phases'
 	// recordedCalls).
 	BackedByCall = "dude recorded its latest call of it: exit 0)"
+	// FailedAtBase is what a checks wake says of a reported failure whose
+	// command dude recorded the Run running at the task's base, failing.
+	FailedAtBase = "dude recorded its latest call of it at the base: exit "
 )
 
 // checksWake matches a checks wake's call to decide (delivery's
@@ -494,11 +497,11 @@ var (
 // the Run's latest call of that command ending with exit 0 (BackedByCall);
 // otherwise (no call recorded, a non-zero exit, no exit code) it is
 // unbacked, as a careful conductor reading the recorded calls would say.
-// Nothing is missing. A failure is
-// pre-existing only when the wake names the task's base and the report's
-// evidence says it fails the same there (ShownAtBase), as a conductor that
-// read the Run's calls at the base would; a check not run is deferred only
-// when its evidence says a later phase runs it (DeferredToLater). Anything
+// Nothing is missing. A failure is pre-existing only when the wake says
+// dude recorded the Run's call of it at the task's base failing
+// (FailedAtBase), as a conductor that read the Run's calls at the base
+// would, never on the writer's evidence alone; a check not run is deferred
+// only when its evidence says a later phase runs it (DeferredToLater). Anything
 // else is rejected, so only a person passes it after the rounds. dude still
 // refuses a verdict its rules do not allow (no base, a fail deferred).
 func ChecksDefaults(input string) [][2]string {
@@ -531,7 +534,7 @@ func ChecksDefaults(input string) [][2]string {
 				verdict = "backed"
 			case c[2] == "pass":
 				verdict = "unbacked"
-			case c[2] == "fail" && strings.Contains(rest, "pre-existing at the task's base (") && strings.Contains(evidence, ShownAtBase):
+			case c[2] == "fail" && failedAtBase(question):
 				verdict = "preexisting"
 			case c[2] == "not-run" && strings.Contains(evidence, DeferredToLater):
 				verdict = "deferred"
@@ -559,6 +562,14 @@ func DefaultChecksCall(call [2]string) bool {
 }
 
 const checksDefaultsReason = "Deliver's defaults"
+
+// failedAtBase says a checks wake's question about a reported failure
+// carries dude's recording of the command failing at the task's base: a
+// non-zero exit (FailedAtBase), not the writer's own word that it did.
+func failedAtBase(question string) bool {
+	_, after, ok := strings.Cut(question, FailedAtBase)
+	return ok && !strings.HasPrefix(after, "0)")
+}
 
 // ManualChecks is a test script's instruction to keep checks decisions
 // explicit (for example a Chat script that later calls decide_checks).
@@ -1059,7 +1070,7 @@ const (
 	OtherFailingCommand = "make lint"
 	// BaseDir is where BaseCommand checks the task's base out.
 	BaseDir     = "../task-base"
-	BaseCommand = "git worktree add " + BaseDir + " " + AtMain + " && make -C " + BaseDir + " test"
+	BaseCommand = "git worktree add " + BaseDir + " " + AtMain + " && cd " + BaseDir + " && " + FailingCommand
 )
 
 // AtMain in a scripted command is its first repository's main as the fake
