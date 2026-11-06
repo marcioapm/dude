@@ -312,8 +312,8 @@ func HandOverIdleParkTx(ctx context.Context, tx pgx.Tx, org, taskID, runID strin
 	if err != nil || d == nil {
 		return false, err
 	}
-	var projectID string
-	err = tx.QueryRow(ctx, `SELECT r.project_id FROM runs r WHERE r.id = $1 FOR UPDATE`, runID).Scan(&projectID)
+	var projectID, role string
+	err = tx.QueryRow(ctx, `SELECT r.project_id, r.role::text FROM runs r WHERE r.id = $1 FOR UPDATE`, runID).Scan(&projectID, &role)
 	if db.IsNotFound(err) {
 		return false, nil
 	}
@@ -334,9 +334,10 @@ func HandOverIdleParkTx(ctx context.Context, tx pgx.Tx, org, taskID, runID strin
 		return false, err
 	}
 	// The status the resume puts back, as an idle park's own run.parked
-	// keeps it for a task no conductor decides (phases.whilePaused).
+	// keeps it for a task no conductor decides (phases.whilePaused); its
+	// role is what the Run's chat names (the quiet implementer).
 	_, err = ledger.Append(ctx, tx, ref.Event(EvIdleHandedOver, ledger.ActorSystem,
-		map[string]any{"reason": "idle", "taskStatus": before, "handedOverFrom": HolderConductor}))
+		map[string]any{"reason": "idle", "taskStatus": before, "handedOverFrom": HolderConductor, "role": role}))
 	return err == nil, err
 }
 

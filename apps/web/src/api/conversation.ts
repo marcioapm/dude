@@ -495,6 +495,24 @@ export const CONDUCTOR_WAIT_WORDS = {
   composer: "Waiting for the conductor's answer.",
 };
 
+/** A Run parked on a repository request its conductor decides first (repository.routed, addressee conductor). */
+export const CONDUCTOR_REQUEST_WORDS = {
+  parked: "Parked while it waits for the conductor — nothing is held; the conductor's decision on its request resumes it.",
+  composer: "Waiting for the conductor to decide its request.",
+};
+
+/**
+ * What the composer of a Run parked for a person says when its conductor,
+ * not a person, holds what it waits on: its question, or its repository
+ * request with nothing a person is asked (no open question or request
+ * card). null when a person holds it.
+ */
+export function conductorWaitComposer(c: Pick<Conversation, "conductorQuestionId" | "conductorRequestId" | "openQuestion" | "openRequest">): string | null {
+  if (c.conductorQuestionId) return CONDUCTOR_WAIT_WORDS.composer;
+  if (c.conductorRequestId && !c.openQuestion && !c.openRequest) return CONDUCTOR_REQUEST_WORDS.composer;
+  return null;
+}
+
 export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }> = {
   person: {
     parked: "Parked while it waits for you — nothing is held; your answer resumes it.",
@@ -528,6 +546,11 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   },
   "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
   "run.idle_nudged": { notice: "nudged", text: () => "Quiet for a while: nudged to carry on or ask." },
+  // A conducted idle park its conductor left: the person's now.
+  "run.idle_handed_over": {
+    notice: "notice",
+    text: (p) => `The conductor did not act on the quiet ${typeof p.role === "string" && p.role ? p.role.replaceAll("_", " ") : "agent"}; it is handed to you.`,
+  },
   [EventTypes.RunTurnStopped]: { notice: "nudged", text: () => "Its model gave no answer for 10 minutes: dude stopped the turn." },
   [EventTypes.RunTurnRetried]: { notice: "notice", text: turnRetriedNotice },
   [EventTypes.SessionReplaced]: { notice: "notice", text: () => "The agent restarted without its earlier conversation." },
@@ -691,6 +714,8 @@ export interface Conversation {
   openQuestion: QuestionTurn | null;
   /** Current writer question routed to its conductor, never an owner answer form. */
   conductorQuestionId: string | null;
+  /** A pending repository request its conductor holds (not yet the person's): no card, nothing for a person to decide. */
+  conductorRequestId: string | null;
   /** The repository request waiting on a person's decision, if one is. */
   openRequest: RepositoryRequestTurn | null;
   /** The wait on a peer's reply this Run is in, if it is. */
@@ -753,6 +778,10 @@ export interface Projection {
   cohortDeliveries: Map<string, CohortResultTurn | string>;
   questionsById: Map<string, QuestionTurn>;
   conductorQuestionId: string | null;
+  /** Repository requests its conductor holds, still pending (repository.routed). */
+  conductorRequests: Set<string>;
+  /** The parked notice said while a conductor-held request kept the Run, said again once the person holds it. */
+  conductorRequestPark: NoticeTurn | null;
   repoRequestsById: Map<string, RepositoryRequestTurn>;
   /** Where the progress row is in `turns`, once there is one. */
   progressIndex: number | null;
@@ -870,6 +899,8 @@ export function emptyProjection(briefedBefore?: string): Projection {
     cohortDeliveries: new Map(),
     questionsById: new Map(),
     conductorQuestionId: null,
+    conductorRequests: new Set(),
+    conductorRequestPark: null,
     repoRequestsById: new Map(),
     progressIndex: null,
     plan: [],
@@ -1632,15 +1663,20 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case "run.parked":
       case "run.unparked":
       case "run.idle_nudged":
+      case "run.idle_handed_over":
       case EventTypes.RunTurnStopped:
       case EventTypes.RunTurnRetried:
       case EventTypes.SessionReplaced:
       case EventTypes.ContextCompacted:
       case EventTypes.RepositoryCloneFailed: {
         const { notice, text } = NOTICES[event.eventType]!;
-        const words = event.eventType === "run.parked" && payload.reason === "person" && state.conductorQuestionId
-          ? CONDUCTOR_WAIT_WORDS.parked : text(payload);
+        const personPark = event.eventType === "run.parked" && payload.reason === "person";
+        const heldRequest = personPark && !state.conductorQuestionId && state.conductorRequests.size > 0;
+        const words = personPark && state.conductorQuestionId ? CONDUCTOR_WAIT_WORDS.parked
+          : heldRequest ? CONDUCTOR_REQUEST_WORDS.parked : text(payload);
         const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: words, at: event.occurredAt };
+        if (heldRequest) state.conductorRequestPark = turn;
+        else if (event.eventType === "run.parked" || event.eventType === "run.unparked") state.conductorRequestPark = null;
         if (notice === "unparked" && typeof payload.epoch === "number") {
           // Its timing came first and was said on its own: that notice is
           // this return.
@@ -1794,9 +1830,26 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         break;
       }
 
+      case "repository.routed": {
+        // Its conductor decides it first: nothing for a person yet.
+        if (payload.addressee === "conductor" && typeof payload.requestId === "string") {
+          state.conductorRequests.add(payload.requestId);
+          state.activity = null;
+          state.activeTool = null;
+        }
+        break;
+      }
+
       case "repository.requested": {
+        const requestId = String(payload.requestId ?? "");
+        // Forwarded or handed over by its conductor: the person's now, and
+        // the parked notice says it waits on them.
+        if (state.conductorRequests.delete(requestId) && state.conductorRequests.size === 0 && state.conductorRequestPark) {
+          state.conductorRequestPark.text = PAUSE_WORDS.person.parked;
+          state.conductorRequestPark = null;
+        }
         const turn: RepositoryRequestTurn = {
-          kind: "repositoryRequest", id: event.eventId, requestId: String(payload.requestId ?? ""),
+          kind: "repositoryRequest", id: event.eventId, requestId,
           repository: String(payload.repository ?? ""), access: payload.access === "write" ? "write" : "read",
           reason: String(payload.reason ?? ""), at: event.occurredAt, decision: null, decidedAt: null,
         };
@@ -1807,6 +1860,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
 
       case "repository.approved":
       case "repository.denied": {
+        state.conductorRequests.delete(String(payload.requestId ?? ""));
         const turn = state.repoRequestsById.get(String(payload.requestId ?? ""));
         if (turn) {
           turn.decision = event.eventType === "repository.approved" ? "approved" : "denied";
@@ -1946,6 +2000,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       contextWindow: state.contextWindow,
       openQuestion: openQuestion(state),
       conductorQuestionId: state.conductorQuestionId,
+      conductorRequestId: [...state.conductorRequests].at(-1) ?? null,
       openRequest: openRequest(state),
       openWait: [...state.peerWaits.values()].findLast((w) => w.ended === null) ?? null,
       activity: state.activity,
@@ -1997,6 +2052,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     // A finished Run asks nothing, whatever it asked before it ended.
     openQuestion: null,
     conductorQuestionId: null,
+    conductorRequestId: null,
     openRequest: null,
     openWait: null,
     activity: null,
