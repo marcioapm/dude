@@ -368,7 +368,15 @@ func reask(ctx context.Context, tx pgx.Tx, ref RunRef, d *Delivery, q *LostQuest
 	} else if untested {
 		return "", "the head is a conductor's commit nothing has reviewed", nil
 	}
-	id, err := askGate(ctx, tx, ref, &d.State, q.Prompt, WhyConductor)
+	// The gate's choices and the actions they carry (#406) as asked: the
+	// recommendation the conductor made, and Open/Draft's open and draft.
+	choices := SingleItem("", GateChoices).Choices
+	if len(q.Items) > 0 && len(q.Items[0].Choices) > 0 {
+		choices = q.Items[0].Choices
+	}
+	var actions []string
+	_ = json.Unmarshal(q.Actions, &actions)
+	id, err := askGate(ctx, tx, ref, &d.State, q.Prompt, WhyConductor, choices, actions)
 	return id, "", err
 }
 
