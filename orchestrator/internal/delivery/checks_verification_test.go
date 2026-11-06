@@ -302,7 +302,7 @@ func TestAnUnchangedRunIsItsOwnStatusInTheChecksAccount(t *testing.T) {
 		"after a skipped implementer",
 		[]gatedJudgement{{Role: "Implementer", Verified: true, Skipped: true}, unchanged},
 		"### Checks\nChecks not verified: no conductor decided them.\n\n" +
-			"- **Implementer** — not model-checked\n- **Simplifier** — no changes; checks not needed",
+			"- **Implementer** — not verified\n- **Simplifier** — no changes; checks not needed",
 	}, {
 		"after a backed implementer",
 		[]gatedJudgement{{Role: "Implementer", Verified: true}, unchanged},
@@ -420,7 +420,7 @@ func TestChecksStatusPrecedence(t *testing.T) {
 		j    gatedJudgement
 		want string
 	}{
-		{gatedJudgement{Verified: true, Skipped: true, Waived: true, Unchanged: true, Carried: true}, "not model-checked"},
+		{gatedJudgement{Verified: true, Skipped: true, Waived: true, Unchanged: true, Carried: true}, "not verified"},
 		{gatedJudgement{Verified: true, Waived: true, Unchanged: true, Carried: true}, "waived"},
 		{gatedJudgement{Verified: true, Unchanged: true, Carried: true}, "no changes; checks not needed"},
 		{gatedJudgement{Verified: true, Carried: true, Checks: []gatedCheck{carried, pass, missing}}, "waiver carried"},

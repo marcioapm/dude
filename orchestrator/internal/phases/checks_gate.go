@@ -32,18 +32,18 @@ type checksVerdict struct {
 	Result   string `json:"result,omitempty"`
 	Decision string `json:"decision,omitempty"`
 	Reason   string `json:"reason"`
-	CallID   string `json:"callId,omitempty"`
+	// The judge's model call an older row cites; never written now.
+	CallID string `json:"callId,omitempty"`
 	// A conducted verdict's record: the run.checks.conducted event's
 	// cursor, and who decided ("conductor").
 	DecisionCursor int64  `json:"decisionCursor,omitempty"`
 	By             string `json:"by,omitempty"`
 	// The person's waiver a waived result carries.
 	Waiver *delivery.CarriedWaiver `json:"waiver,omitempty"`
-	// Why an attempt waiver does not cover a reported failure, beside the
-	// agent's own result and evidence, which a person may still waive.
-	WaiverReason string `json:"waiverReason,omitempty"`
-	// Why the judge did not pass a reported failure or not-run check as
-	// pre-existing or deferred, beside the agent's own result and evidence.
+	// Why a reported failure or not-run check was not passed (the
+	// conductor's reason, or that no conductor decided), beside the agent's
+	// own result and evidence. Its JSON name is the judge's, so older rows
+	// (which may also carry waiverReason and callId) read the same.
 	JudgeReason string `json:"judgeReason,omitempty"`
 }
 
@@ -268,7 +268,7 @@ func (d checksDecision) sendBack() string {
 	// send-back's lines are one per check.
 	for i, v := range failed {
 		failed[i].Command, failed[i].Reason = oneLine(v.Command), oneLine(v.Reason)
-		failed[i].WaiverReason, failed[i].JudgeReason = oneLine(v.WaiverReason), oneLine(v.JudgeReason)
+		failed[i].JudgeReason = oneLine(v.JudgeReason)
 	}
 	passable := !d.untiered && len(d.bases) > 0
 	return checksText.Render(struct {
@@ -290,7 +290,7 @@ func (d checksDecision) unpassed() []checksVerdict {
 func (d checksDecision) unverified() []delivery.UnverifiedCheck {
 	var out []delivery.UnverifiedCheck
 	for _, v := range d.unpassed() {
-		why := slices.DeleteFunc([]string{v.Reason, v.WaiverReason, v.JudgeReason}, func(s string) bool { return s == "" })
+		why := slices.DeleteFunc([]string{v.Reason, v.JudgeReason}, func(s string) bool { return s == "" })
 		out = append(out, delivery.UnverifiedCheck{Command: v.Command, Reason: strings.Join(why, " — ")})
 	}
 	return out

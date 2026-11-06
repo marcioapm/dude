@@ -44,7 +44,7 @@ Escalation: test blocked. Actions: retry, waive, stop. Decide non-person-only ac
 
 ## escalated-checks
 
-Escalation: checks unverified. Actions: retry, waive, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The checks not verified: npm run test:legacy: not-run — not passed by the judge: no later phase runs the legacy Vue jest suite (judgement: no); missing checks: the legacy Vue jest run covers the changed component (judgement: yes).
+Escalation: checks unverified. Actions: retry, waive, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The checks not verified: npm run test:legacy: not-run — not passed by the conductor: no later phase runs the legacy Vue jest suite (verdict: reject); missing checks: the legacy Vue jest run covers the changed component (verdict: missing).
 
 ## escalated-checks-many
 
