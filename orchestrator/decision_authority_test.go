@@ -253,9 +253,10 @@ func TestDecideAskPersonAsksWithChoices(t *testing.T) {
 }
 
 // A quiet decision's deadline is suspended while its conductor waits on a
-// person: no default however long, no Run started; once the person answers
-// it restarts with its full window; once the question's Run ends it
-// resumes.
+// person: no default however long, no Run started, looked at again every
+// askingRecheck; once the person answers, or dude withdraws the question,
+// it restarts with its full window; once the question's Run ends, or its
+// container is gone for good, the deadline applies as it stood.
 func TestTheDecisionDeadlineWaitsForThePersonTheConductorAsked(t *testing.T) {
 	setup := func(t *testing.T) (*world, string) {
 		w := conducting(t)
@@ -271,6 +272,13 @@ func TestTheDecisionDeadlineWaitsForThePersonTheConductorAsked(t *testing.T) {
 		}
 		if n := w.defaulted(task, ""); n != 0 || w.phaseRuns(task, "review") != 0 || w.decisionAt(task) != delivery.PointImplemented {
 			t.Fatalf("with the person's answer awaited: %d defaulted, %d reviews, at %q", n, w.phaseRuns(task, "review"), w.decisionAt(task))
+		}
+		// Held, it looks again by itself soon (askingRecheck), not at an
+		// hour's deadline.
+		if late := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1
+			AND (wake_at IS NULL OR wake_at > now() + interval '35 seconds')`, task); late != 0 {
+			t.Fatalf("a held decision does not look again within the recheck: %s",
+				w.str(`SELECT COALESCE(wake_at::text, 'none') FROM workflow_runs WHERE task_id = $1`, task))
 		}
 		return w, task
 	}
@@ -293,24 +301,59 @@ func TestTheDecisionDeadlineWaitsForThePersonTheConductorAsked(t *testing.T) {
 		}
 	})
 	t.Run("withdrawn", func(t *testing.T) {
+		// As dude withdraws a question (WithdrawQuestionsTo, leaveGateTx):
+		// cancelled, a question.closed event, no answer. Its full window
+		// again, from the withdrawal.
 		w, task := setup(t)
-		mustExec(t, w.owner, `UPDATE questions SET status = 'cancelled', answered_at = now() - interval '2 hours'
-			WHERE task_id = $1 AND status = 'open'`, task)
+		q := w.conductorQuestion(task)
+		mustExec(t, w.owner, `UPDATE questions SET status = 'cancelled' WHERE id = $1`, q)
+		mustExec(t, w.owner, `INSERT INTO events (id, organization_id, project_id, task_id, event_type, actor_type, actor_id, source, payload)
+			SELECT 'evt_withdrawn_'||q.id, q.organization_id, t.project_id, q.task_id, $2, 'system', 'workflow', 'orchestrator',
+			jsonb_build_object('questionId', q.id, 'by', 'test') FROM questions q JOIN tasks t ON t.id = q.task_id WHERE q.id = $1`, q, delivery.EvQuestionClosed)
+		w.until("the deadline restarted", func() bool {
+			mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, task)
+			w.pump()
+			return decideBy(w, task) > 50*time.Minute
+		})
+		if n := w.defaulted(task, ""); n != 0 || w.phaseRuns(task, "review") != 0 {
+			t.Errorf("after the withdrawal: %d defaulted, %d reviews", n, w.phaseRuns(task, "review"))
+		}
+	})
+	t.Run("its Run ended", func(t *testing.T) {
+		// A Run's end through its status cancels its open questions
+		// (runs_cancel_open_questions): no answer, no question.closed, so
+		// no settle time; the deadline applies as it stood.
+		w, task := setup(t)
+		mustExec(t, w.owner, `UPDATE runs SET status = 'completed', ended_at = now() WHERE task_id = $1 AND role = 'conductor'`, task)
+		if s := w.str(`SELECT status::text FROM questions WHERE task_id = $1`, task); s != "cancelled" {
+			t.Fatalf("the ended Run's question is %s, want cancelled", s)
+		}
 		w.lapse(task)
 		w.until("the defaults, the wait resumed", func() bool {
 			w.pump()
 			return w.defaulted(task, delivery.DefaultedDeadline) == 1
 		})
 	})
-	t.Run("its Run ended", func(t *testing.T) {
+	t.Run("its container ended for good", func(t *testing.T) {
+		// lux ended the conductor's container for good while dude has not
+		// ended its Run yet (Ending): its question is still open, but
+		// nobody is there to act on the answer, so it holds nothing.
 		w, task := setup(t)
-		mustExec(t, w.owner, `UPDATE runs SET status = 'completed', ended_at = now() - interval '2 hours'
-			WHERE task_id = $1 AND role = 'conductor'`, task)
+		mustExec(t, w.owner, `UPDATE runs SET lux_state = 'terminated' WHERE task_id = $1 AND role = 'conductor'`, task)
+		if s := w.str(`SELECT status::text FROM questions WHERE task_id = $1`, task); s != "open" {
+			t.Fatalf("the question is %s, want open", s)
+		}
 		w.lapse(task)
-		w.until("the defaults, the wait resumed", func() bool {
-			w.pump()
-			return w.defaulted(task, delivery.DefaultedDeadline) == 1
-		})
+		mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, task)
+		// The workflow's step alone: the syncer's sweep would end the Run
+		// (cancelling the question) and hide what the step reads.
+		if _, err := w.runtime.Tick(context.Background(), 10); err != nil {
+			t.Fatal(err)
+		}
+		if n := w.defaulted(task, delivery.DefaultedDeadline); n != 1 {
+			t.Errorf("%d defaulted with an ending conductor's question open (%s), want 1", n,
+				w.str(`SELECT status::text FROM questions WHERE task_id = $1`, task))
+		}
 	})
 }
 
@@ -387,4 +430,142 @@ func TestAVoidedOpenAnswerStaysVoid(t *testing.T) {
 		t.Fatalf("%d pull requests opened on a voided answer", n)
 	}
 	w.asksTheGateAgain(task)
+}
+
+// testedWith records a completed test Run of the task's attempt, now, with
+// a verdict on criterion 2 of status and decision ("" for none).
+func (w *world) testedWith(task, status, decision string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, ended_at)
+		SELECT 'run_retest_'||id, organization_id, project_id, id,
+			COALESCE((SELECT (state->>'attempt')::int FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1), 1),
+			'test', 'completed', now() FROM tasks WHERE id = $1`, task)
+	mustExec(w.t, w.owner, `INSERT INTO acceptance_verdicts (organization_id, task_id, run_id, criterion, text, status, decision, decided_at)
+		SELECT organization_id, id, 'run_retest_'||id, 2, 'Says hello', $2, NULLIF($3, ''), CASE WHEN $3 <> '' THEN now() END
+		FROM tasks WHERE id = $1`, task, status, decision)
+}
+
+// What a test since the answer says: a criterion failing now that the
+// person was not asked about voids the answer, named; a waived verdict and
+// a finding below the fix bar do not.
+func TestAnOpenAnswerWeighsTheTestsAndFindingsSince(t *testing.T) {
+	t.Run("a new failing criterion", func(t *testing.T) {
+		w := conducting(t)
+		task := w.task()
+		w.reachGateAnswered(task)
+		w.testedWith(task, "fail", "")
+		w.refused(task, "decide", `{"action":"open_pull_request"}`, "criterion 2 fails now")
+		if len(w.gh.Pulls()) != 0 {
+			t.Error("a pull request opened")
+		}
+	})
+	for _, c := range []struct{ name, status, decision, severity string }{
+		{"a waived verdict", "fail", "waived", ""},
+		{"a low finding", "pass", "", "low"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := conducting(t)
+			task := w.task()
+			w.reachGateAnswered(task)
+			w.testedWith(task, c.status, c.decision)
+			if c.severity != "" {
+				mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title)
+					SELECT 'fnd_low', organization_id, id, (SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' LIMIT 1),
+					'correctness', $2, 'A nit' FROM tasks WHERE id = $1`, task, c.severity)
+			}
+			out := w.must(task, "decide", `{"action":"open_pull_request"}`)
+			if out["authorizedBy"] == nil {
+				t.Errorf("open_pull_request: %v", out)
+			}
+			w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+		})
+	}
+}
+
+// authority is the task's recorded open authority's question, "" for none.
+func (w *world) authority(task string) string {
+	return w.str(`SELECT COALESCE(state->'openAuthority'->>'questionId', '') FROM workflow_runs WHERE task_id = $1
+		ORDER BY created_at DESC LIMIT 1`, task)
+}
+
+// An answer gives authority only as the conductor's own question's, asked
+// in this delivery, before its pull request, while it is live: not the
+// gate's own Open (GateAnswer reads that), not a question asked before the
+// delivery began, not one answered once the pull request is open or the
+// delivery is over.
+func TestOnlyAConductorsQuestionInTheLiveDeliveryGivesAuthority(t *testing.T) {
+	t.Run("the gate's own Open", func(t *testing.T) {
+		w := conducting(t)
+		task := w.task()
+		w.reachGate(task)
+		w.must(task, "decide", `{"action":"ask_person"}`)
+		w.chat(task, "Open")
+		w.until("the gate answered", func() bool {
+			return w.count(`SELECT count(*) FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'answered'`, task) == 1
+		})
+		w.pump()
+		if a := w.authority(task); a != "" {
+			t.Errorf("the gate's Open recorded as authority: %s", a)
+		}
+	})
+	for _, c := range []struct{ name, before string }{
+		{"asked before the delivery", `UPDATE questions SET asked_at = (SELECT min(created_at) - interval '1 hour' FROM workflow_runs WHERE task_id = $1)
+			WHERE task_id = $1 AND status = 'open'`},
+		{"answered with the pull request open", `UPDATE workflow_runs SET state = jsonb_set(state, '{pullRequestIds}', '["pr_x"]') WHERE task_id = $1`},
+		{"answered with the delivery over", `UPDATE workflow_runs SET status = 'completed' WHERE task_id = $1`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := conducting(t)
+			task := w.task()
+			w.talk(task)
+			w.implemented(task)
+			w.must(task, "decide", openChoices("open"))
+			mustExec(t, w.owner, c.before, task)
+			w.answerOpen(task)
+			if a := w.authority(task); a != "" {
+				t.Errorf("recorded as authority: %s", a)
+			}
+		})
+	}
+}
+
+// The wake before the pull request cites the answer only while it holds:
+// with a fixer's commit since, it does not say the person already answered.
+func TestTheWakeBeforeThePRCitesOnlyAnAnswerThatHolds(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.askedAndAnsweredOpen(task, "open")
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("after the review round", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "start_phase", `{"phase":"fix"}`)
+	w.until("after the fix", func() bool { return w.decisionAt(task) == delivery.PointFixed })
+	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.finishSimplifierReview(task)
+	w.until("before the pull request", func() bool { return w.decisionAt(task) == delivery.PointBeforePR })
+	w.until("woken before the pull request", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = $3`,
+			task, delivery.EvDecisionAwaited, delivery.PointBeforePR) > 0
+	})
+	for _, n := range w.woken(task) {
+		if strings.Contains(n, "already answered") {
+			t.Errorf("the wake cites an answer that no longer holds: %q", n)
+		}
+	}
+	if v := w.str(`SELECT COALESCE(state->'openAuthority'->'voided'->>'why', '') FROM workflow_runs WHERE task_id = $1`, task); !strings.Contains(v, "not the simplifier's") {
+		t.Errorf("voided %q", v)
+	}
+}
+
+// choices are for decide ask_person away from the gate: refused before the
+// pull request, whose are fixed, and on any other action.
+func TestDecideChoicesAreRefusedWhereTheyDoNotApply(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.reachGate(task)
+	w.refused(task, "decide", `{"action":"ask_person","choices":[{"label":"Ship"},{"label":"Wait"}]}`, "choices are fixed")
+	w.refused(task, "decide", `{"action":"open_pull_request","choices":[{"label":"Ship"},{"label":"Wait"}]}`, "for decide ask_person")
+	w.refused(task, "decide", `{"action":"open_pull_request","recommend":"Open"}`, "for decide ask_person")
+	if n := w.gateQuestions(task); n != 0 {
+		t.Errorf("%d gate questions asked", n)
+	}
 }
