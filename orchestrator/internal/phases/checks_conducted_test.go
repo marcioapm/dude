@@ -776,6 +776,17 @@ func TestRecordedCallsReadAFailureAtTheBase(t *testing.T) {
 		{"reported in its directory, run in another", "cd api && make test", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base/web && make test", 2}}, "none recorded"},
 		{"reported in its directory, run at the root", "cd api && make test", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base && make test", 2}}, "none recorded"},
 		{"reported with no directory, run in one", "", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base/api && make test", 2}}, "exit 2"},
+		// dash (/bin/sh on the runtime image) exits 2 on a failed cd; bash 1.
+		{"exit 2 dash's cd returned", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 2, "sh: 1: cd: can't cd to api"}}, "unclear: exit 2, which a step before it may have returned"},
+		{"exit 1 bash's cd returned", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 1, "bash: line 1: cd: api: No such file or directory"}}, "unclear: exit 1, which a step before it may have returned"},
+		{"exit 2 with no output", "", [][]any{{"git checkout " + sha + " && make test", 2, ""}}, "unclear: exit 2, which a step before it may have returned"},
+		{"exit 2 of make", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 2, "--- FAIL: TestClock (0.00s)\n    clock_test.go:12: got 3, want 2\nFAIL\nexit status 1\nmake: *** [Makefile:4: test] Error 1"}}, "exit 2"},
+		// error: is a step's failure as git's shapes or as the first line;
+		// a test framework's later in the output is the command's.
+		{"a test's error: line", "", [][]any{{"git checkout " + sha + " && make test", 1, "running 1 test\ntest clock ... FAILED\nerror: expected 2, got 3\nFAIL"}}, "exit 1"},
+		{"git's pathspec error", "", [][]any{{"git checkout " + sha + " && make test", 1, "Note: switching to '0123456'.\nerror: pathspec 'x' did not match any file(s) known to git"}}, "unclear: exit 1, which a step before it may have returned"},
+		{"git's local changes error", "", [][]any{{"git checkout " + sha + " && make test", 1, "error: Your local changes to the following files would be overwritten by checkout:\n\tMakefile"}}, "unclear: exit 1, which a step before it may have returned"},
+		{"an error: line first", "", [][]any{{"git checkout " + sha + " && make test", 1, "\nerror: could not detach HEAD\n"}}, "unclear: exit 1, which a step before it may have returned"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
