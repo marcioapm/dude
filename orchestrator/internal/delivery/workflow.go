@@ -249,6 +249,10 @@ type State struct {
 	// Authorization heads and draft mode, owned by the row. GateOpened and
 	// Draft are latched and outlive a head change; gateHeld checks these heads.
 	GateAt *GateAt `json:"gateAt,omitempty"`
+	// A person's answer to the conductor that opens the pull request,
+	// carried to the decision before it (OpenAuthorityValid). Owned by the
+	// row: the answer writes it, the simplifier's commits extend it.
+	OpenAuthority *OpenAuthority `json:"openAuthority,omitempty"`
 	// The step read an answer authorizing the gate: its transition records
 	// it (recheck). Never persisted.
 	authorizeGate bool
@@ -557,7 +561,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 	def := &workflow.Definition{
 		Type:        WorkflowType,
 		InitialStep: "implement",
-		Owned:       []string{"decider", "handedBack", "hadConductor", "voice", "gateAt", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
+		Owned:       []string{"decider", "handedBack", "hadConductor", "voice", "gateAt", "openAuthority", "limitGrants", "limitRequests", "roundDelta", "reviewChoice"},
 		// The gate's authorization: set by the conductor's decision, or by
 		// a hand-back while a step runs.
 		Latched: []string{"draft", "gateOpened", "overridden"},
@@ -1551,6 +1555,16 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	for repo := range out.Heads {
 		if base := cmp.Or(out.Bases[repo], st.Heads[repo]); base != "" {
 			st.SimplifyBase[repo] = base
+		}
+	}
+	// A person's answer that opens the pull request outlives the
+	// simplifier's commits (AuthorityCommitSources): recorded as its own.
+	if st.OpenAuthority != nil {
+		from, to := st.Heads, out.advance(st.Heads)
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			return recordAuthorityMoveTx(ctx, tx, sc.WorkflowRunID, PhaseSimplify, runID, from, to)
+		}); err != nil {
+			return workflow.Result{}, err
 		}
 	}
 	st.HeadRunID, st.Heads, st.ChangedPaths = runID, out.advance(st.Heads), out.ChangedPaths

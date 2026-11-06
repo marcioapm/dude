@@ -88,3 +88,5 @@
 {{- with .Removed}}{{$s}}Removed test declarations in recognised test files: {{range $i, $n := .}}{{if $i}}, {{end}}{{clip . 60}}{{end}}{{with $.RemovedMore}} and {{.}} more{{end}}.{{$s = " "}}{{end}}
 {{- with .Outside}}{{$s}}Files it changed that its brief did not name: {{range $i, $n := .}}{{if $i}}, {{end}}{{clip . 80}}{{end}}{{with $.OutsideMore}} and {{.}} more{{end}}.{{end}}
 {{- end}}
+
+{{- define "wakes/facts/open-authorized"}}The person already answered {{.Label}} ({{.Choice}}) to your question {{.QuestionID}}, and it still holds: decide open_pull_request, which cites it; do not ask again.{{end}}

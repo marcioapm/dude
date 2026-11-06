@@ -206,8 +206,10 @@ type Taken struct {
 	Categories []string `json:"categories,omitempty"`
 	FindingIDs []string `json:"findingIds,omitempty"`
 	Note       string   `json:"note,omitempty"`
-	// open_pull_request: a draft, as the person answered.
-	Draft bool `json:"draft,omitempty"`
+	// open_pull_request: a draft, as the person answered; the person's
+	// earlier answer it cites (OpenAuthority), when not the gate's.
+	Draft      bool         `json:"draft,omitempty"`
+	Authorized *CitedAnswer `json:"authorized,omitempty"`
 	// start_phase fix or simplify: the review queued behind it (then).
 	Then *Pipeline `json:"then,omitempty"`
 	// start_phase review, fix or simplify: the round's scope and bar.
@@ -628,6 +630,28 @@ func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, 
 	if point == PointBeforePR {
 		st.GateRequired, st.ChoiceGate = true, false
 	}
+	if point == PointBeforePR {
+		// A person's answer that opens it and still holds: said, so the
+		// conductor cites it rather than ask again.
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT state->'openAuthority' FROM workflow_runs WHERE id = $1`, sc.WorkflowRunID).Scan(&raw); err != nil {
+			return workflow.Result{}, err
+		}
+		var a *OpenAuthority
+		if len(raw) > 0 && json.Unmarshal(raw, &a) == nil && a != nil {
+			st.OpenAuthority = a
+			if facts, err := authorityFactsTx(ctx, tx, sc.WorkflowRunID, st); err != nil {
+				return workflow.Result{}, err
+			} else if ok, why := OpenAuthorityValid(a, facts); ok {
+				line = strings.TrimSpace(line + " " + authorityLine(a))
+			} else if a.Voided == nil {
+				// Found not to hold: void for good.
+				if err := voidTx(ctx, tx, sc.OrganizationID, st.TaskID, a.QuestionID, why); err != nil {
+					return workflow.Result{}, err
+				}
+			}
+		}
+	}
 	note := decisionWaitingNote(point, line)
 	added, err := recordWakeTx(ctx, tx, sc.OrganizationID, st.TaskID, kind,
 		decisionWakeKey(sc.WorkflowRunID, st.Decisions), note, point == PointStart || settled)
@@ -785,6 +809,30 @@ func (w *steps) quietDecision(ctx context.Context, sc workflow.StepContext, st *
 		return w.quietWait(st, noModel, now), nil
 	}
 	reason := defaultedReason(d, noModel, failed, now)
+	if reason == DefaultedDeadline {
+		// The conductor waits on a person: its deadline is suspended while
+		// the question is open, and restarts in full once it is settled.
+		var held bool
+		var settled *time.Time
+		if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+			var err error
+			held, settled, err = conductorAsksTx(ctx, tx, st.TaskID)
+			return err
+		}); err != nil {
+			return workflow.Result{}, err
+		}
+		switch {
+		case held:
+			res := w.parkQuiet(st)
+			res.SleepUntil = now.UTC().Add(askingRecheck)
+			return res, nil
+		case settled != nil && now.Before(settled.Add(w.s.decisionWait())):
+			// Its full window again, from the person's answer.
+			at, by := settled.UTC(), settled.UTC().Add(w.s.decisionWait())
+			d.Since, d.DecideBy = &at, &by
+			return w.parkQuiet(st), nil
+		}
+	}
 	if reason == "" {
 		return w.parkQuiet(st), nil
 	}
@@ -830,6 +878,44 @@ const ConductorRetrying = `EXISTS (SELECT 1 FROM runs cr WHERE cr.task_id = t.id
 	AND cr.phase IS NULL AND cr.status = 'running' AND cr.control = 'none'
 	AND COALESCE((cr.harness_state->>'turnRetries')::int, 0) > 0
 	AND EXISTS (SELECT 1 FROM directives rd WHERE rd.run_id = cr.id AND ` + retryLive + `))`
+
+// askingRecheck is how often a quiet decision whose conductor waits on a
+// person (conductorAsksTx) looks again whether the question is settled.
+const askingRecheck = 30 * time.Second
+
+// conductorAsksTx says whether the task's live conductor waits on a person:
+// a question of its Run, addressed to a person, still open. Else settled
+// is when the latest such question asked by a conductor of the task was
+// settled since (answered, or withdrawn with a question.closed event), nil
+// for none: the quiet decision's deadline restarts in full from then. One
+// its Run's end cancelled gives none: the deadline applies as it stood. Neither suspends
+// nor counts toward MaxDefaulted: no decision is defaulted meanwhile.
+func conductorAsksTx(ctx context.Context, tx pgx.Tx, taskID string) (held bool, settled *time.Time, err error) {
+	err = tx.QueryRow(ctx, conductorAsksSQL, taskID).Scan(&held, &settled)
+	return held, settled, err
+}
+
+// conductorAsksSQL is conductorAsksTx's statement ($1 the task). A
+// question settled before the wait began gives a window already over. The
+// task's question.closed events are read once, aggregated by question, and
+// joined: not once per question (it runs every askingRecheck while held).
+// A question its Run's end cancelled (runs_cancel_open_questions,
+// migration 015) has neither an answer nor a question.closed event: it
+// gives no settle time, and the deadline applies as it stood. The CASE on
+// an open question of an ended Run does not apply on the supported path
+// (every status change of a Run fires that trigger); kept for a question
+// left open on a Run whose end did not pass through it (a row written
+// ended, a question added after the end), whose end is then its settle
+// time rather than none.
+const conductorAsksSQL = `SELECT
+		EXISTS (SELECT 1 FROM questions q JOIN runs r ON r.id = q.run_id
+			WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = 'person' AND ` + LiveConductor + `
+			AND NOT COALESCE(` + Ending + `, false)),
+		(SELECT max(GREATEST(q.answered_at, c.at, CASE WHEN q.status = 'open' THEN r.ended_at END))
+			FROM questions q JOIN runs r ON r.id = q.run_id AND r.role = 'conductor'
+			LEFT JOIN (SELECT e.payload->>'questionId' AS qid, max(e.occurred_at) AS at FROM events e
+				WHERE e.task_id = $1 AND e.event_type = '` + EvQuestionClosed + `' GROUP BY 1) c ON c.qid = q.id
+			WHERE q.task_id = $1 AND q.addressee = 'person' AND q.asked_at <= now())`
 
 // retryingRecheck is how soon a quiet decision whose deadline passed while
 // its conductor retries (ConductorRetrying) is looked at again.
