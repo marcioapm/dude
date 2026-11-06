@@ -36,7 +36,7 @@ function classify(email: string) {
 
 function Chips({ start }: { readonly start: string }) {
   const [entries, setEntries] = useState<EmailEntry[]>(() => parseEmailEntries(start));
-  return <EmailChipsInput entries={entries} onChange={setEntries} views={emailChipViews(entries, classify)} summaryWords={{ member: "already in Acme" }}
+  return <EmailChipsInput entries={entries} onChange={setEntries} views={emailChipViews(entries, classify)}
     placeholder="ana@acme.dev, Tom Okafor <tom@acme.dev>"
     hint="Type or paste. Enter, comma or space adds one; pasting “Name <email>” or a column from a spreadsheet keeps the names." />;
 }
@@ -115,7 +115,7 @@ export function AccountsSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="ac-chips" title="EmailChipsInput"
-        note="Emails as chips, for an invite. Enter, a comma, a space or leaving the field make chips of what is typed; a paste is split by line, comma and semicolon, keeping Name <email> and a spreadsheet row's name. Each chip says what will happen to it by glyph and words: ✓ new; invitation expired, renewed (same link); not an email; already a member (struck through); already invited, with Copy their link; twice in the list. Backspace in the empty field takes the last back; each has its ✕. The line under it counts them.">
+        note="Emails as chips, for an invite. Enter, a comma, a space or leaving the field make chips of what is typed; a paste is split by line, comma and semicolon, keeping Name <email> and a spreadsheet row's name. A chip carries the address only, its state told by tone and glyph: plain = invited; ↻ = expired, renewed (same link); red ⚠ = not an email; struck through = left out (already a member, already invited, twice in the list). Under the field, the count line with Remove left out, then each left-out or renewed address with its reason, and Copy their link for one already invited. The hint shows only while the field is empty. Backspace in the empty field takes the last back; each chip has its ✕.">
         <Panes mode={mode} surface>
           <Label>every state</Label>
           <div style={{ maxWidth: 680 }}><Chips start={PASTE} /></div>

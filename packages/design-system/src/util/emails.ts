@@ -79,19 +79,14 @@ export function emailChipViews(entries: ReadonlyArray<EmailEntry>,
   });
 }
 
-/** The words for each kind in the summary line; `member` is the caller's ("already in Acme"). */
-export const SUMMARY_WORDS: Record<EmailChipKind, string> = {
-  valid: "new", renew: "renewed", invalid: "not an email", member: "already a member", invited: "already invited", duplicate: "duplicate",
-};
-
-const ORDER: readonly EmailChipKind[] = ["valid", "renew", "invalid", "member", "invited", "duplicate"];
-
-/** "3 new · 1 renewed · 1 not an email. The other 1 is left out." — or "" with nothing typed. */
-export function emailChipSummary(views: ReadonlyArray<EmailChipView>, words: Partial<Record<EmailChipKind, string>> = {}): string {
+/**
+ * The count line under the field: "3 to invite (1 renewed) · 4 left out", or
+ * "" with nothing typed. Why each is left out is the reasons list's to say.
+ */
+export function emailChipSummary(views: ReadonlyArray<EmailChipView>): string {
   if (!views.length) return "";
-  const counts = new Map<EmailChipKind, number>();
-  for (const v of views) counts.set(v.kind, (counts.get(v.kind) ?? 0) + 1);
-  const parts = ORDER.filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${words[k] ?? SUMMARY_WORDS[k]}`);
-  const skipped = views.filter((v) => !TAKEN.has(v.kind)).length;
-  return `${parts.join(" · ")}.${skipped ? ` The other ${skipped} ${skipped === 1 ? "is" : "are"} left out.` : ""}`;
+  const taken = views.filter((v) => TAKEN.has(v.kind)).length;
+  const renewed = views.filter((v) => v.kind === "renew").length;
+  const left = views.length - taken;
+  return `${taken} to invite${renewed ? ` (${renewed} renewed)` : ""}${left ? ` · ${left} left out` : ""}`;
 }

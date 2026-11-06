@@ -138,7 +138,7 @@ export function InviteDialog({ api, orgName, memberEmails, initial, initialRole,
         </Button>
       </>}>
       <FormStack>
-        <EmailChipsInput entries={entries} onChange={setEntries} views={views} autoFocus summaryWords={{ member: `already in ${orgName}` }}
+        <EmailChipsInput entries={entries} onChange={setEntries} views={views} autoFocus
           placeholder="ana@acme.dev, Tom Okafor <tom@acme.dev>" data-testid="chips"
           hint="Type or paste. Enter, comma or space adds one; pasting “Name <email>” or a column from a spreadsheet keeps the names." />
         <Select label="Role" value={role} options={ROLES} onValueChange={(v) => setRole(v as PersonRole)}

@@ -2,7 +2,7 @@
  * The accounts components, mounted in happy-dom: the organisation switcher
  * (what its trigger is called, what its menu lists and does, by keyboard
  * too), the email chips (paste parsing, every chip state, Backspace and ✕,
- * the summary), the invitation links (Copy and Copy all's lines), the key
+ * the summary, the reasons list and Remove left out, the hint), the invitation links (Copy and Copy all's lines), the key
  * shown once (Copy and the usage lines) and the organisation's face.
  */
 
@@ -234,18 +234,22 @@ describe("emailChipViews and the summary", () => {
       }
     });
     expect(views.map((v) => v.kind)).toEqual(["valid", "member", "invalid", "duplicate", "invited", "renew"]);
-    expect(emailChipSummary(views, { member: "already in Acme" }))
-      .toBe("1 new · 1 renewed · 1 not an email · 1 already in Acme · 1 already invited · 1 duplicate. The other 4 are left out.");
+    expect(emailChipSummary(views)).toBe("2 to invite (1 renewed) · 4 left out");
     expect(emailChipSummary([])).toBe("");
-    expect(emailChipSummary([{ kind: "valid" }])).toBe("1 new.");
+    expect(emailChipSummary([{ kind: "valid" }])).toBe("1 to invite");
   });
 });
+
+function EmailChipsHinted() {
+  const [entries, setEntries] = useState<EmailEntry[]>([]);
+  return <EmailChipsInput entries={entries} onChange={setEntries} views={emailChipViews(entries)} hint="Type or paste." />;
+}
 
 function Chips({ classify, onAction }: { classify?: (e: string) => EmailChipView | null; onAction?: (e: string) => void }) {
   const [entries, setEntries] = useState<EmailEntry[]>([]);
   const views = emailChipViews(entries, classify ?? ((e) => (e.startsWith("lin@") ? { kind: "invited", note: "already invited today",
     action: { label: "Copy their link", onClick: () => onAction?.(e) } } : null)));
-  return <EmailChipsInput entries={entries} onChange={setEntries} views={views} summaryWords={{ member: "already in Acme" }} />;
+  return <EmailChipsInput entries={entries} onChange={setEntries} views={views} />;
 }
 
 async function type(input: HTMLInputElement, text: string) {
@@ -279,11 +283,70 @@ describe("EmailChipsInput", () => {
     await act(async () => void input.dispatchEvent(paste));
     expect(chips(el)).toEqual(["valid:priya@x.io", "valid:noah@x.io", "invited:lin@x.io", "invalid:tomás@", "duplicate:priya@x.io"]);
     // The words say it too, not only the colour: a screen reader hears "not an email, left out".
-    expect(spoken(el.querySelector("li[data-state=invalid]")!).replace(/ ,/g, ",")).toBe("tomás@ not an email, left out");
+    expect(spoken(el.querySelector("li[data-state=invalid]")!).replace(/ ,/g, ",")).toBe("tomás@, not an email, left out");
     expect(el.querySelector("[data-testid=chip-summary]")!.textContent)
-      .toBe("2 new · 1 not an email · 1 already invited · 1 duplicate. The other 3 are left out.");
+      .toBe("2 to invite · 3 left out");
     // The summary describes the field to a screen reader.
     expect(input.getAttribute("aria-describedby")).toContain(el.querySelector("[data-testid=chip-summary]")!.id);
+  });
+
+  test("a chip shows the address only; each reason is said once, in the list under the field", async () => {
+    const el = await mount(<Chips classify={(e) => (e === "b@x.io" ? { kind: "member", note: "already in Acme" } : null)} />);
+    const input = byRole(el, "textbox", "Emails") as HTMLInputElement;
+    await type(input, "a@x.io, b@x.io, nope");
+    await key(input, "Enter");
+    // Every visible word in a chip, whatever the element, but not the screen-reader text or the ✕.
+    const visible = (n: Element): string => [...n.childNodes].map((c) => c.nodeType === 3 ? c.textContent ?? ""
+      : c instanceof Element && !c.classList.contains("ds-sr-only") && c.tagName !== "BUTTON" ? visible(c) : "").join("").trim();
+    expect(visible(el.querySelector("li[data-state=member]")!)).toBe("b@x.io");
+    expect(visible(el.querySelector("li[data-state=invalid]")!)).toBe("nope");
+    const reasons = [...el.querySelectorAll("[data-testid=chip-reasons] li")].map((li) => ({
+      kind: li.getAttribute("data-reason"), text: li.textContent ?? "",
+    }));
+    expect(reasons.map((r) => r.kind)).toEqual(["member", "invalid"]);
+    expect(reasons[0]!.text).toContain("b@x.io");
+    expect(reasons[0]!.text).toContain("already in Acme");
+    expect(reasons[1]!.text).toContain("nope");
+    expect(reasons[1]!.text).toContain("not an email");
+    // Taken addresses are not listed again.
+    expect(el.querySelector("[data-testid=chip-reasons] [data-reason=valid]")).toBeNull();
+  });
+
+  test("Remove left out keeps the invited and the renewed, and gives the field its focus back", async () => {
+    const el = await mount(<Chips classify={(e) => (e === "old@x.io" ? { kind: "renew", note: "invitation expired: Invite renews it" } : e === "lin@x.io" ? { kind: "invited", note: "already invited" } : null)} />);
+    const input = byRole(el, "textbox", "Emails") as HTMLInputElement;
+    await type(input, "a@x.io, old@x.io, lin@x.io, nope, a@x.io");
+    await key(input, "Enter");
+    expect(chips(el).length).toBe(5);
+    const remove = byRole(el, "button", "Remove left out") as HTMLButtonElement;
+    remove.focus();
+    await act(async () => remove.click());
+    expect(chips(el)).toEqual(["valid:a@x.io", "renew:old@x.io"]);
+    expect(document.activeElement).toBe(input);
+    expect(el.querySelector("[data-testid=chip-remove-left-out]")).toBeNull();
+    // The renewed address keeps its line: it is not left out, but it is not plain either.
+    expect([...el.querySelectorAll("[data-testid=chip-reasons] li")].map((li) => li.getAttribute("data-reason"))).toEqual(["renew"]);
+  });
+
+  test("the hint shows only while the field is empty; Tab makes a chip", async () => {
+    const el = await mount(<EmailChipsHinted />);
+    const input = byRole(el, "textbox", "Emails") as HTMLInputElement;
+    expect(el.textContent).toContain("Type or paste.");
+    expect(input.getAttribute("aria-describedby")).toContain(el.querySelector("small")!.id);
+    await type(input, "a@x.io");
+    await key(input, "Tab");
+    expect(chips(el)).toEqual(["valid:a@x.io"]);
+    expect(el.textContent).not.toContain("Type or paste.");
+  });
+
+  test("what is typed is shown as text, never as markup", async () => {
+    const el = await mount(<Chips />);
+    const input = byRole(el, "textbox", "Emails") as HTMLInputElement;
+    await type(input, "<img src=x onerror=alert(1)>, javascript:alert(1)");
+    await key(input, "Enter");
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.textContent).toContain("javascript:alert(1)");
   });
 
   test("an already-invited chip offers Copy their link", async () => {

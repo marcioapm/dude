@@ -413,13 +413,14 @@ describe("inviting with the chip editor", () => {
     const chips = [...dialog.querySelectorAll("li[data-state]")].map((c) => [c.getAttribute("data-state"), c.getAttribute("data-email") ?? c.getAttribute("title")]);
     expect(chips).toEqual([["valid", "priya@acme.dev"], ["valid", "noah.berg@acme.dev"], ["member", "marcio@example.com"], ["invited", "jules@acme.dev"],
       ["renew", "kai.nakamura@acme.dev"], ["invalid", "tomás@"], ["duplicate", "priya@acme.dev"]]);
-    expect(text(dialog.querySelector("li[data-state=member]"))).toContain("already in Acme");
-    expect(text(dialog.querySelector("li[data-state=invited]"))).toContain("already invited today");
-    expect(text(dialog.querySelector("li[data-state=renew]"))).toContain("invitation expired 2 days ago: Invite renews it");
-    expect(text(byTestId(dialog, "chip-summary"))).toBe("2 new · 1 renewed · 1 not an email · 1 already in Acme · 1 already invited · 1 duplicate. The other 4 are left out.");
+    // Each reason is said once, under the field; the chips carry the addresses.
+    expect(text(dialog.querySelector("li[data-reason=member]"))).toContain("already in Acme");
+    expect(text(dialog.querySelector("li[data-reason=invited]"))).toContain("already invited today");
+    expect(text(dialog.querySelector("li[data-reason=renew]"))).toContain("invitation expired 2 days ago: Invite renews it");
+    expect(text(byTestId(dialog, "chip-summary"))).toBe("3 to invite (1 renewed) · 4 left out");
     expect(text(byTestId(dialog, "invite-submit"))).toBe("Invite 3 people");
     // Already invited: Copy their link copies that invitation's link.
-    await click(button(dialog.querySelector("li[data-state=invited]")!, "Copy their link")!);
+    await click(button(dialog.querySelector("li[data-reason=invited]")!, "Copy their link")!);
     await settle();
     expect(copied).toEqual([`${location.origin}/#/invite/Ju00000000000000000000`]);
   });
