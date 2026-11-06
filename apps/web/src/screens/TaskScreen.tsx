@@ -1919,7 +1919,7 @@ function checksJudgedLine(p: Record<string, unknown>): { outcome: string; quote:
   const verdicts = Array.isArray(p.checks) ? p.checks as ChecksVerdict[] : [];
   const byConductor = verdicts.some((v) => v.by === "conductor");
   let outcome: string;
-  if (p.skipped) outcome = "were not model-checked";
+  if (p.skipped) outcome = "were not verified by a conductor";
   else if (p.waived) outcome = "were waived";
   else if (p.unchanged) outcome = "were not needed: it changed nothing";
   else if (p.carried && p.verified) outcome = "carried a person's waiver";

@@ -1637,7 +1637,7 @@ describe("the checks gate's send-back", () => {
       ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1", read: true }),
       ev(EventTypes.AgentMessage, { text: "Fixed; checks pass." }),
       ev(EventTypes.RunChecksJudged, { turn: 2, round: 1, verified: true, message: "", checks: [] }),
-      ev(EventTypes.RunChecksJudged, { turn: 3, verified: true, skipped: true, message: "Checks not model-checked: no judgement tier.", checks: [] }),
+      ev(EventTypes.RunChecksJudged, { turn: 3, verified: true, skipped: true, message: "Checks not verified: no conductor decides this delivery.", checks: [] }),
     ], "running");
     expect(turns.filter((t) => t.kind === "message" || t.kind === "told").map((t) => [t.kind, t.text])).toEqual([
       ["message", "checks:\n- command: make check\n  result: pass"], ["told", sentBack], ["message", "Fixed; checks pass."],
