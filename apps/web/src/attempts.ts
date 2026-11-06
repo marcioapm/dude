@@ -155,6 +155,13 @@ export const attemptStatus = (task: TaskDetail, attempt: number, current: number
  */
 export function attemptMark(task: TaskDetail, attempt: number, current: number): { status: Status; label?: string } {
   const status = attemptStatus(task, attempt, current);
+  // A cancelled question can leave the old task status behind (#404). It
+  // must not label the header Needs you: questions are the server's truth.
+  if (attempt === current && status === "awaiting_input" && task.questions !== undefined
+    && !task.questions.some((q) => q.status === "open" && q.addressee === "person")
+    && !task.escalation && !heldAtGate(task)) {
+    return { status: "paused", label: "Waiting on Chat" };
+  }
   // Deliver's hold before the pull request, and a fix of the feedback its owner sent from there.
   if (attempt === current) {
     if (status === "awaiting_input" && heldAtGate(task)) return { status, label: READY_FOR_REVIEW };

@@ -113,7 +113,7 @@ import { FeedbackProvider, ROUTED_WORDS } from "../feedback.tsx";
 import { CommentingNote, CommentingNotices, CommentingUnavailable, PreviewWayIn, commentingNoticeShown, usePictures, usePreviewCommenting } from "./PreviewCommenting.tsx";
 import { OriginLine, TaskOrigin } from "../chatOrigin.tsx";
 import { ChangesTab, RUN_DIFF_EVERY_MS, type RunDiffsMoved } from "./ChangesTab.tsx";
-import { NeedsYou, TaskOverview, openAgentQuestions } from "./TaskOverview.tsx";
+import { LostAsker, NeedsYou, TaskOverview, lostQuestion, openAgentQuestions, openPersonQuestions } from "./TaskOverview.tsx";
 
 export interface TaskScreenProps {
   client: ApiClient;
@@ -521,8 +521,11 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
     return out;
   }, [phases, events]);
 
-  // The agents' questions still open, read once per change of the ledger (not per frame of the stream).
-  const agentQuestions = useMemo(() => openAgentQuestions(events), [events]);
+  // The questions that need a person: as the server holds them (#404), each open one put to a person;
+  // from the ledger only for a control plane that gives none (it cannot tell one cancelled with its Run).
+  const serverQuestions = item?.questions;
+  const agentQuestions = useMemo(() => serverQuestions ? openPersonQuestions(serverQuestions, people.names, events) : openAgentQuestions(events),
+    [serverQuestions, people.names, events]);
   // A task opens on its Overview, whoever decides it; a URL naming a tab, or a session, opens there.
   const tab = asked ?? "overview";
   // Overview's milestones: Activity's own lines, worked out only while Overview shows.
@@ -649,10 +652,16 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
   // An agent's question still open on the current attempt: Overview's one needs-you region.
   const asking = earlier ? undefined : agentQuestions.find((q) => byId.has(q.runId) && attemptOfRun(byId.get(q.runId)!, current) === current);
   const askingRun = asking ? byId.get(asking.runId) : undefined;
+  // The question lost with the latest conductor as it failed, while Try again is offered on it (#404).
+  const lost = earlier || asking ? null : lostQuestion(recovery, item.questions ?? []);
+  const lostTo = lost?.toPerson ? people.names.get(lost.toPerson) ?? null : null;
   const needsYou = asking && tab === "overview" ? (
     <NeedsYou question={asking} run={askingRun}
       who={asking.toName ?? (owner ? owner.name : "a person")}
       onAnswer={() => (askingRun && isConductor(askingRun) ? pickTab("chat") : onOpenRun(asking.runId))} />
+  ) : lost && tab === "overview" ? (
+    <LostAsker lost={lost} who={lostTo ? firstName(lostTo) : owner ? firstName(owner.name) : "The person"}
+      retry={yours ? () => client.retryConductor(item.id) : undefined} onRetried={() => void load()} />
   ) : null;
   // Every notice the task has now, in one place: above the tabs, and on Overview above its figures.
   const notices = needsYou || item.escalation || stop || aside || problem || blocked || held || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
@@ -973,6 +982,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
             earlier={conductors.slice(0, -1).map((r) => ({ id: r.id, status: r.status, attempt: r.attempt }))} ledgers={endedLedgers}
             findings={findings} pullRequests={pullRequests}
             events={events} owner={sessionTask} version={version} onSent={reload} onOpenRun={onOpenRun} onBack={onBack}
+            recovery={recovery} canRetry={yours && !earlier}
             driverControl={driverControl} canSwitchDriver={yours && !earlier} />
         </TabPanel>
 

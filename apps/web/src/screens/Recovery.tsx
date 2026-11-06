@@ -11,7 +11,7 @@
  * else is told whom it waits on.
  */
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { shortId } from "@dude/design-system";
 import { DeciderField, Duration, ROLE_LABEL, pullRequestNumbers, type NextDecider } from "@dude/design-system/components";
 import { Button, Callout, CalloutActions, ChoiceList, calloutActionLineId, Dialog, Textarea, type ChoiceOption } from "@dude/design-system/primitives";
@@ -413,6 +413,10 @@ export function useRecoveryOptions(client: ApiClient, task: TaskDetail | null): 
   const [options, setOptions] = useState<RecoveryOptions | null>(null);
   const [tick, setTick] = useState(0);
   const stopped = task?.status === "aborted" || task?.status === "failed";
+  // Its latest conductor failed: Try again on it (recover.conductor, #404), the task stopped or not.
+  const conductorFailed = useMemo(() => [...(task?.runs ?? [])].filter(isConductor)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)?.status === "failed", [task?.runs]);
+  const read = stopped || conductorFailed;
   const taskId = task?.id;
   const runs = task?.runs.map((r) => `${r.id}:${r.status}:${r.endedAt ?? ""}`).join(",") ?? "";
   const waiting = stopped && options !== null && !options.keptUntil && tick < 5;
@@ -422,7 +426,7 @@ export function useRecoveryOptions(client: ApiClient, task: TaskDetail | null): 
     return () => clearTimeout(timer);
   }, [waiting, options]);
   useEffect(() => {
-    if (!stopped || !taskId) {
+    if (!read || !taskId) {
       setOptions(null);
       return;
     }
@@ -431,6 +435,6 @@ export function useRecoveryOptions(client: ApiClient, task: TaskDetail | null): 
     return () => {
       live = false;
     };
-  }, [client, taskId, stopped, runs, tick]);
+  }, [client, taskId, read, runs, tick]);
   return options;
 }

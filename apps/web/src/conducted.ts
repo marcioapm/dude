@@ -47,6 +47,10 @@ export function conductedLines(task: { decider: string; runs: readonly Run[] }, 
   for (const e of events) {
     const p = (e.payload ?? {}) as Record<string, unknown>;
     switch (e.eventType) {
+      case "question.rebound":
+        out.push({ kind: "notice", id: e.eventId, at: e.occurredAt,
+          text: "lux lost this conductor's Run while it waited for an answer. The question is still open: answer it and a fresh conductor picks up with the conversation so far." });
+        break;
       case EventTypes.ConductorDecisionAwaited: {
         const point = decisionPointSchema.safeParse(p.point);
         if (point.success) out.push({ kind: "decision", id: e.eventId, at: e.occurredAt, text: `Waiting on the conductor: ${DECISION_POINT_LABEL[point.data]}.` });

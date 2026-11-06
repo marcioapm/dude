@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { PersistedEvent, Run } from "@dude/domain";
 import { act, mount, sessionOptions, settle, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
-import type { SentAnswer } from "../src/api/client.ts";
+import type { SentAnswer, TaskQuestion } from "../src/api/client.ts";
 import { FINDINGS, METRICS, PULL_REQUEST, TASK_ID, YOU } from "../src/fixtures/data.ts";
 import { ToastProvider } from "@dude/design-system/primitives";
 import { PeopleProvider } from "../src/people.tsx";
@@ -301,6 +301,79 @@ const tabs = (page: HTMLElement) => [...page.querySelectorAll("[role=tab]")].map
 const drafts = () => Object.keys(localStorage).filter((k) => k.startsWith("dude.answer."));
 const selected = (page: HTMLElement) => page.querySelector("[role=tab][aria-selected=true]")?.textContent ?? "";
 
+/** The ask stays on the old ledger; the server writes its answer on the replacement. */
+function reboundClient(owner = YOU, to: string | null = null, answered = false) {
+  const replacement = "run_replacement";
+  const old = [ev("question.asked", { kind: "agent", questionId: "q_rebound", prompt: "Keep this option?", options: ["Keep", "Drop"], to }),
+    ev("run.failed", { error: "lux no longer has this Run" })];
+  const fresh: PersistedEvent[] = [];
+  const recordAnswer = () => fresh.push({ ...ev("question.answered", { questionId: "q_rebound", answer: "Keep", answers: [{ choices: [0], text: "" }] },
+    { type: "person", id: "u_ben", name: "Ben Baker" } as PersistedEvent["actor"]), runId: replacement });
+  if (answered) recordAnswer();
+  const client = new ChatClient({ status: "failed", createdAt: at(0), endedAt: at(5) }, old);
+  const get = client.getTask.bind(client);
+  client.getTask = async (id) => {
+    const task = await get(id);
+    const question: TaskQuestion = { id: "q_rebound", runId: replacement, status: "open", addressee: "person", prompt: "Keep this option?",
+      items: [], askedAt: at(1), toPerson: to, askerError: null, endedBy: null };
+    return { ...task, owner: { ...task.owner!, id: owner, name: owner === YOU ? "Márcio Martins" : "Other Owner" },
+      questions: fresh.length ? [] : [question], runs: [...task.runs, { ...client.conductorBase(), id: replacement, status: "paused", dudePause: "person", createdAt: at(6) }] };
+  };
+  const events = client.events.bind(client);
+  client.events = async (params) => {
+    if (params.taskId || params.runId === replacement) {
+      const all = (params.runId ? fresh : [...old, ...fresh]).filter((e) => e.cursor > (params.after ?? 0));
+      return { events: all, nextCursor: all.at(-1)?.cursor ?? params.after ?? 0 };
+    }
+    return events(params);
+  };
+  const getRun = client.getRun.bind(client);
+  client.getRun = async (id) => id === replacement ? { ...client.conductorBase(), id, status: "paused", dudePause: "person", sessions: [] } as unknown as RunDetail : getRun(id);
+  const answer = client.chatAnswer.bind(client);
+  client.chatAnswer = async (...args) => { const sent = await answer(...args); recordAnswer(); return { ...sent, runId: replacement }; };
+  return client;
+}
+
+describe("rebound questions", () => {
+  test("the old card keeps the server's cross-ledger answer and Ben's attribution after refetch and fresh mount", async () => {
+    const client = reboundClient();
+    const page = await chatPage(client);
+    const card = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor] [data-question=q_rebound]"), "the old card");
+    const keep = await until(() => [...card.querySelectorAll<HTMLElement>("[role=radio]")].find((b) => b.textContent?.startsWith("Keep")), "the rebound choices");
+    await act(async () => keep.click());
+    await settle();
+    expect(client.sent).toEqual([`${TASK_ID}:q_rebound:[{"choices":[0],"text":""}]`]);
+    const answered = await until(() => {
+      const current = page.querySelector<HTMLElement>("[data-testid=earlier-conductor] [data-question=q_rebound]");
+      return current?.textContent?.includes("Ben") ? current : null;
+    }, "Ben's server answer");
+    expect(answered.textContent).toContain("Keep");
+    expect(answered.textContent).not.toContain("No longer needed");
+    expect(answered.getAttribute("data-state")).toBe("answered");
+    expect(answered.querySelectorAll("[role=radio]").length).toBe(0);
+    const fresh = await chatPage(reboundClient(YOU, null, true));
+    const saved = await until(() => fresh.querySelector<HTMLElement>("[data-testid=earlier-conductor] [data-question=q_rebound]"), "the saved card");
+    await until(() => saved.textContent?.includes("Ben") ? saved : null, "Ben after reload");
+    expect(saved.textContent).toContain("Keep");
+    expect(saved.textContent).not.toContain("No longer needed");
+    expect(saved.getAttribute("data-state")).toBe("answered");
+  });
+
+  for (const [owner, to, allowed] of [["other_owner", null, false], [YOU, YOU, true], [YOU, "u_other", false], [YOU, null, true], ["other_owner", YOU, false]] as const) {
+    test(`ended rebound owner=${owner} addressed=${to} allowed=${allowed}`, async () => {
+      const client = reboundClient(owner, to);
+      const page = await chatPage(client);
+      const card = await until(() => page.querySelector<HTMLElement>("[data-testid=earlier-conductor] [data-question=q_rebound]"), "the open placeholder");
+      await settle();
+      expect(card.textContent).toContain("Keep this option?");
+      expect(card.textContent).not.toContain("No longer needed");
+      expect(card.querySelectorAll("[role=radio]").length > 0).toBe(allowed);
+      if (owner !== YOU) expect(card.textContent).toContain("Waiting for Other");
+      expect(client.sent).toEqual([]);
+    });
+  }
+});
+
 const pickTab = async (page: HTMLElement, name: string) => {
   const tab = [...page.querySelectorAll<HTMLElement>("[role=tab]")].find((t) => t.textContent?.replace(/\d+$/, "") === name)!;
   await act(async () => {
@@ -450,6 +523,30 @@ describe("the Chat tab", () => {
     await act(async () => yes.click());
     await settle();
     expect(client.sent).toEqual([`${TASK_ID}:q_1:[{"choices":[0],"text":""}]`]);
+  });
+
+  test("a live Run's event cannot keep a cancelled server question asking for input", async () => {
+    const asking = [...conductorEvents(), ev("question.asked", { kind: "agent", questionId: "q_server_cancelled", prompt: "Still needed?", options: ["Yes", "No"] })];
+    const client = new ChatClient({ status: "running" }, asking);
+    const get = client.getTask.bind(client);
+    client.getTask = async (id) => ({ ...await get(id), questions: [] });
+    const page = await chatPage(client);
+    await until(() => page.querySelector("[data-testid=question-turn]"), "the question record");
+    expect(page.querySelectorAll("[data-testid=question-turn] [role=radio]").length).toBe(0);
+    expect(page.querySelector("[data-testid=question-turn]")?.textContent).toContain("No longer needed");
+  });
+
+  test("a question closed by lost names the unheard answer, run_failed keeps No longer needed", async () => {
+    const asking = [...conductorEvents(),
+      ev("question.asked", { kind: "agent", questionId: "q_lost", prompt: "Lost?", options: ["Yes"] }),
+      ev("question.closed", { questionId: "q_lost", by: "lost" }),
+      ev("question.asked", { kind: "agent", questionId: "q_failed", prompt: "Failed?", options: ["Yes"] }),
+      ev("question.closed", { questionId: "q_failed", by: "run_failed" })];
+    const page = await chatPage(new ChatClient({ status: "failed" }, asking));
+    await until(() => page.querySelector("[data-question=q_failed]"), "the failed question");
+    expect(page.querySelector("[data-question=q_lost]")?.textContent).toContain("Not heard: dude lost the conductor that asked this");
+    expect(page.querySelector("[data-question=q_failed]")?.textContent).toContain("No longer needed");
+    expect(page.querySelectorAll("[data-testid=question-turn] [role=radio]").length).toBe(0);
   });
 
   test("Write to the agent instead: the composer comes back, and what is written leaves the question open", async () => {
