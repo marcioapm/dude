@@ -118,7 +118,7 @@ func (w world) calls(t *testing.T) []recorded {
 // and last }, and its reasoning is bounded in words with no braces, so it
 // ends before maxTokens.
 func TestTheSystemMessageStatesTheFormatRules(t *testing.T) {
-	system := messages("Is it done?", "")[0].Content
+	system := messages("Is it done?")[0].Content
 	for _, rule := range []string{
 		"Your whole reply is one JSON object and nothing else.",
 		"Its first character is { and its last character is }.",

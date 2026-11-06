@@ -32,8 +32,6 @@ type checksVerdict struct {
 	Result   string `json:"result,omitempty"`
 	Decision string `json:"decision,omitempty"`
 	Reason   string `json:"reason"`
-	// The judge's model call an older row cites; never written now.
-	CallID string `json:"callId,omitempty"`
 	// A conducted verdict's record: the run.checks.conducted event's
 	// cursor, and who decided ("conductor").
 	DecisionCursor int64  `json:"decisionCursor,omitempty"`
@@ -43,7 +41,8 @@ type checksVerdict struct {
 	// Why a reported failure or not-run check was not passed (the
 	// conductor's reason, or that no conductor decided), beside the agent's
 	// own result and evidence. Its JSON name is the judge's, so older rows
-	// (which may also carry waiverReason and callId) read the same.
+	// read the same (their callId and waiverReason are the PR account's
+	// and the web's to show, delivery.gatedCheck: the gate reads neither).
 	JudgeReason string `json:"judgeReason,omitempty"`
 }
 
@@ -63,8 +62,6 @@ type checksDecision struct {
 	// The commit of each repository's target branch the task builds on,
 	// for the send-back.
 	bases []taskBase
-	// No conductor decided: only a person can pass what is held.
-	untiered bool
 	// pending: the conductor was asked about this turn and has not
 	// decided; nothing is recorded and nothing is pushed.
 	pending bool
@@ -80,15 +77,17 @@ type checksDecision struct {
 
 // checksBeforePush judges the report the Run's latest turn ended with,
 // once per turn, before anything leaves the Run. pass: the turn's report
-// was accepted, the judgement was skipped for want of a judgement tier, or
-// a person waived it; acted: it recorded a judgement this time. The model
-// is asked with no transaction held; its verdict, and the send-back or
-// escalation it leads to, are written in one transaction, only if the
-// Run's latest turn is still the one judged. A restart before that commit
-// judges the turn again; one after it reads the recorded verdict.
+// was accepted (by its conductor's verdict), its passes went unverified
+// with no conductor deciding (the skip), or a person waived it; acted: it
+// recorded a judgement this time. The conductor is asked and its verdict
+// read with no transaction held across them; the judgement, and the
+// send-back or escalation it leads to, are written in one transaction, only
+// if the Run's latest turn is still the one judged. A restart before that
+// commit judges the turn again; one after it reads the recorded judgement
+// (a judge-era row's too).
 //
 // A turn that changed nothing the Run may push (unchangedBeforePush) is
-// recorded as such and passes without a report or a judge: there is no
+// recorded as such and passes without a report or an ask: there is no
 // work of its own for checks to cover. That decision is reused only in the
 // agent session placement it was inspected in.
 func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted bool, err error) {
@@ -259,9 +258,11 @@ func (s *Syncer) parsedChecks(ctx context.Context, r phaseRun) (d checksDecision
 }
 
 // sendBack is the send-back of a rejected report: only the verdicts that
-// did not pass, and, when one is a reported failure, a judgement tier
-// answered and a task base is known, how a failure that predates the task
-// passes, naming the commit of each target branch the task builds on.
+// did not pass, and, when one is a reported failure and the conductor was
+// asked with a task base known (bases, set only from its verdict), how a
+// failure that predates the task passes, naming the commit of each target
+// branch the task builds on. With no conductor deciding there are no
+// bases, so no such hint: only a person can pass it.
 func (d checksDecision) sendBack() string {
 	failed := d.unpassed()
 	// Each field one line: evidence and reasons are free text, and the
@@ -270,7 +271,7 @@ func (d checksDecision) sendBack() string {
 		failed[i].Command, failed[i].Reason = oneLine(v.Command), oneLine(v.Reason)
 		failed[i].JudgeReason = oneLine(v.JudgeReason)
 	}
-	passable := !d.untiered && len(d.bases) > 0
+	passable := len(d.bases) > 0
 	return checksText.Render(struct {
 		Checks []checksVerdict
 		Failed bool

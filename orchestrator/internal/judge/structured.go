@@ -93,7 +93,6 @@ func (s Service) Structured(ctx context.Context, org string, ask StructuredAsk) 
 	if askErr != nil {
 		return Structured{CallID: out.CallID}, redactedErr(red, askErr)
 	}
-	out.Summary.CallID = out.CallID
 	return out, nil
 }
 

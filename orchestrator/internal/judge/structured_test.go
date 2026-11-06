@@ -35,7 +35,7 @@ func TestStructuredIsRecordedAsAJudgementWithItsOwnInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Answer.(route).Route != "task" || got.Summary.Decision != "task" || got.CallID == "" || got.Summary.CallID != got.CallID {
+	if got.Answer.(route).Route != "task" || got.Summary.Decision != "task" || got.CallID == "" {
 		t.Fatalf("got %+v", got)
 	}
 	body := w.proxy.bodies[0]

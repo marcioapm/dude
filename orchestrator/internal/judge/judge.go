@@ -39,12 +39,11 @@ const (
 	Unsure = "unsure"
 )
 
-// Judgement is a model's answer. CallID is its row in model_calls.
+// Judgement is a model's answer.
 type Judgement struct {
 	Decision   string  `json:"decision"`
 	Confidence float64 `json:"confidence"`
 	Reasoning  string  `json:"reasoning"`
-	CallID     string  `json:"-"`
 }
 
 // Service asks the organisation's judgement tier.
@@ -85,18 +84,14 @@ const recordTimeout = 5 * time.Second
 const maxTokens = 1024
 
 // messages are the messages a question is sent as: the fixed system
-// message, then the question with its context under a heading.
-func messages(question, context string) []llm.Message {
-	user := strings.TrimSpace(question)
-	if c := strings.TrimSpace(context); c != "" {
-		user += "\n\n## Context\n\n" + c
-	}
-	return []llm.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}}
+// message, then the question.
+func messages(question string) []llm.Message {
+	return []llm.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: strings.TrimSpace(question)}}
 }
 
 // call omits temperature: the proxy answers 400 to one (seen for Claude and GPT tiers).
-func call(t Tier, question, context string) llm.Call {
-	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question, context),
+func call(t Tier, question string) llm.Call {
+	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question),
 		MaxTokens: maxTokens}
 }
 
@@ -156,7 +151,7 @@ func Test(ctx context.Context, c llm.Client, t Tier) (Judgement, llm.Completion,
 }
 
 func testCall(c llm.Client, t Tier) llm.Call {
-	sent := call(t, TestQuestion, "")
+	sent := call(t, TestQuestion)
 	sent.Timeout = c.Timeout
 	if sent.Timeout == 0 {
 		sent.Timeout = llm.TestTimeout

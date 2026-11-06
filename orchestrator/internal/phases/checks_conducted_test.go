@@ -137,7 +137,7 @@ func TestConductorVerdictPassesPreexistingAndIsAudited(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	for _, v := range got.Verdicts {
-		if v.DecisionCursor != cursor || v.By != "conductor" || v.CallID != "" {
+		if v.DecisionCursor != cursor || v.By != "conductor" {
 			t.Fatalf("verdict %+v does not cite decision %d by the conductor", v, cursor)
 		}
 	}
