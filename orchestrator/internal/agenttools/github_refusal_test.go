@@ -18,10 +18,9 @@ import (
 	"log/slog"
 )
 
-// Committing invalid authority is not a general commit-on-error contract:
-// a tool which writes and then ordinarily refuses/errors still rolls back.
-func TestOrdinaryToolErrorsStillRollBackWrites(t *testing.T) {
-	ctx := context.Background()
+// toolWorld is a project, task "t" and running Run "r" in a fresh org,
+// and a Server over it.
+func toolWorld(t *testing.T) (*Server, *pgx.Conn, string) {
 	app, owner := dbtest.Open(t)
 	org := dbtest.Org(t, owner)
 	for _, sql := range []string{
@@ -29,11 +28,23 @@ func TestOrdinaryToolErrorsStillRollBackWrites(t *testing.T) {
 		`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('t', $1, 'p', 1, 'Original')`,
 		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, status) VALUES ('r', $1, 'p', 't', 1, 'implement', 'implementer', 'running')`,
 	} {
-		if _, err := owner.Exec(ctx, sql, org); err != nil {
-			t.Fatal(err)
-		}
+		ownerExec(t, owner, sql, org)
 	}
-	s := &Server{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	return &Server{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, owner, org
+}
+
+func ownerExec(t *testing.T, c *pgx.Conn, sql string, args ...any) {
+	t.Helper()
+	if _, err := c.Exec(context.Background(), sql, args...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Committing invalid authority is not a general commit-on-error contract:
+// a tool which writes and then ordinarily refuses/errors still rolls back.
+func TestOrdinaryToolErrorsStillRollBackWrites(t *testing.T) {
+	ctx := context.Background()
+	s, owner, org := toolWorld(t)
 	for _, want := range []error{refuse("ordinary refusal"), errors.New("ordinary error"),
 		refusal{msg: "not decide", invalidOpenAuthority: &delivery.InvalidOpenAuthority{QuestionID: "q", Why: "invalid"}}} {
 		t.Run(want.Error(), func(t *testing.T) {
@@ -56,6 +67,38 @@ func TestOrdinaryToolErrorsStillRollBackWrites(t *testing.T) {
 				t.Fatalf("errored tool committed unrelated write: %q", title)
 			}
 		})
+	}
+}
+
+// decide's invalid-authority refusal voids only the question it found
+// invalid: a stale question's refusal leaves the task's current authority,
+// another question's, valid and unaudited.
+func TestInvalidOpenAuthorityVoidsOnlyItsQuestion(t *testing.T) {
+	ctx := context.Background()
+	s, owner, org := toolWorld(t)
+	ownerExec(t, owner, `INSERT INTO workflow_runs(id,organization_id,task_id,workflow_type,idempotency_key,status,step,state)
+		VALUES ('wf',$1,'t','task.delivery','t','waiting','implement','{"openAuthority":{"questionId":"qB"}}')`, org)
+	state := func() (voided bool, audits int) {
+		t.Helper()
+		if err := owner.QueryRow(ctx, `SELECT (SELECT state->'openAuthority' ? 'voided' FROM workflow_runs WHERE id = 'wf'),
+			(SELECT count(*) FROM events WHERE event_type = $1)`, delivery.EvOpenAuthorityVoided).Scan(&voided, &audits); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	for _, c := range []struct {
+		question string
+		voided   bool
+		audits   int
+	}{{"qA", false, 0}, {"qB", true, 1}, {"qB", true, 1}} {
+		want := refusal{msg: "invalid", invalidOpenAuthority: &delivery.InvalidOpenAuthority{QuestionID: c.question, Why: "invalid"}}
+		decide := tool{name: "decide", run: func(context.Context, pgx.Tx, Caller, json.RawMessage) (any, error) { return nil, want }}
+		if _, err := s.call(ctx, Caller{Org: org, RunID: "r", TaskID: "t", ProjectID: "p"}, decide, json.RawMessage(`{}`)); err == nil || err.Error() != "invalid" {
+			t.Fatalf("%s: err=%v", c.question, err)
+		}
+		if voided, audits := state(); voided != c.voided || audits != c.audits {
+			t.Fatalf("after %s: voided=%v audits=%d, want %v %d", c.question, voided, audits, c.voided, c.audits)
+		}
 	}
 }
 
