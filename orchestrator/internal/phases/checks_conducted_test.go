@@ -109,7 +109,7 @@ func TestChecksGateNeverCallsJudge(t *testing.T) {
 	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE key = $1`, key).Scan(&line); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(line, "decide_checks") || !strings.Contains(line, `"verify" reported pass: is the pass backed`) ||
+	if !strings.Contains(line, "decide_checks") || !strings.Contains(line, `"verify" reported pass (evidence `) || !strings.Contains(line, `successful⟦/external`) || !strings.Contains(line, `is the pass backed`) ||
 		!strings.Contains(line, "obviously missing") {
 		t.Fatalf("wake line %q", line)
 	}
