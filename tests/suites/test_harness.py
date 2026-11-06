@@ -5,9 +5,14 @@ Pure checks; they need no environment, browser or services:
     uv run --directory tests pytest suites/test_harness.py
 """
 
+import copy
+import json
+
 import pytest
 
 import conftest
+import e2e_receipt
+import run_tests
 from helpers import browser_channel
 
 pytest_plugins = ["pytester"]
@@ -80,12 +85,6 @@ def test_ui_selects_exactly_the_tests_that_need_a_browser(hook_suite):
 
 
 # Behavioral receipt checks run pytest itself, including session fixture teardown.
-import copy
-import json
-from collections import Counter
-
-import e2e_receipt
-import run_tests
 
 
 @pytest.fixture
@@ -139,6 +138,28 @@ def test_terminal_receipt_preserves_parameter_ids_and_platform_skip(receipt_suit
             broken["exit_code"] = 1
         with pytest.raises(ValueError):
             e2e_receipt.check_receipts([] if mutation == "missing" else [broken], 1)
+    # Two runners must agree on inputs; an entire missing/duplicate file is red too.
+    pair = []
+    raw = ["suites/test_a.py::test_x[p]", "suites/test_b.py::test_y[q]"]
+    for index in (1, 2):
+        part = copy.deepcopy(receipt)
+        part["plan"].update(raw=raw, selected=raw, assignment=e2e_receipt.assignment(raw, 2))
+        part["plan"]["inputs"]["denominator"] = 2
+        part["shard"] = index
+        part["selected"] = [n for n in raw if n.split("::")[0] in part["plan"]["assignment"][index - 1]]
+        part["results"] = [{"nodeid": n, "outcome": "passed"} for n in part["selected"]]
+        pair.append(part)
+    e2e_receipt.check_receipts(pair, 2)
+    for field in ("marker", "browser"):
+        broken = copy.deepcopy(pair)
+        broken[1]["plan"]["inputs"][field] = "different"
+        with pytest.raises(ValueError, match="different"):
+            e2e_receipt.check_receipts(broken, 2)
+    for replacement in ([], pair[0]["results"]):
+        broken = copy.deepcopy(pair)
+        broken[1]["results"] = replacement
+        with pytest.raises(ValueError):
+            e2e_receipt.check_receipts(broken, 2)
 
 
 def test_failing_test_and_session_teardown_remain_failures(receipt_suite):
@@ -194,12 +215,8 @@ def test_pipeline_precollects_and_fails_closed(monkeypatch, tmp_path, mode):
     for name in ("require_bun", "build", "build_gallery", "build_web"):
         monkeypatch.setattr(run_tests, name, lambda **kwargs: calls.append("build"))
     arguments = ["--receipt", str(path)] + (["--plan"] if mode == "plan" else [])
-    if mode == "teardown":
-        with pytest.raises(RuntimeError, match="teardown interrupted"):
-            run_tests.main(arguments)
-    else:
-        code = run_tests.main(arguments)
-        assert (code == 0) == (mode == "plan")
+    code = run_tests.main(arguments)
+    assert (code == 0) == (mode == "plan")
     assert calls[0] == "collect"
     if mode in ("plan", "collection_error", "empty"):
         assert calls == ["collect"]

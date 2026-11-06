@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from build import build, build_gallery, build_web
 from env import TestEnvironment, llm_env, lux_env, require_bun
-from e2e_receipt import check_receipts, write
+from e2e_receipt import write
 from shard import TESTS_DIR, names_a_suite, parse_shard
 
 
@@ -111,6 +111,9 @@ def main(argv=None) -> int:
                 if env is not None:
                     env.teardown(keep=args.keep)
                 teardown_ok = True
+            except Exception as error:
+                print(f"E2E teardown failed: {error}", file=sys.stderr)
+                code = code or 1
             finally:
                 state["phases"]["teardown"] = time.monotonic() - started
                 state.update(exit_code=code, complete=code == 0 and teardown_ok)

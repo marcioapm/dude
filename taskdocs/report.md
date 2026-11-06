@@ -16,7 +16,10 @@
 - Focused harness/shard/Go-partition checks: **85 passed in 0.47s**, exit 0 (`focused.log`). Includes synthetic missing/duplicate/parameter-result negatives, platform skip reason, failing test/session teardown, and fake pipeline collection/DB/test/teardown failures.
 - PostgreSQL pgvector pg17-trixie is healthy on 5433, tmpfs 2 GiB, fsync/full-page writes off, max connections 800. Rootless Podman socket `/tmp/dude-podman.sock`, service stdio redirected to `/tmp/podman.log`.
 - Linux arm64 has no Google Chrome channel. Playwright native Chromium **153.0.8010.12** launches successfully; real local gates will explicitly use `DUDE_TEST_BROWSER_CHANNEL=`. This is a disclosed browser fallback, not CI equivalence.
-- Full runtime and twelve-plan collection gates next; no runtime or CI speedup claim yet.
+- Full 1/1 execution launched detached at 19:46 UTC with `full.log`, `full-exit.json`, JUnit and direct receipt. At 19:49 UTC: 19 passed terminal results, receipt unfinished as expected. No silent foreground wait.
+- Collection gate: all 18 plans (six-way and twelve-way) succeed, exact-once selected unions and raw whole-file assignments verified in **18.43s**. Baseline **736 raw / 666 selected**, new **745 / 675**; **zero removed**, nine added harness IDs, exact names in `collection-proof.json`.
+- Initial implementation commit: `6d597478f`. Review tightened aggregate universe/assignment validation and teardown exception exit preservation. Net mechanism/test change remains around the requested 400-line ceiling; no additional framework is being added.
+- Full runtime and final receipt equivalence pending; no runtime or CI speedup claim yet.
 
 ## Artifacts
 This report is intentionally versioned per request. Collection snapshots, receipts, JUnit, logs and patch backup will be retained in this checkout under `taskdocs/` when available; caches and temporary services are not report artifacts.

@@ -35,6 +35,11 @@ def check_receipts(receipts, denominator):
     if len(receipts) != denominator:
         raise ValueError("missing receipt")
     reference = receipts[0]["plan"]
+    raw, selected = reference["raw"], reference["selected"]
+    if (raw != sorted(set(raw)) or selected != sorted(set(selected))
+            or not set(selected).issubset(raw)
+            or reference["assignment"] != assignment(raw, denominator)):
+        raise ValueError("invalid universe or whole-file assignment")
     seen = Counter()
     for index, receipt in enumerate(sorted(receipts, key=lambda r: r["shard"]), 1):
         if receipt["shard"] != index or receipt["plan"] != reference:

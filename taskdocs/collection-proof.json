@@ -1,0 +1,42 @@
+{
+  "baseline": {
+    "raw": 736,
+    "selected": 666
+  },
+  "new": {
+    "raw": 745,
+    "selected": 675
+  },
+  "diff": {
+    "raw": {
+      "removed": [],
+      "added": [
+        "suites/test_harness.py::test_failing_test_and_session_teardown_remain_failures",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[collection_error]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[database]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[empty]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[plan]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[teardown]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[test_failure]",
+        "suites/test_harness.py::test_terminal_receipt_preserves_parameter_ids_and_platform_skip",
+        "suites/test_shard.py::test_every_suite_lands_in_exactly_one_shard[12]"
+      ]
+    },
+    "selected": {
+      "removed": [],
+      "added": [
+        "suites/test_harness.py::test_failing_test_and_session_teardown_remain_failures",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[collection_error]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[database]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[empty]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[plan]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[teardown]",
+        "suites/test_harness.py::test_pipeline_precollects_and_fails_closed[test_failure]",
+        "suites/test_harness.py::test_terminal_receipt_preserves_parameter_ids_and_platform_skip",
+        "suites/test_shard.py::test_every_suite_lands_in_exactly_one_shard[12]"
+      ]
+    }
+  },
+  "plans": 18,
+  "wall_seconds": 18.429818635000174
+}
