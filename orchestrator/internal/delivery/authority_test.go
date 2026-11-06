@@ -87,6 +87,11 @@ func TestDecideItems(t *testing.T) {
 		"Is src/a / b the right path?",
 		"Criterion 1 failed:\n- the e2e suite did not run\n- no container runtime\nHow do you want to go on?",
 		"Steps done:\n1. implemented\n2. reviewed\nWhat should the PR title be?",
+		// One " / " is a phrase, not a list of answers.
+		"Should the greeting keep its hello / goodbye wording?",
+		// Fractions and paths, however many.
+		"Split the budget 1 / 2 / 3 ways?",
+		"Is src/a / src/b / src/c the right order?",
 	} {
 		if _, _, err := decideItems(note, DecideAsk{}); err != nil {
 			t.Errorf("%q: %v, want asked in the person's own words", note, err)
