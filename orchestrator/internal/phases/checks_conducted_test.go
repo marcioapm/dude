@@ -498,6 +498,28 @@ func TestAPendingChecksAskIsNotInspectedEveryPass(t *testing.T) {
 
 // The same holds the other way: with the ask past its deadline, or the
 // conductor lost, the pending shortcut never stands in for the fallback.
+// A delivery that leaves its conductor while an ask is open (a person
+// accepts Deliver's defaults: decider policy) falls back on the gate's
+// next pass, not at the ask's deadline.
+func TestAnOpenAskYieldsWhenTheDeliveryLeavesItsConductor(t *testing.T) {
+	w := newHarnessWorld(t)
+	conducted(w)
+	// The fallback with no conductor is noConductor's, as in production.
+	w.s.JudgeUnconducted = false
+	checksReply(w, passingChecks)
+	endTurn(w)
+	if pass, acted := w.gate(); pass || acted {
+		t.Fatalf("asked: pass %v acted %v, want pending", pass, acted)
+	}
+	mustOwner(t, w, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', '"policy"') WHERE task_id = $1`, w.run.TaskID)
+	if pass, acted := w.gate(); !pass || !acted {
+		t.Fatalf("pass %v acted %v, want the fallback's skip at once", pass, acted)
+	}
+	if got := recordedJudgement(w); !got.Skipped {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestAPendingAskShortcutYieldsToTheFallback(t *testing.T) {
 	for _, c := range []string{"overdue", "unavailable"} {
 		t.Run(c, func(t *testing.T) {
