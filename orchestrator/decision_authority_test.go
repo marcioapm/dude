@@ -38,29 +38,11 @@ func TestInvalidOpenAuthorityCommitsBeforeReturningRefusal(t *testing.T) {
 			mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title)
 				SELECT 'fnd_atomic', organization_id, id, (SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' LIMIT 1),
 				'correctness', 'high', 'A new blocker' FROM tasks WHERE id = $1`, task)
-			paused, resume, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			var once sync.Once
-			tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log,
-				AfterTransaction: func(ctx context.Context, tool string) {
-					if tool == "decide" {
-						once.Do(func() {
-							close(paused)
-							if disconnect {
-								<-ctx.Done()
-							}
-							<-resume
-						})
-					}
-				}}).Handler())
-			t.Cleanup(tools.Close)
+			finished := make(chan struct{})
+			tools, paused, resume := pausingDecide(w, disconnect)
 			var spec lux.Spec
 			_ = json.Unmarshal([]byte(w.conductorSpecOf(task)), &spec)
-			var auth string
-			for _, s := range spec.Secrets {
-				if s.Name == "DUDE_TOOLS_AUTH" {
-					auth = s.Value
-				}
-			}
+			auth := toolsAuth(spec)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			req, _ := http.NewRequestWithContext(ctx, "POST", tools.URL+"/tools/decide", strings.NewReader(`{"action":"open_pull_request"}`))
@@ -128,6 +110,27 @@ func TestInvalidOpenAuthorityCommitsBeforeReturningRefusal(t *testing.T) {
 	}
 }
 
+// pausingDecide is a tools server whose first decide call holds after its
+// transaction finishes, before refusal reporting: paused closes there, and
+// it goes on once resume is closed (and, if untilDone, its request is done).
+func pausingDecide(w *world, untilDone bool) (srv *httptest.Server, paused, resume chan struct{}) {
+	paused, resume = make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	srv = httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, AfterTransaction: func(ctx context.Context, tool string) {
+		if tool == "decide" {
+			once.Do(func() {
+				close(paused)
+				if untilDone {
+					<-ctx.Done()
+				}
+				<-resume
+			})
+		}
+	}}).Handler())
+	w.t.Cleanup(srv.Close)
+	return srv, paused, resume
+}
+
 // HTTP and MCP preserve the same refusal words; a repeated refusal is not
 // a second void. A fresh owner answer can replace the old void while the old
 // HTTP handler is still paused, and its eventual return must not void it.
@@ -139,14 +142,7 @@ func TestInvalidOpenAuthorityRefusalAndFreshAnswer(t *testing.T) {
 			w.reachGateAnswered(task)
 			old := w.authority(task)
 			mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{openAuthority,attempt}', '7') WHERE task_id = $1`, task)
-			paused, resume := make(chan struct{}), make(chan struct{})
-			var once sync.Once
-			srv := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, AfterTransaction: func(_ context.Context, tool string) {
-				if tool == "decide" {
-					once.Do(func() { close(paused); <-resume })
-				}
-			}}).Handler())
-			t.Cleanup(srv.Close)
+			srv, paused, resume := pausingDecide(w, false)
 			specText := w.conductorSpecOf(task)
 			done := make(chan string, 1)
 			go func() {
@@ -157,12 +153,7 @@ func TestInvalidOpenAuthorityRefusalAndFreshAnswer(t *testing.T) {
 			// A second transport sees exactly the same semantic refusal.
 			var spec lux.Spec
 			_ = json.Unmarshal([]byte(specText), &spec)
-			var auth string
-			for _, s := range spec.Secrets {
-				if s.Name == "DUDE_TOOLS_AUTH" {
-					auth = s.Value
-				}
-			}
+			auth := toolsAuth(spec)
 			cs, err := mcp.NewClient(&mcp.Implementation{Name: "authority-test", Version: "1"}, nil).Connect(context.Background(),
 				&mcp.StreamableClientTransport{Endpoint: w.syncer.Agent.ToolsURL, DisableStandaloneSSE: true, MaxRetries: -1,
 					HTTPClient: &http.Client{Transport: headerTransport{"Authorization", auth}}}, nil)
