@@ -356,7 +356,7 @@ func excerpt(s string, n int) (string, bool) {
 func conducted[T any](out T, err error) (T, error) {
 	var r delivery.Refusal
 	if errors.As(err, &r) {
-		refused := refusal{msg: r.Msg, blocked: r.Blocked, lifecycle: r.Lifecycle}
+		refused := refusal{msg: r.Msg, blocked: r.Blocked, lifecycle: r.Lifecycle, invalidOpenAuthority: r.InvalidOpenAuthority}
 		if r.Event != nil {
 			refused.event = &refusedEvent{r.Event.Type, r.Event.Payload}
 		}
@@ -381,12 +381,26 @@ func startPhase(ctx context.Context, tx pgx.Tx, c Caller, in startPhaseIn) (map[
 }
 
 type decideIn struct {
-	Action string `json:"action"`
-	Note   string `json:"note,omitempty"`
+	Action    string           `json:"action"`
+	Note      string           `json:"note,omitempty"`
+	Choices   []decideChoiceIn `json:"choices,omitempty"`
+	Recommend string           `json:"recommend,omitempty"`
+}
+
+type decideChoiceIn struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Action      string `json:"action,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
 }
 
 func decide(ctx context.Context, tx pgx.Tx, c Caller, in decideIn) (map[string]any, error) {
-	return conducted(delivery.ConductDecide(ctx, tx, c.run(), strings.TrimSpace(in.Action), in.Note))
+	ask := delivery.DecideAsk{Recommend: in.Recommend}
+	for _, ch := range in.Choices {
+		ask.Choices = append(ask.Choices, delivery.DecideChoice{Label: ch.Label, Description: ch.Description,
+			Action: ch.Action, Recommended: ch.Recommended})
+	}
+	return conducted(delivery.ConductDecideAsk(ctx, tx, c.run(), strings.TrimSpace(in.Action), in.Note, ask))
 }
 
 type dismissIn struct {
