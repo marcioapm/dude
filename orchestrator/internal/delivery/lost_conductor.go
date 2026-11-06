@@ -349,14 +349,14 @@ var lostRunTmpl = mustTemplate("briefings/lost-run")
 type lostBrief struct {
 	// Old is the predecessor's Run; Failed when it failed (Try again)
 	// rather than lux losing it while it waited.
-	Old           string
-	Failed        bool
-	Error         string
-	Name, Prompt  string
-	Choices       []string
-	Reasked       string
-	NotReasked    string
-	Answered      bool
+	Old          string
+	Failed       bool
+	Error        string
+	Name, Prompt string
+	Choices      []string
+	Reasked      string
+	NotReasked   string
+	Answered     bool
 }
 
 // LostBriefing is the briefing of the replacement conductor ref of a Run

@@ -235,7 +235,7 @@ func (s *Server) recoveryOptions(w http.ResponseWriter, r *http.Request, org str
 	write(w, http.StatusOK, map[string]any{"taskId": taskID, "actions": db.NonNil(actions),
 		"attempt": t.Attempt, "keptUntil": t.KeptUntil, "refused": refused,
 		"retryNeedsNote": t.State.Stopped != nil && delivery.NeedsNote(t.State.Stopped.Reason, "retry"),
-		"conductor": conductor})
+		"conductor":      conductor})
 	return nil
 }
 
