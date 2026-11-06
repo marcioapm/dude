@@ -125,6 +125,8 @@ const woken = `CASE $3
 			(SELECT max(q.decided_at) FROM repository_requests q WHERE q.run_id = r.id AND q.blocking
 				AND q.decided_at >= park.at),
 			(SELECT max(w.closed_at) FROM peer_waits w WHERE w.run_id = r.id AND w.closed_at >= park.at),
+			(SELECT min(v.occurred_at) FROM events v WHERE v.run_id = r.id AND v.event_type = 'run.checks.conducted'
+				AND v.occurred_at >= park.at),
 			(SELECT min(d.created_at) FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL
 				AND d.created_at >= park.at AND EXISTS (SELECT 1 FROM peer_waits ow WHERE ow.run_id = r.id AND ow.closed_at IS NULL)))
 		FROM (SELECT COALESCE(max(COALESCE((e.payload->>'parkedAt')::timestamptz, e.occurred_at)), '-infinity') AS at FROM events e

@@ -902,7 +902,7 @@ const checksHeld = `EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = r.ta
 // person (PersonAsk) or on a peer's reply (peer_waits). An agent that ends
 // its turn with one open is waiting, not done: parked past the grace,
 // resumed once it closes.
-const OpenAsk = `(` + PersonAsk + ` OR ` + openPeerWait + `)`
+const OpenAsk = `(` + PersonAsk + ` OR ` + openPeerWait + ` OR ` + ChecksWaiting + `)`
 
 // HoldsTurn is true (SQL, over a Run aliased r) while a turn that ends
 // is not done: something is open for a person or a peer (OpenAsk), a

@@ -217,4 +217,13 @@ const (
 	rRecoverBranchOutside                   = "branch %q is outside %s: name one under it (letters, digits, . _ -, at most 60 after the prefix), or leave it out for %s"
 	rRecoverBranchInUse                     = "branch %q is the task's own or an open pull request's: name another under dude/<task>/recovered-"
 	rRecoverAlreadyRecovered                = "%s is already recovered to %s (%s): ask for that branch to see it, or wait for its wake"
+	rChecksRunNotOfTask                     = "that Run is not a writer Run of this task's current attempt: decide only the checks reports your task's Runs ask you about"
+	rChecksNotLatestTurn                    = "that is not the Run's latest turn: its latest is %d, and a verdict on an earlier turn is never read. Decide the turn the latest checks wake names"
+	rChecksNotWaiting                       = "the checks gate is not waiting on you for that Run's turn: it was decided already, or it was never asked of you"
+	rChecksIncomplete                       = "decide every reported check, in the report's order and by its exact command, one verdict each: %s"
+	rChecksNeedsReason                      = "every verdict needs its reason: %q has none"
+	rChecksVerdictNotAllowed                = "%q is not a verdict for %q, reported %s: use one of %s"
+	rChecksNoBase                           = "preexisting needs a recorded commit of the target branch this task builds on, and this report has none: reject the failure instead"
+	rChecksWaiverCursor                     = "same_as_waived for %q must cite the waiver it matches: waiverCursor %d"
+	rChecksMissingVerdict                   = "missing needs verdict none or missing, and a reason"
 )

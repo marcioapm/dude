@@ -78,7 +78,7 @@ func TestChecksJudgementsFailClosed(t *testing.T) {
 			w := newHarnessWorld(t)
 			checksReply(w, passingChecks)
 			w.s.Judge = &checksFake{backed: tc.backed, missing: tc.missing, err: tc.err, unrecorded: tc.unrecorded}
-			got, err := w.s.judgeChecks(context.Background(), w.run)
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 			if err != nil || got.Verified != tc.want {
 				t.Fatalf("%+v %v", got, err)
 			}
@@ -91,7 +91,7 @@ func TestChecksMissingOrUnparseableReportsRejectWithoutJudge(t *testing.T) {
 			w := newHarnessWorld(t)
 			checksReply(w, text)
 			fake := acceptingJudge(w)
-			got, err := w.s.judgeChecks(context.Background(), w.run)
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 			if err != nil || got.Verified || fake.calls != 0 {
 				t.Fatalf("%+v %v calls %d", got, err, fake.calls)
 			}
@@ -237,7 +237,7 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 			t.Fatalf("read %d bytes, the earliest report among them: %v", len(reply), strings.Contains(reply, "command: verify"))
 		}
 		fake := acceptingJudge(w)
-		got, err := w.s.judgeChecks(context.Background(), w.run)
+		got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 		if err != nil || !got.Verified || fake.calls != 2 || got.Verdicts[0].Command != "make check" {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
 		}
@@ -248,7 +248,7 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 		checksReply(w, passingChecks)
 		checksReply(w, "checks: [broken")
 		fake := acceptingJudge(w)
-		got, err := w.s.judgeChecks(context.Background(), w.run)
+		got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 		if err != nil || got.Verified || fake.calls != 0 {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
 		}
@@ -259,7 +259,7 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 		w := newHarnessWorld(t)
 		checksReply(w, passingChecks+"\n"+long)
 		fake := acceptingJudge(w)
-		got, err := w.s.judgeChecks(context.Background(), w.run)
+		got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 		if err != nil || got.Verified || fake.calls != 0 {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
 		}
@@ -268,7 +268,7 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 		w := newHarnessWorld(t)
 		checksReply(w, long+passingChecks)
 		fake := acceptingJudge(w)
-		got, err := w.s.judgeChecks(context.Background(), w.run)
+		got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 		if err != nil || !got.Verified || fake.calls != 2 {
 			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
 		}
@@ -294,7 +294,7 @@ func TestChecksTooManyChecksAreSentBackUnjudged(t *testing.T) {
 			w := newHarnessWorld(t)
 			checksReply(w, report(tc.n))
 			fake := acceptingJudge(w)
-			got, err := w.s.judgeChecks(context.Background(), w.run)
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 			if err != nil || fake.calls != tc.calls {
 				t.Fatalf("%+v %v calls %d", got, err, fake.calls)
 			}
