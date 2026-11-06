@@ -26,7 +26,8 @@ func TestChecksEscalationsCountLifecycles(t *testing.T) {
 		{"different run without handover", []string{"escalation.raised"}, "run_b", 2},
 		{"stopped", []string{"escalation.raised", "task.stopped"}, "run_a", 2},
 		{"restarted", []string{"escalation.raised", "task.recovered"}, "run_a", 2},
-		{"reset", []string{"escalation.raised", "machine.reset"}, "run_a", 2},
+		{"machine sizing reset keeps the hold", []string{"escalation.raised", "machine.reset"}, "run_a", 1},
+		{"another run restart keeps the hold", []string{"escalation.raised", "run.restarted"}, "run_a", 1},
 		{"replacement raise", []string{"escalation.raised", "escalation.raised"}, "run_a", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,7 +49,7 @@ func TestChecksEscalationsCountLifecycles(t *testing.T) {
 				case "task.decided":
 					payload = map[string]any{"action": "retry", "reason": delivery.ReasonChecksUnverified}
 				default:
-					// Stop/recovery/reset events need not name checks at all.
+					// Lifecycle and unrelated settings/run events need not name checks.
 					payload = map[string]any{"action": "restart"}
 				}
 				if err := store.Emit(context.Background(), w.org, st, typ, payload); err != nil {
@@ -92,7 +93,7 @@ func (w *world) checksEscalations(wi string) int {
 				lag(payload) OVER (ORDER BY cursor) AS prior
 			FROM events WHERE task_id = $1 AND (
 				event_type IN ('escalation.raised', 'task.decided', 'task.stopped', 'task.recovered',
-					'task.closed', 'task.reopened', 'run.restarted', 'machine.reset')
+					'task.closed', 'task.reopened')
 				OR (event_type = 'question.asked' AND payload->>'kind' = 'escalation'))
 		) e WHERE payload->>'reason' = $2 AND (event_type = 'escalation.raised'
 			OR (event_type = 'question.asked' AND NOT COALESCE(
