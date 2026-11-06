@@ -178,9 +178,6 @@ def test_a_conductor_parked_between_decisions_still_decides(client: ApiClient, f
     assert not [t for t in _said(client, conductor) if "answered 401" in t], _said(client, conductor)
     decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
     assert decided == ["start_phase", "next"], decided
-    assert env.judge_unrouted()[unrouted:] == []
-    calls = client.get("/v1/judgements", params={"asker": "phases.checks"})
-    assert calls.status_code == 200 and calls.json()["calls"] == [], calls.text
     # Both decisions were made by a resumed conductor, each start with its own token.
     assert len(query(owner_dsn, "SELECT 1 FROM run_resumes WHERE run_id = %s", (conductor,))) >= 2
 
@@ -339,6 +336,9 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     _waiting_on(client, task["id"], "after_review", "the review never came back to the conductor")
     decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
     assert decided == ["start_phase", "next"], decided
+    assert env.judge_unrouted()[unrouted:] == []
+    calls = client.get("/v1/judgements", params={"asker": "phases.checks"})
+    assert calls.status_code == 200 and calls.json()["calls"] == [], calls.text
 
 
 def _waived(client: ApiClient, task_id: str, what: str, owner_dsn: str) -> None:
