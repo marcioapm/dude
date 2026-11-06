@@ -22,7 +22,9 @@ func TestALostRunsQuestionIsCancelledAtCommitUnlessMoved(t *testing.T) {
 		mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt) VALUES ($1, $2, $3, $4, 'Open?')`,
 			id, w.org, task, runID)
 	}
-	status := func(q string) string { return w.str(`SELECT status::text || '/' || run_id FROM questions WHERE id = $1`, q) }
+	status := func(q string) string {
+		return w.str(`SELECT status::text || '/' || run_id FROM questions WHERE id = $1`, q)
+	}
 
 	t.Run("lost, not moved: cancelled at commit", func(t *testing.T) {
 		run("run_lost_a", "paused")

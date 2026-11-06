@@ -75,7 +75,7 @@ func TestAConductorLostWhileParkedOnTheGateKeepsTheQuestionOpen(t *testing.T) {
 		t.Errorf("%d lux Runs submitted before the person answered", n-submitted)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'questionId' = $3`,
-		next, delivery.EvQuestionRebound, q); n != 1 {
+		next, "question.rebound", q); n != 1 {
 		t.Errorf("%d question.rebound events", n)
 	}
 }
@@ -146,7 +146,7 @@ func TestALostConductorIsReplacedOnceAcrossFollowerAndSweep(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 2 {
 		t.Errorf("%d conductors, want the lost one and one replacement", n)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE event_type = $1 AND payload->>'questionId' = $2`, delivery.EvQuestionRebound, q); n != 1 {
+	if n := w.count(`SELECT count(*) FROM events WHERE event_type = $1 AND payload->>'questionId' = $2`, "question.rebound", q); n != 1 {
 		t.Errorf("%d question.rebound events, want 1", n)
 	}
 	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "open" {
@@ -186,25 +186,39 @@ func TestAnAnswerCommittedAsTheConductorIsLostStartsTheReplacementWithIt(t *test
 	})
 }
 
-// 6. A quiet conductor lost before its decision's deadline: its replacement
-// is the latest conductor, not failed, so the decision is not defaulted.
+// 6. A quiet conductor lost before its decision's deadline, waiting on the
+// person it asked: its replacement is the latest conductor, not failed, so
+// Deliver's defaults do not take the decision for a failed Run.
 func TestALostQuietConductorDoesNotDefaultTheDecision(t *testing.T) {
 	w := conducting(t)
-	task, old, _ := w.lostAtGate()
-	w.untilLost(old)
-	// Quiet, its decision's deadline an hour off, and the step woken now:
-	// it reads the latest conductor.
-	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(jsonb_set(state, '{voice}', '"quiet"'),
-			'{decision,decideBy}', to_jsonb(now() + interval '1 hour')), wake_at = now()
+	w.syncer.ParkAfter = time.Hour
+	task := w.task()
+	old := w.talk(task)
+	w.implemented(task)
+	w.carriedOut(task, "start_phase", `{"phase":"simplify"}`)
+	w.agentsDone(task, "the simplifier's narrow review", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
+	w.must(task, "decide", `{"action":"ask_person","note":"Dismiss the finding?"}`)
+	w.until("the conductor waiting on the person", func() bool {
+		return w.count(`SELECT count(*) FROM questions WHERE run_id = $1 AND status = 'open' AND addressee = 'person'`, old) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND (waiting_since IS NOT NULL OR turn_done_at IS NOT NULL)`, old) == 1
+	})
+	// Quiet, its deadline an hour off.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(jsonb_set(jsonb_set(state, '{voice}', '"quiet"'),
+			'{decision,decideBy}', to_jsonb(now() + interval '1 hour')), '{decision,since}', to_jsonb(now() - interval '1 minute'))
 		WHERE task_id = $1 AND step = 'conductorDecision'`, task)
+	w.lux.ForgetRun(w.luxRunOf(old))
+	w.untilLost(old)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, task)
 	for range 5 {
 		w.pump()
 	}
-	if w.decisionAt(task) != delivery.PointBeforePR {
-		t.Errorf("the gate's decision was taken: %s", w.workflowState(task))
-	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvDecisionDefaulted); n != 0 {
 		t.Errorf("%d decisions defaulted after lux lost the conductor", n)
+	}
+	if w.decisionAt(task) != delivery.PointReviewed {
+		t.Errorf("the review's decision was taken: %s %s", w.workflowState(task),
+			w.str(`SELECT string_agg(event_type || ' ' || payload::text, E'\n' ORDER BY cursor) FROM events WHERE task_id = $1
+				AND (event_type LIKE 'conductor.decision%' OR event_type LIKE 'chat.notice')`, task))
 	}
 }
 
