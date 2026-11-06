@@ -252,21 +252,6 @@ const (
 	authorityAnsweredLater = "the person answered the conductor otherwise since"
 )
 
-// openAuthorityTx is the delivery's authority to open now: the recorded
-// one, and whether it holds (and why not).
-func openAuthorityTx(ctx context.Context, tx pgx.Tx, wfID string, st *State) (*OpenAuthority, bool, string, error) {
-	a := st.OpenAuthority
-	if a == nil {
-		return nil, false, "", nil
-	}
-	facts, err := authorityFactsTx(ctx, tx, wfID, st)
-	if err != nil {
-		return a, false, "", err
-	}
-	ok, why := OpenAuthorityValid(a, facts)
-	return a, ok, why, nil
-}
-
 // OpenAnswerTx records the owner's answer to the task's conductor's
 // question as authority to open the pull request (State.OpenAuthority),
 // when the choice picked carries the action open or draft (questions.
@@ -522,7 +507,7 @@ func decideItems(note string, in DecideAsk) ([]QuestionItem, []string, error) {
 		item.Choices = append(item.Choices, Choice{Label: c.Label, Description: c.Description, Recommended: c.Recommended})
 	}
 	if rec := strings.TrimSpace(in.Recommend); rec != "" {
-		i := slices.IndexFunc(item.Choices, func(c Choice) bool { return strings.EqualFold(strings.TrimSpace(c.Label), rec) })
+		i := choiceOf(item.Labels(), rec)
 		if i < 0 {
 			return nil, nil, refusef(rRecommendIsOneOf, rec, listOr(item.Labels()))
 		}

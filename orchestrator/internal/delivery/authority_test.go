@@ -32,6 +32,11 @@ func TestOpenAuthorityValid(t *testing.T) {
 		{"as answered", base, facts, true, ""},
 		{"draft", func() *OpenAuthority { a := base(); a.Choice = ChoiceDraft; return a }, facts, true, ""},
 		{"none recorded", func() *OpenAuthority { return nil }, facts, false, "no answer"},
+		{"voided forever", func() *OpenAuthority {
+			a := base()
+			a.Voided = &AuthorityVoid{Why: "the person answered the conductor otherwise since"}
+			return a
+		}, facts, false, "answered the conductor otherwise"},
 		{"a choice that does not open", func() *OpenAuthority { a := base(); a.Choice = ""; return a }, facts, false, "not open or draft"},
 		{"another delivery", base, func() AuthorityFacts { f := facts(); f.WorkflowID = "wf_2"; return f }, false, "another delivery"},
 		{"next attempt", base, func() AuthorityFacts { f := facts(); f.Attempt = 2; return f }, false, "another attempt"},
@@ -108,7 +113,7 @@ func TestDecideItems(t *testing.T) {
 	}
 	items, actions, err = decideItems("Criterion 1 cannot be checked here. How to go on?", DecideAsk{Choices: []DecideChoice{
 		{Label: "Open the PR so CI measures", Action: ChoiceOpen}, {Label: "Run Docker locally"}, {Label: "Accept partly met"}},
-		Recommend: "Open the PR so CI measures"})
+		Recommend: "  oPEN the PR so CI measures  "})
 	if err != nil || len(items[0].Choices) != 3 || !items[0].Choices[0].Recommended || strings.Join(actions, ",") != "open,," {
 		t.Errorf("choices: %+v %v %v", items, actions, err)
 	}
