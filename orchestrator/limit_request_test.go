@@ -85,7 +85,7 @@ func TestRetryReasksLimitRequestWithoutLosingAdminAuthorization(t *testing.T) {
 	q, _ := w.must(task, "request_limit", `{"limit":"perReviewRound","to":3,"reason":"one more round"}`)["questionId"].(string)
 	old := w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
 	w.until("the request turn finished and input heard", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, old) == 1 &&
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND (turn_done_at IS NOT NULL OR waiting_since IS NOT NULL)`, old) == 1 &&
 			w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
 	})
 	mustExec(t, w.owner, `UPDATE runs SET status = 'failed', error = 'lux no longer has this Run', ended_at = now() WHERE id = $1`, old)
