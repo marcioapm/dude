@@ -492,8 +492,6 @@ func TestAPendingChecksAskIsNotInspectedEveryPass(t *testing.T) {
 func TestAnOpenAskYieldsWhenTheDeliveryLeavesItsConductor(t *testing.T) {
 	w := newHarnessWorld(t)
 	conducted(w)
-	// The fallback with no conductor is noConductor's, as in production.
-	w.s.JudgeUnconducted = false
 	checksReply(w, passingChecks)
 	endTurn(w)
 	if pass, acted := w.gate(); pass || acted {
