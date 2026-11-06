@@ -270,8 +270,9 @@ def test_no_conductor_publishes_with_skip_advice(page: Page, web_url: str, clien
 
     # The same outcome is visible in the actual task screen's Activity tab.
     sign_in(page, web_url, client.api_key, at=f"#/task/{task['id']}", board=False)
-    activity = page.get_by_text(re.compile("not verified by a conductor", re.IGNORECASE))
-    expect(activity.first).to_be_visible(timeout=30_000)
+    page.get_by_role("tab", name="Activity").click()
+    activity = page.get_by_test_id("activity")
+    expect(activity.get_by_text(re.compile("not verified by a conductor", re.IGNORECASE)).first).to_be_visible(timeout=30_000)
 
 
 @pytest.mark.e2e
