@@ -617,6 +617,36 @@ test("247 upgrades 246 with the global conductor-stop index outside a transactio
   }
 }, 120_000);
 
+test("251 upgrades 250 with the run question-close index outside a transaction", async () => {
+  const { url, sql } = await migratedBefore("251");
+  try {
+    const before = await recorded(url);
+    expect(before.at(-1)?.version).toBe("250");
+    const file = (await listMigrationFiles()).find((f) => f.version === "251");
+    expect(file?.name).toBe("251_events_run_question_closed_idx.sql");
+    const contents = await file!.contents();
+    expect(outsideTransaction(contents)).toBe(true);
+    const statement = contents.replace(/^--.*$/gm, "").trim();
+    expect(statement.split(";").filter((s) => s.trim())).toHaveLength(1);
+    expect(statement).toMatch(/^CREATE INDEX CONCURRENTLY IF NOT EXISTS events_run_question_closed_idx\s+ON events \(run_id, \(payload->>'questionId'\), cursor\)/);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["251_events_run_question_closed_idx.sql"]);
+    expect((await recorded(url)).slice(0, before.length)).toEqual(before);
+    const [index] = await sql`SELECT i.indisvalid, i.indisready, am.amname,
+      pg_get_indexdef(i.indexrelid, 1, true) AS run, pg_get_indexdef(i.indexrelid, 2, true) AS question,
+      pg_get_indexdef(i.indexrelid, 3, true) AS cursor,
+      pg_get_expr(i.indpred, i.indrelid) AS predicate, i.indnkeyatts, i.indnatts
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am am ON am.oid = c.relam
+      WHERE i.indexrelid = to_regclass('events_run_question_closed_idx') AND i.indrelid = 'events'::regclass`;
+    expect(index).toEqual({ indisvalid: true, indisready: true, amname: "btree",
+      run: "run_id", question: "(payload ->> 'questionId'::text)", cursor: "cursor",
+      predicate: "(event_type = 'question.closed'::text)",
+      indnkeyatts: 3, indnatts: 3 });
+    expect((await migrate(url, { log: () => {} })).applied).toEqual([]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
 test("248 upgrades 247: live reviewer questions and repository requests stay the person's, with partial handover indexes", async () => {
   const { url, sql } = await migratedBefore("248");
   try {
