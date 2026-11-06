@@ -555,3 +555,126 @@ func TestTryAgainDoesNotRelayAWriterQuestionHandedToThePerson(t *testing.T) {
 		t.Fatalf("%d person questions still open", n)
 	}
 }
+
+// notReasked checks Try again after a lost relay asked nothing: no question
+// on the fresh conductor, none open, and the briefing saying why; with
+// running, the task not waiting on a moot question, now or after the
+// sweeps.
+func (s *steering) notReasked(qid, why string, running bool) {
+	s.t.Helper()
+	status, out := s.call("/internal/tasks/"+s.task+"/retry", map[string]any{})
+	if status != 201 {
+		s.t.Fatalf("Try again: %d %v", status, out)
+	}
+	next, _ := out["runId"].(string)
+	if n := s.count(`SELECT count(*) FROM questions WHERE run_id=$1`, next); n != 0 {
+		s.t.Fatalf("%d questions asked again on the fresh conductor", n)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE task_id=$1 AND status='open' AND addressee='person'`, s.task); n != 0 {
+		s.t.Fatalf("%d person questions open after Try again", n)
+	}
+	if prompt := s.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id=$1`, next); !strings.Contains(prompt, why) {
+		s.t.Errorf("the briefing does not say %q:\n%s", why, prompt)
+	}
+	if st := s.taskStatus(s.task); running && st == "awaiting_input" {
+		s.t.Fatalf("task %s after Try again", st)
+	}
+	for range 4 {
+		s.pump()
+	}
+	if st := s.taskStatus(s.task); running && st == "awaiting_input" {
+		s.t.Fatalf("task %s on a moot question after the sweeps", st)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE task_id=$1 AND status='open'`, s.task); n != 0 {
+		s.t.Fatalf("%d questions open after the sweeps", n)
+	}
+	if n := s.count(`SELECT count(*) FROM events WHERE event_type='question.answered' AND payload->>'questionId'=$1`, qid); n > 1 {
+		s.t.Fatalf("writer answered %d times", n)
+	}
+}
+
+// The sweeps hand the writer's question to the person and they answer it,
+// then Try again: it is settled, so nothing is asked again.
+func TestTryAgainDoesNotReaskARelayAnsweredAfterTheHandOver(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	qid, _, _ := s.relayLost()
+	for range 4 {
+		s.pump()
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='open' AND addressee='person'`, qid); n != 1 {
+		t.Fatal("the sweeps did not hand the writer's question to the person")
+	}
+	if status, out := s.call("/internal/questions/"+qid+"/answer", map[string]any{"text": "Shape B, handed over"}); status != 200 {
+		t.Fatalf("answer %d %v", status, out)
+	}
+	if st := s.taskStatus(s.task); st == "awaiting_input" {
+		t.Fatalf("task %s once the person answered", st)
+	}
+	s.notReasked(qid, "the writer's question was settled since", true)
+	s.until("writer told", func() bool { return s.inputsWith(s.implementer, "Shape B, handed over") >= 1 })
+	if n := s.inputsWith(s.implementer, "Shape B, handed over"); n != 1 {
+		t.Fatalf("writer told %d times", n)
+	}
+}
+
+// The writer's Run ended (its question cancelled with it), then Try again:
+// there is no one to relay to, so nothing is asked again. (The task's
+// status is not asserted: the writer's end here is written directly, not
+// through a path that ends the wait its relay raised.)
+func TestTryAgainDoesNotReaskARelayWhoseWriterEnded(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	qid, _, _ := s.relayLost()
+	mustExec(t, s.owner, `UPDATE runs SET status='failed', error='writer gone', ended_at=now() WHERE id=$1`, s.implementer)
+	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='cancelled'`, qid); n != 1 {
+		t.Fatal("the writer's question was not cancelled with its Run")
+	}
+	s.notReasked(qid, "the writer's question was settled since", false)
+}
+
+// Another relay of the writer's question is open already (the person has
+// it), then Try again: it is not asked a second time.
+func TestTryAgainDoesNotReaskARelayAlreadyAsked(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	qid, relay, _ := s.relayLost()
+	mustExec(t, s.owner, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, items, addressee, status, relays, asked_at)
+		SELECT 'qst_other_relay', organization_id, task_id, run_id, prompt, items, addressee, 'open', relays, asked_at - interval '1 second'
+		FROM questions WHERE id=$1`, relay)
+	status, out := s.call("/internal/tasks/"+s.task+"/retry", map[string]any{})
+	if status != 201 {
+		t.Fatalf("Try again: %d %v", status, out)
+	}
+	next, _ := out["runId"].(string)
+	if n := s.count(`SELECT count(*) FROM questions WHERE run_id=$1`, next); n != 0 {
+		t.Fatalf("%d questions asked again on the fresh conductor", n)
+	}
+	if n := s.count(`SELECT count(*) FROM questions WHERE relays=$1 AND status='open'`, qid); n != 1 {
+		t.Fatalf("%d open relays of the writer's question", n)
+	}
+	if prompt := s.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id=$1`, next); !strings.Contains(prompt, "the writer's question is already asked") {
+		t.Errorf("the briefing does not say why it was not asked again:\n%s", prompt)
+	}
+}
+
+// The writer's Run is no longer the task's current attempt's, its question
+// still open with the conductor, then Try again: the writer is gone, so
+// nothing is asked again, and the question is not taken for the person's.
+func TestTryAgainDoesNotReaskARelayOfAnEarlierAttempt(t *testing.T) {
+	s := newSteering(t, conducting(t))
+	qid, _, _ := s.relayLost()
+	mustExec(t, s.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{attempt}', to_jsonb(task_attempt(task_id) + 1))
+		WHERE task_id = $1`, s.task)
+	if n := s.count(`SELECT count(*) FROM questions WHERE id=$1 AND status='open' AND addressee='conductor'`, qid); n != 1 {
+		t.Fatal("the writer's question is not still open with the conductor")
+	}
+	status, out := s.call("/internal/tasks/"+s.task+"/retry", map[string]any{})
+	if status != 201 {
+		t.Fatalf("Try again: %d %v", status, out)
+	}
+	next, _ := out["runId"].(string)
+	if n := s.count(`SELECT count(*) FROM questions WHERE run_id=$1`, next); n != 0 {
+		t.Fatalf("%d questions asked again on the fresh conductor", n)
+	}
+	if prompt := s.str(`SELECT COALESCE(prompt, '') FROM runs WHERE id=$1`, next); !strings.Contains(prompt, "the writer's question was settled since") {
+		t.Errorf("the briefing does not say why it was not asked again:\n%s", prompt)
+	}
+}
