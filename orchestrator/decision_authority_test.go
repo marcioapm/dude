@@ -232,6 +232,13 @@ func TestDecideAskPersonAsksWithChoices(t *testing.T) {
 		if len(options) != 3 || !choices[0].Recommended || strings.Join(actions, ",") != "open,," {
 			t.Errorf("options %v, choices %+v, actions %v", options, choices, actions)
 		}
+		// A choice that carries no action authorizes nothing.
+		if status, out := w.call("/internal/questions/"+w.conductorQuestion(task)+"/answer", map[string]any{"text": "Run Docker locally"}); status != 200 {
+			t.Fatalf("answer: %d %v", status, out)
+		}
+		if a := w.str(`SELECT COALESCE(state->>'openAuthority', '') FROM workflow_runs WHERE task_id = $1`, task); a != "" {
+			t.Errorf("a choice with no action recorded an authority: %s", a)
+		}
 	})
 	t.Run("a question in the person's own words", func(t *testing.T) {
 		w := conducting(t)
