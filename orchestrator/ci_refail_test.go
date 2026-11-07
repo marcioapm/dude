@@ -1,9 +1,15 @@
 package orchestrator_test
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
@@ -84,6 +90,140 @@ func testChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnother
 				t.Fatalf("%d fixes of CI, want 2: the same failing check read again started another", n)
 			}
 		})
+	}
+}
+
+// A conductor may wait for the remaining jobs after the first failure. A
+// different job failing must reach it even though neither head nor rollup moved.
+func TestDistinctFailedJobsOnTheSameHeadWakeAWaitingConductor(t *testing.T) {
+	w, task := conductedDirectWorld(t)
+	head := w.gh.SHA(w.gh.Pull(1).Head)
+
+	// The shared fake's listing has one check run; its CheckRuns map only
+	// supplies details. Override just the listing to model parallel jobs,
+	// keeping all other GitHub reads on the existing fake.
+	type job struct {
+		id                       int64
+		name, status, conclusion string
+	}
+	var jobs atomic.Value
+	setJobs := func(js ...job) { jobs.Store(js) }
+	setJobs(job{501, "unit", "in_progress", ""}, job{502, "integration", "in_progress", ""})
+	github := w.gh.Handler()
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			fakegithub.Graphql(w.gh)(rw, r)
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/acme/target/commits/"+head+"/check-runs" {
+			github.ServeHTTP(rw, r)
+			return
+		}
+		runs := []map[string]any{}
+		for _, j := range jobs.Load().([]job) {
+			runs = append(runs, map[string]any{
+				"id": j.id, "name": j.name, "status": j.status, "conclusion": j.conclusion,
+				"app":      map[string]string{"slug": "github-actions"},
+				"html_url": fmt.Sprintf("https://github.test/acme/target/runs/%d", j.id),
+			})
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(rw).Encode(map[string]any{"total_count": len(runs), "check_runs": runs}); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	mustExec(t, w.owner, `UPDATE forge_credentials SET api_base_url = $2 WHERE organization_id = $1`, w.org, server.URL)
+	w.gh.SetChecks("none")
+	w.untilChecks(task, "pending")
+
+	signals := func() int {
+		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2`, task, delivery.SignalPRFeedback)
+	}
+	keys := func() int {
+		return w.count(`SELECT count(DISTINCT s.idempotency_key) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2`, task, delivery.SignalPRFeedback)
+	}
+	checksJSON := func() string {
+		var checks string
+		if err := w.owner.QueryRow(context.Background(), `SELECT checks_json::text FROM pull_requests WHERE task_id = $1`, task).Scan(&checks); err != nil {
+			t.Fatal(err)
+		}
+		return checks
+	}
+	assertSignals := func(want int) {
+		t.Helper()
+		if got := signals(); got != want {
+			t.Fatalf("%d PR feedback signals, want %d", got, want)
+		}
+		if got := keys(); got != want {
+			t.Fatalf("%d distinct PR feedback signal keys, want %d", got, want)
+		}
+	}
+	wait := func() {
+		t.Helper()
+		w.must(task, "decide", `{"action":"wait","note":"Wait for the remaining CI jobs."}`)
+		w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(task) })
+	}
+	wake := func(before int, previous string) {
+		t.Helper()
+		w.until("the new failed job to reach the conductor", func() bool {
+			w.sync()
+			return w.decisionAt(task) == delivery.PointPRFeedback
+		})
+		w.untilChecks(task, "failing")
+		if got := checksJSON(); got == previous {
+			t.Fatal("the new failed job did not change checks_json")
+		}
+		assertSignals(before + 1)
+		if got := w.gh.SHA(w.gh.Pull(1).Head); got != head {
+			t.Fatalf("head moved from %s to %s", head, got)
+		}
+	}
+
+	before, pending := signals(), checksJSON()
+	setJobs(job{501, "unit", "completed", "failure"}, job{502, "integration", "in_progress", ""})
+	wake(before, pending)
+	first := checksJSON()
+	wait()
+	w.syncRounds(3)
+	assertSignals(before + 1)
+	if !w.waitingOnPR(task) {
+		t.Fatal("the same failed job woke the conductor after wait")
+	}
+
+	setJobs(job{501, "unit", "completed", "failure"}, job{502, "integration", "completed", "failure"})
+	wake(before+1, first)
+	wait()
+	// GitHub may return the identical jobs in another order.
+	setJobs(job{502, "integration", "completed", "failure"}, job{501, "unit", "completed", "failure"})
+	w.syncRounds(3)
+	assertSignals(before + 2)
+	if !w.waitingOnPR(task) {
+		t.Fatal("an order-only checks read woke the conductor")
+	}
+
+	// A rerun replaces unit's id without changing its name or the head;
+	// integration keeps the rollup failing even while unit runs again.
+	setJobs(job{503, "unit", "in_progress", ""}, job{502, "integration", "completed", "failure"})
+	w.syncRounds(3)
+	assertSignals(before + 2)
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND checks::text = 'failing'`, task); n != 1 {
+		t.Fatal("the other failed job did not keep the rollup failing during the rerun")
+	}
+	if !w.waitingOnPR(task) {
+		t.Fatal("the pending rerun woke the conductor")
+	}
+	rerunning := checksJSON()
+	setJobs(job{503, "unit", "completed", "failure"}, job{502, "integration", "completed", "failure"})
+	wake(before+2, rerunning)
+	wait()
+	setJobs(job{502, "integration", "completed", "failure"}, job{503, "unit", "completed", "failure"})
+	w.syncRounds(3)
+	assertSignals(before + 3)
+	if !w.waitingOnPR(task) {
+		t.Fatal("the same rerun failure woke the conductor again")
 	}
 }
 

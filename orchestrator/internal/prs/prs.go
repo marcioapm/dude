@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -494,6 +493,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	}
 	prior := forge.Status{PullRequestRef: forge.PullRequestRef{State: pr.State, HeadSHA: pr.HeadSHA}, Checks: pr.Checks,
 		Review: pr.Review, Mergeable: pr.Mergeable, UnresolvedThreads: pr.UnresolvedThreads}
+	_ = json.Unmarshal(pr.ChecksJSON, &prior.CheckList)
 	signal := forge.Classify(prior, status, permitted, s.FactoryLogins)
 	if signal != nil && signal.Kind == "actionable" {
 		if signal.Feedback, err = s.withBots(ctx, org, gh, pr, signal.Feedback); err != nil {
@@ -736,14 +736,7 @@ func failingChecksKey(feedback []forge.ActionableFeedback) string {
 	var checks []string
 	for _, f := range feedback {
 		for _, c := range f.Checks {
-			switch {
-			case c.RunID != 0:
-				checks = append(checks, "run:"+strconv.FormatInt(c.RunID, 10))
-			case c.StatusID != 0:
-				checks = append(checks, "status:"+strconv.FormatInt(c.StatusID, 10))
-			default:
-				checks = append(checks, "name:"+c.Name)
-			}
+			checks = append(checks, forge.CheckIdentity(c.RunID, c.StatusID, c.Name))
 		}
 	}
 	if len(checks) == 0 {
