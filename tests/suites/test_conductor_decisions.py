@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import json
 
+from env import TestEnvironment
 import requests
-
 from fake_github import FakeGitHub
 from helpers import ApiClient, finish_simplifier_review, query, wait_until
 
@@ -354,7 +354,7 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
 
 
 def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision(
-        client: ApiClient, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str):
+        client: ApiClient, env: TestEnvironment, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str):
     """While the delivery waits on the conductor after the implementer, an
     implementer the conductor started itself (start_agent) is held at the
     checks gate and escalates; the person waives it, and the conductor's next
@@ -363,7 +363,10 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     project = _conducting(client, forge_project)
     models = {**project["agentModels"], **client.on_models({"implementer": "fake/checks-unbacked"})}
     assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
+    # A judgement tier set (the judge stub) changes nothing for a conducted
+    # escalation: the checks gate never asks it.
     assert client.put("/v1/judgements/settings", {"tierId": client.tier_for("judge-e2e")}).status_code == 200
+    unrouted = len(env.judge_unrouted())
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
     task = client.create_task(project["id"], "Greet, with a helper the checks gate holds")
     conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
@@ -390,6 +393,9 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     _waiting_on(client, task["id"], "after_review", "the review never came back to the conductor")
     decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
     assert decided == ["start_phase", "next"], decided
+    assert env.judge_unrouted()[unrouted:] == []
+    calls = client.get("/v1/judgements", params={"asker": "phases.checks"})
+    assert calls.status_code == 200 and calls.json()["calls"] == [], calls.text
 
 
 def _waived(client: ApiClient, task_id: str, what: str, owner_dsn: str) -> None:

@@ -23,8 +23,9 @@ type gatedJudgement struct {
 	Waived    bool
 	Unchanged bool
 	Carried   bool
-	// Some reported failure or not-run check passed on the judge's word:
-	// CheckPreexisting or CheckDeferred.
+	// Some reported failure or not-run check passed on the conductor's
+	// word (on an older row, the judge's): CheckPreexisting or
+	// CheckDeferred. JSON judgePassed.
 	JudgePassed bool
 	Message     string
 	Checks      []gatedCheck `json:"checks"`
@@ -39,12 +40,13 @@ type gatedCheck struct {
 }
 
 // status is a gated Run's outcome as its row in the pull request names it,
-// from what its verdicts show. A waived, carried, judge-passed, skipped or
-// unchanged Run is never called verified.
+// from what its verdicts show. A waived, carried, conductor-passed (or, on
+// an older row, judge-passed), skipped or unchanged Run is never called
+// verified.
 func (j gatedJudgement) status() string {
 	switch {
 	case j.Skipped:
-		return "not model-checked"
+		return "not verified"
 	case j.Waived:
 		return "waived"
 	case j.Unchanged:
@@ -53,6 +55,8 @@ func (j gatedJudgement) status() string {
 		return "not backed"
 	}
 	var backed, carried, judged bool
+	// A row from before the conductor decided checks names no one: the
+	// judgement tier passed it then.
 	who := "the judge"
 	for _, c := range j.Checks {
 		if c.By == "conductor" {
@@ -329,7 +333,8 @@ type writerCheck struct {
 }
 
 // writerCheckLine is one check as the tester reads it. Why: why it was not
-// passed, a person's waiver not covering it or the judge not passing it.
+// passed: an older row's waiver not covering it, or the conductor (an
+// older row's judge) not passing it.
 type writerCheckLine struct{ Command, Result, Reason, Why, Waiver string }
 
 // WriterChecksTx is what a tester of the task's attempt is told about the

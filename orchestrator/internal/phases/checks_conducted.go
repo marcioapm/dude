@@ -34,8 +34,8 @@ func (s *Syncer) conductedDelivery(ctx context.Context, r phaseRun) (bool, error
 }
 
 // noConductor is the gate's decision when no conductor decides: every
-// non-pass is rejected as untiered (only a person passes it, after the
-// rounds), and a report of passes only passes with the skip notice. Never
+// non-pass is rejected (only a person passes it, after the rounds), with
+// no task bases, so its send-back offers no way to pass it, and a report of passes only passes with the skip notice. Never
 // does a non-pass pass without a decision.
 func noConductor(d checksDecision, reason, skip delivery.Text) checksDecision {
 	if len(d.Verdicts) > 0 {
@@ -43,7 +43,6 @@ func noConductor(d checksDecision, reason, skip delivery.Text) checksDecision {
 		for i := range d.Verdicts {
 			d.Verdicts[i].JudgeReason = reason.Render(nil)
 		}
-		d.untiered = true
 		return d
 	}
 	d.Verdicts = []checksVerdict{}
