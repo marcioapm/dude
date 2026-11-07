@@ -136,10 +136,13 @@ func (s *Server) beforeStop(run *Run) {
 	if d, err := time.ParseDuration(hook.Timeout); err == nil && d > 0 {
 		timeout = d
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(s.ctx, timeout)
 	defer cancel()
 	args, env, collect := s.publishing(append([]string{hook.Command[0]}, s.inWorkspace(run, hook.Command[1:])...))
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	cmd.Dir = run.workspace
 	out := filepath.Join(run.workspace, ".lux-artifacts")
 	if s.LegacyArtifacts {
@@ -162,13 +165,19 @@ func (s *Server) beforeStop(run *Run) {
 		}
 		s.mu.Unlock()
 		res, err := http.DefaultClient.Do(req)
+		var data []byte
+		if err == nil {
+			data, err = io.ReadAll(res.Body)
+			res.Body.Close()
+		}
 		s.mu.Lock()
+		if s.isClosed() {
+			return
+		}
 		if err != nil {
 			continue
 		}
-		data, readErr := io.ReadAll(res.Body)
-		res.Body.Close()
-		if readErr != nil || res.StatusCode != http.StatusOK {
+		if res.StatusCode != http.StatusOK {
 			continue
 		}
 		bin, err := os.MkdirTemp(run.workspace, ".dude-cli-")
@@ -184,6 +193,12 @@ func (s *Server) beforeStop(run *Run) {
 		break
 	}
 	code := exitCode(cmd.Run(), -1)
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	if s.isClosed() {
+		return
+	}
 	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "done", "exitCode": code, "timedOut": ctx.Err() != nil})
 	collect(run)
 	if !s.LegacyArtifacts {
@@ -311,6 +326,11 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	if s.isClosed() {
+		s.mu.Unlock()
+		writeErr(w, 503, "unavailable", "fake lux is closed")
+		return
+	}
 	run.Calls = append(run.Calls, "exec")
 	state := run.State
 	var spec map[string]any
@@ -363,13 +383,24 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	}
 	args, env, collect := s.publishing(args)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	cmd.Dir, cmd.Env = dir, env
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := exitCode(cmd.Run(), 127)
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	s.mu.Lock()
-	collect(run)
+	if !s.isClosed() {
+		collect(run)
+	}
 	s.mu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
 	send := func(ch, text string) {
 		for len(text) > 0 {
 			n := min(len(text), 64<<10)
@@ -405,7 +436,7 @@ func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start in
 		s.setStateWith(run, "failed", "workload-failed")
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	command := &workloadCommand{cancel: cancel, done: make(chan struct{})}
 	run.command = command
@@ -477,7 +508,7 @@ func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start in
 			s.mu.Unlock()
 			hold(run.ID)
 			s.mu.Lock()
-			if run.State != "running" {
+			if s.isClosed() || run.State != "running" {
 				return false
 			}
 		}
@@ -503,6 +534,9 @@ type recordWriter struct {
 func (w *recordWriter) Write(p []byte) (int, error) {
 	w.s.mu.Lock()
 	defer w.s.mu.Unlock()
+	if w.s.isClosed() {
+		return len(p), nil
+	}
 	w.run.records = append(w.run.records, record{Seq: int64(len(w.run.records) + 1), Epoch: w.epoch, Ch: w.ch, Data: string(p)})
 	w.run.cond.Broadcast()
 	return len(p), nil
@@ -579,11 +613,23 @@ func (s *Server) runInit(run *Run, spec map[string]any) bool {
 			env = append(env, k+"="+str)
 		}
 	}
-	cmd := exec.Command("/bin/sh", "-c", inWorkspaceScript(script, dir, s.HostDirs))
+	cmd := exec.CommandContext(s.ctx, "/bin/sh", "-c", inWorkspaceScript(script, dir, s.HostDirs))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	cmd.Dir, cmd.Env = dir, env
 	var stdout, stderr tailWriter
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	epoch, start, state := run.Epoch, run.starts, run.State
+	// Retain baseline init ordering: GET and input cannot overtake init.
+	// Close cancels s.ctx before acquiring mu, so it can still stop this command.
 	code := exitCode(cmd.Run(), 1)
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	if s.isClosed() || !run.starting(epoch, start) || run.State != state {
+		return false
+	}
 	run.inits++
 	s.outputRecord(run, "stdout", stdout.String())
 	s.outputRecord(run, "stderr", stderr.String())

@@ -85,5 +85,5 @@ func (s *Server) Move(id, reason string) {
 	_ = json.Unmarshal(run.Spec, &spec)
 	epoch, start := run.Epoch, run.starts
 	s.mu.Unlock()
-	go s.play(run, epoch, start, spec, true)
+	s.goBG(func() { s.play(run, epoch, start, spec, true) })
 }

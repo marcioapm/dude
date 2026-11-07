@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -221,11 +222,13 @@ func (s *Server) startServer(run *Run, sv *server) {
 	if after == 0 {
 		after = 30 * time.Millisecond
 	}
-	go func() {
-		time.Sleep(after)
+	s.goBG(func() {
+		if !s.delay(after) {
+			return
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if sv.gen != gen || run.Epoch != epoch || run.State != "running" || run.server(sv.Name) != sv {
+		if s.isClosed() || sv.gen != gen || run.Epoch != epoch || run.State != "running" || run.server(sv.Name) != sv {
 			return
 		}
 		if m := exitRe.FindStringSubmatch(strings.Join(sv.Command, " ")); m != nil {
@@ -241,7 +244,7 @@ func (s *Server) startServer(run *Run, sv *server) {
 		}
 		sv.logf("stdout", "listening on :%d", sv.Port)
 		s.setServer(run, sv, lux.ServerReady)
-	}()
+	})
 }
 
 // stopServer stops a server a person stopped. Callers hold s.mu.
@@ -347,7 +350,7 @@ func (s *Server) Migrate(id string) {
 	_ = json.Unmarshal(run.Spec, &spec)
 	epoch, start := run.Epoch, run.starts
 	s.mu.Unlock()
-	go s.play(run, epoch, start, spec, true)
+	s.goBG(func() { s.play(run, epoch, start, spec, true) })
 }
 
 // ServerStates is each of a Run's servers' state, by name.
@@ -476,7 +479,10 @@ func (s *Server) runCommand(run *Run, sv *server) {
 		sv.logf("stderr", "could not check out: %v", err)
 	}
 	s.placeWorkspaceSecrets(run)
-	cmd := exec.Command(sv.Command[0], s.inWorkspace(run, sv.Command[1:])...)
+	cmd := exec.CommandContext(s.ctx, sv.Command[0], s.inWorkspace(run, sv.Command[1:])...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	cmd.Dir = run.workspace
 	cmd.Env = os.Environ()
 	for k, v := range sv.StartEnv {
@@ -485,10 +491,18 @@ func (s *Server) runCommand(run *Run, sv *server) {
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	values := maps.Clone(run.secretValues)
-	go func() {
+	s.goBG(func() {
 		err := cmd.Run()
+		// A shell can exit before descendants close inherited output pipes.
+		// Reap the rest of its process group as well on completion.
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.isClosed() {
+			return
+		}
 		for _, out := range []struct{ stream, text string }{{"stdout", stdout.String()}, {"stderr", stderr.String()}} {
 			if out.text != "" {
 				sv.logf(out.stream, "%s", redact(values, out.text))
@@ -497,7 +511,7 @@ func (s *Server) runCommand(run *Run, sv *server) {
 		if err != nil {
 			sv.logf("stderr", "%s", redact(values, err.Error()))
 		}
-	}()
+	})
 }
 
 // secretValues are the values lux holds for a Run's next placement: each

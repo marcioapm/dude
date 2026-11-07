@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -117,6 +119,129 @@ func awaitRun(t *testing.T, fake *Server, id, failure string, cond func(*Run) bo
 func inputWorkers() int {
 	buf := make([]byte, 1<<22)
 	return strings.Count(string(buf[:runtime.Stack(buf, true)]), "fakelux.(*Server).input.func")
+}
+
+// Closing with a delayed stop pending must cancel and join that worker.
+// Terminal states upload checkpoints, so a late stopped transition can push
+// into a bare repository while testing.TempDir is removing it.
+func TestCloseJoinsWorkersAndRejectsAdmission(t *testing.T) {
+	fake := New("", "k", nil)
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	if !fake.goBG(func() {
+		close(entered)
+		<-release
+		close(finished)
+	}) {
+		t.Fatal("worker rejected before Close")
+	}
+	<-entered
+	closed := make(chan struct{})
+	go func() { fake.Close(); close(closed) }()
+	<-fake.closed
+	if fake.goBG(func() { t.Error("worker ran after shutdown") }) {
+		t.Fatal("worker admitted after shutdown")
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned before its worker")
+	default:
+	}
+	close(release)
+	<-closed
+	<-finished
+	fake.Close() // idempotent, including the join
+}
+
+func TestCloseCancelsLongDelay(t *testing.T) {
+	fake := New("", "k", nil)
+	finished := make(chan bool, 1)
+	fake.goBG(func() { finished <- fake.delay(time.Hour) })
+	fake.Close()
+	if <-finished {
+		t.Fatal("shutdown completed a delayed operation")
+	}
+}
+
+func TestCloseCancelsTurnsEnded(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	c, run := submitRun(t, fake)
+	waitState(t, c, run.ID, "running")
+	done := fake.TurnsEnded(run.ID, 1)
+	fake.Close()
+	select {
+	case <-done:
+		t.Fatal("shutdown reported an unfinished turn as ended")
+	default:
+	}
+	// Rejected admission must not start a waiter after Close either.
+	fake.TurnsEnded(run.ID, 1)
+}
+
+func TestCloseCancelsDelayedStop(t *testing.T) {
+	bare := filepath.Join(t.TempDir(), "repo.git")
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=Test", "-c", "user.email=test@example.com"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "--bare", "--initial-branch=main", bare)
+	tree := git("-C", bare, "mktree")
+	head := git("-C", bare, "commit-tree", tree, "-m", "initial")
+	git("-C", bare, "update-ref", "refs/heads/main", head)
+
+	fake := New(bare, "k", func(map[string]any) Behaviour {
+		return Behaviour{Hang: true, Command: []string{"true"}}
+	})
+	fake.Workspaces = t.TempDir()
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	fake.beforeStopped = func() { close(entered); <-release }
+	fake.afterStopped = func() { close(finished) }
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	c := lux.New(srv.URL, "k")
+	run, err := c.Submit(context.Background(), lux.Spec{
+		Workload: lux.Workload{Adapter: "opencode", Prompt: "go"},
+		Git:      &lux.Git{Repositories: []lux.Repository{{Name: "repo", URL: bare, Ref: "main"}}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, c, run.ID, "running")
+	// Stop waits for the behaviour command, which creates the real checkout.
+	if err := c.Stop(context.Background(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	work := filepath.Join(fake.Workspace(run.ID), "repos", "repo")
+	if got := git("-C", work, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("checkout HEAD = %q, want %q", got, head)
+	}
+	assertNoCheckpoint := func() {
+		t.Helper()
+		if got := git("-C", bare, "for-each-ref", "--format=%(refname)", "refs/checkpoints/"); got != "" {
+			t.Errorf("checkpoint refs written during shutdown: %s", got)
+		}
+	}
+	assertNoCheckpoint()
+	closed := make(chan struct{})
+	go func() { fake.Close(); close(closed) }()
+	<-fake.closed
+	close(release)
+	<-closed
+	assertNoCheckpoint()
+	// Even a pre-fix Close that fails to join must expose the late Git write
+	// deterministically: wait for the gated stop worker, not a sleep.
+	<-finished
+	assertNoCheckpoint()
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if got := fake.runs[run.ID].State; got != "stopping" {
+		t.Fatalf("delayed stop reached %q after shutdown; terminal transitions can upload checkpoints", got)
+	}
 }
 
 // Input held on a gate that is never opened is dropped when the fake
