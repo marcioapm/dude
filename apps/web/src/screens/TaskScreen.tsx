@@ -1905,30 +1905,38 @@ const AUTO_END: Record<string, string> = {
 };
 
 type ChecksVerdict = { command?: string; result?: string; reason?: string; decision?: string; callId?: string;
+  decisionCursor?: number; by?: string;
   waiver?: { role?: string; note?: string }; waiverReason?: string; judgeReason?: string };
 
-/** How a check's recorded result reads: one the judge passed without a backed pass says so, never "pass". */
-const CHECK_RESULT_LABEL = new Map([
-  ["pre-existing", "pre-existing, passed by the judge: it fails the same at the commit of the target branch the task builds on"],
-  ["deferred", "deferred, passed by the judge: a later phase runs it"],
-]);
+/**
+ * How a check's recorded result reads: one passed without a backed pass says so, never "pass", and names who
+ * passed it: the conductor (`by`), or the judge on turns judged before the conductor decided checks.
+ */
+function checkResultLabel(v: ChecksVerdict): string | undefined {
+  const who = v.by === "conductor" ? "the conductor" : "the judge";
+  if (v.result === "pre-existing") return `pre-existing, passed by ${who}: it fails the same at the commit of the target branch the task builds on`;
+  if (v.result === "deferred") return `deferred, passed by ${who}: a later phase runs it`;
+  return undefined;
+}
 
 /**
  * A run.checks.judged event's outcome ("were verified") and its quote: the send-back message, then each verdict.
  * `unchanged` is a turn that changed nothing it could push: no report was judged, and it is not a pass of any check.
- * `judgePassed` is a verified turn some of whose reported failures or unrun checks the judge passed.
+ * `judgePassed` (its JSON name kept) is a verified turn some of whose reported failures or unrun checks the conductor
+ * passed, or the judge on older turns; each verdict's `by` says which.
  */
 function checksJudgedLine(p: Record<string, unknown>): { outcome: string; quote: string } {
+  const verdicts = Array.isArray(p.checks) ? p.checks as ChecksVerdict[] : [];
+  const byConductor = verdicts.some((v) => v.by === "conductor");
   let outcome: string;
   if (p.skipped) outcome = "were not model-checked";
   else if (p.waived) outcome = "were waived";
   else if (p.unchanged) outcome = "were not needed: it changed nothing";
   else if (p.carried && p.verified) outcome = "carried a person's waiver";
-  else if (p.judgePassed && p.verified) outcome = "were verified, with failures the judge passed";
+  else if (p.judgePassed && p.verified) outcome = `were verified, with failures ${byConductor ? "the conductor" : "the judge"} passed`;
   else if (p.verified) outcome = "were verified";
   else outcome = "were not verified";
-  const verdicts = Array.isArray(p.checks) ? p.checks as ChecksVerdict[] : [];
-  const details = verdicts.map((v) => `${v.command ?? "Check"}: ${(v.result && CHECK_RESULT_LABEL.get(v.result)) ?? v.result ?? v.decision ?? "unverified"}${v.reason ? ` — ${v.reason}` : ""}${v.waiverReason ? ` — ${v.waiverReason}` : ""}${v.judgeReason ? ` — ${v.judgeReason}` : ""}${v.callId ? ` (judgement ${v.callId})` : ""}`
+  const details = verdicts.map((v) => `${v.command ?? "Check"}: ${checkResultLabel(v) ?? v.result ?? v.decision ?? "unverified"}${v.reason ? ` — ${v.reason}` : ""}${v.waiverReason ? ` — ${v.waiverReason}` : ""}${v.judgeReason ? ` — ${v.judgeReason}` : ""}${v.callId ? ` (judgement ${v.callId})` : ""}${v.by === "conductor" ? ` (decided by the conductor${v.decisionCursor ? `, event ${v.decisionCursor}` : ""})` : ""}`
     + (v.waiver ? `\nWaived by a person for the ${v.waiver.role ?? "earlier Run"}: ${v.waiver.note ?? ""}` : "")).join("\n");
   return { outcome, quote: [typeof p.message === "string" ? p.message : "", details].filter(Boolean).join("\n") };
 }

@@ -51,6 +51,10 @@ type checksVerdict struct {
 	Decision string `json:"decision,omitempty"`
 	Reason   string `json:"reason"`
 	CallID   string `json:"callId,omitempty"`
+	// A conducted verdict's record: the run.checks.conducted event's
+	// cursor, and who decided ("conductor").
+	DecisionCursor int64  `json:"decisionCursor,omitempty"`
+	By             string `json:"by,omitempty"`
 	// The person's waiver a waived result carries.
 	Waiver *delivery.CarriedWaiver `json:"waiver,omitempty"`
 	// Why an attempt waiver does not cover a reported failure, beside the
@@ -68,16 +72,20 @@ type checksDecision struct {
 	Skipped  bool  `json:"skipped,omitempty"`
 	// Some reported failure passed as one a person waived for the attempt.
 	Carried bool `json:"carried,omitempty"`
-	// Some reported failure or not-run check passed on the judge's word
-	// alone: pre-existing at the task's base, or deferred to a later phase.
-	JudgePassed bool            `json:"judgePassed,omitempty"`
-	Verdicts    []checksVerdict `json:"checks"`
-	Message     string          `json:"message"`
+	// Some reported failure or not-run check passed on the conductor's
+	// word alone: pre-existing at the task's base, or deferred to a later
+	// phase. Its JSON name is the judge's, so older rows read the same.
+	ConductorPassed bool            `json:"judgePassed,omitempty"`
+	Verdicts        []checksVerdict `json:"checks"`
+	Message         string          `json:"message"`
 	// The commit of each repository's target branch the task builds on,
 	// for the send-back.
 	bases []taskBase
-	// No judgement tier answered: only a person can pass what is held.
+	// No conductor decided: only a person can pass what is held.
 	untiered bool
+	// pending: the conductor was asked about this turn and has not
+	// decided; nothing is recorded and nothing is pushed.
+	pending bool
 	// Unchanged: a fresh inspection at this turn found every repository the
 	// Run may push at its starting commit with nothing staged, unstaged or
 	// untracked (unchangedBeforePush), so no report was judged. Epoch is
@@ -106,6 +114,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	var epoch int
 	var previous *checksDecision
 	var rounds int
+	var pending bool
 	var rawSettings []byte
 	err = s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
@@ -124,6 +133,13 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 		if !db.IsNotFound(err) {
 			return err
 		}
+		// Asked about this turn and not yet decided, within the wait, with
+		// the conductor still there: pending as before. The ask was made
+		// only once the turn was found changed (unchangedBeforePush), so
+		// nothing is inspected again while it is open.
+		if pending, err = checksAskOpenTx(ctx, tx, r, turn); err != nil || pending {
+			return err
+		}
 		// Rounds are the send-backs since a person last decided on this
 		// Run's checks: a retry gives the agent the configured rounds again.
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE run_id=$1 AND event_type=$2 AND payload->>'verified'='false'
@@ -140,6 +156,9 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	if err != nil {
 		return false, false, err
 	}
+	if pending {
+		return false, false, nil
+	}
 	if previous != nil && (!previous.Unchanged || previous.Epoch == epoch) {
 		return previous.Verified, false, nil
 	}
@@ -153,6 +172,10 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 			Message: checksUnchanged.Render(nil)}
 	} else if d, err = s.judgeChecks(ctx, r); err != nil {
 		return false, true, err
+	} else if d.pending {
+		// Held for the conductor's verdict (askConductor): nothing is
+		// recorded; the verdict, or its deadline, resumes the gate.
+		return false, false, nil
 	}
 	d.Turn, d.Round = turn, rounds
 	maxRounds := forge.ReadSettings(rawSettings).ChecksFixRounds
@@ -203,30 +226,66 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	return d.Verified, true, err
 }
 
+// judgeChecks decides the Run's latest report: a conducted delivery's
+// conductor decides it (askConductor); with no conductor, only a person
+// passes a non-pass (noConductor). The judgement tier is never asked.
 func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, error) {
-	d := checksDecision{Verdicts: []checksVerdict{}}
+	d, checks, done, err := s.parsedChecks(ctx, r)
+	if err != nil || done {
+		return d, err
+	}
+	conducted, err := s.conductedDelivery(ctx, r)
+	if err != nil {
+		return d, err
+	}
+	if !conducted && s.JudgeUnconducted {
+		return s.judgeChecksByJudge(ctx, r)
+	}
+	if !conducted {
+		// No conductor decides this delivery: only a person can pass a
+		// reported failure, and passes go with the skip notice.
+		return noConductor(d, checksNoConductor, checksSkip), nil
+	}
+	return s.askConductor(ctx, r, d, checks)
+}
+
+// parsedChecks reads the Run's report: done when it is unparseable or too
+// long, d then its rejection; otherwise d holds a verdict per non-pass.
+func (s *Syncer) parsedChecks(ctx context.Context, r phaseRun) (d checksDecision, checks []delivery.Check, done bool, err error) {
+	d = checksDecision{Verdicts: []checksVerdict{}}
 	var reply string
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		var err error
 		reply, err = delivery.RunReplyTailTx(ctx, tx, r.ID, checksReplyMax)
 		return err
 	}); err != nil {
-		return d, err
+		return d, nil, true, err
 	}
 	checks, ok := delivery.ParseChecks(reply)
 	if !ok {
 		d.Verdicts = append(d.Verdicts, checksVerdict{Command: "checks:", Reason: checksUnparseable.Render(delivery.ChecksYAMLErrorOf(reply))})
-		return d, nil
+		return d, nil, true, nil
 	}
 	if len(checks) > checksCountMax {
 		d.Verdicts = append(d.Verdicts, checksVerdict{Command: "checks:",
 			Reason: checksMany.Render(struct{ Count, Max int }{len(checks), checksCountMax})})
-		return d, nil
+		return d, nil, true, nil
 	}
 	for _, c := range checks {
 		if c.Result != delivery.CheckPass {
 			d.Verdicts = append(d.Verdicts, checksVerdict{Command: c.Command, Result: c.Result, Reason: c.Evidence})
 		}
+	}
+	return d, checks, false, nil
+}
+
+// judgeChecksByJudge is the judgement tier's gate, which PR5b removes with
+// ChecksJudge: the gate no longer reaches it (judgeChecks), and its own
+// tests keep it honest until then.
+func (s *Syncer) judgeChecksByJudge(ctx context.Context, r phaseRun) (checksDecision, error) {
+	d, checks, done, err := s.parsedChecks(ctx, r)
+	if err != nil || done {
+		return d, err
 	}
 	// A reported failure a person waived for the attempt passes once the
 	// judge says it is that failure; any reported failure or not-run check
@@ -355,7 +414,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 			default:
 				return d, fmt.Errorf("checks gate: the judge passed a %q check", v.Result)
 			}
-			d.JudgePassed = true
+			d.ConductorPassed = true
 			d.Verdicts = append(d.Verdicts, passed)
 			continue
 		}
@@ -370,7 +429,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		for _, rest := range nonPass[i+1:] {
 			d.Verdicts = append(d.Verdicts, rest.verdict)
 		}
-		d.Carried, d.JudgePassed = false, false
+		d.Carried, d.ConductorPassed = false, false
 		return d, nil
 	}
 	passes := slices.DeleteFunc(slices.Clone(checks), func(c delivery.Check) bool { return c.Result != delivery.CheckPass })

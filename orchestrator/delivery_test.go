@@ -217,7 +217,11 @@ func newWorld(t *testing.T) *world {
 		// The organisation's judgement tier, as main wires it: off unless a
 		// test sets one, so the checks gate skips its questions.
 		Judge: &judge.Service{DB: app},
-		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
+		// A world start (w.deliver) is Deliver's policy: the judge's own
+		// tests run on it until PR5b removes the judge from phases. A
+		// conducted delivery never asks it.
+		JudgeUnconducted: true,
+		Agent:            phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
 	// The defaults-taking conductor of a delivery Deliver starts is woken
 	// at once: the wake window is a person's typing, not a test's.

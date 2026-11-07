@@ -103,7 +103,7 @@ func TestATestThatPassesEveryCriterionWithEvidenceOpensThePullRequest(t *testing
 	section := "<!-- dude:verification -->\n## Verification\nTested at `" + heads[:7] + "`.\n\n" +
 		"- **pass** — it greets\n- **pass** — it says goodbye\n\n" +
 		"The evidence (video, screenshots, `acceptance.md`) is on the task in dude.\n\n" +
-		"### Checks\nChecks not model-checked, set a judgement tier in the organisation's settings.\n\n" +
+		"### Checks\nChecks not verified: no conductor decided them.\n\n" +
 		"- **Implementer** — not model-checked\n- **Fixer** — not model-checked\n- **Simplifier** — not model-checked\n" +
 		"<!-- /dude:verification -->\n\n"
 	if !strings.Contains(pr.Body, section) {

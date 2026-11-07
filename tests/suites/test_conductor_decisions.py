@@ -369,6 +369,7 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
     _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
     # The delivery's own implementer is held too: waived, it waits on the conductor after it.
+    _say(client, task["id"], "Test script decides checks explicitly.")
     _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
     _waived(client, task["id"], "the delivery's implementer", owner_dsn)
     _waiting_on(client, task["id"], "after_implement", "the implementer never came back")
@@ -392,11 +393,32 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
 
 
 def _waived(client: ApiClient, task_id: str, what: str, owner_dsn: str) -> None:
-    """Waits for the checks gate to escalate and waives it, as the task's owner."""
-    wait_until(lambda: query(owner_dsn, """SELECT id FROM workflow_runs WHERE task_id=%s
+    """Waits for the checks gate to escalate and waives it, as the task's owner.
+
+    The checks gate asks the conductor about each report (run.checks.asked);
+    fake/scripted decides only what a message names, so the person's Chat
+    has it decide each one through decide_checks: the reported pass is not
+    backed by the recorded calls (make check exited 1)."""
+    told: set[tuple[str, int]] = set()
+
+    def escalated():
+        for ask in query(owner_dsn, """SELECT a.run_id, a.payload FROM events a WHERE a.task_id = %s
+                         AND a.event_type = 'run.checks.asked' AND NOT EXISTS (SELECT 1 FROM events c
+                           WHERE c.run_id = a.run_id AND c.event_type = 'run.checks.conducted'
+                           AND c.payload->>'turn' = a.payload->>'turn')""", (task_id,)):
+            key = (ask["run_id"], int(ask["payload"]["turn"]))
+            if key in told:
+                continue
+            told.add(key)
+            checks = [{"command": c["command"], "verdict": "unbacked" if c["result"] == "pass" else "reject",
+                       "reason": "the recorded call of it exited 1"} for c in ask["payload"]["checks"]]
+            _say(client, task_id, "Decide the checks report.", _tool("decide_checks", {
+                "runId": key[0], "turn": key[1], "checks": checks, "missing": {"verdict": "none", "reason": "nothing obvious"}}))
+        return query(owner_dsn, """SELECT id FROM workflow_runs WHERE task_id=%s
                AND status='waiting' AND step='decide' AND state->'escalation'->>'reason'='checks_unverified'
-               AND NOT state->'escalation' ? 'decided'""", (task_id,)),
-               timeout=90, message=f"the checks gate never reached the conductor for {what}")
+               AND NOT state->'escalation' ? 'decided'""", (task_id,))
+
+    wait_until(escalated, timeout=90, message=f"the checks gate never reached the conductor for {what}")
     resp = client.post(f"/v1/tasks/{task_id}/decide", {"action": "waive", "note": "CI runs the check; the owner reviewed it."})
     assert resp.status_code == 200, resp.text
     wait_until(lambda: _task(client, task_id).get("escalation") is None, timeout=60,

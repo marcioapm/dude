@@ -115,7 +115,7 @@ func TestAJudgePassedFailureIsAccountedAsSuch(t *testing.T) {
 		{Command: "open the settings page", Result: CheckDeferred, Decision: "yes", Reason: "the tester runs it", CallID: "mcall_2"},
 		{Command: "missing checks", Result: "pass", Decision: "no", CallID: "mcall_3"},
 	}}
-	want := "### Checks\nChecks were verified against the Run's recorded commands; the judge passed failures that fail the same at the commit of the target branch the task builds on (pre-existing) and checks a later phase runs (deferred).\n\n" +
+	want := "### Checks\nChecks were verified against the Run's recorded commands; the conductor passed failures that fail the same at the commit of the target branch the task builds on (pre-existing) and checks a later phase runs (deferred).\n\n" +
 		"- **Implementer** — passed by the judge\n" +
 		"  - `npx tsc --noEmit` — **pre-existing** — 95 errors at the parent, 95 with the change (`mcall_1`)\n" +
 		"  - `open the settings page` — **deferred** — the tester runs it (`mcall_2`)\n" +
@@ -301,7 +301,7 @@ func TestAnUnchangedRunIsItsOwnStatusInTheChecksAccount(t *testing.T) {
 	}, {
 		"after a skipped implementer",
 		[]gatedJudgement{{Role: "Implementer", Verified: true, Skipped: true}, unchanged},
-		"### Checks\nChecks not model-checked, set a judgement tier in the organisation's settings.\n\n" +
+		"### Checks\nChecks not verified: no conductor decided them.\n\n" +
 			"- **Implementer** — not model-checked\n- **Simplifier** — no changes; checks not needed",
 	}, {
 		"after a backed implementer",

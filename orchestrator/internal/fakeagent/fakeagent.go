@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -448,18 +450,138 @@ func TakesDefaults(input string) bool {
 	return strings.Contains(input, "Decision waiting:") || strings.Contains(input, "Review round ")
 }
 
-// DefaultsCalls are what a DefaultsModel conductor that decides quietly
-// does with an input, as Deliver's policy would: woken for a decision
-// (TakesDefaults), take Deliver's defaults (DefaultsCall). People's
-// feedback asks for no call: the submit steered a working implementer or
-// fixer with it already (step 3b, PR C2), and with nothing at work the
-// delivery's own next decision or its next fix takes it up, as under
-// Deliver. None while it is chatty: a person drives its decisions.
-func DefaultsCalls(input string, quiet bool) [][2]string {
-	if !quiet || !TakesDefaults(input) {
+// ShownAtBase and DeferredToLater are what a scripted writer's evidence
+// says of a failure that fails the same at the task's base and of a check
+// a later phase runs (ChecksDefaults).
+const (
+	ShownAtBase     = "fails the same at"
+	DeferredToLater = "a later phase runs it"
+	// BackedByCall is what a checks wake says of a reported pass whose
+	// command dude recorded the Run running with exit 0 (phases'
+	// recordedCalls).
+	BackedByCall = "dude recorded its latest call of it: exit 0)"
+	// FailedAtBase is what a checks wake says of a reported failure whose
+	// command dude recorded the Run running at the task's base, failing.
+	FailedAtBase = "dude recorded its latest call of it at the base: exit "
+)
+
+// checksWake matches a checks wake's call to decide (delivery's
+// wakes/checks) and each reported check in it.
+var (
+	checksWakeRun   = regexp.MustCompile(`decide_checks \(runId (\S+), turn (\d+)\)`)
+	checksWakeCheck = regexp.MustCompile(`("(?:[^"\\]|\\.)*") reported (pass|fail|not-run) \(evidence (.*?)\):`)
+)
+
+// ChecksDefaults is what a DefaultsModel conductor decides on a checks
+// wake. A reported pass is backed only when the wake says dude recorded
+// the Run's latest call of that command ending with exit 0 (BackedByCall);
+// otherwise (no call recorded, a non-zero exit, no exit code) it is
+// unbacked, as a careful conductor reading the recorded calls would say.
+// Nothing is missing. A failure is pre-existing only when the wake says
+// dude recorded the Run's call of it at the task's base failing
+// (FailedAtBase), as a conductor that read the Run's calls at the base
+// would, never on the writer's evidence alone; a check not run is deferred
+// only when its evidence says a later phase runs it (DeferredToLater). Anything
+// else is rejected, so only a person passes it after the rounds. dude still
+// refuses a verdict its rules do not allow (no base, a fail deferred).
+func ChecksDefaults(input string) [][2]string {
+	var out [][2]string
+	for _, m := range checksWakeRun.FindAllStringSubmatchIndex(input, -1) {
+		run, turn := input[m[2]:m[3]], input[m[4]:m[5]]
+		rest := input[m[1]:]
+		if next := checksWakeRun.FindStringIndex(rest); next != nil {
+			rest = rest[:next[0]]
+		}
+		var checks []map[string]string
+		found := checksWakeCheck.FindAllStringSubmatchIndex(rest, -1)
+		for k, ci := range found {
+			c := make([]string, 4)
+			for g := range c {
+				c[g] = rest[ci[2*g]:ci[2*g+1]]
+			}
+			// The question about this check: up to the next one.
+			question := rest[ci[1]:]
+			if k+1 < len(found) {
+				question = rest[ci[1]:found[k+1][0]]
+			}
+			var command string
+			if err := json.Unmarshal([]byte(c[1]), &command); err != nil {
+				continue
+			}
+			verdict, evidence := "reject", c[3]
+			switch {
+			case c[2] == "pass" && strings.Contains(question, BackedByCall):
+				verdict = "backed"
+			case c[2] == "pass":
+				verdict = "unbacked"
+			case c[2] == "fail" && failedAtBase(question):
+				verdict = "preexisting"
+			case c[2] == "not-run" && strings.Contains(evidence, DeferredToLater):
+				verdict = "deferred"
+			}
+			checks = append(checks, map[string]string{"command": command, "verdict": verdict, "reason": "Deliver's defaults: " + c[2]})
+		}
+		n, _ := strconv.Atoi(turn)
+		args, _ := json.Marshal(map[string]any{"runId": run, "turn": n, "checks": checks,
+			"missing": map[string]string{"verdict": "none", "reason": checksDefaultsReason}})
+		out = append(out, [2]string{"decide_checks", string(args)})
+	}
+	return out
+}
+
+// DefaultChecksCall says call is a decide_checks ChecksDefaults wrote (its
+// "Deliver's defaults" missing reason), not one a test's script names.
+func DefaultChecksCall(call [2]string) bool {
+	if call[0] != "decide_checks" {
+		return false
+	}
+	var in struct {
+		Missing struct{ Reason string } `json:"missing"`
+	}
+	return json.Unmarshal([]byte(call[1]), &in) == nil && in.Missing.Reason == checksDefaultsReason
+}
+
+const checksDefaultsReason = "Deliver's defaults"
+
+// failedAtBase says a checks wake's question about a reported failure
+// carries dude's recording of the command failing at the task's base: an
+// exit of 1 to 125 (FailedAtBase), not the writer's own word that it did.
+// 126 and up is the command not run (not executable, not found, git's
+// fatal 128) or stopped, never a failure there; any other reading dude
+// gives (unclear, did not run, a status with no exit) does not say exit.
+func failedAtBase(question string) bool {
+	_, after, ok := strings.Cut(question, FailedAtBase)
+	if !ok {
+		return false
+	}
+	code, _, ok := strings.Cut(after, ")")
+	n, err := strconv.Atoi(code)
+	return ok && err == nil && n >= 1 && n <= 125
+}
+
+// ManualChecks is a test script's instruction to keep checks decisions
+// explicit (for example a Chat script that later calls decide_checks).
+const ManualChecks = "Test script decides checks explicitly."
+
+// ChecksAnswer is what any scripted conductor (fake/scripted as well as
+// DefaultsModel, quiet or chatty) does with a checks wake in input that
+// its calls so far (the ones the input names, and Deliver's defaults)
+// leave undecided: it decides it as ChecksDefaults reads it, through the
+// real decide_checks, so a writer's turn is never held for the conductor's
+// whole wait only because the scripted agent ignores the ask. A pass is
+// backed only on a recorded exit 0; dude still validates every verdict.
+// None when a call already decides checks: a test's script that takes the
+// decision itself keeps it.
+func ChecksAnswer(input string, calls [][2]string) [][2]string {
+	if strings.Contains(input, ManualChecks) {
 		return nil
 	}
-	return [][2]string{DefaultsCall}
+	for _, c := range calls {
+		if c[0] == "decide_checks" {
+			return nil
+		}
+	}
+	return ChecksDefaults(input)
 }
 
 // Quiet says a conductor decides its delivery quietly, from its briefing
@@ -536,8 +658,14 @@ func conductorScript(briefing, model string) string {
 	}
 	var b strings.Builder
 	calls := ConductorCalls(message)
-	if model == DefaultsModel && !session {
-		calls = append(calls, DefaultsCalls(message, Quiet(briefing, nil))...)
+	if model == DefaultsModel && !session && Quiet(briefing, nil) && TakesDefaults(message) {
+		calls = append(calls, DefaultsCall)
+	}
+	if !session && !strings.Contains(briefing, ManualChecks) {
+		// Any scripted conductor answers a checks wake no call decided
+		// (ChecksAnswer): the message's, else the briefing's that started it.
+		calls = append(calls, ChecksAnswer(message, calls)...)
+		calls = append(calls, ChecksAnswer(briefing, calls)...)
 	}
 	for _, c := range calls {
 		if Local(c[0]) {
@@ -922,11 +1050,15 @@ const (
 	ChecksNewFailureModel   = "fake/checks-new-failure"
 	ChecksOtherFailureModel = "fake/checks-other-failure"
 	ChecksBaseShownModel    = "fake/checks-base-shown"
-	FailingCommand          = "make test"
-	OtherFailingCommand     = "make lint"
+	// ChecksDeferredModel is ChecksBaseShownModel that also reports a
+	// browser check not run, which a later phase runs.
+	ChecksDeferredModel = "fake/checks-deferred"
+	DeferredCommand     = "open the greeting page in a browser"
+	FailingCommand      = "make test"
+	OtherFailingCommand = "make lint"
 	// BaseDir is where BaseCommand checks the task's base out.
 	BaseDir     = "../task-base"
-	BaseCommand = "git worktree add " + BaseDir + " " + AtMain + " && make -C " + BaseDir + " test"
+	BaseCommand = "git worktree add " + BaseDir + " " + AtMain + " && cd " + BaseDir + " && " + FailingCommand
 )
 
 // AtMain in a scripted command is its first repository's main as the fake
@@ -957,6 +1089,10 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 	case model == ChecksBaseShownModel:
 		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
 			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"}), true
+	case model == ChecksDeferredModel:
+		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
+			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"},
+				[3]string{DeferredCommand, "not-run", "needs a browser: " + DeferredToLater}), true
 	case model == ChecksOtherFailureModel:
 		return [][3]string{{OtherFailingCommand, "lint: 1 issue\nexit status 1", "1"}},
 			ChecksReport([3]string{OtherFailingCommand, "fail", "one lint issue"}), true
@@ -966,7 +1102,8 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 
 // everyWriterReports are the checks models whose report every writer
 // phase makes, not the implementer's alone.
-var everyWriterReports = map[string]bool{ChecksPreexistingModel: true, ChecksNewFailureModel: true, ChecksOtherFailureModel: true, ChecksBaseShownModel: true}
+var everyWriterReports = map[string]bool{ChecksPreexistingModel: true, ChecksNewFailureModel: true, ChecksOtherFailureModel: true, ChecksBaseShownModel: true,
+	ChecksDeferredModel: true}
 
 // For is the agent's step for a phase Run. fixed says whether the tree it
 // starts from already has the fixer's file — which only the reviewer reads.

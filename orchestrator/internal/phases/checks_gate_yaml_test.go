@@ -13,7 +13,7 @@ func TestAnUnparseableChecksReportIsSentBackWithTheYAMLError(t *testing.T) {
 	w := newHarnessWorld(t)
 	checksReply(w, "Built.\n\n```yaml\nchecks:\n  - command: npm run build\n    result: pass\n"+
 		"    evidence: \"✓ built in 2.30s\", exit 0 (vite build then tsc --noEmit)\n```\n")
-	d, err := w.s.judgeChecks(context.Background(), w.run)
+	d, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestAnUnparseableChecksReportIsSentBackWithTheYAMLError(t *testing.T) {
 func TestAMissingChecksReportIsSentBackWithoutAYAMLError(t *testing.T) {
 	w := newHarnessWorld(t)
 	checksReply(w, "Built it.")
-	d, err := w.s.judgeChecks(context.Background(), w.run)
+	d, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestAMissingChecksReportIsSentBackWithoutAYAMLError(t *testing.T) {
 func TestAChecksReportOfTheWrongShapeIsSentBackWithTheShape(t *testing.T) {
 	w := newHarnessWorld(t)
 	checksReply(w, "checks:\n  command: make\n  result: pass\n")
-	d, err := w.s.judgeChecks(context.Background(), w.run)
+	d, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil {
 		t.Fatal(err)
 	}

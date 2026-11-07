@@ -129,7 +129,7 @@ func TestAWaivedFailurePassesOnlyOnTheJudgesYes(t *testing.T) {
 			endTurn(w)
 			fake := &waiverFake{waived: tc.waived, err: tc.err, unrecorded: tc.unrecorded}
 			w.s.Judge = fake
-			got, err := w.s.judgeChecks(context.Background(), w.run)
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 			if err != nil || got.Verified != tc.verified || got.Skipped || fake.waiverQuestions() != 1 {
 				t.Fatalf("%+v %v, %d waiver questions", got, err, fake.waiverQuestions())
 			}
@@ -201,7 +201,7 @@ func TestNoTierAfterACarryIsARejectionNotASkip(t *testing.T) {
 	endTurn(w)
 	fake := &waiverFake{waived: judge.Yes, offAfterWaiver: true}
 	w.s.Judge = fake
-	got, err := w.s.judgeChecks(context.Background(), w.run)
+	got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil || got.Verified || got.Skipped || got.Carried || fake.waiverQuestions() != 1 || len(fake.asked) != 2 {
 		t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 	}
@@ -225,7 +225,7 @@ func TestTheWaiverQuestionShowsTheWaivedFailure(t *testing.T) {
 	endTurn(w)
 	fake := &waiverFake{waived: judge.Yes}
 	w.s.Judge = fake
-	if _, err := w.s.judgeChecks(context.Background(), w.run); err != nil {
+	if _, err := w.s.judgeChecksByJudge(context.Background(), w.run); err != nil {
 		t.Fatal(err)
 	}
 	_, waived, ok := strings.Cut(fake.asked[0].Context, "### The waived failure\n")
@@ -285,7 +285,7 @@ func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
 			endTurn(w)
 			fake := &waiverFake{waived: judge.Yes}
 			w.s.Judge = fake
-			got, err := w.s.judgeChecks(context.Background(), w.run)
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 			if err != nil || got.Verified || got.Carried || fake.waiverQuestions() != tc.waivers || len(fake.asked) != tc.waivers+1 ||
 				!isPreexistingQuestion(fake.asked[len(fake.asked)-1]) {
 				t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
@@ -299,7 +299,7 @@ func TestOnlyAMatchingAttemptWaiverIsAskedAbout(t *testing.T) {
 		waive(w, w.run, delivery.ScopeAttempt, heldFailure)
 		fake := &waiverFake{waived: judge.Yes}
 		w.s.Judge = fake
-		if got, err := w.s.judgeChecks(context.Background(), w.run); err != nil || got.Verified || fake.waiverQuestions() != 0 {
+		if got, err := w.s.judgeChecksByJudge(context.Background(), w.run); err != nil || got.Verified || fake.waiverQuestions() != 0 {
 			t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 		}
 	})
@@ -316,7 +316,7 @@ func TestAPullRequestFixOfTheAttemptCarriesTheWaiver(t *testing.T) {
 	endTurn(w)
 	fake := &waiverFake{waived: judge.Yes}
 	w.s.Judge = fake
-	got, err := w.s.judgeChecks(context.Background(), w.run)
+	got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil || !got.Verified || !got.Carried || got.Verdicts[0].Waiver.RunID != "run_impl_"+w.run.Org {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -334,7 +334,7 @@ func TestEachFailureIsAskedAboutTheNewestWaiverOfItsCommand(t *testing.T) {
 	endTurn(w)
 	fake := &waiverFake{waived: judge.Yes}
 	w.s.Judge = fake
-	got, err := w.s.judgeChecks(context.Background(), w.run)
+	got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil || !got.Verified || !got.Carried || fake.waiverQuestions() != 2 || len(got.Verdicts) != 3 {
 		t.Fatalf("%+v %v, %d waiver questions", got, err, fake.waiverQuestions())
 	}
@@ -359,11 +359,11 @@ func TestARestartJudgesAWaivedFailureAgain(t *testing.T) {
 	if n := w.countEvents(delivery.EvRunChecksJudged); n != 0 {
 		t.Fatalf("%d verdicts recorded for an interrupted judgement", n)
 	}
-	again := &Syncer{DB: w.s.DB, Judge: &waiverFake{waived: judge.Yes}}
+	again := &Syncer{DB: w.s.DB, JudgeUnconducted: true, Judge: &waiverFake{waived: judge.Yes}}
 	if ok, _, err := again.checksBeforePush(context.Background(), w.run); !ok || err != nil {
 		t.Fatalf("judged again: pass %v, %v", ok, err)
 	}
-	after := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
+	after := &Syncer{DB: w.s.DB, JudgeUnconducted: true, Judge: &checksFake{err: errors.New("must not be called")}}
 	if ok, _, err := after.checksBeforePush(context.Background(), w.run); !ok || err != nil {
 		t.Fatalf("after the carried verdict: pass %v, %v", ok, err)
 	}

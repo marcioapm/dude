@@ -94,7 +94,7 @@ func TestAConductorHasTheReadToolsAndItsOwn(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	if got := strings.Join(names, ","); got != "answer_question,answer_review_question,ask_person,create_task,decide,decide_escalation,decide_repository_request,dismiss_finding,emit_event,feedback,feedback_reply,findings,forward_review_question,get_memory,"+
+	if got := strings.Join(names, ","); got != "answer_question,answer_review_question,ask_person,create_task,decide,decide_checks,decide_escalation,decide_repository_request,dismiss_finding,emit_event,feedback,feedback_reply,findings,forward_review_question,get_memory,"+
 		"github_check_log,github_issue,github_pull_request,github_run_jobs,github_search,"+
 		"limits,list_epics,list_machine_sizes,list_repositories,list_tasks,mark_ready,message,note,publish,pull_requests,read_run,recover_run,refresh_pull_requests,remember,reply_on_pull_request,"+
 		"request_limit,request_machine,request_repository,request_review,rerun_failed_checks,resolve_thread,"+

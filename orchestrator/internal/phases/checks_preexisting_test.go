@@ -132,7 +132,7 @@ func TestAPreexistingFailurePassesOnTheJudgesYes(t *testing.T) {
 	}
 	got := recordedJudgement(w)
 	v := got.Verdicts
-	if !got.Verified || !got.JudgePassed || got.Carried || got.Skipped || len(v) != 3 ||
+	if !got.Verified || !got.ConductorPassed || got.Carried || got.Skipped || len(v) != 3 ||
 		v[0].Command != "npx tsc --noEmit" || v[0].Result != delivery.CheckPreexisting || v[0].CallID != "call_test" ||
 		v[0].Reason != "no run at the starting commit" || v[0].Waiver != nil ||
 		v[1].Command != "make lint" || v[1].Result != delivery.CheckPass || v[2].Command != "missing checks" {
@@ -159,7 +159,7 @@ func TestTheChecksContextNamesTheTaskBase(t *testing.T) {
 	endTurn(w)
 	fake := &waiverFake{}
 	w.s.Judge = fake
-	if _, err := w.s.judgeChecks(context.Background(), w.run); err != nil {
+	if _, err := w.s.judgeChecksByJudge(context.Background(), w.run); err != nil {
 		t.Fatal(err)
 	}
 	want := "### The commit of each target branch this task builds on\n- target: main at " + h.Main + "\n\n### The project's notes"
@@ -168,7 +168,7 @@ func TestTheChecksContextNamesTheTaskBase(t *testing.T) {
 	}
 	h.mainMerged(w)
 	fake.asked = nil
-	got, err := w.s.judgeChecks(context.Background(), w.run)
+	got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,8 +228,8 @@ func TestAFailureShownOnlyAtTheRunsStartIsTheTasksOwn(t *testing.T) {
 			checksReply(w, failingTsc)
 			endTurn(w)
 			w.s.Judge = readingJudge{}
-			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || got.Verified != tc.passes || got.JudgePassed != tc.passes {
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+			if err != nil || got.Verified != tc.passes || got.ConductorPassed != tc.passes {
 				t.Fatalf("%+v %v", got, err)
 			}
 			if !tc.passes && (got.Verdicts[0].Result != delivery.CheckFail || !strings.Contains(got.Verdicts[0].JudgeReason, "no run at the task's base")) {
@@ -247,8 +247,8 @@ func TestAFailureWithNoTaskBaseIsRejectedUnasked(t *testing.T) {
 	endTurn(w)
 	fake := &waiverFake{preexisting: judge.Yes}
 	w.s.Judge = fake
-	got, err := w.s.judgeChecks(context.Background(), w.run)
-	if err != nil || got.Verified || got.JudgePassed || len(fake.asked) != 0 {
+	got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+	if err != nil || got.Verified || got.ConductorPassed || len(fake.asked) != 0 {
 		t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 	}
 	if v := got.Verdicts; len(v) != 1 || v[0].Result != delivery.CheckFail || !strings.Contains(v[0].JudgeReason, "no recorded commit of the target branch") {
@@ -328,11 +328,11 @@ func TestAFailureTheJudgeDoesNotFindPreexistingIsSentBack(t *testing.T) {
 			}
 			got := recordedJudgement(w)
 			// Rejected at the failure: nothing more is asked.
-			if got.Verified || got.JudgePassed || len(fake.asked) != 1 || len(got.Verdicts) != 1 ||
+			if got.Verified || got.ConductorPassed || len(fake.asked) != 1 || len(got.Verdicts) != 1 ||
 				got.Verdicts[0].Result != delivery.CheckFail || got.Verdicts[0].JudgeReason == "" {
 				t.Fatalf("recorded %+v, asked %d", got, len(fake.asked))
 			}
-			for _, want := range []string{"- npx tsc --noEmit: 95 errors on the parent, 95 with the change, none in changed files — not passed by the judge: " + tc.reason,
+			for _, want := range []string{"- npx tsc --noEmit: 95 errors on the parent, 95 with the change, none in changed files — not passed by the conductor: " + tc.reason,
 				"this task builds on (target: main at " + h.Main + ")", "in a separate checkout of that commit"} {
 				if !strings.Contains(got.Message, want) {
 					t.Errorf("the send-back lacks %q:\n%s", want, got.Message)
@@ -353,8 +353,8 @@ func TestWithNoTierAReportedFailureIsRejectedNotSkipped(t *testing.T) {
 			endTurn(w)
 			fake := &waiverFake{preexistingErr: off}
 			w.s.Judge = fake
-			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || len(fake.asked) != 1 || got.Verified || got.Skipped || got.JudgePassed || len(got.Verdicts) != 1 || got.Verdicts[0].Result != delivery.CheckFail {
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+			if err != nil || len(fake.asked) != 1 || got.Verified || got.Skipped || got.ConductorPassed || len(got.Verdicts) != 1 || got.Verdicts[0].Result != delivery.CheckFail {
 				t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 			}
 		})
@@ -365,7 +365,7 @@ func TestWithNoTierAReportedFailureIsRejectedNotSkipped(t *testing.T) {
 		checksReply(w, failingTsc)
 		endTurn(w)
 		w.s.Judge = &judge.Service{DB: w.s.DB}
-		got, err := w.s.judgeChecks(context.Background(), w.run)
+		got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 		if err != nil || got.Verified || got.Skipped {
 			t.Fatalf("%+v %v", got, err)
 		}
@@ -379,8 +379,8 @@ func TestWithNoTierAReportedFailureIsRejectedNotSkipped(t *testing.T) {
 		endTurn(w)
 		fake := &waiverFake{preexistingErr: judge.ErrOff}
 		w.s.Judge = fake
-		got, err := w.s.judgeChecks(context.Background(), w.run)
-		if err != nil || got.Verified || got.Skipped || got.JudgePassed || len(got.Verdicts) == 0 || got.Verdicts[0].Result != delivery.CheckFail {
+		got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+		if err != nil || got.Verified || got.Skipped || got.ConductorPassed || len(got.Verdicts) == 0 || got.Verdicts[0].Result != delivery.CheckFail {
 			t.Fatalf("%+v %v", got, err)
 		}
 	})
@@ -393,8 +393,8 @@ func TestWithNoTierAReportedFailureIsRejectedNotSkipped(t *testing.T) {
 		endTurn(w)
 		fake := &waiverFake{preexisting: judge.Yes, offAfterPreexisting: true}
 		w.s.Judge = fake
-		got, err := w.s.judgeChecks(context.Background(), w.run)
-		if err != nil || got.Verified || got.Skipped || got.JudgePassed || fake.preexistingQuestions() != 1 || len(fake.asked) != 2 {
+		got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+		if err != nil || got.Verified || got.Skipped || got.ConductorPassed || fake.preexistingQuestions() != 1 || len(fake.asked) != 2 {
 			t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 		}
 	})
@@ -405,8 +405,8 @@ func TestWithNoTierAReportedFailureIsRejectedNotSkipped(t *testing.T) {
 		endTurn(w)
 		fake := &waiverFake{preexistingErr: judge.ErrOff}
 		w.s.Judge = fake
-		got, err := w.s.judgeChecks(context.Background(), w.run)
-		if err != nil || len(fake.asked) != 1 || got.Verified || got.Skipped || got.JudgePassed || len(got.Verdicts) != 1 || got.Verdicts[0].Result != delivery.CheckNotRun {
+		got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+		if err != nil || len(fake.asked) != 1 || got.Verified || got.Skipped || got.ConductorPassed || len(got.Verdicts) != 1 || got.Verdicts[0].Result != delivery.CheckNotRun {
 			t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 		}
 	})
@@ -425,8 +425,8 @@ func TestAFailureTheWaiverDoesNotCoverMayStillBePreexisting(t *testing.T) {
 			endTurn(w)
 			fake := &waiverFake{waived: judge.No, preexisting: map[bool]string{true: judge.Yes, false: judge.No}[shown]}
 			w.s.Judge = fake
-			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || got.Verified != shown || got.JudgePassed != shown || got.Carried {
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+			if err != nil || got.Verified != shown || got.ConductorPassed != shown || got.Carried {
 				t.Fatalf("%+v %v", got, err)
 			}
 			if fake.waiverQuestions() != 1 || fake.preexistingQuestions() != 1 || !isPreexistingQuestion(fake.asked[1]) {
@@ -436,7 +436,7 @@ func TestAFailureTheWaiverDoesNotCoverMayStillBePreexisting(t *testing.T) {
 			if shown && (v.Result != delivery.CheckPreexisting || v.Waiver != nil) {
 				t.Fatalf("verdict %+v", v)
 			}
-			if !shown && (v.Result != delivery.CheckFail || !strings.Contains(v.WaiverReason, "does not cover") || !strings.Contains(v.JudgeReason, "not passed by the judge")) {
+			if !shown && (v.Result != delivery.CheckFail || !strings.Contains(v.WaiverReason, "does not cover") || !strings.Contains(v.JudgeReason, "not passed by the conductor")) {
 				t.Fatalf("verdict %+v", v)
 			}
 		})
@@ -458,7 +458,7 @@ func TestWithNoTierTheSendBackSaysOnlyAPersonCanPassAFailure(t *testing.T) {
 				fake.preexistingErr = judge.ErrOff
 			}
 			w.s.Judge = fake
-			got, err := w.s.judgeChecks(context.Background(), w.run)
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 			if err != nil || got.Verified {
 				t.Fatalf("%+v %v", got, err)
 			}
@@ -477,14 +477,14 @@ func TestWithNoTierTheSendBackSaysOnlyAPersonCanPassAFailure(t *testing.T) {
 func TestAMultiLineReasonIsOneCheckOfTheSendBack(t *testing.T) {
 	d := checksDecision{Verdicts: []checksVerdict{
 		{Command: "npx tsc --noEmit", Result: delivery.CheckFail, Reason: "94 errors",
-			JudgeReason: "not passed by the judge: the calls show\n- base: 95 errors\n- head: 96 errors"},
+			JudgeReason: "not passed by the conductor: the calls show\n- base: 95 errors\n- head: 96 errors"},
 		{Command: "make lint", Result: delivery.CheckPass},
 	}}
 	msg := d.sendBack()
 	if n := strings.Count(msg, "\n- "); n != 1 || !strings.Contains(msg, "the calls show - base: 95 errors - head: 96 errors") {
 		t.Fatalf("%d check lines:\n%s", n, msg)
 	}
-	if got := d.unverified(); len(got) != 1 || got[0].Command != "npx tsc --noEmit" || !strings.HasPrefix(got[0].Reason, "94 errors — not passed by the judge") {
+	if got := d.unverified(); len(got) != 1 || got[0].Command != "npx tsc --noEmit" || !strings.HasPrefix(got[0].Reason, "94 errors — not passed by the conductor") {
 		t.Fatalf("unverified %+v", got)
 	}
 }
@@ -498,7 +498,7 @@ func TestTheSendBackNamesTheFailuresAfterTheFirstRejected(t *testing.T) {
 	endTurn(w)
 	fake := &waiverFake{}
 	w.s.Judge = fake
-	got, err := w.s.judgeChecks(context.Background(), w.run)
+	got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil || got.Verified || len(fake.asked) != 1 || len(got.Verdicts) != 2 || got.Verdicts[1].Command != "make test" {
 		t.Fatalf("%+v %v, asked %d", got, err, len(fake.asked))
 	}
@@ -569,8 +569,8 @@ func TestANotRunBrowserCheckIsDeferredOnlyToATestPhase(t *testing.T) {
 			endTurn(w)
 			fake := readingJudge{}
 			w.s.Judge = fake
-			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || got.Verified != test || got.JudgePassed != test {
+			got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+			if err != nil || got.Verified != test || got.ConductorPassed != test {
 				t.Fatalf("%+v %v", got, err)
 			}
 			if test && (got.Verdicts[0].Result != delivery.CheckDeferred || got.Verdicts[0].CallID != "call_test") {
@@ -593,14 +593,14 @@ func TestANotRunOnlyReportComparesNothing(t *testing.T) {
 	checksReply(w, notRunInUI)
 	endTurn(w)
 	w.s.Judge = readingJudge{}
-	got, err := w.s.judgeChecks(context.Background(), w.run)
+	got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
 	if err != nil || !got.Verified || *compares != 0 {
 		t.Fatalf("%+v %v; %d compares", got, err, *compares)
 	}
 	// A failure beside it is measured, with one compare.
 	checksReply(w, failingTsc+strings.TrimPrefix(notRunInUI, "checks:\n"))
 	endTurn(w)
-	if _, err := w.s.judgeChecks(context.Background(), w.run); err != nil || *compares != 1 {
+	if _, err := w.s.judgeChecksByJudge(context.Background(), w.run); err != nil || *compares != 1 {
 		t.Fatalf("%v; %d compares", err, *compares)
 	}
 }
@@ -616,8 +616,8 @@ func TestACarriedWaiverIsAskedFirstAndAloneForItsFailure(t *testing.T) {
 	endTurn(w)
 	fake := &waiverFake{waived: judge.Yes, preexisting: judge.Yes}
 	w.s.Judge = fake
-	got, err := w.s.judgeChecks(context.Background(), w.run)
-	if err != nil || !got.Verified || !got.Carried || !got.JudgePassed {
+	got, err := w.s.judgeChecksByJudge(context.Background(), w.run)
+	if err != nil || !got.Verified || !got.Carried || !got.ConductorPassed {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if len(fake.asked) != 3 || fake.waiverQuestions() != 1 || !strings.Contains(fake.asked[0].Question, "waived a reported failure") ||

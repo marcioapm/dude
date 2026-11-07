@@ -96,6 +96,20 @@ describe("checks judgements in the task's Activity", () => {
     ]]);
   });
 
+  test("a failure the conductor passed names the conductor and its decision, not the judge", () => {
+    const lines = activityLines([
+      judged(impl.id, { turn: 1, round: 0, verified: true, judgePassed: true, message: "", checks: [
+        { command: "npx tsc --noEmit", result: "pre-existing", decision: "preexisting", reason: "verify at the base shows it", decisionCursor: 41, by: "conductor" },
+        { command: "make lint", result: "pass", decision: "backed", reason: "clean", decisionCursor: 41, by: "conductor" },
+      ] }, 1),
+    ], people, [impl], [], 1);
+    expect(lines.map((l) => [textOf(l.text), l.quote])).toEqual([[
+      "The implementer's checks were verified, with failures the conductor passed",
+      "npx tsc --noEmit: pre-existing, passed by the conductor: it fails the same at the commit of the target branch the task builds on — verify at the base shows it (decided by the conductor, event 41)\n"
+        + "make lint: pass — clean (decided by the conductor, event 41)",
+    ]]);
+  });
+
   test("a failure the judge did not pass carries the judge's reason", () => {
     const lines = activityLines([
       judged(impl.id, { turn: 1, round: 0, verified: false, message: "Your checks report was not verified.", checks: [

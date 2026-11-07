@@ -228,3 +228,13 @@ rRecoverSecretFound                    refusals/delivery/recover/secret-found
 rRecoverBranchOutside                  refusals/delivery/recover/branch-outside
 rRecoverBranchInUse                    refusals/delivery/recover/branch-in-use
 rRecoverAlreadyRecovered               refusals/delivery/recover/already-recovered
+rChecksRunNotOfTask                     refusals/delivery/checks/run-not-of-task
+rChecksNotLatestTurn                    refusals/delivery/checks/not-latest-turn
+rChecksNotWaiting                       refusals/delivery/checks/not-waiting
+rChecksIncomplete                       refusals/delivery/checks/incomplete
+rChecksNeedsReason                      refusals/delivery/checks/needs-reason
+rChecksVerdictNotAllowed                refusals/delivery/checks/verdict-not-allowed
+rChecksNoBase                           refusals/delivery/checks/no-base
+rChecksWaiverCursor                     refusals/delivery/checks/waiver-cursor
+rChecksMissingVerdict                   refusals/delivery/checks/missing
+rChecksReasonLong                       refusals/delivery/checks/reason-long

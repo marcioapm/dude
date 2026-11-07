@@ -51,7 +51,7 @@ func judgedThroughTheService(t *testing.T, client llm.Client, on bool) (checksDe
 		}
 	}
 	w.s.Judge = &judge.Service{DB: w.s.DB, LLM: client, Timeout: 300 * time.Millisecond}
-	d, err := w.s.judgeChecks(ctx, w.run)
+	d, err := w.s.judgeChecksByJudge(ctx, w.run)
 	if err != nil {
 		t.Fatal(err)
 	}
