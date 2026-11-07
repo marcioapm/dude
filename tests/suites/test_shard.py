@@ -15,7 +15,7 @@ SECONDS = {"suites/test_a.py": 300, "suites/test_b.py": 120, "suites/test_c.py":
            "suites/test_e.py": 5, "suites/test_f.py": 1}
 
 
-@pytest.mark.parametrize("m", [1, 2, 3, 6, 10, 13])
+@pytest.mark.parametrize("m", [1, 2, 3, 6, 10, 12, 13])
 def test_every_suite_lands_in_exactly_one_shard(m):
     shards = shard.split(SUITES, m, SECONDS)
     assert len(shards) == m
@@ -72,8 +72,10 @@ def test_every_suite_on_disk_is_in_some_shard_whatever_the_durations_file_says(t
         (tmp_path / "suites" / name).write_text("")
     durations = tmp_path / "seconds.json"
     durations.write_text(json.dumps({"suites/test_a.py": 50, "suites/test_gone.py": 99}))
+    (tmp_path / "suites" / "nested").mkdir()
+    (tmp_path / "suites" / "nested" / "test_renamed.py").write_text("")
     suites = shard.all_suites(tmp_path)
-    assert suites == ["suites/test_a.py", "suites/test_new.py"]
+    assert suites == ["suites/nested/test_renamed.py", "suites/test_a.py", "suites/test_new.py"]
     placed = [s for b in shard.split(suites, 3, shard.suite_seconds(durations)) for s in b]
     assert sorted(placed) == suites
 

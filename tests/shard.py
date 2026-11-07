@@ -30,7 +30,7 @@ DEFAULT_SECONDS = 30.0
 
 
 def all_suites(tests_dir: Path = TESTS_DIR) -> list[str]:
-    return sorted(str(p.relative_to(tests_dir)) for p in (tests_dir / "suites").glob("test_*.py"))
+    return sorted(str(p.relative_to(tests_dir)) for p in (tests_dir / "suites").rglob("test_*.py"))
 
 
 def suite_seconds(path: Path = SUITE_SECONDS_FILE) -> dict[str, float]:
