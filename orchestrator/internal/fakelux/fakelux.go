@@ -28,6 +28,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -264,6 +265,8 @@ type Run struct {
 	// a start under way goes on only while it is still the latest one.
 	starts  int
 	command *workloadCommand
+	// Completion of an in-flight beforeStop hook; protected by Server.mu.
+	beforeStopDone chan struct{}
 	// Its next placement goes to another host (a migrate).
 	moveNext  bool
 	artifacts []*artifact
@@ -860,10 +863,14 @@ type Server struct {
 	ctx       context.Context
 	cancelBG  context.CancelFunc
 	closeOnce sync.Once
+	closeDone chan struct{}
 	commands  sync.WaitGroup
 	bgMu      sync.Mutex
 	bg        sync.WaitGroup
 	closing   bool
+	// owners identifies admitted goroutines so Close invoked by a callback can
+	// initiate shutdown without joining itself. External callers still join all work.
+	owners map[string]int
 	// What exec and GET say of a Run's processes and usage (execPlay).
 	execPlay
 	// fakeagent.StallModel's and SilentModel's reviewers so far, by task.
@@ -900,17 +907,52 @@ func (s *Server) SetPS(ps func(luxRunID string) string, execFails string) {
 	s.PS, s.ExecFails = ps, execFails
 }
 
-// goBG admits workers atomically with Close's admission barrier. Never hold
-// bgMu while acquiring mu; callers may already hold mu.
-func (s *Server) goBG(fn func()) bool {
+// ownerID is used only to recognize a reentrant Close, not for scheduling.
+// Go has no goroutine-local storage; the first stack line identifies the caller.
+func ownerID() string {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	return strings.Fields(string(buf[:n]))[1]
+}
+
+func (s *Server) enterOwner() func() {
+	id := ownerID()
+	s.bgMu.Lock()
+	if s.owners == nil {
+		s.owners = make(map[string]int)
+	}
+	s.owners[id]++
+	s.bgMu.Unlock()
+	return func() {
+		s.bgMu.Lock()
+		s.owners[id]--
+		if s.owners[id] == 0 {
+			delete(s.owners, id)
+		}
+		s.bgMu.Unlock()
+	}
+}
+
+// admit shares the same barrier for synchronous HTTP handlers and workers.
+func (s *Server) admit() bool {
 	s.bgMu.Lock()
 	defer s.bgMu.Unlock()
 	if s.closing {
 		return false
 	}
 	s.bg.Add(1)
+	return true
+}
+
+// goBG admits workers atomically with Close's admission barrier. Never hold
+// bgMu while acquiring mu; callers may already hold mu.
+func (s *Server) goBG(fn func()) bool {
+	if !s.admit() {
+		return false
+	}
 	go func() {
 		defer s.bg.Done()
+		defer s.enterOwner()()
 		fn()
 	}()
 	return true
@@ -938,37 +980,49 @@ func (s *Server) delay(after time.Duration) bool {
 	}
 }
 
-// Close closes admission and wakes/cancels all normal waits before joining
-// workers outside both locks. Test hooks remain synchronous: tests must release
-// any hooks they deliberately block before shutdown can finish.
+// Close closes admission and cancels waits before taking the state lock.
+// An admitted callback may initiate shutdown, but cannot join itself: it returns
+// after cancellation; an external Close joins it and every other admitted task.
+// Test hooks must be released by their owner before an external join can finish.
 func (s *Server) Close() {
 	s.closeOnce.Do(func() {
-		s.mu.Lock()
 		s.bgMu.Lock()
 		s.closing = true
 		s.bgMu.Unlock()
 		close(s.closed)
 		s.cancelBG()
-		for _, run := range s.runs {
-			if run.command != nil {
-				run.command.cancel()
+		go func() {
+			s.mu.Lock()
+			for _, run := range s.runs {
+				if run.command != nil {
+					run.command.cancel()
+				}
+				run.cond.Broadcast()
 			}
-			run.cond.Broadcast()
-		}
-		if s.feedCond != nil {
-			s.feedCond.Broadcast()
-		}
-		s.mu.Unlock()
-		s.bg.Wait()
-		s.commands.Wait()
+			if s.feedCond != nil {
+				s.feedCond.Broadcast()
+			}
+			s.heldPushes = nil
+			s.heldSyncs = nil
+			s.mu.Unlock()
+			s.bg.Wait()
+			s.commands.Wait()
+			close(s.closeDone)
+		}()
 	})
+	s.bgMu.Lock()
+	reentrant := s.owners[ownerID()] != 0
+	s.bgMu.Unlock()
+	if !reentrant {
+		<-s.closeDone
+	}
 }
 
 // New serves a fake lux. With decide nil, every Run plays dude's scripted
 // agent (fakeagent), as a real lux running lux-fake would.
 func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 	s := &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key,
-		closed: make(chan struct{})}
+		closed: make(chan struct{}), closeDone: make(chan struct{})}
 	s.ctx, s.cancelBG = context.WithCancel(context.Background())
 	s.feedInit()
 	if decide == nil {
@@ -1743,7 +1797,32 @@ func (s *Server) Handler() http.Handler {
 			writeErr(w, 401, "unauthorized", "invalid API key")
 			return
 		}
-		mux.ServeHTTP(w, r)
+		if !s.admit() {
+			writeErr(w, http.StatusServiceUnavailable, "closed", "fake lux is closed")
+			return
+		}
+		defer s.bg.Done()
+		defer s.enterOwner()()
+		ctx, cancel := context.WithCancel(r.Context())
+		stop := context.AfterFunc(s.ctx, cancel)
+		defer stop()
+		defer cancel()
+		// Cancellation must unblock request reads and stream writes too. The
+		// response controller preserves Hijacker/Flusher for WebSocket and SSE.
+		ioDone := make(chan struct{})
+		unblock := context.AfterFunc(ctx, func() {
+			defer close(ioDone)
+			controller := http.NewResponseController(w)
+			_ = controller.SetReadDeadline(time.Now())
+			_ = controller.SetWriteDeadline(time.Now())
+			_ = r.Body.Close()
+		})
+		defer func() {
+			if !unblock() {
+				<-ioDone
+			}
+		}()
+		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -3038,6 +3117,9 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ReleasePushes() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.isClosed() {
+		return
+	}
 	held := s.heldPushes
 	s.heldPushes = nil
 	for _, push := range held {
@@ -3449,7 +3531,10 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	run.Stopped++
 	run.busy = false
 	if run.State == "running" {
-		s.beforeStop(run)
+		if !s.beforeStop(run) || run.State != "running" {
+			writeJSON(w, 202, s.view(run))
+			return
+		}
 		s.stoppedUnread(run)
 		// As lux does: stopping at once, stopped once the container has
 		// gone — a moment later, on the stream.
@@ -3458,11 +3543,11 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 			if s.afterStopped != nil {
 				defer s.afterStopped()
 			}
-			if s.beforeStopped != nil {
-				s.beforeStopped()
-			}
 			if !s.delay(30 * time.Millisecond) {
 				return
+			}
+			if s.beforeStopped != nil {
+				s.beforeStopped()
 			}
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -3509,7 +3594,9 @@ func (s *Server) end(w http.ResponseWriter, run *Run, call string) {
 	defer s.mu.Unlock()
 	run.Calls = append(run.Calls, call)
 	run.Cancelled = true
-	s.beforeStop(run)
+	if !s.beforeStop(run) {
+		return
+	}
 	if !lux.Terminated(run.State) {
 		s.stoppedUnread(run)
 		s.setState(run, s.ended())

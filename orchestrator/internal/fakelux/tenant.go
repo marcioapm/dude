@@ -977,6 +977,9 @@ func (s *Server) syncRun(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ReleaseSyncs() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.isClosed() {
+		return
+	}
 	held := s.heldSyncs
 	s.heldSyncs = nil
 	for _, report := range held {

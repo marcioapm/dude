@@ -3,6 +3,8 @@ package fakelux
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -150,6 +152,145 @@ func TestCloseJoinsWorkersAndRejectsAdmission(t *testing.T) {
 	<-closed
 	<-finished
 	fake.Close() // idempotent, including the join
+}
+
+func TestCloseFromAdmittedWorker(t *testing.T) {
+	fake := New("", "k", nil)
+	returned, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	fake.goBG(func() {
+		fake.Close()
+		close(returned)
+		<-release
+	})
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("admitted worker deadlocked in Close")
+	}
+	joined := make(chan struct{})
+	go func() { fake.Close(); close(joined) }()
+	select {
+	case <-joined:
+		t.Fatal("external Close failed to join reentrant worker")
+	default:
+	}
+	unblock()
+	select {
+	case <-joined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("external Close did not finish")
+	}
+}
+
+func TestCloseJoinsHTTPContinuation(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	c, run := submitRun(t, fake)
+	waitState(t, c, run.ID, "running")
+	entered, canceled, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	fake.OnResume = func(string, bool) {
+		close(entered)
+		<-fake.ctx.Done()
+		close(canceled)
+		<-release
+	}
+	handler := fake.Handler()
+	go func() {
+		r := httptest.NewRequest("POST", "/v1/runs/"+run.ID+"/resume", strings.NewReader(`{}`))
+		r.Header.Set("Authorization", "Bearer k")
+		handler.ServeHTTP(httptest.NewRecorder(), r)
+		close(returned)
+	}()
+	<-entered
+	joined := make(chan struct{})
+	go func() { fake.Close(); close(joined) }()
+	<-canceled
+	select {
+	case <-joined:
+		t.Fatal("Close returned before HTTP continuation")
+	default:
+	}
+	r := httptest.NewRequest("POST", "/v1/runs", strings.NewReader(`{}`))
+	r.Header.Set("Authorization", "Bearer k")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("post-close mutation status = %d", w.Code)
+	}
+	close(release)
+	select {
+	case <-joined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not join HTTP continuation")
+	}
+	<-returned
+}
+
+// readSignalingBody observes the fake's first body read without replacing the
+// real net/http body or changing how Close unblocks it.
+type readSignalingBody struct {
+	io.ReadCloser
+	reading chan struct{}
+	once    sync.Once
+}
+
+func (b *readSignalingBody) Read(p []byte) (int, error) {
+	b.once.Do(func() { close(b.reading) })
+	return b.ReadCloser.Read(p)
+}
+
+func TestCloseUnblocksPartialTCPRequestBody(t *testing.T) {
+	fake := New("", "k", nil)
+	defer fake.Close()
+	reading, returned := make(chan struct{}), make(chan struct{})
+	handler := fake.Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Install outside Handler so the signal comes from the admitted
+		// handler's read, not merely from arrival at the HTTP server.
+		r.Body = &readSignalingBody{ReadCloser: r.Body, reading: reading}
+		defer close(returned)
+		handler.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	conn, err := net.DialTimeout("tcp", srv.Listener.Addr().String(), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() // Only close the client after Close has been checked.
+	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// Neither finish the advertised body nor half-close the connection:
+	// reading this request cannot finish without shutdown interrupting it.
+	if _, err := io.WriteString(conn, "POST /v1/runs HTTP/1.1\r\nHost: fakelux\r\nAuthorization: Bearer k\r\nContent-Length: 100\r\n\r\n{"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("admitted handler did not start reading the partial request body")
+	}
+	select {
+	case <-returned:
+		t.Fatal("handler returned before shutdown with an incomplete request body")
+	default:
+	}
+
+	closed := make(chan struct{})
+	go func() { fake.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close blocked on the partial request body while the client connection remained open")
+	}
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("HTTP handler did not return after Close")
+	}
 }
 
 func TestCloseCancelsLongDelay(t *testing.T) {

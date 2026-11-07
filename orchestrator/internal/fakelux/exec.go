@@ -117,8 +117,34 @@ func (s *Server) checkout(run *Run, spec map[string]any) (string, error) {
 // lux.beforeStop start and done, as lux's shim reports it. A Run whose
 // checkout was never looked at or written to has nothing to diff, and the
 // fake skips the hook for it rather than clone for nothing. Callers hold
-// s.mu.
-func (s *Server) beforeStop(run *Run) {
+// s.mu. False means shutdown or a newer placement superseded the hook;
+// callers must not continue their stop mutations. A state-only change suppresses
+// hook output but returns true so callers can re-evaluate the current state.
+func (s *Server) beforeStop(run *Run) bool {
+	if s.isClosed() || s.ctx.Err() != nil {
+		return false
+	}
+	epoch, start, state := run.Epoch, run.starts, run.State
+	current := func() bool {
+		return !s.isClosed() && s.ctx.Err() == nil && run.Epoch == epoch && run.starts == start
+	}
+	for run.beforeStopDone != nil {
+		done := run.beforeStopDone
+		s.mu.Unlock()
+		select {
+		case <-done:
+		case <-s.ctx.Done():
+		}
+		s.mu.Lock()
+		if !current() {
+			return false
+		}
+		// The owner finishes its stop mutation under this same lock before
+		// a waiter can resume. Re-evaluate rather than repeat its hook.
+		if run.State != state {
+			return true
+		}
+	}
 	var spec struct {
 		Workload struct {
 			BeforeStop *lux.BeforeStop `json:"beforeStop"`
@@ -129,17 +155,27 @@ func (s *Server) beforeStop(run *Run) {
 	_ = json.Unmarshal(run.Spec, &spec)
 	hook := spec.Workload.BeforeStop
 	if hook == nil || len(hook.Command) == 0 || run.workspace == "" || run.State != "running" {
-		return
+		return true
 	}
+	done := make(chan struct{})
+	run.beforeStopDone = done
+	defer func() {
+		run.beforeStopDone = nil
+		close(done)
+	}()
 	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "start"})
 	timeout := 10 * time.Second
 	if d, err := time.ParseDuration(hook.Timeout); err == nil && d > 0 {
 		timeout = d
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(s.ctx, timeout)
 	defer cancel()
 	args, env, collect := s.publishing(append([]string{hook.Command[0]}, s.inWorkspace(run, hook.Command[1:])...))
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	defer discardExecPublish(env)
 	cmd.Dir = run.workspace
 	out := filepath.Join(run.workspace, ".lux-artifacts")
 	if s.LegacyArtifacts {
@@ -162,13 +198,17 @@ func (s *Server) beforeStop(run *Run) {
 		}
 		s.mu.Unlock()
 		res, err := http.DefaultClient.Do(req)
-		s.mu.Lock()
-		if err != nil {
-			continue
+		var data []byte
+		var readErr error
+		if err == nil {
+			data, readErr = io.ReadAll(res.Body)
+			res.Body.Close()
 		}
-		data, readErr := io.ReadAll(res.Body)
-		res.Body.Close()
-		if readErr != nil || res.StatusCode != http.StatusOK {
+		s.mu.Lock()
+		if !current() || run.State != state {
+			return current()
+		}
+		if err != nil || readErr != nil || res.StatusCode != http.StatusOK {
 			continue
 		}
 		bin, err := os.MkdirTemp(run.workspace, ".dude-cli-")
@@ -183,11 +223,23 @@ func (s *Server) beforeStop(run *Run) {
 		cmd.Env = append(cmd.Env, "FAKELUX_DIFF_BASES="+string(data))
 		break
 	}
-	code := exitCode(cmd.Run(), -1)
+	s.mu.Unlock()
+	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	s.mu.Lock()
+	if !current() || run.State != state {
+		return current()
+	}
+	code := exitCode(err, -1)
 	s.recordEvent(run, "lux.beforeStop", map[string]any{"phase": "done", "exitCode": code, "timedOut": ctx.Err() != nil})
 	collect(run)
 	if !s.LegacyArtifacts {
-		return
+		return true
 	}
 	_ = filepath.WalkDir(out, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
@@ -204,6 +256,17 @@ func (s *Server) beforeStop(run *Run) {
 		run.published[filepath.ToSlash(rel)] = string(content)
 		return nil
 	})
+	return true
+}
+
+// discardExecPublish removes staged publications even when shutdown prevents
+// collecting them into a Run.
+func discardExecPublish(env []string) {
+	for _, entry := range env {
+		if dir, ok := strings.CutPrefix(entry, "FAKELUX_PUBLISH="); ok {
+			_ = os.RemoveAll(dir)
+		}
+	}
 }
 
 // inWorkspace reads /workspace in a command's arguments as the Run's
@@ -294,10 +357,14 @@ func (s *Server) Edit(id string, files map[string]string) {
 // Timeout stops a Run as lux's own timeout would: the beforeStop hook runs,
 // then the Run fails with reason "timeout".
 func (s *Server) Timeout(id string) {
+	if !s.admit() {
+		return
+	}
+	defer s.bg.Done()
+	defer s.enterOwner()()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if run := s.runs[id]; run != nil && run.State == "running" {
-		s.beforeStop(run)
+	if run := s.runs[id]; run != nil && run.State == "running" && s.beforeStop(run) && run.State == "running" {
 		s.setStateWith(run, "failed", "timeout")
 	}
 }
@@ -311,7 +378,12 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	if s.isClosed() || r.Context().Err() != nil {
+		s.mu.Unlock()
+		return
+	}
 	run.Calls = append(run.Calls, "exec")
+	epoch, start := run.Epoch, run.starts
 	state := run.State
 	var spec map[string]any
 	_ = json.Unmarshal(run.Spec, &spec)
@@ -337,6 +409,8 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.CloseNow()
 	ctx := r.Context()
+	stopClose := context.AfterFunc(ctx, func() { _ = ws.CloseNow() })
+	defer stopClose()
 	var open struct {
 		Command []string `json:"command"`
 	}
@@ -346,6 +420,10 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	if s.isClosed() || ctx.Err() != nil || run.Epoch != epoch || run.starts != start || run.State != "running" {
+		s.mu.Unlock()
+		return
+	}
 	args := append([]string{open.Command[0]}, s.inWorkspace(run, open.Command[1:])...)
 	ps, fails := s.PS, s.ExecFails
 	s.mu.Unlock()
@@ -357,17 +435,32 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = wsjson.Write(ctx, ws, map[string]any{"data": []byte(ps(run.ID)), "ch": "stdout"})
-		_ = wsjson.Write(context.WithoutCancel(ctx), ws, map[string]any{"exitCode": 0})
+		_ = wsjson.Write(ctx, ws, map[string]any{"exitCode": 0})
 		_ = ws.Close(websocket.StatusNormalClosure, "")
 		return
 	}
 	args, env, collect := s.publishing(args)
+	defer discardExecPublish(env)
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	cmd.Dir, cmd.Env = dir, env
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	code := exitCode(cmd.Run(), 127)
+	err = cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	code := exitCode(err, 127)
 	s.mu.Lock()
+	if s.isClosed() || ctx.Err() != nil || run.Epoch != epoch || run.starts != start || run.State != "running" {
+		s.mu.Unlock()
+		return
+	}
 	collect(run)
 	s.mu.Unlock()
 	send := func(ch, text string) {
@@ -379,7 +472,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 	}
 	send("stdout", stdout.String())
 	send("stderr", stderr.String())
-	_ = wsjson.Write(context.WithoutCancel(ctx), ws, map[string]any{"exitCode": code})
+	_ = wsjson.Write(ctx, ws, map[string]any{"exitCode": code})
 	_ = ws.Close(websocket.StatusNormalClosure, "")
 }
 

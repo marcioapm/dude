@@ -214,6 +214,14 @@ func TestBehaviourCommandCancellation(t *testing.T) {
 			}
 			probe.awaitGone(t, first)
 			got, err := client.Get(ctx, run.ID)
+			if action == "close" {
+				// HTTP admission is closed; inspect the retained snapshot directly.
+				fake.mu.Lock()
+				got.State = fake.runs[run.ID].State
+				got.StateReason = fake.runs[run.ID].StateReason
+				fake.mu.Unlock()
+				err = nil
+			}
 			want := "terminated"
 			switch action {
 			case "stop", "close":
