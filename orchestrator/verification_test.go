@@ -99,12 +99,12 @@ func TestATestThatPassesEveryCriterionWithEvidenceOpensThePullRequest(t *testing
 		t.Errorf("a verdict at the pull request's head is not stale:\n%s", pr.Body)
 	}
 	// The checks gate's account is part of the marked section; with no
-	// judgement tier it says the reports were not model-checked.
+	// conductor deciding the delivery it says the reports were not verified.
 	section := "<!-- dude:verification -->\n## Verification\nTested at `" + heads[:7] + "`.\n\n" +
 		"- **pass** — it greets\n- **pass** — it says goodbye\n\n" +
 		"The evidence (video, screenshots, `acceptance.md`) is on the task in dude.\n\n" +
-		"### Checks\nChecks not model-checked, set a judgement tier in the organisation's settings.\n\n" +
-		"- **Implementer** — not model-checked\n- **Fixer** — not model-checked\n- **Simplifier** — not model-checked\n" +
+		"### Checks\nChecks not verified: no conductor decided them.\n\n" +
+		"- **Implementer** — not verified\n- **Fixer** — not verified\n- **Simplifier** — not verified\n" +
 		"<!-- /dude:verification -->\n\n"
 	if !strings.Contains(pr.Body, section) {
 		t.Fatalf("the pull request opened without the marked section %q:\n%s", section, pr.Body)

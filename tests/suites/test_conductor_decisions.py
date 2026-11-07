@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import json
 
+from env import TestEnvironment
 import requests
-
 from fake_github import FakeGitHub
 from helpers import ApiClient, finish_simplifier_review, query, wait_until
 
@@ -354,7 +354,7 @@ def test_your_call_on_an_escalation_lets_the_conductor_retry(client: ApiClient, 
 
 
 def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision(
-        client: ApiClient, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str):
+        client: ApiClient, env: TestEnvironment, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str):
     """While the delivery waits on the conductor after the implementer, an
     implementer the conductor started itself (start_agent) is held at the
     checks gate and escalates; the person waives it, and the conductor's next
@@ -363,12 +363,16 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     project = _conducting(client, forge_project)
     models = {**project["agentModels"], **client.on_models({"implementer": "fake/checks-unbacked"})}
     assert client.patch(f"/v1/projects/{project['id']}", {"agentModels": models}).status_code == 200
+    # A judgement tier set (the judge stub) changes nothing for a conducted
+    # escalation: the checks gate never asks it.
     assert client.put("/v1/judgements/settings", {"tierId": client.tier_for("judge-e2e")}).status_code == 200
+    unrouted = len(env.judge_unrouted())
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 1}).status_code == 200
     task = client.create_task(project["id"], "Greet, with a helper the checks gate holds")
     conductor = client.post(f"/v1/tasks/{task['id']}/talk").json()["runId"]
     _waiting_on(client, task["id"], "start", "the delivery never waited on the conductor to start")
     # The delivery's own implementer is held too: waived, it waits on the conductor after it.
+    _say(client, task["id"], "Test script decides checks explicitly.")
     _say(client, task["id"], "Go.", _tool("start_phase", {"phase": "implement"}))
     _waived(client, task["id"], "the delivery's implementer", owner_dsn)
     _waiting_on(client, task["id"], "after_implement", "the implementer never came back")
@@ -389,14 +393,38 @@ def test_a_checks_escalation_of_the_conductors_own_agent_returns_to_its_decision
     _waiting_on(client, task["id"], "after_review", "the review never came back to the conductor")
     decided = [e["payload"]["action"] for e in client.events(taskId=task["id"], limit=1000) if e["eventType"] == "conductor.decided"]
     assert decided == ["start_phase", "next"], decided
+    assert env.judge_unrouted()[unrouted:] == []
+    calls = client.get("/v1/judgements", params={"asker": "phases.checks"})
+    assert calls.status_code == 200 and calls.json()["calls"] == [], calls.text
 
 
 def _waived(client: ApiClient, task_id: str, what: str, owner_dsn: str) -> None:
-    """Waits for the checks gate to escalate and waives it, as the task's owner."""
-    wait_until(lambda: query(owner_dsn, """SELECT id FROM workflow_runs WHERE task_id=%s
+    """Waits for the checks gate to escalate and waives it, as the task's owner.
+
+    The checks gate asks the conductor about each report (run.checks.asked);
+    fake/scripted decides only what a message names, so the person's Chat
+    has it decide each one through decide_checks: the reported pass is not
+    backed by the recorded calls (make check exited 1)."""
+    told: set[tuple[str, int]] = set()
+
+    def escalated():
+        for ask in query(owner_dsn, """SELECT a.run_id, a.payload FROM events a WHERE a.task_id = %s
+                         AND a.event_type = 'run.checks.asked' AND NOT EXISTS (SELECT 1 FROM events c
+                           WHERE c.run_id = a.run_id AND c.event_type = 'run.checks.conducted'
+                           AND c.payload->>'turn' = a.payload->>'turn')""", (task_id,)):
+            key = (ask["run_id"], int(ask["payload"]["turn"]))
+            if key in told:
+                continue
+            told.add(key)
+            checks = [{"command": c["command"], "verdict": "unbacked" if c["result"] == "pass" else "reject",
+                       "reason": "the recorded call of it exited 1"} for c in ask["payload"]["checks"]]
+            _say(client, task_id, "Decide the checks report.", _tool("decide_checks", {
+                "runId": key[0], "turn": key[1], "checks": checks, "missing": {"verdict": "none", "reason": "nothing obvious"}}))
+        return query(owner_dsn, """SELECT id FROM workflow_runs WHERE task_id=%s
                AND status='waiting' AND step='decide' AND state->'escalation'->>'reason'='checks_unverified'
-               AND NOT state->'escalation' ? 'decided'""", (task_id,)),
-               timeout=90, message=f"the checks gate never reached the conductor for {what}")
+               AND NOT state->'escalation' ? 'decided'""", (task_id,))
+
+    wait_until(escalated, timeout=90, message=f"the checks gate never reached the conductor for {what}")
     resp = client.post(f"/v1/tasks/{task_id}/decide", {"action": "waive", "note": "CI runs the check; the owner reviewed it."})
     assert resp.status_code == 200, resp.text
     wait_until(lambda: _task(client, task_id).get("escalation") is None, timeout=60,

@@ -1,10 +1,11 @@
-// Package judge asks a model one question and reads back a decision: yes,
-// no or unsure, how sure it is, and why. The organisation picks the tier
-// that answers (organizations.judgement_tier_id); with none, judgements are
-// off. Every call sent is recorded in model_calls, answered or not.
+// Package judge asks the organisation's judgement tier
+// (organizations.judgement_tier_id) a structured question and reads back
+// its answer: chat's routing (Structured). With no tier, judgements are
+// off. Every call sent is recorded in model_calls, answered or not. An
+// admin's test (Test) asks one yes-or-no question and records nothing.
 //
-// It fails closed: any error is a zero Judgement, and the caller does what
-// it does without one.
+// It fails closed: any error is a zero answer, and the caller does what it
+// does without one.
 package judge
 
 import (
@@ -19,7 +20,6 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/llm"
-	"github.com/marciomartins/dude/orchestrator/internal/modelcalls"
 	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
 
@@ -39,25 +39,11 @@ const (
 	Unsure = "unsure"
 )
 
-// Ask is one question, and who asks it.
-type Ask struct {
-	// The part of dude that asks, as code names it ("delivery.comment").
-	Asker string
-	// A short label for what it is about: "ACME-28 · acme#5477".
-	About  string
-	TaskID *string
-	// One question a yes or no answers.
-	Question string
-	// What the model needs to answer it; may be empty.
-	Context string
-}
-
-// Judgement is a model's answer. CallID is its row in model_calls.
+// Judgement is a model's answer.
 type Judgement struct {
 	Decision   string  `json:"decision"`
 	Confidence float64 `json:"confidence"`
 	Reasoning  string  `json:"reasoning"`
-	CallID     string  `json:"-"`
 }
 
 // Service asks the organisation's judgement tier.
@@ -98,18 +84,14 @@ const recordTimeout = 5 * time.Second
 const maxTokens = 1024
 
 // messages are the messages a question is sent as: the fixed system
-// message, then the question with its context under a heading.
-func messages(question, context string) []llm.Message {
-	user := strings.TrimSpace(question)
-	if c := strings.TrimSpace(context); c != "" {
-		user += "\n\n## Context\n\n" + c
-	}
-	return []llm.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}}
+// message, then the question.
+func messages(question string) []llm.Message {
+	return []llm.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: strings.TrimSpace(question)}}
 }
 
 // call omits temperature: the proxy answers 400 to one (seen for Claude and GPT tiers).
-func call(t Tier, question, context string) llm.Call {
-	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question, context),
+func call(t Tier, question string) llm.Call {
+	return llm.Call{Model: t.Model, Effort: t.Effort, Headers: t.Headers, Messages: messages(question),
 		MaxTokens: maxTokens}
 }
 
@@ -142,9 +124,8 @@ func orgTier(ctx context.Context, tx pgx.Tx) (Tier, error) {
 }
 
 // redactor redacts what a call stores: the proxy's key (a proxy may echo
-// it in an error), the tier's header values, which may be credentials,
-// and, for a question about a task, its project's and organisation's secret values.
-func redactor(ctx context.Context, tx pgx.Tx, proxyKey string, taskID *string, headers map[string]string) (*redact.Redactor, error) {
+// it in an error) and the tier's header values, which may be credentials.
+func redactor(proxyKey string, headers map[string]string) *redact.Redactor {
 	var list []redact.Secret
 	if proxyKey != "" {
 		list = append(list, redact.Secret{Name: "DUDE_LLM_KEY", Value: proxyKey})
@@ -152,75 +133,17 @@ func redactor(ctx context.Context, tx pgx.Tx, proxyKey string, taskID *string, h
 	for name, value := range headers {
 		list = append(list, redact.Secret{Name: name, Value: value})
 	}
-	if taskID != nil {
-		// Not secrets_in_force: an organisation value the project overrides is
-		// redacted too, on purpose, since the task's Runs may predate the
-		// override. UNION drops a pair both levels hold with one value.
-		rows, err := tx.Query(ctx, `SELECT s.name, s.value FROM project_secrets s JOIN tasks t ON t.project_id = s.project_id WHERE t.id = $1
-			UNION SELECT o.name, o.value FROM organization_secrets o JOIN tasks t ON t.organization_id = o.organization_id WHERE t.id = $1`, *taskID)
-		if err != nil {
-			return nil, err
-		}
-		secrets, err := pgx.CollectRows(rows, pgx.RowToStructByPos[redact.Secret])
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, secrets...)
-	}
 	if len(list) == 0 {
-		return nil, nil
+		return nil
 	}
-	return redact.FromList(list), nil
-}
-
-// Judge asks the organisation's judgement tier ask's question, once, and
-// records the call. The tier is read in one transaction and the call
-// recorded in another: no transaction is held while the model thinks. The
-// record is written under its own 5s bound, so a call sent is recorded
-// even when ctx ends first.
-func (s Service) Judge(ctx context.Context, org string, ask Ask) (Judgement, error) {
-	var (
-		tier Tier
-		red  *redact.Redactor
-	)
-	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		if tier, err = orgTier(ctx, tx); err != nil {
-			return err
-		}
-		red, err = redactor(ctx, tx, s.LLM.Key, ask.TaskID, tier.Headers)
-		return err
-	})
-	if err != nil {
-		return Judgement{}, err
-	}
-	sent := call(tier, ask.Question, ask.Context)
-	sent.Timeout = s.Timeout
-	j, done, askErr := decide(ctx, s.LLM, sent)
-	rec := modelcalls.Call{Purpose: modelcalls.PurposeJudgement, Asker: ask.Asker, About: ask.About, TaskID: ask.TaskID,
-		TierID: &tier.ID, TierName: tier.Name, Sent: sent, Completion: done, Err: askErr}
-	if askErr == nil {
-		rec.Result = j
-	}
-	recCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
-	defer cancel()
-	var id string
-	if err := s.DB.InOrg(recCtx, org, func(tx pgx.Tx) (err error) {
-		id, err = modelcalls.Record(recCtx, tx, red, rec)
-		return err
-	}); err != nil {
-		return Judgement{}, fmt.Errorf("record the judgement: %w", err)
-	}
-	if askErr != nil {
-		return Judgement{}, askErr
-	}
-	j.CallID = id
-	return j, nil
+	return redact.FromList(list)
 }
 
 // TestQuestion is the question an admin's test asks.
 const TestQuestion = "Is the sky blue on a clear day?"
 
-// Test asks t the test question as Judge would ask it, and records nothing.
+// Test asks t the test question, as a yes-or-no judgement, and records
+// nothing.
 // It is bounded as the Models page's test message is (c.Timeout, else
 // llm.TestTimeout), inside the backend's wait for a test.
 func Test(ctx context.Context, c llm.Client, t Tier) (Judgement, llm.Completion, error) {
@@ -228,7 +151,7 @@ func Test(ctx context.Context, c llm.Client, t Tier) (Judgement, llm.Completion,
 }
 
 func testCall(c llm.Client, t Tier) llm.Call {
-	sent := call(t, TestQuestion, "")
+	sent := call(t, TestQuestion)
 	sent.Timeout = c.Timeout
 	if sent.Timeout == 0 {
 		sent.Timeout = llm.TestTimeout

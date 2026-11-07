@@ -56,9 +56,9 @@ describe("checks judgements in the task's Activity", () => {
     ]);
   });
 
-  test("conflicting flags preserve waiver and no-tier precedence, and unchanged precedes carried", () => {
+  test("conflicting flags preserve waiver and skip precedence, and unchanged precedes carried", () => {
     for (const [flags, outcome] of [
-      [{ skipped: true, waived: true, unchanged: true, carried: true }, "were not model-checked"],
+      [{ skipped: true, waived: true, unchanged: true, carried: true }, "were not verified by a conductor"],
       [{ waived: true, unchanged: true, carried: true }, "were waived"],
       [{ unchanged: true, carried: true }, "were not needed: it changed nothing"],
       [{ carried: true }, "carried a person's waiver"],
@@ -69,13 +69,13 @@ describe("checks judgements in the task's Activity", () => {
     }
   });
 
-  test("a judged turn still reads as verified, and no-tier as not model-checked", () => {
+  test("a judged turn still reads as verified, and a skipped one as not verified by a conductor", () => {
     const lines = activityLines([
       judged(impl.id, { turn: 1, round: 0, verified: true, message: "", checks: [] }, 1),
-      judged(simp.id, { turn: 2, verified: true, skipped: true, message: "no tier", checks: [] }, 2),
+      judged(simp.id, { turn: 2, verified: true, skipped: true, message: "no conductor", checks: [] }, 2),
     ], people, [impl, simp], [], 1);
     expect(lines.filter((l) => textOf(l.text)?.includes("checks")).map((l) => textOf(l.text))).toEqual([
-      "The simplifier's checks were not model-checked",
+      "The simplifier's checks were not verified by a conductor",
       "The implementer's checks were verified",
     ]);
   });
@@ -93,6 +93,20 @@ describe("checks judgements in the task's Activity", () => {
       "npx tsc --noEmit: pre-existing, passed by the judge: it fails the same at the commit of the target branch the task builds on — 95 errors at the parent, 95 with the change (judgement mcall_1)\n"
         + "open the settings page: deferred, passed by the judge: a later phase runs it — the tester runs it (judgement mcall_2)\n"
         + "make lint: pass — clean (judgement mcall_3)",
+    ]]);
+  });
+
+  test("a failure the conductor passed names the conductor and its decision, not the judge", () => {
+    const lines = activityLines([
+      judged(impl.id, { turn: 1, round: 0, verified: true, judgePassed: true, message: "", checks: [
+        { command: "npx tsc --noEmit", result: "pre-existing", decision: "preexisting", reason: "verify at the base shows it", decisionCursor: 41, by: "conductor" },
+        { command: "make lint", result: "pass", decision: "backed", reason: "clean", decisionCursor: 41, by: "conductor" },
+      ] }, 1),
+    ], people, [impl], [], 1);
+    expect(lines.map((l) => [textOf(l.text), l.quote])).toEqual([[
+      "The implementer's checks were verified, with failures the conductor passed",
+      "npx tsc --noEmit: pre-existing, passed by the conductor: it fails the same at the commit of the target branch the task builds on — verify at the base shows it (decided by the conductor, event 41)\n"
+        + "make lint: pass — clean (decided by the conductor, event 41)",
     ]]);
   });
 

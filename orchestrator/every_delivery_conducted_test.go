@@ -45,18 +45,105 @@ func TestDeliverStartsADeliveryItsConductorDecidesQuietly(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'`, task); n != 0 {
 		t.Errorf("the conductor was woken %d times before the implementer finished", n)
 	}
-	// The fake lux plays the implementer; its end is the first decision.
-	w.until("the conductor's first wake, after the implementer", func() bool {
-		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
-			AND (payload->>'started')::boolean`, task) == 1
+	// The fake lux plays the implementer. Its turn's checks report is the
+	// only thing the conductor may be woken for before the implementer
+	// completes (every pushing writer's gate asks it); its first decision
+	// is the one after implement, after the implementer completed, told to
+	// the same conductor Run its checks wake started.
+	w.until("the conductor's first decision, after the implementer", func() bool {
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'decision' AND delivered_at IS NOT NULL`, task) >= 1
 	})
-	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND line LIKE '%'||$2||'%'`, task,
+	// The delivery goes on once the decision is told (the conductor's
+	// checkout synced for its note, its answer, the review): everything
+	// below is about the conductor's wakes up to and including its first
+	// decision, and the events up to the note that told it. A wake's
+	// created_at is its transaction's start, so a wake recorded alongside
+	// the decision's counts as before it; events have a total order
+	// (cursor).
+	first := w.str(`SELECT id FROM conductor_wakes WHERE task_id = $1 AND kind = 'decision' ORDER BY created_at, id LIMIT 1`, task)
+	upTo := `(SELECT created_at FROM conductor_wakes WHERE id = '` + first + `')`
+	told := w.count(`SELECT COALESCE(min(cursor), 0) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
+		AND payload->'reasons' ? 'decision'`, task)
+	if told == 0 {
+		t.Fatalf("no conductor.woken told the decision %s", first)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
+		AND (payload->>'started')::boolean AND cursor <= $2`, task, told); n != 1 {
+		t.Errorf("the conductor was started %d times up to its first decision, want once", n)
+	}
+	if others := w.ids(`SELECT kind || ' ' || key FROM conductor_wakes WHERE task_id = $1 AND kind NOT IN ('decision', $2)
+		AND created_at <= `+upTo+` ORDER BY created_at, id`, task, delivery.WakeChecks); len(others) != 0 {
+		t.Errorf("%d wakes up to the first decision other than the checks report and the decision: %v", len(others), others)
+	}
+	if others := w.ids(`SELECT kind || ' ' || key FROM conductor_wakes c WHERE c.task_id = $1 AND c.kind = $2 AND c.created_at <= `+upTo+`
+		AND c.key NOT LIKE 'checks:' || (SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement') || ':%'
+		ORDER BY created_at, id`, task, delivery.WakeChecks); len(others) != 0 {
+		t.Errorf("%d checks wakes up to the first decision not about the implementer's report: %v", len(others), others)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'decision' AND created_at <= `+upTo, task); n != 1 {
+		t.Errorf("%d decision wakes up to the first, want the one after implement", n)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE id = $1 AND line LIKE '%'||$2||'%'`, first,
 		delivery.PointImplemented); n != 1 {
-		t.Errorf("the conductor's first wake is not the decision after implement (%d)", n)
+		t.Errorf("the conductor's first decision is not the decision after implement")
+	}
+	// Every decision awaited up to the note that told the first is that
+	// one, awaited after the implementer completed.
+	if got := w.ids(`SELECT d.payload->>'point' || CASE WHEN d.cursor > (SELECT e.cursor FROM events e JOIN runs r ON r.id = e.run_id
+			WHERE r.task_id = $1 AND r.phase = 'implement' AND e.event_type = 'run.completed') THEN ' after' ELSE ' before' END
+		FROM events d WHERE d.task_id = $1 AND d.event_type = $2 AND d.cursor <= $3 ORDER BY d.cursor`, task, delivery.EvDecisionAwaited, told); len(got) != 1 ||
+		got[0] != delivery.PointImplemented+" after" {
+		t.Errorf("the decisions awaited up to the first told are %v, want [%s after] the implementer completed", got, delivery.PointImplemented)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'implement' AND status = 'completed'`, task); n != 1 {
-		t.Errorf("the conductor was woken before the implementer completed")
+		t.Errorf("the decision was waited on before the implementer completed")
 	}
+	// The checks turn neither consumed nor lost the decision: it reached
+	// the conductor the checks wake started.
+	if n := w.count(`SELECT count(*) FROM conductor_wakes d WHERE d.id = $1
+		AND d.conductor_run_id = (SELECT c.conductor_run_id FROM conductor_wakes c WHERE c.task_id = $2 AND c.kind = $3
+			AND c.created_at <= `+upTo+`)`, first, task, delivery.WakeChecks); n != 1 {
+		t.Errorf("the decision did not reach the conductor its checks wake started")
+	}
+}
+
+// A quiet conductor a writer's checks report started keeps the decision
+// that comes after it: the checks turn's verdict (decide_checks) lets the
+// implementer complete, the decision after implement then goes to that
+// same conductor Run (its wake not consumed or lost by the checks turn),
+// and the conductor takes it itself (fake/defaults) - not the defaults at
+// a deadline (an hour here), not a second conductor - and the delivery
+// goes on to its review.
+func TestADecisionAfterAConductorsChecksTurnIsStillItsOwn(t *testing.T) {
+	w := defaultsConducting(t)
+	task := w.task()
+	w.deliverByAPI(task)
+	w.until("the conductor's own decision after implement", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'point' = $3`,
+			task, delivery.EvDecisionTaken, delivery.PointImplemented) == 1
+	})
+	conductor, _, _ := w.conductor(task)
+	impl := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
+	checks := w.count(`SELECT COALESCE(min(cursor), 0) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'conductorRunId' = $3`,
+		impl, delivery.EvRunChecksConducted, conductor)
+	if checks == 0 {
+		t.Fatalf("no checks verdict from the conductor on the implementer's report")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND cursor > $3`,
+		task, delivery.EvDecisionAwaited, checks); n < 1 {
+		t.Errorf("the decision after implement was not awaited after the checks verdict")
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = 'decision' AND conductor_run_id = $2
+		AND delivered_at IS NOT NULL AND line LIKE '%'||$3||'%'`, task, conductor, delivery.PointImplemented); n != 1 {
+		t.Errorf("the decision's wake did not reach the conductor its checks report started")
+	}
+	if n := w.defaulted(task, ""); n != 0 {
+		t.Errorf("%d decisions left to the defaults", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 1 {
+		t.Errorf("%d conductor Runs, want the one its checks wake started", n)
+	}
+	w.until("the review after the decision", func() bool { return w.phaseRuns(task, "review") > 0 })
 }
 
 // Talk it through still starts a chatty delivery, its start recorded so.

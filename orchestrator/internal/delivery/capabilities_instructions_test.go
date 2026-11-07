@@ -403,6 +403,23 @@ func capabilityUnlocking(tool string) capabilities.Key {
 	return ""
 }
 
+// The conductor's instruction file without checks.decide, and with it but
+// without verify and runs.read, as goldens: decide_checks' paragraph names
+// only what the Run was given.
+func TestGoldenInstructionsChecksDecide(t *testing.T) {
+	for name, less := range map[string]capabilities.Grants{
+		"instructions-conductor-without-checks":        capabilities.Default(RoleConductor).Without(capabilities.ChecksDecide),
+		"instructions-conductor-checks-without-verify": capabilities.Default(RoleConductor).Without(capabilities.Verify, capabilities.RunsRead),
+	} {
+		in := goldenTask()
+		in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+		in.Repositories = readOnlyRepos()
+		ii := in.InstructionsInput()
+		ii.Grants = &less
+		golden(t, name, Instructions(RoleConductor, "correctness", ii))
+	}
+}
+
 // The conductor's instruction file without conduct.asks, as a golden: the
 // wording a conductor that can neither forward a reviewer's question nor
 // decide a repository request reads.

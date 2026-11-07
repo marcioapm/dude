@@ -39,7 +39,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
-	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/phases"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
@@ -135,6 +134,9 @@ type world struct {
 	ghURL string
 	// checksDelivery starts its delivery with the scripted tester on.
 	checksTested bool
+	// The scripted conductor deciding checks reports (checksDelivery),
+	// at every pump.
+	checks *checksConductor
 }
 
 func newWorld(t *testing.T) *world {
@@ -214,9 +216,6 @@ func newWorld(t *testing.T) *world {
 	store := &delivery.Store{DB: app}
 	w.runtime.Register(delivery.Workflow(store, forges))
 	w.syncer = &phases.Syncer{DB: app, Lux: lux.New(luxSrv.URL, "lux-key"), Forges: forges, Log: w.log, KeepFor: 7 * 24 * time.Hour,
-		// The organisation's judgement tier, as main wires it: off unless a
-		// test sets one, so the checks gate skips its questions.
-		Judge: &judge.Service{DB: app},
 		Agent: phases.AgentConfig{DefaultImage: "default:img", LLMURL: "https://llm.example/v1", LLMKey: "secret-key"}}
 	t.Cleanup(w.syncer.Stop)
 	// The defaults-taking conductor of a delivery Deliver starts is woken
@@ -410,6 +409,9 @@ func (w *world) pump() {
 	}
 	if _, err := w.syncer.Sweep(ctx); err != nil {
 		w.t.Fatal(err)
+	}
+	if w.checks != nil {
+		w.checks.decide(w)
 	}
 	if !w.noPublishes {
 		if _, err := w.syncer.SettlePublishes(ctx); err != nil {

@@ -304,7 +304,7 @@ test("a waiver of reported failures is the Run's alone unless the person ticks l
   const box = runOnly.page.querySelector<HTMLElement>("[data-testid=escalation-later-runs] [role=checkbox]")!;
   expect(box.getAttribute("aria-checked")).toBe("false");
   expect(runOnly.page.querySelector("[data-testid=escalation-later-runs]")?.textContent).toBe("Apply to later Runs in this attempt" +
-    "A later Run's failure of make test passes only if a model judges it the same failure; anything new is held as now.");
+    "A later Run's failure of make test passes only if the task's conductor decides it is the same failure; anything new is held as now.");
   await typeNote(runOnly.page, "Needs a hardware clock.");
   await click(runOnly.page.querySelector("[data-testid=escalation-waive]")!);
   expect(runOnly.sent).toEqual([["waive", "Needs a hardware clock."]]);

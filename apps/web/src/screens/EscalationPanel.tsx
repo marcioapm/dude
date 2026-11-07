@@ -168,7 +168,7 @@ export function EscalationPanel({ client, task, findings = [], you, youAdmin = f
               <div data-testid="escalation-later-runs">
                 <Checkbox checked={laterRuns} onCheckedChange={(c) => setLaterRuns(c === true)}
                   label="Apply to later Runs in this attempt"
-                  description={`A later Run's failure of ${failures.join(", ")} passes only if a model judges it the same failure; anything new is held as now.`} />
+                  description={`A later Run's failure of ${failures.join(", ")} passes only if the task's conductor decides it is the same failure; anything new is held as now.`} />
               </div>
             ) : null}
             <div className="escalationActions">

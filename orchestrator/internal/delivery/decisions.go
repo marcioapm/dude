@@ -1380,6 +1380,9 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 	case WakeRound:
 		// A conducted round's findings at the fix bar, each with its facts.
 		limit = roundLineChars
+	case WakeChecks:
+		// A checks report's summary and one question per check.
+		limit = checksLineChars
 	}
 	text := clip(oneLine(line), limit)
 	if kind == "escalation" && strings.HasSuffix(key, ":decided") {

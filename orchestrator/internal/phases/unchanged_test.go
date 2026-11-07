@@ -13,7 +13,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/judge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -169,17 +168,17 @@ func (w *unchangedWorld) decisions() []checksDecision {
 	return out
 }
 
-// gate runs the checks gate with a judge that fails every report it is
-// asked about: what passes without it passed unjudged.
-func (w *unchangedWorld) gate() (pass bool, judged int) {
+// gate runs the checks gate on the Run, whose task no conductor decides:
+// a report is the untiered verdict's (a reportless turn is sent back), and
+// asked counts the checks asks made, which a turn passed unchanged never
+// makes.
+func (w *unchangedWorld) gate() (pass bool, asked int) {
 	w.t.Helper()
-	fake := &checksFake{backed: judge.No, missing: judge.Yes}
-	w.s.Judge = fake
 	pass, _, err := w.s.checksBeforePush(context.Background(), w.run)
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	return pass, fake.calls
+	return pass, w.countEvents(delivery.EvRunChecksAsked)
 }
 
 func (w *unchangedWorld) passUnchanged() {
@@ -196,13 +195,13 @@ func (w *unchangedWorld) movePlacement() {
 }
 
 // A turn that left every pushable checkout where it started passes the gate
-// with no report and no judge, recorded as no change: verified, not skipped,
+// with no report and nothing asked, recorded as no change: verified, not skipped,
 // with the heads it read.
-func TestAnUnchangedTurnPassesTheGateWithoutAReportOrAJudge(t *testing.T) {
+func TestAnUnchangedTurnPassesTheGateWithoutAReportOrAnAsk(t *testing.T) {
 	w := newUnchangedWorld(t, "api", "web")
-	pass, judged := w.gate()
-	if !pass || judged != 0 {
-		t.Fatalf("pass %v after %d judge calls, want a pass with none", pass, judged)
+	pass, asked := w.gate()
+	if !pass || asked != 0 {
+		t.Fatalf("pass %v after %d asks, want a pass with none", pass, asked)
 	}
 	got := w.decisions()
 	if len(got) != 1 || !got[0].Unchanged || !got[0].Verified || got[0].Skipped || len(got[0].Verdicts) != 0 ||
@@ -262,8 +261,8 @@ func TestAnyChangeInAnyCheckoutKeepsTheRunGated(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			w := newUnchangedWorld(t, "api", "web")
 			c.change(w)
-			if pass, judged := w.gate(); pass || judged != 0 {
-				t.Fatalf("pass %v (%d judge calls), want the reportless turn sent back", pass, judged)
+			if pass, asked := w.gate(); pass || asked != 0 {
+				t.Fatalf("pass %v (%d asks), want the reportless turn sent back", pass, asked)
 			}
 			if got := w.decisions(); len(got) != 1 || got[0].Unchanged || got[0].Verified {
 				t.Fatalf("recorded %+v, want one unverified judgement", got)
@@ -327,7 +326,7 @@ func TestANoChangeDecisionHoldsOnlyForItsTurnAndPlacement(t *testing.T) {
 		w.passUnchanged()
 		execs := w.lux.execCount()
 		w.write("api", "late.txt", "after the decision\n")
-		restarted := &Syncer{DB: w.s.DB, Lux: w.lux, Log: w.s.Log, Judge: &checksFake{err: errors.New("must not be called")}}
+		restarted := &Syncer{DB: w.s.DB, Lux: w.lux, Log: w.s.Log}
 		if pass, _, err := restarted.checksBeforePush(context.Background(), w.run); err != nil || !pass {
 			t.Fatalf("restart: pass %v, %v", pass, err)
 		}
@@ -399,14 +398,16 @@ func TestAJudgedTurnIsReusedAcrossPlacements(t *testing.T) {
 	w := newUnchangedWorld(t, "api")
 	w.write("api", "src/main.go", "package main\n")
 	checksReply(w.harnessWorld, passingChecks)
-	acceptingJudge(w.harnessWorld)
 	if pass, _, err := w.s.checksBeforePush(context.Background(), w.run); err != nil || !pass {
 		t.Fatalf("pass %v, %v", pass, err)
 	}
 	w.movePlacement()
-	w.s.Judge = &checksFake{err: errors.New("must not be called")}
-	if pass, _, err := w.s.checksBeforePush(context.Background(), w.run); err != nil || !pass {
-		t.Fatalf("after a move: pass %v, %v", pass, err)
+	execs := w.lux.execCount()
+	if pass, acted, err := w.s.checksBeforePush(context.Background(), w.run); err != nil || !pass || acted || w.lux.execCount() != execs {
+		t.Fatalf("after a move: pass %v acted %v, %v; inspected again: %v", pass, acted, err, w.lux.execCount() != execs)
+	}
+	if n := len(w.decisions()); n != 1 {
+		t.Fatalf("%d decisions, want the one reused", n)
 	}
 }
 
