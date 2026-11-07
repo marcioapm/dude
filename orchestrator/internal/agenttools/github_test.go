@@ -105,13 +105,106 @@ func TestGitHubCheckLogHTTPKeepsGoCompilerDiagnostic(t *testing.T) {
 		t.Fatalf("lost external note, quote or source metadata: %s", out)
 	}
 	text, _ := got["log"].(string)
-	if text != delivery.ExternalText(w.id, read.Text) {
-		t.Fatal("wrapper changed or truncated the bounded forge excerpt")
+	if text != delivery.ExternalText(w.id, forge.FailureExcerpt(read.Text, 10<<10)) {
+		t.Fatal("wrapper changed the failure excerpt of the bounded forge read")
 	}
 	for _, want := range []string{diagnostic, exit, "… [lines omitted]"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("excerpt lost %q", want)
 		}
+	}
+}
+
+// Escape-heavy logs must fit after JSON encoding, not only before wrapping.
+func TestGitHubCheckLogHTTPEscapedEnvelope(t *testing.T) {
+	for _, unit := range []string{"<", ">", "&", "\x00", "\x01", "\"", "\\"} {
+		t.Run(fmt.Sprintf("%q", unit), func(t *testing.T) {
+			fake := fakegithub.New("", "acme/target")
+			downloads := httptest.NewServer(fake.LogDownloads())
+			t.Cleanup(downloads.Close)
+			api := httptest.NewServer(fake.Handler())
+			t.Cleanup(api.Close)
+			fake.Set(func(s *fakegithub.Server) {
+				s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()}
+			})
+			input := "##[error]early wrapper error\n" + strings.Repeat(strings.Repeat(unit, 4000)+"\n", 4) +
+				strings.Repeat("setup noise\n", 4000) +
+				"[lane2] panic: test timed out after 10m0s\n[lane2] running tests:\n" +
+				"[lane2]     TestBlocked (9m59s)\n[lane2]     TestWaiting (9m58s)\n" +
+				strings.Repeat("goroutine noise\n", 4000) + "FAIL example/service 600s\n" +
+				"##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup noise\n", 4000)
+			fake.SetJobLog(77, input, downloads.URL)
+			gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "local-fixture-token", APIBaseURL: api.URL})
+			read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16380)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(read.Text) > 16380 {
+				t.Fatalf("forge bytes=%d", len(read.Text))
+			}
+			w := wrapper{id: "check-log"}
+			raw, err := w.fit(w.checkLog(read))
+			t.Logf("forge bytes=%d serialized bytes=%d", len(read.Text), len(raw))
+			if err != nil || len(raw) > resultCap || !json.Valid(raw) || !utf8.Valid(raw) {
+				t.Fatalf("envelope bytes=%d cap=%d err=%v", len(raw), resultCap, err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if firstKey(t, raw) != "external" || !balancedQuotes(got, w.id) || got["source"] != "log" || got["actions"] != true {
+				t.Fatal("lost external boundary or source metadata")
+			}
+			text, _ := got["log"].(string)
+			for _, want := range []string{"panic: test timed out", "running tests:", "TestBlocked", "TestWaiting", "FAIL example/service", "Process completed with exit code 2."} {
+				if !strings.Contains(text, want) {
+					t.Errorf("excerpt lost %q", want)
+				}
+			}
+			if auth := fake.DownloadAuthorization(); len(auth) != 1 || auth[0] != "" {
+				t.Errorf("download Authorization = %q", auth)
+			}
+		})
+	}
+}
+
+func TestGitHubCheckLogShortAndUnreadUnchanged(t *testing.T) {
+	for _, read := range []forge.CheckLogRead{
+		{},
+		{Source: "log", Actions: true, Text: "ordinary log\n"},
+		{Source: "check_run", Actions: true, Text: "annotation\n", Unread: "GitHub refused: no Actions: Read permission"},
+	} {
+		w := wrapper{id: "check-log"}
+		raw, err := w.fit(w.checkLog(read))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["source"] != read.Source || got["actions"] != read.Actions || got["log"] != w.text(read.Text, 16<<10) {
+			t.Fatal("changed short log or metadata")
+		}
+		if unread, present := got["unread"]; present != (read.Unread != "") || present && unread != read.Unread {
+			t.Fatal("changed unread metadata")
+		}
+	}
+}
+
+func TestGitHubCheckLogMaximumEscaping(t *testing.T) {
+	w := wrapper{id: "check-log"}
+	raw, err := w.fit(w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Text: strings.Repeat("<", 16380)}))
+	t.Logf("serialized bytes=%d", len(raw))
+	if err != nil || len(raw) > resultCap || !json.Valid(raw) {
+		t.Fatalf("envelope bytes=%d cap=%d err=%v", len(raw), resultCap, err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !balancedQuotes(got, w.id) {
+		t.Fatal("lost external boundary")
 	}
 }
 
