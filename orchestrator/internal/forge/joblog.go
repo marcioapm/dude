@@ -1,7 +1,6 @@
 package forge
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -19,8 +18,8 @@ import (
 const ActionsApp = "github-actions"
 
 // Bounds of reading a job's log: GitHub keeps it whole, often many MB.
-// The read stops at its first ##[error] line or after logReadMax bytes,
-// and keeps at most logLineMax bytes of one line.
+// The read scans through EOF or logReadMax bytes and keeps at most
+// logLineMax bytes of one line, with explicit cap markers.
 const (
 	logReadMax = 16 << 20
 	logLineMax = 4 << 10
@@ -34,6 +33,7 @@ var (
 	// The one annotation GitHub gives a job that failed by its exit code:
 	// it says nothing about why, and its log ends with the same line.
 	exitCodeAnnotation = regexp.MustCompile(`^Process completed with exit code \d+\.?$`)
+	ruffDiagnostic     = regexp.MustCompile(`^.+:\d+:\d+: [A-Z]+\d+\b`)
 )
 
 // checkRun is a check run as GitHub reports it: its app, and what it said
@@ -141,28 +141,43 @@ type CheckLogRead struct {
 	Unread string
 }
 
-// Cut is Said then Tail in at most limit bytes: Said's first lines, up to
-// half of limit when there is a tail, and the end of Tail in the rest.
+// Cut uses the same failure selection as log reads and delivery recuts.
+// Actionable annotations get a modest reservation; uninformative annotations
+// use only spare space so they cannot crowd log anchors out.
 func (r CheckLogRead) Cut(limit int) string {
-	switch {
-	case r.Tail == "":
-		return truncate(r.Said, limit)
-	case r.Said == "":
-		return truncate(r.Tail, limit)
+	if r.Tail == "" {
+		return FailureExcerpt(r.Said, limit)
 	}
-	head := r.Said
-	if limit > 0 && len(head) > limit/2 {
-		head = head[:limit/2]
-		if i := strings.LastIndexByte(head, '\n'); i > 0 {
-			head = head[:i]
+	if r.Said == "" {
+		return FailureExcerpt(r.Tail, limit)
+	}
+	if limit <= 0 || len(r.Said)+1+len(r.Tail) <= limit {
+		return FailureExcerpt(r.Said+"\n"+r.Tail, limit)
+	}
+	reserve := 0
+	// Examine bounded input without splitting or collecting the annotations.
+	for rest := r.Said[:min(len(r.Said), logReadMax)]; rest != ""; {
+		line, next, _ := strings.Cut(rest, "\n")
+		if !finalExit(line) && (failurePriority(line) >= 0 || strings.Contains(line, ": failure:")) {
+			reserve = min(512, limit/4, len(r.Said))
+			break
 		}
-		head += "\n…"
+		rest = next
 	}
-	rest := 0
-	if limit > 0 {
-		rest = max(limit-len(head)-1, 1)
+	if reserve <= len(omissionMarker) {
+		reserve = 0
 	}
-	return head + "\n" + truncate(r.Tail, rest)
+	tailBudget := limit
+	if reserve > 0 {
+		tailBudget -= reserve + 1
+	}
+	tail := FailureExcerpt(r.Tail, tailBudget)
+	rest := limit - len(tail) - 1
+	if rest <= len(omissionMarker) {
+		return tail
+	}
+	head := FailureExcerpt(r.Said, rest)
+	return head + "\n" + tail
 }
 
 // UnreadReason says, for a person or an agent, why GitHub did not give a
@@ -331,13 +346,11 @@ func logGone(err error) bool {
 		(e.Status == http.StatusForbidden || e.Status == http.StatusNotFound || e.Status == http.StatusGone)
 }
 
-// JobLogTail is the end of a GitHub Actions job's log, as a person reads
-// the failure in it: GitHub's timestamps and terminal codes removed, up to
-// and including the first ##[error] line (later lines are the job's
-// cleanup), its last limit bytes. GitHub answers with a redirect to a
-// short-lived download URL on another host, which is followed without the
-// token. The read streams: it keeps a window of the text, stops at the
-// first ##[error] line or after logReadMax bytes, and honours ctx.
+// JobLogTail is a bounded failure excerpt of a GitHub Actions job's log.
+// The name is retained for compatibility. Timestamps and terminal codes are
+// removed; the stream is scanned through EOF or logReadMax, retaining failure
+// sites, nearby context, a rolling tail, and the final observed exit.
+// GitHub's short-lived download redirect is followed without the token.
 func (g *GitHub) JobLogTail(ctx context.Context, slug string, jobID int64, limit int) (string, error) {
 	path := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", slug, jobID)
 	target := g.cred.APIBaseURL + path
@@ -401,50 +414,10 @@ func (g *GitHub) JobLogTail(ctx context.Context, slug string, jobID int64, limit
 	return text, nil
 }
 
-// logTail reads a job's log from r as JobLogTail describes, keeping no
-// more than about twice the limit in memory.
+// logTail preserves the public JobLogTail entry point while sharing selection
+// with in-memory delivery recuts.
 func logTail(r io.Reader, limit int) (string, error) {
-	window := max(limit, 1<<10)
-	in := bufio.NewReaderSize(io.LimitReader(r, logReadMax), 64<<10)
-	var kept []byte
-	read, full := 0, false
-	for {
-		line, err := in.ReadSlice('\n')
-		read += len(line)
-		long := errors.Is(err, bufio.ErrBufferFull)
-		if long {
-			// A line past the buffer: its start is kept, the rest skipped.
-			line = bytes.Clone(line[:min(len(line), logLineMax)])
-			for errors.Is(err, bufio.ErrBufferFull) {
-				var more []byte
-				more, err = in.ReadSlice('\n')
-				read += len(more)
-			}
-		}
-		if len(line) > 0 {
-			text := cleanLogLine(line)
-			kept = append(kept, text...)
-			kept = append(kept, '\n')
-			if strings.HasPrefix(text, "##[error]") {
-				break
-			}
-			if len(kept) > 2*window {
-				kept = append(kept[:0], kept[len(kept)-window:]...)
-			}
-		}
-		if err == io.EOF {
-			full = read >= logReadMax
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-	}
-	out := strings.TrimRight(string(kept), "\n")
-	if full {
-		out += fmt.Sprintf("\n…the log is longer than %d MiB: read stopped there", logReadMax>>20)
-	}
-	return truncate(out, limit), nil
+	return collectFailure(r, limit)
 }
 
 // cleanLogLine is one line of a job's log as a person reads it.

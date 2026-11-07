@@ -61,9 +61,9 @@ func logWorld(t *testing.T, log string) (*fakegithub.Server, *GitHub) {
 	return fake, NewGitHub(Credential{Auth: "pat", Secret: "ghp_log_" + t.Name(), APIBaseURL: api.URL})
 }
 
-// A failed Actions job that says only its exit code gives its log's end:
-// the pytest failure up to the ##[error] line, without timestamps, colour
-// codes or the cleanup after it. The download host never sees the token.
+// A failed Actions job gives failure sites and a rolling tail, without
+// timestamps or colour codes. Scanning continues through cleanup, and the
+// download host never sees the token.
 func TestAnActionsJobsFailureIsTheEndOfItsLog(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(200))
 	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
@@ -71,14 +71,11 @@ func TestAnActionsJobsFailureIsTheEndOfItsLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := read.Text
-	if !strings.HasSuffix(out, "E       AssertionError: 3 != 2\ntests/test_backup.py:57: AssertionError\n"+
-		"=========================== short test summary info ============================\n"+
-		"FAILED tests/test_backup.py::BackupTest::test_backup_counts - AssertionError: 3 != 2\n"+
-		"========================= 1 failed, 40 passed in 12.31s ========================\n"+
-		"##[error]Process completed with exit code 1.") {
-		t.Errorf("log tail does not end at the error:\n%s", out)
+	if !strings.Contains(out, "E       AssertionError: 3 != 2\ntests/test_backup.py:57: AssertionError") ||
+		!strings.Contains(out, "##[error]Process completed with exit code 1.") {
+		t.Errorf("log excerpt lost the failure:\n%s", out)
 	}
-	for _, gone := range []string{"Post job cleanup", "orphan", "2026-10-16T", "\x1b", "\uFEFF"} {
+	for _, gone := range []string{"2026-10-16T", "\x1b", "\uFEFF"} {
 		if strings.Contains(out, gone) {
 			t.Errorf("log tail holds %q:\n%s", gone, out)
 		}
@@ -86,7 +83,7 @@ func TestAnActionsJobsFailureIsTheEndOfItsLog(t *testing.T) {
 	if !strings.Contains(out, "=================================== FAILURES ===") || !strings.Contains(out, "python -m pytest tests/") {
 		t.Errorf("log tail lost the failure's start:\n%s", out)
 	}
-	if len(out) > 4000+len("…\n") || !strings.HasPrefix(out, "…\n") {
+	if len(out) > 4000 || !strings.HasPrefix(out, omissionMarker) {
 		t.Errorf("log tail is %d bytes, want cut to 4000 saying so", len(out))
 	}
 	auth := fake.DownloadAuthorization()
@@ -102,7 +99,7 @@ func TestALogTailKeepsTheCallersLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out := read.Text; len(out) > 200+len("…\n") || !strings.HasSuffix(out, "##[error]Process completed with exit code 1.") {
+	if out := read.Text; len(out) > 200 || !strings.Contains(out, "##[error]Process completed with exit code 1.") {
 		t.Errorf("%d bytes:\n%s", len(out), out)
 	}
 }
@@ -131,13 +128,13 @@ func TestAHugeLogIsReadToItsCapOnly(t *testing.T) {
 	if huge.n != logReadMax {
 		t.Errorf("read %d bytes, past the %d cap", huge.n, logReadMax)
 	}
-	if len(out) > 4000+len("…\n") || !strings.HasSuffix(out, "read stopped there") {
+	if len(out) > 4000 || !strings.HasSuffix(out, inputCapMarker) {
 		t.Errorf("%d bytes, ends %q", len(out), out[max(0, len(out)-80):])
 	}
 	// A line longer than the reader's buffer is kept to its start.
 	long := strings.Repeat("y", 64<<10) + strings.Repeat("z", 136<<10) + "\n##[error]boom\n"
 	if out, err := logTail(strings.NewReader(long), 8000); err != nil || !strings.HasSuffix(out, "\n##[error]boom") ||
-		out != strings.Repeat("y", logLineMax)+"\n##[error]boom" {
+		out != strings.Repeat("y", logLineMax-len(lineCapMarker))+lineCapMarker+"\n##[error]boom" {
 		t.Errorf("long line: %v, %d bytes", err, len(out))
 	}
 }
@@ -259,7 +256,7 @@ func TestAnActionsJobWithWarningsAndNoticesGivesItsLog(t *testing.T) {
 		t.Fatalf("%+v, %v", read, err)
 	}
 	if !strings.Contains(read.Text, "E       AssertionError: 3 != 2") ||
-		!strings.HasSuffix(read.Text, "##[error]Process completed with exit code 1.") {
+		!strings.Contains(read.Text, "##[error]Process completed with exit code 1.") {
 		t.Errorf("not the log's end:\n%s", read.Text)
 	}
 	for _, noise := range []string{"Node.js 20", "deprecated", "ubuntu-latest", "warning", "notice"} {
@@ -283,7 +280,7 @@ func TestAnActionsJobThatSaysWhyGivesItsWordsThenItsLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(read.Text, "1 test failed\ntests/test_backup.py:57: failure: AssertionError: 3 != 2\n") ||
-		!strings.HasSuffix(read.Text, "##[error]Process completed with exit code 1.") || strings.Contains(read.Text, "Node.js") {
+		!strings.Contains(read.Text, "##[error]Process completed with exit code 1.") || strings.Contains(read.Text, "Node.js") {
 		t.Errorf("%s", read.Text)
 	}
 }
@@ -312,7 +309,7 @@ func TestACheckOfAnotherAppIsReadAsBefore(t *testing.T) {
 func TestAnAgentReadsACheckLog(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(5))
 	read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16<<10)
-	if err != nil || read.Source != "log" || !read.Actions || !strings.HasSuffix(read.Text, "##[error]Process completed with exit code 1.") {
+	if err != nil || read.Source != "log" || !read.Actions || !strings.Contains(read.Text, "##[error]Process completed with exit code 1.") {
 		t.Fatalf("%+v, %v", read, err)
 	}
 	fake.Set(func(s *fakegithub.Server) {
@@ -339,8 +336,8 @@ func TestAnAgentReadsTheLogOfAJobWithWarnings(t *testing.T) {
 func TestACutKeepsTheWordsThenTheLogsEnd(t *testing.T) {
 	r := CheckLogRead{Said: strings.Repeat("said line\n", 100) + "last said", Tail: strings.Repeat("log line\n", 500) + "##[error]boom"}
 	out := r.Cut(1000)
-	if len(out) > 1000+len("…\n") || !strings.HasPrefix(out, "said line\n") || !strings.HasSuffix(out, "##[error]boom") ||
-		!strings.Contains(out, "said line\n…\n…\nlog line") {
+	if len(out) > 1000 || !strings.Contains(out, "said line\n") || !strings.HasSuffix(out, "##[error]boom") ||
+		!strings.Contains(out, omissionMarker) {
 		t.Errorf("%d bytes:\n%s", len(out), out)
 	}
 	if got := (CheckLogRead{Said: "a", Tail: "b"}).Cut(100); got != "a\nb" {
