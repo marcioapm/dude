@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 var updateDue = flag.Bool("update-due", false, "intentionally rewrite testdata/due-reference.sql from dueQuery; independent of -update")
@@ -83,7 +84,15 @@ func TestDueMatchesItsReferenceOverRandomStates(t *testing.T) {
 				round, limit, n, len(got), len(want), firstDifference(got, want))
 		}
 		cov.add(want, limit)
+		var checksWaiting int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM runs r WHERE `+delivery.ChecksWaiting).Scan(&checksWaiting); err != nil {
+			t.Fatal(err)
+		}
+		cov.checksWaiting += checksWaiting
 		_ = tx.Rollback(ctx)
+	}
+	if cov.checksWaiting == 0 {
+		t.Error("no state had a Run waiting on its checks ask: ChecksWaiting is not compared")
 	}
 	cov.check(t)
 }
@@ -221,6 +230,8 @@ type dueCoverage struct {
 	statuses  map[string]int
 	truncated int
 	rows      int
+	// checksWaiting: Runs whose checks ask held them (ChecksWaiting).
+	checksWaiting int
 }
 
 func (c *dueCoverage) add(runs []phaseRun, limit int) {
@@ -506,6 +517,24 @@ func (g *dueStates) populate(tx pgx.Tx, rng *rand.Rand, s *Syncer, round int) in
 			}
 			b.Queue(`INSERT INTO events (id, organization_id, run_id, event_type, actor_type, actor_id, source, payload)
 				VALUES ($1, $2, $3, $4, 'system', 'dude', 'orchestrator', $5)`, fmt.Sprintf("ev_%s_%d", id, e), o.id, id, typ, payload)
+		}
+		// The checks gate's ask about a turn (ChecksWaiting): about the
+		// latest turn or an older one, before or past its deadline, and
+		// decided, judged or neither.
+		for c := range rng.IntN(3) {
+			back := pick(rng, 0, 0, 0, 1)
+			b.Queue(`INSERT INTO events (id, organization_id, run_id, event_type, actor_type, actor_id, source, payload)
+				VALUES ($1, $2, $3, 'run.checks.asked', 'system', 'dude', 'orchestrator', jsonb_build_object(
+					'turn', GREATEST((SELECT COALESCE(max(cursor), 0) FROM events WHERE run_id = $3 AND event_type = 'agent.session.stopped') - $4, 0),
+					'deadline', now() + make_interval(secs => $5::float8)))`,
+				fmt.Sprintf("ev_%s_asked_%d", id, c), o.id, id, back, pick(rng, -1.0, 1e-6, -1e-6, 600))
+			if v := rng.IntN(4); v > 0 {
+				typ := pick(rng, "run.checks.conducted", "run.checks.judged", "run.checks.decided")
+				b.Queue(`INSERT INTO events (id, organization_id, run_id, event_type, actor_type, actor_id, source, payload)
+					SELECT $1, $2, $3, $4, 'system', 'dude', 'orchestrator', jsonb_build_object('turn', (payload->>'turn')::bigint - $6)
+					FROM events WHERE id = $5`,
+					fmt.Sprintf("ev_%s_verdict_%d", id, c), o.id, id, typ, fmt.Sprintf("ev_%s_asked_%d", id, c), pick(rng, 0, 0, 1))
+			}
 		}
 		if task != nil {
 			for k, repo := range pickRepos(rng, o) {

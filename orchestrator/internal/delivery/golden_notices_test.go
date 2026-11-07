@@ -52,8 +52,8 @@ func TestGoldenWakeLines(t *testing.T) {
 			"criteria": []map[string]any{{"criterion": 1, "status": "blocked", "text": "The export downloads"}}}})},
 		{"escalated-checks", escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: map[string]any{"runId": "run_impl",
 			"message": "Your checks report was not verified. Nothing from this Run has been pushed.\n\n" +
-				"- npm run test:legacy: not-run — not passed by the judge: no later phase runs the legacy Vue jest suite (judgement: no)\n" +
-				"- missing checks: the legacy Vue jest run covers the changed component (judgement: yes)\n\nRun the missing or unsuccessful checks."}})},
+				"- npm run test:legacy: not-run — not passed by the conductor: no later phase runs the legacy Vue jest suite (verdict: reject)\n" +
+				"- missing checks: the legacy Vue jest run covers the changed component (verdict: missing)\n\nRun the missing or unsuccessful checks."}})},
 		{"escalated-checks-many", escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: map[string]any{"runId": "run_impl",
 			"message": "held", "unverified": slices.Repeat([]map[string]any{{"command": "make check", "reason": "exit 1"}}, escalatedItemsMax+3)}})},
 		{"escalation-answered", escalationAnsweredLine("qst_1", "retry")},
@@ -112,36 +112,14 @@ func TestGoldenWakeLines(t *testing.T) {
 	})
 }
 
-// What the checks gate asks the judge about a person's attempt waiver, and
-// what it says of a failure the waiver did not cover.
-func TestGoldenChecksWaiverTexts(t *testing.T) {
-	w := map[string]any{"Role": "Implementer", "RunID": "run_impl", "Note": "Needs a hardware clock\nCI lacks.",
-		"Command": "make test", "Evidence": "TestClock needs a hardware clock", "Calls": []string{"- bash {\"command\":\"make test\"}\n  status: error, exit code 1"},
-		"Omitted": 3}
-	goldenLines(t, "checks-waiver", [][2]string{
-		{"question", MustText("notices/checks/waived").Render(Check{Command: "make test", Result: CheckFail})},
-		{"context", MustText("notices/checks/waived-context").Render(w)},
-		{"not-covered", MustText("notices/checks/not-covered").Render(map[string]string{"Role": "Implementer", "Reason": "TestGreeting fails too"})},
-	})
-}
-
-// What the checks gate asks the judge about a reported failure or not-run
-// check no waiver covers, and the send-back of one it did not pass.
+// The send-back of a reported failure the conductor did not pass.
 func TestGoldenChecksPreexistingTexts(t *testing.T) {
-	type q struct {
-		Check
-		TestPhase bool
-	}
 	failed := Check{Command: "npx tsc --noEmit", Result: CheckFail, Evidence: "95 errors on the parent, 94 with the change"}
-	browser := Check{Command: "open the settings page", Result: CheckNotRun, Evidence: "no browser"}
-	type verdict struct{ Command, Result, Reason, WaiverReason, JudgeReason, Decision string }
+	type verdict struct{ Command, Result, Reason, JudgeReason, Decision string }
 	goldenLines(t, "checks-preexisting", [][2]string{
-		{"fail", MustText("notices/checks/preexisting").Render(q{failed, true})},
-		{"not-run with a test phase", MustText("notices/checks/preexisting").Render(q{browser, true})},
-		{"not-run without a test phase", MustText("notices/checks/preexisting").Render(q{browser, false})},
 		{"send-back", MustText("notices/checks").Render(map[string]any{"Failed": true, "Bases": "api: main at 1111111, web: release/2 at 2222222",
-			"Checks": []verdict{{Command: failed.Command, Result: CheckFail, Reason: failed.Evidence, Decision: "unsure",
-				JudgeReason: MustText("notices/checks/not-preexisting").Render("no run at the task's base is recorded")}}})},
+			"Checks": []verdict{{Command: failed.Command, Result: CheckFail, Reason: failed.Evidence, Decision: VerdictReject,
+				JudgeReason: MustText("notices/checks/conductor-rejected").Render("no run at the task's base is recorded")}}})},
 	})
 }
 

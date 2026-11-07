@@ -287,8 +287,7 @@ func TestARunWaiverOfAParkedHeldRunPushesAndPublishes(t *testing.T) {
 func TestAnAttemptWaiverOfAParkedHeldRunPushesAndIsCarried(t *testing.T) {
 	w := newWorld(t)
 	w.syncer.ParkAfter = 300 * time.Millisecond
-	j := &scriptedJudge{}
-	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, j)
+	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, nil)
 	runID := w.implementerOf(wi)
 	w.untilParked(runID)
 	w.waivedFromPark(wi, runID, clockNote, delivery.ScopeAttempt)
@@ -359,7 +358,7 @@ func TestADecisionInsideTheGraceNeitherResumesNorParks(t *testing.T) {
 			w.syncer.ParkAfter = 2 * time.Second
 			// The retried agent backs its next report, so nothing is held again.
 			mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
-			wi := w.checksDelivery(fakeagent.ChecksFixedModel, &scriptedJudge{})
+			wi := w.checksDelivery(fakeagent.ChecksFixedModel, nil)
 			w.until("the checks escalation", func() bool { return w.escalationReason(wi) == delivery.ReasonChecksUnverified })
 			runID := w.implementerOf(wi)
 			owner, _, _ := w.people(wi)
@@ -390,7 +389,7 @@ func TestARestartKeepsAParkedHeldRunHeld(t *testing.T) {
 	wi, runID := w.parkedHeld()
 	w.syncer.Stop()
 	w.syncer = &phases.Syncer{DB: w.syncer.DB, Lux: w.syncer.Lux, Forges: w.syncer.Forges, Log: w.log, Agent: w.syncer.Agent,
-		KeepFor: w.syncer.KeepFor, Judge: w.syncer.Judge, ParkAfter: w.syncer.ParkAfter}
+		KeepFor: w.syncer.KeepFor, ParkAfter: w.syncer.ParkAfter, ConductorWarm: w.syncer.ConductorWarm, WakeWindow: w.syncer.WakeWindow}
 	t.Cleanup(w.syncer.Stop)
 	for range 5 {
 		w.pump()

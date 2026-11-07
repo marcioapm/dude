@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
@@ -275,12 +276,21 @@ func (s *Server) verifyCommands(run *Run, commands []string) string {
 			res.Tail = err.Error()
 		} else {
 			s.mu.Unlock()
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 			cmd := exec.CommandContext(ctx, "sh", "-c", c)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+			cmd.WaitDelay = time.Second
 			cmd.Dir = work
 			out, runErr := cmd.CombinedOutput()
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
 			cancel()
 			s.mu.Lock()
+			if s.isClosed() {
+				return ""
+			}
 			res.Tail, res.Exit = string(out), 0
 			var exit *exec.ExitError
 			switch {

@@ -6,18 +6,17 @@ Some of dude's decisions are better made by reading than by rule. For those, dud
 
 ## What judgements are
 
-A **judgement** is one call to a model, with no agent and no tools. dude asks one question and reads back **yes**, **no** or **unsure**, with how sure the model is and why.
+A **judgement** is one call to a model, with no agent and no tools. dude asks one question and reads back a structured answer, with how sure the model is and why.
 
-Judgements **fail closed**. When judgements are off or have no model, the caller skips that check. When they are on, an error, a malformed answer or **unsure** does not count as a pass: a phase's checks are marked unverified and sent back, or escalated after their rounds. A judgement never makes dude take a step it would not take otherwise.
+Judgements **fail closed**. When judgements are off or have no model, the caller does what it does without one. An error or a malformed answer is never acted on. A judgement never makes dude take a step it would not take otherwise.
 
 Every call is recorded: what was asked, what the model answered, how long it took and how many tokens it used.
 
 ## Where dude uses them
 
-dude uses a judgement to check an agent's **checks report**. The implementer, fixer and simplifier end their work with the checks they ran. dude asks the judgement tier whether each reported pass is backed by the commands the Run actually recorded, and whether any check is missing. For a check the agent says failed, it asks whether the Run's commands show the same failure at the commit of the target branch the task builds on; for one not run, whether a later phase of the delivery runs it.
+dude uses a judgement to **route a chat message**: when someone mentions dude in a connected chat, the judgement tier decides which task or project the message is about, and, for a mention that starts a session, which projects it could need. See [Brainstorm sessions](help:brainstorm).
 
-- A check the model does not confirm is **unverified**, and the work is sent back. See [Delivering a task](help:delivery#the-checks-report).
-- With judgements off, dude publishes the work and says visibly that its checks were not model-checked. A check the agent says failed or did not run is still sent back.
+The judgement tier does not check an agent's **checks report**: the task's conductor decides it, and with no conductor deciding the delivery, a check the agent says failed or did not run is sent back for a person. See [Delivering a task](help:delivery#the-checks-report).
 
 ## Choosing the tier
 

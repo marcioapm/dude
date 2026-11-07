@@ -721,6 +721,10 @@ func TestConvertCandidatesRedoesEveryShapeWithAFreshFix(t *testing.T) {
 			}
 			switch c.step {
 			case "conductorDecision":
+				// The sweep hands the delivery to a quiet conductor, whose
+				// checks verdicts (decide_checks) on the redo's fix reach
+				// dude through its tools, as the orchestrator serves them.
+				w.withTools()
 				mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'conductorDecision', status = 'waiting', wake_at = NULL,
 					awaiting_signals = '["conductor.decision"]',
 					state = state || jsonb_build_object('decision', jsonb_build_object('point', $2::text, 'policy', 'review'))

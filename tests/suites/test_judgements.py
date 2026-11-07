@@ -2,10 +2,11 @@
 
 Off by default; an admin picks a tier, the choice persists, and the Models
 page lists Judgements among that tier's users; a member reads it all and
-changes nothing. The suite's LLM proxy (env.py's scripted judgement proxy)
-answers only the checks gate's questions, so the test question's answer
-here is its failure, recorded nowhere, and with no Run judged here Recent
-judgements is empty.
+changes nothing. The tier routes chat; it does not judge checks reports
+(the task's conductor decides them). The suite's LLM proxy (env.py's
+scripted judgement proxy) answers only chat routing's calls, so the test
+question's answer here is its failure, recorded nowhere, and with no chat
+routed here Recent judgements is empty.
 """
 
 from __future__ import annotations

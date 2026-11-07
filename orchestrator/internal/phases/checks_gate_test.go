@@ -3,48 +3,13 @@ package phases
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
-	"github.com/marciomartins/dude/orchestrator/internal/judge"
 )
-
-type checksFake struct {
-	backed, missing string
-	err             error
-	calls           int
-	// unrecorded: answers with no CallID, a judgement model_calls never
-	// recorded.
-	unrecorded bool
-}
-
-func (f *checksFake) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judgement, error) {
-	f.calls++
-	d := f.backed
-	if f.calls%2 == 0 {
-		d = f.missing
-	}
-	if f.err != nil {
-		// An error rejects whatever comes with it: here a yes, recorded.
-		return judge.Judgement{Decision: d, CallID: "call_test"}, f.err
-	}
-	id := "call_test"
-	if f.unrecorded {
-		id = ""
-	}
-	return judge.Judgement{Decision: d, CallID: id, Reasoning: "fixture evidence"}, nil
-}
-
-// acceptingJudge has w's Syncer judge every check backed and none missing.
-func acceptingJudge(w *harnessWorld) *checksFake {
-	fake := &checksFake{backed: judge.Yes, missing: judge.No}
-	w.s.Judge = fake
-	return fake
-}
 
 func checksReply(w *harnessWorld, text string) {
 	w.t.Helper()
@@ -58,102 +23,74 @@ func checksReply(w *harnessWorld, text string) {
 
 const passingChecks = "```yaml\nchecks:\n  - command: verify\n    result: pass\n    evidence: successful\n```"
 
-func TestChecksJudgementsFailClosed(t *testing.T) {
-	for _, tc := range []struct {
-		name, backed, missing string
-		err                   error
-		want                  bool
-		unrecorded            bool
-	}{
-		{"accepted", judge.Yes, judge.No, nil, true, false},
-		{"backed unsure", judge.Unsure, judge.No, nil, false, false},
-		{"missing unsure", judge.Yes, judge.Unsure, nil, false, false},
-		{"unbacked", judge.No, judge.No, nil, false, false},
-		{"missing", judge.Yes, judge.Yes, nil, false, false},
-		{"zero, what judge.Service returns failing", "", "", nil, false, false},
-		{"timeout", judge.Yes, judge.No, errors.New("timeout"), false, false},
-		{"recorded nowhere", judge.Yes, judge.No, nil, false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			w := newHarnessWorld(t)
-			checksReply(w, passingChecks)
-			w.s.Judge = &checksFake{backed: tc.backed, missing: tc.missing, err: tc.err, unrecorded: tc.unrecorded}
-			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || got.Verified != tc.want {
-				t.Fatalf("%+v %v", got, err)
-			}
-		})
-	}
-}
-func TestChecksMissingOrUnparseableReportsRejectWithoutJudge(t *testing.T) {
+// A missing or unparseable report is rejected without asking the
+// conductor: nothing is asked and nothing is pending.
+func TestChecksMissingOrUnparseableReportsRejectWithoutAsking(t *testing.T) {
 	for _, text := range []string{"done", "checks: [broken"} {
 		t.Run(text, func(t *testing.T) {
 			w := newHarnessWorld(t)
+			conducted(w)
 			checksReply(w, text)
-			fake := acceptingJudge(w)
+			endTurn(w)
 			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || got.Verified || fake.calls != 0 {
-				t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+			if err != nil || got.Verified || got.pending || w.countEvents(delivery.EvRunChecksAsked) != 0 {
+				t.Fatalf("%+v %v asked %d", got, err, w.countEvents(delivery.EvRunChecksAsked))
 			}
 		})
 	}
 }
+
+// An accepted turn is read back from the ledger by a restarted syncer,
+// which asks nobody.
 func TestChecksRestartRetainsOnlyAcceptedCurrentTurn(t *testing.T) {
 	w := newHarnessWorld(t)
+	cond := conducted(w)
 	checksReply(w, passingChecks)
-	acceptingJudge(w)
-	ok, _, err := w.s.checksBeforePush(context.Background(), w.run)
-	if err != nil || !ok {
-		t.Fatalf("%v %v", ok, err)
+	endTurn(w)
+	w.gate()
+	if _, err := w.decide(cond, backedAll(w.run.ID, w.turn())); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := w.gate(); !ok {
+		t.Fatal("the backed turn did not pass")
 	}
 	// An independent Syncer consults the ledger, not an in-memory result.
-	restarted := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
-	ok, _, err = restarted.checksBeforePush(context.Background(), w.run)
-	if err != nil || !ok {
-		t.Fatalf("restart: %v %v", ok, err)
+	restarted := &Syncer{DB: w.s.DB}
+	ok, acted, err := restarted.checksBeforePush(context.Background(), w.run)
+	if err != nil || !ok || acted || w.countEvents(delivery.EvRunChecksAsked) != 1 {
+		t.Fatalf("restart: %v %v %v, asked %d", ok, acted, err, w.countEvents(delivery.EvRunChecksAsked))
 	}
 }
 
-// interruptingJudge stands for an orchestrator stopped mid-judgement: its
-// context ends while the model thinks.
-type interruptingJudge struct {
-	calls int
-	stop  context.CancelFunc
-}
-
-func (j *interruptingJudge) Judge(ctx context.Context, _ string, a judge.Ask) (judge.Judgement, error) {
-	j.calls++
-	j.stop()
-	return judge.Judgement{}, ctx.Err()
-}
-
-// A restart between a turn's end and its judgement never passes it: what
-// was judged is read back, a rejection staying one, and a judgement cut
-// short records nothing, so the next process judges the turn again.
-func TestChecksARestartNeverPassesAnUnjudgedOrRejectedTurn(t *testing.T) {
+// A restart between a turn's end and the conductor's verdict never passes
+// it: a pending ask stays pending, recording nothing and asking once; a
+// rejection is read back as one, deciding nothing again.
+func TestChecksARestartNeverPassesAnUndecidedOrRejectedTurn(t *testing.T) {
 	w := newHarnessWorld(t)
+	cond := conducted(w)
 	checksReply(w, passingChecks)
-	w.feed(map[string]any{"type": "lux.activity", "data": map[string]any{"activity": "busy"}},
-		map[string]any{"type": "lux.activity", "data": map[string]any{"activity": "idle"}})
-	// Cut short: no verdict is recorded and nothing passes.
-	ctx, stop := context.WithCancel(context.Background())
-	cut := &interruptingJudge{stop: stop}
-	w.s.Judge = cut
-	if ok, _, err := w.s.checksBeforePush(ctx, w.run); ok || err == nil || cut.calls == 0 {
-		t.Fatalf("an interrupted judgement: pass %v, %v", ok, err)
+	endTurn(w)
+	if ok, _ := w.gate(); ok {
+		t.Fatal("passed before the verdict")
 	}
-	if n := w.countEvents(delivery.EvRunChecksJudged); n != 0 {
-		t.Fatalf("%d verdicts recorded for an interrupted judgement", n)
+	restarted := &Syncer{DB: w.s.DB}
+	if ok, acted, err := restarted.checksBeforePush(context.Background(), w.run); ok || acted || err != nil {
+		t.Fatalf("restarted while pending: pass %v acted %v, %v", ok, acted, err)
 	}
-	// The next process judges it again, here rejecting it...
-	again := &Syncer{DB: w.s.DB, Judge: &checksFake{backed: judge.No, missing: judge.No}}
-	if ok, _, err := again.checksBeforePush(context.Background(), w.run); ok || err != nil {
-		t.Fatalf("judged again: pass %v, %v", ok, err)
+	if n, asked := w.countEvents(delivery.EvRunChecksJudged), w.countEvents(delivery.EvRunChecksAsked); n != 0 || asked != 1 {
+		t.Fatalf("%d verdicts recorded, asked %d times, while pending", n, asked)
 	}
-	// ...and one after that reads the rejection, asking nobody.
-	after := &Syncer{DB: w.s.DB, Judge: &checksFake{err: errors.New("must not be called")}}
-	if ok, _, err := after.checksBeforePush(context.Background(), w.run); ok || err != nil {
-		t.Fatalf("after the rejection: pass %v, %v", ok, err)
+	unbacked := backedAll(w.run.ID, w.turn())
+	unbacked.Checks[0].Verdict = delivery.VerdictUnbacked
+	if _, err := w.decide(cond, unbacked); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := restarted.checksBeforePush(context.Background(), w.run); ok || err != nil {
+		t.Fatalf("decided unbacked: pass %v, %v", ok, err)
+	}
+	after := &Syncer{DB: w.s.DB}
+	if ok, acted, err := after.checksBeforePush(context.Background(), w.run); ok || acted || err != nil {
+		t.Fatalf("after the rejection: pass %v acted %v, %v", ok, acted, err)
 	}
 	if n := w.countEvents(delivery.EvRunChecksJudged); n != 1 {
 		t.Fatalf("%d verdicts, want the one rejection", n)
@@ -174,9 +111,17 @@ func (w *harnessWorld) countEvents(typ string) int {
 // event keeps every verdict, passed ones included.
 func TestChecksSendBackListsOnlyUnverifiedChecks(t *testing.T) {
 	w := newHarnessWorld(t)
+	cond := conducted(w)
 	checksReply(w, strings.ReplaceAll(passingChecks, "verify", "make check"))
-	// The fake answers Backed then Missing: make check unbacked, nothing missing.
-	w.s.Judge = &checksFake{backed: judge.No, missing: judge.No}
+	endTurn(w)
+	w.gate()
+	// The conductor decides make check unbacked, nothing missing.
+	unbacked := delivery.DecideChecks{RunID: w.run.ID, Turn: w.turn(),
+		Checks:  []delivery.ConductedCheck{{Command: "make check", Verdict: delivery.VerdictUnbacked, Reason: "fixture evidence"}},
+		Missing: delivery.ConductedMissing{Verdict: delivery.MissingNone, Reason: "nothing else changed"}}
+	if _, err := w.decide(cond, unbacked); err != nil {
+		t.Fatal(err)
+	}
 	if ok, _, err := w.s.checksBeforePush(context.Background(), w.run); ok || err != nil {
 		t.Fatalf("pass %v, %v", ok, err)
 	}
@@ -194,7 +139,7 @@ func TestChecksSendBackListsOnlyUnverifiedChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "Your checks report was not verified. Nothing from this Run has been pushed.\n" +
-		"\n- make check: fixture evidence (judgement: no)\n" +
+		"\n- make check: fixture evidence (verdict: unbacked)\n" +
 		"\nRun the missing or unsuccessful checks as separate commands, read their output, and correct the report. " +
 		"End your next reply with a checks: YAML block. If you cannot proceed, ask a person what you need."
 	if payload.Message != want {
@@ -211,8 +156,8 @@ func TestChecksSendBackListsOnlyUnverifiedChecks(t *testing.T) {
 }
 
 // The gate reads only the end of a long reply: the newest report after
-// more than checksReplyMax of earlier text is judged, and a malformed
-// newest report is never replaced by an earlier valid one.
+// more than checksReplyMax of earlier text is the one decided, and a
+// malformed newest report is never replaced by an earlier valid one.
 func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 	filler := strings.Repeat("working on it\n", 2<<10)
 	older := func(w *harnessWorld) {
@@ -236,10 +181,9 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 		if len(reply) > checksReplyMax+len(filler)+1 || strings.Contains(reply, "command: verify") {
 			t.Fatalf("read %d bytes, the earliest report among them: %v", len(reply), strings.Contains(reply, "command: verify"))
 		}
-		fake := acceptingJudge(w)
-		got, err := w.s.judgeChecks(context.Background(), w.run)
-		if err != nil || !got.Verified || fake.calls != 2 || got.Verdicts[0].Command != "make check" {
-			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+		_, checks, done, err := w.s.parsedChecks(context.Background(), w.run)
+		if err != nil || done || len(checks) != 1 || checks[0].Command != "make check" {
+			t.Fatalf("%+v %v done %v", checks, err, done)
 		}
 	})
 	t.Run("a malformed newest report", func(t *testing.T) {
@@ -247,10 +191,9 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 		older(w)
 		checksReply(w, passingChecks)
 		checksReply(w, "checks: [broken")
-		fake := acceptingJudge(w)
-		got, err := w.s.judgeChecks(context.Background(), w.run)
-		if err != nil || got.Verified || fake.calls != 0 {
-			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+		got, _, done, err := w.s.parsedChecks(context.Background(), w.run)
+		if err != nil || !done || got.Verified || got.Verdicts[0].Command != "checks:" {
+			t.Fatalf("%+v %v done %v", got, err, done)
 		}
 	})
 	// One message longer than checksReplyMax is read only for its end.
@@ -258,26 +201,24 @@ func TestChecksReadOnlyTheEndOfALongReply(t *testing.T) {
 	t.Run("a report at the start of one oversized message", func(t *testing.T) {
 		w := newHarnessWorld(t)
 		checksReply(w, passingChecks+"\n"+long)
-		fake := acceptingJudge(w)
-		got, err := w.s.judgeChecks(context.Background(), w.run)
-		if err != nil || got.Verified || fake.calls != 0 {
-			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+		got, _, done, err := w.s.parsedChecks(context.Background(), w.run)
+		if err != nil || !done || got.Verified || got.Verdicts[0].Command != "checks:" {
+			t.Fatalf("%+v %v done %v", got, err, done)
 		}
 	})
 	t.Run("a report at the end of one oversized message", func(t *testing.T) {
 		w := newHarnessWorld(t)
 		checksReply(w, long+passingChecks)
-		fake := acceptingJudge(w)
-		got, err := w.s.judgeChecks(context.Background(), w.run)
-		if err != nil || !got.Verified || fake.calls != 2 {
-			t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+		_, checks, done, err := w.s.parsedChecks(context.Background(), w.run)
+		if err != nil || done || len(checks) != 1 {
+			t.Fatalf("%+v %v done %v", checks, err, done)
 		}
 	})
 }
 
-// A report of more than checksCountMax checks is sent back unjudged,
-// saying why; one of exactly checksCountMax is judged.
-func TestChecksTooManyChecksAreSentBackUnjudged(t *testing.T) {
+// A report of more than checksCountMax checks is sent back undecided,
+// saying why; one of exactly checksCountMax goes on to be decided.
+func TestChecksTooManyChecksAreSentBackUndecided(t *testing.T) {
 	report := func(n int) string {
 		var b strings.Builder
 		b.WriteString("checks:\n")
@@ -287,18 +228,20 @@ func TestChecksTooManyChecksAreSentBackUnjudged(t *testing.T) {
 		return b.String()
 	}
 	for _, tc := range []struct {
-		n, calls int
-		judged   bool
-	}{{checksCountMax + 1, 0, false}, {checksCountMax, checksCountMax + 1, true}} {
+		n      int
+		judged bool
+	}{{checksCountMax + 1, false}, {checksCountMax, true}} {
 		t.Run(fmt.Sprint(tc.n), func(t *testing.T) {
 			w := newHarnessWorld(t)
 			checksReply(w, report(tc.n))
-			fake := acceptingJudge(w)
-			got, err := w.s.judgeChecks(context.Background(), w.run)
-			if err != nil || fake.calls != tc.calls {
-				t.Fatalf("%+v %v calls %d", got, err, fake.calls)
+			got, checks, done, err := w.s.parsedChecks(context.Background(), w.run)
+			if err != nil || done == tc.judged {
+				t.Fatalf("%+v %v done %v", got, err, done)
 			}
 			if tc.judged {
+				if len(checks) != tc.n {
+					t.Fatalf("%d checks parsed, want %d", len(checks), tc.n)
+				}
 				return
 			}
 			want := fmt.Sprintf("the report lists %d checks, more than the %d that are verified", tc.n, checksCountMax)

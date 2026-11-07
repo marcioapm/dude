@@ -35,6 +35,7 @@ var tools = []tool{
 	define("ask_person", askPerson),
 	define("ask_conductor", askConductor),
 	define("answer_question", answerQuestion),
+	define("decide_checks", decideChecks),
 	define("emit_event", emitEvent).limit(eventsPerRun),
 	define("list_repositories", listRepositories),
 	define("request_repository", requestRepository).limit(requestsPerRun),
@@ -608,6 +609,16 @@ func askPerson(ctx context.Context, tx pgx.Tx, c Caller, in askIn) (askOut, erro
 		return askOut{QuestionID: id, Next: askNext(true)}, nil
 	}
 	return askOut{QuestionID: id, Next: askNext(false)}, nil
+}
+
+// decideChecks is the conductor's verdict on a writer's checks report the
+// gate waits on (delivery.ConductChecksTx).
+func decideChecks(ctx context.Context, tx pgx.Tx, c Caller, in delivery.DecideChecks) (map[string]any, error) {
+	cursor, err := delivery.ConductChecksTx(ctx, tx, c.run(), in)
+	if _, err = conducted(cursor, err); err != nil {
+		return nil, err
+	}
+	return map[string]any{"decisionCursor": cursor, "next": "Recorded. The checks gate reads it at once; you need not wait for it."}, nil
 }
 
 type answerQuestionIn struct {

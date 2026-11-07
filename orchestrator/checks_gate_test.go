@@ -2,138 +2,227 @@ package orchestrator_test
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
-	"github.com/marciomartins/dude/orchestrator/internal/judge"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
-// scriptedJudge answers the checks gate's questions as a judgement tier
-// would: Backed by whether the Run's recorded call of the command it asks
-// about failed (the command's own exit, as the context shows it), Missing
-// no; or, set, the same answer to every question, or an error.
-type scriptedJudge struct {
+// checksConductor is the scripted conductor the checks gate's tests decide
+// reports with, as the task's conductor, through the real decide_checks:
+// each pass is backed only on dude's recording of its call exiting 0
+// (fakeagent.ChecksDefaults reads the wake), a failure is the one a
+// person waived when the waiver's Run's recorded output fails the same
+// tests (same_as_waived), else pre-existing only on dude's recording of it
+// failing at the task's base, a check not run deferred only when a later
+// phase runs it, and nothing is missing. Set reject to reject every
+// failure, or silent to decide nothing (the gate's deadline settles it).
+// A checks escalation it holds goes to a person at once: its tests are of
+// the person's waiver, which only a person gives.
+type checksConductor struct {
 	mu      sync.Mutex
-	asked   []judge.Ask
-	answer  string
-	missing string
-	err     error
+	decided []delivery.DecideChecks
+	reject  bool
+	silent  bool
+	busy    bool
 }
 
-func (j *scriptedJudge) Judge(_ context.Context, _ string, a judge.Ask) (judge.Judgement, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.asked = append(j.asked, a)
-	if j.err != nil {
-		return judge.Judgement{}, j.err
+// checksReason is what the scripted conductor says of every verdict.
+const checksReason = "the recorded call says so"
+
+// decide is the scripted conductor's turn, once per pump: every checks
+// wake not yet decided, then any checks escalation it holds.
+func (c *checksConductor) decide(w *world) {
+	w.t.Helper()
+	if c.busy {
+		return
 	}
-	backedQ := strings.Contains(a.Question, "reported pass")
-	d := j.answer
-	switch {
-	case d != "":
-	case strings.Contains(a.Question, "waived a reported failure"):
-		// The same failure: both Runs' recorded output names the same
-		// failing tests.
-		this, waived, _ := strings.Cut(a.Context, "### The waived failure")
-		d = judge.No
-		if failing(this) != "" && failing(this) == failing(waived) {
-			d = judge.Yes
+	c.busy = true
+	defer func() { c.busy = false }()
+	for _, row := range w.rows(`SELECT k.task_id, k.line FROM conductor_wakes k WHERE k.organization_id = $1 AND k.kind = $2
+		AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = split_part(k.key, ':', 2) AND v.event_type IN ($3, $4)
+			AND v.payload->>'turn' = split_part(k.key, ':', 3))
+		AND EXISTS (SELECT 1 FROM runs r WHERE r.task_id = k.task_id AND r.role = 'conductor' AND r.status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))
+		ORDER BY k.created_at`, w.org, delivery.WakeChecks, delivery.EvRunChecksConducted, delivery.EvRunChecksJudged) {
+		task, line := row[0], row[1]
+		if c.silent {
+			continue
 		}
-	case strings.HasPrefix(a.Question, "This Run reported a check that did not pass"):
-		// Pre-existing: a recorded run at the target branch's commit the
-		// context names as the task's base fails with the same tests as
-		// the Run's own.
-		d = judge.No
-		if base, head := baseAndHeadFailures(a.Context); base != "" && base == head {
-			d = judge.Yes
+		for _, call := range fakeagent.ChecksDefaults(line) {
+			var in delivery.DecideChecks
+			if err := json.Unmarshal([]byte(call[1]), &in); err != nil {
+				w.t.Fatal(err)
+			}
+			asked := w.checksAsked(in.RunID, in.Turn)
+			if asked == nil {
+				continue
+			}
+			for i := range in.Checks {
+				v := &in.Checks[i]
+				v.Reason = checksReason
+				if wv := asked.Waivers[i]; wv != nil && !c.reject && w.sameFailure(in.RunID, wv, v.Command) {
+					v.Verdict, v.WaiverCursor = delivery.VerdictSameAsWaived, wv.Cursor
+				}
+				if c.reject && asked.Check[i].Result != delivery.CheckPass {
+					v.Verdict = delivery.VerdictReject
+				}
+			}
+			in.Missing.Reason = checksReason
+			args, _ := json.Marshal(in)
+			spec := w.conductorSpecNow(task)
+			if spec == "" {
+				continue
+			}
+			status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "decide_checks", string(args))
+			if status != 200 {
+				out := body
+				// A turn moved on, or settled at its deadline: asked again.
+				w.t.Logf("decide_checks %s: %d %v", args, status, out)
+				continue
+			}
+			c.mu.Lock()
+			c.decided = append(c.decided, in)
+			c.mu.Unlock()
 		}
-	case backedQ && failed(lastCompletion(a.Context)):
-		d = judge.No
-	case backedQ:
-		d = judge.Yes
-	case j.missing != "":
-		d = j.missing
-	default:
-		d = judge.No
 	}
-	return judge.Judgement{Decision: d, Confidence: 0.9, Reasoning: "the recorded call says so", CallID: "mcall_test"}, nil
+	// The escalation it holds is the person's to waive: handed over now,
+	// as its deadline would.
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET wake_at = now(), state = jsonb_set(state, '{escalation,raisedAt}', to_jsonb(now() - interval '1 hour'))
+		WHERE organization_id = $1 AND workflow_type = 'task.delivery' AND status = 'waiting' AND state->'escalation'->>'holder' = 'conductor'
+		AND state->'escalation'->>'reason' = $2 AND NOT (state->'escalation' ? 'decided')`, w.org, delivery.ReasonChecksUnverified)
 }
 
-// lastCompletion is the last recorded completion line of a judge context.
-func lastCompletion(context string) string {
-	lines := strings.Split(context, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(lines[i], "agent.tool.completed ") || strings.HasPrefix(lines[i], "  status:") {
-			return lines[i]
+// waived counts the verdicts that carried a waiver, about runs (all for
+// none).
+func (c *checksConductor) waived(runs ...string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, d := range c.decided {
+		if len(runs) > 0 && !slices.Contains(runs, d.RunID) {
+			continue
+		}
+		for _, v := range d.Checks {
+			if v.Verdict == delivery.VerdictSameAsWaived {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// about counts the verdicts given about runs.
+func (c *checksConductor) about(runs ...string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, d := range c.decided {
+		if slices.Contains(runs, d.RunID) {
+			n++
+		}
+	}
+	return n
+}
+
+// conductorSpecNow is the lux spec of the task's latest conductor, ""
+// while lux has none yet.
+func (w *world) conductorSpecNow(task string) string {
+	id, _, _ := w.conductor(task)
+	for _, r := range w.lux.Runs() {
+		var spec lux.Spec
+		_ = json.Unmarshal(r.Spec, &spec)
+		if spec.Labels["dude.run"] == id {
+			return string(r.Spec)
 		}
 	}
 	return ""
 }
 
-// failed says a recorded completion is a command that failed: dude records
-// a failing call as status error, with its exit code when the harness
-// reports one.
-func failed(completion string) bool {
-	return strings.Contains(completion, `"status": "error"`) || strings.Contains(completion, `"status":"error"`) || strings.Contains(completion, "status: error")
+// checksAsked is what the gate asked about runID's turn.
+func (w *world) checksAsked(runID string, turn int64) *delivery.ChecksAsked {
+	w.t.Helper()
+	var a *delivery.ChecksAsked
+	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+		a, _, err = delivery.ChecksAskedTx(context.Background(), tx, runID, turn)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	return a
 }
 
-// failing are the distinct "FAIL: <test>" lines of a context, sorted.
-func failing(context string) string {
+// sameFailure says runID's latest recorded call of command fails the same
+// tests ("FAIL: " lines) as the waiver's Run's last call of it before the
+// waiver.
+func (w *world) sameFailure(runID string, wv *delivery.CarriedWaiver, command string) bool {
+	w.t.Helper()
+	output := func(run string, before int64) string {
+		return w.str(`SELECT COALESCE((SELECT d.payload::text FROM events c JOIN events d ON d.run_id = c.run_id AND d.event_type = 'agent.tool.completed'
+			AND d.payload->>'callId' = c.payload->>'callId'
+			WHERE c.run_id = $1 AND c.event_type = 'agent.tool.called' AND c.payload->'input'->>'command' = $2 AND ($3::bigint = 0 OR d.cursor < $3)
+			ORDER BY d.cursor DESC LIMIT 1), '')`, run, command, before)
+	}
+	this, waived := failing(output(runID, 0)), failing(output(wv.RunID, wv.Cursor))
+	return this != "" && this == waived
+}
+
+// failing are the distinct "FAIL: <test>" names of a recorded output, sorted.
+func failing(output string) string {
 	var out []string
-	for _, line := range strings.Split(context, "\n") {
-		if line = strings.TrimSpace(line); strings.HasPrefix(line, "FAIL: ") && !slices.Contains(out, line) {
-			out = append(out, line)
+	for _, m := range regexp.MustCompile(`FAIL: (\w+)`).FindAllStringSubmatch(output, -1) {
+		if !slices.Contains(out, m[1]) {
+			out = append(out, m[1])
 		}
 	}
 	slices.Sort(out)
 	return strings.Join(out, ",")
 }
 
-// baseAndHeadFailures are failing's of the context's recorded call in a
-// checkout of the task's base it lists (fakeagent.BaseDir at that commit)
-// and of its last other call.
-func baseAndHeadFailures(context string) (base, head string) {
-	_, listed, _ := strings.Cut(context, "### The commit of each target branch this task builds on\n- ")
-	listed, _, _ = strings.Cut(listed, "\n")
-	_, sha, _ := strings.Cut(listed, " at ")
-	_, calls, _ := strings.Cut(context, "### The tool calls this Run recorded, in order")
-	for _, call := range strings.Split(calls, "\n- ")[1:] {
-		if strings.Contains(call, fakeagent.BaseDir) {
-			if sha != "" && strings.Contains(call, fakeagent.BaseDir+" "+sha) {
-				base = failing(call)
-			}
-		} else {
-			head = failing(call)
-		}
-	}
-	return base, head
-}
-
-func (j *scriptedJudge) count() int {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return len(j.asked)
-}
-
-// checksDelivery starts a delivery whose implementer is model, judged by
-// j (nil: the organisation has no judgement tier).
-func (w *world) checksDelivery(model string, j *scriptedJudge) string {
+// rows are the string columns of sql's rows.
+func (w *world) rows(sql string, args ...any) [][]string {
 	w.t.Helper()
-	if j != nil {
-		w.syncer.Judge = j
+	rows, err := w.owner.Query(context.Background(), sql, args...)
+	if err != nil {
+		w.t.Fatal(err)
 	}
+	defer rows.Close()
+	var out [][]string
+	for rows.Next() {
+		var a, b string
+		if err := rows.Scan(&a, &b); err != nil {
+			w.t.Fatal(err)
+		}
+		out = append(out, []string{a, b})
+	}
+	return out
+}
+
+// checksDelivery starts a delivery its conductor decides (as Deliver
+// does), whose implementer is model; c, the scripted conductor, decides
+// its checks (nil: a fresh one).
+func (w *world) checksDelivery(model string, c *checksConductor) string {
+	w.t.Helper()
+	if c == nil {
+		c = &checksConductor{}
+	}
+	w.checks = c
+	w.lux.ManualChecks = true
+	w.syncer.ConductorWarm = time.Hour
 	w.onModel("implementer", model)
 	wi := w.task()
 	if !w.checksTested {
-		w.deliver(wi)
+		w.deliverByAPI(wi)
 		return wi
 	}
 	// With the scripted tester, on a task of one criterion.
@@ -143,10 +232,25 @@ func (w *world) checksDelivery(model string, j *scriptedJudge) string {
 	}); err != nil {
 		w.t.Fatal(err)
 	}
+	w.withTools()
 	p := scriptedPolicy()
 	p.Test = true
-	w.start(wi, p)
+	w.startConducted(wi, p)
 	return wi
+}
+
+// startConducted starts the delivery workflow as Deliver's API does: its
+// conductor decides it, quietly.
+func (w *world) startConducted(taskID string, policy delivery.Policy) string {
+	id, _, err := w.runtime.Start(context.Background(), workflow.StartOptions{
+		Type: delivery.WorkflowType, OrganizationID: w.org, IdempotencyKey: "delivery:" + taskID, TaskID: taskID,
+		Input: delivery.State{TaskID: taskID, ProjectID: w.project, Policy: policy, Branch: delivery.BranchFor(taskID, 1),
+			HadConductor: true, Decider: delivery.DeciderConductor, Voice: delivery.VoiceQuiet},
+	})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return id
 }
 
 // implementerPushes is how many pushes lux was asked for by the task's
@@ -178,12 +282,12 @@ func (w *world) sentBack(wi string) []string {
 		WHERE r.task_id = $1 AND r.phase = 'implement' AND d.text LIKE 'Your checks report was not verified%' ORDER BY d.created_at`, wi)
 }
 
-// An honest report the judge backs publishes: one judgement, verified, and
-// the implementer's work reaches the pull request.
-func TestAChecksReportTheJudgeBacksPublishes(t *testing.T) {
+// An honest report the conductor backs publishes: one judgement, verified,
+// and the implementer's work reaches the pull request.
+func TestAChecksReportTheConductorBacksPublishes(t *testing.T) {
 	w := newWorld(t)
-	j := &scriptedJudge{}
-	wi := w.checksDelivery(fakeagent.ChecksHonestModel, j)
+	c := &checksConductor{}
+	wi := w.checksDelivery(fakeagent.ChecksHonestModel, c)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if got := w.judged(wi); strings.Join(got, ",") != "verified" {
 		t.Errorf("judged %v, want one verified", got)
@@ -191,30 +295,28 @@ func TestAChecksReportTheJudgeBacksPublishes(t *testing.T) {
 	if n := w.implementerPushes(wi); n != 1 {
 		t.Errorf("%d pushes, want 1", n)
 	}
-	// Backed for its one check and Missing, about the implementer; the
-	// fixer and simplifier report none run, and are asked only Missing.
-	var implementer string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi).Scan(&implementer)
-	asked := 0
-	for _, a := range j.asked {
-		if a.About == implementer {
-			asked++
-		}
-	}
-	if asked != 2 {
-		t.Errorf("%d questions about the implementer, want Backed for one check and Missing", asked)
+	// One verdict about the implementer: its one check backed, and Missing.
+	implementer := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, wi)
+	if n := c.about(implementer); n != 1 {
+		t.Errorf("%d verdicts about the implementer, want one", n)
 	}
 	// The pull request accounts for every gated Run, the implementer's
 	// backed command included, not only the last Run judged.
-	backed := "- `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
-	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were verified against the Run's recorded commands.\n\n"+
+	backed := "- `missing checks` — **pass** — " + checksReason + " (decision)"
+	if got, want := decisionsNamed(checksSection(w.gh.Pull(1).Body)), "Checks were verified against the Run's recorded commands.\n\n"+
 		"- **Implementer** — backed\n"+
-		"  - `"+fakeagent.CheckCommand+"` — **pass** — the recorded call says so (`mcall_test`)\n"+
+		"  - `"+fakeagent.CheckCommand+"` — **pass** — "+checksReason+" (decision)\n"+
 		"  "+backed+"\n"+
 		"- **Fixer** — backed\n  "+backed+"\n"+
 		"- **Simplifier** — backed\n  "+backed; got != want {
 		t.Errorf("the pull request's checks section is\n%s\nwant\n%s", got, want)
 	}
+}
+
+// decisionsNamed is a checks account with each conductor's decision named
+// "(decision)", whatever its event's cursor.
+func decisionsNamed(account string) string {
+	return regexp.MustCompile(` \(the conductor's decision, event \d+\)`).ReplaceAllString(account, " (decision)")
 }
 
 // checksSection is the checks account inside the body's marked
@@ -233,7 +335,7 @@ func checksSection(body string) string {
 // the check, and nothing is pushed until the next turn's report is backed.
 func TestAnUnbackedReportIsSentBackAndPublishesOnceFixed(t *testing.T) {
 	w := newWorld(t)
-	wi := w.checksDelivery(fakeagent.ChecksFixedModel, &scriptedJudge{})
+	wi := w.checksDelivery(fakeagent.ChecksFixedModel, nil)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if got := w.judged(wi); strings.Join(got, ",") != "unverified,verified" {
 		t.Errorf("judged %v, want sent back once then verified", got)
@@ -276,26 +378,26 @@ func TestRetryingAnUnverifiedReportNamesTheDirectiveItSends(t *testing.T) {
 
 // unbackedUntilEscalated runs a delivery whose implementer never backs its
 // report, with the organisation's rounds set (-1: left at the default),
-// to the escalation, asserting no push was asked for.
+// to the escalation with a person, asserting no push was asked for.
 func (w *world) unbackedUntilEscalated(rounds int) string {
 	w.t.Helper()
-	return w.unbackedUntilEscalatedWith(rounds, &scriptedJudge{})
+	return w.unbackedUntilEscalatedWith(rounds, nil)
 }
 
-// unbackedUntilEscalatedWith is unbackedUntilEscalated judged by j.
-func (w *world) unbackedUntilEscalatedWith(rounds int, j *scriptedJudge) string {
+// unbackedUntilEscalatedWith is unbackedUntilEscalated decided by c.
+func (w *world) unbackedUntilEscalatedWith(rounds int, c *checksConductor) string {
 	w.t.Helper()
 	if rounds >= 0 {
 		mustExec(w.t, w.owner, `UPDATE forge_credentials SET settings = jsonb_build_object('checksFixRounds', $2::int)
 			WHERE organization_id = $1`, w.org, rounds)
 	}
-	wi := w.checksDelivery(fakeagent.ChecksUnbackedModel, j)
+	wi := w.checksDelivery(fakeagent.ChecksUnbackedModel, c)
 	w.until("the checks escalation", func() bool { return w.escalationReason(wi) == delivery.ReasonChecksUnverified })
+	// The conductor holds it, then hands it to a person (waive is a
+	// person's).
+	w.until("the escalation with a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	if n := w.implementerPushes(wi); n != 0 {
 		w.t.Fatalf("%d pushes of an unbacked report", n)
-	}
-	if s := w.taskStatus(wi); s != "awaiting_input" {
-		w.t.Fatalf("task %s, want awaiting_input", s)
 	}
 	return wi
 }
@@ -345,8 +447,8 @@ func TestWaivingAnUnverifiedReportNeedsAReasonAndPublishes(t *testing.T) {
 	}
 	// The fixer's and simplifier's later reports are backed, yet the pull
 	// request says the implementer's checks were waived, and why.
-	backed := "  - `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
-	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were waived by a person:\n"+
+	backed := "  - `missing checks` — **pass** — " + checksReason + " (decision)"
+	if got, want := decisionsNamed(checksSection(w.gh.Pull(1).Body)), "Checks were waived by a person:\n"+
 		"- Implementer: The check needs hardware CI has; it passed there.\n\n"+
 		"- **Implementer** — waived\n"+
 		"- **Fixer** — backed\n"+backed+"\n"+
@@ -355,37 +457,25 @@ func TestWaivingAnUnverifiedReportNeedsAReasonAndPublishes(t *testing.T) {
 	}
 }
 
-// With no judgement tier the work publishes, and the skip is recorded.
-func TestWithNoJudgementTierTheChecksAreSkippedAndPublished(t *testing.T) {
+// With no conductor deciding the delivery (Deliver's policy), a report of
+// passes publishes unverified, and the skip is recorded.
+func TestWithNoConductorTheChecksAreSkippedAndPublished(t *testing.T) {
 	w := newWorld(t)
-	wi := w.checksDelivery(fakeagent.ChecksUnbackedModel, nil)
+	w.onModel("implementer", fakeagent.ChecksUnbackedModel)
+	wi := w.task()
+	w.deliver(wi)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if got := w.judged(wi); strings.Join(got, ",") != "skipped" {
 		t.Errorf("judged %v, want the skip recorded", got)
 	}
-	if got, want := checksSection(w.gh.Pull(1).Body), "Checks not model-checked, set a judgement tier in the organisation's settings.\n\n"+
-		"- **Implementer** — not model-checked\n"+
-		"- **Fixer** — not model-checked\n"+
-		"- **Simplifier** — not model-checked"; got != want {
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvRunChecksAsked); n != 0 {
+		t.Errorf("asked %d times with no conductor", n)
+	}
+	if got, want := checksSection(w.gh.Pull(1).Body), "Checks not verified: no conductor decided them.\n\n"+
+		"- **Implementer** — not verified\n"+
+		"- **Fixer** — not verified\n"+
+		"- **Simplifier** — not verified"; got != want {
 		t.Errorf("the pull request's checks section is\n%s\nwant\n%s", got, want)
-	}
-}
-
-// A judge that fails, with a tier set, is not verified: never a pass. The
-// report goes back like an unbacked one and, the rounds spent, to a person.
-func TestAJudgeErrorWithATierNeverPublishes(t *testing.T) {
-	w := newWorld(t)
-	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":1}' WHERE organization_id = $1`, w.org)
-	wi := w.checksDelivery(fakeagent.ChecksHonestModel, &scriptedJudge{err: errors.New("proxy timed out")})
-	w.until("the checks escalation", func() bool { return w.escalationReason(wi) == delivery.ReasonChecksUnverified })
-	if n := w.implementerPushes(wi); n != 0 {
-		t.Fatalf("%d pushes after a judge error", n)
-	}
-	if got := w.judged(wi); strings.Join(got, ",") != "unverified,unverified" {
-		t.Errorf("judged %v, want each turn unverified", got)
-	}
-	if back := w.sentBack(wi); len(back) != 1 || !strings.Contains(back[0], "proxy timed out") {
-		t.Errorf("sent back %q, want the judgement's failure named", back)
 	}
 }
 
@@ -393,16 +483,19 @@ func TestAJudgeErrorWithATierNeverPublishes(t *testing.T) {
 // nothing, is never asked about.
 func TestAReviewerIsNeverJudged(t *testing.T) {
 	w := newWorld(t)
-	j := &scriptedJudge{}
-	wi := w.checksDelivery(fakeagent.ChecksHonestModel, j)
+	c := &checksConductor{}
+	wi := w.checksDelivery(fakeagent.ChecksHonestModel, c)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 	if n := w.count(`SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id
-		WHERE r.task_id = $1 AND r.phase NOT IN ('implement', 'fix', 'simplify') AND e.event_type = $2`, wi, delivery.EvRunChecksJudged); n != 0 {
-		t.Errorf("%d judgements of a phase that is not gated", n)
+		WHERE r.task_id = $1 AND r.phase NOT IN ('implement', 'fix', 'simplify') AND e.event_type IN ($2, $3)`, wi, delivery.EvRunChecksJudged, delivery.EvRunChecksAsked); n != 0 {
+		t.Errorf("%d judgements or asks of a phase that is not gated", n)
 	}
-	for _, a := range j.asked {
-		if !strings.Contains(a.About, "run_") {
-			t.Errorf("asked about %q", a.About)
+	gated := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase IN ('implement', 'fix', 'simplify')`, wi)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, d := range c.decided {
+		if !slices.Contains(gated, d.RunID) {
+			t.Errorf("decided about %q", d.RunID)
 		}
 	}
 }
@@ -421,20 +514,11 @@ func (w *world) scriptedSimplifier(edits map[string]string) {
 	}
 }
 
-// simplifierAsked is how many judge questions were about the task's
-// simplifier Runs.
-func (w *world) simplifierAsked(wi string, j *scriptedJudge) int {
+// simplifierAsked is how many verdicts c gave about the task's simplifier
+// Runs.
+func (w *world) simplifierAsked(wi string, c *checksConductor) int {
 	w.t.Helper()
-	ids := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'simplify'`, wi)
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	n := 0
-	for _, a := range j.asked {
-		if slices.Contains(ids, a.About) {
-			n++
-		}
-	}
-	return n
+	return c.about(w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'simplify'`, wi)...)
 }
 
 // simplifierJudged is judged's for the simplifier, "unchanged" for a turn
@@ -447,8 +531,8 @@ func (w *world) simplifierJudged(wi string) []string {
 		WHERE r.task_id = $1 AND e.event_type = $2 ORDER BY e.cursor`, wi, delivery.EvRunChecksJudged)
 }
 
-// A simplifier that changes nothing and reports no checks goes on with no
-// judge call and nothing sent back, recorded as needing no checks; the pull
+// A simplifier that changes nothing and reports no checks goes on with
+// nothing asked and nothing sent back, recorded as needing no checks; the pull
 // request still says the implementer's checks were waived, and why, and
 // names the simplifier's outcome as its own, not as backed.
 func TestAnUnchangedSimplifierNeedsNoChecksAndKeepsTheImplementersWaiver(t *testing.T) {
@@ -458,8 +542,8 @@ func TestAnUnchangedSimplifierNeedsNoChecksAndKeepsTheImplementersWaiver(t *test
 	// the fake lux still plays it as the scripted tester.
 	w.checksTested = true
 	w.onModel("qa_browser", "claude-test")
-	j := &scriptedJudge{}
-	wi := w.unbackedUntilEscalatedWith(0, j)
+	c := &checksConductor{}
+	wi := w.unbackedUntilEscalatedWith(0, c)
 	owner, _, _ := w.people(wi)
 	if code, body := w.decide(owner, wi, delivery.ActionWaive, "Pre-existing failures on main."); code != 200 {
 		t.Fatalf("the owner's waiver: %d %v", code, body)
@@ -471,15 +555,15 @@ func TestAnUnchangedSimplifierNeedsNoChecksAndKeepsTheImplementersWaiver(t *test
 	if got := w.simplifierJudged(wi); strings.Join(got, ",") != "unchanged" {
 		t.Errorf("the simplifier was judged %v, want one unchanged turn", got)
 	}
-	if n := w.simplifierAsked(wi, j); n != 0 {
-		t.Errorf("%d judge questions about the unchanged simplifier", n)
+	if n := w.simplifierAsked(wi, c); n != 0 {
+		t.Errorf("%d verdicts about the unchanged simplifier", n)
 	}
 	if n := w.count(`SELECT count(*) FROM directives d JOIN runs r ON r.id = d.run_id
 		WHERE r.task_id = $1 AND r.phase = 'simplify'`, wi); n != 0 {
 		t.Errorf("%d directives sent to the unchanged simplifier", n)
 	}
-	backed := "  - `missing checks` — **pass** — the recorded call says so (`mcall_test`)"
-	if got, want := checksSection(w.gh.Pull(1).Body), "Checks were waived by a person:\n"+
+	backed := "  - `missing checks` — **pass** — " + checksReason + " (decision)"
+	if got, want := decisionsNamed(checksSection(w.gh.Pull(1).Body)), "Checks were waived by a person:\n"+
 		"- Implementer: Pre-existing failures on main.\n\n"+
 		"- **Implementer** — waived\n"+
 		"- **Fixer** — backed\n"+backed+"\n"+
@@ -510,8 +594,7 @@ func TestASimplifierWithAnUncommittedEditIsStillGated(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
 	w.scriptedSimplifier(map[string]string{"SCRATCH.md": "notes\n"})
-	j := &scriptedJudge{}
-	wi := w.checksDelivery(fakeagent.ChecksHonestModel, j)
+	wi := w.checksDelivery(fakeagent.ChecksHonestModel, nil)
 	w.until("the checks escalation", func() bool { return w.escalationReason(wi) == delivery.ReasonChecksUnverified })
 	if got := w.simplifierJudged(wi); strings.Join(got, ",") != "unverified" {
 		t.Errorf("the simplifier was judged %v, want its missing report rejected", got)

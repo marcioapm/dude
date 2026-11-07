@@ -40,10 +40,15 @@ func (s *Server) publish(run *Run, name, content, description string) {
 	// Uploaded a moment later, as a runner's upload trails the report, in
 	// the order published: whichever upload is done first announces every
 	// one before it too.
-	go func() {
-		time.Sleep(5 * time.Millisecond)
+	s.goBG(func() {
+		if !s.delay(5 * time.Millisecond) {
+			return
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.isClosed() {
+			return
+		}
 		for _, a := range run.artifacts {
 			if a.Available {
 				continue
@@ -56,7 +61,7 @@ func (s *Server) publish(run *Run, name, content, description string) {
 				break
 			}
 		}
-	}()
+	})
 }
 
 // addArtifact lists content on the Run under name, not yet available.
