@@ -2,15 +2,98 @@ package agenttools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
+
+// The real HTTP forge read and agent wrapper must keep a middle timeout,
+// its running test names, the package FAIL and final exit, not just cleanup.
+func TestGitHubCheckLogHTTPKeepsMiddleFailureWithinBudget(t *testing.T) {
+	const budget = 16380 // readOnGitHub reserves len("…\n") from 16 KiB.
+	fake := fakegithub.New("", "acme/target")
+	downloads := httptest.NewServer(fake.LogDownloads())
+	t.Cleanup(downloads.Close)
+	api := httptest.NewServer(fake.Handler())
+	t.Cleanup(api.Close)
+	fake.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()}
+	})
+	input := "##[error]early wrapper error\n" + strings.Repeat("setup noise 界\n", 4000) +
+		"[lane2] panic: test timed out after 10m0s\n[lane2] running tests:\n" +
+		"[lane2]     TestBlocked (9m59s)\n[lane2]     TestWaiting (9m58s)\n" +
+		strings.Repeat("goroutine noise\n", 4000) + "FAIL example/service 600s\n" +
+		"##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup noise\n", 4000)
+	fake.SetJobLog(77, input, downloads.URL)
+	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp_check_log_" + t.Name(), APIBaseURL: api.URL})
+	read, err := gh.CheckLog(context.Background(), "acme/target", 77, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Source != "log" || !read.Actions || len(read.Text) > budget || !utf8.ValidString(read.Text) {
+		t.Fatalf("source=%q actions=%v bytes=%d valid=%v", read.Source, read.Actions, len(read.Text), utf8.ValidString(read.Text))
+	}
+	w := wrapper{id: "check-log"}
+	out, err := w.fit(w.checkLog(read))
+	if err != nil || len(out) > resultCap || !json.Valid(out) || !utf8.Valid(out) {
+		t.Fatalf("wrapper: bytes=%d err=%v", len(out), err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if firstKey(t, out) != "external" || !balancedQuotes(got, w.id) || got["source"] != "log" || got["actions"] != true {
+		t.Fatalf("lost external note, quote or source metadata: %s", out)
+	}
+	text, _ := got["log"].(string)
+	if text != delivery.ExternalText(w.id, read.Text) {
+		t.Fatal("wrapper changed or truncated the bounded forge excerpt")
+	}
+	for _, want := range []string{"panic: test timed out", "running tests:", "TestBlocked", "TestWaiting", "FAIL example/service", "Process completed with exit code 2.", "…"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("excerpt lost %q", want)
+		}
+	}
+	if auth := fake.DownloadAuthorization(); len(auth) != 1 || auth[0] != "" {
+		t.Errorf("download Authorization = %q", auth)
+	}
+}
+
+// This is only a caller-supplied scrub-before-excerpt seam, not a claim
+// that github_check_log loads secrets or redacts its returned log. Neither
+// forge.CheckLog nor wrapper.checkLog does that; Server.call redacts args.
+func TestGitHubCheckLogWithCallerSuppliedRedaction(t *testing.T) {
+	const secret = "known-check-log-secret/123+&"
+	red := redact.New(map[string]string{"CI_TOKEN": secret})
+	// Scrub intact known values before any lossy selection. Exact-value
+	// redaction after a cut cannot recognize a partial secret.
+	input := strings.Repeat("passing package\n", 1000) + "panic: " + secret + "\nexit status 2\n" + strings.Repeat("cleanup\n", 1000)
+	read := forge.CheckLogRead{Source: "log", Actions: true, Text: forge.FailureExcerpt(red.String(input), 4000)}
+	w := wrapper{id: "redacted-check"}
+	raw, err := w.fit(w.checkLog(read))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := raw
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	text, _ := got["log"].(string)
+	if strings.Contains(text, secret) || !strings.Contains(text, "[REDACTED:CI_TOKEN]") ||
+		!strings.Contains(text, "exit status 2") || !balancedQuotes(got, w.id) {
+		t.Fatalf("caller redaction lost the marker, evidence or quote: %s", out)
+	}
+}
 
 // firstKey is the first key of the JSON object out.
 func firstKey(t *testing.T, out []byte) string {

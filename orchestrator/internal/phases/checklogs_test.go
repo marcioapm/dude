@@ -100,7 +100,7 @@ func TestAFixRunsInitWritesItsCheckLogs(t *testing.T) {
 		t.Error("the caller's feedback was changed")
 	}
 	prompt := delivery.Prompt(delivery.PhaseFix, delivery.PromptInput{PRFeedback: out})
-	if !strings.Contains(prompt, "The last 20 KiB of this job's log is at `/workspace/.dude/checks/api-python-lint-tests.log`: read it") {
+	if !strings.Contains(prompt, "A 20 KiB failure-focused excerpt of this job's log is at `/workspace/.dude/checks/api-python-lint-tests.log`: read it") {
 		t.Errorf("the prompt does not name the file:\n%s", prompt)
 	}
 	runInit(t, dir, strings.ReplaceAll(script, workspaceDir+"/", dir+"/"))
@@ -134,7 +134,7 @@ func TestAtMostFourCheckLogsAreWritten(t *testing.T) {
 }
 
 // (f) Four 64 KiB logs beside a 20 KiB instruction file are over what one
-// init may carry: each log is shortened to its end, the init stays within
+// init may carry: each log is recut around failure evidence, the init stays within
 // checkLogInitMax (and so runs as one `sh -c` argument, as runInit runs it)
 // and writes what the checks say, and the prompt says the file was
 // shortened. An instruction file that leaves too little room writes fewer
@@ -145,14 +145,19 @@ func TestCheckLogsAreCutToFitTheInit(t *testing.T) {
 		checks = append(checks, forge.FailingCheck{Name: fmt.Sprintf("job %d", i), Log: "x", Full: hostileLog(delivery.CheckLogFileMax)})
 	}
 	_, out, script := fixSpec(t, strings.Repeat("rule\n", 4<<10), fixFeedback(checks...))
-	if len(script) > checkLogInitMax || len(script) < checkLogInitMax-(1<<10) {
-		t.Errorf("init is %d bytes: want the room up to %d used", len(script), checkLogInitMax)
+	if len(script) > checkLogInitMax {
+		t.Errorf("init is %d bytes, over %d", len(script), checkLogInitMax)
+	}
+	_, _, again := fixSpec(t, strings.Repeat("rule\n", 4<<10), fixFeedback(checks...))
+	if script != again {
+		t.Error("the same feedback produced a different init")
 	}
 	dir := runInWorkspace(t, script)
 	for i, c := range out[0].Checks {
 		got, err := os.ReadFile(filepath.Join(dir, strings.TrimPrefix(c.Path, "/workspace/")))
-		if err != nil || !c.FileCut || len(got) < 16<<10 || len(got) >= delivery.CheckLogFileMax ||
-			!strings.HasSuffix(checks[i].Full, string(got[:len(got)-1])) || c.FileKiB != (len(got)+512)>>10 {
+		if err != nil || !c.FileCut || len(got) == 0 || len(got) >= delivery.CheckLogFileMax ||
+			string(got) != strings.TrimSuffix(delivery.LogEnd(checks[i].Full, len(got)-1), "\n")+"\n" ||
+			!strings.Contains(string(got), "… [lines omitted]") || c.FileKiB != max((len(got)+512)>>10, 1) {
 			t.Errorf("check %d: %+v, %d bytes: %v", i, c, len(got), err)
 		}
 	}
@@ -192,6 +197,47 @@ func TestCheckLogsAreCutToFitTheInit(t *testing.T) {
 	}
 	if strings.Contains(script, checkLogDir) {
 		t.Error("an init with no room writes a log")
+	}
+}
+
+// Fair-share recuts preserve middle-of-log timeout evidence in real shell files,
+// even when a large retained excerpt must shrink again beside three other logs.
+func TestCheckLogFairShareKeepsMiddleTimeoutEvidence(t *testing.T) {
+	noise := strings.Repeat("ordinary progress output\n", 5000)
+	evidence := "panic: test timed out after 10m0s\nrunning tests:\nTestDeliveryWait (9m59s)\n--- FAIL: TestDeliveryWait (600.00s)\nFAIL\texample.org/delivery\t600.001s"
+	text := noise + evidence + "\n" + noise + "##[error]Process completed with exit code 1."
+	// Long context lines force the 64 KiB excerpt to exceed the init's
+	// fair share, rather than assuming the collector fills its budget.
+	context := strings.Repeat("context detail ", 190) + "\n"
+	text = strings.Replace(text, evidence, strings.Repeat(context, 2)+evidence+"\n"+strings.Repeat(context, 4), 1)
+	full := delivery.LogEnd(text, delivery.CheckLogFileMax)
+	var checks []forge.FailingCheck
+	for i := range 4 {
+		checks = append(checks, forge.FailingCheck{Name: fmt.Sprintf("timeout %d", i), Full: full, Log: delivery.LogEnd(full, 4000)})
+	}
+	instructions := instructionsLeaving(t, 24<<10)
+	_, out, script := fixSpec(t, instructions, fixFeedback(checks...))
+	_, _, again := fixSpec(t, instructions, fixFeedback(checks...))
+	if script != again {
+		t.Fatal("fair-share script is not deterministic")
+	}
+	dir := runInWorkspace(t, script)
+	for i, c := range out[0].Checks {
+		if !c.FileCut || c.NoFile || c.Path == "" {
+			t.Fatalf("check %d did not exercise a fair-share recut: %+v (Full %d bytes)", i, c, len(full))
+		}
+		got, err := os.ReadFile(filepath.Join(dir, strings.TrimPrefix(c.Path, workspaceDir+"/")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) == 0 || len(got) >= len(full) || len(got) > 6<<10 {
+			t.Errorf("check %d: unexpected file size %d", i, len(got))
+		}
+		for _, want := range []string{"panic: test timed out", "running tests:", "TestDeliveryWait", "--- FAIL:", "FAIL\texample.org/delivery", "Process completed with exit code 1.", "… [lines omitted]"} {
+			if !strings.Contains(string(got), want) || !strings.Contains(c.Log, want) {
+				t.Errorf("check %d: file or prompt excerpt lacks %q", i, want)
+			}
+		}
 	}
 }
 

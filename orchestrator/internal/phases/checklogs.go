@@ -12,14 +12,14 @@ import (
 )
 
 // checkLogDir is where a fix Run's init writes its failing checks' job
-// log tails, under its workspace.
+// log excerpts, under its workspace.
 const checkLogDir = "/.dude/checks"
 
 // checkLogMin is the least of a log worth a file: below it the prompt's
 // excerpt says as much.
 const checkLogMin = 4 << 10
 
-// checkLogsInit writes the failing checks' job log tails (FailingCheck.Full,
+// checkLogsInit writes the failing checks' job log excerpts (FailingCheck.Full,
 // at most delivery.CheckLogFiles of them, in feedback order) into
 // dir/.dude/checks, as instructionsInit writes the instruction file: each
 // in a quoted here-document whose delimiter is derived from its text,
