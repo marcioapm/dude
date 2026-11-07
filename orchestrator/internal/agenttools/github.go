@@ -750,7 +750,10 @@ func (w wrapper) runJobs(r forge.WorkflowRun) map[string]any {
 }
 
 func (w wrapper) checkLog(log forge.CheckLogRead) map[string]any {
-	out := map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(log.Text, 16<<10), "external": w.note()}
+	// JSON can expand each log byte sixfold. Select failure evidence before
+	// wrapping so 10 KiB plus the fixed envelope stays below resultCap.
+	const logBudget = 10 << 10
+	out := map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(forge.FailureExcerpt(log.Text, logBudget), logBudget), "external": w.note()}
 	// Why an Actions job's log was not read, in dude's words (forge.UnreadReason).
 	if log.Unread != "" {
 		out["unread"] = log.Unread
