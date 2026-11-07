@@ -56,9 +56,9 @@ describe("checks judgements in the task's Activity", () => {
     ]);
   });
 
-  test("conflicting flags preserve waiver and no-tier precedence, and unchanged precedes carried", () => {
+  test("conflicting flags preserve waiver and skip precedence, and unchanged precedes carried", () => {
     for (const [flags, outcome] of [
-      [{ skipped: true, waived: true, unchanged: true, carried: true }, "were not model-checked"],
+      [{ skipped: true, waived: true, unchanged: true, carried: true }, "were not verified by a conductor"],
       [{ waived: true, unchanged: true, carried: true }, "were waived"],
       [{ unchanged: true, carried: true }, "were not needed: it changed nothing"],
       [{ carried: true }, "carried a person's waiver"],
@@ -69,13 +69,13 @@ describe("checks judgements in the task's Activity", () => {
     }
   });
 
-  test("a judged turn still reads as verified, and no-tier as not model-checked", () => {
+  test("a judged turn still reads as verified, and a skipped one as not verified by a conductor", () => {
     const lines = activityLines([
       judged(impl.id, { turn: 1, round: 0, verified: true, message: "", checks: [] }, 1),
-      judged(simp.id, { turn: 2, verified: true, skipped: true, message: "no tier", checks: [] }, 2),
+      judged(simp.id, { turn: 2, verified: true, skipped: true, message: "no conductor", checks: [] }, 2),
     ], people, [impl, simp], [], 1);
     expect(lines.filter((l) => textOf(l.text)?.includes("checks")).map((l) => textOf(l.text))).toEqual([
-      "The simplifier's checks were not model-checked",
+      "The simplifier's checks were not verified by a conductor",
       "The implementer's checks were verified",
     ]);
   });

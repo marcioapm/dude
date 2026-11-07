@@ -122,8 +122,8 @@ func waitOnPersonTx(ctx context.Context, tx pgx.Tx, runID string) error {
 // the report back once more, with the configured rounds again; stop ends
 // the Run, its work unpushed. A waiver of ScopeAttempt also records the
 // held report's reported failures (covers), which a later Run of the
-// attempt reporting the same command failing may carry once the judge
-// says it is the same failure (phases.judgeChecks). said is the person's
+// attempt reporting the same command failing may carry once the conductor
+// decides it is the same failure (same_as_waived, phases.askConductor). said is the person's
 // note marked as their words (PersonSaidTx), "" for none: a retry's
 // send-back leads with it, so the agent acts on what the person said.
 func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID string, e *Escalation, action, note, said, person, scope string) error {
@@ -304,7 +304,7 @@ func AttemptWaiversTx(ctx context.Context, tx pgx.Tx, runID string, before int64
 }
 
 // For is the newest waiver covering a reported failure of failed's
-// command (trimmed). It is only a candidate for the judge, never a pass
+// command (trimmed). It is only a candidate the conductor is asked about, never a pass
 // by itself; nil for none, and for anything but a reported fail.
 func (ws AttemptWaivers) For(failed Check) *CarriedWaiver {
 	if failed.Result != CheckFail {

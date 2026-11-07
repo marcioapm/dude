@@ -55,3 +55,26 @@ def test_a_new_stub_starts_from_no_mismatches(monkeypatch, tmp_path):
     parent._start_judge()
     parent.judge_server.shutdown()
     assert parent.chat_route_mismatches() == []
+
+
+def test_a_request_that_is_not_chat_routing_is_recorded(monkeypatch, tmp_path):
+    monkeypatch.setenv("DUDE_TEST_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("DUDE_TEST_LOG_DIR", str(tmp_path / "logs"))
+    parent = Environment(run_id="judge-stub")
+    parent.judge_unrouted_path.parent.mkdir(parents=True, exist_ok=True)
+    parent.judge_unrouted_path.write_text("an earlier run's request\n")
+    parent._start_judge()
+    try:
+        assert parent.judge_unrouted() == []
+        readable = "\n".join(f"{h}\nx\n" for h in CHAT_ROUTING_HEADINGS)
+        assert _route(parent.judge_url, readable).status_code == 200
+        assert parent.judge_unrouted() == []
+        messages = [{"role": "system", "content": "You judge a checks report."}, {"role": "user", "content": "make test"}]
+        try:
+            requests.post(f"{parent.judge_url}/chat/completions", json={"messages": messages}, timeout=5)
+        except requests.exceptions.ConnectionError:
+            pass  # the stub answers it as no proxy would
+        [seen] = parent.judge_unrouted()
+        assert "You judge a checks report." in seen, seen
+    finally:
+        parent.judge_server.shutdown()

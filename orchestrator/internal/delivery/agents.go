@@ -172,8 +172,6 @@ var agentFuncs = template.FuncMap{
 	// marker brackets out of s, so s cannot close its quote whatever the id.
 	"externalID": func(s string) string { sum := sha256.Sum256([]byte(s)); return hex.EncodeToString(sum[:4]) },
 	"external":   ExternalText,
-	// indent indents each line of a text by four spaces.
-	"indent": func(s string) string { return "    " + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n    ") },
 }
 
 // fenced breaks each ``` in a text so it cannot close the fence around it.

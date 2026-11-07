@@ -25,7 +25,7 @@ const (
 	CheckNotRun = "not-run"
 )
 
-// Recorded results the checks gate's judge gives a reported fail or not-run
+// Recorded results the checks gate gives, on the conductor's verdict, a reported fail or not-run
 // it passes, never an agent's: CheckPreexisting, a failure the Run's calls
 // show the same at the commit of the target branch the task builds on;
 // CheckDeferred, a check a later phase of the delivery runs; CheckWaived,
