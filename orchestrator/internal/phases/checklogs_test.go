@@ -241,6 +241,45 @@ func TestCheckLogFairShareKeepsMiddleTimeoutEvidence(t *testing.T) {
 	}
 }
 
+// A compiler diagnostic without an "error" keyword must survive a second cut
+// into the shell-written workspace file, not merely the collector's first cut.
+func TestCheckLogFairShareKeepsGoCompilerDiagnostic(t *testing.T) {
+	const diagnostic = "main.go:7:2: undefined: Widget"
+	const exit = "##[error]Process completed with exit code 1."
+	context := strings.Repeat("context detail ", 190) + "\n"
+	text := strings.Repeat("setup progress\n", 5000) + strings.Repeat(context, 2) + diagnostic + "\n" +
+		strings.Repeat("progress "+strings.Repeat("界", 80)+"\n", 100) + exit
+	full := delivery.LogEnd(text, delivery.CheckLogFileMax)
+	var checks []forge.FailingCheck
+	for i := range 4 {
+		checks = append(checks, forge.FailingCheck{Name: fmt.Sprintf("compile %d", i), Full: full, Log: delivery.LogEnd(full, 4000)})
+	}
+	instructions := instructionsLeaving(t, 24<<10)
+	_, out, script := fixSpec(t, instructions, fixFeedback(checks...))
+	_, _, again := fixSpec(t, instructions, fixFeedback(checks...))
+	if script != again {
+		t.Fatal("fair-share script is not deterministic")
+	}
+	dir := runInWorkspace(t, script)
+	for i, c := range out[0].Checks {
+		if !c.FileCut || c.NoFile || c.Path == "" {
+			t.Fatalf("check %d did not exercise a fair-share recut: %+v (Full %d bytes)", i, c, len(full))
+		}
+		got, err := os.ReadFile(filepath.Join(dir, strings.TrimPrefix(c.Path, workspaceDir+"/")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) == 0 || len(got) >= len(full) || len(got) > 6<<10 {
+			t.Errorf("check %d: unexpected file size %d", i, len(got))
+		}
+		for _, want := range []string{diagnostic, exit, "… [lines omitted]"} {
+			if !strings.Contains(string(got), want) || !strings.Contains(c.Log, want) {
+				t.Errorf("check %d: file or prompt excerpt lacks %q", i, want)
+			}
+		}
+	}
+}
+
 // A check's file is named for its repository and check, in a slug.
 func TestACheckLogsFileNameIsASlug(t *testing.T) {
 	for in, want := range map[[2]string]string{

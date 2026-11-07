@@ -57,17 +57,21 @@ func excerptBody(s string) string {
 // Match emitted failures, not timeout options, fixture names, or configuration.
 var timeoutFailure = regexp.MustCompile(`(?i)^(?:E\s+)?(?:Failed: Timeout >|TimeoutError\b|\+{2,}\s*Timeout\b)`)
 
+// Go compiler diagnostics need no "error" keyword (for example, undefined:
+// Widget). Require a source position and message, not arbitrary colon noise.
+var goCompilerDiagnostic = regexp.MustCompile(`^.+\.go:\d+(?::\d+)?: \S`)
+
 func failurePriority(s string) int {
 	s = excerptBody(s)
 	low := strings.ToLower(s)
 	switch {
 	case strings.HasPrefix(low, "panic:") || strings.HasPrefix(low, "fatal error:") || strings.Contains(low, "timeout") && timeoutFailure.MatchString(s) || strings.HasPrefix(low, "test timed out after ") || low == "running tests:":
 		return 0
-	case strings.HasPrefix(s, "--- FAIL:") || strings.HasPrefix(s, "FAILED ") || strings.Contains(s, "AssertionError") || strings.HasPrefix(s, "E ") || strings.Contains(s, "assert ") || strings.Contains(s, "FAILURES") || ruffDiagnostic.MatchString(s):
+	case strings.HasPrefix(s, "--- FAIL:") || strings.HasPrefix(s, "FAILED ") || strings.Contains(s, "AssertionError") || strings.HasPrefix(s, "E ") || strings.Contains(s, "assert ") || strings.Contains(s, "FAILURES") || strings.Contains(s, ":") && ruffDiagnostic.MatchString(s):
 		return 1
 	case s == "FAIL" || strings.HasPrefix(s, "FAIL\t") || strings.HasPrefix(s, "FAIL "):
 		return 2
-	case strings.Contains(low, "error") || strings.Contains(low, "failed") || strings.Contains(low, ": failure:"):
+	case strings.Contains(low, "error") || strings.Contains(low, "failed") || strings.Contains(low, ": failure:") || strings.Contains(s, ".go:") && goCompilerDiagnostic.MatchString(s):
 		return 3
 	}
 	return -1

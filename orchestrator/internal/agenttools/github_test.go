@@ -68,6 +68,53 @@ func TestGitHubCheckLogHTTPKeepsMiddleFailureWithinBudget(t *testing.T) {
 	}
 }
 
+// Compiler diagnostics without an "error" keyword must survive the real HTTP
+// read and agent wrapper, even when progress pushes them out of the log's tail.
+func TestGitHubCheckLogHTTPKeepsGoCompilerDiagnostic(t *testing.T) {
+	const diagnostic = "main.go:7:2: undefined: Widget"
+	const exit = "##[error]Process completed with exit code 1."
+	fake := fakegithub.New("", "acme/target")
+	downloads := httptest.NewServer(fake.LogDownloads())
+	t.Cleanup(downloads.Close)
+	api := httptest.NewServer(fake.Handler())
+	t.Cleanup(api.Close)
+	fake.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()}
+	})
+	input := strings.Repeat("setup noise 界\n", 4000) + diagnostic + "\n" +
+		strings.Repeat("progress "+strings.Repeat("界", 80)+"\n", 100) + exit
+	fake.SetJobLog(77, input, downloads.URL)
+	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp_check_log_" + t.Name(), APIBaseURL: api.URL})
+	read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16380)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read.Text) > 16380 || !utf8.ValidString(read.Text) {
+		t.Fatalf("excerpt: bytes=%d valid=%v", len(read.Text), utf8.ValidString(read.Text))
+	}
+	w := wrapper{id: "compiler-check"}
+	out, err := w.fit(w.checkLog(read))
+	if err != nil || len(out) > resultCap || !json.Valid(out) || !utf8.Valid(out) {
+		t.Fatalf("wrapper: bytes=%d err=%v", len(out), err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if firstKey(t, out) != "external" || !balancedQuotes(got, w.id) || got["source"] != "log" || got["actions"] != true {
+		t.Fatalf("lost external note, quote or source metadata: %s", out)
+	}
+	text, _ := got["log"].(string)
+	if text != delivery.ExternalText(w.id, read.Text) {
+		t.Fatal("wrapper changed or truncated the bounded forge excerpt")
+	}
+	for _, want := range []string{diagnostic, exit, "… [lines omitted]"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("excerpt lost %q", want)
+		}
+	}
+}
+
 // This is only a caller-supplied scrub-before-excerpt seam, not a claim
 // that github_check_log loads secrets or redacts its returned log. Neither
 // forge.CheckLog nor wrapper.checkLog does that; Server.call redacts args.

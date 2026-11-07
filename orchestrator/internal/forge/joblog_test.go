@@ -61,6 +61,32 @@ func logWorld(t *testing.T, log string) (*fakegithub.Server, *GitHub) {
 	return fake, NewGitHub(Credential{Auth: "pat", Secret: "ghp_log_" + t.Name(), APIBaseURL: api.URL})
 }
 
+// A fitting log still passes through the streaming collector on HTTP reads.
+// Its fixed 64-line tail must not discard an earlier compiler failure.
+func TestFailureExcerptCompilerHTTP(t *testing.T) {
+	const diagnostic = "main.go:7:2: undefined: Widget"
+	const exit = "##[error]Process completed with exit code 1."
+	input := diagnostic + "\n" + strings.Repeat("progress\n", 100) + exit + "\n"
+	_, gh := logWorld(t, input)
+	for _, budget := range []int{4000, 16380, 65536} {
+		t.Run(fmt.Sprint(budget), func(t *testing.T) {
+			memory := (CheckLogRead{Tail: input}).Cut(budget)
+			read, err := gh.CheckLog(context.Background(), "acme/target", 77, budget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if read.Source != "log" || read.Unread != "" {
+				t.Fatalf("not an HTTP log read: %+v", read)
+			}
+			for name, out := range map[string]string{"memory": memory, "HTTP": read.Text, "HTTP recut": read.Cut(budget)} {
+				if len(out) > budget || !strings.Contains(out, diagnostic) || !strings.Contains(out, exit) {
+					t.Errorf("%s lost fitting compiler failure (%d input bytes, %d output bytes): %q", name, len(input), len(out), out)
+				}
+			}
+		})
+	}
+}
+
 // A failed Actions job gives failure sites and a rolling tail, without
 // timestamps or colour codes. Scanning continues through cleanup, and the
 // download host never sees the token.

@@ -8,6 +8,59 @@ import (
 	"unicode/utf8"
 )
 
+func TestFailureExcerptDiagnosticClassification(t *testing.T) {
+	for _, line := range []string{
+		"src/main.py:7:2: F401 unused import",
+		"C:/src/main.py:7:2: F401 unused import",
+		"main.go:7:2: undefined: Widget",
+		"./main.go:7: undefined: Widget",
+		"/src/main.go:7:2: cannot use x (variable of type string) as int value in assignment",
+		"main.go:7:2: syntax error: unexpected name Widget",
+		"[lane2] main.go:7:2: too many arguments in call to f",
+		"src/main.ts(3,1): error TS2304: Cannot find name 'Widget'.",
+	} {
+		if failurePriority(line) < 0 {
+			t.Errorf("diagnostic not anchored: %q", line)
+		}
+	}
+	for _, line := range []string{"progress", strings.Repeat("x", 4095), "progress: 7:2: still working", "main.go: downloading", "main.go:7:2:", "https://host:443/path", strings.Repeat("x:", 2047)} {
+		if got := failurePriority(line); got != -1 {
+			t.Errorf("ordinary line anchored (%d): %q", got, line)
+		}
+	}
+}
+
+// Both scan benchmarks consume exactly 16 MiB, including the final partial line.
+func BenchmarkFailureExcerptFullScan(b *testing.B) {
+	for _, size := range []int{100, 4096} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			line := strings.Repeat("x", size-1) + "\n"
+			b.SetBytes(logReadMax)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				r := &countingReader{r: io.LimitReader(repeatReader(line), logReadMax)}
+				if _, err := collectFailure(r, 4000); err != nil || r.n != logReadMax {
+					b.Fatalf("read=%d err=%v", r.n, err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkFailureExcerptClassify4K(b *testing.B) {
+	for name, line := range map[string]string{"plain": strings.Repeat("x", 4095), "colonNoise": strings.Repeat("x:", 2047)} {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				if failurePriority(line) != -1 {
+					b.Fatal("ordinary line anchored")
+				}
+			}
+		})
+	}
+}
+
 func TestFailureExcerptTimeoutReview(t *testing.T) {
 	for _, config := range []string{"timeout=30s", "config: read_timeout 30", "pytest --timeout=60", "timeout_method: thread"} {
 		if got := failurePriority(config); got == 0 {
