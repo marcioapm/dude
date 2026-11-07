@@ -903,16 +903,23 @@ func (s *Server) SetPS(ps func(luxRunID string) string, execFails string) {
 // goBG admits workers atomically with Close's admission barrier. Never hold
 // bgMu while acquiring mu; callers may already hold mu.
 func (s *Server) goBG(fn func()) bool {
+	if !s.admit() {
+		return false
+	}
+	go func() {
+		defer s.bg.Done()
+		fn()
+	}()
+	return true
+}
+
+func (s *Server) admit() bool {
 	s.bgMu.Lock()
 	defer s.bgMu.Unlock()
 	if s.closing {
 		return false
 	}
 	s.bg.Add(1)
-	go func() {
-		defer s.bg.Done()
-		fn()
-	}()
 	return true
 }
 
@@ -941,14 +948,16 @@ func (s *Server) delay(after time.Duration) bool {
 // Close closes admission and wakes/cancels all normal waits before joining
 // workers outside both locks. Test hooks remain synchronous: tests must release
 // any hooks they deliberately block before shutdown can finish.
+// Close belongs to the external owner, never to a worker or internal callback:
+// those must return on closed/context cancellation, not join themselves.
 func (s *Server) Close() {
 	s.closeOnce.Do(func() {
-		s.mu.Lock()
 		s.bgMu.Lock()
 		s.closing = true
-		s.bgMu.Unlock()
 		close(s.closed)
 		s.cancelBG()
+		s.bgMu.Unlock()
+		s.mu.Lock()
 		for _, run := range s.runs {
 			if run.command != nil {
 				run.command.cancel()
@@ -1743,6 +1752,21 @@ func (s *Server) Handler() http.Handler {
 			writeErr(w, 401, "unauthorized", "invalid API key")
 			return
 		}
+		// Mutations and exec can write real checkouts, including while an
+		// HTTP call releases mu. Streams/read-only handlers keep their own
+		// shutdown semantics and are not part of this writer join.
+		if r.Method != http.MethodGet || strings.HasSuffix(r.URL.Path, "/exec") {
+			if !s.admit() {
+				writeErr(w, 503, "unavailable", "fake lux is closed")
+				return
+			}
+			defer s.bg.Done()
+			ctx, cancel := context.WithCancel(r.Context())
+			stop := context.AfterFunc(s.ctx, cancel)
+			defer stop()
+			defer cancel()
+			r = r.WithContext(ctx)
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -1922,6 +1946,8 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		s.setStateWith(run, "lost", "host lost")
 		return
 	}
+	// Lifecycle running precedes checkout/sync, as in the baseline.
+	s.setState(run, "running")
 	if !resumed {
 		for _, repo := range specRepos(spec) {
 			base := head(s.repoPath(repo.URL), repo.Ref)
@@ -1967,9 +1993,6 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	if !s.runInit(run, spec) {
 		return
 	}
-	// Init releases mu while its script runs. Do not expose running until
-	// it finishes, so observers cannot mistake init for a ready workload.
-	s.setState(run, "running")
 	// Every start of the Run starts its spec's servers.
 	s.placementStarted(run)
 	if !s.behaviourCommand(run, spec, epoch, start) {
@@ -3458,11 +3481,11 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 			if s.afterStopped != nil {
 				defer s.afterStopped()
 			}
-			if s.beforeStopped != nil {
-				s.beforeStopped()
-			}
 			if !s.delay(30 * time.Millisecond) {
 				return
+			}
+			if s.beforeStopped != nil {
+				s.beforeStopped()
 			}
 			s.mu.Lock()
 			defer s.mu.Unlock()
