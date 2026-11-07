@@ -14,6 +14,7 @@ package fakelux
 
 import (
 	"cmp"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -387,13 +388,16 @@ func (s *Server) consume(run *Run) {
 	if read && len(run.behavior.InputTools) > 0 {
 		// After the receipt is out, as an agent acts on what it read at a
 		// later step: never inside the request that delivered it.
-		go func() {
+		s.goBG(func() {
 			s.mu.Lock()
 			defer s.mu.Unlock()
+			if s.isClosed() {
+				return
+			}
 			for _, c := range run.behavior.InputTools {
 				s.callTool(run, c[0], c[1])
 			}
-		}()
+		})
 	}
 }
 
@@ -520,7 +524,9 @@ func (run *Run) currentPlacement() *placement {
 // or moved on to another epoch or start meanwhile.
 func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 	step := after / 5
-	time.Sleep(step)
+	if !s.delay(step) {
+		return false
+	}
 	s.mu.Lock()
 	assign := s.beforeAssign
 	s.mu.Unlock()
@@ -529,7 +535,7 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 	}
 	s.hold(epoch, holdAssign)
 	s.mu.Lock()
-	if !run.starting(epoch, start) {
+	if s.isClosed() || !run.starting(epoch, start) {
 		s.mu.Unlock()
 		return false
 	}
@@ -548,9 +554,11 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 	s.atStage(epoch, "image")
 	stages := [...]string{"volumes", "repositories", "container", "running"}
 	for i, stamp := range []**time.Time{&p.ImageReadyAt, &p.VolumesRestoredAt, &p.ReposReadyAt, &p.ContainerStartedAt} {
-		time.Sleep(step)
+		if !s.delay(step) {
+			return false
+		}
 		s.mu.Lock()
-		if !run.starting(epoch, start) {
+		if s.isClosed() || !run.starting(epoch, start) {
 			s.mu.Unlock()
 			return false
 		}
@@ -560,7 +568,9 @@ func (s *Server) placing(run *Run, epoch, start int, after time.Duration) bool {
 		s.mu.Unlock()
 		s.atStage(epoch, stages[i])
 	}
-	time.Sleep(step)
+	if !s.delay(step) {
+		return false
+	}
 	return true
 }
 
@@ -618,6 +628,9 @@ type artifact struct {
 // deliverQueued hands queued input to an idle agent, which takes it as a
 // new turn. Callers hold s.mu.
 func (s *Server) deliverQueued(run *Run) {
+	if s.isClosed() {
+		return
+	}
 	if len(run.queued) == 0 || run.State != "running" || run.command != nil {
 		return
 	}
@@ -839,11 +852,18 @@ type Server struct {
 	afterPlacement      func(runID string, epoch int)
 	beforeCommandResult func(epoch int)
 	afterExited         func(runID string)
+	beforeStopped       func()
+	afterStopped        func()
 	eventPages          func(runID string, after int64, ids []int64) int
 	// closed ends everything the fake waits on in the background (Close).
 	closed    chan struct{}
+	ctx       context.Context
+	cancelBG  context.CancelFunc
 	closeOnce sync.Once
 	commands  sync.WaitGroup
+	bgMu      sync.Mutex
+	bg        sync.WaitGroup
+	closing   bool
 	// What exec and GET say of a Run's processes and usage (execPlay).
 	execPlay
 	// fakeagent.StallModel's and SilentModel's reviewers so far, by task.
@@ -880,18 +900,66 @@ func (s *Server) SetPS(ps func(luxRunID string) string, execFails string) {
 	s.PS, s.ExecFails = ps, execFails
 }
 
-// Close is the fake lux shutting down: work held on InputGate is dropped,
-// so no goroutine outlives the test that served it.
+// goBG admits workers atomically with Close's admission barrier. Never hold
+// bgMu while acquiring mu; callers may already hold mu.
+func (s *Server) goBG(fn func()) bool {
+	s.bgMu.Lock()
+	defer s.bgMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.bg.Add(1)
+	go func() {
+		defer s.bg.Done()
+		fn()
+	}()
+	return true
+}
+
+func (s *Server) isClosed() bool {
+	select {
+	case <-s.closed:
+		return true
+	default:
+		return false
+	}
+}
+
+// delay is interrupted by shutdown; callers still recheck under mu before
+// changing state, since a timer and shutdown can become ready together.
+func (s *Server) delay(after time.Duration) bool {
+	timer := time.NewTimer(after)
+	defer timer.Stop()
+	select {
+	case <-s.closed:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// Close closes admission and wakes/cancels all normal waits before joining
+// workers outside both locks. Test hooks remain synchronous: tests must release
+// any hooks they deliberately block before shutdown can finish.
 func (s *Server) Close() {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
+		s.bgMu.Lock()
+		s.closing = true
+		s.bgMu.Unlock()
 		close(s.closed)
+		s.cancelBG()
 		for _, run := range s.runs {
 			if run.command != nil {
 				run.command.cancel()
 			}
+			run.cond.Broadcast()
+		}
+		if s.feedCond != nil {
+			s.feedCond.Broadcast()
 		}
 		s.mu.Unlock()
+		s.bg.Wait()
 		s.commands.Wait()
 	})
 }
@@ -901,6 +969,7 @@ func (s *Server) Close() {
 func New(repo, key string, decide func(map[string]any) Behaviour) *Server {
 	s := &Server{runs: map[string]*Run{}, byKey: map[string]string{}, Decide: decide, Repo: repo, Key: key,
 		closed: make(chan struct{})}
+	s.ctx, s.cancelBG = context.WithCancel(context.Background())
 	s.feedInit()
 	if decide == nil {
 		s.Decide = s.scripted
@@ -1218,10 +1287,13 @@ func (s *Server) InputBodies(id, requestID string) []string {
 // idle: a lifecycle boundary a test waits on instead of a sleep.
 func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
 	done := make(chan struct{})
-	go func() {
+	s.goBG(func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for {
+			if s.isClosed() {
+				return
+			}
 			run := s.runs[id]
 			if run != nil && run.turnsEnded >= n {
 				close(done)
@@ -1232,7 +1304,7 @@ func (s *Server) TurnsEnded(id string, n int) <-chan struct{} {
 			}
 			run.cond.Wait()
 		}
-	}()
+	})
 	return done
 }
 
@@ -1794,7 +1866,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	// Read before play starts: placing writes the Run under s.mu.
 	view := s.view(run)
 	s.mu.Unlock()
-	go s.play(run, 1, start, spec, false)
+	s.goBG(func() { s.play(run, 1, start, spec, false) })
 	writeJSON(w, 201, view)
 }
 
@@ -1810,7 +1882,9 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	defer s.hold(epoch, holdOver)
 	if sb, _ := spec["sandbox"].(map[string]any); s.NoNestedHost && sb["nestedContainers"] == true {
 		s.mu.Lock()
-		run.StateReason = "waiting for capacity: 1 host in its pool does not support nested containers"
+		if !s.isClosed() {
+			run.StateReason = "waiting for capacity: 1 host in its pool does not support nested containers"
+		}
 		s.mu.Unlock()
 		return
 	}
@@ -1831,7 +1905,7 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !run.starting(epoch, start) {
+	if s.isClosed() || !run.starting(epoch, start) {
 		return
 	}
 	if run.behavior.FailToStart {
@@ -1848,7 +1922,6 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 		s.setStateWith(run, "lost", "host lost")
 		return
 	}
-	s.setState(run, "running")
 	if !resumed {
 		for _, repo := range specRepos(spec) {
 			base := head(s.repoPath(repo.URL), repo.Ref)
@@ -1860,9 +1933,15 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 			s.luxEvent(run, "git.clone", map[string]any{"repo": repo.Name, "ref": repo.Ref, "status": "cloned", "commit": base})
 			checkout := map[string]any{"repo": repo.Name, "ref": repo.Ref, "base": base}
 			if lag := s.checkoutLag(spec); lag > 0 {
-				time.AfterFunc(lag, func() {
+				s.goBG(func() {
+					if !s.delay(lag) {
+						return
+					}
 					s.mu.Lock()
 					defer s.mu.Unlock()
+					if s.isClosed() {
+						return
+					}
 					s.luxEvent(run, "git.checkout", checkout)
 				})
 			} else {
@@ -1888,6 +1967,9 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	if !s.runInit(run, spec) {
 		return
 	}
+	// Init releases mu while its script runs. Do not expose running until
+	// it finishes, so observers cannot mistake init for a ready workload.
+	s.setState(run, "running")
 	// Every start of the Run starts its spec's servers.
 	s.placementStarted(run)
 	if !s.behaviourCommand(run, spec, epoch, start) {
@@ -2002,6 +2084,9 @@ func (s *Server) turn(run *Run) {
 		for _, c := range b.CallTools {
 			s.callTool(run, c[0], c[1])
 		}
+		if s.isClosed() {
+			return
+		}
 		s.edit(run, b.Edits)
 		s.save(run, b.PublishNow, b.Descriptions)
 	} else if run.roundCalls {
@@ -2036,6 +2121,9 @@ func (s *Server) turn(run *Run) {
 				s.callTool(run, c[0], c[1])
 			}
 		}
+	}
+	if s.isClosed() {
+		return
 	}
 	if b.Hang && !run.woken && (first || !b.Conductor || len(b.OpenCalls) == 0) {
 		if first {
@@ -2075,6 +2163,9 @@ func (s *Server) turn(run *Run) {
 	}
 	if b.Verify != nil && first {
 		reply = s.verifyCommands(run, b.Verify)
+	}
+	if s.isClosed() {
+		return
 	}
 	if b.Conductor {
 		reply = run.Prompt()[strings.LastIndex(run.Prompt(), "echo ")+len("echo "):]
@@ -2165,8 +2256,11 @@ func (s *Server) requestMachine(run *Run, args string) int {
 			return status
 		}
 		s.mu.Unlock()
-		time.Sleep(20 * time.Millisecond)
+		alive := s.delay(20 * time.Millisecond)
 		s.mu.Lock()
+		if !alive || s.isClosed() {
+			return 0
+		}
 	}
 }
 
@@ -2179,6 +2273,9 @@ func (s *Server) requestMachine(run *Run, args string) int {
 // failure is said in the agent's reply. Its HTTP status, 0 when it never
 // got one.
 func (s *Server) callTool(run *Run, tool, args string) int {
+	if s.isClosed() {
+		return 0
+	}
 	if tool == fakeagent.LocalIntegrate && run.baseUnfetched {
 		// As the brief says: no merge of a lux/<base> never fetched.
 		return http.StatusOK
@@ -2201,6 +2298,9 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 			"kind": "other", "status": "in_progress", "rawInput": input})
 	}
 	status, body, err := s.toolRequest(run, tool, args)
+	if s.isClosed() {
+		return 0
+	}
 	if activityID != "" {
 		outcome := "completed"
 		if err != nil || status >= 400 {
@@ -2227,9 +2327,15 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 				break
 			}
 			s.mu.Unlock()
-			time.Sleep(wait)
+			alive := s.delay(wait)
 			s.mu.Lock()
+			if !alive || s.isClosed() {
+				return 0
+			}
 			status, body, err = s.toolRequest(run, tool, args)
+			if s.isClosed() {
+				return 0
+			}
 		}
 		run.baseUnfetched = err != nil || status != 200 || !fakeagent.SyncBaseLanded(body)
 	}
@@ -2278,6 +2384,9 @@ func lastFields(answer []byte, args string) string {
 // saidOfTool says a failed call in the agent's reply, as an agent would
 // report a tool it ran. Callers hold s.mu.
 func (s *Server) saidOfTool(run *Run, tool string, status int, err error) {
+	if s.isClosed() {
+		return
+	}
 	switch {
 	case err != nil:
 		s.agent(run, map[string]any{"sessionUpdate": "agent_message_chunk",
@@ -2321,20 +2430,24 @@ func (s *Server) withDude(run *Run, fn func(send func(tool, args string) (*http.
 		if svc.Name != "dude" {
 			continue
 		}
-		fn(func(tool, args string) (*http.Response, error) {
-			req, err := http.NewRequest("POST", strings.TrimRight(svc.URL, "/")+"/tools/"+tool, strings.NewReader(args))
-			if err != nil {
-				return nil, err
+		headers := make(http.Header)
+		for _, h := range svc.Headers {
+			if v, ok := run.secretValues[h.Secret]; ok {
+				headers.Set(h.Name, v)
 			}
-			for _, h := range svc.Headers {
-				if v, ok := run.secretValues[h.Secret]; ok {
-					req.Header.Set(h.Name, v)
-				}
-			}
-			s.mu.Unlock()
+		}
+		s.mu.Unlock()
+		func() {
 			defer s.mu.Lock()
-			return http.DefaultClient.Do(req)
-		})
+			fn(func(tool, args string) (*http.Response, error) {
+				req, err := http.NewRequestWithContext(s.ctx, "POST", strings.TrimRight(svc.URL, "/")+"/tools/"+tool, strings.NewReader(args))
+				if err != nil {
+					return nil, err
+				}
+				req.Header = headers.Clone()
+				return http.DefaultClient.Do(req)
+			})
+		}()
 	}
 }
 
@@ -2347,6 +2460,9 @@ func (s *Server) choosePeerPart(run *Run) {
 	s.withDude(run, func(send func(tool, args string) (*http.Response, error)) {
 		live = higherPeer(send)
 	})
+	if s.isClosed() {
+		return
+	}
 	if live != "" {
 		b.CallTools = append([][2]string{
 			{"message", fmt.Sprintf(`{"to":%q,"text":%q}`, live, fakeagent.PeerQuestion)},
@@ -2543,10 +2659,15 @@ func (s *Server) exited(run *Run) {
 		peak := s.peakDisk()
 		p.peakDisk = &peak
 	}
-	go func() {
-		time.Sleep(5 * time.Millisecond)
+	s.goBG(func() {
+		if !s.delay(5 * time.Millisecond) {
+			return
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.isClosed() {
+			return
+		}
 		for name, content := range published {
 			s.addArtifact(run, name, content, p.Epoch).Available = true
 		}
@@ -2555,14 +2676,19 @@ func (s *Server) exited(run *Run) {
 		p.SnapshotBytes = int64(4<<20 + 4096*len(run.records))
 		// Uploaded a moment after it was taken, as a runner's upload trails
 		// its snapshot.
-		go func() {
-			time.Sleep(5 * time.Millisecond)
+		s.goBG(func() {
+			if !s.delay(5 * time.Millisecond) {
+				return
+			}
 			s.mu.Lock()
 			defer s.mu.Unlock()
+			if s.isClosed() {
+				return
+			}
 			up := time.Now()
 			p.UploadedAt = &up
-		}()
-	}()
+		})
+	})
 }
 
 // mimeFor guesses a type from a name, as lux does from the file. Go reads
@@ -2845,7 +2971,7 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 	}
 	if !run.busy {
 		if gate := s.InputGate; gate != nil {
-			go func() {
+			s.goBG(func() {
 				select {
 				case <-gate:
 				case <-s.closed:
@@ -2853,10 +2979,10 @@ func (s *Server) input(w http.ResponseWriter, r *http.Request) {
 				}
 				s.mu.Lock()
 				defer s.mu.Unlock()
-				if !run.busy {
+				if !s.isClosed() && !run.busy {
 					s.deliverQueued(run)
 				}
-			}()
+			})
 		} else {
 			s.deliverQueued(run)
 		}
@@ -2893,15 +3019,18 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	run.PushCredentials = append(run.PushCredentials, in.Credentials)
 	s.mu.Unlock()
 	writeJSON(w, 202, map[string]any{"requestId": in.RequestID})
-	go func() {
+	s.goBG(func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.isClosed() {
+			return
+		}
 		if s.HoldPushes {
 			s.heldPushes = append(s.heldPushes, func() { s.pushNow(run, spec, branch, in.RequestID) })
 			return
 		}
 		s.pushNow(run, spec, branch, in.RequestID)
-	}()
+	})
 }
 
 // ReleasePushes makes the pushes HoldPushes held, now, each reported with
@@ -3325,14 +3454,22 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 		// As lux does: stopping at once, stopped once the container has
 		// gone — a moment later, on the stream.
 		s.setState(run, "stopping")
-		go func() {
-			time.Sleep(30 * time.Millisecond)
+		s.goBG(func() {
+			if s.afterStopped != nil {
+				defer s.afterStopped()
+			}
+			if s.beforeStopped != nil {
+				s.beforeStopped()
+			}
+			if !s.delay(30 * time.Millisecond) {
+				return
+			}
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			if run.State == "stopping" {
+			if !s.isClosed() && run.State == "stopping" {
 				s.setState(run, "stopped")
 			}
-		}()
+		})
 	} else if p := run.currentPlacement(); p != nil && p.ExitedAt == nil && !lux.Terminal(run.State) {
 		// A placement lux assigned and has not started yet is live too
 		// (lux requestStop: assigned, starting): its start is called off
@@ -3693,7 +3830,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		view["placement"] = moved
 	}
 	s.mu.Unlock()
-	go s.play(run, epoch, start, spec, true)
+	s.goBG(func() { s.play(run, epoch, start, spec, true) })
 	writeJSON(w, 202, view)
 }
 
@@ -3725,19 +3862,30 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 	done := make(chan struct{})
-	go func() {
-		<-r.Context().Done()
+	handlerDone := make(chan struct{})
+	defer close(handlerDone)
+	if !s.goBG(func() {
+		select {
+		case <-r.Context().Done():
+		case <-s.closed:
+		case <-handlerDone:
+			return
+		}
 		s.mu.Lock()
 		close(done)
 		run.cond.Broadcast()
 		s.mu.Unlock()
-	}()
+	}) {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sentRec := 0
 	for {
 		select {
 		case <-done:
+			return
+		case <-s.closed:
 			return
 		default:
 		}
@@ -3785,6 +3933,8 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request) {
 		// of the loop; Wait would then never return.
 		select {
 		case <-done:
+			return
+		case <-s.closed:
 			return
 		default:
 		}

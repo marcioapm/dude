@@ -363,7 +363,7 @@ func (s *Server) createTenantServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.idleStart.Do(func() { go s.idleLoop() })
+	s.idleStart.Do(func() { s.goBG(s.idleLoop) })
 	writeJSON(w, 201, s.tview(t))
 }
 
@@ -787,6 +787,10 @@ func (s *Server) idleLoop() {
 		case <-tick.C:
 		}
 		s.mu.Lock()
+		if s.isClosed() {
+			s.mu.Unlock()
+			return
+		}
 		now := time.Now()
 		for _, t := range s.tservers {
 			if t.IdleAfter <= 0 || t.proc == nil || t.proc.ReadySince == nil || s.state(t, now) != lux.SrvReady {
@@ -836,21 +840,29 @@ func (s *Server) feedHandler(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 	done := make(chan struct{})
-	go func() {
+	handlerDone := make(chan struct{})
+	defer close(handlerDone)
+	if !s.goBG(func() {
 		select {
 		case <-r.Context().Done():
 		case <-s.closed:
+		case <-handlerDone:
+			return
 		}
 		s.mu.Lock()
 		close(done)
 		s.feedCond.Broadcast()
 		s.mu.Unlock()
-	}()
+	}) {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for {
 		select {
 		case <-done:
+			return
+		case <-s.closed:
 			return
 		default:
 		}

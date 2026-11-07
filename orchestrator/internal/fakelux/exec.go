@@ -405,7 +405,7 @@ func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start in
 		s.setStateWith(run, "failed", "workload-failed")
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	command := &workloadCommand{cancel: cancel, done: make(chan struct{})}
 	run.command = command
@@ -477,7 +477,7 @@ func (s *Server) behaviourCommand(run *Run, spec map[string]any, epoch, start in
 			s.mu.Unlock()
 			hold(run.ID)
 			s.mu.Lock()
-			if run.State != "running" {
+			if s.isClosed() || run.State != "running" {
 				return false
 			}
 		}
@@ -503,6 +503,9 @@ type recordWriter struct {
 func (w *recordWriter) Write(p []byte) (int, error) {
 	w.s.mu.Lock()
 	defer w.s.mu.Unlock()
+	if w.s.isClosed() {
+		return len(p), nil
+	}
 	w.run.records = append(w.run.records, record{Seq: int64(len(w.run.records) + 1), Epoch: w.epoch, Ch: w.ch, Data: string(p)})
 	w.run.cond.Broadcast()
 	return len(p), nil
@@ -579,11 +582,23 @@ func (s *Server) runInit(run *Run, spec map[string]any) bool {
 			env = append(env, k+"="+str)
 		}
 	}
-	cmd := exec.Command("/bin/sh", "-c", inWorkspaceScript(script, dir, s.HostDirs))
+	cmd := exec.CommandContext(s.ctx, "/bin/sh", "-c", inWorkspaceScript(script, dir, s.HostDirs))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	cmd.Dir, cmd.Env = dir, env
 	var stdout, stderr tailWriter
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	epoch, start, state := run.Epoch, run.starts, run.State
+	s.mu.Unlock()
 	code := exitCode(cmd.Run(), 1)
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	s.mu.Lock()
+	if s.isClosed() || !run.starting(epoch, start) || run.State != state {
+		return false
+	}
 	run.inits++
 	s.outputRecord(run, "stdout", stdout.String())
 	s.outputRecord(run, "stderr", stderr.String())

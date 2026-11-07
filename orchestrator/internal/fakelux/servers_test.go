@@ -8,7 +8,10 @@ package fakelux_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -62,6 +65,25 @@ func serverState(c *lux.HTTPClient, run, name string) lux.Server {
 var preview = lux.Spec{
 	Image:    lux.Image{Ref: "node:22"},
 	Workload: lux.Workload{Adapter: "generic", Command: []string{"sleep", "infinity"}, Servers: []lux.ServerInput{{Name: "web", Port: 3000, Command: []string{"sh", "-c", "npm run dev"}}}},
+}
+
+func TestCloseCancelsServerCommand(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "started")
+	spec := preview
+	spec.Workload.Servers = []lux.ServerInput{{Name: "web", Port: 3000,
+		Command: []string{"sh", "-c", fmt.Sprintf("# fakelux-run\nprintf started > %q; sleep 3600 & wait", marker)}}}
+	fake, _, _ := started(t, spec)
+	waitFor(t, "server command started", func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	})
+	done := make(chan struct{})
+	go func() { fake.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not cancel and join the server command")
+	}
 }
 
 func TestAServerStartsThenIsReadyAndSaysSoOnTheStream(t *testing.T) {
