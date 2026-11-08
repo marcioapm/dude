@@ -43,12 +43,21 @@ func (w *world) luxResumes(runID string) (resumed int, state string) {
 // parkedHeld is a delivery whose implementer is held at the checks gate
 // and parked once the grace is over: paused for a person, run.parked
 // {reason: person}, lux's Run stopped and kept.
+//
+// The grace is short only from the escalation's hand-over to the park: the
+// gate's ask of the conductor (run.checks.asked) starts the Run's wait as
+// well (delivery.ChecksWaiting), and a short grace while a verdict is
+// pending parks the Run for that wait — parked, unparked by the verdict,
+// then parked again for the person, on a slow runner; after the park, a
+// later turn's ask would do the same. Parked, the grace is long again.
 func (w *world) parkedHeld() (wi, runID string) {
 	w.t.Helper()
-	w.syncer.ParkAfter = 300 * time.Millisecond
+	w.syncer.ParkAfter = time.Hour
 	wi = w.unbackedUntilEscalated(0)
 	runID = w.implementerOf(wi)
+	w.syncer.ParkAfter = 300 * time.Millisecond
 	w.untilParked(runID)
+	w.syncer.ParkAfter = time.Hour
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'person'`, runID); n != 1 {
 		w.t.Fatalf("%d run.parked {reason: person} events", n)
 	}
