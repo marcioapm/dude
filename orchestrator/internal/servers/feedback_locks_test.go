@@ -2,6 +2,7 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -128,7 +129,7 @@ func TestUnsupportedFeedEventsDoNotLockRun(t *testing.T) {
 		{Type: "server.unknown", ServerID: "srv_feedback"},
 		{Type: "server.state", ServerID: "srv_feedback", Data: map[string]any{"state": "starting"}},
 	} {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx := t.Context()
 		app, owner := dbtest.Open(t)
 		org := dbtest.Org(t, owner)
 		for _, query := range []string{
@@ -151,12 +152,42 @@ func TestUnsupportedFeedEventsDoNotLockRun(t *testing.T) {
 		}
 		// A real owned server, with its Run locked: irrelevant events must finish
 		// before that lock is released, not merely return for an unknown server.
-		if err := (&Feed{DB: app}).Apply(ctx, e); err != nil {
+		// Whether Apply waits on that lock is PostgreSQL's to say, as in the
+		// test above, not a deadline's: a loaded runner makes Apply slow,
+		// never blocked by tx.
+		probe, err := pgx.Connect(ctx, owner.Config().ConnString())
+		if err != nil {
 			t.Fatal(err)
 		}
+		pid := owner.PgConn().PID()
+		applyCtx, cancel := context.WithCancel(ctx)
+		result := make(chan error, 1)
+		go func() { result <- (&Feed{DB: app}).Apply(applyCtx, e) }()
+		for done := false; !done; {
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatal(err)
+				}
+				done = true
+			default:
+				var query string
+				err := probe.QueryRow(ctx, `SELECT query FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid)) LIMIT 1`, pid).Scan(&query)
+				if err == nil {
+					cancel()
+					<-result
+					t.Fatalf("%s waited for the locked Run: %s", e.Type, query)
+				}
+				if !errors.Is(err, pgx.ErrNoRows) {
+					t.Fatal(err)
+				}
+				runtime.Gosched()
+			}
+		}
+		cancel()
+		probe.Close(ctx)
 		if err := tx.Rollback(ctx); err != nil {
 			t.Fatal(err)
 		}
-		cancel()
 	}
 }
