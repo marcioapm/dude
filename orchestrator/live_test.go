@@ -25,7 +25,9 @@ func TestFinalHookUsesRecordedSyncHistoryDespiteForgedRefs(t *testing.T) {
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
-	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond
+	// DiffSlow too: the agent is idle and git changes its checkout with no
+	// poke, so a slow fetch lets the watcher back off for a minute first.
+	w.syncer.DiffDelay, w.syncer.DiffEvery, w.syncer.DiffSlow = 10*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
 	runID, luxID, git, commit := w.idleImplementerCheckout()
 	w.commitFileIn(w.gh.Repo, "main", "imported.txt", "M1\n", "M1")
 	w.fetchBase(runID)
@@ -56,7 +58,7 @@ func TestPushScanSeesSecretInImportedBaseOmittedFromDisplay(t *testing.T) {
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
-	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond
+	w.syncer.DiffDelay, w.syncer.DiffEvery, w.syncer.DiffSlow = 10*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
 	runID, luxID, git, commit := w.idleImplementerCheckout()
 	w.commitFileIn(w.gh.Repo, "main", "imported-secret.txt", implToken+"\n", "Base configuration")
 	w.fetchBase(runID)
