@@ -78,7 +78,7 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 			}
 
 			// Retry scheduling misses only before frame application. Let the
-			// batch apply with at least four fifths of timingLockTimeout left.
+			// batch apply with at least four fifths of resumeLockTimeout left.
 			const attempts = 5
 			for attempt := 1; ; attempt++ {
 				reached, err := w.stampWhileTheResumeWaits(ctx, &workers, logs, base)
@@ -142,7 +142,7 @@ func TestAResumeIsRecordedWhileAnotherTransactionUpdatesTheRun(t *testing.T) {
 }
 
 // Another transaction holding the Run's row FOR UPDATE past
-// timingLockTimeout costs a resume only its timing: resumeAsked gives up
+// resumeLockTimeout costs a resume only its timing: resumeAsked gives up
 // on its KEY SHARE, records no row and still returns the epoch foreseen;
 // whilePaused then asks lux, and takes the Run back to running once the
 // holder lets go.
@@ -414,7 +414,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 	// batch's frames: not let go, the batch waits for resumeAsked to time
 	// out and the attempt is tried again.
 	waited := time.Duration(*waitedMs * float64(time.Millisecond))
-	if waited > timingLockTimeout/5 {
+	if waited > resumeLockTimeout/5 {
 		return lost(fmt.Sprintf("resumeAsked was seen waiting only after %s", waited))
 	}
 
@@ -450,7 +450,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 	// sampled.
 	if got := logs.String(); got != "" {
 		return false, fmt.Errorf("resumeAsked failed a timing statement after the batch was let go, having waited %s; "+
-			"the batch committed %s later (lock_timeout %s)", waited, committed, timingLockTimeout)
+			"the batch committed %s later (lock_timeout %s)", waited, committed, resumeLockTimeout)
 	}
 	return true, nil
 }

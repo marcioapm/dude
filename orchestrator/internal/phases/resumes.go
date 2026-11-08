@@ -137,12 +137,13 @@ const woken = `CASE $3
 // row to stamp; requested_at is now. A retry moves requested_at only while
 // lux still reports the Run stopped (the earlier attempt did not take).
 // before is the Run as lux reported it just before. Returns the epoch
-// foreseen.
+// foreseen. Under resumeLockTimeout and resumeStatementTimeout, not the
+// stream's budget: this is the only place the row is made.
 func (s *Syncer) resumeAsked(ctx context.Context, r phaseRun, before lux.Run) int {
 	epoch := nextEpoch(before)
 	_, prev := placementsAround(before.Placements, epoch)
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		s.bestEffort(ctx, tx, r, "resume", func(ctx context.Context, tx pgx.Tx) error {
+		s.bestEffortWithin(ctx, tx, r, "resume", resumeLockTimeout, resumeStatementTimeout, func(ctx context.Context, tx pgx.Tx) error {
 			// The Run's row before the resume's: a retry's new row version
 			// makes writePlacements' foreign-key check take this KEY SHARE,
 			// and taken then, it would wait on a follower batch holding the
@@ -496,13 +497,28 @@ func (s *Syncer) readPlacements(ctx context.Context, r phaseRun, epoch int) erro
 	})
 }
 
-// The Postgres-side budget of each timing statement in a Run's
-// transaction: a row lock held elsewhere, or a slow statement, fails it
-// as a statement error the savepoint undoes, instead of holding up the
-// Run's batch.
+// The Postgres-side budget of each timing statement written from a Run's
+// stream (stamp, resumeAccepted, resumeRefused): a row lock held
+// elsewhere, or a slow statement, fails it as a statement error the
+// savepoint undoes, instead of holding up the Run's batch. Losing one
+// costs little: a later frame stamps it again, or the resume is timed
+// without it.
 const (
 	timingLockTimeout      = 100 * time.Millisecond
 	timingStatementTimeout = 250 * time.Millisecond
+)
+
+// The budget of resumeAsked's statements, which make a resume's row: the
+// only place it is made, so losing it loses the resume's timing for good
+// (stamp updates a row, and nothing times a resume without one). It is
+// off any batch: its own transaction, on the resume path, before lux is
+// asked. It waits on a follower batch holding the Run, a checkpoint or
+// autovacuum; a batch starting meanwhile waits on its KEY SHARE no longer
+// than its statements take. Bounded still, so a Run held for long costs
+// its resume at most this much, and only its timing.
+const (
+	resumeLockTimeout      = time.Second
+	resumeStatementTimeout = 2 * time.Second
 )
 
 // timingBudget is the lock and statement timeouts for timing work under
@@ -510,7 +526,11 @@ const (
 // timing always leaves the Run at least half of what remains. false when
 // too little remains to try.
 func timingBudget(ctx context.Context) (lock, statement time.Duration, ok bool) {
-	lock, statement = timingLockTimeout, timingStatementTimeout
+	return budgetUnder(ctx, timingLockTimeout, timingStatementTimeout)
+}
+
+// budgetUnder is timingBudget from the given lock and statement timeouts.
+func budgetUnder(ctx context.Context, lock, statement time.Duration) (time.Duration, time.Duration, bool) {
 	if deadline, has := ctx.Deadline(); has {
 		half := time.Until(deadline) / 2
 		if half < 5*time.Millisecond {
@@ -529,7 +549,14 @@ func timingBudget(ctx context.Context) (lock, statement time.Duration, ok bool) 
 // timing statement waits would make pgx close the connection under the
 // Run's transaction. Postgres's timeouts bound it instead.
 func (s *Syncer) bestEffort(ctx context.Context, tx pgx.Tx, r phaseRun, what string, fn func(context.Context, pgx.Tx) error) {
-	lock, statement, ok := timingBudget(ctx)
+	s.bestEffortWithin(ctx, tx, r, what, timingLockTimeout, timingStatementTimeout, fn)
+}
+
+// bestEffortWithin is bestEffort under the given lock and statement
+// timeouts, cut as timingBudget cuts its own.
+func (s *Syncer) bestEffortWithin(ctx context.Context, tx pgx.Tx, r phaseRun, what string,
+	lock, statement time.Duration, fn func(context.Context, pgx.Tx) error) {
+	lock, statement, ok := budgetUnder(ctx, lock, statement)
 	if !ok || ctx.Err() != nil {
 		return
 	}
