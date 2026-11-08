@@ -379,14 +379,14 @@ func TestAHungPublishHoldsOneSlotAndTheNextPassClaimsTheRest(t *testing.T) {
 }
 
 // Sweep with SweepWait zero waits for all it started, as the tests' pump
-// expects: a slow Run is advanced and counted before Sweep returns.
+// expects: even a slow retry finishes and releases its slot before Sweep returns.
 func TestASweepWithoutAWaitWaitsForEveryRun(t *testing.T) {
 	fake := newHangLux("lslow")
 	w := newSweepWorld(t, fake)
 	w.s.SweepWait = 0
 	w.failed("slow")
 	time.AfterFunc(300*time.Millisecond, func() { close(fake.open) })
-	if took := w.sweep(1); took < 300*time.Millisecond {
+	if took := w.sweep(0); took < 300*time.Millisecond {
 		t.Errorf("the sweep returned after %v, before its Run was let go", took)
 	}
 	slots, _ := w.s.pools()
