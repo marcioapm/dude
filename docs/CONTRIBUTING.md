@@ -317,7 +317,13 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   opens at it. A person's Chat message may lead the conductor to request
   reviewers, re-run checks, mark a pull request ready or resolve threads,
   within the conductor's limits; it can never merge a pull request or
-  press **Update branch**. A conflict on the open pull request is a
+  press **Update branch**. dude does not hold an open pull request at its
+  last reviewed head while a follow-up is reviewed: a fix or an
+  integration reaches the pull request as it publishes and is reviewed
+  straight after (#418). Holding it would need unpublished heads and a
+  separate promotion step, the candidate pipeline #393/#394 removed; the
+  conductor is told so, and says so up front when a person asks for
+  review before the update. A conflict on the open pull request is a
   message to the conductor at the pull request feedback decision; under
   the policy, the integration fixer merges the base onto the pull request's
   branch, its merge is reviewed and not tested, and the delivery waits
