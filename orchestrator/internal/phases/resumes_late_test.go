@@ -460,3 +460,26 @@ func TestALateStampGoesWithItsFollower(t *testing.T) {
 		t.Errorf("late stamps kept after the follower ended: %v", left)
 	}
 }
+
+// Late stamps a timing had no time left to write are kept for the Run's
+// next timing, not forgotten unwritten.
+func TestALateStampNotTriedIsKept(t *testing.T) {
+	w := newResumeWorld(t)
+	kept := []lateStamp{{"busy_at", 2, time.Now()}}
+	w.s.lateMu.Lock()
+	w.s.late = map[string][]lateStamp{w.run.ID: kept}
+	w.s.lateMu.Unlock()
+	done, cancel := context.WithCancel(w.ctx)
+	cancel()
+	var written func()
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		written = w.s.writeLateStamps(done, tx, w.run, nil)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	written()
+	if left := w.s.lateStamps(w.run.ID); len(left) != 1 {
+		t.Errorf("late stamps %v after a write that never ran, want %v kept", left, kept)
+	}
+}
