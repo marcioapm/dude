@@ -8,7 +8,6 @@
  */
 
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
-import { useState } from "react";
 import { act, mount } from "./dom.ts";
 import { useVisibleInterval } from "../src/hooks/useVisibleInterval.ts";
 
@@ -41,9 +40,8 @@ async function advance(ms: number) {
 }
 
 function Probe({ calls, every }: { calls: string[]; every: number }) {
-  const [n] = useState(0);
   useVisibleInterval(() => calls.push(hidden ? "hidden" : "visible"), every);
-  return <span>{n}</span>;
+  return null;
 }
 
 describe("useVisibleInterval", () => {
@@ -55,19 +53,22 @@ describe("useVisibleInterval", () => {
     await advance(80);
     expect(calls.length).toBe(3);
     await setHidden(true);
-    const atHide = calls.length;
+    expect(calls.length).toBe(3);
     await advance(150);
-    expect(calls.length).toBe(atHide);
+    expect(calls.length).toBe(3);
     expect(calls).not.toContain("hidden");
     await setHidden(false);
-    expect(calls.length).toBe(atHide + 1);
-    await advance(80);
-    expect(calls.length).toBeGreaterThan(atHide + 1);
+    expect(calls.length).toBe(4);
+    // Shown at t=230: two ticks by t=290 whether the interval kept its phase
+    // (240, 270) or restarted on show (260, 290); one that waits 2*ms has one.
+    await advance(60);
+    expect(calls.length).toBe(6);
   });
 
   test("stops when unmounted, and a visibility change after does nothing", async () => {
     const calls: string[] = [];
     const { unmount } = await mount(<Probe calls={calls} every={30} />);
+    mounted.push(unmount);
     await advance(50);
     await unmount();
     const at = calls.length;
