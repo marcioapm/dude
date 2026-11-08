@@ -279,7 +279,7 @@ func TestInstructionsContractMatrix(t *testing.T) {
 			[]string{"Start another phase only once the Run has ended.", "the pull-request gate refuses an unreviewed commit of yours.",
 				"dude cannot keep the pull request at its last reviewed head while a follow-up is reviewed.", "say so before you start it: dude will push it first and review it straight after",
 				"Anything else that reaches it, your publish or a writer you start with `start_agent`, is reviewed only when you start that review: start it at once.",
-				"its next fix first reviews that push", "When the delivery takes the decisions, or the task is merged or closed, you are read-only"}},
+				"that fix, like dude's own next fix, first reviews that push.", "When the delivery takes the decisions, or the task is merged or closed, you are read-only"}},
 		{"brainstorm", "You think with people about their projects before work is planned",
 			"Be a partner, not an echo: bring a view.",
 			[]string{"Proposing again replaces the card.", "Write tasks the delivery can succeed with", "Say in your reply what you published"}},
