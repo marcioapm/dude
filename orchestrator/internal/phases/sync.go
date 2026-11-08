@@ -570,7 +570,7 @@ const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 			       OR (r.control = 'abort' AND r.status IN ('paused', 'aborted'))
 			       -- Aborted or failed in dude, and not yet kept or cancelled in
 			       -- lux; or kept, and its time is up.
-			       OR (r.status IN ('aborted', 'failed')
+			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
 			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 			           AND (r.lux_stop_reason IS DISTINCT FROM 'kept' OR r.kept_until <= now())))
 			  -- Consuming an abort clears the old back-off before cleanup retries.
@@ -909,6 +909,10 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			}
 			if err := s.failUnread(ctx, tx, r, UnreadRunAborted); err != nil {
 				return err
+			}
+			// A child's stop request already recorded its run.aborted.
+			if r.SourceKind != "" {
+				return nil
 			}
 			return s.event(ctx, tx, r, "run.aborted", ledger.ActorSystem, map[string]any{"reason": db.Nullable(reason)})
 		}); err != nil {
@@ -2941,7 +2945,9 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 		s.releaseBranch(ctx, r.Org, r.TaskID, branch)
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none', kept_until = NULL
+		// No lux Run, nothing cancelled: a resumed Run starts without a stop reason.
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = CASE WHEN lux_run_id IS NULL THEN lux_stop_reason ELSE 'cancel' END,
+			control = 'none', kept_until = NULL
 			WHERE id = $1 AND status IN ('aborted', 'failed')`, r.ID)
 		return err
 	})

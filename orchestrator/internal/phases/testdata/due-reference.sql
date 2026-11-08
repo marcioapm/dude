@@ -87,7 +87,7 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 			       OR (r.control = 'abort' AND r.status IN ('paused', 'aborted'))
 			       -- Aborted or failed in dude, and not yet kept or cancelled in
 			       -- lux; or kept, and its time is up.
-			       OR (r.status IN ('aborted', 'failed')
+			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
 			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 			           AND (r.lux_stop_reason IS DISTINCT FROM 'kept' OR r.kept_until <= now())))
 			  -- Consuming an abort clears the old back-off before cleanup retries.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,9 +53,17 @@ func TestAbortSweepSettlesLiveRunsOnce(t *testing.T) {
 						AND control='none' AND lux_stop_reason='cancel' AND NOT keep AND control_reason='checks gate stop'`); n != 1 {
 						t.Error("abort did not durably settle")
 					}
-					if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'
-						AND payload->>'reason'='checks gate stop'`); n != 1 {
-						t.Errorf("abort ledger events=%d, want 1", n)
+					// A child's stop request writes its run.aborted; the sweep does not repeat it.
+					wantEvents := 1
+					if child {
+						wantEvents = 0
+					}
+					if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != wantEvents {
+						t.Errorf("sweep-written abort ledger events=%d, want %d", n, wantEvents)
+					}
+					if !child && w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'
+						AND payload->>'reason'='checks gate stop'`) != 1 {
+						t.Error("ordinary abort event lacks its reason")
 					}
 				})
 			}
@@ -101,6 +110,15 @@ func TestAbortSweepHonorsCleanupBackoff(t *testing.T) {
 					AND retry_due_at=next_attempt_at AND next_attempt_at>now() AND lux_stop_reason IS NULL`); n != 1 {
 					t.Fatal("cleanup did not schedule its backoff")
 				}
+				endedAt := func() time.Time {
+					t.Helper()
+					var at time.Time
+					if err := w.owner.QueryRow(w.ctx, `SELECT ended_at FROM runs WHERE id=$1`, w.run.ID).Scan(&at); err != nil {
+						t.Fatal(err)
+					}
+					return at
+				}
+				firstEnded := endedAt()
 				for range 12 {
 					if n, err := w.s.Sweep(w.ctx); err != nil || n != 0 {
 						t.Fatalf("backed-off sweep acted=%d err=%v", n, err)
@@ -124,6 +142,18 @@ func TestAbortSweepHonorsCleanupBackoff(t *testing.T) {
 				}
 				if calls.Load() != want+1 || w.stopReason() != "cancel" {
 					t.Fatalf("cleanup not settled: POSTs=%d reason=%q", calls.Load(), w.stopReason())
+				}
+				// Once only across the retries: the live Run's one transition
+				// event (none for one already aborted) and its first ended_at.
+				wantEvents := 0
+				if status == "running" {
+					wantEvents = 1
+				}
+				if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != wantEvents {
+					t.Errorf("run.aborted events=%d, want %d", n, wantEvents)
+				}
+				if got := endedAt(); !got.Equal(firstEnded) {
+					t.Errorf("ended_at moved across retries: %v -> %v", firstEnded, got)
 				}
 			})
 		}
@@ -167,14 +197,36 @@ func TestAbortSweepPreservesKeepAndMissingLux(t *testing.T) {
 				if keep && state != "terminated" && state != "missing" {
 					wantReason = "kept"
 				}
+				if state == "missing" {
+					// No lux Run, nothing cancelled: no stop reason to stamp.
+					wantReason = ""
+				}
 				if state == "terminated" || state == "missing" || keep && state == "stopped" {
 					wantCalls = 0
 				}
-				if got := fake.Calls(); len(got) != wantCalls || wantCalls == 1 && keep && got[0] != "stop lrun_1" {
-					t.Errorf("Lux calls=%v, want %d (%s)", got, wantCalls, wantReason)
+				var wantLux []string
+				if wantCalls == 1 {
+					wantLux = []string{"cancel lrun_1"}
+					if wantReason == "kept" {
+						wantLux = []string{"stop lrun_1"}
+					}
+				}
+				if got := fake.Calls(); !slices.Equal(got, wantLux) {
+					t.Errorf("Lux calls=%v, want %v", got, wantLux)
 				}
 				if w.stopReason() != wantReason {
 					t.Errorf("stop reason=%s, want %s", w.stopReason(), wantReason)
+				}
+				var status, control string
+				var ended *time.Time
+				var kept bool
+				if err := w.owner.QueryRow(w.ctx, `SELECT status::text, control::text, ended_at, keep FROM runs WHERE id=$1`,
+					w.run.ID).Scan(&status, &control, &ended, &kept); err != nil {
+					t.Fatal(err)
+				}
+				if status != "aborted" || control != "none" || ended == nil || kept != keep {
+					t.Errorf("terminal row status=%s control=%s ended_at=%v keep=%t, want aborted none set %t",
+						status, control, ended, kept, keep)
 				}
 			})
 		}
@@ -302,5 +354,93 @@ func TestAFreshAbortDuringCleanupBackoffIsConsumedOnce(t *testing.T) {
 	if len(fake.Calls()) != 1 || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND control='none'
 		AND control_reason='fresh stop' AND ended_at<now()-interval '30 minutes' AND retry_failures=1`) != 1 {
 		t.Fatal("fresh control was not consumed once with original terminal timestamp")
+	}
+}
+
+// sweepActedOnce runs 12 Sweeps: the first acts, the rest find nothing due.
+func sweepActedOnce(t *testing.T, w *resumeWorld) {
+	t.Helper()
+	for pass := range 12 {
+		want := 0
+		if pass == 0 {
+			want = 1
+		}
+		if n, err := w.s.Sweep(w.ctx); err != nil || n != want {
+			t.Errorf("pass %d: acted=%d err=%v, want %d", pass, n, err, want)
+		}
+	}
+}
+
+// An abort of a Run lux never had settles once, stamps no lux stop reason
+// and leaves nothing due; resumed as recover does and submitted, it is a
+// fresh Run to lux's failure guards.
+func TestALuxlessAbortSettlesOnceAndResumesClean(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET status='pending', control='abort', control_requested_at=now(), control_reason='stop',
+		lux_run_id=NULL, lux_state=NULL, lux_stop_reason=NULL, dude_pause=NULL WHERE id=$1`, w.run.ID)
+	fake := w.onCallLux(nil)
+	sweepActedOnce(t, w)
+	if got := fake.Calls(); len(got) != 0 {
+		t.Errorf("Lux calls=%v, want none", got)
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='aborted' AND control='none'
+		AND ended_at IS NOT NULL AND lux_stop_reason IS NULL`) != 1 {
+		t.Fatalf("Lux-less abort not settled cleanly (stop reason %q)", w.stopReason())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != 1 {
+		t.Errorf("run.aborted events=%d, want 1", n)
+	}
+	// Resumed as api/recover.go's pickUp does an Unstarted Run.
+	w.exec(`UPDATE runs SET status = 'pending', control = 'none', keep = false, ended_at = NULL,
+			control_reason = NULL, phase_notified_at = NULL, finishes = finishes + 1,
+			image_build_id = NULL, image_waiting_since = NULL, next_attempt_at = NULL
+		WHERE id = ANY($1) AND lux_run_id IS NULL AND status IN ('aborted', 'failed')`, []string{w.run.ID})
+	// Submitted, as submit records lux's Run.
+	w.exec(`UPDATE runs SET lux_run_id='lrun_2', lux_state='running',
+		status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END WHERE id=$1`, w.run.ID)
+	// luxstop.go's failForLux guard: a live Run lux stopped on its own.
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status IN ('scheduled', 'starting', 'running')
+		AND lux_stop_reason IS NULL`) != 1 {
+		t.Errorf("resumed Run carries stop reason %q into lux's failure guards", w.stopReason())
+	}
+}
+
+// A paused Run no resume is due for (dude_pause NULL: resumable NULL) is
+// still due for its abort, once.
+func TestAPausedAbortWithNoResumeIsDueOnce(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET status='paused', dude_pause=NULL, control='abort', control_requested_at=now(),
+		lux_state='stopped', lux_stop_reason=NULL WHERE id=$1`, w.run.ID)
+	fake := w.onCallLux(nil)
+	sweepActedOnce(t, w)
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='aborted' AND control='none'`) != 1 {
+		t.Error("paused abort not settled")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != 1 {
+		t.Errorf("run.aborted events=%d, want 1", n)
+	}
+	if got := fake.Calls(); !slices.Equal(got, []string{"cancel lrun_1"}) {
+		t.Errorf("Lux calls=%v", got)
+	}
+}
+
+// A person's Stop of an ordinary Run already aborted and kept: stopped and
+// kept once, its control consumed, no second run.aborted.
+func TestAKeptAbortedRunsStopIsAskedOnce(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE runs SET status='aborted', ended_at=now(), control='abort', control_requested_at=now(),
+		keep=true, kept_until=NULL, dude_pause=NULL, lux_state='running', lux_stop_reason=NULL WHERE id=$1`, w.run.ID)
+	fake := w.onCallLux(nil)
+	w.s.KeepFor = time.Hour
+	sweepActedOnce(t, w)
+	if got := fake.Calls(); !slices.Equal(got, []string{"stop lrun_1"}) {
+		t.Errorf("Lux calls=%v, want [stop lrun_1]", got)
+	}
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='aborted' AND control='none'
+		AND lux_stop_reason='kept' AND keep`) != 1 {
+		t.Errorf("kept abort not settled (stop reason %q)", w.stopReason())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != 0 {
+		t.Errorf("sweep-written run.aborted events=%d, want 0", n)
 	}
 }
