@@ -180,24 +180,45 @@ func TestTheFirstMessageStartsTheConductorAndTheNextReachesIt(t *testing.T) {
 // resumes it, timed with cause conductor, and it answers that message.
 func TestAConductorParksAfterItsWarmPeriodAndAMessageResumesIt(t *testing.T) {
 	w := conductorWorld(t)
-	w.syncer.ConductorWarm = 400 * time.Millisecond
+	// Warm for good while the test checks it stays warm, then for warm. A
+	// pass's sweep that reads the Run warm after its turn ended asks the
+	// park (requestPause) and the next pass makes it (pause); how long
+	// until's passes take is the runner's, so with a short period the
+	// check could follow the park.
+	const warm = 400 * time.Millisecond
+	w.syncer.ConductorWarm = time.Hour
 	task, log := w.delivered()
 	before := w.workflowState(task)
 
 	_, out := w.chat(task, "what changed?")
 	runID, _ := out["runId"].(string)
-	w.until("the answer", func() bool { return len(w.said(runID)) == 1 })
-	// Warm: still running a moment after its answer.
-	w.pump()
-	if _, status, _ := w.conductor(task); status != "running" {
-		t.Errorf("right after its answer the conductor is %s, want running (warm)", status)
+	w.until("the answer and its turn's end", func() bool {
+		return len(w.said(runID)) == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) == 1
+	})
+	// Warm: still running, nothing asked of it, passes after its answer.
+	for range 3 {
+		w.pump()
 	}
+	if _, status, pause := w.conductor(task); status != "running" || pause != "" {
+		t.Errorf("right after its answer the conductor is %s (pause %q), want running (warm)", status, pause)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND control = 'none'`, runID); n != 1 {
+		t.Errorf("a warm conductor was asked to stop")
+	}
+	w.syncer.ConductorWarm = warm
 	w.until("the conductor to be parked", func() bool {
 		_, status, pause := w.conductor(task)
 		return status == "paused" && pause == "conductor"
 	})
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'conductor'`, runID); n != 1 {
 		t.Errorf("%d run.parked for the conductor, want 1", n)
+	}
+	// Parked no sooner than its warm period after its turn, on the
+	// database's clock.
+	if n := w.count(`SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id WHERE e.run_id = $1
+		AND e.event_type = 'run.parked' AND (e.payload->>'parkedAt')::timestamptz >= r.turn_done_at + make_interval(secs => $2)`,
+		runID, warm.Seconds()); n != 1 {
+		t.Errorf("parked within its warm period of %v", warm)
 	}
 	if after := w.workflowState(task); after != before {
 		t.Errorf("parking moved the task: %s, then %s", before, after)
