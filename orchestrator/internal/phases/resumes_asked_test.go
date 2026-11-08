@@ -142,8 +142,9 @@ func TestAResumeIsRecordedWhileAnotherTransactionUpdatesTheRun(t *testing.T) {
 }
 
 // Another transaction holding the Run's row FOR UPDATE past
-// resumeLockTimeout costs a resume only its timing: resumeAsked gives up
-// on its KEY SHARE, records no row and still returns the epoch foreseen;
+// resumeLockTimeout, and past the one more attempt resumeAsked makes, costs
+// a resume only its timing: resumeAsked gives up on its KEY SHARE, records
+// no row and still returns the epoch foreseen;
 // whilePaused then asks lux, and takes the Run back to running once the
 // holder lets go.
 func TestAResumeBehindAHeldRunSkipsItsTimingAndStillResumes(t *testing.T) {

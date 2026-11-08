@@ -16,7 +16,8 @@ import (
 // would never be timed. Behind a Run held elsewhere past timingLockTimeout
 // (a follower batch, say: lock_timeout, 55P03), and behind an insert
 // slower than timingStatementTimeout (a checkpoint, say: statement_timeout,
-// 57014), the row is made, and the resume is timed once its frames come.
+// 57014), and behind a Run held past resumeAsked's own lock budget, the
+// row is made, and the resume is timed once its frames come.
 func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -30,6 +31,17 @@ func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 			// Let go of the Run well past the stream's lock budget.
 			return func() {
 				time.Sleep(3 * timingLockTimeout)
+				release()
+			}
+		}},
+		// Past resumeAsked's own lock budget too (a second): its first
+		// attempt times out, and the one more it makes gets the row in.
+		// A literal, so the test builds without resumeLockTimeout.
+		{"run held past the resume's budget", func(w *resumeWorld) func() {
+			release := sync.OnceFunc(w.holding(`SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, w.run.ID))
+			w.t.Cleanup(release)
+			return func() {
+				time.Sleep(1300 * time.Millisecond)
 				release()
 			}
 		}},
