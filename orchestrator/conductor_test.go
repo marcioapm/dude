@@ -180,13 +180,13 @@ func TestTheFirstMessageStartsTheConductorAndTheNextReachesIt(t *testing.T) {
 // resumes it, timed with cause conductor, and it answers that message.
 func TestAConductorParksAfterItsWarmPeriodAndAMessageResumesIt(t *testing.T) {
 	w := conductorWorld(t)
-	// Warm for good while the test checks it stays warm, then for warm. A
-	// pass's sweep that reads the Run warm after its turn ended asks the
-	// park (requestPause) and the next pass makes it (pause); how long
-	// until's passes take is the runner's, so with a short period the
-	// check could follow the park.
-	const warm = 400 * time.Millisecond
-	w.syncer.ConductorWarm = time.Hour
+	// The warm period is an hour, and the test moves the turn's end back
+	// instead of waiting for it. The sweep compares turn_done_at with the
+	// database's now(), so the test sets turn_done_at on that same clock:
+	// one second inside the period, then one second past it. How fast the
+	// runner is does not change which side of the line the Run is on.
+	const warm = time.Hour
+	w.syncer.ConductorWarm = warm
 	task, log := w.delivered()
 	before := w.workflowState(task)
 
@@ -195,17 +195,28 @@ func TestAConductorParksAfterItsWarmPeriodAndAMessageResumesIt(t *testing.T) {
 	w.until("the answer and its turn's end", func() bool {
 		return len(w.said(runID)) == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) == 1
 	})
-	// Warm: still running, nothing asked of it, passes after its answer.
+	// state is the conductor's status, control and dude_pause, and how
+	// long ago its turn ended, for failure messages.
+	state := func() (status, control, pause, since string) {
+		_ = w.owner.QueryRow(context.Background(), `SELECT status::text, control::text, COALESCE(dude_pause, ''),
+			COALESCE((now() - turn_done_at)::text, 'no turn_done_at') FROM runs WHERE id = $1`, runID).
+			Scan(&status, &control, &pause, &since)
+		return
+	}
+
+	// Just inside its warm period: still running, and nothing asked of it.
+	// Backdated before each pass, so every pass sees it one second inside.
 	for range 3 {
+		mustExec(t, w.owner, `UPDATE runs SET turn_done_at = now() - interval '59 minutes 59 seconds' WHERE id = $1`, runID)
 		w.pump()
 	}
-	if _, status, pause := w.conductor(task); status != "running" || pause != "" {
-		t.Errorf("right after its answer the conductor is %s (pause %q), want running (warm)", status, pause)
+	if status, control, pause, since := state(); status != "running" || control != "none" || pause != "" {
+		t.Fatalf("its turn ended %s ago, inside its warm period of %v, and the conductor is status %s, control %s, dude_pause %q; want running, none, none (warm)",
+			since, warm, status, control, pause)
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND control = 'none'`, runID); n != 1 {
-		t.Errorf("a warm conductor was asked to stop")
-	}
-	w.syncer.ConductorWarm = warm
+
+	// Just past it: parked.
+	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = now() - interval '1 hour 1 second' WHERE id = $1`, runID)
 	w.until("the conductor to be parked", func() bool {
 		_, status, pause := w.conductor(task)
 		return status == "paused" && pause == "conductor"
@@ -213,18 +224,22 @@ func TestAConductorParksAfterItsWarmPeriodAndAMessageResumesIt(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'conductor'`, runID); n != 1 {
 		t.Errorf("%d run.parked for the conductor, want 1", n)
 	}
-	// Parked no sooner than its warm period after its turn, on the
-	// database's clock.
-	if n := w.count(`SELECT count(*) FROM events e JOIN runs r ON r.id = e.run_id WHERE e.run_id = $1
-		AND e.event_type = 'run.parked' AND (e.payload->>'parkedAt')::timestamptz >= r.turn_done_at + make_interval(secs => $2)`,
-		runID, warm.Seconds()); n != 1 {
-		t.Errorf("parked within its warm period of %v", warm)
+	// The park's own stamp (parkedAt, the database's clock) is at least
+	// its warm period after the turn's end.
+	var parkedAt, turnDone time.Time
+	if err := w.owner.QueryRow(context.Background(), `SELECT (e.payload->>'parkedAt')::timestamptz, r.turn_done_at
+		FROM events e JOIN runs r ON r.id = e.run_id WHERE e.run_id = $1 AND e.event_type = 'run.parked'`, runID).
+		Scan(&parkedAt, &turnDone); err != nil {
+		t.Fatalf("the park's parkedAt and the turn's end: %v", err)
+	}
+	if got := parkedAt.Sub(turnDone); got < warm {
+		t.Errorf("parked at %s, %v after its turn ended at %s; want at least its warm period of %v",
+			parkedAt.Format(time.RFC3339Nano), got, turnDone.Format(time.RFC3339Nano), warm)
 	}
 	if after := w.workflowState(task); after != before {
 		t.Errorf("parking moved the task: %s, then %s", before, after)
 	}
 
-	w.syncer.ConductorWarm = time.Hour
 	status, out := w.chat(task, "and the tests?")
 	if status != 200 || out["runId"] != runID {
 		t.Fatalf("message to the parked conductor: %d %v", status, out)
