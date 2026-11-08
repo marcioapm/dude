@@ -45,6 +45,11 @@ func (w *world) conductorRuns(task string) []string {
 	return w.ids(`SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent' ORDER BY created_at, id`, task)
 }
 
+func (w *world) conductorRunsOf(task string, attempt int) []string {
+	return w.ids(`SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent' AND attempt = $2
+		ORDER BY created_at, id`, task, attempt)
+}
+
 // Resume: the same conductor's lux Run goes on, told the note; the
 // delivery waits on its decision again, and the conductor still decides.
 func TestResumingUnderTheConductorGoesOnWithTheSameConductor(t *testing.T) {

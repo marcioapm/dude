@@ -108,42 +108,87 @@ func TestClosingAStoppedTaskLetsWhatWasKeptGo(t *testing.T) {
 func TestClosingAStoppedTaskSettlesItsHeldWakes(t *testing.T) {
 	w := conducting(t)
 	task, ana, _ := w.stoppedAtDecision()
-	w.heldWake(task)
+	h := w.heldWake(task)
 	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/close", map[string]any{"resolution": "wont_do"}); status != 200 {
 		t.Fatalf("close: %d %v", status, body)
 	}
-	w.assertWakesEnded(task)
+	w.assertWakesEnded(h)
 }
 
 // Start over ends the stopped attempt's wakes the same way: attempt 2,
-// handed to Deliver, gets no conductor for attempt 1's reasons.
+// handed to Deliver, gets no conductor for attempt 1's reasons. Attempt 2
+// is live meanwhile: what its own Runs record is its own.
 func TestStartingOverSettlesTheStoppedAttemptsWakes(t *testing.T) {
 	w := conducting(t)
 	task, ana, _ := w.stoppedAtDecision()
-	w.heldWake(task)
+	h := w.heldWake(task)
 	w.pickUp(ana, task, map[string]any{"action": "restart", "decider": "policy"})
-	w.assertWakesEnded(task)
+	w.assertWakesEnded(h)
 }
 
-func (w *world) heldWake(task string) {
+// held is what a stopped attempt holds for its conductor: its task, its
+// attempt, and the reasons pending when it was stopped.
+type held struct {
+	task    string
+	attempt int
+	reasons []string
+}
+
+// heldWake records a reason that came after the Stop, and returns what the
+// stopped attempt then holds.
+func (w *world) heldWake(task string) held {
 	w.t.Helper()
 	mustExec(w.t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
 		VALUES ('cwk_held_'||$2, $1, $2, 'decision', 'decision:held', 'A decision waits.', now() - interval '1 hour')`, w.org, task)
+	return held{task: task,
+		attempt: w.latestAttempt(task),
+		reasons: w.ids(`SELECT id FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL ORDER BY id`, task)}
 }
 
-func (w *world) assertWakesEnded(task string) {
+func (w *world) latestAttempt(task string) int {
 	w.t.Helper()
+	return w.count(`SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1 AND kind = 'agent'`, task)
+}
+
+// assertWakesEnded checks the stopped attempt's end for its wakes: the
+// reasons it held are settled, told to no conductor, the halt cleared, and
+// no conductor started on it beside the stopped one. With no next attempt
+// that holds for the whole task. After a Start over the next attempt is
+// live, and its Runs record and deliver reasons of their own (a checks
+// report, a quiet conductor started for it) as soon as they work: only a
+// checks reason may reach a conductor other than the stopped attempt's.
+func (w *world) assertWakesEnded(h held) {
+	w.t.Helper()
+	if len(h.reasons) == 0 {
+		w.t.Fatalf("the stopped attempt holds no reason to check")
+	}
 	for range 5 {
 		w.pump()
 	}
-	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, task); n != 0 {
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE id = ANY($1) AND delivered_at IS NULL`, h.reasons); n != 0 {
 		w.t.Errorf("%d reasons still pending", n)
 	}
-	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'halt'`, task); n != 0 {
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE id = ANY($1) AND conductor_run_id IS NOT NULL`, h.reasons); n != 0 {
+		w.t.Errorf("%d of the stopped attempt's reasons were told to a conductor", n)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'halt'`, h.task); n != 0 {
 		w.t.Errorf("a delivery still holds its halt")
 	}
-	if got := w.conductorRuns(task); len(got) != 1 {
-		w.t.Errorf("conductors: %v", got)
+	if got := w.conductorRunsOf(h.task, h.attempt); len(got) != 1 {
+		w.t.Errorf("attempt %d's conductors: %v", h.attempt, got)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes c JOIN runs r ON r.id = c.conductor_run_id
+		WHERE c.task_id = $1 AND r.attempt <> $2 AND c.key NOT LIKE 'checks:%'`, h.task, h.attempt); n != 0 {
+		w.t.Errorf("%d reasons other than checks reached a conductor of another attempt", n)
+	}
+	if w.latestAttempt(h.task) != h.attempt {
+		return
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, h.task); n != 0 {
+		w.t.Errorf("%d of the task's reasons still pending", n)
+	}
+	if got := w.conductorRuns(h.task); len(got) != 1 {
+		w.t.Errorf("the task's conductors: %v", got)
 	}
 }
 
@@ -152,7 +197,7 @@ func (w *world) assertWakesEnded(task string) {
 func TestArchivingAnEndedTaskLetsWhatWasKeptGo(t *testing.T) {
 	w := conducting(t)
 	task, ana, conductor := w.stoppedAtDecision()
-	w.heldWake(task)
+	h := w.heldWake(task)
 	mustExec(t, w.owner, `UPDATE tasks SET status = 'done' WHERE id = $1`, task)
 	if status, body := w.callAs(ana, "/internal/tasks/"+task+"/archive", map[string]any{}); status != 200 {
 		t.Fatalf("archive: %d %v", status, body)
@@ -160,7 +205,7 @@ func TestArchivingAnEndedTaskLetsWhatWasKeptGo(t *testing.T) {
 	if !w.released(conductor) {
 		t.Errorf("the kept conductor is still kept after the archive")
 	}
-	w.assertWakesEnded(task)
+	w.assertWakesEnded(h)
 	w.until("the kept lux Run to be cancelled", func() bool { return w.luxRunFor(conductor).Cancelled })
 }
 
