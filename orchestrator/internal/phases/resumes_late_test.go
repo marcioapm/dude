@@ -382,3 +382,81 @@ func TestALateStampIsKeptOncePerColumnAndResume(t *testing.T) {
 		t.Errorf("owed %v, want the read of 2 once", s.owed("run_1"))
 	}
 }
+
+// lux's running state still lands on a resume once it is timed: it trails
+// the agent's records, and more than timing reads it. Here a resume is
+// timed from its first output alone, and its running state comes after.
+func TestRunningAfterTheResumeIsTimedIsStillStamped(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(spoke(2))
+	w.untilTimed()
+	if row := w.row(2); row["timed_at"] == nil || row["running_at"] != nil {
+		t.Fatalf("timed_at %v, running_at %v: want it timed without running_at", row["timed_at"], row["running_at"])
+	}
+	w.follow(running(2))
+	if row := w.row(2); row["running_at"] == nil {
+		t.Errorf("running_at not stamped after the resume was timed")
+	}
+}
+
+// A late stamp of a frame with no epoch is for the resume that was the
+// latest as the frame was applied, not when it is written: a resume asked
+// for in between keeps its own columns empty.
+func TestALateStampWithNoEpochIsForTheResumeItWasAbout(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2))
+	w.slowStampOnce("busy_at")
+	tr := &translator{run: w.run}
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		tr.stamp(w.ctx, tx, w.s, "busy_at", 0)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.late) != 1 {
+		t.Fatalf("kept %v, want the busy_at stamp: the test proves nothing", tr.late)
+	}
+	// A later resume's row, before the stamp is written.
+	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at) VALUES ($1, $2, 3, 'person', now())`,
+		w.run.ID, w.run.Org)
+	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.row(2)["busy_at"]; got == nil {
+		t.Errorf("busy_at of resume 2 not written")
+	}
+	if got := w.row(3)["busy_at"]; got != nil {
+		t.Errorf("busy_at %v on resume 3, asked for after the frame", got)
+	}
+}
+
+// A Run's late stamps go once its follower is over: nothing else would
+// drop them while the process runs.
+func TestALateStampGoesWithItsFollower(t *testing.T) {
+	w := newResumeWorld(t)
+	w.s.lateMu.Lock()
+	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, time.Now()}}}
+	w.s.lateMu.Unlock()
+	st := newStreamLux(w.lux)
+	w.s.Lux = st
+	r := w.run
+	r.Status, r.LuxState = statusRunning, "resuming"
+	w.s.follow(r)
+	select {
+	case <-st.opened:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the follower never opened the stream")
+	}
+	if err := w.s.unfollowWait(w.ctx, w.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if left := w.s.lateStamps(w.run.ID); left != nil {
+		t.Errorf("late stamps kept after the follower ended: %v", left)
+	}
+}
