@@ -348,3 +348,74 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 		t.Error("a live Run lost its copy")
 	}
 }
+
+// (f) A dead writer given A committed it; its copy, past its retention, is
+// gone, and A is rotated to B. recover_run, which could scan its commits
+// only for B, is refused, and nothing is written or pushed.
+func TestARecoveryOfARunWhoseCopyIsGoneIsRefused(t *testing.T) {
+	w := conducting(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	task, run, _ := w.deadWriter("config/app.toml", "password = "+implToken+"\n")
+	w.collected(run)
+	w.copyExpired(run)
+	w.grant("IMPL_TOKEN", implTokenB, "implementer")
+	w.recoverRefused(task, `{"run":"`+run+`"}`, "dude no longer holds every value it was given")
+	for range 3 {
+		w.pump()
+	}
+	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != "" {
+		t.Errorf("the recovered branch reached GitHub at %s", got)
+	}
+	if w.githubHolds(implToken) {
+		t.Error("the old value reached GitHub")
+	}
+
+	// A Run given no secrets has nothing to scan for: still recovered.
+	t.Run("given none", func(t *testing.T) {
+		w := conducting(t)
+		task, run, commit := w.deadWriter("WIP.md", "half of it\n")
+		w.collected(run)
+		mustExec(t, w.owner, `UPDATE runs SET ended_at = now() - interval '31 days' WHERE id = $1`, run)
+		id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+		w.until("the recovery done", func() bool { return w.recoveryStatus(id) == "done" })
+		if got := w.branchAt("dude/" + task + "/recovered-" + run); got != commit {
+			t.Errorf("the recovered branch is at %q, want %s", got, commit)
+		}
+	})
+}
+
+// (g) As (f), but the copy goes after recover_run accepted the recovery
+// and before the worker scans it: the recovery fails, saying why, nothing
+// is pushed, and the conductor is told.
+func TestARecoveryWhoseCopyGoesBeforeItsScanFailsUnpushed(t *testing.T) {
+	w := conducting(t)
+	w.grant("IMPL_TOKEN", implToken, "implementer")
+	task, run, _ := w.deadWriter("config/app.toml", "password = "+implToken+"\n")
+	w.collected(run)
+	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
+	w.copyExpired(run)
+	w.grant("IMPL_TOKEN", implTokenB, "implementer")
+	w.until("the recovery ended", func() bool {
+		s := w.recoveryStatus(id)
+		return s == "refused" || s == "done" || s == "failed"
+	})
+	if s := w.recoveryStatus(id); s != "failed" {
+		t.Errorf("the recovery %s, want failed", s)
+	}
+	if e := w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id); !strings.Contains(e, "no longer holds every value") {
+		t.Errorf("the recovery's error %q", e)
+	}
+	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != "" {
+		t.Errorf("the recovered branch reached GitHub at %s", got)
+	}
+	if pub := w.publisherOf(id); pub != nil && len(pub.PushCredentials) != 0 {
+		t.Error("lux was asked to push the publisher")
+	}
+	if w.githubHolds(implToken) {
+		t.Error("the old value reached GitHub")
+	}
+	w.until("the conductor told", func() bool { return w.recoveredWakes(task) == 1 })
+	if line := w.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'recovered'`, task); !strings.Contains(line, "no longer holds every value") {
+		t.Errorf("the wake says %q", line)
+	}
+}
