@@ -71,8 +71,10 @@ func failurePriority(s string) int {
 		return 1
 	case s == "FAIL" || strings.HasPrefix(s, "FAIL\t") || strings.HasPrefix(s, "FAIL "):
 		return 2
-	case strings.Contains(low, "error") || strings.Contains(low, "failed") || strings.Contains(low, ": failure:") || strings.Contains(s, ".go:") && goCompilerDiagnostic.MatchString(s):
+	case strings.Contains(low, "error") || strings.Contains(low, "failed") || strings.Contains(low, ": failure:"):
 		return 3
+	case strings.Contains(s, ".go:") && goCompilerDiagnostic.MatchString(s):
+		return 4
 	}
 	return -1
 }

@@ -8,6 +8,37 @@ import (
 	"unicode/utf8"
 )
 
+func TestFailureExcerptGoPositionsDoNotDisplaceExplicitError(t *testing.T) {
+	var input strings.Builder
+	for i := range 20 {
+		fmt.Fprintf(&input, "    widget_test.go:%d: debug value %d\n", 10+i, i)
+	}
+	const diagnostic = "Error: Cannot find module 'left-pad'"
+	const exit = "##[error]Process completed with exit code 1."
+	input.WriteString(strings.Repeat("noise\n", 3000) + diagnostic + "\n" + strings.Repeat("progress\n", 100) + exit)
+	for _, budget := range []int{4000, 16380} {
+		t.Run(fmt.Sprint(budget), func(t *testing.T) {
+			out := FailureExcerpt(input.String(), budget)
+			for _, cut := range []int{budget, 976} {
+				out = FailureExcerpt(out, cut)
+				if !strings.Contains(out, diagnostic) || !strings.Contains(out, exit) || len(out) > cut || !utf8.ValidString(out) {
+					t.Fatalf("cut %d lost explicit failure: %q", cut, out)
+				}
+			}
+		})
+	}
+}
+
+func TestFailureExcerptBareGoCompilerAtSmallBudget(t *testing.T) {
+	const diagnostic = "main.go:7:2: undefined: Widget"
+	const exit = "##[error]Process completed with exit code 1."
+	input := strings.Repeat("setup noise\n", 3000) + diagnostic + "\n" + strings.Repeat("progress\n", 100) + exit
+	out := FailureExcerpt(FailureExcerpt(input, 16380), 976)
+	if !strings.Contains(out, diagnostic) || !strings.Contains(out, exit) || len(out) > 976 || !utf8.ValidString(out) {
+		t.Fatalf("bare compiler diagnostic lost: %q", out)
+	}
+}
+
 func TestFailureExcerptDiagnosticClassification(t *testing.T) {
 	for _, line := range []string{
 		"src/main.py:7:2: F401 unused import",
