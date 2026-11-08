@@ -74,7 +74,7 @@ def test_an_agent_session_does_not_get_the_project_secret(client: ApiClient, for
     pid = forge_project["id"]
     value = f"sk-test-{os.urandom(6).hex()}"
     assert client.post(f"/v1/projects/{pid}/secrets", {"name": NAME, "value": value}).status_code == 201
-    client.patch(f"/v1/projects/{pid}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
+    client.set_models(pid, {"implementer": "fake/hang"})
     task = client.create_task(pid, "An agent with a secret about")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code in (200, 201, 202)
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),

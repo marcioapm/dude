@@ -174,12 +174,12 @@ def run(env: TestEnvironment, args) -> None:
     # starts, so the one-off models below wait until these are past it.
     prs = [pr_of(client, t) for t, client, _ in delivered]
     # Asking its owner: the project's implementer asks, just for this one.
-    ana.patch(f"/v1/projects/{pid}", {"agentModels": ana.on_models({**SCRIPTED, "implementer": "fake/ask"})})
+    ana.set_models(pid, {**SCRIPTED, "implementer": "fake/ask"})
     asking = task(ana, "Localise the settings screens", l10n, ["Ana Costa"])
     deliver(ana, asking)
     wait_until(lambda: ana.get("/v1/questions", params={"taskId": asking["id"]}).json().get("questions"),
                timeout=120, message="the question never came")
-    ana.patch(f"/v1/projects/{pid}", {"agentModels": ana.on_models(SCRIPTED)})
+    ana.set_models(pid, SCRIPTED)
     live = task(ben, "Move data loading into useDashboardData", None, ["Ben Okafor", "Dev Patel"], project=insights["id"])
     deliver(ben, live)
     task(chloe, "Revenue chart zoom", charts, ["Chloé Martin"])

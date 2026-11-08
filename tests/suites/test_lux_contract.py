@@ -120,7 +120,7 @@ def test_steering_pause_and_resume_on_real_lux(client: ApiClient, lux_project):
     """A live agent on lux hears a directive, stops, and continues its session."""
     project, _ = lux_project
     # An agent that never finishes its turn, to have something live to control.
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
+    client.set_models(project["id"], {"implementer": "fake/hang"})
     task = client.create_task(project["id"], "Hold")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
@@ -185,7 +185,7 @@ def test_an_image_steer_and_an_image_prompt_on_real_lux(client: ApiClient, lux_p
     or a steer that never settles — is a contract break.
     """
     project, _ = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
+    client.set_models(project["id"], {"implementer": "fake/hang"})
     task = client.create_task(project["id"], "See this on lux")
     prompt_image = _upload_png(client, task["id"], "design.png", _png(64, 48))
     # A task's images are the ones its text shows: referenced, it is attached for every agent's prompt.
@@ -245,8 +245,7 @@ SEEN_GOAL = (
 def _vision_project(client: ApiClient, env, lux_project) -> tuple[dict, FakeGitHub]:
     """lux_project with every role on the real model, in dude's runtime image."""
     project, gh = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models(
-        {r: VISION_MODEL for r in ("implementer", "reviewer", "simplifier")})})
+    client.set_models(project["id"], {r: VISION_MODEL for r in ("implementer", "reviewer", "simplifier")})
     # The API takes a library image only; a typed ref is the operator's.
     query(env.owner_dsn, "UPDATE projects SET runtime_image = %s WHERE id = %s RETURNING id", (AGENT_IMAGE, project["id"]))
     return project, gh
@@ -395,8 +394,8 @@ def test_an_agent_on_real_lux_calls_dudes_tools(client: ApiClient, lux_project):
     agent (lux-fake's MCP client) calls list_tasks, and dude records the
     call on that Run and answers with the project's work."""
     project, _ = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/tools", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(project["id"], {
+        "implementer": "fake/tools", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(project["id"], "Use the tools")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
@@ -437,8 +436,8 @@ def test_an_agent_waiting_on_a_person_is_parked_on_real_lux_and_resumed_by_the_a
     the answer resumes the same lux Run, in the same agent session, and the
     resume is timed with every timestamp lux reports, in order."""
     project, _ = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(project["id"], {
+        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(project["id"], "Ask on lux")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
 
@@ -530,8 +529,7 @@ def test_a_person_pause_and_resume_on_real_lux_is_timed(client: ApiClient, env, 
     every placement time of both placements, and dude records them in order
     and times the resume once the agent speaks."""
     project, _ = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.set_models(project["id"], {"implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(project["id"], "Pause on lux, then carry on")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),
@@ -556,9 +554,8 @@ def test_a_file_published_on_real_lux_is_listed_while_the_run_keeps_running(clie
     downloaded, and dude lists it, with its description, while the Run is
     still running (lux#77)."""
     project, _ = lux_project
-    resp = client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
-    assert resp.status_code == 200, resp.text
+    client.set_models(project["id"], {
+        "implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(project["id"], "Publish on lux as you go")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["status"] == "running"), None),
@@ -719,8 +716,7 @@ def test_a_paused_agent_resumes_on_the_size_its_role_names_now(client: ApiClient
     fits, else it keeps it and says why); dude records lux's spec, not its
     request, and the resumed container gets the new memory."""
     project, _gh = lux_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models(
-        {"implementer": "fake/hang", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(project["id"], {"implementer": "fake/hang", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     sizes = {}
     try:
         for name, cpus, mem, disk in (("Medium", 2, 2048, 10), ("Small", 1, 1024, 5)):
@@ -815,9 +811,8 @@ def test_a_scripted_subagent_on_real_lux_is_recorded_as_the_task_calls_child(cli
     the child under lux-fake's task call, with lux-fake's ids, in order;
     with ask, lux allows the bash ask itself and says so, and nothing holds."""
     project, _ = lux_project
-    resp = client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
-        "implementer": model, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
-    assert resp.status_code == 200, resp.text
+    client.set_models(project["id"], {
+        "implementer": model, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(project["id"], f"Delegate on lux ({model})")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None),

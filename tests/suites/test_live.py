@@ -30,7 +30,7 @@ LIVE_MODELS = {"implementer": "fake/live", "reviewer": "fake/scripted", "simplif
 
 def _live_task(client: ApiClient, project: dict, title: str) -> tuple[dict, dict]:
     """A task whose implementer is at work, its edits in its checkout."""
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models(LIVE_MODELS)})
+    client.set_models(project["id"], LIVE_MODELS)
     task = client.create_task(project["id"], title)
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None),

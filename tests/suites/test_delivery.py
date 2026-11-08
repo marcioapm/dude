@@ -190,9 +190,8 @@ def test_a_file_an_agent_publishes_is_listed_while_its_run_keeps_running(client:
     as it works and never finishes its turn: each is listed with the task,
     with its description, while the Run is still running — not when it
     stops (lux#72)."""
-    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
-    assert resp.status_code == 200, resp.text
+    client.set_models(forge_project["id"], {
+        "implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(forge_project["id"], "Publish as you go")
     client.post(f"/v1/tasks/{task['id']}/deliver")
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None),
@@ -243,10 +242,9 @@ def test_an_agent_asks_a_person_waits_and_carries_on_with_the_answer(client: Api
     """The question reaches the API and the sidebar; parked while it waits,
     the answer resumes it, and the resume is timed from the answer."""
     # The suite parks a waiting agent after seconds (DUDE_PARK_AFTER).
-    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+    client.set_models(forge_project["id"], {
         "implementer": "fake/ask", "reviewer": "fake/scripted",
-        "simplifier": "fake/scripted"})})
-    assert resp.status_code == 200, resp.text
+        "simplifier": "fake/scripted"})
     task = client.create_task(forge_project["id"], "Ask first")
     client.post(f"/v1/tasks/{task['id']}/deliver")
 
@@ -397,7 +395,7 @@ def _resume_row_in_order(owner_dsn: str, run_id: str, timed: dict) -> dict:
 def test_steer_pause_resume_and_abort_reach_the_agent(client: ApiClient, forge_project: dict):
     """Run control goes user → backend → orchestrator → lux, and back as events."""
     # An agent that never finishes its turn, to have something live to control.
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
+    client.set_models(forge_project["id"], {"implementer": "fake/hang"})
     task = client.create_task(forge_project["id"], "Hold on")
     client.post(f"/v1/tasks/{task['id']}/deliver")
 
@@ -448,8 +446,7 @@ def test_a_persons_pause_and_resume_is_timed_from_their_resume(client: ApiClient
     resume is recorded with its cause and every stamp in order, and timed
     once the agent says something, from when they asked."""
     # Working, never finishing until it is resumed; then it says it is done.
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    client.set_models(forge_project["id"], {"implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(forge_project["id"], "Pause me, then carry on")
     client.post(f"/v1/tasks/{task['id']}/deliver")
     run = wait_until(

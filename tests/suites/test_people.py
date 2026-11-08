@@ -378,8 +378,8 @@ def test_a_task_has_people_the_owner_first(client: ApiClient, env, project: dict
 def test_an_owner_answers_with_any_of_their_keys(client: ApiClient, env, forge_project: dict):
     """The orchestrator's owner check is by person: a second key of the
     owner's answers; someone else's is refused, naming the owner."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(forge_project["id"], "Ask me")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     question = wait_until(lambda: next(iter(client.get("/v1/questions", params={"taskId": task["id"]}).json()["questions"]), None),
@@ -418,8 +418,8 @@ def test_waiting_on_you_is_split_by_whose_it_is(
 ):
     """Bo's agent asks Bo. Bo sees it as his, loud; the first person sees it
     under Waiting on others, quietly, and takes it over — then it is theirs."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     bo, bo_client = _invite(client, env, "Bo")
     task = bo_client.create_task(forge_project["id"], "Bo's question")
     assert bo_client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201

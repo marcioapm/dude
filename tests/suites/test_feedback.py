@@ -120,7 +120,7 @@ def test_a_draft_is_private_and_a_batch_at_the_pull_request_wait_holds_it_until_
 
 
 def test_a_working_implementer_hears_feedback_at_its_next_step(client: ApiClient, env, project: dict):
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
+    client.set_models(project["id"], {"implementer": "fake/hang"})
     task = client.create_task(project["id"], "Hear feedback while working")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     impl = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"

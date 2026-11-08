@@ -63,8 +63,8 @@ def fake_lux_images(env, lux_run_id: str) -> dict:
 
 
 def _hanging_run(client: ApiClient, project: dict, title: str, model: str = "fake/hang") -> tuple[dict, dict]:
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
-        "implementer": model, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(project["id"], {
+        "implementer": model, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(project["id"], title)
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
@@ -345,8 +345,8 @@ def test_a_screenshot_goes_beside_an_open_question(
     """One question has no note to carry images: a screenshot goes as a
     message beside it (Write to the agent instead), and the question stays
     open for its one-click answer."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/ask", "reviewer": "fake/hang", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": "fake/ask", "reviewer": "fake/hang", "simplifier": "fake/scripted"})
     task = client.create_task(forge_project["id"], "Phone layout")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None), timeout=60, message="no run")
@@ -383,8 +383,8 @@ def test_several_answers_carry_a_screenshot_in_their_note(
 ):
     """Several questions are answered together with a note, and the note
     takes images: the screenshot goes to the agent with the answers."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/ask-several", "reviewer": "fake/hang", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": "fake/ask-several", "reviewer": "fake/hang", "simplifier": "fake/scripted"})
     task = client.create_task(forge_project["id"], "Phone layout, two questions")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement"), None), timeout=60, message="no run")
@@ -426,8 +426,8 @@ def _real_models(client: ApiClient, project: dict, **roles: str) -> None:
     """Roles on models whose prompt is dude's own: the scripted agent's (fake/*) prompt is its
     script, while any other model gets the real prompt and is played by the fake lux as scripted.
     The implementer is on one unless told otherwise."""
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
-        "implementer": "llm-impl", "reviewer": "fake/scripted", "simplifier": "fake/scripted", **roles})})
+    client.set_models(project["id"], {
+        "implementer": "llm-impl", "reviewer": "fake/scripted", "simplifier": "fake/scripted", **roles})
 
 
 def _submitted(client: ApiClient, owner_dsn: str, task_id: str, phase: str) -> str:

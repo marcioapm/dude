@@ -245,8 +245,7 @@ def test_a_ready_pull_request_to_continue_with_nothing_to_add_is_reviewed_as_it_
     client: ApiClient, forge_project: dict, fake_github: FakeGitHub
 ):
     """(b) Ready, but Continue chosen; the implementer commits nothing: review on the unchanged head, said in the ledger."""
-    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"implementer": "fake/done"})})
-    assert resp.status_code == 200, resp.text
+    client.set_models(forge_project["id"], {"implementer": "fake/done"})
     person_head = fake_github.open_pull("feature/done", title="Done already")
     task = client.create_task(
         forge_project["id"], "Check the finished greeting",

@@ -1221,8 +1221,8 @@ def test_an_agents_progress_shows_in_its_chat(
     """The implementer reports progress with `dude event progress`; its
     chat shows one progress row that moved, not a line per update. What it
     thought before acting is in its events and in its chat, as a thought."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": {"model": "fake/tools"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": {"model": "fake/tools"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Report progress")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement"), None),
@@ -1255,10 +1255,10 @@ def test_a_role_on_claude_code_or_codex_delivers_and_its_chat_shows_its_work(
     that harness's protocol (as lux relays it), and the delivery goes through
     its phases as on OpenCode. The implementer's chat has its thought, its
     message and its tool calls; its header names the harness."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+    client.set_models(forge_project["id"], {
         "implementer": {"model": "fake/tools", "harness": harness},
         "reviewer": {"model": "fake/scripted", "harness": harness},
-        "simplifier": {"model": "fake/scripted", "harness": harness}})})
+        "simplifier": {"model": "fake/scripted", "harness": harness}})
     item = client.create_task(forge_project["id"], f"Deliver on {label}")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     wait_until(lambda: any(r["phase"] == "simplify" and r["status"] == "completed" for r in client.task_runs(item["id"])),
@@ -1291,8 +1291,8 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
     web = fake_github.add_repository("web")
     client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": {"model": "fake/request"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": {"model": "fake/request"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement"), None),
@@ -1319,8 +1319,8 @@ def test_a_person_approves_a_repository_an_agent_asked_for(
 def test_a_writer_parked_on_its_conductor_does_not_ask_the_owner_for_input(
     page: Page, web_url: str, env, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": "fake/ask", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     task = client.create_task(forge_project["id"], "The conductor holds this question")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     writer = wait_until(lambda: next((r for r in client.task_runs(task["id"])
@@ -1350,8 +1350,8 @@ def test_a_parked_agent_is_answered_from_its_chat(
 ):
     """An agent that asked and was not answered in time is parked: its chat
     says so, and answering there resumes it."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Ask, then wait")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     writer, human = relay_writer_question(client, item["id"])
@@ -1431,8 +1431,13 @@ def test_a_persons_resume_says_how_long_it_took(
 ):
     """A person pauses a working agent and resumes it: its chat says how long
     the resume took once the agent speaks, with the phases on hover."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    # On fake/live, mid-turn until it is resumed: a role names a tier, so the
+    # PATCH must succeed. An agent whose turn already ended (fake/scripted)
+    # may have its checks asked (run.checks.asked) before the pause; then it
+    # waits on them, its resume carries no input (resumeInput), and it never
+    # speaks, so its resume is never timed.
+    client.set_models(forge_project["id"], {
+        "implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Pause, then carry on")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["status"] == "running"), None),
@@ -1457,8 +1462,8 @@ def test_an_agent_parked_on_a_repository_request_says_what_resumes_it(
     web = fake_github.add_repository("web")
     client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": {"model": "fake/wait"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": {"model": "fake/wait"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Needs the client first", repositories=[{"id": target["id"]}])
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     implement = wait_until(
@@ -1560,8 +1565,8 @@ def test_everything_waiting_on_you_is_in_one_place(
     web = fake_github.add_repository("web")
     client.post(f"/v1/projects/{forge_project['id']}/repositories", {"name": "web", "url": web.clone_url})
     target = next(r for r in client.get(f"/v1/projects/{forge_project['id']}").json()["repositories"] if r["name"] != "web")
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     asking = client.create_task(forge_project["id"], "Ask first", repositories=[{"id": target["id"]}])
     client.post(f"/v1/tasks/{asking['id']}/deliver")
     # The writer asks its conductor first (PR4a): that question is not open
@@ -1569,7 +1574,7 @@ def test_everything_waiting_on_you_is_in_one_place(
     # relay through ask_person is the question waiting on you.
     relay_writer_question(client, asking["id"])
     wait_until(lambda: client.get("/v1/questions").json()["questions"], timeout=30, message="no question")
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"implementer": "fake/wait"})})
+    client.set_models(forge_project["id"], {"implementer": "fake/wait"})
     requesting = client.create_task(forge_project["id"], "Needs the client", repositories=[{"id": target["id"]}])
     client.post(f"/v1/tasks/{requesting['id']}/deliver")
     # Its request is its conductor's first (PR4b): not open for a person
@@ -1599,8 +1604,8 @@ def test_only_a_tasks_owner_answers_and_anyone_can_take_it_over(
     """Whoever creates a task drives it: a colleague sees its agent's
     question, but not the choices — they wait on the owner. Taking the task
     over from its page makes the question theirs to answer."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": {"model": "fake/ask"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Ask the owner")
     assert item["owner"]["name"] == "e2e user"
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
@@ -1719,7 +1724,7 @@ def test_a_failed_implementer_says_why_on_its_task_and_its_chat(
     delivery to a person. The task says why at the top and on the failed step, "Waiting on
     you" gives the reason, and the Run's chat ends on the error rather than a
     composer nobody would hear."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
+    client.set_models(forge_project["id"], {"reviewer": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Nobody to implement it")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     task = wait_for_escalation(client, item["id"], timeout=60, message="failure never reached the conductor")
@@ -1788,7 +1793,7 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
     """Delivery stopped for a person offers what fits: here, a failed
     implementer — try again, or stop. A note goes with the decision; trying
     again runs the step afresh, and with its model back it goes on."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
+    client.set_models(forge_project["id"], {"reviewer": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Implement it once it can")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     task = wait_for_escalation(client, item["id"], timeout=60, message="failure never reached the conductor")
@@ -1806,8 +1811,7 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
     expect(escalation.get_by_test_id("escalation-accept")).to_have_count(0)
 
     # Its model back, and a word for the agent.
-    client.patch(f"/v1/projects/{forge_project['id']}",
-                 {"agentModels": client.on_models({"implementer": "fake/scripted", "reviewer": "fake/scripted"})})
+    client.set_models(forge_project["id"], {"implementer": "fake/scripted", "reviewer": "fake/scripted"})
     escalation.get_by_test_id("escalation-note").fill("The model is configured now.")
     escalation.get_by_test_id("escalation-retry").click()
     expect(page.get_by_test_id("escalation")).to_have_count(0)
@@ -1822,7 +1826,7 @@ def test_a_person_decides_how_a_stopped_delivery_goes_on(
 def test_owner_can_stop_a_conductor_held_escalation_with_the_keyboard(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({"reviewer": "fake/scripted"})})
+    client.set_models(forge_project["id"], {"reviewer": "fake/scripted"})
     item = client.create_task(forge_project["id"], "Stop while the conductor decides")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     task = wait_for_escalation(client, item["id"], timeout=60)
@@ -1987,8 +1991,8 @@ def test_a_link_to_something_gone_says_so(
 
 def _hanging_run(client: ApiClient, forge_project: dict, title: str) -> dict:
     """A task whose implementer is working and never finishes its turn."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
-        "implementer": {"model": "fake/hang"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    client.set_models(forge_project["id"], {
+        "implementer": {"model": "fake/hang"}, "reviewer": "fake/scripted", "simplifier": "fake/scripted"})
     item = client.create_task(forge_project["id"], title)
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     return wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),

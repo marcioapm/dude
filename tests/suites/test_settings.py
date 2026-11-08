@@ -892,7 +892,7 @@ def test_the_session_header_says_the_tier_and_the_model_it_requested(
     its effort at the submit, and the header says all three. A later edit of
     the tier changes none."""
     project = forge_project
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({"implementer": "fake/hang"})})
+    client.set_models(project["id"], {"implementer": "fake/hang"})
     tier_id = client.get(f"/v1/projects/{project['id']}").json()["agentModels"]["implementer"]["tier"]
     assert client.put(f"/v1/models/tiers/{tier_id}", {"name": "Scripted", "model": "fake/hang", "effort": "medium"}).status_code == 200
     task = client.create_task(project["id"], "Write it up")
