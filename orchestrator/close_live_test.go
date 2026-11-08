@@ -141,16 +141,22 @@ func (w *world) heldWake(task string) held {
 	mustExec(w.t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
 		VALUES ('cwk_held_'||$2, $1, $2, 'decision', 'decision:held', 'A decision waits.', now() - interval '1 hour')`, w.org, task)
 	return held{task: task,
-		attempt: w.count(`SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1 AND kind = 'agent'`, task),
+		attempt: w.latestAttempt(task),
 		reasons: w.ids(`SELECT id FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL ORDER BY id`, task)}
+}
+
+func (w *world) latestAttempt(task string) int {
+	w.t.Helper()
+	return w.count(`SELECT COALESCE(max(attempt), 1) FROM runs WHERE task_id = $1 AND kind = 'agent'`, task)
 }
 
 // assertWakesEnded checks the stopped attempt's end for its wakes: the
 // reasons it held are settled, told to no conductor, the halt cleared, and
-// no conductor started on it beside the stopped one. Only the stopped
-// attempt's: after a Start over, the next attempt is live, and its Runs
-// record and deliver reasons of their own (a checks report, a quiet
-// conductor started for it) as soon as they work.
+// no conductor started on it beside the stopped one. With no next attempt
+// that holds for the whole task. After a Start over the next attempt is
+// live, and its Runs record and deliver reasons of their own (a checks
+// report, a quiet conductor started for it) as soon as they work: only a
+// checks reason may reach a conductor other than the stopped attempt's.
 func (w *world) assertWakesEnded(h held) {
 	w.t.Helper()
 	if len(h.reasons) == 0 {
@@ -168,9 +174,21 @@ func (w *world) assertWakesEnded(h held) {
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'halt'`, h.task); n != 0 {
 		w.t.Errorf("a delivery still holds its halt")
 	}
-	if got := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND role = 'conductor' AND kind = 'agent' AND attempt = $2
-		ORDER BY created_at, id`, h.task, h.attempt); len(got) != 1 {
+	if got := w.conductorRunsOf(h.task, h.attempt); len(got) != 1 {
 		w.t.Errorf("attempt %d's conductors: %v", h.attempt, got)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes c JOIN runs r ON r.id = c.conductor_run_id
+		WHERE c.task_id = $1 AND r.attempt <> $2 AND c.key NOT LIKE 'checks:%'`, h.task, h.attempt); n != 0 {
+		w.t.Errorf("%d reasons other than checks reached a conductor of another attempt", n)
+	}
+	if w.latestAttempt(h.task) != h.attempt {
+		return
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL`, h.task); n != 0 {
+		w.t.Errorf("%d of the task's reasons still pending", n)
+	}
+	if got := w.conductorRuns(h.task); len(got) != 1 {
+		w.t.Errorf("the task's conductors: %v", got)
 	}
 }
 
