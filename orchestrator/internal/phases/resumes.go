@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -137,13 +138,43 @@ const woken = `CASE $3
 // row to stamp; requested_at is now. A retry moves requested_at only while
 // lux still reports the Run stopped (the earlier attempt did not take).
 // before is the Run as lux reported it just before. Returns the epoch
-// foreseen. Under resumeLockTimeout and resumeStatementTimeout, not the
-// stream's budget: this is the only place the row is made.
+// foreseen.
+//
+// This is the only place the row is made: lost here, the resume is never
+// timed. So it is not under the stream's budget but resumeAsked's own
+// (resumeLockTimeout, resumeStatementTimeout), and a lock or statement
+// timeout, the database slow for a moment, is tried once more in a
+// transaction of its own.
 func (s *Syncer) resumeAsked(ctx context.Context, r phaseRun, before lux.Run) int {
 	epoch := nextEpoch(before)
+	for attempt := 1; ; attempt++ {
+		err := s.askResume(ctx, r, before, epoch)
+		if err == nil {
+			break
+		}
+		if attempt == 1 && databaseTimedOut(err) {
+			s.logger().Debug("recording a resume's timing timed out; trying again", "run", r.ID, "error", err)
+			continue
+		}
+		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", "resume", "error", err)
+		break
+	}
+	return epoch
+}
+
+// databaseTimedOut is whether err is Postgres giving up on a lock wait (55P03) or
+// a statement (57014): the database slow, not the statement wrong.
+func databaseTimedOut(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && (pg.Code == "55P03" || pg.Code == "57014")
+}
+
+// askResume is one attempt of resumeAsked, in a transaction of its own.
+func (s *Syncer) askResume(ctx context.Context, r phaseRun, before lux.Run, epoch int) error {
 	_, prev := placementsAround(before.Placements, epoch)
+	var failed error
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		s.bestEffortWithin(ctx, tx, r, "resume", resumeLockTimeout, resumeStatementTimeout, func(ctx context.Context, tx pgx.Tx) error {
+		failed = s.trySavepoint(ctx, tx, resumeLockTimeout, resumeStatementTimeout, func(ctx context.Context, tx pgx.Tx) error {
 			// The Run's row before the resume's: a retry's new row version
 			// makes writePlacements' foreign-key check take this KEY SHARE,
 			// and taken then, it would wait on a follower batch holding the
@@ -162,9 +193,9 @@ func (s *Syncer) resumeAsked(ctx context.Context, r phaseRun, before lux.Run) in
 		})
 		return nil
 	}); err != nil {
-		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", "resume", "error", err)
+		return err
 	}
-	return epoch
+	return failed
 }
 
 // resumeRefused deletes the row of a resume lux refused for good: there
@@ -549,16 +580,19 @@ func budgetUnder(ctx context.Context, lock, statement time.Duration) (time.Durat
 // timing statement waits would make pgx close the connection under the
 // Run's transaction. Postgres's timeouts bound it instead.
 func (s *Syncer) bestEffort(ctx context.Context, tx pgx.Tx, r phaseRun, what string, fn func(context.Context, pgx.Tx) error) {
-	s.bestEffortWithin(ctx, tx, r, what, timingLockTimeout, timingStatementTimeout, fn)
+	if err := s.trySavepoint(ctx, tx, timingLockTimeout, timingStatementTimeout, fn); err != nil {
+		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", what, "error", err)
+	}
 }
 
-// bestEffortWithin is bestEffort under the given lock and statement
-// timeouts, cut as timingBudget cuts its own.
-func (s *Syncer) bestEffortWithin(ctx context.Context, tx pgx.Tx, r phaseRun, what string,
-	lock, statement time.Duration, fn func(context.Context, pgx.Tx) error) {
+// trySavepoint is bestEffort under the given lock and statement timeouts,
+// cut as timingBudget cuts its own, returning fn's failure, undone, for
+// the caller to log.
+func (s *Syncer) trySavepoint(ctx context.Context, tx pgx.Tx, lock, statement time.Duration,
+	fn func(context.Context, pgx.Tx) error) error {
 	lock, statement, ok := budgetUnder(ctx, lock, statement)
 	if !ok || ctx.Err() != nil {
-		return
+		return nil
 	}
 	ctx = context.WithoutCancel(ctx)
 	var lockWas, statementWas string
@@ -582,9 +616,7 @@ func (s *Syncer) bestEffortWithin(ctx context.Context, tx pgx.Tx, r phaseRun, wh
 				lockWas, statementWas)
 		}
 	}
-	if err != nil {
-		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", what, "error", err)
-	}
+	return err
 }
 
 func (s *Syncer) logger() *slog.Logger {
