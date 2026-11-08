@@ -410,7 +410,8 @@ func releaseRunTx(ctx context.Context, tx pgx.Tx, runID string) error {
 // the new row reads only what comes after, and its costs so far as the
 // new row's base. Paused, to be resumed (phases.Syncer.whilePaused),
 // moved to the new heads, with the round message as its next input. The
-// predecessor keeps its record and its cost to date, and no lux Run.
+// predecessor keeps its record and its cost to date, and no lux Run; the
+// new row gets a copy of its secret values.
 func handOverTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun, p predecessorRow) (string, error) {
 	created, err := createPhaseRunTx(ctx, tx, org, in)
 	if err != nil {
@@ -438,6 +439,15 @@ func handOverTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun, p prede
 			lux_ai_base = o.lux_ai_base + COALESCE(o.lux_ai_usd, 0),
 			lux_compute_base = o.lux_compute_base + COALESCE(o.lux_compute_usd, 0)
 		FROM runs o WHERE n.id = $1 AND o.id = $2`, created, p.ID, luxRunID); err != nil {
+		return "", err
+	}
+	// The predecessor's copy of every value its lux Run was sent goes with
+	// it (phases.recordSending): that Run's checkout, commits and
+	// conversation, which may hold any of them, are the new row's now, and
+	// its resume sends only the current values.
+	if _, err := tx.Exec(ctx, `INSERT INTO run_project_secrets (run_id, organization_id, name, value)
+		SELECT $1, organization_id, name, value FROM run_project_secrets WHERE run_id = $2
+		ON CONFLICT DO NOTHING`, created, p.ID); err != nil {
 		return "", err
 	}
 	text, err := roundMessageTx(ctx, tx, in, p, created)

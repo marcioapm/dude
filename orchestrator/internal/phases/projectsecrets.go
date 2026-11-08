@@ -2,6 +2,7 @@ package phases
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
+	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
 
 // A project's secrets, and its organisation's (organization_secrets,
@@ -136,15 +138,42 @@ func (s *Syncer) retireForSecrets(ctx context.Context, r phaseRun, gone errSecre
 	return true, nil
 }
 
-// copyBackstop is how long after its Run ended a copy is deleted whatever
-// its collection did (a collection given up on, an orchestrator stopped
-// between the two).
+// copyBackstop is how long after its Run ended a copy no longer needed
+// (copyNeeded) is deleted whatever its collection did (a collection given
+// up on, an orchestrator stopped between the two).
 const copyBackstop = time.Hour
 
+// copyRetention is how long after its Run ended a copy is kept for a text
+// file the Run published to be served redacted, or a failed or aborted
+// writer's commits to be recovered (recover_run) with every value it held
+// scanned for. Past it the copy is deleted: what reads the Run's output
+// then redacts with the values in force (run_secret_values), so a value
+// rotated since is no longer caught there.
+const copyRetention = 30 * 24 * time.Hour
+
+// copyNeeded (SQL, over runs r): an ended Run's copy is still needed,
+// beyond its collection. It is kept (runs.keep) to be resumed
+// (delivery.ResumeKeptTx) or taken over by its next round
+// (delivery.handOverTx, which carries the copy over), both only after its
+// collection, until its keep ends (kept_until passed, let go, or its lux
+// Run terminated; while its stop has not yet set kept_until, Syncer.keep,
+// at most copyRetention); or, within copyRetention of its end, it
+// published a text file (served redacted, api.artifactContent), or is a
+// failed or aborted writer that ran on lux, whose checkpoints (which
+// outlive its terminate) a recovery may push (delivery.ConductRecoverTx).
+// A completed writer's commits were scanned with its copy when it pushed
+// them. A live Run's copy is never deleted: both deletes take only ended
+// Runs.
+var copyNeeded = `COALESCE(r.keep AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
+		AND COALESCE(r.kept_until > now(), r.ended_at > now() - make_interval(secs => ` + fmt.Sprint(copyRetention.Seconds()) + `))
+	OR r.ended_at > now() - make_interval(secs => ` + fmt.Sprint(copyRetention.Seconds()) + `)
+		AND (r.phase IN ('implement', 'fix', 'simplify') AND r.status IN ('failed', 'aborted') AND r.lux_run_id IS NOT NULL
+			OR EXISTS (SELECT 1 FROM artifacts a WHERE a.run_id = r.id AND ` + redact.TextTypeSQL("a.content_type") + `)), false)`
+
 // ForgetSecretCopies deletes, in each organization in turn, the copies of
-// Runs that ended over copyBackstop ago. Per organization because the
-// sweeper role has no grant on run_project_secrets. Returns how many
-// copies it deleted.
+// Runs that ended over copyBackstop ago and no longer need one
+// (copyNeeded). Per organization because the sweeper role has no grant on
+// run_project_secrets. Returns how many copies it deleted.
 func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 	var orgs []string
 	if err := s.DB.InSystem(ctx, "secret-copies", func(tx pgx.Tx) error {
@@ -162,7 +191,7 @@ func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 			tag, err := tx.Exec(ctx, `DELETE FROM run_project_secrets s USING runs r
 				WHERE r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted')
-				  AND r.ended_at < now() - make_interval(secs => $1)`, copyBackstop.Seconds())
+				  AND r.ended_at < now() - make_interval(secs => $1) AND NOT `+copyNeeded, copyBackstop.Seconds())
 			n += int(tag.RowsAffected())
 			return err
 		}); err != nil {
@@ -188,11 +217,13 @@ func secretNames(list []lux.Secret) []string {
 // made the Run lux holds, with a name since unticked or a value since
 // rotated. A resume keeps the checkout, its commits and the conversation,
 // which may hold any value sent before; and a retried resume may be
-// answered with an earlier attempt's, which sent another value. Only
-// forgetSubmitting (a submit refused for good), recordGiven's trim to the
-// names lux accepted, the copy's collection and ForgetSecretCopies remove
-// any. A crash before Submit leaves them on a pending Run, which the next
-// attempt adds to.
+// answered with an earlier attempt's, which sent another value. A next
+// round that takes a kept Run's lux Run over starts with its predecessor's
+// copy (delivery.handOverTx). Only forgetSubmitting (a submit refused for
+// good), recordGiven's trim to the names lux accepted, and, once nothing
+// can produce or read the ended Run's output any more (copyNeeded), its
+// collection and ForgetSecretCopies remove any. A crash before Submit
+// leaves them on a pending Run, which the next attempt adds to.
 func (s *Syncer) recordSending(ctx context.Context, r phaseRun, sent []lux.Secret) error {
 	if len(sent) == 0 {
 		return nil

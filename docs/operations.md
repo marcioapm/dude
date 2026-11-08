@@ -568,9 +568,16 @@ it held before: the resumed Run's checkout, commits and conversation may
 still hold an earlier one. A name since removed, or no longer
 given to its phase, cannot be supplied and lux would refuse the resume, so
 dude retires that Run and starts a fresh one of the phase in its slot
-(`run.restarted` by dude), which is no failure. The copy is deleted when the
-Run has ended and its output (pushed work, final diff, files it published)
-is collected, and in any case an hour after it ended.
+(`run.restarted` by dude), which is no failure. The copy outlives the
+Run's end for as long as something can still produce or read its output:
+while its output (pushed work, final diff, files it published) is being
+collected; while it is kept to be resumed or for its next round, which
+takes the copy over with its lux Run (`keep_stopped`); and for 30 days
+after it ended if it published a text file, which is redacted each time
+it is served, or is a failed or aborted writer whose commits `recover_run`
+may still push. Otherwise it is deleted once its output is collected, and
+in any case an hour after it ended. Past those 30 days a file is served,
+and a recovery scanned, with the values in force then.
 
 **Redaction.** dude replaces each value a Run was given — raw, base64
 (standard, unpadded, URL), URL-escaped, hex and JSON-escaped (also twice,
