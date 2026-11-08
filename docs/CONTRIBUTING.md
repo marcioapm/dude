@@ -321,10 +321,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   last reviewed head while a follow-up is reviewed: a fix or an
   integration reaches the pull request as it publishes and is reviewed
   straight after (#418). Holding it would need unpublished heads and a
-  separate promotion step, which is the candidate pipeline #393/#394
-  removed. So the conductor is told the limit and says so up front when a
-  person asks for review before the update, rather than promising it.
-  A conflict on the open pull request is a
+  separate promotion step, the candidate pipeline #393/#394 removed; the
+  conductor is told so, and says so up front when a person asks for
+  review before the update. A conflict on the open pull request is a
   message to the conductor at the pull request feedback decision; under
   the policy, the integration fixer merges the base onto the pull request's
   branch, its merge is reviewed and not tested, and the delivery waits
