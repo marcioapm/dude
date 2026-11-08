@@ -392,3 +392,20 @@ func marshalled(t *testing.T, v any) []byte {
 	}
 	return raw
 }
+
+// PublishesSQL lists exactly the phases Publishes takes, sorted, each an
+// SQL string literal: phases.copyNeeded keeps a dead writer's copy for
+// those, so a phase added to one and not the other would lose a writer's
+// copy (or keep a reader's).
+func TestPublishesSQLIsPublishes(t *testing.T) {
+	var want []string
+	for phase, ok := range Publishes {
+		if ok {
+			want = append(want, "'"+phase+"'")
+		}
+	}
+	slices.Sort(want)
+	if got := PublishesSQL(); got != strings.Join(want, ", ") || len(want) == 0 {
+		t.Errorf("PublishesSQL() = %q, want %q", got, strings.Join(want, ", "))
+	}
+}

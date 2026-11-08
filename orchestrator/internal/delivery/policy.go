@@ -228,6 +228,19 @@ var Publishes = map[string]bool{
 	PhaseSimplify:  true,
 }
 
+// PublishesSQL is the phases Publishes takes, as a sorted list of SQL
+// string literals for an IN (…) over runs.phase.
+func PublishesSQL() string {
+	var phases []string
+	for phase, ok := range Publishes {
+		if ok {
+			phases = append(phases, "'"+strings.ReplaceAll(phase, "'", "''")+"'")
+		}
+	}
+	slices.Sort(phases)
+	return strings.Join(phases, ", ")
+}
+
 var reviewerOrder = []string{"correctness", "quality", "tests", "security", "database", "api", "frontend", "documentation", "performance"}
 
 // ReviewersFor picks the reviewers a diff warrants on a first review round,
