@@ -18,6 +18,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -125,6 +127,13 @@ func TestARoundHandedOverAfterARotationStillRedactsAndRefusesTheOldValue(t *test
 	w, task := stuckReview(t, 3)
 	w.grant("IMPL_TOKEN", implToken, "implementer", "fixer")
 	values := []string{implTokenB, implTokenC}
+	// lux's Decide runs on its own goroutines while the test polls on
+	// w.owner: the hook gets a connection of its own, used under mu.
+	hookConn, err := pgx.ConnectConfig(context.Background(), w.owner.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hookConn.Close(context.Background()) })
 	var mu sync.Mutex
 	reviews := 0
 	scripted := w.lux.Decide
@@ -137,13 +146,22 @@ func TestARoundHandedOverAfterARotationStillRedactsAndRefusesTheOldValue(t *test
 			// round has not yet been resumed.
 			mu.Lock()
 			if reviews < len(values) {
-				mustExec(t, w.owner, `UPDATE project_secrets SET value = $2, updated_at = now() WHERE project_id = $1 AND name = 'IMPL_TOKEN'`,
-					w.project, values[reviews])
+				if _, err := hookConn.Exec(context.Background(), `UPDATE project_secrets SET value = $2, updated_at = now()
+					WHERE project_id = $1 AND name = 'IMPL_TOKEN'`, w.project, values[reviews]); err != nil {
+					t.Error(err)
+				}
 			}
 			reviews++
 			mu.Unlock()
 		case "fix":
-			if w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task) >= 2 {
+			mu.Lock()
+			var fixes int
+			if err := hookConn.QueryRow(context.Background(), `SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task).
+				Scan(&fixes); err != nil {
+				t.Error(err)
+			}
+			mu.Unlock()
+			if fixes >= 2 {
 				b.CallTools = append(slices.Clone(b.CallTools), gitCall("log", "-1", "--grep=remembered "+implToken),
 					writeCall("config/app.toml", "password = "+implToken), commitCall("Add config"))
 			}
