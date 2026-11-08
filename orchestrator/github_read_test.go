@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
@@ -98,8 +99,10 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 			w.gh.SetJobLog(77, log, downloads.URL)
 			out := read("github_check_log", `{"repo":"acme/target","checkId":77}`)
 			text, ok := quoted(field(out, "log").(string))
-			if !ok || !strings.Contains(text, "AssertionError: 3 != 2") || strings.Contains(text, "Post job cleanup") ||
-				strings.Contains(text, "Node.js 20") || len(text) > 16<<10 || field(out, "source") != "log" {
+			if !ok || !strings.Contains(text, "AssertionError: 3 != 2") || !strings.Contains(text, "Post job cleanup.") ||
+				!strings.Contains(text, "Process completed with exit code 1.") || !strings.Contains(text, "… [lines omitted]") ||
+				strings.Count(text, "setup noise") > 64 || strings.Contains(text, "Node.js 20") ||
+				len(text) > 16380 || !utf8.ValidString(text) || field(out, "source") != "log" || field(out, "actions") != true {
 				t.Fatalf("log result: %v", out)
 			}
 			var payload string
@@ -113,6 +116,19 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 			if n := w.count(`SELECT count(*) FROM events WHERE `+column+` = $1
 				AND event_type = 'agent.tool.attempted' AND payload->>'tool' = 'github_check_log'`, scope); n != 1 {
 				t.Fatalf("log read attempts: %d", n)
+			}
+			// Scan beyond an early wrapper error and retain the later diagnosis,
+			// even when a long cleanup pushes both outside the rolling tail.
+			w.gh.SetJobLog(77, "##[error]early wrapper error\n"+strings.Repeat("progress\n", 3000)+
+				"E       AssertionError: later diagnosis\n##[error]Process completed with exit code 1.\n"+
+				strings.Repeat("Post job cleanup.\n", 1000), downloads.URL)
+			out = read("github_check_log", `{"repo":"acme/target","checkId":77}`)
+			text, ok = quoted(field(out, "log").(string))
+			if !ok || !strings.Contains(text, "early wrapper error") || !strings.Contains(text, "AssertionError: later diagnosis") ||
+				!strings.Contains(text, "Process completed with exit code 1.") || !strings.Contains(text, "… [lines omitted]") ||
+				strings.Contains(text, "Node.js 20") ||
+				len(text) > 16380 || !utf8.ValidString(text) || field(out, "source") != "log" || field(out, "actions") != true {
+				t.Fatalf("later diagnosis result: %v", out)
 			}
 			// A log GitHub refuses: the check run's failure, and why.
 			w.gh.Set(func(s *fakegithub.Server) { s.LogStatus = http.StatusForbidden })
