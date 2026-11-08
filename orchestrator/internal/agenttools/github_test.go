@@ -16,10 +16,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
 
-// The real HTTP forge read and agent wrapper must keep a middle timeout,
-// its running test names, the package FAIL and final exit, not just cleanup.
-func TestGitHubCheckLogHTTPKeepsMiddleFailureWithinBudget(t *testing.T) {
-	const budget = 16380 // readOnGitHub reserves len("…\n") from 16 KiB.
+// checkLogForge is a forge reading check 77, an Actions job whose log is
+// log, from a fake GitHub that redirects downloads to another host.
+func checkLogForge(t *testing.T, log, secret string) (*fakegithub.Server, *forge.GitHub) {
+	t.Helper()
 	fake := fakegithub.New("", "acme/target")
 	downloads := httptest.NewServer(fake.LogDownloads())
 	t.Cleanup(downloads.Close)
@@ -28,13 +28,20 @@ func TestGitHubCheckLogHTTPKeepsMiddleFailureWithinBudget(t *testing.T) {
 	fake.Set(func(s *fakegithub.Server) {
 		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()}
 	})
+	fake.SetJobLog(77, log, downloads.URL)
+	return fake, forge.NewGitHub(forge.Credential{Auth: "pat", Secret: secret, APIBaseURL: api.URL})
+}
+
+// The real HTTP forge read and agent wrapper must keep a middle timeout,
+// its running test names, the package FAIL and final exit, not just cleanup.
+func TestGitHubCheckLogHTTPKeepsMiddleFailureWithinBudget(t *testing.T) {
+	const budget = 16380 // readOnGitHub reserves len("…\n") from 16 KiB.
 	input := "##[error]early wrapper error\n" + strings.Repeat("setup noise 界\n", 4000) +
 		"[lane2] panic: test timed out after 10m0s\n[lane2] running tests:\n" +
 		"[lane2]     TestBlocked (9m59s)\n[lane2]     TestWaiting (9m58s)\n" +
 		strings.Repeat("goroutine noise\n", 4000) + "FAIL example/service 600s\n" +
 		"##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup noise\n", 4000)
-	fake.SetJobLog(77, input, downloads.URL)
-	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp_check_log_" + t.Name(), APIBaseURL: api.URL})
+	fake, gh := checkLogForge(t, input, "ghp_check_log_"+t.Name())
 	read, err := gh.CheckLog(context.Background(), "acme/target", 77, budget)
 	if err != nil {
 		t.Fatal(err)
@@ -73,18 +80,9 @@ func TestGitHubCheckLogHTTPKeepsMiddleFailureWithinBudget(t *testing.T) {
 func TestGitHubCheckLogHTTPKeepsGoCompilerDiagnostic(t *testing.T) {
 	const diagnostic = "main.go:7:2: undefined: Widget"
 	const exit = "##[error]Process completed with exit code 1."
-	fake := fakegithub.New("", "acme/target")
-	downloads := httptest.NewServer(fake.LogDownloads())
-	t.Cleanup(downloads.Close)
-	api := httptest.NewServer(fake.Handler())
-	t.Cleanup(api.Close)
-	fake.Set(func(s *fakegithub.Server) {
-		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()}
-	})
 	input := strings.Repeat("setup noise 界\n", 4000) + diagnostic + "\n" +
 		strings.Repeat("progress "+strings.Repeat("界", 80)+"\n", 100) + exit
-	fake.SetJobLog(77, input, downloads.URL)
-	gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp_check_log_" + t.Name(), APIBaseURL: api.URL})
+	_, gh := checkLogForge(t, input, "ghp_check_log_"+t.Name())
 	read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16380)
 	if err != nil {
 		t.Fatal(err)
@@ -119,22 +117,13 @@ func TestGitHubCheckLogHTTPKeepsGoCompilerDiagnostic(t *testing.T) {
 func TestGitHubCheckLogHTTPEscapedEnvelope(t *testing.T) {
 	for _, unit := range []string{"<", ">", "&", "\x00", "\x01", "\"", "\\"} {
 		t.Run(fmt.Sprintf("%q", unit), func(t *testing.T) {
-			fake := fakegithub.New("", "acme/target")
-			downloads := httptest.NewServer(fake.LogDownloads())
-			t.Cleanup(downloads.Close)
-			api := httptest.NewServer(fake.Handler())
-			t.Cleanup(api.Close)
-			fake.Set(func(s *fakegithub.Server) {
-				s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()}
-			})
 			input := "##[error]early wrapper error\n" + strings.Repeat(strings.Repeat(unit, 4000)+"\n", 4) +
 				strings.Repeat("setup noise\n", 4000) +
 				"[lane2] panic: test timed out after 10m0s\n[lane2] running tests:\n" +
 				"[lane2]     TestBlocked (9m59s)\n[lane2]     TestWaiting (9m58s)\n" +
 				strings.Repeat("goroutine noise\n", 4000) + "FAIL example/service 600s\n" +
 				"##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup noise\n", 4000)
-			fake.SetJobLog(77, input, downloads.URL)
-			gh := forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "local-fixture-token", APIBaseURL: api.URL})
+			fake, gh := checkLogForge(t, input, "local-fixture-token")
 			read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16380)
 			if err != nil {
 				t.Fatal(err)
@@ -223,15 +212,14 @@ func TestGitHubCheckLogWithCallerSuppliedRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := raw
 	var got map[string]any
-	if err := json.Unmarshal(out, &got); err != nil {
+	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
 	text, _ := got["log"].(string)
 	if strings.Contains(text, secret) || !strings.Contains(text, "[REDACTED:CI_TOKEN]") ||
 		!strings.Contains(text, "exit status 2") || !balancedQuotes(got, w.id) {
-		t.Fatalf("caller redaction lost the marker, evidence or quote: %s", out)
+		t.Fatalf("caller redaction lost the marker, evidence or quote: %s", raw)
 	}
 }
 
