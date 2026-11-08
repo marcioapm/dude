@@ -19,15 +19,18 @@ const implTokenD = "impl-test-not-a-real-token-DDD"
 // remembersImplementer is an implementer that does calls in its first
 // turn, then hangs; each input it reads after that it answers by running
 // git with value on its command line, as an agent repeating a token it
-// remembers from its conversation would.
-func (w *world) remembersImplementer(value string, calls ...[2]string) {
+// remembers from its conversation would. A resume's input wakes it to
+// finish its turn, unless forGood: then it hangs after the resume too, so
+// its Run stays live and keeps its copy, which collecting an ended Run's
+// output deletes (phases.Artifacts).
+func (w *world) remembersImplementer(value string, forGood bool, calls ...[2]string) {
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		b := scripted(spec)
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
 			b.Commit = nil
 			b.CallTools = calls
-			b.Hang = true
+			b.Hang, b.NeverWake = true, forGood
 			b.InputTools = [][2]string{gitCall("log", "-1", "--grep=remembered "+value)}
 		}
 		return b
@@ -76,7 +79,7 @@ func (w *world) assertNotStored(task, runID, value string) {
 func TestAValueCommittedBeforeAResumeStillRefusesThePush(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
-	w.remembersImplementer(implToken,
+	w.remembersImplementer(implToken, false,
 		writeCall("config/app.toml", "password = "+implToken), commitCall("Add config"),
 		gitCall("rm", "-q", "config/app.toml"), writeCall("README.md", "reads IMPL_TOKEN from the environment"), commitCall("Drop config"))
 	task, runID, _ := w.pausedImplementer()
@@ -111,7 +114,7 @@ func TestAValueCommittedBeforeAResumeStillRefusesThePush(t *testing.T) {
 func TestAValueGivenBeforeAResumeIsStillRedacted(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
-	w.remembersImplementer(implToken)
+	w.remembersImplementer(implToken, true)
 	task, runID, luxID := w.pausedImplementer()
 	w.grant("IMPL_TOKEN", implTokenB, "implementer")
 	w.resumePhase(runID)
@@ -131,7 +134,7 @@ func TestAValueGivenBeforeAResumeIsStillRedacted(t *testing.T) {
 func TestAValueOfAResumeWhoseAnswerWasLostIsRedacted(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
-	w.remembersImplementer(implTokenB)
+	w.remembersImplementer(implTokenB, true)
 	task, runID, luxID := w.pausedImplementer()
 	// The resumed placement waits for a host until the retry is answered,
 	// so lux is still resuming when it comes.
