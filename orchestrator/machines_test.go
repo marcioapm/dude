@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -86,8 +87,27 @@ func TestAResumedRunTakesTheSizeItsSettingsNameNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Else the check below that it records no limit would pass vacuously.
+	var limit int64
+	if p := before.Placements; len(p) > 0 && p[len(p)-1].MemoryLimit != nil {
+		limit = *p[len(p)-1].MemoryLimit
+	}
+	if limit <= 0 {
+		t.Fatalf("the placement before the resume reports a memory limit of %d, want one", limit)
+	}
 
 	mustExec(t, w.owner, `UPDATE machine_sizes SET name = 'Huge', cpus = 16 WHERE id = 'msz_large'`)
+	// The resumed placement waits for a host until the old limit is shown
+	// gone: once lux has assigned it, any read of the Run (the artifacts
+	// sweep's, a sync's) rightly records its limit, which is the new size's.
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	defer release()
+	w.lux.BeforeAssign(func(id string) {
+		if id == r.ID {
+			<-hold
+		}
+	})
 	w.resumeAgent(runID, r)
 
 	huge := lux.Resources{CPUs: 16, Memory: 23040 << 20, Disk: 120 << 30}
@@ -114,6 +134,7 @@ func TestAResumedRunTakesTheSizeItsSettingsNameNow(t *testing.T) {
 	if _, ok := w.machineOf(runID)["memoryLimit"]; ok {
 		t.Error("the placement before the resume recorded its limit as the new size's")
 	}
+	release()
 	w.until("the resumed placement to run", func() bool { return w.lux.State(r.ID) == "running" })
 	after, _ := w.syncer.Lux.Get(ctx, r.ID)
 	phases.RecordMemoryLimit(ctx, w.app, w.log, w.org, runID, after)
