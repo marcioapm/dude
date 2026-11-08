@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -353,6 +354,41 @@ func (w *world) failedOnceHeard(run string) {
 	w.failedAsLuxLost(run)
 }
 
+// parkedAskingAtGate is a conducted task at the pull request gate whose
+// conductor asked the person with decide (an ask_person) and was parked
+// for them, having heard everything dude sent it. Returns the task, the
+// conductor and the gate question.
+//
+// The conductor asks in a turn of its own, as a real one does: that turn
+// ends with the question open, so it waits on the person (translate's
+// idle) by construction, not only if a wake happens to land after the ask.
+// It is parked only once its input is heard and no reason is pending: a
+// note queued as the park's grace ends is held, unread, until the person
+// answers (resumable; requestPause does not wait for it on a park for a
+// person), which is not the state this sets up.
+func (w *world) parkedAskingAtGate(decide string) (task, old, q string) {
+	w.t.Helper()
+	w.syncer.ParkAfter = time.Hour
+	task = w.task()
+	w.reachGate(task)
+	old, _, _ = w.conductor(task)
+	if status, out := w.chat(task, "Ask me at the gate.\n"+fakeagent.ConductorCallPrefix+"decide "+decide); status >= 300 {
+		w.t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("the conductor waiting on its gate question, all it was sent heard", func() bool {
+		q = w.str(`SELECT COALESCE((SELECT id FROM questions WHERE run_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'), '')`, old)
+		return q != "" &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND waiting_since IS NOT NULL`, old) == 1 &&
+			w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0 &&
+			// A reason that only rides on another's note never wakes it.
+			w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL AND NOT starts_with(key, $2)`,
+				task, delivery.RideWakeKey("")) == 0
+	})
+	w.syncer.ParkAfter = time.Millisecond
+	w.untilParked(old)
+	return task, old, q
+}
+
 // failedAsOnMain is main's end state for the issue: the conductor failed
 // with lux's 404, its gate question cancelled with no event, everything
 // it was sent delivered. Returns the task, the failed conductor and the
@@ -366,13 +402,7 @@ func (w *world) failedAsOnMain() (task, old, q string) {
 // ask_person, e.g. one that recommends another of the gate's choices.
 func (w *world) failedAsOnMainAsking(decide string) (task, old, q string) {
 	w.t.Helper()
-	w.syncer.ParkAfter = time.Millisecond
-	task = w.task()
-	w.reachGate(task)
-	w.must(task, "decide", decide)
-	q = w.str(`SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
-	old = w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
-	w.untilParked(old)
+	task, old, q = w.parkedAskingAtGate(decide)
 	w.failedAsLuxLost(old)
 	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "cancelled" {
 		w.t.Fatalf("the question is %s", st)
