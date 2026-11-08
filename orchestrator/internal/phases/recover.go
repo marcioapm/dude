@@ -395,6 +395,9 @@ func (s *Syncer) scanAndPush(ctx context.Context, c recoveryRow) error {
 	switch {
 	case errors.As(err, &unchecked):
 		return s.endRecovery(ctx, c, delivery.RecoveryFailed, err.Error(), nil)
+	case errors.Is(err, errSecretsExpired):
+		s.Log.Warn("refused to scan a recovery whose Run's secret copy is gone", "recovery", c.ID, "run", c.RunID)
+		return s.endRecovery(ctx, c, delivery.RecoveryFailed, delivery.RecoverySecretsExpired, nil)
 	case err != nil:
 		return err
 	case len(found) > 0:
@@ -415,12 +418,27 @@ func (s *Syncer) scanAndPush(ctx context.Context, c recoveryRow) error {
 		WHERE id = $1 AND claim_token = $2 AND status = 'submitted'`, recoveryEvery.String())
 }
 
+// errSecretsExpired: the dead Run was given secrets and its copy of their
+// values is gone (delivery.RecoverySecretsExpiredTx).
+var errSecretsExpired = errors.New("the Run's copy of its secret values is gone")
+
 // scanRecovery finds the dead Run's secrets in what the push would send:
 // every commit from where the dead Run's checkout started to the
-// checkpoint's head, and the branch's name. Nothing for a Run given none.
+// checkpoint's head, and the branch's name. Nothing for a Run given none;
+// errSecretsExpired for one given some whose copy is gone.
 func (s *Syncer) scanRecovery(ctx context.Context, c recoveryRow, chosen []recovered) ([]SecretInWork, error) {
 	var red *redact.Redactor
-	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) (err error) {
+	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+		// Its copy gone since the conductor asked (delivery.ConductRecoverTx
+		// refuses it then): only the values in force now could be scanned
+		// for, not one it held and that was rotated since.
+		expired, err := delivery.RecoverySecretsExpiredTx(ctx, tx, c.RunID)
+		if err != nil {
+			return err
+		}
+		if expired {
+			return errSecretsExpired
+		}
 		red, err = ledger.Redactor(ctx, tx, c.RunID)
 		return err
 	}); err != nil || red.Empty() {

@@ -110,6 +110,18 @@ func ConductRecoverTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask RecoverAsk
 	if secret {
 		return Recovery{}, refusef(rRecoverSecretFound, runID)
 	}
+	// A Run given secrets whose copy of their values is gone (deleted once
+	// nothing needs it, phases.copyNeeded) can be scanned only for the
+	// values in force now, not one it held and that was rotated since: it
+	// is not recovered. The recovery worker checks again before its scan
+	// (phases.scanRecovery), for a copy deleted after this.
+	expired, err := RecoverySecretsExpiredTx(ctx, tx, runID)
+	if err != nil {
+		return Recovery{}, err
+	}
+	if expired {
+		return Recovery{}, refusef(rRecoverSecretsExpired, runID)
+	}
 	prefix := RecoveredBranchPrefix(ref.TaskID)
 	branch := strings.TrimSpace(ask.Branch)
 	if branch == "" {
@@ -151,6 +163,25 @@ func ConductRecoverTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask RecoverAsk
 	}
 	return out, nil
 }
+
+// RecoverySecretsExpiredTx says the Run was given secrets
+// (runs.project_secret_names) and its copy of the values it was sent
+// (run_project_secrets) is gone, so its work cannot be scanned for every
+// value it held: a recovery of it is refused.
+func RecoverySecretsExpiredTx(ctx context.Context, tx pgx.Tx, runID string) (bool, error) {
+	var expired bool
+	err := tx.QueryRow(ctx, `SELECT cardinality(r.project_secret_names) > 0
+			AND NOT EXISTS (SELECT 1 FROM run_project_secrets s WHERE s.run_id = r.id)
+		FROM runs r WHERE r.id = $1`, runID).Scan(&expired)
+	return expired, err
+}
+
+// RecoverySecretsExpired is why a recovery of a Run whose copy is gone
+// (RecoverySecretsExpiredTx) ends unpushed, for the conductor and the
+// person.
+const RecoverySecretsExpired = "the Run was given secrets and dude no longer holds every value it was given " +
+	"(a Run's copy of them is deleted once nothing needs it, at the latest 30 days after it ended), " +
+	"so its work cannot be checked for a value rotated since; it is not recovered"
 
 // branchInUseTx says branch is the task branch of the attempt, or the
 // head of one of the task's open pull requests.
