@@ -90,7 +90,8 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
 			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 			           AND (r.lux_stop_reason IS DISTINCT FROM 'kept' OR r.kept_until <= now())))
-			  -- Consuming an abort clears the old back-off before cleanup retries.
+			  -- An abort is due through any back-off. Consuming it clears a live
+			  -- Run's back-off and keeps a terminal Run's for its cleanup retries.
 			  AND (r.control = 'abort' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $4::float8))
 			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR (r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')

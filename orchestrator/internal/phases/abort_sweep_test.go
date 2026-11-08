@@ -36,16 +36,7 @@ func TestAbortSweepSettlesLiveRunsOnce(t *testing.T) {
 					}))
 					defer server.Close()
 					w.s.Lux = lux.New(server.URL, "test")
-					for pass := range 12 {
-						n, err := w.s.Sweep(w.ctx)
-						want := 0
-						if pass == 0 {
-							want = 1
-						}
-						if err != nil || n != want {
-							t.Errorf("pass %d: acted=%d err=%v, want %d", pass, n, err, want)
-						}
-					}
+					w.sweepActedOnce()
 					if calls.Load() != 1 {
 						t.Errorf("cancel POSTs=%d, want 1", calls.Load())
 					}
@@ -53,12 +44,13 @@ func TestAbortSweepSettlesLiveRunsOnce(t *testing.T) {
 						AND control='none' AND lux_stop_reason='cancel' AND NOT keep AND control_reason='checks gate stop'`); n != 1 {
 						t.Error("abort did not durably settle")
 					}
-					// A child's stop request writes its run.aborted; the sweep does not repeat it.
+					// A child's run.aborted, if any, is written by its stop request
+					// (conductor stop_run or task Stop); the sweep writes none for children.
 					wantEvents := 1
 					if child {
 						wantEvents = 0
 					}
-					if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != wantEvents {
+					if n := w.abortedEvents(); n != wantEvents {
 						t.Errorf("sweep-written abort ledger events=%d, want %d", n, wantEvents)
 					}
 					if !child && w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'
@@ -110,15 +102,7 @@ func TestAbortSweepHonorsCleanupBackoff(t *testing.T) {
 					AND retry_due_at=next_attempt_at AND next_attempt_at>now() AND lux_stop_reason IS NULL`); n != 1 {
 					t.Fatal("cleanup did not schedule its backoff")
 				}
-				endedAt := func() time.Time {
-					t.Helper()
-					var at time.Time
-					if err := w.owner.QueryRow(w.ctx, `SELECT ended_at FROM runs WHERE id=$1`, w.run.ID).Scan(&at); err != nil {
-						t.Fatal(err)
-					}
-					return at
-				}
-				firstEnded := endedAt()
+				firstEnded := w.endedAt()
 				for range 12 {
 					if n, err := w.s.Sweep(w.ctx); err != nil || n != 0 {
 						t.Fatalf("backed-off sweep acted=%d err=%v", n, err)
@@ -149,10 +133,10 @@ func TestAbortSweepHonorsCleanupBackoff(t *testing.T) {
 				if status == "running" {
 					wantEvents = 1
 				}
-				if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != wantEvents {
+				if n := w.abortedEvents(); n != wantEvents {
 					t.Errorf("run.aborted events=%d, want %d", n, wantEvents)
 				}
-				if got := endedAt(); !got.Equal(firstEnded) {
+				if got := w.endedAt(); !got.Equal(firstEnded) {
 					t.Errorf("ended_at moved across retries: %v -> %v", firstEnded, got)
 				}
 			})
@@ -184,15 +168,7 @@ func TestAbortSweepPreservesKeepAndMissingLux(t *testing.T) {
 				}
 				fake := w.onCallLux(nil)
 				w.s.KeepFor = time.Hour
-				for pass := range 12 {
-					want := 0
-					if pass == 0 {
-						want = 1
-					}
-					if n, err := w.s.Sweep(w.ctx); err != nil || n != want {
-						t.Fatalf("pass %d: acted=%d err=%v, want %d", pass, n, err, want)
-					}
-				}
+				w.sweepActedOnce()
 				wantReason, wantCalls := "cancel", 1
 				if keep && state != "terminated" && state != "missing" {
 					wantReason = "kept"
@@ -228,6 +204,9 @@ func TestAbortSweepPreservesKeepAndMissingLux(t *testing.T) {
 					t.Errorf("terminal row status=%s control=%s ended_at=%v keep=%t, want aborted none set %t",
 						status, control, ended, kept, keep)
 				}
+				if n := w.abortedEvents(); n != 1 {
+					t.Errorf("run.aborted events=%d, want 1", n)
+				}
 			})
 		}
 	}
@@ -252,7 +231,7 @@ func TestAbortAdvanceRechecksStatusAndControl(t *testing.T) {
 			if fresh != "failed" && len(fake.Calls()) != 0 {
 				t.Errorf("stale abort asked Lux %v", fake.Calls())
 			}
-			if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != 0 {
+			if n := w.abortedEvents(); n != 0 {
 				t.Errorf("stale abort emitted %d events", n)
 			}
 			if fresh != "resume" && w.count(`SELECT count(*) FROM runs WHERE id=$1 AND ended_at<now()-interval '30 minutes'`) != 1 {
@@ -293,10 +272,7 @@ func TestAbortSweepLiveReproductionAndNotifier(t *testing.T) {
 			t.Fatal(err)
 		}
 		acted += n
-		var at time.Time
-		if err := w.owner.QueryRow(w.ctx, `SELECT ended_at FROM runs WHERE id=$1`, w.run.ID).Scan(&at); err != nil {
-			t.Error(err)
-		} else if pass == 0 {
+		if at := w.endedAt(); pass == 0 {
 			ended = at
 		} else if !at.Equal(ended) {
 			t.Error("repeated sweep changed ended_at")
@@ -358,50 +334,60 @@ func TestAFreshAbortDuringCleanupBackoffIsConsumedOnce(t *testing.T) {
 }
 
 // sweepActedOnce runs 12 Sweeps: the first acts, the rest find nothing due.
-func sweepActedOnce(t *testing.T, w *resumeWorld) {
-	t.Helper()
+func (w *resumeWorld) sweepActedOnce() {
+	w.t.Helper()
 	for pass := range 12 {
 		want := 0
 		if pass == 0 {
 			want = 1
 		}
 		if n, err := w.s.Sweep(w.ctx); err != nil || n != want {
-			t.Errorf("pass %d: acted=%d err=%v, want %d", pass, n, err, want)
+			w.t.Errorf("pass %d: acted=%d err=%v, want %d", pass, n, err, want)
 		}
 	}
 }
 
+func (w *resumeWorld) abortedEvents() int {
+	w.t.Helper()
+	return w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`)
+}
+
+func (w *resumeWorld) endedAt() time.Time {
+	w.t.Helper()
+	var at time.Time
+	if err := w.owner.QueryRow(w.ctx, `SELECT ended_at FROM runs WHERE id=$1`, w.run.ID).Scan(&at); err != nil {
+		w.t.Fatal(err)
+	}
+	return at
+}
+
 // An abort of a Run lux never had settles once, stamps no lux stop reason
-// and leaves nothing due; resumed as recover does and submitted, it is a
-// fresh Run to lux's failure guards.
-func TestALuxlessAbortSettlesOnceAndResumesClean(t *testing.T) {
-	w := newResumeWorld(t)
-	w.exec(`UPDATE runs SET status='pending', control='abort', control_requested_at=now(), control_reason='stop',
-		lux_run_id=NULL, lux_state=NULL, lux_stop_reason=NULL, dude_pause=NULL WHERE id=$1`, w.run.ID)
-	fake := w.onCallLux(nil)
-	sweepActedOnce(t, w)
-	if got := fake.Calls(); len(got) != 0 {
-		t.Errorf("Lux calls=%v, want none", got)
-	}
-	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='aborted' AND control='none'
-		AND ended_at IS NOT NULL AND lux_stop_reason IS NULL`) != 1 {
-		t.Fatalf("Lux-less abort not settled cleanly (stop reason %q)", w.stopReason())
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != 1 {
-		t.Errorf("run.aborted events=%d, want 1", n)
-	}
-	// Resumed as api/recover.go's pickUp does an Unstarted Run.
-	w.exec(`UPDATE runs SET status = 'pending', control = 'none', keep = false, ended_at = NULL,
-			control_reason = NULL, phase_notified_at = NULL, finishes = finishes + 1,
-			image_build_id = NULL, image_waiting_since = NULL, next_attempt_at = NULL
-		WHERE id = ANY($1) AND lux_run_id IS NULL AND status IN ('aborted', 'failed')`, []string{w.run.ID})
-	// Submitted, as submit records lux's Run.
-	w.exec(`UPDATE runs SET lux_run_id='lrun_2', lux_state='running',
-		status = CASE WHEN status = 'pending' THEN 'scheduled'::run_status ELSE status END WHERE id=$1`, w.run.ID)
-	// luxstop.go's failForLux guard: a live Run lux stopped on its own.
-	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status IN ('scheduled', 'starting', 'running')
-		AND lux_stop_reason IS NULL`) != 1 {
-		t.Errorf("resumed Run carries stop reason %q into lux's failure guards", w.stopReason())
+// and leaves nothing due, so a resume submits it as a fresh Run (see
+// TestAReviewerNeverStartedIsQueuedAgainOnResume). One already aborted
+// writes no second run.aborted.
+func TestALuxlessAbortSettlesOnceWithoutAStopReason(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		events int
+	}{{"pending", 1}, {"paused", 1}, {"aborted", 0}} {
+		t.Run(tc.status, func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.exec(`UPDATE runs SET status=$2::run_status, ended_at=CASE WHEN $2='aborted' THEN now() END,
+				control='abort', control_requested_at=now(), control_reason='stop',
+				lux_run_id=NULL, lux_state=NULL, lux_stop_reason=NULL, dude_pause=NULL WHERE id=$1`, w.run.ID, tc.status)
+			fake := w.onCallLux(nil)
+			w.sweepActedOnce()
+			if got := fake.Calls(); len(got) != 0 {
+				t.Errorf("Lux calls=%v, want none", got)
+			}
+			if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='aborted' AND control='none'
+				AND ended_at IS NOT NULL AND lux_stop_reason IS NULL`) != 1 {
+				t.Errorf("Lux-less abort not settled cleanly (stop reason %q)", w.stopReason())
+			}
+			if n := w.abortedEvents(); n != tc.events {
+				t.Errorf("run.aborted events=%d, want %d", n, tc.events)
+			}
+		})
 	}
 }
 
@@ -412,11 +398,12 @@ func TestAPausedAbortWithNoResumeIsDueOnce(t *testing.T) {
 	w.exec(`UPDATE runs SET status='paused', dude_pause=NULL, control='abort', control_requested_at=now(),
 		lux_state='stopped', lux_stop_reason=NULL WHERE id=$1`, w.run.ID)
 	fake := w.onCallLux(nil)
-	sweepActedOnce(t, w)
-	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='aborted' AND control='none'`) != 1 {
-		t.Error("paused abort not settled")
+	w.sweepActedOnce()
+	if w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='aborted' AND control='none'
+		AND ended_at IS NOT NULL AND lux_stop_reason='cancel' AND NOT keep`) != 1 {
+		t.Errorf("paused abort not settled (stop reason %q)", w.stopReason())
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != 1 {
+	if n := w.abortedEvents(); n != 1 {
 		t.Errorf("run.aborted events=%d, want 1", n)
 	}
 	if got := fake.Calls(); !slices.Equal(got, []string{"cancel lrun_1"}) {
@@ -432,7 +419,7 @@ func TestAKeptAbortedRunsStopIsAskedOnce(t *testing.T) {
 		keep=true, kept_until=NULL, dude_pause=NULL, lux_state='running', lux_stop_reason=NULL WHERE id=$1`, w.run.ID)
 	fake := w.onCallLux(nil)
 	w.s.KeepFor = time.Hour
-	sweepActedOnce(t, w)
+	w.sweepActedOnce()
 	if got := fake.Calls(); !slices.Equal(got, []string{"stop lrun_1"}) {
 		t.Errorf("Lux calls=%v, want [stop lrun_1]", got)
 	}
@@ -440,7 +427,7 @@ func TestAKeptAbortedRunsStopIsAskedOnce(t *testing.T) {
 		AND lux_stop_reason='kept' AND keep`) != 1 {
 		t.Errorf("kept abort not settled (stop reason %q)", w.stopReason())
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='run.aborted'`); n != 0 {
+	if n := w.abortedEvents(); n != 0 {
 		t.Errorf("sweep-written run.aborted events=%d, want 0", n)
 	}
 }

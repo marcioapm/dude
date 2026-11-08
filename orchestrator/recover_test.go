@@ -651,6 +651,10 @@ func TestAReviewerNeverStartedIsQueuedAgainOnResume(t *testing.T) {
 	w.until("the never-started reviewer to be submitted", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL`, pending) == 1
 	})
+	// Its abort stamped no stop reason, so lux's failure guards see a fresh Run.
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_run_id IS NOT NULL AND lux_stop_reason IS NULL`, pending); n != 1 {
+		t.Errorf("the resubmitted never-started reviewer carries its old lux stop reason")
+	}
 }
 
 // After a start over, attempt 1's Runs are not signalled to attempt 2's

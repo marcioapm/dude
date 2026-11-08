@@ -573,7 +573,8 @@ const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
 			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 			           AND (r.lux_stop_reason IS DISTINCT FROM 'kept' OR r.kept_until <= now())))
-			  -- Consuming an abort clears the old back-off before cleanup retries.
+			  -- An abort is due through any back-off. Consuming it clears a live
+			  -- Run's back-off and keeps a terminal Run's for its cleanup retries.
 			  AND (r.control = 'abort' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $4::float8))
 			ORDER BY ` + actionable + ` DESC, r.created_at
@@ -874,6 +875,56 @@ func (s *Syncer) interruptSilentTalkers(ctx context.Context) error {
 	return nil
 }
 
+// consumeAbort consumes a Run's abort control once, under the control
+// writer's row lock, and returns the Run as end should see it. It consumes
+// nothing when the control is gone or the Run completed meanwhile.
+func (s *Syncer) consumeAbort(ctx context.Context, r phaseRun) (phaseRun, bool, error) {
+	consumed := false
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var control, reason string
+		if err := tx.QueryRow(ctx, `SELECT status::text, control::text, keep, COALESCE(control_reason, '')
+			FROM runs WHERE id = $1 FOR NO KEY UPDATE`, r.ID).Scan(&r.Status, &control, &r.Keep, &reason); err != nil {
+			return err
+		}
+		if control != "abort" || r.Status == "completed" {
+			return nil
+		}
+		terminal := r.Status == statusAborted || r.Status == "failed"
+		consumed = true
+		// A failed cleanup then retries on its own deadline, not as a fresh
+		// abort. A terminal Run keeps its cleanup back-off; a live one's
+		// back-off was its last step's, which the abort ends.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET status = CASE WHEN status = 'failed' THEN status ELSE 'aborted' END,
+			ended_at = COALESCE(ended_at, now()), keep = keep AND source_kind IS NULL,
+			control = 'none', next_attempt_at = CASE WHEN $2 THEN next_attempt_at END,
+			retry_due_at = NULL, retry_failures = 0
+			WHERE id = $1`, r.ID, terminal); err != nil {
+			return err
+		}
+		if terminal {
+			return nil
+		}
+		if err := s.failUnread(ctx, tx, r, UnreadRunAborted); err != nil {
+			return err
+		}
+		// A child's run.aborted, if any, is written by its stop request
+		// (conductor stop_run or task Stop); the sweep writes none for
+		// children, as before.
+		if r.SourceKind != "" {
+			return nil
+		}
+		return s.event(ctx, tx, r, "run.aborted", ledger.ActorSystem, map[string]any{"reason": db.Nullable(reason)})
+	}); err != nil || !consumed {
+		return r, false, err
+	}
+	// As the UPDATE above set them.
+	if r.Status != "failed" {
+		r.Status = statusAborted
+	}
+	r.Keep = r.Keep && r.SourceKind == ""
+	return r, true, nil
+}
+
 // advance moves one Run on by whatever its state calls for. Returns whether
 // it did anything, so the sweeper keeps going while there is work.
 func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
@@ -883,49 +934,11 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		}
 	}
 	if r.Control == "abort" {
-		consumed := false
-		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			var control, reason string
-			if err := tx.QueryRow(ctx, `SELECT status::text, control::text, keep, COALESCE(control_reason, '')
-				FROM runs WHERE id = $1 FOR NO KEY UPDATE`, r.ID).Scan(&r.Status, &control, &r.Keep, &reason); err != nil {
-				return err
-			}
-			if control != "abort" || r.Status == "completed" {
-				return nil
-			}
-			terminal := r.Status == statusAborted || r.Status == "failed"
-			consumed = true
-			// Consume once under the control writer's row lock. A failed
-			// cleanup then retries on its own deadline, not as a fresh abort.
-			if _, err := tx.Exec(ctx, `UPDATE runs SET status = CASE WHEN status = 'failed' THEN status ELSE 'aborted' END,
-				ended_at = COALESCE(ended_at, now()), keep = keep AND source_kind IS NULL,
-				control = 'none', next_attempt_at = CASE WHEN $2 THEN next_attempt_at END,
-				retry_due_at = NULL, retry_failures = 0
-				WHERE id = $1`, r.ID, terminal); err != nil {
-				return err
-			}
-			if terminal {
-				return nil
-			}
-			if err := s.failUnread(ctx, tx, r, UnreadRunAborted); err != nil {
-				return err
-			}
-			// A child's stop request already recorded its run.aborted.
-			if r.SourceKind != "" {
-				return nil
-			}
-			return s.event(ctx, tx, r, "run.aborted", ledger.ActorSystem, map[string]any{"reason": db.Nullable(reason)})
-		}); err != nil {
+		ended, consumed, err := s.consumeAbort(ctx, r)
+		if err != nil || !consumed {
 			return false, err
 		}
-		if !consumed {
-			return false, nil
-		}
-		if r.Status != "failed" {
-			r.Status = statusAborted
-		}
-		r.Keep = r.Keep && r.SourceKind == ""
-		return true, s.end(ctx, r)
+		return true, s.end(ctx, ended)
 	}
 	switch {
 	case r.Status == statusAborted || r.Status == "failed":
