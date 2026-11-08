@@ -25,9 +25,11 @@ func TestFinalHookUsesRecordedSyncHistoryDespiteForgedRefs(t *testing.T) {
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
-	// DiffSlow too: the agent is idle and git changes its checkout with no
-	// poke, so a slow fetch lets the watcher back off for a minute first.
-	w.syncer.DiffDelay, w.syncer.DiffEvery, w.syncer.DiffSlow = 10*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+	// quickDiffs' DiffSlow matters here: the agent works but never edits,
+	// so nothing pokes the watcher; four unchanged reads before git changes
+	// the checkout (a slow fetch, a loaded host) would slow it to a minute,
+	// past until's 20s.
+	w.quickDiffs()
 	runID, luxID, git, commit := w.idleImplementerCheckout()
 	w.commitFileIn(w.gh.Repo, "main", "imported.txt", "M1\n", "M1")
 	w.fetchBase(runID)
@@ -58,7 +60,7 @@ func TestPushScanSeesSecretInImportedBaseOmittedFromDisplay(t *testing.T) {
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = tools.URL, true
-	w.syncer.DiffDelay, w.syncer.DiffEvery, w.syncer.DiffSlow = 10*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+	w.quickDiffs()
 	runID, luxID, git, commit := w.idleImplementerCheckout()
 	w.commitFileIn(w.gh.Repo, "main", "imported-secret.txt", implToken+"\n", "Base configuration")
 	w.fetchBase(runID)
@@ -82,7 +84,7 @@ func TestPushScanSeesSecretInImportedBaseOmittedFromDisplay(t *testing.T) {
 
 func TestAWorkingAgentsUncommittedEditsAreItsLiveDiff(t *testing.T) {
 	w := newWorld(t)
-	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond
+	w.quickDiffs()
 	w.lux.Workspaces = t.TempDir()
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Edits: map[string]string{"src/new.go": "package src\n", "notes.md": "one\ntwo\n"}}
@@ -233,7 +235,7 @@ func TestEveryStopLeavesTheFinalDiffThroughLuxsBeforeStopHook(t *testing.T) {
 
 func TestAnotherOrganizationCannotReadARunsDiff(t *testing.T) {
 	w := newWorld(t)
-	w.syncer.DiffDelay, w.syncer.DiffEvery = 10*time.Millisecond, 20*time.Millisecond
+	w.quickDiffs()
 	w.lux.Workspaces = t.TempDir()
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour {
 		return fakelux.Behaviour{Hang: true, Edits: map[string]string{"a.md": "a\n"}}
