@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -36,12 +37,21 @@ func TextType(ctype string) bool {
 	if strings.HasPrefix(mt, "text/") {
 		return true
 	}
-	switch mt {
-	case "application/json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript",
-		"application/x-ndjson", "application/sql", "application/toml", "application/x-sh", "image/svg+xml":
+	if slices.Contains(textTypes, mt) {
 		return true
 	}
 	return strings.HasSuffix(mt, "+json") || strings.HasSuffix(mt, "+xml")
+}
+
+// textTypes are the media types outside text/ that TextType takes for text.
+var textTypes = []string{"application/json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript",
+	"application/x-ndjson", "application/sql", "application/toml", "application/x-sh", "image/svg+xml"}
+
+// TextTypeSQL is TextType in SQL, over the text column col.
+func TextTypeSQL(col string) string {
+	mt := "btrim(split_part(lower(" + col + "), ';', 1))"
+	return "(" + mt + " LIKE 'text/%' OR " + mt + " IN ('" + strings.Join(textTypes, "', '") + "') OR " +
+		mt + " LIKE '%+json' OR " + mt + " LIKE '%+xml')"
 }
 
 // Marker is what replaces a value of the secret name.

@@ -264,28 +264,47 @@ func TestAResumeMissingARecordedSecretStartsAFreshRun(t *testing.T) {
 }
 
 // Once a finished Run's output is collected (its push published, its final
-// diff and artifacts recorded), its copy is deleted: nothing of the values
-// it was given stays in dude beyond the project's own.
+// diff and artifacts recorded), its copy is deleted when nothing can come
+// back to that output: not kept, no text file to serve, nothing to
+// recover. Nothing of the values it was given stays in dude beyond the
+// project's own. One that published a text file keeps it, for the file to
+// be served redacted (agent_secrets_lifetime_test.go).
 func TestACompletedRunsCopyIsDeletedOnceItsOutputIsCollected(t *testing.T) {
-	w := newWorld(t)
-	w.grant("IMPL_TOKEN", implToken, "implementer")
-	task := w.task()
-	w.deliver(task)
-	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
-	var runID string
-	_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task).Scan(&runID)
-	if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
-		t.Fatalf("the implementer was given %v", got)
-	}
-	w.until("the implementer's output collected", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND artifacts_due_at IS NULL`, runID) == 1
-	})
-	w.pump()
-	if got := w.runCopy(runID); len(got) != 0 {
-		t.Errorf("a collected Run keeps a copy of %v", slices.Sorted(maps.Keys(got)))
-	}
-	if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
-		t.Errorf("names after the copy is deleted = %v; the record stays", got)
+	for _, publishes := range []bool{false, true} {
+		t.Run(map[bool]string{false: "nothing to read again", true: "a text file published"}[publishes], func(t *testing.T) {
+			w := newWorld(t)
+			w.grant("IMPL_TOKEN", implToken, "implementer")
+			scripted := w.lux.Decide
+			w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+				b := scripted(spec)
+				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" && !publishes {
+					b.Publish, b.PublishNow = nil, nil
+				}
+				return b
+			}
+			task := w.task()
+			w.deliver(task)
+			w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
+			var runID string
+			_ = w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task).Scan(&runID)
+			if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
+				t.Fatalf("the implementer was given %v", got)
+			}
+			w.until("the implementer's output collected", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed' AND artifacts_due_at IS NULL`, runID) == 1
+			})
+			w.pump()
+			texts := w.count(`SELECT count(*) FROM artifacts WHERE run_id = $1 AND content_type LIKE 'text/%'`, runID)
+			if publishes != (texts > 0) {
+				t.Fatalf("the implementer published %d text files", texts)
+			}
+			if got := w.runCopy(runID); publishes != (len(got) == 1) {
+				t.Errorf("a collected Run (text files: %d) keeps a copy of %v", texts, slices.Sorted(maps.Keys(got)))
+			}
+			if got := w.givenNames(runID); !slices.Equal(got, []string{"IMPL_TOKEN"}) {
+				t.Errorf("names after collection = %v; the record stays", got)
+			}
+		})
 	}
 }
 
