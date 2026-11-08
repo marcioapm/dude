@@ -1,8 +1,11 @@
 package phases
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,9 +33,32 @@ func (w *resumeWorld) slowStampOnce(col string) {
 // come together, and runs its follow-up once it commits.
 func (w *resumeWorld) followBatch(frames ...lux.Frame) {
 	w.t.Helper()
+	if resumes, late := w.commitBatch(frames...); resumes != nil {
+		w.s.resumeFollowUp(w.run, resumes, late...)
+	}
+}
+
+// commitBatch applies frames in one batch, as followOutput does, and
+// returns what committed returns, for the caller to follow up.
+func (w *resumeWorld) commitBatch(frames ...lux.Frame) (map[int]bool, []lateStamp) {
+	w.t.Helper()
+	t, err := w.applyFrames(false, frames...)
+	if err != nil {
+		w.t.Fatalf("applying the frames failed the Run's batch: %v", err)
+	}
+	return t.committed()
+}
+
+// errBatchFailed fails a batch after its frames, as a failed save would.
+var errBatchFailed = errors.New("the batch failed after its frames")
+
+// applyFrames applies frames in one batch; with fail, the batch fails once
+// they are applied, and is rolled back. It returns the batch's translator.
+func (w *resumeWorld) applyFrames(fail bool, frames ...lux.Frame) (*translator, error) {
+	w.t.Helper()
 	t := &translator{run: w.run}
 	t.run.Status, t.run.LuxState = statusRunning, "resuming"
-	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+	return t, w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
 		if err := t.load(w.ctx, tx); err != nil {
 			return err
 		}
@@ -41,13 +67,35 @@ func (w *resumeWorld) followBatch(frames ...lux.Frame) {
 				return err
 			}
 		}
+		if fail {
+			return errBatchFailed
+		}
 		return t.save(w.ctx, tx, "", 0)
-	}); err != nil {
-		w.t.Fatalf("applying the frames failed the Run's batch: %v", err)
+	})
+}
+
+// logLines are the lines of got that carry one of marks.
+func logLines(got string, marks ...string) []string {
+	var lines []string
+	for _, l := range strings.Split(got, "\n") {
+		for _, m := range marks {
+			if m != "" && strings.Contains(l, m) {
+				lines = append(lines, l)
+				break
+			}
+		}
 	}
-	if resumes := t.committed(); resumes != nil {
-		w.s.resumeFollowUp(w.run, resumes)
+	return lines
+}
+
+// allWarn is whether every line is a Warn.
+func allWarn(lines []string) bool {
+	for _, l := range lines {
+		if !strings.Contains(l, "level=WARN") {
+			return false
+		}
 	}
+	return true
 }
 
 // A stamp the Run's batch could not write in the stream's budget is not
@@ -80,9 +128,9 @@ func TestAStampTheBatchCouldNotWriteInTimeIsStillTimed(t *testing.T) {
 				}
 				w.untilTimed()
 
-				var stalled int
-				_ = w.owner.QueryRow(w.ctx, `SELECT last_value FROM slow_stamp_seen`).Scan(&stalled)
-				if stalled < 1 {
+				var stalled bool
+				_ = w.owner.QueryRow(w.ctx, `SELECT is_called FROM slow_stamp_seen`).Scan(&stalled)
+				if !stalled {
 					t.Fatalf("no stamp of %s was slowed: the test proves nothing", col)
 				}
 				row := w.row(2)
@@ -92,8 +140,10 @@ func TestAStampTheBatchCouldNotWriteInTimeIsStillTimed(t *testing.T) {
 				if !okBusy || !okOutput {
 					t.Fatalf("busy_at %v, first_output_at %v: want both\nlogs:\n%s", row["busy_at"], row["first_output_at"], logs)
 				}
-				if busyAt.Before(running) || output.Before(busyAt) {
-					t.Errorf("running_at %v, busy_at %v, first_output_at %v: want them in order", running, busyAt, output)
+				// Strictly: each is its own frame's time on the database's
+				// clock, not the batch's.
+				if !running.Before(busyAt) || !busyAt.Before(output) {
+					t.Errorf("running_at %v, busy_at %v, first_output_at %v: want them strictly in order", running, busyAt, output)
 				}
 				timed := w.timed()
 				if len(timed) != 1 {
@@ -112,8 +162,9 @@ func TestAStampTheBatchCouldNotWriteInTimeIsStillTimed(t *testing.T) {
 				}
 				// The batch's timeout is said, once, and nothing failed.
 				got := logs.String()
-				if strings.Count(got, "\n") != 1 || !strings.Contains(got, "writing it after the batch") ||
-					!strings.Contains(got, "step="+col) || !strings.Contains(got, "level=WARN") {
+				lines := logLines(got, "recording a resume's timing", "landed nowhere", "step=")
+				if len(lines) != 1 || !allWarn(lines) || !strings.Contains(lines[0], "writing it after the batch") ||
+					!strings.Contains(lines[0], "step="+col) {
 					t.Errorf("want one Warn that the %s stamp is written after the batch, and nothing else; got:\n%s", col, got)
 				}
 				if left := w.s.lateStamps(w.run.ID); len(left) != 0 {
@@ -161,5 +212,148 @@ func TestAStampAfterTheResumeIsTimedChangesNothing(t *testing.T) {
 	}
 	if n := len(w.timed()); n != 1 {
 		t.Errorf("%d run.resume.timed, want 1", n)
+	}
+}
+
+// onFirstSavepoint runs fn, once, as the first savepoint's set-up
+// statement (savepointAt's) starts on the pool, before it runs: in a
+// timing, its late write, just after the late stamps were read.
+type onFirstSavepoint struct {
+	claimed atomic.Bool
+	fn      func()
+}
+
+func (g *onFirstSavepoint) TraceQueryStart(ctx context.Context, _ *pgx.Conn, q pgx.TraceQueryStartData) context.Context {
+	if strings.HasPrefix(q.SQL, "SELECT current_setting('lock_timeout')") && g.claimed.CompareAndSwap(false, true) {
+		g.fn()
+	}
+	return ctx
+}
+
+func (*onFirstSavepoint) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// A timing reads the late stamps kept only once it holds the resume's row:
+// a batch that stamps it holds that row until it commits, and keeps what
+// it could not write before then. Read before, a batch could keep busy_at
+// and commit first_output_at between the read and the timing's UPDATE,
+// and the resume be timed without its busy for good: the batch's own
+// follow-up finds it timed. Here a timing with a late stamp to write
+// (another batch's) is just past reading them when a batch keeps the
+// agent's first busy (its stamp too slow) and writes its first output; the
+// resume is still timed with its busy, in the row and in the event.
+func TestABusyKeptWhileAResumeIsBeingTimedIsTimedWithIt(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2))
+	running, _ := w.row(2)["running_at"].(time.Time)
+	w.slowStampOnce("busy_at")
+	logs := w.captureTimingLogs()
+
+	// A late stamp an earlier batch kept, for the timing to write.
+	w.s.lateMu.Lock()
+	w.s.late = map[string][]lateStamp{w.run.ID: {{"running_at", 2, running}}}
+	w.s.lateMu.Unlock()
+	var resumes map[int]bool
+	var late []lateStamp
+	w.traced(&onFirstSavepoint{fn: func() {
+		resumes, late = w.commitBatch(busy(2), spoke(2))
+	}})
+	if err := w.s.timeResumes(w.ctx, w.run, 2); err != nil {
+		t.Fatal(err)
+	}
+	if resumes == nil {
+		t.Fatal("the batch did not run inside the timing: the test proves nothing")
+	}
+	if len(late) == 0 {
+		t.Fatalf("the batch kept no stamp: the test proves nothing\nlogs:\n%s", logs)
+	}
+	w.s.resumeFollowUp(w.run, resumes, late...)
+
+	row := w.row(2)
+	if row["timed_at"] == nil || row["busy_at"] == nil || row["first_output_at"] == nil {
+		t.Fatalf("timed_at %v, busy_at %v, first_output_at %v: want the resume timed with its busy\nlogs:\n%s",
+			row["timed_at"], row["busy_at"], row["first_output_at"], logs)
+	}
+	timed := w.timed()
+	if len(timed) != 1 {
+		t.Fatalf("%d run.resume.timed, want 1\nlogs:\n%s", len(timed), logs)
+	}
+	phases, _ := timed[0]["phases"].(map[string]any)
+	if _, ok := phases["take"]; !ok {
+		t.Errorf("run.resume.timed has no phases.take: %v\nlogs:\n%s", timed[0], logs)
+	}
+	if _, ok := timed[0]["untilBusyMs"]; !ok {
+		t.Errorf("run.resume.timed has no untilBusyMs: %v", timed[0])
+	}
+	if lines := logLines(logs.String(), "landed nowhere"); len(lines) != 0 {
+		t.Errorf("a late stamp landed nowhere:\n%s", logs)
+	}
+}
+
+// A late stamp that lands nowhere, its column still empty, is said: here
+// one for a resume already timed without its busy.
+func TestALateStampThatLandsNowhereIsSaid(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2), spoke(2))
+	w.untilTimed()
+	logs := w.captureTimingLogs()
+	w.s.lateMu.Lock()
+	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, time.Now()}}}
+	w.s.lateMu.Unlock()
+	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
+		t.Fatal(err)
+	}
+	lines := logLines(logs.String(), "landed nowhere")
+	if len(lines) != 1 || !allWarn(lines) || !strings.Contains(lines[0], "column=busy_at") {
+		t.Errorf("want one Warn that the busy_at stamp landed nowhere; got:\n%s", logs)
+	}
+	if left := w.s.lateStamps(w.run.ID); len(left) != 0 {
+		t.Errorf("late stamps kept after they were tried: %v", left)
+	}
+}
+
+// A batch rolled back keeps none of its late stamps: its frames are read
+// again, and the replay's stamps are the ones the resume is timed with.
+func TestABatchRolledBackKeepsNoLateStamp(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.slowStampOnce("busy_at")
+	frames := []lux.Frame{session(2), running(2), busy(2), spoke(2)}
+
+	tr, err := w.applyFrames(true, frames...)
+	if !errors.Is(err, errBatchFailed) {
+		t.Fatalf("the batch: %v, want it failed", err)
+	}
+	if len(tr.late) == 0 {
+		t.Fatal("the failed batch kept no stamp: the test proves nothing")
+	}
+	tr.rolledBack(w.s)
+	if left := w.s.lateStamps(w.run.ID); left != nil {
+		t.Fatalf("late stamps kept after the batch rolled back: %v", left)
+	}
+
+	var replayed time.Time
+	if err := w.owner.QueryRow(w.ctx, `SELECT clock_timestamp()`).Scan(&replayed); err != nil {
+		t.Fatal(err)
+	}
+	w.followBatch(frames...)
+	w.untilTimed()
+	timed := w.timed()
+	if len(timed) != 1 {
+		t.Fatalf("%d run.resume.timed, want 1", len(timed))
+	}
+	busyAt, ok := w.row(2)["busy_at"].(time.Time)
+	if !ok || busyAt.Before(replayed) {
+		t.Errorf("busy_at %v, want the replay's (after %v)", w.row(2)["busy_at"], replayed)
+	}
+	if _, ok := timed[0]["untilBusyMs"]; !ok {
+		t.Errorf("run.resume.timed has no untilBusyMs: %v", timed[0])
 	}
 }
