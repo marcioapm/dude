@@ -3,7 +3,8 @@ package orchestrator_test
 // A resume gives the agent the project's current values, but its checkout,
 // its commits and its conversation are the ones it had: a value it was given
 // before the resume can still be pushed or printed after it. The Run's copy
-// keeps every value it was ever sent until its output is collected.
+// keeps every value it was ever sent for as long as it can be resumed
+// (agent_secrets_lifetime_test.go).
 
 import (
 	"context"
