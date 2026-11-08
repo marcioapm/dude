@@ -46,7 +46,12 @@ func (s *Syncer) timeUnowned(ctx context.Context, r phaseRun, epoch int) error {
 }
 
 func (s *Syncer) timeResumesSkippingOwed(ctx context.Context, r phaseRun, epoch int, skipOwed bool) error {
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+	written := func() {}
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// Stamps a batch could not write in its own budget go in first, in
+		// this transaction: the timing below carries them, and none can
+		// land on a resume once it is timed.
+		written = s.writeLateStamps(ctx, tx, r)
 		rows, err := tx.Query(ctx, `UPDATE run_resumes SET timed_at = now()
 			WHERE run_id = $1 AND ($2 = 0 OR epoch = $2) AND timed_at IS NULL
 			  AND (first_output_at IS NOT NULL OR frames_missed)
@@ -70,7 +75,11 @@ func (s *Syncer) timeResumesSkippingOwed(ctx context.Context, r phaseRun, epoch 
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	written()
+	return nil
 }
 
 // leaveOwed puts back untimed, in tx, each of timed that a live follow-up

@@ -415,9 +415,8 @@ func (w *resumeWorld) followFrom(status, luxState string, frames ...lux.Frame) {
 		}); err != nil {
 			w.t.Fatalf("applying a frame failed the Run's batch: %v", err)
 		}
-		if t.resumes != nil {
-			w.s.resumeFollowUp(w.run, t.resumes)
-			t.resumes = nil
+		if resumes := t.committed(); resumes != nil {
+			w.s.resumeFollowUp(w.run, resumes)
 		}
 	}
 }

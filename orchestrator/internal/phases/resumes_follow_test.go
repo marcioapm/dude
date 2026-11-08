@@ -503,9 +503,9 @@ func TestTimingTakesAtMostHalfOfTheRunsRemainingDeadline(t *testing.T) {
 		budget := func(left time.Duration) (lock, statement time.Duration, ok bool) {
 			ctx, cancel := context.WithTimeout(context.Background(), left)
 			defer cancel()
-			return timingBudget(ctx)
+			return budgetUnder(ctx, timingLockTimeout, timingStatementTimeout)
 		}
-		if lock, statement, ok := timingBudget(context.Background()); !ok || lock != timingLockTimeout || statement != timingStatementTimeout {
+		if lock, statement, ok := budgetUnder(context.Background(), timingLockTimeout, timingStatementTimeout); !ok || lock != timingLockTimeout || statement != timingStatementTimeout {
 			t.Errorf("no deadline: lock %s, statement %s, ok %v; want the defaults", lock, statement, ok)
 		}
 		if lock, statement, ok := budget(time.Hour); !ok || lock != timingLockTimeout || statement != timingStatementTimeout {

@@ -139,6 +139,10 @@ type Syncer struct {
 	// and epoch, counted: recovery leaves them to it (owe, resumes.go).
 	owingMu sync.Mutex
 	owing   map[owedResume]int
+	// Stamps a committed batch could not write in its budget, by Run, for
+	// the next timing of its resumes to write first (lateStamp, resumes.go).
+	lateMu sync.Mutex
+	late   map[string][]lateStamp
 }
 
 // follower is one goroutine reading a Run's output. A pointer, so a
@@ -2183,19 +2187,11 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 			}
 		}
 		if err := s.applyBatch(ctx, t, batch); err != nil {
-			// What was read but not recorded is read again from the saved
-			// cursor by the next follower; nothing of it is owed.
-			for epoch, read := range t.resumes {
-				if read {
-					s.paid(r.ID, epoch)
-				}
-			}
-			t.resumes = nil
+			t.rolledBack(s)
 			return err
 		}
-		if t.resumes != nil {
-			go s.resumeFollowUp(r, t.resumes)
-			t.resumes = nil
+		if resumes := t.committed(); resumes != nil {
+			go s.resumeFollowUp(r, resumes)
 		}
 	}
 }
