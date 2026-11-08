@@ -24,7 +24,7 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	  AND NOT (lux_name(p.key_prefix || '-' || repo.name) = ANY (r.lux_repositories))))),
 	COALESCE(r.dude_pause, ''), ask.open,
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
-	(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
+	COALESCE((r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT (EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open')
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking)
 	OR EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
@@ -39,7 +39,7 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	AND w.state->'escalation'->'detail'->>'runId' = r.id AND NOT (w.state->'escalation' ? 'decided'))) AND EXISTS (SELECT 1 FROM machine_moves m WHERE m.run_id = r.id AND m.settled_at IS NULL))
 	OR (r.dude_pause IN ('conductor', 'session') AND EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 	AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
-	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())))))),
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())))))), false),
 	COALESCE(lim.idle_secs > 0 AND (r.status = 'running' AND r.lux_state = 'running' AND r.agent_busy_at IS NOT NULL
 	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND cardinality(r.open_tool_calls) = 0
 	AND GREATEST(COALESCE(r.agent_active_at, r.agent_busy_at), r.idle_nudged_at) < now() - make_interval(secs => lim.idle_secs)
@@ -84,13 +84,15 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	OR (r.dude_pause IN ('conductor', 'session') AND EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 	AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
 	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))))))
+			       OR (r.control = 'abort' AND r.status IN ('paused', 'aborted'))
 			       -- Aborted or failed in dude, and not yet kept or cancelled in
 			       -- lux; or kept, and its time is up.
 			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
 			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 			           AND (r.lux_stop_reason IS DISTINCT FROM 'kept' OR r.kept_until <= now())))
-			  -- An abort does not wait out the back-off of the step it ends.
-			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
+			  -- An abort is due through any back-off. Consuming it clears a live
+			  -- Run's back-off and keeps a terminal Run's for its cleanup retries.
+			  AND (r.control = 'abort' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $4::float8))
 			ORDER BY (r.status = 'pending' OR r.control <> 'none' OR (r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT (EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open')

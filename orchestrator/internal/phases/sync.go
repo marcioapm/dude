@@ -288,7 +288,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	` + repoApproved + `,
 	COALESCE(r.dude_pause, ''), ask.open,
 	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
-	` + resumable + `,
+	COALESCE(` + resumable + `, false),
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
 	COALESCE(r.turn_done_at < now() - make_interval(secs => lim.warm_secs), false),
@@ -567,13 +567,15 @@ const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 			WHERE ` + sweptRuns + `
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR ` + resumable + `
+			       OR (r.control = 'abort' AND r.status IN ('paused', 'aborted'))
 			       -- Aborted or failed in dude, and not yet kept or cancelled in
 			       -- lux; or kept, and its time is up.
 			       OR (r.status IN ('aborted', 'failed') AND r.lux_run_id IS NOT NULL
 			           AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 			           AND (r.lux_stop_reason IS DISTINCT FROM 'kept' OR r.kept_until <= now())))
-			  -- An abort does not wait out the back-off of the step it ends.
-			  AND (r.status = 'aborted' OR r.next_attempt_at IS NULL
+			  -- An abort is due through any back-off. Consuming it clears a live
+			  -- Run's back-off and keeps a terminal Run's for its cleanup retries.
+			  AND (r.control = 'abort' OR r.next_attempt_at IS NULL
 			       OR r.next_attempt_at <= now() + make_interval(secs => $4::float8))
 			ORDER BY ` + actionable + ` DESC, r.created_at
 			LIMIT $5`
@@ -746,8 +748,10 @@ func (s *Syncer) Sweep(ctx context.Context) (int, error) {
 		started++
 		go func() {
 			acted, err := s.advance(ctx, r)
-			if err != nil && !errors.Is(err, errRetry) {
-				s.Log.Warn("phase run sync failed", "run", r.ID, "error", err)
+			if err != nil {
+				if !errors.Is(err, errRetry) {
+					s.Log.Warn("phase run sync failed", "run", r.ID, "error", err)
+				}
 				acted = false
 			}
 			if err == nil && r.RetryFailures > 0 {
@@ -871,6 +875,56 @@ func (s *Syncer) interruptSilentTalkers(ctx context.Context) error {
 	return nil
 }
 
+// consumeAbort consumes a Run's abort control once, under the control
+// writer's row lock, and returns the Run as end should see it. It consumes
+// nothing when the control is gone or the Run completed meanwhile.
+func (s *Syncer) consumeAbort(ctx context.Context, r phaseRun) (phaseRun, bool, error) {
+	consumed := false
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		var control, reason string
+		if err := tx.QueryRow(ctx, `SELECT status::text, control::text, keep, COALESCE(control_reason, '')
+			FROM runs WHERE id = $1 FOR NO KEY UPDATE`, r.ID).Scan(&r.Status, &control, &r.Keep, &reason); err != nil {
+			return err
+		}
+		if control != "abort" || r.Status == "completed" {
+			return nil
+		}
+		terminal := r.Status == statusAborted || r.Status == "failed"
+		consumed = true
+		// A failed cleanup then retries on its own deadline, not as a fresh
+		// abort. A terminal Run keeps its cleanup back-off; a live one's
+		// back-off was its last step's, which the abort ends.
+		if _, err := tx.Exec(ctx, `UPDATE runs SET status = CASE WHEN status = 'failed' THEN status ELSE 'aborted' END,
+			ended_at = COALESCE(ended_at, now()), keep = keep AND source_kind IS NULL,
+			control = 'none', next_attempt_at = CASE WHEN $2 THEN next_attempt_at END,
+			retry_due_at = NULL, retry_failures = 0
+			WHERE id = $1`, r.ID, terminal); err != nil {
+			return err
+		}
+		if terminal {
+			return nil
+		}
+		if err := s.failUnread(ctx, tx, r, UnreadRunAborted); err != nil {
+			return err
+		}
+		// A child's run.aborted, if any, is written by its stop request
+		// (conductor stop_run or task Stop); the sweep writes none for
+		// children, as before.
+		if r.SourceKind != "" {
+			return nil
+		}
+		return s.event(ctx, tx, r, "run.aborted", ledger.ActorSystem, map[string]any{"reason": db.Nullable(reason)})
+	}); err != nil || !consumed {
+		return r, false, err
+	}
+	// As the UPDATE above set them.
+	if r.Status != "failed" {
+		r.Status = statusAborted
+	}
+	r.Keep = r.Keep && r.SourceKind == ""
+	return r, true, nil
+}
+
 // advance moves one Run on by whatever its state calls for. Returns whether
 // it did anything, so the sweeper keeps going while there is work.
 func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
@@ -879,15 +933,12 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			return false, err
 		}
 	}
-	if r.SourceKind != "" && r.Control == "abort" {
-		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `UPDATE runs SET status='aborted', ended_at=COALESCE(ended_at,now()), keep=false WHERE id=$1 AND source_kind IS NOT NULL AND status IN ('pending','scheduled','starting','running','paused')`, r.ID)
-			return err
-		}); err != nil {
-			return true, err
+	if r.Control == "abort" {
+		ended, consumed, err := s.consumeAbort(ctx, r)
+		if err != nil || !consumed {
+			return false, err
 		}
-		r.Status, r.Keep = "aborted", false
-		return true, s.end(ctx, r)
+		return true, s.end(ctx, ended)
 	}
 	switch {
 	case r.Status == statusAborted || r.Status == "failed":
@@ -898,8 +949,6 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 		return true, s.startPlaceholder(ctx, r)
 	case r.Status == statusPaused:
 		return s.whilePaused(ctx, r)
-	case r.Control == "abort":
-		return true, s.end(ctx, r)
 	case r.TimedOut:
 		// Whatever pause is pending: a paused spent lux Run would be
 		// stopped again at its resume.
@@ -2909,7 +2958,9 @@ func (s *Syncer) cancel(ctx context.Context, r phaseRun) error {
 		s.releaseBranch(ctx, r.Org, r.TaskID, branch)
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = 'cancel', control = 'none', kept_until = NULL
+		// No lux Run, nothing cancelled: a resumed Run starts without a stop reason.
+		_, err := tx.Exec(ctx, `UPDATE runs SET lux_stop_reason = CASE WHEN lux_run_id IS NULL THEN lux_stop_reason ELSE 'cancel' END,
+			control = 'none', kept_until = NULL
 			WHERE id = $1 AND status IN ('aborted', 'failed')`, r.ID)
 		return err
 	})
