@@ -140,7 +140,11 @@ type Syncer struct {
 	owingMu sync.Mutex
 	owing   map[owedResume]int
 	// Stamps a committed batch could not write in its budget, by Run, for
-	// the next timing of its resumes to write first (lateStamp, resumes.go).
+	// the next timing of its resumes to write first (lateStamp, resumes.go):
+	// at most one per column and resume (deferStamp). In memory only, best
+	// effort like owing: a restart loses them, and those resumes are timed
+	// without them. Dropped once the Run's follower is over (forgetLate);
+	// each committed batch's follow-up carries its own.
 	lateMu sync.Mutex
 	late   map[string][]lateStamp
 }
@@ -2084,6 +2088,12 @@ func (s *Syncer) follow(r phaseRun) {
 				delete(s.following, r.ID)
 				delete(s.diffs, r.ID)
 			}
+			// Its late stamps too, once no newer follower may be keeping
+			// some: every batch of this one's is committed or abandoned,
+			// and each committed one's follow-up has its own.
+			if f, ok := s.following[r.ID]; !ok || f == mine {
+				s.forgetLate(r.ID)
+			}
 			s.mu.Unlock()
 			cancel()
 			close(mine.done)
@@ -2190,8 +2200,8 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 			t.rolledBack(s)
 			return err
 		}
-		if resumes := t.committed(); resumes != nil {
-			go s.resumeFollowUp(r, resumes)
+		if resumes, late := t.committed(); resumes != nil {
+			go s.resumeFollowUp(r, resumes, late...)
 		}
 	}
 }
