@@ -23,13 +23,12 @@ func (feedbackLockLux) ListServers(context.Context, string, ...string) ([]lux.Te
 func TestFeedbackCompetitorsLockRunBeforeServer(t *testing.T) {
 	for _, path := range []string{"feed ready", "feed deleted", "non-idle park"} {
 		t.Run(path, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
+			setup := t.Context()
 			app, owner := dbtest.Open(t)
 			org := dbtest.Org(t, owner)
 			exec := func(q string, args ...any) {
 				t.Helper()
-				if _, err := owner.Exec(ctx, q, args...); err != nil {
+				if _, err := owner.Exec(setup, q, args...); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -40,20 +39,23 @@ func TestFeedbackCompetitorsLockRunBeforeServer(t *testing.T) {
 				VALUES ('run_feedback', $1, 'web', 'srv_feedback', 'feedback', 'https://feedback.example.test', now())`, org)
 			exec(`INSERT INTO people (id, organization_id, name) VALUES ('per_feedback', $1, 'Ana Example')`, org)
 			// This is the API's held Run SHARE, followed by its server SHARE.
-			tx, err := owner.Begin(ctx)
+			tx, err := owner.Begin(setup)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer tx.Rollback(context.Background())
-			if _, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id = 'run_feedback' FOR SHARE`); err != nil {
+			if _, err := tx.Exec(setup, `SELECT id FROM runs WHERE id = 'run_feedback' FOR SHARE`); err != nil {
 				t.Fatal(err)
 			}
 			pid := owner.PgConn().PID()
-			probe, err := pgx.Connect(ctx, owner.Config().ConnString())
+			probe, err := pgx.Connect(setup, owner.Config().ConnString())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer probe.Close(context.Background())
+			// Started only now, so a slow setup cannot spend the competitor's time.
+			ctx, cancel := context.WithTimeout(context.Background(), lockBackstop)
+			defer cancel()
 			result := make(chan error, 1)
 			go func() {
 				if path == "non-idle park" {
@@ -78,7 +80,7 @@ func TestFeedbackCompetitorsLockRunBeforeServer(t *testing.T) {
 					break
 				}
 				if ctx.Err() != nil {
-					t.Fatalf("no observed lock barrier: %v", err)
+					t.Fatalf("no observed lock barrier within %v: %v", lockBackstop, err)
 				}
 				runtime.Gosched()
 			}
@@ -124,9 +126,9 @@ func TestFeedbackCompetitorsLockRunBeforeServer(t *testing.T) {
 	}
 }
 
-// unsupportedBackstop bounds a hang in TestUnsupportedFeedEventsDoNotLockRun;
-// PostgreSQL, not this deadline, decides whether Apply waited on the Run.
-const unsupportedBackstop = 30 * time.Second
+// lockBackstop bounds a hang in either test once its setup is done;
+// PostgreSQL, not this deadline, decides which lock a competitor waited on.
+const lockBackstop = 30 * time.Second
 
 func TestUnsupportedFeedEventsDoNotLockRun(t *testing.T) {
 	for _, e := range []lux.FeedEvent{
@@ -169,19 +171,22 @@ func TestUnsupportedFeedEventsDoNotLockRun(t *testing.T) {
 			// never blocked by tx. The backstop, started only now so setup
 			// cannot spend it, bounds any other hang (pool, channel, a lock
 			// some other session holds) instead of go test's timeout.
-			ctx, cancel := context.WithTimeout(context.Background(), unsupportedBackstop)
+			ctx, cancel := context.WithTimeout(context.Background(), lockBackstop)
 			defer cancel()
 			result := make(chan error, 1)
 			go func() { result <- (&Feed{DB: app}).Apply(ctx, e) }()
-			for {
+			returned := func() bool {
 				select {
 				case err := <-result:
 					if err != nil {
 						t.Fatal(err)
 					}
-					return
+					return true
 				default:
+					return false
 				}
+			}
+			for !returned() {
 				var query string
 				err := probe.QueryRow(ctx, `SELECT query FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid)) LIMIT 1`, pid).Scan(&query)
 				if err == nil {
@@ -190,7 +195,11 @@ func TestUnsupportedFeedEventsDoNotLockRun(t *testing.T) {
 					t.Fatalf("%s waited for the locked Run: %s", e.Type, query)
 				}
 				if ctx.Err() != nil {
-					t.Fatalf("%s: Apply neither returned nor waited on the Run lock within %v", e.Type, unsupportedBackstop)
+					// Apply may have returned just as the deadline hit.
+					if returned() {
+						return
+					}
+					t.Fatalf("%s: Apply neither returned nor waited on the Run lock within %v", e.Type, lockBackstop)
 				}
 				if !errors.Is(err, pgx.ErrNoRows) {
 					t.Fatal(err)
