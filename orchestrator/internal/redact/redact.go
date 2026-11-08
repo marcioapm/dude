@@ -17,10 +17,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // MinLength is the shortest value redacted, in bytes.
@@ -47,12 +49,41 @@ func TextType(ctype string) bool {
 var textTypes = []string{"application/json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript",
 	"application/x-ndjson", "application/sql", "application/toml", "application/x-sh", "image/svg+xml"}
 
-// TextTypeSQL is TextType in SQL, over the text column col.
+// TextTypes are the media types outside text/ that TextType takes for
+// text, a copy.
+func TextTypes() []string { return slices.Clone(textTypes) }
+
+// TextTypeSQL is TextType in SQL, over the text column col; it must agree
+// with TextType on every string (TestTextTypeSQLIsTextType). btrim strips
+// only spaces unless told otherwise, so it is given every character
+// strings.TrimSpace strips (spaceSQL). lower() follows the database's
+// collation, which may not lower a non-ASCII letter to the ASCII one
+// strings.ToLower does (İ to i, the Kelvin sign to k), so those two are
+// translated first; any other non-ASCII character keeps a type out of
+// every ASCII name and suffix matched here whatever its case.
 func TextTypeSQL(col string) string {
-	mt := "btrim(split_part(lower(" + col + "), ';', 1))"
+	mt := "btrim(split_part(lower(translate(" + col + ", E'\\u0130\\u212A', 'ik')), ';', 1), " + spaceSQL + ")"
 	return "(" + mt + " LIKE 'text/%' OR " + mt + " IN ('" + strings.Join(textTypes, "', '") + "') OR " +
 		mt + " LIKE '%+json' OR " + mt + " LIKE '%+xml')"
 }
+
+// spaceSQL is an SQL string literal of every character unicode.IsSpace
+// (so strings.TrimSpace) takes for white space.
+var spaceSQL = func() string {
+	var b strings.Builder
+	b.WriteString("E'")
+	for _, r := range unicode.White_Space.R16 {
+		for c := r.Lo; c <= r.Hi; c += r.Stride {
+			fmt.Fprintf(&b, "\\u%04X", c)
+		}
+	}
+	for _, r := range unicode.White_Space.R32 {
+		for c := r.Lo; c <= r.Hi; c += r.Stride {
+			fmt.Fprintf(&b, "\\U%08X", c)
+		}
+	}
+	return b.String() + "'"
+}()
 
 // Marker is what replaces a value of the secret name.
 func Marker(name string) string { return "[REDACTED:" + name + "]" }
