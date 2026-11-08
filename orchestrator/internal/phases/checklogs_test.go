@@ -210,35 +210,7 @@ func TestCheckLogFairShareKeepsMiddleTimeoutEvidence(t *testing.T) {
 	// fair share, rather than assuming the collector fills its budget.
 	context := strings.Repeat("context detail ", 190) + "\n"
 	text = strings.Replace(text, evidence, strings.Repeat(context, 2)+evidence+"\n"+strings.Repeat(context, 4), 1)
-	full := delivery.LogEnd(text, delivery.CheckLogFileMax)
-	var checks []forge.FailingCheck
-	for i := range 4 {
-		checks = append(checks, forge.FailingCheck{Name: fmt.Sprintf("timeout %d", i), Full: full, Log: delivery.LogEnd(full, 4000)})
-	}
-	instructions := instructionsLeaving(t, 24<<10)
-	_, out, script := fixSpec(t, instructions, fixFeedback(checks...))
-	_, _, again := fixSpec(t, instructions, fixFeedback(checks...))
-	if script != again {
-		t.Fatal("fair-share script is not deterministic")
-	}
-	dir := runInWorkspace(t, script)
-	for i, c := range out[0].Checks {
-		if !c.FileCut || c.NoFile || c.Path == "" {
-			t.Fatalf("check %d did not exercise a fair-share recut: %+v (Full %d bytes)", i, c, len(full))
-		}
-		got, err := os.ReadFile(filepath.Join(dir, strings.TrimPrefix(c.Path, workspaceDir+"/")))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) == 0 || len(got) >= len(full) || len(got) > 6<<10 {
-			t.Errorf("check %d: unexpected file size %d", i, len(got))
-		}
-		for _, want := range []string{"panic: test timed out", "running tests:", "TestDeliveryWait", "--- FAIL:", "FAIL\texample.org/delivery", "Process completed with exit code 1.", "… [lines omitted]"} {
-			if !strings.Contains(string(got), want) || !strings.Contains(c.Log, want) {
-				t.Errorf("check %d: file or prompt excerpt lacks %q", i, want)
-			}
-		}
-	}
+	fairShareKeeps(t, "timeout", text, "panic: test timed out", "running tests:", "TestDeliveryWait", "--- FAIL:", "FAIL\texample.org/delivery", "Process completed with exit code 1.")
 }
 
 // A compiler diagnostic without an "error" keyword must survive a second cut
@@ -249,10 +221,19 @@ func TestCheckLogFairShareKeepsGoCompilerDiagnostic(t *testing.T) {
 	context := strings.Repeat("context detail ", 190) + "\n"
 	text := strings.Repeat("setup progress\n", 5000) + strings.Repeat(context, 2) + diagnostic + "\n" +
 		strings.Repeat("progress "+strings.Repeat("界", 80)+"\n", 100) + exit
+	fairShareKeeps(t, "compile", text, diagnostic, exit)
+}
+
+// fairShareKeeps gives four checks named for name the 64 KiB excerpt of text
+// beside instructions that leave them 24 KiB, and asserts each fair-share
+// recut, in the prompt and the shell-written file, holds every want and says
+// lines were omitted.
+func fairShareKeeps(t *testing.T, name, text string, wants ...string) {
+	t.Helper()
 	full := delivery.LogEnd(text, delivery.CheckLogFileMax)
 	var checks []forge.FailingCheck
 	for i := range 4 {
-		checks = append(checks, forge.FailingCheck{Name: fmt.Sprintf("compile %d", i), Full: full, Log: delivery.LogEnd(full, 4000)})
+		checks = append(checks, forge.FailingCheck{Name: fmt.Sprintf("%s %d", name, i), Full: full, Log: delivery.LogEnd(full, 4000)})
 	}
 	instructions := instructionsLeaving(t, 24<<10)
 	_, out, script := fixSpec(t, instructions, fixFeedback(checks...))
@@ -272,7 +253,7 @@ func TestCheckLogFairShareKeepsGoCompilerDiagnostic(t *testing.T) {
 		if len(got) == 0 || len(got) >= len(full) || len(got) > 6<<10 {
 			t.Errorf("check %d: unexpected file size %d", i, len(got))
 		}
-		for _, want := range []string{diagnostic, exit, "… [lines omitted]"} {
+		for _, want := range append(wants, "… [lines omitted]") {
 			if !strings.Contains(string(got), want) || !strings.Contains(c.Log, want) {
 				t.Errorf("check %d: file or prompt excerpt lacks %q", i, want)
 			}
