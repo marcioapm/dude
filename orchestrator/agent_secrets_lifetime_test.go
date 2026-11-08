@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -32,18 +33,39 @@ func (w *world) githubHolds(value string) bool {
 	return strings.TrimSpace(string(out)) != ""
 }
 
-// collected waits until the ended Run's last exit is collected.
+// collected waits until the ended Run's last exit is collected, which
+// deletes its copy unless copyNeeded keeps it; then has it ended over
+// copyBackstop ago (two hours) and runs the backstop (ForgetSecretCopies),
+// which deletes any copy copyNeeded does not keep: what is left is what
+// the Run keeps for as long as copyNeeded holds, not what a backstop not
+// yet due left behind.
 func (w *world) collected(runID string) {
 	w.t.Helper()
 	w.until("the Run's output collected", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('completed', 'failed', 'aborted')
 			AND artifacts_due_at IS NULL`, runID) == 1
 	})
-	// One more pass of every loop, the backstop included: nothing deletes
-	// the copy later than this in the window a person resumes in.
 	w.pump()
+	mustExec(w.t, w.owner, `UPDATE runs SET ended_at = now() - interval '2 hours' WHERE id = $1`, runID)
+	w.forgetCopies()
+}
+
+// forgetCopies runs the backstop once.
+func (w *world) forgetCopies() {
+	w.t.Helper()
 	if _, err := w.syncer.ForgetSecretCopies(context.Background()); err != nil {
 		w.t.Fatal(err)
+	}
+}
+
+// copyExpired has the ended Run's retention past (ended 31 days ago) and
+// runs the backstop, which deletes its copy.
+func (w *world) copyExpired(runID string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE runs SET ended_at = now() - interval '31 days' WHERE id = $1`, runID)
+	w.forgetCopies()
+	if got := w.runCopy(runID); len(got) != 0 {
+		w.t.Fatalf("the Run's copy holds %d values past its retention", len(got))
 	}
 }
 
@@ -91,53 +113,90 @@ func TestAKeptRunResumedAfterItsCollectionStillRedactsAndRefusesAnOldValue(t *te
 	}
 }
 
-// (b) The implementer, kept for its next round, is collected; A is rotated
-// to B while the reviewer works; the fix round takes the implementer's lux
-// Run over (handOverTx) and is resumed with B. The round-2 agent prints A
-// and commits it: the new row's copy holds A, carried over, so the print is
-// stored redacted and the push is refused.
+// (b) Three rounds on one lux Run: the implementer, kept for its next
+// round, is collected; A is rotated to B while the first reviewer works,
+// and the first fix round takes the implementer's lux Run over
+// (handOverTx) and is resumed with B; B is rotated to C while the second
+// reviewer works, and the second fix round takes it over in turn and is
+// resumed with C. The second fixer prints A and commits it: its copy holds
+// A and B, carried over twice, so the print is stored redacted and the
+// push is refused. A predecessor handed over and collected keeps no copy.
 func TestARoundHandedOverAfterARotationStillRedactsAndRefusesTheOldValue(t *testing.T) {
-	w, task := stuckReview(t, 2)
+	w, task := stuckReview(t, 3)
 	w.grant("IMPL_TOKEN", implToken, "implementer", "fixer")
+	values := []string{implTokenB, implTokenC}
+	var mu sync.Mutex
+	reviews := 0
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		b := scripted(spec)
 		labels, _ := spec["labels"].(map[string]any)
 		switch labels["dude.phase"] {
 		case "review":
-			// Between the rounds: the implementer has ended, and the fix
+			// Between the rounds: the writer has ended, and the next fix
 			// round has not yet been resumed.
-			mustExec(t, w.owner, `UPDATE project_secrets SET value = $2, updated_at = now() WHERE project_id = $1 AND name = 'IMPL_TOKEN'`,
-				w.project, implTokenB)
+			mu.Lock()
+			if reviews < len(values) {
+				mustExec(t, w.owner, `UPDATE project_secrets SET value = $2, updated_at = now() WHERE project_id = $1 AND name = 'IMPL_TOKEN'`,
+					w.project, values[reviews])
+			}
+			reviews++
+			mu.Unlock()
 		case "fix":
-			b.CallTools = append(slices.Clone(b.CallTools), gitCall("log", "-1", "--grep=remembered "+implToken),
-				writeCall("config/app.toml", "password = "+implToken), commitCall("Add config"))
+			if w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task) >= 2 {
+				b.CallTools = append(slices.Clone(b.CallTools), gitCall("log", "-1", "--grep=remembered "+implToken),
+					writeCall("config/app.toml", "password = "+implToken), commitCall("Add config"))
+			}
 		}
 		return b
 	}
-	var fix string
-	w.until("the fix round failed or pushed the value", func() bool {
-		fix = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' ORDER BY created_at LIMIT 1), '')`, task)
-		return fix != "" && (w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('failed', 'completed')`, fix) == 1)
+	var fix1, fix2 string
+	w.until("the second fix round failed or pushed the value", func() bool {
+		fix2 = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' ORDER BY created_at OFFSET 1 LIMIT 1), '')`, task)
+		return fix2 != "" && (w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('failed', 'completed')`, fix2) == 1)
 	})
+	fix1 = w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' ORDER BY created_at LIMIT 1`, task)
 	impl := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement'`, task)
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND continues_run_id = $2 AND continues_how = 'resume'`, fix, impl); n != 1 {
-		t.Fatalf("the fix round did not take the implementer's lux Run over")
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND continues_run_id = $2 AND continues_how = 'resume'`, fix1, impl); n != 1 {
+		t.Fatalf("the first fix round did not take the implementer's lux Run over")
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND payload::text LIKE '%--grep=remembered [REDACTED:IMPL_TOKEN]%'`, fix); n == 0 {
-		t.Error("no stored event of the fix round shows the marker where the agent printed the old value")
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND continues_run_id = $2 AND continues_how = 'resume'`, fix2, fix1); n != 1 {
+		t.Fatalf("the second fix round did not take the first fixer's lux Run over")
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND payload::text LIKE '%--grep=remembered [REDACTED:IMPL_TOKEN]%'`, fix2); n == 0 {
+		t.Error("no stored event of the second fix round shows the marker where the agent printed the old value")
 	}
 	w.assertTaskHoldsNo(task, implToken)
 	if w.githubHolds(implToken) {
 		t.Error("the old value reached GitHub")
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.push.refused'
-		AND payload->'secrets' = '["IMPL_TOKEN"]'`, fix); n != 1 {
-		t.Errorf("%d run.push.refused on the fix round naming IMPL_TOKEN", n)
+		AND payload->'secrets' = '["IMPL_TOKEN"]'`, fix2); n != 1 {
+		t.Errorf("%d run.push.refused on the second fix round naming IMPL_TOKEN", n)
 	}
-	if got := w.runCopyValues(fix); !slices.Equal(got, []string{"IMPL_TOKEN=" + implToken, "IMPL_TOKEN=" + implTokenB}) {
-		t.Errorf("the fix round's copy holds %d values, want its predecessor's and its resume's", len(got))
+	got := w.runCopyValues(fix2)
+	for _, v := range []string{implToken, implTokenB, implTokenC} {
+		if !slices.Contains(got, "IMPL_TOKEN="+v) {
+			t.Errorf("the second fix round's copy (%d values) lacks a value its lux Run was sent", len(got))
+		}
 	}
+	// Each predecessor, its lux Run handed over and its output collected,
+	// keeps no copy for the handover. The first fixer published nothing:
+	// none at all. The implementer published its notes (text/markdown),
+	// served redacted with its copy: the values it was sent itself, until
+	// its retention ends.
+	w.collected(fix1)
+	if got := w.runCopy(fix1); len(got) != 0 {
+		t.Errorf("the first fixer, handed over and collected, keeps %d values", len(got))
+	}
+	w.collected(impl)
+	if n := w.count(`SELECT count(*) FROM artifacts WHERE run_id = $1 AND content_type LIKE 'text/%'`, impl); n == 0 {
+		t.Fatal("the implementer published no text file")
+	}
+	if got := w.runCopyValues(impl); !slices.Equal(got, []string{"IMPL_TOKEN=" + implToken}) {
+		t.Errorf("the implementer, handed over and collected, keeps %d values, want the one it was sent for its notes", len(got))
+	}
+	w.copyExpired(impl)
 }
 
 // (c) A reviewer given A publishes a text file holding A; A is rotated to
@@ -207,10 +266,11 @@ func TestARecoveryAfterARotationRefusesTheOldValue(t *testing.T) {
 }
 
 // (e) The copy still goes. Runs ended over an hour ago, as the backstop
-// finds them: one nothing can come back to loses its copy; one kept, or
-// one whose output may still be read (a text file, a dead writer's
-// commits), keeps it until its keep or its retention ends, and then loses
-// it.
+// finds them: one nothing can come back to loses its copy (one kept whose
+// lux Run was handed to its next round too); one kept, or one whose output
+// may still be read (a text file, a dead writer's commits), keeps it until
+// its keep or its retention (30 days, an hour short of which it is still
+// kept) ends, and then loses it.
 func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
@@ -238,6 +298,7 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 		"a Run let go":                    mk("run_released", "review", "aborted", "keep = false, kept_until = now(), lux_stop_reason = 'kept'"),
 		"a kept Run cancelled in lux":     mk("run_cancelled", "review", "aborted", "keep = true, kept_until = now() + interval '1 day', lux_stop_reason = 'cancel'"),
 		"a failed writer lux never had":   mk("run_nolux", "implement", "failed", "lux_run_id = NULL"),
+		"kept, its lux Run handed over":   mk("run_handed", "implement", "completed", "keep = true, kept_until = now() + interval '1 day', lux_run_id = NULL"),
 	}
 	art(gone["a reviewer that published bytes"], "shot.png", "image/png")
 	kept := map[string]string{
@@ -248,16 +309,14 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 		"an aborted fixer":              mk("run_fixer", "fix", "aborted", ""),
 		"a reviewer that wrote text":    mk("run_text", "review", "completed", ""),
 		"a reviewer that wrote json":    mk("run_json", "review", "completed", ""),
+		"a failed writer, a day short":  mk("run_boundary", "implement", "failed", "ended_at = now() - interval '29 days 23 hours'"),
+		"a reviewer, text, a day short": mk("run_boundary_text", "review", "completed", "ended_at = now() - interval '29 days 23 hours'"),
 	}
 	art(kept["a reviewer that wrote text"], "notes.md", "text/markdown; charset=utf-8")
 	art(kept["a reviewer that wrote json"], "out.json", "application/json")
+	art(kept["a reviewer, text, a day short"], "notes.txt", "text/plain")
 
-	forget := func() {
-		t.Helper()
-		if _, err := w.syncer.ForgetSecretCopies(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
+	forget := w.forgetCopies
 	forget()
 	for what, id := range gone {
 		if got := w.runCopy(id); len(got) != 0 {
@@ -277,7 +336,8 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE runs SET kept_until = now() - interval '1 second' WHERE id = ANY($1) AND kept_until IS NOT NULL`,
 		[]string{kept["a kept Run"], kept["a Run kept for its next round"]})
 	mustExec(t, w.owner, `UPDATE runs SET ended_at = now() - interval '31 days' WHERE id = ANY($1)`,
-		[]string{kept["a kept Run not yet stopped"], kept["a failed writer"], kept["an aborted fixer"], kept["a reviewer that wrote text"], kept["a reviewer that wrote json"]})
+		[]string{kept["a kept Run not yet stopped"], kept["a failed writer"], kept["an aborted fixer"], kept["a reviewer that wrote text"], kept["a reviewer that wrote json"],
+			kept["a failed writer, a day short"], kept["a reviewer, text, a day short"]})
 	forget()
 	for what, id := range kept {
 		if got := w.runCopy(id); len(got) != 0 {
