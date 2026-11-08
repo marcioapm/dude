@@ -313,9 +313,8 @@ func writePlacements(ctx context.Context, tx pgx.Tx, runID string, epoch int, cu
 const latestResume = `epoch = CASE WHEN $2 = 0 THEN (SELECT max(epoch) FROM run_resumes WHERE run_id = $1) ELSE $2 END`
 
 // stamp writes col (a stamp of dude's own) once on the resume a frame of
-// epoch is about, unless that row is frames_missed or already timed: a
-// stamp landing after the resume's timing was published (a later turn's
-// busy, say) would contradict it. It returns the epoch it stamped, if
+// epoch is about, unless that row is frames_missed or, but for running_at,
+// already timed (untimed). It returns the epoch it stamped, if
 // any; whether lux had yet to report some of its new placement; and
 // whether the epoch is settled: its row is there, or none will ever be.
 // An epoch with no row is unsettled only while the Run is paused (lux's
@@ -341,7 +340,7 @@ func (t *translator) stamp(ctx context.Context, tx pgx.Tx, s *Syncer, col string
 		return tx.QueryRow(ctx, `WITH target AS (SELECT epoch FROM run_resumes WHERE run_id = $1 AND `+latestResume+`),
 			stamped AS (UPDATE run_resumes SET `+col+` = $3
 				WHERE run_id = $1 AND epoch IN (SELECT epoch FROM target) AND `+col+` IS NULL AND NOT frames_missed
-					AND timed_at IS NULL
+					AND `+untimed(col)+`
 				RETURNING epoch, assigned_at IS NULL OR image_ready_at IS NULL OR volumes_restored_at IS NULL
 					OR container_started_at IS NULL OR workload_started_at IS NULL OR host_name IS NULL AS missing)
 			SELECT (SELECT epoch FROM stamped), COALESCE((SELECT missing FROM stamped), false),
@@ -361,6 +360,21 @@ func (t *translator) stamp(ctx context.Context, tx pgx.Tx, s *Syncer, col string
 	}
 	s.logger().Warn("recording a resume's timing failed", "run", t.run.ID, "step", col, "error", err)
 	return nil, false, false
+}
+
+// untimed (SQL) is the condition for col to be stamped on a resume:
+// before it is timed, so nothing lands on a resume after its
+// run.resume.timed (a later turn's busy would come after first_output_at
+// and contradict it). Except running_at: lux's running state trails the
+// agent's records and may come after the first output, and more than
+// timing reads it — roundSyncLanded bounds a continuation's sync wait
+// from it, and resumeAsked's retry keeps requested_at once it is in — so
+// it is stamped whenever it comes, as before.
+func untimed(col string) string {
+	if col == "running_at" {
+		return "true"
+	}
+	return "timed_at IS NULL"
 }
 
 // lateStamp is a stamp a batch could not write in its budget: col of the
@@ -441,8 +455,8 @@ func (s *Syncer) lateDone(runID string, done []lateStamp) {
 }
 
 // writeLateStamps writes, in tx, the late stamps batches of the Run kept,
-// each only where its column is still empty and the resume not timed
-// yet: the frame's time is kept, a stamp a batch got in meanwhile wins
+// each only where its column is still empty and, as stamp does
+// (untimed), the resume not timed yet: the frame's time is kept, a stamp a batch got in meanwhile wins
 // (earlier, or the same frame replayed), and nothing lands on a timed
 // resume. Under resumeAsked's budget, not the stream's: off the Run's
 // batch, it can wait out the lock or the slow moment the batch could not.
@@ -460,7 +474,7 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun) (co
 	if err := s.trySavepoint(ctx, tx, resumeLockTimeout, resumeStatementTimeout, func(ctx context.Context, tx pgx.Tx) error {
 		for _, l := range late {
 			if _, err := tx.Exec(ctx, `UPDATE run_resumes SET `+l.col+` = COALESCE(`+l.col+`, $3)
-				WHERE run_id = $1 AND `+latestResume+` AND timed_at IS NULL AND NOT frames_missed`,
+				WHERE run_id = $1 AND `+latestResume+` AND `+untimed(l.col)+` AND NOT frames_missed`,
 				r.ID, l.epoch, l.at); err != nil {
 				return err
 			}
