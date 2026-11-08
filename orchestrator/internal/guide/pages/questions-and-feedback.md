@@ -65,7 +65,7 @@ A reviewer that cannot establish a fact it needs (what the product should do, ho
 
 The task's owner answers it there, or withdraws it with a reason when it no longer matters. Your answer is recorded as a decision on the task, which the fixer reads. The next reviewer of the same kind sees the question and its answer.
 
-**While a reviewer's question is open, dude does not open the pull request.** On a pull request that is already open, a fix still goes to it and is reviewed after. Review and fixing of the other findings go on. The task waits on you until every question of the attempt is answered or withdrawn.
+**While a reviewer's question is open, dude does not open the pull request.** On a pull request that is already open, a fix still goes to it and is reviewed after. Review and fixing of the other findings go on. Before the pull request opens, the task waits on you until every question of the attempt is answered or withdrawn.
 
 Under the conductor, the question goes to the conductor first: the task keeps running, shows as with the conductor, and you are not notified. The conductor answers with `answer_review_question` only when it has established the fact itself, or withdraws it. Otherwise it gives the question to you with `forward_review_question`, and the task waits on you. Its answer is recorded as the conductor's, not as your decision. If the conductor does not settle the question within 10 minutes, fails, or has no model, dude gives it to you. You can answer it yourself at any time.
 
