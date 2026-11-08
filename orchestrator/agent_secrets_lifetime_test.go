@@ -302,19 +302,19 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	}
 	art(gone["a reviewer that published bytes"], "shot.png", "image/png")
 	kept := map[string]string{
-		"a kept Run":                    mk("run_kept", "review", "aborted", "keep = true, kept_until = now() + interval '1 day', lux_stop_reason = 'kept'"),
-		"a kept Run not yet stopped":    mk("run_keeping", "test", "failed", "keep = true"),
-		"a Run kept for its next round": mk("run_next", "review", "completed", "keep = true, kept_until = now() + interval '1 day', lux_stop_reason = 'complete'"),
-		"a failed writer":               mk("run_dead", "implement", "failed", ""),
-		"an aborted fixer":              mk("run_fixer", "fix", "aborted", ""),
-		"a reviewer that wrote text":    mk("run_text", "review", "completed", ""),
-		"a reviewer that wrote json":    mk("run_json", "review", "completed", ""),
-		"a failed writer, a day short":  mk("run_boundary", "implement", "failed", "ended_at = now() - interval '29 days 23 hours'"),
-		"a reviewer, text, a day short": mk("run_boundary_text", "review", "completed", "ended_at = now() - interval '29 days 23 hours'"),
+		"a kept Run":                      mk("run_kept", "review", "aborted", "keep = true, kept_until = now() + interval '1 day', lux_stop_reason = 'kept'"),
+		"a kept Run not yet stopped":      mk("run_keeping", "test", "failed", "keep = true"),
+		"a Run kept for its next round":   mk("run_next", "review", "completed", "keep = true, kept_until = now() + interval '1 day', lux_stop_reason = 'complete'"),
+		"a failed writer":                 mk("run_dead", "implement", "failed", ""),
+		"an aborted fixer":                mk("run_fixer", "fix", "aborted", ""),
+		"a reviewer that wrote text":      mk("run_text", "review", "completed", ""),
+		"a reviewer that wrote json":      mk("run_json", "review", "completed", ""),
+		"a failed writer, an hour short":  mk("run_boundary", "implement", "failed", "ended_at = now() - interval '29 days 23 hours'"),
+		"a reviewer, text, an hour short": mk("run_boundary_text", "review", "completed", "ended_at = now() - interval '29 days 23 hours'"),
 	}
 	art(kept["a reviewer that wrote text"], "notes.md", "text/markdown; charset=utf-8")
 	art(kept["a reviewer that wrote json"], "out.json", "application/json")
-	art(kept["a reviewer, text, a day short"], "notes.txt", "text/plain")
+	art(kept["a reviewer, text, an hour short"], "notes.txt", "text/plain")
 
 	forget := w.forgetCopies
 	forget()
@@ -337,7 +337,7 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 		[]string{kept["a kept Run"], kept["a Run kept for its next round"]})
 	mustExec(t, w.owner, `UPDATE runs SET ended_at = now() - interval '31 days' WHERE id = ANY($1)`,
 		[]string{kept["a kept Run not yet stopped"], kept["a failed writer"], kept["an aborted fixer"], kept["a reviewer that wrote text"], kept["a reviewer that wrote json"],
-			kept["a failed writer, a day short"], kept["a reviewer, text, a day short"]})
+			kept["a failed writer, an hour short"], kept["a reviewer, text, an hour short"]})
 	forget()
 	for what, id := range kept {
 		if got := w.runCopy(id); len(got) != 0 {

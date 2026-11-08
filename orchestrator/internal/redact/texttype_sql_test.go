@@ -29,7 +29,7 @@ func TestTextTypeSQLIsTextType(t *testing.T) {
 		// Case.
 		"TEXT/PLAIN", "Application/JSON; charset=x", "IMAGE/SVG+XML", "Application/Vnd.A+Json",
 		// Whitespace, around the type and before its parameters.
-		" text/csv ", "text/markdown\t; charset=utf-8", "\tapplication/json", "application/json\n", "application/xml\r\n; q=1",
+		" text/csv ", "text/markdown\t; charset=utf-8", "application/json\t; charset=utf-8", "\tapplication/json", "application/json\n", "application/xml\r\n; q=1",
 		"application/yaml\v", "\fapplication/toml", "  application/sql  ; charset=utf-8", "\u00a0application/json",
 		"application/json\u0085", "\u3000text/plain\u2028", "\u1680image/svg+xml\u205f; x", " ", "", ";", "; text/plain",
 		// Letters strings.ToLower lowers to ASCII and a collation may not.
