@@ -2456,11 +2456,11 @@ func (w *steps) refreshPRWaitHeads(ctx context.Context, sc workflow.StepContext,
 }
 
 // fromPullRequestHeads starts the fix from each open pull request's head
-// as GitHub has it, and gives failing checks the end of their logs.
+// as GitHub has it, and gives failing checks failure-focused log excerpts.
 //
 // tails: this step creates a fix Run, so a check read in an earlier step
-// has its tail read again (Full is never stored). Without it a check with
-// an excerpt is left as it is.
+// has its longer excerpt read again (Full is never stored in feedback JSON).
+// Without it a check with an excerpt is left as it is.
 func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, tails bool) error {
 	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
 	if err != nil {
@@ -2519,14 +2519,14 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 				check.Log, check.Unread = read.Cut(checkLogLimit), read.Unread
 			} else if read.Tail == "" {
 				// The excerpt survives from an earlier step; say why the
-				// longer tail could not be had now.
+				// longer excerpt could not be had now.
 				check.Unread = read.Unread
 			}
-			// The fix Run's init writes the longer tail into its workspace
+			// The fix Run's init writes the longer excerpt into its workspace
 			// (phases' checkLogsInit), for the first CheckLogFiles checks.
 			if read.Tail != "" && files < CheckLogFiles {
-				// The file is the log's end itself: no "…" saying it was cut.
-				check.Full = LogEnd(forge.CleanLog(strings.TrimPrefix(read.Tail, "…\n")), CheckLogFileMax)
+				// Keep omission boundaries when recutting the selected job log.
+				check.Full = LogEnd(forge.CleanLog(read.Tail), CheckLogFileMax)
 				files++
 			}
 		}
@@ -2536,7 +2536,7 @@ func (w *steps) fromPullRequestHeads(ctx context.Context, sc workflow.StepContex
 
 // readsCheck says whether a failing check is read from GitHub now. Full is
 // never stored (json:"-"), so a check read in an earlier step has its
-// excerpt but not its tail: a step creating a fix Run (tails) reads it
+// excerpt but not its longer log selection: a step creating a fix Run (tails) reads it
 // again, for the first CheckLogFiles checks only. A step that creates no
 // fix Run leaves a check with an excerpt alone. A check with an excerpt
 // whose log was unreadable is not asked for again; one with neither is.
@@ -2551,8 +2551,8 @@ func readsCheck(c forge.FailingCheck, tails bool, files int) bool {
 }
 
 // checkLogLimit: how much of a failing check's output a fixer's prompt
-// quotes. CheckLogFiles checks' job log tails, CheckLogFileMax bytes each,
-// go into its workspace as files.
+// quotes. CheckLogFiles checks' longer failure-focused excerpts, at most
+// CheckLogFileMax bytes each including omission markers, go into workspace files.
 const (
 	checkLogLimit   = 4000
 	CheckLogFiles   = 4
@@ -2588,17 +2588,10 @@ func WithCheckLogs(feedback []forge.ActionableFeedback, logs map[string]string) 
 	return out
 }
 
-// LogEnd is the end of s in at most limit bytes, from a line's
-// start where one is in reach.
+// LogEnd keeps a failure-focused excerpt of s in at most limit bytes, including
+// omission markers. It shares Forge's selection policy without adding redaction.
 func LogEnd(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-	cut := s[len(s)-limit:]
-	if i := strings.IndexByte(cut, '\n'); i >= 0 && i < len(cut)-1 {
-		cut = cut[i+1:]
-	}
-	return cut
+	return forge.FailureExcerpt(s, limit)
 }
 
 func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {

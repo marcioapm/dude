@@ -2,15 +2,226 @@ package agenttools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
+
+// checkLogForge is a forge reading check 77, an Actions job whose log is
+// log, from a fake GitHub that redirects downloads to another host.
+func checkLogForge(t *testing.T, log, secret string) (*fakegithub.Server, *forge.GitHub) {
+	t.Helper()
+	fake := fakegithub.New("", "acme/target")
+	downloads := httptest.NewServer(fake.LogDownloads())
+	t.Cleanup(downloads.Close)
+	api := httptest.NewServer(fake.Handler())
+	t.Cleanup(api.Close)
+	fake.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()}
+	})
+	fake.SetJobLog(77, log, downloads.URL)
+	return fake, forge.NewGitHub(forge.Credential{Auth: "pat", Secret: secret, APIBaseURL: api.URL})
+}
+
+// The real HTTP forge read and agent wrapper must keep a middle timeout,
+// its running test names, the package FAIL and final exit, not just cleanup.
+func TestGitHubCheckLogHTTPKeepsMiddleFailureWithinBudget(t *testing.T) {
+	const budget = 16380 // readOnGitHub reserves len("…\n") from 16 KiB.
+	input := "##[error]early wrapper error\n" + strings.Repeat("setup noise 界\n", 4000) +
+		"[lane2] panic: test timed out after 10m0s\n[lane2] running tests:\n" +
+		"[lane2]     TestBlocked (9m59s)\n[lane2]     TestWaiting (9m58s)\n" +
+		strings.Repeat("goroutine noise\n", 4000) + "FAIL example/service 600s\n" +
+		"##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup noise\n", 4000)
+	fake, gh := checkLogForge(t, input, "ghp_check_log_"+t.Name())
+	read, err := gh.CheckLog(context.Background(), "acme/target", 77, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Source != "log" || !read.Actions || len(read.Text) > budget || !utf8.ValidString(read.Text) {
+		t.Fatalf("source=%q actions=%v bytes=%d valid=%v", read.Source, read.Actions, len(read.Text), utf8.ValidString(read.Text))
+	}
+	w := wrapper{id: "check-log"}
+	out, err := w.fit(w.checkLog(read))
+	if err != nil || len(out) > resultCap || !json.Valid(out) || !utf8.Valid(out) {
+		t.Fatalf("wrapper: bytes=%d err=%v", len(out), err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if firstKey(t, out) != "external" || !balancedQuotes(got, w.id) || got["source"] != "log" || got["actions"] != true {
+		t.Fatalf("lost external note, quote or source metadata: %s", out)
+	}
+	text, _ := got["log"].(string)
+	if text != delivery.ExternalText(w.id, read.Text) {
+		t.Fatal("wrapper changed or truncated the bounded forge excerpt")
+	}
+	for _, want := range []string{"panic: test timed out", "running tests:", "TestBlocked", "TestWaiting", "FAIL example/service", "Process completed with exit code 2.", "…"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("excerpt lost %q", want)
+		}
+	}
+	if auth := fake.DownloadAuthorization(); len(auth) != 1 || auth[0] != "" {
+		t.Errorf("download Authorization = %q", auth)
+	}
+}
+
+// Compiler diagnostics without an "error" keyword must survive the real HTTP
+// read and agent wrapper, even when progress pushes them out of the log's tail.
+func TestGitHubCheckLogHTTPKeepsGoCompilerDiagnostic(t *testing.T) {
+	const diagnostic = "main.go:7:2: undefined: Widget"
+	const exit = "##[error]Process completed with exit code 1."
+	input := strings.Repeat("setup noise 界\n", 4000) + diagnostic + "\n" +
+		strings.Repeat("progress "+strings.Repeat("界", 80)+"\n", 100) + exit
+	_, gh := checkLogForge(t, input, "ghp_check_log_"+t.Name())
+	read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16380)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read.Text) > 16380 || !utf8.ValidString(read.Text) {
+		t.Fatalf("excerpt: bytes=%d valid=%v", len(read.Text), utf8.ValidString(read.Text))
+	}
+	w := wrapper{id: "compiler-check"}
+	out, err := w.fit(w.checkLog(read))
+	if err != nil || len(out) > resultCap || !json.Valid(out) || !utf8.Valid(out) {
+		t.Fatalf("wrapper: bytes=%d err=%v", len(out), err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if firstKey(t, out) != "external" || !balancedQuotes(got, w.id) || got["source"] != "log" || got["actions"] != true {
+		t.Fatalf("lost external note, quote or source metadata: %s", out)
+	}
+	text, _ := got["log"].(string)
+	if text != delivery.ExternalText(w.id, forge.FailureExcerpt(read.Text, 10<<10)) {
+		t.Fatal("wrapper changed the failure excerpt of the bounded forge read")
+	}
+	for _, want := range []string{diagnostic, exit, "… [lines omitted]"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("excerpt lost %q", want)
+		}
+	}
+}
+
+// Escape-heavy logs must fit after JSON encoding, not only before wrapping.
+func TestGitHubCheckLogHTTPEscapedEnvelope(t *testing.T) {
+	for _, unit := range []string{"<", ">", "&", "\x00", "\x01", "\"", "\\"} {
+		t.Run(fmt.Sprintf("%q", unit), func(t *testing.T) {
+			input := "##[error]early wrapper error\n" + strings.Repeat(strings.Repeat(unit, 4000)+"\n", 4) +
+				strings.Repeat("setup noise\n", 4000) +
+				"[lane2] panic: test timed out after 10m0s\n[lane2] running tests:\n" +
+				"[lane2]     TestBlocked (9m59s)\n[lane2]     TestWaiting (9m58s)\n" +
+				strings.Repeat("goroutine noise\n", 4000) + "FAIL example/service 600s\n" +
+				"##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup noise\n", 4000)
+			fake, gh := checkLogForge(t, input, "local-fixture-token")
+			read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16380)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(read.Text) > 16380 {
+				t.Fatalf("forge bytes=%d", len(read.Text))
+			}
+			w := wrapper{id: "check-log"}
+			raw, err := w.fit(w.checkLog(read))
+			t.Logf("forge bytes=%d serialized bytes=%d", len(read.Text), len(raw))
+			if err != nil || len(raw) > resultCap || !json.Valid(raw) || !utf8.Valid(raw) {
+				t.Fatalf("envelope bytes=%d cap=%d err=%v", len(raw), resultCap, err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if firstKey(t, raw) != "external" || !balancedQuotes(got, w.id) || got["source"] != "log" || got["actions"] != true {
+				t.Fatal("lost external boundary or source metadata")
+			}
+			text, _ := got["log"].(string)
+			for _, want := range []string{"panic: test timed out", "running tests:", "TestBlocked", "TestWaiting", "FAIL example/service", "Process completed with exit code 2."} {
+				if !strings.Contains(text, want) {
+					t.Errorf("excerpt lost %q", want)
+				}
+			}
+			if auth := fake.DownloadAuthorization(); len(auth) != 1 || auth[0] != "" {
+				t.Errorf("download Authorization = %q", auth)
+			}
+		})
+	}
+}
+
+func TestGitHubCheckLogShortAndUnreadUnchanged(t *testing.T) {
+	for _, read := range []forge.CheckLogRead{
+		{},
+		{Source: "log", Actions: true, Text: "ordinary log\n"},
+		{Source: "check_run", Actions: true, Text: "annotation\n", Unread: "GitHub refused: no Actions: Read permission"},
+	} {
+		w := wrapper{id: "check-log"}
+		raw, err := w.fit(w.checkLog(read))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["source"] != read.Source || got["actions"] != read.Actions || got["log"] != w.text(read.Text, 16<<10) {
+			t.Fatal("changed short log or metadata")
+		}
+		if unread, present := got["unread"]; present != (read.Unread != "") || present && unread != read.Unread {
+			t.Fatal("changed unread metadata")
+		}
+	}
+}
+
+func TestGitHubCheckLogMaximumEscaping(t *testing.T) {
+	w := wrapper{id: "check-log"}
+	raw, err := w.fit(w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Text: strings.Repeat("<", 16380)}))
+	t.Logf("serialized bytes=%d", len(raw))
+	if err != nil || len(raw) > resultCap || !json.Valid(raw) {
+		t.Fatalf("envelope bytes=%d cap=%d err=%v", len(raw), resultCap, err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !balancedQuotes(got, w.id) {
+		t.Fatal("lost external boundary")
+	}
+}
+
+// This is only a caller-supplied scrub-before-excerpt seam, not a claim
+// that github_check_log loads secrets or redacts its returned log. Neither
+// forge.CheckLog nor wrapper.checkLog does that; Server.call redacts args.
+func TestGitHubCheckLogWithCallerSuppliedRedaction(t *testing.T) {
+	const secret = "known-check-log-secret/123+&"
+	red := redact.New(map[string]string{"CI_TOKEN": secret})
+	// Scrub intact known values before any lossy selection. Exact-value
+	// redaction after a cut cannot recognize a partial secret.
+	input := strings.Repeat("passing package\n", 1000) + "panic: " + secret + "\nexit status 2\n" + strings.Repeat("cleanup\n", 1000)
+	read := forge.CheckLogRead{Source: "log", Actions: true, Text: forge.FailureExcerpt(red.String(input), 4000)}
+	w := wrapper{id: "redacted-check"}
+	raw, err := w.fit(w.checkLog(read))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	text, _ := got["log"].(string)
+	if strings.Contains(text, secret) || !strings.Contains(text, "[REDACTED:CI_TOKEN]") ||
+		!strings.Contains(text, "exit status 2") || !balancedQuotes(got, w.id) {
+		t.Fatalf("caller redaction lost the marker, evidence or quote: %s", raw)
+	}
+}
 
 // firstKey is the first key of the JSON object out.
 func firstKey(t *testing.T, out []byte) string {
