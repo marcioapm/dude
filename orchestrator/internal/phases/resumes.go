@@ -175,14 +175,14 @@ func (s *Syncer) resumeAsked(ctx context.Context, r phaseRun, before lux.Run) in
 // resumeAskedTimeout bounds resumeAsked, both its attempts and all their
 // statements: what a slow database can add to a resume before lux is
 // asked, in one of the sweep's slots. Within it each attempt's statements
-// get resumeLockTimeout and resumeStatementTimeout, cut to what remains;
-// without it an attempt's three statements could take 3 × 2s, two
-// attempts 12s. 3s is the common case, a lock held past resumeLockTimeout
-// (a follower batch, an UPDATE of the Run), covered twice over: the first
-// attempt gives up at 1s, and the second has a full 1s lock wait and time
-// left for its statements. Postgres's timeouts end a statement first;
-// the context ends one still running at the bound, which here, in a
-// transaction of its own, costs that connection, not a Run's batch.
+// get resumeLockTimeout and resumeStatementTimeout; without it an
+// attempt's three statements could take 3 × 2s, two attempts 12s. 3s is
+// the common case, a lock held past resumeLockTimeout (a follower batch,
+// an UPDATE of the Run), covered twice over: the first attempt gives up
+// at 1s, and the second has a full 1s lock wait and time left for its
+// statements. The context is the bound: a statement still running at it
+// is cancelled, which here, in a transaction of its own, costs that
+// connection, not a Run's batch.
 const resumeAskedTimeout = 3 * time.Second
 
 // databaseTimedOut is whether err is Postgres giving up on a lock wait
@@ -195,20 +195,18 @@ func databaseTimedOut(err error) bool {
 }
 
 // askResume is one attempt of resumeAsked, in a transaction of its own,
-// under ctx: cancelled at resumeAsked's bound, it is rolled back.
+// under ctx: cancelled at resumeAsked's bound, it is rolled back. ctx's
+// deadline bounds its statements as a whole; Postgres's timeouts, each
+// statement's.
 func (s *Syncer) askResume(ctx context.Context, r phaseRun, before lux.Run, epoch int) error {
 	_, prev := placementsAround(before.Placements, epoch)
-	lock, statement := resumeLockTimeout, resumeStatementTimeout
-	if deadline, has := ctx.Deadline(); has {
-		left := time.Until(deadline)
-		if left < 10*time.Millisecond {
-			return fmt.Errorf("too little time left to record the resume: %w", context.DeadlineExceeded)
-		}
-		lock, statement = min(lock, left), min(statement, left)
+	if deadline, has := ctx.Deadline(); has && time.Until(deadline) < 10*time.Millisecond {
+		return fmt.Errorf("too little time left to record the resume: %w", context.DeadlineExceeded)
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)`,
-			strconv.FormatInt(lock.Milliseconds(), 10), strconv.FormatInt(statement.Milliseconds(), 10)); err != nil {
+			strconv.FormatInt(resumeLockTimeout.Milliseconds(), 10),
+			strconv.FormatInt(resumeStatementTimeout.Milliseconds(), 10)); err != nil {
 			return err
 		}
 		// The Run's row before the resume's: a retry's new row version
@@ -333,9 +331,16 @@ const latestResume = `epoch = CASE WHEN $2 = 0 THEN (SELECT max(epoch) FROM run_
 // on any failure: a later frame may stamp it in a later batch, and
 // whichever of the two is written first is kept (each writes only an
 // empty column).
+//
+// A frame with no epoch (0) is about the latest resume as the frame is
+// applied. A stamp kept for later names that resume, resolved in this
+// batch, so it is not whichever is latest when it is written: right after
+// the UPDATE timed out, by a plain read that waits on no row lock, under
+// the stream's budget. Only then: a stamp that goes in costs no extra
+// round trip.
 func (t *translator) stamp(ctx context.Context, tx pgx.Tx, s *Syncer, col string, epoch int) (stamped *int, missing, settled bool) {
 	var at time.Time
-	err := s.savepointAt(ctx, tx, timingLockTimeout, timingStatementTimeout, func(ctx context.Context, tx pgx.Tx, now time.Time) error {
+	ran, err := s.savepointAt(ctx, tx, timingLockTimeout, timingStatementTimeout, func(ctx context.Context, tx pgx.Tx, now time.Time) error {
 		at = now
 		return tx.QueryRow(ctx, `WITH target AS (SELECT epoch FROM run_resumes WHERE run_id = $1 AND `+latestResume+`),
 			stamped AS (UPDATE run_resumes SET `+col+` = $3
@@ -350,16 +355,42 @@ func (t *translator) stamp(ctx context.Context, tx pgx.Tx, s *Syncer, col string
 			Scan(&stamped, &missing, &settled)
 	})
 	switch {
-	case err == nil:
+	case err == nil && ran:
 		return stamped, missing, settled
+	case err == nil:
+		// Too little of the Run's time left to try: unsettled, as on a
+		// failure, for a later frame to stamp.
+		return nil, false, false
 	case databaseTimedOut(err) && !at.IsZero():
-		t.deferStamp(s, col, epoch, at)
+		target, rerr := t.resumeOf(ctx, tx, s, epoch)
+		if rerr != nil || target == 0 {
+			s.logger().Warn("recording a resume's timing failed", "run", t.run.ID, "step", col, "epoch", epoch,
+				"error", errors.Join(err, rerr))
+			return nil, false, false
+		}
+		t.deferStamp(s, col, target, at)
 		s.logger().Warn("recording a resume's timing timed out; writing it after the batch", "run", t.run.ID,
-			"step", col, "epoch", epoch, "error", err)
+			"step", col, "epoch", target, "error", err)
 		return nil, false, false
 	}
 	s.logger().Warn("recording a resume's timing failed", "run", t.run.ID, "step", col, "error", err)
 	return nil, false, false
+}
+
+// resumeOf is the epoch of the resume a frame of epoch is about: epoch,
+// or for a frame with none (0) the Run's latest resume, 0 for none.
+func (t *translator) resumeOf(ctx context.Context, tx pgx.Tx, s *Syncer, epoch int) (int, error) {
+	if epoch != 0 {
+		return epoch, nil
+	}
+	var latest *int
+	ran, err := s.savepointAt(ctx, tx, timingLockTimeout, timingStatementTimeout, func(ctx context.Context, tx pgx.Tx, _ time.Time) error {
+		return tx.QueryRow(ctx, `SELECT max(epoch) FROM run_resumes WHERE run_id = $1`, t.run.ID).Scan(&latest)
+	})
+	if err != nil || !ran || latest == nil {
+		return 0, err
+	}
+	return *latest, nil
 }
 
 // untimed (SQL) is the condition for col to be stamped on a resume:
@@ -378,13 +409,17 @@ func untimed(col string) string {
 }
 
 // lateStamp is a stamp a batch could not write in its budget: col of the
-// resume a frame of epoch (0: no epoch, the latest) is about, at the
+// resume into epoch, the one its frame was about as it was applied (a
+// frame with no epoch resolved to the latest then, by stamp), at the
 // frame's time on Postgres's clock.
 type lateStamp struct {
 	col   string
 	epoch int
 	at    time.Time
 }
+
+// lateCols are the columns a stamp can be kept for: stamp's.
+var lateCols = []string{"running_at", "busy_at", "first_output_at"}
 
 // deferStamp keeps a stamp the batch could not write, and has the batch's
 // follow-up write it and time the resume, if it can be. Kept on the
@@ -393,27 +428,39 @@ type lateStamp struct {
 // takes it back (rolledBack), and is read again and stamps again. A
 // timing that writes it meanwhile writes the time this frame was applied,
 // which the replay's COALESCE keeps.
+//
+// One per column and resume: one already kept is an earlier batch's,
+// committed (a Run's batches run one at a time, and one rolled back took
+// its own back), so its frame came first and its time is the one to keep;
+// its follow-up is still to come or already failed, and either way this
+// one adds nothing to it. So a Run whose row stays locked costs one
+// follow-up per stamp, not one per contended batch.
 func (t *translator) deferStamp(s *Syncer, col string, epoch int, at time.Time) {
 	l := lateStamp{col, epoch, at}
-	t.late = append(t.late, l)
 	s.lateMu.Lock()
 	if s.late == nil {
 		s.late = map[string][]lateStamp{}
 	}
+	if slices.ContainsFunc(s.late[t.run.ID], func(k lateStamp) bool { return k.col == col && k.epoch == epoch }) {
+		s.lateMu.Unlock()
+		return
+	}
 	s.late[t.run.ID] = append(s.late[t.run.ID], l)
 	s.lateMu.Unlock()
+	t.late = append(t.late, l)
 	// A placement read wants a known epoch; running_at or first_output_at
 	// stamped would have asked for one (or might have: lux's placements
 	// not all in).
-	t.afterBatch(s, epoch, col != "busy_at" && epoch != 0)
+	t.afterBatch(s, epoch, col != "busy_at")
 }
 
 // committed is the batch committed: it returns the resumes for its
-// follow-up, nil for none.
-func (t *translator) committed() map[int]bool {
-	resumes := t.resumes
+// follow-up, nil for none, and the stamps it kept, for that follow-up to
+// write whatever becomes of the Syncer's copy (forgetLate).
+func (t *translator) committed() (map[int]bool, []lateStamp) {
+	resumes, late := t.resumes, t.late
 	t.resumes, t.late = nil, nil
-	return resumes
+	return resumes, late
 }
 
 // rolledBack forgets what a batch that failed noted: what was read but not
@@ -429,11 +476,28 @@ func (t *translator) rolledBack(s *Syncer) {
 	t.resumes, t.late = nil, nil
 }
 
-// lateStamps are the Run's late stamps kept so far.
-func (s *Syncer) lateStamps(runID string) []lateStamp {
+// lateStamps are the Run's late stamps kept so far, and own besides (the
+// follow-up's batch's, which the Syncer may have forgotten since).
+func (s *Syncer) lateStamps(runID string, own ...lateStamp) []lateStamp {
 	s.lateMu.Lock()
 	defer s.lateMu.Unlock()
-	return slices.Clone(s.late[runID])
+	late := slices.Clone(s.late[runID])
+	for _, o := range own {
+		if !slices.ContainsFunc(late, func(l lateStamp) bool { return l.col == o.col && l.epoch == o.epoch && l.at.Equal(o.at) }) {
+			late = append(late, o)
+		}
+	}
+	return late
+}
+
+// forgetLate forgets every late stamp of the Run: its follower is over,
+// every batch of it committed or abandoned, and each committed one's
+// follow-up holds its own (committed). What is left would otherwise stay
+// for as long as the process runs.
+func (s *Syncer) forgetLate(runID string) {
+	s.lateMu.Lock()
+	defer s.lateMu.Unlock()
+	delete(s.late, runID)
 }
 
 // lateDone forgets the Run's late stamps that are in the database, or
@@ -454,36 +518,101 @@ func (s *Syncer) lateDone(runID string, done []lateStamp) {
 	s.late[runID] = kept
 }
 
-// writeLateStamps writes, in tx, the late stamps batches of the Run kept,
-// each only where its column is still empty and, as stamp does
-// (untimed), the resume not timed yet: the frame's time is kept, a stamp a batch got in meanwhile wins
-// (earlier, or the same frame replayed), and nothing lands on a timed
-// resume. Under resumeAsked's budget, not the stream's: off the Run's
-// batch, it can wait out the lock or the slow moment the batch could not.
+// lockUntimed locks, in tx, every resume of the Run not timed yet, in
+// epoch order, before its late stamps are read (writeLateStamps). A batch
+// that stamped a resume holds its row until it commits, and keeps the
+// stamps it could not write (deferStamp) before it commits; so once these
+// locks are granted, every stamp kept by a batch whose output the timing
+// can see is in the Syncer's copy. Taken later, a batch could keep busy_at
+// and commit first_output_at between the read and the timing, and the
+// resume be timed without its busy, for good.
+//
+// Every untimed resume, not only those being timed: the late stamps may be
+// of any of them, and two timings of a Run locking different sets would
+// each wait on the other's. In epoch order, as two timings of a Run take
+// them, so neither waits on the other while holding what it needs. FOR NO
+// KEY UPDATE, as the timed_at UPDATE takes them anyway: nothing conflicts
+// with it that did not already, and like that UPDATE it waits under tx's
+// own bounds (no lock_timeout; the follow-up's or recovery's context), so
+// the wait is the one the UPDATE made before, moved earlier. A batch's
+// stamp waits on it under the stream's budget and keeps its stamp for its
+// own follow-up; resumeAsked under its own, and on a resume's own row
+// only on a retry; neither takes these rows before the Run's.
+func lockUntimed(ctx context.Context, tx pgx.Tx, runID string) error {
+	_, err := tx.Exec(ctx, `SELECT 1 FROM run_resumes WHERE run_id = $1 AND timed_at IS NULL ORDER BY epoch FOR NO KEY UPDATE`, runID)
+	return err
+}
+
+// writeLateStamps writes, in tx, the late stamps batches of the Run kept
+// (and own, the follow-up's batch's), each only where its column is still
+// empty and, as stamp does (untimed), the resume not timed yet: the
+// frame's time is kept, a stamp a batch got in meanwhile wins (earlier,
+// or the same frame replayed), and nothing lands on a timed resume. One
+// statement, under resumeAsked's budget, not the stream's: off the Run's
+// batch, it can wait out the lock or the slow moment the batch could not,
+// and holds the rows it locks no longer than that budget all told. A
+// stamp that lands nowhere, its column still empty, is logged.
+//
 // They are tried once: forgotten once tx commits (the returned func),
-// written or not. A failure is logged, and the resume timed without them;
-// kept longer, a stamp without an epoch could land on a later resume.
-// Only a transaction that does not commit leaves them to the Run's next
-// timing.
-func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun) (committed func()) {
-	late := s.lateStamps(r.ID)
+// written or not. A failure is logged, and the resume timed without them.
+// A transaction that does not commit, or a write never tried (too little
+// time left), leaves them to the Run's next timing.
+func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own []lateStamp) (committed func()) {
+	late := s.lateStamps(r.ID, own...)
 	if len(late) == 0 {
 		return func() {}
 	}
-	committed = func() { s.lateDone(r.ID, late) }
-	if err := s.trySavepoint(ctx, tx, resumeLockTimeout, resumeStatementTimeout, func(ctx context.Context, tx pgx.Tx) error {
-		for _, l := range late {
-			if _, err := tx.Exec(ctx, `UPDATE run_resumes SET `+l.col+` = COALESCE(`+l.col+`, $3)
-				WHERE run_id = $1 AND `+latestResume+` AND `+untimed(l.col)+` AND NOT frames_missed`,
-				r.ID, l.epoch, l.at); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", "late", "error", err)
+	cols, epochs, ats := make([]string, len(late)), make([]int, len(late)), make([]time.Time, len(late))
+	for i, l := range late {
+		cols[i], epochs[i], ats[i] = l.col, l.epoch, l.at
 	}
-	return committed
+	set, filters := "", ""
+	for i, c := range lateCols {
+		if i > 0 {
+			set, filters = set+", ", filters+", "
+		}
+		set += c + ` = CASE WHEN ` + untimed(c) + ` THEN COALESCE(rr.` + c + `, l.` + c + `) ELSE rr.` + c + ` END`
+		filters += `min(at) FILTER (WHERE col = '` + c + `') AS ` + c
+	}
+	type landed struct {
+		Epoch                      int
+		Running, Busy, FirstOutput *time.Time
+	}
+	var rows []landed
+	ran, err := s.savepointAt(ctx, tx, resumeLockTimeout, resumeStatementTimeout, func(ctx context.Context, tx pgx.Tx, _ time.Time) error {
+		got, err := tx.Query(ctx, `WITH l AS (SELECT epoch, `+filters+`
+				FROM unnest($2::text[], $3::int[], $4::timestamptz[]) AS l(col, epoch, at) GROUP BY epoch),
+			u AS (UPDATE run_resumes rr SET `+set+`
+				FROM l WHERE rr.run_id = $1 AND rr.epoch = l.epoch AND NOT rr.frames_missed
+					AND (rr.timed_at IS NULL OR l.running_at IS NOT NULL)
+				RETURNING rr.epoch, rr.running_at, rr.busy_at, rr.first_output_at)
+			SELECT l.epoch, COALESCE(u.running_at, rr.running_at), COALESCE(u.busy_at, rr.busy_at),
+				COALESCE(u.first_output_at, rr.first_output_at)
+			FROM l LEFT JOIN u ON u.epoch = l.epoch LEFT JOIN run_resumes rr ON rr.run_id = $1 AND rr.epoch = l.epoch`,
+			r.ID, cols, epochs, ats)
+		if err != nil {
+			return err
+		}
+		rows, err = pgx.CollectRows(got, pgx.RowToStructByPos[landed])
+		return err
+	})
+	switch {
+	case err != nil:
+		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", "late", "error", err)
+	case !ran:
+		return func() {}
+	default:
+		for _, l := range late {
+			i := slices.IndexFunc(rows, func(w landed) bool { return w.Epoch == l.epoch })
+			if i >= 0 && map[string]*time.Time{"running_at": rows[i].Running, "busy_at": rows[i].Busy,
+				"first_output_at": rows[i].FirstOutput}[l.col] != nil {
+				continue
+			}
+			s.logger().Warn("a resume's late timing stamp landed nowhere: its resume is timed, missed or gone", "run", r.ID,
+				"step", "late", "column", l.col, "epoch", l.epoch)
+		}
+	}
+	return func() { s.lateDone(r.ID, late) }
 }
 
 // resumeRunning records lux reporting the Run running again, and has its
@@ -601,8 +730,11 @@ func (s *Syncer) owed(runID string) map[int]bool {
 // In the background, so a slow lux never holds up the Run's output; both
 // steps are idempotent, so two follow-ups of one resume do no harm. A
 // resume it reads is its own to time: recovery skips it until the read
-// and the timing are done, whether they succeeded or not.
-func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool) {
+// and the timing are done, whether they succeeded or not. late are the
+// stamps the batch kept (committed), written by its first timing that
+// commits even if the Run's follower has ended and the Syncer forgotten
+// them since (forgetLate).
+func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool, late ...lateStamp) {
 	timeout := s.followUpTimeout
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -610,7 +742,9 @@ func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	for epoch, read := range resumes {
-		s.followUp(ctx, r, epoch, read)
+		if s.followUp(ctx, r, epoch, read, late) {
+			late = nil
+		}
 	}
 	if s.followedUp != nil {
 		s.followedUp()
@@ -622,7 +756,9 @@ func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool) {
 // owner time to publish the resume, without the placements.
 const followUpTimingTimeout = 5 * time.Second
 
-func (s *Syncer) followUp(ctx context.Context, r phaseRun, epoch int, read bool) {
+// followUp is resumeFollowUp's for one resume; timed is whether its timing
+// committed, late with it.
+func (s *Syncer) followUp(ctx context.Context, r phaseRun, epoch int, read bool, late []lateStamp) (timed bool) {
 	if read {
 		defer s.paid(r.ID, epoch)
 		if err := s.readPlacements(ctx, r, epoch); err != nil {
@@ -631,9 +767,11 @@ func (s *Syncer) followUp(ctx context.Context, r phaseRun, epoch int, read bool)
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), followUpTimingTimeout)
 	defer cancel()
-	if err := s.timeResumes(ctx, r, epoch); err != nil {
+	if err := s.timeResumes(ctx, r, epoch, late...); err != nil {
 		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "epoch", epoch, "error", err)
+		return false
 	}
+	return true
 }
 
 // timeResumesLater writes, in the background, run.resume.timed for every
@@ -733,7 +871,7 @@ const (
 // costs its resume at most that, and only its timing.
 //
 // The same budget writes a batch's late stamps (writeLateStamps), off the
-// batch too.
+// batch too, in one statement.
 const (
 	resumeLockTimeout      = time.Second
 	resumeStatementTimeout = 2 * time.Second
@@ -772,19 +910,21 @@ func (s *Syncer) bestEffort(ctx context.Context, tx pgx.Tx, r phaseRun, what str
 // log. Nothing runs, and nil is returned, when too little time remains.
 func (s *Syncer) trySavepoint(ctx context.Context, tx pgx.Tx, lock, statement time.Duration,
 	fn func(context.Context, pgx.Tx) error) error {
-	return s.savepointAt(ctx, tx, lock, statement, func(ctx context.Context, tx pgx.Tx, _ time.Time) error {
+	_, err := s.savepointAt(ctx, tx, lock, statement, func(ctx context.Context, tx pgx.Tx, _ time.Time) error {
 		return fn(ctx, tx)
 	})
+	return err
 }
 
 // savepointAt is trySavepoint, handing fn Postgres's clock_timestamp() as
 // the savepoint was set up: read with its settings, before fn's own
-// statements can wait on anything, at no round trip of its own.
+// statements can wait on anything, at no round trip of its own. ran is
+// whether it tried: false, with no error, when too little time remained.
 func (s *Syncer) savepointAt(ctx context.Context, tx pgx.Tx, lock, statement time.Duration,
-	fn func(context.Context, pgx.Tx, time.Time) error) error {
+	fn func(context.Context, pgx.Tx, time.Time) error) (ran bool, err error) {
 	lock, statement, ok := budgetUnder(ctx, lock, statement)
 	if !ok || ctx.Err() != nil {
-		return nil
+		return false, nil
 	}
 	ctx = context.WithoutCancel(ctx)
 	var lockWas, statementWas string
@@ -809,7 +949,7 @@ func (s *Syncer) savepointAt(ctx context.Context, tx pgx.Tx, lock, statement tim
 				lockWas, statementWas)
 		}
 	}
-	return err
+	return true, err
 }
 
 func (s *Syncer) logger() *slog.Logger {
