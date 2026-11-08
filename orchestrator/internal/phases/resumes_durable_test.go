@@ -27,10 +27,11 @@ type askedAnswer struct {
 // statement past the stream's tight budget (timingLockTimeout,
 // timingStatementTimeout), nothing would make it again and the resume
 // would never be timed. Behind a Run held elsewhere past timingLockTimeout
-// (a follower batch, say: lock_timeout, 55P03), and behind an insert
-// slower than timingStatementTimeout (a checkpoint, say: statement_timeout,
-// 57014), and behind a Run held past resumeAsked's own lock budget, the
-// row is made, and the resume is timed once its frames come.
+// (a follower batch, say: lock_timeout, 55P03), behind a Run held past
+// resumeAsked's own lock budget, and behind an insert slower than
+// resumeAsked's own statement budget once (a checkpoint, say:
+// statement_timeout, 57014), the row is made, trying once more where it
+// must, and the resume is timed once its frames come.
 func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -77,13 +78,12 @@ func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 				return nil
 			}
 		}, 1},
+		// Past resumeAsked's own statement budget (57014): the first
+		// insert is too slow, and the one more it tries gets the row in.
 		{"slow insert", func(w *resumeWorld) func(<-chan struct{}, *logSink) error {
-			sleep := timingStatementTimeout + 150*time.Millisecond
-			w.exec(fmt.Sprintf(`CREATE FUNCTION slow_resume() RETURNS trigger LANGUAGE plpgsql AS
-				$$ BEGIN PERFORM pg_sleep(%.3f); RETURN NEW; END $$`, sleep.Seconds()))
-			w.exec(`CREATE TRIGGER slow_resume BEFORE INSERT ON run_resumes FOR EACH ROW EXECUTE FUNCTION slow_resume()`)
+			w.slowInserts(true)
 			return func(<-chan struct{}, *logSink) error { return nil }
-		}, 0},
+		}, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newResumeWorld(t)
@@ -129,8 +129,9 @@ func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 			}
 			// The retry's Warn line, once per retry, and nothing else.
 			got := logs.String()
-			if n := strings.Count(got, retried); n != c.retries || strings.Count(got, "\n") != c.retries ||
-				c.retries > 0 && !strings.Contains(got, "level=WARN") || c.retries > 0 && !strings.Contains(got, "step=resume") {
+			lines := logLines(got, "recording a resume's timing", "step=")
+			if n := len(logLines(got, retried)); n != c.retries || len(lines) != c.retries || !allWarn(lines) ||
+				len(logLines(got, "step=resume")) != c.retries {
 				t.Errorf("want %d Warn %q lines, with step=resume, and nothing else; got:\n%s", c.retries, retried, got)
 			}
 			logs.Reset()
@@ -142,10 +143,54 @@ func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 			if n := len(w.timed()); n != 1 {
 				t.Errorf("%d run.resume.timed, want 1\nlogs:\n%s", n, logs)
 			}
-			if got := logs.String(); got != "" {
-				t.Errorf("a timing statement failed:\n%s", got)
+			if lines := logLines(logs.String(), "recording a resume's timing", "step="); len(lines) != 0 {
+				t.Errorf("a timing statement failed:\n%s", logs)
 			}
 		})
+	}
+}
+
+// slowInserts makes inserts into run_resumes sleep past resumeAsked's
+// statement budget: only the first (once), or every one. A sequence
+// counts, as it is not rolled back with the insert.
+func (w *resumeWorld) slowInserts(once bool) {
+	w.t.Helper()
+	sleep := resumeStatementTimeout + 500*time.Millisecond
+	when := "true"
+	if once {
+		when = "nextval('slow_insert_seen') = 1"
+		w.exec(`CREATE SEQUENCE slow_insert_seen`)
+		w.exec(`GRANT USAGE ON SEQUENCE slow_insert_seen TO PUBLIC`)
+	}
+	w.exec(fmt.Sprintf(`CREATE FUNCTION slow_resume() RETURNS trigger LANGUAGE plpgsql AS
+		$$ BEGIN IF %s THEN PERFORM pg_sleep(%.3f); END IF; RETURN NEW; END $$`, when, sleep.Seconds()))
+	w.exec(`CREATE TRIGGER slow_resume BEFORE INSERT ON run_resumes FOR EACH ROW EXECUTE FUNCTION slow_resume()`)
+}
+
+// A database too slow for every attempt costs the resume path no more than
+// resumeAskedTimeout, both attempts together: the resume goes on untimed,
+// and says so.
+func TestAResumeOnADatabaseTooSlowForItIsBoundedAsAWhole(t *testing.T) {
+	w := newResumeWorld(t)
+	logs := w.captureTimingLogs()
+	w.slowInserts(false)
+	start := time.Now()
+	epoch := w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(time.Now().Add(-time.Minute).UTC()))
+	took := time.Since(start)
+	if epoch != 2 {
+		t.Errorf("resumeAsked foresaw epoch %d, want 2", epoch)
+	}
+	if took > resumeAskedTimeout+250*time.Millisecond {
+		t.Errorf("resumeAsked took %s, want within its bound of %s", took, resumeAskedTimeout)
+	}
+	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1`); n != 0 {
+		t.Errorf("%d resume rows, want none", n)
+	}
+	got := logs.String()
+	lines := logLines(got, "recording a resume's timing", "step=")
+	if len(lines) != 2 || !allWarn(lines) || len(logLines(got, retried)) != 1 ||
+		len(logLines(got, "recording a resume's timing failed")) != 1 {
+		t.Errorf("want a Warn that it tries again and one that it failed, and nothing else; got:\n%s", got)
 	}
 }
 
