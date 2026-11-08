@@ -357,3 +357,28 @@ func TestABatchRolledBackKeepsNoLateStamp(t *testing.T) {
 		t.Errorf("run.resume.timed has no untilBusyMs: %v", timed[0])
 	}
 }
+
+// A Run whose resume stays locked keeps one late stamp per column and
+// resume, the earliest, and follows it up once: each contended batch after
+// the first adds nothing.
+func TestALateStampIsKeptOncePerColumnAndResume(t *testing.T) {
+	s := &Syncer{}
+	first := time.Now()
+	for i := range 3 {
+		tr := &translator{run: phaseRun{ID: "run_1"}}
+		tr.deferStamp(s, "busy_at", 2, first.Add(time.Duration(i)*time.Second))
+		if resumes, late := tr.committed(); (i == 0) != (resumes != nil) || (i == 0) != (len(late) == 1) {
+			t.Errorf("batch %d: follow-up %v, kept %v; want one only for the first", i, resumes, late)
+		}
+	}
+	tr := &translator{run: phaseRun{ID: "run_1"}}
+	tr.deferStamp(s, "first_output_at", 2, first)
+	tr.deferStamp(s, "busy_at", 3, first)
+	got := s.lateStamps("run_1")
+	if len(got) != 3 || !got[0].at.Equal(first) {
+		t.Errorf("kept %v, want busy_at of 2 at %v, first_output_at of 2 and busy_at of 3", got, first)
+	}
+	if s.owed("run_1")[2] != true || len(s.owed("run_1")) != 1 {
+		t.Errorf("owed %v, want the read of 2 once", s.owed("run_1"))
+	}
+}
