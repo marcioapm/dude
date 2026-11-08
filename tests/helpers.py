@@ -217,6 +217,13 @@ class ApiClient:
             out[role] = {**{k: v for k, v in fields.items() if k != "model"}, "tier": self.tier_for(fields["model"])}
         return out
 
+    def set_models(self, project_id: str, models: Mapping[str, str | dict]) -> dict:
+        """A project's agents put on the models named, as `on_models` says. A
+        rejected change fails here, not later on the old models it left."""
+        resp = self.patch(f"/v1/projects/{project_id}", {"agentModels": self.on_models(models)})
+        assert resp.status_code == 200, f"set models failed: {resp.status_code} {resp.text}"
+        return resp.json()
+
 
 # ---------------------------------------------------------------------------
 # Resume timing (run_resumes and run.resume.timed)

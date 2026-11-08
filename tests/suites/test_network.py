@@ -22,8 +22,8 @@ LLM_HOST = "localhost"
 
 
 def _implementer_on(client: ApiClient, project: dict, model: str) -> None:
-    client.patch(f"/v1/projects/{project['id']}", {"agentModels": client.on_models({
-        "implementer": model, "reviewer": "fake/hang", "simplifier": "fake/scripted"})})
+    client.set_models(project["id"], {
+        "implementer": model, "reviewer": "fake/hang", "simplifier": "fake/scripted"})
 
 
 def _first_spec(env, client: ApiClient, project: dict, owner_dsn: str) -> tuple[dict, dict]:

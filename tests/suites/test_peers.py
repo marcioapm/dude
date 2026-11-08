@@ -20,8 +20,8 @@ ANSWER = "It takes {metric, from, period}."
 
 def test_a_question_waited_on_is_answered_and_the_asker_completes(client: ApiClient, forge_project: dict):
     pid = forge_project["id"]
-    assert client.patch(f"/v1/projects/{pid}", {"agentModels": client.on_models({
-        "implementer": "fake/peer", "reviewer": "fake/hang", "simplifier": "fake/scripted"})}).status_code == 200
+    client.set_models(pid, {
+        "implementer": "fake/peer", "reviewer": "fake/hang", "simplifier": "fake/scripted"})
     epic = client.post(f"/v1/projects/{pid}/epics", {"title": "Metric preview"}).json()
     a = client.create_task(pid, "Frontend: preview panel", epicId=epic["id"])
     b = client.create_task(pid, "Backend: preview endpoints", epicId=epic["id"])

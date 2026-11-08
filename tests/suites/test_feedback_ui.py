@@ -62,7 +62,7 @@ def _shoot(page: Page, name: str, subject=None) -> None:
 def test_a_comment_on_a_runs_diff_is_a_draft_until_submitted_then_handled_from_its_card(
     page: Page, web_url: str, client: ApiClient, org: dict, forge_project: dict, console_errors: list
 ):
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models(LIVE_MODELS)})
+    client.set_models(forge_project["id"], LIVE_MODELS)
     task = client.create_task(forge_project["id"], "Pause graceful vs hard")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
@@ -203,7 +203,7 @@ def test_an_item_on_lines_that_moved_follows_them_and_one_on_changed_lines_is_ou
     """Two comments on the live implementer's LIVE.md diff; its next diff
     shifts one line and rewrites the other. Drawn on that newer diff, the
     shifted one is on its new lines, the rewritten one at the file's head."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models(LIVE_MODELS)})
+    client.set_models(forge_project["id"], LIVE_MODELS)
     task = client.create_task(forge_project["id"], "Follow the lines")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(task["id"]) if r["phase"] == "implement" and r["status"] == "running"), None),
