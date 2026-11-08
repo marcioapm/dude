@@ -24,7 +24,7 @@ import (
 // comments. A Run records the names it was given (runs.project_secret_names)
 // and keeps a copy of the exact values (run_project_secrets, 129), which
 // dude redacts its output with and scans its push for, for as long as
-// anything can still produce or read that output (copyNeeded).
+// anything can still produce or read that output (copyNeeded, 256).
 
 // EvSecretsGiven names the project secrets a Run was given, never their
 // values. Once per Run. Payload: {names}.
@@ -181,6 +181,11 @@ var copyNeeded = `COALESCE(r.keep AND r.lux_run_id IS NOT NULL AND r.lux_stop_re
 // Runs that ended over copyBackstop ago and no longer need one
 // (copyNeeded). Per organization because the sweeper role has no grant on
 // run_project_secrets. Returns how many copies it deleted.
+//
+// It weighs only the Runs with a copy in the organization, each once, so
+// copyNeeded's artifact probe is one artifacts_run_idx lookup per such
+// Run, never a pass over every artifact of the organization
+// (TestForgetSecretCopiesProbesEachRunOnce).
 func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 	var orgs []string
 	if err := s.DB.InSystem(ctx, "secret-copies", func(tx pgx.Tx) error {
@@ -196,7 +201,7 @@ func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 	n := 0
 	for _, org := range orgs {
 		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			tag, err := tx.Exec(ctx, forgetCopies, copyBackstop/time.Second)
+			tag, err := tx.Exec(ctx, forgetCopies, copyBackstop/time.Second, org)
 			n += int(tag.RowsAffected())
 			return err
 		}); err != nil {
@@ -206,11 +211,16 @@ func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// forgetCopies is ForgetSecretCopies' delete in one organization, of
-// Runs ended over $1 seconds ago.
-var forgetCopies = `DELETE FROM run_project_secrets s USING runs r
-	WHERE r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted')
-	  AND r.ended_at < now() - make_interval(secs => $1) AND NOT ` + copyNeeded
+// forgetCopies is ForgetSecretCopies' delete in one organization ($2),
+// of Runs ended over $1 seconds ago. Each Run with a copy there is weighed
+// once (copyNeeded probing artifacts_run_idx for it), not once per value,
+// and its values are found on run_project_secrets_org_idx.
+var forgetCopies = `DELETE FROM run_project_secrets s
+	WHERE s.organization_id = $2 AND s.run_id IN (
+		SELECT r.id FROM runs r
+		WHERE r.id IN (SELECT c.run_id FROM run_project_secrets c WHERE c.organization_id = $2)
+		  AND r.status IN ('completed', 'failed', 'aborted')
+		  AND r.ended_at < now() - make_interval(secs => $1) AND NOT ` + copyNeeded + `)`
 
 // secretNames are the names of list, in its order.
 func secretNames(list []lux.Secret) []string {
