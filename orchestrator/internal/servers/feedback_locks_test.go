@@ -124,53 +124,64 @@ func TestFeedbackCompetitorsLockRunBeforeServer(t *testing.T) {
 	}
 }
 
+// unsupportedBackstop bounds a hang in TestUnsupportedFeedEventsDoNotLockRun;
+// PostgreSQL, not this deadline, decides whether Apply waited on the Run.
+const unsupportedBackstop = 30 * time.Second
+
 func TestUnsupportedFeedEventsDoNotLockRun(t *testing.T) {
 	for _, e := range []lux.FeedEvent{
 		{Type: "server.unknown", ServerID: "srv_feedback"},
 		{Type: "server.state", ServerID: "srv_feedback", Data: map[string]any{"state": "starting"}},
 	} {
-		ctx := t.Context()
-		app, owner := dbtest.Open(t)
-		org := dbtest.Org(t, owner)
-		for _, query := range []string{
-			`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_feedback', $1, 'Acme', 'acme', 'ACME')`,
-			`INSERT INTO runs (id, organization_id, project_id, preview_branch, attempt, status, kind, wakeable)
-			 VALUES ('run_feedback', $1, 'prj_feedback', 'feature/feedback', 1, 'running', 'preview', true)`,
-			`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
-			 VALUES ('run_feedback', $1, 'web', 'srv_feedback', 'feedback', 'https://feedback.example.test')`,
-		} {
-			if _, err := owner.Exec(ctx, query, org); err != nil {
-				t.Fatal(err)
-			}
-		}
-		tx, err := owner.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(ctx, `SELECT id FROM runs WHERE id = 'run_feedback' FOR UPDATE`); err != nil {
-			t.Fatal(err)
-		}
-		// A real owned server, with its Run locked: irrelevant events must finish
-		// before that lock is released, not merely return for an unknown server.
-		// Whether Apply waits on that lock is PostgreSQL's to say, as in the
-		// test above, not a deadline's: a loaded runner makes Apply slow,
-		// never blocked by tx.
-		probe, err := pgx.Connect(ctx, owner.Config().ConnString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		pid := owner.PgConn().PID()
-		applyCtx, cancel := context.WithCancel(ctx)
-		result := make(chan error, 1)
-		go func() { result <- (&Feed{DB: app}).Apply(applyCtx, e) }()
-		for done := false; !done; {
-			select {
-			case err := <-result:
-				if err != nil {
+		t.Run(e.Type, func(t *testing.T) {
+			setup := t.Context()
+			app, owner := dbtest.Open(t)
+			org := dbtest.Org(t, owner)
+			for _, query := range []string{
+				`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_feedback', $1, 'Acme', 'acme', 'ACME')`,
+				`INSERT INTO runs (id, organization_id, project_id, preview_branch, attempt, status, kind, wakeable)
+				 VALUES ('run_feedback', $1, 'prj_feedback', 'feature/feedback', 1, 'running', 'preview', true)`,
+				`INSERT INTO preview_servers (run_id, organization_id, name, lux_server_id, hostname, url)
+				 VALUES ('run_feedback', $1, 'web', 'srv_feedback', 'feedback', 'https://feedback.example.test')`,
+			} {
+				if _, err := owner.Exec(setup, query, org); err != nil {
 					t.Fatal(err)
 				}
-				done = true
-			default:
+			}
+			tx, err := owner.Begin(setup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(context.Background())
+			if _, err := tx.Exec(setup, `SELECT id FROM runs WHERE id = 'run_feedback' FOR UPDATE`); err != nil {
+				t.Fatal(err)
+			}
+			probe, err := pgx.Connect(setup, owner.Config().ConnString())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer probe.Close(context.Background())
+			pid := owner.PgConn().PID()
+			// A real owned server, with its Run locked: irrelevant events must
+			// finish before that lock is released, not merely return for an
+			// unknown server. Whether Apply waits on that lock is PostgreSQL's
+			// to say, as in the test above: a loaded runner makes Apply slow,
+			// never blocked by tx. The backstop, started only now so setup
+			// cannot spend it, bounds any other hang (pool, channel, a lock
+			// some other session holds) instead of go test's timeout.
+			ctx, cancel := context.WithTimeout(context.Background(), unsupportedBackstop)
+			defer cancel()
+			result := make(chan error, 1)
+			go func() { result <- (&Feed{DB: app}).Apply(ctx, e) }()
+			for {
+				select {
+				case err := <-result:
+					if err != nil {
+						t.Fatal(err)
+					}
+					return
+				default:
+				}
 				var query string
 				err := probe.QueryRow(ctx, `SELECT query FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid)) LIMIT 1`, pid).Scan(&query)
 				if err == nil {
@@ -178,16 +189,14 @@ func TestUnsupportedFeedEventsDoNotLockRun(t *testing.T) {
 					<-result
 					t.Fatalf("%s waited for the locked Run: %s", e.Type, query)
 				}
+				if ctx.Err() != nil {
+					t.Fatalf("%s: Apply neither returned nor waited on the Run lock within %v", e.Type, unsupportedBackstop)
+				}
 				if !errors.Is(err, pgx.ErrNoRows) {
 					t.Fatal(err)
 				}
 				runtime.Gosched()
 			}
-		}
-		cancel()
-		probe.Close(ctx)
-		if err := tx.Rollback(ctx); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
 }
