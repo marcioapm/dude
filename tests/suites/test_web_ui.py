@@ -1431,8 +1431,14 @@ def test_a_persons_resume_says_how_long_it_took(
 ):
     """A person pauses a working agent and resumes it: its chat says how long
     the resume took once the agent speaks, with the phases on hover."""
-    client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": {
-        "implementer": {"model": "fake/live"}, "reviewer": {"model": "fake/scripted"}, "simplifier": {"model": "fake/scripted"}}})
+    # On fake/live, mid-turn until it is resumed: a role names a tier, so the
+    # PATCH must succeed. An agent whose turn already ended (fake/scripted)
+    # may have its checks asked (run.checks.asked) before the pause; then it
+    # waits on them, its resume carries no input (resumeInput), and it never
+    # speaks, so its resume is never timed.
+    resp = client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": client.on_models({
+        "implementer": "fake/live", "reviewer": "fake/scripted", "simplifier": "fake/scripted"})})
+    assert resp.status_code == 200, resp.text
     item = client.create_task(forge_project["id"], "Pause, then carry on")
     assert client.post(f"/v1/tasks/{item['id']}/deliver").status_code == 201
     run = wait_until(lambda: next((r for r in client.task_runs(item["id"]) if r["status"] == "running"), None),
