@@ -229,12 +229,12 @@ func TestFailureExcerptRangesAndBounds(t *testing.T) {
 		t.Fatalf("ranges: %q", out)
 	}
 	reader := &countingReader{r: io.MultiReader(strings.NewReader("##[error]early\n"), io.LimitReader(repeatReader("noise\n"), 32<<20))}
-	out, err := logTail(reader, 120)
+	out, err := collectFailure(reader, 120)
 	if err != nil || reader.n != logReadMax || !strings.Contains(out, "input capped") || len(out) > 120 {
 		t.Fatalf("cap: read=%d out=%q err=%v", reader.n, out, err)
 	}
 	boom := readerFunc(func([]byte) (int, error) { return 0, io.ErrUnexpectedEOF })
-	if _, err := logTail(boom, 100); err != io.ErrUnexpectedEOF {
+	if _, err := collectFailure(boom, 100); err != io.ErrUnexpectedEOF {
 		t.Fatalf("read error: %v", err)
 	}
 }
@@ -243,7 +243,7 @@ func TestFailureExcerptRegression(t *testing.T) {
 	input := "##[error]early wrapper error\n" + strings.Repeat("noise\n", 1000) +
 		"[lane2] panic: test timed out after 10m0s\n[lane2] running tests:\n[lane2]     TestBlocked (9m59s)\n" +
 		strings.Repeat("goroutine noise\n", 1000) + "FAIL example/service 600s\n##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup\n", 1000)
-	out, err := logTail(strings.NewReader(input), 500)
+	out, err := collectFailure(strings.NewReader(input), 500)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestFailureExcerptRegression(t *testing.T) {
 }
 
 func TestFailureExcerptLineCapRegression(t *testing.T) {
-	out, err := logTail(strings.NewReader("panic: boom "+strings.Repeat("x", 10000)+"\nexit status 2\n"), 6000)
+	out, err := collectFailure(strings.NewReader("panic: boom "+strings.Repeat("x", 10000)+"\nexit status 2\n"), 6000)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -147,7 +147,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 func TestAHugeLogIsReadToItsCapOnly(t *testing.T) {
 	line := strings.Repeat("x", 120) + "\n"
 	huge := &countingReader{r: io.LimitReader(repeatReader(line), 64<<20)}
-	out, err := logTail(huge, 4000)
+	out, err := collectFailure(huge, 4000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestAHugeLogIsReadToItsCapOnly(t *testing.T) {
 	}
 	// A line longer than the reader's buffer is kept to its start.
 	long := strings.Repeat("y", 64<<10) + strings.Repeat("z", 136<<10) + "\n##[error]boom\n"
-	if out, err := logTail(strings.NewReader(long), 8000); err != nil || !strings.HasSuffix(out, "\n##[error]boom") ||
+	if out, err := collectFailure(strings.NewReader(long), 8000); err != nil || !strings.HasSuffix(out, "\n##[error]boom") ||
 		out != strings.Repeat("y", logLineMax-len(lineCapMarker))+lineCapMarker+"\n##[error]boom" {
 		t.Errorf("long line: %v, %d bytes", err, len(out))
 	}

@@ -407,17 +407,11 @@ func (g *GitHub) JobLogTail(ctx context.Context, slug string, jobID int64, limit
 		markRateLimit(refusal, res.Header, "rate limit: ")
 		return "", refusal
 	}
-	text, err := logTail(res.Body, limit)
+	text, err := collectFailure(res.Body, limit)
 	if err != nil {
 		return "", &Unreachable{err}
 	}
 	return text, nil
-}
-
-// logTail preserves the public JobLogTail entry point while sharing selection
-// with in-memory delivery recuts.
-func logTail(r io.Reader, limit int) (string, error) {
-	return collectFailure(r, limit)
 }
 
 // cleanLogLine is one line of a job's log as a person reads it.
