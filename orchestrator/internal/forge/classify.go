@@ -3,6 +3,7 @@ package forge
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -190,6 +191,42 @@ func IsActionableComment(f Feedback, factoryLogins []string) bool {
 	return !isCourtesy(f.Body)
 }
 
+// CheckIdentity names a check independently of provider prose. Check runs and
+// commit statuses have separate id namespaces; older providers may only give a name.
+func CheckIdentity(runID, statusID int64, name string) string {
+	switch {
+	case runID != 0:
+		return "run:" + strconv.FormatInt(runID, 10)
+	case statusID != 0:
+		return "status:" + strconv.FormatInt(statusID, 10)
+	default:
+		return "name:" + name
+	}
+}
+
+// newCheckFailure compares failures, not the entire rollup: another job can
+// fail while it is already red. Losing an old failure alone is not news.
+func newCheckFailure(prior, current Status) bool {
+	if current.Checks != ChecksFailing {
+		return false
+	}
+	if prior.Checks != ChecksFailing || prior.HeadSHA != current.HeadSHA {
+		return true
+	}
+	seen := make(map[string]bool)
+	for _, c := range prior.CheckList {
+		if c.Failed() {
+			seen[CheckIdentity(c.RunID, c.StatusID, c.Name)] = true
+		}
+	}
+	for _, c := range current.CheckList {
+		if c.Failed() && !seen[CheckIdentity(c.RunID, c.StatusID, c.Name)] {
+			return true
+		}
+	}
+	return false
+}
+
 // Classify decides what a change on a pull request means, without a model.
 //
 // Most of what happens on a PR — an approval, a green check, a bot comment,
@@ -215,10 +252,9 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 			actionable = append(actionable, ActionableFeedback{Source: "review", ID: f.ID, Author: f.Author, Body: f.Body, Path: f.Path, Kind: f.Kind})
 		}
 	}
-	// A check turning red is worth a fixer; one already red is not news, and
-	// waking again would spend the loop's budget on a failure the last fix
-	// already saw.
-	if current.Checks == ChecksFailing && prior.Checks != ChecksFailing {
+	// New failed identities are news even while other jobs keep the rollup red.
+	// Keep the complete current failure set as context for the conductor/fixer.
+	if newCheckFailure(prior, current) {
 		f := ActionableFeedback{Source: "checks",
 			Body: "Continuous integration is failing on this branch. Find out why and fix it."}
 		for _, c := range current.CheckList {
