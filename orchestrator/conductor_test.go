@@ -180,18 +180,44 @@ func TestTheFirstMessageStartsTheConductorAndTheNextReachesIt(t *testing.T) {
 // resumes it, timed with cause conductor, and it answers that message.
 func TestAConductorParksAfterItsWarmPeriodAndAMessageResumesIt(t *testing.T) {
 	w := conductorWorld(t)
-	w.syncer.ConductorWarm = 400 * time.Millisecond
+	// The warm period is an hour, and the test moves the turn's end back
+	// instead of waiting for it. The sweep compares turn_done_at with the
+	// database's now(), so the test sets turn_done_at on that same clock:
+	// a minute inside the period, then one second past it. How fast the
+	// runner is does not change which side of the line the Run is on.
+	const warm = time.Hour
+	w.syncer.ConductorWarm = warm
 	task, log := w.delivered()
 	before := w.workflowState(task)
 
 	_, out := w.chat(task, "what changed?")
 	runID, _ := out["runId"].(string)
-	w.until("the answer", func() bool { return len(w.said(runID)) == 1 })
-	// Warm: still running a moment after its answer.
-	w.pump()
-	if _, status, _ := w.conductor(task); status != "running" {
-		t.Errorf("right after its answer the conductor is %s, want running (warm)", status)
+	w.until("the answer and its turn's end", func() bool {
+		return len(w.said(runID)) == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND turn_done_at IS NOT NULL`, runID) == 1
+	})
+	// state is the conductor's status, control and dude_pause, and how
+	// long ago its turn ended, for failure messages.
+	state := func() (status, control, pause, since string) {
+		_ = w.owner.QueryRow(context.Background(), `SELECT status::text, control::text, COALESCE(dude_pause, ''),
+			COALESCE((now() - turn_done_at)::text, 'no turn_done_at') FROM runs WHERE id = $1`, runID).
+			Scan(&status, &control, &pause, &since)
+		return
 	}
+
+	// A minute inside its warm period: still running, and nothing asked of
+	// it, however many passes the sweep makes.
+	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = now() - interval '59 minutes' WHERE id = $1`, runID)
+	for range 3 {
+		w.pump()
+	}
+	if status, control, pause, since := state(); status != "running" || control != "none" || pause != "" {
+		t.Fatalf("its turn ended %s ago, inside its warm period of %v, and the conductor is status %s, control %s, dude_pause %q; want running, none, none (warm)",
+			since, warm, status, control, pause)
+	}
+
+	// Just past it: parked. The backdate past the line and the wait for
+	// the park cover parking once the period is over.
+	mustExec(t, w.owner, `UPDATE runs SET turn_done_at = now() - interval '1 hour 1 second' WHERE id = $1`, runID)
 	w.until("the conductor to be parked", func() bool {
 		_, status, pause := w.conductor(task)
 		return status == "paused" && pause == "conductor"
@@ -203,7 +229,6 @@ func TestAConductorParksAfterItsWarmPeriodAndAMessageResumesIt(t *testing.T) {
 		t.Errorf("parking moved the task: %s, then %s", before, after)
 	}
 
-	w.syncer.ConductorWarm = time.Hour
 	status, out := w.chat(task, "and the tests?")
 	if status != 200 || out["runId"] != runID {
 		t.Fatalf("message to the parked conductor: %d %v", status, out)
