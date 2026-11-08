@@ -376,8 +376,56 @@ func TestChecksTurningRedWakeAFixer(t *testing.T) {
 func TestChecksThatWereAlreadyRedDoNot(t *testing.T) {
 	failing := open
 	failing.Checks = ChecksFailing
-	if s := Classify(Status{PullRequestRef: PullRequestRef{State: StateOpen}, Checks: ChecksFailing}, failing, nil, nil); s != nil {
+	if s := Classify(failing, failing, nil, nil); s != nil {
 		t.Fatalf("signal = %+v, want nil", s)
+	}
+}
+
+func TestAFailingNewHeadIsNews(t *testing.T) {
+	before, after := open, open
+	before.Checks, after.Checks = ChecksFailing, ChecksFailing
+	before.HeadSHA, after.HeadSHA = "old", "new"
+	if s := Classify(before, after, nil, nil); s == nil || s.Kind != "actionable" {
+		t.Fatalf("signal = %+v, want checks feedback for the new head", s)
+	}
+}
+
+func TestNewFailedCheckIdentitiesWhileAlreadyRed(t *testing.T) {
+	failed := func(name string, run, status int64) Check {
+		return Check{Name: name, RunID: run, StatusID: status, Status: "completed", Conclusion: "failure"}
+	}
+	a, b := failed("ts", 501, 0), failed("go", 502, 0)
+	for _, tt := range []struct {
+		name          string
+		before, after []Check
+		want          bool
+	}{
+		{"unchanged", []Check{a}, []Check{a}, false},
+		{"later job", []Check{a, {Name: "go", RunID: 502, Status: "in_progress"}}, []Check{a, b}, true},
+		{"reordered", []Check{a, b}, []Check{b, a}, false},
+		{"removed failure", []Check{a, b}, []Check{a}, false},
+		{"rerun", []Check{a}, []Check{failed("ts", 503, 0)}, true},
+		{"status rerun", []Check{failed("ci", 0, 501)}, []Check{failed("ci", 0, 502)}, true},
+		{"name fallback", []Check{failed("ts", 0, 0)}, []Check{failed("ts", 0, 0), failed("go", 0, 0)}, true},
+		{"identity namespace", []Check{a}, []Check{failed("ts", 0, 501)}, true},
+		{"same id renamed", []Check{a}, []Check{failed("new prose", 501, 0)}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			before, after := open, open
+			before.HeadSHA, after.HeadSHA = "same-head", "same-head"
+			before.Checks, after.Checks = ChecksFailing, ChecksFailing
+			before.CheckList, after.CheckList = tt.before, tt.after
+			s := Classify(before, after, nil, nil)
+			if !tt.want {
+				if s != nil {
+					t.Fatalf("signal = %+v, want nil", s)
+				}
+				return
+			}
+			if s == nil || s.Kind != "actionable" || len(s.Feedback) != 1 || s.Feedback[0].Source != "checks" {
+				t.Fatalf("signal = %+v, want new checks feedback", s)
+			}
+		})
 	}
 }
 
