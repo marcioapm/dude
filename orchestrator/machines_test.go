@@ -87,17 +87,21 @@ func TestAResumedRunTakesTheSizeItsSettingsNameNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Else the check that it records no limit below would pass vacuously.
+	if p := before.Placements; len(p) == 0 || p[len(p)-1].MemoryLimit == nil || *p[len(p)-1].MemoryLimit <= 0 {
+		t.Fatalf("the placement before the resume reports no memory limit: %+v", p)
+	}
 
 	mustExec(t, w.owner, `UPDATE machine_sizes SET name = 'Huge', cpus = 16 WHERE id = 'msz_large'`)
 	// The resumed placement waits for a host until the old limit is shown
 	// gone: once lux has assigned it, any read of the Run (the artifacts
 	// sweep's, a sync's) rightly records its limit, which is the new size's.
-	assign := make(chan struct{})
-	assigned := sync.OnceFunc(func() { close(assign) })
-	defer assigned()
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	defer release()
 	w.lux.BeforeAssign(func(id string) {
 		if id == r.ID {
-			<-assign
+			<-hold
 		}
 	})
 	w.resumeAgent(runID, r)
@@ -126,8 +130,7 @@ func TestAResumedRunTakesTheSizeItsSettingsNameNow(t *testing.T) {
 	if _, ok := w.machineOf(runID)["memoryLimit"]; ok {
 		t.Error("the placement before the resume recorded its limit as the new size's")
 	}
-	assigned()
-	w.lux.BeforeAssign(nil)
+	release()
 	w.until("the resumed placement to run", func() bool { return w.lux.State(r.ID) == "running" })
 	after, _ := w.syncer.Lux.Get(ctx, r.ID)
 	phases.RecordMemoryLimit(ctx, w.app, w.log, w.org, runID, after)
