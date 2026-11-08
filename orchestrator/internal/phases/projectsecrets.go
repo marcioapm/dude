@@ -2,8 +2,8 @@ package phases
 
 import (
 	"context"
-	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,8 +23,8 @@ import (
 // never get one: they read text anyone can write, such as pull request
 // comments. A Run records the names it was given (runs.project_secret_names)
 // and keeps a copy of the exact values (run_project_secrets, 129), which
-// dude redacts its output with and scans its push for, until its output is
-// collected.
+// dude redacts its output with and scans its push for, for as long as
+// anything can still produce or read that output (copyNeeded).
 
 // EvSecretsGiven names the project secrets a Run was given, never their
 // values. Once per Run. Payload: {names}.
@@ -146,10 +146,15 @@ const copyBackstop = time.Hour
 // copyRetention is how long after its Run ended a copy is kept for a text
 // file the Run published to be served redacted, or a failed or aborted
 // writer's commits to be recovered (recover_run) with every value it held
-// scanned for. Past it the copy is deleted: what reads the Run's output
-// then redacts with the values in force (run_secret_values), so a value
-// rotated since is no longer caught there.
+// scanned for. Past it the copy is deleted: a text file is then served
+// redacted with the values in force (run_secret_values), so a value
+// rotated since is no longer caught there, and a recovery of a Run given
+// secrets is refused (delivery.RecoverySecretsExpiredTx). A fixed
+// retention, not a setting.
 const copyRetention = 30 * 24 * time.Hour
+
+// copyRetentionSQL is copyRetention as an SQL interval, in whole seconds.
+var copyRetentionSQL = "make_interval(secs => " + strconv.FormatInt(int64(copyRetention/time.Second), 10) + ")"
 
 // copyNeeded (SQL, over runs r): an ended Run's copy is still needed,
 // beyond its collection. It is kept (runs.keep) to be resumed
@@ -159,15 +164,17 @@ const copyRetention = 30 * 24 * time.Hour
 // Run terminated; while its stop has not yet set kept_until, Syncer.keep,
 // at most copyRetention); or, within copyRetention of its end, it
 // published a text file (served redacted, api.artifactContent), or is a
-// failed or aborted writer that ran on lux, whose checkpoints (which
-// outlive its terminate) a recovery may push (delivery.ConductRecoverTx).
-// A completed writer's commits were scanned with its copy when it pushed
-// them. A live Run's copy is never deleted: both deletes take only ended
-// Runs.
+// failed or aborted writer (delivery.Publishes) that ran on lux, whose
+// checkpoints (which outlive its terminate) a recovery may push
+// (delivery.ConductRecoverTx). A completed writer's commits were scanned
+// with its copy when it pushed them. A live Run's copy is never deleted:
+// both deletes take only ended Runs. Built once, at init, from constants
+// and delivery.Publishes, and never changed: the statements that embed it
+// are prepared as they are.
 var copyNeeded = `COALESCE(r.keep AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
-		AND COALESCE(r.kept_until > now(), r.ended_at > now() - make_interval(secs => ` + fmt.Sprint(copyRetention.Seconds()) + `))
-	OR r.ended_at > now() - make_interval(secs => ` + fmt.Sprint(copyRetention.Seconds()) + `)
-		AND (r.phase IN ('implement', 'fix', 'simplify') AND r.status IN ('failed', 'aborted') AND r.lux_run_id IS NOT NULL
+		AND COALESCE(r.kept_until > now(), r.ended_at > now() - ` + copyRetentionSQL + `)
+	OR r.ended_at > now() - ` + copyRetentionSQL + `
+		AND (r.phase IN (` + delivery.PublishesSQL() + `) AND r.status IN ('failed', 'aborted') AND r.lux_run_id IS NOT NULL
 			OR EXISTS (SELECT 1 FROM artifacts a WHERE a.run_id = r.id AND ` + redact.TextTypeSQL("a.content_type") + `)), false)`
 
 // ForgetSecretCopies deletes, in each organization in turn, the copies of
@@ -189,9 +196,7 @@ func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 	n := 0
 	for _, org := range orgs {
 		if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-			tag, err := tx.Exec(ctx, `DELETE FROM run_project_secrets s USING runs r
-				WHERE r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted')
-				  AND r.ended_at < now() - make_interval(secs => $1) AND NOT `+copyNeeded, copyBackstop.Seconds())
+			tag, err := tx.Exec(ctx, forgetCopies, copyBackstop/time.Second)
 			n += int(tag.RowsAffected())
 			return err
 		}); err != nil {
@@ -200,6 +205,12 @@ func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 	}
 	return n, nil
 }
+
+// forgetCopies is ForgetSecretCopies' delete in one organization, of
+// Runs ended over $1 seconds ago.
+var forgetCopies = `DELETE FROM run_project_secrets s USING runs r
+	WHERE r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted')
+	  AND r.ended_at < now() - make_interval(secs => $1) AND NOT ` + copyNeeded
 
 // secretNames are the names of list, in its order.
 func secretNames(list []lux.Secret) []string {
