@@ -111,9 +111,13 @@ func TestContainsNamesTheSecretFound(t *testing.T) {
 	}
 }
 
+// textTypeCases are content types and whether TextType takes each for
+// text; TestTextTypeSQLIsTextType checks TextTypeSQL against them too.
+var textTypeCases = map[string]bool{"text/plain; charset=utf-8": true, "application/json": true, "application/vnd.x+json": true,
+	"image/png": false, "video/webm": false, "application/octet-stream": false, "image/svg+xml": true}
+
 func TestTextTypes(t *testing.T) {
-	for ct, want := range map[string]bool{"text/plain; charset=utf-8": true, "application/json": true, "application/vnd.x+json": true,
-		"image/png": false, "video/webm": false, "application/octet-stream": false, "image/svg+xml": true} {
+	for ct, want := range textTypeCases {
 		if redact.TextType(ct) != want {
 			t.Errorf("TextType(%q) = %v", ct, !want)
 		}
