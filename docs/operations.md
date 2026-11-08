@@ -575,9 +575,21 @@ collected; while it is kept to be resumed or for its next round, which
 takes the copy over with its lux Run (`keep_stopped`); and for 30 days
 after it ended if it published a text file, which is redacted each time
 it is served, or is a failed or aborted writer whose commits `recover_run`
-may still push. Otherwise it is deleted once its output is collected, and
-in any case an hour after it ended. Past those 30 days a file is served,
-and a recovery scanned, with the values in force then.
+may still push. Otherwise it is deleted once its output is collected; a
+copy its collection missed (given up on, or the orchestrator stopped in
+between) is deleted by a sweep from an hour after the Run ended, once
+none of the above keeps it. The 30 days are a fixed retention, not a
+setting.
+
+A Run given secrets whose copy is gone (after those 30 days, or a
+completed writer once collected) can no longer be checked for a value it
+held and that was rotated since, so `recover_run` refuses it ("dude no
+longer holds every value it was given"); a recovery already accepted
+whose copy goes before the worker scans its commits ends `failed` with
+the same reason, unpushed, and the conductor is told. A Run given no
+secrets is still recovered. Past those 30 days a text file the Run
+published is still served, redacted with the values in force then: a
+value rotated since is not caught there.
 
 **Redaction.** dude replaces each value a Run was given — raw, base64
 (standard, unpadded, URL), URL-escaped, hex and JSON-escaped (also twice,
