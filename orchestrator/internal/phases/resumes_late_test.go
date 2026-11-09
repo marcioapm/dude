@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -583,5 +584,172 @@ func TestTheEarliestLateStampIsWritten(t *testing.T) {
 	}
 	if got, _ := w.row(2)["busy_at"].(time.Time); !got.Equal(t1) {
 		t.Errorf("busy_at %v, want the earlier stamp %v (not %v)", w.row(2)["busy_at"], t1, t2)
+	}
+}
+
+// A late running_at for a resume already timed is not written by the late
+// write, which touches only the untimed resumes it holds (lockUntimed):
+// one a batch holds, timed, never makes the write wait and fail with
+// every stamp in it. The next running frame stamps it, as on any timed
+// resume. Here a batch holds the timed resume 2 throughout; the late
+// write still lands resume 3's busy, at once, and says that 2's
+// running_at landed nowhere.
+func TestALateRunningOfATimedResumeLeavesTheLateWriteAlone(t *testing.T) {
+	w := newResumeWorld(t)
+	// Short, so a write that did wait on the held resume fails here.
+	w.s.resumeBudget = resumeBudget{lock: 100 * time.Millisecond}
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(spoke(2))
+	w.untilTimed()
+	if row := w.row(2); row["timed_at"] == nil || row["running_at"] != nil {
+		t.Fatalf("timed_at %v, running_at %v: want it timed without running_at", row["timed_at"], row["running_at"])
+	}
+	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at) VALUES ($1, $2, 3, 'person', now())`,
+		w.run.ID, w.run.Org)
+	logs := w.captureTimingLogs()
+	release := w.lockResume(2)
+	now := time.Now()
+	w.s.lateMu.Lock()
+	w.s.late = map[string][]lateStamp{w.run.ID: {{"running_at", 2, now}, {"busy_at", 3, now}}}
+	w.s.lateMu.Unlock()
+	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.row(3)["busy_at"]; got == nil {
+		t.Errorf("busy_at of resume 3 not written beside a held, timed resume 2\nlogs:\n%s", logs)
+	}
+	if got := w.row(2)["running_at"]; got != nil {
+		t.Errorf("running_at %v written by the late write on timed resume 2", got)
+	}
+	lines := logLines(logs.String(), "recording a resume's timing", "landed nowhere")
+	if len(lines) != 1 || !strings.Contains(lines[0], "landed nowhere") || !strings.Contains(lines[0], "column=running_at") ||
+		!strings.Contains(lines[0], "epoch=2") {
+		t.Errorf("want one Warn that 2's running_at landed nowhere, and nothing else; got:\n%s", logs)
+	}
+	release()
+	w.follow(running(2))
+	if got := w.row(2)["running_at"]; got == nil {
+		t.Errorf("running_at not stamped by the next running frame")
+	}
+}
+
+// A late stamp of a frame with no epoch is for the latest resume as the
+// frame is applied: here two are untimed, and it is the later one's.
+func TestALateStampWithNoEpochIsForTheLatestResume(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2))
+	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at) VALUES ($1, $2, 3, 'person', now())`,
+		w.run.ID, w.run.Org)
+	w.slowStampOnce("busy_at")
+	tr := &translator{run: w.run}
+	if err := w.s.DB.InOrg(w.ctx, w.run.Org, func(tx pgx.Tx) error {
+		tr.stamp(w.ctx, tx, w.s, "busy_at", 0)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.late) != 1 || tr.late[0].epoch != 3 {
+		t.Fatalf("kept %v, want the busy_at stamp of resume 3", tr.late)
+	}
+	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.row(3)["busy_at"]; got == nil {
+		t.Errorf("busy_at of resume 3 not written")
+	}
+	if got := w.row(2)["busy_at"]; got != nil {
+		t.Errorf("busy_at %v on resume 2, not the latest", got)
+	}
+}
+
+// heldLux holds its first Output past its context until let go: a
+// follower told to stop that has not exited yet.
+type heldLux struct {
+	*streamLux
+	first   atomic.Bool
+	entered chan struct{}
+	hold    chan struct{}
+}
+
+func (h *heldLux) Output(ctx context.Context, a, b string, c int64, fn func(lux.Frame) error) error {
+	if h.first.CompareAndSwap(false, true) {
+		close(h.entered)
+		<-h.hold
+		return ctx.Err()
+	}
+	return h.streamLux.Output(ctx, a, b, c, fn)
+}
+
+// A follower that ends after a newer one took the Run leaves the Run's
+// late stamps alone: they may be the newer one's.
+func TestAnOlderFollowerEndingKeepsTheNewerOnesLateStamps(t *testing.T) {
+	w := newResumeWorld(t)
+	st := newStreamLux(w.lux)
+	h := &heldLux{streamLux: st, entered: make(chan struct{}), hold: make(chan struct{})}
+	letGo := sync.OnceFunc(func() { close(h.hold) })
+	t.Cleanup(letGo)
+	w.s.Lux = h
+	r := w.run
+	r.Status, r.LuxState = statusRunning, "resuming"
+	w.s.follow(r)
+	select {
+	case <-h.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first follower never opened the stream")
+	}
+	w.s.mu.Lock()
+	older := w.s.following[w.run.ID]
+	w.s.mu.Unlock()
+	w.s.unfollow(w.run.ID)
+	w.s.follow(r)
+	t.Cleanup(func() { _ = w.s.unfollowWait(w.ctx, w.run.ID) })
+	select {
+	case <-st.opened:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the newer follower never opened the stream")
+	}
+	// The newer follower's batch keeps a stamp.
+	(&translator{run: w.run}).deferStamp(w.s, "busy_at", 2, time.Now())
+	letGo()
+	select {
+	case <-older.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the older follower never ended")
+	}
+	if left := w.s.lateStamps(w.run.ID); len(left) != 1 {
+		t.Errorf("late stamps %v once the older follower ended, want the newer one's kept", left)
+	}
+}
+
+// A follow-up whose first timing fails keeps its batch's stamps for the
+// next resume it times: the failed one's transaction took them back.
+// Here the first timing fails, whichever resume it is, and the stamp the
+// Syncer forgot is still written by the second.
+func TestAFollowUpKeepsItsStampsPastAFailedTiming(t *testing.T) {
+	w := newResumeWorld(t)
+	for _, epoch := range []int{2, 3} {
+		w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at, first_output_at)
+			VALUES ($1, $2, $3, 'person', now() - interval '1 second', now())`, w.run.ID, w.run.Org, epoch)
+	}
+	w.exec(`CREATE SEQUENCE timing_seen`)
+	w.exec(`GRANT USAGE ON SEQUENCE timing_seen TO PUBLIC`)
+	w.exec(`CREATE FUNCTION fail_timing() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+		IF NEW.timed_at IS NOT NULL AND OLD.timed_at IS NULL AND nextval('timing_seen') = 1 THEN
+			RAISE EXCEPTION 'the first timing fails'; END IF;
+		RETURN NEW; END $$`)
+	w.exec(`CREATE TRIGGER fail_timing BEFORE UPDATE ON run_resumes FOR EACH ROW EXECUTE FUNCTION fail_timing()`)
+	logs := w.captureTimingLogs()
+	busyAt := time.Now().Add(-500 * time.Millisecond).UTC().Truncate(time.Microsecond)
+	w.s.resumeFollowUp(w.run, map[int]bool{2: false, 3: false}, lateStamp{"busy_at", 3, busyAt})
+	if got := len(logLines(logs.String(), "the first timing fails")); got != 1 {
+		t.Fatalf("%d timings failed, want 1: the test proves nothing\nlogs:\n%s", got, logs)
+	}
+	if got, _ := w.row(3)["busy_at"].(time.Time); !got.Equal(busyAt) {
+		t.Errorf("busy_at of resume 3 %v, want the batch's %v\nlogs:\n%s", w.row(3)["busy_at"], busyAt, logs)
 	}
 }
