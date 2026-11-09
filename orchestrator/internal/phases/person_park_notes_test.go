@@ -241,3 +241,25 @@ func TestAPersonParkRechecksTheCeilingWithTheProjectsGrace(t *testing.T) {
 		})
 	}
 }
+
+// A person resumes a Run parked for a person whose question is still open,
+// lux having placed it again itself (takeUpLive: no run_resumes row, no
+// run.unparked, so the wait still counts from the ask, past the ceiling).
+// A steer a minute later is inside the grace of its new wait: delivered,
+// not parked over, as on main.
+func TestASteerAfterALiveTakeUpIsHeardNotParkedOver(t *testing.T) {
+	w := newResumeWorld(t)
+	w.exec(`UPDATE questions SET status = 'open', answer = NULL, answered_at = NULL, asked_at = now() - interval '21 minutes'
+		WHERE run_id = $1`, w.run.ID)
+	w.exec(`UPDATE runs SET control = 'resume', lux_state = 'running' WHERE id = $1`, w.run.ID)
+	r := w.run
+	r.Control, r.Waiting = "resume", true
+	if taken, changes, err := w.s.takeUpLive(w.ctx, r, "running"); err != nil || !taken || changes {
+		t.Fatalf("taken %v, changes %v, err %v; want taken", taken, changes, err)
+	}
+	w.exec(`UPDATE runs SET waiting_since = now() - interval '1 minute' WHERE id = $1`, w.run.ID)
+	w.note(false)
+	if got := w.dueRun(); got.ParkNow {
+		t.Errorf("ParkNow inside the grace of the resumed wait, the steer unheard")
+	}
+}
