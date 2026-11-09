@@ -337,6 +337,9 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 		"a failed writer, an hour short":  mk("run_boundary", "implement", "failed", "ended_at = now() - interval '29 days 23 hours'"),
 		"a reviewer, text, an hour short": mk("run_boundary_text", "review", "completed", "ended_at = now() - interval '29 days 23 hours'"),
 	}
+	// Only ended Runs lose a copy, whatever their ended_at says: one
+	// running again keeps it (its age past every retention).
+	stale := mk("run_again", "implement", "running", "ended_at = now() - interval '40 days'")
 	art(kept["a reviewer that wrote text"], "notes.md", "text/markdown; charset=utf-8")
 	art(kept["a reviewer that wrote json"], "out.json", "application/json")
 	art(kept["a reviewer, text, an hour short"], "notes.txt", "text/plain")
@@ -356,6 +359,9 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	if got := w.runCopy(live); len(got) != 1 {
 		t.Error("a live Run lost its copy")
 	}
+	if got := w.runCopy(stale); len(got) != 1 {
+		t.Error("a live Run with an ended_at of an earlier life lost its copy")
+	}
 
 	// Its keep over, its retention past: every one of them goes.
 	mustExec(t, w.owner, `UPDATE runs SET kept_until = now() - interval '1 second' WHERE id = ANY($1) AND kept_until IS NOT NULL`,
@@ -371,6 +377,9 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	}
 	if got := w.runCopy(live); len(got) != 1 {
 		t.Error("a live Run lost its copy")
+	}
+	if got := w.runCopy(stale); len(got) != 1 {
+		t.Error("a live Run with an ended_at of an earlier life lost its copy")
 	}
 }
 
