@@ -466,7 +466,7 @@ func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"Severity is what happens if this ships", "carries its evidence",
+	for _, want := range []string{"Severity is your judgement of what happens if this merges as it is", "carries its evidence",
 		"minimal local change", "out of scope unless the change makes it reachable"} {
 		if !strings.Contains(reviewContract, want) {
 			t.Errorf("the reviewer's contract lacks %q", want)
