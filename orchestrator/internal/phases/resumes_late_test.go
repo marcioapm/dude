@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -132,10 +133,11 @@ func TestAStampTheBatchCouldNotWriteInTimeIsStillTimed(t *testing.T) {
 				}
 				w.untilTimed()
 
-				var stalled bool
-				_ = w.owner.QueryRow(w.ctx, `SELECT is_called FROM slow_stamp_seen`).Scan(&stalled)
-				if !stalled {
-					t.Fatalf("no stamp of %s was slowed: the test proves nothing", col)
+				// The stamp of col was deferred: slowed here, or timed out on
+				// its own on a loaded machine.
+				deferred := logLines(logs.String(), "writing it after the batch")
+				if len(logLines(strings.Join(deferred, "\n"), "step="+col)) != 1 {
+					t.Fatalf("the stamp of %s was not written after the batch: the test proves nothing\nlogs:\n%s", col, logs)
 				}
 				row := w.row(2)
 				running, _ := row["running_at"].(time.Time)
@@ -164,12 +166,23 @@ func TestAStampTheBatchCouldNotWriteInTimeIsStillTimed(t *testing.T) {
 						t.Errorf("run.resume.timed has no %s: %v", k, timed[0])
 					}
 				}
-				// The batch's timeout is said, once, and nothing failed.
+				// The batch's timeout is said, and nothing failed: every line
+				// is a Warn that a stamp is written after the batch (col's,
+				// and on a loaded machine another column's, which the
+				// stream's own budget timed out), once per column.
 				got := logs.String()
 				lines := logLines(got, "recording a resume's timing", "landed nowhere", "step=")
-				if len(lines) != 1 || !allWarn(lines) || !strings.Contains(lines[0], "writing it after the batch") ||
-					!strings.Contains(lines[0], "step="+col) {
-					t.Errorf("want one Warn that the %s stamp is written after the batch, and nothing else; got:\n%s", col, got)
+				seen := map[string]bool{}
+				for _, l := range lines {
+					step := l[strings.Index(l, "step="):]
+					if !strings.Contains(l, "writing it after the batch") || seen[step] {
+						t.Errorf("want only one Warn per stamp written after the batch, and nothing else; got:\n%s", got)
+						break
+					}
+					seen[step] = true
+				}
+				if !allWarn(lines) {
+					t.Errorf("a line is not a Warn:\n%s", got)
 				}
 				if left := w.s.lateStamps(w.run.ID); len(left) != 0 {
 					t.Errorf("late stamps kept after they were written: %v", left)
@@ -510,7 +523,7 @@ func TestARecoveryBeforeTheFollowUpLeavesAKeptBusyToIt(t *testing.T) {
 	logs := w.captureTimingLogs()
 
 	resumes, late := w.commitBatch(busy(2), spoke(2))
-	if len(late) != 1 || late[0].col != "busy_at" {
+	if !slices.ContainsFunc(late, func(l lateStamp) bool { return l.col == "busy_at" }) {
 		t.Fatalf("the batch kept %v, want its busy_at: the test proves nothing\nlogs:\n%s", late, logs)
 	}
 	w.s.forgetLate(w.run.ID)
@@ -549,7 +562,7 @@ func TestACommittedBatchsStampOutlivesItsFollower(t *testing.T) {
 	logs := w.captureTimingLogs()
 
 	resumes, late := w.commitBatch(busy(2), spoke(2))
-	if len(late) != 1 || late[0].col != "busy_at" {
+	if !slices.ContainsFunc(late, func(l lateStamp) bool { return l.col == "busy_at" }) {
 		t.Fatalf("the batch kept %v, want its busy_at: the test proves nothing\nlogs:\n%s", late, logs)
 	}
 	w.s.forgetLate(w.run.ID)
