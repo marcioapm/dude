@@ -171,6 +171,18 @@ func TestInstructionsAspectsUseSharedSeverity(t *testing.T) {
 				}
 			})
 		}
+		// An aspect may only add floors: its own severity section caps
+		// nothing the shared contract would rate higher.
+		_, section, found := strings.Cut(reviewFocus[aspect], "## Severity\n")
+		if !found {
+			t.Errorf("%s: aspect has no ## Severity section", aspect)
+		}
+		section, _, _ = strings.Cut(section, "\n## ")
+		for _, ceiling := range []string{"at most", "no higher than", "never above"} {
+			if strings.Contains(strings.ToLower(section), ceiling) {
+				t.Errorf("%s: aspect's severity section sets a ceiling with %q:\n%s", aspect, ceiling, section)
+			}
+		}
 	}
 }
 
