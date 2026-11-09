@@ -288,8 +288,8 @@ func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
 		// hold: news_hold_at (SQL interval ago, "" for NULL); waiting: how
 		// long since waiting_since ("" mid-turn); note: when a note was
 		// queued ("" none); resumed: a run_resumes row that long ago.
-		hold, waiting, note, resumed string
-		answered                     bool
+		hold, waiting, note, resumed  string
+		answered                      bool
 		parkNow, holdNews, directives bool
 	}{
 		{name: "never held, inside the grace, a note", waiting: "1 minute", note: "now()", directives: true},
