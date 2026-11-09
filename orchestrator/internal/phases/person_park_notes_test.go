@@ -74,24 +74,35 @@ func TestAPersonParkRechecksForANoteQueuedSinceTheSweepRead(t *testing.T) {
 // A note sent, its turn not under way yet (unread, or read after the wait
 // began), holds the park off too; one read before the wait, or in the batch
 // that began it (the turn that read it is over), does not, nor one sent
-// longer ago than delivery.UnreadGraceSecs.
+// longer ago than delivery.UnreadGraceSecs. Nor one that failed, sent or
+// never tried, nor one sent as the interrupt alone (interrupt_only): there
+// is no note for the agent to take a turn for.
 func TestAPersonParkWaitsForASentNotesTurn(t *testing.T) {
 	for _, c := range []struct {
 		name, waiting, sent, delivered string
-		parks                          int
+		// also: more of the directive (SQL, an UPDATE's SET list).
+		also  string
+		parks int
 	}{
-		{"sent, unread", "now() - interval '1 hour'", "now()", "NULL", 0},
-		{"read after the wait began", "now() - interval '1 hour'", "now()", "now()", 0},
+		{"sent, unread", "now() - interval '1 hour'", "now()", "NULL", "", 0},
+		{"read after the wait began", "now() - interval '1 hour'", "now()", "now()", "", 0},
 		// Inside the unread grace: only the read's order with the wait parks it.
-		{"read before the wait began", "now() - interval '30 seconds'", "now() - interval '60 seconds'", "now() - interval '50 seconds'", 1},
-		{"read in the batch that began the wait", "now() - interval '30 seconds'", "now() - interval '31 seconds'", "(SELECT waiting_since FROM runs WHERE id = run_id)", 1},
-		{"sent past the unread grace, unread", "now() - interval '1 hour'", "now() - interval '1 hour'", "NULL", 1},
+		{"read before the wait began", "now() - interval '30 seconds'", "now() - interval '60 seconds'", "now() - interval '50 seconds'", "", 1},
+		{"read in the batch that began the wait", "now() - interval '30 seconds'", "now() - interval '31 seconds'", "(SELECT waiting_since FROM runs WHERE id = run_id)", "", 1},
+		{"sent past the unread grace, unread", "now() - interval '1 hour'", "now() - interval '1 hour'", "NULL", "", 1},
+		{"a failed note, never tried", "now() - interval '1 hour'", "NULL", "NULL", "failed_at = now()", 1},
+		{"sent, then failed", "now() - interval '1 hour'", "now()", "NULL", "failed_at = now()", 1},
+		{"sent, interrupt only, unread", "now() - interval '1 hour'", "now()", "NULL", "interrupt_only = true", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, r := waitingWorld(t)
 			w.exec(`UPDATE runs SET waiting_since = `+c.waiting+` WHERE id = $1`, w.run.ID)
 			w.note(false)
-			w.exec(`UPDATE directives SET claimed_at = `+c.sent+`, sent_at = `+c.sent+`, delivered_at = `+c.delivered+`
+			also := ""
+			if c.also != "" {
+				also = ", " + c.also
+			}
+			w.exec(`UPDATE directives SET claimed_at = `+c.sent+`, sent_at = `+c.sent+`, delivered_at = `+c.delivered+also+`
 				WHERE id = 'dir_'||$1`, w.run.Org)
 			if n := w.parkForPerson(r); n != c.parks {
 				t.Errorf("%d run.parked events, want %d", n, c.parks)
