@@ -146,4 +146,4 @@ suggested_fix: What to do instead.
 
 Report nothing if you find nothing. A finding you are not confident in is a `note`, not a `blocking` — a reviewer that cries wolf costs the next fix attempt for nothing.
 
-Severity decides what happens next: `blocking`, `high`, `medium` send the change back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. So a finding that means an acceptance criterion is not met must be one of `blocking`, `high`, `medium`, however small the fix. A finding at a severity that sends the change back states its `acceptance`.
+Severity decides what happens next: `blocking`, `high`, `medium` send the change back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. Rate every finding, not only failed criteria, by the same judgement as the reviewers: what happens if this merges as it is, who meets it and whether they would notice. An acceptance criterion not met is at least `high`, however small the fix. A finding at a severity that sends the change back states its `acceptance`.
