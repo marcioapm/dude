@@ -277,6 +277,12 @@ func (w *world) heldPast(task, old, q string, grace time.Duration) string {
 	return held
 }
 
+// sent says whether directive id was sent to lux.
+func (w *world) sent(id string) bool {
+	w.t.Helper()
+	return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, id) == 1
+}
+
 // unsent says whether directive id is still queued: not sent, not settled.
 func (w *world) unsent(id string) bool {
 	w.t.Helper()
@@ -315,7 +321,7 @@ func TestAPersonParkHeldForNewsParksOnceItsNoteIsHeardThoughNotesKeepComing(t *t
 	w.waitingOn(old, q, grace+time.Second, grace+time.Second)
 	held := w.note(task, old, "news before the park")
 	w.until("the held note sent, or the Run parked", func() bool {
-		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, held) == 1
+		return w.parks(old) > 0 || w.sent(held)
 	})
 	if n := w.parks(old); n != 0 {
 		t.Fatalf("parked %d times, the note due at the park unsent", n)
@@ -496,7 +502,7 @@ func TestAHeldParkAnsweredWhileAnOlderPeerWaitStaysOpenWaitsAFullGrace(t *testin
 	w.waitingOn(old, q, grace+time.Second, grace+time.Second)
 	held := w.note(task, old, "news before the park")
 	w.until("the held note sent, or the Run parked", func() bool {
-		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, held) == 1
+		return w.parks(old) > 0 || w.sent(held)
 	})
 	if n := w.parks(old); n != 0 {
 		t.Fatalf("parked %d times, the note due at the park unsent", n)
@@ -513,7 +519,7 @@ func TestAHeldParkAnsweredWhileAnOlderPeerWaitStaysOpenWaitsAFullGrace(t *testin
 		t.Fatalf("no directive carries the answer")
 	}
 	w.until("the answer sent", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, answer) == 1
+		return w.sent(answer)
 	})
 	release()
 	w.until("the answer heard and its turn over, waiting on the peer", func() bool {
@@ -564,14 +570,14 @@ func TestAHeldParkOnAPeerHearsALaterNoteAndWaitsAFullGraceAfterIt(t *testing.T) 
 	w.waitingOn(old, q, grace+time.Second, 0)
 	held := w.note(task, old, "news before the park")
 	w.until("the held note sent, or the Run parked", func() bool {
-		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, held) == 1
+		return w.parks(old) > 0 || w.sent(held)
 	})
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`, old); n != 1 || w.parks(old) != 0 {
 		t.Fatalf("the park was not held for the note: %d parks", w.parks(old))
 	}
 	later := w.note(task, old, "news after the hold")
 	w.until("the later note sent, or the Run parked", func() bool {
-		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, later) == 1
+		return w.parks(old) > 0 || w.sent(later)
 	})
 	release()
 	w.until("both heard and their turn over, or the Run parked", func() bool {

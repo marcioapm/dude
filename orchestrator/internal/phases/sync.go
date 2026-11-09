@@ -580,12 +580,12 @@ const toSend = `SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at I
 // news in the wait it waits in now: news_hold_at, set by holdForNews, no
 // older than the wait's start (waitBegan: an answer and a new ask, or a
 // resume, begin a new wait, so each wait's park is held once; an answer
-// whose asks older than the hold stay open does not move it, holdSpent
-// ends that hold). A park
-// clears news_hold_at as well (pause, parkStopped), and so does a resume
-// (resume, takeUpLive): a take-up writes no resume of its own. waitBegan is
-// read only for a Run that has one; a wait that does not say when it began
-// is never held (unheardNews never holds its park either).
+// with an ask older than the hold still open does not move it, and
+// holdSpent ends that hold). A park clears news_hold_at as well (pause,
+// parkStopped), and so does a resume (resume, takeUpLive): a take-up
+// writes no resume of its own. waitBegan is read only for a Run that has
+// one; a wait that does not say when it began is never held (unheardNews
+// never holds its park either).
 const newsHeldSince = `CASE WHEN r.news_hold_at IS NULL THEN false
 		ELSE COALESCE(r.news_hold_at >= ` + waitBegan + `, false) END`
 
@@ -3736,7 +3736,7 @@ const parkedForPeer = "parked while it waits on a peer's reply"
 // per wait (newsHeld). From then on only what was queued by then holds the
 // park off, and what comes after waits for the answer, so the hold costs
 // that news's turn and no more: the Run parks as soon as it waits again
-// (parkState).
+// (parkState), unless a note sent after the hold ended it (holdSpent).
 func (s *Syncer) holdForNews(ctx context.Context, r phaseRun) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// As requestPause, it re-checks what the sweep read: still due the
