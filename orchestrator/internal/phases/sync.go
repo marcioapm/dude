@@ -521,14 +521,15 @@ const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.i
 // otherwise never park, each note's turn resetting waiting_since. Past the
 // ceiling news no longer holds the park: the Run parks once it waits past
 // its grace, as it always did, its news left for the answer. The worst
-// case: a wait that began at T, whose park main would make at T+G (G its
-// grace), is held at each past-grace moment before T+2G; the last note
-// held for is delivered just before T+2G, its turn takes D, and the wait
-// that turn ends in parks one grace later, at about T+3G+D (and a sweep).
-// So the hold adds at most about two graces and one turn to a park main
-// makes; the turns of the notes delivered before fall inside that window.
-// Notes that come inside every grace keep a Run running exactly as they
-// always did: no park is held or added for them.
+// case, for a wait that began at T (G its grace): main parks it at the
+// first moment P it is past its grace (P >= T+G). If news is pending then
+// and P < T+2G, the park is held; the note's turn takes D and ends in a new
+// wait, whose grace ends at P+D+G, past the ceiling: news no longer holds
+// it. So a wait's park is held at most once, by at most a grace and a turn
+// (G+D, and a sweep), at the latest about T+3G+D; or, for a note whose
+// send or turn does not come, by delivery.UnreadGraceSecs. Notes that come
+// inside every grace keep a Run running exactly as they always did: no
+// park is held or added for them.
 //
 // What is held for the answer (HeldBack) does not hold the park off, and
 // what is queued after the park waits for the answer (resumable), as it
