@@ -264,21 +264,30 @@ func (a *Artifacts) collect(ctx context.Context, r dueRun) error {
 			if err != nil || tag.RowsAffected() == 0 {
 				return err
 			}
-			// An ended Run's output is all in: the values it was given are
-			// no longer needed to redact or scan it.
+			// An ended Run's output is all in. Its copy goes too, unless
+			// something can still produce or read its output: a resume of
+			// it, a next round taking it over, a text file of it served, a
+			// recovery of its commits (copyNeeded). ForgetSecretCopies
+			// deletes it once none can.
 			if child {
 				if _, err := tx.Exec(ctx, `UPDATE runs SET child_output_closed=true WHERE id=$1`, r.ID); err != nil {
 					return err
 				}
 			}
-			_, err = tx.Exec(ctx, `DELETE FROM run_project_secrets s USING runs r
-				WHERE s.run_id = $1 AND r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted')`, r.ID)
+			_, err = tx.Exec(ctx, collectCopy, r.ID)
 			return err
 		}
 		return a.askAgainLater(ctx, tx, r)
 	})
 	return errors.Join(err, finalErr)
 }
+
+// collectCopy is a collected Run's ($1) copy deleted, once it has ended
+// and nothing still needs it (copyNeeded, whose artifacts probe reads
+// only the Run's artifacts, on artifacts_run_idx,
+// TestForgetSecretCopiesProbesEachRunOnce).
+var collectCopy = `DELETE FROM run_project_secrets s USING runs r
+	WHERE s.run_id = $1 AND r.id = s.run_id AND r.status IN ('completed', 'failed', 'aborted') AND NOT ` + copyNeeded
 
 // settled: lux has reported every exit so far, so the list of what the Run
 // published is complete.

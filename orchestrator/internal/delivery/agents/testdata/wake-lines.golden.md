@@ -172,6 +172,10 @@ Could not recover run_impl (rcv_2), nothing pushed: nothing committed beyond its
 
 Your recovery rcv_3 of run_impl was refused, nothing pushed: its work contains the project secret IMPL_TOKEN in config/app.toml; a person must remove it
 
+## recovered-secrets-expired
+
+Your recovery rcv_4 of run_impl was refused, nothing pushed: dude no longer holds every secret value the Run was given (its copy is deleted at the latest 30 days after it ended), so its work cannot be checked for one rotated since; not recovered. Tell the person: its commits may hold a secret value dude can no longer check for; anything taken from lux's checkpoint must be checked for secrets by hand before it is pushed anywhere.
+
 ## stalled
 
 Your security implement Run run_impl (round 2, fast, running 90 min) has made no progress for 15 min. Its agent has done nothing for 14 min: no output, no tool call. It has 3 tool calls open: `bash` "go test ./...", for 15 min, `task` "explore", for 10 min, `bash` "sleep 999", for 30 s; `bash`'s command is running; `task` runs inside the agent: no separate process is expected; no process runs `bash`'s command. Its `task` call "explore" has a child (subagent · ses_child_01) whose last event was 5 min ago: asked to run make — waiting on a permission nothing can answer: bash for make *, rm *. Processes: go test ./... (99.5 % CPU, up 15:00); sh (0.0 % CPU, up 1:00). CPU over 15 min: 12 s; network: 3.0 MiB. Its files last changed at 10:15 UTC. Its tool calls in the window: 3 bash, 1 read, 0 edit. Its plan: write the export; test it. Its last message: "Running the tests.". Leave it, steer it (interrupt to stop its turn), or restart_run(run, note, tier).

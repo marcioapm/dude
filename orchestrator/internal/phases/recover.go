@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
@@ -395,6 +397,9 @@ func (s *Syncer) scanAndPush(ctx context.Context, c recoveryRow) error {
 	switch {
 	case errors.As(err, &unchecked):
 		return s.endRecovery(ctx, c, delivery.RecoveryFailed, err.Error(), nil)
+	case errors.Is(err, errSecretsExpired):
+		s.Log.Warn("refused to scan a recovery whose Run's secret copy is gone", "recovery", c.ID, "run", c.RunID)
+		return s.endRecovery(ctx, c, delivery.RecoveryRefused, delivery.RecoverySecretsExpired, nil)
 	case err != nil:
 		return err
 	case len(found) > 0:
@@ -415,15 +420,57 @@ func (s *Syncer) scanAndPush(ctx context.Context, c recoveryRow) error {
 		WHERE id = $1 AND claim_token = $2 AND status = 'submitted'`, recoveryEvery.String())
 }
 
+// errSecretsExpired: the dead Run was given secrets and its copy of their
+// values is gone (delivery.RecoverySecretsExpiredTx).
+var errSecretsExpired = errors.New("the Run's copy of its secret values is gone")
+
+// recoveryChecked, when set (by a test), runs between recoveryRedactor's
+// check that the copy is there and its read of the values.
+var recoveryChecked func()
+
+// recoveryRedactor is the dead Run's values to scan a recovery for:
+// errSecretsExpired when it was given secrets and its copy is gone since
+// the conductor asked (delivery.ConductRecoverTx refuses it then), as only
+// the values in force now could be scanned for, not one it held and that
+// was rotated since. The check and the read share one snapshot (REPEATABLE
+// READ, read only): a copy deleted after the check (ForgetSecretCopies, a
+// collection) is still read whole, never the values in force alone. Read
+// only, it takes no row lock, so it cannot deadlock with either delete,
+// nor hold one up.
+func (s *Syncer) recoveryRedactor(ctx context.Context, org, runID string) (*redact.Redactor, error) {
+	var red *redact.Redactor
+	err := db.InOrgOn(ctx, snapshotBeginner{s.DB.Pool}, org, func(tx pgx.Tx) error {
+		expired, err := delivery.RecoverySecretsExpiredTx(ctx, tx, runID)
+		if err != nil {
+			return err
+		}
+		if expired {
+			return errSecretsExpired
+		}
+		if recoveryChecked != nil {
+			recoveryChecked()
+		}
+		red, err = ledger.Redactor(ctx, tx, runID)
+		return err
+	})
+	return red, err
+}
+
+// snapshotBeginner begins read-only REPEATABLE READ transactions: every
+// statement of one reads the same snapshot.
+type snapshotBeginner struct{ pool *pgxpool.Pool }
+
+func (b snapshotBeginner) Begin(ctx context.Context) (pgx.Tx, error) {
+	return b.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+}
+
 // scanRecovery finds the dead Run's secrets in what the push would send:
 // every commit from where the dead Run's checkout started to the
-// checkpoint's head, and the branch's name. Nothing for a Run given none.
+// checkpoint's head, and the branch's name. Nothing for a Run given none;
+// errSecretsExpired for one given some whose copy is gone.
 func (s *Syncer) scanRecovery(ctx context.Context, c recoveryRow, chosen []recovered) ([]SecretInWork, error) {
-	var red *redact.Redactor
-	if err := s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) (err error) {
-		red, err = ledger.Redactor(ctx, tx, c.RunID)
-		return err
-	}); err != nil || red.Empty() {
+	red, err := s.recoveryRedactor(ctx, c.Org, c.RunID)
+	if err != nil || red.Empty() {
 		return nil, err
 	}
 	bases := map[string]string{}

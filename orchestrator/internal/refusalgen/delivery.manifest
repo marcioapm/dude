@@ -225,6 +225,7 @@ rRecoverYourself                       refusals/delivery/recover/yourself
 rRecoverStillLive                      refusals/delivery/recover/still-live
 rRecoverDoesNotPublish                 refusals/delivery/recover/does-not-publish
 rRecoverSecretFound                    refusals/delivery/recover/secret-found
+rRecoverSecretsExpired                 refusals/delivery/recover/secrets-expired
 rRecoverBranchOutside                  refusals/delivery/recover/branch-outside
 rRecoverBranchInUse                    refusals/delivery/recover/branch-in-use
 rRecoverAlreadyRecovered               refusals/delivery/recover/already-recovered

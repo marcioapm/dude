@@ -62,6 +62,10 @@ This recovery has already ended, failed: lux kept no checkpoint of its checkouts
 
 This recovery has already ended, done; how it ended reaches you once, by its own wake, if it has not already. Its commits are on the branch; the branch is not the task's: start a writer to merge it.
 
+## recover-run-ended-secrets-expired
+
+This recovery has already ended, refused: dude no longer holds every secret value the Run was given (its copy is deleted at the latest 30 days after it ended), so its work cannot be checked for one rotated since; not recovered; how it ended reaches you once, by its own wake, if it has not already. It pushed nothing, and recover_run refuses this Run for good: tell the person that its commits may hold a secret value dude can no longer check for, and that anything taken from lux's checkpoint must be checked for secrets by hand before it is pushed anywhere.
+
 ## recover-run-ended-refused
 
 This recovery has already ended, refused: its work contains the project secret API_TOKEN in config/app.toml; a person must remove it; how it ended reaches you once, by its own wake, if it has not already. It pushed nothing: a person must remove the secret from the Run's commits; recover_run refuses this Run until then.

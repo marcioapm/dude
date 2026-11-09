@@ -104,6 +104,8 @@ func TestGoldenWakeLines(t *testing.T) {
 			Status: RecoveryFailed, Error: "nothing committed beyond its start"})},
 		{"recovered-secret", recoveredLine(RecoveryEnd{ID: "rcv_3", RunID: "run_impl", Branch: "dude/GLD-8/recovered-run_impl",
 			Status: RecoveryRefused, Error: "its work contains the project secret IMPL_TOKEN in config/app.toml; a person must remove it"})},
+		{"recovered-secrets-expired", recoveredLine(RecoveryEnd{ID: "rcv_4", RunID: "run_impl", Branch: "dude/GLD-8/recovered-run_impl",
+			Status: RecoveryRefused, Error: RecoverySecretsExpired})},
 		{"stalled", goldenStall().Text(ConductorOptions(false))},
 		{"stalled-quiet", goldenQuietStall().Text(ConductorOptions(false))},
 		{"stalled-child", goldenStall().Text(ConductorOptions(true))},

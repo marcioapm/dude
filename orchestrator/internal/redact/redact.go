@@ -17,9 +17,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // MinLength is the shortest value redacted, in bytes.
@@ -36,13 +40,67 @@ func TextType(ctype string) bool {
 	if strings.HasPrefix(mt, "text/") {
 		return true
 	}
-	switch mt {
-	case "application/json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript",
-		"application/x-ndjson", "application/sql", "application/toml", "application/x-sh", "image/svg+xml":
+	if slices.Contains(textTypes, mt) {
 		return true
 	}
 	return strings.HasSuffix(mt, "+json") || strings.HasSuffix(mt, "+xml")
 }
+
+// textTypes are the media types outside text/ that TextType takes for text.
+var textTypes = []string{"application/json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript",
+	"application/x-ndjson", "application/sql", "application/toml", "application/x-sh", "image/svg+xml"}
+
+// TextTypes are the media types outside text/ that TextType takes for
+// text, a copy.
+func TextTypes() []string { return slices.Clone(textTypes) }
+
+// TextTypeSQL is TextType in SQL, over the text column col; it must agree
+// with TextType on every string, whatever col's collation or the
+// database's (TestTextTypeSQLIsTextType). col is taken COLLATE "C", under
+// which lower() lowers only A-Z: any other collation's lower() may lower
+// an ASCII letter to a non-ASCII one (a Turkish one lowers I to a dotless
+// ı, so APPLICATION/JSON would not be text), or not. strings.ToLower
+// lowers exactly two non-ASCII letters to ASCII ones, İ to i and the
+// Kelvin sign to k, so those are translated first; any other non-ASCII
+// character keeps a type out of every ASCII name and suffix matched here
+// whatever its case, in Go as in SQL. btrim strips only spaces unless told
+// otherwise, so it is given every character strings.TrimSpace strips
+// (spaceSQL). The normalised type is matched once, by one anchored regular
+// expression (ARE: '.' takes a newline too, '$' only the end), not once
+// per name.
+func TextTypeSQL(col string) string {
+	return "(btrim(split_part(lower(translate((" + col + ") COLLATE \"C\", E'\\u0130\\u212A', 'ik')), ';', 1), " + spaceSQL + ") ~ " + textTypeRE + ")"
+}
+
+// textTypeRE is an SQL escape string literal (so standard_conforming_strings
+// does not matter) of the regular expression a normalised type TextType
+// takes for text matches whole.
+var textTypeRE = func() string {
+	alts := []string{"text/.*"}
+	for _, t := range textTypes {
+		alts = append(alts, regexp.QuoteMeta(t))
+	}
+	alts = append(alts, ".*\\+json", ".*\\+xml")
+	return "E'^(?:" + strings.ReplaceAll(strings.Join(alts, "|"), `\`, `\\`) + ")$'"
+}()
+
+// spaceSQL is an SQL string literal of every character unicode.IsSpace
+// (so strings.TrimSpace) takes for white space.
+var spaceSQL = func() string {
+	var b strings.Builder
+	b.WriteString("E'")
+	for _, r := range unicode.White_Space.R16 {
+		for c := r.Lo; c <= r.Hi; c += r.Stride {
+			fmt.Fprintf(&b, "\\u%04X", c)
+		}
+	}
+	for _, r := range unicode.White_Space.R32 {
+		for c := r.Lo; c <= r.Hi; c += r.Stride {
+			fmt.Fprintf(&b, "\\U%08X", c)
+		}
+	}
+	return b.String() + "'"
+}()
 
 // Marker is what replaces a value of the secret name.
 func Marker(name string) string { return "[REDACTED:" + name + "]" }
