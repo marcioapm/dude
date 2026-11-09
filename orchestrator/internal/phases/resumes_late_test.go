@@ -34,6 +34,52 @@ func (w *resumeWorld) slowStampOnce(col string) {
 	w.exec(`CREATE TRIGGER slow_stamp BEFORE UPDATE ON run_resumes FOR EACH ROW EXECUTE FUNCTION slow_stamp()`)
 }
 
+// resumedOnHostB records the Run's resume from epoch 1, accepted as
+// foreseen, with lux to report it running on host-b once read.
+func (w *resumeWorld) resumedOnHostB() {
+	w.t.Helper()
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+}
+
+// keepLate sets the Run's late stamps the Syncer keeps to late, as
+// batches that could not write them would have left them.
+func (w *resumeWorld) keepLate(late ...lateStamp) {
+	w.s.lateMu.Lock()
+	defer w.s.lateMu.Unlock()
+	w.s.late = map[string][]lateStamp{w.run.ID: late}
+}
+
+// timedWithBusy fails the test unless resume 2 is timed, once, with its
+// busy: in the row and in run.resume.timed, no late stamp landing nowhere.
+func (w *resumeWorld) timedWithBusy(logs *logSink) {
+	w.t.Helper()
+	row := w.row(2)
+	if row["timed_at"] == nil || row["busy_at"] == nil {
+		w.t.Fatalf("timed_at %v, busy_at %v: want the resume timed with its busy\nlogs:\n%s", row["timed_at"], row["busy_at"], logs)
+	}
+	timed := w.timed()
+	if len(timed) != 1 {
+		w.t.Fatalf("%d run.resume.timed, want 1\nlogs:\n%s", len(timed), logs)
+	}
+	if _, ok := timed[0]["untilBusyMs"]; !ok {
+		w.t.Errorf("run.resume.timed has no untilBusyMs: %v\nlogs:\n%s", timed[0], logs)
+	}
+	if lines := logLines(logs.String(), "landed nowhere"); len(lines) != 0 {
+		w.t.Errorf("a late stamp landed nowhere:\n%s", logs)
+	}
+}
+
+// keptBusy fails the test unless a batch kept late includes a busy_at:
+// without it, the test proves nothing.
+func (w *resumeWorld) keptBusy(late []lateStamp, logs *logSink) {
+	w.t.Helper()
+	if !slices.ContainsFunc(late, func(l lateStamp) bool { return l.col == "busy_at" }) {
+		w.t.Fatalf("the batch kept %v, want its busy_at: the test proves nothing\nlogs:\n%s", late, logs)
+	}
+}
+
 // followBatch applies frames in one batch, as followOutput does when they
 // come together, and runs its follow-up once it commits.
 func (w *resumeWorld) followBatch(frames ...lux.Frame) {
@@ -119,9 +165,7 @@ func TestAStampTheBatchCouldNotWriteInTimeIsStillTimed(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				w := newResumeWorld(t)
-				base := time.Now().Add(-time.Minute).UTC()
-				w.resume(stoppedOnHost1(base))
-				w.lux.set(runningAgain(base, "host-b"), nil)
+				w.resumedOnHostB()
 				w.slowStampOnce(col)
 				logs := w.captureTimingLogs()
 
@@ -197,9 +241,7 @@ func TestAStampTheBatchCouldNotWriteInTimeIsStillTimed(t *testing.T) {
 // stamp kept for it, which would contradict what run.resume.timed said.
 func TestAStampAfterTheResumeIsTimedChangesNothing(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	// Timed without its first busy.
 	w.follow(session(2), running(2), spoke(2))
 	w.untilTimed()
@@ -214,9 +256,7 @@ func TestAStampAfterTheResumeIsTimedChangesNothing(t *testing.T) {
 	// The agent's next turn.
 	w.follow(busy(2), spoke(2))
 	// A late stamp kept for the resume, written by the Run's next timing.
-	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, time.Now()}}}
-	w.s.lateMu.Unlock()
+	w.keepLate(lateStamp{"busy_at", 2, time.Now()})
 	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -260,18 +300,14 @@ func (*onFirstSavepoint) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQuer
 // resume is still timed with its busy, in the row and in the event.
 func TestABusyKeptWhileAResumeIsBeingTimedIsTimedWithIt(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2))
 	running, _ := w.row(2)["running_at"].(time.Time)
 	w.slowStampOnce("busy_at")
 	logs := w.captureTimingLogs()
 
 	// A late stamp an earlier batch kept, for the timing to write.
-	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: {{"running_at", 2, running}}}
-	w.s.lateMu.Unlock()
+	w.keepLate(lateStamp{"running_at", 2, running})
 	var resumes map[int]bool
 	var late []lateStamp
 	w.traced(&onFirstSavepoint{fn: func() {
@@ -313,15 +349,11 @@ func TestABusyKeptWhileAResumeIsBeingTimedIsTimedWithIt(t *testing.T) {
 // one for a resume already timed without its busy.
 func TestALateStampThatLandsNowhereIsSaid(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2), spoke(2))
 	w.untilTimed()
 	logs := w.captureTimingLogs()
-	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, time.Now()}}}
-	w.s.lateMu.Unlock()
+	w.keepLate(lateStamp{"busy_at", 2, time.Now()})
 	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -338,9 +370,7 @@ func TestALateStampThatLandsNowhereIsSaid(t *testing.T) {
 // again, and the replay's stamps are the ones the resume is timed with.
 func TestABatchRolledBackKeepsNoLateStamp(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.slowStampOnce("busy_at")
 	frames := []lux.Frame{session(2), running(2), busy(2), spoke(2)}
 
@@ -412,9 +442,7 @@ func TestALateStampIsKeptOncePerColumnAndResume(t *testing.T) {
 // timed from its first output alone, and its running state comes after.
 func TestRunningAfterTheResumeIsTimedIsStillStamped(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(spoke(2))
 	w.untilTimed()
 	if row := w.row(2); row["timed_at"] == nil || row["running_at"] != nil {
@@ -431,9 +459,7 @@ func TestRunningAfterTheResumeIsTimedIsStillStamped(t *testing.T) {
 // for in between keeps its own columns empty.
 func TestALateStampWithNoEpochIsForTheResumeItWasAbout(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2))
 	w.slowStampOnce("busy_at")
 	tr := &translator{run: w.run}
@@ -468,9 +494,7 @@ func TestALateStampWithNoEpochIsForTheResumeItWasAbout(t *testing.T) {
 func TestALateStampGoesWithItsFollower(t *testing.T) {
 	w := newResumeWorld(t)
 	now := time.Now()
-	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, now}, {"busy_at", 3, now}}}
-	w.s.lateMu.Unlock()
+	w.keepLate(lateStamp{"busy_at", 2, now}, lateStamp{"busy_at", 3, now})
 	w.s.owe(w.run.ID, 3)
 	st := newStreamLux(w.lux)
 	w.s.Lux = st
@@ -539,9 +563,7 @@ func TestAFailedFollowUpOfAnUnfollowedRunLeavesNoLateStamp(t *testing.T) {
 func TestALateStampNotTriedIsKept(t *testing.T) {
 	w := newResumeWorld(t)
 	kept := []lateStamp{{"busy_at", 2, time.Now()}}
-	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: kept}
-	w.s.lateMu.Unlock()
+	w.keepLate(kept...)
 	done, cancel := context.WithCancel(w.ctx)
 	cancel()
 	var written func()
@@ -564,37 +586,20 @@ func TestALateStampNotTriedIsKept(t *testing.T) {
 // recovery runs first: the resume is still timed with its busy.
 func TestARecoveryBeforeTheFollowUpLeavesAKeptBusyToIt(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2))
 	w.slowStampOnce("busy_at")
 	logs := w.captureTimingLogs()
 
 	resumes, late := w.commitBatch(busy(2), spoke(2))
-	if !slices.ContainsFunc(late, func(l lateStamp) bool { return l.col == "busy_at" }) {
-		t.Fatalf("the batch kept %v, want its busy_at: the test proves nothing\nlogs:\n%s", late, logs)
-	}
+	w.keptBusy(late, logs)
 	w.s.forgetLate(w.run.ID)
 	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
 		t.Fatal(err)
 	}
 	w.s.resumeFollowUp(w.run, resumes, late...)
 
-	row := w.row(2)
-	if row["timed_at"] == nil || row["busy_at"] == nil {
-		t.Fatalf("timed_at %v, busy_at %v: want the resume timed with its busy\nlogs:\n%s", row["timed_at"], row["busy_at"], logs)
-	}
-	timed := w.timed()
-	if len(timed) != 1 {
-		t.Fatalf("%d run.resume.timed, want 1\nlogs:\n%s", len(timed), logs)
-	}
-	if _, ok := timed[0]["untilBusyMs"]; !ok {
-		t.Errorf("run.resume.timed has no untilBusyMs: %v\nlogs:\n%s", timed[0], logs)
-	}
-	if lines := logLines(logs.String(), "landed nowhere"); len(lines) != 0 {
-		t.Errorf("a late stamp landed nowhere:\n%s", logs)
-	}
+	w.timedWithBusy(logs)
 }
 
 // A committed batch's kept stamps are its follow-up's to write whatever
@@ -603,30 +608,17 @@ func TestARecoveryBeforeTheFollowUpLeavesAKeptBusyToIt(t *testing.T) {
 // them.
 func TestACommittedBatchsStampOutlivesItsFollower(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2))
 	w.slowStampOnce("busy_at")
 	logs := w.captureTimingLogs()
 
 	resumes, late := w.commitBatch(busy(2), spoke(2))
-	if !slices.ContainsFunc(late, func(l lateStamp) bool { return l.col == "busy_at" }) {
-		t.Fatalf("the batch kept %v, want its busy_at: the test proves nothing\nlogs:\n%s", late, logs)
-	}
+	w.keptBusy(late, logs)
 	w.s.forgetLate(w.run.ID)
 	w.s.resumeFollowUp(w.run, resumes, late...)
 
-	if got := w.row(2)["busy_at"]; got == nil {
-		t.Fatalf("busy_at not written by the batch's follow-up\nlogs:\n%s", logs)
-	}
-	timed := w.timed()
-	if len(timed) != 1 {
-		t.Fatalf("%d run.resume.timed, want 1\nlogs:\n%s", len(timed), logs)
-	}
-	if _, ok := timed[0]["untilBusyMs"]; !ok {
-		t.Errorf("run.resume.timed has no untilBusyMs: %v", timed[0])
-	}
+	w.timedWithBusy(logs)
 }
 
 // A stamp a batch kept is still written when another batch's follow-up
@@ -637,9 +629,7 @@ func TestACommittedBatchsStampOutlivesItsFollower(t *testing.T) {
 // and B's follow-up times 2 before A's runs: still with its busy.
 func TestAnotherBatchsFollowUpTimesAKeptBusyWithIt(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2))
 	w.slowStampOnce("busy_at")
 	logs := w.captureTimingLogs()
@@ -658,20 +648,7 @@ func TestAnotherBatchsFollowUpTimesAKeptBusyWithIt(t *testing.T) {
 	w.s.resumeFollowUp(w.run, resB, lateB...)
 	w.s.resumeFollowUp(w.run, resA, lateA...)
 
-	row := w.row(2)
-	if row["timed_at"] == nil || row["busy_at"] == nil {
-		t.Fatalf("timed_at %v, busy_at %v: want the resume timed with its busy\nlogs:\n%s", row["timed_at"], row["busy_at"], logs)
-	}
-	timed := w.timed()
-	if len(timed) != 1 {
-		t.Fatalf("%d run.resume.timed, want 1\nlogs:\n%s", len(timed), logs)
-	}
-	if _, ok := timed[0]["untilBusyMs"]; !ok {
-		t.Errorf("run.resume.timed has no untilBusyMs: %v\nlogs:\n%s", timed[0], logs)
-	}
-	if lines := logLines(logs.String(), "landed nowhere"); len(lines) != 0 {
-		t.Errorf("a late stamp landed nowhere:\n%s", logs)
-	}
+	w.timedWithBusy(logs)
 	if left := w.s.lateStamps(w.run.ID); len(left) != 0 {
 		t.Errorf("late stamps kept after they were written: %v", left)
 	}
@@ -681,17 +658,13 @@ func TestAnotherBatchsFollowUpTimesAKeptBusyWithIt(t *testing.T) {
 // Syncer's, the earlier is written: the earlier frame's.
 func TestTheEarliestLateStampIsWritten(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2), spoke(2))
 	// Untimed again, its busy still to come.
 	w.exec(`UPDATE run_resumes SET timed_at = NULL WHERE run_id = $1`, w.run.ID)
 	t1 := time.Now().Add(-10 * time.Second).UTC().Truncate(time.Microsecond)
 	t2 := t1.Add(5 * time.Second)
-	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, t2}}}
-	w.s.lateMu.Unlock()
+	w.keepLate(lateStamp{"busy_at", 2, t2})
 	if err := w.s.timeResumes(w.ctx, w.run, 2, lateStamp{"busy_at", 2, t1}); err != nil {
 		t.Fatal(err)
 	}
@@ -712,9 +685,7 @@ func TestALateRunningOfATimedResumeLeavesTheLateWriteAlone(t *testing.T) {
 			w := newResumeWorld(t)
 			// Short, so a write that did wait on the held resume fails here.
 			w.s.resumeBudget = resumeBudget{lock: 100 * time.Millisecond}
-			base := time.Now().Add(-time.Minute).UTC()
-			w.resume(stoppedOnHost1(base))
-			w.lux.set(runningAgain(base, "host-b"), nil)
+			w.resumedOnHostB()
 			w.follow(spoke(2))
 			w.untilTimed()
 			if row := w.row(2); row["timed_at"] == nil || row["running_at"] != nil {
@@ -728,9 +699,7 @@ func TestALateRunningOfATimedResumeLeavesTheLateWriteAlone(t *testing.T) {
 				release = w.lockResume(2)
 			}
 			now := time.Now().UTC().Truncate(time.Microsecond)
-			w.s.lateMu.Lock()
-			w.s.late = map[string][]lateStamp{w.run.ID: {{"running_at", 2, now}, {"busy_at", 3, now}}}
-			w.s.lateMu.Unlock()
+			w.keepLate(lateStamp{"running_at", 2, now}, lateStamp{"busy_at", 3, now})
 			if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
 				t.Fatal(err)
 			}
@@ -763,9 +732,7 @@ func TestALateRunningOfATimedResumeLeavesTheLateWriteAlone(t *testing.T) {
 // frame is applied: here two are untimed, and it is the later one's.
 func TestALateStampWithNoEpochIsForTheLatestResume(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2))
 	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at) VALUES ($1, $2, 3, 'person', now())`,
 		w.run.ID, w.run.Org)
@@ -896,17 +863,13 @@ func TestAFollowUpKeepsItsStampsPastAFailedTiming(t *testing.T) {
 // is the earlier frame's, or the same frame replayed.
 func TestALateStampLeavesAStampAlreadyIn(t *testing.T) {
 	w := newResumeWorld(t)
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.resumedOnHostB()
 	w.follow(session(2), running(2), busy(2))
 	in, ok := w.row(2)["busy_at"].(time.Time)
 	if !ok {
 		t.Fatal("no busy_at stamped: the test proves nothing")
 	}
-	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, in.Add(-time.Second)}}}
-	w.s.lateMu.Unlock()
+	w.keepLate(lateStamp{"busy_at", 2, in.Add(-time.Second)})
 	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
 		t.Fatal(err)
 	}
