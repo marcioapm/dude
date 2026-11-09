@@ -626,11 +626,7 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own
 		set += c + ` = COALESCE(rr.` + c + `, l.` + c + `)`
 		filters += `min(at) FILTER (WHERE col = '` + c + `') AS ` + c
 	}
-	type landed struct {
-		Epoch                      int
-		Running, Busy, FirstOutput *time.Time
-	}
-	var rows []landed
+	var rows []landedStamps
 	budget := s.resumeBudgets()
 	ran, err := s.savepointAt(ctx, tx, budget.lock, budget.statement, func(ctx context.Context, tx pgx.Tx, _ time.Time) error {
 		got, err := tx.Query(ctx, `WITH l AS (SELECT epoch, `+filters+`
@@ -645,7 +641,7 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own
 		if err != nil {
 			return err
 		}
-		rows, err = pgx.CollectRows(got, pgx.RowToStructByPos[landed])
+		rows, err = pgx.CollectRows(got, pgx.RowToStructByPos[landedStamps])
 		return err
 	})
 	switch {
@@ -656,9 +652,8 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own
 	default:
 		var missed []lateStamp
 		for _, l := range late {
-			i := slices.IndexFunc(rows, func(w landed) bool { return w.Epoch == l.epoch })
-			if i < 0 || map[string]*time.Time{"running_at": rows[i].Running, "busy_at": rows[i].Busy,
-				"first_output_at": rows[i].FirstOutput}[l.col] == nil {
+			i := slices.IndexFunc(rows, func(w landedStamps) bool { return w.Epoch == l.epoch })
+			if i < 0 || rows[i].at(l.col) == nil {
 				missed = append(missed, l)
 			}
 		}
@@ -668,6 +663,23 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own
 		}
 	}
 	return func() { s.lateDone(r.ID, late) }
+}
+
+// landedStamps is a resume's lateCols after the late write.
+type landedStamps struct {
+	Epoch                      int
+	Running, Busy, FirstOutput *time.Time
+}
+
+// at is the column col of lateCols.
+func (l landedStamps) at(col string) *time.Time {
+	switch col {
+	case "running_at":
+		return l.Running
+	case "busy_at":
+		return l.Busy
+	}
+	return l.FirstOutput
 }
 
 // writeLateRunning writes, in tx, each running_at of missed (the late

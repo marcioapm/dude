@@ -51,7 +51,9 @@ func (s *Syncer) timeResumesSkippingOwed(ctx context.Context, r phaseRun, epoch 
 		// The Run's untimed resumes locked first (lockUntimed), so the late
 		// stamps read next are every one a batch whose output the UPDATE
 		// below sees kept; they go in first, in this transaction: the
-		// timing carries them, and none can land on a resume once timed.
+		// timing carries them, and none of the agent's lands on a resume
+		// once timed (a timed one's late running_at does, as stamp's would:
+		// writeLateRunning).
 		if err := lockUntimed(ctx, tx, r.ID); err != nil {
 			return err
 		}
