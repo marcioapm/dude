@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -62,9 +63,10 @@ func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 	w.onFailureShowsDirectives(old)
 	said := len(w.said(old))
 	// Past any grace, and the reason past the wake window: both due now.
-	const grace = time.Second
+	// The question asked now: the hold's ceiling (two graces) is ahead.
+	const grace = 2 * time.Second
 	w.syncer.ParkAfter = grace
-	mustExec(t, w.owner, `UPDATE runs SET waiting_since = now() - interval '1 hour' WHERE id = $1`, old)
+	w.waitingOn(old, q, time.Hour)
 	w.reason(task, "test:news", "CI failed on the base", time.Minute)
 
 	var note string
@@ -115,6 +117,102 @@ func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 	}
 	if n := w.unheard(old); n != 0 {
 		t.Errorf("%d directives unheard at the park", n)
+	}
+	w.questionOpen(q, "after the park")
+}
+
+// waitingOn sets run waiting on the person for as long as waited, its
+// question q asked now: past its grace, inside the ceiling of unheardNews.
+// What it was sent before is moved back as far, so it was still read
+// before the wait began.
+func (w *world) waitingOn(run, q string, waited time.Duration) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE runs SET waiting_since = waiting_since - make_interval(secs => $2) WHERE id = $1`, run, waited.Seconds())
+	mustExec(w.t, w.owner, `UPDATE directives SET sent_at = sent_at - make_interval(secs => $2),
+		delivered_at = delivered_at - make_interval(secs => $2) WHERE run_id = $1`, run, waited.Seconds())
+	mustExec(w.t, w.owner, `UPDATE questions SET asked_at = now() WHERE id = $1`, q)
+}
+
+// lux refuses every input to the Run (a 503, as BeforeInput refuses): the
+// note is claimed, its send fails and is retried, and it is never sent. Its
+// hold on the park is bounded by delivery.UnreadGraceSecs from its first
+// try (claimed_at): past it the Run is parked once, as without news.
+func TestAPersonParkDoesNotWaitForANoteLuxKeepsRefusing(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.waitingAtGate(`{"action":"ask_person"}`)
+	w.onFailureShowsDirectives(old)
+	w.syncer.RetryAhead = time.Minute
+	luxRun := w.luxRunOf(old)
+	w.lux.BeforeInput = func(runID, _ string) bool { return runID != luxRun }
+	// Past the grace, far inside the ceiling: only the claim's bound ends the hold.
+	w.syncer.ParkAfter = time.Minute
+	w.waitingOn(old, q, time.Hour)
+	w.reason(task, "test:news", "CI failed on the base", time.Minute)
+	var note string
+	w.until("the note tried and refused", func() bool {
+		note = w.noteFor(task, "test:news")
+		return note != "" && w.count(`SELECT count(*) FROM directives WHERE id = $1 AND claimed_at IS NOT NULL AND sent_at IS NULL`, note) == 1 &&
+			w.count(`SELECT count(*) FROM runs WHERE id = $1 AND retry_failures > 0`, old) == 1
+	})
+	for range 3 {
+		w.pump()
+	}
+	if n := w.parks(old); n != 0 {
+		t.Fatalf("parked %d times inside the bound, with the note's send under way", n)
+	}
+	// The bound passes: first tried longer ago than delivery.UnreadGraceSecs.
+	mustExec(t, w.owner, `UPDATE directives SET claimed_at = now() - interval '121 seconds' WHERE id = $1`, note)
+	w.untilParked(old)
+	for range 5 {
+		w.pump()
+	}
+	if n := w.parks(old); n != 1 {
+		t.Errorf("parked %d times, want once", n)
+	}
+	w.questionOpen(q, "once parked")
+}
+
+// A Run that keeps getting notes, each before its grace ends, would never
+// park: each note's turn resets waiting_since. The hold has a ceiling, two
+// graces from when the wait began (the question asked): the Run is parked
+// once, by then, and notes after the park wait for the answer.
+func TestAPersonParkComesByTheCeilingWhileNotesKeepComing(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.waitingAtGate(`{"action":"ask_person"}`)
+	w.onFailureShowsDirectives(old)
+	const grace = 2 * time.Second
+	w.syncer.ParkAfter = grace
+	w.waitingOn(old, q, 0)
+	notes, last := 0, time.Time{}
+	w.until("the Run parked, notes arriving every half grace", func() bool {
+		w.questionOpen(q, "while notes came")
+		if time.Since(last) >= grace/2 {
+			notes++
+			w.reason(task, fmt.Sprintf("test:news%d", notes), fmt.Sprintf("news %d", notes), time.Minute)
+			last = time.Now()
+		}
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, old) == 1
+	})
+	w.untilParked(old)
+	// By the ceiling: two graces from the ask, and a sweep or two after.
+	if n := w.count(`SELECT count(*) FROM events p, questions q WHERE p.run_id = $1 AND p.event_type = 'run.parked' AND q.id = $2
+		AND (p.payload->>'parkedAt')::timestamptz <= q.asked_at + make_interval(secs => $3)`, old, q, (2*grace + 3*time.Second).Seconds()); n != 1 {
+		t.Errorf("parked past the ceiling: %s", w.str(`SELECT (SELECT payload->>'parkedAt' FROM events WHERE run_id = $1 AND event_type = 'run.parked')
+			|| ' asked ' || (SELECT asked_at::text FROM questions WHERE id = $2)`, old, q))
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL
+		AND created_at >= (SELECT asked_at FROM questions WHERE id = $2)`, old, q); n < 2 {
+		t.Errorf("%d notes heard before the park, want the hold to have delivered some", n)
+	}
+	w.reason(task, "test:late", "the base moved on", time.Minute)
+	for range 5 {
+		w.pump()
+	}
+	if n := w.parks(old); n != 1 {
+		t.Errorf("parked %d times, want once", n)
+	}
+	if resumed, _ := w.luxResumes(old); resumed != 0 {
+		t.Errorf("resumed %d times for a note, the question unanswered", resumed)
 	}
 	w.questionOpen(q, "after the park")
 }
