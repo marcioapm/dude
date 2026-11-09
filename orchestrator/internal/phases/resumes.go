@@ -520,6 +520,9 @@ func (s *Syncer) lateStamps(runID string, own ...lateStamp) []lateStamp {
 func (s *Syncer) forgetLate(runID string) {
 	s.lateMu.Lock()
 	defer s.lateMu.Unlock()
+	if len(s.late[runID]) == 0 {
+		return
+	}
 	owed := s.owed(runID)
 	s.keepLate(runID, func(l lateStamp) bool { return owed[l.epoch] })
 }
@@ -864,22 +867,21 @@ func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool, late ...lateSt
 			late = nil
 		}
 	}
-	// Its stamps no timing of its wrote, each failed: kept for the Run's
-	// next timing while its follower lives, which forgets them as it ends
-	// once no longer owed (forgetLate). With no follower left nothing
-	// would, so this forgets them as that end would have: those of a
-	// resume another follow-up is still owed stay for it.
-	if late != nil {
-		s.forgetLateUnfollowed(r.ID)
-	}
+	// Once the Run's follower is over, the stamps it kept stay only while
+	// their resume is owed (forgetLate); this follow-up's owes are paid
+	// now, so with no follower left it forgets those no longer owed, as
+	// the follower's end would have: its own, if each of its timings
+	// failed, and another's whose follow-up failed while this one still
+	// owed the resume. The last owed follow-up out leaves none.
+	s.forgetLateUnfollowed(r.ID)
 	if s.followedUp != nil {
 		s.followedUp()
 	}
 }
 
 // forgetLateUnfollowed is forgetLate, if no follower of the Run's output
-// is in its slot; under s.mu, as a follower's end calls it, so none
-// starts in between.
+// is in its slot; under s.mu, as a follower's end calls forgetLate, so
+// none starts in between. A Run with no late stamp costs it s.mu alone.
 func (s *Syncer) forgetLateUnfollowed(runID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

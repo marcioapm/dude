@@ -556,6 +556,33 @@ func TestAFailedFollowUpOfAnUnfollowedRunLeavesNoLateStamp(t *testing.T) {
 			}
 		})
 	}
+	// Two follow-ups owe resume 2, and the one that carries the stamp
+	// fails first: the other, still owed, keeps it, and is the one that
+	// forgets it once it has failed too.
+	t.Run("another still owed", func(t *testing.T) {
+		w := newResumeWorld(t)
+		w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at, first_output_at)
+			VALUES ($1, $2, 2, 'person', now() - interval '1 second', now())`, w.run.ID, w.run.Org)
+		w.exec(`CREATE FUNCTION fail_timing() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+			IF NEW.timed_at IS NOT NULL THEN RAISE EXCEPTION 'every timing fails'; END IF;
+			RETURN NEW; END $$`)
+		w.exec(`CREATE TRIGGER fail_timing BEFORE UPDATE ON run_resumes FOR EACH ROW EXECUTE FUNCTION fail_timing()`)
+		w.captureTimingLogs()
+		carrier := &translator{run: w.run}
+		carrier.deferStamp(w.s, "busy_at", 2, time.Now())
+		resA, lateA := carrier.committed()
+		other := &translator{run: w.run}
+		other.afterBatch(w.s, 2, true)
+		resB, lateB := other.committed()
+		w.s.resumeFollowUp(w.run, resA, lateA...)
+		if left := w.s.lateStamps(w.run.ID); len(left) != 1 {
+			t.Fatalf("late stamps %v once the carrier failed, want the busy_at kept while 2 is still owed", left)
+		}
+		w.s.resumeFollowUp(w.run, resB, lateB...)
+		if left := w.s.lateStamps(w.run.ID); left != nil {
+			t.Errorf("late stamps %v once every follow-up failed, want none", left)
+		}
+	})
 }
 
 // Late stamps a timing had no time left to write are kept for the Run's
