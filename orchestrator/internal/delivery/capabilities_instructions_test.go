@@ -289,7 +289,7 @@ var notTheTool = map[string][]string{
 	"message": {"first message lists them", "default merge message", "a Chat message", "your next message", "--message M",
 		"Each message reaches you", "comes to you as a message"},
 	"note": {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)",
-		"`low` or `note`", "`note` is an observation", "`note` is for an observation", "| low | note", "a design note", "and a note)"},
+		"`note` is for an observation", "| low | note", "a design note", "and a note)"},
 	"propose":  {"before you propose anything"},
 	"publish":  {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code", "goes to the pull request when you publish"},
 	"verify":   {"could not verify", "`--no-verify`", "a reason a person could verify"},
