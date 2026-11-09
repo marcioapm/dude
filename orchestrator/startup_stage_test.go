@@ -137,9 +137,14 @@ func TestABrainstormRecordsItsStagesFreshAndResumedAndTheSessionSaysWhereItIs(t 
 func TestAConductorRecordsItsStagesAsItWakes(t *testing.T) {
 	tk := newTalking(t, "conductor", nil)
 	var run string
-	tk.until("the conductor answering", func() bool {
+	// Its answer is one of the agent's records, which lux sends ahead of
+	// its own lifecycle events: the stage running can still be on its way.
+	// lux's state running follows that stage in the same stream, so once
+	// dude has the Run running on lux, every stage of its start is in.
+	tk.until("the conductor answering, running on lux", func() bool {
 		run = tk.latest()
-		return run != "" && len(tk.said(run)) == 1
+		return run != "" && len(tk.said(run)) == 1 &&
+			tk.count(`SELECT count(*) FROM runs WHERE id = $1 AND lux_state = 'running'`, run) == 1
 	})
 	tk.startedThrough(run, 1, freshStages...)
 }
