@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -54,18 +55,34 @@ var textTypes = []string{"application/json", "application/xml", "application/yam
 func TextTypes() []string { return slices.Clone(textTypes) }
 
 // TextTypeSQL is TextType in SQL, over the text column col; it must agree
-// with TextType on every string (TestTextTypeSQLIsTextType). btrim strips
-// only spaces unless told otherwise, so it is given every character
-// strings.TrimSpace strips (spaceSQL). lower() follows the database's
-// collation, which may not lower a non-ASCII letter to the ASCII one
-// strings.ToLower does (İ to i, the Kelvin sign to k), so those two are
-// translated first; any other non-ASCII character keeps a type out of
-// every ASCII name and suffix matched here whatever its case.
+// with TextType on every string, whatever col's collation or the
+// database's (TestTextTypeSQLIsTextType). col is taken COLLATE "C", under
+// which lower() lowers only A-Z: any other collation's lower() may lower
+// an ASCII letter to a non-ASCII one (a Turkish one lowers I to a dotless
+// ı, so APPLICATION/JSON would not be text), or not. strings.ToLower
+// lowers exactly two non-ASCII letters to ASCII ones, İ to i and the
+// Kelvin sign to k, so those are translated first; any other non-ASCII
+// character keeps a type out of every ASCII name and suffix matched here
+// whatever its case, in Go as in SQL. btrim strips only spaces unless told
+// otherwise, so it is given every character strings.TrimSpace strips
+// (spaceSQL). The normalised type is matched once, by one anchored regular
+// expression (ARE: '.' takes a newline too, '$' only the end), not once
+// per name.
 func TextTypeSQL(col string) string {
-	mt := "btrim(split_part(lower(translate(" + col + ", E'\\u0130\\u212A', 'ik')), ';', 1), " + spaceSQL + ")"
-	return "(" + mt + " LIKE 'text/%' OR " + mt + " IN ('" + strings.Join(textTypes, "', '") + "') OR " +
-		mt + " LIKE '%+json' OR " + mt + " LIKE '%+xml')"
+	return "(btrim(split_part(lower(translate((" + col + ") COLLATE \"C\", E'\\u0130\\u212A', 'ik')), ';', 1), " + spaceSQL + ") ~ " + textTypeRE + ")"
 }
+
+// textTypeRE is an SQL escape string literal (so standard_conforming_strings
+// does not matter) of the regular expression a normalised type TextType
+// takes for text matches whole.
+var textTypeRE = func() string {
+	alts := []string{"text/.*"}
+	for _, t := range textTypes {
+		alts = append(alts, regexp.QuoteMeta(t))
+	}
+	alts = append(alts, ".*\\+json", ".*\\+xml")
+	return "E'^(?:" + strings.ReplaceAll(strings.Join(alts, "|"), `\`, `\\`) + ")$'"
+}()
 
 // spaceSQL is an SQL string literal of every character unicode.IsSpace
 // (so strings.TrimSpace) takes for white space.
