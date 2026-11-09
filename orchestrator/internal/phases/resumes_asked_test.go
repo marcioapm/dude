@@ -68,12 +68,13 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 	}{{"first", false}, {"again", true}} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newResumeWorld(t)
-			// A lock budget no loaded machine's batch outlasts: resumeAsked
-			// timing out while the batch applies would be the machine's
-			// speed, not a cycle. A cycle still fails: Postgres's deadlock
-			// detector ends it within its deadlock_timeout.
-			// A missed interleaving lets resumeAsked time out, twice: 20s.
-			w.s.resumeBudget = resumeBudget{lock: 10 * time.Second, whole: 25 * time.Second}
+			// Budgets wide enough that resumeAsked timing out while the
+			// batch applies would be a cycle, not the machine's speed: the
+			// lock wait counts toward statement_timeout too, so both are
+			// set. A cycle still fails: Postgres's deadlock detector ends
+			// it within its deadlock_timeout. A missed interleaving lets
+			// resumeAsked time out twice, 10s each, within the whole 25s.
+			w.s.resumeBudget = resumeBudget{lock: 10 * time.Second, statement: 10 * time.Second, whole: 25 * time.Second}
 			logs := w.captureTimingLogs()
 			ctx, cancel := context.WithTimeout(w.ctx, 2*time.Minute)
 			var workers sync.WaitGroup
@@ -91,7 +92,8 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 			}
 
 			// Retry scheduling misses only before frame application. Let the
-			// batch apply with at least four fifths of resumeAsked's lock budget left.
+			// batch apply with at least four fifths of resumeAsked's wait
+			// budget (the lesser of its lock and statement timeouts) left.
 			const attempts = 5
 			for attempt := 1; ; attempt++ {
 				reached, err := w.stampWhileTheResumeWaits(ctx, &workers, logs, base)
@@ -424,11 +426,14 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 		return fail(fmt.Errorf("resumeAsked (pid %d) waits on the batch's lock on the Run holding the resume row the batch stamps",
 			asker))
 	}
-	// Seen late, too little of resumeAsked's lock_timeout is left for the
+	// Seen late, too little of resumeAsked's wait budget is left for the
 	// batch's frames: not let go, the batch waits for resumeAsked to time
-	// out and the attempt is tried again.
+	// out and the attempt is tried again. The lock wait counts toward
+	// statement_timeout as well as lock_timeout: the lesser bounds it.
+	budget := w.s.resumeBudgets()
+	wait := min(budget.lock, budget.statement)
 	waited := time.Duration(*waitedMs * float64(time.Millisecond))
-	if waited > w.s.resumeBudgets().lock/5 {
+	if waited > wait/5 {
 		return lost(fmt.Sprintf("resumeAsked was seen waiting only after %s", waited))
 	}
 
@@ -464,7 +469,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 	// sampled.
 	if got := logs.String(); got != "" {
 		return false, fmt.Errorf("resumeAsked failed a timing statement after the batch was let go, having waited %s; "+
-			"the batch committed %s later (lock_timeout %s)", waited, committed, w.s.resumeBudgets().lock)
+			"the batch committed %s later (lock_timeout %s, statement_timeout %s)", waited, committed, budget.lock, budget.statement)
 	}
 	return true, nil
 }

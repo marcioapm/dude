@@ -52,9 +52,10 @@ func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 		// Past the stream's lock budget, within resumeAsked's: the Run is
 		// let go only once resumeAsked was seen waiting on it for three
 		// times timingLockTimeout, on the database's clock. resumeAsked's
-		// lock budget is far past that, so it never needs a second try; a
-		// resumeAsked under the stream's budget would time out twice.
-		{"held run", resumeBudget{lock: 30 * time.Second, whole: time.Minute},
+		// lock and statement budgets (a lock wait counts toward both) are
+		// far past that, so it never needs a second try; a resumeAsked
+		// under the stream's budget would time out twice.
+		{"held run", resumeBudget{lock: 30 * time.Second, statement: 30 * time.Second, whole: time.Minute},
 			func(w *resumeWorld, _ *logSink) func(<-chan struct{}, *logSink) error {
 				holder, release := w.holdingWithPid(`SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, w.run.ID)
 				return func(returned <-chan struct{}, logs *logSink) error {
