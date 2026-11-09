@@ -15,7 +15,7 @@ import (
 
 // ForgetSecretCopies runs in every organization on every tick over every
 // copy retained there (up to 30 days of them), and artifacts are never
-// deleted. Seeded as an organization of 1,000 Runs, every one with a copy,
+// deleted. Seeded as an organization of 2,000 Runs, 1,000 with a copy,
 // and 120,000 artifacts (enough that, without copyNeeded's fences, a
 // custom plan pulls its artifacts probe up into a hashed SubPlan over every
 // artifact of the organization) beside nine small ones, its delete, on a
@@ -24,9 +24,11 @@ import (
 // organization's copies on run_project_secrets_org_idx (257), never by
 // scanning every organization's; reads artifacts only on
 // artifacts_run_idx, never through a hashed SubPlan; and probes them at
-// most once per Run with a copy. A collection's delete of one Run's copy
+// most once per Run with a copy (not per value, nor per Run of the
+// organization). A collection's delete of one Run's copy
 // (collectCopy) reads them the same way, at most once per value of that
-// Run. EXPLAIN ANALYZE, rolled back.
+// Run; and so does copyNeeded over every Run of the organization, whatever
+// statement embeds it. EXPLAIN ANALYZE, rolled back.
 func TestForgetSecretCopiesProbesEachRunOnce(t *testing.T) {
 	_, owner := dbtest.Open(t)
 	ctx := context.Background()
@@ -59,7 +61,7 @@ func TestForgetSecretCopiesProbesEachRunOnce(t *testing.T) {
 		seed(fmt.Sprintf("%s_%d", base, i), 3000, 4000)
 	}
 	org = base + "_big"
-	seed(org, 1000, 120000)
+	seed(org, 2000, 120000)
 	exec(`ANALYZE`)
 	for _, st := range []struct {
 		name, sql, args string
@@ -68,6 +70,10 @@ func TestForgetSecretCopiesProbesEachRunOnce(t *testing.T) {
 		{"forgetCopies", forgetCopies, "(3600, '" + org + "')", withCopy},
 		// One Run, two values: probed at most once per value, joined.
 		{"collectCopy", collectCopy, "('" + org + "_r1')", 2},
+		// copyNeeded itself, over every ended Run of the organization, as
+		// any statement may embed it: at most one probe per Run.
+		{"copyNeeded", `SELECT count(*) FROM runs r WHERE r.organization_id = $1
+			AND r.status IN ('completed', 'failed', 'aborted') AND NOT ` + copyNeeded, "('" + org + "')", 2000},
 	} {
 		for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
 			plan := explainCopyDelete(t, owner, org, mode, st.name, st.sql, st.args)
