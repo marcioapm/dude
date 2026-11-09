@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
@@ -456,6 +457,15 @@ func TestAHoldForNewsIsRecordedOncePerWaitAndClearedByAPark(t *testing.T) {
 	if n := w2.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`); n != 0 {
 		t.Errorf("a hold recorded inside the grace")
 	}
+	// Nor past the grace with no ask open: nothing to park for.
+	w3, _ := waitingWorld(t)
+	w3.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() WHERE run_id = $1`, w3.run.ID)
+	if err := w3.s.holdForNews(w3.ctx, w3.run); err != nil {
+		t.Fatal(err)
+	}
+	if n := w3.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`); n != 0 {
+		t.Errorf("a hold recorded with no ask open")
+	}
 	// The park clears it.
 	w.exec(`UPDATE directives SET sent_at = now() - interval '1 hour', delivered_at = now() - interval '1 hour' WHERE run_id = $1`, w.run.ID)
 	w.exec(`UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, w.run.ID)
@@ -467,6 +477,56 @@ func TestAHoldForNewsIsRecordedOncePerWaitAndClearedByAPark(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND news_hold_at IS NULL`); n != 1 {
 		t.Errorf("paused with its wait's hold kept")
 	}
+}
+
+// Every other way a wait ends clears the hold too, each starting from one
+// recorded: lux stopping the Run itself (parkStopped), a resume
+// (whilePaused), and a take-up of a Run lux placed again (takeUpLive).
+func TestAHoldForNewsIsClearedByAStopAResumeAndATakeUp(t *testing.T) {
+	held := func(w *resumeWorld) {
+		w.t.Helper()
+		w.exec(`UPDATE runs SET news_hold_at = now() - interval '1 minute' WHERE id = $1`, w.run.ID)
+	}
+	cleared := func(w *resumeWorld, what string) {
+		w.t.Helper()
+		if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NULL`); n != 1 {
+			w.t.Errorf("%s kept the wait's hold for news", what)
+		}
+	}
+	t.Run("parkStopped", func(t *testing.T) {
+		w, r := waitingWorld(t)
+		w.exec(`UPDATE runs SET lux_state = 'stopped', agent_session_epoch = 1 WHERE id = $1`, w.run.ID)
+		held(w)
+		r.LuxState = "stopped"
+		if parked, err := w.s.parkStopped(w.ctx, r); err != nil || !parked {
+			t.Fatalf("parked %v, err %v; want parked", parked, err)
+		}
+		cleared(w, "parkStopped")
+	})
+	t.Run("whilePaused's resume", func(t *testing.T) {
+		w := newResumeWorld(t)
+		w.resumable()
+		w.lux.set(stoppedOnHost1(time.Now().Add(-time.Minute).UTC()), nil)
+		w.s.Lux = &releasingLux{placementLux: w.lux, release: func() {}}
+		held(w)
+		w.whilePaused()
+		if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`); n != 1 {
+			t.Fatalf("not resumed")
+		}
+		cleared(w, "the resume")
+	})
+	t.Run("takeUpLive", func(t *testing.T) {
+		w := newResumeWorld(t)
+		w.exec(`UPDATE questions SET status = 'open', answer = NULL, answered_at = NULL WHERE run_id = $1`, w.run.ID)
+		w.exec(`UPDATE runs SET control = 'resume', lux_state = 'running' WHERE id = $1`, w.run.ID)
+		held(w)
+		r := w.run
+		r.Control, r.Waiting = "resume", true
+		if taken, _, err := w.s.takeUpLive(w.ctx, r, "running"); err != nil || !taken {
+			t.Fatalf("taken %v, err %v; want taken", taken, err)
+		}
+		cleared(w, "takeUpLive")
+	})
 }
 
 // inputLux records what deliverDirectives sends.
@@ -508,5 +568,39 @@ func TestDeliverDirectivesHoldsWhatCameAfterTheHoldForNews(t *testing.T) {
 	}
 	if want := []string{"dir_before_" + w.run.Org, "dir_after_" + w.run.Org}; !slices.Equal(fake.sent, want) {
 		t.Errorf("sent %v, want %v: the answer brings what was held for it", fake.sent, want)
+	}
+}
+
+// What deliverDirectives does not hold for the answer, though queued after
+// the hold with the question open: an interrupt and a due turn retry
+// (they serve the turn under way). And with a hold from before the wait
+// began (the question asked since), nothing is held: that hold is spent.
+func TestDeliverDirectivesSendsInterruptsRetriesAndWhatAStaleHoldDoesNotHold(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// hold: news_hold_at, ago; also: more of the note queued a minute
+		// ago (SQL, after a comma).
+		hold, also string
+	}{
+		{"an interrupt queued after the hold", "2 minutes", ", interrupt = true"},
+		{"a retry queued after the hold, due", "2 minutes", ", deliver_after = now() - interval '1 second'"},
+		{"a note after a hold from before the question", "4 minutes", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, r := waitingWorld(t)
+			fake := &inputLux{placementLux: w.lux}
+			w.s.Lux = fake
+			w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
+			w.exec(`UPDATE runs SET news_hold_at = now() - $2::interval, lux_run_id = 'lrun_1' WHERE id = $1`, w.run.ID, c.hold)
+			w.note(false)
+			w.exec(`UPDATE directives SET created_at = now() - interval '1 minute'`+c.also+` WHERE id = 'dir_'||$1`, w.run.Org)
+			r.HasDirectives = true
+			if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"dir_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+				t.Errorf("sent %v, want %v", fake.sent, want)
+			}
+		})
 	}
 }
