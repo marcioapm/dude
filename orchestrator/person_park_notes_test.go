@@ -38,6 +38,20 @@ func (w *world) questionOpen(q, when string) {
 	}
 }
 
+// onFailureShowsDirectives logs run's directives and wait if the test fails.
+func (w *world) onFailureShowsDirectives(run string) {
+	w.t.Cleanup(func() {
+		if !w.t.Failed() {
+			return
+		}
+		w.t.Logf("the Run: %s\nits directives:\n%s", w.str(`SELECT format('control=%s status=%s waiting_since=%s turn_done=%s busy=%s now=%s',
+			control, status, waiting_since, turn_done_at, agent_busy_at, now()) FROM runs WHERE id = $1`, run),
+			w.str(`SELECT COALESCE(string_agg(format('%s created=%s sent=%s accepted=%s delivered=%s failed=%s held_for=%s interrupt_only=%s %s',
+				id, created_at, sent_at, accepted_at, delivered_at, failed_at, held_for, interrupt_only, left(text, 60)), E'\n' ORDER BY created_at), '')
+				FROM directives WHERE run_id = $1`, run))
+	})
+}
+
 // The issue's case: a conductor waiting on the person, past its grace, and
 // a wake note due in the same sweep. The reason is recorded only once the
 // conductor waits with everything heard, so the note and the park are due
@@ -45,6 +59,7 @@ func (w *world) questionOpen(q, when string) {
 func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 	w := conducting(t)
 	task, old, q := w.waitingAtGate(`{"action":"ask_person"}`)
+	w.onFailureShowsDirectives(old)
 	said := len(w.said(old))
 	// Past any grace, and the reason past the wake window: both due now.
 	const grace = time.Second
@@ -62,10 +77,13 @@ func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 	if note == "" || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL`, note) != 1 {
 		t.Fatalf("parked for the person with dude's note unheard (directive %q):\n%s", note, w.describeRuns())
 	}
+	// The turn that read it ended at or after the read: the fake agent
+	// reads it and ends the turn in one batch, at the same now().
 	w.until("the note's turn over, waiting on the person again", func() bool {
 		w.questionOpen(q, "during the note's turn")
 		return len(w.said(old)) > said && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since IS NOT NULL
-			AND waiting_since > (SELECT delivered_at FROM directives WHERE id = $2)`, old, note) == 1
+			AND waiting_since >= (SELECT delivered_at FROM directives WHERE id = $2)`, old, note) == 1 ||
+			w.parks(old) > 0
 	})
 	w.untilParked(old)
 	w.questionOpen(q, "once parked")
@@ -123,6 +141,7 @@ func (w *world) heldNote(task, run, q, text string) string {
 func TestAHeldBackDirectiveDoesNotHoldOffThePersonPark(t *testing.T) {
 	w := conducting(t)
 	task, old, q := w.waitingAtGate(`{"action":"ask_person"}`)
+	w.onFailureShowsDirectives(old)
 	held := w.heldNote(task, old, q, "after your answer: carry on")
 	w.syncer.ParkAfter = time.Millisecond
 	w.untilParked(old)
