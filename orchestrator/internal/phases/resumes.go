@@ -598,12 +598,11 @@ func lockUntimed(ctx context.Context, tx pgx.Tx, runID string) error {
 // nothing lands on a timed resume. running_at too, unlike stamp (untimed):
 // so the statement touches only rows lockUntimed holds, and never waits
 // on a batch holding a timed one, which would fail every stamp of the
-// write. A running_at kept for a timed resume feeds only roundSyncLanded,
-// and the next running frame of that placement stamps it, as stamp still
-// does on a timed resume; until then, it is said to land nowhere. One
-// statement, under resumeAsked's budget, not the stream's: off the Run's
-// batch, it can wait out the lock or the slow moment the batch could not,
-// and holds the rows it locks no longer than that budget all told. A
+// write. A running_at kept for a timed resume is written after it, in a
+// step of its own (writeLateRunning). One statement, under resumeAsked's
+// budget, not the stream's: off the Run's batch, it can wait out the lock
+// or the slow moment the batch could not, and holds the rows it locks no
+// longer than that budget all told, twice with writeLateRunning's. A
 // stamp that lands nowhere, its column still empty, is logged.
 //
 // They are tried once: forgotten once tx commits (the returned func),
@@ -655,17 +654,71 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own
 	case !ran:
 		return func() {}
 	default:
+		var missed []lateStamp
 		for _, l := range late {
 			i := slices.IndexFunc(rows, func(w landed) bool { return w.Epoch == l.epoch })
-			if i >= 0 && map[string]*time.Time{"running_at": rows[i].Running, "busy_at": rows[i].Busy,
-				"first_output_at": rows[i].FirstOutput}[l.col] != nil {
-				continue
+			if i < 0 || map[string]*time.Time{"running_at": rows[i].Running, "busy_at": rows[i].Busy,
+				"first_output_at": rows[i].FirstOutput}[l.col] == nil {
+				missed = append(missed, l)
 			}
+		}
+		for _, l := range s.writeLateRunning(ctx, tx, r, missed) {
 			s.logger().Warn("a resume's late timing stamp landed nowhere: its resume is timed, missed or gone", "run", r.ID,
 				"step", "late", "column", l.col, "epoch", l.epoch)
 		}
 	}
 	return func() { s.lateDone(r.ID, late) }
+}
+
+// writeLateRunning writes, in tx, each running_at of missed (the late
+// stamps writeLateStamps found nowhere to land) on its resume though it
+// is timed, as stamp does: roundSyncLanded bounds a continuation's sync
+// wait from it, and a placement's running_at comes from at most two
+// frames, so no later one may ever stamp it. A savepoint of its own,
+// after the main write, under the same budget: a timed row is not one
+// lockUntimed holds, and a batch holding it fails only this step, never
+// the untimed resumes' stamps. It returns the stamps still landed
+// nowhere: missed but for the running_at it wrote, or found already in.
+// A failure is logged, and its stamps left out of what it returns.
+func (s *Syncer) writeLateRunning(ctx context.Context, tx pgx.Tx, r phaseRun, missed []lateStamp) (nowhere []lateStamp) {
+	var epochs []int
+	var ats []time.Time
+	for _, l := range missed {
+		if l.col == "running_at" {
+			epochs, ats = append(epochs, l.epoch), append(ats, l.at)
+		} else {
+			nowhere = append(nowhere, l)
+		}
+	}
+	if len(epochs) == 0 {
+		return nowhere
+	}
+	var in []int
+	budget := s.resumeBudgets()
+	ran, err := s.savepointAt(ctx, tx, budget.lock, budget.statement, func(ctx context.Context, tx pgx.Tx, _ time.Time) error {
+		got, err := tx.Query(ctx, `WITH l AS (SELECT epoch, min(at) AS at FROM unnest($2::int[], $3::timestamptz[]) AS l(epoch, at)
+				GROUP BY epoch),
+			u AS (UPDATE run_resumes rr SET running_at = l.at
+				FROM l WHERE rr.run_id = $1 AND rr.epoch = l.epoch AND rr.running_at IS NULL AND NOT rr.frames_missed
+				RETURNING rr.epoch)
+			SELECT l.epoch FROM l LEFT JOIN run_resumes rr ON rr.run_id = $1 AND rr.epoch = l.epoch
+			WHERE l.epoch IN (SELECT epoch FROM u) OR rr.running_at IS NOT NULL`, r.ID, epochs, ats)
+		if err != nil {
+			return err
+		}
+		in, err = pgx.CollectRows(got, pgx.RowTo[int])
+		return err
+	})
+	if err != nil {
+		s.logger().Warn("recording a resume's timing failed", "run", r.ID, "step", "late running_at", "error", err)
+		return nowhere
+	}
+	for _, l := range missed {
+		if l.col == "running_at" && (!ran || !slices.Contains(in, l.epoch)) {
+			nowhere = append(nowhere, l)
+		}
+	}
+	return nowhere
 }
 
 // resumeRunning records lux reporting the Run running again, and has its

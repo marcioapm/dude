@@ -700,51 +700,62 @@ func TestTheEarliestLateStampIsWritten(t *testing.T) {
 	}
 }
 
-// A late running_at for a resume already timed is not written by the late
-// write, which touches only the untimed resumes it holds (lockUntimed):
-// one a batch holds, timed, never makes the write wait and fail with
-// every stamp in it. The next running frame stamps it, as on any timed
-// resume. Here a batch holds the timed resume 2 throughout; the late
-// write still lands resume 3's busy, at once, and says that 2's
-// running_at landed nowhere.
+// A late running_at for a resume already timed is written in a step of
+// its own, after the late write proper, which touches only the untimed
+// resumes it holds (lockUntimed): roundSyncLanded reads it, and no later
+// running frame may come to stamp it. Resume 3's busy lands whether or
+// not a batch holds the timed resume 2; 2's running_at lands when its row
+// is free, and when it is held only that step fails, said once.
 func TestALateRunningOfATimedResumeLeavesTheLateWriteAlone(t *testing.T) {
-	w := newResumeWorld(t)
-	// Short, so a write that did wait on the held resume fails here.
-	w.s.resumeBudget = resumeBudget{lock: 100 * time.Millisecond}
-	base := time.Now().Add(-time.Minute).UTC()
-	w.resume(stoppedOnHost1(base))
-	w.lux.set(runningAgain(base, "host-b"), nil)
-	w.follow(spoke(2))
-	w.untilTimed()
-	if row := w.row(2); row["timed_at"] == nil || row["running_at"] != nil {
-		t.Fatalf("timed_at %v, running_at %v: want it timed without running_at", row["timed_at"], row["running_at"])
-	}
-	w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at) VALUES ($1, $2, 3, 'person', now())`,
-		w.run.ID, w.run.Org)
-	logs := w.captureTimingLogs()
-	release := w.lockResume(2)
-	now := time.Now()
-	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: {{"running_at", 2, now}, {"busy_at", 3, now}}}
-	w.s.lateMu.Unlock()
-	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.row(3)["busy_at"]; got == nil {
-		t.Errorf("busy_at of resume 3 not written beside a held, timed resume 2\nlogs:\n%s", logs)
-	}
-	if got := w.row(2)["running_at"]; got != nil {
-		t.Errorf("running_at %v written by the late write on timed resume 2", got)
-	}
-	lines := logLines(logs.String(), "recording a resume's timing", "landed nowhere")
-	if len(lines) != 1 || !strings.Contains(lines[0], "landed nowhere") || !strings.Contains(lines[0], "column=running_at") ||
-		!strings.Contains(lines[0], "epoch=2") {
-		t.Errorf("want one Warn that 2's running_at landed nowhere, and nothing else; got:\n%s", logs)
-	}
-	release()
-	w.follow(running(2))
-	if got := w.row(2)["running_at"]; got == nil {
-		t.Errorf("running_at not stamped by the next running frame")
+	for _, held := range []bool{false, true} {
+		t.Run(fmt.Sprintf("held %v", held), func(t *testing.T) {
+			w := newResumeWorld(t)
+			// Short, so a write that did wait on the held resume fails here.
+			w.s.resumeBudget = resumeBudget{lock: 100 * time.Millisecond}
+			base := time.Now().Add(-time.Minute).UTC()
+			w.resume(stoppedOnHost1(base))
+			w.lux.set(runningAgain(base, "host-b"), nil)
+			w.follow(spoke(2))
+			w.untilTimed()
+			if row := w.row(2); row["timed_at"] == nil || row["running_at"] != nil {
+				t.Fatalf("timed_at %v, running_at %v: want it timed without running_at", row["timed_at"], row["running_at"])
+			}
+			w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at) VALUES ($1, $2, 3, 'person', now())`,
+				w.run.ID, w.run.Org)
+			logs := w.captureTimingLogs()
+			release := func() {}
+			if held {
+				release = w.lockResume(2)
+			}
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			w.s.lateMu.Lock()
+			w.s.late = map[string][]lateStamp{w.run.ID: {{"running_at", 2, now}, {"busy_at", 3, now}}}
+			w.s.lateMu.Unlock()
+			if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
+				t.Fatal(err)
+			}
+			release()
+			if got := w.row(3)["busy_at"]; got == nil {
+				t.Errorf("busy_at of resume 3 not written beside timed resume 2\nlogs:\n%s", logs)
+			}
+			running, _ := w.row(2)["running_at"].(time.Time)
+			lines := logLines(logs.String(), "recording a resume's timing", "landed nowhere")
+			if held {
+				if !running.IsZero() {
+					t.Errorf("running_at %v written on timed resume 2 while a batch held it", running)
+				}
+				if len(lines) != 1 || !allWarn(lines) || !strings.Contains(lines[0], "step=\"late running_at\"") {
+					t.Errorf("want one Warn that the late running_at step failed, and nothing else; got:\n%s", logs)
+				}
+				return
+			}
+			if !running.Equal(now) {
+				t.Errorf("running_at of timed resume 2 %v, want the late stamp's %v\nlogs:\n%s", w.row(2)["running_at"], now, logs)
+			}
+			if len(lines) != 0 {
+				t.Errorf("want no timing line; got:\n%s", logs)
+			}
+		})
 	}
 }
 
