@@ -11,7 +11,7 @@ import (
 )
 
 // WakeRecovered is a recovery of the conductor's that ended: pushed,
-// failed, or refused for a secret.
+// failed, or refused (a secret in it, or its copy gone).
 const WakeRecovered = "recovered"
 
 // EvRunRecovered is the ledger event of a recovery's end, on the Run whose

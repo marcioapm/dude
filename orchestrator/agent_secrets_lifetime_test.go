@@ -421,7 +421,7 @@ func TestARecoveryOfARunWhoseCopyIsGoneIsRefused(t *testing.T) {
 // (g) As (f), but the copy goes after recover_run accepted the recovery
 // and before the worker scans it: the recovery is refused, saying why,
 // nothing is pushed, and the conductor is told.
-func TestARecoveryWhoseCopyGoesBeforeItsScanFailsUnpushed(t *testing.T) {
+func TestARecoveryWhoseCopyGoesBeforeItsScanIsRefusedUnpushed(t *testing.T) {
 	w := conducting(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
 	task, run, _ := w.deadWriter("config/app.toml", "password = "+implToken+"\n")
