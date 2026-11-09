@@ -818,8 +818,11 @@ func TestAnOlderFollowerEndingKeepsTheNewerOnesLateStamps(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the newer follower never opened the stream")
 	}
-	// The newer follower's batch keeps a stamp.
+	// The newer follower's batch keeps a stamp, and its follow-up has run
+	// (its timing failed): no longer owed, the stamp is kept only for as
+	// long as its follower lives.
 	(&translator{run: w.run}).deferStamp(w.s, "busy_at", 2, time.Now())
+	w.s.paid(w.run.ID, 2)
 	letGo()
 	select {
 	case <-older.done:
