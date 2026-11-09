@@ -168,23 +168,28 @@ var copyRetentionSQL = "make_interval(secs => " + strconv.FormatInt(int64(copyRe
 // checkpoints (which outlive its terminate) a recovery may push
 // (delivery.ConductRecoverTx). A completed writer's commits were scanned
 // with its copy when it pushed them. A live Run's copy is never deleted:
-// both deletes take only ended Runs. Built once, at init, from constants
+// both deletes take only ended Runs. The artifacts probe ends in OFFSET 0
+// so the planner keeps it a SubPlan run per Run on artifacts_run_idx: a
+// custom plan may otherwise pull it up into a hashed SubPlan that reads,
+// and evaluates TextTypeSQL on, every artifact of the organization, which
+// grows without bound as artifacts are never deleted. Built once, at init, from constants
 // and delivery.Publishes, and never changed: the statements that embed it
 // are prepared as they are.
 var copyNeeded = `COALESCE(r.keep AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 		AND COALESCE(r.kept_until > now(), r.ended_at > now() - ` + copyRetentionSQL + `)
 	OR r.ended_at > now() - ` + copyRetentionSQL + `
 		AND (r.phase IN (` + delivery.PublishesSQL() + `) AND r.status IN ('failed', 'aborted') AND r.lux_run_id IS NOT NULL
-			OR EXISTS (SELECT 1 FROM artifacts a WHERE a.run_id = r.id AND ` + redact.TextTypeSQL("a.content_type") + `)), false)`
+			OR EXISTS (SELECT 1 FROM artifacts a WHERE a.run_id = r.id AND ` + redact.TextTypeSQL("a.content_type") + ` OFFSET 0)), false)`
 
 // ForgetSecretCopies deletes, in each organization in turn, the copies of
 // Runs that ended over copyBackstop ago and no longer need one
 // (copyNeeded). Per organization because the sweeper role has no grant on
 // run_project_secrets. Returns how many copies it deleted.
 //
-// It weighs only the Runs with a copy in the organization, each once, so
-// copyNeeded's artifact probe is one artifacts_run_idx lookup per such
-// Run, never a pass over every artifact of the organization
+// It weighs only the Runs with a copy in the organization, each once
+// (forgetCopies), so copyNeeded's artifact probe runs at most once per
+// such Run, on artifacts_run_idx, never as one pass over every artifact
+// of the organization, on a custom plan as well as a generic one
 // (TestForgetSecretCopiesProbesEachRunOnce).
 func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 	var orgs []string
@@ -212,15 +217,17 @@ func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 }
 
 // forgetCopies is ForgetSecretCopies' delete in one organization ($2),
-// of Runs ended over $1 seconds ago. Each Run with a copy there is weighed
-// once (copyNeeded probing artifacts_run_idx for it), not once per value,
-// and its values are found on run_project_secrets_org_idx.
-var forgetCopies = `DELETE FROM run_project_secrets s
-	WHERE s.organization_id = $2 AND s.run_id IN (
-		SELECT r.id FROM runs r
-		WHERE r.id IN (SELECT c.run_id FROM run_project_secrets c WHERE c.organization_id = $2)
-		  AND r.status IN ('completed', 'failed', 'aborted')
-		  AND r.ended_at < now() - make_interval(secs => $1) AND NOT ` + copyNeeded + `)`
+// of Runs ended over $1 seconds ago. due takes the distinct Runs with a
+// copy there (run_project_secrets_org_idx) and weighs each once, in a
+// LATERAL subquery fenced by OFFSET 0 and materialised, so the planner
+// can neither flatten copyNeeded into a join nor weigh a Run once per
+// value; the copies are then found on run_project_secrets_org_idx.
+var forgetCopies = `WITH due AS MATERIALIZED (
+		SELECT d.id FROM (SELECT DISTINCT c.run_id FROM run_project_secrets c WHERE c.organization_id = $2) c
+		CROSS JOIN LATERAL (SELECT r.id FROM runs r
+			WHERE r.id = c.run_id AND r.status IN ('completed', 'failed', 'aborted')
+			  AND r.ended_at < now() - make_interval(secs => $1) AND NOT ` + copyNeeded + ` OFFSET 0) d)
+	DELETE FROM run_project_secrets s USING due WHERE s.organization_id = $2 AND s.run_id = due.id`
 
 // secretNames are the names of list, in its order.
 func secretNames(list []lux.Secret) []string {
