@@ -15,18 +15,21 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
-// slowStampOnce makes the first UPDATE of run_resumes that changes col
-// sleep past the stream's statement budget, so the batch's stamp of col
-// times out (57014); later ones run at once. A sequence counts, as it is
-// not rolled back with the stamp's savepoint.
+// slowStampOnce makes the first stamp of col under the stream's budget
+// (timingStatementTimeout) fail as that budget's statement_timeout fails
+// it (57014), at once, so the batch's stamp of col times out whatever the
+// machine's speed; later ones, and any under another budget (the late
+// write's), run. A sequence counts, as it is not rolled back with the
+// stamp's savepoint.
 func (w *resumeWorld) slowStampOnce(col string) {
 	w.t.Helper()
-	sleep := timingStatementTimeout + 150*time.Millisecond
 	w.exec(`CREATE SEQUENCE slow_stamp_seen`)
 	w.exec(`GRANT USAGE ON SEQUENCE slow_stamp_seen TO PUBLIC`)
 	w.exec(fmt.Sprintf(`CREATE FUNCTION slow_stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
-		IF NEW.%[1]s IS DISTINCT FROM OLD.%[1]s AND nextval('slow_stamp_seen') = 1 THEN PERFORM pg_sleep(%.3[2]f); END IF;
-		RETURN NEW; END $$`, col, sleep.Seconds()))
+		IF NEW.%[1]s IS DISTINCT FROM OLD.%[1]s AND current_setting('statement_timeout') = '%[2]dms' THEN
+			IF nextval('slow_stamp_seen') = 1 THEN RAISE EXCEPTION 'slow' USING ERRCODE = 'query_canceled'; END IF;
+		END IF;
+		RETURN NEW; END $$`, col, timingStatementTimeout.Milliseconds()))
 	w.exec(`CREATE TRIGGER slow_stamp BEFORE UPDATE ON run_resumes FOR EACH ROW EXECUTE FUNCTION slow_stamp()`)
 }
 

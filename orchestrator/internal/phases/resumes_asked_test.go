@@ -68,8 +68,13 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 	}{{"first", false}, {"again", true}} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newResumeWorld(t)
+			// A lock budget no loaded machine's batch outlasts: resumeAsked
+			// timing out while the batch applies would be the machine's
+			// speed, not a cycle. A cycle still fails: Postgres's deadlock
+			// detector ends it within its deadlock_timeout.
+			w.s.resumeBudget = resumeBudget{lock: 30 * time.Second, whole: time.Minute}
 			logs := w.captureTimingLogs()
-			ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
+			ctx, cancel := context.WithTimeout(w.ctx, 2*time.Minute)
 			var workers sync.WaitGroup
 			// LIFO: the workers are joined before the fixture closes its database.
 			t.Cleanup(func() {
@@ -85,7 +90,7 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 			}
 
 			// Retry scheduling misses only before frame application. Let the
-			// batch apply with at least four fifths of resumeLockTimeout left.
+			// batch apply with at least four fifths of resumeAsked's lock budget left.
 			const attempts = 5
 			for attempt := 1; ; attempt++ {
 				reached, err := w.stampWhileTheResumeWaits(ctx, &workers, logs, base)
@@ -422,7 +427,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 	// batch's frames: not let go, the batch waits for resumeAsked to time
 	// out and the attempt is tried again.
 	waited := time.Duration(*waitedMs * float64(time.Millisecond))
-	if waited > resumeLockTimeout/5 {
+	if waited > w.s.resumeBudgets().lock/5 {
 		return lost(fmt.Sprintf("resumeAsked was seen waiting only after %s", waited))
 	}
 
@@ -458,7 +463,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 	// sampled.
 	if got := logs.String(); got != "" {
 		return false, fmt.Errorf("resumeAsked failed a timing statement after the batch was let go, having waited %s; "+
-			"the batch committed %s later (lock_timeout %s)", waited, committed, resumeLockTimeout)
+			"the batch committed %s later (lock_timeout %s)", waited, committed, w.s.resumeBudgets().lock)
 	}
 	return true, nil
 }
