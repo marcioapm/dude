@@ -87,6 +87,12 @@ func RecoveryEndedTx(ctx context.Context, tx pgx.Tx, end RecoveryEnd) error {
 // the recovered wake shows, in characters; longer is clipped.
 const RecoveredWhyChars = 200
 
+// recoveredLineChars bounds a recovered wake's line, as the table does
+// (migration 258): its reason clipped at RecoveredWhyChars, its pushed and
+// other repositories, and, for a Run whose copy is gone, the person's
+// warning.
+const recoveredLineChars = 600
+
 // recoveredLine tells the conductor how its recovery ended.
 func recoveredLine(end RecoveryEnd) string {
 	var pushed, other []string
@@ -102,7 +108,11 @@ func recoveredLine(end RecoveryEnd) string {
 		ID, Run, Branch, Status, Error string
 		Pushed, Other, Dirty           []string
 		WhyChars                       int
-	}{end.ID, end.RunID, end.Branch, end.Status, end.Error, pushed, other, end.Dirty, RecoveredWhyChars})
+		// Refused for its Run's copy gone (RecoverySecretsExpired): the
+		// person is warned, outside the clipped reason.
+		Expired bool
+	}{end.ID, end.RunID, end.Branch, end.Status, end.Error, pushed, other, end.Dirty, RecoveredWhyChars,
+		end.Status == RecoveryRefused && end.Error == RecoverySecretsExpired})
 }
 
 func shortSHA(sha string) string { return sha[:min(len(sha), 12)] }

@@ -1383,6 +1383,9 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 	case WakeChecks:
 		// A checks report's summary and one question per check.
 		limit = checksLineChars
+	case WakeRecovered:
+		// A refusal's reason and, for a copy gone, the person's warning.
+		limit = recoveredLineChars
 	}
 	text := clip(oneLine(line), limit)
 	if kind == "escalation" && strings.HasSuffix(key, ":decided") {

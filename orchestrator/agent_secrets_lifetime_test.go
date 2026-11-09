@@ -420,7 +420,7 @@ func TestARecoveryOfARunWhoseCopyIsGoneIsRefused(t *testing.T) {
 
 // (g) As (f), but the copy goes after recover_run accepted the recovery
 // and before the worker scans it: the recovery is refused, saying why,
-// nothing is pushed, and the conductor is told.
+// nothing is pushed, and the conductor is told, with the person's warning.
 func TestARecoveryWhoseCopyGoesBeforeItsScanIsRefusedUnpushed(t *testing.T) {
 	w := conducting(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
@@ -449,7 +449,8 @@ func TestARecoveryWhoseCopyGoesBeforeItsScanIsRefusedUnpushed(t *testing.T) {
 		t.Error("the old value reached GitHub")
 	}
 	w.until("the conductor told", func() bool { return w.recoveredWakes(task) == 1 })
-	if line := w.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'recovered'`, task); !strings.Contains(line, delivery.RecoverySecretsExpired) {
+	if line := w.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'recovered'`, task); !strings.Contains(line, delivery.RecoverySecretsExpired) ||
+		!strings.Contains(line, "must be checked for secrets by hand before it is pushed anywhere") {
 		t.Errorf("the wake says %q", line)
 	}
 }

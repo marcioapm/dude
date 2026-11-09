@@ -174,7 +174,7 @@ Your recovery rcv_3 of run_impl was refused, nothing pushed: its work contains t
 
 ## recovered-secrets-expired
 
-Your recovery rcv_4 of run_impl was refused, nothing pushed: dude no longer holds every secret value the Run was given (its copy is deleted at the latest 30 days after it ended), so its work cannot be checked for one rotated since; not recovered
+Your recovery rcv_4 of run_impl was refused, nothing pushed: dude no longer holds every secret value the Run was given (its copy is deleted at the latest 30 days after it ended), so its work cannot be checked for one rotated since; not recovered. Tell the person: its commits may hold a secret value dude can no longer check for; anything taken from lux's checkpoint must be checked for secrets by hand before it is pushed anywhere.
 
 ## stalled
 
