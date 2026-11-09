@@ -501,6 +501,18 @@ func TestAHoldForNewsIsRecordedOncePerWaitAndClearedByAPark(t *testing.T) {
 	if n := w4.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at > now() - interval '5 seconds'`); n != 1 {
 		t.Errorf("a hold from an earlier idle kept the later one from being recorded")
 	}
+	// But a hold of this wait from an earlier idle, unspent, stays where it
+	// is: moved later, notes queued after it would count as news from
+	// before the hold, more than one note's turn (newsHeld).
+	w5, _ := waitingWorld(t)
+	w5.exec(`UPDATE questions SET asked_at = now() - interval '15 minutes' WHERE run_id = $1`, w5.run.ID)
+	w5.exec(`UPDATE runs SET news_hold_at = now() - interval '12 minutes', waiting_since = now() - interval '11 minutes' WHERE id = $1`, w5.run.ID)
+	if err := w5.s.holdForNews(w5.ctx, w5.run); err != nil {
+		t.Fatal(err)
+	}
+	if n := w5.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at < now() - interval '11 minutes'`); n != 1 {
+		t.Errorf("a hold of this wait from an earlier idle was moved")
+	}
 	// The park clears it.
 	w.exec(`UPDATE directives SET sent_at = now() - interval '1 hour', delivered_at = now() - interval '1 hour' WHERE run_id = $1`, w.run.ID)
 	w.exec(`UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, w.run.ID)
