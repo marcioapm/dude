@@ -530,3 +530,58 @@ func TestARecoveryBeforeTheFollowUpLeavesAKeptBusyToIt(t *testing.T) {
 		t.Errorf("a late stamp landed nowhere:\n%s", logs)
 	}
 }
+
+// A committed batch's kept stamps are its follow-up's to write whatever
+// becomes of the Syncer's copy: the follower over (forgetLate) before the
+// follow-up runs, the follow-up still writes them, and the event carries
+// them.
+func TestACommittedBatchsStampOutlivesItsFollower(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2))
+	w.slowStampOnce("busy_at")
+	logs := w.captureTimingLogs()
+
+	resumes, late := w.commitBatch(busy(2), spoke(2))
+	if len(late) != 1 || late[0].col != "busy_at" {
+		t.Fatalf("the batch kept %v, want its busy_at: the test proves nothing\nlogs:\n%s", late, logs)
+	}
+	w.s.forgetLate(w.run.ID)
+	w.s.resumeFollowUp(w.run, resumes, late...)
+
+	if got := w.row(2)["busy_at"]; got == nil {
+		t.Fatalf("busy_at not written by the batch's follow-up\nlogs:\n%s", logs)
+	}
+	timed := w.timed()
+	if len(timed) != 1 {
+		t.Fatalf("%d run.resume.timed, want 1\nlogs:\n%s", len(timed), logs)
+	}
+	if _, ok := timed[0]["untilBusyMs"]; !ok {
+		t.Errorf("run.resume.timed has no untilBusyMs: %v", timed[0])
+	}
+}
+
+// Of two late stamps of one column and resume, the follow-up's own and the
+// Syncer's, the earlier is written: the earlier frame's.
+func TestTheEarliestLateStampIsWritten(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2), spoke(2))
+	// Untimed again, its busy still to come.
+	w.exec(`UPDATE run_resumes SET timed_at = NULL WHERE run_id = $1`, w.run.ID)
+	t1 := time.Now().Add(-10 * time.Second).UTC().Truncate(time.Microsecond)
+	t2 := t1.Add(5 * time.Second)
+	w.s.lateMu.Lock()
+	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, t2}}}
+	w.s.lateMu.Unlock()
+	if err := w.s.timeResumes(w.ctx, w.run, 2, lateStamp{"busy_at", 2, t1}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := w.row(2)["busy_at"].(time.Time); !got.Equal(t1) {
+		t.Errorf("busy_at %v, want the earlier stamp %v (not %v)", w.row(2)["busy_at"], t1, t2)
+	}
+}
