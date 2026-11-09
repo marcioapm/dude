@@ -154,7 +154,7 @@ func TestChildContractFollowsPublishes(t *testing.T) {
 }
 
 func TestInstructionsAspectsUseSharedSeverity(t *testing.T) {
-	const definition = "Severity is what happens if this ships, never your taste."
+	const definition = "Severity is your judgement of what happens if this merges as it is"
 	const reference = "Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`."
 	for _, aspect := range reviewerOrder {
 		for mode, text := range underEveryMode("reviewer", aspect, InstructionsInput{Tools: true}) {

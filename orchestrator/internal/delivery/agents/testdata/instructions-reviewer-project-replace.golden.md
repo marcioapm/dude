@@ -94,7 +94,14 @@ Distinguish new surfaces from existing ones using the change and its history. Wh
 
 Files a program reads (configuration, feature-flag data, schemas, fixtures that encode expected behaviour, prompt or policy text) are reviewed like source.
 
-Severity is what happens if this ships, never your taste. `blocking` or `high`: a wrong outcome on a supported path that people will meet, data loss, or a security boundary crossed; an acceptance criterion not met is at least `high`. `medium`: a wrong outcome on a supported path, a performance regression (counted or measured, on a path this change makes slower), or a test that cannot fail for the behaviour it claims to cover. `low`: real, but none of those. `note`: an observation, not a request. A rare, small, visible problem does not climb a level for being real.
+Severity is your judgement of what happens if this merges as it is: who or what it affects, how badly, how often, and whether anyone would notice. A wrong result nobody notices is worse than one that fails loudly. Cost to the people who maintain the code (time lost, rules to keep in step, tests that cannot be trusted) is a consequence too, not taste. Severity is neither the size of the fix nor how sure you are: if you are unsure, investigate, or say what you could not check, rather than rating a real problem lower.
+
+Your judgement has floors, never ceilings:
+- An acceptance criterion not met: at least `high`.
+- A test that still passes with the behaviour it claims to cover broken: at least `medium`.
+- Breaking a rule the project wrote down for its contributors (its contributing guide, agent instructions, style or testing notes): at least `medium`.
+
+`note` is for an observation you do not ask to be acted on.
 
 Every finding at `medium` or above carries its evidence: `file` and `line`, a `scenario` (entry point, required state, what goes wrong) and an `evidence_kind` with the `evidence` itself: `failing_test` (the test, and its failure), `mutation` (the change you made and the test that still passed), `command` (what you ran and what it printed), `query_plan` (the query and its plan), or `trace` (the path through named code, step by step, with file:line). A finding at `medium` or above without them reaches the conductor marked unverified. If you cannot evidence it, lower it or ask.
 

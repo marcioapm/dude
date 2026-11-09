@@ -262,7 +262,8 @@ func TestInstructionsContractMatrix(t *testing.T) {
 			nil}, // This role has a purpose and stance, but no post-stance contract.
 		{"reviewer", "a weak or wrong finding costs a whole fix round.",
 			"No finding is better than a weak one: do not pad.",
-			[]string{"Every finding at `medium` or above carries its evidence", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:"}},
+			[]string{"Every finding at `medium` or above carries its evidence", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:",
+				"Your judgement has floors, never ceilings", "An acceptance criterion not met: at least `high`."}},
 		{"fixer", "Your fix is reviewed again, and on an open pull request it goes to the pull request when you publish, where its CI and reviewers see it, and is reviewed after: run the affected tests before you finish.",
 			"Fix what was raised, completely, and nothing else",
 			[]string{"For each problem, reproduce it first where it can be reproduced", "```yaml\nchecks:\n", "Only committed changes are kept."}},
