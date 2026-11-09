@@ -12,12 +12,14 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
-// A Run is not parked for a person while dude has a note for it the agent
-// has not heard (requestPause, due's ParkNow): the note goes first, its
-// turn runs, and the Run is parked once it waits again, after the grace.
-// A note held for an answer (HeldBack) does not hold the park off, and one
-// that arrives after the park waits for the answer, as before. The hold is
-// bounded: by a note's first send, and by a ceiling from the wait's start.
+// A Run due its park for a person (past its grace) is not parked while dude
+// has a note for it the agent has not heard (requestPause, due's ParkNow):
+// the note goes first, its turn runs, and the Run is parked once it waits
+// again, after the grace. Inside the grace nothing parks, as on main. A
+// note held for an answer (HeldBack) does not hold the park off, and one
+// that arrives after the park waits for the answer, as on main. The hold
+// is bounded: by a note's first send, and by a ceiling from the wait's
+// start, past which the park is as on main.
 
 // noteFor is the directive carrying the wake note that told reason key,
 // "" for none yet.
