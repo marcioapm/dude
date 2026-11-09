@@ -11,6 +11,47 @@ from suites.test_conductor_agents import _world, _children
 from suites.test_conductor_edits import _say, _tool
 
 
+def _heard_and_waiting(owner_dsn, task_id, run_id):
+    """The Run's wait on the person once it has heard all dude has for it:
+    no wake reason pending (bar news that only rides on a note), no note
+    queued or in flight that is not held for the answer, and its turn over
+    after the last note it read. None while any of that is still coming."""
+    rows = query(owner_dsn, """SELECT r.waiting_since FROM runs r WHERE r.id=%s AND r.status='running' AND r.waiting_since IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM conductor_wakes w WHERE w.task_id=%s AND w.delivered_at IS NULL AND w.key NOT LIKE 'base-moved:%%')
+        AND NOT EXISTS (SELECT 1 FROM directives d WHERE d.run_id=r.id AND d.failed_at IS NULL AND d.held_for IS NULL
+            AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since))""", (run_id, task_id))
+    return rows and rows[0]
+
+
+def _park_after_news(owner_dsn, task_id, run_id, notes=5):
+    """Age the Run's wait on a person past its grace and wait for the
+    syncer's person park. A park past the grace waits until the agent has
+    heard dude's pending note and its turn is over (unheardNews): so wait
+    for that, then age the new wait, and what the Run had read before it
+    (as if read before the wait began); a note that comes meanwhile starts
+    a turn that waits again, and the loop ages that one too."""
+    def parked():
+        return query(owner_dsn, "SELECT 1 FROM runs WHERE id=%s AND status='paused' AND dude_pause='person'", (run_id,))
+
+    for _ in range(notes):
+        wait_until(lambda: parked() or _heard_and_waiting(owner_dsn, task_id, run_id), timeout=90)
+        if parked():
+            return
+        # One statement, so no note is read between the two moves.
+        aged = query(owner_dsn, """WITH d AS (UPDATE directives SET sent_at=sent_at-interval '2 minutes', delivered_at=delivered_at-interval '2 minutes'
+                WHERE run_id=%s AND delivered_at IS NOT NULL)
+            UPDATE runs SET waiting_since=waiting_since-interval '2 minutes' WHERE id=%s AND waiting_since IS NOT NULL RETURNING waiting_since""",
+            (run_id, run_id))
+        if not aged:
+            continue
+        # Parked, or a note came and its turn moved the wait: age that one.
+        wait_until(lambda: parked() or query(owner_dsn, "SELECT 1 FROM runs WHERE id=%s AND waiting_since IS DISTINCT FROM %s",
+                                             (run_id, aged[0]["waiting_since"])), timeout=60)
+        if parked():
+            return
+    raise AssertionError(f"not parked for the person after {notes} notes")
+
+
 def test_cohort_result_waits_for_answer_then_updates_one_row(
     page, web_url, client, org, second_org, forge_project, owner_dsn
 ):
@@ -28,9 +69,11 @@ def test_cohort_result_waits_for_answer_then_updates_one_row(
     question = wait_until(lambda: client.get(f"/v1/questions?runId={parent}").json()["questions"], timeout=60)[0]
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings", {"delivery": {"parkAfterMinutes": 1}}).status_code == 200
     # Deterministic clock fixture only: the real syncer performs the park.
-    wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id=%s AND waiting_since IS NOT NULL", (parent,)), timeout=60)
-    execute(owner_dsn, "UPDATE runs SET waiting_since=now()-interval '2 minutes' WHERE id=%s", (parent,))
-    wait_until(lambda: query(owner_dsn, "SELECT 1 FROM runs WHERE id=%s AND status='paused' AND dude_pause='person'", (parent,)), timeout=60)
+    _park_after_news(owner_dsn, task["id"], parent)
+    # What dude had for the conductor (the decision after implement) was
+    # heard before the park, not left for the answer.
+    assert query(owner_dsn, """SELECT 1 FROM directives d WHERE d.run_id=%s AND d.text LIKE '%%Decision waiting: after implement%%'
+        AND d.delivered_at < (SELECT min(e.occurred_at) FROM events e WHERE e.run_id=d.run_id AND e.event_type='run.parked')""", (parent,))
     before_runs = query(owner_dsn, "SELECT id FROM runs WHERE task_id=%s", (task["id"],))
     for i, member in enumerate(members):
         assert client.post(f"/v1/runs/{member['id']}/abort", {}).status_code == 200
