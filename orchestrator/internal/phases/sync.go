@@ -203,7 +203,9 @@ type phaseRun struct {
 	DudePause string
 	// Something is open for a person: a question, a repository request.
 	Waiting bool
-	// Its agent has waited on a person past the project's grace period.
+	// Its agent has waited on a person past the project's grace period, and
+	// has heard everything dude has for it (unheardNews): news first, so a
+	// Run with some falls through to its delivery.
 	ParkNow bool
 	// Paused, and due to be resumed: a person asked, or dude's own reason
 	// for pausing it is over (resumable).
@@ -287,7 +289,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	ELSE false END,
 	` + repoApproved + `,
 	COALESCE(r.dude_pause, ''), ask.open,
-	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open,
+	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open AND NOT ` + unheardNews + `,
 	COALESCE(` + resumable + `, false),
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
@@ -454,7 +456,9 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // or a repository it cannot go on without), that has peer mail to read or
 // a machine move to make (its wait stays open, so its next idle waits
 // again). An idle park, like a person's own pause, waits for a person's
-// Resume.
+// Resume. A Run parked for a person it asked is not resumed for a note
+// queued after the park: the note waits for the answer. One queued before
+// is heard before the park (unheardNews).
 // Known limit: a Run resumed only for its move whose orchestrator dies
 // between settleMachine's commit and whilePaused's UPDATE stays
 // paused/person in dude until the peer replies or a person resumes it.
@@ -467,6 +471,20 @@ const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_paus
 // that lux does not have yet, and is not held for an answer (HeldBack).
 const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 	AND NOT ` + delivery.HeldBack + `)`
+
+// unheardNews (SQL, over runs r): dude has something for an agent waiting
+// on a person that it has not taken a turn for yet: queued and not held for
+// an answer (unsentDirective), or sent since its wait began and its turn
+// not started (the agent's "busy" clears waiting_since, its next wait sets
+// it again), for delivery.UnreadGraceSecs at most, which bounds a receipt
+// or a turn that never comes. A Run is not parked for a person while it
+// holds (ParkNow, requestPause): the agent hears the news first, its turn
+// runs, and it is parked once it waits again past the grace. What is held
+// for the answer (HeldBack) does not hold the park off, and what is queued
+// after the park waits for the answer (resumable), as it always did.
+const unheardNews = `(` + unsentDirective + `
+	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
+		AND d.sent_at >= r.waiting_since AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))`
 
 // limits are runFrom's parameters: the factory's grace before parking, idle
 // limit and conductor's warm period, in seconds, for projects that set none
@@ -975,6 +993,9 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			// Waiting on a person who has not answered in the grace period:
 			// stop the container, keeping the agent's conversation, and
 			// resume it when they do — the next minute or the next week.
+			// Not while dude has news it has not heard (unheardNews): that
+			// is delivered below, and the park comes once its turn waits
+			// again past the grace.
 			return true, s.requestPause(ctx, r, "person", "parked while it waits for a person")
 		case r.Quiet && r.Nudged:
 			// Quiet again as long after its nudge: for a person to look at.
@@ -3508,8 +3529,9 @@ const parkedForPeer = "parked while it waits on a peer's reply"
 // raises the work item for a person to look at (lowered when they resume it).
 //
 // The sweep decided from what it read; the pause checks it still holds — a
-// Run parked for a person still waits on one, an idle one has done nothing
-// since — so an answer or a word from the agent in between wins.
+// Run parked for a person still waits on one and has heard what dude had
+// for it (unheardNews), an idle one has done nothing since — so an answer,
+// a note queued meanwhile or a word from the agent in between wins.
 func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// parkedAt: when the park began, on the database's clock, as the
@@ -3520,7 +3542,7 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			 WHEN $3 = 'person' AND NOT `+delivery.PersonAsk+` THEN $5 ELSE $2 END,
 			dude_pause = $3
 			WHERE r.id = $1 AND r.control = 'none' AND r.status = 'running'
-			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+`))
+			  AND ($3 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+` AND NOT `+unheardNews+`))
 			  AND ($3 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
 			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $4))
 			  AND ($3 NOT IN ('conductor', 'session') OR (r.turn_done_at IS NOT NULL AND NOT `+unsentDirective+`))
