@@ -416,9 +416,10 @@ func TestAReviewOfARangeIsToldItsRangeWhateverItsInstructions(t *testing.T) {
 func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads", "Totals match"},
 		Repositories: twoRepos(), BlockingSeverities: []string{"blocking", "high"}, Tools: true, CLI: true}
+	note := severityNote("qa_browser", in.BlockingSeverities)
 	for kind, got := range underEveryMode("qa_browser", "", in.InstructionsInput()) {
 		for _, want := range []string{testerContract, testerTools,
-			render(mustTemplate("contracts/finding-format"), InstructionsInput{}.data("qa_browser")), severityNote("qa_browser", in.BlockingSeverities)} {
+			render(mustTemplate("contracts/finding-format"), InstructionsInput{}.data("qa_browser")), note} {
 			if strings.Count(got, want) != 1 {
 				t.Errorf("%s: the tester's instructions should say %q once:\n%s", kind, want, got)
 			}
@@ -446,7 +447,7 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 	// How the tester rates: every finding by the reviewers' judgement, with
 	// a failed criterion's floor.
 	for _, want := range []string{"Rate every finding, not only failed criteria", "An acceptance criterion not met is at least `high`"} {
-		if !strings.Contains(severityNote("qa_browser", in.BlockingSeverities), want) {
+		if !strings.Contains(note, want) {
 			t.Errorf("the tester's severity note lacks %q", want)
 		}
 	}
