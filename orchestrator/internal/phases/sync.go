@@ -577,24 +577,23 @@ const newsHeldSince = `CASE WHEN r.news_hold_at IS NULL THEN false
 // Read once per Run (hold.held).
 const newsHeld = `CASE WHEN r.news_hold_at IS NULL OR NOT ask.open THEN false ELSE ` + newsHeldSince + ` END`
 
-// newsCutoff (SQL, over runs r): when the park was held for news in this
-// wait (newsHeldSince), while a person's ask is open (as heldForNews); NULL
+// newsCutoff (SQL, over runFrom's hold) is when the park was held for news
+// in this wait, while a person's ask is open (as heldForNews); NULL
 // otherwise: only what was queued by then holds the park off
 // (newsPending). A Run waiting only on a peer or the checks gate is
 // resumed for a note queued after its park (resumable), so a note after
 // its hold is heard first, not parked over and resumed for.
-const newsCutoff = `CASE WHEN r.news_hold_at IS NULL THEN NULL
-		WHEN ` + newsHeldSince + ` AND ` + delivery.PersonAsk + ` THEN r.news_hold_at END`
+const newsCutoff = `hold.cutoff`
 
 // heldForNews (SQL, over directives d and runFrom's hold): queued after
 // the Run's park was held for news in this wait, while a person's ask is
-// open (hold.notes), so it waits for the answer, as it would have had the
+// open (hold.cutoff), so it waits for the answer, as it would have had the
 // park not been held (resumable resumes a parked Run for one only once no
 // person's ask is open). Not an interrupt (dude's nudge of a stuck, silent
 // or quiet turn, a person's "Interrupt now") nor a turn's retry
 // (deliver_after): they serve a turn under way, which no park stops, and
 // do not hold the park off (newsCutoff).
-const heldForNews = `(hold.notes AND d.created_at > r.news_hold_at AND NOT d.interrupt AND d.deliver_after IS NULL)`
+const heldForNews = `COALESCE(d.created_at > hold.cutoff AND NOT d.interrupt AND d.deliver_after IS NULL, false)`
 
 // queuedAfterHold (SQL, over directives d) is heldForNews for a query
 // without runFrom: deliverDirectives's.
@@ -605,11 +604,12 @@ var queuedAfterHold = `EXISTS (SELECT 1 FROM runs r WHERE r.id = d.run_id AND d.
 // heldInWait is newsHeld for a query without runFrom's ask.
 var heldInWait = `(` + strings.ReplaceAll(newsHeld, "ask.open", "("+delivery.OpenAsk+")") + `)`
 
-// holdFrom (SQL, over runs r and ask.open) is runFrom's hold: held, the
-// Run's park was held for news in this wait (newsHeld); notes, and a
-// person's ask is open, so what comes after the hold waits for the answer
-// (heldForNews).
-const holdFrom = `(SELECT h.held, CASE WHEN h.held THEN ` + delivery.PersonAsk + ` ELSE false END AS notes
+// holdFrom (SQL, over runs r and ask.open) is runFrom's hold, read once
+// per Run: held, the Run's park was held for news in this wait (newsHeld);
+// cutoff, when, if a person's ask is open too, so what comes after it
+// waits for the answer (heldForNews) and does not hold the park off
+// (newsCutoff). A Run never held reads news_hold_at alone.
+const holdFrom = `(SELECT h.held, CASE WHEN h.held AND ` + delivery.PersonAsk + ` THEN r.news_hold_at END AS cutoff
 		FROM (SELECT ` + newsHeld + ` AS held) h) hold`
 
 // parkState (SQL, over runFrom) is what the sweep does about a Run's wait
@@ -3709,6 +3709,10 @@ func (s *Syncer) holdForNews(ctx context.Context, r phaseRun) error {
 	})
 }
 
+// pauseUnheardNews is unheardNews in requestPause, whose subquery lim
+// carries holdFrom's cutoff.
+var pauseUnheardNews = strings.ReplaceAll(unheardNews, newsCutoff, "lim.cutoff")
+
 // requestPause asks for a graceful pause, saying why, marked as dude's own
 // (kind is a dude_pause) so the syncer knows when to resume it; a person's
 // later pause or resume wins. A pause other than for a repository is a
@@ -3725,14 +3729,15 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 		// answers and decisions that end it are stamped.
 		var parkedAt time.Time
 		// lim: the Run's park grace, as the sweep reads it (limitsFrom),
-		// for unheardNews's ceiling.
+		// for unheardNews's ceiling, and its hold for news (holdFrom's
+		// cutoff), for what holds the park off.
 		err := tx.QueryRow(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(),
 			control_reason = CASE WHEN $6 = 'person' AND EXISTS (SELECT 1 FROM questions q WHERE q.run_id=r.id AND q.status='open' AND q.addressee='conductor') THEN 'parked while it waits for its conductor'
 			 WHEN $6 = 'person' AND NOT `+delivery.PersonAsk+` THEN $8 ELSE $5 END,
 			dude_pause = $6
-			FROM (SELECT lim.park_secs FROM `+limitsFrom+` WHERE r.id = $4) lim
+			FROM (SELECT lim.park_secs, hold.cutoff FROM `+runFrom+` WHERE r.id = $4) lim
 			WHERE r.id = $4 AND r.control = 'none' AND r.status = 'running'
-			  AND ($6 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+` AND NOT `+unheardNews+`))
+			  AND ($6 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+` AND NOT `+pauseUnheardNews+`))
 			  AND ($6 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
 			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $7))
 			  AND ($6 NOT IN ('conductor', 'session') OR (r.turn_done_at IS NOT NULL AND NOT `+unsentDirective+`))
