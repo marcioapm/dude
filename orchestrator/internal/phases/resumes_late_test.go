@@ -670,47 +670,61 @@ func TestALateStampWithNoEpochIsForTheLatestResume(t *testing.T) {
 	}
 }
 
-// heldLux holds its first Output past its context until let go: a
-// follower told to stop that has not exited yet.
-type heldLux struct {
-	*streamLux
-	first   atomic.Bool
-	entered chan struct{}
-	hold    chan struct{}
+// followerGate holds the first follower's first statement, as it starts
+// on the pool, until let go, whatever its context: a follower told to stop
+// that has not ended yet. It holds every recovery timing (lockUntimed's
+// statement, before any late stamp is read) until the test ends, so none
+// writes, and forgets, the late stamps the test looks at.
+type followerGate struct {
+	first     atomic.Bool
+	entered   chan struct{}
+	letGo     chan struct{}
+	testEnded chan struct{}
 }
 
-func (h *heldLux) Output(ctx context.Context, a, b string, c int64, fn func(lux.Frame) error) error {
-	if h.first.CompareAndSwap(false, true) {
-		close(h.entered)
-		<-h.hold
-		return ctx.Err()
+func (g *followerGate) TraceQueryStart(ctx context.Context, _ *pgx.Conn, q pgx.TraceQueryStartData) context.Context {
+	switch {
+	case strings.HasPrefix(q.SQL, "UPDATE runs SET child_output_generation") && g.first.CompareAndSwap(false, true):
+		close(g.entered)
+		<-g.letGo
+	case strings.HasPrefix(q.SQL, "SELECT 1 FROM run_resumes WHERE run_id = $1 AND timed_at IS NULL"):
+		<-g.testEnded
 	}
-	return h.streamLux.Output(ctx, a, b, c, fn)
+	return ctx
 }
+
+func (*followerGate) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 // A follower that ends after a newer one took the Run leaves the Run's
-// late stamps alone: they may be the newer one's.
+// late stamps alone: they may be the newer one's. Here the older follower
+// is told to stop, a newer one starts and keeps a stamp, and only then
+// does the older one end.
 func TestAnOlderFollowerEndingKeepsTheNewerOnesLateStamps(t *testing.T) {
 	w := newResumeWorld(t)
+	g := &followerGate{entered: make(chan struct{}), letGo: make(chan struct{}), testEnded: make(chan struct{})}
+	w.traced(g)
+	letGo := sync.OnceFunc(func() { close(g.letGo) })
+	// LIFO: before the traced pool closes, which waits on held statements.
+	t.Cleanup(func() {
+		letGo()
+		close(g.testEnded)
+		_ = w.s.unfollowWait(w.ctx, w.run.ID)
+	})
 	st := newStreamLux(w.lux)
-	h := &heldLux{streamLux: st, entered: make(chan struct{}), hold: make(chan struct{})}
-	letGo := sync.OnceFunc(func() { close(h.hold) })
-	t.Cleanup(letGo)
-	w.s.Lux = h
+	w.s.Lux = st
 	r := w.run
 	r.Status, r.LuxState = statusRunning, "resuming"
 	w.s.follow(r)
 	select {
-	case <-h.entered:
+	case <-g.entered:
 	case <-time.After(10 * time.Second):
-		t.Fatal("the first follower never opened the stream")
+		t.Fatal("the first follower never started")
 	}
 	w.s.mu.Lock()
 	older := w.s.following[w.run.ID]
 	w.s.mu.Unlock()
 	w.s.unfollow(w.run.ID)
 	w.s.follow(r)
-	t.Cleanup(func() { _ = w.s.unfollowWait(w.ctx, w.run.ID) })
 	select {
 	case <-st.opened:
 	case <-time.After(10 * time.Second):
@@ -754,5 +768,28 @@ func TestAFollowUpKeepsItsStampsPastAFailedTiming(t *testing.T) {
 	}
 	if got, _ := w.row(3)["busy_at"].(time.Time); !got.Equal(busyAt) {
 		t.Errorf("busy_at of resume 3 %v, want the batch's %v\nlogs:\n%s", w.row(3)["busy_at"], busyAt, logs)
+	}
+}
+
+// A stamp a batch got in before the late write wins over the late one: it
+// is the earlier frame's, or the same frame replayed.
+func TestALateStampLeavesAStampAlreadyIn(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2), busy(2))
+	in, ok := w.row(2)["busy_at"].(time.Time)
+	if !ok {
+		t.Fatal("no busy_at stamped: the test proves nothing")
+	}
+	w.s.lateMu.Lock()
+	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, in.Add(-time.Second)}}}
+	w.s.lateMu.Unlock()
+	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := w.row(2)["busy_at"].(time.Time); !got.Equal(in) {
+		t.Errorf("busy_at %v, want the batch's %v kept", w.row(2)["busy_at"], in)
 	}
 }
