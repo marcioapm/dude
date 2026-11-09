@@ -271,14 +271,17 @@ func TestInstructionsContractMatrix(t *testing.T) {
 		{"reviewer", "a weak or wrong finding costs a whole fix round.",
 			"No finding is better than a weak one: do not pad, and do not rate a real one down.",
 			[]string{"Every finding at `medium` or above carries its evidence", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:",
-				"Your judgement has floors, never ceilings", "An acceptance criterion not met: at least `high`."}},
+				"Your judgement has floors, never ceilings", "An acceptance criterion not met: at least `high`.",
+				"A test that still passes with the behaviour it claims to cover broken: at least `medium`.",
+				"Breaking a rule the project wrote down for its contributors (its contributing guide, agent instructions, style or testing notes): at least `medium`."}},
 		{"fixer", "Your fix is reviewed again, and on an open pull request it goes to the pull request when you publish, where its CI and reviewers see it, and is reviewed after: run the affected tests before you finish.",
 			"Fix what was raised, completely, and nothing else",
 			[]string{"For each problem, reproduce it first where it can be reproduced", "```yaml\nchecks:\n", "Only committed changes are kept."}},
 		{"simplifier", "Your diff is reviewed on its own, as a change that must not alter behaviour.",
 			"Read the whole change: every file the branch adds or alters against the branch it will merge into (`git diff <base>...HEAD`)",
 			[]string{"Only committed changes are kept.", "```yaml\nchecks:\n", "Never list a check as `pass` that you did not see pass.",
-				"If nothing is worth simplifying, change nothing and run no tests", "run them before your first edit"}},
+				"If nothing is worth simplifying, change nothing and run no tests", "run them before your first edit",
+				"naming the constructs you weighed and why each stays"}},
 		{"qa_browser", "A person merging the change relies on your report more than on anything else.",
 			"A criterion passes only on evidence you saw: a screenshot, an output, a record.",
 			[]string{"You are independent verification: show, as a user would see it, whether this change does what the task says.", "criterion: 1", "The acceptance report and findings, in the format below",
@@ -293,6 +296,9 @@ func TestInstructionsContractMatrix(t *testing.T) {
 			"Be a partner, not an echo: bring a view.",
 			[]string{"Proposing again replaces the card.", "Write tasks the delivery can succeed with", "Say in your reply what you published"}},
 	}
+	// More of a role's built-in stance: present only where it is, so a saved
+	// prompt replaces them with it.
+	stanceMarkers := map[string][]string{"simplifier": {"ask whether it carries a requirement of its own"}}
 	modes := []struct {
 		name, projectMode     string
 		org, project, builtin bool
@@ -332,6 +338,9 @@ func TestInstructionsContractMatrix(t *testing.T) {
 						presence(marker, true)
 					}
 					presence(role.stance, mode.builtin)
+					for _, marker := range stanceMarkers[role.role] {
+						presence(marker, mode.builtin)
+					}
 					presence("Organisation stance for "+role.role+": verify CSV export.", mode.org && mode.projectMode != "replace")
 					presence("Project stance for "+role.role+": deliver CSV export.", mode.project)
 					presence("Your tools act on the work you are part of. Use them; do not work around them.", tools)
@@ -432,6 +441,13 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 		"never `pass`", "commit nothing", "Test environment:", "head commit", "video was written and is not empty"} {
 		if !strings.Contains(testerContract, want) {
 			t.Errorf("the tester's contract lacks %q", want)
+		}
+	}
+	// How the tester rates: every finding by the reviewers' judgement, with
+	// a failed criterion's floor.
+	for _, want := range []string{"Rate every finding, not only failed criteria", "An acceptance criterion not met is at least `high`"} {
+		if !strings.Contains(severityNote("qa_browser", in.BlockingSeverities), want) {
+			t.Errorf("the tester's severity note lacks %q", want)
 		}
 	}
 	// What a person needs to follow a tester's video, and the tools it must not assume.
