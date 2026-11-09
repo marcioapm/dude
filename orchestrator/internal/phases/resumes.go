@@ -151,7 +151,7 @@ const woken = `CASE $3
 // sweep slot, before lux is asked.
 func (s *Syncer) resumeAsked(ctx context.Context, r phaseRun, before lux.Run) int {
 	epoch := nextEpoch(before)
-	ctx, cancel := context.WithTimeout(ctx, resumeAskedTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.resumeBudgets().whole)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
 		err := s.askResume(ctx, r, before, epoch)
@@ -200,13 +200,14 @@ func databaseTimedOut(err error) bool {
 // statement's.
 func (s *Syncer) askResume(ctx context.Context, r phaseRun, before lux.Run, epoch int) error {
 	_, prev := placementsAround(before.Placements, epoch)
+	budget := s.resumeBudgets()
 	if deadline, has := ctx.Deadline(); has && time.Until(deadline) < 10*time.Millisecond {
 		return fmt.Errorf("too little time left to record the resume: %w", context.DeadlineExceeded)
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)`,
-			strconv.FormatInt(resumeLockTimeout.Milliseconds(), 10),
-			strconv.FormatInt(resumeStatementTimeout.Milliseconds(), 10)); err != nil {
+			strconv.FormatInt(budget.lock.Milliseconds(), 10),
+			strconv.FormatInt(budget.statement.Milliseconds(), 10)); err != nil {
 			return err
 		}
 		// The Run's row before the resume's: a retry's new row version
@@ -588,7 +589,8 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own
 		Running, Busy, FirstOutput *time.Time
 	}
 	var rows []landed
-	ran, err := s.savepointAt(ctx, tx, resumeLockTimeout, resumeStatementTimeout, func(ctx context.Context, tx pgx.Tx, _ time.Time) error {
+	budget := s.resumeBudgets()
+	ran, err := s.savepointAt(ctx, tx, budget.lock, budget.statement, func(ctx context.Context, tx pgx.Tx, _ time.Time) error {
 		got, err := tx.Query(ctx, `WITH l AS (SELECT epoch, `+filters+`
 				FROM unnest($2::text[], $3::int[], $4::timestamptz[]) AS l(col, epoch, at) GROUP BY epoch),
 			u AS (UPDATE run_resumes rr SET `+set+`
@@ -877,7 +879,8 @@ const (
 // autovacuum; a batch starting meanwhile waits on its KEY SHARE no longer
 // than its statements take. Each is per statement, and an attempt runs
 // three; resumeAskedTimeout bounds the whole call, so a Run held for long
-// costs its resume at most that, and only its timing.
+// costs its resume at most that, and only its timing. All three are read
+// through resumeBudgets, which tests may override (Syncer.resumeBudget).
 //
 // The same budget writes a batch's late stamps (writeLateStamps), off the
 // batch too, in one statement.
@@ -885,6 +888,28 @@ const (
 	resumeLockTimeout      = time.Second
 	resumeStatementTimeout = 2 * time.Second
 )
+
+// resumeBudget is resumeAsked's budget, and the late stamps': each
+// statement's lock and statement timeouts, and resumeAsked's whole call.
+type resumeBudget struct {
+	lock, statement, whole time.Duration
+}
+
+// resumeBudgets is s's resumeBudget, a zero field taking its constant
+// (resumeLockTimeout, resumeStatementTimeout, resumeAskedTimeout).
+func (s *Syncer) resumeBudgets() resumeBudget {
+	b := s.resumeBudget
+	if b.lock == 0 {
+		b.lock = resumeLockTimeout
+	}
+	if b.statement == 0 {
+		b.statement = resumeStatementTimeout
+	}
+	if b.whole == 0 {
+		b.whole = resumeAskedTimeout
+	}
+	return b
+}
 
 // budgetUnder is the lock and statement timeouts for timing work under
 // ctx: those given, or less when the Run's own deadline is closer, so

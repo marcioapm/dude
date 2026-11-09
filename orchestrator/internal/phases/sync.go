@@ -109,6 +109,10 @@ type Syncer struct {
 	// For tests: the budget of a resume follow-up's placement reads; zero
 	// is 30 s. Its timing has a budget of its own (followUpTimingTimeout).
 	followUpTimeout time.Duration
+	// For tests: resumeAsked's and the late stamps' budgets; a zero field
+	// is its constant (resumeBudgets, resumes.go). A field, not package
+	// variables: followers of earlier tests may still be reading them.
+	resumeBudget resumeBudget
 	// For tests: called as a publish looks up its Run's git.merge_attempted
 	// (mergeAttempted).
 	MergeAttemptLookup func()
