@@ -29,8 +29,7 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120)))
 	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
 		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
-		AND d.sent_at > now() - make_interval(secs => 120)))
-	AND COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
+		AND d.sent_at > now() - make_interval(secs => 120))) AND COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
 	(SELECT min(q.created_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking),
 	(SELECT min((w.state->'escalation'->>'raisedAt')::timestamptz) FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
 	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = 'checks_unverified'
@@ -42,7 +41,13 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = r.id AND v.event_type IN ('run.checks.conducted', 'run.checks.judged')
 		AND v.payload->>'turn' = a.payload->>'turn'))),
 	(SELECT max(rr.requested_at) FROM run_resumes rr WHERE rr.run_id = r.id)) > now() - make_interval(secs => 2 * lim.park_secs), false))
-		OR COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
+		OR (EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+		AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))
+		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120)))
+	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
+		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
+		AND d.sent_at > now() - make_interval(secs => 120))) AND COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
 	(SELECT min(q.created_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking),
 	(SELECT min((w.state->'escalation'->>'raisedAt')::timestamptz) FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
 	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = 'checks_unverified'
