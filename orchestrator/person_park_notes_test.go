@@ -295,36 +295,68 @@ func (w *world) parkedAt(run string) time.Time {
 }
 
 // The cost #438 left open, bounded: a park held for a note, then notes
-// that each arrive half a grace into the wait the last one's turn ended
-// in. Without the bound each is heard inside a new grace and the Run never
-// parks. With it, the park was held once in this wait (newsHeld): the Run
-// parks as soon as the held note's turn is over — main's park time, that
-// turn, and a sweep — and the later notes wait for the answer, as on main.
-// The clock is the test's: the grace is a minute, and only waitingOn moves
-// a wait past part of it.
+// that each arrive half a grace into the wait. Without the bound each is
+// heard inside a new grace and the Run never parks. With it, the park was
+// held once in this wait (newsHeld): notes queued after the hold wait for
+// the answer, as on main, and the Run parks as soon as the held note's
+// turn is over — main's park time, that turn, and a sweep. lux holds the
+// held note's turn (InputGate) while the later notes come, so they arrive
+// during it; then, once it is parked, two more. The clock is the test's:
+// the grace is a minute, and only waitingOn moves a wait past part of it.
 func TestAPersonParkHeldForNewsParksOnceItsNoteIsHeardThoughNotesKeepComing(t *testing.T) {
 	w := conducting(t)
 	task, old, q := w.waitingAtGate(`{"action":"ask_person"}`)
 	w.onFailureShowsDirectives(old)
 	const grace = time.Minute
 	w.syncer.ParkAfter = grace
-	held := w.heldPast(task, old, q, grace)
-
-	var later []string
-	for k := range 4 {
-		if w.parks(old) == 0 {
-			// Half a grace into the wait the last turn ended in.
-			w.waitingOn(old, q, grace/2, grace+time.Second+time.Duration(k+1)*grace/2)
+	gate := make(chan struct{})
+	w.lux.InputGate = gate
+	opened := false
+	t.Cleanup(func() {
+		if !opened {
+			close(gate)
 		}
-		note := w.note(task, old, fmt.Sprintf("news %d after the hold", k+1))
-		later = append(later, note)
-		w.until("the note heard and its turn over, or the Run parked", func() bool {
-			return w.parks(old) > 0 || w.directiveDelivered(note) && w.waitsAfter(old, note)
-		})
+	})
+
+	// Main's park time: past the grace, a note due. The park is held.
+	w.waitingOn(old, q, grace+time.Second, grace+time.Second)
+	held := w.note(task, old, "news before the park")
+	w.until("the held note sent, or the Run parked", func() bool {
+		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, held) == 1
+	})
+	if n := w.parks(old); n != 0 {
+		t.Fatalf("parked %d times, the note due at the park unsent", n)
 	}
+
+	// During its turn, notes half a grace apart: each waits for the answer.
+	// (The ask stays where it was: inside the ceiling, which is not what
+	// this test is about.)
+	var later []string
+	for k := range 3 {
+		w.waitingOn(old, q, grace/2, grace+time.Second)
+		later = append(later, w.note(task, old, fmt.Sprintf("news %d during the held turn", k+1)))
+		for range 3 {
+			w.pump()
+		}
+		for _, id := range later {
+			if !w.unsent(id) {
+				t.Fatalf("%s, queued after the hold, was sent before the answer", id)
+			}
+		}
+	}
+	if n := w.parks(old); n != 0 {
+		t.Fatalf("parked %d times under the held note's turn", n)
+	}
+
+	// The turn runs: parked once it is over, without a fresh grace.
+	opened = true
+	close(gate)
 	w.untilParked(old)
-	for range 5 {
-		w.pump()
+	for _, k := range []int{4, 5} {
+		later = append(later, w.note(task, old, fmt.Sprintf("news %d after the park", k)))
+		for range 3 {
+			w.pump()
+		}
 	}
 	if n := w.parks(old); n != 1 {
 		t.Fatalf("parked %d times, want once", n)
@@ -334,12 +366,13 @@ func TestAPersonParkHeldForNewsParksOnceItsNoteIsHeardThoughNotesKeepComing(t *t
 			t.Errorf("%s, queued after the held park, was sent before the answer", id)
 		}
 	}
+	if !w.directiveDelivered(held) {
+		t.Errorf("parked with the held note unheard")
+	}
 	// By the held note's turn and a sweep: parked inside the grace of the
-	// wait that turn ended in, never after a fresh one, and before anything
-	// queued after it was heard.
-	waited := w.str(`SELECT waiting_since::text FROM runs WHERE id = $1`, old)
+	// wait that turn ended in, never after a fresh one, and after the turn.
 	if w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since + make_interval(secs => $2) > $3`, old, grace.Seconds(), w.parkedAt(old)) != 1 {
-		t.Errorf("parked at %s, a grace or more after its wait began at %s", w.parkedAt(old), waited)
+		t.Errorf("parked at %s, a grace or more after its wait began at %s", w.parkedAt(old), w.str(`SELECT waiting_since::text FROM runs WHERE id = $1`, old))
 	}
 	if n := w.count(`SELECT count(*) FROM events p, events d WHERE p.run_id = $1 AND p.event_type = 'run.parked'
 		AND d.run_id = $1 AND d.event_type = 'run.directive.delivered' AND d.payload->>'directiveId' = $2 AND d.cursor < p.cursor`,

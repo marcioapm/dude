@@ -1,10 +1,13 @@
 package phases
 
 import (
+	"context"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // waitingWorld is a resumeWorld whose Run runs, waiting on its open
@@ -395,5 +398,47 @@ func TestAHoldForNewsIsRecordedOncePerWaitAndClearedByAPark(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND news_hold_at IS NULL`); n != 1 {
 		t.Errorf("paused with its wait's hold kept")
+	}
+}
+
+// inputLux records what deliverDirectives sends.
+type inputLux struct {
+	*placementLux
+	sent []string
+}
+
+func (f *inputLux) Input(_ context.Context, _ string, in lux.InputRequest) error {
+	f.sent = append(f.sent, in.RequestID)
+	return nil
+}
+
+// deliverDirectives re-checks the hold itself, not only through the
+// sweep's HasDirectives: a note queued after the park was held for news,
+// in its wait, with the person's question open, is not sent — it waits for
+// the answer — though the sweep read the Run with something to send (the
+// note queued before the hold, since heard). One queued before the hold
+// is sent, and once the question is answered so is the later one.
+func TestDeliverDirectivesHoldsWhatCameAfterTheHoldForNews(t *testing.T) {
+	w, r := waitingWorld(t)
+	fake := &inputLux{placementLux: w.lux}
+	w.s.Lux = fake
+	w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
+	w.exec(`UPDATE runs SET news_hold_at = now() - interval '2 minutes', lux_run_id = 'lrun_1' WHERE id = $1`, w.run.ID)
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, created_at)
+		VALUES ('dir_before_'||$1, $1, $2, $3, 'before', now() - interval '150 seconds'),
+		       ('dir_after_'||$1, $1, $2, $3, 'after', now() - interval '1 minute')`, w.run.Org, w.run.TaskID, w.run.ID)
+	r.HasDirectives = true
+	if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"dir_before_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+		t.Fatalf("sent %v, want %v: only what came before the hold", fake.sent, want)
+	}
+	w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() WHERE run_id = $1`, w.run.ID)
+	if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"dir_before_" + w.run.Org, "dir_after_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+		t.Errorf("sent %v, want %v: the answer brings what was held for it", fake.sent, want)
 	}
 }
