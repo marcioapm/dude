@@ -172,6 +172,14 @@ func TestTheConductorIsToldWhenToEditAndWhenToDelegate(t *testing.T) {
 		if strings.Contains(got, "You never edit files") {
 			t.Errorf("the conductor (%s) is still told it never edits", mode)
 		}
+		// Severity is the reviewers' to judge; the conductor triages it and
+		// has no definition of its own to re-rate it by.
+		if strings.Contains(got, "Medium or above is") {
+			t.Errorf("the conductor (%s) is given its own definition of severity", mode)
+		}
+		if strings.Count(got, "Triage it; do not re-rate it.") != 1 {
+			t.Errorf("the conductor (%s) is not told to triage severity rather than re-rate it", mode)
+		}
 	}
 	msg := ConductorPrompt("briefing", in)
 	for _, want := range []string{"`app` at `/workspace/repos/app` (you may edit it, small things only)", "`docs` at `/workspace/repos/docs` (read only)",
