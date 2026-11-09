@@ -220,10 +220,12 @@ func (s *Syncer) ForgetSecretCopies(ctx context.Context) (int, error) {
 // forgetCopies is ForgetSecretCopies' delete in one organization ($2),
 // of Runs ended over $1 seconds ago. due takes the distinct Runs with a
 // copy there (run_project_secrets_org_idx) and weighs each once, in a
-// LATERAL subquery fenced by OFFSET 0 and materialised, so the planner
-// can neither flatten copyNeeded into a join nor weigh a Run once per
-// value; the copies are then found on run_project_secrets_org_idx.
-var forgetCopies = `WITH due AS MATERIALIZED (
+// LATERAL subquery fenced by OFFSET 0: the planner can neither flatten it
+// into a semi-join that weighs a Run once per value, nor drive it from
+// the organization's Runs, nor pull copyNeeded's artifacts probe up into
+// a hashed SubPlan. The copies are then found on
+// run_project_secrets_org_idx.
+var forgetCopies = `WITH due AS (
 		SELECT d.id FROM (SELECT DISTINCT c.run_id FROM run_project_secrets c WHERE c.organization_id = $2) c
 		CROSS JOIN LATERAL (SELECT r.id FROM runs r
 			WHERE r.id = c.run_id AND r.status IN ('completed', 'failed', 'aborted')
