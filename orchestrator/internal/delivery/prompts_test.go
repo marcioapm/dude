@@ -278,7 +278,7 @@ func TestInstructionsContractMatrix(t *testing.T) {
 			"Fix what was raised, completely, and nothing else",
 			[]string{"For each problem, reproduce it first where it can be reproduced", "```yaml\nchecks:\n", "Only committed changes are kept."}},
 		{"simplifier", "Your diff is reviewed on its own, as a change that must not alter behaviour.",
-			"Read the whole change: every file the branch adds or alters against the branch it will merge into (`git diff <base>...HEAD`)",
+			"Read the whole change: every file the branch adds or alters against the branch it will merge into (the default branch unless a Base section names another), with `git diff <base>...HEAD`",
 			[]string{"Only committed changes are kept.", "```yaml\nchecks:\n", "Never list a check as `pass` that you did not see pass.",
 				"If nothing is worth simplifying, change nothing and run no tests", "run them before your first edit",
 				"naming the constructs you weighed and why each stays"}},
