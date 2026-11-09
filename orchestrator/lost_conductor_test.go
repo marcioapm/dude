@@ -378,11 +378,24 @@ func (w *world) failedOnceHeard(run string) {
 // The conductor asks in a turn of its own, as a real one does: that turn
 // ends with the question open, so it waits on the person (translate's
 // idle) by construction, not only if a wake happens to land after the ask.
-// It is parked only once its input is heard and no reason is pending: a
-// note queued as the park's grace ends is held, unread, until the person
-// answers (resumable; requestPause does not wait for it on a park for a
-// person), which is not the state this sets up.
+// It is parked only once its input is heard and no reason is pending, so
+// the park is not put off by a note to deliver first (requestPause, due's
+// ParkNow): this sets up a conductor parked with nothing unheard.
 func (w *world) parkedAskingAtGate(decide string) (task, old, q string) {
+	w.t.Helper()
+	task, old, q = w.waitingAtGate(decide)
+	w.syncer.ParkAfter = time.Millisecond
+	w.untilParked(old)
+	if p := w.pendingWakes(task); p != "" {
+		w.t.Fatalf("a wake reason came as the conductor was parked, unheard:\n%s", p)
+	}
+	return task, old, q
+}
+
+// waitingAtGate is parkedAskingAtGate before the park: the conductor
+// running, waiting on the person with its gate question open, having heard
+// everything dude sent it and no reason pending. The grace is an hour.
+func (w *world) waitingAtGate(decide string) (task, old, q string) {
 	w.t.Helper()
 	w.syncer.ParkAfter = time.Hour
 	task = w.task()
@@ -401,11 +414,6 @@ func (w *world) parkedAskingAtGate(decide string) (task, old, q string) {
 	w.until("all it was sent heard, no reason pending", func() bool {
 		return w.unheard(old) == 0 && w.pendingWakes(task) == ""
 	})
-	w.syncer.ParkAfter = time.Millisecond
-	w.untilParked(old)
-	if p := w.pendingWakes(task); p != "" {
-		w.t.Fatalf("a wake reason came as the conductor was parked, unheard:\n%s", p)
-	}
 	return task, old, q
 }
 
