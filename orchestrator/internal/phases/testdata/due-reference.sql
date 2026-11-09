@@ -115,7 +115,8 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	OR EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
 	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = 'checks_unverified'
 	AND w.state->'escalation'->'detail'->>'runId' = r.id AND NOT (w.state->'escalation' ? 'decided'))) THEN r.news_hold_at END AS cutoff
-		FROM (SELECT CASE WHEN r.news_hold_at IS NULL OR NOT ask.open THEN false ELSE CASE WHEN r.news_hold_at IS NULL THEN false
+		FROM (SELECT CASE WHEN r.news_hold_at IS NULL OR NOT ask.open THEN false
+		ELSE CASE WHEN r.news_hold_at IS NULL THEN false
 		ELSE COALESCE(r.news_hold_at >= GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
 	(SELECT min(q.created_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking),
 	(SELECT min((w.state->'escalation'->>'raisedAt')::timestamptz) FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
@@ -128,7 +129,8 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = r.id AND v.event_type IN ('run.checks.conducted', 'run.checks.judged')
 		AND v.payload->>'turn' = a.payload->>'turn'))),
 	(SELECT max(rr.requested_at) FROM run_resumes rr WHERE rr.run_id = r.id),
-	(SELECT max(u.occurred_at) FROM events u WHERE u.run_id = r.id AND u.event_type = 'run.unparked')), false) END END AS held) h) hold
+	(SELECT max(u.occurred_at) FROM events u WHERE u.run_id = r.id AND u.event_type = 'run.unparked')), false) END AND NOT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.created_at > r.news_hold_at
+		AND d.sent_at IS NOT NULL AND NOT d.interrupt AND d.deliver_after IS NULL) END AS held) h) hold
 			WHERE (r.phase IS NOT NULL OR (r.role IN ('conductor', 'brainstorm') AND r.kind = 'agent'))
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR (r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')

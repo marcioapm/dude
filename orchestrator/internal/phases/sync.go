@@ -573,9 +573,30 @@ const newsHeldSince = `CASE WHEN r.news_hold_at IS NULL THEN false
 		ELSE COALESCE(r.news_hold_at >= ` + waitBegan + `, false) END`
 
 // newsHeld (SQL, over a Run aliased r and its ask.open) is newsHeldSince
-// while the wait is open: an answer that closes it is delivered, not held.
-// Read once per Run (hold.held).
-const newsHeld = `CASE WHEN r.news_hold_at IS NULL OR NOT ask.open THEN false ELSE ` + newsHeldSince + ` END`
+// while the wait is open and the hold is not spent: an answer that closes
+// it is delivered, not held, and once a note queued after the hold has
+// been sent (holdSpent) the hold is over. Read once per Run (hold.held).
+const newsHeld = `CASE WHEN r.news_hold_at IS NULL OR NOT ask.open THEN false
+		ELSE ` + newsHeldSince + ` AND NOT ` + holdSpent + ` END`
+
+// holdSpent (SQL, over runs r with news_hold_at set): a note queued after
+// the hold has been sent, so its turn ends a wait main would have resumed
+// the Run for — an answer, a decision, what was held for them, or a note
+// to a Run waiting only on a peer or the checks gate (resumable) — and
+// the Run waits a full grace again, as on main, not parked as soon as it
+// waits (parkState). The asks still open may be older than the hold (a
+// peer wait, a blocking repository), so waitBegan does not move: without
+// this, the spent hold would park the Run as soon as the answer's turn
+// ended. What caused the hold was queued before it and does not spend it;
+// what is queued after it while a person's ask is open waits for the
+// answer (heldForNews), unsent, and does not either. Nor an interrupt or
+// a turn's retry, sent during a hold: they serve the held note's turn (a
+// nudge of it, a person's "Interrupt now", the same turn run again), which
+// begins no new wait, and spending on them would give that turn a fresh
+// grace. Read from the directives, not cleared where each answer is
+// written, so every path that queues a note spends it alike.
+const holdSpent = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.created_at > r.news_hold_at
+		AND d.sent_at IS NOT NULL AND NOT d.interrupt AND d.deliver_after IS NULL)`
 
 // newsCutoff (SQL, over runFrom's hold) is when the park was held for news
 // in this wait, while a person's ask is open (as heldForNews); NULL
@@ -608,7 +629,9 @@ var heldInWait = `(` + strings.ReplaceAll(newsHeld, "ask.open", "("+delivery.Ope
 // per Run: held, the Run's park was held for news in this wait (newsHeld);
 // cutoff, when, if a person's ask is open too, so what comes after it
 // waits for the answer (heldForNews) and does not hold the park off
-// (newsCutoff). A Run never held reads news_hold_at alone.
+// (newsCutoff). A Run never held reads news_hold_at alone. The OFFSET 0s
+// fence each level, so the planner does not inline newsHeld (and its
+// waitBegan) into every place hold.held and hold.cutoff are read.
 const holdFrom = `(SELECT h.held, CASE WHEN h.held AND ` + delivery.PersonAsk + ` THEN r.news_hold_at END AS cutoff
 		FROM (SELECT ` + newsHeld + ` AS held) h) hold`
 

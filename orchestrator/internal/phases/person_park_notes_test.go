@@ -32,6 +32,17 @@ func (w *resumeWorld) note(held bool) {
 		VALUES ('dir_'||$1, $1, $2, $3, 'news', CASE WHEN $4 THEN 'q_'||$1 END)`, w.run.Org, w.run.TaskID, w.run.ID, held)
 }
 
+// peerWait opens a wait of w's Run on a peer's reply, since ago (SQL
+// interval): an ask (delivery.OpenAsk), not a person's (PersonAsk).
+func (w *resumeWorld) peerWait(since string) {
+	w.t.Helper()
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_peer_'||$1, $1, 'prj_'||$1, 2, 'Peer', 'G')`, w.run.Org)
+	w.exec(`INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text)
+		VALUES ('pm_'||$1, $1, 'wi_'||$1, 'run_'||$1, 'wi_peer_'||$1, 'hi')`, w.run.Org)
+	w.exec(`INSERT INTO peer_waits (id, organization_id, run_id, message_id, how, since)
+		VALUES ('pw_'||$1, $1, 'run_'||$1, 'pm_'||$1, 'wait', now() - $2::interval)`, w.run.Org, since)
+}
+
 // parkForPerson runs the person park as advance does, and returns how many
 // run.parked events the Run has.
 func (w *resumeWorld) parkForPerson(r phaseRun) int {
@@ -291,8 +302,15 @@ func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
 		// hold: news_hold_at (SQL interval ago, "" for NULL); waiting: how
 		// long since waiting_since ("" mid-turn); note: when a note was
 		// queued ("" none); resumed: a run_resumes row that long ago.
-		hold, waiting, note, resumed  string
+		hold, waiting, note, resumed string
+		// also: more of the note to set (SQL, after a comma).
+		also string
+		// answered: the question answered a minute ago; asked: a new
+		// question since, that long ago; peer: a peer wait open since 5
+		// minutes ago, older than the question.
 		answered                      bool
+		asked                         string
+		peer                          bool
 		parkNow, holdNews, directives bool
 	}{
 		{name: "never held, inside the grace, a note", waiting: "1 minute", note: "now()", directives: true},
@@ -310,22 +328,72 @@ func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
 		{name: "held before the ask, inside the grace, a note", hold: "4 minutes", waiting: "1 minute", note: "now()", directives: true},
 		{name: "held, answered since, a note queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
 			answered: true, directives: true},
+		// Interrupts and turn retries are not held for the answer, and do
+		// not hold the park off (newsCutoff).
+		{name: "held, inside the grace, an interrupt queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			also: "interrupt = true", parkNow: true, directives: true},
+		{name: "held, inside the grace, a retry queued after the hold, due", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			also: "deliver_after = now() - interval '1 second'", parkNow: true, directives: true},
+		// What was queued by the hold holds the park off, at the hold too.
+		{name: "held, inside the grace, a note queued at the hold, unsent and unclaimed", hold: "2 minutes", waiting: "1 minute",
+			note: "(SELECT news_hold_at FROM runs WHERE id = run_id)", directives: true},
+		// The wait begins with the question: a hold made then is this wait's.
+		{name: "held as the question was asked, inside the grace, no note", hold: "3 minutes", waiting: "1 minute", parkNow: true},
+		// Waiting only on a peer: what comes after the hold is heard, as a
+		// parked Run is resumed for it (resumable), not parked over.
+		{name: "held, waiting only on an older peer wait, a note queued after the hold", hold: "2 minutes", waiting: "1 minute",
+			note: "now()", answered: true, peer: true, directives: true},
+		// A hold with nothing open has no effect: nothing to park for.
+		{name: "held, nothing open, a resume before the hold, a note queued after the hold", hold: "2 minutes", resumed: "5 minutes",
+			waiting: "1 minute", note: "now()", answered: true, directives: true},
+		// The reviewer's repro: the held question answered, its answer
+		// heard (a note sent after the hold spends it, holdSpent), an
+		// older peer wait still open so waitBegan does not move. The
+		// answer's turn ends in a wait with a full grace, as on main;
+		// so does a new question's.
+		{name: "held, answered, older peer wait still open, no new question", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			answered: true, peer: true},
+		{name: "held, answered, older peer wait still open, a new question", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			answered: true, peer: true, asked: "30 seconds"},
+		// Not spent by what serves the held note's turn: an interrupt of
+		// it, a retry of it, sent after the hold.
+		{name: "held, inside the grace, an interrupt sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			parkNow: true},
+		{name: "held, inside the grace, a retry sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "deliver_after = now() - interval '58 seconds', sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			parkNow: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, _ := waitingWorld(t)
 			w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
 			if c.answered {
-				w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() WHERE run_id = $1`, w.run.ID)
+				w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() - interval '1 minute' WHERE run_id = $1`, w.run.ID)
 			}
+			if c.asked != "" {
+				w.exec(`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status, asked_at)
+					VALUES ('q2_'||$1, $1, 'wi_'||$1, 'run_'||$1, 'And now?', 'open', now() - $2::interval)`, w.run.Org, c.asked)
+			}
+			if c.peer {
+				w.peerWait("5 minutes")
+			}
+			// A hold of "3 minutes" is the question's asked_at exactly.
 			w.exec(`UPDATE runs SET waiting_since = now() - NULLIF($2, '')::interval,
-				news_hold_at = now() - NULLIF($3, '')::interval WHERE id = $1`, w.run.ID, c.waiting, c.hold)
+				news_hold_at = CASE WHEN $3 = '3 minutes' THEN (SELECT asked_at FROM questions WHERE id = 'q_'||organization_id)
+					ELSE now() - NULLIF($3, '')::interval END WHERE id = $1`, w.run.ID, c.waiting, c.hold)
 			if c.resumed != "" {
 				w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at)
 					VALUES ($1, $2, 2, 'answer', now() - $3::interval)`, w.run.ID, w.run.Org, c.resumed)
 			}
 			if c.note != "" {
 				w.note(false)
-				w.exec(`UPDATE directives SET created_at = `+c.note+` WHERE id = 'dir_'||$1`, w.run.Org)
+				also := ""
+				if c.also != "" {
+					also = ", " + c.also
+				}
+				w.exec(`UPDATE directives SET created_at = `+c.note+also+` WHERE id = 'dir_'||$1`, w.run.Org)
 			}
 			got := w.dueRun()
 			if got.ParkNow != c.parkNow || got.HoldNews != c.holdNews || got.HasDirectives != c.directives {
