@@ -28,9 +28,9 @@ type resumeTiming struct {
 // and that has none yet — the one into epoch. Once each: timed_at is set
 // in the same transaction. It is the owner's call, made by a resume's
 // follow-up after its placement read; recovery goes through timeUnowned
-// instead.
-func (s *Syncer) timeResumes(ctx context.Context, r phaseRun, epoch int) error {
-	return s.timeResumesSkippingOwed(ctx, r, epoch, false)
+// instead. own are the late stamps of the follow-up's batch.
+func (s *Syncer) timeResumes(ctx context.Context, r phaseRun, epoch int, own ...lateStamp) error {
+	return s.timeResumesSkippingOwed(ctx, r, epoch, false, own)
 }
 
 // timeUnowned is timeResumes for recovery, and with epoch 0 takes every
@@ -42,11 +42,22 @@ func (s *Syncer) timeResumes(ctx context.Context, r phaseRun, epoch int) error {
 // already timed it. Such a row is put back untimed before this
 // transaction commits.
 func (s *Syncer) timeUnowned(ctx context.Context, r phaseRun, epoch int) error {
-	return s.timeResumesSkippingOwed(ctx, r, epoch, true)
+	return s.timeResumesSkippingOwed(ctx, r, epoch, true, nil)
 }
 
-func (s *Syncer) timeResumesSkippingOwed(ctx context.Context, r phaseRun, epoch int, skipOwed bool) error {
-	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+func (s *Syncer) timeResumesSkippingOwed(ctx context.Context, r phaseRun, epoch int, skipOwed bool, own []lateStamp) error {
+	written := func() {}
+	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// The Run's untimed resumes locked first (lockUntimed), so the late
+		// stamps read next are every one a batch whose output the UPDATE
+		// below sees kept; they go in first, in this transaction: the
+		// timing carries them, and none of the agent's lands on a resume
+		// once timed (a timed one's late running_at does, as stamp's would:
+		// writeLateRunning).
+		if err := lockUntimed(ctx, tx, r.ID); err != nil {
+			return err
+		}
+		written = s.writeLateStamps(ctx, tx, r, own)
 		rows, err := tx.Query(ctx, `UPDATE run_resumes SET timed_at = now()
 			WHERE run_id = $1 AND ($2 = 0 OR epoch = $2) AND timed_at IS NULL
 			  AND (first_output_at IS NOT NULL OR frames_missed)
@@ -70,7 +81,11 @@ func (s *Syncer) timeResumesSkippingOwed(ctx context.Context, r phaseRun, epoch 
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	written()
+	return nil
 }
 
 // leaveOwed puts back untimed, in tx, each of timed that a live follow-up

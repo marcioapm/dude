@@ -20,12 +20,19 @@ import (
 type logSink struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
+	// onLine, when set before any logging, is called with each line as it
+	// is logged, on the logging goroutine, before the logger returns.
+	onLine func(string)
 }
 
 func (l *logSink) Write(p []byte) (int, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
+	n, err := l.buf.Write(p)
+	l.mu.Unlock()
+	if l.onLine != nil {
+		l.onLine(string(p))
+	}
+	return n, err
 }
 
 func (l *logSink) String() string {
@@ -61,8 +68,15 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 	}{{"first", false}, {"again", true}} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newResumeWorld(t)
+			// Budgets wide enough that resumeAsked timing out while the
+			// batch applies would be a cycle, not the machine's speed: the
+			// lock wait counts toward statement_timeout too, so both are
+			// set. A cycle still fails: Postgres's deadlock detector ends
+			// it within its deadlock_timeout. A missed interleaving lets
+			// resumeAsked time out twice, 10s each, within the whole 25s.
+			w.s.resumeBudget = resumeBudget{lock: 10 * time.Second, statement: 10 * time.Second, whole: 25 * time.Second}
 			logs := w.captureTimingLogs()
-			ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
+			ctx, cancel := context.WithTimeout(w.ctx, 2*time.Minute)
 			var workers sync.WaitGroup
 			// LIFO: the workers are joined before the fixture closes its database.
 			t.Cleanup(func() {
@@ -78,7 +92,8 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 			}
 
 			// Retry scheduling misses only before frame application. Let the
-			// batch apply with at least four fifths of timingLockTimeout left.
+			// batch apply with at least four fifths of resumeAsked's wait
+			// budget (the lesser of its lock and statement timeouts) left.
 			const attempts = 5
 			for attempt := 1; ; attempt++ {
 				reached, err := w.stampWhileTheResumeWaits(ctx, &workers, logs, base)
@@ -142,8 +157,9 @@ func TestAResumeIsRecordedWhileAnotherTransactionUpdatesTheRun(t *testing.T) {
 }
 
 // Another transaction holding the Run's row FOR UPDATE past
-// timingLockTimeout costs a resume only its timing: resumeAsked gives up
-// on its KEY SHARE, records no row and still returns the epoch foreseen;
+// resumeLockTimeout, and past the one more attempt resumeAsked makes, costs
+// a resume only its timing: resumeAsked gives up on its KEY SHARE, records
+// no row and still returns the epoch foreseen;
 // whilePaused then asks lux, and takes the Run back to running once the
 // holder lets go.
 func TestAResumeBehindAHeldRunSkipsItsTimingAndStillResumes(t *testing.T) {
@@ -410,11 +426,14 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 		return fail(fmt.Errorf("resumeAsked (pid %d) waits on the batch's lock on the Run holding the resume row the batch stamps",
 			asker))
 	}
-	// Seen late, too little of resumeAsked's lock_timeout is left for the
+	// Seen late, too little of resumeAsked's wait budget is left for the
 	// batch's frames: not let go, the batch waits for resumeAsked to time
-	// out and the attempt is tried again.
+	// out and the attempt is tried again. The lock wait counts toward
+	// statement_timeout as well as lock_timeout: the lesser bounds it.
+	budget := w.s.resumeBudgets()
+	wait := min(budget.lock, budget.statement)
 	waited := time.Duration(*waitedMs * float64(time.Millisecond))
-	if waited > timingLockTimeout/5 {
+	if waited > wait/5 {
 		return lost(fmt.Sprintf("resumeAsked was seen waiting only after %s", waited))
 	}
 
@@ -450,7 +469,7 @@ func (w *resumeWorld) stampWhileTheResumeWaits(ctx context.Context, workers *syn
 	// sampled.
 	if got := logs.String(); got != "" {
 		return false, fmt.Errorf("resumeAsked failed a timing statement after the batch was let go, having waited %s; "+
-			"the batch committed %s later (lock_timeout %s)", waited, committed, timingLockTimeout)
+			"the batch committed %s later (lock_timeout %s, statement_timeout %s)", waited, committed, budget.lock, budget.statement)
 	}
 	return true, nil
 }

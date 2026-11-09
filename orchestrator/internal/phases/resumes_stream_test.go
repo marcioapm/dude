@@ -140,10 +140,10 @@ func TestASlowLuxHoldsUpNoFramesAndTheResumeIsTimedOnce(t *testing.T) {
 	t.Run("recovery right after the batch commits leaves the resume to its follow-up", testRecoveryRightAfterTheCommitLeavesTheResume)
 }
 
-// recoveryTimingGate pauses the first timing UPDATE before Postgres takes
-// its statement snapshot; stream batches and placement reads remain
-// independent. ended is closed once that UPDATE's transaction commits or
-// rolls back.
+// recoveryTimingGate pauses the first timing transaction at its first
+// statement (lockUntimed), before it locks or reads anything; stream
+// batches and placement reads remain independent. ended is closed once
+// that transaction commits or rolls back.
 type recoveryTimingGate struct {
 	claimed atomic.Bool
 	conn    atomic.Pointer[pgx.Conn]
@@ -155,9 +155,7 @@ type recoveryTimingGate struct {
 type recoveryTimingKey struct{}
 
 func (g *recoveryTimingGate) TraceQueryStart(ctx context.Context, c *pgx.Conn, q pgx.TraceQueryStartData) context.Context {
-	// The prefix also matches leaveOwed's revert (SET timed_at = NULL), which
-	// comes after the gated UPDATE in its transaction: claimed lets it by.
-	if strings.HasPrefix(q.SQL, "UPDATE run_resumes SET timed_at") && g.claimed.CompareAndSwap(false, true) {
+	if strings.HasPrefix(q.SQL, "SELECT 1 FROM run_resumes WHERE run_id = $1 AND timed_at IS NULL") && g.claimed.CompareAndSwap(false, true) {
 		g.conn.Store(c)
 		close(g.entered)
 		select {

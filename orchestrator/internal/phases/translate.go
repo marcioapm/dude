@@ -103,6 +103,9 @@ type translator struct {
 	// Resumes to follow up once the batch commits, by epoch: true to read
 	// lux's placements first (resumes.go).
 	resumes map[int]bool
+	// Stamps this batch could not write in its budget, for the follow-up
+	// to write once it commits (resumes.go).
+	late []lateStamp
 	// A session's refused names said so far (refused).
 	sessionRefused map[string]bool
 	// The placement the last record came from: the one a turn failed in.

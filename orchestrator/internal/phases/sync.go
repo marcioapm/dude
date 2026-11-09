@@ -109,6 +109,10 @@ type Syncer struct {
 	// For tests: the budget of a resume follow-up's placement reads; zero
 	// is 30 s. Its timing has a budget of its own (followUpTimingTimeout).
 	followUpTimeout time.Duration
+	// For tests: resumeAsked's and the late stamps' budgets; a zero field
+	// is its constant (resumeBudgets, resumes.go). A field, not package
+	// variables: followers of earlier tests may still be reading them.
+	resumeBudget resumeBudget
 	// For tests: called as a publish looks up its Run's git.merge_attempted
 	// (mergeAttempted).
 	MergeAttemptLookup func()
@@ -139,6 +143,17 @@ type Syncer struct {
 	// and epoch, counted: recovery leaves them to it (owe, resumes.go).
 	owingMu sync.Mutex
 	owing   map[owedResume]int
+	// Stamps a committed batch could not write in its budget, by Run, for
+	// the next timing of its resumes to write first (lateStamp, resumes.go):
+	// at most one per column and resume (deferStamp). In memory only, best
+	// effort like owing: a restart loses them, and those resumes are timed
+	// without them. Once the Run's follower is over, only those whose
+	// resume is still owed are kept (forgetLate): any timing of that resume,
+	// another batch's follow-up's included, still writes them, and the
+	// follow-up that carries them, owed the resume so recovery leaves it
+	// alone, forgets them once tried.
+	lateMu sync.Mutex
+	late   map[string][]lateStamp
 }
 
 // follower is one goroutine reading a Run's output. A pointer, so a
@@ -2080,6 +2095,12 @@ func (s *Syncer) follow(r phaseRun) {
 				delete(s.following, r.ID)
 				delete(s.diffs, r.ID)
 			}
+			// Its late stamps too, once no newer follower may be keeping
+			// some: every batch of this one's is committed or abandoned.
+			// Those a follow-up is still owed for stay (forgetLate).
+			if f, ok := s.following[r.ID]; !ok || f == mine {
+				s.forgetLate(r.ID)
+			}
 			s.mu.Unlock()
 			cancel()
 			close(mine.done)
@@ -2183,19 +2204,11 @@ func (s *Syncer) followOutput(ctx context.Context, r phaseRun) error {
 			}
 		}
 		if err := s.applyBatch(ctx, t, batch); err != nil {
-			// What was read but not recorded is read again from the saved
-			// cursor by the next follower; nothing of it is owed.
-			for epoch, read := range t.resumes {
-				if read {
-					s.paid(r.ID, epoch)
-				}
-			}
-			t.resumes = nil
+			t.rolledBack(s)
 			return err
 		}
-		if t.resumes != nil {
-			go s.resumeFollowUp(r, t.resumes)
-			t.resumes = nil
+		if resumes, late := t.committed(); resumes != nil {
+			go s.resumeFollowUp(r, resumes, late...)
 		}
 	}
 }
