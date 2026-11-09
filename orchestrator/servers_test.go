@@ -420,14 +420,19 @@ func TestABranchPreviewServesTheTasksBranchAndIsParkedWhenUnused(t *testing.T) {
 		t.Errorf("abort a preview = %d %v", code, body)
 	}
 
+	// Serving, as lux says (previewStage, read from lux), and running at
+	// its checkout as dude recorded it (state, commit: the preview's
+	// follower applies lux's events on a goroutine of its own, so they may
+	// trail lux's answer).
 	var stages []string
 	w.until("the preview to serve", func() bool {
 		_, out = w.do("GET", "/internal/tasks/"+wi+"/servers", nil)
-		stage, _ := out["run"].(map[string]any)["previewStage"].(string)
+		run := out["run"].(map[string]any)
+		stage, _ := run["previewStage"].(string)
 		if len(stages) == 0 || stages[len(stages)-1] != stage {
 			stages = append(stages, stage)
 		}
-		return stage == "ready"
+		return stage == "ready" && run["state"] == "running" && run["commit"] != nil
 	})
 	// On its way it set up (web has a setup step) before it was ready.
 	if !slices.Contains(stages, "setup") || stages[len(stages)-1] != "ready" {
@@ -456,15 +461,23 @@ func TestABranchPreviewServesTheTasksBranchAndIsParkedWhenUnused(t *testing.T) {
 		t.Errorf("run = %v", run)
 	}
 
-	// Opened by someone a moment ago: in use, not parked.
-	w.previews.Minute = 40 * time.Millisecond // 5 "minutes" = 200ms
-	time.Sleep(250 * time.Millisecond)
-	w.lux.Request(luxID, "web", time.Now())
+	// Opened by someone a moment ago: in use, not parked. Started longer
+	// ago than its limit (5 minutes), so the sweep asks lux; the request,
+	// a moment before the sweep, is well inside the limit however slow
+	// the pump, and the sweep counts the preview's use from it.
+	w.previews.Minute = time.Minute
+	mustExec(t, w.owner, `UPDATE runs SET active_since = now() - interval '1 hour' WHERE id = $1`, runID)
+	opened := time.Now()
+	w.lux.Request(luxID, "web", opened)
 	w.pump()
 	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, runID); n != 1 {
 		t.Fatalf("parked while in use: %s", w.describeRuns())
 	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND active_since = $2`, runID, opened); n != 1 {
+		t.Fatalf("the sweep did not count the preview's use from its request: %s", w.describeRuns())
+	}
 	// Unused for the limit: parked — lux stopped, the task told.
+	w.previews.Minute = 40 * time.Millisecond // 5 "minutes" = 200ms
 	w.until("the preview to be parked", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'unused' AND lux_state = 'stopped'`, runID) == 1
 	})
