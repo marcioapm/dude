@@ -910,7 +910,7 @@ does not refuse to start.
 | `orchestrator.token` | `DUDE_ORCHESTRATOR_TOKEN` | required (orchestrator) | both | The token the backend authenticates with, the same in both; also signs agents' tool tokens unless `tools.key` is set. **Secret.** |
 | `orchestrator.listen` | `DUDE_ORCHESTRATOR_LISTEN` | `127.0.0.1:3100` | orchestrator | Internal API address. |
 | `orchestrator.pr_reconcile` | `DUDE_PR_RECONCILE` | `15m` | orchestrator | How often open pull requests are re-read as a backstop to webhooks (a Go duration). |
-| `orchestrator.park_after` | `DUDE_PARK_AFTER` | the delivery policy's | orchestrator | Grace before a Run waiting on a person is parked, for projects that set none (a Go duration). |
+| `orchestrator.park_after` | `DUDE_PARK_AFTER` | the delivery policy's | orchestrator | Grace before a Run waiting on a person is parked, for projects that set none (a Go duration). A Run that dude still has an undelivered note for (a wake note, a steer; not one held for the person's answer) is not parked: the note is delivered, the agent takes its turn, and the grace starts again when it waits again. A note that arrives after the park waits for the person's answer. |
 | `orchestrator.idle_after` | `DUDE_IDLE_AFTER` | the delivery policy's | orchestrator | Quiet time before an idle Run is nudged and parked, for projects that set none. |
 | `orchestrator.conductor_warm` | `DUDE_CONDUCTOR_WARM` | the delivery policy's | orchestrator | How long a task's conductor stays running after its turn before it is parked, for projects that set none. |
 | `orchestrator.wake_window` | `DUDE_WAKE_WINDOW` | `15s` | orchestrator | How long reasons to wake a task's conductor are gathered after the last arrived, before one note delivers them (a Go duration). |
