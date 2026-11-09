@@ -541,13 +541,29 @@ func (s *Syncer) lateDone(runID string, done []lateStamp) {
 // of any of them, and two timings of a Run locking different sets would
 // each wait on the other's. In epoch order, as two timings of a Run take
 // them, so neither waits on the other while holding what it needs. FOR NO
-// KEY UPDATE, as the timed_at UPDATE takes them anyway: nothing conflicts
-// with it that did not already, and like that UPDATE it waits under tx's
-// own bounds (no lock_timeout; the follow-up's or recovery's context), so
-// the wait is the one the UPDATE made before, moved earlier. A batch's
-// stamp waits on it under the stream's budget and keeps its stamp for its
-// own follow-up; resumeAsked under its own, and on a resume's own row
-// only on a retry; neither takes these rows before the Run's.
+// KEY UPDATE, the timed_at UPDATE's own lock; it waits under tx's own
+// bounds (no lock_timeout; the follow-up's or recovery's context). Neither
+// takes these rows before the Run's, so no cycle: a batch's stamp waits
+// on them under the stream's budget and keeps its stamp for its own
+// follow-up; resumeAsked under its own, and on a resume's own row only on
+// a retry.
+//
+// It is a new contention edge, though, not the UPDATE's wait moved
+// earlier: that UPDATE locks only the resumes it times (first output in,
+// or frames missed), and these are every untimed one, held until tx
+// commits, through the late write. So a timing, a no-op one included
+// (recovery, a follow-up with nothing complete), holds the resume just
+// asked for, still waiting on its first output, which the UPDATE never
+// locked: resumeAccepted's epoch move (stream budget, best effort) may
+// time out on it, and the resume is then timed at the epoch foreseen or
+// not at all; resumeRefused's DELETE may too, and the refused resume's
+// row stays, untimed, never published; a batch's stamp of it is kept
+// for later (deferStamp), costing a follow-up. Each is a timing step
+// lost, never the Run delayed past the stream's budget. Narrowing the
+// set to the resumes that could be timed now, under READ COMMITTED, would
+// let a batch keep a stamp of a resume it was not locking and commit its
+// first output between the late read and the UPDATE: the round-2 race,
+// back for an owner's timing, which does not skip owed resumes.
 func lockUntimed(ctx context.Context, tx pgx.Tx, runID string) error {
 	_, err := tx.Exec(ctx, `SELECT 1 FROM run_resumes WHERE run_id = $1 AND timed_at IS NULL ORDER BY epoch FOR NO KEY UPDATE`, runID)
 	return err
@@ -555,9 +571,14 @@ func lockUntimed(ctx context.Context, tx pgx.Tx, runID string) error {
 
 // writeLateStamps writes, in tx, the late stamps batches of the Run kept
 // (and own, the follow-up's batch's), each only where its column is still
-// empty and, as stamp does (untimed), the resume not timed yet: the
-// frame's time is kept, a stamp a batch got in meanwhile wins (earlier,
-// or the same frame replayed), and nothing lands on a timed resume. One
+// empty and the resume not timed yet: the frame's time is kept, a stamp a
+// batch got in meanwhile wins (earlier, or the same frame replayed), and
+// nothing lands on a timed resume. running_at too, unlike stamp (untimed):
+// so the statement touches only rows lockUntimed holds, and never waits
+// on a batch holding a timed one, which would fail every stamp of the
+// write. A running_at kept for a timed resume feeds only roundSyncLanded,
+// and the next running frame of that placement stamps it, as stamp still
+// does on a timed resume; until then, it is said to land nowhere. One
 // statement, under resumeAsked's budget, not the stream's: off the Run's
 // batch, it can wait out the lock or the slow moment the batch could not,
 // and holds the rows it locks no longer than that budget all told. A
@@ -581,7 +602,7 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own
 		if i > 0 {
 			set, filters = set+", ", filters+", "
 		}
-		set += c + ` = CASE WHEN ` + untimed(c) + ` THEN COALESCE(rr.` + c + `, l.` + c + `) ELSE rr.` + c + ` END`
+		set += c + ` = COALESCE(rr.` + c + `, l.` + c + `)`
 		filters += `min(at) FILTER (WHERE col = '` + c + `') AS ` + c
 	}
 	type landed struct {
@@ -594,8 +615,7 @@ func (s *Syncer) writeLateStamps(ctx context.Context, tx pgx.Tx, r phaseRun, own
 		got, err := tx.Query(ctx, `WITH l AS (SELECT epoch, `+filters+`
 				FROM unnest($2::text[], $3::int[], $4::timestamptz[]) AS l(col, epoch, at) GROUP BY epoch),
 			u AS (UPDATE run_resumes rr SET `+set+`
-				FROM l WHERE rr.run_id = $1 AND rr.epoch = l.epoch AND NOT rr.frames_missed
-					AND (rr.timed_at IS NULL OR l.running_at IS NOT NULL)
+				FROM l WHERE rr.run_id = $1 AND rr.epoch = l.epoch AND NOT rr.frames_missed AND rr.timed_at IS NULL
 				RETURNING rr.epoch, rr.running_at, rr.busy_at, rr.first_output_at)
 			SELECT l.epoch, COALESCE(u.running_at, rr.running_at), COALESCE(u.busy_at, rr.busy_at),
 				COALESCE(u.first_output_at, rr.first_output_at)
