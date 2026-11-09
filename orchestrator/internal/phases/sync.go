@@ -489,17 +489,21 @@ const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.i
 
 // unheardNews (SQL, over runs r): dude has something for an agent waiting
 // on a person that it has not taken a turn for yet: queued and not held for
-// an answer (unsentDirective), or sent since its wait began and its turn
-// not started (the agent's "busy" clears waiting_since, its next wait sets
-// it again), for delivery.UnreadGraceSecs at most, which bounds a receipt
-// or a turn that never comes. A Run is not parked for a person while it
+// an answer (unsentDirective); or sent and either not read yet or read
+// after the wait began — its turn not over: the agent's "busy" clears
+// waiting_since and the turn's end sets it again, at or after the read —
+// for delivery.UnreadGraceSecs from the send at most, which bounds a
+// receipt or a turn that never comes. A park then would stop the container
+// under that turn, and what it had not read would wait for the answer
+// (unreadAtStop, resumable). A Run is not parked for a person while it
 // holds (ParkNow, requestPause): the agent hears the news first, its turn
 // runs, and it is parked once it waits again past the grace. What is held
 // for the answer (HeldBack) does not hold the park off, and what is queued
 // after the park waits for the answer (resumable), as it always did.
 const unheardNews = `(` + unsentDirective + `
 	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
-		AND d.sent_at >= r.waiting_since AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))`
+		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
+		AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))`
 
 // limits are runFrom's parameters: the factory's grace before parking, idle
 // limit and conductor's warm period, in seconds, for projects that set none

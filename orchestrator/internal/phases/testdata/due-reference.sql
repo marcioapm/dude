@@ -27,7 +27,8 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
 	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())))
 	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
-		AND d.sent_at >= r.waiting_since AND d.sent_at > now() - make_interval(secs => 120))),
+		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
+		AND d.sent_at > now() - make_interval(secs => 120))),
 	COALESCE((r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT (EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open')
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking)
