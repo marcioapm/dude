@@ -148,8 +148,9 @@ const copyBackstop = time.Hour
 // writer's commits to be recovered (recover_run) with every value it held
 // scanned for. Past it the copy is deleted: a text file is then served
 // redacted with the values in force (run_secret_values), so a value
-// rotated since is no longer caught there, and a recovery of a Run given
-// secrets is refused (delivery.RecoverySecretsExpiredTx). A fixed
+// rotated since is no longer caught there. A recovery of a Run given
+// secrets whose copy is gone, past it or (a completed writer) at its
+// collection, is refused (delivery.RecoverySecretsExpiredTx). A fixed
 // retention, not a setting.
 const copyRetention = 30 * 24 * time.Hour
 

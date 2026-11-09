@@ -9,4 +9,4 @@ COMMENT ON TABLE run_project_secrets IS
   'Deleted once nothing can produce or read the Run''s output (phases.copyNeeded): kept while the Run is kept '
   '(runs.keep) to be resumed or handed to its next round, and for 30 days after it ended if it published a text '
   'file or is a failed or aborted writer recover_run may push; otherwise at its collection, or by the backstop '
-  'from an hour after it ended. Past those 30 days a recovery of a Run given secrets is refused.';
+  'from an hour after it ended. A recovery of a Run given secrets whose copy is gone is refused.';
