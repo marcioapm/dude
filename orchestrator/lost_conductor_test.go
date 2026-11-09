@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -228,7 +229,7 @@ func TestHistoricalAnswerAndUnrelatedChatAreNotAnUnreadAnswer(t *testing.T) {
 		t.Fatalf("answer: %d %v", status, body)
 	}
 	w.until("old answer heard", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0
+		return w.unheard(old) == 0
 	})
 	if status, body := w.chat(task, "Unrelated new README work"); status >= 300 {
 		t.Fatalf("chat: %d %v", status, body)
@@ -299,7 +300,7 @@ func TestALostQuietConductorDoesNotDefaultTheDecision(t *testing.T) {
 	w.agentsDone(task, "the simplifier's narrow review", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
 	w.wokenWith(task, "review")
 	w.until("genuinely heard wakes settled before loss", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, old) == 0 &&
+		return w.unheard(old) == 0 &&
 			w.count(`SELECT count(*) FROM conductor_wake_attempts a LEFT JOIN directives x ON x.id=a.directive_id
 			 WHERE a.conductor_run_id=$1 AND a.failed_at IS NULL AND a.heard_at IS NULL
 			 AND (a.directive_id IS NULL OR (x.delivered_at IS NULL AND x.failed_at IS NULL))`, old) == 0
@@ -336,6 +337,22 @@ func TestALostQuietConductorDoesNotDefaultTheDecision(t *testing.T) {
 	}
 }
 
+// unheard is how many directives sent to run are neither delivered nor
+// failed.
+func (w *world) unheard(run string) int {
+	w.t.Helper()
+	return w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, run)
+}
+
+// pendingWakes is task's pending wake reasons, kind and key, one per line;
+// empty if none. A reason that only rides on another's note never wakes
+// the conductor, so it is not counted.
+func (w *world) pendingWakes(task string) string {
+	w.t.Helper()
+	return w.str(`SELECT COALESCE(string_agg(kind || ' ' || key, E'\n' ORDER BY created_at), '') FROM conductor_wakes
+		WHERE task_id = $1 AND delivered_at IS NULL AND NOT starts_with(key, $2)`, task, delivery.RideWakeKey(""))
+}
+
 // failedAsLuxLost fails conductor run as main did when lux lost it: no
 // question.closed, its open questions cancelled by the status change.
 func (w *world) failedAsLuxLost(run string) {
@@ -348,9 +365,48 @@ func (w *world) failedAsLuxLost(run string) {
 func (w *world) failedOnceHeard(run string) {
 	w.t.Helper()
 	w.until("all conductor input heard", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE run_id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, run) == 0
+		return w.unheard(run) == 0
 	})
 	w.failedAsLuxLost(run)
+}
+
+// parkedAskingAtGate is a conducted task at the pull request gate whose
+// conductor asked the person with decide (an ask_person) and was parked
+// for them, having heard everything dude sent it. Returns the task, the
+// conductor and the gate question.
+//
+// The conductor asks in a turn of its own, as a real one does: that turn
+// ends with the question open, so it waits on the person (translate's
+// idle) by construction, not only if a wake happens to land after the ask.
+// It is parked only once its input is heard and no reason is pending: a
+// note queued as the park's grace ends is held, unread, until the person
+// answers (resumable; requestPause does not wait for it on a park for a
+// person), which is not the state this sets up.
+func (w *world) parkedAskingAtGate(decide string) (task, old, q string) {
+	w.t.Helper()
+	w.syncer.ParkAfter = time.Hour
+	task = w.task()
+	w.reachGate(task)
+	if status, out := w.chat(task, "Ask me at the gate.\n"+fakeagent.ConductorCallPrefix+"decide "+decide); status >= 300 {
+		w.t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("the gate question asked and waited on", func() bool {
+		q = w.str(`SELECT COALESCE((SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'), '')`, task)
+		if q == "" {
+			return false
+		}
+		old = w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND waiting_since IS NOT NULL`, old) == 1
+	})
+	w.until("all it was sent heard, no reason pending", func() bool {
+		return w.unheard(old) == 0 && w.pendingWakes(task) == ""
+	})
+	w.syncer.ParkAfter = time.Millisecond
+	w.untilParked(old)
+	if p := w.pendingWakes(task); p != "" {
+		w.t.Fatalf("a wake reason came as the conductor was parked, unheard:\n%s", p)
+	}
+	return task, old, q
 }
 
 // failedAsOnMain is main's end state for the issue: the conductor failed
@@ -366,18 +422,12 @@ func (w *world) failedAsOnMain() (task, old, q string) {
 // ask_person, e.g. one that recommends another of the gate's choices.
 func (w *world) failedAsOnMainAsking(decide string) (task, old, q string) {
 	w.t.Helper()
-	w.syncer.ParkAfter = time.Millisecond
-	task = w.task()
-	w.reachGate(task)
-	w.must(task, "decide", decide)
-	q = w.str(`SELECT id FROM questions WHERE task_id = $1 AND pr_gate_heads IS NOT NULL AND status = 'open'`, task)
-	old = w.str(`SELECT run_id FROM questions WHERE id = $1`, q)
-	w.untilParked(old)
+	task, old, q = w.parkedAskingAtGate(decide)
 	w.failedAsLuxLost(old)
 	if st := w.str(`SELECT status::text FROM questions WHERE id = $1`, q); st != "cancelled" {
 		w.t.Fatalf("the question is %s", st)
 	}
-	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NULL AND failed_at IS NULL`, old); n != 0 {
+	if n := w.unheard(old); n != 0 {
 		w.t.Fatalf("%d directives unread", n)
 	}
 	return task, old, q
