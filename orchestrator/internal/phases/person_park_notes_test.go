@@ -366,6 +366,12 @@ func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
 		{name: "held, inside the grace, a retry sent after the hold", hold: "2 minutes", waiting: "10 seconds",
 			note: "now() - interval '1 minute'", also: "deliver_after = now() - interval '58 seconds', sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
 			parkNow: true},
+		// Nor held off by one, unread: only what was queued by the hold
+		// holds the park off (newsCutoff); the stop un-sends it for the
+		// answer (unsendUnread).
+		{name: "held, inside the grace, an interrupt sent after the hold, unread", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, claimed_at = now() - interval '5 seconds', sent_at = now() - interval '5 seconds'",
+			parkNow: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, _ := waitingWorld(t)
