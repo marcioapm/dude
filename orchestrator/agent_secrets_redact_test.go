@@ -154,11 +154,14 @@ func TestARotationMidRunStillRedactsTheValueTheRunWasGiven(t *testing.T) {
 	w := newWorld(t)
 	w.grant("SNOWFLAKE_PASSWORD", snowflakePassword, "reviewer")
 	scripted := w.lux.Decide
+	hookConn := w.hookConn()
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		b := scripted(spec)
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
 			// Rotated as the reviewer starts, before it prints anything.
-			mustExec(t, w.owner, `UPDATE project_secrets SET value = 'sf-test-ROTATED-password-999' WHERE project_id = $1`, w.project)
+			if _, err := hookConn.Exec(context.Background(), `UPDATE project_secrets SET value = 'sf-test-ROTATED-password-999' WHERE project_id = $1`, w.project); err != nil {
+				t.Error(err)
+			}
 			b.Reply = "Connected with " + snowflakePassword + ". Nothing to add."
 		}
 		return b

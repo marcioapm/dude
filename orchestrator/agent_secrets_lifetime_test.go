@@ -18,11 +18,25 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
+
+// hookConn is a pool on the test's database for a fakelux Decide hook: lux
+// calls Decide on goroutines of its own while the test polls on w.owner, a
+// single connection, which two goroutines must not use at once ("conn
+// busy"). Closed when the test ends.
+func (w *world) hookConn() *pgxpool.Pool {
+	w.t.Helper()
+	pool, err := pgxpool.New(context.Background(), w.owner.Config().ConnString())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.t.Cleanup(pool.Close)
+	return pool
+}
 
 // githubHolds says whether any branch on the fake GitHub's repository has
 // a commit that adds or removes value. (lux's checkpoints, which the fake
@@ -128,13 +142,7 @@ func TestARoundHandedOverAfterARotationStillRedactsAndRefusesTheOldValue(t *test
 	w, task := stuckReview(t, 3)
 	w.grant("IMPL_TOKEN", implToken, "implementer", "fixer")
 	values := []string{implTokenB, implTokenC}
-	// lux's Decide runs on its own goroutines while the test polls on
-	// w.owner: the hook gets a connection of its own, used under mu.
-	hookConn, err := pgx.ConnectConfig(context.Background(), w.owner.Config())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = hookConn.Close(context.Background()) })
+	hookConn := w.hookConn()
 	var mu sync.Mutex
 	reviews := 0
 	scripted := w.lux.Decide
@@ -155,13 +163,11 @@ func TestARoundHandedOverAfterARotationStillRedactsAndRefusesTheOldValue(t *test
 			reviews++
 			mu.Unlock()
 		case "fix":
-			mu.Lock()
 			var fixes int
 			if err := hookConn.QueryRow(context.Background(), `SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix'`, task).
 				Scan(&fixes); err != nil {
 				t.Error(err)
 			}
-			mu.Unlock()
 			if fixes >= 2 {
 				b.CallTools = append(slices.Clone(b.CallTools), gitCall("log", "-1", "--grep=remembered "+implToken),
 					writeCall("config/app.toml", "password = "+implToken), commitCall("Add config"))
