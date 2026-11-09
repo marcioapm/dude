@@ -541,7 +541,10 @@ const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.i
 // and the Run parks at the next sweep once it waits again: P+D and a
 // sweep. Or, for a note whose send or turn does not come, by
 // delivery.UnreadGraceSecs; and never past the ceiling. Notes that keep
-// arriving after the hold do not extend it: they wait for the answer.
+// arriving after the hold do not extend it: they wait for the answer. A
+// note sent after the hold (the answer itself, or one to a Run waiting
+// only on a peer or the checks gate) ends it (holdSpent): what main would
+// have resumed the Run for begins a wait with a full grace.
 //
 // What is held for the answer (HeldBack) does not hold the park off, and
 // what is queued after the park waits for the answer (resumable), as it
@@ -564,7 +567,9 @@ const newsPending = `(EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id A
 // newsHeldSince (SQL, over runs r) is true once the Run's park was held for
 // news in the wait it waits in now: news_hold_at, set by holdForNews, no
 // older than the wait's start (waitBegan: an answer and a new ask, or a
-// resume, begin a new wait, so each wait's park is held once). A park
+// resume, begin a new wait, so each wait's park is held once; an answer
+// whose asks older than the hold stay open does not move it, holdSpent
+// ends that hold). A park
 // clears news_hold_at as well (pause, parkStopped), and so does a resume
 // (resume, takeUpLive): a take-up writes no resume of its own. waitBegan is
 // read only for a Run that has one; a wait that does not say when it began
@@ -603,7 +608,8 @@ const holdSpent = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND 
 // otherwise: only what was queued by then holds the park off
 // (newsPending). A Run waiting only on a peer or the checks gate is
 // resumed for a note queued after its park (resumable), so a note after
-// its hold is heard first, not parked over and resumed for.
+// its hold is heard first, not parked over and resumed for, and ends the
+// hold once sent (holdSpent).
 const newsCutoff = `hold.cutoff`
 
 // heldForNews (SQL, over directives d and runFrom's hold): queued after

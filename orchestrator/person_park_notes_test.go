@@ -309,14 +309,7 @@ func TestAPersonParkHeldForNewsParksOnceItsNoteIsHeardThoughNotesKeepComing(t *t
 	w.onFailureShowsDirectives(old)
 	const grace = time.Minute
 	w.syncer.ParkAfter = grace
-	gate := make(chan struct{})
-	w.lux.InputGate = gate
-	opened := false
-	t.Cleanup(func() {
-		if !opened {
-			close(gate)
-		}
-	})
+	release := w.gateInput()
 
 	// Main's park time: past the grace, a note due. The park is held.
 	w.waitingOn(old, q, grace+time.Second, grace+time.Second)
@@ -349,8 +342,7 @@ func TestAPersonParkHeldForNewsParksOnceItsNoteIsHeardThoughNotesKeepComing(t *t
 	}
 
 	// The turn runs: parked once it is over, without a fresh grace.
-	opened = true
-	close(gate)
+	release()
 	w.untilParked(old)
 	for _, k := range []int{4, 5} {
 		later = append(later, w.note(task, old, fmt.Sprintf("news %d after the park", k)))
@@ -483,6 +475,114 @@ func TestAPersonParkIsHeldOncePerWaitAResumeBeginsANewOne(t *testing.T) {
 		t.Errorf("%d directives unheard at the second park", n)
 	}
 	w.questionOpen(q, "after the second park")
+}
+
+// The agent asked a peer long before it asked the person
+// (an older ask: waitBegan stays at it), was held at main's park for a
+// note, and the person answers during the held note's turn. The answer is
+// heard (no person's ask is open), and it spends the hold (holdSpent): the
+// wait the answer's turn ends in, on the peer alone, has a full grace, as
+// on main, not a park as soon as it waits. lux holds the held note's turn
+// (InputGate) so the answer is sent while it runs.
+func TestAHeldParkAnsweredWhileAnOlderPeerWaitStaysOpenWaitsAFullGrace(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.waitingAtGate(`{"action":"ask_person"}`)
+	w.onFailureShowsDirectives(old)
+	const grace = time.Minute
+	w.syncer.ParkAfter = grace
+	w.peerWaitSince(task, old, 3*grace/2)
+	release := w.gateInput()
+
+	w.waitingOn(old, q, grace+time.Second, grace+time.Second)
+	held := w.note(task, old, "news before the park")
+	w.until("the held note sent, or the Run parked", func() bool {
+		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, held) == 1
+	})
+	if n := w.parks(old); n != 0 {
+		t.Fatalf("parked %d times, the note due at the park unsent", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`, old); n != 1 {
+		t.Fatalf("the park was not held for the note")
+	}
+	if status, out := w.call("/internal/questions/"+q+"/answer", map[string]any{"text": "Draft"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, out)
+	}
+	answer := w.str(`SELECT COALESCE((SELECT id FROM directives WHERE run_id = $1 AND created_at > (SELECT news_hold_at FROM runs WHERE id = $1)
+		ORDER BY created_at LIMIT 1), '')`, old)
+	if answer == "" {
+		t.Fatalf("no directive carries the answer")
+	}
+	w.until("the answer sent", func() bool {
+		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, answer) == 1
+	})
+	release()
+	w.until("the answer heard and its turn over, waiting on the peer", func() bool {
+		return w.parks(old) > 0 || w.directiveDelivered(answer) && w.waitsAfter(old, answer)
+	})
+	for range 5 {
+		w.pump()
+	}
+	if n := w.parks(old); n != 0 {
+		t.Fatalf("parked %d times inside the grace of the wait the answer's turn ended in", n)
+	}
+	// Past that grace it parks, on its peer, as on main. (What it was sent
+	// moves back as far: read before the wait began.)
+	back := (grace + time.Second).Seconds()
+	mustExec(t, w.owner, `UPDATE runs SET waiting_since = waiting_since - make_interval(secs => $2) WHERE id = $1`, old, back)
+	mustExec(t, w.owner, `UPDATE directives SET sent_at = sent_at - make_interval(secs => $2),
+		delivered_at = delivered_at - make_interval(secs => $2) WHERE run_id = $1`, old, back)
+	w.untilParked(old)
+}
+
+// peerWaitSince opens a wait of run, on task, on a peer task's reply, since
+// ago: an ask (delivery.OpenAsk) that is not a person's.
+func (w *world) peerWaitSince(task, run string, ago time.Duration) {
+	w.t.Helper()
+	peer := w.task()
+	mustExec(w.t, w.owner, `INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text)
+		VALUES ('pm_'||$1, $2, $3, $1, $4, 'which route?')`, run, w.org, task, peer)
+	mustExec(w.t, w.owner, `INSERT INTO peer_waits (id, organization_id, run_id, message_id, how, since)
+		VALUES ('pw_'||$1, $2, $1, 'pm_'||$1, 'wait', now() - make_interval(secs => $3))`, run, w.org, ago.Seconds())
+}
+
+// A Run waiting only on a peer (its question gone; the peer wait is the
+// ask) is held at main's park for a note, and another note comes after the
+// hold. With no person's ask open it is heard, as a parked Run would be
+// resumed for it (resumable), and it spends the hold (holdSpent): the wait
+// its turn ends in has a full grace, as main's after that resume, not a
+// park as soon as it waits.
+func TestAHeldParkOnAPeerHearsALaterNoteAndWaitsAFullGraceAfterIt(t *testing.T) {
+	w := conducting(t)
+	task, old, q := w.waitingAtGate(`{"action":"ask_person"}`)
+	w.onFailureShowsDirectives(old)
+	const grace = time.Minute
+	w.syncer.ParkAfter = grace
+	w.peerWaitSince(task, old, 3*grace/2)
+	mustExec(t, w.owner, `UPDATE questions SET status = 'cancelled' WHERE id = $1`, q)
+	release := w.gateInput()
+
+	w.waitingOn(old, q, grace+time.Second, 0)
+	held := w.note(task, old, "news before the park")
+	w.until("the held note sent, or the Run parked", func() bool {
+		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, held) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`, old); n != 1 || w.parks(old) != 0 {
+		t.Fatalf("the park was not held for the note: %d parks", w.parks(old))
+	}
+	later := w.note(task, old, "news after the hold")
+	w.until("the later note sent, or the Run parked", func() bool {
+		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND sent_at IS NOT NULL`, later) == 1
+	})
+	release()
+	w.until("both heard and their turn over, or the Run parked", func() bool {
+		return w.parks(old) > 0 || w.directiveDelivered(held) && w.directiveDelivered(later) && w.waitsAfter(old, later)
+	})
+	for range 5 {
+		w.pump()
+	}
+	if n := w.parks(old); n != 0 {
+		t.Fatalf("parked %d times inside the grace of the wait the later note's turn ended in", n)
+	}
 }
 
 // The agent asked long ago (past the hold's ceiling) and worked on; its
