@@ -205,8 +205,9 @@ type phaseRun struct {
 	Waiting bool
 	// Its agent has waited on a person past the project's grace period, and
 	// has heard everything dude has for it (unheardNews): news first, so a
-	// Run with some falls through to its delivery. Or it waits, and its wait
-	// is past unheardNews's ceiling (newsCeiling): parked, news or not.
+	// Run with some falls through to its delivery. Or it waits with news
+	// pending past unheardNews's ceiling (pastNewsCeiling): parked at once,
+	// its news left for the answer.
 	ParkNow bool
 	// Paused, and due to be resumed: a person asked, or dude's own reason
 	// for pausing it is over (resumable).
@@ -291,7 +292,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	` + repoApproved + `,
 	COALESCE(r.dude_pause, ''), ask.open,
 	r.waiting_since IS NOT NULL AND ask.open AND (COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND NOT ` + unheardNews + `
-		OR COALESCE(` + waitBegan + ` <= now() - make_interval(secs => ` + newsCeiling + ` * lim.park_secs), false)),
+		OR ` + newsPending + ` AND ` + pastNewsCeiling + `),
 	COALESCE(` + resumable + `, false),
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
@@ -503,28 +504,35 @@ const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.i
 // (waitBegan): a Run that keeps getting notes (a conductor woken every few
 // minutes overnight) would otherwise never park, each note resetting
 // waiting_since and so the grace, and paying for a turn. Past the ceiling
-// it parks once it waits (ParkNow), and later notes wait for the answer.
+// a Run with news pending is parked as soon as it waits (ParkNow), its
+// news left for the answer; one with none parks after its grace, as it
+// always did.
 //
 // What is held for the answer (HeldBack) does not hold the park off, and
 // what is queued after the park waits for the answer (resumable), as it
 // always did. Delivered to a phase Run held on ChecksWaiting, a note's turn
 // ends in a new report, which may cost another gate round: the same path a
 // steer inside the grace already takes.
-const unheardNews = `((EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+const unheardNews = `(` + newsPending + ` AND COALESCE(` + waitBegan + ` > now() - make_interval(secs => ` + newsCeiling + ` * lim.park_secs), false))`
+
+// newsPending (SQL, over runs r) is unheardNews before its ceiling.
+const newsPending = `(EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 		AND NOT ` + delivery.HeldBack + `
 		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))
 	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
 		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
-		AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))
-	AND COALESCE(` + waitBegan + ` > now() - make_interval(secs => ` + newsCeiling + ` * lim.park_secs), false))`
+		AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))`
+
+// pastNewsCeiling (SQL, over runs r and lim.park_secs): the Run's wait is
+// past unheardNews's ceiling. Neither it nor its converse holds for a wait
+// that does not say when it began: news does not hold its park, as before.
+const pastNewsCeiling = `COALESCE(` + waitBegan + ` <= now() - make_interval(secs => ` + newsCeiling + ` * lim.park_secs), false)`
 
 // newsCeiling (SQL) is how many of its park graces a Run's wait on a person
 // may be put off by dude's news (unheardNews), counted from waitBegan: one
 // grace, as without news, and one more for what came during it to be
-// heard. Past it (ParkNow) the Run is parked as soon as it waits, however
-// recently a note's turn reset waiting_since, and later notes wait for the
-// answer: a Run woken every few minutes costs at most this many graces of
-// container and their notes' turns, not a night of them.
+// heard. A Run woken every few minutes costs at most about this many
+// graces of container, and its notes' turns, not a night of them.
 const newsCeiling = `2`
 
 // waitBegan (SQL, over runs r) is when the Run began waiting on what holds
@@ -532,7 +540,10 @@ const newsCeiling = `2`
 // (run_resumes), if later — a Run resumed for one answer and still waiting
 // on an older ask begins a new wait. Not waiting_since: a note's turn
 // resets it. NULL for an ask that does not say when (an escalation raised
-// before raisedAt was recorded): no hold, as before.
+// before raisedAt was recorded). A resume with no run_resumes row (its
+// timing is best effort; takeUpLive writes none) counts from the ask: news
+// then parks it at once, as it did before; without news its grace runs as
+// always.
 const waitBegan = `GREATEST(` + delivery.OpenAskSince + `,
 	(SELECT max(rr.requested_at) FROM run_resumes rr WHERE rr.run_id = r.id))`
 
