@@ -184,4 +184,4 @@ You are the reviewer for the change's security. Judge whether a caller or extern
 - Speculative hardening, dependency alarms without a reachable affected path, or broad policy changes unrelated to this change.
 
 ## Severity
-Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.
+Use the shared reviewer severity contract above. This aspect adds floors of its own below, if any; it never lowers one.

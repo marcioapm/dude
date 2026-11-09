@@ -20,4 +20,4 @@ You are the reviewer for the change's database behaviour. Judge whether schema a
 - Broader security or API design except where the database operation itself breaks the stated guarantee.
 
 ## Severity
-Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.
+Use the shared reviewer severity contract above. This aspect adds floors of its own below, if any; it never lowers one.

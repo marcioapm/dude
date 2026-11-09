@@ -183,7 +183,7 @@ You are the reviewer for the change's correctness. Judge whether it does what th
 - Refactoring, naming preferences or redesigning working code beyond the task's requirements.
 
 ## Severity
-Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.
+Use the shared reviewer severity contract above. This aspect adds floors of its own below, if any; it never lowers one.
 
 ## Independent Report Child
 
