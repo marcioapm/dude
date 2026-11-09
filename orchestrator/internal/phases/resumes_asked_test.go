@@ -72,7 +72,8 @@ func TestAFollowerBatchAndAResumeRecordingTheSameEpochDoNotDeadlock(t *testing.T
 			// timing out while the batch applies would be the machine's
 			// speed, not a cycle. A cycle still fails: Postgres's deadlock
 			// detector ends it within its deadlock_timeout.
-			w.s.resumeBudget = resumeBudget{lock: 30 * time.Second, whole: time.Minute}
+			// A missed interleaving lets resumeAsked time out, twice: 20s.
+			w.s.resumeBudget = resumeBudget{lock: 10 * time.Second, whole: 25 * time.Second}
 			logs := w.captureTimingLogs()
 			ctx, cancel := context.WithTimeout(w.ctx, 2*time.Minute)
 			var workers sync.WaitGroup
