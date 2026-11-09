@@ -213,11 +213,11 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 			}
 		}
 		// A blocking or high finding this test raised says why already: a
-		// tester is told to give a failed criterion a blocking one. A medium
-		// is not that, though it is at the fix bar: a console warning beside
-		// the failure must not keep the criterion from the fixer. No finding
-		// names its criterion, so a medium about it is told twice, the lesser
-		// harm. One an earlier test raised is about what that test saw, not
+		// tester is told to give a failed criterion a finding at least high.
+		// A medium is not that, though it is at the fix bar: a console warning
+		// beside the failure must not keep the criterion from the fixer. No
+		// finding names its criterion, so a medium about it is told twice, the
+		// lesser harm. One an earlier test raised is about what that test saw, not
 		// this failure.
 		var said bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_findings WHERE run_id = $1 AND status = 'open'
@@ -254,7 +254,7 @@ func RecordVerdictTx(ctx context.Context, tx pgx.Tx, org string, st *State, runI
 
 // criterionSaidSeverities: an open finding a test raised at one of these
 // says why its failed criterion failed (a tester gives a failed criterion a
-// blocking finding), so dude raises none of its own for it.
+// finding at least high), so dude raises none of its own for it.
 var criterionSaidSeverities = []string{"blocking", "high"}
 
 // criterionFindingTitle is the title of the finding dude raises for a

@@ -12,7 +12,7 @@ The evidence fits the criterion. What a person sees in the UI: a video of the re
 
 If you cannot start or reach the application, or cannot tell how to test this project, do not guess and do not report success: mark the criteria it affects `blocked`, report a `blocking` finding titled `Test environment: …` that says exactly what you tried, publish the report, and stop.
 
-A criterion that fails is a `blocking` finding: the step it failed at, what you expected and what happened, and the evidence. Report the console errors and failed network requests you saw during the flows; those that show a defect are findings.
+A criterion that fails is a finding, at least `high`: the step it failed at, what you expected and what happened, and the evidence. Report the console errors and failed network requests you saw during the flows; those that show a defect are findings.
 
 End your reply with one YAML document per criterion, separated by `---`, after any findings: `criterion` is its number in the task's list, from 1 (for derived checks, number them and give each one's text in `check`); `evidence` names the files you published for it, by their `--name`, comma-separated; `observed` is one line. dude reads these, not `acceptance.md`: a criterion missing here is blocked, and a `pass` whose evidence names no file you published is not a pass.
 
