@@ -2,8 +2,6 @@ package orchestrator_test
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -76,7 +74,7 @@ func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 	// The question asked now: the hold's ceiling (two graces) is ahead.
 	const grace = 2 * time.Second
 	w.syncer.ParkAfter = grace
-	w.waitingOn(old, q, time.Hour)
+	w.waitingOn(old, q, time.Hour, 0)
 	w.reason(task, "test:news", "CI failed on the base", time.Minute)
 
 	var note string
@@ -131,16 +129,16 @@ func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 	w.questionOpen(q, "after the park")
 }
 
-// waitingOn sets run waiting on the person for as long as waited, its
-// question q asked now: past its grace, inside the ceiling of unheardNews.
-// What it was sent before is moved back as far, so it was still read
-// before the wait began.
-func (w *world) waitingOn(run, q string, waited time.Duration) {
+// waitingOn moves run's wait on the person back by waited, and its
+// question q's ask to asked ago (0: now, so the ceiling of unheardNews is
+// ahead). What it was sent before is moved back as far, so it was still
+// read before the wait began.
+func (w *world) waitingOn(run, q string, waited, asked time.Duration) {
 	w.t.Helper()
 	mustExec(w.t, w.owner, `UPDATE runs SET waiting_since = waiting_since - make_interval(secs => $2) WHERE id = $1`, run, waited.Seconds())
 	mustExec(w.t, w.owner, `UPDATE directives SET sent_at = sent_at - make_interval(secs => $2),
 		delivered_at = delivered_at - make_interval(secs => $2) WHERE run_id = $1`, run, waited.Seconds())
-	mustExec(w.t, w.owner, `UPDATE questions SET asked_at = now() WHERE id = $1`, q)
+	mustExec(w.t, w.owner, `UPDATE questions SET asked_at = now() - make_interval(secs => $2) WHERE id = $1`, q, asked.Seconds())
 }
 
 // lux refuses every input to the Run (a 503, as BeforeInput refuses): the
@@ -156,7 +154,7 @@ func TestAPersonParkDoesNotWaitForANoteLuxKeepsRefusing(t *testing.T) {
 	w.lux.BeforeInput = func(runID, _ string) bool { return runID != luxRun }
 	// Past the grace, far inside the ceiling: only the claim's bound ends the hold.
 	w.syncer.ParkAfter = time.Minute
-	w.waitingOn(old, q, time.Hour)
+	w.waitingOn(old, q, time.Hour, 0)
 	w.reason(task, "test:news", "CI failed on the base", time.Minute)
 	var note string
 	w.until("the note tried and refused", func() bool {
@@ -182,95 +180,60 @@ func TestAPersonParkDoesNotWaitForANoteLuxKeepsRefusing(t *testing.T) {
 	w.questionOpen(q, "once parked")
 }
 
-// Notes that keep coming. The sweep runs only when the test pumps, so a
-// wait reaches past its grace unswept, then a note is queued, then it is
-// swept: one is pending as the Run is due its park. First such a note,
-// inside the ceiling (two graces from the ask): it holds the park, and is
-// heard. Then notes inside each grace (between a quarter and half of it),
-// heard and not parked over, as on main, until one comes past the ceiling.
-// Then one past the next wait's grace: past the ceiling it no longer holds
-// the park, and the Run parks with it left for the answer, as without
-// news. It parks exactly once, never inside a grace.
+// Notes that keep coming, on a clock the test sets: the grace is a minute,
+// so a wait is past it only when the test moves waiting_since (and the ask)
+// back, and the sweep runs only when the test pumps. First a note as the
+// wait is past its grace, inside the ceiling (two graces from the ask): it
+// holds the park, and is heard. Then, the ask past the ceiling, a note
+// inside the grace of the wait that turn ended in: heard, not parked over,
+// as on main. Then a note as that note's wait is past its grace: past the
+// ceiling it no longer holds the park, and the Run parks once, with it
+// left for the answer, as without news.
 func TestAPersonParkComesByTheCeilingWhileNotesKeepComing(t *testing.T) {
 	w := conducting(t)
 	task, old, q := w.waitingAtGate(`{"action":"ask_person"}`)
 	w.onFailureShowsDirectives(old)
-	const grace = 2 * time.Second
+	const grace, ε = time.Minute, time.Second
 	w.syncer.ParkAfter = grace
-	w.waitingOn(old, q, 0)
-	// stage: 0 the held note past a grace, 1 notes inside each grace, 2 a
-	// note past the grace past the ceiling.
-	notes, stage, lastWait, inside := 0, 0, "", ""
-	deadline := time.Now().Add(20 * time.Second)
-	for w.parks(old) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("not parked after %d notes\nruns:\n%s", notes, w.describeRuns())
-		}
-		w.questionOpen(q, "while notes came")
-		var wait string
-		var past, inGrace, pastCeiling bool
-		if err := w.owner.QueryRow(context.Background(), `SELECT COALESCE(waiting_since::text, ''),
-			COALESCE(waiting_since <= now() - make_interval(secs => $2), false),
-			COALESCE(waiting_since BETWEEN now() - make_interval(secs => $2 / 2) AND now() - make_interval(secs => $2 / 4), false),
-			(SELECT asked_at FROM questions WHERE id = $3) <= now() - make_interval(secs => 2 * $2)
-			FROM runs WHERE id = $1 AND status = 'running' AND control = 'none'`, old, grace.Seconds(), q).Scan(&wait, &past, &inGrace, &pastCeiling); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			t.Fatal(err)
-		}
-		due := false
-		switch {
-		case wait == "" || w.unheard(old) > 0 || wait == lastWait:
-			// A turn or a note under way, or this wait has had its note.
-			due = wait == "" || w.unheard(old) > 0
-		case stage == 0 && past && !pastCeiling, stage == 2 && past:
-			due = true
-		case stage == 1 && inGrace:
-			due = true
-		}
-		if due && wait != "" && w.unheard(old) == 0 {
-			notes++
-			id := w.note(task, old, fmt.Sprintf("news %d", notes))
-			lastWait = wait
-			switch {
-			case stage == 0:
-				stage = 1
-			case stage == 1 && pastCeiling:
-				inside, stage = id, 2
-			}
-		}
-		if due {
-			w.pump()
-		}
-		time.Sleep(untilPoll)
+
+	// Past the grace, inside the ceiling: the park is held for the note.
+	w.waitingOn(old, q, grace+ε, grace+ε)
+	held := w.note(task, old, "news 1")
+	w.until("the held note's turn over, or the Run parked", func() bool { return w.parks(old) > 0 || w.waitsAfter(old, held) })
+	if n := w.parks(old); n != 0 {
+		t.Fatalf("parked %d times past the grace inside the ceiling, the note unheard", n)
 	}
-	if inside == "" || !w.directiveDelivered(inside) {
-		t.Errorf("parked with the note inside the grace past the ceiling (%q) unheard", inside)
+
+	// Inside the grace of the new wait, the ask past the ceiling: the note
+	// is heard and the Run not parked over it.
+	w.waitingOn(old, q, grace/4, 2*grace+ε)
+	inside := w.note(task, old, "news 2")
+	w.until("the note inside the grace heard, its turn over, or the Run parked", func() bool { return w.parks(old) > 0 || w.waitsAfter(old, inside) })
+	if n := w.parks(old); n != 0 {
+		t.Fatalf("parked %d times inside the grace, past the ceiling", n)
 	}
+
+	// Past the grace of that wait, past the ceiling: parked, the note left.
+	w.waitingOn(old, q, grace+ε, 3*grace+ε)
+	last := w.note(task, old, "news 3")
 	w.untilParked(old)
-	asked := `(SELECT asked_at FROM questions WHERE id = $2)`
-	parkedAt := `(SELECT (payload->>'parkedAt')::timestamptz FROM events WHERE run_id = $1 AND event_type = 'run.parked')`
-	describe := func() string {
-		return w.str(`SELECT format('parked %s, asked %s, waiting since %s', `+parkedAt+`, `+asked+`, waiting_since) FROM runs WHERE id = $1`, old, q)
+	for range 5 {
+		w.pump()
 	}
-	// Held while inside the ceiling: not parked before it.
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND `+parkedAt+` >= `+asked+` + make_interval(secs => $3)`,
-		old, q, (2 * grace).Seconds()); n != 1 {
-		t.Errorf("parked inside the ceiling, with a note pending: %s", describe())
+	if n := w.parks(old); n != 1 {
+		t.Errorf("parked %d times, want once", n)
 	}
-	// Past the grace of the wait it parked in, and by the ceiling and a
-	// grace more (and a note's turn, and a sweep or two).
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND `+parkedAt+` >= waiting_since + make_interval(secs => $2)`,
-		old, grace.Seconds()); n != 1 {
-		t.Errorf("parked inside its grace: %s", describe())
+	for _, id := range []string{held, inside} {
+		if !w.directiveDelivered(id) {
+			t.Errorf("parked with %s, a note before the ceiling's park, unheard", id)
+		}
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND `+parkedAt+` <= `+asked+` + make_interval(secs => $3)`,
-		old, q, (3*grace + 3*time.Second).Seconds()); n != 1 {
-		t.Errorf("parked well past the ceiling: %s", describe())
+	if w.directiveDelivered(last) || w.unheard(old) != 1 {
+		t.Errorf("the note past the ceiling heard, or %d notes left for the answer, want it alone", w.unheard(old))
 	}
-	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND delivered_at IS NOT NULL AND text LIKE 'news %'`, old); n != notes-1 {
-		t.Errorf("%d notes heard before the park, want all %d but the last", n, notes)
-	}
-	if n := w.unheard(old); n != 1 {
-		t.Errorf("%d notes left for the answer, want the last", n)
+	if n := w.count(`SELECT count(*) FROM runs r, events p WHERE r.id = $1 AND p.run_id = r.id AND p.event_type = 'run.parked'
+		AND (p.payload->>'parkedAt')::timestamptz >= r.waiting_since + make_interval(secs => $2)`, old, grace.Seconds()); n != 1 {
+		t.Errorf("parked inside the grace of its wait")
 	}
 	w.note(task, old, "the base moved on")
 	for range 5 {
@@ -283,6 +246,14 @@ func TestAPersonParkComesByTheCeilingWhileNotesKeepComing(t *testing.T) {
 		t.Errorf("resumed %d times for a note, the question unanswered", resumed)
 	}
 	w.questionOpen(q, "after the park")
+}
+
+// waitsAfter says whether run waits again after directive id was
+// delivered: the turn that read it is over.
+func (w *world) waitsAfter(run, id string) bool {
+	w.t.Helper()
+	return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since IS NOT NULL
+		AND waiting_since >= (SELECT delivered_at FROM directives WHERE id = $2)`, run, id) == 1
 }
 
 // The agent asked long ago (past the hold's ceiling) and worked on; its
