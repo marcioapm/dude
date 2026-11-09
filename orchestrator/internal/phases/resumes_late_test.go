@@ -460,13 +460,18 @@ func TestALateStampWithNoEpochIsForTheResumeItWasAbout(t *testing.T) {
 	}
 }
 
-// A Run's late stamps go once its follower is over: nothing else would
-// drop them while the process runs.
+// A Run's late stamps go once its follower is over, but for those of a
+// resume a follow-up is still owed: nothing else would drop them while
+// the process runs, and an owed one is still to be timed, by any of the
+// Run's follow-ups. Here 2's stamp is owed to no one and goes; 3's is
+// owed and stays.
 func TestALateStampGoesWithItsFollower(t *testing.T) {
 	w := newResumeWorld(t)
+	now := time.Now()
 	w.s.lateMu.Lock()
-	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, time.Now()}}}
+	w.s.late = map[string][]lateStamp{w.run.ID: {{"busy_at", 2, now}, {"busy_at", 3, now}}}
 	w.s.lateMu.Unlock()
+	w.s.owe(w.run.ID, 3)
 	st := newStreamLux(w.lux)
 	w.s.Lux = st
 	r := w.run
@@ -480,8 +485,52 @@ func TestALateStampGoesWithItsFollower(t *testing.T) {
 	if err := w.s.unfollowWait(w.ctx, w.run.ID); err != nil {
 		t.Fatal(err)
 	}
+	if left := w.s.lateStamps(w.run.ID); len(left) != 1 || left[0].epoch != 3 {
+		t.Errorf("late stamps %v after the follower ended, want only the owed resume 3's", left)
+	}
+	w.s.paid(w.run.ID, 3)
+	w.s.forgetLate(w.run.ID)
 	if left := w.s.lateStamps(w.run.ID); left != nil {
-		t.Errorf("late stamps kept after the follower ended: %v", left)
+		t.Errorf("late stamps %v once nothing is owed, want none", left)
+	}
+}
+
+// A follow-up whose every timing failed, its Run no longer followed,
+// forgets the stamps it carried: nothing else would. With the Run still
+// followed they stay, for its next timing, until the follower ends.
+func TestAFailedFollowUpOfAnUnfollowedRunLeavesNoLateStamp(t *testing.T) {
+	for _, followed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("followed %v", followed), func(t *testing.T) {
+			w := newResumeWorld(t)
+			w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at, first_output_at)
+				VALUES ($1, $2, 2, 'person', now() - interval '1 second', now())`, w.run.ID, w.run.Org)
+			w.exec(`CREATE FUNCTION fail_timing() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+				IF NEW.timed_at IS NOT NULL THEN RAISE EXCEPTION 'every timing fails'; END IF;
+				RETURN NEW; END $$`)
+			w.exec(`CREATE TRIGGER fail_timing BEFORE UPDATE ON run_resumes FOR EACH ROW EXECUTE FUNCTION fail_timing()`)
+			logs := w.captureTimingLogs()
+			if followed {
+				w.s.mu.Lock()
+				w.s.following = map[string]*follower{w.run.ID: {}}
+				w.s.mu.Unlock()
+			}
+			// As a batch that kept busy_at leaves it: in the Syncer's copy,
+			// and owed to its follow-up.
+			tr := &translator{run: w.run}
+			tr.deferStamp(w.s, "busy_at", 2, time.Now())
+			resumes, late := tr.committed()
+			w.s.resumeFollowUp(w.run, resumes, late...)
+			if got := len(logLines(logs.String(), "every timing fails")); got != 1 {
+				t.Fatalf("%d timings failed, want 1: the test proves nothing\nlogs:\n%s", got, logs)
+			}
+			left := w.s.lateStamps(w.run.ID)
+			if followed && len(left) != 1 {
+				t.Errorf("late stamps %v, want the busy_at kept while the Run is followed", left)
+			}
+			if !followed && left != nil {
+				t.Errorf("late stamps %v kept with no follower left", left)
+			}
+		})
 	}
 }
 
@@ -577,6 +626,54 @@ func TestACommittedBatchsStampOutlivesItsFollower(t *testing.T) {
 	}
 	if _, ok := timed[0]["untilBusyMs"]; !ok {
 		t.Errorf("run.resume.timed has no untilBusyMs: %v", timed[0])
+	}
+}
+
+// A stamp a batch kept is still written when another batch's follow-up
+// times its resume first, after the follower is over: the Syncer's copy
+// outlives the follower while its resume is owed. Here batch A keeps
+// busy_at (owing 2 to its follow-up), batch B commits the first output
+// (its follow-up owes nothing and carries no stamp), the follower ends,
+// and B's follow-up times 2 before A's runs: still with its busy.
+func TestAnotherBatchsFollowUpTimesAKeptBusyWithIt(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2))
+	w.slowStampOnce("busy_at")
+	logs := w.captureTimingLogs()
+
+	resA, lateA := w.commitBatch(busy(2))
+	resB, lateB := w.commitBatch(spoke(2))
+	if !resA[2] || len(lateA) != 1 || lateA[0].col != "busy_at" {
+		t.Fatalf("batch A: follow-up %v, kept %v; want 2 read and its busy_at: the test proves nothing\nlogs:\n%s",
+			resA, lateA, logs)
+	}
+	if read, ok := resB[2]; !ok || read || len(lateB) != 0 {
+		t.Fatalf("batch B: follow-up %v, kept %v; want 2 timed only, no stamp: the test proves nothing\nlogs:\n%s",
+			resB, lateB, logs)
+	}
+	w.s.forgetLate(w.run.ID)
+	w.s.resumeFollowUp(w.run, resB, lateB...)
+	w.s.resumeFollowUp(w.run, resA, lateA...)
+
+	row := w.row(2)
+	if row["timed_at"] == nil || row["busy_at"] == nil {
+		t.Fatalf("timed_at %v, busy_at %v: want the resume timed with its busy\nlogs:\n%s", row["timed_at"], row["busy_at"], logs)
+	}
+	timed := w.timed()
+	if len(timed) != 1 {
+		t.Fatalf("%d run.resume.timed, want 1\nlogs:\n%s", len(timed), logs)
+	}
+	if _, ok := timed[0]["untilBusyMs"]; !ok {
+		t.Errorf("run.resume.timed has no untilBusyMs: %v\nlogs:\n%s", timed[0], logs)
+	}
+	if lines := logLines(logs.String(), "landed nowhere"); len(lines) != 0 {
+		t.Errorf("a late stamp landed nowhere:\n%s", logs)
+	}
+	if left := w.s.lateStamps(w.run.ID); len(left) != 0 {
+		t.Errorf("late stamps kept after they were written: %v", left)
 	}
 }
 

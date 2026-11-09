@@ -147,9 +147,11 @@ type Syncer struct {
 	// the next timing of its resumes to write first (lateStamp, resumes.go):
 	// at most one per column and resume (deferStamp). In memory only, best
 	// effort like owing: a restart loses them, and those resumes are timed
-	// without them. Dropped once the Run's follower is over (forgetLate);
-	// each committed batch's follow-up carries its own, and is owed the
-	// resume, so recovery leaves it to that follow-up.
+	// without them. Once the Run's follower is over, only those whose
+	// resume is still owed are kept (forgetLate): any timing of that resume,
+	// another batch's follow-up's included, still writes them, and the
+	// follow-up that carries them, owed the resume so recovery leaves it
+	// alone, forgets them once tried.
 	lateMu sync.Mutex
 	late   map[string][]lateStamp
 }
@@ -2094,8 +2096,8 @@ func (s *Syncer) follow(r phaseRun) {
 				delete(s.diffs, r.ID)
 			}
 			// Its late stamps too, once no newer follower may be keeping
-			// some: every batch of this one's is committed or abandoned,
-			// and each committed one's follow-up has its own.
+			// some: every batch of this one's is committed or abandoned.
+			// Those a follow-up is still owed for stay (forgetLate).
 			if f, ok := s.following[r.ID]; !ok || f == mine {
 				s.forgetLate(r.ID)
 			}

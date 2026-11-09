@@ -426,12 +426,14 @@ var lateCols = []string{"running_at", "busy_at", "first_output_at"}
 // follow-up write it and time the resume, if it can be. The resume is
 // owed (afterBatch) from here, inside the batch's transaction, so
 // recovery leaves it to that follow-up, which carries the stamp whatever
-// becomes of the Syncer's copy. The Syncer's copy is kept from here too:
-// it lets any other owner's timing of the Run (another batch's follow-up,
-// which recovery does not skip) write it first; a batch rolled back takes
-// both back (rolledBack), and is read again and stamps again. A timing
-// that writes it meanwhile writes the time this frame was applied, which
-// the replay's COALESCE keeps.
+// becomes of the Syncer's copy. The Syncer's copy is kept from here too,
+// for as long as the follower lives and, past it, while the resume is
+// still owed (forgetLate): it lets any other owner's timing of the Run
+// (another batch's follow-up, which recovery does not skip) write it
+// first, even one that runs after the follower is over; a batch rolled
+// back takes both back (rolledBack), and is read again and stamps again.
+// A timing that writes it meanwhile writes the time this frame was
+// applied, which the replay's COALESCE keeps.
 //
 // One per column and resume: one already kept is an earlier batch's,
 // committed (a Run's batches run one at a time, and one rolled back took
@@ -439,28 +441,29 @@ var lateCols = []string{"running_at", "busy_at", "first_output_at"}
 // its follow-up is still to come (the resume owed to it, so recovery
 // leaves it alone) or has run and its timing failed, and either way this
 // one adds nothing to it: the Syncer's copy, kept while this follower
-// lives, is what the Run's next timing writes. So a Run whose row stays
+// lives and past it while the resume is owed, is what the Run's next
+// timing writes. So a Run whose row stays
 // locked costs one follow-up per stamp, not one per contended batch.
 func (t *translator) deferStamp(s *Syncer, col string, epoch int, at time.Time) {
 	l := lateStamp{col, epoch, at}
 	s.lateMu.Lock()
+	defer s.lateMu.Unlock()
 	if s.late == nil {
 		s.late = map[string][]lateStamp{}
 	}
 	if slices.ContainsFunc(s.late[t.run.ID], func(k lateStamp) bool { return k.col == col && k.epoch == epoch }) {
-		s.lateMu.Unlock()
 		return
 	}
-	s.late[t.run.ID] = append(s.late[t.run.ID], l)
-	s.lateMu.Unlock()
-	t.late = append(t.late, l)
-	// Owed, whatever the column: the follow-up carries the stamp (own),
-	// and once the Run's follower is over (forgetLate) it is the only one
-	// that does, so recovery (timeUnowned, which leaves owed resumes)
-	// must not time the resume before it. A busy_at kept costs its
-	// follow-up a placement read it would not otherwise make; harmless,
-	// the read is idempotent.
+	// Owed, whatever the column: recovery (timeUnowned, which leaves owed
+	// resumes) must not time the resume before the follow-up that carries
+	// the stamp (own), and the owe is what keeps the Syncer's copy past
+	// the follower (forgetLate) for any other owner's timing; so before
+	// the copy is in, under lateMu. A busy_at kept costs its follow-up a
+	// placement read it would not otherwise make; harmless, the read is
+	// idempotent.
 	t.afterBatch(s, epoch, true)
+	s.late[t.run.ID] = append(s.late[t.run.ID], l)
+	t.late = append(t.late, l)
 }
 
 // committed is the batch committed: it returns the resumes for its
@@ -492,22 +495,43 @@ func (s *Syncer) lateStamps(runID string, own ...lateStamp) []lateStamp {
 	defer s.lateMu.Unlock()
 	late := slices.Clone(s.late[runID])
 	for _, o := range own {
-		if !slices.ContainsFunc(late, func(l lateStamp) bool { return l.col == o.col && l.epoch == o.epoch && l.at.Equal(o.at) }) {
+		if !slices.ContainsFunc(late, o.same) {
 			late = append(late, o)
 		}
 	}
 	return late
 }
 
-// forgetLate forgets every late stamp of the Run: its follower is over,
-// every batch of it committed or abandoned, and each committed one's
-// follow-up holds its own (committed) and is owed its resume (deferStamp),
-// so recovery cannot time that resume without them. What is left would
-// otherwise stay for as long as the process runs.
+// forgetLate forgets the Run's late stamps whose resume no follow-up is
+// owed any more: its follower is over, every batch of it committed or
+// abandoned, and what is left would otherwise stay for as long as the
+// process runs. A stamp whose resume is still owed stays: its carrying
+// follow-up has yet to time it, and so may another batch's follow-up,
+// first (an owner's timing, which does not leave owed resumes alone);
+// that timing must still read it. The carrying follow-up's write then
+// forgets it (lateDone), or, its timing failed and no follower left,
+// resumeFollowUp does.
+//
+// Locks: s.mu (when called at a follower's end), then lateMu, then
+// owingMu, read under lateMu; deferStamp owes under lateMu too, before
+// its stamp is in, so a stamp forgetLate sees has its owe seen with it.
+// owingMu is taken last, and nothing holding lateMu or owingMu takes
+// s.mu: no cycle.
 func (s *Syncer) forgetLate(runID string) {
 	s.lateMu.Lock()
 	defer s.lateMu.Unlock()
-	delete(s.late, runID)
+	owed := s.owed(runID)
+	s.keepLate(runID, func(l lateStamp) bool { return owed[l.epoch] })
+}
+
+// keepLate keeps, under lateMu, the Run's late stamps keep says to.
+func (s *Syncer) keepLate(runID string, keep func(lateStamp) bool) {
+	kept := slices.DeleteFunc(s.late[runID], func(l lateStamp) bool { return !keep(l) })
+	if len(kept) == 0 {
+		delete(s.late, runID)
+		return
+	}
+	s.late[runID] = kept
 }
 
 // lateDone forgets the Run's late stamps that are in the database, or
@@ -518,14 +542,12 @@ func (s *Syncer) lateDone(runID string, done []lateStamp) {
 	}
 	s.lateMu.Lock()
 	defer s.lateMu.Unlock()
-	kept := slices.DeleteFunc(s.late[runID], func(l lateStamp) bool {
-		return slices.ContainsFunc(done, func(d lateStamp) bool { return d.col == l.col && d.epoch == l.epoch && d.at.Equal(l.at) })
-	})
-	if len(kept) == 0 {
-		delete(s.late, runID)
-		return
-	}
-	s.late[runID] = kept
+	s.keepLate(runID, func(l lateStamp) bool { return !slices.ContainsFunc(done, l.same) })
+}
+
+// same is whether l and o are one stamp: one column and resume, one time.
+func (l lateStamp) same(o lateStamp) bool {
+	return l.col == o.col && l.epoch == o.epoch && l.at.Equal(o.at)
 }
 
 // lockUntimed locks, in tx, every resume of the Run not timed yet, in
@@ -777,8 +799,27 @@ func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool, late ...lateSt
 			late = nil
 		}
 	}
+	// Its stamps no timing of its wrote, each failed: kept for the Run's
+	// next timing while its follower lives, which forgets them as it ends
+	// once no longer owed (forgetLate). With no follower left nothing
+	// would, so this forgets them as that end would have: those of a
+	// resume another follow-up is still owed stay for it.
+	if late != nil {
+		s.forgetLateUnfollowed(r.ID)
+	}
 	if s.followedUp != nil {
 		s.followedUp()
+	}
+}
+
+// forgetLateUnfollowed is forgetLate, if no follower of the Run's output
+// is in its slot; under s.mu, as a follower's end calls it, so none
+// starts in between.
+func (s *Syncer) forgetLateUnfollowed(runID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.following[runID]; !ok {
+		s.forgetLate(runID)
 	}
 }
 
