@@ -20,12 +20,19 @@ import (
 type logSink struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
+	// onLine, when set before any logging, is called with each line as it
+	// is logged, on the logging goroutine, before the logger returns.
+	onLine func(string)
 }
 
 func (l *logSink) Write(p []byte) (int, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
+	n, err := l.buf.Write(p)
+	l.mu.Unlock()
+	if l.onLine != nil {
+		l.onLine(string(p))
+	}
+	return n, err
 }
 
 func (l *logSink) String() string {

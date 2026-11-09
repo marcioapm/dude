@@ -28,68 +28,79 @@ type askedAnswer struct {
 // timingStatementTimeout), nothing would make it again and the resume
 // would never be timed. Behind a Run held elsewhere past timingLockTimeout
 // (a follower batch, say: lock_timeout, 55P03), behind a Run held past
-// resumeAsked's own lock budget, and behind an insert slower than
-// resumeAsked's own statement budget once (a checkpoint, say:
-// statement_timeout, 57014), the row is made, trying once more where it
-// must, and the resume is timed once its frames come.
+// resumeAsked's own lock budget, and behind an insert the database times
+// out once (a checkpoint, say: statement_timeout, 57014), the row is made,
+// trying once more where it must, and the resume is timed once its frames
+// come.
+//
+// Sequenced on the database and on resumeAsked's own log, not on sleeps:
+// each case's budget (Syncer.resumeBudget) is wide enough that nothing
+// but the step the case makes slow can time out, however loaded the
+// machine.
 func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 	for _, c := range []struct {
-		name string
+		name   string
+		budget resumeBudget
 		// slow makes the database slow for resumeAsked, and returns what
 		// to do once resumeAsked has started; an error fails the test.
-		slow func(w *resumeWorld) (started func(returned <-chan struct{}, logs *logSink) error)
+		slow func(w *resumeWorld, logs *logSink) (started func(returned <-chan struct{}, logs *logSink) error)
 		// How many times resumeAsked tries again.
 		retries int
+		// resumeAsked takes at least this long: it waited the database out.
+		minTook time.Duration
 	}{
-		{"held run", func(w *resumeWorld) func(<-chan struct{}, *logSink) error {
-			release := sync.OnceFunc(w.holding(`SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, w.run.ID))
-			w.t.Cleanup(release)
-			// Let go of the Run well past the stream's lock budget.
-			return func(<-chan struct{}, *logSink) error {
-				time.Sleep(3 * timingLockTimeout)
-				release()
-				return nil
-			}
-		}, 0},
-		// Past resumeAsked's own lock budget too (a second): its first
-		// attempt times out, and the one more it makes gets the row in.
-		// Sequenced on the database, not on sleeps: the Run is let go only
-		// once resumeAsked was seen waiting on it, its first attempt timed
-		// out, and its second attempt was seen waiting on it afresh. With
-		// no second attempt, resumeAsked returns first, and this fails.
-		{"run held past the resume's budget", func(w *resumeWorld) func(<-chan struct{}, *logSink) error {
-			holder, release := w.holdingWithPid(`SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, w.run.ID)
-			return func(returned <-chan struct{}, logs *logSink) error {
-				first, err := w.blockedBy(holder, time.Time{}, returned)
-				if err != nil {
-					return fmt.Errorf("the first attempt: %w\nlogs:\n%s", err, logs)
+		// Past the stream's lock budget, within resumeAsked's: the Run is
+		// let go only once resumeAsked was seen waiting on it for three
+		// times timingLockTimeout, on the database's clock. resumeAsked's
+		// lock budget is far past that, so it never needs a second try; a
+		// resumeAsked under the stream's budget would time out twice.
+		{"held run", resumeBudget{lock: 30 * time.Second, whole: time.Minute},
+			func(w *resumeWorld, _ *logSink) func(<-chan struct{}, *logSink) error {
+				holder, release := w.holdingWithPid(`SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, w.run.ID)
+				return func(returned <-chan struct{}, logs *logSink) error {
+					if err := w.waitedOn(holder, 3*timingLockTimeout, returned); err != nil {
+						return fmt.Errorf("%w\nlogs:\n%s", err, logs)
+					}
+					release()
+					return nil
 				}
-				for !strings.Contains(logs.String(), retried) {
-					select {
-					case <-returned:
-						return fmt.Errorf("resumeAsked returned without logging a retry (%q)\nlogs:\n%s", retried, logs)
-					case <-time.After(time.Millisecond):
+			}, 0, 3 * timingLockTimeout},
+		// Past resumeAsked's own lock budget too: its first attempt times
+		// out, the Run held throughout, and the Run is let go as resumeAsked
+		// logs that it tries again: on its own goroutine, before the second
+		// attempt starts, so that attempt waits on nothing. With no second
+		// attempt, resumeAsked returns without the line or the row, and
+		// this fails.
+		{"run held past the resume's budget", resumeBudget{whole: time.Minute},
+			func(w *resumeWorld, logs *logSink) func(<-chan struct{}, *logSink) error {
+				holder, release := w.holdingWithPid(`SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, w.run.ID)
+				logs.onLine = func(line string) {
+					if strings.Contains(line, retried) {
+						release()
 					}
 				}
-				if _, err := w.blockedBy(holder, first, returned); err != nil {
-					return fmt.Errorf("the second attempt: %w\nlogs:\n%s", err, logs)
+				return func(returned <-chan struct{}, logs *logSink) error {
+					if _, err := w.blockedBy(holder, time.Time{}, returned); err != nil {
+						return fmt.Errorf("the first attempt: %w\nlogs:\n%s", err, logs)
+					}
+					return nil
 				}
-				release()
-				return nil
-			}
-		}, 1},
-		// Past resumeAsked's own statement budget (57014): the first
-		// insert is too slow, and the one more it tries gets the row in.
-		{"slow insert", func(w *resumeWorld) func(<-chan struct{}, *logSink) error {
-			w.slowInserts(true)
+			}, 1, resumeLockTimeout},
+		// The database times the first insert out (57014), and the one
+		// more it tries gets the row in. Raised by the insert itself, not
+		// slept into, and the whole call's bound wide: the retry has its
+		// statements' full budget whatever the load.
+		{"slow insert", resumeBudget{whole: time.Minute}, func(w *resumeWorld, _ *logSink) func(<-chan struct{}, *logSink) error {
+			w.timesOutFirstInsert()
 			return func(<-chan struct{}, *logSink) error { return nil }
-		}, 1},
+		}, 1, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newResumeWorld(t)
+			w.s.resumeBudget = c.budget
 			logs := w.captureTimingLogs()
 			base := time.Now().Add(-time.Minute).UTC()
-			started := c.slow(w)
+			started := c.slow(w, logs)
 
 			// Buffered, so the worker never blocks on a test that stopped
 			// reading; joined on every return, t.Fatalf's included, before
@@ -112,7 +123,7 @@ func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 			var a askedAnswer
 			select {
 			case a = <-asked:
-			case <-time.After(30 * time.Second):
+			case <-time.After(2 * time.Minute):
 				t.Fatalf("resumeAsked did not return\nlogs:\n%s", logs)
 			}
 			if a.epoch != 2 {
@@ -121,11 +132,8 @@ func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 			if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1`); n != 1 {
 				t.Fatalf("%d resume rows after resumeAsked took %s on a slow database, want 1\nlogs:\n%s", n, a.took, logs)
 			}
-			// resumeAsked waited the database out, past the stream's budget,
-			// and within its own bound.
-			if a.took < 2*timingLockTimeout || a.took > resumeAskedTimeout+time.Second {
-				t.Errorf("resumeAsked returned after %s, want past the stream's budget and within its own %s",
-					a.took, resumeAskedTimeout)
+			if a.took < c.minTook {
+				t.Errorf("resumeAsked returned after %s, want it to have waited the database out (%s)", a.took, c.minTook)
 			}
 			// The retry's Warn line, once per retry, and nothing else.
 			got := logs.String()
@@ -150,47 +158,58 @@ func TestAResumeOnASlowDatabaseIsStillTimed(t *testing.T) {
 	}
 }
 
-// slowInserts makes inserts into run_resumes sleep past resumeAsked's
-// statement budget: only the first (once), or every one. A sequence
-// counts, as it is not rolled back with the insert.
-func (w *resumeWorld) slowInserts(once bool) {
+// timesOutFirstInsert makes the first insert into run_resumes fail as
+// Postgres's statement_timeout fails it (57014), at once; later ones run.
+// A sequence counts, as it is not rolled back with the insert.
+func (w *resumeWorld) timesOutFirstInsert() {
 	w.t.Helper()
-	sleep := resumeStatementTimeout + 500*time.Millisecond
-	when := "true"
-	if once {
-		when = "nextval('slow_insert_seen') = 1"
-		w.exec(`CREATE SEQUENCE slow_insert_seen`)
-		w.exec(`GRANT USAGE ON SEQUENCE slow_insert_seen TO PUBLIC`)
-	}
+	w.exec(`CREATE SEQUENCE slow_insert_seen`)
+	w.exec(`GRANT USAGE ON SEQUENCE slow_insert_seen TO PUBLIC`)
+	w.exec(`CREATE FUNCTION slow_resume() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+		IF nextval('slow_insert_seen') = 1 THEN RAISE EXCEPTION 'slow' USING ERRCODE = 'query_canceled'; END IF;
+		RETURN NEW; END $$`)
+	w.exec(`CREATE TRIGGER slow_resume BEFORE INSERT ON run_resumes FOR EACH ROW EXECUTE FUNCTION slow_resume()`)
+}
+
+// slowInserts makes every insert into run_resumes sleep for sleep.
+func (w *resumeWorld) slowInserts(sleep time.Duration) {
+	w.t.Helper()
 	w.exec(fmt.Sprintf(`CREATE FUNCTION slow_resume() RETURNS trigger LANGUAGE plpgsql AS
-		$$ BEGIN IF %s THEN PERFORM pg_sleep(%.3f); END IF; RETURN NEW; END $$`, when, sleep.Seconds()))
+		$$ BEGIN PERFORM pg_sleep(%.3f); RETURN NEW; END $$`, sleep.Seconds()))
 	w.exec(`CREATE TRIGGER slow_resume BEFORE INSERT ON run_resumes FOR EACH ROW EXECUTE FUNCTION slow_resume()`)
 }
 
 // A database too slow for every attempt costs the resume path no more than
-// resumeAskedTimeout, both attempts together: the resume goes on untimed,
-// and says so.
+// resumeAsked's whole budget, both attempts together: the resume goes on
+// untimed, and says so. Here each statement may take 3s, the whole call
+// half a second, and every insert sleeps 10s: bounded as a whole,
+// resumeAsked returns in about half a second; bounded only per statement,
+// it would take two statement timeouts, 6s, far past the 2s of slack
+// given for a loaded machine.
 func TestAResumeOnADatabaseTooSlowForItIsBoundedAsAWhole(t *testing.T) {
+	const slack = 2 * time.Second
 	w := newResumeWorld(t)
+	w.s.resumeBudget = resumeBudget{lock: 3 * time.Second, statement: 3 * time.Second, whole: 500 * time.Millisecond}
 	logs := w.captureTimingLogs()
-	w.slowInserts(false)
+	w.slowInserts(10 * time.Second)
 	start := time.Now()
 	epoch := w.s.resumeAsked(w.ctx, w.run, stoppedOnHost1(time.Now().Add(-time.Minute).UTC()))
 	took := time.Since(start)
 	if epoch != 2 {
 		t.Errorf("resumeAsked foresaw epoch %d, want 2", epoch)
 	}
-	if took > resumeAskedTimeout+250*time.Millisecond {
-		t.Errorf("resumeAsked took %s, want within its bound of %s", took, resumeAskedTimeout)
+	if took > w.s.resumeBudget.whole+slack {
+		t.Errorf("resumeAsked took %s, want within its bound of %s (and %s of slack)", took, w.s.resumeBudget.whole, slack)
 	}
 	if n := w.count(`SELECT count(*) FROM run_resumes WHERE run_id = $1`); n != 0 {
 		t.Errorf("%d resume rows, want none", n)
 	}
 	got := logs.String()
+	retries := len(logLines(got, retried))
 	lines := logLines(got, "recording a resume's timing", "step=")
-	if len(lines) != 2 || !allWarn(lines) || len(logLines(got, retried)) != 1 ||
+	if retries > 1 || len(lines) != retries+1 || !allWarn(lines) ||
 		len(logLines(got, "recording a resume's timing failed")) != 1 {
-		t.Errorf("want a Warn that it tries again and one that it failed, and nothing else; got:\n%s", got)
+		t.Errorf("want at most one Warn that it tries again, one that it failed, and nothing else; got:\n%s", got)
 	}
 }
 
@@ -244,6 +263,33 @@ func (w *resumeWorld) blockedBy(holder int32, since time.Time, returned <-chan s
 		case <-ctx.Done():
 			return time.Time{}, fmt.Errorf("no wait on the holder (pid %d) began after %v: %w", holder, since, ctx.Err())
 		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// waitedOn waits until a backend has waited on holder's locks for at least
+// d, on Postgres's clock. It fails if resumeAsked returns first, or after
+// 30s.
+func (w *resumeWorld) waitedOn(holder int32, d time.Duration, returned <-chan struct{}) error {
+	ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
+	defer cancel()
+	for {
+		var waited bool
+		if err := w.owner.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity a
+			JOIN pg_locks l ON l.pid = a.pid AND NOT l.granted
+			WHERE $1::int = ANY(pg_blocking_pids(a.pid)) AND l.waitstart <= clock_timestamp() - make_interval(secs => $2))`,
+			holder, d.Seconds()).Scan(&waited); err != nil {
+			return err
+		}
+		if waited {
+			return nil
+		}
+		select {
+		case <-returned:
+			return fmt.Errorf("resumeAsked returned before it waited %s on the holder (pid %d)", d, holder)
+		case <-ctx.Done():
+			return fmt.Errorf("nothing waited %s on the holder (pid %d): %w", d, holder, ctx.Err())
+		case <-time.After(5 * time.Millisecond):
 		}
 	}
 }
