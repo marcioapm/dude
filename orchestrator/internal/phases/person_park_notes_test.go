@@ -181,11 +181,11 @@ func TestAPersonParkIsHeldForNewsOnlyPastTheGraceAndInsideTheCeiling(t *testing.
 			if got.ParkNow != c.parkNow {
 				t.Errorf("ParkNow = %v, want %v", got.ParkNow, c.parkNow)
 			}
-			if c.waiting != pastGrace {
+			if c.waiting != pastGrace && c.waiting != "" {
 				return
 			}
-			// Past the grace, requestPause's re-check agrees with the
-			// sweep's read. (Inside it the sweep never asks it.)
+			// Past the grace or mid-turn, requestPause's re-check agrees
+			// with the sweep's read. (Inside the grace it is never asked.)
 			want := 0
 			if c.parkNow {
 				want = 1
