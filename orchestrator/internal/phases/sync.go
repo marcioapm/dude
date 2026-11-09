@@ -490,10 +490,11 @@ const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.i
 	AND NOT ` + delivery.HeldBack + `)`
 
 // unheardNews (SQL, over runs r and lim.park_secs, the Run's grace before
-// a person park in seconds): dude has something for an agent waiting on a person
-// that it has not taken a turn for yet. A Run is not parked for a person
-// while it holds (ParkNow, requestPause): the agent hears the news first,
-// its turn runs, and it is parked once it waits again past the grace.
+// a person park, in seconds): dude has something for an agent waiting on a
+// person that it has not taken a turn for yet. A Run is not parked for a
+// person while it holds (ParkNow, requestPause): the agent hears the news
+// first, its turn runs, and it is parked once it waits again past the
+// grace.
 //
 // What counts, each for delivery.UnreadGraceSecs at most, so a send, a
 // receipt or a turn that never comes cannot keep the container running:

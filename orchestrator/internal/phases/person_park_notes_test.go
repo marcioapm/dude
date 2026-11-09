@@ -16,14 +16,12 @@ func waitingWorld(t *testing.T) (*resumeWorld, phaseRun) {
 	return w, r
 }
 
-// note queues a directive for w's Run, held for its question's answer if
-// held, and returns its id.
-func (w *resumeWorld) note(held bool) string {
+// note queues directive 'dir_'||org for w's Run, held for its question's
+// answer if held.
+func (w *resumeWorld) note(held bool) {
 	w.t.Helper()
-	id := "dir_" + w.run.Org
 	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, held_for)
 		VALUES ('dir_'||$1, $1, $2, $3, 'news', CASE WHEN $4 THEN 'q_'||$1 END)`, w.run.Org, w.run.TaskID, w.run.ID, held)
-	return id
 }
 
 // parkForPerson runs the person park as advance does, and returns how many
