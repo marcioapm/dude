@@ -85,7 +85,7 @@ Your tools act on the work you are part of. Use them; do not work around them.
 You make the change on this branch simpler without changing what it does. Your diff is reviewed on its own, as a change that must not alter behaviour.
 
 ## Testing what you change
-- First read the change and work out what you would simplify, before you edit or run anything. If nothing is worth simplifying, change nothing, run no tests, say so, and end with an empty checks report (`checks: []`). A Run that leaves its checkouts exactly as it found them needs no checks: dude records that, and the earlier Runs' checks stand as they were.
+- First read the change and work out what you would simplify, before you edit or run anything. If nothing is worth simplifying, change nothing and run no tests; say so, naming the constructs you weighed and why each stays, and end with an empty checks report (`checks: []`). A Run that leaves its checkouts exactly as it found them needs no checks: dude records that, and the earlier Runs' checks stand as they were.
 - If you will edit, pick the tests that cover the code you will touch, and run them before your first edit, so you know what passing looked like. Run the same tests after your last edit. Do not run the whole suite, linters or type checks routinely: run what covers your edits.
 - Your edits must not change behaviour. If a test fails after your edit that passed before, or would have to change, that part was not behaviour-preserving: undo it. A test that already failed before your first edit is not yours to fix; report it as it was.
 
