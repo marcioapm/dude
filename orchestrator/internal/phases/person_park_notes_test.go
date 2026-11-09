@@ -97,17 +97,20 @@ func TestAPersonParkWaitsForASentNotesTurn(t *testing.T) {
 
 // The hold has a ceiling: two park graces (newsCeiling) from when the wait
 // began (waitBegan: the oldest open ask, or the last resume), not from
-// waiting_since, which each note's turn resets. Past it the Run is due its
-// park as soon as it waits, however recent waiting_since, and the park does
-// not wait for news. The factory's grace here is DefaultPolicy's 10 minutes.
+// waiting_since, which each note's turn resets. Past it a Run with news is
+// due its park as soon as it waits, however recent waiting_since, and the
+// park does not wait for the news; one without keeps its grace. The
+// factory's grace here is DefaultPolicy's 10 minutes.
 func TestAPersonParksPastTheCeilingWithNewsUnheard(t *testing.T) {
 	for _, c := range []struct {
 		name, asked, resumed, waiting string
-		parkNow                       bool
+		news, parkNow                 bool
 	}{
-		{"asked inside the ceiling, waiting inside the grace", "now() - interval '19 minutes'", "", "now() - interval '1 minute'", false},
-		{"asked past the ceiling, waiting inside the grace", "now() - interval '21 minutes'", "", "now() - interval '1 minute'", true},
-		{"asked past the ceiling, resumed since", "now() - interval '21 minutes'", "now() - interval '5 minutes'", "now() - interval '1 minute'", false},
+		{"asked inside the ceiling, waiting inside the grace", "now() - interval '19 minutes'", "", "now() - interval '1 minute'", true, false},
+		{"asked past the ceiling, waiting inside the grace", "now() - interval '21 minutes'", "", "now() - interval '1 minute'", true, true},
+		{"asked past the ceiling, resumed since", "now() - interval '21 minutes'", "now() - interval '5 minutes'", "now() - interval '1 minute'", true, false},
+		// No news: its grace, as always.
+		{"asked past the ceiling, no news, waiting inside the grace", "now() - interval '21 minutes'", "", "now() - interval '1 minute'", false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w, _ := waitingWorld(t)
@@ -117,7 +120,9 @@ func TestAPersonParksPastTheCeilingWithNewsUnheard(t *testing.T) {
 				w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at)
 					VALUES ($1, $2, 2, 'answer', `+c.resumed+`)`, w.run.ID, w.run.Org)
 			}
-			w.note(false)
+			if c.news {
+				w.note(false)
+			}
 			runs, err := w.s.due(w.ctx)
 			if err != nil {
 				t.Fatal(err)
