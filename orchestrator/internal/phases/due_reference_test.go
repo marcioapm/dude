@@ -245,7 +245,7 @@ func (c *dueCoverage) add(runs []phaseRun, limit int) {
 	for _, r := range runs {
 		c.statuses[r.Status]++
 		for name, v := range map[string]bool{"HasDirectives": r.HasDirectives, "Unread": r.Unread, "RepoApproved": r.RepoApproved,
-			"Waiting": r.Waiting, "ParkNow": r.ParkNow, "Resumable": r.Resumable, "Quiet": r.Quiet, "Nudged": r.Nudged,
+			"Waiting": r.Waiting, "ParkNow": r.ParkNow, "HoldNews": r.HoldNews, "Resumable": r.Resumable, "Quiet": r.Quiet, "Nudged": r.Nudged,
 			"WarmOver": r.WarmOver, "KeepExpired": r.KeepExpired, "Moving": r.Moving, "Broken": r.Broken != nil} {
 			f := c.flags[name]
 			if v {
@@ -470,7 +470,7 @@ func (g *dueStates) populate(tx pgx.Tx, rng *rand.Rand, s *Syncer, round int) in
 		b.Queue(`INSERT INTO runs (id, organization_id, project_id, task_id, session_id, attempt, status, control, phase, role, kind,
 			lux_run_id, lux_state, lux_stop_reason, keep,
 			kept_until, next_attempt_at, turn_done_at, waiting_since, agent_busy_at, agent_active_at, idle_nudged_at,
-			dude_pause, open_tool_calls, push_request_id, lux_repositories, harness_state, created_at)
+			dude_pause, open_tool_calls, push_request_id, lux_repositories, harness_state, created_at, news_hold_at)
 			VALUES ($1, $2, $3, $4, $5, 1, $6::run_status, $7::run_control, $8::run_phase, $9::agent_role, $10,
 			$11, $12, $13, $14,
 			now() + make_interval(secs => $15::float8), now() + make_interval(secs => $16::float8),
@@ -480,13 +480,16 @@ func (g *dueStates) populate(tx pgx.Tx, rng *rand.Rand, s *Syncer, round int) in
 			$22, $23, $24, $25,
 			CASE WHEN $26::float8 IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('brokenTurn',
 				jsonb_build_object('error', 'broke', 'epoch', 1, 'at', now() + make_interval(secs => $26::float8))) END,
-			now() - make_interval(secs => $27::float8))`,
+			now() - make_interval(secs => $27::float8), now() + make_interval(secs => $28::float8))`,
 			id, o.id, projectID(prj), task, sess, status,
 			pick(rng, "none", "none", "none", "pause_graceful", "pause_hard", "abort", "resume"), phase, role, kind,
 			luxRunID, luxState, maybe(0.5, pick(rng, "cancel", "kept", "done")), rng.IntN(3) == 0,
 			at(0), at(s.RetryAhead.Seconds()), turnDone, waiting, at(-idle), at(-idle), at(-idle),
 			dudePause, openCalls, pushRequest, luxRepos, at(-30),
-			float64(round*1000+i)+rng.Float64()/2)
+			float64(round*1000+i)+rng.Float64()/2,
+			// A park held for news: in this wait or before it (waitBegan
+			// reads the asks, resumes and unparks above), or never.
+			sometimes(rng, 2, pick(rng, -5.0, -60, -3600)))
 
 		var questions []string
 		for q := range rng.IntN(3) {
