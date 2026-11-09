@@ -853,8 +853,10 @@ func (s *Syncer) owed(runID string) map[int]bool {
 // resume it reads is its own to time: recovery skips it until the read
 // and the timing are done, whether they succeeded or not. late are the
 // stamps the batch kept (committed), written by its first timing that
-// commits even if the Run's follower has ended and the Syncer forgotten
-// them since (forgetLate).
+// commits. The Syncer keeps its copy of them past the Run's follower for
+// as long as their resume is owed (forgetLate), so another batch's
+// follow-up timing it first writes them too; late is the carrier's own
+// in case its copy is gone.
 func (s *Syncer) resumeFollowUp(r phaseRun, resumes map[int]bool, late ...lateStamp) {
 	timeout := s.followUpTimeout
 	if timeout == 0 {
