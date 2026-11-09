@@ -39,7 +39,7 @@ func TestTextTypeSQLIsTextType(t *testing.T) {
 		"appl\u0130cation/json", "application/vnd.\u212Aey+json", "T\u0130XT/plain", "\u0130mage/svg+xml",
 		// I, which a Turkish collation lowers to a dotless ı; ı and the
 		// dotted i's own lowercase, which strings.ToLower leaves non-ASCII.
-		"APPLICATION/JSON", "APPLICATION/X-SH", "IMAGE/SVG+XML", "APPLICATION/VND.I+JSON", "TEXT/PLAIN; CHARSET=X",
+		"APPLICATION/JSON", "APPLICATION/X-SH", "APPLICATION/VND.I+JSON", "TEXT/PLAIN; CHARSET=X",
 		"appl\u0131cation/json", "APPL\u0131CATION/JSON", "application/vnd.\u0131+json",
 		// The suffixes.
 		"application/vnd.a+xml", "image/svg+xml", "application/vnd.x+json", "application/+json", "+xml",

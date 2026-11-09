@@ -67,6 +67,17 @@ func (w *world) collected(runID string) {
 	w.forgetCopies()
 }
 
+// recoveryEnded waits until the recovery has ended, and is how it ended.
+func (w *world) recoveryEnded(id string) string {
+	w.t.Helper()
+	var s string
+	w.until("the recovery ended", func() bool {
+		s = w.recoveryStatus(id)
+		return s == "refused" || s == "done" || s == "failed"
+	})
+	return s
+}
+
 // forgetCopies runs the backstop once.
 func (w *world) forgetCopies() {
 	w.t.Helper()
@@ -273,11 +284,7 @@ func TestARecoveryAfterARotationRefusesTheOldValue(t *testing.T) {
 	w.collected(run)
 	w.grant("IMPL_TOKEN", implTokenB, "implementer")
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
-	w.until("the recovery ended", func() bool {
-		s := w.recoveryStatus(id)
-		return s == "refused" || s == "done" || s == "failed"
-	})
-	if s := w.recoveryStatus(id); s != "refused" {
+	if s := w.recoveryEnded(id); s != "refused" {
 		t.Errorf("the recovery %s, want refused", s)
 	}
 	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != "" {
@@ -344,8 +351,7 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	art(kept["a reviewer that wrote json"], "out.json", "application/json")
 	art(kept["a reviewer, text, an hour short"], "notes.txt", "text/plain")
 
-	forget := w.forgetCopies
-	forget()
+	w.forgetCopies()
 	for what, id := range gone {
 		if got := w.runCopy(id); len(got) != 0 {
 			t.Errorf("%s keeps its copy", what)
@@ -369,7 +375,7 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE runs SET ended_at = now() - interval '30 days 1 hour' WHERE id = ANY($1)`,
 		[]string{kept["a kept Run not yet stopped"], kept["a failed writer"], kept["an aborted fixer"], kept["a reviewer that wrote text"], kept["a reviewer that wrote json"],
 			kept["a failed writer, an hour short"], kept["a reviewer, text, an hour short"]})
-	forget()
+	w.forgetCopies()
 	for what, id := range kept {
 		if got := w.runCopy(id); len(got) != 0 {
 			t.Errorf("%s keeps its copy after its keep and retention ended", what)
@@ -429,11 +435,7 @@ func TestARecoveryWhoseCopyGoesBeforeItsScanIsRefusedUnpushed(t *testing.T) {
 	id, _ := w.must(task, "recover_run", `{"run":"`+run+`"}`)["recoveryId"].(string)
 	w.copyExpired(run)
 	w.grant("IMPL_TOKEN", implTokenB, "implementer")
-	w.until("the recovery ended", func() bool {
-		s := w.recoveryStatus(id)
-		return s == "refused" || s == "done" || s == "failed"
-	})
-	if s := w.recoveryStatus(id); s != "refused" {
+	if s := w.recoveryEnded(id); s != "refused" {
 		t.Errorf("the recovery %s, want refused", s)
 	}
 	if e := w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id); e != delivery.RecoverySecretsExpired {

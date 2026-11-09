@@ -589,10 +589,9 @@ whose copy goes before the worker scans its commits ends `refused` with
 the same reason, unpushed, and the conductor is told. Its commits may
 hold a value dude can no longer check for: anything taken from lux's
 checkpoint by hand must be checked for secrets before it is pushed
-anywhere. A Run given no
-secrets is still recovered. Past those 30 days a text file the Run
-published is still served, redacted with the values in force then: a
-value rotated since is not caught there.
+anywhere. A Run given no secrets is still recovered. Past those 30 days a
+text file the Run published is still served, redacted with the values in
+force then: a value rotated since is not caught there.
 
 **Redaction.** dude replaces each value a Run was given — raw, base64
 (standard, unpadded, URL), URL-escaped, hex and JSON-escaped (also twice,

@@ -173,9 +173,9 @@ var copyRetentionSQL = "make_interval(secs => " + strconv.FormatInt(int64(copyRe
 // so the planner keeps it a SubPlan run per Run on artifacts_run_idx: a
 // custom plan may otherwise pull it up into a hashed SubPlan that reads,
 // and evaluates TextTypeSQL on, every artifact of the organization, which
-// grows without bound as artifacts are never deleted. Built once, at init, from constants
-// and delivery.Publishes, and never changed: the statements that embed it
-// are prepared as they are.
+// grows without bound as artifacts are never deleted. Built once, at init,
+// from constants and delivery.Publishes, and never changed: the statements
+// that embed it are prepared as they are.
 var copyNeeded = `COALESCE(r.keep AND r.lux_run_id IS NOT NULL AND r.lux_stop_reason IS DISTINCT FROM 'cancel'
 		AND COALESCE(r.kept_until > now(), r.ended_at > now() - ` + copyRetentionSQL + `)
 	OR r.ended_at > now() - ` + copyRetentionSQL + `
