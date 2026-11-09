@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -41,14 +42,15 @@ func (w *world) luxResumes(runID string) (resumed int, state string) {
 }
 
 // parkedHeld is a delivery whose implementer is held at the checks gate
-// and parked once the grace is over: paused for a person, run.parked
-// {reason: person}, lux's Run stopped and kept.
+// and parked once the grace is over (parkHeld): paused for a person, one
+// run.parked {reason: person}, lux's Run stopped and kept. The caller gets
+// the grace back long (an hour).
 func (w *world) parkedHeld() (wi, runID string) {
 	w.t.Helper()
-	w.syncer.ParkAfter = 300 * time.Millisecond
+	w.syncer.ParkAfter = time.Hour
 	wi = w.unbackedUntilEscalated(0)
 	runID = w.implementerOf(wi)
-	w.untilParked(runID)
+	w.parkHeld(runID)
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'person'`, runID); n != 1 {
 		w.t.Fatalf("%d run.parked {reason: person} events", n)
 	}
@@ -56,6 +58,22 @@ func (w *world) parkedHeld() (wi, runID string) {
 		w.t.Fatalf("the parked Run lost its lux Run")
 	}
 	return wi, runID
+}
+
+// parkHeld parks the held runID, its escalation with the person: the grace
+// is short only from the hand-over to the park, and an hour again after it.
+//
+// The gate's ask of the conductor (run.checks.asked) starts the Run's wait
+// as well (delivery.ChecksWaiting): a short grace while a verdict is
+// pending parks the Run for that wait — parked, unparked by the verdict,
+// then parked again for the person, on a slow runner — and, after the
+// park, a later turn's ask would do the same. So the delivery reaches the
+// hand-over under a long grace, and the caller gets a long one back.
+func (w *world) parkHeld(runID string) {
+	w.t.Helper()
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	w.untilParked(runID)
+	w.syncer.ParkAfter = time.Hour
 }
 
 // untilParked waits for the held Run to be paused for a person and lux's
@@ -161,6 +179,17 @@ func TestADecisionKeepsTheWaitOfAnotherOpenAsk(t *testing.T) {
 	}
 }
 
+// waits says whether runID's wait has a start (waiting_since) and whether
+// anything holds it open (delivery.OpenAsk). Once what held a parked Run is
+// decided, nothing may: its resume restarts the wait from OpenAsk, and an
+// open one would park it again past the grace — which the tests' hour
+// does not show.
+func (w *world) waits(runID string) (started, open bool) {
+	w.t.Helper()
+	return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since IS NOT NULL`, runID) == 1,
+		w.count(`SELECT count(*) FROM runs r WHERE r.id = $1 AND `+delivery.OpenAsk, runID) == 1
+}
+
 // luxInputs are the inputs lux's Run for runID was given, the prompt aside.
 func (w *world) luxInputs(runID string) []string {
 	w.t.Helper()
@@ -197,6 +226,10 @@ func TestARetryResumesAParkedHeldRunWithTheSendBack(t *testing.T) {
 	heldDone := w.str(`SELECT turn_done_at::text FROM runs WHERE id = $1`, runID)
 	if code, body := w.decide(owner, wi, "retry", ""); code != 200 {
 		t.Fatalf("retry: %d %v", code, body)
+	}
+	// Decided, before anything resumes it: no wait left to park it again.
+	if started, open := w.waits(runID); started || open {
+		t.Errorf("the decided Run still waits (started %v, open %v)", started, open)
 	}
 	// The held turn is not kept: once resumed, the Run waits on the
 	// send-back's new turn, never on the held one's done mark. The kept
@@ -286,13 +319,54 @@ func TestARunWaiverOfAParkedHeldRunPushesAndPublishes(t *testing.T) {
 // attempt still carry it.
 func TestAnAttemptWaiverOfAParkedHeldRunPushesAndIsCarried(t *testing.T) {
 	w := newWorld(t)
-	w.syncer.ParkAfter = 300 * time.Millisecond
+	w.syncer.ParkAfter = time.Hour
 	wi := w.failingUntilEscalated(fakeagent.ChecksPreexistingModel, nil)
 	runID := w.implementerOf(wi)
-	w.untilParked(runID)
+	w.parkHeld(runID)
 	w.waivedFromPark(wi, runID, clockNote, delivery.ScopeAttempt)
 	if got := strings.Join(w.gateJudged(wi), ","); got != "implement:unverified,implement:waived,fix:carried,simplify:carried" {
 		t.Errorf("judged %s", got)
+	}
+}
+
+// A held Run's wait starts at the gate's ask of the conductor: past the
+// grace with the verdict pending, it is parked for that wait; the verdict
+// unparks it, and when it rejects the report at the bound, the Run is
+// parked again for the person, its held turn kept throughout.
+func TestAHeldRunParkedOnItsChecksAskIsParkedAgainForThePerson(t *testing.T) {
+	w := newWorld(t)
+	c := &checksConductor{silent: true}
+	w.syncer.ParkAfter = 300 * time.Millisecond
+	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
+	wi := w.checksDelivery(fakeagent.ChecksUnbackedModel, c)
+	var runID string
+	w.until("the gate to ask the conductor", func() bool {
+		runID = w.str(`SELECT COALESCE((SELECT run_id FROM events WHERE task_id = $1 AND event_type = $2 LIMIT 1), '')`, wi, delivery.EvRunChecksAsked)
+		return runID != ""
+	})
+	w.untilParked(runID)
+	turnDone := w.str(`SELECT turn_done_at::text FROM runs WHERE id = $1`, runID)
+	c.silent = false
+	w.until("the Run parked again for the person", func() bool {
+		return w.taskStatus(wi) == "awaiting_input" &&
+			w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'person'`, runID) == 2
+	})
+	w.untilParked(runID)
+	if got := w.ids(`SELECT payload->>'message' FROM events WHERE run_id = $1 AND event_type = 'run.parked' ORDER BY cursor`, runID); !slices.Equal(got,
+		[]string{"parked while it waits on a peer's reply", "parked while it waits for a person"}) {
+		t.Errorf("parked %q, want for the verdict, then for the person", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.unparked'`, runID); n != 1 {
+		t.Errorf("%d run.unparked events, want the verdict's one", n)
+	}
+	if got := w.judged(wi); strings.Join(got, ",") != "unverified" {
+		t.Errorf("judged %v, want the asked turn rejected once", got)
+	}
+	if got := w.str(`SELECT COALESCE(turn_done_at::text, 'null') FROM runs WHERE id = $1`, runID); got != turnDone {
+		t.Errorf("turn done at %s after the parks, want the held turn's %s", got, turnDone)
+	}
+	if n := w.implementerPushes(wi); n != 0 {
+		t.Errorf("%d pushes of a held Run", n)
 	}
 }
 
@@ -408,8 +482,6 @@ func TestARestartKeepsAParkedHeldRunHeld(t *testing.T) {
 func TestAPersonsResumeOfAParkedHeldRunKeepsTheHeldTurn(t *testing.T) {
 	w := newWorld(t)
 	wi, runID := w.parkedHeld()
-	// Taken back up, it is not parked again while this test looks at it.
-	w.syncer.ParkAfter = time.Hour
 	if status, body := w.call("/internal/runs/"+runID+"/resume", map[string]any{}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
 	}
@@ -439,6 +511,10 @@ func TestStoppingTheTaskOfAParkedHeldRunKeepsItForResume(t *testing.T) {
 	owner, _, _ := w.people(wi)
 	w.stop(owner, wi, map[string]any{})
 	w.until("the parked Run to be kept", func() bool { return w.keptRun(runID) })
+	// Nothing holds it open, so the pick-up's resume starts no wait.
+	if _, open := w.waits(runID); open {
+		t.Errorf("the stopped Run still has something open")
+	}
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state->'escalation' IS NULL
 		AND state->'stopped'->>'reason' = $2`, wi, delivery.ReasonChecksUnverified); n != 1 {
 		t.Fatalf("the delivery after the stop: %s", w.str(`SELECT state::text FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, wi))
