@@ -8,20 +8,25 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
 // ForgetSecretCopies runs in every organization on every tick over every
 // copy retained there (up to 30 days of them), and artifacts are never
-// deleted. Seeded as a long-lived organization (20,000 Runs, 1,000 of them
-// with a copy, 120,000 artifacts) beside nine small ones, its delete, on a
+// deleted. Seeded as an organization of 1,000 Runs, every one with a copy,
+// and 120,000 artifacts (enough that, without copyNeeded's fences, a
+// custom plan pulls its artifacts probe up into a hashed SubPlan over every
+// artifact of the organization) beside nine small ones, its delete, on a
 // custom plan as well as a generic one (pgx plans each statement custom
 // for its first five executions on a connection), finds the
 // organization's copies on run_project_secrets_org_idx (257), never by
 // scanning every organization's; reads artifacts only on
-// artifacts_run_idx, never through a hashed SubPlan over every artifact
-// of the organization; and probes them at most once per Run with a copy
-// (EXPLAIN ANALYZE, rolled back).
+// artifacts_run_idx, never through a hashed SubPlan; and probes them at
+// most once per Run with a copy. A collection's delete of one Run's copy
+// (collectCopy) reads them the same way, at most once per value of that
+// Run. EXPLAIN ANALYZE, rolled back.
 func TestForgetSecretCopiesProbesEachRunOnce(t *testing.T) {
 	_, owner := dbtest.Open(t)
 	ctx := context.Background()
@@ -56,89 +61,104 @@ func TestForgetSecretCopiesProbesEachRunOnce(t *testing.T) {
 	org = base + "_big"
 	seed(org, 1000, 120000)
 	exec(`ANALYZE`)
-	for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
-		tx, err := owner.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(ctx, `SELECT set_config('role', 'dude_app', true), set_config('app.organization_id', $1, true),
-			set_config('jit', 'off', true), set_config('plan_cache_mode', $2, true)`, org, mode); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(ctx, `PREPARE forget AS `+forgetCopies); err != nil {
-			t.Fatal(err)
-		}
-		if dir := os.Getenv("DUDE_PLAN_OUT"); dir != "" {
-			// The plan as text, for a reader, in a savepoint rolled back
-			// so that the plan checked below deletes the same copies.
-			var text []string
-			_, _ = tx.Exec(ctx, `SAVEPOINT text`)
-			rows, err := tx.Query(ctx, `EXPLAIN (ANALYZE, BUFFERS) EXECUTE forget(3600, '`+org+`')`)
-			if err == nil {
-				for rows.Next() {
-					var l string
-					_ = rows.Scan(&l)
-					text = append(text, l)
+	for _, st := range []struct {
+		name, sql, args string
+		maxProbes       float64
+	}{
+		{"forgetCopies", forgetCopies, "(3600, '" + org + "')", withCopy},
+		// One Run, two values: probed at most once per value, joined.
+		{"collectCopy", collectCopy, "('" + org + "_r1')", 2},
+	} {
+		for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
+			plan := explainCopyDelete(t, owner, org, mode, st.name, st.sql, st.args)
+			scans, probes := map[string][]string{}, 0.0
+			var walk func(node map[string]any)
+			walk = func(node map[string]any) {
+				if rel, ok := node["Relation Name"].(string); ok {
+					how := fmt.Sprint(node["Node Type"])
+					if name, ok := node["Index Name"].(string); ok {
+						how += " " + name
+					}
+					scans[rel] = append(scans[rel], how)
+					if rel == "artifacts" {
+						l, _ := node["Actual Loops"].(float64)
+						probes += l
+					}
 				}
-				rows.Close()
-			}
-			_, _ = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT text`)
-			_ = os.WriteFile(dir+"/"+mode+".txt", []byte(strings.Join(text, "\n")+"\n"), 0o644)
-		}
-		var plan []byte
-		if err := tx.QueryRow(ctx, `EXPLAIN (ANALYZE, FORMAT JSON) EXECUTE forget(3600, '`+org+`')`).Scan(&plan); err != nil {
-			t.Fatal(err)
-		}
-		_, _ = tx.Exec(ctx, `DEALLOCATE forget`)
-		_ = tx.Rollback(ctx)
-		scans := map[string][]string{}
-		loops := 0.0
-		var walk func(node map[string]any)
-		walk = func(node map[string]any) {
-			if rel, ok := node["Relation Name"].(string); ok {
-				how := fmt.Sprint(node["Node Type"])
-				if name, ok := node["Index Name"].(string); ok {
-					how += " " + name
+				if p, ok := node["Subplan Name"].(string); ok && strings.HasPrefix(p, "hashed") {
+					scans["hashed"] = append(scans["hashed"], p)
 				}
-				scans[rel] = append(scans[rel], how)
-				if rel == "artifacts" {
-					l, _ := node["Actual Loops"].(float64)
-					loops += l
+				children, _ := node["Plans"].([]any)
+				for _, c := range children {
+					walk(c.(map[string]any))
 				}
 			}
-			if name, ok := node["Index Name"].(string); ok && node["Relation Name"] == nil {
-				scans["bitmap"] = append(scans["bitmap"], name)
+			var nodes []struct{ Plan map[string]any }
+			if err := json.Unmarshal(plan, &nodes); err != nil {
+				t.Fatal(err)
 			}
-			if p, ok := node["Subplan Name"].(string); ok && strings.HasPrefix(p, "hashed") {
-				scans["hashed"] = append(scans["hashed"], p)
+			for _, n := range nodes {
+				walk(n.Plan)
 			}
-			children, _ := node["Plans"].([]any)
-			for _, c := range children {
-				walk(c.(map[string]any))
+			for _, how := range scans["artifacts"] {
+				if how != "Index Scan artifacts_run_idx" && how != "Index Only Scan artifacts_run_idx" {
+					t.Errorf("%s, %s: artifacts read by %s, want artifacts_run_idx; plan %s", st.name, mode, how, plan)
+				}
 			}
-		}
-		var nodes []struct{ Plan map[string]any }
-		if err := json.Unmarshal(plan, &nodes); err != nil {
-			t.Fatal(err)
-		}
-		for _, n := range nodes {
-			walk(n.Plan)
-		}
-		for _, how := range scans["artifacts"] {
-			if how != "Index Scan artifacts_run_idx" && how != "Index Only Scan artifacts_run_idx" {
-				t.Errorf("%s: artifacts read by %s, want artifacts_run_idx; plan %s", mode, how, plan)
+			if len(scans["artifacts"]) == 0 || len(scans["hashed"]) != 0 {
+				t.Errorf("%s, %s: artifacts read %v, hashed subplans %v; plan %s", st.name, mode, scans["artifacts"], scans["hashed"], plan)
 			}
-		}
-		if len(scans["artifacts"]) == 0 || len(scans["hashed"]) != 0 {
-			t.Errorf("%s: artifacts read %v, hashed subplans %v; plan %s", mode, scans["artifacts"], scans["hashed"], plan)
-		}
-		if loops < 1 || loops > withCopy {
-			t.Errorf("%s: artifacts probed %v times, want 1 to %d (once at most per Run with a copy); plan %s", mode, loops, withCopy, plan)
-		}
-		for _, how := range scans["run_project_secrets"] {
-			if how == "Seq Scan" {
-				t.Errorf("%s: every organization's copies scanned; plan %s", mode, plan)
+			if probes < 1 || probes > st.maxProbes {
+				t.Errorf("%s, %s: artifacts probed %v times, want 1 to %v; plan %s", st.name, mode, probes, st.maxProbes, plan)
+			}
+			for _, how := range scans["run_project_secrets"] {
+				if how == "Seq Scan" {
+					t.Errorf("%s, %s: every organization's copies scanned; plan %s", st.name, mode, plan)
+				}
 			}
 		}
 	}
+}
+
+// explainCopyDelete is the plan, as JSON, of the delete sql run once with
+// args as dude_app in org under plan_cache_mode mode, rolled back. With
+// DUDE_PLAN_OUT set, the plan as text is written there too, for a reader.
+func explainCopyDelete(t *testing.T, owner *pgx.Conn, org, mode, name, sql, args string) []byte {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+		_, _ = owner.Exec(ctx, `DEALLOCATE copy_delete`) // a session's, not the transaction's
+	}()
+	if _, err := tx.Exec(ctx, `SELECT set_config('role', 'dude_app', true), set_config('app.organization_id', $1, true),
+		set_config('jit', 'off', true), set_config('plan_cache_mode', $2, true)`, org, mode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `PREPARE copy_delete AS `+sql); err != nil {
+		t.Fatal(err)
+	}
+	if dir := os.Getenv("DUDE_PLAN_OUT"); dir != "" {
+		// In a savepoint rolled back, so the plan checked deletes the same copies.
+		var text []string
+		_, _ = tx.Exec(ctx, `SAVEPOINT text`)
+		if rows, err := tx.Query(ctx, `EXPLAIN (ANALYZE, BUFFERS) EXECUTE copy_delete`+args); err == nil {
+			for rows.Next() {
+				var l string
+				_ = rows.Scan(&l)
+				text = append(text, l)
+			}
+			rows.Close()
+		}
+		_, _ = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT text`)
+		_ = os.WriteFile(dir+"/"+name+"-"+mode+".txt", []byte(strings.Join(text, "\n")+"\n"), 0o644)
+	}
+	var plan []byte
+	if err := tx.QueryRow(ctx, `EXPLAIN (ANALYZE, FORMAT JSON) EXECUTE copy_delete`+args).Scan(&plan); err != nil {
+		t.Fatal(err)
+	}
+	return plan
 }
