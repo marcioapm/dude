@@ -142,7 +142,7 @@ acceptance: What must be observably true once this is fixed — an outcome or in
 suggested_fix: What to do instead.
 ```
 
-Report nothing if you find nothing. A finding you are not confident in is a `note`, not a `blocking` — a reviewer that cries wolf costs the next fix attempt for nothing.
+Report nothing if you find nothing. A finding you could not confirm says what you could not check; it is not rated lower for that, and a guess is not a finding.
 
 ## Independent Report Child
 
