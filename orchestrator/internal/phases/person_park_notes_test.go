@@ -270,3 +270,130 @@ func TestASteerAfterALiveTakeUpIsHeardNotParkedOver(t *testing.T) {
 		t.Errorf("ParkNow inside the grace of the resumed wait, the steer unheard")
 	}
 }
+
+// A park held for news in this wait (runs.news_hold_at, newsHeld), row by
+// row, as due and requestPause read it. The wait began when the question
+// was asked, 3 minutes ago (inside the ceiling); its grace is the
+// factory's 10 minutes. Held in this wait, the Run is due its park as soon
+// as it waits with what was queued by the hold heard, grace or not; a note
+// queued after the hold does not hold the park off (it waits for the
+// answer: not HasDirectives), but one queued before does. A hold from
+// before the wait began (an older ask's wait, a resume since) is spent:
+// the wait is as on main and #438, its park due only past its grace, and
+// held for a note then (HoldNews). A held park whose person's ask was
+// answered leaves the Run's notes to deliver. Mid-turn, nothing parks.
+func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// hold: news_hold_at (SQL interval ago, "" for NULL); waiting: how
+		// long since waiting_since ("" mid-turn); note: when a note was
+		// queued ("" none); resumed: a run_resumes row that long ago.
+		hold, waiting, note, resumed string
+		answered                     bool
+		parkNow, holdNews, directives bool
+	}{
+		{name: "never held, inside the grace, a note", waiting: "1 minute", note: "now()", directives: true},
+		{name: "never held, past the grace, a note", waiting: pastGrace, note: "now()", holdNews: true, directives: true},
+		{name: "never held, past the grace, no note", waiting: pastGrace, parkNow: true},
+		{name: "held, inside the grace, no note", hold: "2 minutes", waiting: "1 minute", parkNow: true},
+		{name: "held, inside the grace, a note queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()", parkNow: true},
+		{name: "held, inside the grace, a note queued before the hold", hold: "2 minutes", waiting: "1 minute",
+			note: "now() - interval '150 seconds'", directives: true},
+		{name: "held, mid-turn, a note queued after the hold", hold: "2 minutes", note: "now()"},
+		{name: "held before a resume, inside the grace, a note", hold: "2 minutes", resumed: "1 minute", waiting: "1 minute",
+			note: "now()", directives: true},
+		{name: "held before a resume, past the grace, a note", hold: "2 minutes", resumed: "1 minute", waiting: pastGrace,
+			note: "now()", holdNews: true, directives: true},
+		{name: "held before the ask, inside the grace, a note", hold: "4 minutes", waiting: "1 minute", note: "now()", directives: true},
+		{name: "held, answered since, a note queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			answered: true, directives: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, _ := waitingWorld(t)
+			w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
+			if c.answered {
+				w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() WHERE run_id = $1`, w.run.ID)
+			}
+			w.exec(`UPDATE runs SET waiting_since = now() - NULLIF($2, '')::interval,
+				news_hold_at = now() - NULLIF($3, '')::interval WHERE id = $1`, w.run.ID, c.waiting, c.hold)
+			if c.resumed != "" {
+				w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at)
+					VALUES ($1, $2, 2, 'answer', now() - $3::interval)`, w.run.ID, w.run.Org, c.resumed)
+			}
+			if c.note != "" {
+				w.note(false)
+				w.exec(`UPDATE directives SET created_at = `+c.note+` WHERE id = 'dir_'||$1`, w.run.Org)
+			}
+			got := w.dueRun()
+			if got.ParkNow != c.parkNow || got.HoldNews != c.holdNews || got.HasDirectives != c.directives {
+				t.Errorf("ParkNow %v, HoldNews %v, HasDirectives %v; want %v, %v, %v",
+					got.ParkNow, got.HoldNews, got.HasDirectives, c.parkNow, c.holdNews, c.directives)
+			}
+			if c.answered {
+				return
+			}
+			// requestPause's re-check agrees with the sweep's read; it is
+			// asked only of a Run the sweep read as due.
+			want := 0
+			if c.parkNow {
+				want = 1
+			}
+			r := *got
+			r.ParkNow = true
+			if n := w.parkForPerson(r); n != want {
+				t.Errorf("%d run.parked events, want %d", n, want)
+			}
+		})
+	}
+}
+
+// holdForNews records the hold once per wait, only for a Run due the park
+// main would make (past its grace, an open ask); pause and resume clear it.
+func TestAHoldForNewsIsRecordedOncePerWaitAndClearedByAPark(t *testing.T) {
+	w, r := waitingWorld(t)
+	w.note(false)
+	got := w.dueRun()
+	if !got.HoldNews || got.ParkNow {
+		t.Fatalf("HoldNews %v, ParkNow %v; want held, not parked", got.HoldNews, got.ParkNow)
+	}
+	if err := w.s.holdForNews(w.ctx, *got); err != nil {
+		t.Fatal(err)
+	}
+	first := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`)
+	if first != 1 {
+		t.Fatalf("the hold was not recorded")
+	}
+	var at1, at2 string
+	_ = w.owner.QueryRow(w.ctx, `SELECT news_hold_at::text FROM runs WHERE id = $1`, w.run.ID).Scan(&at1)
+	if err := w.s.holdForNews(w.ctx, *got); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.owner.QueryRow(w.ctx, `SELECT news_hold_at::text FROM runs WHERE id = $1`, w.run.ID).Scan(&at2)
+	if at1 != at2 {
+		t.Errorf("the hold moved from %s to %s within its wait", at1, at2)
+	}
+	if got := w.dueRun(); got.HoldNews || got.ParkNow || !got.HasDirectives {
+		t.Errorf("held, its note pending: HoldNews %v, ParkNow %v, HasDirectives %v; want the note delivered first",
+			got.HoldNews, got.ParkNow, got.HasDirectives)
+	}
+	// Inside the grace the hold is never recorded.
+	w2, _ := waitingWorld(t)
+	w2.exec(`UPDATE runs SET waiting_since = now() - interval '1 minute' WHERE id = $1`, w2.run.ID)
+	if err := w2.s.holdForNews(w2.ctx, w2.run); err != nil {
+		t.Fatal(err)
+	}
+	if n := w2.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`); n != 0 {
+		t.Errorf("a hold recorded inside the grace")
+	}
+	// The park clears it.
+	w.exec(`UPDATE directives SET sent_at = now() - interval '1 hour', delivered_at = now() - interval '1 hour' WHERE run_id = $1`, w.run.ID)
+	w.exec(`UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, w.run.ID)
+	// lux has it stopped already: pause asks lux nothing.
+	r.Control, r.LuxState = "pause_graceful", "stopped"
+	if err := w.s.pause(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND news_hold_at IS NULL`); n != 1 {
+		t.Errorf("paused with its wait's hold kept")
+	}
+}
