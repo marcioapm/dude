@@ -585,8 +585,11 @@ A Run given secrets whose copy is gone (after those 30 days, or a
 completed writer once collected) can no longer be checked for a value it
 held and that was rotated since, so `recover_run` refuses it ("dude no
 longer holds every value it was given"); a recovery already accepted
-whose copy goes before the worker scans its commits ends `failed` with
-the same reason, unpushed, and the conductor is told. A Run given no
+whose copy goes before the worker scans its commits ends `refused` with
+the same reason, unpushed, and the conductor is told. Its commits may
+hold a value dude can no longer check for: anything taken from lux's
+checkpoint by hand must be checked for secrets before it is pushed
+anywhere. A Run given no
 secrets is still recovered. Past those 30 days a text file the Run
 published is still served, redacted with the values in force then: a
 value rotated since is not caught there.

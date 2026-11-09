@@ -565,7 +565,10 @@ func recoverRun(ctx context.Context, tx pgx.Tx, c Caller, in recoverRunIn) (map[
 // after it ended: how it ended, and, when it pushed nothing, where another
 // try must go. Its own wake tells the conductor once, if it has not yet.
 func recoverEndedNext(status, why, prefix string) string {
-	return recoverEndedResult.Render(struct{ Status, Error, Prefix string }{status, why, prefix})
+	return recoverEndedResult.Render(struct {
+		Status, Error, Prefix string
+		Expired               bool
+	}{status, why, prefix, why == delivery.RecoverySecretsExpired})
 }
 
 type replyIn struct {

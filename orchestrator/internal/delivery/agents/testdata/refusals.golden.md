@@ -1628,5 +1628,5 @@ a reason is at most %d characters, and %s's is %d: say what decides the verdict,
 
 ## refusals/delivery/recover/secrets-expired
 
-%s was given secrets, and dude no longer holds every value it was given (a Run's copy of them is deleted once nothing needs it, at the latest 30 days after it ended): its work cannot be checked for a value rotated since, so it is not recovered. Tell the person; they can recover its commits from lux themselves
+%s was given secrets, and dude no longer holds every value it was given (a Run's copy of them is deleted once nothing needs it, at the latest 30 days after it ended): its work cannot be checked for a value rotated since, so it is not recovered. Tell the person: its commits may hold a secret value dude can no longer check for; anything taken from lux's checkpoint must be checked for secrets by hand before it is pushed anywhere
 
