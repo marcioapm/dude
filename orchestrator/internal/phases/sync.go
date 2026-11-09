@@ -205,7 +205,8 @@ type phaseRun struct {
 	Waiting bool
 	// Its agent has waited on a person past the project's grace period, and
 	// has heard everything dude has for it (unheardNews): news first, so a
-	// Run with some falls through to its delivery.
+	// Run with some falls through to its delivery. Or it waits, and its wait
+	// is past unheardNews's ceiling (newsCeiling): parked, news or not.
 	ParkNow bool
 	// Paused, and due to be resumed: a person asked, or dude's own reason
 	// for pausing it is over (resumable).
@@ -1043,7 +1044,7 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			// resume it when they do — the next minute or the next week.
 			// Not while dude has news it has not heard (unheardNews): that
 			// is delivered below, and the park comes once its turn waits
-			// again past the grace.
+			// again past the grace, or by the hold's ceiling.
 			return true, s.requestPause(ctx, r, "person", "parked while it waits for a person")
 		case r.Quiet && r.Nudged:
 			// Quiet again as long after its nudge: for a person to look at.
