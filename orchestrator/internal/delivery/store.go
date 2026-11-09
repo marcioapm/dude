@@ -882,21 +882,41 @@ func (r RunRef) correlation() string {
 
 // openQuestion (SQL, over a Run aliased r): it has a question waiting for
 // a person's answer.
-const openQuestion = `EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open')`
+const openQuestion = `EXISTS (SELECT 1 FROM ` + openQuestions + `)`
+
+// The rows each of OpenAsk's asks is read from (SQL, over a Run aliased
+// r): its open questions, its blocking repository requests, the delivery
+// holding it on a checks escalation, its open peer wait.
+const (
+	openQuestions = `questions q WHERE q.run_id = r.id AND q.status = 'open'`
+	blockingRepos = `repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking`
+	checksHeldOn  = `workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = '` + WorkflowType + `'
+	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = '` + ReasonChecksUnverified + `'
+	AND w.state->'escalation'->'detail'->>'runId' = r.id AND NOT (w.state->'escalation' ? 'decided')`
+	openPeerWaits = `peer_waits pw WHERE pw.run_id = r.id AND pw.closed_at IS NULL`
+)
 
 // PersonAsk is true (SQL, over a Run aliased r) while the Run is blocked on
 // a person: a question, or a repository it said it cannot go on without.
 const PersonAsk = `(` + openQuestion + `
-	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking)
+	OR EXISTS (SELECT 1 FROM ` + blockingRepos + `)
 	OR ` + checksHeld + `)`
 
 // checksHeld is true (SQL, over a Run aliased r) while the task's delivery
 // waits on a person's undecided checks escalation (ReasonChecksUnverified)
 // of this Run. The decision sets escalation.decided in its own
 // transaction, which ends it.
-const checksHeld = `EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = '` + WorkflowType + `'
-	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = '` + ReasonChecksUnverified + `'
-	AND w.state->'escalation'->'detail'->>'runId' = r.id AND NOT (w.state->'escalation' ? 'decided'))`
+const checksHeld = `EXISTS (SELECT 1 FROM ` + checksHeldOn + `)`
+
+// OpenAskSince (SQL, over a Run aliased r) is when the oldest ask OpenAsk
+// counts was made: a question asked, a repository requested, a checks
+// escalation raised, a peer wait opened, the gate's checks asked. NULL when
+// none is open, or none says when (an escalation from before raisedAt).
+const OpenAskSince = `LEAST((SELECT min(q.asked_at) FROM ` + openQuestions + `),
+	(SELECT min(q.created_at) FROM ` + blockingRepos + `),
+	(SELECT min((w.state->'escalation'->>'raisedAt')::timestamptz) FROM ` + checksHeldOn + `),
+	(SELECT min(pw.since) FROM ` + openPeerWaits + `),
+	(SELECT min(a.occurred_at) FROM ` + checksAsked + `))`
 
 // OpenAsk is true (SQL, over a Run aliased r) while the Run is blocked on a
 // person (PersonAsk) or on a peer's reply (peer_waits). An agent that ends
