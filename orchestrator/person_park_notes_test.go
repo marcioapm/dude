@@ -39,6 +39,22 @@ func (w *world) parks(run string) int {
 	return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'person'`, run)
 }
 
+// waitsAfter says whether run waits again after directive id was
+// delivered: the turn that read it is over.
+func (w *world) waitsAfter(run, id string) bool {
+	w.t.Helper()
+	return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since IS NOT NULL
+		AND waiting_since >= (SELECT delivered_at FROM directives WHERE id = $2)`, run, id) == 1
+}
+
+// parkedPastGrace says whether run's park came at least grace into the
+// wait it parked in.
+func (w *world) parkedPastGrace(run string, grace time.Duration) bool {
+	w.t.Helper()
+	return w.count(`SELECT count(*) FROM runs r, events p WHERE r.id = $1 AND p.run_id = r.id AND p.event_type = 'run.parked'
+		AND (p.payload->>'parkedAt')::timestamptz >= r.waiting_since + make_interval(secs => $2)`, run, grace.Seconds()) == 1
+}
+
 // questionOpen fails the test if q is no longer open.
 func (w *world) questionOpen(q, when string) {
 	w.t.Helper()
@@ -91,9 +107,7 @@ func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 	// reads it and ends the turn in one batch, at the same now().
 	w.until("the note's turn over, waiting on the person again", func() bool {
 		w.questionOpen(q, "during the note's turn")
-		return len(w.said(old)) > said && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since IS NOT NULL
-			AND waiting_since >= (SELECT delivered_at FROM directives WHERE id = $2)`, old, note) == 1 ||
-			w.parks(old) > 0
+		return len(w.said(old)) > said && w.waitsAfter(old, note) || w.parks(old) > 0
 	})
 	w.untilParked(old)
 	w.questionOpen(q, "once parked")
@@ -109,8 +123,7 @@ func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 			AND d.payload->>'directiveId' = $2)`, old, note); n == 0 {
 		t.Error("parked before the agent's turn for the note said anything")
 	}
-	if n := w.count(`SELECT count(*) FROM runs r, events p WHERE r.id = $1 AND p.run_id = r.id AND p.event_type = 'run.parked'
-		AND (p.payload->>'parkedAt')::timestamptz >= r.waiting_since + make_interval(secs => $2)`, old, grace.Seconds()); n != 1 {
+	if !w.parkedPastGrace(old, grace) {
 		t.Errorf("parked inside the grace of its wait after the note: %s", w.str(`SELECT r.waiting_since::text || ' / ' ||
 			(SELECT payload->>'parkedAt' FROM events WHERE run_id = r.id AND event_type = 'run.parked') FROM runs r WHERE r.id = $1`, old))
 	}
@@ -231,8 +244,7 @@ func TestAPersonParkComesByTheCeilingWhileNotesKeepComing(t *testing.T) {
 	if w.directiveDelivered(last) || w.unheard(old) != 1 {
 		t.Errorf("the note past the ceiling heard, or %d notes left for the answer, want it alone", w.unheard(old))
 	}
-	if n := w.count(`SELECT count(*) FROM runs r, events p WHERE r.id = $1 AND p.run_id = r.id AND p.event_type = 'run.parked'
-		AND (p.payload->>'parkedAt')::timestamptz >= r.waiting_since + make_interval(secs => $2)`, old, grace.Seconds()); n != 1 {
+	if !w.parkedPastGrace(old, grace) {
 		t.Errorf("parked inside the grace of its wait")
 	}
 	w.note(task, old, "the base moved on")
@@ -246,14 +258,6 @@ func TestAPersonParkComesByTheCeilingWhileNotesKeepComing(t *testing.T) {
 		t.Errorf("resumed %d times for a note, the question unanswered", resumed)
 	}
 	w.questionOpen(q, "after the park")
-}
-
-// waitsAfter says whether run waits again after directive id was
-// delivered: the turn that read it is over.
-func (w *world) waitsAfter(run, id string) bool {
-	w.t.Helper()
-	return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND waiting_since IS NOT NULL
-		AND waiting_since >= (SELECT delivered_at FROM directives WHERE id = $2)`, run, id) == 1
 }
 
 // The agent asked long ago (past the hold's ceiling) and worked on; its
