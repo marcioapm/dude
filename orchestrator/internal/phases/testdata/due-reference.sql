@@ -4,9 +4,10 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
-	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
-	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))
-		AND NOT COALESCE(d.created_at > hold.cutoff AND NOT d.interrupt AND d.deliver_after IS NULL, false)),
+	(hold.cutoff IS NULL AND EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())))
+		OR hold.cutoff IS NOT NULL AND EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())) AND NOT COALESCE(d.created_at > hold.cutoff AND NOT d.interrupt AND d.deliver_after IS NULL, false))),
 	CASE WHEN r.turn_done_at IS NOT NULL AND r.status = 'running' AND r.lux_state = 'running' AND r.push_request_id IS NULL
 	THEN EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NOT NULL AND d.failed_at IS NULL
 	        AND d.interrupt_only IS NOT TRUE
@@ -25,15 +26,18 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	  AND NOT (lux_name(p.key_prefix || '-' || repo.name) = ANY (r.lux_repositories))))),
 	COALESCE(r.dude_pause, ''), ask.open,
 	CASE WHEN r.waiting_since IS NULL OR NOT ask.open THEN 'none'
-		WHEN hold.held THEN CASE WHEN ((EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+		WHEN hold.held THEN CASE WHEN ((hold.cutoff IS NULL AND (EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 		AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
 	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))
-		AND d.created_at <= COALESCE(hold.cutoff, 'infinity')
-		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120)))
-	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
+		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120))) OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
 		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
-		AND d.created_at <= COALESCE(hold.cutoff, 'infinity')
-		AND d.sent_at > now() - make_interval(secs => 120))) AND COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
+		AND d.sent_at > now() - make_interval(secs => 120)))
+	OR hold.cutoff IS NOT NULL AND (EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+		AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))
+		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120)) AND d.created_at <= hold.cutoff) OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
+		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
+		AND d.sent_at > now() - make_interval(secs => 120) AND d.created_at <= hold.cutoff))) AND COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
 	(SELECT min(q.created_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking),
 	(SELECT min((w.state->'escalation'->>'raisedAt')::timestamptz) FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
 	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = 'checks_unverified'
@@ -46,15 +50,18 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 		AND v.payload->>'turn' = a.payload->>'turn'))),
 	(SELECT max(rr.requested_at) FROM run_resumes rr WHERE rr.run_id = r.id),
 	(SELECT max(u.occurred_at) FROM events u WHERE u.run_id = r.id AND u.event_type = 'run.unparked')) > now() - make_interval(secs => 2 * lim.park_secs), false)) THEN 'none' ELSE 'park' END
-		WHEN r.waiting_since < now() - make_interval(secs => lim.park_secs) THEN CASE WHEN ((EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+		WHEN r.waiting_since < now() - make_interval(secs => lim.park_secs) THEN CASE WHEN ((hold.cutoff IS NULL AND (EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 		AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
 	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))
-		AND d.created_at <= COALESCE(hold.cutoff, 'infinity')
-		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120)))
-	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
+		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120))) OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
 		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
-		AND d.created_at <= COALESCE(hold.cutoff, 'infinity')
-		AND d.sent_at > now() - make_interval(secs => 120))) AND COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
+		AND d.sent_at > now() - make_interval(secs => 120)))
+	OR hold.cutoff IS NOT NULL AND (EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+		AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))
+		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120)) AND d.created_at <= hold.cutoff) OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
+		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
+		AND d.sent_at > now() - make_interval(secs => 120) AND d.created_at <= hold.cutoff))) AND COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
 	(SELECT min(q.created_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking),
 	(SELECT min((w.state->'escalation'->>'raisedAt')::timestamptz) FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
 	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = 'checks_unverified'

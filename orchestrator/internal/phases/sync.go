@@ -300,8 +300,8 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
-	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ` + delivery.HeldBack + `
-		AND NOT ` + heldForNews + `),
+	(` + newsCutoff + ` IS NULL AND EXISTS (` + toSend + `)
+		OR ` + newsCutoff + ` IS NOT NULL AND EXISTS (` + toSend + ` AND NOT ` + heldForNews + `)),
 	CASE WHEN r.turn_done_at IS NOT NULL AND r.status = 'running' AND r.lux_state = 'running' AND r.push_request_id IS NULL
 	THEN EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NOT NULL AND d.failed_at IS NULL
 	        AND d.interrupt_only IS NOT TRUE
@@ -555,14 +555,26 @@ const unheardNews = `(` + newsPending + ` AND COALESCE(` + waitBegan + ` > now()
 
 // newsPending (SQL, over runs r) is unheardNews before its ceiling: what
 // was queued up to newsCutoff, every note before the wait's park was held.
-const newsPending = `(EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+// A Run with no cutoff reads main's subqueries as they were, so the
+// planner keeps their hashed form; only a held one compares created_at.
+const newsPending = `(` + newsCutoff + ` IS NULL AND (EXISTS (` + unsentNews + `) OR EXISTS (` + sentNews + `))
+	OR ` + newsCutoff + ` IS NOT NULL AND (EXISTS (` + unsentNews + ` AND ` + byCutoff + `) OR EXISTS (` + sentNews + ` AND ` + byCutoff + `)))`
+
+// unsentNews and sentNews (SQL, over runs r) are newsPending's notes,
+// queued and sent; byCutoff, one queued by the hold (newsCutoff).
+const (
+	unsentNews = `SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 		AND NOT ` + delivery.HeldBack + `
-		AND d.created_at <= COALESCE(` + newsCutoff + `, 'infinity')
-		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))
-	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
+		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `))`
+	sentNews = `SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
 		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
-		AND d.created_at <= COALESCE(` + newsCutoff + `, 'infinity')
-		AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))`
+		AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)`
+	byCutoff = `d.created_at <= ` + newsCutoff
+)
+
+// toSend (SQL, over runs r) is HasDirectives's: queued, unsent, not held
+// for an answer (HeldBack); heldForNews is added for a held Run only.
+const toSend = `SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ` + delivery.HeldBack
 
 // newsHeldSince (SQL, over runs r) is true once the Run's park was held for
 // news in the wait it waits in now: news_hold_at, set by holdForNews, no
