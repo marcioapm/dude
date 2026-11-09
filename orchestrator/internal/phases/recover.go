@@ -397,7 +397,7 @@ func (s *Syncer) scanAndPush(ctx context.Context, c recoveryRow) error {
 		return s.endRecovery(ctx, c, delivery.RecoveryFailed, err.Error(), nil)
 	case errors.Is(err, errSecretsExpired):
 		s.Log.Warn("refused to scan a recovery whose Run's secret copy is gone", "recovery", c.ID, "run", c.RunID)
-		return s.endRecovery(ctx, c, delivery.RecoveryFailed, delivery.RecoverySecretsExpired, nil)
+		return s.endRecovery(ctx, c, delivery.RecoveryRefused, delivery.RecoverySecretsExpired, nil)
 	case err != nil:
 		return err
 	case len(found) > 0:

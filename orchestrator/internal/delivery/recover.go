@@ -177,11 +177,10 @@ func RecoverySecretsExpiredTx(ctx context.Context, tx pgx.Tx, runID string) (boo
 }
 
 // RecoverySecretsExpired is why a recovery of a Run whose copy is gone
-// (RecoverySecretsExpiredTx) ends unpushed, for the conductor and the
-// person.
-const RecoverySecretsExpired = "the Run was given secrets and dude no longer holds every value it was given " +
-	"(a Run's copy of them is deleted once nothing needs it, at the latest 30 days after it ended), " +
-	"so its work cannot be checked for a value rotated since; it is not recovered"
+// (RecoverySecretsExpiredTx) ends refused, unpushed, for the conductor and
+// the person. It fits the recovered wake whole (RecoveredWhyChars).
+const RecoverySecretsExpired = "dude no longer holds every secret value the Run was given (its copy is deleted at the latest " +
+	"30 days after it ended), so its work cannot be checked for one rotated since; not recovered"
 
 // branchInUseTx says branch is the task branch of the attempt, or the
 // head of one of the task's open pull requests.

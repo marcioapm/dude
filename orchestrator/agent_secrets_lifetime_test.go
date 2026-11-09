@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -288,7 +289,7 @@ func TestARecoveryAfterARotationRefusesTheOldValue(t *testing.T) {
 // lux Run was handed to its next round too); one kept, or one whose output
 // may still be read (a text file, a dead writer's commits), keeps it until
 // its keep or its retention (30 days, an hour short of which it is still
-// kept) ends, and then loses it.
+// kept) ends, and then loses it (an hour past them).
 func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	w := newWorld(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
@@ -353,7 +354,7 @@ func TestACopyIsKeptOnlyWhileItsRunCanComeBackAndThenDeleted(t *testing.T) {
 	// Its keep over, its retention past: every one of them goes.
 	mustExec(t, w.owner, `UPDATE runs SET kept_until = now() - interval '1 second' WHERE id = ANY($1) AND kept_until IS NOT NULL`,
 		[]string{kept["a kept Run"], kept["a Run kept for its next round"]})
-	mustExec(t, w.owner, `UPDATE runs SET ended_at = now() - interval '31 days' WHERE id = ANY($1)`,
+	mustExec(t, w.owner, `UPDATE runs SET ended_at = now() - interval '30 days 1 hour' WHERE id = ANY($1)`,
 		[]string{kept["a kept Run not yet stopped"], kept["a failed writer"], kept["an aborted fixer"], kept["a reviewer that wrote text"], kept["a reviewer that wrote json"],
 			kept["a failed writer, an hour short"], kept["a reviewer, text, an hour short"]})
 	forget()
@@ -403,8 +404,8 @@ func TestARecoveryOfARunWhoseCopyIsGoneIsRefused(t *testing.T) {
 }
 
 // (g) As (f), but the copy goes after recover_run accepted the recovery
-// and before the worker scans it: the recovery fails, saying why, nothing
-// is pushed, and the conductor is told.
+// and before the worker scans it: the recovery is refused, saying why,
+// nothing is pushed, and the conductor is told.
 func TestARecoveryWhoseCopyGoesBeforeItsScanFailsUnpushed(t *testing.T) {
 	w := conducting(t)
 	w.grant("IMPL_TOKEN", implToken, "implementer")
@@ -417,10 +418,10 @@ func TestARecoveryWhoseCopyGoesBeforeItsScanFailsUnpushed(t *testing.T) {
 		s := w.recoveryStatus(id)
 		return s == "refused" || s == "done" || s == "failed"
 	})
-	if s := w.recoveryStatus(id); s != "failed" {
-		t.Errorf("the recovery %s, want failed", s)
+	if s := w.recoveryStatus(id); s != "refused" {
+		t.Errorf("the recovery %s, want refused", s)
 	}
-	if e := w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id); !strings.Contains(e, "no longer holds every value") {
+	if e := w.str(`SELECT COALESCE(error, '') FROM run_recoveries WHERE id = $1`, id); e != delivery.RecoverySecretsExpired {
 		t.Errorf("the recovery's error %q", e)
 	}
 	if got := w.branchAt("dude/" + task + "/recovered-" + run); got != "" {
@@ -433,7 +434,7 @@ func TestARecoveryWhoseCopyGoesBeforeItsScanFailsUnpushed(t *testing.T) {
 		t.Error("the old value reached GitHub")
 	}
 	w.until("the conductor told", func() bool { return w.recoveredWakes(task) == 1 })
-	if line := w.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'recovered'`, task); !strings.Contains(line, "no longer holds every value") {
+	if line := w.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = 'recovered'`, task); !strings.Contains(line, delivery.RecoverySecretsExpired) {
 		t.Errorf("the wake says %q", line)
 	}
 }

@@ -83,6 +83,10 @@ func RecoveryEndedTx(ctx context.Context, tx pgx.Tx, end RecoveryEnd) error {
 	return err
 }
 
+// RecoveredWhyChars is the most of a failed or refused recovery's reason
+// the recovered wake shows, in characters; longer is clipped.
+const RecoveredWhyChars = 200
+
 // recoveredLine tells the conductor how its recovery ended.
 func recoveredLine(end RecoveryEnd) string {
 	var pushed, other []string
@@ -97,7 +101,8 @@ func recoveredLine(end RecoveryEnd) string {
 	return render(recoveredTmpl, struct {
 		ID, Run, Branch, Status, Error string
 		Pushed, Other, Dirty           []string
-	}{end.ID, end.RunID, end.Branch, end.Status, end.Error, pushed, other, end.Dirty})
+		WhyChars                       int
+	}{end.ID, end.RunID, end.Branch, end.Status, end.Error, pushed, other, end.Dirty, RecoveredWhyChars})
 }
 
 func shortSHA(sha string) string { return sha[:min(len(sha), 12)] }

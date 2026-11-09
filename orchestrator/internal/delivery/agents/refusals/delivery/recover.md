@@ -14,7 +14,7 @@
 
 {{- define "refusals/delivery/recover/secret-found"}}a secret was found in %s's work and its push refused: a person must remove it; it is not recovered{{end}}
 
-{{- define "refusals/delivery/recover/secrets-expired"}}%s was given secrets, and dude no longer holds every value it was given (a Run's copy of them is deleted once nothing needs it, at the latest 30 days after it ended): its work cannot be checked for a value rotated since, so it is not recovered. Tell the person; they can recover its commits from lux themselves{{end}}
+{{- define "refusals/delivery/recover/secrets-expired"}}%s was given secrets, and dude no longer holds every value it was given (a Run's copy of them is deleted once nothing needs it, at the latest 30 days after it ended): its work cannot be checked for a value rotated since, so it is not recovered. Tell the person: its commits may hold a secret value dude can no longer check for; anything taken from lux's checkpoint must be checked for secrets by hand before it is pushed anywhere{{end}}
 
 {{- define "refusals/delivery/recover/branch-outside"}}branch %q is outside %s: name one under it (letters, digits, . _ -, at most 60 after the prefix), or leave it out for %s{{end}}
 
