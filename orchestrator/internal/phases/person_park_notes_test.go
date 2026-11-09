@@ -472,6 +472,35 @@ func TestAHoldForNewsIsRecordedOncePerWaitAndClearedByAPark(t *testing.T) {
 	if n := w3.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`); n != 0 {
 		t.Errorf("a hold recorded with no ask open")
 	}
+	// Spent by a note sent after it (holdSpent) while the turn it starts
+	// has not come yet: the Run still waits in the idle the hold was taken
+	// in, past its grace, that note unheard (HoldNews). The hold is not
+	// taken again: one recorded now would come after that note, which
+	// would no longer spend it, and the Run would park as soon as its turn
+	// ended, a grace earlier than main. A later idle's may.
+	w4, _ := waitingWorld(t)
+	w4.exec(`UPDATE runs SET news_hold_at = now() - interval '30 seconds' WHERE id = $1`, w4.run.ID)
+	w4.note(false)
+	w4.exec(`UPDATE directives SET created_at = now() - interval '20 seconds', claimed_at = now() - interval '10 seconds',
+		sent_at = now() - interval '10 seconds' WHERE id = 'dir_'||$1`, w4.run.Org)
+	spent := w4.dueRun()
+	if !spent.HoldNews {
+		t.Fatalf("spent, past the grace, its note unheard: HoldNews %v, ParkNow %v; want HoldNews", spent.HoldNews, spent.ParkNow)
+	}
+	if err := w4.s.holdForNews(w4.ctx, *spent); err != nil {
+		t.Fatal(err)
+	}
+	if n := w4.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at < now() - interval '25 seconds'`); n != 1 {
+		t.Errorf("a spent hold was taken again before its note's turn")
+	}
+	w4.exec(`UPDATE runs SET waiting_since = now() - interval '11 minutes' + interval '5 seconds',
+		news_hold_at = now() - interval '11 minutes' WHERE id = $1`, w4.run.ID)
+	if err := w4.s.holdForNews(w4.ctx, *spent); err != nil {
+		t.Fatal(err)
+	}
+	if n := w4.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at > now() - interval '5 seconds'`); n != 1 {
+		t.Errorf("a hold from an earlier idle kept the later one from being recorded")
+	}
 	// The park clears it.
 	w.exec(`UPDATE directives SET sent_at = now() - interval '1 hour', delivered_at = now() - interval '1 hour' WHERE run_id = $1`, w.run.ID)
 	w.exec(`UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, w.run.ID)

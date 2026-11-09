@@ -3741,10 +3741,16 @@ func (s *Syncer) holdForNews(ctx context.Context, r phaseRun) error {
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// As requestPause, it re-checks what the sweep read: still due the
 		// park main would make (past the grace, an open ask), not held yet.
+		// And not held in this idle already (news_hold_at before
+		// waiting_since): a hold spent by a note sent in it (holdSpent)
+		// reads as due again until that note's turn begins, and taken
+		// again it would come after the note, which would no longer spend
+		// it: the Run would park as soon as that turn ended.
 		_, err := tx.Exec(ctx, `UPDATE runs r SET news_hold_at = now()
 			FROM (SELECT lim.park_secs FROM `+limitsFrom+` WHERE r.id = $4) lim
 			WHERE r.id = $4 AND r.status = 'running' AND r.control = 'none'
 			  AND r.waiting_since < now() - make_interval(secs => lim.park_secs)
+			  AND (r.news_hold_at IS NULL OR r.news_hold_at < r.waiting_since)
 			  AND `+delivery.OpenAsk+` AND NOT `+heldInWait, append(s.limits(), r.ID)...)
 		return err
 	})
