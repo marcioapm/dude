@@ -23,12 +23,37 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 		WHERE fs.id = sr.session_id AND hp.project_id = repo.project_id)
 	  AND NOT (lux_name(p.key_prefix || '-' || repo.name) = ANY (r.lux_repositories))))),
 	COALESCE(r.dude_pause, ''), ask.open,
-	COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND ask.open AND NOT (EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
-	AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
-	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())))
+	r.waiting_since IS NOT NULL AND ask.open AND (COALESCE(r.waiting_since < now() - make_interval(secs => lim.park_secs), false) AND NOT ((EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+		AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now()))
+		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => 120)))
 	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
 		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
-		AND d.sent_at > now() - make_interval(secs => 120))),
+		AND d.sent_at > now() - make_interval(secs => 120)))
+	AND COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
+	(SELECT min(q.created_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking),
+	(SELECT min((w.state->'escalation'->>'raisedAt')::timestamptz) FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
+	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = 'checks_unverified'
+	AND w.state->'escalation'->'detail'->>'runId' = r.id AND NOT (w.state->'escalation' ? 'decided')),
+	(SELECT min(pw.since) FROM peer_waits pw WHERE pw.run_id = r.id AND pw.closed_at IS NULL),
+	(SELECT min(a.occurred_at) FROM events a WHERE a.run_id = r.id AND a.event_type = 'run.checks.asked'
+	AND (a.payload->>'deadline')::timestamptz > now()
+	AND (a.payload->>'turn')::bigint = (SELECT COALESCE(max(t.cursor), 0) FROM events t WHERE t.run_id = r.id AND t.event_type = 'agent.session.stopped')
+	AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = r.id AND v.event_type IN ('run.checks.conducted', 'run.checks.judged')
+		AND v.payload->>'turn' = a.payload->>'turn'))),
+	(SELECT max(rr.requested_at) FROM run_resumes rr WHERE rr.run_id = r.id)) > now() - make_interval(secs => 2 * lim.park_secs), false))
+		OR COALESCE(GREATEST(LEAST((SELECT min(q.asked_at) FROM questions q WHERE q.run_id = r.id AND q.status = 'open'),
+	(SELECT min(q.created_at) FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking),
+	(SELECT min((w.state->'escalation'->>'raisedAt')::timestamptz) FROM workflow_runs w WHERE w.task_id = r.task_id AND w.workflow_type = 'task.delivery'
+	AND w.status = 'waiting' AND w.state->'escalation'->>'reason' = 'checks_unverified'
+	AND w.state->'escalation'->'detail'->>'runId' = r.id AND NOT (w.state->'escalation' ? 'decided')),
+	(SELECT min(pw.since) FROM peer_waits pw WHERE pw.run_id = r.id AND pw.closed_at IS NULL),
+	(SELECT min(a.occurred_at) FROM events a WHERE a.run_id = r.id AND a.event_type = 'run.checks.asked'
+	AND (a.payload->>'deadline')::timestamptz > now()
+	AND (a.payload->>'turn')::bigint = (SELECT COALESCE(max(t.cursor), 0) FROM events t WHERE t.run_id = r.id AND t.event_type = 'agent.session.stopped')
+	AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = r.id AND v.event_type IN ('run.checks.conducted', 'run.checks.judged')
+		AND v.payload->>'turn' = a.payload->>'turn'))),
+	(SELECT max(rr.requested_at) FROM run_resumes rr WHERE rr.run_id = r.id)) <= now() - make_interval(secs => 2 * lim.park_secs), false)),
 	COALESCE((r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT (EXISTS (SELECT 1 FROM questions q WHERE q.run_id = r.id AND q.status = 'open')
 	OR EXISTS (SELECT 1 FROM repository_requests q WHERE q.run_id = r.id AND q.status = 'pending' AND q.blocking)

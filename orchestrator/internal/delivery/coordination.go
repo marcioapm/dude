@@ -67,7 +67,7 @@ const voiceSQL = `SELECT r.id FROM runs r WHERE r.task_id = $1 AND r.kind = 'age
 	ORDER BY r.created_at DESC LIMIT 1`
 
 // openPeerWait (SQL, over runs r): the Run waits on a peer's reply.
-const openPeerWait = `EXISTS (SELECT 1 FROM peer_waits pw WHERE pw.run_id = r.id AND pw.closed_at IS NULL)`
+const openPeerWait = `EXISTS (SELECT 1 FROM ` + openPeerWaits + `)`
 
 // RunLabel is a Run as its peers read it: "ABS-4's implementer".
 func RunLabel(ctx context.Context, tx pgx.Tx, runID string) (string, error) {

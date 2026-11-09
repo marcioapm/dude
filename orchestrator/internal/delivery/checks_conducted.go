@@ -102,11 +102,15 @@ type ConductedChecks struct {
 // on, within ConductorAnswerWait. It holds the turn like an open question,
 // so the Run is parked past its grace, and its end (a verdict, or the
 // deadline) lets the park resume.
-const ChecksWaiting = `EXISTS (SELECT 1 FROM events a WHERE a.run_id = r.id AND a.event_type = '` + EvRunChecksAsked + `'
+const ChecksWaiting = `EXISTS (SELECT 1 FROM ` + checksAsked + `)`
+
+// checksAsked (SQL, over a Run aliased r): the gate's open ask of
+// ChecksWaiting, as events a.
+const checksAsked = `events a WHERE a.run_id = r.id AND a.event_type = '` + EvRunChecksAsked + `'
 	AND (a.payload->>'deadline')::timestamptz > now()
 	AND (a.payload->>'turn')::bigint = (SELECT COALESCE(max(t.cursor), 0) FROM events t WHERE t.run_id = r.id AND t.event_type = 'agent.session.stopped')
 	AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = r.id AND v.event_type IN ('` + EvRunChecksConducted + `', '` + EvRunChecksJudged + `')
-		AND v.payload->>'turn' = a.payload->>'turn'))`
+		AND v.payload->>'turn' = a.payload->>'turn')`
 
 // ChecksKey is the wake key of a turn's checks report.
 func ChecksKey(runID string, turn int64) string { return fmt.Sprintf("checks:%s:%d", runID, turn) }
