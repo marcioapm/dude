@@ -585,7 +585,7 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 				control = 'none', control_requested_at = NULL, control_reason = NULL, dude_pause = NULL,
 				idle_nudged_at = NULL, agent_active_at = NULL, files_changed_at = now(),
 				left_running_at = CASE WHEN $2 = 'running' THEN NULL ELSE now() END,
-				waiting_since = CASE WHEN $3 THEN now() END,
+				waiting_since = CASE WHEN $3 THEN now() END, news_hold_at = NULL,
 				turn_done_at = CASE WHEN $4 THEN turn_done_at END, agent_busy_at = CASE WHEN $4 THEN agent_busy_at END,
 				harness_state = harness_state - 'brokenTurn'
 			WHERE id = $1`, r.ID, state, r.Waiting, r.keepsTurn()); err != nil {
