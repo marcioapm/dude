@@ -7,7 +7,7 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 	(hold.cutoff IS NULL AND EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
 	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())))
 		OR hold.cutoff IS NOT NULL AND EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ((d.held_for IS NOT NULL AND EXISTS (SELECT 1 FROM questions hq WHERE hq.id = d.held_for AND hq.status = 'open'))
-	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())) AND NOT COALESCE(d.created_at > hold.cutoff AND NOT d.interrupt AND d.deliver_after IS NULL, false))),
+	OR (d.deliver_after IS NOT NULL AND d.deliver_after > now())) AND NOT COALESCE(d.created_at > hold.cutoff AND NOT (d.interrupt AND (d.scope = 'turn' OR d.resends IS NOT NULL)) AND d.deliver_after IS NULL, false))),
 	CASE WHEN r.turn_done_at IS NOT NULL AND r.status = 'running' AND r.lux_state = 'running' AND r.push_request_id IS NULL
 	THEN EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NOT NULL AND d.failed_at IS NULL
 	        AND d.interrupt_only IS NOT TRUE
@@ -137,7 +137,7 @@ SELECT r.id, r.organization_id, COALESCE(r.project_id, ''), COALESCE(r.task_id, 
 		AND v.payload->>'turn' = a.payload->>'turn'))),
 	(SELECT max(rr.requested_at) FROM run_resumes rr WHERE rr.run_id = r.id),
 	(SELECT max(u.occurred_at) FROM events u WHERE u.run_id = r.id AND u.event_type = 'run.unparked')), false) END AND NOT EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.created_at > r.news_hold_at
-		AND d.sent_at IS NOT NULL AND NOT d.interrupt AND d.deliver_after IS NULL) END AS held OFFSET 0) h OFFSET 0) hold
+		AND d.sent_at IS NOT NULL AND NOT (d.interrupt AND (d.scope = 'turn' OR d.resends IS NOT NULL)) AND d.deliver_after IS NULL) END AS held OFFSET 0) h OFFSET 0) hold
 			WHERE (r.phase IS NOT NULL OR (r.role IN ('conductor', 'brainstorm') AND r.kind = 'agent'))
 			  AND (r.status IN ('pending', 'scheduled', 'starting', 'running')
 			       OR (r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')

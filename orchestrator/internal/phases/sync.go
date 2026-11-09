@@ -606,14 +606,22 @@ const newsHeld = `CASE WHEN r.news_hold_at IS NULL OR NOT ask.open THEN false
 // this, the spent hold would park the Run as soon as the answer's turn
 // ended. What caused the hold was queued before it and does not spend it;
 // what is queued after it while a person's ask is open waits for the
-// answer (heldForNews), unsent, and does not either. Nor an interrupt or
-// a turn's retry, sent during a hold: they serve the held note's turn (a
-// nudge of it, a person's "Interrupt now", the same turn run again), which
-// begins no new wait, and spending on them would give that turn a fresh
+// answer (heldForNews), unsent, and does not either. Nor what serves the
+// held note's turn, sent during a hold (servesTurn, a turn's retry): it
+// begins no new wait, and spending on it would give that turn a fresh
+// grace. A new steer sent as an interrupt (a person's, a conductor's)
+// does spend it: main would have resumed the Run for it, with a full
 // grace. Read from the directives, not cleared where each answer is
 // written, so every path that queues a note spends it alike.
 const holdSpent = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.created_at > r.news_hold_at
-		AND d.sent_at IS NOT NULL AND NOT d.interrupt AND d.deliver_after IS NULL)`
+		AND d.sent_at IS NOT NULL AND NOT ` + servesTurn + ` AND d.deliver_after IS NULL)`
+
+// servesTurn (SQL, over directives d) is an interrupt of the turn under
+// way: dude's nudge of a stuck, silent or quiet turn (scope turn) or a
+// person's "Interrupt now" (resends: the same words again). Not a new
+// steer sent as an interrupt, a person's or a conductor's (scope run, no
+// resends): new words, which a park would have waited on the answer for.
+const servesTurn = `(d.interrupt AND (d.scope = 'turn' OR d.resends IS NOT NULL))`
 
 // newsCutoff (SQL, over runFrom's hold) is when the park was held for news
 // in this wait, while a person's ask is open (as heldForNews); NULL
@@ -628,16 +636,16 @@ const newsCutoff = `hold.cutoff`
 // the Run's park was held for news in this wait, while a person's ask is
 // open (hold.cutoff), so it waits for the answer, as it would have had the
 // park not been held (resumable resumes a parked Run for one only once no
-// person's ask is open). Not an interrupt (dude's nudge of a stuck, silent
-// or quiet turn, a person's "Interrupt now") nor a turn's retry
-// (deliver_after): they serve a turn under way, which no park stops, and
-// do not hold the park off (newsCutoff).
-const heldForNews = `COALESCE(d.created_at > hold.cutoff AND NOT d.interrupt AND d.deliver_after IS NULL, false)`
+// person's ask is open), a new steer sent as an interrupt too. Not what
+// serves the turn under way (servesTurn: dude's nudge of it, a person's
+// "Interrupt now") nor a turn's retry (deliver_after): no park stops that
+// turn, and they do not hold the park off (newsCutoff).
+const heldForNews = `COALESCE(d.created_at > hold.cutoff AND NOT ` + servesTurn + ` AND d.deliver_after IS NULL, false)`
 
 // queuedAfterHold (SQL, over directives d) is heldForNews for a query
 // without runFrom: deliverDirectives's.
 var queuedAfterHold = `EXISTS (SELECT 1 FROM runs r WHERE r.id = d.run_id AND d.created_at > r.news_hold_at
-	AND NOT d.interrupt AND d.deliver_after IS NULL
+	AND NOT ` + servesTurn + ` AND d.deliver_after IS NULL
 	AND ` + heldInWait + ` AND ` + delivery.PersonAsk + `)`
 
 // heldInWait is newsHeld for a query without runFrom's ask.

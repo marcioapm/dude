@@ -33,6 +33,15 @@ func (w *resumeWorld) note(held bool) {
 		VALUES ('dir_'||$1, $1, $2, $3, 'news', CASE WHEN $4 THEN 'q_'||$1 END)`, w.run.Org, w.run.TaskID, w.run.ID, held)
 }
 
+// interruptedRoot queues the steer an "Interrupt now" of w's Run resends,
+// heard an hour ago: 'dir_root_'||org.
+func (w *resumeWorld) interruptedRoot() {
+	w.t.Helper()
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, created_at, sent_at, delivered_at)
+		VALUES ('dir_root_'||$1, $1, $2, $3, 'news', now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour')`,
+		w.run.Org, w.run.TaskID, w.run.ID)
+}
+
 // peerWait opens a wait of w's Run on a peer's reply, since ago (SQL
 // interval): an ask (delivery.OpenAsk), not a person's (PersonAsk).
 func (w *resumeWorld) peerWait(since string) {
@@ -329,10 +338,17 @@ func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
 		{name: "held before the ask, inside the grace, a note", hold: "4 minutes", waiting: "1 minute", note: "now()", directives: true},
 		{name: "held, answered since, a note queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
 			answered: true, directives: true},
-		// Interrupts and turn retries are not held for the answer, and do
-		// not hold the park off (newsCutoff).
-		{name: "held, inside the grace, an interrupt queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
-			also: "interrupt = true", parkNow: true, directives: true},
+		// What serves the turn under way (servesTurn: dude's nudge of it, a
+		// person's "Interrupt now") and turn retries are not held for the
+		// answer, and do not hold the park off (newsCutoff).
+		{name: "held, inside the grace, a turn's nudge queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			also: "interrupt = true, scope = 'turn'", parkNow: true, directives: true},
+		{name: "held, inside the grace, an Interrupt now queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			also: "interrupt = true, resends = 'dir_root_'||organization_id", parkNow: true, directives: true},
+		// A new steer sent as an interrupt (a person's, a conductor's) is a
+		// note like any other: it waits for the answer (heldForNews).
+		{name: "held, inside the grace, a new interrupt steer queued after the hold", hold: "2 minutes", waiting: "1 minute",
+			note: "now()", also: "interrupt = true", parkNow: true},
 		{name: "held, inside the grace, a retry queued after the hold, due", hold: "2 minutes", waiting: "1 minute", note: "now()",
 			also: "deliver_after = now() - interval '1 second'", parkNow: true, directives: true},
 		// What was queued by the hold holds the park off, at the hold too.
@@ -358,19 +374,31 @@ func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
 		{name: "held, answered, older peer wait still open, a new question", hold: "2 minutes", waiting: "10 seconds",
 			note: "now() - interval '1 minute'", also: "sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
 			answered: true, peer: true, asked: "30 seconds"},
-		// Not spent by what serves the held note's turn: an interrupt of
-		// it, a retry of it, sent after the hold.
-		{name: "held, inside the grace, an interrupt sent after the hold", hold: "2 minutes", waiting: "10 seconds",
-			note: "now() - interval '1 minute'", also: "interrupt = true, sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+		// Not spent by what serves the held note's turn: dude's nudge of
+		// it, a person's "Interrupt now", a retry of it, sent after the hold.
+		{name: "held, inside the grace, a turn's nudge sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, scope = 'turn', sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
 			parkNow: true},
+		{name: "held, inside the grace, an Interrupt now sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, resends = 'dir_root_'||organization_id, sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			parkNow: true},
+		{name: "held, answered, older peer wait still open, a turn's nudge sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, scope = 'turn', sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			answered: true, peer: true, parkNow: true},
+		// But a new steer sent as an interrupt, to a Run waiting only on a
+		// peer, spends it: main would have resumed the Run for it, and its
+		// turn ends in a wait with a full grace (qual's round-2 repro).
+		{name: "held, answered, older peer wait still open, a new interrupt steer sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			answered: true, peer: true},
 		{name: "held, inside the grace, a retry sent after the hold", hold: "2 minutes", waiting: "10 seconds",
 			note: "now() - interval '1 minute'", also: "deliver_after = now() - interval '58 seconds', sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
 			parkNow: true},
 		// Nor held off by one, unread: only what was queued by the hold
 		// holds the park off (newsCutoff); the stop un-sends it for the
 		// answer (unsendUnread).
-		{name: "held, inside the grace, an interrupt sent after the hold, unread", hold: "2 minutes", waiting: "10 seconds",
-			note: "now() - interval '1 minute'", also: "interrupt = true, claimed_at = now() - interval '5 seconds', sent_at = now() - interval '5 seconds'",
+		{name: "held, inside the grace, a turn's nudge sent after the hold, unread", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, scope = 'turn', claimed_at = now() - interval '5 seconds', sent_at = now() - interval '5 seconds'",
 			parkNow: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -395,6 +423,9 @@ func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
 					VALUES ($1, $2, 2, 'answer', now() - $3::interval)`, w.run.ID, w.run.Org, c.resumed)
 			}
 			if c.note != "" {
+				if strings.Contains(c.also, "resends") {
+					w.interruptedRoot()
+				}
 				w.note(false)
 				also := ""
 				if c.also != "" {
@@ -619,9 +650,10 @@ func TestDeliverDirectivesHoldsWhatCameAfterTheHoldForNews(t *testing.T) {
 }
 
 // What deliverDirectives does not hold for the answer, though queued after
-// the hold with the question open: an interrupt and a due turn retry
-// (they serve the turn under way). And with a hold from before the wait
-// began (the question asked since), nothing is held: that hold is spent.
+// the hold with the question open: what serves the turn under way (a
+// turn's nudge, an "Interrupt now": servesTurn) and a due turn retry. And
+// with a hold from before the wait began (the question asked since),
+// nothing is held: that hold is spent.
 func TestDeliverDirectivesSendsInterruptsRetriesAndWhatAStaleHoldDoesNotHold(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -629,7 +661,8 @@ func TestDeliverDirectivesSendsInterruptsRetriesAndWhatAStaleHoldDoesNotHold(t *
 		// ago (SQL, after a comma).
 		hold, also string
 	}{
-		{"an interrupt queued after the hold", "2 minutes", ", interrupt = true"},
+		{"a turn's nudge queued after the hold", "2 minutes", ", interrupt = true, scope = 'turn'"},
+		{"an Interrupt now queued after the hold", "2 minutes", ", interrupt = true, resends = 'dir_root_'||organization_id"},
 		{"a retry queued after the hold, due", "2 minutes", ", deliver_after = now() - interval '1 second'"},
 		{"a note after a hold from before the question", "4 minutes", ""},
 	} {
@@ -639,6 +672,9 @@ func TestDeliverDirectivesSendsInterruptsRetriesAndWhatAStaleHoldDoesNotHold(t *
 			w.s.Lux = fake
 			w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
 			w.exec(`UPDATE runs SET news_hold_at = now() - $2::interval, lux_run_id = 'lrun_1' WHERE id = $1`, w.run.ID, c.hold)
+			if strings.Contains(c.also, "resends") {
+				w.interruptedRoot()
+			}
 			w.note(false)
 			w.exec(`UPDATE directives SET created_at = now() - interval '1 minute'`+c.also+` WHERE id = 'dir_'||$1`, w.run.Org)
 			r.HasDirectives = true
@@ -649,5 +685,34 @@ func TestDeliverDirectivesSendsInterruptsRetriesAndWhatAStaleHoldDoesNotHold(t *
 				t.Errorf("sent %v, want %v", fake.sent, want)
 			}
 		})
+	}
+}
+
+// A new steer sent as an interrupt (a person's, a conductor's), queued
+// after the hold with the question open, waits for the answer as any note
+// does, while a turn's nudge queued after it is sent: it serves the turn
+// under way (servesTurn). The answer brings the steer.
+func TestDeliverDirectivesHoldsANewInterruptSteerButSendsATurnsNudge(t *testing.T) {
+	w, r := waitingWorld(t)
+	fake := &inputLux{placementLux: w.lux}
+	w.s.Lux = fake
+	w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
+	w.exec(`UPDATE runs SET news_hold_at = now() - interval '2 minutes', lux_run_id = 'lrun_1' WHERE id = $1`, w.run.ID)
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, scope, interrupt, created_at)
+		VALUES ('dir_steer_'||$1, $1, $2, $3, 'steer', 'run', true, now() - interval '1 minute'),
+		       ('dir_nudge_'||$1, $1, $2, $3, 'nudge', 'turn', true, now() - interval '30 seconds')`, w.run.Org, w.run.TaskID, w.run.ID)
+	r.HasDirectives = true
+	if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"dir_nudge_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+		t.Fatalf("sent %v, want %v: the nudge, not the new steer", fake.sent, want)
+	}
+	w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() WHERE run_id = $1`, w.run.ID)
+	if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"dir_nudge_" + w.run.Org, "dir_steer_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+		t.Errorf("sent %v, want %v: the answer brings the steer", fake.sent, want)
 	}
 }
