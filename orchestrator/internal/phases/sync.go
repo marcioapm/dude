@@ -527,9 +527,12 @@ const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.i
 // wait, whose grace ends at P+D+G, past the ceiling: news no longer holds
 // it. So a wait's park is held at most once, by at most a grace and a turn
 // (G+D, and a sweep), at the latest about T+3G+D; or, for a note whose
-// send or turn does not come, by delivery.UnreadGraceSecs. Notes that come
-// inside every grace keep a Run running exactly as they always did: no
-// park is held or added for them.
+// send or turn does not come, by delivery.UnreadGraceSecs. But once a held
+// note's turn has run, notes that each arrive inside the new grace keep
+// the Run running, as notes inside the grace do, where main would have
+// parked it at the held park. So the container time beyond main's is
+// bounded by G+D per held park only while notes do not keep arriving
+// inside each new grace.
 //
 // What is held for the answer (HeldBack) does not hold the park off, and
 // what is queued after the park waits for the answer (resumable), as it
@@ -1075,7 +1078,8 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			// resume it when they do — the next minute or the next week.
 			// Not while dude has news it has not heard (unheardNews): that
 			// is delivered below, and the park comes once its turn waits
-			// again past the grace, or past the hold's ceiling.
+			// again past the grace; past the hold's ceiling news no longer
+			// delays it.
 			return true, s.requestPause(ctx, r, "person", "parked while it waits for a person")
 		case r.Quiet && r.Nudged:
 			// Quiet again as long after its nudge: for a person to look at.
