@@ -639,7 +639,7 @@ var heldInWait = `(` + strings.ReplaceAll(newsHeld, "ask.open", "("+delivery.Ope
 // fence each level, so the planner does not inline newsHeld (and its
 // waitBegan) into every place hold.held and hold.cutoff are read.
 const holdFrom = `(SELECT h.held, CASE WHEN h.held AND ` + delivery.PersonAsk + ` THEN r.news_hold_at END AS cutoff
-		FROM (SELECT ` + newsHeld + ` AS held) h) hold`
+		FROM (SELECT ` + newsHeld + ` AS held OFFSET 0) h OFFSET 0) hold`
 
 // parkState (SQL, over runFrom) is what the sweep does about a Run's wait
 // on a person: 'park' (ParkNow), 'hold' (HoldNews: due its park, held for
