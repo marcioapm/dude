@@ -144,7 +144,8 @@ type Syncer struct {
 	// at most one per column and resume (deferStamp). In memory only, best
 	// effort like owing: a restart loses them, and those resumes are timed
 	// without them. Dropped once the Run's follower is over (forgetLate);
-	// each committed batch's follow-up carries its own.
+	// each committed batch's follow-up carries its own, and is owed the
+	// resume, so recovery leaves it to that follow-up.
 	lateMu sync.Mutex
 	late   map[string][]lateStamp
 }

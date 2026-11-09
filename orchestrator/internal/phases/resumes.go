@@ -422,19 +422,24 @@ type lateStamp struct {
 var lateCols = []string{"running_at", "busy_at", "first_output_at"}
 
 // deferStamp keeps a stamp the batch could not write, and has the batch's
-// follow-up write it and time the resume, if it can be. Kept on the
-// Syncer from here, inside the batch's transaction, as owe is, so no
-// timing that sees the batch committed misses it; a batch rolled back
-// takes it back (rolledBack), and is read again and stamps again. A
-// timing that writes it meanwhile writes the time this frame was applied,
-// which the replay's COALESCE keeps.
+// follow-up write it and time the resume, if it can be. The resume is
+// owed (afterBatch) from here, inside the batch's transaction, so
+// recovery leaves it to that follow-up, which carries the stamp whatever
+// becomes of the Syncer's copy. The Syncer's copy is kept from here too:
+// it lets any other owner's timing of the Run (another batch's follow-up,
+// which recovery does not skip) write it first; a batch rolled back takes
+// both back (rolledBack), and is read again and stamps again. A timing
+// that writes it meanwhile writes the time this frame was applied, which
+// the replay's COALESCE keeps.
 //
 // One per column and resume: one already kept is an earlier batch's,
 // committed (a Run's batches run one at a time, and one rolled back took
 // its own back), so its frame came first and its time is the one to keep;
-// its follow-up is still to come or already failed, and either way this
-// one adds nothing to it. So a Run whose row stays locked costs one
-// follow-up per stamp, not one per contended batch.
+// its follow-up is still to come (the resume owed to it, so recovery
+// leaves it alone) or has run and its timing failed, and either way this
+// one adds nothing to it: the Syncer's copy, kept while this follower
+// lives, is what the Run's next timing writes. So a Run whose row stays
+// locked costs one follow-up per stamp, not one per contended batch.
 func (t *translator) deferStamp(s *Syncer, col string, epoch int, at time.Time) {
 	l := lateStamp{col, epoch, at}
 	s.lateMu.Lock()
@@ -448,10 +453,13 @@ func (t *translator) deferStamp(s *Syncer, col string, epoch int, at time.Time) 
 	s.late[t.run.ID] = append(s.late[t.run.ID], l)
 	s.lateMu.Unlock()
 	t.late = append(t.late, l)
-	// A placement read wants a known epoch; running_at or first_output_at
-	// stamped would have asked for one (or might have: lux's placements
-	// not all in).
-	t.afterBatch(s, epoch, col != "busy_at")
+	// Owed, whatever the column: the follow-up carries the stamp (own),
+	// and once the Run's follower is over (forgetLate) it is the only one
+	// that does, so recovery (timeUnowned, which leaves owed resumes)
+	// must not time the resume before it. A busy_at kept costs its
+	// follow-up a placement read it would not otherwise make; harmless,
+	// the read is idempotent.
+	t.afterBatch(s, epoch, true)
 }
 
 // committed is the batch committed: it returns the resumes for its
@@ -492,8 +500,9 @@ func (s *Syncer) lateStamps(runID string, own ...lateStamp) []lateStamp {
 
 // forgetLate forgets every late stamp of the Run: its follower is over,
 // every batch of it committed or abandoned, and each committed one's
-// follow-up holds its own (committed). What is left would otherwise stay
-// for as long as the process runs.
+// follow-up holds its own (committed) and is owed its resume (deferStamp),
+// so recovery cannot time that resume without them. What is left would
+// otherwise stay for as long as the process runs.
 func (s *Syncer) forgetLate(runID string) {
 	s.lateMu.Lock()
 	defer s.lateMu.Unlock()

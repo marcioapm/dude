@@ -378,8 +378,15 @@ func TestALateStampIsKeptOncePerColumnAndResume(t *testing.T) {
 	if len(got) != 3 || !got[0].at.Equal(first) {
 		t.Errorf("kept %v, want busy_at of 2 at %v, first_output_at of 2 and busy_at of 3", got, first)
 	}
-	if s.owed("run_1")[2] != true || len(s.owed("run_1")) != 1 {
-		t.Errorf("owed %v, want the read of 2 once", s.owed("run_1"))
+	// Each kept stamp owes its resume to the batch's follow-up, busy_at
+	// too: recovery must leave it to the follow-up that carries it. The
+	// first batch owes 2 once (the later ones keep nothing); the last owes
+	// 2 and 3, each once a batch.
+	if owed := s.owed("run_1"); !owed[2] || !owed[3] || len(owed) != 2 {
+		t.Errorf("owed %v, want 2 and 3", owed)
+	}
+	if n := s.owing[owedResume{"run_1", 2}]; n != 2 {
+		t.Errorf("2 owed %d times, want twice: the first batch and the last", n)
 	}
 }
 
@@ -481,5 +488,45 @@ func TestALateStampNotTriedIsKept(t *testing.T) {
 	written()
 	if left := w.s.lateStamps(w.run.ID); len(left) != 1 {
 		t.Errorf("late stamps %v after a write that never ran, want %v kept", left, kept)
+	}
+}
+
+// A batch that keeps a stamp owes its resume to its own follow-up, busy_at
+// included: once the Run's follower is over (forgetLate), that follow-up
+// is the only one holding the stamp, so recovery must leave the resume to
+// it. Here the follower ended between the batch and its follow-up, and
+// recovery runs first: the resume is still timed with its busy.
+func TestARecoveryBeforeTheFollowUpLeavesAKeptBusyToIt(t *testing.T) {
+	w := newResumeWorld(t)
+	base := time.Now().Add(-time.Minute).UTC()
+	w.resume(stoppedOnHost1(base))
+	w.lux.set(runningAgain(base, "host-b"), nil)
+	w.follow(session(2), running(2))
+	w.slowStampOnce("busy_at")
+	logs := w.captureTimingLogs()
+
+	resumes, late := w.commitBatch(busy(2), spoke(2))
+	if len(late) != 1 || late[0].col != "busy_at" {
+		t.Fatalf("the batch kept %v, want its busy_at: the test proves nothing\nlogs:\n%s", late, logs)
+	}
+	w.s.forgetLate(w.run.ID)
+	if err := w.s.timeUnowned(w.ctx, w.run, 0); err != nil {
+		t.Fatal(err)
+	}
+	w.s.resumeFollowUp(w.run, resumes, late...)
+
+	row := w.row(2)
+	if row["timed_at"] == nil || row["busy_at"] == nil {
+		t.Fatalf("timed_at %v, busy_at %v: want the resume timed with its busy\nlogs:\n%s", row["timed_at"], row["busy_at"], logs)
+	}
+	timed := w.timed()
+	if len(timed) != 1 {
+		t.Fatalf("%d run.resume.timed, want 1\nlogs:\n%s", len(timed), logs)
+	}
+	if _, ok := timed[0]["untilBusyMs"]; !ok {
+		t.Errorf("run.resume.timed has no untilBusyMs: %v\nlogs:\n%s", timed[0], logs)
+	}
+	if lines := logLines(logs.String(), "landed nowhere"); len(lines) != 0 {
+		t.Errorf("a late stamp landed nowhere:\n%s", logs)
 	}
 }
