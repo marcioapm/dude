@@ -15,7 +15,8 @@ import (
 // has not heard (requestPause, due's ParkNow): the note goes first, its
 // turn runs, and the Run is parked once it waits again, after the grace.
 // A note held for an answer (HeldBack) does not hold the park off, and one
-// that arrives after the park waits for the answer, as before.
+// that arrives after the park waits for the answer, as before. The hold is
+// bounded: by a note's first send, and by a ceiling from the wait's start.
 
 // noteFor is the directive carrying the wake note that told reason key,
 // "" for none yet.
@@ -23,6 +24,12 @@ func (w *world) noteFor(task, key string) string {
 	w.t.Helper()
 	return w.str(`SELECT COALESCE((SELECT a.directive_id FROM conductor_wake_attempts a JOIN conductor_wakes k ON k.id = a.wake_id
 		WHERE k.task_id = $1 AND k.key = $2 AND a.directive_id IS NOT NULL ORDER BY a.created_at DESC LIMIT 1), '')`, task, key)
+}
+
+// directiveDelivered says whether directive id was delivered to the agent.
+func (w *world) directiveDelivered(id string) bool {
+	w.t.Helper()
+	return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL`, id) == 1
 }
 
 // parks is how many times run was parked for a person.
@@ -74,9 +81,9 @@ func TestAPersonParkWaitsUntilDudesNoteIsHeard(t *testing.T) {
 		w.questionOpen(q, "before the note was heard")
 		note = w.noteFor(task, "test:news")
 		return w.parks(old) > 0 || w.count(`SELECT count(*) FROM runs WHERE id = $1 AND control = 'pause_graceful'`, old) > 0 ||
-			(note != "" && w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL`, note) == 1)
+			(note != "" && w.directiveDelivered(note))
 	})
-	if note == "" || w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL`, note) != 1 {
+	if note == "" || !w.directiveDelivered(note) {
 		t.Fatalf("parked for the person with dude's note unheard (directive %q):\n%s", note, w.describeRuns())
 	}
 	// The turn that read it ended at or after the read: the fake agent
@@ -274,7 +281,7 @@ func TestANoteAfterThePersonParkWaitsForTheAnswer(t *testing.T) {
 		t.Fatalf("answer: %d %v", status, out)
 	}
 	w.until("the late note heard after the answer", func() bool {
-		return w.count(`SELECT count(*) FROM directives WHERE id = $1 AND delivered_at IS NOT NULL`, note) == 1
+		return w.directiveDelivered(note)
 	})
 	if resumed, _ := w.luxResumes(old); resumed != 1 {
 		t.Errorf("resumed %d times, want the answer's once", resumed)
