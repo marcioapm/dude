@@ -75,14 +75,29 @@ func TestForgetSecretCopiesProbesEachRunOnce(t *testing.T) {
 		{"copyNeeded", `SELECT count(*) FROM runs r WHERE r.organization_id = $1
 			AND r.status IN ('completed', 'failed', 'aborted') AND NOT ` + copyNeeded, "('" + org + "')", 2000},
 	} {
-		for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
-			plan := explainCopyDelete(t, owner, org, mode, st.name, st.sql, st.args)
+		// enable_indexscan off: the bitmap plan the planner may pick on its
+		// own (it did at 20,000 Runs and 1.12 million artifacts), a Bitmap
+		// Heap Scan driven by artifacts_run_idx, still once per Run.
+		for _, mode := range []struct {
+			name, cache string
+			bitmap      bool
+		}{
+			{"force_custom_plan", "force_custom_plan", false},
+			{"force_generic_plan", "force_generic_plan", false},
+			{"bitmap", "force_custom_plan", true},
+		} {
+			plan := explainCopyDelete(t, owner, org, mode.cache, mode.bitmap, st.name, st.sql, st.args)
 			scans, probes := map[string][]string{}, 0.0
 			var walk func(node map[string]any)
 			walk = func(node map[string]any) {
 				if rel, ok := node["Relation Name"].(string); ok {
 					how := fmt.Sprint(node["Node Type"])
-					if name, ok := node["Index Name"].(string); ok {
+					name, ok := node["Index Name"].(string)
+					if children, _ := node["Plans"].([]any); how == "Bitmap Heap Scan" && len(children) == 1 {
+						// Read through its one Bitmap Index Scan's index.
+						name, ok = children[0].(map[string]any)["Index Name"].(string)
+					}
+					if ok {
 						how += " " + name
 					}
 					scans[rel] = append(scans[rel], how)
@@ -106,20 +121,28 @@ func TestForgetSecretCopiesProbesEachRunOnce(t *testing.T) {
 			for _, n := range nodes {
 				walk(n.Plan)
 			}
+			bitmaps := 0
 			for _, how := range scans["artifacts"] {
-				if how != "Index Scan artifacts_run_idx" && how != "Index Only Scan artifacts_run_idx" {
-					t.Errorf("%s, %s: artifacts read by %s, want artifacts_run_idx; plan %s", st.name, mode, how, plan)
+				switch how {
+				case "Bitmap Heap Scan artifacts_run_idx":
+					bitmaps++
+				case "Index Scan artifacts_run_idx", "Index Only Scan artifacts_run_idx":
+				default:
+					t.Errorf("%s, %s: artifacts read by %s, want artifacts_run_idx; plan %s", st.name, mode.name, how, plan)
 				}
 			}
+			if mode.bitmap && bitmaps == 0 {
+				t.Errorf("%s, %s: artifacts read %v, want a Bitmap Heap Scan; plan %s", st.name, mode.name, scans["artifacts"], plan)
+			}
 			if len(scans["artifacts"]) == 0 || len(scans["hashed"]) != 0 {
-				t.Errorf("%s, %s: artifacts read %v, hashed subplans %v; plan %s", st.name, mode, scans["artifacts"], scans["hashed"], plan)
+				t.Errorf("%s, %s: artifacts read %v, hashed subplans %v; plan %s", st.name, mode.name, scans["artifacts"], scans["hashed"], plan)
 			}
 			if probes < 1 || probes > st.maxProbes {
-				t.Errorf("%s, %s: artifacts probed %v times, want 1 to %v; plan %s", st.name, mode, probes, st.maxProbes, plan)
+				t.Errorf("%s, %s: artifacts probed %v times, want 1 to %v; plan %s", st.name, mode.name, probes, st.maxProbes, plan)
 			}
 			for _, how := range scans["run_project_secrets"] {
 				if how == "Seq Scan" {
-					t.Errorf("%s, %s: every organization's copies scanned; plan %s", st.name, mode, plan)
+					t.Errorf("%s, %s: every organization's copies scanned; plan %s", st.name, mode.name, plan)
 				}
 			}
 		}
@@ -127,9 +150,10 @@ func TestForgetSecretCopiesProbesEachRunOnce(t *testing.T) {
 }
 
 // explainCopyDelete is the plan, as JSON, of the delete sql run once with
-// args as dude_app in org under plan_cache_mode mode, rolled back. With
-// DUDE_PLAN_OUT set, the plan as text is written there too, for a reader.
-func explainCopyDelete(t *testing.T, owner *pgx.Conn, org, mode, name, sql, args string) []byte {
+// args as dude_app in org under plan_cache_mode mode, with index scans off
+// if bitmap, rolled back. With DUDE_PLAN_OUT set, the plan as text is
+// written there too, for a reader.
+func explainCopyDelete(t *testing.T, owner *pgx.Conn, org, mode string, bitmap bool, name, sql, args string) []byte {
 	t.Helper()
 	ctx := context.Background()
 	tx, err := owner.Begin(ctx)
@@ -141,7 +165,8 @@ func explainCopyDelete(t *testing.T, owner *pgx.Conn, org, mode, name, sql, args
 		_, _ = owner.Exec(ctx, `DEALLOCATE copy_delete`) // a session's, not the transaction's
 	}()
 	if _, err := tx.Exec(ctx, `SELECT set_config('role', 'dude_app', true), set_config('app.organization_id', $1, true),
-		set_config('jit', 'off', true), set_config('plan_cache_mode', $2, true)`, org, mode); err != nil {
+		set_config('jit', 'off', true), set_config('plan_cache_mode', $2, true),
+		set_config('enable_indexscan', CASE WHEN $3 THEN 'off' ELSE 'on' END, true)`, org, mode, bitmap); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `PREPARE copy_delete AS `+sql); err != nil {
@@ -160,6 +185,9 @@ func explainCopyDelete(t *testing.T, owner *pgx.Conn, org, mode, name, sql, args
 			rows.Close()
 		}
 		_, _ = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT text`)
+		if bitmap {
+			mode += "-bitmap"
+		}
 		_ = os.WriteFile(dir+"/"+name+"-"+mode+".txt", []byte(strings.Join(text, "\n")+"\n"), 0o644)
 	}
 	var plan []byte
