@@ -1,4 +1,4 @@
--- 260_pull_request_ready_gate.sql — the last ready gate computed per pull
+-- 261_pull_request_ready_gate.sql — the last ready gate computed per pull
 -- request.
 --
 -- ready_gate: {head, at, ready, items}: the gate (delivery.ReadyGate) as
