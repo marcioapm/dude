@@ -88,11 +88,15 @@ type GateFacts struct {
 	// AcceptedHead is the head a person accepted a review round at.
 	AcceptedHead string
 	// Reviewed is R: the latest head every review Run of the attempt
-	// started there completed at, "" for none. Lenses the task's paths
-	// require that no completed review Run of the attempt covered are
-	// MissingLenses.
-	Reviewed      string
-	MissingLenses []string
+	// started there completed at, "" for none.
+	Reviewed string
+	// The policy's reviewers, and per category the head of its latest
+	// completed review Run of the attempt over this repository
+	// (LensHeads): which lenses the pull request's paths require, and
+	// whether each covered what changed since, is judged from GitHub's
+	// compares (missingLenses), so a person's push counts as dude's does.
+	Policy    Policy
+	LensHeads map[string]string
 	// The attempt's completed simplify Runs in this repository.
 	Simplifies []gateSimplify
 	// The items read from dude's own records.
@@ -190,7 +194,8 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 		if p.Reviewed, err = reviewedHeadTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
 			return c, err
 		}
-		if p.MissingLenses, err = missingLensesTx(ctx, tx, taskID, attempt, p.Repo, st.Policy); err != nil {
+		p.Policy = st.Policy
+		if p.LensHeads, err = lensHeadsTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
 			return c, err
 		}
 		if p.Simplifies, err = gateSimplifiesTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
@@ -222,38 +227,94 @@ func reviewedHeadTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 	return head, err
 }
 
-// missingLensesTx is the reviewers the policy picks for the paths the
-// attempt changed in repo (ReviewersFor) that no completed review Run of
-// the attempt was, over repo.
-func missingLensesTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, repo string, p Policy) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT DISTINCT $3 || '/' || path FROM events e
-		JOIN runs w ON w.id = e.run_id AND w.attempt = $2,
-		jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.payload->'changedPaths') = 'array'
-			THEN e.payload->'changedPaths' ELSE '[]'::jsonb END) path
-		WHERE e.task_id = $1 AND e.event_type = $4 AND e.payload->>'repo' = $3`, taskID, attempt, repo, EvGitCommitCreated)
+// lensHeadsTx is, per review category, the head of repo its latest
+// completed review Run of the attempt started at.
+func lensHeadsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, repo string) (map[string]string, error) {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (k.category) k.category, k.base_refs->>$3 FROM runs k WHERE `+reviewedFrom+`
+		AND k.status = 'completed' AND k.category IS NOT NULL
+		ORDER BY k.category, k.ended_at DESC NULLS LAST, k.created_at DESC, k.id DESC`, taskID, attempt, repo)
 	if err != nil {
 		return nil, err
 	}
-	paths, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return nil, err
+	out := map[string]string{}
+	for rows.Next() {
+		var c, head string
+		if err := rows.Scan(&c, &head); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out[c] = head
 	}
-	rows, err = tx.Query(ctx, `SELECT DISTINCT k.category FROM runs k WHERE `+reviewedFrom+`
-		AND k.status = 'completed' AND k.category IS NOT NULL`, taskID, attempt, repo)
-	if err != nil {
-		return nil, err
+	rows.Close()
+	return out, rows.Err()
+}
+
+// missingLenses is each reviewer the policy picks (ReviewersFor) for the
+// paths the pull request changes (GitHub's compare of its base with the
+// head, whoever pushed them) that has not reviewed what concerns it: one
+// with no completed review of the attempt here, or, for a lens chosen by
+// path, one whose paths the pull request changed again since its last
+// completed review. "" for none; refused says GitHub would not compare.
+func missingLenses(ctx context.Context, gh *forge.GitHub, p GateFacts, base string) (missing []string, refused bool, err error) {
+	whole, err := gh.CompareCommits(ctx, p.Slug, base, p.Head)
+	if forge.Refused(err) {
+		return nil, true, nil
 	}
-	ran, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var missing []string
-	for _, lens := range ReviewersFor(p, paths) {
-		if !slices.Contains(ran, lens) {
-			missing = append(missing, lens)
+	ours := map[string]bool{}
+	var paths []string
+	for _, f := range whole.Files {
+		for _, n := range []string{f.Filename, f.PreviousFilename} {
+			if n != "" && !ours[n] {
+				ours[n] = true
+				paths = append(paths, p.Repo+"/"+n)
+			}
 		}
 	}
-	return missing, nil
+	for _, lens := range ReviewersFor(p.Policy, paths) {
+		at, ran := p.LensHeads[lens]
+		if !ran || at == "" {
+			missing = append(missing, lens)
+			continue
+		}
+		if at == p.Head || !byPath(p.Policy, lens) {
+			continue
+		}
+		since, err := gh.CompareCommits(ctx, p.Slug, at, p.Head)
+		if forge.Refused(err) {
+			return nil, true, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		// What the pull request itself changed since that review: a file a
+		// pure merge of the base brought in is not the pull request's.
+		var changed []string
+		for _, f := range since.Files {
+			for _, n := range []string{f.Filename, f.PreviousFilename} {
+				if n != "" && ours[n] {
+					changed = append(changed, p.Repo+"/"+n)
+				}
+			}
+		}
+		if slices.Contains(pathReviewers(p.Policy, changed), lens) {
+			missing = append(missing, lens+" (changed since its review at "+short(at)+")")
+		}
+	}
+	return missing, false, nil
+}
+
+// byPath says the policy picks lens by the paths changed: a conditional
+// rule with paths, not a reviewer it always asks for.
+func byPath(p Policy, lens string) bool {
+	if slices.Contains(p.RequiredReviewers, lens) {
+		return false
+	}
+	return slices.ContainsFunc(p.ConditionalReviewers, func(r ReviewerRule) bool {
+		return r.Category == lens && len(r.WhenPathsMatch) > 0
+	})
 }
 
 // gateSimplifiesTx is the attempt's completed simplify Runs in repo.
@@ -459,8 +520,16 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 		return true, fmt.Sprintf("a person accepted the review round at %s", short(h)), nil
 	case p.Reviewed == "":
 		return false, "no review of this attempt completed over this repository", nil
-	case len(p.MissingLenses) > 0:
-		return false, "no completed review by " + strings.Join(p.MissingLenses, ", ") + ", which the changed paths require", nil
+	}
+	base := cmp.Or(f.BaseBranch, p.BaseBranch)
+	missing, refused, err := missingLenses(ctx, gh, p, base)
+	switch {
+	case err != nil:
+		return false, "", err
+	case refused:
+		return false, fmt.Sprintf("GitHub would not compare %s with %s to say which lenses the changed paths require", base, short(h)), nil
+	case len(missing) > 0:
+		return false, "no completed review by " + strings.Join(missing, ", ") + ", which the changed paths require", nil
 	case p.Reviewed == h:
 		return true, fmt.Sprintf("reviewed at %s", short(h)), nil
 	}
@@ -486,7 +555,6 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 	if err != nil {
 		return false, "", err
 	}
-	base := cmp.Or(f.BaseBranch, p.BaseBranch)
 	// The branch's own line, head down to R by first parents: what a merge
 	// brings in under its second parent is the base's, judged with the
 	// merge.

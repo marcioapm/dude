@@ -118,6 +118,31 @@ func TestTheReadyGateReviewedThroughHeadItem(t *testing.T) {
 		f.reviewed(head, "database")
 		holds(t, f.gate(), ReadyReviewed, true, "reviewed at")
 	})
+	t.Run("a migration a fix rewrote, reviewed by correctness alone", func(t *testing.T) {
+		f := newGateFixture(t)
+		head := f.implemented(map[string]string{"db/migrations/001.sql": "SELECT 1;\n"})
+		f.reviewed(head, "correctness", "database")
+		f.simplifiedEmpty(head)
+		fix := f.gh.CommitFiles("feature", "Fix", map[string]string{"db/migrations/001.sql": "SELECT 2;\n"})
+		f.pushed(f.run(PhaseFix, "", head, map[string]any{"repo": map[string]any{"sha": fix, "base": head}}), head, fix, "db/migrations/001.sql")
+		f.reviewed(fix, "correctness")
+		f.simplifiedEmpty(fix)
+		f.synced()
+		holds(t, f.gate(), ReadyReviewed, false, "no completed review by database (changed since its review at "+head[:7]+")")
+		f.reviewed(fix, "database")
+		holds(t, f.gate(), ReadyReviewed, true, "reviewed at "+fix[:7])
+	})
+	t.Run("a person pushes a migration", func(t *testing.T) {
+		f := newGateFixture(t)
+		f.ready()
+		push := f.gh.CommitFiles("feature", "Add a migration", map[string]string{"db/migrations/002.sql": "SELECT 2;\n"})
+		f.reviewed(push, "correctness")
+		f.simplifiedEmpty(push)
+		f.synced()
+		holds(t, f.gate(), ReadyReviewed, false, "no completed review by database")
+		f.reviewed(push, "database")
+		holds(t, f.gate(), ReadyReviewed, true, "reviewed at "+push[:7])
+	})
 }
 
 // 4. simplified_after_last_change: the simplifier ran from the last change
