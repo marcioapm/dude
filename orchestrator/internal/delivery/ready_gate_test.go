@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -171,6 +172,39 @@ func TestTheReadyGateSimplifiedAfterLastChangeItem(t *testing.T) {
 		f.gh.MergeInto("feature", "main", nil)
 		f.synced()
 		holds(t, f.gate(), ReadySimplified, true, "found nothing to simplify")
+	})
+	t.Run("ran empty twice from a pure merge on the last change", func(t *testing.T) {
+		f := newGateFixture(t)
+		head := f.implemented(map[string]string{"app/greet.go": "package app\n"})
+		f.reviewed(head)
+		f.gh.CommitFiles("main", "Other work", map[string]string{"lib/other.go": "package lib\n"})
+		merge := f.gh.MergeInto("feature", "main", nil)
+		f.synced()
+		f.simplifiedEmpty(merge)
+		f.simplifiedEmpty(merge)
+		holds(t, f.gate(), ReadySimplified, true, "the simplifier ran from "+merge[:7]+", after the last change "+head[:7])
+	})
+	t.Run("committed with the base merged under it, and reviewed", func(t *testing.T) {
+		f := newGateFixture(t)
+		head := f.implemented(map[string]string{"app/greet.go": "package app\n"})
+		f.reviewed(head)
+		// The simplifier's commit, made from head while main was merged
+		// into the branch; dude merges it on top of that merge.
+		w := f.gh.Branch("simplifier", "feature", "Simplify")
+		f.gh.CommitFiles("main", "Other work", map[string]string{"lib/other.go": "package lib\n"})
+		into := f.gh.MergeInto("feature", "main", nil)
+		made := f.gh.MergeCommit("feature", w)
+		if w == "" || into == "" || made == "" {
+			t.Fatal("no merge")
+		}
+		run := f.run(PhaseSimplify, "", head, map[string]any{"repo": map[string]any{"sha": made, "base": head}})
+		raw, _ := json.Marshal(map[string]any{"repo": "repo", "baseSha": head, "headSha": made, "branch": "feature",
+			"changedPaths": []string{}, "mergedBase": map[string]any{"commit": w, "into": into}})
+		f.exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+			VALUES ('ev_merged', $1, 'git.commit_created', $2, 'wi_g', 'agent', $2, 'test', $3::jsonb)`, run, string(raw))
+		f.reviewed(made)
+		f.synced()
+		holds(t, f.gate(), ReadySimplified, true, "the simplifier made "+made[:7]+", the last change, and it was reviewed")
 	})
 	t.Run("off in the policy", func(t *testing.T) {
 		f := newGateFixture(t)

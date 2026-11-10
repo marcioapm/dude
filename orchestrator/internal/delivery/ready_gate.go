@@ -549,9 +549,12 @@ func simplifiedCommits(ctx context.Context, gh *forge.GitHub, p GateFacts) (map[
 	return out, nil
 }
 
-// gateSimplified is item 4: C, the head's last commit that is not a
-// merge, is where a completed simplify Run started and committed nothing,
-// or what one produced and was reviewed (item 3).
+// gateSimplified is item 4. C is the last change: the head's last commit,
+// by first parents, that is not GitHub's pure merge of the base. A
+// completed simplify Run counts when it started anywhere on the chain from
+// C up to the head and committed nothing, or when what it produced (or the
+// commit it made, the base merged under it) is on that chain and was
+// reviewed (item 3).
 func gateSimplified(ctx context.Context, gh *forge.GitHub, p GateFacts, reviewed bool) (bool, string, error) {
 	if !p.Simplify {
 		return true, "simplifier off", nil
@@ -560,6 +563,7 @@ func gateSimplified(ctx context.Context, gh *forge.GitHub, p GateFacts, reviewed
 		return false, "no head recorded", nil
 	}
 	last := p.Head
+	chain := map[string]bool{last: true}
 	for range maxGateMerges {
 		parents, err := gh.CommitParents(ctx, p.Slug, last)
 		if forge.Refused(err) {
@@ -571,13 +575,27 @@ func gateSimplified(ctx context.Context, gh *forge.GitHub, p GateFacts, reviewed
 		if len(parents) < 2 {
 			break
 		}
+		// A merge that is not the base's alone (dude's merge of a writer's
+		// commit, a person's resolution) is a change of its own.
+		pure, err := advance.PureBaseMerge(ctx, gh, p.Slug, p.BaseBranch, last, parents)
+		if err != nil {
+			return false, "", err
+		}
+		if !pure {
+			break
+		}
 		last = parents[0]
+		chain[last] = true
 	}
 	for _, s := range slices.Backward(p.Simplifies) {
 		switch {
-		case s.Produced == "" && s.Start == last:
-			return true, fmt.Sprintf("the simplifier ran from %s, the last change, and found nothing to simplify", short(last)), nil
-		case s.Produced == last || s.Merged != "" && s.Merged == last:
+		case s.Produced == "" && chain[s.Start]:
+			return true, fmt.Sprintf("the simplifier ran from %s, after the last change %s, and found nothing to simplify", short(s.Start), short(last)), nil
+		case s.Produced != "" && (chain[s.Produced] || s.Merged != "" && chain[s.Merged]):
+			last := s.Produced
+			if !chain[last] {
+				last = s.Merged
+			}
 			if !reviewed {
 				return false, fmt.Sprintf("the simplifier made %s, the last change; its review does not cover the head yet", short(last)), nil
 			}
