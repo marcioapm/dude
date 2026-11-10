@@ -6,8 +6,10 @@ import (
 )
 
 func TestConductorStopNotifiesWithoutAskingAPerson(t *testing.T) {
-	if !strings.Contains(conductorNews, "'task.decided'") {
-		t.Fatal("notification sweep does not read task.decided")
+	for _, arm := range []string{conductorStops, conductorPRRetries} {
+		if !strings.Contains(arm, "'task.decided'") || !strings.Contains(notifiedEvents, arm) {
+			t.Fatalf("notification sweep does not read task.decided in %s", arm)
+		}
 	}
 	a := ask{Type: "task.decided", TaskID: "task_1", Task: "WC-214", Slug: "web", Payload: []byte(`{"by":"conductor","action":"stop","note":"The approach is not converging."}`)}
 	m, ok := messageFor(a)

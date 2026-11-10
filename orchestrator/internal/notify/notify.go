@@ -39,10 +39,16 @@ const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 
 // retries of pr_loop_exhausted (another set of pull request fix rounds,
 // with no cap but its reason), are news for the owner, read separately
 // rather than broadening that partial index's predicate. A person's
-// decision carries no "by", so nobody is told of their own act. One string
-// literal: the control plane's migration test reads it from this source.
-const conductorNews = "(event_type = 'task.decided' AND payload->>'by' = 'conductor' AND (payload->>'action' = 'stop' OR payload->>'action' = 'retry' AND payload->>'reason' = 'pr_loop_exhausted'))"
-const notifiedEvents = "(SELECT * FROM events WHERE event_type IN " + asks + " UNION ALL SELECT * FROM events WHERE " + conductorNews + ")"
+// decision carries no "by", so nobody is told of their own act. Each is an
+// arm of its own whose predicate is its partial index's: the stops'
+// events_conductor_stops_idx (migration 247), the retries'
+// events_conductor_pr_retries_idx (260). One OR of both would imply
+// neither, and filter every decision above the watermark. Each is one
+// string literal: the control plane's migration test reads them from this
+// source.
+const conductorStops = "(event_type = 'task.decided' AND payload->>'by' = 'conductor' AND payload->>'action' = 'stop')"
+const conductorPRRetries = "(event_type = 'task.decided' AND payload->>'by' = 'conductor' AND payload->>'action' = 'retry' AND payload->>'reason' = 'pr_loop_exhausted')"
+const notifiedEvents = "(SELECT * FROM events WHERE event_type IN " + asks + " UNION ALL SELECT * FROM events WHERE " + conductorStops + " UNION ALL SELECT * FROM events WHERE " + conductorPRRetries + ")"
 
 // Notifier sends Web Push for new asks.
 type Notifier struct {

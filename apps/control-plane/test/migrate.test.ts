@@ -882,7 +882,8 @@ test.skipIf(process.env.DUDE_NOTIFY_PLAN_TEST !== "1")("notification idle plans 
         await sql`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
           SELECT 'plan_' || i, 'org_plan', CASE WHEN i % 100 = 0 THEN 'task.decided' ELSE 'agent.message' END,
             'system', 'plan', 'test', CASE WHEN i % 100 = 0
-              THEN '{"by":"conductor","action":"retry"}'::jsonb
+              THEN CASE WHEN i % 200 = 0 THEN '{"by":"conductor","action":"retry","reason":"conductor_unavailable"}'::jsonb
+                ELSE '{"by":"conductor","action":"retry"}'::jsonb END
               ELSE jsonb_build_object('text', repeat('x', 300)) END
           FROM generate_series(${start}::int, ${start + 9999}::int) i`;
         await sql`CHECKPOINT`;
@@ -909,8 +910,10 @@ test.skipIf(process.env.DUDE_NOTIFY_PLAN_TEST !== "1")("notification idle plans 
       walk(plan.Plan);
       console.log(JSON.stringify({ query: i === 0 ? "sweep" : "advance", plan }));
       // No exact plan tree or timing threshold: any index/bitmap/join shape is fine,
-      // but both real queries must use the canonical stop index and avoid retry-tail filtering.
+      // but both real queries must read the stops and the pr_loop_exhausted retries each on
+      // its own partial index, and avoid filtering the other retries' tail.
       expect(nodes.some((n) => n["Index Name"] === "events_conductor_stops_idx")).toBe(true);
+      expect(nodes.some((n) => n["Index Name"] === "events_conductor_pr_retries_idx")).toBe(true);
       const ledger = nodes.filter((n) => n["Relation Name"] === "events");
       expect(ledger.reduce((sum, n) => sum + (n["Rows Removed by Filter"] ?? 0) * (n["Actual Loops"] ?? 1), 0)).toBeLessThan(100);
       expect((plan.Plan["Shared Hit Blocks"] ?? 0) + (plan.Plan["Shared Read Blocks"] ?? 0)).toBeLessThan(200);
@@ -922,15 +925,19 @@ test.skipIf(process.env.DUDE_NOTIFY_PLAN_TEST !== "1")("notification idle plans 
         ["eligible", "task.decided", { by: "conductor", action: "stop" }],
         ["person", "task.decided", { by: "person", action: "stop" }],
         ["retry", "task.decided", { by: "conductor", action: "retry" }],
+        ["pr_retry", "task.decided", { by: "conductor", action: "retry", reason: "pr_loop_exhausted" }],
+        ["other_retry", "task.decided", { by: "conductor", action: "retry", reason: "conductor_unavailable" }],
+        ["person_pr_retry", "task.decided", { action: "retry", reason: "pr_loop_exhausted" }],
         ["other", "conductor.decided", { by: "conductor", action: "stop" }],
       ] as const) {
         await tx`INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
           VALUES (${id}, 'org_plan', ${type}, 'system', 'plan', 'test', ${payload}::jsonb)`;
       }
       const rows = await tx.unsafe(queries[0]!);
-      expect(rows).toHaveLength(1);
-      expect(rows[0].event_type).toBe("task.decided");
-      expect(rows[0].payload).toEqual({ by: "conductor", action: "stop" });
+      expect(rows.map((r: { event_type: string; payload: unknown }) => [r.event_type, r.payload])).toEqual([
+        ["task.decided", { by: "conductor", action: "stop" }],
+        ["task.decided", { by: "conductor", action: "retry", reason: "pr_loop_exhausted" }],
+      ]);
       await tx.unsafe(queries[1]!);
       expect(Number((await tx`SELECT after_cursor FROM push_config`)[0].after_cursor)).toBe(0);
       await tx`ROLLBACK`;
