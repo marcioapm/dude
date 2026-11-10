@@ -2,6 +2,8 @@ package delivery
 
 import (
 	"encoding/json"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -131,6 +133,70 @@ func TestTheReadyGateReviewedThroughHeadItem(t *testing.T) {
 		holds(t, f.gate(), ReadyReviewed, false, "no completed review by database (changed since its review at "+head[:7]+")")
 		f.reviewed(fix, "database")
 		holds(t, f.gate(), ReadyReviewed, true, "reviewed at "+fix[:7])
+	})
+	t.Run("a category's latest review at the head failed", func(t *testing.T) {
+		// O9: each category's latest Run there must have completed.
+		f := newGateFixture(t)
+		head := f.implemented(map[string]string{"app/greet.go": "package app\n"})
+		f.reviewed(head, "correctness", "quality")
+		f.simplifiedEmpty(head)
+		f.synced()
+		holds(t, f.gate(), ReadyReviewed, true, "reviewed at "+head[:7])
+		failed := f.run(PhaseReview, "quality", head, nil)
+		f.exec(`UPDATE runs SET status = 'failed' WHERE id = $2 AND organization_id = $1`, failed)
+		holds(t, f.gate(), ReadyReviewed, false, "no review of this attempt completed")
+	})
+	t.Run("an unreviewed simplify commit under a pure merge", func(t *testing.T) {
+		// O4: a pure merge on top hides nothing below it.
+		f := newGateFixture(t)
+		head := f.implemented(map[string]string{"app/greet.go": "package app\n"})
+		f.reviewed(head)
+		s := f.simplified()
+		f.gh.CommitFiles("main", "Other work", map[string]string{"lib/other.go": "package lib\n"})
+		if f.gh.MergeInto("feature", "main", nil) == "" {
+			t.Fatal("no merge")
+		}
+		f.synced()
+		g := f.gate()
+		holds(t, g, ReadyReviewed, false, "unreviewed since: "+s[:7])
+		holds(t, g, ReadySimplified, false, "the simplifier made "+s[:7]+", the last change; its review does not cover the head yet")
+		if g.Ready {
+			t.Fatal("ready with the simplifier's commit unreviewed")
+		}
+	})
+	t.Run("a person accepted the round at the head", func(t *testing.T) {
+		// O13: AcceptedHead at the head is reviewed through it.
+		f := newGateFixture(t)
+		f.ready()
+		c := f.gh.CommitFiles("feature", "Tweak", map[string]string{"app/greet.go": "package app // tweak\n"})
+		f.synced()
+		holds(t, f.gate(), ReadyReviewed, false, "unreviewed since: "+c[:7])
+		f.st.AcceptedHeads = map[string]string{"repo": c}
+		f.saveState()
+		holds(t, f.gate(), ReadyReviewed, true, "a person accepted the review round at "+c[:7])
+	})
+	t.Run("history rewritten since the review", func(t *testing.T) {
+		// O5.
+		f := newGateFixture(t)
+		reviewed := f.ready()
+		// A force-push: the branch restarted from main.
+		if out, err := exec.Command("git", "-C", f.gh.Repo, "update-ref", "refs/heads/feature", "refs/heads/main").CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+		f.gh.CommitFiles("feature", "Start again", map[string]string{"app/greet.go": "package app // again\n"})
+		f.synced()
+		holds(t, f.gate(), ReadyReviewed, false, "no longer descends from the reviewed "+reviewed[:7])
+	})
+	t.Run("more commits since the review than the gate explains", func(t *testing.T) {
+		// O8: past maxGateCommits, unexplained, never ready.
+		f := newGateFixture(t)
+		reviewed := f.ready()
+		for i := range maxGateCommits + 1 {
+			f.gh.CommitFiles("feature", "Merge-free step", map[string]string{"SIMPLE.md": strings.Repeat("x", i+1) + "\n"})
+		}
+		f.synced()
+		holds(t, f.gate(), ReadyReviewed, false, "which do not lead back to the review")
+		holds(t, f.gate(), ReadyReviewed, false, "reviewed at "+reviewed[:7])
 	})
 	t.Run("a person pushes a migration", func(t *testing.T) {
 		f := newGateFixture(t)
