@@ -57,6 +57,10 @@ type PRGate struct {
 	Ready  bool       `json:"ready"`
 	Items  []GateItem `json:"items"`
 	Err    error      `json:"-"`
+	// MergeableUnknown: GitHub has not worked out whether it merges yet
+	// (mergeable_state unknown). Not a reading: weighReadiness leaves the
+	// status as it is and reads the gate again.
+	MergeableUnknown bool `json:"-"`
 }
 
 // Failing is the gate's items that do not hold.
@@ -449,6 +453,7 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	// 8. mergeable
 	ok, detail := gateMergeable(f)
 	add(ReadyMergeable, ok, "%s", detail)
+	g.MergeableUnknown = !ok && mergeableUnknown(f)
 	// 9. checks
 	ok, detail = gateChecks(f, p, time.Now())
 	add(ReadyChecks, ok, "%s", detail)
@@ -630,6 +635,16 @@ func gateMergeable(f forge.ReadinessFacts) (bool, string) {
 		return false, fmt.Sprintf("it conflicts with %s: resolve the conflict", base)
 	}
 	return false, "GitHub has not worked out whether it merges yet: retry later"
+}
+
+// mergeableUnknown says GitHub has not computed mergeability: the reading
+// gateMergeable answers "retry later" for.
+func mergeableUnknown(f forge.ReadinessFacts) bool {
+	switch f.MergeableState {
+	case "clean", "has_hooks", "unstable", "behind", "dirty", "draft", "blocked":
+		return false
+	}
+	return f.Mergeable == nil || *f.Mergeable
 }
 
 // gateChecks is item 9: every check and status at the exact head

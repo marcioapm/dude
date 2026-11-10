@@ -2979,6 +2979,10 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 // again.
 const readyGateRetry = 30 * time.Second
 
+// mergeableRetry is how soon a ready gate is read again while GitHub works
+// out whether the pull request merges: seconds, as a rule.
+const mergeableRetry = 10 * time.Second
+
 // weighReadiness moves the task to ready to merge when the ready gate
 // (ReadyGate) passes for every pull request still open, and back to
 // review when one no longer does. The gate asks no approval beyond what
@@ -3007,6 +3011,7 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 		}
 	}
 	ready := len(gates) > 0
+	unknown := false
 	for _, g := range gates {
 		if g.Err != nil {
 			// GitHub did not answer: not a judgement either way. The
@@ -3015,6 +3020,16 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 			return workflow.Wait{After: readyGateRetry, Why: "the ready gate could not read GitHub: " + g.Err.Error()}
 		}
 		ready = ready && g.Ready
+		// Unknown mergeability with every other item holding is no
+		// reading at all: the syncer keeps its last reading in its place,
+		// so the clean that follows would not count as a move, and no sync
+		// would weigh readiness again.
+		if g.MergeableUnknown && len(g.Failing()) == 1 {
+			unknown = true
+		}
+	}
+	if unknown {
+		return workflow.Wait{After: mergeableRetry, Why: "GitHub has not worked out whether the pull request merges yet"}
 	}
 	// The move, its event and the conductor's Chat notice in one
 	// transaction: one lost to a retry would never be written again (the

@@ -114,3 +114,25 @@ func TestTheReadyGateEndpointAnswersEveryItem(t *testing.T) {
 		t.Errorf("an unknown pull request: %d, want 404", status)
 	}
 }
+
+// GitHub works mergeability out lazily: after the base is merged in, it
+// reads unknown for a moment. That is no reading: the task is not moved
+// out of ready to merge for it, and once GitHub says clean it is ready to
+// merge, though the syncer, keeping its last reading in unknown's place,
+// sees no move.
+func TestUnknownMergeabilityAfterABaseMergeComesBackToReady(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.until("ready to merge", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+	w.gh.CommitFiles("main", "Other work", map[string]string{"OTHER.md": "other\n"})
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	if w.gh.MergeInto(w.gh.Pull(1).Head, "main", nil) == "" {
+		t.Fatal("could not merge main in")
+	}
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	w.gh.Set(func(s *fakegithub.Server) { delete(s.MergeableUnknown, 1) })
+	w.until("ready to merge again", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+}
