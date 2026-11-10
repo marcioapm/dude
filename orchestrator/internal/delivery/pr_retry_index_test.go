@@ -3,7 +3,6 @@ package delivery
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
@@ -44,15 +43,8 @@ func TestThePRLoopRetriesReadTheirIndexUnderAGenericPlan(t *testing.T) {
 
 	exec(`PREPARE pr_loop_retries AS ` + prLoopRetriesSQL)
 	defer exec(`DEALLOCATE pr_loop_retries`)
-	// A generic plan's values do not shape it: each parameter is the task.
-	var n int
-	if err := owner.QueryRow(ctx, `SELECT cardinality(parameter_types) FROM pg_prepared_statements
-		WHERE name = 'pr_loop_retries'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	args := strings.TrimSuffix(strings.Repeat(`'tsk_busy',`, n), ",")
 	var plan []byte
-	if err := owner.QueryRow(ctx, `EXPLAIN (FORMAT JSON) EXECUTE pr_loop_retries(`+args+`)`).Scan(&plan); err != nil {
+	if err := owner.QueryRow(ctx, `EXPLAIN (FORMAT JSON) EXECUTE pr_loop_retries('tsk_busy', 'wf_1')`).Scan(&plan); err != nil {
 		t.Fatal(err)
 	}
 	var nodes []struct{ Plan map[string]any }
