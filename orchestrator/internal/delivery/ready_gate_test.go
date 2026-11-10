@@ -295,7 +295,8 @@ func TestTheReadyGateMergeableItem(t *testing.T) {
 func TestTheReadyGateChecksItem(t *testing.T) {
 	for _, c := range []struct {
 		name, checks string
-		workflows    bool
+		workflows    string
+		seen         string
 		required     []string
 		forbidden    bool
 		ok           bool
@@ -309,20 +310,31 @@ func TestTheReadyGateChecksItem(t *testing.T) {
 		{name: "failing Actions", checks: "run:failure", want: "failing: e2e"},
 		{name: "pending", checks: "run:pending", want: "pending: e2e"},
 		{name: "no CI", checks: "none", ok: true, want: "no CI configured"},
-		{name: "workflows, nothing reported yet", checks: "none", workflows: true, want: "pending: no checks have reported at the head yet, though .github/workflows has ci.yml"},
+		{name: "workflows on pull requests, nothing reported yet", checks: "none", workflows: "on: pull_request\n", want: "pending: no checks have reported at the head yet"},
+		{name: "workflows on pull requests, nothing reported past the grace", checks: "none", workflows: "on: [pull_request]\n", seen: "1 hour", ok: true, want: "no CI for this head: nothing reported within the grace"},
+		{name: "workflows only on push to main", checks: "none", workflows: "on:\n  push:\n    branches: [main]\n  schedule:\n    - cron: '0 0 * * *'\n", ok: true, want: "none of which runs on pull requests"},
+		{name: "an unparseable workflow, within the grace", checks: "none", workflows: "on: [\n", want: "pending: no checks have reported at the head yet"},
+		{name: "an external status before Actions, within the grace", checks: "success", workflows: "on:\n  pull_request:\n", want: "Actions has not reported yet"},
+		{name: "an external status before Actions, past the grace", checks: "success", workflows: "on:\n  pull_request:\n", seen: "1 hour", ok: true, want: "1 check(s) passed"},
+		{name: "an external status, workflows only on push", checks: "success", workflows: "on: push\n", ok: true, want: "1 check(s) passed"},
 		{name: "a required check, nothing reported", checks: "none", required: []string{"build"}, want: "branch protection requires build"},
 		{name: "checks unreadable", checks: "success", forbidden: true, want: "checks unreadable"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newGateFixture(t)
 			files := map[string]string{"app/greet.go": "package app\n"}
-			if c.workflows {
-				files[".github/workflows/ci.yml"] = "on: push\n"
+			if c.workflows != "" {
+				files[".github/workflows/ci.yml"] = c.workflows
 			}
 			head := f.implemented(files)
 			f.reviewed(head)
 			f.simplifiedEmpty(head)
 			f.synced()
+			if c.seen != "" {
+				f.exec(`UPDATE pull_requests SET head_seen_at = now() - $2::interval WHERE id = 'pr_g' AND organization_id = $1`, c.seen)
+			} else {
+				f.exec(`UPDATE pull_requests SET head_seen_at = now() WHERE id = 'pr_g' AND organization_id = $1`)
+			}
 			f.gh.SetChecks(c.checks)
 			f.gh.Set(func(s *fakegithub.Server) {
 				s.CheckRunsForbidden = c.forbidden
@@ -362,5 +374,24 @@ func TestTheReadyGateReadsAPushRecordedWithNoPaths(t *testing.T) {
 		jsonb_build_object('repo', 'repo', 'headSha', $2::text, 'changedPaths', 'null'::jsonb))`, head)
 	if !f.gate().Ready {
 		t.Fatalf("not ready: %+v", f.gate().Items)
+	}
+}
+
+// The checks item agrees with the syncer's CI grace: on a pull request that
+// has had CI, a head nothing reported on is pending while the syncer says
+// pending (within its grace), and no CI for this head once it records
+// unknown (past it), whatever the workflows directory holds.
+func TestTheReadyGateChecksItemFollowsTheSyncersGrace(t *testing.T) {
+	f := newGateFixture(t)
+	f.gh.SetChecks("none")
+	f.ready()
+	f.exec(`UPDATE pull_requests SET had_ci = true, checks = 'pending', head_seen_at = now() - interval '1 hour'
+		WHERE id = 'pr_g' AND organization_id = $1`)
+	holds(t, f.gate(), ReadyChecks, false, "pending: no checks have reported at the head yet")
+	f.exec(`UPDATE pull_requests SET checks = 'unknown' WHERE id = 'pr_g' AND organization_id = $1`)
+	g := f.gate()
+	holds(t, g, ReadyChecks, true, "no CI for this head")
+	if !g.Ready {
+		t.Fatalf("not ready past the grace: %+v", g.Items)
 	}
 }

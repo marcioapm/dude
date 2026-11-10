@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -97,6 +98,13 @@ type GateFacts struct {
 	Simplifies []gateSimplify
 	// The items read from dude's own records.
 	Findings, Questions GateItem
+	// The syncer's CI record of the pull request (prs.Syncer.Sync): whether
+	// it has had CI, the checks it recorded at Head (pending within its
+	// grace when GitHub reports nothing on a pull request that had CI),
+	// and when Head was first seen.
+	HadCI          bool
+	RecordedChecks string
+	HeadSeenAt     *time.Time
 }
 
 // gateSimplify is a completed simplify Run: where it started in the
@@ -139,7 +147,8 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 			return c, err
 		}
 	}
-	rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.base_branch, pr.number, pr.state::text, COALESCE(pr.head_sha, '')
+	rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.base_branch, pr.number, pr.state::text, COALESCE(pr.head_sha, ''),
+			pr.had_ci, pr.checks::text, pr.head_seen_at
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND (CASE WHEN $2::text[] IS NULL THEN pr.state IN ('open', 'draft') ELSE pr.id = ANY($2) END)
 		ORDER BY pr.created_at, pr.id`, taskID, prIDs)
@@ -149,7 +158,8 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 	for rows.Next() {
 		var p GateFacts
 		var url string
-		if err := rows.Scan(&p.ID, &p.Repo, &url, &p.BaseBranch, &p.Number, &p.State, &p.Head); err != nil {
+		if err := rows.Scan(&p.ID, &p.Repo, &url, &p.BaseBranch, &p.Number, &p.State, &p.Head,
+			&p.HadCI, &p.RecordedChecks, &p.HeadSeenAt); err != nil {
 			rows.Close()
 			return c, err
 		}
@@ -440,7 +450,7 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	ok, detail := gateMergeable(f)
 	add(ReadyMergeable, ok, "%s", detail)
 	// 9. checks
-	ok, detail = gateChecks(f)
+	ok, detail = gateChecks(f, p, time.Now())
 	add(ReadyChecks, ok, "%s", detail)
 	return g, nil
 }
@@ -623,15 +633,25 @@ func gateMergeable(f forge.ReadinessFacts) (bool, string) {
 }
 
 // gateChecks is item 9: every check and status at the exact head
-// completed as success, neutral or skipped. None at all is no CI only
-// when the head has no workflow file and protection requires no check.
-func gateChecks(f forge.ReadinessFacts) (bool, string) {
+// completed as success, neutral or skipped. It agrees with the syncer's CI
+// grace (prs.Syncer.Sync): within it, nothing reported on a pull request
+// that has had CI is CI yet to start, pending; past it, nothing reported
+// is no CI for this head (a commit CI skips: path filters, [skip ci],
+// workflows that never run on pull requests), as the syncer records it
+// (unknown), not ci_stuck. Where the head's workflows run on pull
+// requests (on: pull_request, pull_request_target), Actions is expected:
+// within the grace an external status alone (a CLA bot, a deploy preview)
+// is pending until Actions reports.
+func gateChecks(f forge.ReadinessFacts, p GateFacts, now time.Time) (bool, string) {
 	if forge.CheckDiagnostic(f.CheckList) == forge.CheckRunsForbidden {
 		return false, "checks unreadable: GitHub refused the check-runs read"
 	}
 	var failing, pending []string
-	passed := 0
+	passed, actions := 0, false
 	for _, c := range f.CheckList {
+		if c.App == "github-actions" {
+			actions = true
+		}
 		switch forge.CheckOutcome(c) {
 		case forge.ChecksFailing:
 			failing = append(failing, c.Name)
@@ -641,6 +661,7 @@ func gateChecks(f forge.ReadinessFacts) (bool, string) {
 			passed++
 		}
 	}
+	inGrace := ciGrace(p, now)
 	switch {
 	case len(failing) > 0:
 		return false, "failing: " + strings.Join(failing, ", ")
@@ -651,13 +672,31 @@ func gateChecks(f forge.ReadinessFacts) (bool, string) {
 	case f.Checks == forge.ChecksPending:
 		return false, "pending: GitHub's combined status at the head is pending"
 	case passed > 0 || f.Checks == forge.ChecksPassing:
+		if !actions && f.ActionsExpected == forge.ActionsExpected && inGrace {
+			return false, "pending: only an external status has reported at the head; .github/workflows runs on pull requests, and Actions has not reported yet"
+		}
 		return true, fmt.Sprintf("%d check(s) passed at the head", max(passed, 1))
-	case !f.WorkflowsKnown:
-		return false, "no checks at the head, and GitHub would not list .github/workflows: unreadable"
-	case len(f.Workflows) > 0:
-		return false, "pending: no checks have reported at the head yet, though .github/workflows has " + strings.Join(f.Workflows, ", ")
 	case len(f.RequiredChecks) > 0:
 		return false, "pending: branch protection requires " + strings.Join(f.RequiredChecks, ", ") + ", and none has reported at the head"
+	case !f.WorkflowsKnown:
+		return false, "no checks at the head, and GitHub would not list .github/workflows: unreadable"
+	case len(f.Workflows) == 0 && !p.HadCI:
+		return true, "no CI configured"
+	case f.ActionsExpected == forge.ActionsNotExpected && !p.HadCI:
+		return true, "no CI for this head: .github/workflows has " + strings.Join(f.Workflows, ", ") + ", none of which runs on pull requests"
+	case inGrace:
+		return false, "pending: no checks have reported at the head yet, within the grace CI has to show up"
 	}
-	return true, "no CI configured"
+	return true, "no CI for this head: nothing reported within the grace CI has to show up"
+}
+
+// ciGrace says the head is within the grace CI has to show up on it: the
+// syncer's own judgement where it made one (a pull request that has had
+// CI, nothing reported: pending within its grace, unknown past it),
+// otherwise forge.DefaultCIGrace from when the head was first seen.
+func ciGrace(p GateFacts, now time.Time) bool {
+	if p.HadCI && (p.RecordedChecks == forge.ChecksPending || p.RecordedChecks == forge.ChecksUnknown) {
+		return p.RecordedChecks == forge.ChecksPending
+	}
+	return p.HeadSeenAt == nil || now.Sub(*p.HeadSeenAt) < forge.DefaultCIGrace
 }
