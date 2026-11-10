@@ -210,11 +210,11 @@ func TestAPRFixPublicationParksForTheFrozenOwner(t *testing.T) {
 	}
 	w.connectOwner(ana, "ana-again", 1)
 	w.authorizeAgain(task, ana)
-	// The fix reviewed and simplified on both pull requests: in review, or
-	// ready to merge once the ready gate holds at both heads.
+	// The fix reviewed and simplified on both pull requests: ready to
+	// merge, the ready gate holding at both heads.
 	w.until("the new pull request", func() bool {
 		s := w.taskStatus(task)
-		return len(w.web.Pulls()) == 1 && (s == "review" || s == "ready_to_merge")
+		return len(w.web.Pulls()) == 1 && s == "ready_to_merge"
 	})
 	if got := w.web.OpenAuth; len(got) != 1 || got[0] != "Bearer ana-again" {
 		t.Fatalf("new creation auth %v", got)

@@ -44,7 +44,7 @@ func TestDirectAStopAndResumeMidNarrowLoopFinishesTheRound(t *testing.T) {
 	w.until("the round done and waiting", func() bool {
 		w.sync()
 		s := w.taskStatus(w.wi)
-		return w.waiting() && (s == "review" || s == "ready_to_merge")
+		return w.waiting() && s == "ready_to_merge"
 	})
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2`,
 		w.wi, delivery.RangePullRequestFix); n != 1 {
