@@ -3458,11 +3458,12 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			return workflow.Result{}, err
 		}
 		// The escalation was a gate item: back at the pull requests, the
-		// gate is weighed now, not at the next sync, which may never come.
+		// gate is read again at once (waitForPR's timer wakes
+		// awaitPullRequest, which weighs readiness as for the CI grace),
+		// not at the next sync, which may never come.
 		if len(st.PullRequestIDs) > 0 {
-			if err := w.weighReadinessNow(ctx, sc, st); err != nil {
-				return workflow.Result{}, err
-			}
+			now := time.Now()
+			st.ReweighAt = &now
 		}
 		return waitForPR(st), nil
 	}
