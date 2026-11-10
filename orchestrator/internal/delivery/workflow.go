@@ -1607,12 +1607,14 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		// the simplifier past the fix (simplified_after_last_change): one
 		// that failed is tried once more, then a person (or the conductor
 		// first) decides, as a failed fixer on this path is
-		// (pr_fix_failed).
+		// (pr_fix_failed). It stays retried through the escalation: a
+		// resumed Run that fails again is the person's again, not a retry
+		// whose key finds that same failed Run (retry clears it, its key
+		// new).
 		if !st.SimplifyRetried {
 			st.SimplifyRetried = true
 			return workflow.Result{Next: "simplify", State: st}, nil
 		}
-		st.SimplifyRetried = false
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error, "phase": PhaseSimplify})
 	}
 	st.SimplifyRetried = false
@@ -3634,8 +3636,10 @@ func resumeEscalationAt(st *State, e *Escalation) workflow.Result {
 // a step a person aborted.
 func retry(st *State, step string, e *Escalation) workflow.Result {
 	st.Retries++
-	// A step run again afresh is not the conductor's queued unit.
+	// A step run again afresh is not the conductor's queued unit, nor a
+	// failed simplifier's one retry: its Runs are new (Retries).
 	st.Pipeline = nil
+	st.SimplifyRetried = false
 	switch step {
 	case "review":
 		if e != nil && e.Reason == "review_failed" {
