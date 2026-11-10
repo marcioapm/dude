@@ -188,6 +188,28 @@ func TestAnsweringTheLastQuestionMakesThePullRequestReady(t *testing.T) {
 	}
 }
 
+// A pull request reviewed, green and simplified, held only by an
+// escalation: once a person decides to wait, the task is ready to merge,
+// with nothing changed on GitHub and no sync.
+func TestWaitingOnADecidedEscalationMakesThePullRequestReady(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.until("ready to merge", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+	// Stopped for a person at the pull requests, nothing else holding.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'decide', status = 'waiting', wake_at = NULL,
+		awaiting_signals = '["human.decision"]', state = state || '{"escalation":
+			{"reason":"pull_request_conflict","detail":{"repo":"target","number":1},"holder":"person"}}'
+		WHERE task_id = $1`, wi)
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'awaiting_input' WHERE id = $1`, wi)
+	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
+		t.Fatalf("decide: %d %v", code, body)
+	}
+	w.until("ready to merge with no sync", func() bool { return w.taskStatus(wi) == "ready_to_merge" })
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest' AND status = 'waiting'`, wi); n != 1 {
+		t.Fatalf("not waiting on the pull request: %s", w.describeRuns())
+	}
+}
+
 // crashSimplifiers has the first n simplify Runs after now fail, as a dead
 // container would; every other Run is the world's scripted agent.
 func (w *world) crashSimplifiers(n int) {
