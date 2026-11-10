@@ -480,7 +480,7 @@ func TestGoldenConductorResults(t *testing.T) {
 // with the round's fixes spent, it is taken, quiet or chatty, and prFix
 // escalates pr_loop_exhausted as Deliver's policy does, for the conductor
 // to retry with its reason, stop, or ask the person.
-func TestAQuietConductorsNextAtThePRFixBoundIsDeliversDefaults(t *testing.T) {
+func TestAQuietOrChattyConductorsNextAtThePRFixBoundIsDeliversDefaults(t *testing.T) {
 	for _, voice := range []string{VoiceQuiet, VoiceChatty} {
 		t.Run(voice, func(t *testing.T) {
 			w := newGoldenWorld(t)
