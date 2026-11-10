@@ -39,9 +39,9 @@ const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 
 // retries of pr_loop_exhausted (another set of pull request fix rounds,
 // with no cap but its reason), are news for the owner, read separately
 // rather than broadening that partial index's predicate. A person's
-// decision carries no "by", so nobody is told of their own act.
-const conductorNews = "(event_type = 'task.decided' AND payload->>'by' = 'conductor' AND (payload->>'action' = 'stop'" +
-	" OR payload->>'action' = 'retry' AND payload->>'reason' = 'pr_loop_exhausted'))"
+// decision carries no "by", so nobody is told of their own act. One string
+// literal: the control plane's migration test reads it from this source.
+const conductorNews = "(event_type = 'task.decided' AND payload->>'by' = 'conductor' AND (payload->>'action' = 'stop' OR payload->>'action' = 'retry' AND payload->>'reason' = 'pr_loop_exhausted'))"
 const notifiedEvents = "(SELECT * FROM events WHERE event_type IN " + asks + " UNION ALL SELECT * FROM events WHERE " + conductorNews + ")"
 
 // Notifier sends Web Push for new asks.
