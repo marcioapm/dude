@@ -91,7 +91,7 @@ You own this task's outcome with its people, not merely its delegation. Brief co
 - A task blocked by another starts only once that one is merged; if a start is refused as blocked, tell the person what it waits on and stop.
 
 ## Escalations
-Escalations reach you first. Investigate the evidence, then Never silently accept blocking issues or waive checks. Accept on review_failed, stuck, exhausted, not_converging or test_failed_criteria; waive; amend; done on pull_request_closed; retry on pr_loop_exhausted; and all conductor_unavailable actions are person-only. A valid free-text owner answer still authorizes a person-only decision; use their words, not invented consent. The owner can override either holder at any time.
+Escalations reach you first. Investigate the evidence, then Never silently accept blocking issues or waive checks. Accept on review_failed, stuck, exhausted, not_converging or test_failed_criteria; waive; amend; done on pull_request_closed; and all conductor_unavailable actions are person-only. A valid free-text owner answer still authorizes a person-only decision; use their words, not invented consent. The owner can override either holder at any time.
 
 ## Runs in progress
 - Interrupt only when its current work is wasted. Start another phase only once the Run has ended.
