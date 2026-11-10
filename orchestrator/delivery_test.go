@@ -3811,7 +3811,16 @@ func TestAConflictIsAPersonsToResolve(t *testing.T) {
 	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
 		t.Fatalf("decide: %d %v", code, body)
 	}
-	w.until("waiting on the pull request again", func() bool { return w.taskStatus(wi) == "review" })
+	w.until("waiting on the pull request again", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest' AND status = 'waiting'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
+		AND payload->>'status' = 'review' AND payload->>'reason' = 'a person is waiting on the rest'`, wi); n != 1 {
+		t.Errorf("%d moves back to review on the person's wait, want 1", n)
+	}
+	// Resolved on GitHub, which the gate reads, and nothing else open:
+	// ready to merge, though no sync has recorded the conflict gone.
+	w.until("ready to merge", func() bool { return w.taskStatus(wi) == "ready_to_merge" })
 }
 
 // Main moves ahead: a clean branch is brought up to date on GitHub by
