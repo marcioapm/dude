@@ -65,8 +65,11 @@ func (w *world) prFixPushed(wi string) string {
 	w.agentsDone(wi, "the fix pushed", func() bool {
 		s := w.taskStatus(wi)
 		// Its review, the simplifier on it and that one's review done: back
-		// at the wait, at the head the round ends with.
-		return w.fixes(wi) == 1 && w.gh.SHA(branch) != before && (s == "review" || s == "ready_to_merge") && w.waitingOnPR(wi)
+		// at the wait (or at the refresh before it), at the head the round
+		// ends with.
+		settled := w.waitingOnPR(wi) || w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1
+			AND step = 'refreshPromoted' AND status = 'waiting'`, wi) == 1
+		return w.fixes(wi) == 1 && w.gh.SHA(branch) != before && (s == "review" || s == "ready_to_merge") && settled
 	})
 	return w.gh.SHA(branch)
 }
