@@ -104,6 +104,8 @@ rNotWayGoOnAfterOne                     refusals/delivery/escalations/not-way-go
 rOwnerAnswerYourQuestionOneIts          refusals/delivery/escalations/owner-answer-your-question-one-its
 rOwnerAnswerIsChoiceNotDirection        refusals/delivery/escalations/owner-answer-is-choice-not-direction
 rOnlyTaskOwnerOrOrganisationAdmin       refusals/delivery/escalations/only-task-owner-or-organisation-admin
+rSayWhyAnotherPRFixRound                refusals/delivery/escalations/say-why-another-pr-fix-round
+rPRFixRetryReasonUnchanged              refusals/delivery/escalations/pr-fix-retry-reason-unchanged
 rNotYoursDoTaskConductorActs            refusals/delivery/pr-actions/not-yours-do-task-conductor-acts
 rYouAreNoLongerThisTask4                refusals/delivery/pr-actions/you-are-no-longer-this-task-4
 rYourRunActsOnNothing                   refusals/delivery/pr-actions/your-run-acts-on-nothing

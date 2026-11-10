@@ -343,7 +343,10 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   the conductor (`conductor_wakes`); the syncer delivers a task's reasons as
   one bounded note (`delivery/wakes.go`). The pull request's fix rounds
   (`MaxPRFixIterations`, the organization's `fixRoundsPerPr`) refuse the
-  conductor's `start_phase` and `decide` as they bound Deliver. A person's
+  conductor's `start_phase` fix; its `decide next` takes Deliver's step,
+  which escalates `pr_loop_exhausted` to it. Its retry there (another set of
+  fix rounds) needs its reason, refused when it repeats an earlier retry's
+  in the delivery (`prLoopRetryRefusal`): it then stops or asks. A person's
   first Chat message hands a delivery in progress to the conductor; Talk it through starts one
   it decides; "Let Deliver finish it" hands it back. The conductor may also
   steer a live phase Run of its task's current attempt (`steer`, whoever

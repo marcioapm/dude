@@ -84,8 +84,8 @@ def test_a_draft_is_private_and_a_batch_at_the_pull_request_wait_holds_it_until_
                                     message="the unanswered item never reached the fix bound")
     assert escalated["status"] == "running" and escalated["escalation"]["holder"] == "conductor"
     assert escalated["escalation"]["reason"] == "pr_loop_exhausted"
-    # Resetting the fix budget is PersonOnly. The conductor asks, but nobody
-    # authorizes another round: the item must keep holding the pull request.
+    # The conductor may retry with its reason, or ask; here it asks, and
+    # nobody authorizes another round: the item must keep holding the pull request.
     handed_over = ask_person_about_escalation(
         client, task["id"], question="Allow another round for the unanswered feedback?",
         actions=["retry", "stop"], recommended="stop",

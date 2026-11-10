@@ -212,7 +212,7 @@ export function GithubBehaviour({ client, admin }: { client: ApiClient; admin: b
             options={[{ value: "update", label: "Keep it up to date: merge the base in, and resolve conflicts with an agent" },
               { value: "tell", label: "Only tell the task's people" }]} />
         </SettingRow>
-        <SettingRow label="Fix rounds per pull request" help="Then the owner decides how it goes on. 0 for no limit.">
+        <SettingRow label="Fix rounds per pull request" help="Then the conductor decides how it goes on, and may ask the owner; with no conductor, the owner decides. 0 for no limit.">
           <Input aria-label="Fix rounds per pull request" type="number" min={0} max={50} value={draft.fixRoundsPerPr}
             onChange={(e) => set("fixRoundsPerPr", Number(e.target.value))} data-testid="setting-fix-rounds" />
         </SettingRow>

@@ -30,7 +30,7 @@ Accepting a failure or waiving a check needs your reason; the owner or an admin 
 
 ## It stopped fixing review comments
 
-A pull request gets fixes within two limits: **Pull request fix rounds** (3 per review round, **Settings → Delivery**) and **Fix rounds per pull request** (5 in all, **Settings → GitHub**). When either runs out, dude asks the owner. Under the conductor, it can ask to raise either for this task. See [Limits](help:limits#fix-rounds-on-pull-requests).
+A pull request gets fixes within two limits: **Pull request fix rounds** (3 per review round, **Settings → Delivery**) and **Fix rounds per pull request** (5 in all, **Settings → GitHub**). When either runs out, dude asks the owner. Under the conductor, the conductor decides: it may allow another set of fix rounds with its reason, stop, or ask you; it can also ask to raise either limit for this task. See [Limits](help:limits#fix-rounds-on-pull-requests).
 
 Other reasons a comment did not wake a fixer:
 

@@ -38,9 +38,9 @@
 
 {{- define "refusals/delivery/conduct/not-open"}}%s is %s, not open{{end}}
 
-{{- define "refusals/delivery/conduct/pull-request-fixes-are-at-their"}}pull request fixes are at their bound: %d of %d this review round. Ask the person how to go on (ask_person){{end}}
+{{- define "refusals/delivery/conduct/pull-request-fixes-are-at-their"}}pull request fixes are at their bound: %d of %d this review round. At a decision, `decide next` escalates pr_loop_exhausted to you; or ask the person how to go on (ask_person){{end}}
 
-{{- define "refusals/delivery/conduct/pull-request-in-has-had-fix"}}the pull request in %s has had %d fix rounds, the organization's bound: ask the person how to go on (ask_person){{end}}
+{{- define "refusals/delivery/conduct/pull-request-in-has-had-fix"}}the pull request in %s has had %d fix rounds, the organization's bound: at a decision, `decide next` escalates pr_loop_exhausted to you; or ask the person how to go on (ask_person){{end}}
 
 {{- define "refusals/delivery/conduct/not-decision-at-one-or-start"}}%q is not a decision at %s; one of %s, or start_phase{{end}}
 

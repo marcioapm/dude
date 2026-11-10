@@ -6,15 +6,27 @@ import (
 )
 
 func TestConductorStopNotifiesWithoutAskingAPerson(t *testing.T) {
-	if !strings.Contains(conductorStops, "'task.decided'") {
-		t.Fatal("notification sweep does not read task.decided")
+	for _, arm := range []string{conductorStops, conductorPRRetries} {
+		if !strings.Contains(arm, "'task.decided'") || !strings.Contains(notifiedEvents, arm) {
+			t.Fatalf("notification sweep does not read task.decided in %s", arm)
+		}
 	}
 	a := ask{Type: "task.decided", TaskID: "task_1", Task: "WC-214", Slug: "web", Payload: []byte(`{"by":"conductor","action":"stop","note":"The approach is not converging."}`)}
 	m, ok := messageFor(a)
 	if !ok || m.Title != "WC-214 was stopped by the conductor" || m.Body != "The approach is not converging." || !strings.Contains(m.URL, "task/task_1") {
 		t.Fatalf("stop: %v %+v", ok, m)
 	}
-	for _, payload := range []string{`{"by":"conductor","action":"retry"}`, `{"by":"person","action":"stop"}`} {
+	// Its retry of pr_loop_exhausted is news too, with its reason.
+	a.Payload = []byte(`{"by":"conductor","reason":"pr_loop_exhausted","action":"retry","note":"Only the changelog is left."}`)
+	m, ok = messageFor(a)
+	if !ok || m.Title != "WC-214 was retried by the conductor" || m.Body != "Your conductor retried the pull request fixes: Only the changelog is left." ||
+		!strings.Contains(m.URL, "task/task_1") {
+		t.Fatalf("retry: %v %+v", ok, m)
+	}
+	// Its other retries are not; nor is a person's own retry, to them.
+	for _, payload := range []string{`{"by":"conductor","action":"retry"}`, `{"by":"person","action":"stop"}`,
+		`{"by":"conductor","reason":"conductor_unavailable","action":"retry","note":"Back."}`,
+		`{"reason":"pr_loop_exhausted","action":"retry","note":"Once more."}`} {
 		a.Payload = []byte(payload)
 		if _, ok := messageFor(a); ok {
 			t.Fatalf("unexpected notification: %s", payload)
