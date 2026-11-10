@@ -164,6 +164,24 @@ func TestASecondPRLoopRetryWithAnUnchangedReasonIsRefused(t *testing.T) {
 			wantPRFixesReset(t, next, st)
 		})
 	}
+	// Any earlier retry counts, not the latest alone: after retries for A
+	// then B, a retry saying A again is refused.
+	t.Run("repeating a retry before the latest", func(t *testing.T) {
+		w := prLoopExhausted(t, HolderConductor)
+		const second = "Split the changelog out."
+		for i, note := range []string{first, second} {
+			w.exec(t, fmt.Sprintf(`INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+				VALUES ('ev_retry%d', $1, 'task.decided', 'wi_g', 'agent', 'run_cond1', 'test',
+				jsonb_build_object('reason','pr_loop_exhausted','action','retry','note',$2::text,'by','conductor'))`, i+1), note)
+		}
+		err := w.conductorDecides(t, "retry", first)
+		if err == nil || !strings.Contains(err.Error(), "stop, or ask the person") {
+			t.Fatalf("a retry repeating the retry before the latest: %v, want refused", err)
+		}
+		if p, _, _ := w.decided(t); p["note"] != second {
+			t.Fatalf("a refused retry recorded %v", p)
+		}
+	})
 }
 
 // A person's retry of pr_loop_exhausted is as it was: no reason needed, as
