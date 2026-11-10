@@ -137,3 +137,51 @@ func TestAPullRequestFixIsSimplifiedAndReadyAgainUnderTheDefaultPolicy(t *testin
 		t.Errorf("%d ready-to-merge events, want two", n)
 	}
 }
+
+// GitHub works mergeability out lazily: after the base is merged in, it
+// reads unknown for a moment. That is no reading: the task is not moved
+// out of ready to merge for it, and once GitHub says clean it is ready to
+// merge, though the syncer, keeping its last reading in unknown's place,
+// sees no move.
+func TestUnknownMergeabilityAfterABaseMergeComesBackToReady(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.until("ready to merge", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+	w.gh.CommitFiles("main", "Other work", map[string]string{"OTHER.md": "other\n"})
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	if w.gh.MergeInto(w.gh.Pull(1).Head, "main", nil) == "" {
+		t.Fatal("could not merge main in")
+	}
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	w.gh.Set(func(s *fakegithub.Server) { delete(s.MergeableUnknown, 1) })
+	w.until("ready to merge again", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+}
+
+// A pull request green and reviewed, held only by a reviewer's question:
+// once its owner answers it, the task is ready to merge, with nothing
+// changed on GitHub and no sync.
+func TestAnsweringTheLastQuestionMakesThePullRequestReady(t *testing.T) {
+	w := newWorld(t)
+	ana := w.person("Ana")
+	wi := w.reviewing()
+	w.assignOwner(wi, ana)
+	qs := w.askedQuestions(wi, "Do invoices close in UTC?")
+	for range 5 {
+		w.sync()
+		w.pump()
+	}
+	if s := w.taskStatus(wi); s != "review" {
+		t.Fatalf("%s with a reviewer's question open", s)
+	}
+	requests := len(w.gh.Requests())
+	if status, body := w.callAs(ana, "/internal/review-questions/"+qs[0]+"/answer", map[string]any{"answer": "UTC"}); status != 200 {
+		t.Fatalf("answer: %d %v", status, body)
+	}
+	w.until("ready to merge", func() bool { return w.taskStatus(wi) == "ready_to_merge" })
+	if len(w.gh.Requests()) == requests {
+		t.Fatal("ready with no read of GitHub")
+	}
+}

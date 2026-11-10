@@ -832,9 +832,11 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 		WHERE id = $1`, findingID, note); err != nil {
 		return err
 	}
-	_, err = ledger.Append(ctx, tx, ref.Event(EvFindingResolved, ledger.ActorAgent,
-		map[string]any{"findingId": findingID, "status": "accepted", "note": note, "title": title, "by": "conductor"}))
-	return err
+	if _, err = ledger.Append(ctx, tx, ref.Event(EvFindingResolved, ledger.ActorAgent,
+		map[string]any{"findingId": findingID, "status": "accepted", "note": note, "title": title, "by": "conductor"})); err != nil {
+		return err
+	}
+	return GateItemSettledTx(ctx, tx, ref.Org, ref.TaskID, "finding:"+findingID)
 }
 
 // EvFindingResolved is a finding's status changed by hand: a person's, or

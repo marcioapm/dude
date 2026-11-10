@@ -60,7 +60,7 @@ type Syncer struct {
 }
 
 // DefaultCIGrace: how long CI may take to show up on a new head.
-const DefaultCIGrace = 10 * time.Minute
+const DefaultCIGrace = forge.DefaultCIGrace
 
 type tracked struct {
 	ID, ProjectID, TaskID, RunID, State, Checks, Review, HeadSHA, RepoURL, RepoName, Mergeable string

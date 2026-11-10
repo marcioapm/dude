@@ -1919,6 +1919,11 @@ func agentReadContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, agentReadKey{}, true)
 }
 
+// AgentReadContext marks ctx's GitHub reads as an agent's: each is held
+// to the reserve kept for delivery (reserveAgentRequest), as the GitHub
+// read tools' are.
+func AgentReadContext(ctx context.Context) context.Context { return agentReadContext(ctx) }
+
 func isAgentRead(ctx context.Context) bool {
 	return ctx.Value(agentReadKey{}) == true
 }

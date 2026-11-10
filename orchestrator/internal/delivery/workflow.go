@@ -3024,6 +3024,10 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 // again.
 const readyGateRetry = 30 * time.Second
 
+// mergeableRetry is how soon a ready gate is read again while GitHub works
+// out whether the pull request merges: seconds, as a rule.
+const mergeableRetry = 10 * time.Second
+
 // weighReadiness moves the task to ready to merge when the ready gate
 // (ReadyGate) passes for every pull request still open, and back to
 // review when one no longer does. The gate asks no approval beyond what
@@ -3052,14 +3056,32 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 		}
 	}
 	ready := len(gates) > 0
+	unknown := false
 	for _, g := range gates {
 		if g.Err != nil {
 			// GitHub did not answer: not a judgement either way. The
-			// status stays as it was, and the gate is read again soon,
-			// the step's attempts not spent on GitHub's outage.
-			return workflow.Wait{After: readyGateRetry, Why: "the ready gate could not read GitHub: " + g.Err.Error()}
+			// status stays as it was, and the gate is read again soon —
+			// after GitHub's Retry-After when it gave one — the step's
+			// attempts not spent on GitHub's outage.
+			return workflow.Wait{After: max(forge.RetryAfter(g.Err), readyGateRetry),
+				Why: "the ready gate could not read GitHub: " + g.Err.Error()}
 		}
 		ready = ready && g.Ready
+		// Unknown mergeability with every other item holding is no
+		// reading at all: the syncer keeps its last reading in its place,
+		// so the clean that follows would not count as a move, and no sync
+		// would weigh readiness again.
+		if g.MergeableUnknown && len(g.Failing()) == 1 {
+			unknown = true
+		}
+	}
+	// Kept for the conductor's pull_requests, which serves it while the
+	// head it was judged at is the one recorded.
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error { return StoreGatesTx(ctx, tx, gates, time.Now()) }); err != nil {
+		return err
+	}
+	if unknown {
+		return workflow.Wait{After: mergeableRetry, Why: "GitHub has not worked out whether the pull request merges yet"}
 	}
 	// The move, its event and the conductor's Chat notice in one
 	// transaction: one lost to a retry would never be written again (the

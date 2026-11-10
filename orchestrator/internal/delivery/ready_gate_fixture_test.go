@@ -31,6 +31,9 @@ type gateFixture struct {
 	n     int
 	st    State
 	runs  int
+	// intercept, when set, answers a request to the fake GitHub in its
+	// place when it returns true.
+	intercept func(w http.ResponseWriter, r *http.Request) bool
 }
 
 func newGateFixture(t *testing.T) *gateFixture {
@@ -44,7 +47,12 @@ func newGateFixture(t *testing.T) *gateFixture {
 	mux.Handle("/repos/acme/repo", f.gh.Handler())
 	mux.Handle("/repos/acme/repo/", f.gh.Handler())
 	mux.Handle("POST /graphql", fakegithub.Graphql(f.gh))
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if f.intercept != nil && f.intercept(w, r) {
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	f.forge = forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})
 	p := DefaultPolicy()

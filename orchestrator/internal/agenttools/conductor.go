@@ -212,33 +212,82 @@ type pullRequestOut struct {
 	// the only act left, and each item that says why or why not. Only on
 	// an open pull request, and only from the pull_requests tool.
 	ReadyGate *readyGateOut `json:"readyGate,omitempty"`
+	id        string
 }
 
 // readyGateOut is one pull request's ready gate as the conductor reads it.
-// unread says GitHub did not answer: the gate is not judged.
+// unread says GitHub did not answer: the gate is not judged. JudgedAt and
+// JudgedHead say when and at which head it was computed: the last gate
+// dude computed is served while that head is still the one recorded.
 type readyGateOut struct {
-	Ready  bool                `json:"ready"`
-	Items  []delivery.GateItem `json:"items"`
-	Unread string              `json:"unread,omitempty"`
+	Ready      bool                `json:"ready"`
+	Items      []delivery.GateItem `json:"items"`
+	Unread     string              `json:"unread,omitempty"`
+	JudgedAt   *time.Time          `json:"judgedAt,omitempty"`
+	JudgedHead string              `json:"judgedHead,omitempty"`
 }
 
 // gatedPullRequests is pull_requests checked in its transaction: the
-// listing, and what dude knows of each open pull request's ready gate.
+// listing, the gates stored at each pull request's recorded head, and
+// what dude knows of each open one that has none, to judge fresh.
 type gatedPullRequests struct {
 	listing map[string]any
+	stored  map[string]delivery.StoredGate
 	gate    delivery.ReadyGateCheck
 }
 
-// pull_requests lists the task's pull requests in a transaction, reads
-// their ready gates from GitHub with none open (the gate's GitHub reads
-// are dude's own, never the hour's of the caller), and answers both.
+// githubReads is the gates read fresh: one GitHub read each of the
+// task's hourly budget (checkGitHubBudget).
+func (g gatedPullRequests) githubReads() int { return len(g.gate.PRs) }
+
+// pull_requests lists the task's pull requests in a transaction and gives
+// each open one its ready gate: the last one computed (weighReadiness's,
+// or an earlier call's), while the head it was judged at is the one
+// recorded. Only one with none at its head is read from GitHub, with no
+// transaction open, as an agent's read (held to the reserve kept for
+// delivery), each counted against the task's GitHub read budget.
 func checkPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (gatedPullRequests, error) {
 	listed, err := pullRequests(ctx, tx, c, in)
 	if err != nil {
 		return gatedPullRequests{}, err
 	}
 	gate, err := delivery.CheckReadyGateTx(ctx, tx, c.TaskID, nil)
-	return gatedPullRequests{listing: listed.(map[string]any), gate: gate}, err
+	if err != nil {
+		return gatedPullRequests{}, err
+	}
+	stored, err := delivery.StoredGatesTx(ctx, tx, c.TaskID)
+	if err != nil {
+		return gatedPullRequests{}, err
+	}
+	// Served: an open pull request's gate stored at its recorded head,
+	// with dude's own items (findings, questions) as they stand now.
+	served := map[string]delivery.StoredGate{}
+	var fresh []delivery.GateFacts
+	for _, p := range gate.PRs {
+		if s, ok := stored[p.ID]; ok && p.Head != "" && s.Head == p.Head {
+			served[p.ID] = s.WithOwnItems(p)
+			continue
+		}
+		fresh = append(fresh, p)
+	}
+	gate.PRs = fresh
+	g := gatedPullRequests{listing: listed.(map[string]any), stored: served, gate: gate}
+	if len(fresh) == 0 {
+		return g, nil
+	}
+	if gh, _ := githubOf(c); gh == nil {
+		// Nothing is read of GitHub: unreadable, and nothing spent.
+		return g, nil
+	}
+	if err := checkGitHubBudget(ctx, tx, c, len(fresh)); err != nil {
+		return gatedPullRequests{}, err
+	}
+	for range fresh {
+		if _, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": "pull_requests", "attempted": true, "readyGate": true})); err != nil {
+			return gatedPullRequests{}, err
+		}
+	}
+	return g, nil
 }
 
 func readGates(ctx context.Context, c Caller, g gatedPullRequests) ([]delivery.PRGate, error) {
@@ -250,19 +299,30 @@ func readGates(ctx context.Context, c Caller, g gatedPullRequests) ([]delivery.P
 		// No client: every GitHub item unreadable, as the gate says.
 		gh = nil
 	}
-	return delivery.DoReadyGate(ctx, gh, g.gate), nil
+	return delivery.DoReadyGate(forge.AgentReadContext(ctx), gh, g.gate), nil
 }
 
-func listGates(_ context.Context, _ pgx.Tx, _ Caller, g gatedPullRequests, gates []delivery.PRGate) (map[string]any, error) {
+func listGates(ctx context.Context, tx pgx.Tx, _ Caller, g gatedPullRequests, gates []delivery.PRGate) (map[string]any, error) {
+	now := time.Now().UTC()
+	if err := delivery.StoreGatesTx(ctx, tx, gates, now); err != nil {
+		return nil, err
+	}
 	prs, _ := g.listing["pullRequests"].([]pullRequestOut)
 	for i := range prs {
+		if s, ok := g.stored[prs[i].id]; ok {
+			at := s.At
+			prs[i].ReadyGate = &readyGateOut{Ready: s.Ready, Items: s.Items, JudgedAt: &at, JudgedHead: s.Head}
+			continue
+		}
 		for _, gate := range gates {
-			if gate.Repo != prs[i].Repo || gate.Number != prs[i].Number {
+			if gate.ID != prs[i].id {
 				continue
 			}
 			out := &readyGateOut{Ready: gate.Ready, Items: gate.Items}
 			if gate.Err != nil {
 				out.Unread = "GitHub did not answer: " + gate.Err.Error()
+			} else {
+				out.JudgedAt, out.JudgedHead = &now, gate.Head
 			}
 			prs[i].ReadyGate = out
 		}
@@ -277,7 +337,7 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (
 	}
 	// People's words on GitHub, quoted as external text under one id per call.
 	w := newWrapper()
-	rows, err := tx.Query(ctx, `SELECT repo.name, pr.number, pr.url, pr.state::text, pr.head_branch, COALESCE(pr.head_sha, ''),
+	rows, err := tx.Query(ctx, `SELECT pr.id, repo.name, pr.number, pr.url, pr.state::text, pr.head_branch, COALESCE(pr.head_sha, ''),
 			pr.base_branch, pr.checks::text, COALESCE(pr.checks_json, '[]'), pr.review::text, COALESCE(pr.reviews_json, '[]'),
 			COALESCE(pr.unresolved_threads, 0), pr.last_polled_at
 		FROM pull_requests pr JOIN repositories repo ON repo.id = pr.repository_id
@@ -292,7 +352,7 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (
 	var prs []row
 	for rows.Next() {
 		var p row
-		if err := rows.Scan(&p.Repo, &p.Number, &p.URL, &p.State, &p.HeadBranch, &p.Head, &p.BaseBranch, &p.Checks, &p.checks,
+		if err := rows.Scan(&p.id, &p.Repo, &p.Number, &p.URL, &p.State, &p.HeadBranch, &p.Head, &p.BaseBranch, &p.Checks, &p.checks,
 			&p.Review, &p.reviews, &p.UnresolvedThreads, &p.LastPolledAt); err != nil {
 			return nil, err
 		}

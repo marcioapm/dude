@@ -44,7 +44,7 @@ func TestReadinessReadsWhatTheGateJudges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.MergeableState != "clean" || f.Checks != ChecksUnknown || !f.WorkflowsKnown || len(f.Workflows) != 0 ||
-		!f.ProtectionKnown || len(f.RequiredChecks) != 0 || f.HeadSHA != fake.SHA("feature") {
+		len(f.RequiredChecks) != 0 || f.HeadSHA != fake.SHA("feature") {
 		t.Fatalf("a repository with no CI: %+v", f)
 	}
 
@@ -112,6 +112,28 @@ func TestGateMovedIsWhatTheReadyGateReads(t *testing.T) {
 		change(&now)
 		if !GateMoved(base, now) {
 			t.Errorf("%s moved, and it did not say so", name)
+		}
+	}
+}
+
+// A workflow's on: says whether Actions runs on a pull request's head:
+// pull_request or pull_request_target with no filter does; push, tags,
+// schedule only does not; a filter or a file that does not parse cannot
+// tell.
+func TestWorkflowRunsOnPullRequestsReadsOn(t *testing.T) {
+	for raw, want := range map[string]string{
+		"on: pull_request\n":                                     ActionsExpected,
+		"on: [push, pull_request_target]\n":                      ActionsExpected,
+		"on:\n  pull_request:\n  push:\n":                        ActionsExpected,
+		"on: push\n":                                             ActionsNotExpected,
+		"on:\n  push:\n    branches: [main]\n    tags: ['v*']\n": ActionsNotExpected,
+		"on:\n  schedule:\n    - cron: '0 0 * * *'\n":            ActionsNotExpected,
+		"on:\n  pull_request:\n    paths: ['src/**']\n":          "",
+		"on: [\n":            "",
+		"name: no trigger\n": "",
+	} {
+		if got := WorkflowRunsOnPullRequests([]byte(raw)); got != want {
+			t.Errorf("%q: %q, want %q", raw, got, want)
 		}
 	}
 }

@@ -276,6 +276,9 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		return err
 	}
 	// Wakes the workflow to carry it out; the decision is in its state.
+	if err := GateItemSettledTx(ctx, tx, org, taskID, "escalation:"+e.Reason+":"+e.Decided.At.UTC().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
 	return workflow.SignalTx(ctx, tx, org, wfID, SignalHumanDecision, nil, "")
 }
 

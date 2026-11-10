@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // ReadinessFacts is what GitHub says of a pull request that the ready
@@ -34,14 +37,16 @@ type ReadinessFacts struct {
 	// count them.
 	UnresolvedThreads int
 	ThreadsUnknown    bool
-	// Read only when no check reported at the head: whether
-	// .github/workflows holds a workflow file at it.
-	WorkflowsKnown bool
-	Workflows      []string
+	// Read only when Actions reported no check at the head: whether
+	// .github/workflows holds a workflow file at it, and whether any of
+	// them runs for this pull request's head by its on: (ActionsExpected,
+	// ActionsNotExpected; "" when a file could not be read or parsed).
+	WorkflowsKnown  bool
+	Workflows       []string
+	ActionsExpected string
 	// What branch protection (and rulesets) on BaseBranch require, read
-	// when no check reported or GitHub says the merge is blocked.
-	// ProtectionKnown is false when neither could be read.
-	ProtectionKnown   bool
+	// when no check reported or GitHub says the merge is blocked; none
+	// when neither could be read.
 	RequiredChecks    []string
 	RequiredApprovals int
 	// GitHub's count of approving reviews standing, for naming a missing
@@ -81,9 +86,19 @@ func (g *GitHub) Readiness(ctx context.Context, slug string, number int) (Readin
 	if f.UnresolvedThreads, f.ThreadsUnknown, err = g.unresolvedThreads(ctx, slug, number); err != nil {
 		return f, err
 	}
-	if f.Checks == ChecksUnknown && p.Head.SHA != "" {
+	// The workflows are read when Actions has reported nothing at the head:
+	// whether it should (on:) is what tells "no CI for this head" from "CI
+	// yet to register", and an external status alone from a green head.
+	if !actionsReported(f.CheckList) && p.Head.SHA != "" {
 		if f.Workflows, f.WorkflowsKnown, err = g.workflowFiles(ctx, slug, p.Head.SHA); err != nil {
 			return f, err
+		}
+		if f.WorkflowsKnown && len(f.Workflows) > 0 {
+			if f.ActionsExpected, err = g.actionsExpected(ctx, slug, p.Head.SHA, f.Workflows); err != nil {
+				return f, err
+			}
+		} else if f.WorkflowsKnown {
+			f.ActionsExpected = ActionsNotExpected
 		}
 	}
 	if (f.Checks == ChecksUnknown || f.MergeableState == "blocked") && f.BaseBranch != "" {
@@ -133,8 +148,8 @@ func (g *GitHub) workflowFiles(ctx context.Context, slug, ref string) (files []s
 
 // protection reads what the base branch requires, from the two places
 // GitHub keeps it that a reader may see: the branch's own protection
-// summary and the rulesets that apply to it. Neither readable leaves
-// ProtectionKnown false.
+// summary and the rulesets that apply to it. Neither readable requires
+// nothing that can be named.
 func (g *GitHub) protection(ctx context.Context, slug, branch string, f *ReadinessFacts) error {
 	var b struct {
 		Protected  bool `json:"protected"`
@@ -150,7 +165,6 @@ func (g *GitHub) protection(ctx context.Context, slug, branch string, f *Readine
 	err := g.do(ctx, "GET", "/repos/"+slug+"/branches/"+branch, nil, &b)
 	switch {
 	case err == nil:
-		f.ProtectionKnown = true
 		if b.Protection != nil && b.Protection.RequiredStatusChecks != nil {
 			f.RequiredChecks = append(f.RequiredChecks, b.Protection.RequiredStatusChecks.Contexts...)
 			for _, c := range b.Protection.RequiredStatusChecks.Checks {
@@ -172,7 +186,6 @@ func (g *GitHub) protection(ctx context.Context, slug, branch string, f *Readine
 	err = g.do(ctx, "GET", "/repos/"+slug+"/rules/branches/"+branch, nil, &rules)
 	switch {
 	case err == nil:
-		f.ProtectionKnown = true
 		for _, r := range rules {
 			switch r.Type {
 			case "pull_request":
@@ -240,4 +253,111 @@ func gateReading(s Status) reading {
 	}
 	return reading{state: s.State, head: s.HeadSHA, checks: s.Checks, review: review, mergeable: s.Mergeable,
 		threads: s.UnresolvedThreads}
+}
+
+// Whether GitHub Actions should report on a pull request's head, by its
+// workflows' on: (ReadinessFacts.ActionsExpected).
+const (
+	ActionsExpected    = "expected"
+	ActionsNotExpected = "not_expected"
+)
+
+// DefaultCIGrace is how long CI may take to show up on a new head
+// (prs.Syncer's grace, and the ready gate's where the syncer has not
+// judged it).
+const DefaultCIGrace = 10 * time.Minute
+
+// maxWorkflowBytes bounds one workflow file read for its on:.
+const maxWorkflowBytes = 256 << 10
+
+// actionsReported says a check at the head is GitHub Actions'.
+func actionsReported(checks []Check) bool {
+	for _, c := range checks {
+		if c.App == "github-actions" {
+			return true
+		}
+	}
+	return false
+}
+
+// actionsExpected reads each workflow file's on: at ref: ActionsExpected
+// when one runs on pull_request or pull_request_target with no filter
+// (branches, paths, types) that could leave this head out;
+// ActionsNotExpected when none names either (push to main, tags,
+// schedule, workflow_dispatch only); "" when a file could not be read or
+// parsed, or a filter decides: the gate falls back to the CI grace.
+func (g *GitHub) actionsExpected(ctx context.Context, slug, ref string, files []string) (string, error) {
+	out := ActionsNotExpected
+	for _, name := range files {
+		raw, err := g.FileAt(ctx, slug, ".github/workflows/"+name, ref, maxWorkflowBytes)
+		switch {
+		case Refused(err):
+			out = ""
+			continue
+		case err != nil:
+			var e *Error
+			if asError(err, &e) && e.NotFound() {
+				out = ""
+				continue
+			}
+			return "", err
+		}
+		switch WorkflowRunsOnPullRequests(raw) {
+		case ActionsExpected:
+			return ActionsExpected, nil
+		case "":
+			out = ""
+		}
+	}
+	return out, nil
+}
+
+// WorkflowRunsOnPullRequests reads one workflow file's on:
+// ActionsExpected when it runs on every pull request (pull_request or
+// pull_request_target, no filter), ActionsNotExpected when it names
+// neither, "" when it cannot tell (unparseable, or a filter).
+func WorkflowRunsOnPullRequests(raw []byte) string {
+	var doc map[string]yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return ""
+	}
+	// YAML 1.1 reads a bare on as true: a key "true".
+	on, ok := doc["on"]
+	if !ok {
+		if on, ok = doc["true"]; !ok {
+			return ""
+		}
+	}
+	isPR := func(s string) bool { return s == "pull_request" || s == "pull_request_target" }
+	switch on.Kind {
+	case yaml.ScalarNode:
+		if isPR(on.Value) {
+			return ActionsExpected
+		}
+		return ActionsNotExpected
+	case yaml.SequenceNode:
+		for _, n := range on.Content {
+			if isPR(n.Value) {
+				return ActionsExpected
+			}
+		}
+		return ActionsNotExpected
+	case yaml.MappingNode:
+		out := ActionsNotExpected
+		for i := 0; i+1 < len(on.Content); i += 2 {
+			if !isPR(on.Content[i].Value) {
+				continue
+			}
+			v := on.Content[i+1]
+			if v.Kind == yaml.MappingNode && len(v.Content) > 0 {
+				// branches, paths, types: whether this head is in is not
+				// read here.
+				out = ""
+				continue
+			}
+			return ActionsExpected
+		}
+		return out
+	}
+	return ""
 }

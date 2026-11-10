@@ -3,9 +3,12 @@ package delivery
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -56,6 +59,10 @@ type PRGate struct {
 	Ready  bool       `json:"ready"`
 	Items  []GateItem `json:"items"`
 	Err    error      `json:"-"`
+	// MergeableUnknown: GitHub has not worked out whether it merges yet
+	// (mergeable_state unknown). Not a reading: weighReadiness leaves the
+	// status as it is and reads the gate again.
+	MergeableUnknown bool `json:"-"`
 }
 
 // Failing is the gate's items that do not hold.
@@ -101,6 +108,13 @@ type GateFacts struct {
 	Simplifies []gateSimplify
 	// The items read from dude's own records.
 	Findings, Questions GateItem
+	// The syncer's CI record of the pull request (prs.Syncer.Sync): whether
+	// it has had CI, the checks it recorded at Head (pending within its
+	// grace when GitHub reports nothing on a pull request that had CI),
+	// and when Head was first seen.
+	HadCI          bool
+	RecordedChecks string
+	HeadSeenAt     *time.Time
 }
 
 // gateSimplify is a completed simplify Run: where it started in the
@@ -110,6 +124,74 @@ type gateSimplify struct {
 	Start, Produced, Merged string
 	// A completed review of the attempt started at Produced.
 	Reviewed bool
+}
+
+// StoredGate is the last gate computed for a pull request
+// (pull_requests.ready_gate): at which head, and when.
+type StoredGate struct {
+	Head  string     `json:"head"`
+	At    time.Time  `json:"at"`
+	Ready bool       `json:"ready"`
+	Items []GateItem `json:"items"`
+}
+
+// WithOwnItems is the stored gate with dude's own items (findings,
+// questions) as p reads them now, and Ready judged again with them: those
+// change with no change of the head.
+func (s StoredGate) WithOwnItems(p GateFacts) StoredGate {
+	items := slices.Clone(s.Items)
+	ready := len(items) == len(ReadyKeys)
+	for i, it := range items {
+		switch it.Key {
+		case ReadyFindings:
+			items[i] = p.Findings
+		case ReadyQuestions:
+			items[i] = p.Questions
+		}
+		ready = ready && items[i].OK
+	}
+	s.Items, s.Ready = items, ready
+	return s
+}
+
+// StoreGatesTx records each gate GitHub answered for as its pull
+// request's last, only while the head it was judged at is still the one
+// recorded, as judged at at.
+func StoreGatesTx(ctx context.Context, tx pgx.Tx, gates []PRGate, at time.Time) error {
+	for _, g := range gates {
+		if g.Err != nil || g.Head == "" {
+			continue
+		}
+		raw, err := json.Marshal(StoredGate{Head: g.Head, At: at.UTC(), Ready: g.Ready, Items: g.Items})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE pull_requests SET ready_gate = $3::jsonb WHERE id = $1 AND head_sha = $2`,
+			g.ID, g.Head, string(raw)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StoredGatesTx is the task's pull requests' last gates, by pull request
+// id; one never judged is absent.
+func StoredGatesTx(ctx context.Context, tx pgx.Tx, taskID string) (map[string]StoredGate, error) {
+	rows, err := tx.Query(ctx, `SELECT id, ready_gate FROM pull_requests WHERE task_id = $1 AND ready_gate IS NOT NULL`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]StoredGate{}
+	var id string
+	var raw []byte
+	_, err = pgx.ForEachRow(rows, []any{&id, &raw}, func() error {
+		var g StoredGate
+		if json.Unmarshal(raw, &g) == nil {
+			out[id] = g
+		}
+		return nil
+	})
+	return out, err
 }
 
 // ReadyGateFor reads the gate of the task's pull requests prIDs (every
@@ -143,7 +225,8 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 			return c, err
 		}
 	}
-	rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.base_branch, pr.number, pr.state::text, COALESCE(pr.head_sha, '')
+	rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.base_branch, pr.number, pr.state::text, COALESCE(pr.head_sha, ''),
+			pr.had_ci, pr.checks::text, pr.head_seen_at
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND (CASE WHEN $2::text[] IS NULL THEN pr.state IN ('open', 'draft') ELSE pr.id = ANY($2) END)
 		ORDER BY pr.created_at, pr.id`, taskID, prIDs)
@@ -153,7 +236,8 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 	for rows.Next() {
 		var p GateFacts
 		var url string
-		if err := rows.Scan(&p.ID, &p.Repo, &url, &p.BaseBranch, &p.Number, &p.State, &p.Head); err != nil {
+		if err := rows.Scan(&p.ID, &p.Repo, &url, &p.BaseBranch, &p.Number, &p.State, &p.Head,
+			&p.HadCI, &p.RecordedChecks, &p.HeadSeenAt); err != nil {
 			rows.Close()
 			return c, err
 		}
@@ -500,8 +584,9 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	// 8. mergeable
 	ok, detail := gateMergeable(f)
 	add(ReadyMergeable, ok, "%s", detail)
+	g.MergeableUnknown = !ok && mergeableUnknown(f)
 	// 9. checks
-	ok, detail = gateChecks(f)
+	ok, detail = gateChecks(f, p, time.Now())
 	add(ReadyChecks, ok, "%s", detail)
 	return g, nil
 }
@@ -551,7 +636,7 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 			parents[c.SHA] = append(parents[c.SHA], x.SHA)
 		}
 	}
-	simplified, err := simplifiedCommits(ctx, gh, p)
+	simplified, unread, err := simplifiedCommits(ctx, gh, p)
 	if err != nil {
 		return false, "", err
 	}
@@ -560,6 +645,7 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 	// merge.
 	var unreviewed []string
 	at := h
+	merges := 0
 	for n := 0; at != p.Reviewed; n++ {
 		ps, listed := parents[at]
 		if !listed || len(ps) == 0 || n == maxGateCommits {
@@ -569,7 +655,13 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 		switch {
 		case simplified[at]:
 		case len(ps) == 2:
-			pure, err := advance.PureBaseMerge(ctx, gh, p.Slug, base, at, ps)
+			// Each merge judged costs GitHub reads, on every evaluation:
+			// past advance.MaxBaseMerges, a review of the head is cheaper
+			// than walking on.
+			if merges++; merges > advance.MaxBaseMerges {
+				return false, fmt.Sprintf("too many base merges since the last review at %s: review the head", short(p.Reviewed)), nil
+			}
+			pure, err := pureBaseMerge(ctx, gh, p.Slug, base, at, ps)
 			if err != nil {
 				return false, "", err
 			}
@@ -583,15 +675,55 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 	}
 	if len(unreviewed) > 0 {
 		slices.Reverse(unreviewed)
-		return false, fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", ")), nil
+		detail := fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", "))
+		if len(unread) > 0 {
+			detail += fmt.Sprintf(" (GitHub would not compare the simplifier's run from %s, so its commits are not counted as reviewed simplifications)",
+				strings.Join(unread, ", "))
+		}
+		return false, detail, nil
 	}
 	return true, fmt.Sprintf("reviewed at %s; since then only reviewed simplifications and pure merges of %s", short(p.Reviewed), base), nil
 }
 
+// pureMerges remembers the merges judged GitHub's pure merge of a base,
+// by repository, merge and base branch, across evaluations: a commit's
+// parents and content never change, and once the base contains the merged
+// parent it keeps containing it. A merge judged not pure is judged again
+// (the base may come to contain it). Bounded: cleared when full.
+var pureMerges = struct {
+	sync.Mutex
+	m map[string]bool
+}{m: map[string]bool{}}
+
+const pureMergesMax = 4096
+
+// pureBaseMerge is advance.PureBaseMerge, remembered when pure.
+func pureBaseMerge(ctx context.Context, gh *forge.GitHub, slug, base, merge string, parents []string) (bool, error) {
+	key := slug + "\x00" + merge + "\x00" + base
+	pureMerges.Lock()
+	known := pureMerges.m[key]
+	pureMerges.Unlock()
+	if known {
+		return true, nil
+	}
+	pure, err := advance.PureBaseMerge(ctx, gh, slug, base, merge, parents)
+	if err == nil && pure {
+		pureMerges.Lock()
+		if len(pureMerges.m) >= pureMergesMax {
+			clear(pureMerges.m)
+		}
+		pureMerges.m[key] = true
+		pureMerges.Unlock()
+	}
+	return pure, err
+}
+
 // simplifiedCommits is every commit of a simplify Run whose own review
-// completed: start..produced.
-func simplifiedCommits(ctx context.Context, gh *forge.GitHub, p GateFacts) (map[string]bool, error) {
+// completed: start..produced. refused names the starts of those GitHub
+// would not compare: their commits between are not counted.
+func simplifiedCommits(ctx context.Context, gh *forge.GitHub, p GateFacts) (map[string]bool, []string, error) {
 	out := map[string]bool{}
+	var refused []string
 	for _, s := range p.Simplifies {
 		if s.Produced == "" || !s.Reviewed {
 			continue
@@ -605,16 +737,17 @@ func simplifiedCommits(ctx context.Context, gh *forge.GitHub, p GateFacts) (map[
 		}
 		cmp, err := gh.CompareCommits(ctx, p.Slug, s.Start, s.Produced)
 		if forge.Refused(err) {
+			refused = append(refused, short(s.Start))
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, c := range cmp.Commits {
 			out[c.SHA] = true
 		}
 	}
-	return out, nil
+	return out, refused, nil
 }
 
 // gateSimplified is item 4. C is the last change: the head's last commit,
@@ -645,7 +778,7 @@ func gateSimplified(ctx context.Context, gh *forge.GitHub, p GateFacts, reviewed
 		}
 		// A merge that is not the base's alone (dude's merge of a writer's
 		// commit, a person's resolution) is a change of its own.
-		pure, err := advance.PureBaseMerge(ctx, gh, p.Slug, p.BaseBranch, last, parents)
+		pure, err := pureBaseMerge(ctx, gh, p.Slug, p.BaseBranch, last, parents)
 		if err != nil {
 			return false, "", err
 		}
@@ -708,16 +841,36 @@ func gateMergeable(f forge.ReadinessFacts) (bool, string) {
 	return false, "GitHub has not worked out whether it merges yet: retry later"
 }
 
+// mergeableUnknown says GitHub has not computed mergeability: the reading
+// gateMergeable answers "retry later" for.
+func mergeableUnknown(f forge.ReadinessFacts) bool {
+	switch f.MergeableState {
+	case "clean", "has_hooks", "unstable", "behind", "dirty", "draft", "blocked":
+		return false
+	}
+	return f.Mergeable == nil || *f.Mergeable
+}
+
 // gateChecks is item 9: every check and status at the exact head
-// completed as success, neutral or skipped. None at all is no CI only
-// when the head has no workflow file and protection requires no check.
-func gateChecks(f forge.ReadinessFacts) (bool, string) {
+// completed as success, neutral or skipped. It agrees with the syncer's CI
+// grace (prs.Syncer.Sync): within it, nothing reported on a pull request
+// that has had CI is CI yet to start, pending; past it, nothing reported
+// is no CI for this head (a commit CI skips: path filters, [skip ci],
+// workflows that never run on pull requests), as the syncer records it
+// (unknown), not ci_stuck. Where the head's workflows run on pull
+// requests (on: pull_request, pull_request_target), Actions is expected:
+// within the grace an external status alone (a CLA bot, a deploy preview)
+// is pending until Actions reports.
+func gateChecks(f forge.ReadinessFacts, p GateFacts, now time.Time) (bool, string) {
 	if forge.CheckDiagnostic(f.CheckList) == forge.CheckRunsForbidden {
 		return false, "checks unreadable: GitHub refused the check-runs read"
 	}
 	var failing, pending []string
-	passed := 0
+	passed, actions := 0, false
 	for _, c := range f.CheckList {
+		if c.App == "github-actions" {
+			actions = true
+		}
 		switch forge.CheckOutcome(c) {
 		case forge.ChecksFailing:
 			failing = append(failing, c.Name)
@@ -727,6 +880,7 @@ func gateChecks(f forge.ReadinessFacts) (bool, string) {
 			passed++
 		}
 	}
+	inGrace := ciGrace(p, now)
 	switch {
 	case len(failing) > 0:
 		return false, "failing: " + strings.Join(failing, ", ")
@@ -737,13 +891,31 @@ func gateChecks(f forge.ReadinessFacts) (bool, string) {
 	case f.Checks == forge.ChecksPending:
 		return false, "pending: GitHub's combined status at the head is pending"
 	case passed > 0 || f.Checks == forge.ChecksPassing:
+		if !actions && f.ActionsExpected == forge.ActionsExpected && inGrace {
+			return false, "pending: only an external status has reported at the head; .github/workflows runs on pull requests, and Actions has not reported yet"
+		}
 		return true, fmt.Sprintf("%d check(s) passed at the head", max(passed, 1))
-	case !f.WorkflowsKnown:
-		return false, "no checks at the head, and GitHub would not list .github/workflows: unreadable"
-	case len(f.Workflows) > 0:
-		return false, "pending: no checks have reported at the head yet, though .github/workflows has " + strings.Join(f.Workflows, ", ")
 	case len(f.RequiredChecks) > 0:
 		return false, "pending: branch protection requires " + strings.Join(f.RequiredChecks, ", ") + ", and none has reported at the head"
+	case !f.WorkflowsKnown:
+		return false, "no checks at the head, and GitHub would not list .github/workflows: unreadable"
+	case len(f.Workflows) == 0 && !p.HadCI:
+		return true, "no CI configured"
+	case f.ActionsExpected == forge.ActionsNotExpected && !p.HadCI:
+		return true, "no CI for this head: .github/workflows has " + strings.Join(f.Workflows, ", ") + ", none of which runs on pull requests"
+	case inGrace:
+		return false, "pending: no checks have reported at the head yet, within the grace CI has to show up"
 	}
-	return true, "no CI configured"
+	return true, "no CI for this head: nothing reported within the grace CI has to show up"
+}
+
+// ciGrace says the head is within the grace CI has to show up on it: the
+// syncer's own judgement where it made one (a pull request that has had
+// CI, nothing reported: pending within its grace, unknown past it),
+// otherwise forge.DefaultCIGrace from when the head was first seen.
+func ciGrace(p GateFacts, now time.Time) bool {
+	if p.HadCI && (p.RecordedChecks == forge.ChecksPending || p.RecordedChecks == forge.ChecksUnknown) {
+		return p.RecordedChecks == forge.ChecksPending
+	}
+	return p.HeadSeenAt == nil || now.Sub(*p.HeadSeenAt) < forge.DefaultCIGrace
 }
