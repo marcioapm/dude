@@ -3122,11 +3122,13 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 				Why: "the ready gate could not read GitHub: " + g.Err.Error()}
 		}
 		ready = ready && g.Ready
-		// Unknown mergeability with every other item holding is no
-		// reading at all: the syncer keeps its last reading in its place,
-		// so the clean that follows would not count as a move, and no sync
-		// would weigh readiness again.
-		if g.MergeableUnknown && len(g.Failing()) == 1 {
+		// Unknown mergeability with every other item holding — but for
+		// checks pending only for the CI grace, which no sync sees end
+		// either — is no reading at all: the syncer keeps its last reading
+		// in its place, so the clean that follows would not count as a
+		// move, and no sync would weigh readiness again. Read again soon;
+		// that reading, mergeability known, arms the grace's own timer.
+		if g.MergeableUnknown && onlyUnknownOrGrace(g) {
 			unknown = true
 		}
 		// Checks pending only for the CI grace, everything else holding:
@@ -3157,6 +3159,22 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	// transaction: one lost to a retry would never be written again (the
 	// status has moved).
 	return w.s.moveReadiness(ctx, sc.OrganizationID, st, gates, ready, len(open))
+}
+
+// onlyUnknownOrGrace says whether g fails on nothing but what no sync
+// sees move: mergeability GitHub has not worked out, and checks pending
+// only for the CI grace.
+func onlyUnknownOrGrace(g PRGate) bool {
+	f := g.Failing()
+	for _, it := range f {
+		switch {
+		case it.Key == ReadyMergeable && g.MergeableUnknown:
+		case it.Key == ReadyChecks && g.GraceLeft > 0:
+		default:
+			return false
+		}
+	}
+	return len(f) > 0
 }
 
 // escalate stops and asks for a person, and waits for their decision
