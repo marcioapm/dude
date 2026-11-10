@@ -47,7 +47,7 @@ Two limits bound fixes on a pull request:
 - **Pull request fix rounds** (3 by default, **Settings → Delivery**) — fixes per round of review feedback.
 - **Fix rounds per pull request** (5 by default, **Settings → GitHub**) — fixes in all, across every review round. 0 means no limit.
 
-A fix that changes nothing in a repository spends none of that pull request's budget. When either limit is reached, the owner is asked: **PR fix rounds used up**. See [Limits](help:limits#fix-rounds-on-pull-requests).
+A fix that changes nothing in a repository spends none of that pull request's budget. When either limit is reached: **PR fix rounds used up**. The conductor decides it, or asks the owner. See [Limits](help:limits#fix-rounds-on-pull-requests).
 
 ## CI and reruns
 
