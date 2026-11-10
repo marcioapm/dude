@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -431,7 +432,17 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	// pull_requests with no ready gate stored at the head would read the
 	// gate from GitHub, a read of the same hour's budget: the pull
 	// requests are still listed, each gate unread for the budget, and
-	// nothing reaches GitHub.
+	// nothing reaches GitHub. No judgement either way: ready is left out,
+	// and unread says when the budget has room again — an hour after the
+	// oldest read the hour still counts.
+	var oldest time.Time
+	if err := w.owner.QueryRow(context.Background(), `SELECT min(occurred_at) FROM events WHERE task_id = $1
+		AND event_type = 'agent.tool.attempted' AND occurred_at > now() - interval '1 hour'
+		AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log', 'github_run_jobs', 'refresh_pull_requests', 'pull_requests')`,
+		task).Scan(&oldest); err != nil {
+		t.Fatal(err)
+	}
+	want := "read budget spent (60/hour): not read; try again after " + oldest.Add(time.Hour).UTC().Format(time.RFC3339)
 	listed := w.must(task, "pull_requests", `{}`)
 	prs, _ := listed["pullRequests"].([]any)
 	if len(prs) == 0 {
@@ -439,8 +450,8 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	}
 	for _, p := range prs {
 		gate, _ := p.(map[string]any)["readyGate"].(map[string]any)
-		if gate["unread"] != "read budget spent" {
-			t.Errorf("readyGate %v, want unread: read budget spent", gate)
+		if _, judged := gate["ready"]; judged || gate["unread"] != want {
+			t.Errorf("readyGate %v, want no ready and unread: %s", gate, want)
 		}
 	}
 	if w.requests() != before {

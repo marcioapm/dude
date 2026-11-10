@@ -216,11 +216,14 @@ type pullRequestOut struct {
 }
 
 // readyGateOut is one pull request's ready gate as the conductor reads it.
-// unread says GitHub did not answer: the gate is not judged. JudgedAt and
-// JudgedHead say when and at which head it was computed: the last gate
-// dude computed is served while that head is still the one recorded.
+// unread says the gate was not read as it stands: the hourly GitHub read
+// budget is spent (ready is then left out — no judgement either way — and
+// unread says when to try again), or GitHub did not answer (its GitHub
+// items unreadable, never ready). JudgedAt and JudgedHead say when and at
+// which head it was computed: the last gate dude computed is served while
+// that head is still the one recorded.
 type readyGateOut struct {
-	Ready      bool                `json:"ready"`
+	Ready      *bool               `json:"ready,omitempty"`
 	Items      []delivery.GateItem `json:"items"`
 	Unread     string              `json:"unread,omitempty"`
 	JudgedAt   *time.Time          `json:"judgedAt,omitempty"`
@@ -290,7 +293,13 @@ func checkPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequests
 		}
 		// The budget is spent: the pull requests are still listed, their
 		// gates unread, and nothing is read of GitHub or spent.
-		g.unread, g.gate.PRs = "read budget spent", nil
+		g.unread = fmt.Sprintf("read budget spent (%d/hour): not read", githubReadsPerHour)
+		if at, err := githubReadsFreeAt(ctx, tx, c, len(fresh)); err != nil {
+			return gatedPullRequests{}, err
+		} else if !at.IsZero() {
+			g.unread += "; try again after " + at.UTC().Format(time.RFC3339)
+		}
+		g.gate.PRs = nil
 		g.unreadIDs = fresh
 		return g, nil
 	}
@@ -300,6 +309,36 @@ func checkPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequests
 		}
 	}
 	return g, nil
+}
+
+// githubReadsFreeAt is when c's hourly GitHub read budget has room for
+// need more reads again: when enough of the last hour's reads leave the
+// hour. Zero when it cannot (need is more than the whole budget).
+func githubReadsFreeAt(ctx context.Context, tx pgx.Tx, c Caller, need int) (time.Time, error) {
+	reads, err := githubReadsThisHour(ctx, tx, c)
+	if err != nil {
+		return time.Time{}, err
+	}
+	expire := reads + need - githubReadsPerHour // reads that must leave the hour
+	if expire < 1 || expire > reads {
+		return time.Time{}, nil
+	}
+	count, scope := githubReadsByTask, c.TaskID
+	if c.SessionID != "" {
+		count, scope = githubReadsBySession, c.SessionID
+	}
+	if c.AutomationID != "" {
+		count, scope = githubReadsByAutomation, c.AutomationID
+	}
+	q := strings.Replace(count, "SELECT count(*)", "SELECT occurred_at", 1) + ` ORDER BY occurred_at OFFSET $2 LIMIT 1`
+	var at time.Time
+	if err := tx.QueryRow(ctx, q, scope, expire-1).Scan(&at); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, nil
+		}
+		return time.Time{}, err
+	}
+	return at.Add(time.Hour), nil
 }
 
 func readGates(ctx context.Context, c Caller, g gatedPullRequests) ([]delivery.PRGate, error) {
@@ -327,15 +366,16 @@ func listGates(ctx context.Context, tx pgx.Tx, _ Caller, g gatedPullRequests, ga
 			}
 		}
 		if s, ok := g.stored[prs[i].id]; ok {
-			at := s.At
-			prs[i].ReadyGate = &readyGateOut{Ready: s.Ready, Items: s.Items, JudgedAt: &at, JudgedHead: s.Head}
+			at, ready := s.At, s.Ready
+			prs[i].ReadyGate = &readyGateOut{Ready: &ready, Items: s.Items, JudgedAt: &at, JudgedHead: s.Head}
 			continue
 		}
 		for _, gate := range gates {
 			if gate.ID != prs[i].id {
 				continue
 			}
-			out := &readyGateOut{Ready: gate.Ready, Items: gate.Items}
+			ready := gate.Ready
+			out := &readyGateOut{Ready: &ready, Items: gate.Items}
 			if gate.Err != nil {
 				out.Unread = "GitHub did not answer: " + gate.Err.Error()
 			} else {
