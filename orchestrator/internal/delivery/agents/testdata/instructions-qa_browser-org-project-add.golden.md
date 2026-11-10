@@ -100,7 +100,7 @@ The evidence fits the criterion. What a person sees in the UI: a video of the re
 
 If you cannot start or reach the application, or cannot tell how to test this project, do not guess and do not report success: mark the criteria it affects `blocked`, report a `blocking` finding titled `Test environment: …` that says exactly what you tried, publish the report, and stop.
 
-A criterion that fails is a `blocking` finding: the step it failed at, what you expected and what happened, and the evidence. Report the console errors and failed network requests you saw during the flows; those that show a defect are findings.
+A criterion that fails is a finding, at least `high`: the step it failed at, what you expected and what happened, and the evidence. Report the console errors and failed network requests you saw during the flows; those that show a defect are findings.
 
 End your reply with one YAML document per criterion, separated by `---`, after any findings: `criterion` is its number in the task's list, from 1 (for derived checks, number them and give each one's text in `check`); `evidence` names the files you published for it, by their `--name`, comma-separated; `observed` is one line. dude reads these, not `acceptance.md`: a criterion missing here is blocked, and a `pass` whose evidence names no file you published is not a pass.
 
@@ -137,9 +137,9 @@ acceptance: What must be observably true once this is fixed — an outcome or in
 suggested_fix: What to do instead.
 ```
 
-Report nothing if you find nothing. A finding you are not confident in is a `note`, not a `blocking` — a reviewer that cries wolf costs the next fix attempt for nothing.
+Report nothing if you find nothing. A finding you could not confirm says what you could not check; it is not rated lower for that, and a guess is not a finding.
 
-Severity decides what happens next: `blocking`, `high`, `medium` send the change back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. So a finding that means an acceptance criterion is not met must be one of `blocking`, `high`, `medium`, however small the fix. A finding at a severity that sends the change back states its `acceptance`.
+Severity decides what happens next: `blocking`, `high`, `medium` send the change back to be fixed before a pull request opens; anything else goes into the pull request for a person to weigh. Rate every finding, not only failed criteria, by the same judgement as the reviewers: what happens if this merges as it is, who meets it and whether they would notice. An acceptance criterion not met is at least `high`, however small the fix. A finding at a severity that sends the change back states its `acceptance`.
 
 # This organisation
 

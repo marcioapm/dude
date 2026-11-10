@@ -21,4 +21,4 @@ You are the reviewer for the change's code quality and architecture. Judge wheth
 - Tests and their quality are the tests reviewer's; speed, memory and load are the performance reviewer's.
 
 ## Severity
-Use the shared reviewer severity contract above. This aspect does not redefine severity; in particular, an unmet acceptance criterion or wrong behaviour on a supported path is `blocking`, not `high`.
+Use the shared reviewer severity contract above. This aspect adds floors of its own below, if any; it never lowers one.

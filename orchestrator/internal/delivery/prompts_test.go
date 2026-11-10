@@ -172,6 +172,14 @@ func TestTheConductorIsToldWhenToEditAndWhenToDelegate(t *testing.T) {
 		if strings.Contains(got, "You never edit files") {
 			t.Errorf("the conductor (%s) is still told it never edits", mode)
 		}
+		// Severity is the reviewers' to judge; the conductor triages it and
+		// has no definition of its own to re-rate it by.
+		if strings.Contains(got, "Medium or above is") {
+			t.Errorf("the conductor (%s) is given its own definition of severity", mode)
+		}
+		if strings.Count(got, "Triage it; do not re-rate it.") != 1 {
+			t.Errorf("the conductor (%s) is not told to triage severity rather than re-rate it", mode)
+		}
 	}
 	msg := ConductorPrompt("briefing", in)
 	for _, want := range []string{"`app` at `/workspace/repos/app` (you may edit it, small things only)", "`docs` at `/workspace/repos/docs` (read only)",
@@ -261,15 +269,19 @@ func TestInstructionsContractMatrix(t *testing.T) {
 			"Keep what you verified apart from what you infer, and end with a recommendation.",
 			nil}, // This role has a purpose and stance, but no post-stance contract.
 		{"reviewer", "a weak or wrong finding costs a whole fix round.",
-			"No finding is better than a weak one: do not pad.",
-			[]string{"Every finding at `medium` or above carries its evidence", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:"}},
+			"No finding is better than a weak one: do not pad, and do not rate a real one down.",
+			[]string{"Every finding at `medium` or above carries its evidence", "Findings, verdicts on earlier findings, questions, and your summary", "review_summary:",
+				"Your judgement has floors, never ceilings", "An acceptance criterion not met: at least `high`.",
+				"A test that still passes with the behaviour it claims to cover broken: at least `medium`.",
+				"Breaking a rule the project wrote down for its contributors (its contributing guide, agent instructions, style or testing notes): at least `medium`."}},
 		{"fixer", "Your fix is reviewed again, and on an open pull request it goes to the pull request when you publish, where its CI and reviewers see it, and is reviewed after: run the affected tests before you finish.",
 			"Fix what was raised, completely, and nothing else",
 			[]string{"For each problem, reproduce it first where it can be reproduced", "```yaml\nchecks:\n", "Only committed changes are kept."}},
 		{"simplifier", "Your diff is reviewed on its own, as a change that must not alter behaviour.",
-			"Prefer a few clear simplifications to many cosmetic ones.",
+			"Read the whole change: every file the branch adds or alters against the branch it will merge into (the default branch unless a Base section names another), with `git diff <base>...HEAD`",
 			[]string{"Only committed changes are kept.", "```yaml\nchecks:\n", "Never list a check as `pass` that you did not see pass.",
-				"If nothing is worth simplifying, change nothing, run no tests", "run them before your first edit"}},
+				"If nothing is worth simplifying, change nothing and run no tests", "run them before your first edit",
+				"naming the constructs you weighed and why each stays"}},
 		{"qa_browser", "A person merging the change relies on your report more than on anything else.",
 			"A criterion passes only on evidence you saw: a screenshot, an output, a record.",
 			[]string{"You are independent verification: show, as a user would see it, whether this change does what the task says.", "criterion: 1", "The acceptance report and findings, in the format below",
@@ -284,6 +296,9 @@ func TestInstructionsContractMatrix(t *testing.T) {
 			"Be a partner, not an echo: bring a view.",
 			[]string{"Proposing again replaces the card.", "Write tasks the delivery can succeed with", "Say in your reply what you published"}},
 	}
+	// More of a role's built-in stance: present only where it is, so a saved
+	// prompt replaces them with it.
+	stanceMarkers := map[string][]string{"simplifier": {"ask whether it carries a requirement of its own"}}
 	modes := []struct {
 		name, projectMode     string
 		org, project, builtin bool
@@ -323,6 +338,9 @@ func TestInstructionsContractMatrix(t *testing.T) {
 						presence(marker, true)
 					}
 					presence(role.stance, mode.builtin)
+					for _, marker := range stanceMarkers[role.role] {
+						presence(marker, mode.builtin)
+					}
 					presence("Organisation stance for "+role.role+": verify CSV export.", mode.org && mode.projectMode != "replace")
 					presence("Project stance for "+role.role+": deliver CSV export.", mode.project)
 					presence("Your tools act on the work you are part of. Use them; do not work around them.", tools)
@@ -398,9 +416,10 @@ func TestAReviewOfARangeIsToldItsRangeWhateverItsInstructions(t *testing.T) {
 func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 	in := PromptInput{Title: "Export invoices", AcceptanceCriteria: []string{"A CSV downloads", "Totals match"},
 		Repositories: twoRepos(), BlockingSeverities: []string{"blocking", "high"}, Tools: true, CLI: true}
+	note := severityNote("qa_browser", in.BlockingSeverities)
 	for kind, got := range underEveryMode("qa_browser", "", in.InstructionsInput()) {
 		for _, want := range []string{testerContract, testerTools,
-			render(mustTemplate("contracts/finding-format"), InstructionsInput{}.data("qa_browser")), severityNote("qa_browser", in.BlockingSeverities)} {
+			render(mustTemplate("contracts/finding-format"), InstructionsInput{}.data("qa_browser")), note} {
 			if strings.Count(got, want) != 1 {
 				t.Errorf("%s: the tester's instructions should say %q once:\n%s", kind, want, got)
 			}
@@ -423,6 +442,13 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 		"never `pass`", "commit nothing", "Test environment:", "head commit", "video was written and is not empty"} {
 		if !strings.Contains(testerContract, want) {
 			t.Errorf("the tester's contract lacks %q", want)
+		}
+	}
+	// How the tester rates: every finding by the reviewers' judgement, with
+	// a failed criterion's floor.
+	for _, want := range []string{"Rate every finding, not only failed criteria", "An acceptance criterion not met is at least `high`"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the tester's severity note lacks %q", want)
 		}
 	}
 	// What a person needs to follow a tester's video, and the tools it must not assume.
@@ -465,7 +491,7 @@ func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"Severity is what happens if this ships", "carries its evidence",
+	for _, want := range []string{"Severity is your judgement of what happens if this merges as it is", "carries its evidence",
 		"minimal local change", "out of scope unless the change makes it reachable"} {
 		if !strings.Contains(reviewContract, want) {
 			t.Errorf("the reviewer's contract lacks %q", want)

@@ -103,7 +103,7 @@ var fixBarSeverities = []string{"blocking", "high", "medium"}
 // atFixBar is the loop's findings as the fix bar (IsBlocking)
 // weighs them: what blocks is every finding at medium or above, and every
 // low one marked trivial. Until the conductor runs the loop itself, the
-// policy's Exit routes it, and reviewers rate a wrong outcome medium
+// policy's Exit routes it, and a reviewer may judge a wrong outcome medium
 // (contracts/review.md): without the bar such a finding would ship.
 func atFixBar(findings []FindingState) []FindingState {
 	out := slices.Clone(findings)
