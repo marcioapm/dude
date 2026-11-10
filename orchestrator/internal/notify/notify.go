@@ -35,10 +35,20 @@ import (
 // same.
 const asks = "('question.asked', 'repository.requested', 'task.ready_to_merge', 'run.stalled', 'automation.failed')"
 
-// Keep the indexed asks predicate intact. Conductor stops are news, read
-// separately rather than broadening that partial index's predicate.
+// Keep the indexed asks predicate intact. A conductor's stops, and its own
+// retries of pr_loop_exhausted (another set of pull request fix rounds,
+// with no cap but its reason), are news for the owner, read separately
+// rather than broadening that partial index's predicate. A person's
+// decision carries no "by", so nobody is told of their own act. Each is an
+// arm of its own whose predicate is its partial index's: the stops'
+// events_conductor_stops_idx (migration 247), the retries'
+// events_conductor_pr_retries_idx (260). One OR of both would imply
+// neither, and filter every decision above the watermark. Each is one
+// string literal: the control plane's migration test reads them from this
+// source.
 const conductorStops = "(event_type = 'task.decided' AND payload->>'by' = 'conductor' AND payload->>'action' = 'stop')"
-const notifiedEvents = "(SELECT * FROM events WHERE event_type IN " + asks + " UNION ALL SELECT * FROM events WHERE " + conductorStops + ")"
+const conductorPRRetries = "(event_type = 'task.decided' AND payload->>'by' = 'conductor' AND payload->>'action' = 'retry' AND payload->>'reason' = 'pr_loop_exhausted')"
+const notifiedEvents = "(SELECT * FROM events WHERE event_type IN " + asks + " UNION ALL SELECT * FROM events WHERE " + conductorStops + " UNION ALL SELECT * FROM events WHERE " + conductorPRRetries + ")"
 
 // Notifier sends Web Push for new asks.
 type Notifier struct {
@@ -414,14 +424,23 @@ func messageFor(a ask) (Message, bool) {
 			msg.Title, msg.Body = who+" asks", str("prompt")
 		}
 	case "task.decided":
-		// Delegated stops are news for the owner, never a question. Retries
-		// and decisions made by a person do not need another notification.
-		if str("by") != "conductor" || str("action") != "stop" {
+		// A conductor's stop, and its retry of pr_loop_exhausted, are news
+		// for the owner, never a question. Its other retries, and decisions
+		// made by a person, do not need another notification.
+		if str("by") != "conductor" {
 			return msg, false
 		}
 		msg.Tag, msg.URL = "task:"+a.TaskID, link(a, "task/"+a.TaskID)
-		msg.Title = strings.TrimSpace(a.Task + " was stopped by the conductor")
-		msg.Body = str("note")
+		switch {
+		case str("action") == "stop":
+			msg.Title = strings.TrimSpace(a.Task + " was stopped by the conductor")
+			msg.Body = str("note")
+		case str("action") == "retry" && str("reason") == "pr_loop_exhausted":
+			msg.Title = strings.TrimSpace(a.Task + " was retried by the conductor")
+			msg.Body = "Your conductor retried the pull request fixes: " + str("note")
+		default:
+			return msg, false
+		}
 	case delivery.EvReadyToMerge:
 		msg.Title = strings.TrimSpace(a.Task + " is ready to merge")
 		msg.Body = "Approved, with its checks passing. Merging is yours."

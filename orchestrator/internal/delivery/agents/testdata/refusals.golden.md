@@ -732,11 +732,11 @@ no open finding or feedback item to fix
 
 ## refusals/delivery/conduct/pull-request-fixes-are-at-their
 
-pull request fixes are at their bound: %d of %d this review round. Ask the person how to go on (ask_person)
+pull request fixes are at their bound: %d of %d this review round. At a decision, `decide next` escalates pr_loop_exhausted to you; or ask the person how to go on (ask_person)
 
 ## refusals/delivery/conduct/pull-request-in-has-had-fix
 
-the pull request in %s has had %d fix rounds, the organization's bound: ask the person how to go on (ask_person)
+the pull request in %s has had %d fix rounds, the organization's bound: at a decision, `decide next` escalates pr_loop_exhausted to you; or ask the person how to go on (ask_person)
 
 ## refusals/delivery/conduct/not-decision-at-one-or-start
 
@@ -1629,4 +1629,12 @@ a reason is at most %d characters, and %s's is %d: say what decides the verdict,
 ## refusals/delivery/recover/secrets-expired
 
 %s was given secrets, and dude no longer holds every value it was given (a Run's copy of them is deleted once nothing needs it, at the latest 30 days after it ended): its work cannot be checked for a value rotated since, so it is not recovered. Tell the person: its commits may hold a secret value dude can no longer check for; anything taken from lux's checkpoint must be checked for secrets by hand before it is pushed anywhere
+
+## refusals/delivery/escalations/pr-fix-retry-reason-unchanged
+
+this delivery's pull request fix rounds were retried already for that reason (%q): name what differs from that retry, or stop, or ask the person with your recommendation (ask_person)
+
+## refusals/delivery/escalations/say-why-another-pr-fix-round
+
+retry on pr_loop_exhausted needs your reason in the note: say why another set of pull request fix rounds will converge, or what changed since they ran out
 

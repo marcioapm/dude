@@ -191,6 +191,15 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 		       ($5, $2, 'task.decided', $3, $4, 'agent', 'conductor', 'orchestrator', '{"by":"conductor","action":"retry"}'),
 		       ($6, $2, 'escalation.raised', $3, $4, 'system', 'workflow', 'orchestrator', '{"holder":"conductor"}')`,
 		"evt_stop_"+org, org, "prj_"+org, "wi_"+org, "evt_retry_"+org, "evt_raised_"+org)
+	// The conductor's own retry of an exhausted pull request fix loop is
+	// news for the owner, with its reason; the owner's own retry of one is
+	// not told back to them.
+	exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'task.decided', $3, $4, 'agent', 'conductor', 'orchestrator',
+			'{"by":"conductor","reason":"pr_loop_exhausted","action":"retry","note":"Only the changelog is left."}'),
+		       ($5, $2, 'task.decided', $3, $4, 'human', $6, 'api',
+			'{"reason":"pr_loop_exhausted","action":"retry","note":"Once more."}')`,
+		"evt_prretry_"+org, org, "prj_"+org, "wi_"+org, "evt_myretry_"+org, "key_me_"+org)
 
 	// Other tests' asks may be swept too; ours must be among them.
 	for range 5 {
@@ -200,15 +209,17 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	}
 	mine.mu.Lock()
 	defer mine.mu.Unlock()
-	if len(mine.got) != 4 {
-		t.Fatalf("the owner's browser got %d notifications, want 4: %+v", len(mine.got), mine.got)
+	if len(mine.got) != 5 {
+		t.Fatalf("the owner's browser got %d notifications, want 5: %+v", len(mine.got), mine.got)
 	}
 	// Sent concurrently, so in any order.
-	var m, stalled, stopped notify.Message
+	var m, stalled, stopped, retried notify.Message
 	for _, g := range mine.got {
 		switch g.Title {
 		case "TEXT-19 was stopped by the conductor":
 			stopped = g
+		case "TEXT-19 was retried by the conductor":
+			retried = g
 		case "TEXT-19 · Implementer asks":
 			m = g
 		case "TEXT-19 · Implementer has made no progress":
@@ -217,6 +228,9 @@ func TestAnAskReachesItsOwnersBrowsersOnce(t *testing.T) {
 	}
 	if stopped.Body != "The approach is not converging." || stopped.URL != "#/o/"+org+"/task/wi_"+org {
 		t.Errorf("the conductor stop's notification = %+v", stopped)
+	}
+	if retried.Body != "Your conductor retried the pull request fixes: Only the changelog is left." || retried.URL != "#/o/"+org+"/task/wi_"+org {
+		t.Errorf("the conductor retry's notification = %+v", retried)
 	}
 	// Links name the organisation (its slug is its id here, dbtest.Org).
 	if stalled.Body != "Your implement Run has made no progress for 2.0 h." || stalled.URL != "#/o/"+org+"/task/wi_"+org {

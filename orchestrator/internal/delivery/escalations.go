@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 
@@ -650,6 +651,11 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 		return nil, refusef(rNoEscalationWaitsOnDecisionNow, escalationBanner)
 	}
 	if !PersonOnly(d.State.Escalation.Reason, action) {
+		if d.State.Escalation.Reason == "pr_loop_exhausted" && action == "retry" {
+			if err := prLoopRetryRefusal(ctx, tx, d, note); err != nil {
+				return nil, err
+			}
+		}
 		err := DecideEscalationTx(ctx, tx, ref.Org, ref.TaskID, EscalationDecision{
 			Action: action, Note: note, ActorType: ledger.ActorAgent, ActorID: ref.RunID, Conductor: ref.RunID,
 		})
@@ -733,6 +739,53 @@ func ConductDecideEscalation(ctx context.Context, tx pgx.Tx, ref RunRef, action,
 		return nil, err
 	}
 	return map[string]any{"decided": action, "questionId": qID, "next": EscalationDecidedNext(action == "amend")}, nil
+}
+
+// prLoopRetryRefusal refuses the conductor's own retry on pr_loop_exhausted
+// — another set of pull request fix rounds — without its reason (note), or
+// with the reason of a retry this delivery took already (the conductor's or
+// a person's, on its task.decided), read as words alone: a loop that ran
+// out again is retried only for something that differs, else the conductor
+// stops or asks the person.
+func prLoopRetryRefusal(ctx context.Context, tx pgx.Tx, d *Delivery, note string) error {
+	said := retryReasonWords(note)
+	if said == "" {
+		return refuseText(rSayWhyAnotherPRFixRound)
+	}
+	rows, err := tx.Query(ctx, prLoopRetriesSQL, d.State.TaskID, d.WorkflowID)
+	if err != nil {
+		return err
+	}
+	earlier, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	for _, e := range earlier {
+		if retryReasonWords(e) == said {
+			return refusef(rPRFixRetryReasonUnchanged, clip(e, 200))
+		}
+	}
+	return nil
+}
+
+// prLoopRetriesSQL is the reasons of this delivery's pr_loop_exhausted
+// retries, oldest first, on events_task_decisions_idx (migration 238:
+// task_id, cursor, over the decision event types alone). The event type is
+// a literal, as in defaultsInARowSQL: bound as a parameter, a generic plan
+// (which production's pool settles on) cannot prove the index's predicate
+// and reads every event of the task.
+const prLoopRetriesSQL = `SELECT COALESCE(payload->>'note', '') FROM events
+	WHERE task_id = $1 AND event_type = '` + EvTaskDecided + `'
+	  AND payload->>'reason' = 'pr_loop_exhausted' AND payload->>'action' = 'retry'
+	  AND occurred_at >= (SELECT created_at FROM workflow_runs WHERE id = $2)
+	ORDER BY cursor`
+
+// retryReasonWords is a retry's reason as its words alone: lower case,
+// punctuation and spacing aside.
+func retryReasonWords(note string) string {
+	return strings.Join(strings.FieldsFunc(strings.ToLower(note), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}), " ")
 }
 
 var escalationDecidedTmpl = mustTemplate("results/escalation-decided")

@@ -529,14 +529,10 @@ func ConductDecideAsk(ctx context.Context, tx pgx.Tx, ref RunRef, action, note s
 				return nil, err
 			}
 		}
-		// A quiet conductor's next is Deliver's defaults: at the bound,
-		// prFix escalates pr_loop_exhausted as Deliver's policy does
-		// (chargePRFix), so it is not refused for the conductor to ask.
-		if p.Policy == "prFix" && !st.quiet() {
-			if err := prFixBound(ctx, tx, st); err != nil {
-				return nil, err
-			}
-		}
+		// The conductor's next is Deliver's defaults: at the bound, prFix
+		// escalates pr_loop_exhausted as Deliver's policy does (chargePRFix),
+		// and the conductor holds it: it may retry with its reason, stop, or
+		// ask the person.
 	case "open_pull_request":
 		if err := untestedRefusal(ctx, tx, st); err != nil {
 			return nil, err

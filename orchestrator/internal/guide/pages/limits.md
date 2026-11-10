@@ -39,7 +39,7 @@ A fix for pull request feedback needs room in **both** of two limits:
 - **Pull request fix rounds** — fixes in this round of review. It counts from 0 again when a person submits a new review.
 - **Fix rounds per pull request** — fixes the pull request has had in all, counted when a fix lands with commits. 0 means no limit here.
 
-Whichever runs out first stops the next fix, and the owner is asked: **PR fix rounds used up**.
+Whichever runs out first stops the next fix: **PR fix rounds used up**. Under the conductor, it decides: another set of fix rounds, saying why they will converge (never with the same words as an earlier retry's reason), stop, or ask the owner with its recommendation.
 
 ## A delivery keeps the limits it started with
 
