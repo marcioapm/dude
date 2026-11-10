@@ -182,6 +182,19 @@ func TestASecondPRLoopRetryWithAnUnchangedReasonIsRefused(t *testing.T) {
 			t.Fatalf("a refused retry recorded %v", p)
 		}
 	})
+	// An earlier retry for another escalation reason is not a
+	// pr_loop_exhausted retry: its words do not refuse this one.
+	t.Run("an earlier retry for another reason", func(t *testing.T) {
+		w := prLoopExhausted(t, HolderConductor)
+		w.exec(t, `INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload)
+			VALUES ('ev_stuck', $1, 'task.decided', 'wi_g', 'human', 'per_ana', 'test',
+			jsonb_build_object('reason','stuck','action','retry','note',$2::text))`, first)
+		if err := w.conductorDecides(t, "retry", first); err != nil {
+			t.Fatalf("a retry with the words of a stuck retry: %v, want taken", err)
+		}
+		next, st := w.carriedOut(t)
+		wantPRFixesReset(t, next, st)
+	})
 }
 
 // A person's retry of pr_loop_exhausted is as it was: no reason needed, as
