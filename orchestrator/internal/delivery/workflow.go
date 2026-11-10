@@ -3553,25 +3553,32 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 }
 
 // acceptHeads records the heads a person accepted
-// the review round at, for each repository with an open pull request:
+// the review round at, for each repository with a pull request:
 // what pullRequestOpenTx then takes as reviewed (AcceptedHeads).
 func (w *steps) acceptHeads(ctx context.Context, sc workflow.StepContext, st *State) error {
 	if len(st.PullRequestIDs) == 0 {
 		return nil
 	}
-	open, err := w.openPRRepos(ctx, sc, st)
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
 	if err != nil {
 		return err
 	}
-	for _, repo := range open {
-		if h := st.Heads[repo]; h != "" {
+	st.acceptHeadsOf(states)
+	return nil
+}
+
+// acceptHeadsOf records the heads of the repositories with a pull request
+// (open, merged or closed) as accepted. A merged or closed one's head is
+// one dude changes no more: left out, it kept simplifyDue true for good.
+func (st *State) acceptHeadsOf(states []PullRequestState) {
+	for _, p := range states {
+		if h := st.Heads[p.Repo]; h != "" {
 			if st.AcceptedHeads == nil {
 				st.AcceptedHeads = map[string]string{}
 			}
-			st.AcceptedHeads[repo] = h
+			st.AcceptedHeads[p.Repo] = h
 		}
 	}
-	return nil
 }
 
 // resumeEscalationAt restores the interrupted wait. Old rows have no saved

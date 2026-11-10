@@ -40,3 +40,21 @@ func TestAfterReviewSimplifiesAgainOnceAFixMovedTheWork(t *testing.T) {
 		}
 	}
 }
+
+// A person accepting a round records the head of every repository with a
+// pull request, merged or closed ones too: a merged repository's head left
+// out kept simplifyDue true for good.
+func TestAcceptingHeadsCoversMergedAndClosedPullRequests(t *testing.T) {
+	on := DefaultPolicy()
+	on.Simplify = true
+	st := State{Policy: on, Heads: map[string]string{"api": "a1", "web": "w1", "docs": "d1"}}
+	pr := func(repo, state string) PullRequestState {
+		p := PullRequestState{Repo: repo}
+		p.State = state
+		return p
+	}
+	st.acceptHeadsOf([]PullRequestState{pr("api", "open"), pr("web", "merged"), pr("docs", "closed")})
+	if st.simplifyDue() {
+		t.Fatalf("simplifier due after a person accepted every head: accepted %v", st.AcceptedHeads)
+	}
+}
