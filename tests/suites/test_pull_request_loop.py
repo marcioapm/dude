@@ -9,12 +9,15 @@ signed webhook.
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
+import requests
 
+from env import TestEnvironment
 from fake_github import FakeGitHub
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, finish_simplifier_review, wait_until
 
 
 def _pull_requests(client: ApiClient, task_id: str) -> list[dict]:
@@ -73,7 +76,7 @@ def test_delivery_opens_a_pull_request(client: ApiClient, forge_project: dict, f
 
 
 def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
-    client: ApiClient, forge_project: dict, fake_github: FakeGitHub
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub, env: TestEnvironment, org: dict
 ):
     """A person's comment brings the factory back; merging ends the task.
 
@@ -140,14 +143,34 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
     assert not [r for r in client.task_runs(task["id"]) if r["phase"] == "simplify"
                 and r["createdAt"] > fix_runs()[-1]["createdAt"]]
 
-    # Its thread resolved and approved, and the fixture has no CI: ready to
-    # merge, and it is a person's merge — the factory never does it.
+    # Its thread resolved and approved, and the fixture has no CI; but the
+    # fix is the last change and no simplifier has run since: the ready
+    # gate holds it in review, and says so.
     fake_github.resolve_thread(pr["number"], line)
     fake_github.approve(pr["number"])
+    wait_until(lambda: _pull_requests(client, task["id"])[0]["review"] == "approved", timeout=30,
+               message="the approval never reached dude")
+    time.sleep(3)
+    assert _task(client, task["id"])["status"] == "review"
+    # Read straight from the orchestrator: the gate names the simplifier,
+    # and nothing else.
+    gate = requests.get(f"{env.orchestrator_url}/internal/pull-requests/{pr['id']}/ready-gate",
+                        headers={"Authorization": f"Bearer {env.orchestrator_token}", "X-Dude-Organization": org["id"]},
+                        timeout=10)
+    assert gate.status_code == 200, gate.text
+    failing = [i for i in gate.json()["items"] if not i["ok"]]
+    assert [i["key"] for i in failing] == ["simplified_after_last_change"], failing
+    # The conductor works through what the gate names: the simplifier after
+    # the last change, its own commit reviewed; then only the merge is
+    # left, and it is a person's merge — the factory never does it.
+    asked = client.post(f"/v1/tasks/{task['id']}/chat",
+                        {"text": "Simplify it before I merge.\ntool: start_phase " + json.dumps({"phase": "simplify"})})
+    assert asked.status_code in (200, 201), asked.text
+    finish_simplifier_review(client, env.owner_dsn, task["id"])
     wait_until(
         lambda: _task(client, task["id"])["status"] == "ready_to_merge",
-        timeout=30,
-        message="an approved pull request did not make the task ready to merge",
+        timeout=60,
+        message="the pull request did not become ready to merge once its gate was worked through",
     )
     assert _pull_requests(client, task["id"])[0]["state"] == "open"
 

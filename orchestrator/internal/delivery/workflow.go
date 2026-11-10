@@ -1297,6 +1297,9 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 			if st.RetestDue {
 				return workflow.Result{Next: "test", State: st}, nil
 			}
+			// A simplification started at the wait is reviewed: its range
+			// is not a later round's.
+			st.SimplifyBase = nil
 			return workflow.Result{Next: "openPullRequest", State: st}, nil
 		}
 		return workflow.Result{Next: st.afterReview(), State: st}, nil
@@ -1543,10 +1546,16 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 	// code was simple enough already. Carry on with what we had — unless
 	// the conductor queued a review behind it: then it is told at once.
 	if !out.Succeeded || len(out.Heads) == 0 {
-		if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseSimplify, runID, out, "test"); ok || err != nil {
+		// Started while the pull requests waited: back to them, its CI the
+		// test, as after a fix of the pull request.
+		next := "test"
+		if st.ActingOnPR {
+			next = "openPullRequest"
+		}
+		if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseSimplify, runID, out, next); ok || err != nil {
 			return res, err
 		}
-		return workflow.Result{Next: "test", State: st}, nil
+		return workflow.Result{Next: next, State: st}, nil
 	}
 	// What it changed was never reviewed: a review round over its diff
 	// alone, from where each repository it changed stood before it, then
@@ -1909,7 +1918,31 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if len(st.PendingConflicts) > 0 {
 		return workflow.Result{Next: "awaitPullRequest", State: st}, nil
 	}
+	if acting {
+		// Back from work started while the pull requests waited (a review,
+		// the simplifier): whether that was all the gate asked for is
+		// weighed now, not at the next sync. GitHub not answering is no
+		// reason to fail the step: the next sync signals readiness again.
+		if err := w.weighReadinessNow(ctx, sc, st); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	return waitForPR(st), nil
+}
+
+// weighReadinessNow is weighReadiness of the delivery's pull requests as
+// last synced, outside awaitPullRequest: a gate GitHub did not answer
+// leaves the status as it is.
+func (w *steps) weighReadinessNow(ctx context.Context, sc workflow.StepContext, st *State) error {
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return err
+	}
+	err = w.weighReadiness(ctx, sc, st, states)
+	if errors.As(err, new(workflow.Wait)) {
+		return nil
+	}
+	return err
 }
 
 // awaitOwnerAuthorization parks a publication until its frozen owner
