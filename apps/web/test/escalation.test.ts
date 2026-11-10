@@ -38,6 +38,19 @@ describe("escalationWords", () => {
     });
   });
 
+  test("a failed pull request fix names the fixer, or the simplifier after it", () => {
+    expect(escalationWords({ reason: "pr_fix_failed", detail: { runId: "run_f", error: "boom" }, at })).toEqual({
+      short: "Fixer failed",
+      sentence: "The fixer answering the pull request's feedback failed: boom",
+      runId: "run_f",
+    });
+    expect(escalationWords({ reason: "pr_fix_failed", detail: { runId: "run_s", error: "boom", phase: "simplify" }, at })).toEqual({
+      short: "Simplifier failed",
+      sentence: "The simplifier run after the pull request's fix failed: boom",
+      runId: "run_s",
+    });
+  });
+
   test("a failed reviewer names its category, and says the round is not complete", () => {
     expect(escalationWords({ reason: "review_failed", detail: { runId: "run_r", category: "frontend", error: "timeout" }, at })).toEqual({
       short: "A frontend reviewer failed",
