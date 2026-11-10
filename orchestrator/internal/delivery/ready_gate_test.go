@@ -298,6 +298,21 @@ func TestTheReadyGateSimplifiedAfterLastChangeItem(t *testing.T) {
 		f.synced()
 		holds(t, f.gate(), ReadySimplified, true, "the simplifier made "+made[:7]+", the last change, and it was reviewed")
 	})
+	t.Run("a person accepted the round at the head", func(t *testing.T) {
+		// As item 3 (O13): an accepted head needs no simplifier, which
+		// would commit on top of what the person accepted.
+		f := newGateFixture(t)
+		head := f.implemented(map[string]string{"app/greet.go": "package app\n"})
+		f.reviewed(head)
+		f.synced()
+		holds(t, f.gate(), ReadySimplified, false, "start the simplifier")
+		f.st.AcceptedHeads = map[string]string{"repo": head}
+		f.saveState()
+		holds(t, f.gate(), ReadySimplified, true, "a person accepted the review round at "+head[:7])
+		c := f.gh.CommitFiles("feature", "Tweak", map[string]string{"app/greet.go": "package app // tweak\n"})
+		f.synced()
+		holds(t, f.gate(), ReadySimplified, false, "has not run since "+c[:7])
+	})
 	t.Run("off in the policy", func(t *testing.T) {
 		f := newGateFixture(t)
 		f.st.Policy.Simplify = false

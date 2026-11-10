@@ -763,6 +763,11 @@ func gateSimplified(ctx context.Context, gh *forge.GitHub, p GateFacts, reviewed
 	if p.Head == "" {
 		return false, "no head recorded", nil
 	}
+	if p.AcceptedHead != "" && p.AcceptedHead == p.Head {
+		// As for item 3: a person's accept at the head is its last word;
+		// dude does not change code a person accepted.
+		return true, fmt.Sprintf("a person accepted the review round at %s", short(p.Head)), nil
+	}
 	last := p.Head
 	chain := map[string]bool{last: true}
 	for range maxGateMerges {

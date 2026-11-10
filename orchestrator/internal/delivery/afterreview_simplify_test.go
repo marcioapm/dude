@@ -5,8 +5,8 @@ import "testing"
 // The simplifier runs on the final reviewed code: a reviewed fix that moved
 // the work past where the simplifier last left it goes through it again —
 // a pull request's fix before its round is done, a fix of the simplifier's
-// own diff before the test — and not once it ran there, nor with the
-// policy's simplifier off.
+// own diff before the test — and not once it ran there, nor at a head a
+// person accepted, nor with the policy's simplifier off.
 func TestAfterReviewSimplifiesAgainOnceAFixMovedTheWork(t *testing.T) {
 	on := DefaultPolicy()
 	on.Simplify = true
@@ -29,6 +29,11 @@ func TestAfterReviewSimplifiesAgainOnceAFixMovedTheWork(t *testing.T) {
 		{"the simplifier's diff reviewed as it was", State{Policy: on, Heads: heads, SimplifyBase: map[string]string{"api": "s0"},
 			SimplifiedHeads: map[string]string{"api": "fixed"}}, "test"},
 		{"before any simplifier", State{Policy: on, Heads: heads}, "simplify"},
+		{"a pull request fix a person accepted", State{Policy: on, Heads: heads, FixRange: map[string]string{"api": "a"},
+			AcceptedHeads: heads}, "prFixDone"},
+		{"before any simplifier, a person accepted the head", State{Policy: on, Heads: heads, AcceptedHeads: heads}, "test"},
+		{"a person accepted an earlier head", State{Policy: on, Heads: heads, FixRange: map[string]string{"api": "a"},
+			AcceptedHeads: map[string]string{"api": "a"}}, "simplify"},
 	} {
 		if got := c.st.afterReview(); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)

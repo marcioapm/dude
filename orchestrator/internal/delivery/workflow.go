@@ -1116,7 +1116,7 @@ func (st *State) afterReview() string {
 		// tester after it; the pull request's CI is its test.
 		return "prFixDone"
 	}
-	if st.Policy.Simplify && len(st.SimplifyBase) == 0 {
+	if st.Policy.Simplify && len(st.SimplifyBase) == 0 && !st.acceptedAtHeads() {
 		return "simplify"
 	}
 	return "test"
@@ -1124,17 +1124,34 @@ func (st *State) afterReview() string {
 
 // simplifyDue says the policy runs the simplifier and the work moved past
 // where it last left it (SimplifiedHeads): a fix after it, of its diff or
-// of the pull request, or a pull request it never ran on.
+// of the pull request, or a pull request it never ran on. A head a person
+// accepted (AcceptedHeads) counts as simplified, as it counts as reviewed
+// (ReadyReviewed): dude does not change code after a person accepted it.
 func (st *State) simplifyDue() bool {
 	if !st.Policy.Simplify {
 		return false
 	}
 	for repo, head := range st.Heads {
-		if head != "" && st.SimplifiedHeads[repo] != head {
+		if head != "" && st.SimplifiedHeads[repo] != head && st.AcceptedHeads[repo] != head {
 			return true
 		}
 	}
 	return false
+}
+
+// acceptedAtHeads says a person accepted every repository's current head.
+func (st *State) acceptedAtHeads() bool {
+	n := 0
+	for repo, head := range st.Heads {
+		if head == "" {
+			continue
+		}
+		if st.AcceptedHeads[repo] != head {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 // judgedBy assigns each category's attempted findings to a reviewer of the
