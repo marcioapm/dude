@@ -3015,9 +3015,11 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	for _, g := range gates {
 		if g.Err != nil {
 			// GitHub did not answer: not a judgement either way. The
-			// status stays as it was, and the gate is read again soon,
-			// the step's attempts not spent on GitHub's outage.
-			return workflow.Wait{After: readyGateRetry, Why: "the ready gate could not read GitHub: " + g.Err.Error()}
+			// status stays as it was, and the gate is read again soon —
+			// after GitHub's Retry-After when it gave one — the step's
+			// attempts not spent on GitHub's outage.
+			return workflow.Wait{After: max(forge.RetryAfter(g.Err), readyGateRetry),
+				Why: "the ready gate could not read GitHub: " + g.Err.Error()}
 		}
 		ready = ready && g.Ready
 		// Unknown mergeability with every other item holding is no
