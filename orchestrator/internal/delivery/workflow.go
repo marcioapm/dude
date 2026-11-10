@@ -173,6 +173,10 @@ type State struct {
 	// converging): an open pull request showing one counts as reviewed
 	// (unreviewedPRHeadTx).
 	AcceptedHeads map[string]string `json:"acceptedHeads,omitempty"`
+	// When the ready gate is read again by itself: a pull request held
+	// only by checks pending within the CI grace, whose end no sync sees
+	// (weighReadiness). awaitPullRequest's timer (waitForPR) wakes then.
+	ReweighAt *time.Time `json:"reweighAt,omitempty"`
 	// A direct pull request fix (or integration) held while the narrow
 	// review of dude's unreviewed push it would start from runs
 	// (reviewFirst): once that loop is clear, prFix starts it.
@@ -2068,6 +2072,11 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			}
 		}
 	}
+	if st.ReweighAt != nil && (len(sc.Signals) == 0 || !time.Now().Before(*st.ReweighAt)) {
+		// The CI grace the gate waited out is over: the timer woke the
+		// step (no signal), or a signal did after it ran out.
+		readiness = true
+	}
 	if stop == nil && len(st.PendingConflicts) > 0 {
 		s := st.PendingConflicts[0]
 		st.PendingConflicts = st.PendingConflicts[1:]
@@ -2155,7 +2164,8 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			if err != nil {
 				return workflow.Result{}, err
 			}
-			return waitAgain, w.weighReadiness(ctx, sc, st, states)
+			err = w.weighReadiness(ctx, sc, st, states)
+			return st.reweighed(waitAgain), err
 		}
 		return waitAgain, nil
 	}
@@ -3024,7 +3034,8 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	case !grown && c.open > 0:
 		// The rest are still open: what is merged is taken, so whether the
 		// task is ready depends on those.
-		return waitAgain, false, w.weighReadiness(ctx, sc, st, states)
+		err := w.weighReadiness(ctx, sc, st, states)
+		return st.reweighed(waitAgain), false, err
 	case !grown && c.merged > 0:
 		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
 	case c.open == 0 && c.merged == 0:
@@ -3044,6 +3055,10 @@ const readyGateRetry = 30 * time.Second
 // mergeableRetry is how soon a ready gate is read again while GitHub works
 // out whether the pull request merges: seconds, as a rule.
 const mergeableRetry = 10 * time.Second
+
+// graceMargin is how long after the CI grace ends the gate is read again:
+// past it, not on its edge.
+const graceMargin = 5 * time.Second
 
 // weighReadiness moves the task to ready to merge when the ready gate
 // (ReadyGate) passes for every pull request still open, and back to
@@ -3074,6 +3089,7 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	}
 	ready := len(gates) > 0
 	unknown := false
+	var grace time.Duration // the longest grace left of a gate held by it alone
 	for _, g := range gates {
 		if g.Err != nil {
 			// GitHub did not answer: not a judgement either way. The
@@ -3091,6 +3107,14 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 		if g.MergeableUnknown && len(g.Failing()) == 1 {
 			unknown = true
 		}
+		// Checks pending only for the CI grace, everything else holding:
+		// the grace ending is no move the syncer sees (a filtered
+		// workflow that never reports, Actions reporting green after an
+		// external status before any sync saw it run), so no sync would
+		// weigh readiness again.
+		if f := g.Failing(); g.GraceLeft > 0 && len(f) == 1 && f[0].Key == ReadyChecks {
+			grace = max(grace, g.GraceLeft)
+		}
 	}
 	// Kept for the conductor's pull_requests, which serves it while the
 	// head it was judged at is the one recorded.
@@ -3099,6 +3123,13 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	}
 	if unknown {
 		return workflow.Wait{After: mergeableRetry, Why: "GitHub has not worked out whether the pull request merges yet"}
+	}
+	// Read again once the grace is over (waitForPR's timer), not held to
+	// it as a Wait would: a signal meanwhile is acted on at once.
+	st.ReweighAt = nil
+	if grace > 0 {
+		at := time.Now().Add(grace + graceMargin)
+		st.ReweighAt = &at
 	}
 	// The move, its event and the conductor's Chat notice in one
 	// transaction: one lost to a retry would never be written again (the
@@ -3648,8 +3679,18 @@ func waitForPR(st *State) workflow.Result {
 	if len(st.PendingConflicts) > 0 {
 		return workflow.Result{Next: "awaitPullRequest", State: st}
 	}
-	return workflow.Result{Next: "awaitPullRequest", State: st,
-		AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}}
+	return st.reweighed(workflow.Result{Next: "awaitPullRequest", State: st,
+		AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}})
+}
+
+// reweighed is res, waitForPR's, waking when weighReadiness last asked
+// for the gate to be read again (ReweighAt), if it did.
+func (st *State) reweighed(res workflow.Result) workflow.Result {
+	res.SleepUntil = time.Time{}
+	if st.ReweighAt != nil && len(res.AwaitSignals) > 0 {
+		res.SleepUntil = *st.ReweighAt
+	}
+	return res
 }
 
 // awaitRead waits on a person reading work that opened no pull request:

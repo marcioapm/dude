@@ -63,6 +63,12 @@ type PRGate struct {
 	// (mergeable_state unknown). Not a reading: weighReadiness leaves the
 	// status as it is and reads the gate again.
 	MergeableUnknown bool `json:"-"`
+	// GraceLeft: the checks item fails only because the head is within
+	// the grace CI has to show up on it (nothing reported yet, or only an
+	// external status where Actions is expected), with this much of it
+	// left. Not a reading the syncer sees end: weighReadiness reads the
+	// gate again once it is over.
+	GraceLeft time.Duration `json:"-"`
 }
 
 // Failing is the gate's items that do not hold.
@@ -586,8 +592,12 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	add(ReadyMergeable, ok, "%s", detail)
 	g.MergeableUnknown = !ok && mergeableUnknown(f)
 	// 9. checks
-	ok, detail = gateChecks(f, p, time.Now())
+	now := time.Now()
+	ok, detail = gateChecks(f, p, now)
 	add(ReadyChecks, ok, "%s", detail)
+	if !ok && checksInGrace(f, p, now) {
+		g.GraceLeft = max(graceLeft(p, now), time.Nanosecond)
+	}
 	return g, nil
 }
 
@@ -867,6 +877,11 @@ func mergeableUnknown(f forge.ReadinessFacts) bool {
 // within the grace an external status alone (a CLA bot, a deploy preview)
 // is pending until Actions reports.
 func gateChecks(f forge.ReadinessFacts, p GateFacts, now time.Time) (bool, string) {
+	return checksAt(f, p, ciGrace(p, now))
+}
+
+// checksAt is gateChecks with the head within the CI grace or past it.
+func checksAt(f forge.ReadinessFacts, p GateFacts, inGrace bool) (bool, string) {
 	if forge.CheckDiagnostic(f.CheckList) == forge.CheckRunsForbidden {
 		return false, "checks unreadable: GitHub refused the check-runs read"
 	}
@@ -885,7 +900,6 @@ func gateChecks(f forge.ReadinessFacts, p GateFacts, now time.Time) (bool, strin
 			passed++
 		}
 	}
-	inGrace := ciGrace(p, now)
 	switch {
 	case len(failing) > 0:
 		return false, "failing: " + strings.Join(failing, ", ")
@@ -914,6 +928,22 @@ func gateChecks(f forge.ReadinessFacts, p GateFacts, now time.Time) (bool, strin
 	return true, "no CI for this head: nothing reported within the grace CI has to show up"
 }
 
+// checksInGrace says gateChecks failed only for a grace counted from when
+// the head was first seen: within it nothing has reported at the head, or
+// only an external status has where Actions is expected, and past it
+// either reads as passing. The syncer's own grace (a pull request that has
+// had CI, recorded pending) is not one: its reading moves when it ends.
+func checksInGrace(f forge.ReadinessFacts, p GateFacts, now time.Time) bool {
+	if p.HadCI && (p.RecordedChecks == forge.ChecksPending || p.RecordedChecks == forge.ChecksUnknown) {
+		return false
+	}
+	if !ciGrace(p, now) {
+		return false
+	}
+	ok, _ := checksAt(f, p, false)
+	return ok
+}
+
 // ciGrace says the head is within the grace CI has to show up on it: the
 // syncer's own judgement where it made one (a pull request that has had
 // CI, nothing reported: pending within its grace, unknown past it),
@@ -923,4 +953,15 @@ func ciGrace(p GateFacts, now time.Time) bool {
 		return p.RecordedChecks == forge.ChecksPending
 	}
 	return p.HeadSeenAt == nil || now.Sub(*p.HeadSeenAt) < forge.DefaultCIGrace
+}
+
+// graceLeft is how long the head has left of the grace CI has to show up
+// on it, from when it was first seen: forge.DefaultCIGrace, the longest a
+// grace runs (the syncer's own, where it judged one, is no longer). Zero
+// once it is over; the whole grace for a head not yet seen.
+func graceLeft(p GateFacts, now time.Time) time.Duration {
+	if p.HeadSeenAt == nil {
+		return forge.DefaultCIGrace
+	}
+	return max(forge.DefaultCIGrace-now.Sub(*p.HeadSeenAt), 0)
 }
