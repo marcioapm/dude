@@ -30,13 +30,10 @@ func prLoopExhausted(t *testing.T, holder string) goldenWorld {
 	return w
 }
 
-var conductorRef = RunRef{ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
-
 // conductorDecides is decide_escalation by the task's conductor.
 func (w goldenWorld) conductorDecides(t *testing.T, action, note string) error {
 	t.Helper()
-	ref := conductorRef
-	ref.Org = w.org
+	ref := RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond1"}
 	return w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 		_, err := ConductDecideEscalation(context.Background(), tx, ref, action, note)
 		return err
