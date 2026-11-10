@@ -428,8 +428,14 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	if w.requests() != before {
 		t.Error("the 61st read reached GitHub")
 	}
+	// pull_requests with no ready gate stored at the head reads the gate
+	// from GitHub, one read of the same hour's budget: refused too.
+	w.refused(task, "pull_requests", `{}`, "at most 60 GitHub reads an hour")
+	if w.requests() != before {
+		t.Error("the refused pull_requests reached GitHub")
+	}
 	// Its other tools are not spent.
-	w.must(task, "pull_requests", `{}`)
+	w.must(task, "findings", `{}`)
 	mustExec(t, w.owner, `UPDATE events SET occurred_at = now() - interval '61 minutes' WHERE run_id = $1
 		AND event_type = 'agent.tool.attempted' AND payload->>'tool' = 'github_issue'
 		AND id IN (SELECT id FROM events WHERE run_id = $1 AND event_type = 'agent.tool.attempted' ORDER BY cursor LIMIT 1)`, "run_previous_reader")
