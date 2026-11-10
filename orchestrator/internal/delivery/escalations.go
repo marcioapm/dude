@@ -754,13 +754,13 @@ func prLoopRetryRefusal(ctx context.Context, tx pgx.Tx, d *Delivery, note string
 	if err != nil {
 		return err
 	}
-	earlier, err := pgx.CollectRows(rows, pgx.RowTo[*string])
+	earlier, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return err
 	}
 	for _, e := range earlier {
-		if e != nil && retryReasonWords(*e) == said {
-			return refusef(rPRFixRetryReasonUnchanged, clip(strings.TrimSpace(*e), 200))
+		if retryReasonWords(e) == said {
+			return refusef(rPRFixRetryReasonUnchanged, clip(e, 200))
 		}
 	}
 	return nil
@@ -772,7 +772,7 @@ func prLoopRetryRefusal(ctx context.Context, tx pgx.Tx, d *Delivery, note string
 // a literal, as in defaultsInARowSQL: bound as a parameter, a generic plan
 // (which production's pool settles on) cannot prove the index's predicate
 // and reads every event of the task.
-const prLoopRetriesSQL = `SELECT payload->>'note' FROM events
+const prLoopRetriesSQL = `SELECT COALESCE(payload->>'note', '') FROM events
 	WHERE task_id = $1 AND event_type = '` + EvTaskDecided + `'
 	  AND payload->>'reason' = 'pr_loop_exhausted' AND payload->>'action' = 'retry'
 	  AND occurred_at >= (SELECT created_at FROM workflow_runs WHERE id = $2)
