@@ -460,6 +460,11 @@ func TestABranchPreviewServesTheTasksBranchAndIsParkedWhenUnused(t *testing.T) {
 	if run := out["run"].(map[string]any); run["branch"] != "main" || run["commit"] == nil || run["state"] != "running" {
 		t.Errorf("run = %v", run)
 	}
+	// Running starts its idle time: checked here, as the backdate below
+	// overwrites it.
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND active_since IS NOT NULL`, runID); n != 1 {
+		t.Fatalf("lux's running did not start the preview's idle time (active_since is NULL): %s", w.describeRuns())
+	}
 
 	// Opened by someone a moment ago: in use, not parked. Started longer
 	// ago than its limit (5 minutes), so the sweep asks lux; the request,
