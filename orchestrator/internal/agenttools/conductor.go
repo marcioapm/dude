@@ -208,6 +208,66 @@ type pullRequestOut struct {
 	// When dude last read it from GitHub; null for never. A webhook or the
 	// reconciler's poll reads it again; refresh_pull_requests does now.
 	LastPolledAt *time.Time `json:"lastPolledAt"`
+	// Its ready gate (delivery.ReadyGate), read now: whether merging is
+	// the only act left, and each item that says why or why not. Only on
+	// an open pull request, and only from the pull_requests tool.
+	ReadyGate *readyGateOut `json:"readyGate,omitempty"`
+}
+
+// readyGateOut is one pull request's ready gate as the conductor reads it.
+// unread says GitHub did not answer: the gate is not judged.
+type readyGateOut struct {
+	Ready  bool                `json:"ready"`
+	Items  []delivery.GateItem `json:"items"`
+	Unread string              `json:"unread,omitempty"`
+}
+
+// gatedPullRequests is pull_requests checked in its transaction: the
+// listing, and what dude knows of each open pull request's ready gate.
+type gatedPullRequests struct {
+	listing map[string]any
+	gate    delivery.ReadyGateCheck
+}
+
+// pull_requests lists the task's pull requests in a transaction, reads
+// their ready gates from GitHub with none open (the gate's GitHub reads
+// are dude's own, never the hour's of the caller), and answers both.
+func checkPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (gatedPullRequests, error) {
+	listed, err := pullRequests(ctx, tx, c, in)
+	if err != nil {
+		return gatedPullRequests{}, err
+	}
+	gate, err := delivery.CheckReadyGateTx(ctx, tx, c.TaskID, nil)
+	return gatedPullRequests{listing: listed.(map[string]any), gate: gate}, err
+}
+
+func readGates(ctx context.Context, c Caller, g gatedPullRequests) ([]delivery.PRGate, error) {
+	if len(g.gate.PRs) == 0 {
+		return nil, nil
+	}
+	gh, err := githubOf(c)
+	if err != nil {
+		// No client: every GitHub item unreadable, as the gate says.
+		gh = nil
+	}
+	return delivery.DoReadyGate(ctx, gh, g.gate), nil
+}
+
+func listGates(_ context.Context, _ pgx.Tx, _ Caller, g gatedPullRequests, gates []delivery.PRGate) (map[string]any, error) {
+	prs, _ := g.listing["pullRequests"].([]pullRequestOut)
+	for i := range prs {
+		for _, gate := range gates {
+			if gate.Repo != prs[i].Repo || gate.Number != prs[i].Number {
+				continue
+			}
+			out := &readyGateOut{Ready: gate.Ready, Items: gate.Items}
+			if gate.Err != nil {
+				out.Unread = "GitHub did not answer: " + gate.Err.Error()
+			}
+			prs[i].ReadyGate = out
+		}
+	}
+	return g.listing, nil
 }
 
 func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (any, error) {

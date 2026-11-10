@@ -7,8 +7,10 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
@@ -66,4 +68,49 @@ func TestAPullRequestNobodyApprovedIsReadyWhereProtectionAsksForNoApproval(t *te
 		w.gh.Review(1, "alice", "APPROVED")
 		w.until("ready once approved", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
 	})
+}
+
+// GET /internal/pull-requests/{id}/ready-gate answers the pull request's
+// gate, every item in order, read now; it changes nothing. Another
+// organization's pull request is not found.
+func TestTheReadyGateEndpointAnswersEveryItem(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	var id string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM pull_requests WHERE task_id = $1`, wi).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	events := w.count(`SELECT count(*) FROM events WHERE task_id = $1`, wi)
+	w.gh.Set(func(s *fakegithub.Server) { s.Unresolved[1] = 1 })
+	status, body := w.get("/internal/pull-requests/"+id+"/ready-gate", w.org)
+	if status != 200 {
+		t.Fatalf("ready-gate: %d %s", status, body)
+	}
+	var out struct {
+		PullRequestID, TaskID, Repo, Head string
+		Number                            int
+		Ready                             bool
+		Items                             []delivery.GateItem
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.PullRequestID != id || out.TaskID != wi || out.Repo != "target" || out.Number != 1 || out.Ready || len(out.Items) != len(delivery.ReadyKeys) {
+		t.Fatalf("ready-gate: %s", body)
+	}
+	for i, it := range out.Items {
+		want := it.Key != delivery.ReadyThreads
+		if it.Key != delivery.ReadyKeys[i] || it.OK != want {
+			t.Errorf("item %d: %+v, want %s ok %v", i, it, delivery.ReadyKeys[i], want)
+		}
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1`, wi); n != events {
+		t.Errorf("reading the gate recorded %d events", n-events)
+	}
+	if status, _ := w.get("/internal/pull-requests/"+id+"/ready-gate", "org_someone_else"); status != 404 {
+		t.Errorf("another organization's read: %d, want 404", status)
+	}
+	if status, _ := w.get("/internal/pull-requests/pr_nope/ready-gate", w.org); status != 404 {
+		t.Errorf("an unknown pull request: %d, want 404", status)
+	}
 }

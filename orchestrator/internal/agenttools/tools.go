@@ -45,7 +45,7 @@ var tools = []tool{
 	define("remember", remember).limit(remembersPerRun),
 	define("run_diff", runDiff),
 	define("findings", findings),
-	define("pull_requests", pullRequests),
+	around(define("pull_requests", checkPullRequests).before(forgeFor), readGates, listGates),
 	define("limits", readLimits),
 	define("request_limit", requestLimit),
 	define("settings", readSettings).before(prepareSettings),

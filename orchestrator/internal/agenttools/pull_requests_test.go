@@ -217,3 +217,43 @@ func TestPullRequestsQuotesFeedbackAsExternalText(t *testing.T) {
 		}
 	}
 }
+
+// pull_requests gives each open pull request its ready gate, every item in
+// order: one not on GitHub has its GitHub items unreadable and is never
+// ready, and dude's own items are still judged.
+func TestPullRequestsGivesEachOpenPullRequestItsReadyGate(t *testing.T) {
+	f, token := pullRequestFixture(t)
+	var out struct {
+		PullRequests []struct {
+			Repo      string
+			ReadyGate *struct {
+				Ready bool
+				Items []delivery.GateItem
+			} `json:"readyGate"`
+		} `json:"pullRequests"`
+	}
+	if status := f.postAs(t, token, "pull_requests", `{}`, &out); status != 200 || len(out.PullRequests) != 2 {
+		t.Fatalf("pull_requests: %d %+v", status, out)
+	}
+	for _, p := range out.PullRequests {
+		g := p.ReadyGate
+		if g == nil || g.Ready || len(g.Items) != len(delivery.ReadyKeys) {
+			t.Fatalf("%s's gate: %+v", p.Repo, g)
+		}
+		for i, it := range g.Items {
+			if it.Key != delivery.ReadyKeys[i] {
+				t.Errorf("%s's item %d is %s, want %s", p.Repo, i, it.Key, delivery.ReadyKeys[i])
+			}
+			switch it.Key {
+			case delivery.ReadyFindings, delivery.ReadyQuestions:
+				if !it.OK {
+					t.Errorf("%s: %s fails with nothing open: %s", p.Repo, it.Key, it.Detail)
+				}
+			default:
+				if it.OK || !strings.Contains(it.Detail, "unreadable") {
+					t.Errorf("%s: %s off GitHub: ok %v %q", p.Repo, it.Key, it.OK, it.Detail)
+				}
+			}
+		}
+	}
+}
