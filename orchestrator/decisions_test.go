@@ -796,7 +796,15 @@ func (w *world) directFixReviewed(task string) {
 	w.t.Helper()
 	w.until("the fix's review", func() bool { return w.fixes(task) == 1 && w.decisionAt(task) == delivery.PointReviewed })
 	w.must(task, "decide", `{"action":"next"}`)
-	w.until("waiting on the pull request again", func() bool { return w.waitingOnPR(task) && w.taskStatus(task) == "review" })
+	// The simplifier runs on the reviewed fix (the default policy's); its
+	// commit's review is the conductor's round too.
+	w.until("waiting on the pull request again", func() bool {
+		if w.decisionAt(task) == delivery.PointReviewed {
+			w.must(task, "decide", `{"action":"next"}`)
+		}
+		s := w.taskStatus(task)
+		return w.waitingOnPR(task) && (s == "review" || s == "ready_to_merge")
+	})
 }
 
 func setPolicy(w *world, task, patch string) {
