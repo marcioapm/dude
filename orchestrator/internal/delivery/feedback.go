@@ -936,6 +936,19 @@ func gateMoved(ctx context.Context, tx pgx.Tx, org string, d *Delivery, key stri
 	return workflow.SignalTx(ctx, tx, org, d.WorkflowID, SignalPRFeedback, map[string]any{"kind": "readiness"}, key)
 }
 
+// GateItemSettledTx tells the task's delivery that an item its ready gate
+// reads from dude's own records was settled (a question answered, a
+// finding dismissed, an escalation decided): a delivery waiting on its
+// pull requests weighs readiness again, as for a change on GitHub
+// (gateMoved). key keeps one signal per settling.
+func GateItemSettledTx(ctx context.Context, tx pgx.Tx, org, taskID, key string) error {
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	return gateMoved(ctx, tx, org, d, "gate-item:"+key)
+}
+
 // PersonReplyTx is a person's reply to an item: the conversation goes on,
 // and the item no longer holds anything (replied).
 func PersonReplyTx(ctx context.Context, tx pgx.Tx, in PersonAction) error {

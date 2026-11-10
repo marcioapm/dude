@@ -286,6 +286,9 @@ func settleReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, status, tex
 	if err := signalReviewQuestionTx(ctx, tx, org, d.WorkflowID, id); err != nil {
 		return out, err
 	}
+	if err := GateItemSettledTx(ctx, tx, org, out.TaskID, "review-question:"+id); err != nil {
+		return out, err
+	}
 	if !by.conductor() && d.State.conducted() {
 		// The conductor decides whether a review should weigh it.
 		line := reviewQuestionAnsweredLine(id, text, status == "withdrawn")

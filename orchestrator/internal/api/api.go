@@ -997,6 +997,13 @@ func answerQuestion(ctx context.Context, tx pgx.Tx, ref delivery.RunRef, role, q
 		}
 		return "", nil, err
 	}
+	if role == delivery.RoleConductor && addressee == delivery.HolderPerson {
+		// The conductor's question to a person is an item of the ready
+		// gate: answered, the delivery weighs readiness again.
+		if err := delivery.GateItemSettledTx(ctx, tx, ref.Org, ref.TaskID, "question:"+questionID); err != nil {
+			return "", nil, err
+		}
+	}
 	return directiveID, relay, delivery.EndConductorWait(ctx, tx, ref.Org, ref.ProjectID, ref.TaskID)
 }
 
