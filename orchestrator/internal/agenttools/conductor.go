@@ -234,6 +234,10 @@ type gatedPullRequests struct {
 	listing map[string]any
 	stored  map[string]delivery.StoredGate
 	gate    delivery.ReadyGateCheck
+	// Why the gates of gate.PRs are not read ("" to read them): the
+	// task's hourly GitHub read budget is spent.
+	unread    string
+	unreadIDs []delivery.GateFacts
 }
 
 // githubReads is the gates read fresh: one GitHub read each of the
@@ -280,7 +284,15 @@ func checkPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequests
 		return g, nil
 	}
 	if err := checkGitHubBudget(ctx, tx, c, len(fresh)); err != nil {
-		return gatedPullRequests{}, err
+		var r refusal
+		if !errors.As(err, &r) {
+			return gatedPullRequests{}, err
+		}
+		// The budget is spent: the pull requests are still listed, their
+		// gates unread, and nothing is read of GitHub or spent.
+		g.unread, g.gate.PRs = "read budget spent", nil
+		g.unreadIDs = fresh
+		return g, nil
 	}
 	for range fresh {
 		if _, err := ledger.Append(ctx, tx, c.event(AttemptEventType, map[string]any{"tool": "pull_requests", "attempted": true, "readyGate": true})); err != nil {
@@ -309,6 +321,11 @@ func listGates(ctx context.Context, tx pgx.Tx, _ Caller, g gatedPullRequests, ga
 	}
 	prs, _ := g.listing["pullRequests"].([]pullRequestOut)
 	for i := range prs {
+		for _, p := range g.unreadIDs {
+			if p.ID == prs[i].id {
+				prs[i].ReadyGate = &readyGateOut{Unread: g.unread}
+			}
+		}
 		if s, ok := g.stored[prs[i].id]; ok {
 			at := s.At
 			prs[i].ReadyGate = &readyGateOut{Ready: s.Ready, Items: s.Items, JudgedAt: &at, JudgedHead: s.Head}

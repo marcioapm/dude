@@ -428,11 +428,23 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	if w.requests() != before {
 		t.Error("the 61st read reached GitHub")
 	}
-	// pull_requests with no ready gate stored at the head reads the gate
-	// from GitHub, one read of the same hour's budget: refused too.
-	w.refused(task, "pull_requests", `{}`, "at most 60 GitHub reads an hour")
+	// pull_requests with no ready gate stored at the head would read the
+	// gate from GitHub, a read of the same hour's budget: the pull
+	// requests are still listed, each gate unread for the budget, and
+	// nothing reaches GitHub.
+	listed := w.must(task, "pull_requests", `{}`)
+	prs, _ := listed["pullRequests"].([]any)
+	if len(prs) == 0 {
+		t.Fatalf("pull_requests listed nothing with the budget spent: %v", listed)
+	}
+	for _, p := range prs {
+		gate, _ := p.(map[string]any)["readyGate"].(map[string]any)
+		if gate["unread"] != "read budget spent" {
+			t.Errorf("readyGate %v, want unread: read budget spent", gate)
+		}
+	}
 	if w.requests() != before {
-		t.Error("the refused pull_requests reached GitHub")
+		t.Error("pull_requests reached GitHub with the budget spent")
 	}
 	// Its other tools are not spent.
 	w.must(task, "findings", `{}`)
