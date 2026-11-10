@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -74,17 +75,19 @@ func TestReadinessIsANoticeNotAWake(t *testing.T) {
 				}
 				return
 			}
-			if len(notices) != 1 || notices[0] != "target#1 is ready to merge: approved, checks green. Merging is yours." {
+			if len(notices) != 1 || notices[0] != "target#1 is ready to merge: reviewed through its head, checks green, nothing open. Merging is yours." {
 				t.Errorf("the notices: %q", notices)
 			}
 			if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1`, task); n != wakes {
 				t.Errorf("readiness recorded %d reasons to wake the conductor", n-wakes)
 			}
-			// An approval dismissed is no approval.
-			w.gh.Review(1, "alice", "DISMISSED")
+			// A review thread left open is a person's feedback: no longer
+			// ready, the notice naming the gate's failing item.
+			w.gh.Set(func(s *fakegithub.Server) { s.Unresolved[1] = 1 })
 			w.until("no longer ready", func() bool { w.sync(); return w.taskStatus(task) != "ready_to_merge" })
 			if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
-				AND payload->>'about' = 'no_longer_ready' AND payload->>'text' = 'target#1 is no longer ready to merge: nobody has approved it.'`, task); n != 1 {
+				AND payload->>'about' = 'no_longer_ready' AND payload->>'text' = 'target#1 is no longer ready to merge: threads (1 review thread(s) unresolved: each is a person''s open feedback).'
+				AND payload->'failing'->0->>'key' = 'threads'`, task); n != 1 {
 				t.Errorf("%d notices that it is no longer ready", n)
 			}
 			if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1`, task); n != wakes {

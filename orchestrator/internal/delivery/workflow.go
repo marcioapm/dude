@@ -2942,26 +2942,51 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	return res, true, err
 }
 
-// weighReadiness moves the task to ready to merge when every pull
-// request still open is approved with its checks passing (forge.Ready),
-// and back to review when one no longer is. The factory never merges:
-// ready to merge is what a person is told, and merging is theirs.
+// readyGateRetry is how soon a ready gate GitHub did not answer is read
+// again.
+const readyGateRetry = 30 * time.Second
+
+// weighReadiness moves the task to ready to merge when the ready gate
+// (ReadyGate) passes for every pull request still open, and back to
+// review when one no longer does. The gate asks no approval beyond what
+// GitHub's branch protection asks. The factory never merges: ready to
+// merge is what a person is told, and merging is theirs.
 func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st *State, states []PullRequestState) error {
-	ready, open := true, 0
+	var open []string
 	for _, s := range states {
 		if s.State == forge.StateMerged || s.State == forge.StateClosed {
 			continue
 		}
-		open++
-		// Always about the pull request's current head: publishing a fix
-		// resets its checks (phases.publish), and a sync records a head
-		// someone else pushed.
-		ready = ready && forge.Ready(s.Status)
+		open = append(open, s.ID)
+	}
+	var gates []PRGate
+	if len(open) > 0 {
+		var gh *forge.GitHub
+		if w.forges != nil {
+			var err error
+			if gh, err = w.forges.For(ctx, sc.OrganizationID); err != nil {
+				return err
+			}
+		}
+		var err error
+		if gates, err = w.s.ReadyGateFor(ctx, sc.OrganizationID, gh, st.TaskID, open); err != nil {
+			return err
+		}
+	}
+	ready := len(gates) > 0
+	for _, g := range gates {
+		if g.Err != nil {
+			// GitHub did not answer: not a judgement either way. The
+			// status stays as it was, and the gate is read again soon,
+			// the step's attempts not spent on GitHub's outage.
+			return workflow.Wait{After: readyGateRetry, Why: "the ready gate could not read GitHub: " + g.Err.Error()}
+		}
+		ready = ready && g.Ready
 	}
 	// The move, its event and the conductor's Chat notice in one
 	// transaction: one lost to a retry would never be written again (the
 	// status has moved).
-	return w.s.moveReadiness(ctx, sc.OrganizationID, st, states, open > 0 && ready, open)
+	return w.s.moveReadiness(ctx, sc.OrganizationID, st, gates, ready, len(open))
 }
 
 // escalate stops and asks for a person, and waits for their decision

@@ -1892,10 +1892,13 @@ func TestAForgeThatCannotBeReadDelaysTheRunRatherThanStartingItWithoutCredential
 
 // Approved with its checks green, a task is ready to merge — a
 // person's call to make, the factory never merges — and back in review
-// if a check turns red.
+// if a check turns red. An approval counts only where branch protection
+// asks for one (the ready gate): dismissed under a rule that requires one,
+// it is back in review until approved again.
 func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 	w := newWorld(t)
 	wi := w.reviewing()
+	w.gh.Set(func(s *fakegithub.Server) { s.RequiredApprovals = map[string]int{"main": 1} })
 
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
@@ -1909,7 +1912,7 @@ func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 		t.Errorf("%d ready-to-merge events, want one to tell people by", n)
 	}
 
-	// An approval dismissed is no approval.
+	// An approval dismissed is no approval, and protection asks for one.
 	w.gh.Review(1, "alice", "DISMISSED")
 	w.until("back in review", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3379,6 +3382,9 @@ func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("run:failure")
 	wi := w.reviewing()
+	// A fix of the pull request runs no simplifier after it; the ready
+	// gate asks for one when the policy does. These are about the checks.
+	w.simplifierOff(wi)
 	w.gh.Review(1, "alice", "APPROVED")
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3399,6 +3405,9 @@ func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 	w := newWorld(t)
 	wi := w.reviewing()
+	// A fix of the pull request runs no simplifier after it; the ready
+	// gate asks for one when the policy does. These are about the checks.
+	w.simplifierOff(wi)
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3442,6 +3451,9 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 	w := newWorld(t)
 	w.prs.CIGrace = time.Hour
 	wi := w.reviewing()
+	// A fix of the pull request runs no simplifier after it; the ready
+	// gate asks for one when the policy does. These are about the checks.
+	w.simplifierOff(wi)
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3475,14 +3487,16 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 	})
 }
 
-// A commit a person adds on GitHub ("Update branch", a committed
-// suggestion) is the pull request's head from then on: approved and green
-// on it, the task is ready, though the factory never pushed it.
+// A commit a person adds on GitHub with "Update branch" is the pull
+// request's head from then on: GitHub's pure merge of main needs no review
+// of its own (the ready gate), so approved and green on it, the task is
+// ready, though the factory never pushed it.
 func TestACommitAPersonAddsCanBeReady(t *testing.T) {
 	w := newWorld(t)
 	wi := w.reviewing()
-	if w.gh.CommitOnTop(w.gh.Pull(1).Head, "Merge branch 'main' into the task") == "" {
-		t.Fatal("could not commit on top")
+	w.gh.CommitFiles("main", "Other work", map[string]string{"OTHER.md": "other\n"})
+	if w.gh.MergeInto(w.gh.Pull(1).Head, "main", nil) == "" {
+		t.Fatal("could not merge main in")
 	}
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
@@ -3705,6 +3719,14 @@ func TestAPersonAcceptsTheFindingsAReviewGotStuckOn(t *testing.T) {
 
 // sync reads the task's pull requests from GitHub, as a webhook would
 // have it do.
+// simplifierOff turns the delivery's simplifier off, as a project's
+// policy would have: the ready gate asks for none after the last change.
+func (w *world) simplifierOff(wi string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{policy,simplify}', 'false')
+		WHERE task_id = $1 AND workflow_type = 'task.delivery'`, wi)
+}
+
 func (w *world) sync() {
 	_, _ = w.prs.Reconcile(context.Background(), 0)
 }

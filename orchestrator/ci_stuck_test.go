@@ -109,7 +109,9 @@ func TestCIStuckClearsItselfWhenTheChecksFinish(t *testing.T) {
 	w.gh.SetChecks("success")
 	w.until("waiting on the pull request again", func() bool {
 		w.sync()
-		return w.taskStatus(wi) == "review" &&
+		// Green, and nothing else open: ready to merge, as the ready gate
+		// asks no approval protection does not.
+		return (w.taskStatus(wi) == "review" || w.taskStatus(wi) == "ready_to_merge") &&
 			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest' AND status = 'waiting'`, wi) == 1
 	})
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, wi); n != 1 {
@@ -281,7 +283,10 @@ func TestCIStuckRerunOnTheSameHeadEscalatesAfterOnePatience(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = $2 WHERE task_id = $1`, wi, first)
 	w.until("first stuck episode", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
 	w.gh.SetChecks("success")
-	w.until("auto-cleared", func() bool { w.sync(); return w.taskStatus(wi) == "review" })
+	w.until("auto-cleared", func() bool {
+		w.sync()
+		return w.taskStatus(wi) == "review" || w.taskStatus(wi) == "ready_to_merge"
+	})
 	w.gh.SetChecks("pending")
 	w.sync()
 	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = $2 WHERE task_id = $1`, wi, first.Add(time.Minute))

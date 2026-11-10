@@ -91,3 +91,27 @@ func TestCommitParentsReadsAMergesParentsInOrder(t *testing.T) {
 		t.Fatalf("parents %v (%v), want [%s %s]", got, err, head, base)
 	}
 }
+
+// What the ready gate reads moving is news to the workflow, though nothing
+// for a fixer: checks settling, an approval, mergeability, threads, the
+// head, a draft marked ready. Nothing moving is none.
+func TestGateMovedIsWhatTheReadyGateReads(t *testing.T) {
+	base := Status{PullRequestRef: PullRequestRef{State: StateOpen, HeadSHA: "a"}, Checks: ChecksPending, Mergeable: MergeClean}
+	if GateMoved(base, base) {
+		t.Error("nothing moved, and it said so")
+	}
+	for name, change := range map[string]func(*Status){
+		"checks":    func(s *Status) { s.Checks = ChecksPassing },
+		"review":    func(s *Status) { s.Review = ReviewApproved },
+		"mergeable": func(s *Status) { s.Mergeable = MergeBehind },
+		"threads":   func(s *Status) { s.UnresolvedThreads = 1 },
+		"head":      func(s *Status) { s.HeadSHA = "b" },
+		"state":     func(s *Status) { s.State = StateDraft },
+	} {
+		now := base
+		change(&now)
+		if !GateMoved(base, now) {
+			t.Errorf("%s moved, and it did not say so", name)
+		}
+	}
+}
