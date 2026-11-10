@@ -2,7 +2,7 @@
 	"" (.Wrap "The dude tools read what dude knows about this task: " (.List ", " " and "
 		"run_diff" "run_diff (what a Run changed: the files, then the lines of those you name)"
 		"findings" "findings (the review findings and how each was settled; name ids for their text)"
-		"pull_requests" "pull_requests (state, checks, reviews and feedback, as dude last read them from GitHub: lastPolledAt says when; each item an excerpt: name feedback ids for their whole text, without spending a GitHub read)"
+		"pull_requests" "pull_requests (state, checks, reviews and feedback, as dude last read them from GitHub: lastPolledAt says when; each item an excerpt: name feedback ids for their whole text, without spending a GitHub read; and each open one's readyGate, read from GitHub now: every item between it and the merge, with what fails)"
 		"refresh_pull_requests pull_requests" "refresh_pull_requests (the same, read from GitHub now; one of the hour's GitHub reads)"
 		"refresh_pull_requests !pull_requests" "refresh_pull_requests (the task's pull requests, their state, checks, reviews and feedback, read from GitHub now; one of the hour's GitHub reads)"
 		"run_chat" "run_chat (a Run of this task's Chat — what its agent said, what it was told — and the question it waits on, so you can relay it)"
