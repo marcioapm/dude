@@ -3454,7 +3454,17 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 				return res, err
 			}
 		}
-		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest"); err != nil {
+			return workflow.Result{}, err
+		}
+		// The escalation was a gate item: back at the pull requests, the
+		// gate is weighed now, not at the next sync, which may never come.
+		if len(st.PullRequestIDs) > 0 {
+			if err := w.weighReadinessNow(ctx, sc, st); err != nil {
+				return workflow.Result{}, err
+			}
+		}
+		return waitForPR(st), nil
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", decisionActor(d)+" decided: "+d.Action); err != nil {
 		return workflow.Result{}, err

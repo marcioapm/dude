@@ -276,9 +276,8 @@ func DecideEscalationTx(ctx context.Context, tx pgx.Tx, org, taskID string, in E
 		return err
 	}
 	// Wakes the workflow to carry it out; the decision is in its state.
-	if err := GateItemSettledTx(ctx, tx, org, taskID, "escalation:"+e.Reason+":"+e.Decided.At.UTC().Format(time.RFC3339Nano)); err != nil {
-		return err
-	}
+	// Its step is decide now, not awaitPullRequest: readiness is weighed
+	// there, once a wait goes back to the pull requests (decide's wait).
 	return workflow.SignalTx(ctx, tx, org, wfID, SignalHumanDecision, nil, "")
 }
 
