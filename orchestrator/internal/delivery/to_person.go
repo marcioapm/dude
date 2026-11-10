@@ -334,11 +334,13 @@ func personWaitTx(ctx context.Context, tx pgx.Tx, r RunRef, id string, payload m
 //     waive on test_blocked and checks_unverified (NeedsReason);
 //   - changing the acceptance criteria: amend on not_converging;
 //   - declaring the merged part the task: done on pull_request_closed;
-//   - resetting the organisation's fix budgets: retry on pr_loop_exhausted;
 //   - everything on conductor_unavailable, which no conductor holds.
 //
 // Retry and stop on stuck, exhausted and not_converging are the
-// conductor's: it may let the loop go more rounds, with its direction.
+// conductor's: it may let the loop go more rounds, with its direction. So
+// is retry on pr_loop_exhausted, another set of pull request fix rounds,
+// with its reason: one the delivery retried for already is refused
+// (prLoopRetryRefusal), for it to stop or ask the person.
 func PersonOnly(reason, action string) bool {
 	if NeedsReason(reason, action) {
 		return true
@@ -352,8 +354,6 @@ func PersonOnly(reason, action string) bool {
 		return action == "accept" || action == "amend"
 	case "pull_request_closed":
 		return action == "done"
-	case "pr_loop_exhausted":
-		return action == "retry"
 	}
 	return false
 }

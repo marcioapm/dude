@@ -37,3 +37,7 @@
 {{- define "refusals/delivery/escalations/owner-answer-is-choice-not-direction"}}the owner's answer to your question %s is one of its choices, not their direction: to %s, they say how in their own words, or decide on the banner{{end}}
 
 {{- define "refusals/delivery/escalations/only-task-owner-or-organisation-admin"}}only the task's owner or an organisation admin can %s this; %s{{end}}
+
+{{- define "refusals/delivery/escalations/say-why-another-pr-fix-round"}}retry on pr_loop_exhausted needs your reason in the note: say why another set of pull request fix rounds will converge, or what changed since they ran out{{end}}
+
+{{- define "refusals/delivery/escalations/pr-fix-retry-reason-unchanged"}}this delivery's pull request fix rounds were retried already for that reason (%q): name what differs from that retry, or stop, or ask the person with your recommendation (ask_person){{end}}

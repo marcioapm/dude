@@ -18,7 +18,6 @@ func TestPersonOnly(t *testing.T) {
 		ReasonTestBlocked:        {ActionWaive},
 		ReasonChecksUnverified:   {ActionWaive},
 		"pull_request_closed":    {"done"},
-		"pr_loop_exhausted":      {"retry"},
 	}
 	actions := []string{"resume", "retry", "accept", "amend", ActionWaive, "done", "wait", "stop"}
 	reasons := []string{"implement_failed", "fix_failed", "test_failed", "pr_fix_failed", "review_failed", "no_changes",

@@ -476,10 +476,10 @@ func TestGoldenConductorResults(t *testing.T) {
 	})
 }
 
-// A quiet conductor's next at the pull request's feedback is Deliver's
-// defaults: with the round's fixes spent, it is taken, and prFix escalates
-// pr_loop_exhausted as Deliver's policy does. A chatty conductor's is
-// refused, for it to ask the person.
+// A conductor's next at the pull request's feedback is Deliver's defaults:
+// with the round's fixes spent, it is taken, quiet or chatty, and prFix
+// escalates pr_loop_exhausted as Deliver's policy does, for the conductor
+// to retry with its reason, stop, or ask the person.
 func TestAQuietConductorsNextAtThePRFixBoundIsDeliversDefaults(t *testing.T) {
 	for _, voice := range []string{VoiceQuiet, VoiceChatty} {
 		t.Run(voice, func(t *testing.T) {
@@ -493,11 +493,8 @@ func TestAQuietConductorsNextAtThePRFixBoundIsDeliversDefaults(t *testing.T) {
 				_, err := ConductDecide(context.Background(), tx, ref, "next", "")
 				return err
 			})
-			if voice == VoiceQuiet && err != nil {
-				t.Fatalf("a quiet conductor's next at the bound was refused: %v", err)
-			}
-			if voice == VoiceChatty && (err == nil || !strings.Contains(err.Error(), "at their bound")) {
-				t.Fatalf("a chatty conductor's next at the bound: %v, want refused", err)
+			if err != nil {
+				t.Fatalf("a %s conductor's next at the bound was refused: %v", voice, err)
 			}
 		})
 	}
