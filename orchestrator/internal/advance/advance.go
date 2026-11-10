@@ -43,6 +43,11 @@ func (a Result) Payload(p map[string]any) map[string]any {
 // over: one GitHub compare each.
 const maxBaseMerges = 5
 
+// MaxBaseMerges is maxBaseMerges for the ready gate: the most pure base
+// merges it walks past since the last review before asking for a review
+// of the head.
+const MaxBaseMerges = maxBaseMerges
+
 // ErrBaseMergeConflict: the base was merged into the task branch under
 // the writer, and GitHub would not merge the writer's commit with it (409).
 type ErrBaseMergeConflict struct {

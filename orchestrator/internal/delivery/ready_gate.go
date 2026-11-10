@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -576,6 +577,7 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 	// merge.
 	var unreviewed []string
 	at := h
+	merges := 0
 	for n := 0; at != p.Reviewed; n++ {
 		ps, listed := parents[at]
 		if !listed || len(ps) == 0 || n == maxGateCommits {
@@ -585,7 +587,13 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 		switch {
 		case simplified[at]:
 		case len(ps) == 2:
-			pure, err := advance.PureBaseMerge(ctx, gh, p.Slug, base, at, ps)
+			// Each merge judged costs GitHub reads, on every evaluation:
+			// past advance.MaxBaseMerges, a review of the head is cheaper
+			// than walking on.
+			if merges++; merges > advance.MaxBaseMerges {
+				return false, fmt.Sprintf("too many base merges since the last review at %s: review the head", short(p.Reviewed)), nil
+			}
+			pure, err := pureBaseMerge(ctx, gh, p.Slug, base, at, ps)
 			if err != nil {
 				return false, "", err
 			}
@@ -602,6 +610,39 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 		return false, fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", ")), nil
 	}
 	return true, fmt.Sprintf("reviewed at %s; since then only reviewed simplifications and pure merges of %s", short(p.Reviewed), base), nil
+}
+
+// pureMerges remembers the merges judged GitHub's pure merge of a base,
+// by repository, merge and base branch, across evaluations: a commit's
+// parents and content never change, and once the base contains the merged
+// parent it keeps containing it. A merge judged not pure is judged again
+// (the base may come to contain it). Bounded: cleared when full.
+var pureMerges = struct {
+	sync.Mutex
+	m map[string]bool
+}{m: map[string]bool{}}
+
+const pureMergesMax = 4096
+
+// pureBaseMerge is advance.PureBaseMerge, remembered when pure.
+func pureBaseMerge(ctx context.Context, gh *forge.GitHub, slug, base, merge string, parents []string) (bool, error) {
+	key := slug + "\x00" + merge + "\x00" + base
+	pureMerges.Lock()
+	known := pureMerges.m[key]
+	pureMerges.Unlock()
+	if known {
+		return true, nil
+	}
+	pure, err := advance.PureBaseMerge(ctx, gh, slug, base, merge, parents)
+	if err == nil && pure {
+		pureMerges.Lock()
+		if len(pureMerges.m) >= pureMergesMax {
+			clear(pureMerges.m)
+		}
+		pureMerges.m[key] = true
+		pureMerges.Unlock()
+	}
+	return pure, err
 }
 
 // simplifiedCommits is every commit of a simplify Run whose own review

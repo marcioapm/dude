@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -393,5 +394,61 @@ func TestTheReadyGateChecksItemFollowsTheSyncersGrace(t *testing.T) {
 	holds(t, g, ReadyChecks, true, "no CI for this head")
 	if !g.Ready {
 		t.Fatalf("not ready past the grace: %+v", g.Items)
+	}
+}
+
+// mergesSince merges n commits of main into feature, each GitHub's pure
+// merge, after a ready pull request, and syncs the head.
+func (f *gateFixture) mergesSince(n int) {
+	f.t.Helper()
+	for i := range n {
+		f.gh.CommitFiles("main", fmt.Sprintf("Other work %d", i), map[string]string{fmt.Sprintf("lib/other%d.go", i): "package lib\n"})
+		if f.gh.MergeInto("feature", "main", nil) == "" {
+			f.t.Fatal("no merge")
+		}
+	}
+	f.synced()
+}
+
+// gateRequests is the GitHub requests one evaluation of the gate makes.
+func (f *gateFixture) gateRequests() (PRGate, int) {
+	f.t.Helper()
+	before := len(f.gh.Requests())
+	g := f.gate()
+	return g, len(f.gh.Requests()) - before
+}
+
+// The reviewed-through-head walk is bounded: up to advance's five base
+// merges since the review are walked, each pure merge's verdict
+// remembered so a later evaluation asks GitHub nothing more for it; past
+// five the gate asks for a review of the head without walking them.
+func TestTheReadyGateBoundsTheBaseMergeWalk(t *testing.T) {
+	cases := []struct {
+		merges int
+		ok     bool
+		want   string
+	}{
+		{5, true, "pure merges of main"},
+		{20, false, "too many base merges since the last review"},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprint(c.merges), func(t *testing.T) {
+			f := newGateFixture(t)
+			f.st.Policy.Simplify = false
+			f.saveState()
+			f.ready()
+			f.mergesSince(c.merges)
+			g, first := f.gateRequests()
+			holds(t, g, ReadyReviewed, c.ok, c.want)
+			g, second := f.gateRequests()
+			holds(t, g, ReadyReviewed, c.ok, c.want)
+			t.Logf("%d merges: %d requests, then %d", c.merges, first, second)
+			if c.ok && second >= first {
+				t.Errorf("%d merges: %d requests evaluated again, %d the first time: pure merges not remembered", c.merges, second, first)
+			}
+			if first > 30 {
+				t.Errorf("%d merges: %d requests in one evaluation", c.merges, first)
+			}
+		})
 	}
 }
