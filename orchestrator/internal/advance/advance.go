@@ -494,6 +494,32 @@ func BaseMerges(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, 
 	return j, nil
 }
 
+// PureBaseMerge says merge, a commit with parents, is a pure merge of
+// baseBranch into a branch: two parents, the second on baseBranch
+// (baseBranch contains it), and GitHub's web-flow merge that added
+// exactly that second parent's changes to the first (pureMerge). It is
+// the judgement BaseMerges makes of each merge it walks, for one commit;
+// a compare GitHub refuses is no.
+func PureBaseMerge(ctx context.Context, gh *forge.GitHub, slug, baseBranch, merge string, parents []string) (bool, error) {
+	if len(parents) != 2 || baseBranch == "" {
+		return false, nil
+	}
+	in, err := gh.Compare(ctx, slug, parents[1], baseBranch)
+	switch {
+	case forge.Refused(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	case in.BehindBy > 0:
+		return false, nil
+	}
+	pure, err := pureMerge(ctx, gh, slug, parents[0], parents[1], merge, parents[0])
+	if forge.Refused(err) {
+		return false, nil
+	}
+	return pure, err
+}
+
 func short(sha string) string {
 	if len(sha) > 7 {
 		return sha[:7]

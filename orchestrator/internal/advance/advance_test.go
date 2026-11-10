@@ -611,3 +611,49 @@ func TestACleanMergeOfAFileIsTheSameWhicheverSideIsOurs(t *testing.T) {
 		}
 	}
 }
+
+// PureBaseMerge judges one commit as BaseMerges judges each merge it
+// walks: GitHub's update-branch merge of the base is pure; the same merge
+// with an edit of its own, a merge of a branch that is not the base, or a
+// person's local merge is not.
+func TestPureBaseMergeJudgesOneCommit(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name string
+		make func(a *advancing) string
+		pure bool
+	}{
+		{"GitHub's merge of the base", func(a *advancing) string {
+			a.fake.CommitFiles("main", "base", map[string]string{"BASE.md": "base\n"})
+			return a.fake.MergeInto("task", "main", nil)
+		}, true},
+		{"GitHub's merge with an edit of its own", func(a *advancing) string {
+			a.fake.CommitFiles("main", "base", map[string]string{"BASE.md": "base\n"})
+			return a.fake.MergeInto("task", "main", map[string]string{"EXTRA.md": "slipped in\n"})
+		}, false},
+		{"a person's local merge", func(a *advancing) string {
+			a.fake.CommitFiles("main", "base", map[string]string{"BASE.md": "base\n"})
+			return a.fake.MergeLocally("task", "main", nil)
+		}, false},
+		{"a merge of a branch that is not the base", func(a *advancing) string {
+			a.fake.Branch("other", "main", "other work")
+			return a.fake.MergeInto("task", "other", nil)
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newAdvancing(t)
+			x := c.make(a)
+			if x == "" {
+				t.Fatal("no merge made")
+			}
+			got, err := PureBaseMerge(ctx, a.gh, "acme/target", "main", x, a.fake.Parents(x))
+			if err != nil || got != c.pure {
+				t.Fatalf("pure %v (%v), want %v", got, err, c.pure)
+			}
+		})
+	}
+	a := newAdvancing(t)
+	if got, err := PureBaseMerge(ctx, a.gh, "acme/target", "main", a.commit, a.fake.Parents(a.commit)); got || err != nil {
+		t.Errorf("a commit with one parent: pure %v (%v)", got, err)
+	}
+}
