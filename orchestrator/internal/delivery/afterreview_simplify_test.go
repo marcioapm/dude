@@ -1,0 +1,37 @@
+package delivery
+
+import "testing"
+
+// The simplifier runs on the final reviewed code: a reviewed fix that moved
+// the work past where the simplifier last left it goes through it again —
+// a pull request's fix before its round is done, a fix of the simplifier's
+// own diff before the test — and not once it ran there, nor with the
+// policy's simplifier off.
+func TestAfterReviewSimplifiesAgainOnceAFixMovedTheWork(t *testing.T) {
+	on := DefaultPolicy()
+	on.Simplify = true
+	off := on
+	off.Simplify = false
+	heads := map[string]string{"api": "fixed"}
+	for _, c := range []struct {
+		name string
+		st   State
+		want string
+	}{
+		{"a pull request fix, simplifier never ran", State{Policy: on, Heads: heads, FixRange: map[string]string{"api": "a"}}, "simplify"},
+		{"a pull request fix, simplified before it", State{Policy: on, Heads: heads, FixRange: map[string]string{"api": "a"},
+			SimplifiedHeads: map[string]string{"api": "a"}}, "simplify"},
+		{"a pull request fix, simplified since", State{Policy: on, Heads: heads, FixRange: map[string]string{"api": "a"},
+			SimplifiedHeads: map[string]string{"api": "fixed"}}, "prFixDone"},
+		{"a pull request fix, simplifier off", State{Policy: off, Heads: heads, FixRange: map[string]string{"api": "a"}}, "prFixDone"},
+		{"a fix of the simplifier's diff", State{Policy: on, Heads: heads, SimplifyBase: map[string]string{"api": "s0"},
+			SimplifiedHeads: map[string]string{"api": "s1"}}, "simplify"},
+		{"the simplifier's diff reviewed as it was", State{Policy: on, Heads: heads, SimplifyBase: map[string]string{"api": "s0"},
+			SimplifiedHeads: map[string]string{"api": "fixed"}}, "test"},
+		{"before any simplifier", State{Policy: on, Heads: heads}, "simplify"},
+	} {
+		if got := c.st.afterReview(); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}

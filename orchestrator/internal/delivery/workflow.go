@@ -154,6 +154,11 @@ type State struct {
 	// review loop after it covers only from there (RangeSimplify). Set by
 	// awaitSimplify when it published, cleared at the test.
 	SimplifyBase map[string]string `json:"simplifyBase,omitempty"`
+	// The heads the simplifier last left, whether it committed or found
+	// nothing to simplify: once the work moves past them (a fix, of a pull
+	// request or of the simplifier's own diff) it runs again after the
+	// review, as the ready gate asks (afterReview).
+	SimplifiedHeads map[string]string `json:"simplifiedHeads,omitempty"`
 	// Legacy, read by the conversion alone (convertCandidateTx, legacyTrace):
 	// an open pull request's fix being checked on its candidate branch, as
 	// a delivery stored before the candidate path was deleted may hold.
@@ -1093,16 +1098,21 @@ func (st *State) conductsRounds() bool { return st.conducted() }
 func (st *State) newLoop() { st.Round, st.RoundHeads, st.ReviewingHeads = 0, nil, nil }
 
 // afterReview is the step a review loop that has nothing left to fix goes
-// to: the simplifier, then the test. A loop over the simplifier's own
-// diff goes to the test: the simplifier is not run again after a fix of
-// its diff; that fix was reviewed by the loop, and the tester runs next.
+// to: the simplifier, then the test. The simplifier runs on the final
+// reviewed code: a loop over its own diff whose fix moved the work, or a
+// fix pushed to the pull request, goes through it again (simplifyDue) —
+// its commits reviewed as before — and only then to the test, or back to
+// the pull request.
 func (st *State) afterReview() string {
 	if st.PRFixAfter != nil {
 		// dude's push the fix would start from is reviewed: the fix now.
 		return "prFix"
 	}
+	if st.simplifyDue() {
+		return "simplify"
+	}
 	if len(st.FixRange) > 0 {
-		// A fix pushed to the pull request, reviewed: no simplifier and no
+		// A fix pushed to the pull request, reviewed (and simplified): no
 		// tester after it; the pull request's CI is its test.
 		return "prFixDone"
 	}
@@ -1110,6 +1120,21 @@ func (st *State) afterReview() string {
 		return "simplify"
 	}
 	return "test"
+}
+
+// simplifyDue says the policy runs the simplifier and the work moved past
+// where it last left it (SimplifiedHeads): a fix after it, of its diff or
+// of the pull request, or a pull request it never ran on.
+func (st *State) simplifyDue() bool {
+	if !st.Policy.Simplify {
+		return false
+	}
+	for repo, head := range st.Heads {
+		if head != "" && st.SimplifiedHeads[repo] != head {
+			return true
+		}
+	}
+	return false
 }
 
 // judgedBy assigns each category's attempted findings to a reviewer of the
@@ -1297,9 +1322,15 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 			if st.RetestDue {
 				return workflow.Result{Next: "test", State: st}, nil
 			}
+			// A simplification started at the wait whose diff a fix
+			// changed: through the simplifier again, on that fix.
+			again := len(st.SimplifyBase) > 0 && st.simplifyDue()
 			// A simplification started at the wait is reviewed: its range
 			// is not a later round's.
 			st.SimplifyBase = nil
+			if again {
+				return workflow.Result{Next: "simplify", State: st}, nil
+			}
 			return workflow.Result{Next: "openPullRequest", State: st}, nil
 		}
 		return workflow.Result{Next: st.afterReview(), State: st}, nil
@@ -1542,14 +1573,23 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		return workflow.Result{}, err
 	}
 	st.PendingRunIDs = nil
+	if out.Succeeded {
+		// Where it left the work: it runs again only once that moves
+		// (simplifyDue).
+		st.SimplifiedHeads = out.advance(st.Heads)
+	}
 	// A failed or empty simplification is not a failure of the task: the
 	// code was simple enough already. Carry on with what we had — unless
 	// the conductor queued a review behind it: then it is told at once.
 	if !out.Succeeded || len(out.Heads) == 0 {
 		// Started while the pull requests waited: back to them, its CI the
-		// test, as after a fix of the pull request.
+		// test, as after a fix of the pull request. After a fix pushed to
+		// the pull request: that fix's round is done.
 		next := "test"
-		if st.ActingOnPR {
+		switch {
+		case st.fixLoop():
+			next = "prFixDone"
+		case st.ActingOnPR && !st.RetestDue:
 			next = "openPullRequest"
 		}
 		if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseSimplify, runID, out, next); ok || err != nil {
@@ -1581,6 +1621,9 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		// No starting commit known (a Run from before it was kept): the
 		// range cannot be named, and a whole-branch round would end in
 		// another simplification.
+		if st.fixLoop() {
+			return workflow.Result{Next: "prFixDone", State: st}, nil
+		}
 		return workflow.Result{Next: "test", State: st}, nil
 	}
 	// The simplifier's diff is a loop of its own: its first review is round 1.
@@ -2805,7 +2848,9 @@ func (w *steps) prFixDone(ctx context.Context, sc workflow.StepContext) (workflo
 			heads[repo] = h
 		}
 	}
-	st.FixRange = nil
+	// The simplifier's diff of this round, if any, is reviewed: its range
+	// is not a later round's.
+	st.FixRange, st.SimplifyBase = nil, nil
 	// The bodies' review and verification are brought up to these heads
 	// as a promotion's are (refreshPromoted, retried), then prFixLanded.
 	return w.movedOnPR(ctx, sc, st, heads, len(heads) > 0)

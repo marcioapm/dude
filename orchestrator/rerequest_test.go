@@ -64,7 +64,9 @@ func (w *world) prFixPushed(wi string) string {
 	w.gh.Comment(1, "alice", "Please rename the greeting.")
 	w.agentsDone(wi, "the fix pushed", func() bool {
 		s := w.taskStatus(wi)
-		return w.fixes(wi) == 1 && w.gh.SHA(branch) != before && (s == "review" || s == "ready_to_merge")
+		// Its review, the simplifier on it and that one's review done: back
+		// at the wait, at the head the round ends with.
+		return w.fixes(wi) == 1 && w.gh.SHA(branch) != before && (s == "review" || s == "ready_to_merge") && w.waitingOnPR(wi)
 	})
 	return w.gh.SHA(branch)
 }
@@ -265,8 +267,10 @@ func TestAReviewRequestGitHubRefusesLeavesTheFixPushed(t *testing.T) {
 			!slices.Equal(strs(e[0]["reviewersRefused"]), []string{"jerv"}) || !strings.Contains(e[0]["error"].(string), "403") {
 			t.Fatalf("recorded %v", e)
 		}
-		if s := w.taskStatus(wi); s != "review" {
-			t.Errorf("task %s, want review", s)
+		// The refused request is no reason to hold the task: the gate
+		// asks for no approval here.
+		if s := w.taskStatus(wi); s != "review" && s != "ready_to_merge" {
+			t.Errorf("task %s, want review or ready to merge", s)
 		}
 	})
 }
@@ -380,7 +384,10 @@ func TestAFixWhoseSiblingParksForItsOwnerHasAskedItsReviewersFirst(t *testing.T)
 
 	w.connectOwner(ana, "ana-again", 1)
 	w.authorizeAgain(wi, ana)
-	w.until("web's pull request", func() bool { return len(w.web.Pulls()) == 1 && w.taskStatus(wi) == "review" })
+	w.until("web's pull request", func() bool {
+		s := w.taskStatus(wi)
+		return len(w.web.Pulls()) == 1 && (s == "review" || s == "ready_to_merge")
+	})
 	if p := w.web.Pull(1); p.Author != "ana" {
 		t.Errorf("web pull request authored by %q", p.Author)
 	}

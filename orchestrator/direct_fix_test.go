@@ -42,7 +42,7 @@ func (w *prFixWorld) waiting() bool {
 
 // A comment on the pull request: the fix publishes to the pull request's
 // branch, which CI and its reviewers see at once, and is then reviewed over
-// its own push alone; no simplifier, no tester. Its reviewers are asked
+// its own push alone, then simplified; no tester. Its reviewers are asked
 // again once, and nothing goes to a candidate branch.
 func TestDirectAPullRequestFixLandsOnThePullRequestThenIsReviewedOverItsRange(t *testing.T) {
 	w := newPRFixWorldDirect(t)
@@ -57,7 +57,8 @@ func TestDirectAPullRequestFixLandsOnThePullRequestThenIsReviewedOverItsRange(t 
 	w.comment("Please rename the greeting.")
 	w.until("the fix reviewed and the delivery waiting", func() bool {
 		w.sync()
-		return w.gh.SHA(w.branch) != w.before && w.taskStatus(w.wi) == "review" && w.waiting()
+		s := w.taskStatus(w.wi)
+		return w.gh.SHA(w.branch) != w.before && (s == "review" || s == "ready_to_merge") && w.waiting()
 	})
 	if !slices.Equal(w.phases, []string{"fix", "review"}) {
 		t.Errorf("after the comment: %v, want the fix and its review", w.phases)
@@ -78,9 +79,14 @@ func TestDirectAPullRequestFixLandsOnThePullRequestThenIsReviewedOverItsRange(t 
 		w.wi, delivery.RangePullRequestFix, w.before, fixHead); n != 1 {
 		t.Errorf("%d reviews of the fix's push %s..%s\n%s", n, w.before, fixHead, w.describeRuns())
 	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('simplify', 'test')
+	// The simplifier on the reviewed fix (the default policy's); no tester.
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'test'
 		AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb)`, w.wi); n != 0 {
-		t.Errorf("%d simplifier or tester Runs after the pull request's fix", n)
+		t.Errorf("%d tester Runs after the pull request's fix", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'simplify'
+		AND created_at > (SELECT min(created_at) FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb)`, w.wi); n != 1 {
+		t.Errorf("%d simplifier Runs after the pull request's fix, want one", n)
 	}
 	if w.candidate() != leftover || len(w.gh.BranchLog(delivery.CandidateBranch(w.wi, 1))) != 0 {
 		t.Errorf("the candidate branch was written or deleted: at %q, was %s", w.candidate(), leftover)
@@ -112,7 +118,8 @@ func TestDirectANarrowReviewFindingIsFixedOnThePullRequestAndReviewedAgain(t *te
 	w.comment("Please rename the greeting.")
 	w.until("the loop's second fix reviewed", func() bool {
 		w.sync()
-		return w.taskStatus(w.wi) == "review" && w.waiting() && len(w.phases) >= 4
+		s := w.taskStatus(w.wi)
+		return (s == "review" || s == "ready_to_merge") && w.waiting() && len(w.phases) >= 4
 	})
 	if !slices.Equal(w.phases, []string{"fix", "review", "fix", "review"}) {
 		t.Fatalf("after the comment: %v\n%s", w.phases, w.describeRuns())

@@ -8,6 +8,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -112,5 +113,27 @@ func TestTheReadyGateEndpointAnswersEveryItem(t *testing.T) {
 	}
 	if status, _ := w.get("/internal/pull-requests/pr_nope/ready-gate", w.org); status != 404 {
 		t.Errorf("an unknown pull request: %d, want 404", status)
+	}
+}
+
+// Under the default policy, the simplifier on: a person's comment on a
+// pull request that was ready to merge is fixed, the fix reviewed, the
+// simplifier runs on it by itself and its commit is reviewed, and the task
+// is ready to merge again. Nobody starts a phase by hand.
+func TestAPullRequestFixIsSimplifiedAndReadyAgainUnderTheDefaultPolicy(t *testing.T) {
+	w := newWorld(t)
+	wi := w.reviewing()
+	w.until("ready to merge", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+	phases := len(w.phaseOrder(wi))
+
+	w.gh.Comment(1, "alice", "Please also rename foo to bar.")
+	w.until("a fixer", func() bool { w.sync(); return w.taskStatus(wi) == "running" })
+	w.until("ready to merge again", func() bool { w.sync(); w.pump(); return w.taskStatus(wi) == "ready_to_merge" })
+
+	if got := w.phaseOrder(wi)[phases:]; !slices.Equal(got, []string{"fix", "review", "simplify", "review"}) {
+		t.Fatalf("phases after the comment: %v, want the fix, its review, the simplifier and its review", got)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.ready_to_merge'`, wi); n != 2 {
+		t.Errorf("%d ready-to-merge events, want two", n)
 	}
 }

@@ -65,7 +65,8 @@ func TestAFreshLargeDeltaReviewerKeepsTheDirectFixLoopsRange(t *testing.T) {
 // A pull request's direct fix loop weighs only the findings it would send
 // a fix: an open blocking finding of a review outside its range (run_rr1,
 // of the whole branch) does not keep the loop going. One of the loop's own
-// does: outside its range the round is done (prFixDone), not fixed again.
+// does: outside its range the round is not fixed again, and goes on to the
+// simplifier on the reviewed fix (the default policy's), not to a fix.
 // The same holds for reviewExit, which a person's accept of a
 // not_converging escalation in the loop goes to.
 func TestADirectFixLoopsExitWeighsOnlyTheFindingsItsFixIsSent(t *testing.T) {
@@ -78,7 +79,7 @@ func TestADirectFixLoopsExitWeighsOnlyTheFindingsItsFixIsSent(t *testing.T) {
 	var cases []exitCase
 	for _, step := range []string{"awaitReview", "reviewExit"} {
 		cases = append(cases,
-			exitCase{step + " outside the loop's range", step, "", "prFixDone"},
+			exitCase{step + " outside the loop's range", step, "", "simplify"},
 			exitCase{step + " of the loop's fix", step, RangePullRequestFix, "fix"})
 	}
 	for _, c := range cases {

@@ -569,12 +569,15 @@ func TestAnAdoptedPullRequestIsReviewedAndFixedInPlace(t *testing.T) {
 	if head == jervsHead || len(w.gh.Pulls()) != 1 {
 		t.Fatalf("fix head %s (was %s), %d pull requests", head, jervsHead, len(w.gh.Pulls()))
 	}
-	// Pushed to the adopted branch itself, then reviewed over its own range.
-	var fixBranch, fixHead string
+	// Pushed to the adopted branch itself, then reviewed over its own range;
+	// the simplifier on the reviewed fix may commit on top of it.
+	var fixBranch, fixHead, simplified string
 	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(branch, ''), heads->'target'->>'sha' FROM runs
 		WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb`, wi).Scan(&fixBranch, &fixHead)
-	if fixBranch != "" && fixBranch != "feature/greet" || fixHead != head {
-		t.Fatalf("the fix published to %q at %s; feature/greet is at %s", fixBranch, fixHead, head)
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE(heads->'target'->>'sha', '') FROM runs
+		WHERE task_id = $1 AND phase = 'simplify' ORDER BY created_at DESC LIMIT 1`, wi).Scan(&simplified)
+	if fixBranch != "" && fixBranch != "feature/greet" || fixHead != head && simplified != head {
+		t.Fatalf("the fix published to %q at %s, the simplifier at %s; feature/greet is at %s", fixBranch, fixHead, simplified, head)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
 		AND review_range->'base'->>'target' = $3`, wi, delivery.RangePullRequestFix, jervsHead); n == 0 {

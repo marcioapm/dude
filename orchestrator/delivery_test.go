@@ -3382,9 +3382,6 @@ func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("run:failure")
 	wi := w.reviewing()
-	// A fix of the pull request runs no simplifier after it; the ready
-	// gate asks for one when the policy does. These are about the checks.
-	w.simplifierOff(wi)
 	w.gh.Review(1, "alice", "APPROVED")
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3405,9 +3402,6 @@ func TestFailingActionsKeepAnApprovedPullRequestOutOfReady(t *testing.T) {
 func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 	w := newWorld(t)
 	wi := w.reviewing()
-	// A fix of the pull request runs no simplifier after it; the ready
-	// gate asks for one when the policy does. These are about the checks.
-	w.simplifierOff(wi)
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3425,7 +3419,11 @@ func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 	// green checks on record are the last head's, and CI on the new one
 	// has not started.
 	w.gh.SetChecks("pending")
-	w.until("the fix pushed", func() bool { return w.gh.SHA(head) != before && w.taskStatus(wi) != "running" })
+	// Then its review, the simplifier on it and that one's review: back at
+	// the wait.
+	w.until("the fix pushed", func() bool {
+		return w.gh.SHA(head) != before && w.taskStatus(wi) != "running" && w.waitingOnPR(wi)
+	})
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		w.pump()
@@ -3451,9 +3449,6 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 	w := newWorld(t)
 	w.prs.CIGrace = time.Hour
 	wi := w.reviewing()
-	// A fix of the pull request runs no simplifier after it; the ready
-	// gate asks for one when the policy does. These are about the checks.
-	w.simplifierOff(wi)
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3477,8 +3472,10 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		w.pump()
 	}
-	if w.taskStatus(wi) != "review" {
-		t.Fatalf("%s within the grace, before CI could show up", w.taskStatus(wi))
+	// Still at work (the simplifier runs on the fix after its review) or
+	// in review; not ready.
+	if s := w.taskStatus(wi); s == "ready_to_merge" {
+		t.Fatalf("%s within the grace, before CI could show up", s)
 	}
 	w.prs.CIGrace = time.Millisecond
 	w.until("ready, the fix having no CI", func() bool {
@@ -3719,14 +3716,6 @@ func TestAPersonAcceptsTheFindingsAReviewGotStuckOn(t *testing.T) {
 
 // sync reads the task's pull requests from GitHub, as a webhook would
 // have it do.
-// simplifierOff turns the delivery's simplifier off, as a project's
-// policy would have: the ready gate asks for none after the last change.
-func (w *world) simplifierOff(wi string) {
-	w.t.Helper()
-	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{policy,simplify}', 'false')
-		WHERE task_id = $1 AND workflow_type = 'task.delivery'`, wi)
-}
-
 func (w *world) sync() {
 	_, _ = w.prs.Reconcile(context.Background(), 0)
 }

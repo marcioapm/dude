@@ -23,8 +23,10 @@ func (w *world) waitingOnPR(task string) bool {
 // While the delivery waits on its pull request, the conductor may start a
 // fix, a review, the simplifier or a test: the Run goes to work on the pull
 // request's branch, and the delivery waits on it again after — no second
-// pull request, no simplify it did not start, no Open or Draft. Implement
-// is not for then, nor is a fix with nothing to do.
+// pull request, no Open or Draft. A fix goes through the simplifier after
+// its review, as any pull request fix does under the default policy; a
+// review alone does not. Implement is not for then, nor is a fix with
+// nothing to do.
 func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	w := conducting(t)
 	task := w.reviewing()
@@ -45,8 +47,9 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 		return w.gh.SHA(branch) != before && w.waitingOnPR(task)
 	})
 	// A direct fix, whoever started it: pushed to the pull request, then
-	// reviewed over its own range; no simplifier, no tester.
-	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"fix", "review"}) {
+	// reviewed over its own range, then the simplifier and its review; no
+	// tester.
+	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"fix", "review", "simplify", "review"}) {
 		t.Fatalf("phases after start_phase fix: %v", got)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
@@ -62,7 +65,7 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	w.until("the review's decision", func() bool { return w.decisionAt(task) == "after_review" })
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("waiting again", func() bool { return w.waitingOnPR(task) })
-	if got := w.phasesRun(task)[phases+2:]; len(got) == 0 || got[0] != "review" || slices.Contains(got, "simplify") ||
+	if got := w.phasesRun(task)[phases+4:]; len(got) == 0 || got[0] != "review" || slices.Contains(got, "simplify") ||
 		slices.Contains(got, "test") {
 		t.Fatalf("phases after start_phase review: %v", got)
 	}
