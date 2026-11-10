@@ -351,3 +351,16 @@ func TestTheReadyGateWithoutGitHubIsNotReady(t *testing.T) {
 	holds(t, gates[0], ReadyChecks, false, "unreadable")
 	holds(t, gates[0], ReadyFindings, true, "no open finding")
 }
+
+// dude's push recorded with no paths ("changedPaths": null, a nil list
+// marshalled) is read as none, never failing the gate's read.
+func TestTheReadyGateReadsAPushRecordedWithNoPaths(t *testing.T) {
+	f := newGateFixture(t)
+	head := f.ready()
+	f.exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_nullpaths', $1, 'git.commit_created', 'run_g01', 'wi_g', 'agent', 'run_g01', 'test',
+		jsonb_build_object('repo', 'repo', 'headSha', $2::text, 'changedPaths', 'null'::jsonb))`, head)
+	if !f.gate().Ready {
+		t.Fatalf("not ready: %+v", f.gate().Items)
+	}
+}

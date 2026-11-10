@@ -66,7 +66,14 @@ func testAPullRequestFixThatCommitsNothingSpendsNoBudget(t *testing.T) {
 	head := w.gh.SHA(w.gh.Pull(1).Head)
 	w.commit.Store(false)
 	w.gh.Comment(1, "alice", "Is this ready?")
-	w.until("the fix that changed nothing", func() bool { w.sync(); return w.fixes(w.wi) == 1 && w.taskStatus(w.wi) == "review" })
+	// Back to waiting on the pull request: in review, or ready to merge,
+	// as nothing it changed holds it back (the ready gate asks for no
+	// approval protection does not).
+	w.until("the fix that changed nothing", func() bool {
+		w.sync()
+		s := w.taskStatus(w.wi)
+		return w.fixes(w.wi) == 1 && (s == "review" || s == "ready_to_merge")
+	})
 	if got := w.gh.SHA(w.gh.Pull(1).Head); got != head {
 		t.Fatalf("the quiet fixer moved the pull request: %s -> %s", head, got)
 	}

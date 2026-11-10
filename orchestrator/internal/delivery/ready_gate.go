@@ -228,7 +228,8 @@ func reviewedHeadTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 func missingLensesTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, repo string, p Policy) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT $3 || '/' || path FROM events e
 		JOIN runs w ON w.id = e.run_id AND w.attempt = $2,
-		jsonb_array_elements_text(COALESCE(e.payload->'changedPaths', '[]'::jsonb)) path
+		jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.payload->'changedPaths') = 'array'
+			THEN e.payload->'changedPaths' ELSE '[]'::jsonb END) path
 		WHERE e.task_id = $1 AND e.event_type = $4 AND e.payload->>'repo' = $3`, taskID, attempt, repo, EvGitCommitCreated)
 	if err != nil {
 		return nil, err
