@@ -9,10 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // Approved, green, and a person's commit on top that no review covered:
@@ -184,4 +186,54 @@ func TestAnsweringTheLastQuestionMakesThePullRequestReady(t *testing.T) {
 	if len(w.gh.Requests()) == requests {
 		t.Fatal("ready with no read of GitHub")
 	}
+}
+
+// crashSimplifiers has the first n simplify Runs after now fail, as a dead
+// container would; every other Run is the world's scripted agent.
+func (w *world) crashSimplifiers(n int) {
+	scripted := w.lux.Decide
+	var mu sync.Mutex
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "simplify" {
+			mu.Lock()
+			crash := n > 0
+			n--
+			mu.Unlock()
+			if crash {
+				return fakelux.Behaviour{Crash: true}
+			}
+		}
+		return scripted(spec)
+	}
+}
+
+// The simplifier the gate asks for after a pull request fix fails once:
+// it is tried again, and the task reaches ready to merge. Failing twice,
+// the delivery stops for a decision.
+func TestAFailedSimplifierAfterAPullRequestFixIsRetriedOnceThenEscalates(t *testing.T) {
+	t.Run("retried", func(t *testing.T) {
+		w := newWorld(t)
+		wi := w.reviewing()
+		w.until("ready to merge", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+		w.crashSimplifiers(1)
+		w.gh.Comment(1, "alice", "Please also rename foo to bar.")
+		w.until("a fixer", func() bool { w.sync(); return w.taskStatus(wi) == "running" })
+		w.until("ready to merge again", func() bool { w.sync(); w.pump(); return w.taskStatus(wi) == "ready_to_merge" })
+		if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'simplify'`, wi); n != 3 {
+			t.Errorf("%d simplify Runs, want the first, the failed one and its retry", n)
+		}
+	})
+	t.Run("escalated", func(t *testing.T) {
+		w := newWorld(t)
+		wi := w.reviewing()
+		w.until("ready to merge", func() bool { w.sync(); return w.taskStatus(wi) == "ready_to_merge" })
+		w.crashSimplifiers(2)
+		w.gh.Comment(1, "alice", "Please also rename foo to bar.")
+		w.until("a fixer", func() bool { w.sync(); return w.taskStatus(wi) == "running" })
+		w.until("escalated", func() bool { w.sync(); return w.taskStatus(wi) == "awaiting_input" })
+		if r := w.escalationReason(wi); r != "pr_fix_failed" {
+			t.Fatalf("escalated %q, want pr_fix_failed", r)
+		}
+	})
 }

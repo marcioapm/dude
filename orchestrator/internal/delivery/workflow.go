@@ -177,6 +177,9 @@ type State struct {
 	// only by checks pending within the CI grace, whose end no sync sees
 	// (weighReadiness). awaitPullRequest's timer (waitForPR) wakes then.
 	ReweighAt *time.Time `json:"reweighAt,omitempty"`
+	// The simplifier after a pull request fix failed once and runs again
+	// (awaitSimplify); failing again escalates.
+	SimplifyRetried bool `json:"simplifyRetried,omitempty"`
 	// A direct pull request fix (or integration) held while the narrow
 	// review of dude's unreviewed push it would start from runs
 	// (reviewFirst): once that loop is clear, prFix starts it.
@@ -1599,6 +1602,20 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		// (simplifyDue).
 		st.SimplifiedHeads = out.advance(st.Heads)
 	}
+	if !out.Succeeded && st.fixLoop() {
+		// After a fix pushed to the pull request, the ready gate asks for
+		// the simplifier past the fix (simplified_after_last_change): one
+		// that failed is tried once more, then a person (or the conductor
+		// first) decides, as a failed fixer on this path is
+		// (pr_fix_failed).
+		if !st.SimplifyRetried {
+			st.SimplifyRetried = true
+			return workflow.Result{Next: "simplify", State: st}, nil
+		}
+		st.SimplifyRetried = false
+		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error, "phase": PhaseSimplify})
+	}
+	st.SimplifyRetried = false
 	// A failed or empty simplification is not a failure of the task: the
 	// code was simple enough already. Carry on with what we had — unless
 	// the conductor queued a review behind it: then it is told at once.
@@ -2370,10 +2387,15 @@ func writerKey(sc workflow.StepContext, st *State, phase string) string {
 		}
 		return key(sc, st, ":implement")
 	case PhaseSimplify:
-		if d != nil {
-			return conductorKey(sc, st, d, ":simplify")
+		again := ""
+		if st.SimplifyRetried {
+			// The retry of a failed simplifier is a Run of its own.
+			again = ":again"
 		}
-		return testRoundKey(sc, st, ":simplify")
+		if d != nil {
+			return conductorKey(sc, st, d, ":simplify"+again)
+		}
+		return testRoundKey(sc, st, ":simplify"+again)
 	case PhaseFix:
 		switch {
 		case d != nil:
@@ -3208,6 +3230,8 @@ var RetryStep = map[string]string{
 	"testVerdict": "test",
 	"prFix":       "prFix",
 	"awaitPRFix":  "prFix",
+	// A simplifier that failed twice after a pull request fix.
+	"awaitSimplify": "simplify",
 }
 
 func decisionActor(d *HumanDecision) string {
