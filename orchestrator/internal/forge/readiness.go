@@ -45,9 +45,8 @@ type ReadinessFacts struct {
 	Workflows       []string
 	ActionsExpected string
 	// What branch protection (and rulesets) on BaseBranch require, read
-	// when no check reported or GitHub says the merge is blocked.
-	// ProtectionKnown is false when neither could be read.
-	ProtectionKnown   bool
+	// when no check reported or GitHub says the merge is blocked; none
+	// when neither could be read.
 	RequiredChecks    []string
 	RequiredApprovals int
 	// GitHub's count of approving reviews standing, for naming a missing
@@ -149,8 +148,8 @@ func (g *GitHub) workflowFiles(ctx context.Context, slug, ref string) (files []s
 
 // protection reads what the base branch requires, from the two places
 // GitHub keeps it that a reader may see: the branch's own protection
-// summary and the rulesets that apply to it. Neither readable leaves
-// ProtectionKnown false.
+// summary and the rulesets that apply to it. Neither readable requires
+// nothing that can be named.
 func (g *GitHub) protection(ctx context.Context, slug, branch string, f *ReadinessFacts) error {
 	var b struct {
 		Protected  bool `json:"protected"`
@@ -166,7 +165,6 @@ func (g *GitHub) protection(ctx context.Context, slug, branch string, f *Readine
 	err := g.do(ctx, "GET", "/repos/"+slug+"/branches/"+branch, nil, &b)
 	switch {
 	case err == nil:
-		f.ProtectionKnown = true
 		if b.Protection != nil && b.Protection.RequiredStatusChecks != nil {
 			f.RequiredChecks = append(f.RequiredChecks, b.Protection.RequiredStatusChecks.Contexts...)
 			for _, c := range b.Protection.RequiredStatusChecks.Checks {
@@ -188,7 +186,6 @@ func (g *GitHub) protection(ctx context.Context, slug, branch string, f *Readine
 	err = g.do(ctx, "GET", "/repos/"+slug+"/rules/branches/"+branch, nil, &rules)
 	switch {
 	case err == nil:
-		f.ProtectionKnown = true
 		for _, r := range rules {
 			switch r.Type {
 			case "pull_request":

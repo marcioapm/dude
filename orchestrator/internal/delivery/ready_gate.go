@@ -567,7 +567,7 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 			parents[c.SHA] = append(parents[c.SHA], x.SHA)
 		}
 	}
-	simplified, err := simplifiedCommits(ctx, gh, p)
+	simplified, refused, err := simplifiedCommits(ctx, gh, p)
 	if err != nil {
 		return false, "", err
 	}
@@ -607,7 +607,12 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 	}
 	if len(unreviewed) > 0 {
 		slices.Reverse(unreviewed)
-		return false, fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", ")), nil
+		detail := fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", "))
+		if len(refused) > 0 {
+			detail += fmt.Sprintf(" (GitHub would not compare the simplifier's run from %s, so its commits are not counted as reviewed simplifications)",
+				strings.Join(refused, ", "))
+		}
+		return false, detail, nil
 	}
 	return true, fmt.Sprintf("reviewed at %s; since then only reviewed simplifications and pure merges of %s", short(p.Reviewed), base), nil
 }
@@ -646,9 +651,11 @@ func pureBaseMerge(ctx context.Context, gh *forge.GitHub, slug, base, merge stri
 }
 
 // simplifiedCommits is every commit of a simplify Run whose own review
-// completed: start..produced.
-func simplifiedCommits(ctx context.Context, gh *forge.GitHub, p GateFacts) (map[string]bool, error) {
+// completed: start..produced. refused names the starts of those GitHub
+// would not compare: their commits between are not counted.
+func simplifiedCommits(ctx context.Context, gh *forge.GitHub, p GateFacts) (map[string]bool, []string, error) {
 	out := map[string]bool{}
+	var refused []string
 	for _, s := range p.Simplifies {
 		if s.Produced == "" || !s.Reviewed {
 			continue
@@ -662,16 +669,17 @@ func simplifiedCommits(ctx context.Context, gh *forge.GitHub, p GateFacts) (map[
 		}
 		cmp, err := gh.CompareCommits(ctx, p.Slug, s.Start, s.Produced)
 		if forge.Refused(err) {
+			refused = append(refused, short(s.Start))
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, c := range cmp.Commits {
 			out[c.SHA] = true
 		}
 	}
-	return out, nil
+	return out, refused, nil
 }
 
 // gateSimplified is item 4: C, the head's last commit that is not a

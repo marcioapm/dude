@@ -44,7 +44,7 @@ func TestReadinessReadsWhatTheGateJudges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.MergeableState != "clean" || f.Checks != ChecksUnknown || !f.WorkflowsKnown || len(f.Workflows) != 0 ||
-		!f.ProtectionKnown || len(f.RequiredChecks) != 0 || f.HeadSHA != fake.SHA("feature") {
+		len(f.RequiredChecks) != 0 || f.HeadSHA != fake.SHA("feature") {
 		t.Fatalf("a repository with no CI: %+v", f)
 	}
 

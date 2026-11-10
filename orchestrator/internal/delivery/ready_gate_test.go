@@ -452,3 +452,21 @@ func TestTheReadyGateBoundsTheBaseMergeWalk(t *testing.T) {
 		})
 	}
 }
+
+// A simplify Run whose range GitHub will not compare is not counted as a
+// reviewed simplification, and the reviewed item says why, not only that
+// its commit is unreviewed.
+func TestTheReadyGateSaysWhenARefusedCompareSkipsASimplifyRun(t *testing.T) {
+	f := newGateFixture(t)
+	f.st.Policy.Simplify = false
+	f.saveState()
+	h0 := f.implemented(map[string]string{"app/greet.go": "package app\n"})
+	f.gh.CommitFiles("feature", "Simplify", map[string]string{"SIMPLE.md": "simple\n"})
+	s2 := f.gh.CommitFiles("feature", "Simplify more", map[string]string{"SIMPLER.md": "simpler\n"})
+	f.reviewed(s2)
+	bogus := "0123456789abcdef0123456789abcdef01234567"
+	f.run(PhaseSimplify, "", bogus, map[string]any{"repo": map[string]any{"sha": s2, "base": bogus}})
+	f.reviewed(h0)
+	f.synced()
+	holds(t, f.gate(), ReadyReviewed, false, "GitHub would not compare the simplifier's run from "+bogus[:7])
+}
