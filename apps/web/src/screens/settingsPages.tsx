@@ -659,7 +659,7 @@ export function DeliveryPage({ scope }: { scope: SettingsScope }) {
         {number("maxAttemptsPerFinding", 1, 20, "Fixes one finding may survive before it is raised on its own.", "Attempts per finding")}
         {number("maxStillRounds", 0, 20, "Consecutive explicit still verdicts on a blocking acceptance criterion. 0 disables.", "Unmet criterion rounds")}
         {number("maxRegressionRounds", 0, 20, "Consecutive fix rounds replacing resolved blockers with blockers caused by the fix. 0 disables.", "Regression rounds")}
-        {number("maxPrFixIterations", 0, 20, "Fixes for pull request comments before the owner is asked.", "Pull request fix rounds")}
+        {number("maxPrFixIterations", 0, 20, "Fixes for pull request comments before the conductor decides how to go on, and may ask the owner; with no conductor, the owner is asked.", "Pull request fix rounds")}
         {number("maxPrFixReviewIterations", 1, 20, "Review → fix cycles after a fix pushed to an open pull request, before the owner is asked. Each is a push CI sees.", "Reviews per pull request fix")}
         <SettingRow
           label="Simplify pass"
