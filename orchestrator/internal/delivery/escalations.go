@@ -750,10 +750,7 @@ func prLoopRetryRefusal(ctx context.Context, tx pgx.Tx, d *Delivery, note string
 	if said == "" {
 		return refuseText(rSayWhyAnotherPRFixRound)
 	}
-	rows, err := tx.Query(ctx, `SELECT payload->>'note' FROM events
-		WHERE task_id = $1 AND event_type = $2 AND payload->>'reason' = 'pr_loop_exhausted' AND payload->>'action' = 'retry'
-		  AND occurred_at >= (SELECT created_at FROM workflow_runs WHERE id = $3)
-		ORDER BY cursor`, d.State.TaskID, EvTaskDecided, d.WorkflowID)
+	rows, err := tx.Query(ctx, prLoopRetriesSQL, d.State.TaskID, d.WorkflowID)
 	if err != nil {
 		return err
 	}
@@ -768,6 +765,18 @@ func prLoopRetryRefusal(ctx context.Context, tx pgx.Tx, d *Delivery, note string
 	}
 	return nil
 }
+
+// prLoopRetriesSQL is the reasons of this delivery's pr_loop_exhausted
+// retries, oldest first, on events_task_decisions_idx (migration 238:
+// task_id, cursor, over the decision event types alone). The event type is
+// a literal, as in defaultsInARowSQL: bound as a parameter, a generic plan
+// (which production's pool settles on) cannot prove the index's predicate
+// and reads every event of the task.
+const prLoopRetriesSQL = `SELECT payload->>'note' FROM events
+	WHERE task_id = $1 AND event_type = '` + EvTaskDecided + `'
+	  AND payload->>'reason' = 'pr_loop_exhausted' AND payload->>'action' = 'retry'
+	  AND occurred_at >= (SELECT created_at FROM workflow_runs WHERE id = $2)
+	ORDER BY cursor`
 
 // retryReasonWords is a retry's reason as its words alone: lower case,
 // punctuation and spacing aside.
