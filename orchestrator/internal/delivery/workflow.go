@@ -3030,6 +3030,11 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 			unknown = true
 		}
 	}
+	// Kept for the conductor's pull_requests, which serves it while the
+	// head it was judged at is the one recorded.
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error { return StoreGatesTx(ctx, tx, gates, time.Now()) }); err != nil {
+		return err
+	}
 	if unknown {
 		return workflow.Wait{After: mergeableRetry, Why: "GitHub has not worked out whether the pull request merges yet"}
 	}

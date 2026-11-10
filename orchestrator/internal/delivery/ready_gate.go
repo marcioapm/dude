@@ -3,6 +3,7 @@ package delivery
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -118,6 +119,74 @@ type gateSimplify struct {
 	Start, Produced, Merged string
 	// A completed review of the attempt started at Produced.
 	Reviewed bool
+}
+
+// StoredGate is the last gate computed for a pull request
+// (pull_requests.ready_gate): at which head, and when.
+type StoredGate struct {
+	Head  string     `json:"head"`
+	At    time.Time  `json:"at"`
+	Ready bool       `json:"ready"`
+	Items []GateItem `json:"items"`
+}
+
+// WithOwnItems is the stored gate with dude's own items (findings,
+// questions) as p reads them now, and Ready judged again with them: those
+// change with no change of the head.
+func (s StoredGate) WithOwnItems(p GateFacts) StoredGate {
+	items := slices.Clone(s.Items)
+	ready := len(items) == len(ReadyKeys)
+	for i, it := range items {
+		switch it.Key {
+		case ReadyFindings:
+			items[i] = p.Findings
+		case ReadyQuestions:
+			items[i] = p.Questions
+		}
+		ready = ready && items[i].OK
+	}
+	s.Items, s.Ready = items, ready
+	return s
+}
+
+// StoreGatesTx records each gate GitHub answered for as its pull
+// request's last, only while the head it was judged at is still the one
+// recorded, as judged at at.
+func StoreGatesTx(ctx context.Context, tx pgx.Tx, gates []PRGate, at time.Time) error {
+	for _, g := range gates {
+		if g.Err != nil || g.Head == "" {
+			continue
+		}
+		raw, err := json.Marshal(StoredGate{Head: g.Head, At: at.UTC(), Ready: g.Ready, Items: g.Items})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE pull_requests SET ready_gate = $3::jsonb WHERE id = $1 AND head_sha = $2`,
+			g.ID, g.Head, string(raw)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StoredGatesTx is the task's pull requests' last gates, by pull request
+// id; one never judged is absent.
+func StoredGatesTx(ctx context.Context, tx pgx.Tx, taskID string) (map[string]StoredGate, error) {
+	rows, err := tx.Query(ctx, `SELECT id, ready_gate FROM pull_requests WHERE task_id = $1 AND ready_gate IS NOT NULL`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]StoredGate{}
+	var id string
+	var raw []byte
+	_, err = pgx.ForEachRow(rows, []any{&id, &raw}, func() error {
+		var g StoredGate
+		if json.Unmarshal(raw, &g) == nil {
+			out[id] = g
+		}
+		return nil
+	})
+	return out, err
 }
 
 // ReadyGateFor reads the gate of the task's pull requests prIDs (every
