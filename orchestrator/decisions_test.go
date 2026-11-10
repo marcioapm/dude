@@ -733,8 +733,9 @@ func TestThePullRequestGateFollowsTheHead(t *testing.T) {
 	}
 }
 
-// The pull request's fix rounds bound the conductor, each refused saying to
-// ask the person; review rounds and fix attempts do not
+// The pull request's fix rounds bound the conductor's start_phase fix; its
+// decide next goes on to Deliver's step, which escalates pr_loop_exhausted
+// to the conductor; review rounds and fix attempts do not bound it
 // (TestNoReviewRoundBoundRefusesAConductedLoop).
 func TestTheBoundsRefuseTheConductor(t *testing.T) {
 	t.Run("pull request fix rounds", func(t *testing.T) {
@@ -752,7 +753,6 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		w.gh.Comment(1, "alice", "And the farewell.")
 		w.until("feedback again", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
 		w.refused(task, "start_phase", `{"phase":"fix"}`, "1 of 1 this review round")
-		w.refused(task, "decide", `{"action":"next"}`, "the person how to go on")
 		w.must(task, "decide", `{"action":"wait","note":"asking Márcio first"}`)
 		w.until("waiting on the pull request", func() bool { return w.taskStatus(task) == "review" })
 	})
@@ -771,17 +771,24 @@ func TestTheBoundsRefuseTheConductor(t *testing.T) {
 		w.directFixReviewed(task)
 		w.gh.Comment(1, "alice", "And the farewell.")
 		w.until("feedback again", func() bool { w.sync(); return w.decisionAt(task) == delivery.PointPRFeedback })
-		decided := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decided'`, task)
 		w.refused(task, "start_phase", `{"phase":"fix"}`, "the organization's bound")
-		w.refused(task, "decide", `{"action":"next"}`, "the organization's bound")
-		for range 3 {
-			w.pump()
-		}
-		if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decided'`, task); n != decided {
-			t.Errorf("%d decisions recorded past the bound", n-decided)
-		}
+		// decide next is Deliver's step, which escalates at the bound: the
+		// conductor holds it, and no fixer is started past the bound.
+		w.must(task, "decide", `{"action":"next"}`)
+		w.until("pr_loop_exhausted with the conductor", func() bool {
+			return w.escalationReason(task) == "pr_loop_exhausted" && w.taskStatus(task) == "running"
+		})
 		if n := w.fixes(task); n != 1 {
 			t.Errorf("%d fixer Runs, want the one within the bound", n)
+		}
+		w.wokenWith(task, "Escalation: pr loop exhausted")
+		// Its retry needs its reason; with one, another fix runs.
+		w.refused(task, "decide_escalation", `{"action":"retry","note":" "}`, "needs your reason")
+		w.must(task, "decide_escalation", `{"action":"retry","note":"Alice's farewell comment is new and small: one more fix converges."}`)
+		w.until("the retried fix", func() bool { w.sync(); return w.fixes(task) == 2 })
+		if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'
+			AND payload->>'reason' = 'pr_loop_exhausted' AND payload->>'action' = 'retry' AND payload->>'by' = 'conductor'`, task); n != 1 {
+			t.Errorf("%d conductor retries recorded, want 1", n)
 		}
 	})
 }
