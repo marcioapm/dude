@@ -82,7 +82,11 @@ func TestDueReadsChecksAsksOnTheirIndex(t *testing.T) {
 		return b
 	}
 	exec(`ANALYZE`)
+	// dueQuery reads runs.news_hold_at (259): there for the measurement
+	// before 251, and dropped again for 259 to add it.
+	exec(`ALTER TABLE runs ADD COLUMN news_hold_at timestamptz`)
 	before := best()
+	exec(`ALTER TABLE runs DROP COLUMN news_hold_at`)
 	apply()
 	exec(`ANALYZE events`)
 	after := best()

@@ -1,10 +1,14 @@
 package phases
 
 import (
+	"context"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // waitingWorld is a resumeWorld whose Run runs, waiting on its open
@@ -27,6 +31,26 @@ func (w *resumeWorld) note(held bool) {
 	w.t.Helper()
 	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, held_for)
 		VALUES ('dir_'||$1, $1, $2, $3, 'news', CASE WHEN $4 THEN 'q_'||$1 END)`, w.run.Org, w.run.TaskID, w.run.ID, held)
+}
+
+// interruptedRoot queues the steer an "Interrupt now" of w's Run resends,
+// heard an hour ago: 'dir_root_'||org.
+func (w *resumeWorld) interruptedRoot() {
+	w.t.Helper()
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, created_at, sent_at, delivered_at)
+		VALUES ('dir_root_'||$1, $1, $2, $3, 'news', now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour')`,
+		w.run.Org, w.run.TaskID, w.run.ID)
+}
+
+// peerWait opens a wait of w's Run on a peer's reply, since ago (SQL
+// interval): an ask (delivery.OpenAsk), not a person's (PersonAsk).
+func (w *resumeWorld) peerWait(since string) {
+	w.t.Helper()
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_peer_'||$1, $1, 'prj_'||$1, 2, 'Peer', 'G')`, w.run.Org)
+	w.exec(`INSERT INTO peer_messages (id, organization_id, from_task_id, from_run_id, to_task_id, text)
+		VALUES ('pm_'||$1, $1, 'wi_'||$1, 'run_'||$1, 'wi_peer_'||$1, 'hi')`, w.run.Org)
+	w.exec(`INSERT INTO peer_waits (id, organization_id, run_id, message_id, how, since)
+		VALUES ('pw_'||$1, $1, 'run_'||$1, 'pm_'||$1, 'wait', now() - $2::interval)`, w.run.Org, since)
 }
 
 // parkForPerson runs the person park as advance does, and returns how many
@@ -268,5 +292,427 @@ func TestASteerAfterALiveTakeUpIsHeardNotParkedOver(t *testing.T) {
 	w.note(false)
 	if got := w.dueRun(); got.ParkNow {
 		t.Errorf("ParkNow inside the grace of the resumed wait, the steer unheard")
+	}
+}
+
+// A park held for news in this wait (runs.news_hold_at, newsHeld), row by
+// row, as due and requestPause read it. The wait began when the question
+// was asked, 3 minutes ago (inside the ceiling); its grace is the
+// factory's 10 minutes. Held in this wait, the Run is due its park as soon
+// as it waits with what was queued by the hold heard, grace or not; a note
+// queued after the hold does not hold the park off (it waits for the
+// answer: not HasDirectives), but one queued before does. A hold from
+// before the wait began (an older ask's wait, a resume since) is spent:
+// the wait is as on main and #438, its park due only past its grace, and
+// held for a note then (HoldNews). A held park whose person's ask was
+// answered leaves the Run's notes to deliver. Mid-turn, nothing parks.
+func TestAPersonParkHeldForNewsRowByRow(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// hold: news_hold_at (SQL interval ago, "" for NULL); waiting: how
+		// long since waiting_since ("" mid-turn); note: when a note was
+		// queued ("" none); resumed: a run_resumes row that long ago.
+		hold, waiting, note, resumed string
+		// also: more of the note to set (SQL, after a comma).
+		also string
+		// answered: the question answered a minute ago; asked: a new
+		// question since, that long ago; peer: a peer wait open since 5
+		// minutes ago, older than the question.
+		answered                      bool
+		asked                         string
+		peer                          bool
+		parkNow, holdNews, directives bool
+	}{
+		{name: "never held, inside the grace, a note", waiting: "1 minute", note: "now()", directives: true},
+		{name: "never held, past the grace, a note", waiting: pastGrace, note: "now()", holdNews: true, directives: true},
+		{name: "never held, past the grace, no note", waiting: pastGrace, parkNow: true},
+		{name: "held, inside the grace, no note", hold: "2 minutes", waiting: "1 minute", parkNow: true},
+		{name: "held, inside the grace, a note queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()", parkNow: true},
+		{name: "held, inside the grace, a note queued before the hold", hold: "2 minutes", waiting: "1 minute",
+			note: "now() - interval '150 seconds'", directives: true},
+		{name: "held, mid-turn, a note queued after the hold", hold: "2 minutes", note: "now()"},
+		{name: "held before a resume, inside the grace, a note", hold: "2 minutes", resumed: "1 minute", waiting: "1 minute",
+			note: "now()", directives: true},
+		{name: "held before a resume, past the grace, a note", hold: "2 minutes", resumed: "1 minute", waiting: pastGrace,
+			note: "now()", holdNews: true, directives: true},
+		{name: "held before the ask, inside the grace, a note", hold: "4 minutes", waiting: "1 minute", note: "now()", directives: true},
+		{name: "held, answered since, a note queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			answered: true, directives: true},
+		// What serves the turn under way (servesTurn: dude's nudge of it, a
+		// person's "Interrupt now") and turn retries are not held for the
+		// answer, and do not hold the park off (newsCutoff).
+		{name: "held, inside the grace, a turn's nudge queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			also: "interrupt = true, scope = 'turn'", parkNow: true, directives: true},
+		{name: "held, inside the grace, an Interrupt now queued after the hold", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			also: "interrupt = true, resends = 'dir_root_'||organization_id", parkNow: true, directives: true},
+		// A new steer sent as an interrupt (a person's, a conductor's) is a
+		// note like any other: it waits for the answer (heldForNews).
+		{name: "held, inside the grace, a new interrupt steer queued after the hold", hold: "2 minutes", waiting: "1 minute",
+			note: "now()", also: "interrupt = true", parkNow: true},
+		{name: "held, inside the grace, a retry queued after the hold, due", hold: "2 minutes", waiting: "1 minute", note: "now()",
+			also: "deliver_after = now() - interval '1 second'", parkNow: true, directives: true},
+		// What was queued by the hold holds the park off, at the hold too.
+		{name: "held, inside the grace, a note queued at the hold, unsent and unclaimed", hold: "2 minutes", waiting: "1 minute",
+			note: "(SELECT news_hold_at FROM runs WHERE id = run_id)", directives: true},
+		// The wait begins with the question: a hold made then is this wait's.
+		{name: "held as the question was asked, inside the grace, no note", hold: "3 minutes", waiting: "1 minute", parkNow: true},
+		// Waiting only on a peer: what comes after the hold is heard, as a
+		// parked Run is resumed for it (resumable), not parked over.
+		{name: "held, waiting only on an older peer wait, a note queued after the hold", hold: "2 minutes", waiting: "1 minute",
+			note: "now()", answered: true, peer: true, directives: true},
+		// A hold with nothing open has no effect: nothing to park for.
+		{name: "held, nothing open, a resume before the hold, a note queued after the hold", hold: "2 minutes", resumed: "5 minutes",
+			waiting: "1 minute", note: "now()", answered: true, directives: true},
+		// The reviewer's repro: the held question answered, its answer
+		// heard (a note sent after the hold spends it, holdSpent), an
+		// older peer wait still open so waitBegan does not move. The
+		// answer's turn ends in a wait with a full grace, as on main;
+		// so does a new question's.
+		{name: "held, answered, older peer wait still open, no new question", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			answered: true, peer: true},
+		{name: "held, answered, older peer wait still open, a new question", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			answered: true, peer: true, asked: "30 seconds"},
+		// Not spent by what serves the held note's turn: dude's nudge of
+		// it, a person's "Interrupt now", a retry of it, sent after the hold.
+		{name: "held, inside the grace, a turn's nudge sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, scope = 'turn', sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			parkNow: true},
+		{name: "held, inside the grace, an Interrupt now sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, resends = 'dir_root_'||organization_id, sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			parkNow: true},
+		{name: "held, answered, older peer wait still open, a turn's nudge sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, scope = 'turn', sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			answered: true, peer: true, parkNow: true},
+		// But a new steer sent as an interrupt, to a Run waiting only on a
+		// peer, spends it: main would have resumed the Run for it, and its
+		// turn ends in a wait with a full grace (qual's round-2 repro).
+		{name: "held, answered, older peer wait still open, a new interrupt steer sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			answered: true, peer: true},
+		{name: "held, inside the grace, a retry sent after the hold", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "deliver_after = now() - interval '58 seconds', sent_at = now() - interval '55 seconds', delivered_at = now() - interval '50 seconds'",
+			parkNow: true},
+		// Nor held off by one, unread: only what was queued by the hold
+		// holds the park off (newsCutoff); the stop un-sends it for the
+		// answer (unsendUnread).
+		{name: "held, inside the grace, a turn's nudge sent after the hold, unread", hold: "2 minutes", waiting: "10 seconds",
+			note: "now() - interval '1 minute'", also: "interrupt = true, scope = 'turn', claimed_at = now() - interval '5 seconds', sent_at = now() - interval '5 seconds'",
+			parkNow: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, _ := waitingWorld(t)
+			w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
+			if c.answered {
+				w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() - interval '1 minute' WHERE run_id = $1`, w.run.ID)
+			}
+			if c.asked != "" {
+				w.exec(`INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status, asked_at)
+					VALUES ('q2_'||$1, $1, 'wi_'||$1, 'run_'||$1, 'And now?', 'open', now() - $2::interval)`, w.run.Org, c.asked)
+			}
+			if c.peer {
+				w.peerWait("5 minutes")
+			}
+			// A hold of "3 minutes" is the question's asked_at exactly.
+			w.exec(`UPDATE runs SET waiting_since = now() - NULLIF($2, '')::interval,
+				news_hold_at = CASE WHEN $3 = '3 minutes' THEN (SELECT asked_at FROM questions WHERE id = 'q_'||organization_id)
+					ELSE now() - NULLIF($3, '')::interval END WHERE id = $1`, w.run.ID, c.waiting, c.hold)
+			if c.resumed != "" {
+				w.exec(`INSERT INTO run_resumes (run_id, organization_id, epoch, cause, requested_at)
+					VALUES ($1, $2, 2, 'answer', now() - $3::interval)`, w.run.ID, w.run.Org, c.resumed)
+			}
+			if c.note != "" {
+				if strings.Contains(c.also, "resends") {
+					w.interruptedRoot()
+				}
+				w.note(false)
+				also := ""
+				if c.also != "" {
+					also = ", " + c.also
+				}
+				w.exec(`UPDATE directives SET created_at = `+c.note+also+` WHERE id = 'dir_'||$1`, w.run.Org)
+			}
+			got := w.dueRun()
+			if got.ParkNow != c.parkNow || got.HoldNews != c.holdNews || got.HasDirectives != c.directives {
+				t.Errorf("ParkNow %v, HoldNews %v, HasDirectives %v; want %v, %v, %v",
+					got.ParkNow, got.HoldNews, got.HasDirectives, c.parkNow, c.holdNews, c.directives)
+			}
+			if c.answered {
+				return
+			}
+			// requestPause's re-check agrees with the sweep's read; it is
+			// asked only of a Run the sweep read as due.
+			want := 0
+			if c.parkNow {
+				want = 1
+			}
+			r := *got
+			r.ParkNow = true
+			if n := w.parkForPerson(r); n != want {
+				t.Errorf("%d run.parked events, want %d", n, want)
+			}
+		})
+	}
+}
+
+// holdForNews records the hold once per wait, only for a Run due the park
+// main would make (past its grace, an open ask); pause and resume clear it.
+func TestAHoldForNewsIsRecordedOncePerWaitAndClearedByAPark(t *testing.T) {
+	w, r := waitingWorld(t)
+	w.note(false)
+	got := w.dueRun()
+	if !got.HoldNews || got.ParkNow {
+		t.Fatalf("HoldNews %v, ParkNow %v; want held, not parked", got.HoldNews, got.ParkNow)
+	}
+	if err := w.s.holdForNews(w.ctx, *got); err != nil {
+		t.Fatal(err)
+	}
+	first := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`)
+	if first != 1 {
+		t.Fatalf("the hold was not recorded")
+	}
+	var at1, at2 string
+	_ = w.owner.QueryRow(w.ctx, `SELECT news_hold_at::text FROM runs WHERE id = $1`, w.run.ID).Scan(&at1)
+	if err := w.s.holdForNews(w.ctx, *got); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.owner.QueryRow(w.ctx, `SELECT news_hold_at::text FROM runs WHERE id = $1`, w.run.ID).Scan(&at2)
+	if at1 != at2 {
+		t.Errorf("the hold moved from %s to %s within its wait", at1, at2)
+	}
+	if got := w.dueRun(); got.HoldNews || got.ParkNow || !got.HasDirectives {
+		t.Errorf("held, its note pending: HoldNews %v, ParkNow %v, HasDirectives %v; want the note delivered first",
+			got.HoldNews, got.ParkNow, got.HasDirectives)
+	}
+	// Inside the grace the hold is never recorded.
+	w2, _ := waitingWorld(t)
+	w2.exec(`UPDATE runs SET waiting_since = now() - interval '1 minute' WHERE id = $1`, w2.run.ID)
+	if err := w2.s.holdForNews(w2.ctx, w2.run); err != nil {
+		t.Fatal(err)
+	}
+	if n := w2.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`); n != 0 {
+		t.Errorf("a hold recorded inside the grace")
+	}
+	// Nor past the grace with no ask open: nothing to park for.
+	w3, _ := waitingWorld(t)
+	w3.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() WHERE run_id = $1`, w3.run.ID)
+	if err := w3.s.holdForNews(w3.ctx, w3.run); err != nil {
+		t.Fatal(err)
+	}
+	if n := w3.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NOT NULL`); n != 0 {
+		t.Errorf("a hold recorded with no ask open")
+	}
+	// Spent by a note sent after it (holdSpent) while the turn it starts
+	// has not come yet: the Run still waits in the idle the hold was taken
+	// in, past its grace, that note unheard (HoldNews). The hold is not
+	// taken again: one recorded now would come after that note, which
+	// would no longer spend it, and the Run would park as soon as its turn
+	// ended, a grace earlier than main. A later idle's may.
+	w4, _ := waitingWorld(t)
+	w4.exec(`UPDATE runs SET news_hold_at = now() - interval '30 seconds' WHERE id = $1`, w4.run.ID)
+	w4.note(false)
+	w4.exec(`UPDATE directives SET created_at = now() - interval '20 seconds', claimed_at = now() - interval '10 seconds',
+		sent_at = now() - interval '10 seconds' WHERE id = 'dir_'||$1`, w4.run.Org)
+	spent := w4.dueRun()
+	if !spent.HoldNews {
+		t.Fatalf("spent, past the grace, its note unheard: HoldNews %v, ParkNow %v; want HoldNews", spent.HoldNews, spent.ParkNow)
+	}
+	if err := w4.s.holdForNews(w4.ctx, *spent); err != nil {
+		t.Fatal(err)
+	}
+	if n := w4.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at < now() - interval '25 seconds'`); n != 1 {
+		t.Errorf("a spent hold was taken again before its note's turn")
+	}
+	w4.exec(`UPDATE runs SET waiting_since = now() - interval '11 minutes' + interval '5 seconds',
+		news_hold_at = now() - interval '11 minutes' WHERE id = $1`, w4.run.ID)
+	if err := w4.s.holdForNews(w4.ctx, *spent); err != nil {
+		t.Fatal(err)
+	}
+	if n := w4.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at > now() - interval '5 seconds'`); n != 1 {
+		t.Errorf("a hold from an earlier idle kept the later one from being recorded")
+	}
+	// But a hold of this wait from an earlier idle, unspent, stays where it
+	// is: moved later, notes queued after it would count as news from
+	// before the hold, more than one note's turn (newsHeld).
+	w5, _ := waitingWorld(t)
+	w5.exec(`UPDATE questions SET asked_at = now() - interval '15 minutes' WHERE run_id = $1`, w5.run.ID)
+	w5.exec(`UPDATE runs SET news_hold_at = now() - interval '12 minutes', waiting_since = now() - interval '11 minutes' WHERE id = $1`, w5.run.ID)
+	if err := w5.s.holdForNews(w5.ctx, w5.run); err != nil {
+		t.Fatal(err)
+	}
+	if n := w5.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at < now() - interval '11 minutes'`); n != 1 {
+		t.Errorf("a hold of this wait from an earlier idle was moved")
+	}
+	// The park clears it.
+	w.exec(`UPDATE directives SET sent_at = now() - interval '1 hour', delivered_at = now() - interval '1 hour' WHERE run_id = $1`, w.run.ID)
+	w.exec(`UPDATE runs SET control = 'pause_graceful' WHERE id = $1`, w.run.ID)
+	// lux has it stopped already: pause asks lux nothing.
+	r.Control, r.LuxState = "pause_graceful", "stopped"
+	if err := w.s.pause(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND news_hold_at IS NULL`); n != 1 {
+		t.Errorf("paused with its wait's hold kept")
+	}
+}
+
+// Every other way a wait ends clears the hold too, each starting from one
+// recorded: lux stopping the Run itself (parkStopped), a resume
+// (whilePaused), and a take-up of a Run lux placed again (takeUpLive).
+func TestAHoldForNewsIsClearedByAStopAResumeAndATakeUp(t *testing.T) {
+	held := func(w *resumeWorld) {
+		w.t.Helper()
+		w.exec(`UPDATE runs SET news_hold_at = now() - interval '1 minute' WHERE id = $1`, w.run.ID)
+	}
+	cleared := func(w *resumeWorld, what string) {
+		w.t.Helper()
+		if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND news_hold_at IS NULL`); n != 1 {
+			w.t.Errorf("%s kept the wait's hold for news", what)
+		}
+	}
+	t.Run("parkStopped", func(t *testing.T) {
+		w, r := waitingWorld(t)
+		w.exec(`UPDATE runs SET lux_state = 'stopped', agent_session_epoch = 1 WHERE id = $1`, w.run.ID)
+		held(w)
+		r.LuxState = "stopped"
+		if parked, err := w.s.parkStopped(w.ctx, r); err != nil || !parked {
+			t.Fatalf("parked %v, err %v; want parked", parked, err)
+		}
+		cleared(w, "parkStopped")
+	})
+	t.Run("whilePaused's resume", func(t *testing.T) {
+		w := newResumeWorld(t)
+		w.resumable()
+		w.lux.set(stoppedOnHost1(time.Now().Add(-time.Minute).UTC()), nil)
+		w.s.Lux = &releasingLux{placementLux: w.lux, release: func() {}}
+		held(w)
+		w.whilePaused()
+		if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`); n != 1 {
+			t.Fatalf("not resumed")
+		}
+		cleared(w, "the resume")
+	})
+	t.Run("takeUpLive", func(t *testing.T) {
+		w := newResumeWorld(t)
+		w.exec(`UPDATE questions SET status = 'open', answer = NULL, answered_at = NULL WHERE run_id = $1`, w.run.ID)
+		w.exec(`UPDATE runs SET control = 'resume', lux_state = 'running' WHERE id = $1`, w.run.ID)
+		held(w)
+		r := w.run
+		r.Control, r.Waiting = "resume", true
+		if taken, _, err := w.s.takeUpLive(w.ctx, r, "running"); err != nil || !taken {
+			t.Fatalf("taken %v, err %v; want taken", taken, err)
+		}
+		cleared(w, "takeUpLive")
+	})
+}
+
+// inputLux records what deliverDirectives sends.
+type inputLux struct {
+	*placementLux
+	sent []string
+}
+
+func (f *inputLux) Input(_ context.Context, _ string, in lux.InputRequest) error {
+	f.sent = append(f.sent, in.RequestID)
+	return nil
+}
+
+// deliverDirectives re-checks the hold itself, not only through the
+// sweep's HasDirectives: a note queued after the park was held for news,
+// in its wait, with the person's question open, is not sent — it waits for
+// the answer — though the sweep read the Run with something to send (the
+// note queued before the hold, since heard). One queued before the hold
+// is sent, and once the question is answered so is the later one.
+func TestDeliverDirectivesHoldsWhatCameAfterTheHoldForNews(t *testing.T) {
+	w, r := waitingWorld(t)
+	fake := &inputLux{placementLux: w.lux}
+	w.s.Lux = fake
+	w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
+	w.exec(`UPDATE runs SET news_hold_at = now() - interval '2 minutes', lux_run_id = 'lrun_1' WHERE id = $1`, w.run.ID)
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, created_at)
+		VALUES ('dir_before_'||$1, $1, $2, $3, 'before', now() - interval '150 seconds'),
+		       ('dir_after_'||$1, $1, $2, $3, 'after', now() - interval '1 minute')`, w.run.Org, w.run.TaskID, w.run.ID)
+	r.HasDirectives = true
+	if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"dir_before_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+		t.Fatalf("sent %v, want %v: only what came before the hold", fake.sent, want)
+	}
+	w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() WHERE run_id = $1`, w.run.ID)
+	if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"dir_before_" + w.run.Org, "dir_after_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+		t.Errorf("sent %v, want %v: the answer brings what was held for it", fake.sent, want)
+	}
+}
+
+// What deliverDirectives does not hold for the answer, though queued after
+// the hold with the question open: what serves the turn under way (a
+// turn's nudge, an "Interrupt now": servesTurn) and a due turn retry. And
+// with a hold from before the wait began (the question asked since),
+// nothing is held: that hold is spent.
+func TestDeliverDirectivesSendsInterruptsRetriesAndWhatAStaleHoldDoesNotHold(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// hold: news_hold_at, ago; also: more of the note queued a minute
+		// ago (SQL, after a comma).
+		hold, also string
+	}{
+		{"a turn's nudge queued after the hold", "2 minutes", ", interrupt = true, scope = 'turn'"},
+		{"an Interrupt now queued after the hold", "2 minutes", ", interrupt = true, resends = 'dir_root_'||organization_id"},
+		{"a retry queued after the hold, due", "2 minutes", ", deliver_after = now() - interval '1 second'"},
+		{"a note after a hold from before the question", "4 minutes", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, r := waitingWorld(t)
+			fake := &inputLux{placementLux: w.lux}
+			w.s.Lux = fake
+			w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
+			w.exec(`UPDATE runs SET news_hold_at = now() - $2::interval, lux_run_id = 'lrun_1' WHERE id = $1`, w.run.ID, c.hold)
+			if strings.Contains(c.also, "resends") {
+				w.interruptedRoot()
+			}
+			w.note(false)
+			w.exec(`UPDATE directives SET created_at = now() - interval '1 minute'`+c.also+` WHERE id = 'dir_'||$1`, w.run.Org)
+			r.HasDirectives = true
+			if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"dir_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+				t.Errorf("sent %v, want %v", fake.sent, want)
+			}
+		})
+	}
+}
+
+// A new steer sent as an interrupt (a person's, a conductor's), queued
+// after the hold with the question open, waits for the answer as any note
+// does, while a turn's nudge queued after it is sent: it serves the turn
+// under way (servesTurn). The answer brings the steer.
+func TestDeliverDirectivesHoldsANewInterruptSteerButSendsATurnsNudge(t *testing.T) {
+	w, r := waitingWorld(t)
+	fake := &inputLux{placementLux: w.lux}
+	w.s.Lux = fake
+	w.exec(`UPDATE questions SET asked_at = now() - interval '3 minutes' WHERE run_id = $1`, w.run.ID)
+	w.exec(`UPDATE runs SET news_hold_at = now() - interval '2 minutes', lux_run_id = 'lrun_1' WHERE id = $1`, w.run.ID)
+	w.exec(`INSERT INTO directives (id, organization_id, task_id, run_id, text, scope, interrupt, created_at)
+		VALUES ('dir_steer_'||$1, $1, $2, $3, 'steer', 'run', true, now() - interval '1 minute'),
+		       ('dir_nudge_'||$1, $1, $2, $3, 'nudge', 'turn', true, now() - interval '30 seconds')`, w.run.Org, w.run.TaskID, w.run.ID)
+	r.HasDirectives = true
+	if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"dir_nudge_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+		t.Fatalf("sent %v, want %v: the nudge, not the new steer", fake.sent, want)
+	}
+	w.exec(`UPDATE questions SET status = 'answered', answer = 'yes', answered_at = now() WHERE run_id = $1`, w.run.ID)
+	if _, err := w.s.deliverDirectives(w.ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"dir_nudge_" + w.run.Org, "dir_steer_" + w.run.Org}; !slices.Equal(fake.sent, want) {
+		t.Errorf("sent %v, want %v: the answer brings the steer", fake.sent, want)
 	}
 }

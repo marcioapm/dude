@@ -1,0 +1,12 @@
+-- 259_run_news_hold.sql — when a Run's person park was held for news.
+--
+-- news_hold_at: when the sweep found the Run waiting on a person past its
+-- grace, due its park, and held the park for a note it had not heard yet
+-- (phases unheardNews). It counts for the wait it was set in only (phases
+-- newsHeld: no older than the wait's start, waitBegan), and a pause clears
+-- it: a wait's park is held for news once. While it counts, the Run parks
+-- as soon as that note's turn ends and it waits again, without a fresh
+-- grace, and what is queued for it after the hold waits for the answer, as
+-- it would had the park not been held. NULL for every existing Run: none
+-- had its park held under this rule.
+ALTER TABLE runs ADD COLUMN news_hold_at timestamptz;

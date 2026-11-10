@@ -221,8 +221,14 @@ type phaseRun struct {
 	// Its agent has waited on a person past the project's grace period, and
 	// has heard everything dude has for it (unheardNews): news first, so a
 	// Run with some falls through to its delivery. Never mid-turn
-	// (waiting_since NULL).
+	// (waiting_since NULL). Once its park was held for news in this wait
+	// (newsHeld), as soon as it waits again with that news heard, grace or
+	// not (parkState).
 	ParkNow bool
+	// Due its park as main would park it (past the grace, an open ask), and
+	// held for news it has not heard (unheardNews), for the first time in
+	// this wait: advance records the hold (holdForNews), which bounds it.
+	HoldNews bool
 	// Paused, and due to be resumed: a person asked, or dude's own reason
 	// for pausing it is over (resumable).
 	Resumable bool
@@ -294,7 +300,8 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	COALESCE(r.category, ''),
 	COALESCE(r.lux_run_id, ''), COALESCE(r.lux_state, ''), COALESCE(r.lux_stop_reason, ''),
 	COALESCE(r.push_request_id, ''), COALESCE(r.push_branch, ''), cardinality(r.lux_pushes) > 0, r.base_refs, r.base_shas, r.turn_done_at IS NOT NULL,
-	EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ` + delivery.HeldBack + `),
+	(` + newsCutoff + ` IS NULL AND EXISTS (` + toSend + `)
+		OR ` + newsCutoff + ` IS NOT NULL AND EXISTS (` + toSend + ` AND NOT ` + heldForNews + `)),
 	CASE WHEN r.turn_done_at IS NOT NULL AND r.status = 'running' AND r.lux_state = 'running' AND r.push_request_id IS NULL
 	THEN EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NOT NULL AND d.failed_at IS NULL
 	        AND d.interrupt_only IS NOT TRUE
@@ -305,7 +312,7 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	ELSE false END,
 	` + repoApproved + `,
 	COALESCE(r.dude_pause, ''), ask.open,
-	r.waiting_since IS NOT NULL AND r.waiting_since < now() - make_interval(secs => lim.park_secs) AND ask.open AND NOT ` + unheardNews + `,
+	` + parkState + `,
 	COALESCE(` + resumable + `, false),
 	COALESCE(lim.idle_secs > 0 AND ` + quiet + `, false), r.idle_nudged_at IS NOT NULL, ` + quietSince + `,
 	r.push_result, r.pr_feedback, r.finding_ids, r.blocking_severities, r.attempt,
@@ -315,10 +322,12 @@ const runColumns = `r.id, r.organization_id, COALESCE(r.project_id, ''), COALESC
 	r.retry_failures, r.retry_due_at, COALESCE(r.source_kind, ''), (r.harness_state ? 'timedOut')`
 
 // runFrom is what runColumns reads from: the Run and its limits
-// (limitsFrom), and whether it has anything open for a person (ask.open,
-// delivery.OpenAsk: asked once per row, read in several places).
+// (limitsFrom), whether it has anything open for a person (ask.open,
+// delivery.OpenAsk: asked once per row, read in several places), and
+// whether its park was held for news in this wait (holdFrom).
 const runFrom = limitsFrom + `
-	CROSS JOIN LATERAL (SELECT ` + delivery.OpenAsk + ` AS open) ask`
+	CROSS JOIN LATERAL (SELECT ` + delivery.OpenAsk + ` AS open) ask
+	CROSS JOIN LATERAL ` + holdFrom
 
 // limitsFrom is the Run with how long its project lets an agent wait on a
 // person (lim.park_secs) or stay quiet (idle_secs, 0 for never), and a
@@ -517,22 +526,25 @@ const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.i
 // the bound.
 //
 // And only while the wait is younger than newsCeiling park graces
-// (waitBegan): a Run whose every grace ends with a note pending would
-// otherwise never park, each note's turn resetting waiting_since. Past the
-// ceiling news no longer holds the park: the Run parks once it waits past
-// its grace, as it always did, its news left for the answer. The worst
-// case, for a wait that began at T (G its grace): main parks it at the
-// first moment P it is past its grace (P >= T+G). If news is pending then
-// and P < T+2G, the park is held; the note's turn takes D and ends in a new
-// wait, whose grace ends at P+D+G, past the ceiling: news no longer holds
-// it. So a wait's park is held at most once, by at most a grace and a turn
-// (G+D, and a sweep), at the latest about T+3G+D; or, for a note whose
-// send or turn does not come, by delivery.UnreadGraceSecs. But once a held
-// note's turn has run, notes that each arrive inside the new grace keep
-// the Run running, as notes inside the grace do, where main would have
-// parked it at the held park. So the container time beyond main's is
-// bounded by G+D per held park only while notes do not keep arriving
-// inside each new grace.
+// (waitBegan), past which news no longer holds the park: the Run parks
+// once it waits past its grace, as it always did, its news left for the
+// answer.
+//
+// And once per wait (newsHeld): the sweep that holds a park for news
+// records it (runs.news_hold_at, holdForNews). From then on, for the rest
+// of that wait, what is queued after the hold waits for the answer
+// (heldForNews), as it would have had the park not been held, and only
+// what was there at the hold counts here (newsCutoff): the Run parks as
+// soon as it waits again with that heard, without a fresh grace
+// (parkState). The worst case, for a wait whose park main makes at P: the
+// park is held at P, what was pending then is delivered, its turn takes D,
+// and the Run parks at the next sweep once it waits again: P+D and a
+// sweep. Or, for a note whose send or turn does not come, by
+// delivery.UnreadGraceSecs; and never past the ceiling. Notes that keep
+// arriving after the hold do not extend it: they wait for the answer. A
+// note sent after the hold (the answer itself, or one to a Run waiting
+// only on a peer or the checks gate) ends it (holdSpent): what main would
+// have resumed the Run for begins a wait with a full grace.
 //
 // What is held for the answer (HeldBack) does not hold the park off, and
 // what is queued after the park waits for the answer (resumable), as it
@@ -541,13 +553,125 @@ const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.i
 // steer inside the grace already takes.
 const unheardNews = `(` + newsPending + ` AND COALESCE(` + waitBegan + ` > now() - make_interval(secs => ` + newsCeiling + ` * lim.park_secs), false))`
 
-// newsPending (SQL, over runs r) is unheardNews before its ceiling.
-const newsPending = `(EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
+// newsPending (SQL, over runs r) is unheardNews before its ceiling: what
+// was queued up to newsCutoff, every note before the wait's park was held.
+// A Run with no cutoff reads main's subqueries as they were, so the
+// planner keeps their hashed form; only a held one compares created_at.
+const newsPending = `(` + newsCutoff + ` IS NULL AND (EXISTS (` + unsentNews + `) OR EXISTS (` + sentNews + `))
+	OR ` + newsCutoff + ` IS NOT NULL AND (EXISTS (` + unsentNews + ` AND ` + byCutoff + `) OR EXISTS (` + sentNews + ` AND ` + byCutoff + `)))`
+
+// unsentNews and sentNews (SQL, over runs r) are newsPending's notes,
+// queued and sent; byCutoff, one queued by the hold (newsCutoff).
+const (
+	unsentNews = `SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 		AND NOT ` + delivery.HeldBack + `
-		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))
-	OR EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
+		AND (d.claimed_at IS NULL OR d.claimed_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `))`
+	sentNews = `SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.failed_at IS NULL AND d.interrupt_only IS NOT TRUE
 		AND (d.delivered_at IS NULL OR d.delivered_at > r.waiting_since)
-		AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)))`
+		AND d.sent_at > now() - make_interval(secs => ` + delivery.UnreadGraceSecs + `)`
+	byCutoff = `d.created_at <= ` + newsCutoff
+)
+
+// toSend (SQL, over runs r) is HasDirectives's: queued, unsent, not held
+// for an answer (HeldBack); heldForNews is added for a held Run only.
+const toSend = `SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.sent_at IS NULL AND d.failed_at IS NULL AND NOT ` + delivery.HeldBack
+
+// newsHeldSince (SQL, over runs r) is true once the Run's park was held for
+// news in the wait it waits in now: news_hold_at, set by holdForNews, no
+// older than the wait's start (waitBegan: an answer and a new ask, or a
+// resume, begin a new wait, so each wait's park is held once; an answer
+// with an ask older than the hold still open does not move it, and
+// holdSpent ends that hold). A park clears news_hold_at as well (pause,
+// parkStopped), and so does a resume (resume, takeUpLive): a take-up
+// writes no resume of its own. waitBegan is read only for a Run that has
+// one; a wait that does not say when it began is never held (unheardNews
+// never holds its park either).
+const newsHeldSince = `CASE WHEN r.news_hold_at IS NULL THEN false
+		ELSE COALESCE(r.news_hold_at >= ` + waitBegan + `, false) END`
+
+// newsHeld (SQL, over a Run aliased r and its ask.open) is newsHeldSince
+// while the wait is open and the hold is not spent: an answer that closes
+// it is delivered, not held, and once a note queued after the hold has
+// been sent (holdSpent) the hold is over. Read once per Run (hold.held).
+const newsHeld = `CASE WHEN r.news_hold_at IS NULL OR NOT ask.open THEN false
+		ELSE ` + newsHeldSince + ` AND NOT ` + holdSpent + ` END`
+
+// holdSpent (SQL, over runs r with news_hold_at set): a note queued after
+// the hold has been sent, so its turn ends a wait main would have resumed
+// the Run for — an answer, a decision, what was held for them, or a note
+// to a Run waiting only on a peer or the checks gate (resumable) — and
+// the Run waits a full grace again, as on main, not parked as soon as it
+// waits (parkState). The asks still open may be older than the hold (a
+// peer wait, a blocking repository), so waitBegan does not move: without
+// this, the spent hold would park the Run as soon as the answer's turn
+// ended. What caused the hold was queued before it and does not spend it;
+// what is queued after it while a person's ask is open waits for the
+// answer (heldForNews), unsent, and does not either. Nor what serves the
+// held note's turn, sent during a hold (servesTurn, a turn's retry): it
+// begins no new wait, and spending on it would give that turn a fresh
+// grace. A new steer sent as an interrupt (a person's, a conductor's)
+// does spend it: main would have resumed the Run for it, with a full
+// grace. Read from the directives, not cleared where each answer is
+// written, so every path that queues a note spends it alike.
+const holdSpent = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.created_at > r.news_hold_at
+		AND d.sent_at IS NOT NULL AND NOT ` + servesTurn + ` AND d.deliver_after IS NULL)`
+
+// servesTurn (SQL, over directives d) is an interrupt of the turn under
+// way: dude's nudge of a stuck, silent or quiet turn (scope turn) or a
+// person's "Interrupt now" (resends: the same words again). Not a new
+// steer sent as an interrupt, a person's or a conductor's (scope run, no
+// resends): new words, which a park would have waited on the answer for.
+const servesTurn = `(d.interrupt AND (d.scope = 'turn' OR d.resends IS NOT NULL))`
+
+// newsCutoff (SQL, over runFrom's hold) is when the park was held for news
+// in this wait, while a person's ask is open (as heldForNews); NULL
+// otherwise: only what was queued by then holds the park off
+// (newsPending). A Run waiting only on a peer or the checks gate is
+// resumed for a note queued after its park (resumable), so a note after
+// its hold is heard first, not parked over and resumed for, and ends the
+// hold once sent (holdSpent).
+const newsCutoff = `hold.cutoff`
+
+// heldForNews (SQL, over directives d and runFrom's hold): queued after
+// the Run's park was held for news in this wait, while a person's ask is
+// open (hold.cutoff), so it waits for the answer, as it would have had the
+// park not been held (resumable resumes a parked Run for one only once no
+// person's ask is open), a new steer sent as an interrupt too. Not what
+// serves the turn under way (servesTurn: dude's nudge of it, a person's
+// "Interrupt now") nor a turn's retry (deliver_after): no park stops that
+// turn, and they do not hold the park off (newsCutoff).
+const heldForNews = `COALESCE(d.created_at > hold.cutoff AND NOT ` + servesTurn + ` AND d.deliver_after IS NULL, false)`
+
+// queuedAfterHold (SQL, over directives d) is heldForNews for a query
+// without runFrom: deliverDirectives's.
+var queuedAfterHold = `EXISTS (SELECT 1 FROM runs r WHERE r.id = d.run_id AND d.created_at > r.news_hold_at
+	AND NOT ` + servesTurn + ` AND d.deliver_after IS NULL
+	AND ` + heldInWait + ` AND ` + delivery.PersonAsk + `)`
+
+// heldInWait is newsHeld for a query without runFrom's ask.
+var heldInWait = `(` + strings.ReplaceAll(newsHeld, "ask.open", "("+delivery.OpenAsk+")") + `)`
+
+// holdFrom (SQL, over runs r and ask.open) is runFrom's hold, read once
+// per Run: held, the Run's park was held for news in this wait (newsHeld);
+// cutoff, when, if a person's ask is open too, so what comes after it
+// waits for the answer (heldForNews) and does not hold the park off
+// (newsCutoff). A Run never held reads news_hold_at alone. The OFFSET 0s
+// fence each level, so the planner does not inline newsHeld (and its
+// waitBegan) into every place hold.held and hold.cutoff are read.
+const holdFrom = `(SELECT h.held, CASE WHEN h.held AND ` + delivery.PersonAsk + ` THEN r.news_hold_at END AS cutoff
+		FROM (SELECT ` + newsHeld + ` AS held OFFSET 0) h OFFSET 0) hold`
+
+// parkState (SQL, over runFrom) is what the sweep does about a Run's wait
+// on a person: 'park' (ParkNow), 'hold' (HoldNews: due its park, held for
+// news, the first time this wait) or 'none'. Never mid-turn (waiting_since
+// NULL) nor with nothing open. Once held (hold.held), it parks as soon as
+// it waits with the news from before the hold heard, grace or not: the
+// hold costs that news's turn and no fresh grace. Otherwise past its grace
+// it parks, unless news holds it (unheardNews).
+const parkState = `CASE WHEN r.waiting_since IS NULL OR NOT ask.open THEN 'none'
+		WHEN hold.held THEN CASE WHEN ` + unheardNews + ` THEN 'none' ELSE 'park' END
+		WHEN r.waiting_since < now() - make_interval(secs => lim.park_secs) THEN CASE WHEN ` + unheardNews + ` THEN 'hold' ELSE 'park' END
+		ELSE 'none' END`
 
 // newsCeiling (SQL) is how many of its park graces from waitBegan a Run's
 // wait on a person may have its park held off by dude's news
@@ -589,18 +713,21 @@ func (s *Syncer) limits() []any {
 
 func scan(row pgx.Row) (phaseRun, error) {
 	var r phaseRun
+	// park: parkState.
+	var park string
 	var broken []byte
 	var brokenSecs float64
 	err := row.Scan(&r.ID, &r.Org, &r.ProjectID, &r.TaskID, &r.SessionID, &r.Phase, &r.Status, &r.Control, &r.Role,
 		&r.Category, &r.LuxRunID, &r.LuxState, &r.LuxStopReason,
 		&r.PushRequestID, &r.PushBranch, &r.HoldsPushable, &r.BaseRefs, &r.BaseSHAs, &r.TurnDone, &r.HasDirectives, &r.Unread, &r.RepoApproved,
-		&r.DudePause, &r.Waiting, &r.ParkNow, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
+		&r.DudePause, &r.Waiting, &park, &r.Resumable, &r.Quiet, &r.Nudged, &r.QuietSince,
 		&r.PushResult, &r.PRFeedback, &r.FindingIDs, &r.BlockingSeverities, &r.Attempt, &r.WarmOver,
 		&r.Keep, &r.KeepExpired, &r.Finishes, &r.ImageBuildID, &r.Moving, &broken, &brokenSecs,
 		&r.RetryFailures, &r.RetryDueAt, &r.SourceKind, &r.TimedOut)
 	if err != nil {
 		return r, err
 	}
+	r.ParkNow, r.HoldNews = park == "park", park == "hold"
 	return r, r.scanBroken(broken, brokenSecs)
 }
 
@@ -1078,9 +1205,15 @@ func (s *Syncer) advance(ctx context.Context, r phaseRun) (bool, error) {
 			// resume it when they do — the next minute or the next week.
 			// Not while dude has news it has not heard (unheardNews): that
 			// is delivered below, and the park comes once its turn waits
-			// again past the grace; past the hold's ceiling news no longer
-			// delays it.
+			// again; past the hold's ceiling news no longer delays it.
 			return true, s.requestPause(ctx, r, "person", "parked while it waits for a person")
+		case r.HoldNews:
+			// Due its park, held for news: recorded, so the park comes as
+			// soon as that news's turn is over and what comes after it
+			// waits for the answer (newsHeld). The news is delivered below.
+			if err := s.holdForNews(ctx, r); err != nil {
+				return true, err
+			}
 		case r.Quiet && r.Nudged:
 			// Quiet again as long after its nudge: for a person to look at.
 			return true, s.requestPause(ctx, r, "idle", "parked: the agent went quiet and did not answer a nudge")
@@ -1162,7 +1295,7 @@ func (s *Syncer) parkStopped(ctx context.Context, r phaseRun) (bool, error) {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE runs r SET status = 'paused', dude_pause = $2, lux_stop_reason = $3,
-			control_requested_at = NULL, harness_state = r.harness_state - 'turnRetries'
+			control_requested_at = NULL, harness_state = r.harness_state - 'turnRetries', news_hold_at = NULL
 			WHERE r.id = $1 AND `+delivery.Parkable, r.ID, r.parkKind(), stopPause)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
@@ -3241,9 +3374,10 @@ func (s *Syncer) pause(ctx context.Context, r phaseRun) error {
 	}
 	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
 		// A turn retry pending is over with the turn: the count starts
-		// again after the resume (ConductorRetrying reads it).
+		// again after the resume (ConductorRetrying reads it). A park
+		// held for news is over with the wait (newsHeld).
 		tag, err := tx.Exec(ctx, `UPDATE runs SET status = 'paused', control = 'none', control_requested_at = NULL,
-			harness_state = harness_state - 'turnRetries'
+			harness_state = harness_state - 'turnRetries', news_hold_at = NULL
 			WHERE id = $1 AND status IN ('scheduled', 'starting', 'running')`, r.ID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
@@ -3383,8 +3517,9 @@ func (s *Syncer) whilePaused(ctx context.Context, r phaseRun) (bool, error) {
 			files_changed_at = now(),
 			left_running_at = CASE WHEN $2 = 'running' THEN NULL ELSE now() END,
 			-- Still waiting on a person (a person resumed it anyway): the
-			-- grace period starts again.
-			waiting_since = CASE WHEN $3 THEN now() END,
+			-- grace period starts again, and a new wait's park may be
+			-- held for news once (newsHeld).
+			waiting_since = CASE WHEN $3 THEN now() END, news_hold_at = NULL,
 			turn_done_at = CASE WHEN $4 THEN turn_done_at END, agent_busy_at = CASE WHEN $4 THEN agent_busy_at END,
 			harness_state = harness_state - 'brokenTurn'
 			WHERE id = $1 AND status = 'paused'`, r.ID, lr.State, r.Waiting, r.keepsTurn())
@@ -3604,6 +3739,35 @@ func (s *Syncer) resumeSecrets(ctx context.Context, r phaseRun, stored lux.Store
 // reply, not a person.
 const parkedForPeer = "parked while it waits on a peer's reply"
 
+// holdForNews records that the person park due for Run r is held for news
+// it has not heard (HoldNews): news_hold_at, on the database's clock, once
+// per wait (newsHeld). From then on only what was queued by then holds the
+// park off, and what comes after waits for the answer, so the hold costs
+// that news's turn and no more: the Run parks as soon as it waits again
+// (parkState), unless a note sent after the hold ended it (holdSpent).
+func (s *Syncer) holdForNews(ctx context.Context, r phaseRun) error {
+	return s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
+		// As requestPause, it re-checks what the sweep read: still due the
+		// park main would make (past the grace, an open ask), not held yet.
+		// And not held in this idle already (news_hold_at before
+		// waiting_since): a hold spent by a note sent in it (holdSpent)
+		// reads as due again until that note's turn begins, and taken
+		// again it would come after the note, which would no longer spend
+		// it: the Run would park as soon as that turn ended.
+		_, err := tx.Exec(ctx, `UPDATE runs r SET news_hold_at = now()
+			FROM (SELECT lim.park_secs FROM `+limitsFrom+` WHERE r.id = $4) lim
+			WHERE r.id = $4 AND r.status = 'running' AND r.control = 'none'
+			  AND r.waiting_since < now() - make_interval(secs => lim.park_secs)
+			  AND (r.news_hold_at IS NULL OR r.news_hold_at < r.waiting_since)
+			  AND `+delivery.OpenAsk+` AND NOT `+heldInWait, append(s.limits(), r.ID)...)
+		return err
+	})
+}
+
+// pauseUnheardNews is unheardNews in requestPause, whose subquery lim
+// carries holdFrom's cutoff.
+var pauseUnheardNews = strings.ReplaceAll(unheardNews, newsCutoff, "lim.cutoff")
+
 // requestPause asks for a graceful pause, saying why, marked as dude's own
 // (kind is a dude_pause) so the syncer knows when to resume it; a person's
 // later pause or resume wins. A pause other than for a repository is a
@@ -3620,14 +3784,15 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 		// answers and decisions that end it are stamped.
 		var parkedAt time.Time
 		// lim: the Run's park grace, as the sweep reads it (limitsFrom),
-		// for unheardNews's ceiling.
+		// for unheardNews's ceiling, and its hold for news (holdFrom's
+		// cutoff), for what holds the park off.
 		err := tx.QueryRow(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(),
 			control_reason = CASE WHEN $6 = 'person' AND EXISTS (SELECT 1 FROM questions q WHERE q.run_id=r.id AND q.status='open' AND q.addressee='conductor') THEN 'parked while it waits for its conductor'
 			 WHEN $6 = 'person' AND NOT `+delivery.PersonAsk+` THEN $8 ELSE $5 END,
 			dude_pause = $6
-			FROM (SELECT lim.park_secs FROM `+limitsFrom+` WHERE r.id = $4) lim
+			FROM (SELECT lim.park_secs, hold.cutoff FROM `+runFrom+` WHERE r.id = $4) lim
 			WHERE r.id = $4 AND r.control = 'none' AND r.status = 'running'
-			  AND ($6 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+` AND NOT `+unheardNews+`))
+			  AND ($6 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+` AND NOT `+pauseUnheardNews+`))
 			  AND ($6 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
 			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $7))
 			  AND ($6 NOT IN ('conductor', 'session') OR (r.turn_done_at IS NOT NULL AND NOT `+unsentDirective+`))
@@ -3800,9 +3965,12 @@ func (s *Syncer) deliverDirectives(ctx context.Context, r phaseRun) (bool, error
 	}
 	var pending []directive
 	if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error {
-		// What was held for an answer goes after it (HeldBack).
+		// What was held for an answer goes after it (HeldBack), and so
+		// does what came after the Run's park was held for news
+		// (queuedAfterHold).
 		rows, err := tx.Query(ctx, `SELECT id, text, interrupt, COALESCE(resends, '')
 			FROM directives d WHERE run_id = $1 AND sent_at IS NULL AND failed_at IS NULL AND NOT `+delivery.HeldBack+`
+			  AND NOT `+queuedAfterHold+`
 			  AND ($2::timestamptz IS NULL OR created_at <= $2) ORDER BY held_for IS NOT NULL, created_at`, r.ID, upTo)
 		if err != nil {
 			return err
