@@ -103,3 +103,35 @@ func TestBranchRunsOfNoBranchAreRefusedUnasked(t *testing.T) {
 		t.Fatalf("err %v, %d requests", err, asked)
 	}
 }
+
+// The call ending (its context done) stops the read where it is, with no
+// further run's jobs asked for and no runs answered as if read.
+func TestBranchRunsStopWhenTheCallEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		switch r.URL.Path {
+		case "/repos/acme/api/actions/runs":
+			fmt.Fprint(w, `{"total_count":2,"workflow_runs":[
+				{"id":2,"name":"CI","head_sha":"b","status":"completed","conclusion":"failure","created_at":"2026-11-11T10:00:00Z"},
+				{"id":1,"name":"CI","head_sha":"a","status":"completed","conclusion":"success","created_at":"2026-11-11T09:00:00Z"}]}`)
+		case "/repos/acme/api/actions/runs/2/jobs":
+			// The call ends while GitHub fails on this run's jobs.
+			cancel()
+			w.WriteHeader(502)
+			fmt.Fprint(w, `{"message":"bad gateway"}`)
+		default:
+			fmt.Fprint(w, `{"total_count":0,"jobs":[]}`)
+		}
+	}))
+	defer srv.Close()
+	runs, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(ctx, "acme/api", "main", 5, 5)
+	if err == nil || runs != nil {
+		t.Fatalf("read %+v (%v), want the read stopped", runs, err)
+	}
+	if len(asked) != 2 {
+		t.Fatalf("asked %v, want nothing past run 2's jobs", asked)
+	}
+}
