@@ -349,6 +349,8 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 			// pull request (I-3), as after a fix with then.wake after_fix.
 			// Not at the pull request's feedback (or conflict): there the
 			// fix it starts reviews that push first (prFix's reviewFirst).
+			// A simplifier where the checks passed since is held to this
+			// as at the wait (startAtPRWait).
 			if err := refusePullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil {
 				return "", err
 			}
@@ -523,6 +525,8 @@ func ConductDecideAsk(ctx context.Context, tx pgx.Tx, ref RunRef, action, note s
 	}
 	p, st := d.State.Decision, &d.State
 	if action == "next" {
+		// Settled, the decision's next waits on the pull requests again
+		// (conductorDecision) instead of starting a fix with nothing to do.
 		if _, err := checksPassedSinceTx(ctx, tx, d); err != nil {
 			return nil, err
 		}
