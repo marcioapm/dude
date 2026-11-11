@@ -92,3 +92,14 @@ func TestBranchRunsKeepTheRunsWhenOneRunsJobsFail(t *testing.T) {
 		})
 	}
 }
+
+// No branch is refused before GitHub is asked: it would list every
+// branch's runs.
+func TestBranchRunsOfNoBranchAreRefusedUnasked(t *testing.T) {
+	asked := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { asked++ }))
+	defer srv.Close()
+	if _, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(context.Background(), "acme/api", "", 3, 2); err == nil || asked != 0 {
+		t.Fatalf("err %v, %d requests", err, asked)
+	}
+}

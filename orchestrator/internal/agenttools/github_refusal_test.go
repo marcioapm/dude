@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -207,6 +208,55 @@ func TestATransferredIssueIsNotAMovedRepository(t *testing.T) {
 			want := "GitHub says acme/target#7 has moved (renamed repository or transferred issue)"
 			if !errors.As(err, &r) || r.msg != want || r.event == nil || r.event.payload["refused"] != "moved_item" {
 				t.Fatalf("err=%v (%+v), want %q recorded as moved_item", err, r, want)
+			}
+		})
+	}
+}
+
+// A branch runs read with no branch (dude has no default branch for the
+// repository: no repositories row, as for an automation's) asks GitHub
+// for the default branch first and lists that branch's runs. GitHub
+// naming none, or failing, is never a list of every branch's runs: no
+// runs request is made.
+func TestBranchRunsWithNoBranchReadTheDefaultBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name, repo string
+		status     int
+		listed     bool
+	}{
+		{name: "default branch named", repo: `{"default_branch":"trunk","full_name":"acme/auto"}`, listed: true},
+		{name: "no default branch", repo: `{"full_name":"acme/auto"}`},
+		{name: "default branch read fails", status: 502},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var asked []string
+			c := githubAnswering(t, func(w http.ResponseWriter, r *http.Request) {
+				asked = append(asked, r.URL.RequestURI())
+				switch {
+				case r.URL.Path == "/repos/acme/auto" && tc.status != 0:
+					w.WriteHeader(tc.status)
+					fmt.Fprint(w, `{"message":"no"}`)
+				case r.URL.Path == "/repos/acme/auto":
+					fmt.Fprint(w, tc.repo)
+				case r.URL.Path == "/repos/acme/auto/actions/runs":
+					fmt.Fprint(w, `{"total_count":0,"workflow_runs":[]}`)
+				default:
+					w.WriteHeader(404)
+				}
+			})
+			out, err := readOnGitHub(context.Background(), c, githubRead{Tool: "github_branch_runs", Slug: "acme/auto"})
+			listing := slices.ContainsFunc(asked, func(u string) bool { return strings.HasPrefix(u, "/repos/acme/auto/actions/runs") })
+			if !tc.listed {
+				if err == nil || listing {
+					t.Fatalf("read %s, asked %v: want refused, no runs asked", out, asked)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(asked, "/repos/acme/auto/actions/runs?branch=trunk&per_page=10") || !strings.Contains(string(out), "trunk") {
+				t.Fatalf("read %s, asked %v", out, asked)
 			}
 		})
 	}

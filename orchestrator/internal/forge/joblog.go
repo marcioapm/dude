@@ -329,6 +329,10 @@ type BranchJob struct {
 // attempt's jobs: one request for the runs and one per run for its jobs.
 // A run whose jobs GitHub failed to answer for is kept, JobsUnread.
 func (g *GitHub) BranchRuns(ctx context.Context, slug, branch string, runs, jobs int) ([]BranchRun, error) {
+	// No branch would list every branch's runs, never what was asked.
+	if branch == "" {
+		return nil, fmt.Errorf("no branch to read the runs of on %s", slug)
+	}
 	ctx = agentReadContext(ctx)
 	if err := g.readBudget(ctx, slug, "core"); err != nil {
 		return nil, err
