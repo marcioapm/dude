@@ -931,7 +931,7 @@ func checksAt(f forge.ReadinessFacts, p GateFacts, inGrace bool) (bool, string) 
 // either reads as passing. The syncer's own grace (a pull request that has
 // had CI, recorded pending) is not one: its reading moves when it ends.
 func checksInGrace(f forge.ReadinessFacts, p GateFacts, now time.Time) bool {
-	if p.syncerJudgedGrace() || !ciGrace(p, now) {
+	if p.syncerJudgedGrace() || graceLeft(p, now) == 0 {
 		return false
 	}
 	ok, _ := checksAt(f, p, false)
