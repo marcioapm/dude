@@ -36,6 +36,9 @@ func unprocessable(w http.ResponseWriter, detail string) {
 
 // diffHunks is, per path, the hunk each line of base...commit's diff is
 // in, by side ("RIGHT", "LEFT") and line number.
+// Known limit, renames: validated with --no-renames, while /files
+// (pullFiles) uses rename detection, and neither matches GitHub; see the
+// test-quality review of PR 1 (renamed-file divergence).
 func (s *Server) diffHunks(base, commit string) map[string]map[string]map[int]int {
 	out := map[string]map[string]map[int]int{}
 	diff, err := s.git("diff", "--no-color", "--no-renames", "refs/heads/"+base+"..."+commit)

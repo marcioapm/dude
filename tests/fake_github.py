@@ -443,7 +443,11 @@ class FakeGitHub:
 
     def _diff_hunks(self, base: str, commit: str) -> dict[str, dict[str, dict[int, int]]]:
         """Per path, the hunk each line of base...commit's diff is in, by
-        side ("RIGHT", "LEFT") and line number."""
+        side ("RIGHT", "LEFT") and line number.
+
+        Known limit, renames: validated with --no-renames, while /files
+        uses rename detection, and neither matches GitHub; see the
+        test-quality review of PR 1 (renamed-file divergence)."""
         out: dict[str, dict[str, dict[int, int]]] = {}
         diff = subprocess.run(["git", "diff", "--no-color", "--no-renames", f"refs/heads/{base}...{commit}"],
                               cwd=self.bare, capture_output=True, text=True)
