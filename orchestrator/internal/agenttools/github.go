@@ -67,7 +67,7 @@ var githubTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
 	for _, name := range []string{"refused", "whose-task", "whose-session", "cut", "search-more", "issue-pull-request",
 		"comments-cut", "comments-newest-cut", "no-diff", "checks-cut", "reviews-cut", "threads-unknown", "files-cut", "budget-cut", "text-cut",
-		"run-jobs-next", "run-jobs-cut", "branch-runs-next", "branch-runs-jobs-cut", "branch-runs-jobs-unread"} {
+		"run-jobs-next", "run-jobs-cut", "branch-runs-next", "branch-runs-jobs-unread"} {
 		out[name] = delivery.MustText("results/github/" + name)
 	}
 	return out
@@ -891,7 +891,7 @@ func (w wrapper) branchRuns(read githubRead, runs []forge.BranchRun) map[string]
 		if r.JobsUnread {
 			run.More = githubText("branch-runs-jobs-unread", nil)
 		} else if r.TotalJobs > len(r.Jobs) {
-			run.More = githubText("branch-runs-jobs-cut", struct {
+			run.More = githubText("run-jobs-cut", struct {
 				Cut          string
 				Shown, Total int
 			}{cutMark, len(r.Jobs), r.TotalJobs})
