@@ -255,6 +255,9 @@ var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@
 func parsePatch(patch string) DiffLines {
 	d := DiffLines{Known: true}
 	for _, line := range strings.Split(patch, "\n") {
+		if !strings.HasPrefix(line, "@@") {
+			continue // most lines; the regexp is for headers only
+		}
 		m := hunkHeader.FindStringSubmatch(line)
 		if m == nil {
 			continue
