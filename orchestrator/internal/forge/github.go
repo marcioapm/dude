@@ -199,6 +199,10 @@ type Error struct {
 	// each "name=access" joined by ",". "" when GitHub sent none, or sent
 	// anything else (see acceptedPermissions).
 	AcceptedPermissions string
+	// Details is the "errors" list of GitHub's answer, one per line (a
+	// string's text, or an object's message or code): where a 422 says
+	// what it refused, its message being "Unprocessable Entity".
+	Details string
 }
 
 // acceptedPermissions is h's X-Accepted-GitHub-Permissions, normalised,
@@ -1046,6 +1050,7 @@ type ghComment struct {
 
 type ghReview struct {
 	ID          int64   `json:"id"`
+	NodeID      string  `json:"node_id"`
 	Body        string  `json:"body"`
 	State       string  `json:"state"`
 	SubmittedAt *string `json:"submitted_at"`
