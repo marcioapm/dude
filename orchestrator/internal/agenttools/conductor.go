@@ -297,7 +297,8 @@ func checkPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequests
 		if at, err := githubReadsFreeAt(ctx, tx, c, len(fresh)); err != nil {
 			return gatedPullRequests{}, err
 		} else if !at.IsZero() {
-			g.unread += "; try again after " + at.UTC().Format(time.RFC3339)
+			// Rounded up: a time cut to the second is before the budget has room.
+			g.unread += "; try again after " + at.Truncate(time.Second).Add(time.Second).UTC().Format(time.RFC3339)
 		}
 		g.gate.PRs = nil
 		g.unreadIDs = fresh

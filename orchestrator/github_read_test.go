@@ -434,7 +434,8 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	// requests are still listed, each gate unread for the budget, and
 	// nothing reaches GitHub. No judgement either way: ready is left out,
 	// and unread says when the budget has room again — an hour after the
-	// oldest read the hour still counts.
+	// oldest read the hour still counts, rounded up to the second so that
+	// trying again then is not too early.
 	var oldest time.Time
 	if err := w.owner.QueryRow(context.Background(), `SELECT min(occurred_at) FROM events WHERE task_id = $1
 		AND event_type = 'agent.tool.attempted' AND occurred_at > now() - interval '1 hour'
@@ -442,7 +443,7 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 		task).Scan(&oldest); err != nil {
 		t.Fatal(err)
 	}
-	want := "read budget spent (60/hour): not read; try again after " + oldest.Add(time.Hour).UTC().Format(time.RFC3339)
+	want := "read budget spent (60/hour): not read; try again after " + oldest.Add(time.Hour).Truncate(time.Second).Add(time.Second).UTC().Format(time.RFC3339)
 	listed := w.must(task, "pull_requests", `{}`)
 	prs, _ := listed["pullRequests"].([]any)
 	if len(prs) == 0 {
