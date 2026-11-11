@@ -106,6 +106,61 @@ func TestAQueuedReviewAfterAFixOfNoChangeIsKept(t *testing.T) {
 	}
 }
 
+// "Completed at these heads" is a completed review Run of this attempt:
+// where the queued reviewer's only Run at these heads failed or was
+// stopped, or is of another attempt or phase, the review is still offered.
+func TestAQueuedReviewRunsWhereItsReviewerDidNotCompleteHere(t *testing.T) {
+	for _, c := range []struct{ name, set string }{
+		{"failed", `status = 'failed'`},
+		{"stopped", `status = 'aborted'`},
+		{"another attempt", `attempt = attempt + 1`},
+		{"another phase", `phase = 'fix'`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := roundsWorld(t)
+			w.fixPlays(func(spec map[string]any) *fakelux.Behaviour {
+				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "simplify" {
+					return &fakelux.Behaviour{Reply: "Simple enough."}
+				}
+				return nil
+			})
+			task := w.task()
+			w.toRoundOne(task)
+			ran, _ := w.roundOneLenses(task)
+			mustExec(t, w.owner, `UPDATE runs SET `+c.set+` WHERE task_id = $1 AND phase = 'review' AND category = $2`, task, ran)
+			w.simplifiedNothingThen(task, ran)
+			if !w.fixedWith(task, fmt.Sprintf(`[%q]`, ran)) {
+				t.Fatalf("parked at %q, want the review offered\n%s", w.decisionAt(task), w.describeRuns())
+			}
+		})
+	}
+}
+
+// Only a writer that committed nothing covers nothing new: a simplifier
+// that failed keeps the review queued behind it, and its wake says it
+// failed, even where the reviewer completed at these heads.
+func TestAQueuedReviewBehindAFailedSimplifierIsKept(t *testing.T) {
+	w := roundsWorld(t)
+	w.fixPlays(func(spec map[string]any) *fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "simplify" {
+			return &fakelux.Behaviour{FailToStart: true}
+		}
+		return nil
+	})
+	task := w.task()
+	w.toRoundOne(task)
+	ran, _ := w.roundOneLenses(task)
+	w.must(task, "start_phase", fmt.Sprintf(`{"phase":"simplify","then":{"review":[%q]}}`, ran))
+	w.until("after the simplifier", func() bool { return w.untaken(task) && w.decisionAt(task) == delivery.PointFixed })
+	if !w.fixedWith(task, fmt.Sprintf(`[%q]`, ran)) {
+		t.Fatalf("parked at %q without the queued review\n%s", w.decisionAt(task), w.describeRuns())
+	}
+	covered := delivery.MustText("wakes/facts/pipeline-covered").Render(struct{ Review []string }{[]string{ran}})
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND strpos(line, $2) > 0`, task, covered); n != 0 {
+		t.Errorf("a failed simplifier's wake says it committed nothing (%q)", covered)
+	}
+}
+
 func TestAQueuedReviewStillRunsForReviewersNotRunOrHeadsMoved(t *testing.T) {
 	nothing := func(spec map[string]any) *fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "simplify" {
