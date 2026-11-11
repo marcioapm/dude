@@ -240,7 +240,7 @@ type gatedPullRequests struct {
 	// Why the gates of gate.PRs are not read ("" to read them): the
 	// task's hourly GitHub read budget is spent.
 	unread    string
-	unreadIDs []delivery.GateFacts
+	unreadPRs []delivery.GateFacts
 }
 
 // githubReads is the gates read fresh: one GitHub read each of the
@@ -301,7 +301,7 @@ func checkPullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequests
 			g.unread += "; try again after " + at.Truncate(time.Second).Add(time.Second).UTC().Format(time.RFC3339)
 		}
 		g.gate.PRs = nil
-		g.unreadIDs = fresh
+		g.unreadPRs = fresh
 		return g, nil
 	}
 	for range fresh {
@@ -346,11 +346,9 @@ func readGates(ctx context.Context, c Caller, g gatedPullRequests) ([]delivery.P
 	if len(g.gate.PRs) == 0 {
 		return nil, nil
 	}
-	gh, err := githubOf(c)
-	if err != nil {
-		// No client: every GitHub item unreadable, as the gate says.
-		gh = nil
-	}
+	// No client (githubOf's error) reads every GitHub item unreadable, as
+	// the gate says.
+	gh, _ := githubOf(c)
 	return delivery.DoReadyGate(forge.AgentReadContext(ctx), gh, g.gate), nil
 }
 
@@ -361,7 +359,7 @@ func listGates(ctx context.Context, tx pgx.Tx, _ Caller, g gatedPullRequests, ga
 	}
 	prs, _ := g.listing["pullRequests"].([]pullRequestOut)
 	for i := range prs {
-		for _, p := range g.unreadIDs {
+		for _, p := range g.unreadPRs {
 			if p.ID == prs[i].id {
 				prs[i].ReadyGate = &readyGateOut{Unread: g.unread}
 			}
