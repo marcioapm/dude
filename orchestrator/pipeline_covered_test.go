@@ -16,7 +16,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
-// roundOneLens is a reviewer round 1 ran to completion at the delivery's
+// roundOneLenses is a reviewer round 1 ran to completion at the delivery's
 // heads, and one it did not run.
 func (w *world) roundOneLenses(task string) (ran, notRan string) {
 	w.t.Helper()
@@ -30,6 +30,14 @@ func (w *world) roundOneLenses(task string) (ran, notRan string) {
 	}
 	w.t.Fatal("round 1 ran every reviewer")
 	return
+}
+
+// simplifierCommitsNothing has the simplifier reply and commit nothing.
+func simplifierCommitsNothing(spec map[string]any) *fakelux.Behaviour {
+	if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "simplify" {
+		return &fakelux.Behaviour{Reply: "Simple enough."}
+	}
+	return nil
 }
 
 // simplifiedNothingThen starts the simplifier, which commits nothing, with
@@ -46,12 +54,7 @@ func (w *world) simplifiedNothingThen(task string, review ...string) {
 
 func TestAQueuedReviewOfNoChangeAtReviewedHeadsIsDropped(t *testing.T) {
 	w := roundsWorld(t)
-	w.fixPlays(func(spec map[string]any) *fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "simplify" {
-			return &fakelux.Behaviour{Reply: "Simple enough."}
-		}
-		return nil
-	})
+	w.fixPlays(simplifierCommitsNothing)
 	task := w.task()
 	w.toRoundOne(task)
 	ran, _ := w.roundOneLenses(task)
@@ -118,12 +121,7 @@ func TestAQueuedReviewRunsWhereItsReviewerDidNotCompleteHere(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := roundsWorld(t)
-			w.fixPlays(func(spec map[string]any) *fakelux.Behaviour {
-				if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "simplify" {
-					return &fakelux.Behaviour{Reply: "Simple enough."}
-				}
-				return nil
-			})
+			w.fixPlays(simplifierCommitsNothing)
 			task := w.task()
 			w.toRoundOne(task)
 			ran, _ := w.roundOneLenses(task)
@@ -162,15 +160,9 @@ func TestAQueuedReviewBehindAFailedSimplifierIsKept(t *testing.T) {
 }
 
 func TestAQueuedReviewStillRunsForReviewersNotRunOrHeadsMoved(t *testing.T) {
-	nothing := func(spec map[string]any) *fakelux.Behaviour {
-		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "simplify" {
-			return &fakelux.Behaviour{Reply: "Simple enough."}
-		}
-		return nil
-	}
 	t.Run("a reviewer the last round did not run", func(t *testing.T) {
 		w := roundsWorld(t)
-		w.fixPlays(nothing)
+		w.fixPlays(simplifierCommitsNothing)
 		task := w.task()
 		w.toRoundOne(task)
 		ran, notRan := w.roundOneLenses(task)
@@ -184,7 +176,7 @@ func TestAQueuedReviewStillRunsForReviewersNotRunOrHeadsMoved(t *testing.T) {
 	})
 	t.Run("heads moved since the review", func(t *testing.T) {
 		w := roundsWorld(t)
-		w.fixPlays(nothing)
+		w.fixPlays(simplifierCommitsNothing)
 		task := w.task()
 		w.toRoundOne(task)
 		ran, _ := w.roundOneLenses(task)
