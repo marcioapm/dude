@@ -239,8 +239,6 @@ type WorkflowRun struct {
 	Jobs                 []WorkflowJob
 	// TotalJobs is how many jobs GitHub has, of which Jobs is the first page.
 	TotalJobs int
-	// GitHub failed on reading its jobs (a 5xx, no answer): Jobs is empty.
-	JobsUnread bool
 }
 
 // WorkflowJob is one job of a run: its id is its check run's, which
