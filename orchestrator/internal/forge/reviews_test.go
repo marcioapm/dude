@@ -283,8 +283,9 @@ func TestFindOwnReviewRecoversALostAnswerAndIgnoresQuotes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Indented 4 spaces, the marker is a code block's text.
-	if _, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventComment,
-		Body: "as code:\n\n    " + marker}); err != nil {
+	quoted, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventComment,
+		Body: "as code:\n\n    " + marker})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1"); err != nil || found {
@@ -292,7 +293,7 @@ func TestFindOwnReviewRecoversALostAnswerAndIgnoresQuotes(t *testing.T) {
 	}
 
 	fake.Set(func(s *fakegithub.Server) { s.ReviewTimeoutOnce = true })
-	_, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventApprove,
+	_, err = g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventApprove,
 		Body: "Approved.\n\n" + marker})
 	if err == nil || !Transient(err) {
 		t.Fatalf("a dropped answer: %v, want an ambiguous (transient) error", err)
@@ -302,6 +303,25 @@ func TestFindOwnReviewRecoversALostAnswerAndIgnoresQuotes(t *testing.T) {
 	last := reviews[len(reviews)-1]
 	if err != nil || !found || got.ID != last.ID || got.State != "APPROVED" || got.CommitID != head {
 		t.Fatalf("after the lost answer: %+v %v %v, want review %+v", got, found, err, last)
+	}
+	// The recovered review carries the URL and node GitHub answers a
+	// submission with, as dude records them.
+	url := func(id int64) string {
+		return fmt.Sprintf("https://github.test/acme/repo/pull/%d#pullrequestreview-%d", n, id)
+	}
+	if quoted.URL != url(quoted.ID) || quoted.NodeID != fmt.Sprintf("PRR_%d", quoted.ID) {
+		t.Fatalf("a submission's answer: %+v", quoted)
+	}
+	if got.URL != url(last.ID) || got.NodeID != fmt.Sprintf("PRR_%d", last.ID) {
+		t.Fatalf("the recovered review has URL %q and node %q, want those GitHub gives", got.URL, got.NodeID)
+	}
+	answered, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventComment,
+		Body: "Answered.\n\n" + ReviewMarker("wi_1", "claim_3")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, ok, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_3"); err != nil || !ok || found != answered {
+		t.Fatalf("found %+v %v %v, want the submission's answer %+v", found, ok, err, answered)
 	}
 	if _, found, _ := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_2"); found {
 		t.Fatal("another claim's review was found")

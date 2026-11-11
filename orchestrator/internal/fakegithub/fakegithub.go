@@ -1479,8 +1479,7 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 	n, _ := strconv.Atoi(r.PathValue("n"))
 	if p := s.pulls[n]; p != nil {
 		for _, rv := range p.Reviews {
-			out = append(out, map[string]any{"id": rv.ID, "user": s.userJSON(rv.Login), "state": rv.State,
-				"body": rv.Body, "submitted_at": rv.SubmittedAt, "commit_id": rv.CommitID})
+			out = append(out, s.reviewJSON(p, rv)) // as GitHub lists them: node_id and html_url too
 		}
 	}
 	write(w, 200, page(r, out))
