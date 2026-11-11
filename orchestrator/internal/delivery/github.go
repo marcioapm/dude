@@ -20,14 +20,14 @@ import (
 const EvChatNotice = "chat.notice"
 
 // prName is a pull request as a line names it: repo#number.
-func prName(p PullRequestState) string { return fmt.Sprintf("%s#%d", p.Repo, p.Number) }
+func prName(g PRGate) string { return fmt.Sprintf("%s#%d", g.Repo, g.Number) }
 
 // readinessLine says which pull requests are ready to merge, or which
 // one no longer is and which of its gate's items fail.
 func readinessLine(gates []PRGate, ready bool) string {
 	var open []string
 	for _, g := range gates {
-		name := fmt.Sprintf("%s#%d", g.Repo, g.Number)
+		name := prName(g)
 		if !ready && !g.Ready {
 			return fmt.Sprintf("%s is no longer ready to merge: %s.", name, failingLine(g))
 		}
@@ -79,7 +79,7 @@ func (s *Store) moveReadiness(ctx context.Context, org string, st *State, gates 
 		var failing []map[string]any
 		for _, g := range gates {
 			for _, it := range g.Failing() {
-				failing = append(failing, map[string]any{"pr": fmt.Sprintf("%s#%d", g.Repo, g.Number), "key": it.Key, "detail": it.Detail})
+				failing = append(failing, map[string]any{"pr": prName(g), "key": it.Key, "detail": it.Detail})
 			}
 		}
 		if len(failing) > 0 {
