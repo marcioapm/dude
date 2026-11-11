@@ -13,6 +13,28 @@ import (
 	"time"
 )
 
+// answerPullRequest answers what a read of pull request acme/api#1 asks
+// besides its check runs: an open pull request at head abc with no commit
+// statuses, reviews or threads, not behind its base. It says whether it
+// answered.
+func answerPullRequest(w http.ResponseWriter, r *http.Request) bool {
+	switch r.URL.Path {
+	case "/repos/acme/api/pulls/1":
+		fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
+	case "/repos/acme/api/commits/abc/status":
+		fmt.Fprint(w, `{"state":"pending","total_count":0}`)
+	case "/repos/acme/api/pulls/1/reviews":
+		fmt.Fprint(w, `[]`)
+	case "/graphql":
+		fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
+	case "/repos/acme/api/compare/...abc":
+		fmt.Fprint(w, `{"behind_by":0}`)
+	default:
+		return false
+	}
+	return true
+}
+
 // timeLimitServer answers a pull request whose head has one check run of
 // the given conclusion, reported by app (Actions when ""), whose
 // annotations are annotations (a JSON list) or answer status when it is
@@ -27,11 +49,10 @@ func timeLimitServer(t *testing.T, app, conclusion, annotations string, status i
 		mu.Lock()
 		asked = append(asked, r.URL.Path)
 		mu.Unlock()
+		if answerPullRequest(w, r) {
+			return
+		}
 		switch r.URL.Path {
-		case "/repos/acme/api/pulls/1":
-			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
-		case "/repos/acme/api/commits/abc/status":
-			fmt.Fprint(w, `{"state":"pending","total_count":0}`)
 		case "/repos/acme/api/commits/abc/check-runs":
 			fmt.Fprintf(w, `{"total_count":1,"check_runs":[{"id":41,"name":"unit","status":"completed","conclusion":%q,"app":{"slug":%q}}]}`, conclusion, app)
 		case "/repos/acme/api/check-runs/41/annotations":
@@ -41,12 +62,6 @@ func timeLimitServer(t *testing.T, app, conclusion, annotations string, status i
 				return
 			}
 			fmt.Fprint(w, annotations)
-		case "/repos/acme/api/pulls/1/reviews":
-			fmt.Fprint(w, `[]`)
-		case "/graphql":
-			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
-		case "/repos/acme/api/compare/...abc":
-			fmt.Fprint(w, `{"behind_by":0}`)
 		default:
 			w.WriteHeader(404)
 		}
@@ -144,11 +159,10 @@ func annotationsServer(t *testing.T, runs func() string, timedOut ...int64) (*Gi
 	var mu sync.Mutex
 	reads := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerPullRequest(w, r) {
+			return
+		}
 		switch {
-		case r.URL.Path == "/repos/acme/api/pulls/1":
-			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
-		case r.URL.Path == "/repos/acme/api/commits/abc/status":
-			fmt.Fprint(w, `{"state":"pending","total_count":0}`)
 		case r.URL.Path == "/repos/acme/api/commits/abc/check-runs":
 			list := runs()
 			fmt.Fprintf(w, `{"total_count":%d,"check_runs":%s}`, strings.Count(list, `"id"`), list)
@@ -163,12 +177,6 @@ func annotationsServer(t *testing.T, runs func() string, timedOut ...int64) (*Gi
 				}
 			}
 			fmt.Fprint(w, `[{"message":"Canceling since a higher priority waiting request for 'ci' exists"}]`)
-		case r.URL.Path == "/repos/acme/api/pulls/1/reviews":
-			fmt.Fprint(w, `[]`)
-		case r.URL.Path == "/graphql":
-			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
-		case r.URL.Path == "/repos/acme/api/compare/...abc":
-			fmt.Fprint(w, `{"behind_by":0}`)
 		default:
 			w.WriteHeader(404)
 		}
@@ -254,11 +262,10 @@ func settleServer(t *testing.T, now func() time.Time, annotations func() string,
 	var mu sync.Mutex
 	reads := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerPullRequest(w, r) {
+			return
+		}
 		switch r.URL.Path {
-		case "/repos/acme/api/pulls/1":
-			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
-		case "/repos/acme/api/commits/abc/status":
-			fmt.Fprint(w, `{"state":"pending","total_count":0}`)
 		case "/repos/acme/api/commits/abc/check-runs":
 			fmt.Fprint(w, `{"total_count":1,"check_runs":[{"id":41,"name":"unit","status":"completed","conclusion":"cancelled",
 				"started_at":"2026-11-11T09:54:00Z","completed_at":"2026-11-11T10:00:00Z","app":{"slug":"github-actions"}}]}`)
@@ -272,12 +279,6 @@ func settleServer(t *testing.T, now func() time.Time, annotations func() string,
 				return
 			}
 			fmt.Fprint(w, annotations())
-		case "/repos/acme/api/pulls/1/reviews":
-			fmt.Fprint(w, `[]`)
-		case "/graphql":
-			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
-		case "/repos/acme/api/compare/...abc":
-			fmt.Fprint(w, `{"behind_by":0}`)
 		default:
 			w.WriteHeader(404)
 		}
