@@ -128,7 +128,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		}
 	}
 	if !ended {
-		status, err = gh.PullRequest(ctx, slug, pr.Number)
+		// The checks stored last: a cancelled Actions run's verdict (timed
+		// out or not) is reused, not read again.
+		var known []forge.Check
+		_ = json.Unmarshal(pr.ChecksJSON, &known)
+		status, err = gh.PullRequest(forge.WithKnownChecks(ctx, known), slug, pr.Number)
 	}
 	if err != nil {
 		return err

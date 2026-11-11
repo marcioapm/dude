@@ -151,6 +151,7 @@ rChatHistoryRateLimited                refusals/tools/chat/history-rate-limited
 rChatHistoryAtMostReadsHour            refusals/tools/chat/history-at-most-reads-hour
 rRunIdRunFrom1OrItsLink                refusals/tools/github/run-id-run-from-1-or-its-link
 rRunLinkIsAnotherRepository            refusals/tools/github/run-link-is-another-repository
+rBranchAtMost255Characters             refusals/tools/github/branch-at-most-255-characters
 rPostAutomationsOnly                   refusals/tools/post-to-chat/automations-only
 rPostNameAChannel                      refusals/tools/post-to-chat/name-a-channel
 rPostTextLength                        refusals/tools/post-to-chat/text-length

@@ -674,6 +674,10 @@ a thread reply is 1 to %d characters; this one is %d: summarise it in a few line
 
 this turn's message was typed in dude, not in the chat: nothing was posted; answer in this session
 
+## refusals/tools/github/branch-at-most-255-characters
+
+branch: at most 255 characters
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

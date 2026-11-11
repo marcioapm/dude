@@ -79,10 +79,12 @@ func TestANamedReadCountsDecodedStreamSizes(t *testing.T) {
 	}
 }
 
-// A failed check's log is a GitHub read too: whatever the harness called the
-// tool, its text never reaches the ledger, only its size.
+// A failed check's log is a GitHub read too, and so are a run's jobs and a
+// branch's recent runs: whatever the harness called the tool, its text
+// never reaches the ledger, only its size.
 func TestACheckLogReadIsWithheldByName(t *testing.T) {
-	for _, name := range []string{"github_check_log", "dude_github_check_log"} {
+	for _, name := range []string{"github_check_log", "dude_github_check_log", "github_run_jobs", "dude_github_run_jobs",
+		"github_branch_runs", "dude_github_branch_runs"} {
 		payload := map[string]any{"output": capOutput("E   AssertionError: 3 != 2\n##[error]Process completed with exit code 1.")}
 		withholdGitHubRead([]string{name}, payload)
 		out, _ := payload["output"].(map[string]any)
