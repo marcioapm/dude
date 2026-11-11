@@ -239,6 +239,8 @@ type WorkflowRun struct {
 	Jobs                 []WorkflowJob
 	// TotalJobs is how many jobs GitHub has, of which Jobs is the first page.
 	TotalJobs int
+	// GitHub failed on reading its jobs (a 5xx, no answer): Jobs is empty.
+	JobsUnread bool
 }
 
 // WorkflowJob is one job of a run: its id is its check run's, which
@@ -311,6 +313,8 @@ type BranchRun struct {
 	Jobs                    []BranchJob
 	// TotalJobs is how many jobs GitHub has, of which Jobs is the first page.
 	TotalJobs int
+	// GitHub failed on reading its jobs (a 5xx, no answer): Jobs is empty.
+	JobsUnread bool
 }
 
 // BranchJob is one job of a BranchRun; its id is its check run's, which
@@ -323,6 +327,7 @@ type BranchJob struct {
 // BranchRuns reads branch's most recent Actions runs on slug, newest
 // first, at most runs of them, each with at most jobs of its latest
 // attempt's jobs: one request for the runs and one per run for its jobs.
+// A run whose jobs GitHub failed to answer for is kept, JobsUnread.
 func (g *GitHub) BranchRuns(ctx context.Context, slug, branch string, runs, jobs int) ([]BranchRun, error) {
 	ctx = agentReadContext(ctx)
 	if err := g.readBudget(ctx, slug, "core"); err != nil {
@@ -354,11 +359,19 @@ func (g *GitHub) BranchRuns(ctx context.Context, slug, branch string, runs, jobs
 				Conclusion string `json:"conclusion"`
 			} `json:"jobs"`
 		}
-		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=%d", slug, r.ID, jobs), nil, &js); err != nil {
-			return nil, err
-		}
 		run := BranchRun{ID: r.ID, Name: r.Name, Event: r.Event, HeadSHA: r.HeadSHA, Status: r.Status, Conclusion: r.Conclusion,
-			URL: r.HTMLURL, CreatedAt: r.CreatedAt, TotalJobs: js.Total}
+			URL: r.HTMLURL, CreatedAt: r.CreatedAt}
+		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=%d", slug, r.ID, jobs), nil, &js); err != nil {
+			// GitHub failing on one run's jobs keeps the runs read; its
+			// rate limit, a refusal or the call ending stops the read.
+			if !Transient(err) || RateLimited(err) || ctx.Err() != nil {
+				return nil, err
+			}
+			run.JobsUnread = true
+			out = append(out, run)
+			continue
+		}
+		run.TotalJobs = js.Total
 		for _, j := range js.Jobs[:min(len(js.Jobs), jobs)] {
 			run.Jobs = append(run.Jobs, BranchJob{ID: j.ID, Name: j.Name, Status: j.Status, Conclusion: j.Conclusion})
 		}

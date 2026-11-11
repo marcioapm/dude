@@ -39,7 +39,56 @@ func TestBranchRunsAreNewestFirstWithTheirJobs(t *testing.T) {
 	if len(runs[0].Jobs) != 2 || runs[0].TotalJobs != 3 || runs[0].Jobs[0].Name != "unit" || runs[0].Jobs[0].Conclusion != "failure" || runs[0].Jobs[0].ID != 11 {
 		t.Fatalf("jobs %+v", runs[0])
 	}
-	if len(asked) != 4 || asked[0] != "/repos/acme/api/actions/runs?branch=release%2F1+x&per_page=3" {
+	if len(asked) != 4 || asked[0] != "/repos/acme/api/actions/runs?branch=release%2F1+x&per_page=3" ||
+		asked[1] != "/repos/acme/api/actions/runs/1/jobs?filter=latest&per_page=2" {
 		t.Fatalf("asked %v", asked)
+	}
+}
+
+// GitHub failing on one run's jobs keeps the runs already read, that one
+// marked JobsUnread; its rate limit, or a refusal, still fails the read.
+func TestBranchRunsKeepTheRunsWhenOneRunsJobsFail(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		fails  bool
+	}{
+		{name: "a 502", status: 502, body: `{"message":"bad gateway"}`},
+		{name: "a rate limit", status: 429, body: `{"message":"rate limit"}`, fails: true},
+		{name: "a refusal", status: 403, body: `{"message":"Resource not accessible by integration"}`, fails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/acme/api/actions/runs":
+					fmt.Fprint(w, `{"total_count":2,"workflow_runs":[
+						{"id":2,"name":"CI","head_sha":"b","status":"completed","conclusion":"failure","created_at":"2026-11-11T10:00:00Z"},
+						{"id":1,"name":"CI","head_sha":"a","status":"completed","conclusion":"success","created_at":"2026-11-11T09:00:00Z"}]}`)
+				case "/repos/acme/api/actions/runs/1/jobs":
+					fmt.Fprint(w, `{"total_count":1,"jobs":[{"id":11,"name":"unit","status":"completed","conclusion":"success"}]}`)
+				case "/repos/acme/api/actions/runs/2/jobs":
+					w.WriteHeader(tc.status)
+					fmt.Fprint(w, tc.body)
+				default:
+					w.WriteHeader(404)
+				}
+			}))
+			defer srv.Close()
+			runs, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(context.Background(), "acme/api", "main", 5, 5)
+			if tc.fails {
+				if err == nil {
+					t.Fatalf("read %+v, want it refused", runs)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runs) != 2 || runs[0].ID != 2 || !runs[0].JobsUnread || len(runs[0].Jobs) != 0 ||
+				false || len(runs[1].Jobs) != 1 {
+				t.Fatalf("runs %+v", runs)
+			}
+		})
 	}
 }
