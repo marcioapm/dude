@@ -119,6 +119,10 @@ type Check struct {
 	// read (CheckRunsForbidden). Its Status is CheckUnavailable, which
 	// readers without this field take as pending: blocking, never failed.
 	Diagnostic string `json:"diagnostic,omitempty"`
+	// A cancelled Actions run's verdict (timed_out or cancelled) is final:
+	// a later read given this check (WithKnownChecks) reuses it without
+	// reading its annotations again. See cancelledSettle.
+	Settled bool `json:"settled,omitempty"`
 }
 
 // CheckRunsForbidden: GitHub refused the check-runs listing (403, not a
@@ -345,11 +349,13 @@ type GitHub struct {
 	testGitHost string
 	// How the organization wants dude to behave on GitHub.
 	Settings Settings
-	// The clock installation tokens' expiry is read against.
+	// The clock installation tokens' expiry, and how long ago a cancelled
+	// run ended (endedAWhileAgo), are read against.
 	now func() time.Time
 }
 
-// WithClock replaces the clock a GitHub App's tokens are judged by.
+// WithClock replaces the clock a GitHub App's tokens, and a cancelled
+// run's settling, are judged by.
 func WithClock(now func() time.Time) func(*GitHub) {
 	return func(g *GitHub) { g.now = now }
 }
@@ -850,19 +856,25 @@ pages:
 			if r.App != nil {
 				app = r.App.Slug
 			}
+			settled := false
 			if r.Status == "completed" && r.Conclusion == "cancelled" && app == ActionsApp {
-				verdict, ok := known[r.ID]
+				prior, ok := known[r.ID]
 				switch {
-				case ok:
-					r.Conclusion = verdict
+				case ok && (prior.Conclusion == "timed_out" || prior.Settled):
+					r.Conclusion, settled = prior.Conclusion, true
 				case isAgentRead(ctx) && annotationReads >= agentAnnotationReads:
 					// Left cancelled: not failing, never read as passing.
 				default:
 					annotationReads++
-					out, err := g.cancelledByTimeLimit(ctx, slug, r.ID)
+					out, answered, err := g.cancelledByTimeLimit(ctx, slug, r.ID)
 					if err != nil {
 						return "", nil, false, err
 					}
+					// A time limit is final once seen. Not seeing one is
+					// final only when read a while after the run ended (GitHub
+					// may annotate it a moment late) and GitHub answered, or
+					// on the second such read: a refusal is read once more.
+					settled = out || (g.endedAWhileAgo(r.CompletedAt) && (answered || ok))
 					if out {
 						r.Conclusion = "timed_out"
 					}
@@ -874,7 +886,7 @@ pages:
 				link = r.DetailsURL
 			}
 			c := Check{Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: link,
-				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID, App: app}
+				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID, App: app, Settled: settled}
 			list = append(list, c)
 		}
 		seen += len(runs.CheckRuns)
@@ -1056,23 +1068,37 @@ const timeLimitAnnotation = "has exceeded the maximum execution time"
 // a sync of passing or failing checks costs nothing more. Annotations
 // GitHub refuses (no Checks permission, gone) leave it cancelled; a
 // failure that may pass fails the read, to be tried again.
-func (g *GitHub) cancelledByTimeLimit(ctx context.Context, slug string, runID int64) (bool, error) {
+// answered says GitHub gave the annotations: false when it refused them.
+func (g *GitHub) cancelledByTimeLimit(ctx context.Context, slug string, runID int64) (timedOut, answered bool, err error) {
 	var annotations []struct {
 		Message string `json:"message"`
 	}
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/check-runs/%d/annotations?per_page=50", slug, runID), nil, &annotations); err != nil {
 		var e *Error
 		if !asError(err, &e) || Transient(err) {
-			return false, err
+			return false, false, err
 		}
-		return false, nil
+		return false, false, nil
 	}
 	for _, a := range annotations {
 		if strings.Contains(a.Message, timeLimitAnnotation) {
-			return true, nil
+			return true, true, nil
 		}
 	}
-	return false, nil
+	return false, true, nil
+}
+
+// cancelledSettle is how long after a cancelled Actions run ended its
+// annotations are taken to be complete: GitHub may add the time-limit one
+// a moment after the run reads completed. A read sooner is not final.
+const cancelledSettle = time.Minute
+
+// endedAWhileAgo says a run that completed at completedAt (GitHub's
+// timestamp) did so cancelledSettle or more ago; with no time to go by,
+// it did.
+func (g *GitHub) endedAWhileAgo(completedAt string) bool {
+	t, err := time.Parse(time.RFC3339, completedAt)
+	return err != nil || g.now().Sub(t) >= cancelledSettle
 }
 
 type knownChecksKey struct{}
@@ -1080,8 +1106,11 @@ type knownChecksKey struct{}
 // WithKnownChecks gives ctx's check reads the checks stored at the last
 // read of the same pull request (pull_requests.checks_json). A completed
 // check run never changes (a re-run is a new one), so an Actions run
-// stored cancelled or timed out keeps that verdict and its annotations
-// are not read again (cancelledByTimeLimit): each is read at most once.
+// stored timed out keeps that verdict, and one stored cancelled keeps it
+// once Settled, and its annotations are not read again
+// (cancelledByTimeLimit). A cancelled one read too soon after it ended
+// is read again until a read is final; one whose annotations GitHub
+// refused is read once more.
 func WithKnownChecks(ctx context.Context, known []Check) context.Context {
 	return context.WithValue(ctx, knownChecksKey{}, known)
 }
@@ -1091,15 +1120,15 @@ func WithKnownChecks(ctx context.Context, known []Check) context.Context {
 // stored verdict for is left cancelled, which is never passing.
 const agentAnnotationReads = 10
 
-// knownVerdicts are ctx's known checks' verdicts on cancelled Actions
-// runs, by run id.
-func knownVerdicts(ctx context.Context) map[int64]string {
+// knownVerdicts are ctx's known checks on cancelled Actions runs, by run
+// id: one timed out or Settled is reused; another is read once more.
+func knownVerdicts(ctx context.Context) map[int64]Check {
 	known, _ := ctx.Value(knownChecksKey{}).([]Check)
-	out := map[int64]string{}
+	out := map[int64]Check{}
 	for _, c := range known {
 		if c.RunID != 0 && c.App == ActionsApp && c.Status == "completed" &&
 			(c.Conclusion == "cancelled" || c.Conclusion == "timed_out") {
-			out[c.RunID] = c.Conclusion
+			out[c.RunID] = c
 		}
 	}
 	return out

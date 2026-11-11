@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // timeLimitServer answers a pull request whose head has one check run of
@@ -242,5 +243,117 @@ func TestAnAgentsChecksReadBoundsItsAnnotationsReads(t *testing.T) {
 	}
 	if rollup != ChecksFailing || !list[0].TimedOut() || list[len(list)-1].Conclusion != "cancelled" {
 		t.Errorf("rollup %s, list %+v", rollup, list)
+	}
+}
+
+// settleServer answers a pull request whose head has one cancelled Actions
+// run, 41, completed at 10:00:00, whose annotations are annotations() or
+// answer status() when that is set, at the time of asking; it counts the
+// annotations reads. Its clock is now().
+func settleServer(t *testing.T, now func() time.Time, annotations func() string, status func() int) (*GitHub, func() int) {
+	var mu sync.Mutex
+	reads := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls/1":
+			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
+		case "/repos/acme/api/commits/abc/status":
+			fmt.Fprint(w, `{"state":"pending","total_count":0}`)
+		case "/repos/acme/api/commits/abc/check-runs":
+			fmt.Fprint(w, `{"total_count":1,"check_runs":[{"id":41,"name":"unit","status":"completed","conclusion":"cancelled",
+				"started_at":"2026-11-11T09:54:00Z","completed_at":"2026-11-11T10:00:00Z","app":{"slug":"github-actions"}}]}`)
+		case "/repos/acme/api/check-runs/41/annotations":
+			mu.Lock()
+			reads++
+			mu.Unlock()
+			if s := status(); s != 0 {
+				w.WriteHeader(s)
+				fmt.Fprint(w, `{"message":"no"}`)
+				return
+			}
+			fmt.Fprint(w, annotations())
+		case "/repos/acme/api/pulls/1/reviews":
+			fmt.Fprint(w, `[]`)
+		case "/graphql":
+			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
+		case "/repos/acme/api/compare/...abc":
+			fmt.Fprint(w, `{"behind_by":0}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}, WithClock(now)), func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return reads
+	}
+}
+
+// A stored cancelled verdict is reused only once it is final: read with
+// GitHub answering, cancelledSettle or more after the run ended. Read
+// sooner, GitHub may yet add the time-limit annotation: the next sync
+// reads it again and sees the hang. A timed-out verdict is final at once.
+func TestACancelledVerdictReadTooSoonIsReadAgain(t *testing.T) {
+	ended := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	clock := ended.Add(10 * time.Second)
+	annotations := `[]`
+	gh, reads := settleServer(t, func() time.Time { return clock }, func() string { return annotations }, func() int { return 0 })
+	sync := func(known []Check) Status {
+		t.Helper()
+		st, err := gh.PullRequest(WithKnownChecks(context.Background(), known), "acme/api", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	first := sync(nil)
+	if first.Checks != ChecksPending || first.CheckList[0].Conclusion != "cancelled" || first.CheckList[0].Settled {
+		t.Fatalf("read 10s after it ended: %s %+v, want cancelled, not settled", first.Checks, first.CheckList)
+	}
+	// GitHub annotates the time limit a moment late.
+	annotations = timeLimitAnnotations
+	clock = ended.Add(20 * time.Second)
+	second := sync(first.CheckList)
+	if reads() != 2 || second.Checks != ChecksFailing || !second.CheckList[0].TimedOut() || !second.CheckList[0].Settled {
+		t.Fatalf("after %d reads: %s %+v, want the late annotation read as timed out, settled", reads(), second.Checks, second.CheckList)
+	}
+	clock = ended.Add(time.Hour)
+	if third := sync(second.CheckList); reads() != 2 || !third.CheckList[0].TimedOut() {
+		t.Fatalf("a settled timed-out verdict: %d reads, %+v", reads(), third.CheckList)
+	}
+}
+
+// Read cancelledSettle or more after it ended with GitHub answering, a
+// cancelled verdict is final: reused with no read. One whose annotations
+// GitHub refused is read once more, then reused.
+func TestASettledCancelledVerdictIsReused(t *testing.T) {
+	ended := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		status int
+		reads  int
+	}{
+		{name: "answered", reads: 1},
+		{name: "refused", status: 403, reads: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gh, reads := settleServer(t, func() time.Time { return ended.Add(2 * time.Minute) },
+				func() string { return `[]` }, func() int { return tc.status })
+			var known []Check
+			for range 4 {
+				st, err := gh.PullRequest(WithKnownChecks(context.Background(), known), "acme/api", 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if st.Checks != ChecksPending || st.CheckList[0].Conclusion != "cancelled" {
+					t.Fatalf("%s %+v, want cancelled", st.Checks, st.CheckList)
+				}
+				known = st.CheckList
+			}
+			if reads() != tc.reads || !known[0].Settled {
+				t.Fatalf("four syncs read the annotations %d times (settled %v), want %d", reads(), known[0].Settled, tc.reads)
+			}
+		})
 	}
 }
