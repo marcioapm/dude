@@ -357,3 +357,24 @@ func TestASettledCancelledVerdictIsReused(t *testing.T) {
 		})
 	}
 }
+
+// The agentAnnotationReads bound is an agent's only: a sync of a head
+// with more cancelled runs than that, none of them known, reads every
+// one's annotations, and sees the hang in the last.
+func TestASyncReadsEveryUnknownCancelledRunsAnnotations(t *testing.T) {
+	var ids []int64
+	for id := int64(1); id <= agentAnnotationReads+5; id++ {
+		ids = append(ids, id)
+	}
+	gh, reads := annotationsServer(t, func() string { return cancelledRuns(ids...) }, ids[len(ids)-1])
+	st, err := gh.PullRequest(context.Background(), "acme/api", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reads(); len(got) != len(ids) {
+		t.Errorf("read %d runs' annotations, want all %d: %v", len(got), len(ids), got)
+	}
+	if st.Checks != ChecksFailing || !st.CheckList[len(ids)-1].TimedOut() {
+		t.Errorf("%s %+v, want the last run timed out", st.Checks, st.CheckList)
+	}
+}
