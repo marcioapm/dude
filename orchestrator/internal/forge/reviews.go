@@ -52,13 +52,11 @@ func ReviewMarker(taskID, claimID string) string {
 	return "<!-- dude:review task=" + taskID + " claim=" + claimID + " -->"
 }
 
-// reviewMarked says body ends in marker, read as VerdictMarked reads its
-// marker: the last non-blank line, indented at most 3 spaces, outside any
-// code fence and blockquote.
+// reviewMarked says body ends in marker, read as Own reads ReplyMarker
+// (markerLine).
 func reviewMarked(body, marker string) bool {
-	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(body, " \t\r\n"), "\r\n", "\n"), "\n")
-	ind, rest := indent(lines[len(lines)-1])
-	return strings.TrimSpace(rest) == marker && ind <= 3 && !fenced(lines)
+	last, ok := markerLine(body)
+	return ok && last == marker
 }
 
 // The ways GitHub refuses a review write that a caller acts on.
