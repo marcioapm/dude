@@ -439,26 +439,26 @@ func (w *steps) pipelineGoesOn(ctx context.Context, sc workflow.StepContext, st 
 		return workflow.Result{Next: "review", State: st}, true, nil
 	}
 	line := out.line(runID, phase) + " "
-	queued := p.queued()
+	covered := false
 	if stop == pipelineNothing && policy != "review" {
 		// Nothing changed: a review whose every reviewer completed at these
 		// heads already would cover no change. Dropped, and said; next goes
 		// where the policy goes (the test, or the pull request). Not where
 		// the policy reviews (after a fix): there next would start a review
-		// anyway, the policy's, so it runs the one queued, as before.
-		covered, err := w.reviewedAtHeads(ctx, sc, st, p.Review)
-		if err != nil {
+		// anyway, the policy's, so it runs the one queued.
+		var err error
+		if covered, err = w.reviewedAtHeads(ctx, sc, st, p.Review); err != nil {
 			return workflow.Result{}, true, err
 		}
-		if covered {
-			queued = nil
-		}
 	}
-	if stop != "" && queued == nil {
+	queued := p.queued()
+	switch {
+	case covered:
+		queued = nil
 		line += render(pipelineCoveredTmpl, struct{ Review []string }{p.Review})
-	} else if stop != "" {
+	case stop != "":
 		line += pipelineStopped(p, stop, out, true)
-	} else {
+	default:
 		line += render(pipelineQueuedTmpl, struct{ Review []string }{p.Review})
 	}
 	if len(st.FixRange) > 0 && len(out.Heads) > 0 {
