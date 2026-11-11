@@ -125,13 +125,13 @@ var actionsRunURL = regexp.MustCompile(`^https?://github\.com/([A-Za-z0-9_.-]+/[
 type githubRead struct {
 	Tool, Slug string
 	// The branch github_branch_runs reads; "" for the repository's default.
-	Branch string
-	Number int
-	CheckID    int64
-	Query      string
-	Kind       string
-	State      string
-	Files      []string
+	Branch  string
+	Number  int
+	CheckID int64
+	Query   string
+	Kind    string
+	State   string
+	Files   []string
 }
 
 // readableRepos are the GitHub repositories (owner/name) the caller may
