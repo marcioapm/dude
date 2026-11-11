@@ -200,9 +200,22 @@ def test_a_new_verdict_refreshes_only_dudes_section_of_the_pull_request_body(
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": "I'll steer from here."})
     assert resp.status_code in (200, 201) and resp.json()["decider"] == "conductor", resp.text
     tests = [r for r in client.task_runs(task["id"]) if r["phase"] == "test"]
-    resp = client.post(f"/v1/tasks/{task['id']}/chat",
-                       {"text": "Test it again.\ntool: start_phase " + json.dumps({"phase": "test"})})
-    assert resp.status_code in (200, 201), resp.text
+
+    def a_test_started() -> bool:
+        return len([r for r in client.task_runs(task["id"]) if r["phase"] == "test"]) > len(tests)
+
+    # The push's sync can hold the delivery for a moment, and a start_phase
+    # landing then is refused with "again in a moment" (dude#455). The scripted
+    # conductor does not retry, so the person says it again, as one would.
+    for _ in range(4):
+        resp = client.post(f"/v1/tasks/{task['id']}/chat",
+                           {"text": "Test it again.\ntool: start_phase " + json.dumps({"phase": "test"})})
+        assert resp.status_code in (200, 201), resp.text
+        try:
+            wait_until(a_test_started, timeout=20)
+            break
+        except AssertionError:
+            continue
     wait_until(lambda: len([r for r in client.task_runs(task["id"]) if r["phase"] == "test" and r["status"] == "completed"])
                > len(tests), timeout=120, message="the conductor's test never completed")
 
