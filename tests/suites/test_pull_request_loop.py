@@ -9,7 +9,6 @@ signed webhook.
 
 from __future__ import annotations
 
-import json
 import time
 
 import pytest
@@ -17,7 +16,7 @@ import requests
 
 from env import TestEnvironment
 from fake_github import FakeGitHub
-from helpers import ApiClient, finish_simplifier_review, wait_until
+from helpers import ApiClient, wait_until
 
 
 def _pull_requests(client: ApiClient, task_id: str) -> list[dict]:
@@ -124,55 +123,62 @@ def test_pr_feedback_wakes_a_fixer_and_a_merge_finishes(
         message="the fix never reached the pull request branch",
     )
     assert fix_runs()[-1]["baseRefs"], "the PR fix did not start from the PR's head"
-    wait_until(
-        lambda: _task(client, task["id"])["status"] == "review",
-        timeout=30,
-        message="task did not return to review after the fix",
-    )
-    # The fix went to the pull request's branch, not a candidate, and
-    # one review of its own push followed; no simplifier.
+    # The fix went to the pull request's branch, not a candidate.
     assert not [b for b in fake_github.branches() if b.endswith("-candidate")], fake_github.branches()
-    wait_until(
-        lambda: [r["status"] for r in review_runs()[reviews_before:]] == ["completed"]
-        and _task(client, task["id"])["status"] == "review",
-        timeout=30,
-        message="the fix's push was not reviewed once",
-    )
-    time.sleep(2)
-    assert len(review_runs()) == reviews_before + 1, review_runs()[reviews_before:]
-    assert not [r for r in client.task_runs(task["id"]) if r["phase"] == "simplify"
-                and r["createdAt"] > fix_runs()[-1]["createdAt"]]
 
-    # Its thread resolved and approved, and the fixture has no CI; but the
-    # fix is the last change and no simplifier has run since: the ready
-    # gate holds it in review, and says so.
+    def runs_since_fix():
+        fix = fix_runs()[-1]
+        return [r for r in client.task_runs(task["id"]) if r["createdAt"] >= fix["createdAt"]]
+
+    # Under the default policy the ready gate asks that the simplifier ran
+    # after the last change, and the delivery sees to it by itself: one
+    # review of the fix's push, then the simplifier, nobody starting a
+    # phase; its commit is reviewed over its own range in turn. The
+    # simplifier starts the moment the fix's review ends, so there is no
+    # settled moment at which "no simplifier yet" could be asserted: the
+    # order is asserted from the Runs instead, once the round is over.
+    def round_over():
+        runs = runs_since_fix()
+        return (all(r["status"] == "completed" for r in runs)
+                and [r["phase"] for r in runs][-1:] == ["review"]
+                and "simplify" in [r["phase"] for r in runs]
+                and _task(client, task["id"])["status"] in ("review", "ready_to_merge")
+                and runs)
+
+    runs = wait_until(round_over, timeout=90,
+                      message="the fix was not reviewed and simplified by itself")
+    simplify = next(r for r in runs if r["phase"] == "simplify")
+    phases = [r["phase"] for r in runs]
+    # The scripted simplifier commits, so its diff is reviewed too.
+    assert phases == ["fix", "review", "simplify", "review"], phases
+    assert runs[-1]["reviewOf"] == "simplify", runs[-1]
+    # Its commit landed on the pull request's branch, as the fix's did.
+    assert (fake_github.file_at(pr["headBranch"], "SIMPLE.md") or "").strip() == f"simplified by {simplify['id']}", \
+        fake_github.file_at(pr["headBranch"], "SIMPLE.md")
+
+    # The person's thread is still open: the gate holds the task in review
+    # until it is resolved, whatever the simplifier did.
+    assert _task(client, task["id"])["status"] == "review"
     fake_github.resolve_thread(pr["number"], line)
     fake_github.approve(pr["number"])
     wait_until(lambda: _pull_requests(client, task["id"])[0]["review"] == "approved", timeout=30,
                message="the approval never reached dude")
-    time.sleep(3)
-    assert _task(client, task["id"])["status"] == "review"
-    # Read straight from the orchestrator: the gate names the simplifier,
-    # and nothing else.
+    # Then only the merge is left, and it is a person's merge — the factory
+    # never does it.
+    wait_until(
+        lambda: _task(client, task["id"])["status"] == "ready_to_merge",
+        timeout=60,
+        message="the pull request did not become ready to merge once its fix was simplified and its thread resolved",
+    )
+    assert _pull_requests(client, task["id"])[0]["state"] == "open"
+    # Read straight from the orchestrator: every item of the gate holds,
+    # the simplifier's after the last change among them.
     gate = requests.get(f"{env.orchestrator_url}/internal/pull-requests/{pr['id']}/ready-gate",
                         headers={"Authorization": f"Bearer {env.orchestrator_token}", "X-Dude-Organization": org["id"]},
                         timeout=10)
     assert gate.status_code == 200, gate.text
-    failing = [i for i in gate.json()["items"] if not i["ok"]]
-    assert [i["key"] for i in failing] == ["simplified_after_last_change"], failing
-    # The conductor works through what the gate names: the simplifier after
-    # the last change, its own commit reviewed; then only the merge is
-    # left, and it is a person's merge — the factory never does it.
-    asked = client.post(f"/v1/tasks/{task['id']}/chat",
-                        {"text": "Simplify it before I merge.\ntool: start_phase " + json.dumps({"phase": "simplify"})})
-    assert asked.status_code in (200, 201), asked.text
-    finish_simplifier_review(client, env.owner_dsn, task["id"])
-    wait_until(
-        lambda: _task(client, task["id"])["status"] == "ready_to_merge",
-        timeout=60,
-        message="the pull request did not become ready to merge once its gate was worked through",
-    )
-    assert _pull_requests(client, task["id"])[0]["state"] == "open"
+    assert [i for i in gate.json()["items"] if not i["ok"]] == [], gate.json()
+    assert len(review_runs()) == reviews_before + 2, review_runs()[reviews_before:]
 
     # Time and cost, from what was recorded: every phase ran, the agents
     # worked, and the change has sat in review.
