@@ -371,18 +371,8 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 	case PhaseFix:
 		if settled {
 			// No feedback left for it: as at the wait, a fix of what note says.
-			if len(in.FindingIDs) > 0 {
-				return "", refuseText(rFixWhilePullRequestWaitsAddresses)
-			}
-			repos, err := openPRRepos(ctx, tx, st.PullRequestIDs)
-			if err != nil {
+			if err := refuseFixAtPRWait(ctx, tx, st, in); err != nil {
 				return "", err
-			}
-			if err := prFixBoundFor(ctx, tx, st, repos); err != nil {
-				return "", err
-			}
-			if strings.TrimSpace(in.Note) == "" {
-				return "", refuseText(rSayWhatFixDoNoteNo)
 			}
 			break
 		}

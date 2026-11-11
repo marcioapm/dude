@@ -78,18 +78,8 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 			}
 		}
 	case PhaseFix:
-		if len(in.FindingIDs) > 0 {
-			return "", refuseText(rFixWhilePullRequestWaitsAddresses)
-		}
-		repos, err := openPRRepos(ctx, tx, st.PullRequestIDs)
-		if err != nil {
+		if err := refuseFixAtPRWait(ctx, tx, st, in); err != nil {
 			return "", err
-		}
-		if err := prFixBoundFor(ctx, tx, st, repos); err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(in.Note) == "" {
-			return "", refuseText(rSayWhatFixDoNoteNo)
 		}
 	}
 	st.Decision = &Pending{Point: PointPRFeedback, Policy: "awaitPullRequest"}
@@ -110,6 +100,26 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 		return "", err
 	}
 	return prPhaseStarted(in.Phase), nil
+}
+
+// refuseFixAtPRWait bounds a fix started with no pull request feedback
+// waiting for it: a fix of what note says, not of findings, within the
+// fix bound of the pull requests still open.
+func refuseFixAtPRWait(ctx context.Context, tx pgx.Tx, st *State, in StartPhase) error {
+	if len(in.FindingIDs) > 0 {
+		return refuseText(rFixWhilePullRequestWaitsAddresses)
+	}
+	repos, err := openPRRepos(ctx, tx, st.PullRequestIDs)
+	if err != nil {
+		return err
+	}
+	if err := prFixBoundFor(ctx, tx, st, repos); err != nil {
+		return err
+	}
+	if strings.TrimSpace(in.Note) == "" {
+		return refuseText(rSayWhatFixDoNoteNo)
+	}
+	return nil
 }
 
 // prPhaseStarted is what start_phase answers for a phase started while the
