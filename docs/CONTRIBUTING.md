@@ -1355,7 +1355,11 @@ rather than give a page that is not next to the one named. The conversation
 is the session's origin's, never one the agent names. `github_run_jobs`
 (`github.read`) lists a GitHub Actions run's jobs from its id or link, for
 `github_check_log` to read the failed job's log; it counts against the same
-hourly GitHub reads. Those counts, and `chat_history`'s, read the
+hourly GitHub reads. `github_branch_runs` (`github.read` too) lists a
+branch's ten latest Actions runs, newest first, with each job's conclusion
+(the default branch when none is named), so a conductor can tell a flaky or
+already-failing job from one its change broke; one request for the runs and
+one per run for its jobs, counted as one read. Those counts, and `chat_history`'s, read the
 tool-agnostic indexes of counted attempts (`event_type =
 'agent.tool.attempted'` by session, task or automation and time, migrations
 197–199, which replace the tool-list indexes 200–202 drop); the tool list
