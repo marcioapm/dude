@@ -1,6 +1,7 @@
 package fakegithub
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -138,21 +139,14 @@ func (s *Server) postReview(w http.ResponseWriter, r *http.Request) {
 		hunks = s.diffHunks(p.Base, in.CommitID)
 	}
 	for _, c := range in.Comments {
-		side := c.Side
-		if side == "" {
-			side = "RIGHT"
-		}
+		side := cmp.Or(c.Side, "RIGHT")
 		h, ok := hunks[c.Path][side][c.Line]
 		if !ok {
 			unprocessable(w, MessageNotInDiff)
 			return
 		}
 		if c.StartLine > 0 {
-			startSide := c.StartSide
-			if startSide == "" {
-				startSide = side
-			}
-			if hs, ok := hunks[c.Path][startSide][c.StartLine]; !ok || hs != h {
+			if hs, ok := hunks[c.Path][cmp.Or(c.StartSide, side)][c.StartLine]; !ok || hs != h {
 				unprocessable(w, MessageStartNotInHunk)
 				return
 			}
