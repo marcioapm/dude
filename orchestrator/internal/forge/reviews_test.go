@@ -181,10 +181,11 @@ func TestPullDiffLinesReadsThePatch(t *testing.T) {
 }
 
 // GitHub's base side is a side of its own: a removed line is commented on
-// LEFT, a LEFT line outside the hunks is refused, and a range may start on
-// one side and end on the other within a hunk. The line added after line 3
-// puts the second hunk at 22-28 on LEFT but 23-29 on RIGHT, so a side
-// read as the other one lands somewhere else.
+// LEFT, a LEFT line outside the hunks is refused even where the same number
+// is in a hunk on RIGHT, and a range may start on one side and end on the
+// other within a hunk. The line added after line 3 puts the second hunk at
+// 22-28 on LEFT but 23-29 on RIGHT, so a side read as the other one lands
+// somewhere else.
 func TestTheBaseSideIsReviewedOnItsOwnLines(t *testing.T) {
 	fake, g, n, _ := reviewFake(t)
 	lines := strings.SplitAfter(thirty(map[int]string{3: "three", 25: "twenty-five"}), "\n")
@@ -204,6 +205,9 @@ func TestTheBaseSideIsReviewedOnItsOwnLines(t *testing.T) {
 	}
 	if _, err := submit(ReviewComment{Path: "a.txt", Line: 12, Side: "LEFT"}); !LineNotInDiff(err) {
 		t.Fatalf("a comment on LEFT 12, between the hunks: %v, want LineNotInDiff", err)
+	}
+	if _, err := submit(ReviewComment{Path: "a.txt", Line: 29, Side: "LEFT"}); !LineNotInDiff(err) {
+		t.Fatalf("a comment on LEFT 29, past LEFT 22-28 though inside RIGHT 23-29: %v, want LineNotInDiff", err)
 	}
 	if _, err := submit(ReviewComment{Path: "a.txt", Line: 23, StartLine: 22, StartSide: "LEFT"}); err != nil {
 		t.Fatalf("a range from LEFT 22 to RIGHT 23, one hunk: %v", err)
