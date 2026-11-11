@@ -1,9 +1,11 @@
 package orchestrator_test
 
-// A review queued behind a simplifier (or fix) that committed nothing is
-// dropped when each of its reviewers completed at these heads already: it
-// would cover no change. The wake says so; next goes where the policy
-// goes. Reviewers that have not run at these heads still get the review.
+// A review queued behind a simplifier that committed nothing is dropped
+// when each of its reviewers completed at these heads already: it would
+// cover no change. The wake says so; next goes where the policy goes (the
+// test or the pull request). Reviewers that have not run at these heads
+// still get the review. After a fix, where next reviews either way, the
+// queued review is kept, so next runs the one the conductor queued.
 
 import (
 	"fmt"
@@ -70,6 +72,37 @@ func TestAQueuedReviewOfNoChangeAtReviewedHeadsIsDropped(t *testing.T) {
 	})
 	if n := w.phaseRuns(task, "review"); n != reviews {
 		t.Errorf("%d review Runs over no change since the last review at these heads\n%s", n-reviews, w.describeRuns())
+	}
+}
+
+// After a fix that committed nothing the queued review is kept, even when
+// its reviewer completed at these heads: there next goes to a review
+// either way (the policy's), so it runs exactly the one the conductor
+// queued, with nothing else, as the conductor's instructions say.
+func TestAQueuedReviewAfterAFixOfNoChangeIsKept(t *testing.T) {
+	w := roundsWorld(t)
+	w.fixPlays(func(map[string]any) *fakelux.Behaviour { return &fakelux.Behaviour{Reply: "Nothing to change."} })
+	task := w.task()
+	w.toRoundOne(task)
+	ran, _ := w.roundOneLenses(task)
+	w.must(task, "start_phase", fmt.Sprintf(`{"phase":"fix","then":{"review":[%q]}}`, ran))
+	w.until("after the fix", func() bool { return w.untaken(task) && w.decisionAt(task) == delivery.PointFixed })
+	if !w.fixedWith(task, fmt.Sprintf(`[%q]`, ran)) {
+		t.Fatalf("parked at %q without the queued review\n%s", w.decisionAt(task), w.describeRuns())
+	}
+	covered := delivery.MustText("wakes/facts/pipeline-covered").Render(struct{ Review []string }{[]string{ran}})
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND strpos(line, $2) > 0`, task, covered); n != 0 {
+		t.Errorf("a wake says the review is dropped (%q) while next runs it", covered)
+	}
+	if fact := stoppedFact("nothing", "done", "", ran); w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1
+		AND kind = $3 AND strpos(line, $2) > 0`, task, fact, delivery.WakeRound) != 1 {
+		t.Errorf("no wake says %q", fact)
+	}
+	from := w.cursor(task)
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("the queued review", func() bool { return len(w.reviewersSince(task, from)) > 0 })
+	if got := w.reviewersSince(task, from); fmt.Sprint(got) != fmt.Sprintf(`[[%q]]`, ran) {
+		t.Errorf("review rounds after next: %v, want only the queued [%q]", got, ran)
 	}
 }
 
