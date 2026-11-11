@@ -173,9 +173,11 @@ type State struct {
 	// converging): an open pull request showing one counts as reviewed
 	// (unreviewedPRHeadTx).
 	AcceptedHeads map[string]string `json:"acceptedHeads,omitempty"`
-	// When the ready gate is read again by itself: a pull request held
-	// only by checks pending within the CI grace, whose end no sync sees
-	// (weighReadiness). awaitPullRequest's timer (waitForPR) wakes then.
+	// When the ready gate is read again by itself, for what no sync sees
+	// move: the end of a CI grace that alone holds a pull request
+	// (weighReadiness), or at once (reweighNow) when the delivery comes
+	// back to its pull requests from a decision or a phase that may have
+	// settled a gate item. awaitPullRequest's timer (waitForPR) wakes then.
 	ReweighAt *time.Time `json:"reweighAt,omitempty"`
 	// The simplifier after a pull request fix failed once and runs again
 	// (awaitSimplify); failing again escalates.
@@ -2004,11 +2006,8 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if acting {
 		// Back from work started while the pull requests waited (a review,
 		// the simplifier): whether that was all the gate asked for is
-		// weighed now, not at the next sync, which may never come —
-		// awaitPullRequest, woken at once by waitForPR's timer, weighs it,
-		// and waits as the gate asks when GitHub has no answer yet.
-		now := time.Now()
-		st.ReweighAt = &now
+		// weighed now, not at the next sync, which may never come.
+		st.reweighNow()
 	}
 	return waitForPR(st), nil
 }
@@ -2077,8 +2076,8 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 		}
 	}
 	if st.ReweighAt != nil && (len(sc.Signals) == 0 || !time.Now().Before(*st.ReweighAt)) {
-		// The CI grace the gate waited out is over: the timer woke the
-		// step (no signal), or a signal did after it ran out.
+		// ReweighAt is due: the timer woke the step (no signal), or a
+		// signal did after it.
 		readiness = true
 	}
 	if stop == nil && len(st.PendingConflicts) > 0 {
@@ -3463,12 +3462,10 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			return workflow.Result{}, err
 		}
 		// The escalation was a gate item: back at the pull requests, the
-		// gate is read again at once (waitForPR's timer wakes
-		// awaitPullRequest, which weighs readiness as for the CI grace),
-		// not at the next sync, which may never come.
+		// gate is read again at once, not at the next sync, which may
+		// never come.
 		if len(st.PullRequestIDs) > 0 {
-			now := time.Now()
-			st.ReweighAt = &now
+			st.reweighNow()
 		}
 		return waitForPR(st), nil
 	}
@@ -3585,7 +3582,8 @@ func (w *steps) acceptHeads(ctx context.Context, sc workflow.StepContext, st *St
 
 // acceptHeadsOf records the heads of the repositories with a pull request
 // (open, merged or closed) as accepted. A merged or closed one's head is
-// one dude changes no more: left out, it kept simplifyDue true for good.
+// one dude changes no more: it counts as accepted too, or simplifyDue
+// would hold there for good.
 func (st *State) acceptHeadsOf(states []PullRequestState) {
 	for _, p := range states {
 		if h := st.Heads[p.Repo]; h != "" {
@@ -3732,8 +3730,15 @@ func waitForPR(st *State) workflow.Result {
 		AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}})
 }
 
-// reweighed is res, waitForPR's, waking when weighReadiness last asked
-// for the gate to be read again (ReweighAt), if it did.
+// reweighNow has awaitPullRequest weigh readiness as soon as it waits
+// (ReweighAt): there, a gate GitHub has no answer for yet waits as
+// weighReadiness asks.
+func (st *State) reweighNow() {
+	now := time.Now()
+	st.ReweighAt = &now
+}
+
+// reweighed is res, waitForPR's, waking at ReweighAt, if it is set.
 func (st *State) reweighed(res workflow.Result) workflow.Result {
 	res.SleepUntil = time.Time{}
 	if st.ReweighAt != nil && len(res.AwaitSignals) > 0 {
