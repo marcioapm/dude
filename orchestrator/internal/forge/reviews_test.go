@@ -80,7 +80,8 @@ func TestASubmittedReviewIsPinnedToTheReviewedCommit(t *testing.T) {
 		t.Fatalf("a review with no commit_id reached GitHub: %v", got)
 	}
 	out, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: 1, CommitID: "abc", Event: EventComment, Body: "b",
-		Comments: []ReviewComment{{Path: "a.txt", Line: 5, StartLine: 3, Body: "x"}}})
+		Comments: []ReviewComment{{Path: "a.txt", Line: 5, StartLine: 3, Body: "x"},
+			{Path: "a.txt", Line: 4, Side: "LEFT", StartLine: 2, StartSide: "RIGHT", Body: "y"}}})
 	if err != nil || out.ID != 7 || out.NodeID != "PRR_7" || out.URL != "https://x/7" || out.CommitID != "abc" {
 		t.Fatalf("submit: %+v %v", out, err)
 	}
@@ -90,6 +91,12 @@ func TestASubmittedReviewIsPinnedToTheReviewedCommit(t *testing.T) {
 	c := got[0]["comments"].([]any)[0].(map[string]any)
 	if c["line"] != 5.0 || c["side"] != "RIGHT" || c["start_line"] != 3.0 || c["start_side"] != "RIGHT" {
 		t.Fatalf("comment sent as %v, want line/side/start_line/start_side", c)
+	}
+	// A caller's sides are sent as given, not defaulted: a LEFT line on
+	// the RIGHT is another line, or a 422.
+	c = got[0]["comments"].([]any)[1].(map[string]any)
+	if c["line"] != 4.0 || c["side"] != "LEFT" || c["start_line"] != 2.0 || c["start_side"] != "RIGHT" {
+		t.Fatalf("comment sent as %v, want line 4 LEFT from 2 RIGHT", c)
 	}
 }
 
@@ -112,9 +119,11 @@ func TestPlacementKeepsOnlyCommentsInAHunkInline(t *testing.T) {
 		{Path: "a.txt", Line: 25, StartLine: 4, Body: "a range across hunks"},
 		{Path: "big.txt", Line: 1, Body: "no patch"},
 		{Path: "other.txt", Line: 1, Body: "not in the pull request"},
+		{Path: "a.txt", Line: 23, StartLine: 25, Body: "a range that ends before it starts"},
 	}
 	inline, folded := PlaceComments(in, diff)
-	want := []ReviewComment{in[0], in[1], in[3], {Path: "a.txt", Line: 25, Body: "a range across hunks"}}
+	want := []ReviewComment{in[0], in[1], in[3], {Path: "a.txt", Line: 25, Body: "a range across hunks"},
+		{Path: "a.txt", Line: 23, Body: "a range that ends before it starts"}}
 	if !reflect.DeepEqual(inline, want) {
 		t.Fatalf("inline:\n%+v\nwant\n%+v", inline, want)
 	}
@@ -125,6 +134,14 @@ func TestPlacementKeepsOnlyCommentsInAHunkInline(t *testing.T) {
 	if !reviewMarked(body, ReviewMarker("wi_1", "c1")) || !strings.Contains(body, "**Not on a changed line**") ||
 		!strings.Contains(body, "`a.txt:12` — between hunks") || !strings.Contains(body, "`big.txt:1` — no patch") {
 		t.Fatalf("folded body:\n%s", body)
+	}
+	// With no marker, the section still ends the body.
+	if got := FoldComments("No marker.", folded[:1]); got != "No marker.\n\n**Not on a changed line**\n\n- `a.txt:12` — between hunks" {
+		t.Fatalf("folded body with no marker:\n%s", got)
+	}
+	// A count left out of a hunk header is one line: "@@ -3 +3 @@".
+	if got := parsePatch("@@ -3 +3 @@\n-line 3\n+three\n"); !reflect.DeepEqual(got.Hunks, []Hunk{{3, 1, 3, 1}}) {
+		t.Fatalf("a one-line hunk: %+v", got)
 	}
 }
 
@@ -160,6 +177,42 @@ func TestPullDiffLinesReadsThePatch(t *testing.T) {
 	inline, folded := PlaceComments([]ReviewComment{{Path: "huge.json", Line: 1}}, got)
 	if len(inline) != 0 || len(folded) != 1 {
 		t.Fatalf("a comment on a file with no patch: inline %v folded %v", inline, folded)
+	}
+}
+
+// GitHub's base side is a side of its own: a removed line is commented on
+// LEFT, a LEFT line outside the hunks is refused, and a range may start on
+// one side and end on the other within a hunk. The line added after line 3
+// puts the second hunk at 22-28 on LEFT but 23-29 on RIGHT, so a side
+// read as the other one lands somewhere else.
+func TestTheBaseSideIsReviewedOnItsOwnLines(t *testing.T) {
+	fake, g, n, _ := reviewFake(t)
+	lines := strings.SplitAfter(thirty(map[int]string{3: "three", 25: "twenty-five"}), "\n")
+	head := fake.CommitFiles("feature", "Add a line", map[string]string{
+		"a.txt": strings.Join(lines[:3], "") + "three and a half\n" + strings.Join(lines[3:], "")})
+	if head == "" {
+		t.Fatal("commit on feature failed")
+	}
+	ctx := context.Background()
+	submit := func(c ReviewComment) (SubmittedReview, error) {
+		c.Body = "x"
+		return g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventComment, Body: "b",
+			Comments: []ReviewComment{c}})
+	}
+	if _, err := submit(ReviewComment{Path: "a.txt", Line: 3, Side: "LEFT"}); err != nil {
+		t.Fatalf("a comment on removed line 3 (LEFT): %v", err)
+	}
+	if _, err := submit(ReviewComment{Path: "a.txt", Line: 12, Side: "LEFT"}); !LineNotInDiff(err) {
+		t.Fatalf("a comment on LEFT 12, between the hunks: %v, want LineNotInDiff", err)
+	}
+	if _, err := submit(ReviewComment{Path: "a.txt", Line: 23, StartLine: 22, StartSide: "LEFT"}); err != nil {
+		t.Fatalf("a range from LEFT 22 to RIGHT 23, one hunk: %v", err)
+	}
+	if _, err := submit(ReviewComment{Path: "a.txt", Line: 23, StartLine: 22}); !LineNotInDiff(err) {
+		t.Fatalf("a range from RIGHT 22, in no hunk: %v, want LineNotInDiff", err)
+	}
+	if got := len(fake.Pull(n).Reviews); got != 2 {
+		t.Fatalf("%d reviews kept, want the 2 accepted", got)
 	}
 }
 
@@ -229,6 +282,11 @@ func TestFindOwnReviewRecoversALostAnswerAndIgnoresQuotes(t *testing.T) {
 		Body: "in a fence:\n\n```\n" + marker}); err != nil {
 		t.Fatal(err)
 	}
+	// Indented 4 spaces, the marker is a code block's text.
+	if _, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventComment,
+		Body: "as code:\n\n    " + marker}); err != nil {
+		t.Fatal(err)
+	}
 	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1"); err != nil || found {
 		t.Fatalf("before dude's review: %+v %v %v, want none", got, found, err)
 	}
@@ -247,6 +305,13 @@ func TestFindOwnReviewRecoversALostAnswerAndIgnoresQuotes(t *testing.T) {
 	}
 	if _, found, _ := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_2"); found {
 		t.Fatal("another claim's review was found")
+	}
+	// The newest marked review wins, and GitHub's logins are read without
+	// case.
+	fake.ReviewSaying(n, strings.ToUpper(fakegithub.Login), "COMMENTED", "Again.\n\n"+marker)
+	reviews = fake.Pull(n).Reviews
+	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1"); err != nil || !found || got.ID != reviews[len(reviews)-1].ID {
+		t.Fatalf("with a newer review by %s: %+v %v %v, want it", strings.ToUpper(fakegithub.Login), got, found, err)
 	}
 }
 
@@ -284,6 +349,62 @@ func TestDismissalRefusedIsTypedAndAlreadyDismissedIsDone(t *testing.T) {
 	if len(fake.Pull(n).Reviews) != 1 {
 		t.Fatalf("a failed submission was kept: %+v", fake.Pull(n).Reviews)
 	}
+	// ReviewFail5xx fails that many submissions, then GitHub takes them.
+	commented, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventComment, Body: "b"})
+	if err != nil || len(fake.Pull(n).Reviews) != 2 {
+		t.Fatalf("the submission after the 5xx: %v, reviews %+v", err, fake.Pull(n).Reviews)
+	}
+	// A comment-only review cannot be dismissed; an unknown one is a 404,
+	// which is not a refusal to act on.
+	if err := g.DismissReview(ctx, "acme/repo", n, commented.ID, "stale"); !DismissRefused(err) {
+		t.Fatalf("dismissing a COMMENTED review: %v, want DismissRefused", err)
+	}
+	err = g.DismissReview(ctx, "acme/repo", n, 999999, "stale")
+	var e *Error
+	if !errors.As(err, &e) || e.Status != 404 || DismissRefused(err) {
+		t.Fatalf("dismissing an unknown review: %v, want a plain 404", err)
+	}
+}
+
+// A dismissal sends GitHub its message and the DISMISS event; GitHub
+// requires the message, and its 422 would read as a refusal.
+func TestADismissalSendsItsMessage(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"id":7,"state":"DISMISSED"}`))
+	}))
+	defer srv.Close()
+	if err := NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL}).DismissReview(context.Background(), "acme/repo", 1, 7, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, map[string]any{"message": "stale", "event": "DISMISS"}) {
+		t.Fatalf("dismissal sent %v", got)
+	}
+}
+
+// GitHub's 422 "errors" list holds strings or objects (resource, field,
+// code, message); an object is read by its message, else its code.
+func TestErrorDetailsReadObjectsAndStrings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(422)
+		_, _ = w.Write([]byte(`{"message":"Validation Failed","errors":[` +
+			`{"resource":"PullRequestReviewComment","field":"line","code":"invalid","message":"Pull request review thread line must be part of the diff"},` +
+			`{"resource":"PullRequestReview","code":"custom"},` +
+			`"a plain string",` +
+			`7]}`))
+	}))
+	defer srv.Close()
+	_, err := NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL}).SubmitReview(context.Background(),
+		SubmitReview{Slug: "acme/repo", Number: 1, CommitID: "abc", Event: EventComment, Body: "b"})
+	var e *Error
+	if !errors.As(err, &e) || e.Message != "Validation Failed" ||
+		e.Details != "Pull request review thread line must be part of the diff\ncustom\na plain string" {
+		t.Fatalf("details: %#v", e)
+	}
+	if !LineNotInDiff(err) {
+		t.Fatalf("the object's message is matched: %v, want LineNotInDiff", err)
+	}
 }
 
 // The matching of GitHub's words is one place, and reads the "errors" list
@@ -298,6 +419,7 @@ func TestReviewAnswerReadsGitHubsWords(t *testing.T) {
 		{"submit", &Error{Status: 422, Message: "Unprocessable Entity", Details: "Pull request review thread line must be part of the diff"}, RefusalLineNotInDiff, false},
 		{"submit", &Error{Status: 422, Message: "Unprocessable Entity", Details: "Line could not be resolved"}, RefusalLineNotInDiff, false},
 		{"submit", &Error{Status: 422, Message: "Unprocessable Entity", Details: "Pull request review thread start line must be part of the same hunk as the line."}, RefusalLineNotInDiff, false},
+		{"submit", &Error{Status: 422, Message: "Unprocessable Entity", Details: "Pull request review thread diff hunk can't be blank"}, RefusalLineNotInDiff, false},
 		{"submit", &Error{Status: 422, Message: "Unprocessable Entity", Details: "Can not approve your own pull request"}, RefusalOwnPullRequest, false},
 		{"submit", &Error{Status: 422, Message: "Validation Failed", Details: "Body is too long"}, "", false},
 		{"submit", &Error{Status: 403, Message: "Can not approve your own pull request"}, "", false},
