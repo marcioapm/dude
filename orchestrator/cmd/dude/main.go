@@ -1312,7 +1312,8 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
                                              answered in its thread, anything else quoted
   dude task update [--goal G] [--criterion C]... [--no-criteria] [--question Q]
                                              a conductor's: write what Chat settled into the task,
-                                             before the implementer starts
+                                             before the implementer starts; after it started, only
+                                             the criteria, to write down a person's answer (--question)
   dude task update [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]...
                    [--unrelate KEY]... [--why TEXT]
                                              a conductor's: the task's relations, at any status;
