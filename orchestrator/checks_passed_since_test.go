@@ -6,6 +6,7 @@ package orchestrator_test
 // no empty fix. With a check still failing, the decision is as before.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -103,5 +104,71 @@ func TestAFeedbackDecisionIsNotSettledWhileSomethingIsLeft(t *testing.T) {
 				t.Errorf("the feedback decision was converted with something left")
 			}
 		})
+	}
+}
+
+// Taken as the pull request wait's, the decision's stored state keeps no
+// feedback: the failing check it was for is gone with it, in the row the
+// workflow's next step reads.
+func TestASettledFeedbackDecisionDropsTheFeedbackFromItsRow(t *testing.T) {
+	w, task, _ := checksFailedThenRerun(t, true)
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND state ? 'prFeedback'`, task); n != 1 {
+		t.Fatalf("no feedback stored before the conversion")
+	}
+	w.must(task, "start_phase", `{"phase":"review","categories":["performance"]}`)
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'conductorDecision'
+		AND state->'decision'->>'policy' = 'awaitPullRequest' AND state->'decision' ? 'taken' AND NOT state ? 'prFeedback'`, task); n != 1 {
+		t.Errorf("the settled decision's row still has prFeedback (or was not converted)")
+	}
+}
+
+// start_phase fix at a settled decision is a fix of what note says, as at
+// the wait: refused without a note, refused naming findings, and given a
+// note, the fixer is not handed the check that passed since.
+func TestAFixAtASettledFeedbackDecisionIsAFixOfTheNote(t *testing.T) {
+	w, task, _ := checksFailedThenRerun(t, true)
+	w.refused(task, "start_phase", `{"phase":"fix"}`, "say what the fix is to do (note)")
+	w.refused(task, "start_phase", `{"phase":"fix","note":"Rename it.","findings":["f-1"]}`,
+		"a fix while the pull request waits addresses what you ask in note, not findings")
+	fixes := w.phaseRuns(task, "fix")
+	out := w.must(task, "start_phase", `{"phase":"fix","note":"Rename greet to welcome."}`)
+	if next, _ := out["next"].(string); next == "" {
+		t.Fatalf("start_phase fix: %v", out)
+	}
+	w.until("the fix", func() bool { return w.phaseRuns(task, "fix") > fixes })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback::text LIKE '%"checks"%'`,
+		task); n != 0 {
+		t.Errorf("the fixer was handed the check that passed since (%d fix Runs with checks feedback)", n)
+	}
+	fix := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' ORDER BY created_at DESC LIMIT 1`, task)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND (pr_feedback IS NULL OR pr_feedback = '[]'::jsonb)
+		AND (check_logs IS NULL OR check_logs = '[]'::jsonb OR check_logs = '{}'::jsonb)`, fix); n != 1 {
+		t.Errorf("the fixer was handed the check that passed since: pr_feedback %s",
+			w.str(`SELECT COALESCE(pr_feedback::text, '') FROM runs WHERE id = $1`, fix))
+	}
+	if note := w.str(`SELECT COALESCE(conductor_note, '') FROM runs WHERE id = $1`, fix); !strings.Contains(note, "Rename greet to welcome.") {
+		t.Errorf("the fixer's note is %q, want the conductor's", note)
+	}
+}
+
+// next at a settled decision waits on the pull requests again and weighs
+// their gate at once: the gate is stored anew with no sync and no timer.
+// The signals the rerun's sync queued are spent first, so that only next
+// can be what weighs it.
+func TestNextAtASettledFeedbackDecisionWeighsTheGateAtOnce(t *testing.T) {
+	w, task, _ := checksFailedThenRerun(t, true)
+	mustExec(t, w.owner, `UPDATE workflow_signals SET consumed_at = now() WHERE consumed_at IS NULL
+		AND workflow_run_id IN (SELECT id FROM workflow_runs WHERE task_id = $1)`, task)
+	before := w.str(`SELECT now()::text`)
+	w.must(task, "decide", `{"action":"next"}`)
+	for range 5 {
+		w.pump()
+	}
+	if !w.waitingOnPR(task) {
+		t.Fatalf("not waiting on the pull request after next\n%s", w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND (ready_gate->>'at')::timestamptz > $2::timestamptz`,
+		task, before); n != 1 {
+		t.Errorf("the ready gate was not weighed after next (task %s)", w.taskStatus(task))
 	}
 }
