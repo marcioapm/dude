@@ -107,3 +107,23 @@ func TestBranchRunsReadsCountAgainstTheHour(t *testing.T) {
 		t.Error("the 61st read reached GitHub")
 	}
 }
+
+// What GitHub said (a run's head SHA, a job's name) is in none of the
+// task's events: the read is recorded by its size, the call's result
+// withheld, as for the other GitHub reads.
+func TestBranchRunsResultStaysOutOfTheLedger(t *testing.T) {
+	w, task := conductingWithAnotherProject(t)
+	mainHistory(w)
+	w.gh.SetWorkflowRun(704, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "okapi-sha-704", Status: "completed",
+		Conclusion: "failure", CreatedAt: "2026-11-11T13:00:00Z", Jobs: []fakegithub.WorkflowJob{
+			{ID: 7041, Name: "pangolin-job", Status: "completed", Conclusion: "failure"}}})
+	out := w.must(task, "github_branch_runs", `{"repo":"acme/target"}`)
+	if field(out, "runs", 0, "headSha") != "okapi-sha-704" {
+		t.Fatalf("read %v", out)
+	}
+	for _, word := range []string{"okapi-sha-704", "pangolin-job"} {
+		if c := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND payload::text LIKE '%' || $2 || '%'`, task, word); c != 0 {
+			t.Errorf("%q is in %d of the task's events", word, c)
+		}
+	}
+}
