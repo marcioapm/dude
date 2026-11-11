@@ -152,20 +152,19 @@ func checksPassedSinceTx(ctx context.Context, tx pgx.Tx, d *Delivery) (bool, err
 	if open > 0 {
 		return false, nil
 	}
-	for _, repo := range feedbackRepos(st.PRFeedback) {
-		head := st.Heads[repo]
-		if head == "" {
+	repos := feedbackRepos(st.PRFeedback)
+	heads := make([]string, len(repos))
+	for i, repo := range repos {
+		if heads[i] = st.Heads[repo]; heads[i] == "" {
 			return false, nil
 		}
-		var passed bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE pr.id = ANY($1) AND r.name = $2 AND pr.state IN ('open', 'draft') AND pr.head_sha = $3
-			AND pr.checks::text = 'passing')`, st.PullRequestIDs, repo, head).Scan(&passed); err != nil {
-			return false, err
-		}
-		if !passed {
-			return false, nil
-		}
+	}
+	var passed bool
+	if err := tx.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM unnest($2::text[], $3::text[]) h(repo, head) WHERE NOT EXISTS (
+			SELECT 1 FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = ANY($1) AND r.name = h.repo AND pr.state IN ('open', 'draft') AND pr.head_sha = h.head
+			AND pr.checks::text = 'passing'))`, st.PullRequestIDs, repos, heads).Scan(&passed); err != nil || !passed {
+		return false, err
 	}
 	p.Policy, st.PRFeedback = "awaitPullRequest", nil
 	raw, err := json.Marshal(p)
