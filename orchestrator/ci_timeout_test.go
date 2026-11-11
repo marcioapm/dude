@@ -64,9 +64,10 @@ func TestAJobCancelledAtItsTimeLimitRaisesTheFeedbackDecision(t *testing.T) {
 		return w.decisionAt(task) == delivery.PointPRFeedback
 	})
 	w.untilChecks(task, "failing")
-	// A completed check run never changes: once stored, its verdict is
-	// reused by every later sync and ready gate of the same head, and its
-	// annotations are not read again.
+	// A completed check run never changes: once stored as timed out, its
+	// verdict is reused by later syncs and agent reads of the same head,
+	// and its annotations are not read again (the ready gate's reuse:
+	// TestTheReadyGateReusesStoredCancelledVerdicts).
 	annotationReads := func() int {
 		n := 0
 		for _, r := range w.gh.Requests() {
