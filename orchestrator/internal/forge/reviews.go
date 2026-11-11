@@ -301,9 +301,9 @@ func (g *GitHub) PullDiffLines(ctx context.Context, slug string, number int) (ma
 func PlaceComments(comments []ReviewComment, diff map[string]DiffLines) (inline, folded []ReviewComment) {
 	for _, c := range comments {
 		side, startSide := c.sides()
-		d, ok := diff[c.Path]
+		d := diff[c.Path] // a path not in the diff is not Known
 		h, in := d.hunk(side, c.Line)
-		if !ok || !d.Known || c.Line <= 0 || !in {
+		if !d.Known || c.Line <= 0 || !in {
 			folded = append(folded, c)
 			continue
 		}
