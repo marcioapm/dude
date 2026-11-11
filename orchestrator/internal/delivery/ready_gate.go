@@ -93,8 +93,6 @@ type GateFacts struct {
 	ID, Repo, Slug, BaseBranch string
 	Number                     int
 	State, Head                string
-	// The delivery's policy says to run the simplifier.
-	Simplify bool
 	// Head is dude's push no review of the attempt covers
 	// (unreviewedPRPushesTx).
 	UnreviewedPush bool
@@ -103,9 +101,9 @@ type GateFacts struct {
 	// Reviewed is R: the latest head every review Run of the attempt
 	// started there completed at, "" for none.
 	Reviewed string
-	// The policy's reviewers, and per category the head of its latest
-	// completed review Run of the attempt over this repository
-	// (LensHeads): which lenses the pull request's paths require, and
+	// The delivery's policy (its reviewers, whether the simplifier runs),
+	// and per review category the head of its latest completed review Run
+	// of the attempt over this repository (LensHeads): which lenses the pull request's paths require, and
 	// whether each covered what changed since, is judged from GitHub's
 	// compares (missingLenses), so a person's push counts as dude's does.
 	Policy    Policy
@@ -248,7 +246,6 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 			return c, err
 		}
 		p.Slug = forge.SlugFromURL(url)
-		p.Simplify = st.Policy.Simplify
 		p.AcceptedHead = st.AcceptedHeads[p.Repo]
 		c.PRs = append(c.PRs, p)
 	}
@@ -767,7 +764,7 @@ func simplifiedCommits(ctx context.Context, gh *forge.GitHub, p GateFacts) (map[
 // commit it made, the base merged under it) is on that chain and was
 // reviewed (item 3).
 func gateSimplified(ctx context.Context, gh *forge.GitHub, p GateFacts, reviewed bool) (bool, string, error) {
-	if !p.Simplify {
+	if !p.Policy.Simplify {
 		return true, "simplifier off", nil
 	}
 	if p.Head == "" {
