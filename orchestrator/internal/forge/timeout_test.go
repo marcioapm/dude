@@ -208,3 +208,27 @@ func TestACancelledRunsAnnotationsAreReadOnce(t *testing.T) {
 		t.Errorf("second sync %s %+v", second.Checks, second.CheckList)
 	}
 }
+
+// An agent's read of checks (github_pull_request) makes at most
+// agentAnnotationReads annotations reads; a cancelled run past them is
+// left cancelled (pending, never passing), and one it is given a verdict
+// for costs nothing.
+func TestAnAgentsChecksReadBoundsItsAnnotationsReads(t *testing.T) {
+	var ids []int64
+	for id := int64(1); id <= agentAnnotationReads+5; id++ {
+		ids = append(ids, id)
+	}
+	gh, reads := annotationsServer(t, func() string { return cancelledRuns(ids...) }, ids[len(ids)-1])
+	known := []Check{{Name: "job 1", Status: "completed", Conclusion: "timed_out", RunID: 1, App: ActionsApp}}
+	rollup, list, _, err := gh.checks(agentReadContext(WithKnownChecks(context.Background(), known)), "acme/api", "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reads()
+	if len(got) != agentAnnotationReads || got["/repos/acme/api/check-runs/1/annotations"] != 0 {
+		t.Errorf("read %d runs' annotations (%v), want %d, none of run 1", len(got), got, agentAnnotationReads)
+	}
+	if rollup != ChecksFailing || !list[0].TimedOut() || list[len(list)-1].Conclusion != "cancelled" {
+		t.Errorf("rollup %s, list %+v", rollup, list)
+	}
+}

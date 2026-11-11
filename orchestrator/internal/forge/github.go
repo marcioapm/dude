@@ -805,7 +805,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 	}
 	// An agent's read stops at 3 pages or 300 checks in all, saying it cut.
 	cut := false
-	known := knownVerdicts(ctx)
+	known, annotationReads := knownVerdicts(ctx), 0
 pages:
 	for page, seen := 1, 0; ; page++ {
 		if isAgentRead(ctx) && (page > 3 || seen >= 300) {
@@ -854,7 +854,10 @@ pages:
 				switch {
 				case ok:
 					r.Conclusion = verdict
+				case isAgentRead(ctx) && annotationReads >= agentAnnotationReads:
+					// Left cancelled: not failing, never read as passing.
 				default:
+					annotationReads++
 					out, err := g.cancelledByTimeLimit(ctx, slug, r.ID)
 					if err != nil {
 						return "", nil, false, err
@@ -1081,6 +1084,11 @@ type knownChecksKey struct{}
 func WithKnownChecks(ctx context.Context, known []Check) context.Context {
 	return context.WithValue(ctx, knownChecksKey{}, known)
 }
+
+// agentAnnotationReads bounds an agent's read (github_pull_request) to
+// that many annotations reads; a cancelled run past them it has no
+// stored verdict for is left cancelled, which is never passing.
+const agentAnnotationReads = 10
 
 // knownVerdicts are ctx's known checks' verdicts on cancelled Actions
 // runs, by run id.

@@ -7,6 +7,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -79,6 +80,14 @@ func TestAJobCancelledAtItsTimeLimitRaisesTheFeedbackDecision(t *testing.T) {
 	w.syncRounds(3)
 	if n := annotationReads(); n != read {
 		t.Fatalf("three more syncs read the timed-out job's annotations %d more times, want none", n-read)
+	}
+	// So is an agent's read of the pull request dude tracks.
+	pr := w.must(task, "github_pull_request", `{"repo":"acme/target","number":1}`)
+	if n := annotationReads(); n != read {
+		t.Fatalf("github_pull_request read the timed-out job's annotations %d times, want none", n-read)
+	}
+	if !strings.Contains(fmt.Sprint(pr), "timed_out") {
+		t.Fatalf("github_pull_request does not say the job timed out: %v", pr)
 	}
 	if n := feedbackSignals(); n != before+1 {
 		t.Fatalf("%d actionable feedback signals for the timed-out job, want 1", n-before)

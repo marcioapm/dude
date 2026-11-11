@@ -132,6 +132,10 @@ type githubRead struct {
 	Kind    string
 	State   string
 	Files   []string
+	// The checks dude stored for the pull request github_pull_request
+	// reads, when it tracks it: a cancelled Actions run's verdict there is
+	// not read again (forge.WithKnownChecks).
+	Known []forge.Check
 }
 
 // readableRepos are the GitHub repositories (owner/name) the caller may
@@ -302,7 +306,37 @@ func readGitHubPullRequest(ctx context.Context, tx pgx.Tx, c Caller, in githubPu
 	if len(files) > diffPathsMax {
 		return githubRead{}, refuse(rFilesAtMostPathsAtOnce, diffPathsMax)
 	}
-	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_pull_request", Slug: in.Repo, Number: in.Number, Files: files})
+	read, err := checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_pull_request", Slug: in.Repo, Number: in.Number, Files: files})
+	if err != nil {
+		return read, err
+	}
+	read.Known, err = storedChecks(ctx, tx, c.Org, read.Slug, read.Number)
+	return read, err
+}
+
+// storedChecks are the checks dude last stored for slug's pull request
+// number in org, or none when it does not track it.
+func storedChecks(ctx context.Context, tx pgx.Tx, org, slug string, number int) ([]forge.Check, error) {
+	rows, err := tx.Query(ctx, `SELECT r.url, pr.checks_json FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.organization_id = $1 AND pr.number = $2`, org, number)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var known []forge.Check
+	for rows.Next() {
+		var u string
+		var checks []byte
+		if err := rows.Scan(&u, &checks); err != nil {
+			return nil, err
+		}
+		if strings.EqualFold(forge.SlugFromURL(u), slug) {
+			var list []forge.Check
+			_ = json.Unmarshal(checks, &list)
+			known = append(known, list...)
+		}
+	}
+	return known, rows.Err()
 }
 
 func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheckLogIn) (githubRead, error) {
@@ -402,7 +436,7 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 		}
 		out = w.issue(issue)
 	case "github_pull_request":
-		pr, err := gh.PullRequestRead(ctx, read.Slug, read.Number, filesMax, commentsMax, read.Files...)
+		pr, err := gh.PullRequestRead(forge.WithKnownChecks(ctx, read.Known), read.Slug, read.Number, filesMax, commentsMax, read.Files...)
 		if err != nil {
 			return nil, githubRefusal(read, err)
 		}
