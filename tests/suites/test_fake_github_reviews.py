@@ -6,6 +6,7 @@ Pure checks; they need git, and no environment, browser or services:
     uv run --directory tests pytest suites/test_fake_github_reviews.py
 """
 
+import contextlib
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -95,9 +96,13 @@ def test_a_review_is_pinned_to_its_commit_with_its_line_comments(gh, pr, hooks):
     assert [(c["path"], c["line"], c["body"], c["pull_request_review_id"]) for c in comments] == \
         [("greet.py", 3, "why", review["id"])]
     # The fake answers first and tells by webhook after, as GitHub does.
-    wait_until(lambda: ("pull_request_review", {"action": "submitted", "pull_request": {"number": number},
-                                                "repository": {"full_name": "acme/target"}}) in hooks,
-               timeout=10, interval=0.05, message=f"no pull_request_review webhook; got {hooks!r}")
+    submitted = ("pull_request_review", {"action": "submitted", "pull_request": {"number": number},
+                                         "repository": {"full_name": "acme/target"}})
+    # wait_until raises on a timeout; let the assert below fail instead, so
+    # pytest prints the deliveries as they were at the end.
+    with contextlib.suppress(AssertionError):
+        wait_until(lambda: submitted in hooks, timeout=10, interval=0.05)
+    assert submitted in hooks
 
 
 def test_a_review_without_commit_id_is_refused(gh, pr):
