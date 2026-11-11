@@ -358,6 +358,26 @@ func TestASettledCancelledVerdictIsReused(t *testing.T) {
 	}
 }
 
+// A cancelled run GitHub gives no completed_at for has no time to wait
+// out: read with GitHub answering, its verdict is final at once.
+func TestACancelledRunWithNoEndIsSettledAtOnce(t *testing.T) {
+	gh, reads := annotationsServer(t, func() string { return cancelledRuns(41) })
+	var known []Check
+	for range 2 {
+		st, err := gh.PullRequest(WithKnownChecks(context.Background(), known), "acme/api", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Checks != ChecksPending || st.CheckList[0].Conclusion != "cancelled" || !st.CheckList[0].Settled {
+			t.Fatalf("%s %+v, want cancelled, settled", st.Checks, st.CheckList)
+		}
+		known = st.CheckList
+	}
+	if got := reads()["/repos/acme/api/check-runs/41/annotations"]; got != 1 {
+		t.Errorf("two syncs read the annotations %d times, want 1", got)
+	}
+}
+
 // The agentAnnotationReads bound is an agent's only: a sync of a head
 // with more cancelled runs than that, none of them known, reads every
 // one's annotations, and sees the hang in the last.
