@@ -326,6 +326,10 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		return "", err
 	}
 	p, st := d.State.Decision, &d.State
+	settled, err := checksPassedSinceTx(ctx, tx, d)
+	if err != nil {
+		return "", err
+	}
 	if !slices.Contains(p.Phases(), in.Phase) {
 		return "", refusef(rCannotStartAtThisDecisionCan, in.Phase, pointLabel[p.Point], listOr(p.Phases()))
 	}
@@ -340,7 +344,7 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		} else if err != nil {
 			return "", err
 		}
-		if p.Point != PointPRFeedback {
+		if p.Point != PointPRFeedback || settled && in.Phase == PhaseSimplify {
 			// No second writer past an unreviewed push of dude's on the
 			// pull request (I-3), as after a fix with then.wake after_fix.
 			// Not at the pull request's feedback (or conflict): there the
@@ -365,6 +369,23 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 			}
 		}
 	case PhaseFix:
+		if settled {
+			// No feedback left for it: as at the wait, a fix of what note says.
+			if len(in.FindingIDs) > 0 {
+				return "", refuseText(rFixWhilePullRequestWaitsAddresses)
+			}
+			repos, err := openPRRepos(ctx, tx, st.PullRequestIDs)
+			if err != nil {
+				return "", err
+			}
+			if err := prFixBoundFor(ctx, tx, st, repos); err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(in.Note) == "" {
+				return "", refuseText(rSayWhatFixDoNoteNo)
+			}
+			break
+		}
 		if p.Point == PointPRFeedback {
 			if err := prFixBound(ctx, tx, st); err != nil {
 				return "", err
@@ -380,6 +401,9 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 	if err := take(ctx, tx, ref, d, Taken{Action: "start_phase", Phase: in.Phase, Categories: in.Categories,
 		FindingIDs: in.FindingIDs, Note: clip(strings.TrimSpace(in.Note), noteChars), Then: then, Round: round}); err != nil {
 		return "", err
+	}
+	if settled {
+		return prPhaseStarted(in.Phase), nil
 	}
 	return render(conductorStartsTmpl, in.Phase), nil
 }
@@ -508,6 +532,11 @@ func ConductDecideAsk(ctx context.Context, tx pgx.Tx, ref RunRef, action, note s
 		return nil, err
 	}
 	p, st := d.State.Decision, &d.State
+	if action == "next" {
+		if _, err := checksPassedSinceTx(ctx, tx, d); err != nil {
+			return nil, err
+		}
+	}
 	note = strings.TrimSpace(note)
 	if !slices.Contains(p.Actions(), action) {
 		if action == "open_pull_request" && st.OpenAuthority != nil && st.OpenAuthority.Voided == nil && len(st.PullRequestIDs) == 0 {

@@ -328,6 +328,10 @@ func (d *Pending) Phases() []string {
 		}
 		return []string{PhaseImplement}
 	case PointPRFeedback:
+		if d.Policy == "awaitPullRequest" {
+			// Nothing left to act on (checksPassedSinceTx): as at the wait.
+			return prWaitPhases
+		}
 		return []string{PhaseFix}
 	case PointImplemented:
 		if d.Adopted {
@@ -730,6 +734,14 @@ func (w *steps) conductorDecision(ctx context.Context, sc workflow.StepContext) 
 	st.Decisions++
 	switch t.Action {
 	case "next":
+		if d.Point == PointPRFeedback && d.Policy == "awaitPullRequest" && st.Integration == nil {
+			// The checks it was for passed since (checksPassedSinceTx):
+			// no fix to start; the pull requests are waited on again and
+			// their gate weighed now, which says what it still needs.
+			st.PRFeedback = nil
+			st.reweighNow()
+			return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "pull request open")
+		}
 		if q := d.Queued; q != nil {
 			// The review the conductor queued, with what it says now.
 			// What is cut to fit is then.note: decide next's words, the
