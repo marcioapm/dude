@@ -1,6 +1,8 @@
 {{with .Repo}}in **{{.}}** — {{end}}{{with .Path}}`{{.}}` — {{end}}{{with .Author}}**{{.}}** — {{end}}{{.Body}}{{if and .ID .Tools}} _({{.ID}})_{{end}}{{range .Checks}}
 
-**Failing check: {{.Name}}**{{with .URL}} ({{.}}){{end}}{{with .Unread}}
+**Failing check: {{.Name}}**{{with .URL}} ({{.}}){{end}}{{if .TimedOut}}
+
+This job hit its time limit: with no failing test, that is usually a hang. Read the end of its log and the change for what blocks.{{end}}{{with .Unread}}
 
 dude could not read this job's log ({{.}}), so reproduce the failure locally from the workflow file that runs it, under `.github/workflows/`.{{end}}{{if .Path}}
 

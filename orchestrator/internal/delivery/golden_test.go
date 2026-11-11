@@ -139,6 +139,7 @@ func goldenPRFeedback() []forge.ActionableFeedback {
 			{Name: "go test", URL: "https://ci.example/run/1", Log: "--- FAIL: TestExport\n```\nwant 10.00, got 9.99\n```",
 				Path: "/workspace/.dude/checks/api-go-test.log", FileKiB: 64},
 			{Name: "lint"},
+			{Name: "unit", URL: "https://github.com/acme/api/actions/runs/9/job/11", TimedOut: true},
 			{Name: "Python (lint, tests)", URL: "https://github.com/acme/api/actions/runs/9/job/10",
 				Log: ".github:243: failure: Process completed with exit code 1.", Unread: "the log has expired"},
 		}},

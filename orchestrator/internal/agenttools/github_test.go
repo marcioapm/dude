@@ -525,3 +525,17 @@ func TestCutBytesKeepsWholeUTF8Prefix(t *testing.T) {
 		}
 	}
 }
+
+// A run whose jobs GitHub failed to answer for is listed, its jobs none,
+// and says how to read them; a cut list says it was cut.
+func TestABranchRunWithUnreadJobsSaysSo(t *testing.T) {
+	out := newWrapper().branchRuns(githubRead{Slug: "acme/api", Branch: "main"}, []forge.BranchRun{
+		{ID: 2, JobsUnread: true},
+		{ID: 1, Jobs: []forge.BranchJob{{ID: 11, Name: "unit"}}, TotalJobs: 3},
+	})
+	runs := out["runs"].([]ghBranchRunOut)
+	if len(runs) != 2 || len(runs[0].Jobs) != 0 || !strings.Contains(runs[0].More, "github_run_jobs") ||
+		!strings.Contains(runs[1].More, "the first 1 of 3 jobs") {
+		t.Fatalf("runs %+v", runs)
+	}
+}

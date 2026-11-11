@@ -432,3 +432,27 @@ func TestGoldenInstructionsWithoutHeldAsks(t *testing.T) {
 	ii.Grants = &less
 	golden(t, "instructions-conductor-without-held-asks", Instructions(RoleConductor, "correctness", ii))
 }
+
+// The conductor's "when CI is red" paragraph is read only with
+// github_check_log granted (github.read), as a golden without it; with it,
+// the paragraph names the rerun and github_branch_runs it was given.
+func TestGoldenInstructionsWithoutGitHubRead(t *testing.T) {
+	const red = "When CI is red, read the failing job's log before deciding anything."
+	in := goldenTask()
+	in.Tools, in.CLI, in.BlockingSeverities = true, true, []string{"blocking", "high"}
+	in.Repositories = readOnlyRepos()
+	full := in.InstructionsInput()
+	if got := Instructions(RoleConductor, "correctness", full); !strings.Contains(got, red) ||
+		!strings.Contains(got, "use the commit's one rerun (`rerun_failed_checks`) before asking anyone") ||
+		!strings.Contains(got, "look at the base branch's recent CI (`github_branch_runs`)") {
+		t.Errorf("a conductor granted github.read does not read the red CI paragraph:\n%s", got)
+	}
+	less := capabilities.Default(RoleConductor).Without(capabilities.GitHubRead)
+	ii := in.InstructionsInput()
+	ii.Grants = &less
+	got := Instructions(RoleConductor, "correctness", ii)
+	if strings.Contains(got, red) || strings.Contains(got, "github_branch_runs") {
+		t.Errorf("a conductor without github.read reads the red CI paragraph")
+	}
+	golden(t, "instructions-conductor-without-github-read", got)
+}

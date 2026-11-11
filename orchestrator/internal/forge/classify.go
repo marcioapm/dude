@@ -88,6 +88,9 @@ type FailingCheck struct {
 	RunID int64 `json:"runId,omitempty"`
 	// The commit status, when it is one (Check.StatusID).
 	StatusID int64 `json:"statusId,omitempty"`
+	// It hit its time limit (Check.TimedOut), Actions' or another app's:
+	// usually a hang, not a failing test.
+	TimedOut bool `json:"timedOut,omitempty"`
 }
 
 // Words that carry approval or thanks and nothing else.
@@ -259,7 +262,7 @@ func Classify(prior, current Status, feedback []Feedback, factoryLogins []string
 			Body: "Continuous integration is failing on this branch. Find out why and fix it."}
 		for _, c := range current.CheckList {
 			if c.Failed() {
-				f.Checks = append(f.Checks, FailingCheck{Name: c.Name, URL: c.URL, RunID: c.RunID, StatusID: c.StatusID})
+				f.Checks = append(f.Checks, FailingCheck{Name: c.Name, URL: c.URL, RunID: c.RunID, StatusID: c.StatusID, TimedOut: c.TimedOut()})
 			}
 		}
 		actionable = append(actionable, f)

@@ -3,11 +3,13 @@ package delivery
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // Implemented, reviewed at its head, simplified with nothing to change,
@@ -534,6 +536,49 @@ func TestTheReadyGateChecksItemFollowsTheSyncersGrace(t *testing.T) {
 	holds(t, g, ReadyChecks, true, "no CI for this head")
 	if !g.Ready {
 		t.Fatalf("not ready past the grace: %+v", g.Items)
+	}
+}
+
+// The checks item reuses the verdicts the syncer stored (checks_json) on
+// the head's cancelled Actions runs: one stored timed out is failing, one
+// stored settled as cancelled is not, and the gate reads neither one's
+// annotations. GitHub, asked, would say neither ran out of time.
+func TestTheReadyGateReusesStoredCancelledVerdicts(t *testing.T) {
+	f := newGateFixture(t)
+	f.ready()
+	f.intercept = func(w http.ResponseWriter, r *http.Request) bool {
+		if !strings.HasSuffix(r.URL.Path, "/check-runs") {
+			return false
+		}
+		var runs []string
+		for _, id := range []int{501, 502} {
+			runs = append(runs, fmt.Sprintf(`{"id":%d,"name":"job %d","status":"completed","conclusion":"cancelled",
+				"completed_at":"2026-11-11T10:00:00Z","app":{"slug":"github-actions"}}`, id, id))
+		}
+		fmt.Fprintf(w, `{"total_count":2,"check_runs":[%s]}`, strings.Join(runs, ","))
+		return true
+	}
+	f.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{501: {App: "github-actions"}, 502: {App: "github-actions"}}
+	})
+	stored, _ := json.Marshal([]forge.Check{
+		{Name: "job 501", Status: "completed", Conclusion: "timed_out", RunID: 501, App: forge.ActionsApp, Settled: true},
+		{Name: "job 502", Status: "completed", Conclusion: "cancelled", RunID: 502, App: forge.ActionsApp, Settled: true},
+	})
+	f.exec(`UPDATE pull_requests SET checks = 'failing', checks_json = $2::jsonb WHERE id = 'pr_g' AND organization_id = $1`, string(stored))
+	before := len(f.gh.Requests())
+	g := f.gate()
+	for _, r := range f.gh.Requests()[before:] {
+		if strings.HasSuffix(r, "/annotations") {
+			t.Errorf("the gate read %s", r)
+		}
+	}
+	holds(t, g, ReadyChecks, false, "failing: job 501")
+	if it := g.item(ReadyChecks); strings.Contains(it.Detail, "job 502") {
+		t.Errorf("the run stored as cancelled is named, not read as the stored cancelled: %+v", it)
+	}
+	if g.Ready {
+		t.Fatalf("ready with a timed-out check: %+v", g.Items)
 	}
 }
 
