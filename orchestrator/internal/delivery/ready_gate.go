@@ -596,7 +596,7 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	ok, detail = gateChecks(f, p, now)
 	add(ReadyChecks, ok, "%s", detail)
 	if !ok && checksInGrace(f, p, now) {
-		g.GraceLeft = max(graceLeft(p, now), time.Nanosecond)
+		g.GraceLeft = graceLeft(p, now)
 	}
 	return g, nil
 }
@@ -934,10 +934,7 @@ func checksAt(f forge.ReadinessFacts, p GateFacts, inGrace bool) (bool, string) 
 // either reads as passing. The syncer's own grace (a pull request that has
 // had CI, recorded pending) is not one: its reading moves when it ends.
 func checksInGrace(f forge.ReadinessFacts, p GateFacts, now time.Time) bool {
-	if p.HadCI && (p.RecordedChecks == forge.ChecksPending || p.RecordedChecks == forge.ChecksUnknown) {
-		return false
-	}
-	if !ciGrace(p, now) {
+	if p.syncerJudgedGrace() || !ciGrace(p, now) {
 		return false
 	}
 	ok, _ := checksAt(f, p, false)
@@ -945,14 +942,20 @@ func checksInGrace(f forge.ReadinessFacts, p GateFacts, now time.Time) bool {
 }
 
 // ciGrace says the head is within the grace CI has to show up on it: the
-// syncer's own judgement where it made one (a pull request that has had
-// CI, nothing reported: pending within its grace, unknown past it),
-// otherwise forge.DefaultCIGrace from when the head was first seen.
+// syncer's own judgement where it made one (syncerJudgedGrace), otherwise
+// graceLeft's.
 func ciGrace(p GateFacts, now time.Time) bool {
-	if p.HadCI && (p.RecordedChecks == forge.ChecksPending || p.RecordedChecks == forge.ChecksUnknown) {
+	if p.syncerJudgedGrace() {
 		return p.RecordedChecks == forge.ChecksPending
 	}
-	return p.HeadSeenAt == nil || now.Sub(*p.HeadSeenAt) < forge.DefaultCIGrace
+	return graceLeft(p, now) > 0
+}
+
+// syncerJudgedGrace says the syncer judged the head's CI grace itself: a
+// pull request that has had CI, nothing reported, recorded pending within
+// the grace and unknown past it.
+func (p GateFacts) syncerJudgedGrace() bool {
+	return p.HadCI && (p.RecordedChecks == forge.ChecksPending || p.RecordedChecks == forge.ChecksUnknown)
 }
 
 // graceLeft is how long the head has left of the grace CI has to show up
