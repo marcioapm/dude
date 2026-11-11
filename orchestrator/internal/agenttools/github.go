@@ -384,9 +384,8 @@ func readGitHubBranchRuns(ctx context.Context, tx pgx.Tx, c Caller, in githubBra
 			repo = slugs[0]
 		}
 	}
-	read, err := checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_branch_runs", Slug: repo})
+	read, err := checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_branch_runs", Slug: repo, Branch: branch})
 	if err != nil || branch != "" {
-		read.Branch = branch
 		return read, err
 	}
 	// The repository's default branch as dude knows it; GitHub is asked
