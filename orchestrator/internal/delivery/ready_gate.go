@@ -119,6 +119,9 @@ type GateFacts struct {
 	HadCI          bool
 	RecordedChecks string
 	HeadSeenAt     *time.Time
+	// The check list it stored (checks_json): a cancelled Actions run's
+	// verdict there is not read again (forge.WithKnownChecks).
+	RecordedCheckList []forge.Check
 }
 
 // gateSimplify is a completed simplify Run: where it started in the
@@ -230,7 +233,7 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 		}
 	}
 	rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url, pr.base_branch, pr.number, pr.state::text, COALESCE(pr.head_sha, ''),
-			pr.had_ci, pr.checks::text, pr.head_seen_at
+			pr.had_ci, pr.checks::text, pr.head_seen_at, pr.checks_json
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND (CASE WHEN $2::text[] IS NULL THEN pr.state IN ('open', 'draft') ELSE pr.id = ANY($2) END)
 		ORDER BY pr.created_at, pr.id`, taskID, prIDs)
@@ -240,11 +243,13 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 	for rows.Next() {
 		var p GateFacts
 		var url string
+		var checksJSON []byte
 		if err := rows.Scan(&p.ID, &p.Repo, &url, &p.BaseBranch, &p.Number, &p.State, &p.Head,
-			&p.HadCI, &p.RecordedChecks, &p.HeadSeenAt); err != nil {
+			&p.HadCI, &p.RecordedChecks, &p.HeadSeenAt, &checksJSON); err != nil {
 			rows.Close()
 			return c, err
 		}
+		_ = json.Unmarshal(checksJSON, &p.RecordedCheckList)
 		p.Slug = forge.SlugFromURL(url)
 		p.AcceptedHead = st.AcceptedHeads[p.Repo]
 		c.PRs = append(c.PRs, p)
@@ -537,7 +542,7 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	if gh == nil || p.Slug == "" {
 		return unread("GitHub is not connected for this repository: unreadable")
 	}
-	f, err := gh.Readiness(ctx, p.Slug, p.Number)
+	f, err := gh.Readiness(forge.WithKnownChecks(ctx, p.RecordedCheckList), p.Slug, p.Number)
 	if forge.Refused(err) {
 		return unread("GitHub refused the read: " + err.Error())
 	}

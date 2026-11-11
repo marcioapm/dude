@@ -3,9 +3,11 @@ package forge
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -118,5 +120,91 @@ func TestATransientAnnotationsReadFailsTheSync(t *testing.T) {
 	gh, _ := timeLimitServer(t, "cancelled", "", 502)
 	if _, err := gh.PullRequest(context.Background(), "acme/api", 1); err == nil || !Transient(err) {
 		t.Fatalf("err %v, want a transient failure", err)
+	}
+}
+
+// annotationsServer answers a pull request whose head's check runs are
+// runs() (a JSON list) at the time of asking; every cancelled run's
+// annotations are timeLimitAnnotations for an id in timedOut, else a
+// concurrency cancellation. It counts the annotations reads by run id.
+func annotationsServer(t *testing.T, runs func() string, timedOut ...int64) (*GitHub, func() map[string]int) {
+	var mu sync.Mutex
+	reads := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/acme/api/pulls/1":
+			fmt.Fprint(w, `{"number":1,"state":"open","head":{"sha":"abc"}}`)
+		case r.URL.Path == "/repos/acme/api/commits/abc/status":
+			fmt.Fprint(w, `{"state":"pending","total_count":0}`)
+		case r.URL.Path == "/repos/acme/api/commits/abc/check-runs":
+			list := runs()
+			fmt.Fprintf(w, `{"total_count":%d,"check_runs":%s}`, strings.Count(list, `"id"`), list)
+		case strings.HasSuffix(r.URL.Path, "/annotations"):
+			mu.Lock()
+			reads[r.URL.Path]++
+			mu.Unlock()
+			for _, id := range timedOut {
+				if r.URL.Path == fmt.Sprintf("/repos/acme/api/check-runs/%d/annotations", id) {
+					fmt.Fprint(w, timeLimitAnnotations)
+					return
+				}
+			}
+			fmt.Fprint(w, `[{"message":"Canceling since a higher priority waiting request for 'ci' exists"}]`)
+		case r.URL.Path == "/repos/acme/api/pulls/1/reviews":
+			fmt.Fprint(w, `[]`)
+		case r.URL.Path == "/graphql":
+			fmt.Fprint(w, `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`)
+		case r.URL.Path == "/repos/acme/api/compare/...abc":
+			fmt.Fprint(w, `{"behind_by":0}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}), func() map[string]int {
+		mu.Lock()
+		defer mu.Unlock()
+		return maps.Clone(reads)
+	}
+}
+
+func cancelledRuns(ids ...int64) string {
+	var runs []string
+	for _, id := range ids {
+		runs = append(runs, fmt.Sprintf(`{"id":%d,"name":"job %d","status":"completed","conclusion":"cancelled","app":{"slug":"github-actions"}}`, id, id))
+	}
+	return "[" + strings.Join(runs, ",") + "]"
+}
+
+// A completed check run never changes, so its annotations are read once:
+// a sync given the checks it stored last (WithKnownChecks) reuses each
+// cancelled run's verdict, timed out or not, and reads only a run it has
+// not classified yet.
+func TestACancelledRunsAnnotationsAreReadOnce(t *testing.T) {
+	ids := []int64{41, 42}
+	gh, reads := annotationsServer(t, func() string { return cancelledRuns(ids...) }, 41, 43)
+	first, err := gh.PullRequest(context.Background(), "acme/api", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Checks != ChecksFailing || !first.CheckList[0].TimedOut() || first.CheckList[1].Conclusion != "cancelled" {
+		t.Fatalf("first sync %s %+v", first.Checks, first.CheckList)
+	}
+	if got := reads(); len(got) != 2 {
+		t.Fatalf("first sync read %v, want both runs' annotations", got)
+	}
+	ids = []int64{41, 42, 43}
+	second, err := gh.PullRequest(WithKnownChecks(context.Background(), first.CheckList), "acme/api", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{"/repos/acme/api/check-runs/41/annotations": 1, "/repos/acme/api/check-runs/42/annotations": 1,
+		"/repos/acme/api/check-runs/43/annotations": 1}
+	if got := reads(); !maps.Equal(got, want) {
+		t.Errorf("after two syncs read %v, want %v", got, want)
+	}
+	if second.Checks != ChecksFailing || len(second.CheckList) != 3 || !second.CheckList[0].TimedOut() ||
+		second.CheckList[1].Conclusion != "cancelled" || !second.CheckList[2].TimedOut() {
+		t.Errorf("second sync %s %+v", second.Checks, second.CheckList)
 	}
 }

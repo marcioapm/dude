@@ -805,6 +805,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 	}
 	// An agent's read stops at 3 pages or 300 checks in all, saying it cut.
 	cut := false
+	known := knownVerdicts(ctx)
 pages:
 	for page, seen := 1, 0; ; page++ {
 		if isAgentRead(ctx) && (page > 3 || seen >= 300) {
@@ -849,12 +850,18 @@ pages:
 				app = r.App.Slug
 			}
 			if r.Status == "completed" && r.Conclusion == "cancelled" && app == ActionsApp {
-				out, err := g.cancelledByTimeLimit(ctx, slug, r.ID)
-				if err != nil {
-					return "", nil, false, err
-				}
-				if out {
-					r.Conclusion = "timed_out"
+				verdict, ok := known[r.ID]
+				switch {
+				case ok:
+					r.Conclusion = verdict
+				default:
+					out, err := g.cancelledByTimeLimit(ctx, slug, r.ID)
+					if err != nil {
+						return "", nil, false, err
+					}
+					if out {
+						r.Conclusion = "timed_out"
+					}
 				}
 			}
 			rollup = worseChecks(rollup, checkRunState(r.Status, r.Conclusion))
@@ -1062,6 +1069,31 @@ func (g *GitHub) cancelledByTimeLimit(ctx context.Context, slug string, runID in
 		}
 	}
 	return false, nil
+}
+
+type knownChecksKey struct{}
+
+// WithKnownChecks gives ctx's check reads the checks stored at the last
+// read of the same pull request (pull_requests.checks_json). A completed
+// check run never changes (a re-run is a new one), so an Actions run
+// stored cancelled or timed out keeps that verdict and its annotations
+// are not read again (cancelledByTimeLimit): each is read at most once.
+func WithKnownChecks(ctx context.Context, known []Check) context.Context {
+	return context.WithValue(ctx, knownChecksKey{}, known)
+}
+
+// knownVerdicts are ctx's known checks' verdicts on cancelled Actions
+// runs, by run id.
+func knownVerdicts(ctx context.Context) map[int64]string {
+	known, _ := ctx.Value(knownChecksKey{}).([]Check)
+	out := map[int64]string{}
+	for _, c := range known {
+		if c.RunID != 0 && c.App == ActionsApp && c.Status == "completed" &&
+			(c.Conclusion == "cancelled" || c.Conclusion == "timed_out") {
+			out[c.RunID] = c.Conclusion
+		}
+	}
+	return out
 }
 
 // worseChecks combines two readings: failing over pending over passing

@@ -63,6 +63,23 @@ func TestAJobCancelledAtItsTimeLimitRaisesTheFeedbackDecision(t *testing.T) {
 		return w.decisionAt(task) == delivery.PointPRFeedback
 	})
 	w.untilChecks(task, "failing")
+	// A completed check run never changes: once stored, its verdict is
+	// reused by every later sync and ready gate of the same head, and its
+	// annotations are not read again.
+	annotationReads := func() int {
+		n := 0
+		for _, r := range w.gh.Requests() {
+			if r == "GET /repos/acme/target/check-runs/602/annotations" {
+				n++
+			}
+		}
+		return n
+	}
+	read := annotationReads()
+	w.syncRounds(3)
+	if n := annotationReads(); n != read {
+		t.Fatalf("three more syncs read the timed-out job's annotations %d more times, want none", n-read)
+	}
 	if n := feedbackSignals(); n != before+1 {
 		t.Fatalf("%d actionable feedback signals for the timed-out job, want 1", n-before)
 	}
