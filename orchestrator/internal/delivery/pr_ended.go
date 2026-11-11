@@ -209,6 +209,7 @@ func (w *steps) endLoop(ctx context.Context, sc workflow.StepContext, st *State,
 		st.Decisions++
 	}
 	st.Escalation, st.Directed, st.Integration, st.FixRange, st.PRFixAfter = nil, nil, nil, nil, nil
+	st.SimplifyRetried = false
 	st.PendingRunIDs, st.ReviewRunIDs, st.PRFeedback, st.QuestionsHeld = nil, nil, nil, false
 	res, finished, err := w.pullRequestEnded(ctx, sc, st)
 	if res.State == nil {
