@@ -88,7 +88,7 @@ type FailingCheck struct {
 	RunID int64 `json:"runId,omitempty"`
 	// The commit status, when it is one (Check.StatusID).
 	StatusID int64 `json:"statusId,omitempty"`
-	// GitHub cancelled its job at the job's time limit (Check.TimedOut):
+	// It hit its time limit (Check.TimedOut), Actions' or another app's:
 	// usually a hang, not a failing test.
 	TimedOut bool `json:"timedOut,omitempty"`
 }

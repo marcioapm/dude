@@ -131,9 +131,10 @@ const (
 // Failed says the check finished and failed: what wakes a fixer.
 func (c Check) Failed() bool { return checkRunState(c.Status, c.Conclusion) == ChecksFailing }
 
-// TimedOut says the check ran out of time: GitHub cancelled its job at
-// the job's time limit. checks writes such a job's conclusion as
-// timed_out, though GitHub reports it cancelled, so it reads as failed.
+// TimedOut says the check hit its time limit: an app reported it
+// timed_out, or GitHub cancelled an Actions job at its timeout-minutes,
+// which checks writes as timed_out though GitHub reports it cancelled,
+// so it reads as failed.
 func (c Check) TimedOut() bool { return c.Status == "completed" && c.Conclusion == "timed_out" }
 
 // CheckDiagnostic is the first diagnostic code in a check list, or "".
