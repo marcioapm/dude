@@ -439,7 +439,22 @@ func (w *steps) pipelineGoesOn(ctx context.Context, sc workflow.StepContext, st 
 		return workflow.Result{Next: "review", State: st}, true, nil
 	}
 	line := out.line(runID, phase) + " "
-	if stop != "" {
+	queued := p.queued()
+	if stop == pipelineNothing {
+		// Nothing changed: a review whose every reviewer completed at these
+		// heads already would cover no change. Dropped, and said; next goes
+		// where the policy goes.
+		covered, err := w.reviewedAtHeads(ctx, sc, st, p.Review)
+		if err != nil {
+			return workflow.Result{}, true, err
+		}
+		if covered {
+			queued = nil
+		}
+	}
+	if stop != "" && queued == nil {
+		line += render(pipelineCoveredTmpl, struct{ Review []string }{p.Review})
+	} else if stop != "" {
 		line += pipelineStopped(p, stop, out, true)
 	} else {
 		line += render(pipelineQueuedTmpl, struct{ Review []string }{p.Review})
@@ -449,8 +464,29 @@ func (w *steps) pipelineGoesOn(ctx context.Context, sc workflow.StepContext, st 
 	}
 	res, err := w.next(ctx, sc, st, PointFixed, policy, line)
 	// A round's wake: its facts are not a decision's 300 characters.
-	st.Routed.Queued, st.Routed.Kind = p.queued(), WakeRound
+	st.Routed.Queued, st.Routed.Kind = queued, WakeRound
 	return res, true, err
+}
+
+// reviewedAtHeads says each of the categories has a completed review Run of
+// the attempt that started at the delivery's heads: a review of them now
+// would cover no change since.
+func (w *steps) reviewedAtHeads(ctx context.Context, sc workflow.StepContext, st *State, categories []string) (bool, error) {
+	if len(st.Heads) == 0 || len(categories) == 0 {
+		return false, nil
+	}
+	heads, err := json.Marshal(st.Heads)
+	if err != nil {
+		return false, err
+	}
+	var covered bool
+	err = w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM unnest($3::text[]) c WHERE NOT EXISTS (
+				SELECT 1 FROM runs k WHERE k.task_id = $1 AND k.attempt = $2 AND k.phase = 'review' AND k.kind = 'agent'
+				AND k.status = 'completed' AND k.category = c AND k.base_refs = $4::jsonb))`,
+			st.TaskID, st.Attempt, categories, heads).Scan(&covered)
+	})
+	return covered, err
 }
 
 // Routed is a decision point the policy took in a step: the step it chose
