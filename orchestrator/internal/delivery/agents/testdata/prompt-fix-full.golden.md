@@ -41,6 +41,10 @@ want 10.00, got 9.99
 
 **Failing check: lint**
 
+**Failing check: unit** (https://github.com/acme/api/actions/runs/9/job/11)
+
+GitHub cancelled this job at its time limit: with no failing test, that is usually a hang. Read the end of its log and the change for what blocks.
+
 **Failing check: Python (lint, tests)** (https://github.com/acme/api/actions/runs/9/job/10)
 
 dude could not read this job's log (the log has expired), so reproduce the failure locally from the workflow file that runs it, under `.github/workflows/`.

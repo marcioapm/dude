@@ -131,6 +131,11 @@ const (
 // Failed says the check finished and failed: what wakes a fixer.
 func (c Check) Failed() bool { return checkRunState(c.Status, c.Conclusion) == ChecksFailing }
 
+// TimedOut says the check ran out of time: GitHub cancelled its job at
+// the job's time limit. checks writes such a job's conclusion as
+// timed_out, though GitHub reports it cancelled, so it reads as failed.
+func (c Check) TimedOut() bool { return c.Status == "completed" && c.Conclusion == "timed_out" }
+
 // CheckDiagnostic is the first diagnostic code in a check list, or "".
 func CheckDiagnostic(checks []Check) string {
 	for _, c := range checks {
@@ -839,16 +844,26 @@ pages:
 				cut = true
 				break pages
 			}
+			app := ""
+			if r.App != nil {
+				app = r.App.Slug
+			}
+			if r.Status == "completed" && r.Conclusion == "cancelled" && app == ActionsApp {
+				out, err := g.cancelledByTimeLimit(ctx, slug, r.ID)
+				if err != nil {
+					return "", nil, false, err
+				}
+				if out {
+					r.Conclusion = "timed_out"
+				}
+			}
 			rollup = worseChecks(rollup, checkRunState(r.Status, r.Conclusion))
 			link := r.HTMLURL
 			if link == "" {
 				link = r.DetailsURL
 			}
 			c := Check{Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: link,
-				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID}
-			if r.App != nil {
-				c.App = r.App.Slug
-			}
+				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID, App: app}
 			list = append(list, c)
 		}
 		seen += len(runs.CheckRuns)
@@ -1003,7 +1018,9 @@ func (g *GitHub) graphqlURL() string {
 // checkRunState reads one check run: still running is pending; finished,
 // its conclusion decides. Neutral and skipped runs block nothing. One a
 // person cancelled, or waiting on a person's approval, or superseded, is
-// not a failure an agent could fix: not passing, but no fixer either.
+// not a failure an agent could fix: not passing, but no fixer either. A
+// job GitHub cancelled at its time limit is a failure (timed_out): checks
+// gives it that conclusion (cancelledByTimeLimit).
 func checkRunState(status, conclusion string) string {
 	if status != "completed" {
 		return ChecksPending
@@ -1015,6 +1032,36 @@ func checkRunState(status, conclusion string) string {
 		return ChecksPending
 	}
 	return ChecksFailing
+}
+
+// timeLimitAnnotation is what GitHub Actions annotates a job it cancelled
+// at its timeout-minutes with ("The job has exceeded the maximum execution
+// time of 6m0s"); the check run's conclusion is only "cancelled".
+const timeLimitAnnotation = "has exceeded the maximum execution time"
+
+// cancelledByTimeLimit says an Actions job reported as cancelled was
+// cancelled by GitHub at its time limit, not by a person or a newer run
+// (concurrency): its annotations say so. Read only for cancelled runs, so
+// a sync of passing or failing checks costs nothing more. Annotations
+// GitHub refuses (no Checks permission, gone) leave it cancelled; a
+// failure that may pass fails the read, to be tried again.
+func (g *GitHub) cancelledByTimeLimit(ctx context.Context, slug string, runID int64) (bool, error) {
+	var annotations []struct {
+		Message string `json:"message"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/check-runs/%d/annotations?per_page=50", slug, runID), nil, &annotations); err != nil {
+		var e *Error
+		if !asError(err, &e) || Transient(err) {
+			return false, err
+		}
+		return false, nil
+	}
+	for _, a := range annotations {
+		if strings.Contains(a.Message, timeLimitAnnotation) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // worseChecks combines two readings: failing over pending over passing
