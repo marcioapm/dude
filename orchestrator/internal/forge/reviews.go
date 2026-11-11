@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +25,12 @@ type ReviewComment struct {
 	StartLine int    // 0, or the first line of a multi-line range
 	StartSide string // "" = Side
 	Body      string
+}
+
+// sides is the comment's Side and StartSide with their defaults filled in.
+func (c ReviewComment) sides() (side, startSide string) {
+	side = cmp.Or(c.Side, "RIGHT")
+	return side, cmp.Or(c.StartSide, side)
 }
 
 // SubmitReview is a review to post on a pull request.
@@ -162,16 +169,10 @@ func (g *GitHub) SubmitReview(ctx context.Context, in SubmitReview) (SubmittedRe
 		Comments []ghReviewCommentIn `json:"comments,omitempty"`
 	}{CommitID: in.CommitID, Event: in.Event, Body: in.Body}
 	for _, c := range in.Comments {
-		side := c.Side
-		if side == "" {
-			side = "RIGHT"
-		}
+		side, startSide := c.sides()
 		out := ghReviewCommentIn{Path: c.Path, Line: c.Line, Side: side, Body: c.Body}
 		if c.StartLine > 0 {
-			out.StartLine, out.StartSide = c.StartLine, c.StartSide
-			if out.StartSide == "" {
-				out.StartSide = side
-			}
+			out.StartLine, out.StartSide = c.StartLine, startSide
 		}
 		body.Comments = append(body.Comments, out)
 	}
@@ -299,10 +300,7 @@ func (g *GitHub) PullDiffLines(ctx context.Context, slug string, number int) (ma
 // file with no known diff folds every comment on it.
 func PlaceComments(comments []ReviewComment, diff map[string]DiffLines) (inline, folded []ReviewComment) {
 	for _, c := range comments {
-		side := c.Side
-		if side == "" {
-			side = "RIGHT"
-		}
+		side, startSide := c.sides()
 		d, ok := diff[c.Path]
 		h, in := d.hunk(side, c.Line)
 		if !ok || !d.Known || c.Line <= 0 || !in {
@@ -310,10 +308,6 @@ func PlaceComments(comments []ReviewComment, diff map[string]DiffLines) (inline,
 			continue
 		}
 		if c.StartLine > 0 {
-			startSide := c.StartSide
-			if startSide == "" {
-				startSide = side
-			}
 			hs, inStart := d.hunk(startSide, c.StartLine)
 			if !inStart || hs != h || startSide == side && c.StartLine >= c.Line {
 				c.StartLine, c.StartSide = 0, ""
