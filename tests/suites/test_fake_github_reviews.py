@@ -14,6 +14,7 @@ import pytest
 import requests
 
 from fake_github import FakeGitHub
+from helpers import wait_until
 
 HEADERS = {"authorization": "Bearer fake-token"}
 
@@ -53,11 +54,17 @@ def gh(tmp_path, hooks):
     fake.stop()
 
 
+BASE = "".join(f"line {i}\n" for i in range(1, 21))  # greet.py on main: 20 lines
+
+
 @pytest.fixture
 def pr(gh):
-    """A person's pull request (gus's) changing greet.py's lines 1-3; its number and head."""
+    """A person's pull request (gus's) replacing greet.py's line 2 with two
+    lines: one hunk, lines 1-5 on the base (LEFT, with line 2 removed) and
+    1-6 on the head (RIGHT). Its number and head."""
+    gh.write_file("main", "greet.py", BASE, "add greet")
     gh.open_pull("feature", author="gus")
-    return 1, gh.write_file("feature", "greet.py", "a\nb\nc\n", "greet")
+    return 1, gh.write_file("feature", "greet.py", BASE.replace("line 2\n", "two\ntwo more\n"), "greet")
 
 
 def post(gh, number, body):
@@ -71,7 +78,7 @@ def dismiss(gh, number, review):
 
 def test_a_review_is_pinned_to_its_commit_with_its_line_comments(gh, pr, hooks):
     number, head = pr
-    gh.write_file("feature", "greet.py", "a\nb\nc\nd\n", "later")  # the branch moves on; the review stays put
+    gh.write_file("feature", "greet.py", "later\n", "later")  # the branch moves on; the review stays put
     gh.pulls[number].requested_reviewers = ["dude-bot", "ana"]
     resp = post(gh, number, {"commit_id": head, "event": "REQUEST_CHANGES", "body": "see",
                              "comments": [{"path": "greet.py", "line": 3, "start_line": 1, "body": "why"}]})
@@ -87,8 +94,10 @@ def test_a_review_is_pinned_to_its_commit_with_its_line_comments(gh, pr, hooks):
     comments = requests.get(f"{gh.api_url}/repos/acme/target/pulls/{number}/comments", headers=HEADERS, timeout=10).json()
     assert [(c["path"], c["line"], c["body"], c["pull_request_review_id"]) for c in comments] == \
         [("greet.py", 3, "why", review["id"])]
-    assert ("pull_request_review", {"action": "submitted", "pull_request": {"number": number},
-                                    "repository": {"full_name": "acme/target"}}) in hooks
+    # The fake answers first and tells by webhook after, as GitHub does.
+    wait_until(lambda: ("pull_request_review", {"action": "submitted", "pull_request": {"number": number},
+                                                "repository": {"full_name": "acme/target"}}) in hooks,
+               timeout=10, interval=0.05, message=f"no pull_request_review webhook; got {hooks!r}")
 
 
 def test_a_review_without_commit_id_is_refused(gh, pr):
@@ -108,8 +117,11 @@ def test_an_unknown_commit_and_an_unknown_event_are_refused(gh, pr):
 @pytest.mark.parametrize(("comment", "reason"), [
     ({"path": "greet.py", "line": 9}, "Pull request review thread line must be part of the diff"),
     ({"path": "README.md", "line": 1}, "Pull request review thread line must be part of the diff"),
-    ({"path": "greet.py", "line": 1, "side": "LEFT"}, "Pull request review thread line must be part of the diff"),
+    ({"path": "greet.py", "line": 12, "side": "LEFT"}, "Pull request review thread line must be part of the diff"),
     ({"path": "greet.py", "line": 2, "start_line": 7},
+     "Pull request review thread start line must be part of the same hunk as the line."),
+    # LEFT 6 is past the hunk on the base, though RIGHT 6 is in it.
+    ({"path": "greet.py", "line": 3, "start_line": 6, "start_side": "LEFT"},
      "Pull request review thread start line must be part of the same hunk as the line."),
 ])
 def test_a_comment_off_the_diff_is_refused_with_the_reason_in_errors(gh, pr, comment, reason):
@@ -117,6 +129,16 @@ def test_a_comment_off_the_diff_is_refused_with_the_reason_in_errors(gh, pr, com
     assert resp.status_code == 422
     assert resp.json() == {"message": "Unprocessable Entity", "errors": [reason]}
     assert gh.pulls[pr[0]].reviews == [] and gh.pulls[pr[0]].comments == []
+
+
+def test_the_base_side_takes_comments_on_its_own_lines(gh, pr):
+    """A removed line is commented on LEFT, and a range may start on the
+    base and end on the head within one hunk."""
+    comments = [{"path": "greet.py", "line": 2, "side": "LEFT", "body": "removed"},
+                {"path": "greet.py", "line": 3, "side": "RIGHT", "start_line": 2, "start_side": "LEFT", "body": "both"}]
+    resp = post(gh, pr[0], {"event": "COMMENT", "commit_id": pr[1], "comments": comments})
+    assert resp.status_code == 200, resp.text
+    assert [(c["line"], c["body"]) for c in gh.pulls[pr[0]].comments] == [(2, "removed"), (3, "both")]
 
 
 def test_the_author_may_not_approve_or_request_changes_on_its_own_pull_request(gh, pr):
