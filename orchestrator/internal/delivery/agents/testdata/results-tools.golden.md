@@ -94,6 +94,10 @@ The relations are written. A task blocked by another starts only once that one i
 
 The implementer's prompt will have it.
 
+## update-task-answered
+
+The tester's next judgement will have it.
+
 ## update-task-present
 
 Already there, so nothing was written for it: this task blocks GLD-9, related GLD-4.

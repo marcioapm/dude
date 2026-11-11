@@ -55,7 +55,7 @@
 //	                                      a conductor's: an escalation the owner handed it
 //	dude pr reply PR TEXT [--in-reply-to ID]
 //	                                      a conductor's: answer on its task's pull request
-//	dude task update [--goal G] [--criterion C]... [--no-criteria]
+//	dude task update [--goal G] [--criterion C]... [--no-criteria] [--question Q]
 //	        [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]... [--unrelate KEY]... [--why TEXT]
 //	dude relate KEY --blocks KEY | --related KEY   a brainstorm's: proposed for a member to file
 //	dude publish FILE [--name NAME] [--description TEXT] [--poster PATH]
@@ -873,6 +873,7 @@ func run(args []string, out io.Writer) error {
 		goal := fs.String("goal", "", "the task's goal, whole")
 		clear := fs.Bool("no-criteria", false, "clear the acceptance criteria")
 		why := fs.String("why", "", "why the relations change, shown in the task's history")
+		question := fs.String("question", "", "after the implementer started: the person's answered question the criteria write down")
 		var criteria, blockOn, unblock, blocks, relate, unrelate many
 		fs.Var(&criteria, "criterion", "an acceptance criterion (repeatable): the whole list")
 		fs.Var(&blockOn, "block-on", "a task key this task can't start before is merged (repeatable)")
@@ -891,6 +892,9 @@ func run(args []string, out io.Writer) error {
 		})
 		if len(criteria) > 0 || *clear {
 			body["acceptanceCriteria"] = list(criteria)
+		}
+		if *question != "" {
+			body["questionId"] = *question
 		}
 		edges := func(kind string, keys many) []map[string]any {
 			var out []map[string]any
@@ -913,7 +917,7 @@ func run(args []string, out io.Writer) error {
 			body["removeRelations"] = remove
 		}
 		if len(body) == 0 {
-			return errors.New(`usage: dude task update [--goal G] [--criterion C]... [--no-criteria] [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]... [--unrelate KEY]... [--why TEXT]`)
+			return errors.New(`usage: dude task update [--goal G] [--criterion C]... [--no-criteria] [--question Q] [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]... [--unrelate KEY]... [--why TEXT]`)
 		}
 		return show(out, *asJSON, call("update_task", body))
 	case "relate":
@@ -1306,7 +1310,7 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude pr reply PR TEXT [--in-reply-to ID]   a conductor's: answer on its task's pull request (PR is 12
                                              or repo#12) as dude's GitHub login; a line-comment-… is
                                              answered in its thread, anything else quoted
-  dude task update [--goal G] [--criterion C]... [--no-criteria]
+  dude task update [--goal G] [--criterion C]... [--no-criteria] [--question Q]
                                              a conductor's: write what Chat settled into the task,
                                              before the implementer starts
   dude task update [--block-on KEY]... [--unblock KEY]... [--blocks KEY]... [--relate KEY]...

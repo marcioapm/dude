@@ -784,7 +784,7 @@ say why it is dismissed: the reason is shown with the finding
 
 ## refusals/delivery/conduct/implementer-has-started-on-this-attempt
 
-an implementer has started on this attempt: the task's text is what it was given. Record what changed as a decision with the person (ask_person), or as a follow-up task
+an implementer has started on this attempt: the task's text is what it was given. Record what changed as a decision with the person (ask_person), or as a follow-up task; once they have answered, the acceptance criteria may take their answer, naming that question (questionId)
 
 ## refusals/delivery/conduct/give-goal-acceptance-criteria-or-both
 
@@ -1637,4 +1637,12 @@ this delivery's pull request fix rounds were retried already for that reason (%q
 ## refusals/delivery/escalations/say-why-another-pr-fix-round
 
 retry on pr_loop_exhausted needs your reason in the note: say why another set of pull request fix rounds will converge, or what changed since they ran out
+
+## refusals/delivery/conduct/answer-changes-criteria-only
+
+after the implementer has started, a person's answer changes the acceptance criteria only, not the goal
+
+## refusals/delivery/conduct/question-is-not-persons-answer-here
+
+%s is not a question of this task a person has answered: after the implementer has started, update_task writes only a person's answer into the acceptance criteria, naming their answered question
 

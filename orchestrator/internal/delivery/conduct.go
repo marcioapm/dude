@@ -871,10 +871,17 @@ type TaskSpec struct {
 	Criteria []string
 	// Criteria given (an empty list clears them).
 	HasCriteria bool
+	// The person's answered question on this task whose answer the
+	// criteria write down: after the implementer has started, the only
+	// change update_task makes.
+	QuestionID string
 }
 
 // ConductUpdateTask is update_task: what Chat settled, written into the
-// task before the implementer is started, so its prompt has it.
+// task before the implementer is started, so its prompt has it. After it
+// started, only the acceptance criteria change, and only to write down a
+// person's answer on this task (in.QuestionID), so the tester judges what
+// the person settled.
 func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) error {
 	d, err := parked(ctx, tx, ref)
 	if err != nil {
@@ -886,8 +893,24 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 		ref.TaskID, d.State.Attempt).Scan(&started); err != nil {
 		return err
 	}
-	if started {
+	in.QuestionID = strings.TrimSpace(in.QuestionID)
+	switch {
+	case started && in.QuestionID == "":
 		return refuseText(rImplementerHasStartedOnThisAttempt)
+	case started && in.Goal != nil:
+		return refuseText(rAnswerChangesCriteriaOnly)
+	}
+	if in.QuestionID != "" {
+		// A person's answer on this task, recorded: the fact that lets the
+		// criteria the tester judges say what the person settled.
+		var answered bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE id = $1 AND task_id = $2
+			AND addressee = 'person' AND status = 'answered')`, in.QuestionID, ref.TaskID).Scan(&answered); err != nil {
+			return err
+		}
+		if !answered {
+			return refusef(rQuestionIsNotPersonsAnswerHere, in.QuestionID)
+		}
 	}
 	var goal string
 	var criteria []string
@@ -927,6 +950,9 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 	// now), and what they were.
 	payload := maps.Clone(after)
 	payload["before"], payload["by"] = before, "conductor"
+	if in.QuestionID != "" {
+		payload["questionId"] = in.QuestionID
+	}
 	_, err = ledger.Append(ctx, tx, ref.Event(EvTaskUpdated, ledger.ActorAgent, payload))
 	return err
 }

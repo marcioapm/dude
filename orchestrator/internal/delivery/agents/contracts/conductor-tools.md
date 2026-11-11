@@ -15,7 +15,7 @@
 	"answer_question" (print "answer_question answers a current writer's open conductor-addressed question, from what you know or can establish." (.List "" "" "ask_person" " If only the person can decide, ask them with ask_person and relay: <questionId>: their answer goes to the Run directly.") " A question you do not take in time, or cannot take, dude hands to the person.")
 	"create_task" "create_task records a change as a new task, for a person to deliver."
 	"" (.Wrap "While you take the decisions: " (.List "; " "; "
-		"update_task" "update_task writes an agreed goal or acceptance criteria into the task, before the implementer"
+		"update_task" "update_task writes an agreed goal or acceptance criteria into the task, before the implementer; after it, only a person's answer into the acceptance criteria, naming their answered question (questionId), so the tester judges what they settled"
 		"start_phase" "start_phase starts implement, review (some or all categories), fix (some or all findings), simplify or test"
 		"decide" (.Wrap "decide takes the decision waited on (" (.List ", " ", " "" "next" "ask_person" "ask_person" "" "wait" "" "open_pull_request") ")")
 		"dismiss_finding" "dismiss_finding leaves a finding as it is, with the reason"
