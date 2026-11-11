@@ -79,3 +79,20 @@ func TestAResumedSimplifierThatFailsAgainAfterAPullRequestFixEscalatesAgain(t *t
 		t.Errorf("%d simplify Runs, want one new for the retry", n)
 	}
 }
+
+// A person's retry is a new budget: its first simplifier crashing is tried
+// once more before a person is asked again, as the first time.
+func TestARetriedSimplifierThatFailsIsRetriedOnceBeforeItEscalates(t *testing.T) {
+	w := newWorld(t)
+	wi, _ := w.simplifierEscalated()
+	raised := w.prFixFailures(wi)
+	simplifies := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'simplify'`, wi)
+	w.crashSimplifiers(2)
+	if status, body := w.call("/internal/tasks/"+wi+"/decide", map[string]any{"action": "retry"}); status != 200 {
+		t.Fatalf("retry: %d %v", status, body)
+	}
+	w.until("a new escalation", func() bool { w.sync(); return w.prFixFailures(wi) > raised })
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'simplify'`, wi); n != simplifies+2 {
+		t.Errorf("%d simplify Runs after the retry, want %d: the retry's and its one retry", n, simplifies+2)
+	}
+}
