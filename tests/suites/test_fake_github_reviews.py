@@ -118,6 +118,8 @@ def test_an_unknown_commit_and_an_unknown_event_are_refused(gh, pr):
     ({"path": "greet.py", "line": 9}, "Pull request review thread line must be part of the diff"),
     ({"path": "README.md", "line": 1}, "Pull request review thread line must be part of the diff"),
     ({"path": "greet.py", "line": 12, "side": "LEFT"}, "Pull request review thread line must be part of the diff"),
+    # LEFT 6 is past the hunk on the base (1-5), though RIGHT 6 is in it.
+    ({"path": "greet.py", "line": 6, "side": "LEFT"}, "Pull request review thread line must be part of the diff"),
     ({"path": "greet.py", "line": 2, "start_line": 7},
      "Pull request review thread start line must be part of the same hunk as the line."),
     # LEFT 6 is past the hunk on the base, though RIGHT 6 is in it.
