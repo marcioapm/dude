@@ -45,6 +45,8 @@ func NoisyActionsJob() CheckRun {
 type WorkflowRun struct {
 	Name, Branch, Event, HeadSHA, Status, Conclusion string
 	Jobs                                             []WorkflowJob
+	// When it was created (RFC 3339), which orders a branch's runs.
+	CreatedAt string
 }
 
 // WorkflowJob is one job of a WorkflowRun; FailedSteps' steps failed, the
@@ -76,6 +78,35 @@ func (s *Server) workflowRun(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, 200, map[string]any{"id": id, "name": run.Name, "head_branch": run.Branch, "head_sha": run.HeadSHA, "event": run.Event,
 		"status": run.Status, "conclusion": run.Conclusion, "html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d", s.Slug, id)})
+}
+
+// workflowRuns lists the repository's runs as GitHub does: newest first
+// (by CreatedAt, then id), of one branch when branch is given, a page of
+// per_page.
+func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
+	branch := r.URL.Query().Get("branch")
+	type listed struct {
+		id  int64
+		run WorkflowRun
+	}
+	var all []listed
+	s.mu.Lock()
+	for id, run := range s.WorkflowRuns {
+		if branch == "" || run.Branch == branch {
+			all = append(all, listed{id, run})
+		}
+	}
+	s.mu.Unlock()
+	slices.SortFunc(all, func(a, b listed) int {
+		return cmp.Or(strings.Compare(b.run.CreatedAt, a.run.CreatedAt), cmp.Compare(b.id, a.id))
+	})
+	runs := []any{}
+	for _, l := range page(r, all) {
+		runs = append(runs, map[string]any{"id": l.id, "name": l.run.Name, "head_branch": l.run.Branch, "head_sha": l.run.HeadSHA,
+			"event": l.run.Event, "status": l.run.Status, "conclusion": l.run.Conclusion, "created_at": l.run.CreatedAt,
+			"html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d", s.Slug, l.id)})
+	}
+	write(w, 200, map[string]any{"total_count": len(all), "workflow_runs": runs})
 }
 
 // workflowRunJobs answers a run's jobs; GitHub's filter=latest is the only

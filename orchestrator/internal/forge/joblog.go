@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -297,6 +298,74 @@ func (g *GitHub) RunJobs(ctx context.Context, slug string, runID int64, max int)
 		}
 		out.Jobs = append(out.Jobs, job)
 	}
+	return out, nil
+}
+
+// BranchRun is one of a branch's recent Actions runs: its jobs' names and
+// conclusions, of its latest attempt.
+type BranchRun struct {
+	ID                      int64
+	Name, Event, HeadSHA    string
+	Status, Conclusion, URL string
+	CreatedAt               string
+	Jobs                    []BranchJob
+	// TotalJobs is how many jobs GitHub has, of which Jobs is the first page.
+	TotalJobs int
+}
+
+// BranchJob is one job of a BranchRun; its id is its check run's, which
+// CheckLog reads.
+type BranchJob struct {
+	ID                       int64
+	Name, Status, Conclusion string
+}
+
+// BranchRuns reads branch's most recent Actions runs on slug, newest
+// first, at most runs of them, each with at most jobs of its latest
+// attempt's jobs: one request for the runs and one per run for its jobs.
+func (g *GitHub) BranchRuns(ctx context.Context, slug, branch string, runs, jobs int) ([]BranchRun, error) {
+	ctx = agentReadContext(ctx)
+	if err := g.readBudget(ctx, slug, "core"); err != nil {
+		return nil, err
+	}
+	var listed struct {
+		Runs []struct {
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			HeadSHA    string `json:"head_sha"`
+			Event      string `json:"event"`
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+			HTMLURL    string `json:"html_url"`
+			CreatedAt  string `json:"created_at"`
+		} `json:"workflow_runs"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/runs?branch=%s&per_page=%d", slug, url.QueryEscape(branch), runs), nil, &listed); err != nil {
+		return nil, err
+	}
+	out := []BranchRun{}
+	for _, r := range listed.Runs[:min(len(listed.Runs), runs)] {
+		var js struct {
+			Total int `json:"total_count"`
+			Jobs  []struct {
+				ID         int64  `json:"id"`
+				Name       string `json:"name"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+			} `json:"jobs"`
+		}
+		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/runs/%d/jobs?filter=latest&per_page=%d", slug, r.ID, jobs), nil, &js); err != nil {
+			return nil, err
+		}
+		run := BranchRun{ID: r.ID, Name: r.Name, Event: r.Event, HeadSHA: r.HeadSHA, Status: r.Status, Conclusion: r.Conclusion,
+			URL: r.HTMLURL, CreatedAt: r.CreatedAt, TotalJobs: js.Total}
+		for _, j := range js.Jobs[:min(len(js.Jobs), jobs)] {
+			run.Jobs = append(run.Jobs, BranchJob{ID: j.ID, Name: j.Name, Status: j.Status, Conclusion: j.Conclusion})
+		}
+		out = append(out, run)
+	}
+	// GitHub lists runs newest first; said so whatever order it answered in.
+	slices.SortStableFunc(out, func(a, b BranchRun) int { return strings.Compare(b.CreatedAt, a.CreatedAt) })
 	return out, nil
 }
 
