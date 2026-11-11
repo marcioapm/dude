@@ -12,6 +12,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -563,4 +564,30 @@ func TestTheConductorStartsTheSimplifierWhileThePullRequestWaits(t *testing.T) {
 	if len(w.gh.Pulls()) != 1 {
 		t.Fatalf("%d pull requests", len(w.gh.Pulls()))
 	}
+}
+
+// As above, but GitHub has not worked out the pull request's mergeability
+// when the simplifier's review is decided. That is no reading: the gate is
+// read again on its own once GitHub says clean, with no sync, which sees
+// no move (the syncer keeps its last reading in unknown's place).
+func TestTheSimplifierWhileMergeabilityIsUnknownComesBackToReady(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.until("the simplifier's review", func() bool { return w.decisionAt(task) == "after_review" })
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	w.must(task, "decide", `{"action":"next"}`)
+	for range 5 {
+		w.pump()
+	}
+	if s := w.taskStatus(task); s != "review" {
+		t.Fatalf("the task is %s with mergeability unknown, want review", s)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { delete(s.MergeableUnknown, 1) })
+	w.timersElapse(task)
+	w.until("ready to merge with no sync", func() bool { return w.taskStatus(task) == "ready_to_merge" })
 }

@@ -2004,28 +2004,13 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if acting {
 		// Back from work started while the pull requests waited (a review,
 		// the simplifier): whether that was all the gate asked for is
-		// weighed now, not at the next sync. GitHub not answering is no
-		// reason to fail the step: the next sync signals readiness again.
-		if err := w.weighReadinessNow(ctx, sc, st); err != nil {
-			return workflow.Result{}, err
-		}
+		// weighed now, not at the next sync, which may never come —
+		// awaitPullRequest, woken at once by waitForPR's timer, weighs it,
+		// and waits as the gate asks when GitHub has no answer yet.
+		now := time.Now()
+		st.ReweighAt = &now
 	}
 	return waitForPR(st), nil
-}
-
-// weighReadinessNow is weighReadiness of the delivery's pull requests as
-// last synced, outside awaitPullRequest: a gate GitHub did not answer
-// leaves the status as it is.
-func (w *steps) weighReadinessNow(ctx context.Context, sc workflow.StepContext, st *State) error {
-	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-	if err != nil {
-		return err
-	}
-	err = w.weighReadiness(ctx, sc, st, states)
-	if errors.As(err, new(workflow.Wait)) {
-		return nil
-	}
-	return err
 }
 
 // awaitOwnerAuthorization parks a publication until its frozen owner
