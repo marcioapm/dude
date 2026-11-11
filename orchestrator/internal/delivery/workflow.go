@@ -3108,21 +3108,21 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 				Why: "the ready gate could not read GitHub: " + g.Err.Error()}
 		}
 		ready = ready && g.Ready
-		// Unknown mergeability with every other item holding — but for
-		// checks pending only for the CI grace, which no sync sees end
-		// either — is no reading at all: the syncer keeps its last reading
-		// in its place, so the clean that follows would not count as a
-		// move, and no sync would weigh readiness again. Read again soon;
-		// that reading, mergeability known, arms the grace's own timer.
-		if g.MergeableUnknown && onlyUnknownOrGrace(g) {
+		// Held by nothing a sync sees move, no sync would weigh readiness
+		// again: the workflow reads the gate again itself.
+		switch {
+		case !onlyUnknownOrGrace(g):
+		case g.MergeableUnknown:
+			// Unknown mergeability is no reading at all: the syncer keeps
+			// its last reading in its place, so the clean that follows
+			// is no move. Read again soon; that reading, mergeability
+			// known, arms the grace's own timer.
 			unknown = true
-		}
-		// Checks pending only for the CI grace, everything else holding:
-		// the grace ending is no move the syncer sees (a filtered
-		// workflow that never reports, Actions reporting green after an
-		// external status before any sync saw it run), so no sync would
-		// weigh readiness again.
-		if f := g.Failing(); g.GraceLeft > 0 && len(f) == 1 && f[0].Key == ReadyChecks {
+		default:
+			// Checks pending only for the CI grace: its end is no move
+			// the syncer sees (a filtered workflow that never reports,
+			// Actions reporting green after an external status before
+			// any sync saw it run).
 			grace = max(grace, g.GraceLeft)
 		}
 	}
