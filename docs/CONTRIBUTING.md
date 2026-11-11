@@ -1359,14 +1359,14 @@ hourly GitHub reads. `github_branch_runs` (`github.read` too) lists a
 branch's ten latest Actions runs, newest first, with each job's conclusion
 (the default branch when none is named), so a conductor can tell a flaky or
 already-failing job from one its change broke; one request for the runs and
-one per run for its jobs, counted as one read. Those counts, and `chat_history`'s, read the
-tool-agnostic indexes of counted attempts (`event_type =
-'agent.tool.attempted'` by session, task or automation and time, migrations
-197–199, which replace the tool-list indexes 200–202 drop); the tool list
-is a filter in the query, so a new counted tool needs no migration. The
-migrator records a `CREATE INDEX CONCURRENTLY` file only once its index is
-valid, and drops (concurrently) one an interrupted build left invalid, so
-the next migrate builds it afresh.
+one per run for its jobs, counted as one read. Those counts, and
+`chat_history`'s, read the tool-agnostic indexes of counted attempts
+(`event_type = 'agent.tool.attempted'` by session, task or automation and
+time, migrations 197–199, which replace the tool-list indexes 200–202 drop);
+the tool list is a filter in the query, so a new counted tool needs no
+migration. The migrator records a `CREATE INDEX CONCURRENTLY` file only once
+its index is valid, and drops (concurrently) one an interrupted build left
+invalid, so the next migrate builds it afresh.
 
 **Reactions follow the work.** 👀 goes on the mention as the loop's first
 stage of a delivery (never in the webhook request), once per delivery:
