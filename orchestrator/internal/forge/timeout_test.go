@@ -12,10 +12,14 @@ import (
 	"testing"
 )
 
-// timeLimitServer answers a pull request whose head has one Actions check
-// run of the given conclusion, whose annotations are annotations (a JSON
-// list) or answer status when it is set; it records every path asked.
-func timeLimitServer(t *testing.T, conclusion, annotations string, status int) (*GitHub, func() []string) {
+// timeLimitServer answers a pull request whose head has one check run of
+// the given conclusion, reported by app (Actions when ""), whose
+// annotations are annotations (a JSON list) or answer status when it is
+// set; it records every path asked.
+func timeLimitServer(t *testing.T, app, conclusion, annotations string, status int) (*GitHub, func() []string) {
+	if app == "" {
+		app = ActionsApp
+	}
 	var mu sync.Mutex
 	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,7 +32,7 @@ func timeLimitServer(t *testing.T, conclusion, annotations string, status int) (
 		case "/repos/acme/api/commits/abc/status":
 			fmt.Fprint(w, `{"state":"pending","total_count":0}`)
 		case "/repos/acme/api/commits/abc/check-runs":
-			fmt.Fprintf(w, `{"total_count":1,"check_runs":[{"id":41,"name":"unit","status":"completed","conclusion":%q,"app":{"slug":"github-actions"}}]}`, conclusion)
+			fmt.Fprintf(w, `{"total_count":1,"check_runs":[{"id":41,"name":"unit","status":"completed","conclusion":%q,"app":{"slug":%q}}]}`, conclusion, app)
 		case "/repos/acme/api/check-runs/41/annotations":
 			if status != 0 {
 				w.WriteHeader(status)
@@ -64,13 +68,21 @@ const timeLimitAnnotations = `[{"path":".github","start_line":1,"annotation_leve
 // annotations read.
 func TestAJobCancelledAtItsTimeLimitIsFailing(t *testing.T) {
 	for _, tc := range []struct {
-		name, conclusion, annotations string
-		status                        int
-		checks                        string
-		timedOut, readsAnnotations    bool
+		name, app, conclusion, annotations string
+		status                             int
+		checks                             string
+		timedOut, readsAnnotations         bool
 	}{
 		{name: "cancelled at its time limit", conclusion: "cancelled", annotations: timeLimitAnnotations,
 			checks: ChecksFailing, timedOut: true, readsAnnotations: true},
+		// Every annotation is looked at, not only the first.
+		{name: "cancelled at its time limit, said second", conclusion: "cancelled",
+			annotations: `[{"path":".github","start_line":1,"annotation_level":"failure","message":"The operation was canceled."},` + timeLimitAnnotations[1:],
+			checks:      ChecksFailing, timedOut: true, readsAnnotations: true},
+		// Only Actions annotates its time limit: another app's cancelled
+		// run costs no read and stays not failing.
+		{name: "cancelled, another app's", app: "circleci", conclusion: "cancelled", annotations: timeLimitAnnotations,
+			checks: ChecksPending},
 		{name: "cancelled by a person", conclusion: "cancelled", annotations: `[]`,
 			checks: ChecksPending, readsAnnotations: true},
 		{name: "superseded by concurrency", conclusion: "cancelled",
@@ -82,7 +94,7 @@ func TestAJobCancelledAtItsTimeLimitIsFailing(t *testing.T) {
 		{name: "success", conclusion: "success", checks: ChecksPassing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			gh, asked := timeLimitServer(t, tc.conclusion, tc.annotations, tc.status)
+			gh, asked := timeLimitServer(t, tc.app, tc.conclusion, tc.annotations, tc.status)
 			st, err := gh.PullRequest(context.Background(), "acme/api", 1)
 			if err != nil {
 				t.Fatal(err)
@@ -117,7 +129,7 @@ func TestAJobCancelledAtItsTimeLimitIsFailing(t *testing.T) {
 // A failure that may pass on the annotations read fails the sync, to be
 // tried again, rather than reading the job as cancelled by a person.
 func TestATransientAnnotationsReadFailsTheSync(t *testing.T) {
-	gh, _ := timeLimitServer(t, "cancelled", "", 502)
+	gh, _ := timeLimitServer(t, "", "cancelled", "", 502)
 	if _, err := gh.PullRequest(context.Background(), "acme/api", 1); err == nil || !Transient(err) {
 		t.Fatalf("err %v, want a transient failure", err)
 	}
