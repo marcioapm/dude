@@ -38,8 +38,9 @@ func (w *world) rangeSpecs(of string) []lux.Spec {
 // The simplifier changes code nobody reviewed: a review of its diff alone,
 // by the policy's required reviewers, told the range from the head before
 // it to HEAD. Its finding goes to the fixer; the fix is reviewed (over the
-// same range), the simplifier does not run again, and the test then the
-// pull request follow.
+// same range), and the fix having changed code after it, the simplifier
+// runs again on the final reviewed code, its own diff reviewed, before the
+// test then the pull request follow.
 func TestTheSimplifiersDiffIsReviewedAndItsFindingFixedBeforeTheTest(t *testing.T) {
 	w := newWorld(t)
 	// A reviewer on a model the fake lux plays as the scripted one, whose
@@ -59,20 +60,20 @@ func TestTheSimplifiersDiffIsReviewedAndItsFindingFixedBeforeTheTest(t *testing.
 	wi := w.testing("fake/scripted")
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
 
-	if n := w.phaseRuns(wi, "simplify"); n != 1 {
-		t.Errorf("%d simplifications, want one: never again after its diff's fix", n)
+	if n := w.phaseRuns(wi, "simplify"); n != 2 {
+		t.Errorf("%d simplifications, want two: again after its diff's fix", n)
 	}
 	specs := w.rangeSpecs(delivery.RangeSimplify)
-	if len(specs) != 2 {
-		t.Fatalf("%d reviews of the simplifier's diff, want its round and the fix's re-review\n%s", len(specs), w.describeRuns())
+	if len(specs) != 3 {
+		t.Fatalf("%d reviews of the simplifier's diff, want its round, the fix's re-review and the second simplifier's\n%s", len(specs), w.describeRuns())
 	}
 	// From the head before the simplifier: the review loop's fix.
 	var before, simplified string
 	_ = w.owner.QueryRow(context.Background(), `SELECT heads->'target'->>'sha' FROM runs WHERE task_id = $1 AND phase = 'fix'
 		ORDER BY created_at LIMIT 1`, wi).Scan(&before)
-	_ = w.owner.QueryRow(context.Background(), `SELECT heads->'target'->>'sha' FROM runs WHERE task_id = $1 AND phase = 'simplify'`,
-		wi).Scan(&simplified)
-	for i, spec := range specs {
+	_ = w.owner.QueryRow(context.Background(), `SELECT heads->'target'->>'sha' FROM runs WHERE task_id = $1 AND phase = 'simplify'
+		ORDER BY created_at LIMIT 1`, wi).Scan(&simplified)
+	for i, spec := range specs[:2] {
 		for _, want := range []string{"Review `" + before + "..HEAD`:", "behaviour-preservation check of the simplifier's diff"} {
 			if !strings.Contains(spec.Workload.Prompt, want) {
 				t.Errorf("review %d of the simplifier's diff is not told %q:\n%s", i+1, want, spec.Workload.Prompt)
@@ -103,7 +104,7 @@ func TestTheSimplifiersDiffIsReviewedAndItsFindingFixedBeforeTheTest(t *testing.
 	if head := w.branchHead(wi); tested != head || tested == simplified {
 		t.Errorf("tested %s; the branch is at %s, the simplifier left %s: want the fix of its diff tested", tested, head, simplified)
 	}
-	if order := w.phaseOrder(wi); !slices.Equal(order, []string{"implement", "review", "fix", "review", "simplify", "review", "fix", "review", "test"}) {
+	if order := w.phaseOrder(wi); !slices.Equal(order, []string{"implement", "review", "fix", "review", "simplify", "review", "fix", "review", "simplify", "review", "test"}) {
 		t.Errorf("phases = %v", order)
 	}
 }
@@ -160,7 +161,10 @@ type prFixWorld struct {
 	seen      []string // the PR branch's head at each Run lux started after arm
 	seenWeb   []string // web's, the same way
 	phases    []string
-	prTests   atomic.Int32
+	// The simplifier after arm plays as scripted, and is counted; else it
+	// finds nothing to simplify, and is not.
+	simplifies bool
+	prTests    atomic.Int32
 	// The tests run after arm, in order: the scripted tester's model each
 	// plays; past the end, a pass.
 	testers []string
@@ -191,6 +195,11 @@ func newPRFixWorldAt(t *testing.T, at prAt, testers ...string) *prFixWorld {
 		phase, _ := labels["dude.phase"].(string)
 		if !w.armed.Load() {
 			return scripted(spec)
+		}
+		if phase == "simplify" && !w.simplifies {
+			// The default policy's simplifier on a reviewed fix: these are
+			// about the fix, so it finds nothing, and is not counted.
+			return fakelux.Behaviour{Reply: "Simple enough already."}
 		}
 		w.mu <- struct{}{}
 		w.seen = append(w.seen, w.gh.SHA(w.branch))
@@ -284,9 +293,13 @@ func TestARepositoryAFixOfTheSimplifiersDiffChangesFirstIsReviewed(t *testing.T)
 	w := newWorld(t)
 	w.onModel("reviewer", "llm-reviewer")
 	scripted := w.lux.Decide
-	var simplifyReviews, fixes atomic.Int32
+	var simplifyReviews, fixes, simplifies atomic.Int32
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		labels, _ := spec["labels"].(map[string]any)
+		if labels["dude.phase"] == "simplify" && simplifies.Add(1) > 1 {
+			// Again on the fix of its diff: nothing more to simplify.
+			return fakelux.Behaviour{Reply: "Simple enough already."}
+		}
 		if rangeReview(spec) == delivery.RangeSimplify {
 			if simplifyReviews.Add(1) == 1 {
 				return fakelux.Behaviour{Reply: simplifierFinding}

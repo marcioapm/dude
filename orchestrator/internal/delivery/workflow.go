@@ -154,6 +154,11 @@ type State struct {
 	// review loop after it covers only from there (RangeSimplify). Set by
 	// awaitSimplify when it published, cleared at the test.
 	SimplifyBase map[string]string `json:"simplifyBase,omitempty"`
+	// The heads the simplifier last left, whether it committed or found
+	// nothing to simplify: once the work moves past them (a fix, of a pull
+	// request or of the simplifier's own diff) it runs again after the
+	// review, as the ready gate asks (afterReview).
+	SimplifiedHeads map[string]string `json:"simplifiedHeads,omitempty"`
 	// Legacy, read by the conversion alone (convertCandidateTx, legacyTrace):
 	// an open pull request's fix being checked on its candidate branch, as
 	// a delivery stored before the candidate path was deleted may hold.
@@ -168,6 +173,15 @@ type State struct {
 	// converging): an open pull request showing one counts as reviewed
 	// (unreviewedPRHeadTx).
 	AcceptedHeads map[string]string `json:"acceptedHeads,omitempty"`
+	// When the ready gate is read again by itself, for what no sync sees
+	// move: the end of a CI grace that alone holds a pull request
+	// (weighReadiness), or at once (reweighNow) when the delivery comes
+	// back to its pull requests from a decision or a phase that may have
+	// settled a gate item. awaitPullRequest's timer (waitForPR) wakes then.
+	ReweighAt *time.Time `json:"reweighAt,omitempty"`
+	// The simplifier after a pull request fix failed once and runs again
+	// (awaitSimplify); failing again escalates.
+	SimplifyRetried bool `json:"simplifyRetried,omitempty"`
 	// A direct pull request fix (or integration) held while the narrow
 	// review of dude's unreviewed push it would start from runs
 	// (reviewFirst): once that loop is clear, prFix starts it.
@@ -1093,23 +1107,60 @@ func (st *State) conductsRounds() bool { return st.conducted() }
 func (st *State) newLoop() { st.Round, st.RoundHeads, st.ReviewingHeads = 0, nil, nil }
 
 // afterReview is the step a review loop that has nothing left to fix goes
-// to: the simplifier, then the test. A loop over the simplifier's own
-// diff goes to the test: the simplifier is not run again after a fix of
-// its diff; that fix was reviewed by the loop, and the tester runs next.
+// to: the simplifier, then the test. The simplifier runs on the final
+// reviewed code: a loop over its own diff whose fix moved the work, or a
+// fix pushed to the pull request, goes through it again (simplifyDue) —
+// its commits reviewed as before — and only then to the test, or back to
+// the pull request.
 func (st *State) afterReview() string {
 	if st.PRFixAfter != nil {
 		// dude's push the fix would start from is reviewed: the fix now.
 		return "prFix"
 	}
+	if st.simplifyDue() {
+		return "simplify"
+	}
 	if len(st.FixRange) > 0 {
-		// A fix pushed to the pull request, reviewed: no simplifier and no
+		// A fix pushed to the pull request, reviewed (and simplified): no
 		// tester after it; the pull request's CI is its test.
 		return "prFixDone"
 	}
-	if st.Policy.Simplify && len(st.SimplifyBase) == 0 {
+	if st.Policy.Simplify && len(st.SimplifyBase) == 0 && !st.acceptedAtHeads() {
 		return "simplify"
 	}
 	return "test"
+}
+
+// simplifyDue says the policy runs the simplifier and the work moved past
+// where it last left it (SimplifiedHeads): a fix after it, of its diff or
+// of the pull request, or a pull request it never ran on. A head a person
+// accepted (AcceptedHeads) counts as simplified, as it counts as reviewed
+// (ReadyReviewed): dude does not change code after a person accepted it.
+func (st *State) simplifyDue() bool {
+	if !st.Policy.Simplify {
+		return false
+	}
+	for repo, head := range st.Heads {
+		if head != "" && st.SimplifiedHeads[repo] != head && st.AcceptedHeads[repo] != head {
+			return true
+		}
+	}
+	return false
+}
+
+// acceptedAtHeads says a person accepted every repository's current head.
+func (st *State) acceptedAtHeads() bool {
+	n := 0
+	for repo, head := range st.Heads {
+		if head == "" {
+			continue
+		}
+		if st.AcceptedHeads[repo] != head {
+			return false
+		}
+		n++
+	}
+	return n > 0
 }
 
 // judgedBy assigns each category's attempted findings to a reviewer of the
@@ -1296,6 +1347,15 @@ func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *Stat
 			// A failed test's fix must be tested before returning to the PR.
 			if st.RetestDue {
 				return workflow.Result{Next: "test", State: st}, nil
+			}
+			// A simplification started at the wait whose diff a fix
+			// changed: through the simplifier again, on that fix.
+			again := len(st.SimplifyBase) > 0 && st.simplifyDue()
+			// A simplification started at the wait is reviewed: its range
+			// is not a later round's.
+			st.SimplifyBase = nil
+			if again {
+				return workflow.Result{Next: "simplify", State: st}, nil
 			}
 			return workflow.Result{Next: "openPullRequest", State: st}, nil
 		}
@@ -1539,14 +1599,45 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		return workflow.Result{}, err
 	}
 	st.PendingRunIDs = nil
+	if out.Succeeded {
+		// Where it left the work: it runs again only once that moves
+		// (simplifyDue).
+		st.SimplifiedHeads = out.advance(st.Heads)
+	}
+	if !out.Succeeded && st.fixLoop() {
+		// After a fix pushed to the pull request, the ready gate asks for
+		// the simplifier past the fix (simplified_after_last_change): one
+		// that failed is tried once more, then a person (or the conductor
+		// first) decides, as a failed fixer on this path is
+		// (pr_fix_failed). It stays retried through the escalation: a
+		// resumed Run that fails again is the person's again, not a retry
+		// whose key finds that same failed Run (retry clears it, its key
+		// new).
+		if !st.SimplifyRetried {
+			st.SimplifyRetried = true
+			return workflow.Result{Next: "simplify", State: st}, nil
+		}
+		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error, "phase": PhaseSimplify})
+	}
+	st.SimplifyRetried = false
 	// A failed or empty simplification is not a failure of the task: the
 	// code was simple enough already. Carry on with what we had — unless
 	// the conductor queued a review behind it: then it is told at once.
 	if !out.Succeeded || len(out.Heads) == 0 {
-		if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseSimplify, runID, out, "test"); ok || err != nil {
+		// Started while the pull requests waited: back to them, its CI the
+		// test, as after a fix of the pull request. After a fix pushed to
+		// the pull request: that fix's round is done.
+		next := "test"
+		switch {
+		case st.fixLoop():
+			next = "prFixDone"
+		case st.ActingOnPR && !st.RetestDue:
+			next = "openPullRequest"
+		}
+		if res, ok, err := w.pipelineGoesOn(ctx, sc, st, PhaseSimplify, runID, out, next); ok || err != nil {
 			return res, err
 		}
-		return workflow.Result{Next: "test", State: st}, nil
+		return workflow.Result{Next: next, State: st}, nil
 	}
 	// What it changed was never reviewed: a review round over its diff
 	// alone, from where each repository it changed stood before it, then
@@ -1572,6 +1663,9 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		// No starting commit known (a Run from before it was kept): the
 		// range cannot be named, and a whole-branch round would end in
 		// another simplification.
+		if st.fixLoop() {
+			return workflow.Result{Next: "prFixDone", State: st}, nil
+		}
 		return workflow.Result{Next: "test", State: st}, nil
 	}
 	// The simplifier's diff is a loop of its own: its first review is round 1.
@@ -1909,6 +2003,12 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 	if len(st.PendingConflicts) > 0 {
 		return workflow.Result{Next: "awaitPullRequest", State: st}, nil
 	}
+	if acting {
+		// Back from work started while the pull requests waited (a review,
+		// the simplifier): whether that was all the gate asked for is
+		// weighed now, not at the next sync, which may never come.
+		st.reweighNow()
+	}
 	return waitForPR(st), nil
 }
 
@@ -1974,6 +2074,11 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 				stopAt(&forge.Signal{Kind: "conflict", Repo: s.Repo, Number: s.Number})
 			}
 		}
+	}
+	if st.ReweighAt != nil && (len(sc.Signals) == 0 || !time.Now().Before(*st.ReweighAt)) {
+		// ReweighAt is due: the timer woke the step (no signal), or a
+		// signal did after it.
+		readiness = true
 	}
 	if stop == nil && len(st.PendingConflicts) > 0 {
 		s := st.PendingConflicts[0]
@@ -2062,7 +2167,8 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			if err != nil {
 				return workflow.Result{}, err
 			}
-			return waitAgain, w.weighReadiness(ctx, sc, st, states)
+			err = w.weighReadiness(ctx, sc, st, states)
+			return st.reweighed(waitAgain), err
 		}
 		return waitAgain, nil
 	}
@@ -2267,10 +2373,15 @@ func writerKey(sc workflow.StepContext, st *State, phase string) string {
 		}
 		return key(sc, st, ":implement")
 	case PhaseSimplify:
-		if d != nil {
-			return conductorKey(sc, st, d, ":simplify")
+		again := ""
+		if st.SimplifyRetried {
+			// The retry of a failed simplifier is a Run of its own.
+			again = ":again"
 		}
-		return testRoundKey(sc, st, ":simplify")
+		if d != nil {
+			return conductorKey(sc, st, d, ":simplify"+again)
+		}
+		return testRoundKey(sc, st, ":simplify"+again)
 	case PhaseFix:
 		switch {
 		case d != nil:
@@ -2772,7 +2883,9 @@ func (w *steps) prFixDone(ctx context.Context, sc workflow.StepContext) (workflo
 			heads[repo] = h
 		}
 	}
-	st.FixRange = nil
+	// The simplifier's diff of this round, if any, is reviewed: its range
+	// is not a later round's.
+	st.FixRange, st.SimplifyBase = nil, nil
 	// The bodies' review and verification are brought up to these heads
 	// as a promotion's are (refreshPromoted, retried), then prFixLanded.
 	return w.movedOnPR(ctx, sc, st, heads, len(heads) > 0)
@@ -2929,7 +3042,8 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	case !grown && c.open > 0:
 		// The rest are still open: what is merged is taken, so whether the
 		// task is ready depends on those.
-		return waitAgain, false, w.weighReadiness(ctx, sc, st, states)
+		err := w.weighReadiness(ctx, sc, st, states)
+		return st.reweighed(waitAgain), false, err
 	case !grown && c.merged > 0:
 		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
 	case c.open == 0 && c.merged == 0:
@@ -2942,26 +3056,111 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	return res, true, err
 }
 
-// weighReadiness moves the task to ready to merge when every pull
-// request still open is approved with its checks passing (forge.Ready),
-// and back to review when one no longer is. The factory never merges:
-// ready to merge is what a person is told, and merging is theirs.
+// readyGateRetry is how soon a ready gate GitHub did not answer is read
+// again.
+const readyGateRetry = 30 * time.Second
+
+// mergeableRetry is how soon a ready gate is read again while GitHub works
+// out whether the pull request merges: seconds, as a rule.
+const mergeableRetry = 10 * time.Second
+
+// graceMargin is how long after the CI grace ends the gate is read again:
+// past it, not on its edge.
+const graceMargin = 5 * time.Second
+
+// weighReadiness moves the task to ready to merge when the ready gate
+// (ReadyGate) passes for every pull request still open, and back to
+// review when one no longer does. The gate asks no approval beyond what
+// GitHub's branch protection asks. The factory never merges: ready to
+// merge is what a person is told, and merging is theirs.
 func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st *State, states []PullRequestState) error {
-	ready, open := true, 0
+	var open []string
 	for _, s := range states {
 		if s.State == forge.StateMerged || s.State == forge.StateClosed {
 			continue
 		}
-		open++
-		// Always about the pull request's current head: publishing a fix
-		// resets its checks (phases.publish), and a sync records a head
-		// someone else pushed.
-		ready = ready && forge.Ready(s.Status)
+		open = append(open, s.ID)
+	}
+	var gates []PRGate
+	if len(open) > 0 {
+		var gh *forge.GitHub
+		if w.forges != nil {
+			var err error
+			if gh, err = w.forges.For(ctx, sc.OrganizationID); err != nil {
+				return err
+			}
+		}
+		var err error
+		if gates, err = w.s.ReadyGateFor(ctx, sc.OrganizationID, gh, st.TaskID, open); err != nil {
+			return err
+		}
+	}
+	ready := len(gates) > 0
+	unknown := false
+	var grace time.Duration // the longest grace left of a gate held by it alone
+	for _, g := range gates {
+		if g.Err != nil {
+			// GitHub did not answer: not a judgement either way. The
+			// status stays as it was, and the gate is read again soon —
+			// after GitHub's Retry-After when it gave one — the step's
+			// attempts not spent on GitHub's outage.
+			return workflow.Wait{After: max(forge.RetryAfter(g.Err), readyGateRetry),
+				Why: "the ready gate could not read GitHub: " + g.Err.Error()}
+		}
+		ready = ready && g.Ready
+		// Held by nothing a sync sees move, no sync would weigh readiness
+		// again: the workflow reads the gate again itself.
+		switch {
+		case !onlyUnknownOrGrace(g):
+		case g.MergeableUnknown:
+			// Unknown mergeability is no reading at all: the syncer keeps
+			// its last reading in its place, so the clean that follows
+			// is no move. Read again soon; that reading, mergeability
+			// known, arms the grace's own timer.
+			unknown = true
+		default:
+			// Checks pending only for the CI grace: its end is no move
+			// the syncer sees (a filtered workflow that never reports,
+			// Actions reporting green after an external status before
+			// any sync saw it run).
+			grace = max(grace, g.GraceLeft)
+		}
+	}
+	// Kept for the conductor's pull_requests, which serves it while the
+	// head it was judged at is the one recorded.
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error { return StoreGatesTx(ctx, tx, gates, time.Now()) }); err != nil {
+		return err
+	}
+	if unknown {
+		return workflow.Wait{After: mergeableRetry, Why: "GitHub has not worked out whether the pull request merges yet"}
+	}
+	// Read again once the grace is over (waitForPR's timer), not held to
+	// it as a Wait would: a signal meanwhile is acted on at once.
+	st.ReweighAt = nil
+	if grace > 0 {
+		at := time.Now().Add(grace + graceMargin)
+		st.ReweighAt = &at
 	}
 	// The move, its event and the conductor's Chat notice in one
 	// transaction: one lost to a retry would never be written again (the
 	// status has moved).
-	return w.s.moveReadiness(ctx, sc.OrganizationID, st, states, open > 0 && ready, open)
+	return w.s.moveReadiness(ctx, sc.OrganizationID, st, gates, ready, len(open))
+}
+
+// onlyUnknownOrGrace says whether g fails on nothing but what no sync
+// sees move: mergeability GitHub has not worked out, and checks pending
+// only for the CI grace.
+func onlyUnknownOrGrace(g PRGate) bool {
+	f := g.Failing()
+	for _, it := range f {
+		switch {
+		case it.Key == ReadyMergeable && g.MergeableUnknown:
+		case it.Key == ReadyChecks && g.GraceLeft > 0:
+		default:
+			return false
+		}
+	}
+	return len(f) > 0
 }
 
 // escalate stops and asks for a person, and waits for their decision
@@ -3035,6 +3234,8 @@ var RetryStep = map[string]string{
 	"testVerdict": "test",
 	"prFix":       "prFix",
 	"awaitPRFix":  "prFix",
+	// A simplifier that failed twice after a pull request fix.
+	"awaitSimplify": "simplify",
 }
 
 func decisionActor(d *HumanDecision) string {
@@ -3257,7 +3458,16 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 				return res, err
 			}
 		}
-		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest")
+		if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "a person is waiting on the rest"); err != nil {
+			return workflow.Result{}, err
+		}
+		// The escalation was a gate item: back at the pull requests, the
+		// gate is read again at once, not at the next sync, which may
+		// never come.
+		if len(st.PullRequestIDs) > 0 {
+			st.reweighNow()
+		}
+		return waitForPR(st), nil
 	}
 	if err := w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "running", decisionActor(d)+" decided: "+d.Action); err != nil {
 		return workflow.Result{}, err
@@ -3356,25 +3566,33 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 }
 
 // acceptHeads records the heads a person accepted
-// the review round at, for each repository with an open pull request:
+// the review round at, for each repository with a pull request:
 // what pullRequestOpenTx then takes as reviewed (AcceptedHeads).
 func (w *steps) acceptHeads(ctx context.Context, sc workflow.StepContext, st *State) error {
 	if len(st.PullRequestIDs) == 0 {
 		return nil
 	}
-	open, err := w.openPRRepos(ctx, sc, st)
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
 	if err != nil {
 		return err
 	}
-	for _, repo := range open {
-		if h := st.Heads[repo]; h != "" {
+	st.acceptHeadsOf(states)
+	return nil
+}
+
+// acceptHeadsOf records the heads of the repositories with a pull request
+// (open, merged or closed) as accepted. A merged or closed one's head is
+// one dude changes no more: it counts as accepted too, or simplifyDue
+// would hold there for good.
+func (st *State) acceptHeadsOf(states []PullRequestState) {
+	for _, p := range states {
+		if h := st.Heads[p.Repo]; h != "" {
 			if st.AcceptedHeads == nil {
 				st.AcceptedHeads = map[string]string{}
 			}
-			st.AcceptedHeads[repo] = h
+			st.AcceptedHeads[p.Repo] = h
 		}
 	}
-	return nil
 }
 
 // resumeEscalationAt restores the interrupted wait. Old rows have no saved
@@ -3401,8 +3619,10 @@ func resumeEscalationAt(st *State, e *Escalation) workflow.Result {
 // a step a person aborted.
 func retry(st *State, step string, e *Escalation) workflow.Result {
 	st.Retries++
-	// A step run again afresh is not the conductor's queued unit.
+	// A step run again afresh is not the conductor's queued unit, nor a
+	// failed simplifier's one retry: its Runs are new (Retries).
 	st.Pipeline = nil
+	st.SimplifyRetried = false
 	switch step {
 	case "review":
 		if e != nil && e.Reason == "review_failed" {
@@ -3506,8 +3726,25 @@ func waitForPR(st *State) workflow.Result {
 	if len(st.PendingConflicts) > 0 {
 		return workflow.Result{Next: "awaitPullRequest", State: st}
 	}
-	return workflow.Result{Next: "awaitPullRequest", State: st,
-		AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}}
+	return st.reweighed(workflow.Result{Next: "awaitPullRequest", State: st,
+		AwaitSignals: []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}})
+}
+
+// reweighNow has awaitPullRequest weigh readiness as soon as it waits
+// (ReweighAt): there, a gate GitHub has no answer for yet waits as
+// weighReadiness asks.
+func (st *State) reweighNow() {
+	now := time.Now()
+	st.ReweighAt = &now
+}
+
+// reweighed is res, waitForPR's, waking at ReweighAt, if it is set.
+func (st *State) reweighed(res workflow.Result) workflow.Result {
+	res.SleepUntil = time.Time{}
+	if st.ReweighAt != nil && len(res.AwaitSignals) > 0 {
+		res.SleepUntil = *st.ReweighAt
+	}
+	return res
 }
 
 // awaitRead waits on a person reading work that opened no pull request:

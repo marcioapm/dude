@@ -11,13 +11,14 @@ import (
 
 // A conducted delivery waiting on its pull requests has no decision open,
 // yet its conductor may want a phase run now — a review of what a person
-// pushed, a fix of something said in Chat, a test. start_phase fix, review
-// or test is taken then as a decision at pull request feedback, under the
-// same bounds; refused while anything that writes the task branch is at
-// work (one writer at a time).
+// pushed, a fix of something said in Chat, a test, the simplifier after
+// the last change (what the ready gate asks for). start_phase fix, review,
+// simplify or test is taken then as a decision at pull request feedback,
+// under the same bounds; refused while anything that writes the task
+// branch is at work (one writer at a time).
 
 // prWaitPhases are what may start while the delivery waits on its pull requests.
-var prWaitPhases = []string{PhaseFix, PhaseReview, PhaseTest}
+var prWaitPhases = []string{PhaseFix, PhaseReview, PhaseSimplify, PhaseTest}
 
 // waitingOnPR says the delivery is parked on its pull requests, nothing running.
 func (d *Delivery) waitingOnPR() bool {
@@ -64,6 +65,12 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 	}
 	st := &d.State
 	switch in.Phase {
+	case PhaseSimplify:
+		// Not past a push of dude's no review covered: the simplifier's
+		// own commits would be reviewed with it, unasked.
+		if err := refusePullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil {
+			return "", err
+		}
 	case PhaseReview:
 		for _, c := range in.Categories {
 			if !slices.Contains(reviewCategories(), c) {

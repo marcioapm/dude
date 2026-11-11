@@ -148,6 +148,15 @@ type Server struct {
 	UserTypes map[string]string
 	// Branches GitHub reports as protected (a rule or a ruleset applies).
 	Protected map[string]bool
+	// What protection on a branch requires, by branch: the checks that
+	// must pass, and approving reviews (a ruleset's pull_request rule).
+	// Either named protects the branch.
+	RequiredChecks    map[string][]string
+	RequiredApprovals map[string]int
+	// GitHub's mergeable_state a pull request's read shows instead of the
+	// one the fake works out (clean or dirty), by pull request: behind,
+	// blocked, unstable, has_hooks.
+	MergeableStates map[int]string
 	// Review threads resolved, by thread id (ThreadID), and draft pull
 	// requests marked ready, through GraphQL.
 	ResolvedThreads map[string]bool
@@ -739,9 +748,38 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		s.mu.Lock()
-		protected := s.Protected[branch]
+		checks, approvals := s.RequiredChecks[branch], s.RequiredApprovals[branch]
+		protected := s.Protected[branch] || len(checks) > 0 || approvals > 0
 		s.mu.Unlock()
-		write(w, 200, map[string]any{"name": branch, "protected": protected, "commit": map[string]string{"sha": sha}})
+		out := map[string]any{"name": branch, "protected": protected, "commit": map[string]string{"sha": sha}}
+		if len(checks) > 0 {
+			out["protection"] = map[string]any{"enabled": true,
+				"required_status_checks": map[string]any{"enforcement_level": "non_admins", "contexts": checks}}
+		}
+		write(w, 200, out)
+	})
+	// The rules that apply to a branch, as rulesets give them: a
+	// pull_request rule for required approvals, a required_status_checks
+	// rule for required checks.
+	mux.HandleFunc("GET "+prefix+"/rules/branches/{branch...}", func(w http.ResponseWriter, r *http.Request) {
+		branch := r.PathValue("branch")
+		s.mu.Lock()
+		checks, approvals := s.RequiredChecks[branch], s.RequiredApprovals[branch]
+		s.mu.Unlock()
+		rules := []any{}
+		if approvals > 0 {
+			rules = append(rules, map[string]any{"type": "pull_request",
+				"parameters": map[string]any{"required_approving_review_count": approvals}})
+		}
+		if len(checks) > 0 {
+			var required []any
+			for _, c := range checks {
+				required = append(required, map[string]string{"context": c})
+			}
+			rules = append(rules, map[string]any{"type": "required_status_checks",
+				"parameters": map[string]any{"required_status_checks": required}})
+		}
+		write(w, 200, rules)
 	})
 	mux.HandleFunc("DELETE "+prefix+"/git/refs/heads/{branch...}", s.deleteRef)
 	mux.HandleFunc("GET "+prefix+"/collaborators/{login}/permission", func(w http.ResponseWriter, r *http.Request) {
@@ -774,9 +812,13 @@ func (s *Server) Handler() http.Handler {
 			committer = map[string]string{"name": "GitHub"}
 			verified = true
 		}
+		parents := []any{}
+		for _, p := range s.Parents(r.PathValue("sha")) {
+			parents = append(parents, map[string]string{"sha": p})
+		}
 		write(w, 200, map[string]any{"author": nil, "committer": map[string]string{"login": map[bool]string{true: "web-flow", false: ""}[verified]}, "commit": map[string]any{
 			"author": map[string]string{"name": out}, "committer": committer,
-			"verification": map[string]bool{"verified": verified}}})
+			"verification": map[string]bool{"verified": verified}}, "parents": parents})
 	})
 	mux.HandleFunc("PUT "+prefix+"/pulls/{n}/update-branch", func(w http.ResponseWriter, r *http.Request) {
 		p := s.number(w, r)
@@ -1007,6 +1049,13 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 	if s.Conflicting[p.Number] {
 		mergeable, state = false, "dirty"
 	}
+	if need := s.RequiredApprovals[p.Base]; need > 0 && state == "clean" && s.approvals(p) < need {
+		// As GitHub: protection asking for more approvals blocks it.
+		state = "blocked"
+	}
+	if st := s.MergeableStates[p.Number]; st != "" && state != "dirty" {
+		state = st
+	}
 	if s.MergeableUnknown[p.Number] {
 		mergeable, state = nil, "unknown"
 	}
@@ -1027,6 +1076,24 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
 		"user": s.userJSON(p.Author), "labels": labelsJSON(p.Labels),
 	}
+}
+
+// approvals counts the logins whose latest verdict on p approves it. The
+// caller holds s.mu.
+func (s *Server) approvals(p *Pull) int {
+	latest := map[string]string{}
+	for _, r := range p.Reviews {
+		if r.State != "COMMENTED" {
+			latest[r.Login] = r.State
+		}
+	}
+	n := 0
+	for _, v := range latest {
+		if v == "APPROVED" {
+			n++
+		}
+	}
+	return n
 }
 
 // userJSON is a GitHub user object: of type Bot for an App's account
@@ -1560,11 +1627,34 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 // does for Accept: application/vnd.github.raw; 404 for a path that is not
 // a file at ref. Only the raw media type is faked.
 func (s *Server) contents(w http.ResponseWriter, r *http.Request) {
+	ref, path := r.URL.Query().Get("ref"), r.PathValue("path")
 	if r.Header.Get("Accept") != "application/vnd.github.raw" {
-		fail(w, 415, "only the raw media type is faked")
+		// A directory's listing, as GitHub's JSON answer has it; a file
+		// is only faked raw.
+		if ref == "" || strings.HasPrefix(ref, "-") {
+			fail(w, 404, "Not Found")
+			return
+		}
+		out, err := exec.Command("git", "-C", s.Repo, "ls-tree", ref+":"+path).Output()
+		if err != nil {
+			fail(w, 404, "Not Found")
+			return
+		}
+		entries := []any{}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			meta, name, ok := strings.Cut(line, "\t")
+			if !ok {
+				continue
+			}
+			kind := "file"
+			if strings.Contains(meta, " tree ") {
+				kind = "dir"
+			}
+			entries = append(entries, map[string]string{"name": name, "path": path + "/" + name, "type": kind})
+		}
+		write(w, 200, entries)
 		return
 	}
-	ref, path := r.URL.Query().Get("ref"), r.PathValue("path")
 	if ref == "" || strings.HasPrefix(ref, "-") {
 		fail(w, 404, "Not Found")
 		return

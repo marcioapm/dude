@@ -12,6 +12,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -21,10 +22,12 @@ func (w *world) waitingOnPR(task string) bool {
 }
 
 // While the delivery waits on its pull request, the conductor may start a
-// fix, a review or a test: the Run goes to work on the pull request's
-// branch, and the delivery waits on it again after — no second pull
-// request, no simplify, no Open or Draft. Implement and simplify are not
-// for then, nor is a fix with nothing to do.
+// fix, a review, the simplifier or a test: the Run goes to work on the pull
+// request's branch, and the delivery waits on it again after — no second
+// pull request, no Open or Draft. A fix goes through the simplifier after
+// its review, as any pull request fix does under the default policy; a
+// review alone does not. Implement is not for then, nor is a fix with
+// nothing to do.
 func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	w := conducting(t)
 	task := w.reviewing()
@@ -37,7 +40,6 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	phases := len(w.phasesRun(task))
 
 	w.refused(task, "start_phase", `{"phase":"implement"}`, "cannot start while the delivery waits on its pull requests")
-	w.refused(task, "start_phase", `{"phase":"simplify"}`, "cannot start while the delivery waits on its pull requests")
 	w.refused(task, "start_phase", `{"phase":"fix"}`, "say what the fix is to do")
 
 	w.must(task, "start_phase", `{"phase":"fix","note":"Rename greet to welcome, as Ana asked in Chat."}`)
@@ -46,8 +48,9 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 		return w.gh.SHA(branch) != before && w.waitingOnPR(task)
 	})
 	// A direct fix, whoever started it: pushed to the pull request, then
-	// reviewed over its own range; no simplifier, no tester.
-	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"fix", "review"}) {
+	// reviewed over its own range, then the simplifier and its review; no
+	// tester.
+	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"fix", "review", "simplify", "review"}) {
 		t.Fatalf("phases after start_phase fix: %v", got)
 	}
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
@@ -63,7 +66,7 @@ func TestTheConductorStartsAPhaseWhileThePullRequestWaits(t *testing.T) {
 	w.until("the review's decision", func() bool { return w.decisionAt(task) == "after_review" })
 	w.must(task, "decide", `{"action":"next"}`)
 	w.until("waiting again", func() bool { return w.waitingOnPR(task) })
-	if got := w.phasesRun(task)[phases+2:]; len(got) == 0 || got[0] != "review" || slices.Contains(got, "simplify") ||
+	if got := w.phasesRun(task)[phases+4:]; len(got) == 0 || got[0] != "review" || slices.Contains(got, "simplify") ||
 		slices.Contains(got, "test") {
 		t.Fatalf("phases after start_phase review: %v", got)
 	}
@@ -521,4 +524,70 @@ func TestAnEndedConductorCannotStartAtThePullRequestWait(t *testing.T) {
 	if !w.waitingOnPR(task) {
 		t.Fatal("a refused start moved the delivery")
 	}
+}
+
+// The simplifier after the last change, which the ready gate asks for, is
+// started while the pull request waits: what it commits reaches the pull
+// request and is reviewed over its own range, and the delivery waits on
+// the pull request again; one with nothing to simplify goes straight back.
+// Not past dude's push no review has covered.
+func TestTheConductorStartsTheSimplifierWhileThePullRequestWaits(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	branch := w.gh.Pull(1).Head
+	before := w.gh.SHA(branch)
+	phases := len(w.phasesRun(task))
+
+	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.until("the simplifier's review", func() bool { return w.decisionAt(task) == "after_review" })
+	if w.gh.SHA(branch) == before {
+		t.Fatal("the simplifier's commit did not reach the pull request")
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2
+		AND review_range->'base'->>'target' = $3`, task, delivery.RangeSimplify, before); n == 0 {
+		t.Fatal("the simplifier's commit was not reviewed over its own range")
+	}
+	w.must(task, "decide", `{"action":"next"}`)
+	w.until("waiting again", func() bool { return w.waitingOnPR(task) })
+	// That was all its gate asked for: ready to merge, weighed as the
+	// delivery waits again, with no sync.
+	if s := w.taskStatus(task); s != "ready_to_merge" {
+		t.Errorf("the task is %s once the simplifier's commit was reviewed, want ready_to_merge", s)
+	}
+	if got := w.phasesRun(task)[phases:]; !slices.Equal(got, []string{"simplify", "review"}) {
+		t.Fatalf("phases after start_phase simplify: %v", got)
+	}
+	if len(w.gh.Pulls()) != 1 {
+		t.Fatalf("%d pull requests", len(w.gh.Pulls()))
+	}
+}
+
+// As above, but GitHub has not worked out the pull request's mergeability
+// when the simplifier's review is decided. That is no reading: the gate is
+// read again on its own once GitHub says clean, with no sync, which sees
+// no move (the syncer keeps its last reading in unknown's place).
+func TestTheSimplifierWhileMergeabilityIsUnknownComesBackToReady(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w.must(task, "start_phase", `{"phase":"simplify"}`)
+	w.until("the simplifier's review", func() bool { return w.decisionAt(task) == "after_review" })
+	w.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[1] = true })
+	w.must(task, "decide", `{"action":"next"}`)
+	for range 5 {
+		w.pump()
+	}
+	if s := w.taskStatus(task); s != "review" {
+		t.Fatalf("the task is %s with mergeability unknown, want review", s)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { delete(s.MergeableUnknown, 1) })
+	w.timersElapse(task)
+	w.until("ready to merge with no sync", func() bool { return w.taskStatus(task) == "ready_to_merge" })
 }

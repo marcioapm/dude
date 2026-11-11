@@ -102,7 +102,9 @@ func (w *prFixWorld) settledBackOnThePullRequest() {
 	w.t.Helper()
 	w.until("waiting on the pull request", func() bool {
 		w.sync()
-		return w.stateStep() == "awaitPullRequest" && w.taskStatus(w.wi) == "review"
+		// In review, or ready to merge: the gate may pass at once.
+		s := w.taskStatus(w.wi)
+		return w.stateStep() == "awaitPullRequest" && (s == "review" || s == "ready_to_merge")
 	})
 	if r := w.escalationReason(w.wi); r != "" {
 		w.t.Errorf("escalated %q", r)
@@ -251,9 +253,10 @@ func TestAPromotedRefreshRetriesOnlyThePullRequestItFailed(t *testing.T) {
 		t.Errorf("retrying %s, want web alone", repos)
 	}
 	w.settledBackOnThePullRequest()
-	// target's refresh finds the body the push left already right: no PATCH.
-	if n := target.Load(); n != 1 {
-		t.Errorf("target's description updated %d times, want the push's alone", n)
+	// target's refresh finds the body the push left right but for the
+	// simplifier that ran on the fix after it: one PATCH to add its line.
+	if n := target.Load(); n != 2 {
+		t.Errorf("target's description updated %d times, want the push's and the simplifier's line", n)
 	}
 	if n := web.Load(); n != 3 {
 		t.Errorf("web's description updated %d times, want the push's, the refresh's failure and its retry", n)
@@ -290,9 +293,10 @@ func TestAPromotionRefreshesASiblingPullRequestItDidNotMove(t *testing.T) {
 	if at := w.web.SHA(w.branch); at != w.webBefore {
 		t.Fatalf("web moved to %s; the fix was to change target alone", at)
 	}
-	// target's refresh finds the body the push left already right: no PATCH.
-	if n := target.Load(); n != 1 {
-		t.Errorf("target's description updated %d times, want the push's alone", n)
+	// target's refresh finds the body the push left right but for the
+	// simplifier that ran on the fix after it: one PATCH to add its line.
+	if n := target.Load(); n != 2 {
+		t.Errorf("target's description updated %d times, want the push's and the simplifier's line", n)
 	}
 	if n := web.Load(); n != 3 {
 		t.Errorf("web's description updated %d times, want the push's, the refresh's failure and its retry", n)

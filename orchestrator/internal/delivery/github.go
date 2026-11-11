@@ -20,20 +20,18 @@ import (
 const EvChatNotice = "chat.notice"
 
 // prName is a pull request as a line names it: repo#number.
-func prName(p PullRequestState) string { return fmt.Sprintf("%s#%d", p.Repo, p.Number) }
+func prName(g PRGate) string { return fmt.Sprintf("%s#%d", g.Repo, g.Number) }
 
-// readinessLine says which pull requests are ready to merge, or which one
-// no longer is and why.
-func readinessLine(states []PullRequestState, ready bool) string {
+// readinessLine says which pull requests are ready to merge, or which
+// one no longer is and which of its gate's items fail.
+func readinessLine(gates []PRGate, ready bool) string {
 	var open []string
-	for _, s := range states {
-		if s.State == forge.StateMerged || s.State == forge.StateClosed {
-			continue
+	for _, g := range gates {
+		name := prName(g)
+		if !ready && !g.Ready {
+			return fmt.Sprintf("%s is no longer ready to merge: %s.", name, failingLine(g))
 		}
-		if !ready && !forge.Ready(s.Status) {
-			return fmt.Sprintf("%s is no longer ready to merge: %s.", prName(s), strings.Join(forge.Blockers(s.Status), ", "))
-		}
-		open = append(open, prName(s))
+		open = append(open, name)
 	}
 	if !ready {
 		return "The pull requests are no longer ready to merge."
@@ -42,27 +40,29 @@ func readinessLine(states []PullRequestState, ready bool) string {
 	if len(open) > 1 {
 		verb = "are"
 	}
-	return fmt.Sprintf("%s %s ready to merge: approved, checks green. Merging is yours.", strings.Join(open, ", "), verb)
+	return fmt.Sprintf("%s %s ready to merge: reviewed through its head, checks green, nothing open. Merging is yours.", strings.Join(open, ", "), verb)
+}
+
+// failingLine names a gate's failing items, each with what it found.
+func failingLine(g PRGate) string {
+	var parts []string
+	for _, it := range g.Failing() {
+		parts = append(parts, it.Key+" ("+it.Detail+")")
+	}
+	return strings.Join(parts, "; ")
 }
 
 // moveReadiness moves the task into ready to merge, or out of it, and
 // under the conductor says so in Chat, in the same transaction: a notice
-// once per move, waking nobody.
-func (s *Store) moveReadiness(ctx context.Context, org string, st *State, states []PullRequestState, ready bool, open int) error {
+// once per move, waking nobody, naming the gate's failing items when it
+// moves out.
+func (s *Store) moveReadiness(ctx context.Context, org string, st *State, gates []PRGate, ready bool, open int) error {
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var moved bool
 		var err error
 		if ready {
-			// People's feedback still to be handled keeps it out of ready.
-			blocking, err := BlockingFeedbackTx(ctx, tx, st.TaskID, st.Attempt)
-			if err != nil {
-				return err
-			}
-			ready = blocking == 0
-		}
-		if ready {
 			if moved, err = SetTaskStatusTx(ctx, tx, org, st.ProjectID, st.TaskID, "review", "ready_to_merge",
-				"approved, checks passing"); err == nil && moved {
+				"the ready gate passes: merging is the only act left"); err == nil && moved {
 				err = emitTx(ctx, tx, org, st, EvReadyToMerge, map[string]any{"pullRequests": open})
 			}
 		} else {
@@ -75,9 +75,19 @@ func (s *Store) moveReadiness(ctx context.Context, org string, st *State, states
 		if !ready {
 			about = "no_longer_ready"
 		}
+		payload := map[string]any{"text": readinessLine(gates, ready), "about": about}
+		var failing []map[string]any
+		for _, g := range gates {
+			for _, it := range g.Failing() {
+				failing = append(failing, map[string]any{"pr": prName(g), "key": it.Key, "detail": it.Detail})
+			}
+		}
+		if len(failing) > 0 {
+			payload["failing"] = failing
+		}
 		_, err = ledger.Append(ctx, tx, ledger.Event{Type: EvChatNotice, OrganizationID: org, ProjectID: st.ProjectID,
 			TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
-			CorrelationID: st.TaskID, Payload: map[string]any{"text": readinessLine(states, ready), "about": about}})
+			CorrelationID: st.TaskID, Payload: payload})
 		return err
 	})
 }

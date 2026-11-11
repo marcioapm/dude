@@ -1892,10 +1892,13 @@ func TestAForgeThatCannotBeReadDelaysTheRunRatherThanStartingItWithoutCredential
 
 // Approved with its checks green, a task is ready to merge — a
 // person's call to make, the factory never merges — and back in review
-// if a check turns red.
+// if a check turns red. An approval counts only where branch protection
+// asks for one (the ready gate): dismissed under a rule that requires one,
+// it is back in review until approved again.
 func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 	w := newWorld(t)
 	wi := w.reviewing()
+	w.gh.Set(func(s *fakegithub.Server) { s.RequiredApprovals = map[string]int{"main": 1} })
 
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
@@ -1909,7 +1912,7 @@ func TestAnApprovedPullRequestWithGreenChecksIsReadyToMerge(t *testing.T) {
 		t.Errorf("%d ready-to-merge events, want one to tell people by", n)
 	}
 
-	// An approval dismissed is no approval.
+	// An approval dismissed is no approval, and protection asks for one.
 	w.gh.Review(1, "alice", "DISMISSED")
 	w.until("back in review", func() bool {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
@@ -3416,7 +3419,11 @@ func TestAFixIsNotReadyUntilItsOwnChecksPass(t *testing.T) {
 	// green checks on record are the last head's, and CI on the new one
 	// has not started.
 	w.gh.SetChecks("pending")
-	w.until("the fix pushed", func() bool { return w.gh.SHA(head) != before && w.taskStatus(wi) != "running" })
+	// Then its review, the simplifier on it and that one's review: back at
+	// the wait.
+	w.until("the fix pushed", func() bool {
+		return w.gh.SHA(head) != before && w.taskStatus(wi) != "running" && w.waitingOnPR(wi)
+	})
 	for range 5 {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		w.pump()
@@ -3465,8 +3472,10 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 		_, _ = w.prs.Reconcile(context.Background(), 0)
 		w.pump()
 	}
-	if w.taskStatus(wi) != "review" {
-		t.Fatalf("%s within the grace, before CI could show up", w.taskStatus(wi))
+	// Still at work (the simplifier runs on the fix after its review) or
+	// in review; not ready.
+	if s := w.taskStatus(wi); s == "ready_to_merge" {
+		t.Fatalf("%s within the grace, before CI could show up", s)
 	}
 	w.prs.CIGrace = time.Millisecond
 	w.until("ready, the fix having no CI", func() bool {
@@ -3475,14 +3484,16 @@ func TestAFixCISkipsIsReadyAfterTheGrace(t *testing.T) {
 	})
 }
 
-// A commit a person adds on GitHub ("Update branch", a committed
-// suggestion) is the pull request's head from then on: approved and green
-// on it, the task is ready, though the factory never pushed it.
+// A commit a person adds on GitHub with "Update branch" is the pull
+// request's head from then on: GitHub's pure merge of main needs no review
+// of its own (the ready gate), so approved and green on it, the task is
+// ready, though the factory never pushed it.
 func TestACommitAPersonAddsCanBeReady(t *testing.T) {
 	w := newWorld(t)
 	wi := w.reviewing()
-	if w.gh.CommitOnTop(w.gh.Pull(1).Head, "Merge branch 'main' into the task") == "" {
-		t.Fatal("could not commit on top")
+	w.gh.CommitFiles("main", "Other work", map[string]string{"OTHER.md": "other\n"})
+	if w.gh.MergeInto(w.gh.Pull(1).Head, "main", nil) == "" {
+		t.Fatal("could not merge main in")
 	}
 	w.gh.Review(1, "alice", "APPROVED")
 	w.until("ready to merge", func() bool {
@@ -3800,7 +3811,16 @@ func TestAConflictIsAPersonsToResolve(t *testing.T) {
 	if code, body := w.callAs(w.person("owner"), "/internal/tasks/"+wi+"/decide", map[string]string{"action": "wait"}); code != 200 {
 		t.Fatalf("decide: %d %v", code, body)
 	}
-	w.until("waiting on the pull request again", func() bool { return w.taskStatus(wi) == "review" })
+	w.until("waiting on the pull request again", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND step = 'awaitPullRequest' AND status = 'waiting'`, wi) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
+		AND payload->>'status' = 'review' AND payload->>'reason' = 'a person is waiting on the rest'`, wi); n != 1 {
+		t.Errorf("%d moves back to review on the person's wait, want 1", n)
+	}
+	// Resolved on GitHub, which the gate reads, and nothing else open:
+	// ready to merge, though no sync has recorded the conflict gone.
+	w.until("ready to merge", func() bool { return w.taskStatus(wi) == "ready_to_merge" })
 }
 
 // Main moves ahead: a clean branch is brought up to date on GitHub by

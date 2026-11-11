@@ -107,12 +107,12 @@ func TestDirectAConductedNarrowLoopRunsWithoutTheConductor(t *testing.T) {
 	if s := stopped(); s != "" {
 		t.Fatalf("the loop stopped at %q after %v\n%s", s, seen(), w.describeRuns())
 	}
-	if got := seen(); !slices.Equal(got, []string{"fix", "review", "fix", "review"}) {
-		t.Fatalf("after the decision: %v, want [fix review fix review]\n%s", got, w.describeRuns())
+	if got := seen(); !slices.Equal(got, []string{"fix", "review", "fix", "review", "simplify", "review"}) {
+		t.Fatalf("after the decision: %v, want [fix review fix review simplify review]\n%s", got, w.describeRuns())
 	}
 	if got := slices.DeleteFunc(w.awaited(task, from), func(p string) bool { return p == delivery.PointPRFeedback }); !slices.Equal(got,
-		[]string{delivery.PointReviewed, delivery.PointReviewed}) {
-		t.Errorf("the conductor was asked at %v during the loop, want after each of its two rounds", got)
+		[]string{delivery.PointReviewed, delivery.PointReviewed, delivery.PointReviewed}) {
+		t.Errorf("the conductor was asked at %v during the loop, want after each of its two rounds and the simplifier's", got)
 	}
 	// Both reviews over the round's push, the fresh one too.
 	reviews := w.ids(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2 ORDER BY created_at`,

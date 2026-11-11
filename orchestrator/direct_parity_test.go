@@ -13,7 +13,8 @@ import (
 
 // A person stops the task while a direct fix's narrow review works, then
 // resumes it: the same reviewer goes on over the fix's range, and the
-// round ends as it would have — reviewers asked again, back to waiting.
+// round ends as it would have — reviewers asked again, back to waiting
+// (ready to merge, once the gate holds at the fix).
 func TestDirectAStopAndResumeMidNarrowLoopFinishesTheRound(t *testing.T) {
 	w := newPRFixWorldDirect(t)
 	ana := w.ownedBy(w.wi, "Ana")
@@ -38,7 +39,13 @@ func TestDirectAStopAndResumeMidNarrowLoopFinishesTheRound(t *testing.T) {
 	if status, body := w.callAs(ana, "/internal/tasks/"+w.wi+"/recover", map[string]any{"action": "resume"}); status != 200 {
 		t.Fatalf("resume: %d %v", status, body)
 	}
-	w.until("the round done and waiting", func() bool { w.sync(); return w.waiting() && w.taskStatus(w.wi) == "review" })
+	// Done and waiting: the round's fix reviewed and simplified, every
+	// ready gate item holds at the fix's head, so ready to merge.
+	w.until("the round done and waiting", func() bool {
+		w.sync()
+		s := w.taskStatus(w.wi)
+		return w.waiting() && s == "ready_to_merge"
+	})
 	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND review_range->>'of' = $2`,
 		w.wi, delivery.RangePullRequestFix); n != 1 {
 		t.Errorf("%d narrow reviews: the resume made another\n%s", n, w.describeRuns())

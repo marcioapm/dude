@@ -25,11 +25,17 @@ def _conductor_project(client: ApiClient, forge_project: dict) -> dict:
 
 
 def _delivered(client: ApiClient, project: dict, fake_github: FakeGitHub) -> dict:
+    """A delivered task, settled where delivery leaves it: its pull request
+    open and the task ready to merge. The fixture's repository has no CI
+    and its protection asks for no approval, so the ready gate passes as
+    soon as the pull request is weighed; status read any earlier would be
+    a moment in delivery, not where it rests."""
     task = client.create_task(project["id"], "Retry on 429 with backoff")
     assert client.post(f"/v1/tasks/{task['id']}/deliver").status_code == 201
     wait_until(lambda: client.get("/v1/pull-requests", params={"taskId": task["id"]}).json()["pullRequests"],
                timeout=90, message="the delivery never opened a pull request")
-    return client.get(f"/v1/tasks/{task['id']}").json()
+    return wait_until(lambda: (t := client.get(f"/v1/tasks/{task['id']}").json())["status"] == "ready_to_merge" and t,
+                      timeout=60, message="the delivered task never settled at ready to merge")
 
 
 def _said(client: ApiClient, run_id: str) -> list[str]:
@@ -59,7 +65,11 @@ def test_a_delivered_tasks_chat_starts_its_conductor_which_answers_parks_and_wak
     assert client.patch(settings, {"delivery": {"conductorWarmMinutes": 10}}).status_code == 200
     task = _delivered(client, project, fake_github)
     branch = next(r["branch"] for r in task["runs"] if r["branch"])
-    before = _state(client, owner_dsn, task["id"], fake_github, branch)
+    # The workflow too has come to rest, waiting on the pull request.
+    before = wait_until(lambda: (s := _state(client, owner_dsn, task["id"], fake_github, branch))[2]
+                        == [{"step": "awaitPullRequest", "status": "waiting"}] and s,
+                        timeout=30, message="the delivery's workflow never came to wait on the pull request")
+    assert before[0] == "ready_to_merge", before
     key = f"{task['key']} · {task['id']}"
 
     # Every delivery has a conductor: Deliver's, quiet, briefed by dude when

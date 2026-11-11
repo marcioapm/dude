@@ -60,7 +60,7 @@ type Syncer struct {
 }
 
 // DefaultCIGrace: how long CI may take to show up on a new head.
-const DefaultCIGrace = 10 * time.Minute
+const DefaultCIGrace = forge.DefaultCIGrace
 
 type tracked struct {
 	ID, ProjectID, TaskID, RunID, State, Checks, Review, HeadSHA, RepoURL, RepoName, Mergeable string
@@ -495,6 +495,10 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		Review: pr.Review, Mergeable: pr.Mergeable, UnresolvedThreads: pr.UnresolvedThreads}
 	_ = json.Unmarshal(pr.ChecksJSON, &prior.CheckList)
 	signal := forge.Classify(prior, status, permitted, s.FactoryLogins)
+	if signal == nil && isOpen(status.State) && forge.GateMoved(prior, status) {
+		// Nothing for a fixer, but the ready gate reads it.
+		signal = &forge.Signal{Kind: "readiness"}
+	}
 	if signal != nil && signal.Kind == "actionable" {
 		if signal.Feedback, err = s.withBots(ctx, org, gh, pr, signal.Feedback); err != nil {
 			return err

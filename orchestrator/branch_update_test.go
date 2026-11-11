@@ -1151,6 +1151,12 @@ func (w *world) fixPromotedFrom(wi, base string) {
 	if n := w.branchUpdates(wi); n != 1 {
 		w.t.Fatalf("%d branch updates, want 1", n)
 	}
+	// The round ends at the simplifier's commit when it made one on the
+	// fix (the default policy's): the branch is updated there.
+	_ = w.owner.QueryRow(context.Background(), `SELECT COALESCE((SELECT heads->'target'->>'sha' FROM runs WHERE task_id = $1
+		AND phase = 'simplify' AND status = 'completed' AND heads->'target'->>'sha' IS NOT NULL AND created_at > (SELECT created_at
+		FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback <> '[]'::jsonb) ORDER BY created_at DESC LIMIT 1), $2)`,
+		wi, promoted).Scan(&promoted)
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
 		AND payload->>'action' = 'update-branch' AND payload->>'refused' IS NULL AND payload->>'head' = $2`, wi, promoted); n != 1 || promoted == "" {
 		w.t.Errorf("the branch was not updated at the head the fix pushed (%.8s)", promoted)

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // The readiness move, run twice each way on a conducted task, as a retried
@@ -26,8 +25,7 @@ func TestReadinessIsOneNoticePerActualMove(t *testing.T) {
 	}
 	s := &Store{DB: app}
 	st := &State{TaskID: "wi_r", ProjectID: "prj_r", Decider: DeciderConductor}
-	pr := PullRequestState{Repo: "target", Status: forge.Status{PullRequestRef: forge.PullRequestRef{Number: 1, State: forge.StateOpen},
-		Checks: forge.ChecksPassing, Review: forge.ReviewApproved}}
+	pr := PRGate{Repo: "target", Number: 1, Ready: true, Items: []GateItem{{Key: ReadyChecks, OK: true, Detail: "1 check(s) passed at the head"}}}
 	count := func(sql string, args ...any) int {
 		var n int
 		if err := owner.QueryRow(ctx, sql, append([]any{"wi_r"}, args...)...).Scan(&n); err != nil {
@@ -46,7 +44,7 @@ func TestReadinessIsOneNoticePerActualMove(t *testing.T) {
 	}
 
 	for range 2 {
-		if err := s.moveReadiness(ctx, org, st, []PullRequestState{pr}, true, 1); err != nil {
+		if err := s.moveReadiness(ctx, org, st, []PRGate{pr}, true, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,9 +55,9 @@ func TestReadinessIsOneNoticePerActualMove(t *testing.T) {
 		t.Errorf("%d ready-to-merge notices for one move", n)
 	}
 
-	pr.Review = forge.ReviewPending
+	pr.Ready, pr.Items[0] = false, GateItem{Key: ReadyChecks, Detail: "failing: ci"}
 	for range 2 {
-		if err := s.moveReadiness(ctx, org, st, []PullRequestState{pr}, false, 1); err != nil {
+		if err := s.moveReadiness(ctx, org, st, []PRGate{pr}, false, 1); err != nil {
 			t.Fatal(err)
 		}
 	}

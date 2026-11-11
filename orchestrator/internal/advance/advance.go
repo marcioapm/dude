@@ -43,6 +43,11 @@ func (a Result) Payload(p map[string]any) map[string]any {
 // over: one GitHub compare each.
 const maxBaseMerges = 5
 
+// MaxBaseMerges is maxBaseMerges for the ready gate: the most pure base
+// merges it walks past since the last review before asking for a review
+// of the head.
+const MaxBaseMerges = maxBaseMerges
+
 // ErrBaseMergeConflict: the base was merged into the task branch under
 // the writer, and GitHub would not merge the writer's commit with it (409).
 type ErrBaseMergeConflict struct {
@@ -492,6 +497,32 @@ func BaseMerges(ctx context.Context, gh *forge.GitHub, slug, baseBranch, start, 
 	}
 	j.Only = true
 	return j, nil
+}
+
+// PureBaseMerge says merge, a commit with parents, is a pure merge of
+// baseBranch into a branch: two parents, the second on baseBranch
+// (baseBranch contains it), and GitHub's web-flow merge that added
+// exactly that second parent's changes to the first (pureMerge). It is
+// the judgement BaseMerges makes of each merge it walks, for one commit;
+// a compare GitHub refuses is no.
+func PureBaseMerge(ctx context.Context, gh *forge.GitHub, slug, baseBranch, merge string, parents []string) (bool, error) {
+	if len(parents) != 2 || baseBranch == "" {
+		return false, nil
+	}
+	in, err := gh.Compare(ctx, slug, parents[1], baseBranch)
+	switch {
+	case forge.Refused(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	case in.BehindBy > 0:
+		return false, nil
+	}
+	pure, err := pureMerge(ctx, gh, slug, parents[0], parents[1], merge, parents[0])
+	if forge.Refused(err) {
+		return false, nil
+	}
+	return pure, err
 }
 
 func short(sha string) string {

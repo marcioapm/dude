@@ -160,7 +160,10 @@ export function escalationWords(e: Escalation): EscalationWords {
       };
     }
     case "pr_fix_failed":
-      return { ...failed("Fixer"), sentence: `The fixer answering the pull request's feedback failed${error}` };
+      // The simplifier the gate asks for past a pull request's fix stops here too.
+      return d.phase === "simplify"
+        ? { ...failed("Simplifier"), sentence: `The simplifier run after the pull request's fix failed${error}` }
+        : { ...failed("Fixer"), sentence: `The fixer answering the pull request's feedback failed${error}` };
     case "pr_loop_exhausted": {
       const spent = Array.isArray(d.spent) ? (d.spent as string[]) : [];
       return spent.length > 0

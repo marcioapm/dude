@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -428,8 +429,37 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	if w.requests() != before {
 		t.Error("the 61st read reached GitHub")
 	}
+	// pull_requests with no ready gate stored at the head would read the
+	// gate from GitHub, a read of the same hour's budget: the pull
+	// requests are still listed, each gate unread for the budget, and
+	// nothing reaches GitHub. No judgement either way: ready is left out,
+	// and unread says when the budget has room again — an hour after the
+	// oldest read the hour still counts, rounded up to the second so that
+	// trying again then is not too early.
+	var oldest time.Time
+	if err := w.owner.QueryRow(context.Background(), `SELECT min(occurred_at) FROM events WHERE task_id = $1
+		AND event_type = 'agent.tool.attempted' AND occurred_at > now() - interval '1 hour'
+		AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log', 'github_run_jobs', 'refresh_pull_requests', 'pull_requests')`,
+		task).Scan(&oldest); err != nil {
+		t.Fatal(err)
+	}
+	want := "read budget spent (60/hour): not read; try again after " + oldest.Add(time.Hour).Truncate(time.Second).Add(time.Second).UTC().Format(time.RFC3339)
+	listed := w.must(task, "pull_requests", `{}`)
+	prs, _ := listed["pullRequests"].([]any)
+	if len(prs) == 0 {
+		t.Fatalf("pull_requests listed nothing with the budget spent: %v", listed)
+	}
+	for _, p := range prs {
+		gate, _ := p.(map[string]any)["readyGate"].(map[string]any)
+		if _, judged := gate["ready"]; judged || gate["unread"] != want {
+			t.Errorf("readyGate %v, want no ready and unread: %s", gate, want)
+		}
+	}
+	if w.requests() != before {
+		t.Error("pull_requests reached GitHub with the budget spent")
+	}
 	// Its other tools are not spent.
-	w.must(task, "pull_requests", `{}`)
+	w.must(task, "findings", `{}`)
 	mustExec(t, w.owner, `UPDATE events SET occurred_at = now() - interval '61 minutes' WHERE run_id = $1
 		AND event_type = 'agent.tool.attempted' AND payload->>'tool' = 'github_issue'
 		AND id IN (SELECT id FROM events WHERE run_id = $1 AND event_type = 'agent.tool.attempted' ORDER BY cursor LIMIT 1)`, "run_previous_reader")
