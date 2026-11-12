@@ -656,4 +656,3 @@ func TestStartPhaseRightAfterAPersonsPushWhileThePullRequestWaits(t *testing.T) 
 		t.Fatalf("%d test Runs after start_phase, want %d", n, tests+1)
 	}
 }
-

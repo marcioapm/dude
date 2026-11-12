@@ -20,9 +20,13 @@ import (
 // prWaitPhases are what may start while the delivery waits on its pull requests.
 var prWaitPhases = []string{PhaseFix, PhaseReview, PhaseSimplify, PhaseTest}
 
-// waitingOnPR says the delivery is parked on its pull requests, nothing running.
+// waitingOnPR says the delivery is parked on its pull requests, no phase
+// running.
 func (d *Delivery) waitingOnPR() bool {
-	return d.Status == "waiting" && d.Step == "awaitPullRequest" && len(d.State.PullRequestIDs) > 0
+	// "running" too: a signal (a person's push, readiness) woke the step and
+	// the poller has not run it yet. A step being run holds its lease, which
+	// startAtPRWait refuses as "in a moment" (stepHolds).
+	return (d.Status == "waiting" || d.Status == "running") && d.Step == "awaitPullRequest" && len(d.State.PullRequestIDs) > 0
 }
 
 // startAtPRWait takes start_phase on a delivery waiting on its pull
