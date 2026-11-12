@@ -61,8 +61,8 @@ func sectionsFor(tool, role string) []string {
 		}
 		return out
 	case "search_memory":
-		return []string{"- **Memory**: what people and agents here learned before you. Before you act on something you have not met " +
-			"here before (an unfamiliar failure, a convention, how a service is run), search it first (`search_memory`)."}
+		return []string{"- **Memory**: what people and agents here learned before you. Before you act on something this project's code, " +
+			"task and briefing do not explain (an unfamiliar failure, a convention, how a service is run), search it first (`search_memory`)."}
 	case "remember":
 		out := []string{"Save (`remember`) only what you had to learn the hard way: you searched, found nothing, then established it. " +
 			"Search again before you save: if it is already there, do not add a second"}
@@ -295,7 +295,8 @@ var notTheTool = map[string][]string{
 	"message": {"first message lists them", "default merge message", "a Chat message", "your next message", "--message M",
 		"Each message reaches you", "comes to you as a message"},
 	"note": {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)",
-		"`note` is for an observation", "| low | note", "a design note", "and a note)"},
+		"`note` is for an observation", "| low | note", "a design note", "and a note)",
+		"in the note of the `decide next`"},
 	"propose":  {"before you propose anything"},
 	"publish":  {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code", "goes to the pull request when you publish"},
 	"verify":   {"could not verify", "`--no-verify`", "a reason a person could verify"},
