@@ -299,8 +299,11 @@ func CheckProfileGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []s
 	if len(c.PRs) == 0 {
 		return c, nil
 	}
+	// A review verdict reads none of dude's pushes, R or the simplify Runs
+	// (verdictReviewed reads the lens heads alone, and item 4 does not
+	// apply): it skips their reads. The merge profile reads each as before.
 	unreviewed := map[string]string{}
-	if d != nil {
+	if d != nil && !verdict {
 		pushes, err := unreviewedPRPushesTx(ctx, tx, taskID, st)
 		if err != nil {
 			return c, err
@@ -321,15 +324,19 @@ func CheckProfileGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []s
 		p := &c.PRs[i]
 		p.UnreviewedPush = p.Head != "" && unreviewed[p.Repo] == p.Head
 		p.Findings, p.Questions = findings, questions
-		if p.Reviewed, err = reviewedHeadTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
-			return c, err
+		if !verdict {
+			if p.Reviewed, err = reviewedHeadTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
+				return c, err
+			}
 		}
 		p.Policy = st.Policy
 		if p.LensHeads, err = lensHeadsTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
 			return c, err
 		}
-		if p.Simplifies, err = gateSimplifiesTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
-			return c, err
+		if !verdict {
+			if p.Simplifies, err = gateSimplifiesTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
+				return c, err
+			}
 		}
 	}
 	return c, nil
