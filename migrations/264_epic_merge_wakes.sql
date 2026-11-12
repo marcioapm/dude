@@ -1,22 +1,14 @@
 -- 264_epic_merge_wakes.sql — a merge on an epic wakes its peers' conductors
 -- (delivery.EpicMerges).
 --
--- pull_requests.merge_commit_sha: the commit GitHub's merge made, as the
--- pull request sync reads it; NULL when it was never read.
+-- merge_commit_sha: GitHub's merge commit, as the pull request sync reads it.
+-- epic_peers_told_at: when the worker told the peers; it takes every merged
+-- pull request without one. Those merged before this migration count as told.
+-- epic_peers_retry_at: a merge the worker could not settle waits until then.
 --
--- pull_requests.epic_peers_told_at: when the worker told the epic peers of
--- a merged pull request's task. The worker takes every merged pull request
--- with none (level-triggered: the stored state, not the sync's event), and
--- sets it in the transaction that records the wakes. A pull request merged
--- before this migration is marked told: its peers are not woken for it now.
---
--- pull_requests.epic_peers_retry_at: a merged pull request the worker
--- could not settle (the forge would not give its files, or telling a peer
--- failed) is not tried again before it; NULL: on the next pass.
---
--- conductor_wakes: kind epic_merge, its line bounded at 300 like the rest.
--- NOT VALID: no scan of the table under ACCESS EXCLUSIVE; every row there
--- holds a kind the constraint it replaces allowed, all of which this allows.
+-- conductor_wakes gains kind epic_merge (its line bounded at 300, as the
+-- rest). NOT VALID: no scan under ACCESS EXCLUSIVE; every existing kind is
+-- still allowed.
 ALTER TABLE pull_requests
   ADD COLUMN merge_commit_sha    text CHECK (merge_commit_sha ~ '^[0-9a-f]{40,64}$'),
   ADD COLUMN epic_peers_told_at  timestamptz,

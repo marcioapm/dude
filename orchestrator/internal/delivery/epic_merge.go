@@ -15,44 +15,35 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
-// A merge on an epic wakes its peers' conductors: when a pull request of a
-// task on an epic merges, the live conductor of every other task on that
-// epic with an open delivery is woken once, told which task merged, its
-// pull request and merge commit, and which of the files the merge changed
-// its own branch changes too. Notes and messages never wake anyone; this
-// does, so a peer brings the merge in before it builds further on what
-// the merge changed.
+// A merge on an epic wakes its peers' conductors: when a task's pull
+// request merges, the conductor of every other task on its epic with an
+// open delivery is woken once, told what merged and which of its files the
+// peer's branch changes too, so it brings the merge in before building on
+// it.
 //
-// As a merge's release of what waits on it (unblock.go): never in the
-// merge's transaction, by a worker. The worker reads stored state, not the
-// sync's event: every merged pull request not yet told
-// (pull_requests.epic_peers_told_at IS NULL) is a candidate on each pass,
-// so a sync that crashed after recording the merge, or a worker that
-// crashed mid-pass, loses nothing. Each peer's wake is keyed by the merged
-// pull request (EpicMergeWakeKey), so recording it twice records one; the
-// pull request is marked told in the transaction that records its wakes.
+// A worker, not the merge's transaction (as unblock.go), reading stored
+// state: every merged pull request with epic_peers_told_at NULL is a
+// candidate on each pass, so a crash loses nothing. The wake is keyed by
+// the pull request (EpicMergeWakeKey) and the pull request marked told in
+// the transaction that records the wakes.
 
 // WakeEpicMerge is the conductor's reason when a peer on its epic merged.
 const WakeEpicMerge = "epic_merge"
 
-// EpicMergeWakeKey is a peer's wake key for merged pull request prID: one
-// wake per (peer, merged pull request), across passes and restarts.
+// EpicMergeWakeKey is a peer's wake key for merged pull request prID.
 func EpicMergeWakeKey(prID string) string { return "epic-merge:" + prID }
 
 // epicMergeBatch bounds the merged pull requests one pass takes.
 const epicMergeBatch = 20
 
-// epicMergeRetryFor is how long after its merge (merged_at, on the
-// database's clock) a merged pull request whose files the forge would not
-// give (rate limit, an outage) waits for a later pass before its peers are
-// woken with the overlap unknown: news late is worse than news without the
-// overlap.
+// epicMergeRetryFor is how long after merged_at (the database's clock) a
+// merge whose files the forge will not give is retried before its peers
+// are told the overlap is unknown: late news is worse than less news.
 const epicMergeRetryFor = 10 * time.Minute
 
-// A merged pull request the worker could not settle is not tried again
-// before epic_peers_retry_at: the forge's own wait when it gave one, else
-// as long as it has been since the merge, from epicMergeBackoff up to
-// epicMergeBackoffMax (10s, 20s, 40s, ... 2m).
+// A merge the worker could not settle waits until epic_peers_retry_at:
+// the forge's Retry-After, else the time since the merge, clamped to
+// epicMergeBackoff..epicMergeBackoffMax (10s, 20s, 40s, ... 2m).
 const (
 	epicMergeBackoff    = 10 * time.Second
 	epicMergeBackoffMax = 2 * time.Minute
@@ -69,10 +60,9 @@ type EpicMerges struct {
 	Log    *slog.Logger
 }
 
-// Sweep tells the peers of the merged pull requests not yet told, and due:
-// past their retry time, or past the window for the forge. Returns how
-// many it settled. One pull request that fails is logged, given a retry
-// time, and left untold; the rest of the batch goes on.
+// Sweep tells the peers of merged pull requests not yet told that are due
+// (past their retry time, or the window), and returns how many it settled.
+// One that fails is logged and given a retry time; the batch goes on.
 func (e *EpicMerges) Sweep(ctx context.Context) (int, error) {
 	type due struct{ ID, Org string }
 	var todo []due
@@ -140,12 +130,10 @@ type epicMerge struct {
 }
 
 // epicPeer is a task woken for a merge, and what its branch changes in the
-// merged pull request's repository: Files, each path and a rename's
-// previous one, sorted bytewise; Known false when that could not be read
-// (no snapshot), Partial when the list may be cut, may miss a rename's
-// previous path, or may be stale (a newer capture asked for, not yet read).
-// SameBase: its delivery measures the repository against
-// the base the merge went into.
+// merged pull request's repository: Files (fileNames), sorted bytewise;
+// Known false when there is no snapshot; Partial when the list may be cut,
+// miss a name, or be stale (a capture asked since, not yet read). SameBase:
+// its delivery measures the repository against the base m merged into.
 type epicPeer struct {
 	TaskID         string
 	Writes         bool
@@ -249,15 +237,13 @@ const (
 		OR EXISTS (SELECT 1 FROM jsonb_array_elements(s.files) f WHERE f->>'status' = 'R' AND NOT f ? 'previousPath'))`
 )
 
-// epicMergePeers are the tasks m's merge wakes: on its epic, not its own
-// task, not ended (done, cancelled, failed), with an open delivery, and a
-// conductor that is live or will be started for a pending reason that is
-// not held news (heldWakePrefix, which starts none). A conductor that is
-// not live otherwise is not woken: this wake would start one, as an
-// unblocked task's does not (wakeUnblockedTx). A peer that has not started
-// has no delivery: its first briefing shows the epic. Each with what its
-// branch changes in m's repository, as stored, and whether its delivery's
-// base there is the one m merged into (deliveryBase, as NotifyBaseMovedTx).
+// epicMergePeers are the tasks m's merge wakes: on its epic, not its task,
+// not ended, with an open delivery, and a conductor that is live or will
+// be started for a pending reason that is not held news (heldWakePrefix
+// starts none). Otherwise this wake would start one, which an unblocked
+// task's does not either (wakeUnblockedTx). A peer not started has no
+// delivery; its first briefing shows the epic. SameBase uses deliveryBase,
+// as NotifyBaseMovedTx does.
 func epicMergePeers(ctx context.Context, tx pgx.Tx, m epicMerge) ([]epicPeer, error) {
 	rows, err := tx.Query(ctx, `SELECT t.id,
 			EXISTS (SELECT 1 FROM task_repositories tr WHERE tr.task_id = t.id AND tr.repository_id = $3 AND tr.access = 'write'),
@@ -289,15 +275,10 @@ func epicMergePeers(ctx context.Context, tx pgx.Tx, m epicMerge) ([]epicPeer, er
 }
 
 // storedMergeFiles is what m's merge changed, from the merged task's
-// stored snapshot at the pull request's head, sorted bytewise: ok false
-// when none is stored that says so. A snapshot lists what the branch
-// changes past its merge base with its target, so only one measured
-// against the base m merged into, from before the merge reached it, says
-// what the merge changed. One captured after (the capturer reads the
-// branch again when the base moves), its target already holding the head,
-// has the head for its merge base and lists nothing: not "the merge
-// changed nothing". It is passed over for an older snapshot at the head,
-// else GitHub's listing.
+// newest snapshot at the pull request's head against m's base, sorted
+// bytewise; ok false when there is none. A snapshot read after the merge
+// reached the base has the head for its merge base and lists nothing: it
+// is not "the merge changed nothing", so it is passed over.
 func storedMergeFiles(ctx context.Context, tx pgx.Tx, m epicMerge) (files []string, ok, partial bool, err error) {
 	err = tx.QueryRow(ctx, `SELECT `+fileNames+`, `+snapshotPartial+`
 		FROM task_branch_snapshots s WHERE s.task_id = $1 AND s.repository_id = $2 AND s.head_sha = $3
@@ -314,9 +295,9 @@ func storedMergeFiles(ctx context.Context, tx pgx.Tx, m epicMerge) (files []stri
 var errNoForge = errors.New("no forge to read the merged pull request's files")
 
 // forgeMergeFiles is what m's merge changed, from GitHub's listing of its
-// pull request's files, each path and a rename's previous one, sorted
-// bytewise: one read, outside any transaction. An error is the forge not
-// answering (ok false).
+// pull request's files (each path and a rename's previous one, sorted
+// bytewise; partial when cut at the cap or a rename has no previous name):
+// one read, outside any transaction.
 func (e *EpicMerges) forgeMergeFiles(ctx context.Context, org string, m epicMerge) ([]string, bool, bool, error) {
 	if e.Forges == nil || m.Slug == "" {
 		return nil, false, false, errNoForge
@@ -354,11 +335,10 @@ type epicOverlap struct {
 	Files           []string
 }
 
-// overlapOf is the files peer p's branch shares with merged, a path or a
-// rename's previous one on either side. Unknown when either side could
-// not be read, or neither shares one but a side's list may be cut or miss
-// a rename's previous path: "can't tell" is never "none". A peer that does
-// not write the merged repository shares nothing.
+// overlapOf is the files peer p's branch shares with merged. Unknown when
+// a side could not be read, or nothing is shared but a side is partial:
+// "can't tell" is never "none". A peer that does not write the merged
+// repository shares nothing.
 func overlapOf(p epicPeer, merged []string, mergedKnown, mergedPartial bool) epicOverlap {
 	if !p.Writes {
 		return epicOverlap{Known: true}
@@ -382,9 +362,9 @@ func overlapOf(p epicPeer, merged []string, mergedKnown, mergedPartial bool) epi
 // counted.
 const epicMergeShown = 4
 
-// epicMergeLine tells a peer's conductor m merged, and what its branch
-// shares with it: as many shared files as fit a wake's line, none when
-// even one does not, the rest counted, so what follows them is never cut.
+// epicMergeLine tells a peer's conductor m merged and what it shares: as
+// many shared files as fit a wake's line (maybe none), the rest counted,
+// so the instruction after them is never cut.
 func epicMergeLine(m epicMerge, o epicOverlap) string {
 	sha := m.MergeSHA
 	if len(sha) > 12 {

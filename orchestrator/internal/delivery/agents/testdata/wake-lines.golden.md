@@ -146,7 +146,7 @@ GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes `servi
 
 ## epic-merge-overlap-one-long
 
-GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes 1 file it changed: bring `main` in (sync_base, or start_phase fix while a pull request is open) before you go on.
+GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes 1 of its files: bring `main` in (sync_base, or start_phase fix while a pull request is open) before you go on.
 
 ## epic-merge-overlap-other-base
 
