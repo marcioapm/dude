@@ -71,8 +71,13 @@ func (w *epicMergeWorld) peer(p peerSpec) string {
 		if state == "" {
 			state = "{}"
 		}
-		mustExec(t, w.owner, `INSERT INTO workflow_runs(id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
-			VALUES($1,$2,$3,$1,$4,$5,'awaitPullRequest',$6::jsonb)`, "wf_"+id, w.org, deliveryType, id, p.deliveryStatus, state)
+		// A running delivery is one a worker is advancing: held by its
+		// lease, so the world's own workers leave it running meanwhile.
+		mustExec(t, w.owner, `INSERT INTO workflow_runs(id, organization_id, workflow_type, idempotency_key, task_id, status, step, state,
+				locked_by, locked_until)
+			VALUES($1,$2,$3,$1,$4,$5::text::workflow_run_status,'awaitPullRequest',$6::jsonb,
+				CASE WHEN $5::text = 'running' THEN 'another-worker' END, CASE WHEN $5::text = 'running' THEN now() + interval '1 hour' END)`,
+			"wf_"+id, w.org, deliveryType, id, p.deliveryStatus, state)
 	}
 	if p.conductor {
 		mustExec(t, w.owner, `INSERT INTO runs(id, organization_id, project_id, task_id, attempt, status, role, kind)
@@ -325,6 +330,11 @@ func TestEpicMergeWakesLivePeersOnce(t *testing.T) {
 		VALUES($1,$2,$3,$4,1,'paused','conductor','agent') ON CONFLICT DO NOTHING`, "run_c_"+w.merging, w.org, w.project, w.merging)
 	quiet["merged"] = w.merging
 	w.merge()
+	// The running delivery is still running when the worker reads it, so
+	// it is that status, not "waiting", that has it woken.
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'running'`, runningPeer); n != 1 {
+		t.Fatal("the running peer's delivery is no longer running")
+	}
 	if n := w.sweep(); n != 1 {
 		t.Errorf("settled %d, want the one merge", n)
 	}
