@@ -107,10 +107,20 @@ def test_a_merge_on_the_epic_wakes_the_peer_with_the_overlap(client: ApiClient, 
 
 def test_a_merge_with_no_stored_branch_reads_its_files_from_github(client: ApiClient, env, forge_project: dict,
                                                                    fake_github: FakeGitHub):
-    """No snapshot of A at its pull request's head: the merged side comes
-    from GitHub's listing of the pull request's files."""
+    """No snapshot of A at its pull request's head that says what it
+    changed: the merged side comes from GitHub's listing of the pull
+    request's files. A's only snapshot is one read after the merge reached
+    main (its merge base is its head; it lists nothing), as a capture asked
+    before the merge and read after it records: never "no overlap"."""
     a, b, first = _two_in_review(client, env, forge_project["id"])
-    execute(env.owner_dsn, "DELETE FROM task_branch_snapshots WHERE task_id = %s", (a["id"],))
+    execute(env.owner_dsn, """WITH s AS (DELETE FROM task_branch_snapshots WHERE task_id = %s RETURNING *)
+        INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository, branch_ref,
+            target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, status, relation)
+        SELECT 'tbs_after_merge_' || md5(random()::text), organization_id, task_id, attempt, repository_id, repository, branch_ref,
+            target_ref, head_sha, head_sha, head_sha, '[]', 'empty', '{}', 'complete', 'initial'
+        FROM s ORDER BY captured_at DESC LIMIT 1""", (a["id"],))
+    assert query(env.owner_dsn, "SELECT count(*) AS n FROM task_branch_snapshots WHERE task_id = %s AND head_sha = %s AND files = '[]'",
+                 (a["id"], first["headSha"]))[0]["n"] == 1
     reads = fake_github.files_reads.get(first["number"], 0)
     _merge_and_check(client, env, fake_github, a, b, first)
     assert fake_github.files_reads.get(first["number"], 0) > reads, "the merge's files were never read from GitHub"
