@@ -143,8 +143,8 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	}
 	// The epic it is on, and what its peers did since it last looked:
 	// told here, never a wake of its own.
-	var org string
-	if err := tx.QueryRow(ctx, `SELECT organization_id FROM tasks WHERE id = $1`, taskID).Scan(&org); err != nil {
+	var org, project string
+	if err := tx.QueryRow(ctx, `SELECT organization_id, project_id FROM tasks WHERE id = $1`, taskID).Scan(&org, &project); err != nil {
 		return "", err
 	}
 	if b.Digest, err = ConductorDigestTx(ctx, tx, org, taskID, conductorRunID, "briefing"); err != nil {
@@ -157,6 +157,10 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 		return "", err
 	}
 	if err := briefDecider(ctx, tx, &b, taskID); err != nil {
+		return "", err
+	}
+	// The project's pinned facts, beside the epic: every briefing has them.
+	if b.Facts, err = ProjectFacts(ctx, tx, project); err != nil {
 		return "", err
 	}
 	if b.Epic, err = EpicBriefing(ctx, tx, org, taskID, "", RoleConductor); err != nil {
@@ -182,7 +186,7 @@ type conductorBrief struct {
 	Runs, Findings             briefLines
 	// The current attempt's open reviewer questions, one line each.
 	Questions            []string
-	Digest, Epic, Replay string
+	Digest, Facts, Epic, Replay string
 	PullRequests         []briefPullRequest
 	Heads                []RepoHead
 	// Who decides: no live delivery, Deliver's policy (a person accepted
