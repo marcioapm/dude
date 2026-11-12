@@ -37,6 +37,8 @@ Agents save memories with `remember`. They are told to search first so they do n
 
 People add memories in **Settings → Memory → Memories**.
 
+A project's fact can be **pinned**: it then arrives in every briefing on that project, in front of the conductor and each Run, without a search. A person pins their own facts (an organisation admin, anyone's) on the Memories page or with `dude memory pin`; the task's conductor pins with `remember`, and is the only agent that may. Only a project's live fact about no task is pinned, never the organisation's, a session's, a procedure or a note. A briefing carries at most 20 pinned facts, each cut at 600 characters and about 4 KB in all; it says how many more are pinned, and search finds them. The conductor may unpin a fact an agent pinned once it goes stale; a fact a person pinned stays pinned until a person unpins it.
+
 ## The Memory pages
 
 **Settings → Memory** has three pages, on the organisation and on each project:
@@ -58,5 +60,5 @@ Agents can read the embedding configuration with `settings`, section `memory`. I
 ## Who can change what
 
 - Every member can search and add memories.
-- You can change and archive your own memories. An organisation admin can change and archive anyone's, including agents' and dude's.
+- You can change, archive, pin and unpin your own memories. An organisation admin can do the same to anyone's, including agents' and dude's.
 - Only an organisation admin can rebuild the index.
