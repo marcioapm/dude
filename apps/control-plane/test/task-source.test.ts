@@ -41,6 +41,8 @@ let key: string;
 let orchestrator: ReturnType<typeof Bun.serve>;
 // What the stand-in was asked, newest last.
 const checks: Array<Record<string, unknown>> = [];
+// The task the stand-in's supersede answers it made.
+let superseding = "";
 
 beforeAll(async () => {
   admin = new SQL(OWNER_URL);
@@ -69,6 +71,19 @@ beforeAll(async () => {
     }
     if (body.pullRequest === "8") {
       return Response.json({ error: { code: "github_unavailable", message: "GitHub could not be asked about it: down" } }, { status: 502 });
+    }
+    if (url.pathname.endsWith("/tasks/supersede")) {
+      return Response.json({ taskId: superseding, key: "SRC-99", superseded: body.holder }, { status: 201 });
+    }
+    if (body.pullRequest === "21") {
+      // Held by a live task: refused unless confirmed, then answered as it.
+      const holder = { id: "wi_holder", key: "SRC-3", mode: "review_only" };
+      if (!body.supersede && !body.supersedeTask) {
+        return Response.json({ error: { code: "superseded_required", message: "feature/held is already the branch of SRC-3",
+          details: { holder } } }, { status: 409 });
+      }
+      return Response.json({ kind: "pr", repositoryId: REPO, repository: "target", number: 21, title: "Held",
+        headBranch: "feature/held", baseBranch: "main", mode: body.mode ?? "review", supersedes: holder });
     }
     if (body.kind === "pr") {
       // A number or the pull request's URL. #14 is a draft: unfinished work, which continues by default.
@@ -175,9 +190,13 @@ test("a source saved before modes reviews, as it did", async () => {
 test("simultaneous sources reserve one live task per head while different heads work", async () => {
   const source = { kind: "branch", repositoryId: REPO, branch: "feature/concurrent", base: "main" };
   const results = await Promise.all([newTask(source), newTask(source)]);
-  expect(results.map(r => r.status).sort()).toEqual([201, 422]);
-  const refused = results.find(r => r.status === 422)!;
-  expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("branch_taken");
+  // The flat branch_taken is gone: the second is asked to supersede the first.
+  expect(results.map(r => r.status).sort()).toEqual([201, 409]);
+  const refused = results.find(r => r.status === 409)!;
+  const answer = (await refused.json()) as { error: { code: string; details: { holder: { id: string; key: string } } } };
+  expect(answer.error.code).toBe("superseded_required");
+  const created = results.find(r => r.status === 201)!;
+  expect(answer.error.details.holder.id).toBe(((await created.json()) as { id: string }).id);
   const different = await Promise.all([
     newTask({ ...source, branch: "feature/one" }), newTask({ ...source, branch: "feature/two" }),
   ]);
@@ -187,7 +206,48 @@ test("simultaneous sources reserve one live task per head while different heads 
   const attached = await Promise.all(ids.map(id => call("PATCH", `/v1/tasks/${id}`, {
     source: { ...source, branch: "feature/attach" },
   })));
-  expect(attached.map(r => r.status).sort()).toEqual([200, 422]);
+  expect(attached.map(r => r.status).sort()).toEqual([200, 409]);
+});
+
+test("a review-only source is kept with read access, and asks nothing of a holder", async () => {
+  const res = await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "31", mode: "review_only" });
+  expect(res.status).toBe(201);
+  const id = ((await res.json()) as { id: string }).id;
+  expect(checks.at(-1)).toMatchObject({ kind: "pr", pullRequest: "31", mode: "review_only" });
+  expect(checks.at(-1)).not.toHaveProperty("supersede");
+  expect((await storedSource(id))!.mode).toBe("review_only");
+  const [repo] = await owner`SELECT access FROM task_repositories WHERE task_id = ${id}`;
+  expect(repo.access).toBe("read");
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${id}`;
+});
+
+test("a source a live task holds asks first; the confirmation goes to the orchestrator's supersede", async () => {
+  const before = (await owner`SELECT count(*)::int AS n FROM tasks`)[0].n as number;
+  const asked = await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "21" });
+  expect(asked.status).toBe(409);
+  const refusal = (await asked.json()) as { error: { code: string; details: { holder: { key: string; mode: string } } } };
+  expect(refusal.error).toMatchObject({ code: "superseded_required", details: { holder: { key: "SRC-3", mode: "review_only" } } });
+  expect((await owner`SELECT count(*)::int AS n FROM tasks`)[0].n).toBe(before);
+
+  // The orchestrator makes it in its own transaction; this answers its row.
+  superseding = "wi_superseding";
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
+    VALUES (${superseding}, ${ORG}, ${PROJECT}, 99, 'Take it over', 'carry the pull request on from here', 'received')`;
+  const confirmed = await call("POST", "/v1/tasks", { projectId: PROJECT, title: "Take it over", goal: "carry the pull request on from here",
+    source: { kind: "pr", repositoryId: REPO, pullRequest: "21", mode: "review" }, supersede: "wi_holder" });
+  expect(confirmed.status).toBe(201);
+  expect(((await confirmed.json()) as { id: string }).id).toBe(superseding);
+  const check = checks.findLast((c) => String(c.path).endsWith("/sources/check"))!;
+  expect(check).toMatchObject({ pullRequest: "21", supersedeTask: "wi_holder" });
+  const sup = checks.at(-1)!;
+  expect(sup.path).toBe(`/internal/projects/${PROJECT}/tasks/supersede`);
+  expect(sup).toMatchObject({ holder: "wi_holder", source: { number: 21, headBranch: "feature/held", mode: "review" },
+    create: { title: "Take it over" } });
+  expect(sup.source).not.toHaveProperty("supersedes");
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${superseding}`;
+
+  // supersede without a source is a mistake, said so.
+  expect((await call("POST", "/v1/tasks", { projectId: PROJECT, title: "x", goal: "sixteen characters or more", supersede: true })).status).toBe(400);
 });
 
 test("the pickers ask the orchestrator, which holds the forge credential, with a bounded query", async () => {

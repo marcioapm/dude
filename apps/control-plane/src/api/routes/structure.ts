@@ -20,7 +20,7 @@ import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { SOURCE_JSON, checkTaskSource, keepMode, sameSource, setTaskSource, sourceMode, taskSourceInput } from "./taskSource.ts";
+import { SOURCE_JSON, checkTaskSource, keepMode, sameSource, setTaskSource, sourceMode, supersedeInput, supersedeWith, taskSourceInput } from "./taskSource.ts";
 import type { TaskSource } from "@dude/domain";
 import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
 import { syncTaskAttachments } from "./attachments.ts";
@@ -359,6 +359,8 @@ const updateTaskInput = z.object({
   ownerId: z.string().min(1),
   /** Existing work it starts from, or null for new work; fixed once its delivery has started. */
   source: taskSourceInput,
+  /** The answer to superseded_required for its source (createTask's). */
+  supersede: supersedeInput,
 }).partial();
 
 /**
@@ -368,7 +370,7 @@ const updateTaskInput = z.object({
  * handing it to someone else, never is.
  */
 async function updateTask(ctx: RequestContext): Promise<Response> {
-  const { ownerId: ownerGiven, source: sourceGiven, ...given } = await parseBody(ctx.request, updateTaskInput);
+  const { ownerId: ownerGiven, source: sourceGiven, supersede, ...given } = await parseBody(ctx.request, updateTaskInput);
   const id = ctx.params.id!;
   // A changed source is asked of GitHub before the transaction, so no row is
   // held while it answers; the same source again is no change, and not asked.
@@ -381,7 +383,14 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     });
     if (!stored) throw notFound(`task ${id} not found`);
     if (!sameSource(stored.source, sourceGiven)) {
-      source = sourceGiven ? keepMode(stored.source, sourceGiven, await checkTaskSource(ctx, stored.projectId, sourceGiven, id)) : null;
+      const checked = sourceGiven ? await checkTaskSource(ctx, stored.projectId, sourceGiven, id, supersede) : null;
+      if (checked?.supersedes) {
+        // Stopped, attached and linked by the orchestrator in one
+        // transaction; the rest of the edit goes on as without a source.
+        await supersedeWith(ctx, stored.projectId, keepMode(stored.source, sourceGiven!, checked), { taskId: id });
+      } else {
+        source = checked ? keepMode(stored.source, sourceGiven!, checked) : null;
+      }
     } else if (stored.source && sourceGiven) {
       // The same source in another mode: nothing to ask GitHub.
       source = sourceMode(stored.source, sourceGiven) ?? undefined;
