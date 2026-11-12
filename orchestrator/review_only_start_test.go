@@ -55,6 +55,28 @@ func TestAReviewOnlyTaskIsRefusedAtEveryStart(t *testing.T) {
 	}
 }
 
+// Feedback submitted on a review-only task never started would start it:
+// that start is refused with the refusal's own answer, not an internal
+// error, and no delivery is made.
+func TestFeedbackOnANotStartedReviewOnlyTaskIsRefused(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
+	ana := w.person("Ana")
+	w.assignOwner(wi, ana)
+	status, out := w.feedback(ana, wi, "fbi_ro", "Look at the retry loop.")
+	notYet(t, "Feedback", status, out)
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1`, wi); n != 0 {
+		t.Fatalf("%d deliveries made for a review-only task", n)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, wi); n != 0 {
+		t.Fatalf("%d Runs made for a review-only task", n)
+	}
+	if s := w.taskStatus(wi); !delivery.NotStarted(s) {
+		t.Fatalf("the refused task is %s", s)
+	}
+}
+
 // A review-only task stopped (one from before the refusal) is not picked
 // back up either: Stop and start over, Start over, Resume and Try again
 // are refused, and no other delivery is made.
