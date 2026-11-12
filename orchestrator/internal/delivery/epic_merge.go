@@ -132,7 +132,9 @@ type epicMerge struct {
 // epicPeer is a task woken for a merge, and what its branch changes in the
 // merged pull request's repository: Files (fileNames), sorted bytewise;
 // Known false when there is no snapshot; Partial when the list may be cut,
-// miss a name, or be stale (a capture asked since, not yet read). SameBase:
+// miss a name, or be stale: a capture pending, whatever its timestamps,
+// is a newer read owed (a push during a read leaves the request pending
+// and older than the snapshot that read the branch before it). SameBase:
 // its delivery measures the repository against the base m merged into.
 type epicPeer struct {
 	TaskID         string
@@ -248,7 +250,7 @@ func epicMergePeers(ctx context.Context, tx pgx.Tx, m epicMerge) ([]epicPeer, er
 	rows, err := tx.Query(ctx, `SELECT t.id,
 			EXISTS (SELECT 1 FROM task_repositories tr WHERE tr.task_id = t.id AND tr.repository_id = $3 AND tr.access = 'write'),
 			s.files IS NOT NULL OR COALESCE(c.status = 'absent', false),
-			COALESCE(`+snapshotPartial+` OR (c.status = 'pending' AND c.requested_at > s.captured_at), false),
+			COALESCE(`+snapshotPartial+` OR c.status = 'pending', false),
 			`+deliveryBase+` = $5,
 			`+fileNames+`
 		FROM tasks t
