@@ -37,14 +37,26 @@ type SourceRequest struct {
 	// The task it is for, when it exists: its own source is not "another
 	// task's branch".
 	TaskID string `json:"taskId,omitempty"`
+	// The mode asked for, "" for the default. ModeReviewOnly is checked by
+	// its own rules: read access, a pull request only, a protected head
+	// allowed.
+	Mode string `json:"mode,omitempty"`
+	// A person's confirmation that the live task holding the branch is to
+	// be stopped for this one: true, or that task's id, refused when the
+	// holder is another by now.
+	Supersede     bool   `json:"supersede,omitempty"`
+	SupersedeTask string `json:"supersedeTask,omitempty"`
 }
 
 // What a delivery does first with the work it took over (task_sources.mode).
 const (
 	// An implementer carries the work on, then the review loop.
 	ModeContinue = "continue"
-	// The review loop at once.
+	// The review loop at once, and its fixes.
 	ModeReview = "review"
+	// Review a person's pull request and change no code: no writer Run is
+	// ever made for it (refuseReviewOnlyWriterTx).
+	ModeReviewOnly = "review_only"
 )
 
 // Source is a checked source, as task_sources keeps it.
@@ -64,11 +76,26 @@ type Source struct {
 	// The head when the delivery took it over: a later head is someone's
 	// work on it, dude's or a person's.
 	HeadSHA string `json:"headSha,omitempty"`
+	// The live task the check found holding the branch, which a person
+	// confirmed this one supersedes; nil for none. Not kept.
+	Supersedes *SourceHolder `json:"supersedes,omitempty"`
+}
+
+// SourceHolder is a live task holding a branch: its id, key and source
+// mode ("" for one on its own new work).
+type SourceHolder struct {
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+	Mode string `json:"mode"`
 }
 
 // SourceRefusal is a source dude will not adopt, with why in a person's
-// words. Code names the rule, for the UI and the tests.
-type SourceRefusal struct{ Code, Msg string }
+// words. Code names the rule, for the UI and the tests. Holder is the
+// live task in the way, for superseded_required.
+type SourceRefusal struct {
+	Code, Msg string
+	Holder    *SourceHolder
+}
 
 func (r SourceRefusal) Error() string { return r.Msg }
 
@@ -110,11 +137,18 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 	if gh == nil {
 		return out, SourceUnreachable{errors.New("GitHub is not connected for this organisation")}
 	}
-	if err := gh.CheckPushAccess(ctx, repoURL); err != nil {
-		if forge.Refused(err) {
-			return out, sourceRefusal("no_write", "dude may not push to %s with this organisation's GitHub connection: %v", slug, err)
+	reviewOnly := in.Mode == ModeReviewOnly
+	if reviewOnly && in.Kind != SourcePR {
+		return out, sourceRefusal("bad_kind", "review only reviews a pull request: name one, not a branch")
+	}
+	// Review only never pushes: reading the pull request below proves read access.
+	if !reviewOnly {
+		if err := gh.CheckPushAccess(ctx, repoURL); err != nil {
+			if forge.Refused(err) {
+				return out, sourceRefusal("no_write", "dude may not push to %s with this organisation's GitHub connection: %v", slug, err)
+			}
+			return out, SourceUnreachable{err}
 		}
-		return out, SourceUnreachable{err}
 	}
 	defaultBranch, err = gh.SourceDefaultBranch(ctx, slug)
 	if err != nil {
@@ -131,11 +165,17 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 		if errors.As(err, &e) && e.NotFound() {
 			return out, sourceRefusal("pr_not_found", "%s has no pull request #%d", slug, n)
 		}
+		if errors.As(err, &e) && e.Status == 403 {
+			return out, sourceRefusal("no_read", "dude may not read %s with this organisation's GitHub connection: %v", slug, err)
+		}
 		if err != nil {
 			return out, unreachableOr(err)
 		}
 		if pr.State == forge.StateMerged || pr.State == forge.StateClosed {
 			return out, sourceRefusal("pr_"+pr.State, "pull request #%d is %s: only an open one can be adopted", n, pr.State)
+		}
+		if (pr.Fork() || !strings.EqualFold(pr.BaseRepo, slug)) && reviewOnly {
+			return out, sourceRefusal("pr_fork", "pull request #%d is from a fork: dude reviews only this repository's own pull requests for now", n)
 		}
 		if pr.Fork() || !strings.EqualFold(pr.BaseRepo, slug) {
 			return out, sourceRefusal("pr_fork", "pull request #%d is from a fork: its branch is not in %s, and dude cannot push to it",
@@ -143,7 +183,9 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 		}
 		out.Number, out.Title, out.URL, out.HeadBranch, out.BaseBranch = n, pr.Title, pr.URL, pr.HeadRef, pr.BaseRef
 		out.Mode = ModeReview
-		if pr.State == forge.StateDraft {
+		if reviewOnly {
+			out.Mode = ModeReviewOnly
+		} else if pr.State == forge.StateDraft {
 			out.Mode = ModeContinue
 		}
 	case SourceBranch:
@@ -172,7 +214,7 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 	if info == nil {
 		return out, sourceRefusal("branch_not_found", "%s has no branch %s", slug, out.HeadBranch)
 	}
-	if info.Protected {
+	if info.Protected && !reviewOnly {
 		return out, sourceRefusal("protected", "GitHub protects %s: dude only fast-forwards branches nobody protects", out.HeadBranch)
 	}
 	if in.Kind == SourceBranch {
@@ -187,23 +229,45 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 			return out, sourceRefusal("branch_not_found", "%s has no branch %s", slug, out.BaseBranch)
 		}
 	}
-	var taken string
 	err = d.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, branchHolder, in.RepositoryID, out.HeadBranch, in.TaskID).Scan(&taken)
+		out.Supersedes, err = supersedeOrRefuseTx(ctx, tx, in.RepositoryID, out.HeadBranch, in.TaskID, in.Supersede, in.SupersedeTask)
+		return err
 	})
-	if err == nil {
-		return out, sourceRefusal("branch_taken", "%s is already the branch of %s, which is still in progress", out.HeadBranch, taken)
-	}
-	if !db.IsNotFound(err) {
-		return out, err
-	}
-	return out, nil
+	return out, err
 }
 
-// branchHolder (SQL; $1 repository, $2 branch, $3 the task asking): the key
-// of another task that is not over whose task branch is $2 in $1 — adopted
-// as its source, or its live delivery's own branch.
-const branchHolder = `SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id
+// supersedeOrRefuseTx is the live task holding branch in repo, which the
+// asking task may take over only as a person confirmed (supersede, or
+// expect naming that very task): nil for none. Without it, or when the
+// holder is another than expect, it is superseded_required naming the
+// holder.
+func supersedeOrRefuseTx(ctx context.Context, tx pgx.Tx, repo, branch, taskID string, supersede bool, expect string) (*SourceHolder, error) {
+	var h SourceHolder
+	err := tx.QueryRow(ctx, branchHolder, repo, branch, taskID).Scan(&h.ID, &h.Key, &h.Mode)
+	if db.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if expect != "" && expect != h.ID {
+		return nil, SourceRefusal{Code: "superseded_required", Holder: &h,
+			Msg: fmt.Sprintf("%s is now the branch of %s, not of the task you confirmed: confirm again to stop %s for this task", branch, h.Key, h.Key)}
+	}
+	if !supersede && expect == "" {
+		return nil, SourceRefusal{Code: "superseded_required", Holder: &h,
+			Msg: fmt.Sprintf("%s is already the branch of %s, which is still in progress: confirm to stop %s and take the work over in this task", branch, h.Key, h.Key)}
+	}
+	return &h, nil
+}
+
+// branchHolder (SQL; $1 repository, $2 branch, $3 the task asking): the id,
+// key and source mode of another task that is not over whose task branch is
+// $2 in $1 — adopted as its source (review only too: a writer on the same
+// pull request supersedes it, and it them), or its live delivery's own
+// branch. The control plane's setTaskSource asks the same.
+const branchHolder = `SELECT t.id, p.key_prefix || '-' || t.number,
+	COALESCE((SELECT s.mode FROM task_sources s WHERE s.task_id = t.id), '') FROM tasks t JOIN projects p ON p.id = t.project_id
 	WHERE t.id IS DISTINCT FROM NULLIF($3, '') AND t.status NOT IN ('done', 'aborted', 'failed')
 	  AND (EXISTS (SELECT 1 FROM task_sources s WHERE s.task_id = t.id AND s.repository_id = $1 AND s.head_branch = $2)
 	    OR EXISTS (SELECT 1 FROM workflow_runs w JOIN task_repositories tr ON tr.task_id = w.task_id AND tr.repository_id = $1
@@ -229,7 +293,11 @@ func NewState(ctx context.Context, tx pgx.Tx, taskID, projectID string, policy P
 	if err != nil || src == nil {
 		return st, err
 	}
-	if err := HoldBranchTx(ctx, tx, taskID, src); err != nil {
+	if src.ReviewOnly() {
+		// It writes nothing, so it holds no branch; its tester runs only
+		// when its conductor starts one, and it has no simplifier.
+		st.Policy.Test, st.Policy.Simplify = false, false
+	} else if err := HoldBranchTx(ctx, tx, taskID, src); err != nil {
 		return st, err
 	}
 	st.Branch, st.Source = src.HeadBranch, src
@@ -237,21 +305,15 @@ func NewState(ctx context.Context, tx pgx.Tx, taskID, projectID string, policy P
 	return st, nil
 }
 
-// HoldBranchTx refuses (branch_taken) when another live task holds src's
-// head branch, under src's repository row lock held to tx's end.
+// HoldBranchTx refuses (superseded_required) when another live task holds
+// src's head branch, under src's repository row lock held to tx's end. A
+// start never supersedes: that is a person's confirmation on the source.
 func HoldBranchTx(ctx context.Context, tx pgx.Tx, taskID string, src *Source) error {
 	if _, err := tx.Exec(ctx, `SELECT id FROM repositories WHERE id = $1 FOR UPDATE`, src.RepositoryID); err != nil {
 		return err
 	}
-	var holder string
-	err := tx.QueryRow(ctx, branchHolder, src.RepositoryID, src.HeadBranch, taskID).Scan(&holder)
-	if err == nil {
-		return sourceRefusal("branch_taken", "%s is already the branch of %s", src.HeadBranch, holder)
-	}
-	if !db.IsNotFound(err) {
-		return err
-	}
-	return nil
+	_, err := supersedeOrRefuseTx(ctx, tx, src.RepositoryID, src.HeadBranch, taskID, false, "")
+	return err
 }
 
 // BaseFor is what repo's task branch merges into: its stored base, else

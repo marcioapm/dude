@@ -7,8 +7,12 @@
 
 import type { TaskStatus } from "./hierarchy.ts";
 
-/** The kinds stored. "Blocked by" is `blocks` read from the other side; `duplicates` is Close's alone. */
-export type TaskRelationKind = "blocks" | "related" | "duplicates";
+/**
+ * The kinds stored. "Blocked by" is `blocks` read from the other side;
+ * `duplicates` is Close's alone; `supersedes` (new → old) is a confirmed
+ * supersede's alone, gating nothing.
+ */
+export type TaskRelationKind = "blocks" | "related" | "duplicates" | "supersedes";
 
 /** The kinds a person or agent names, from the task they are on. */
 export type RelationSide = "blocked_by" | "blocks" | "related";
@@ -119,6 +123,9 @@ export interface TaskRelations {
   duplicateOf: TaskRelationView[];
   /** The tasks closed as duplicates of this one. */
   duplicatedBy: TaskRelationView[];
+  /** The task this one stopped and took over on the same pull request or branch, and the one that did so to it. */
+  supersedes?: TaskRelationView[];
+  supersededBy?: TaskRelationView[];
   /** The task's start when unblocked, if set. */
   autoStart: { how: AutoStartHow; by: { id: string; name: string }; at: string } | null;
   /** The reader owns the task (sets and cancels start when unblocked). */

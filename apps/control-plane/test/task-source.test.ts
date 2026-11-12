@@ -41,6 +41,8 @@ let key: string;
 let orchestrator: ReturnType<typeof Bun.serve>;
 // What the stand-in was asked, newest last.
 const checks: Array<Record<string, unknown>> = [];
+// The task the stand-in's supersede answers it made.
+let superseding = "";
 
 beforeAll(async () => {
   admin = new SQL(OWNER_URL);
@@ -69,6 +71,19 @@ beforeAll(async () => {
     }
     if (body.pullRequest === "8") {
       return Response.json({ error: { code: "github_unavailable", message: "GitHub could not be asked about it: down" } }, { status: 502 });
+    }
+    if (url.pathname.endsWith("/tasks/supersede")) {
+      return Response.json({ taskId: body.taskId ?? superseding, key: "SRC-99", superseded: body.holder }, { status: 201 });
+    }
+    if (body.pullRequest === "21") {
+      // Held by a live task: refused unless confirmed, then answered as it.
+      const holder = { id: "wi_holder", key: "SRC-3", mode: "review_only" };
+      if (!body.supersede && !body.supersedeTask) {
+        return Response.json({ error: { code: "superseded_required", message: "feature/held is already the branch of SRC-3",
+          details: { holder } } }, { status: 409 });
+      }
+      return Response.json({ kind: "pr", repositoryId: REPO, repository: "target", number: 21, title: "Held",
+        headBranch: "feature/held", baseBranch: "main", mode: body.mode ?? "review", supersedes: holder });
     }
     if (body.kind === "pr") {
       // A number or the pull request's URL. #14 is a draft: unfinished work, which continues by default.
@@ -175,9 +190,13 @@ test("a source saved before modes reviews, as it did", async () => {
 test("simultaneous sources reserve one live task per head while different heads work", async () => {
   const source = { kind: "branch", repositoryId: REPO, branch: "feature/concurrent", base: "main" };
   const results = await Promise.all([newTask(source), newTask(source)]);
-  expect(results.map(r => r.status).sort()).toEqual([201, 422]);
-  const refused = results.find(r => r.status === 422)!;
-  expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("branch_taken");
+  // The flat branch_taken is gone: the second is asked to supersede the first.
+  expect(results.map(r => r.status).sort()).toEqual([201, 409]);
+  const refused = results.find(r => r.status === 409)!;
+  const answer = (await refused.json()) as { error: { code: string; details: { holder: { id: string; key: string } } } };
+  expect(answer.error.code).toBe("superseded_required");
+  const created = results.find(r => r.status === 201)!;
+  expect(answer.error.details.holder.id).toBe(((await created.json()) as { id: string }).id);
   const different = await Promise.all([
     newTask({ ...source, branch: "feature/one" }), newTask({ ...source, branch: "feature/two" }),
   ]);
@@ -187,7 +206,109 @@ test("simultaneous sources reserve one live task per head while different heads 
   const attached = await Promise.all(ids.map(id => call("PATCH", `/v1/tasks/${id}`, {
     source: { ...source, branch: "feature/attach" },
   })));
-  expect(attached.map(r => r.status).sort()).toEqual([200, 422]);
+  expect(attached.map(r => r.status).sort()).toEqual([200, 409]);
+});
+
+test("a review-only source is kept with read access, and asks nothing of a holder", async () => {
+  const res = await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "31", mode: "review_only" });
+  expect(res.status).toBe(201);
+  const id = ((await res.json()) as { id: string }).id;
+  expect(checks.at(-1)).toMatchObject({ kind: "pr", pullRequest: "31", mode: "review_only" });
+  expect(checks.at(-1)).not.toHaveProperty("supersede");
+  expect((await storedSource(id))!.mode).toBe("review_only");
+  const [repo] = await owner`SELECT access FROM task_repositories WHERE task_id = ${id}`;
+  expect(repo.access).toBe("read");
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${id}`;
+});
+
+test("a source a live task holds asks first; the confirmation goes to the orchestrator's supersede", async () => {
+  const before = (await owner`SELECT count(*)::int AS n FROM tasks`)[0].n as number;
+  const asked = await newTask({ kind: "pr", repositoryId: REPO, pullRequest: "21" });
+  expect(asked.status).toBe(409);
+  const refusal = (await asked.json()) as { error: { code: string; details: { holder: { key: string; mode: string } } } };
+  expect(refusal.error).toMatchObject({ code: "superseded_required", details: { holder: { key: "SRC-3", mode: "review_only" } } });
+  expect((await owner`SELECT count(*)::int AS n FROM tasks`)[0].n).toBe(before);
+
+  // The orchestrator makes it in its own transaction; this answers its row.
+  superseding = "wi_superseding";
+  await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
+    VALUES (${superseding}, ${ORG}, ${PROJECT}, 99, 'Take it over', 'carry the pull request on from here', 'received')`;
+  const confirmed = await call("POST", "/v1/tasks", { projectId: PROJECT, title: "Take it over", goal: "carry the pull request on from here",
+    source: { kind: "pr", repositoryId: REPO, pullRequest: "21", mode: "review" }, supersede: "wi_holder" });
+  expect(confirmed.status).toBe(201);
+  expect(((await confirmed.json()) as { id: string }).id).toBe(superseding);
+  const check = checks.findLast((c) => String(c.path).endsWith("/sources/check"))!;
+  expect(check).toMatchObject({ pullRequest: "21", supersedeTask: "wi_holder" });
+  const sup = checks.at(-1)!;
+  expect(sup.path).toBe(`/internal/projects/${PROJECT}/tasks/supersede`);
+  expect(sup).toMatchObject({ holder: "wi_holder", source: { number: 21, headBranch: "feature/held", mode: "review" },
+    create: { title: "Take it over" } });
+  expect(sup.source).not.toHaveProperty("supersedes");
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${superseding}`;
+
+  // supersede without a source is a mistake, said so.
+  expect((await call("POST", "/v1/tasks", { projectId: PROJECT, title: "x", goal: "sixteen characters or more", supersede: true })).status).toBe(400);
+});
+
+test("a PATCH that only confirms a supersede answers the task; one whose other fields are refused stops nothing", async () => {
+  const held = { kind: "pr", repositoryId: REPO, pullRequest: "21", mode: "review" };
+  const supersedes = () => checks.filter((c) => String(c.path).endsWith("/tasks/supersede")).length;
+  const task = (await (await newTask()).json()) as { id: string };
+
+  // Refused for the rest of the edit before the supersede: nothing is stopped.
+  const before = supersedes();
+  const short = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true, goal: "short" });
+  expect(short.status).toBe(400);
+  const noEpic = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true, epicId: "epc_nowhere" });
+  expect(noEpic.status).toBe(404);
+  const noOwner = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true, ownerId: "per_nobody" });
+  expect(noOwner.status).toBe(404);
+  expect(supersedes()).toBe(before);
+
+  // Confirmed alone: the orchestrator supersedes for this task, and the edit answers it.
+  const confirmed = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true });
+  expect(confirmed.status).toBe(200);
+  expect(((await confirmed.json()) as { id: string }).id).toBe(task.id);
+  expect(supersedes()).toBe(before + 1);
+  expect(checks.at(-1)).toMatchObject({ holder: "wi_holder", taskId: task.id, source: { number: 21, mode: "review" } });
+
+  // A task already started is refused, and stops nothing.
+  const started = (await (await newTask()).json()) as { id: string };
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
+    VALUES (${"wf_" + started.id}, ${ORG}, 'task.delivery', ${"delivery:" + started.id}, ${started.id}, 'waiting', 'review', '{}'::jsonb)`;
+  const late = await call("PATCH", `/v1/tasks/${started.id}`, { source: held, supersede: true });
+  expect(late.status).toBe(409);
+  expect(supersedes()).toBe(before + 1);
+  await owner`UPDATE tasks SET status = 'done' WHERE id IN (${task.id}, ${started.id})`;
+});
+
+test("a PATCH with a supersede and a repository not in the project is refused before anything is stopped", async () => {
+  const held = { kind: "pr", repositoryId: REPO, pullRequest: "21", mode: "review" };
+  const supersedes = () => checks.filter((c) => String(c.path).endsWith("/tasks/supersede")).length;
+  const task = (await (await newTask()).json()) as { id: string };
+  const before = supersedes();
+  const res = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true, repositories: [{ id: "repo_nowhere" }] });
+  expect(res.status).toBe(404);
+  expect(((await res.json()) as { error: { message: string } }).error.message).toBe("repository repo_nowhere is not in this task's project");
+  expect(supersedes()).toBe(before);
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${task.id}`;
+});
+
+test("a PATCH with a supersede and a goal showing another task's image is refused before anything is stopped", async () => {
+  const held = { kind: "pr", repositoryId: REPO, pullRequest: "21", mode: "review" };
+  const supersedes = () => checks.filter((c) => String(c.path).endsWith("/tasks/supersede")).length;
+  const other = (await (await newTask()).json()) as { id: string };
+  await owner`INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes, sha256,
+      object_key, original_content_type, original_width, original_height, original_bytes, original_key)
+    VALUES ('att_others', ${ORG}, ${other.id}, 'a.png', 'image/png', 1, 1, 1, 'x', 'k/att_others', 'image/png', 1, 1, 1, 'o/att_others')`;
+  const task = (await (await newTask()).json()) as { id: string };
+  const before = supersedes();
+  const res = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true,
+    goal: "carry the pull request on, as ![shot](attachment:att_others) shows" });
+  expect(res.status).toBe(400);
+  expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_attachment_reference");
+  expect(supersedes()).toBe(before);
+  await owner`UPDATE tasks SET status = 'done' WHERE id IN (${task.id}, ${other.id})`;
 });
 
 test("the pickers ask the orchestrator, which holds the forge credential, with a bounded query", async () => {

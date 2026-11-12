@@ -141,6 +141,9 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if b.Questions, err = briefReviewQuestions(ctx, tx, taskID); err != nil {
 		return "", err
 	}
+	if b.Supersedes, err = SupersededTx(ctx, tx, taskID); err != nil {
+		return "", err
+	}
 	// The epic it is on, and what its peers did since it last looked:
 	// told here, never a wake of its own.
 	var org, project string
@@ -195,6 +198,8 @@ type conductorBrief struct {
 	Waiting, Step                     string
 	// The reason of the escalation the delivery is stopped at, for a person.
 	Escalated string
+	// The key of the task this one superseded (its supersedes relation).
+	Supersedes string
 }
 
 // briefLines is a bounded list: its total, and the lines shown.

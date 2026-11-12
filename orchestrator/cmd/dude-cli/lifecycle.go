@@ -60,22 +60,28 @@ func (c *cli) ownDrafts(taskID string) ([]string, error) {
 
 // sourceFlags are create's --from-pr / --from-branch: existing work a new
 // task takes over, in a repository given by name.
-type sourceFlags struct{ pr, branch, base, mode *string }
+type sourceFlags struct {
+	pr, branch, base, mode *string
+	supersede              *bool
+}
 
 func addSourceFlags(fs *flag.FlagSet) sourceFlags {
 	return sourceFlags{
 		pr:     fs.String("from-pr", "", "start from this pull request (number or URL) in --repo's repository"),
 		branch: fs.String("from-branch", "", "start from this branch in --repo's repository"),
 		base:   fs.String("base", "", "with --from-branch: the branch it is based on"),
-		mode:   fs.String("mode", "", "continue (work on it, the default) or review (only review it)"),
+		mode: fs.String("mode", "", "what dude does with it: continue (build on it, then review and fix), "+
+			"review (review it and fix what the review finds) or review-only (review a pull request and change no code); "+
+			"default: continue for a draft pull request or a branch, review for a ready pull request"),
+		supersede: fs.Bool("supersede", false, "stop the task in progress on the same pull request or branch, and take it over"),
 	}
 }
 
 // body is the API's source, or nil; repoID is the repository it is in.
 func (s sourceFlags) body(repoID string) (obj, error) {
 	if *s.pr == "" && *s.branch == "" {
-		if *s.base != "" || *s.mode != "" {
-			return nil, errors.New("--base and --mode go with --from-pr or --from-branch")
+		if *s.base != "" || *s.mode != "" || *s.supersede {
+			return nil, errors.New("--base, --mode and --supersede go with --from-pr or --from-branch")
 		}
 		return nil, nil
 	}
@@ -83,10 +89,14 @@ func (s sourceFlags) body(repoID string) (obj, error) {
 		return nil, errors.New("--from-pr or --from-branch, not both")
 	}
 	if *s.mode != "" {
-		if err := oneOf("--mode", *s.mode, "continue", "review"); err != nil {
+		if err := oneOf("--mode", *s.mode, "continue", "review", "review-only"); err != nil {
 			return nil, err
 		}
+		if *s.mode == "review-only" && *s.pr == "" {
+			return nil, errors.New("--mode review-only reviews a pull request: give --from-pr")
+		}
 	}
+	mode := strings.ReplaceAll(*s.mode, "-", "_")
 	src := obj{"repositoryId": repoID}
 	if *s.pr != "" {
 		if *s.base != "" {
@@ -97,7 +107,7 @@ func (s sourceFlags) body(repoID string) (obj, error) {
 		src["kind"], src["branch"] = "branch", *s.branch
 		setIf(src, "base", *s.base)
 	}
-	return setIf(src, "mode", *s.mode), nil
+	return setIf(src, "mode", mode), nil
 }
 
 var lifecycleCommands = map[string]command{

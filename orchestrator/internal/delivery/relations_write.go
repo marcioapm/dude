@@ -289,6 +289,10 @@ type TaskRelationsOut struct {
 	// Closed as a duplicate of this key; the keys closed as duplicates of it.
 	DuplicateOf  string   `json:"duplicateOf,omitempty"`
 	DuplicatedBy []string `json:"duplicatedBy,omitempty"`
+	// The task this one superseded on its pull request or branch; the
+	// one that superseded it.
+	Supersedes   string `json:"supersedes,omitempty"`
+	SupersededBy string `json:"supersededBy,omitempty"`
 	// Not started, and nothing unmerged in front of it.
 	Startable           bool    `json:"startable"`
 	StartsWhenUnblocked *string `json:"startsWhenUnblocked"`
@@ -341,6 +345,15 @@ func RelationsOf(ctx context.Context, tx pgx.Tx, taskIDs, hidden []string) (map[
 	var merged, fromHidden, toHidden bool
 	_, err = pgx.ForEachRow(rows, []any{&fromID, &toID, &kind, &fromKey, &fromStatus, &merged, &toKey, &toStatus, &fromHidden, &toHidden}, func() error {
 		// Each side is told of the other only when the other is in reach.
+		if kind == RelationSupersede {
+			if o := out[fromID]; o != nil && !toHidden {
+				o.Supersedes = toKey
+			}
+			if o := out[toID]; o != nil && !fromHidden {
+				o.SupersededBy = fromKey
+			}
+			return nil
+		}
 		if kind == "duplicates" {
 			if o := out[fromID]; o != nil && !toHidden {
 				o.DuplicateOf = toKey
@@ -385,7 +398,7 @@ func RelationLine(r *TaskRelationsOut) string {
 		blocks = append(blocks, b.Key)
 	}
 	return render(relationLineTmpl, struct {
-		Open, Blocks, Related, DuplicatedBy []string
-		DuplicateOf                         string
-	}{open, blocks, r.Related, r.DuplicatedBy, r.DuplicateOf})
+		Open, Blocks, Related, DuplicatedBy   []string
+		DuplicateOf, Supersedes, SupersededBy string
+	}{open, blocks, r.Related, r.DuplicatedBy, r.DuplicateOf, r.Supersedes, r.SupersededBy})
 }

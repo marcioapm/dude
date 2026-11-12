@@ -364,3 +364,22 @@ test("removing the last blocker of a parked delivery signals it as the orchestra
   expect(byId.get(wf)).toMatchObject({ status: "running", wake_at: null });
   expect(byId.get(wfOther)).toMatchObject({ status: "waiting" });
 });
+
+test("a supersedes edge reads as supersedes and superseded by, gates nothing, and nobody removes it here", async () => {
+  const old = await task(ana, "aborted");
+  const now = await task(ana);
+  await owner`INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+    VALUES (${ORG}, ${now}, ${old}, 'supersedes', ${ana.personId})`;
+  const fresh = (await relations(ana, now)) as Relations & { supersedes?: Array<{ task: { key: string }; canRemove: boolean }> };
+  expect(fresh.supersedes?.map((r) => [r.task.key, r.canRemove])).toEqual([[key(old), false]]);
+  expect(fresh.blockedBy).toEqual([]);
+  expect(fresh.blocks).toEqual([]);
+  const gone = (await relations(ana, old)) as Relations & { supersededBy?: Array<{ task: { key: string } }> };
+  expect(gone.supersededBy?.map((r) => r.task.key)).toEqual([key(now)]);
+  expect(gone.blocks).toEqual([]);
+  const tree = (await (await call(ana, "GET", "/v1/navigation")).json()) as { projects: Array<{ tasks: NavTaskOut[] }> };
+  const n = tree.projects.flatMap((p) => p.tasks).find((t) => t.key === key(now))!;
+  expect(n.blockedBy).toEqual([]);
+  expect(n.edges.blockedBy).toEqual([]);
+  expect(n.startable).toBe(true);
+});

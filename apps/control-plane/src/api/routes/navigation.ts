@@ -129,7 +129,7 @@ function sessionStatus(r: RunRow): SessionStatus {
 interface EdgeRow {
   fromId: string;
   toId: string;
-  kind: "blocks" | "related" | "duplicates";
+  kind: "blocks" | "related" | "duplicates" | "supersedes";
   fromKey: string;
   fromTitle: string;
   fromStatus: TaskStatus;
@@ -177,7 +177,8 @@ function relationsByTask(edges: EdgeRow[]) {
     of(e.toId).duplicatedBy.push(e.fromKey);
   }
   for (const e of edges) {
-    if (e.kind === "duplicates") continue;
+    // A supersede gates nothing and is not shown on the board.
+    if (e.kind === "duplicates" || e.kind === "supersedes") continue;
     if (e.kind === "related") {
       of(e.fromId).related.push(e.toKey);
       of(e.toId).related.push(e.fromKey);

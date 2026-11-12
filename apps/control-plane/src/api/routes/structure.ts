@@ -19,11 +19,11 @@ import { badRequest, conflict, json, noContent, notFound, parseBody } from "../h
 import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
-import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { SOURCE_JSON, checkTaskSource, keepMode, sameSource, setTaskSource, sourceMode, taskSourceInput } from "./taskSource.ts";
+import { REPOSITORIES_JSON, repositoryNotInProject, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
+import { SOURCE_JSON, checkTaskSource, keepMode, sameSource, setTaskSource, sourceMode, supersedeInput, supersedeWith, taskSourceInput } from "./taskSource.ts";
 import type { TaskSource } from "@dude/domain";
 import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
-import { syncTaskAttachments } from "./attachments.ts";
+import { checkTaskAttachments, syncTaskAttachments } from "./attachments.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   setup_script AS "setupScript", created_at AS "createdAt"`;
@@ -359,6 +359,8 @@ const updateTaskInput = z.object({
   ownerId: z.string().min(1),
   /** Existing work it starts from, or null for new work; fixed once its delivery has started. */
   source: taskSourceInput,
+  /** The answer to superseded_required for its source (createTask's). */
+  supersede: supersedeInput,
 }).partial();
 
 /**
@@ -368,11 +370,12 @@ const updateTaskInput = z.object({
  * handing it to someone else, never is.
  */
 async function updateTask(ctx: RequestContext): Promise<Response> {
-  const { ownerId: ownerGiven, source: sourceGiven, ...given } = await parseBody(ctx.request, updateTaskInput);
+  const { ownerId: ownerGiven, source: sourceGiven, supersede, ...given } = await parseBody(ctx.request, updateTaskInput);
   const id = ctx.params.id!;
   // A changed source is asked of GitHub before the transaction, so no row is
   // held while it answers; the same source again is no change, and not asked.
   let source: TaskSource | null | undefined;
+  let superseded = false;
   if (sourceGiven !== undefined) {
     const stored = await withOrg(ctx.principal.organizationId, async (scope) => {
       const rows = (await scope.sql`SELECT project_id AS "projectId", ${scope.sql.unsafe(SOURCE_JSON)}
@@ -381,54 +384,30 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     });
     if (!stored) throw notFound(`task ${id} not found`);
     if (!sameSource(stored.source, sourceGiven)) {
-      source = sourceGiven ? keepMode(stored.source, sourceGiven, await checkTaskSource(ctx, stored.projectId, sourceGiven, id)) : null;
+      const checked = sourceGiven ? await checkTaskSource(ctx, stored.projectId, sourceGiven, id, supersede) : null;
+      if (checked?.supersedes) {
+        // The supersede stops the holder for good: the rest of the edit is
+        // checked first, so an edit refused stops nothing.
+        refuseEdit(await withOrg(ctx.principal.organizationId, (scope) => checkEdit(scope, id, given, ownerGiven, true)), id);
+        // Stopped, attached and linked by the orchestrator in one
+        // transaction; the rest of the edit goes on as without a source.
+        await supersedeWith(ctx, stored.projectId, keepMode(stored.source, sourceGiven!, checked), { taskId: id });
+        superseded = true;
+      } else {
+        source = checked ? keepMode(stored.source, sourceGiven!, checked) : null;
+      }
     } else if (stored.source && sourceGiven) {
       // The same source in another mode: nothing to ask GitHub.
       source = sourceMode(stored.source, sourceGiven) ?? undefined;
     }
   }
   const result = await withOrg(ctx.principal.organizationId, async (scope) => {
-    const current = (await scope.sql`
-      SELECT project_id AS "projectId", epic_id AS "epicId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
-      FROM tasks WHERE id = ${id} FOR UPDATE`) as Array<{
-      projectId: string;
-      epicId: string | null;
-      status: string;
-      title: string;
-      goal: string;
-      acceptanceCriteria: string[];
-    }>;
-    if (!current[0]) return { missing: true as const };
-    const { projectId, status } = current[0];
-    // What the edit really changes: a dialog sends every field, and what it
-    // left as it was is no change — to the rules below, or to the record
-    // (a resumed agent is told its task changed only when it did).
-    const input = { ...given };
-    if (input.title === current[0].title) delete input.title;
-    if (input.goal === current[0].goal) delete input.goal;
-    if (input.acceptanceCriteria !== undefined &&
-      JSON.stringify(input.acceptanceCriteria) === JSON.stringify(current[0].acceptanceCriteria)) delete input.acceptanceCriteria;
-    const changesTheTask = input.title !== undefined || input.goal !== undefined ||
-      input.acceptanceCriteria !== undefined || input.repositories !== undefined;
-    // Started means a delivery exists, whatever the status says yet: the
-    // orchestrator moves the status on its own schedule. A stopped one may
-    // say something else before it is picked back up — what it asks for,
-    // not where: a delivery picked up again works where it was.
-    const delivering = await scope.sql`SELECT 1 FROM workflow_runs WHERE task_id = ${id} LIMIT 1`;
-    const stopped = status === "aborted" || status === "failed";
-    if (changesTheTask && delivering.length > 0 && (!stopped || input.repositories !== undefined)) return { started: status };
-    // Where it starts from is the delivery's branch: fixed once one has started, stopped or not.
-    if (source !== undefined && delivering.length > 0) return { started: status };
-    // After the started check, so a started task asked for a new goal hears it is fixed.
-    // A task saved before the rule keeps its short goal until someone sets one.
-    if (input.goal !== undefined && taskGoalShortBy(input.goal) > 0) return { shortGoal: true as const };
-    if (input.epicId) {
-      const epic = await scope.sql`SELECT 1 FROM epics WHERE id = ${input.epicId} AND project_id = ${projectId}`;
-      if (epic.length === 0) return { noEpic: input.epicId };
-    }
-    const ownerId = ownerGiven === undefined ? undefined : await personOf(scope, ownerGiven);
-    if (ownerId === null) return { noPerson: ownerGiven };
-    if (Object.keys(given).length === 0 && ownerId === undefined && source === undefined) return { unchanged: true as const };
+    const checked = await checkEdit(scope, id, given, ownerGiven, source !== undefined);
+    if (!("ok" in checked)) return checked;
+    const { current, input, ownerId } = checked;
+    const { projectId } = current;
+    // A confirmed supersede is a change: the source it attached.
+    if (Object.keys(given).length === 0 && ownerId === undefined && source === undefined && !superseded) return { unchanged: true as const };
     if (input.repositories) {
       const missing = await setTaskRepositories(scope, ctx.principal.organizationId, projectId, id, input.repositories);
       if (missing) return { noRepository: missing };
@@ -450,7 +429,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
       WHERE id = ${id}`;
     // Its images are what its text references: fixed with it while a delivery runs (refused above).
     if (input.goal !== undefined || input.acceptanceCriteria !== undefined) {
-      await syncTaskAttachments(scope, id, input.goal ?? current[0].goal, input.acceptanceCriteria ?? current[0].acceptanceCriteria);
+      await syncTaskAttachments(scope, id, input.goal ?? current.goal, input.acceptanceCriteria ?? current.acceptanceCriteria);
     }
     if (Object.keys(input).length > 0 || source !== undefined) {
       await record(scope, ctx, EventTypes.TaskUpdated, projectId, { ...input, ...(source !== undefined ? { source } : {}) }, id);
@@ -460,7 +439,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     // Moved out of an epic: the epic's other tasks may all have ended
     // (migration 222's rule). Its advisory lock is the last lock this
     // transaction takes, as on a status move.
-    const leftEpic = current[0].epicId;
+    const leftEpic = current.epicId;
     if (leftEpic && input.epicId !== undefined && (input.epicId ?? null) !== leftEpic) {
       await scope.sql`SELECT chat_epic_notice(${leftEpic}, 'epic_finished', ${id})`;
     }
@@ -472,16 +451,81 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
       FROM tasks WHERE id = ${id}`) as Array<Record<string, unknown>>;
     return { task: rows[0]! };
   });
-  if ("missing" in result) throw notFound(`task ${id} not found`);
-  if ("started" in result) {
-    throw conflict(`delivery has started (${result.started}); what it asks for can no longer change while it runs — abort it, then change it and start over`);
-  }
-  if ("shortGoal" in result) throw badRequest(TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS);
-  if ("noEpic" in result) throw notFound(`epic ${result.noEpic} is not in this task's project`);
-  if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this task's project`);
-  if ("noPerson" in result) throw notFound(`${result.noPerson} is not one of this organisation's people`);
+  refuseEdit(result, id);
   if ("unchanged" in result) throw badRequest("nothing to change");
-  return json(result.task);
+  return json((result as { task: Record<string, unknown> }).task);
+}
+
+type EditInput = Omit<z.input<typeof updateTaskInput>, "ownerId" | "source" | "supersede">;
+type EditRefusal = { missing: true } | { started: string } | { shortGoal: true } | { noEpic: string } | { noPerson: string } |
+  { noRepository: string };
+
+/**
+ * The rules an edit of a task is held to, under its row's lock: what it
+ * really changes, refused once its delivery has started (sourceChanges:
+ * a new source is a change), a short goal, an epic, owner or repository
+ * not there, an image its text may not show (thrown).
+ * updateTask asks it in its transaction, and before a supersede, which
+ * an edit refused must not reach.
+ */
+async function checkEdit(scope: OrgScope, id: string, given: EditInput, ownerGiven: string | undefined, sourceChanges: boolean):
+  Promise<EditRefusal | { ok: true; current: TaskRow; input: EditInput; ownerId: string | undefined }> {
+  const rows = (await scope.sql`
+    SELECT project_id AS "projectId", epic_id AS "epicId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
+    FROM tasks WHERE id = ${id} FOR UPDATE`) as TaskRow[];
+  const current = rows[0];
+  if (!current) return { missing: true as const };
+  const { projectId, status } = current;
+  // What the edit really changes: a dialog sends every field, and what it
+  // left as it was is no change — to the rules below, or to the record
+  // (a resumed agent is told its task changed only when it did).
+  const input = { ...given };
+  if (input.title === current.title) delete input.title;
+  if (input.goal === current.goal) delete input.goal;
+  if (input.acceptanceCriteria !== undefined &&
+    JSON.stringify(input.acceptanceCriteria) === JSON.stringify(current.acceptanceCriteria)) delete input.acceptanceCriteria;
+  const changesTheTask = input.title !== undefined || input.goal !== undefined ||
+    input.acceptanceCriteria !== undefined || input.repositories !== undefined;
+  // Started means a delivery exists, whatever the status says yet: the
+  // orchestrator moves the status on its own schedule. A stopped one may
+  // say something else before it is picked back up — what it asks for,
+  // not where: a delivery picked up again works where it was.
+  const delivering = await scope.sql`SELECT 1 FROM workflow_runs WHERE task_id = ${id} LIMIT 1`;
+  const stopped = status === "aborted" || status === "failed";
+  if (changesTheTask && delivering.length > 0 && (!stopped || input.repositories !== undefined)) return { started: status };
+  // Where it starts from is the delivery's branch: fixed once one has started, stopped or not.
+  if (sourceChanges && delivering.length > 0) return { started: status };
+  // After the started check, so a started task asked for a new goal hears it is fixed.
+  // A task saved before the rule keeps its short goal until someone sets one.
+  if (input.goal !== undefined && taskGoalShortBy(input.goal) > 0) return { shortGoal: true as const };
+  if (input.epicId) {
+    const epic = await scope.sql`SELECT 1 FROM epics WHERE id = ${input.epicId} AND project_id = ${projectId}`;
+    if (epic.length === 0) return { noEpic: input.epicId };
+  }
+  const ownerId = ownerGiven === undefined ? undefined : await personOf(scope, ownerGiven);
+  if (ownerId === null) return { noPerson: ownerGiven! };
+  const noRepository = input.repositories ? await repositoryNotInProject(scope, projectId, input.repositories) : null;
+  if (noRepository) return { noRepository };
+  // Its images' refusals (thrown), so a supersede is not reached for an edit they refuse.
+  if (input.goal !== undefined || input.acceptanceCriteria !== undefined) {
+    await checkTaskAttachments(scope, id, input.goal ?? current.goal, input.acceptanceCriteria ?? current.acceptanceCriteria);
+  }
+  return { ok: true as const, current, input, ownerId };
+}
+
+type TaskRow = { projectId: string; epicId: string | null; status: string; title: string; goal: string; acceptanceCriteria: string[] };
+
+/** Throws checkEdit's refusal as the API answers it; anything else passes. */
+function refuseEdit(result: object, id: string): void {
+  const r = result as Partial<{ missing: true; started: string; shortGoal: true; noEpic: string; noPerson: string; noRepository: string }>;
+  if (r.missing) throw notFound(`task ${id} not found`);
+  if (r.started !== undefined) {
+    throw conflict(`delivery has started (${r.started}); what it asks for can no longer change while it runs — abort it, then change it and start over`);
+  }
+  if (r.shortGoal) throw badRequest(TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS);
+  if (r.noEpic !== undefined) throw notFound(`epic ${r.noEpic} is not in this task's project`);
+  if (r.noPerson !== undefined) throw notFound(`${r.noPerson} is not one of this organisation's people`);
+  if (r.noRepository !== undefined) throw notFound(`repository ${r.noRepository} is not in this task's project`);
 }
 
 const taskPeopleInput = z.object({

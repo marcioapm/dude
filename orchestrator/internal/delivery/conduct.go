@@ -313,6 +313,13 @@ func pipelineOf(in StartPhase) (*Pipeline, *RoundAsk, error) {
 
 // ConductStartPhase takes start_phase as the decision the delivery waits on.
 func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase) (string, error) {
+	// Said here, at the decision or the pull request's wait, before a step
+	// is taken: its Run would be refused by createPhaseRunTx, later.
+	if Publishes[in.Phase] {
+		if err := refuseReviewOnlyWriterTx(ctx, tx, ref.TaskID); err != nil {
+			return "", err
+		}
+	}
 	d, err := parked(ctx, tx, ref)
 	if errors.As(err, new(Refusal)) {
 		// Not at a decision: it may be waiting on its pull requests.

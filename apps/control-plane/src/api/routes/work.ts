@@ -21,7 +21,7 @@ import { orchestrator } from "../../orchestrator/client.ts";
 import { requireOrgAdmin } from "../access.ts";
 import { listTiers } from "./models.ts";
 import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
-import { SOURCE_JSON, checkTaskSource, setTaskSource, taskSourceInput } from "./taskSource.ts";
+import { SOURCE_JSON, checkTaskSource, setTaskSource, supersedeInput, supersedeWith, taskSourceInput } from "./taskSource.ts";
 import { ownerJson, peopleJson } from "./people.ts";
 import { syncTaskAttachments } from "./attachments.ts";
 import { agentMachines } from "./machines.ts";
@@ -202,6 +202,12 @@ const createTaskInput = z.object({
   acceptanceCriteria: taskCriteriaInput.default([]),
   /** Existing work it starts from (a pull request or a branch); omitted or null for new work. */
   source: taskSourceInput.optional(),
+  /**
+   * The answer to superseded_required: stop the live task holding the
+   * source's branch for this one (true, or that task's id). Only a person's
+   * request carries it; nothing automatic supersedes.
+   */
+  supersede: supersedeInput,
   /** What Deliver does before its pull request; omitted or null follows the project. Its creator owns it. */
   pullRequestChoice: z.enum(PULL_REQUEST_CHOICES).nullable().optional(),
 });
@@ -211,7 +217,18 @@ async function createTask(ctx: RequestContext): Promise<Response> {
   if (taskGoalShortBy(input.goal ?? "") > 0) throw badRequest(TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS);
   const { organizationId } = ctx.principal;
   // Asked of GitHub before the transaction: no row is held while it answers.
-  const source = input.source ? await checkTaskSource(ctx, input.projectId, input.source, null) : null;
+  if (input.supersede !== undefined && !input.source) throw badRequest("supersede goes with a source");
+  const source = input.source ? await checkTaskSource(ctx, input.projectId, input.source, null, input.supersede) : null;
+  if (source?.supersedes) {
+    // The old task stopped, this one made with its source, and the two
+    // linked: one transaction, the orchestrator's.
+    const taskId = await supersedeWith(ctx, input.projectId, source, { create: {
+      title: input.title, goal: input.goal ?? "", acceptanceCriteria: input.acceptanceCriteria ?? [], epicId: input.epicId ?? "",
+      repositories: input.repositories ?? [], pullRequestChoice: input.pullRequestChoice ?? null } });
+    const rows = await withOrg(organizationId, async (scope) => (await scope.sql`
+      SELECT ${scope.sql.unsafe(TASK_SELECT)} FROM tasks WHERE id = ${taskId}`) as Array<Record<string, unknown>>);
+    return json(rows[0]!, 201);
+  }
 
   const result = await withOrg(organizationId, async (scope) => {
     // RLS already confines this to the caller's org, so a miss means the

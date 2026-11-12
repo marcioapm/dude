@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -27,9 +28,14 @@ type stopBody struct {
 }
 
 // inProgress says a task is between its start and its end, with a delivery
-// going on: what Stop stops.
-func inProgress(status string, d *delivery.Delivery) bool {
-	return d != nil && d.Live() && !delivery.NotStarted(status) && !delivery.Ended(status)
+// going on: what Stop stops. With queued, a queued task with a live
+// delivery (parked on a blocker added after its start) is too: a
+// supersede stops it, a person's Stop does not.
+func inProgress(status string, d *delivery.Delivery, queued bool) bool {
+	if d == nil || !d.Live() || delivery.Ended(status) {
+		return false
+	}
+	return !delivery.NotStarted(status) || queued && status == "queued"
 }
 
 func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) error {
@@ -64,29 +70,11 @@ func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) er
 		if err := mayDecide(r.Context(), tx, taskID, p); err != nil {
 			return err
 		}
-		stopped, err := delivery.StopAllTx(r.Context(), tx, org, taskID, note, true, func(locked delivery.Stopped) error {
-			if !inProgress(locked.TaskStatus, locked.Delivery) {
-				return fail(http.StatusConflict, "not_in_progress", "task %s is %s: only a task in progress can be stopped", taskID, locked.TaskStatus)
-			}
-			return delivery.StopEscalationTx(r.Context(), tx, org, locked.Delivery, p.ActorType, p.Actor)
-		})
+		stopped, decider, err := stopTaskTx(r.Context(), tx, org, taskID, note, "a person stopped the task", "stop", p, false)
 		if err != nil {
 			return err
 		}
-		d := stopped.Delivery
-		decider := wireDecider(&d.State)
-		if _, err := delivery.SetTaskStatusTx(r.Context(), tx, org, stopped.ProjectID, taskID, "", "aborted", "a person stopped the task"); err != nil {
-			return err
-		}
-		if err := delivery.HaltDeliveryTx(r.Context(), tx, org, d, stopped.Conductor, "a person stopped the task", p.ActorType, p.Actor); err != nil {
-			return err
-		}
 		ri := runInfo{ProjectID: stopped.ProjectID, TaskID: taskID}
-		for _, id := range stopped.All() {
-			if err := humanEvent(r.Context(), tx, org, id, ri, "run.aborted", p, map[string]any{"reason": db.Nullable(note), "by": "stop"}); err != nil {
-				return err
-			}
-		}
 		next := ""
 		if body.AndRestart {
 			next = body.Decider
@@ -120,7 +108,7 @@ func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) er
 	})
 	var taken delivery.SourceRefusal
 	if errors.As(err, &taken) {
-		return fail(http.StatusConflict, taken.Code, "%s", taken.Msg)
+		return sourceFail(taken)
 	}
 	if err != nil {
 		if body.AndRestart {
@@ -132,4 +120,37 @@ func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) er
 	s.kick()
 	write(w, http.StatusOK, out)
 	return nil
+}
+
+// stopTaskTx is a person's Stop of a task in progress: every live Run
+// stopped and kept to resume, the delivery halted where it stands,
+// the task aborted for why, each Run's end recorded as by. Its Stop, and a
+// supersede of a task by another on the same branch (queued: a queued
+// task with a live delivery is stopped too). Returns what it stopped and
+// the delivery's decider.
+func stopTaskTx(ctx context.Context, tx pgx.Tx, org, taskID, note, why, by string, p principal, queued bool) (delivery.Stopped, string, error) {
+	stopped, err := delivery.StopAllTx(ctx, tx, org, taskID, note, true, func(locked delivery.Stopped) error {
+		if !inProgress(locked.TaskStatus, locked.Delivery, queued) {
+			return fail(http.StatusConflict, "not_in_progress", "task %s is %s: only a task in progress can be stopped", taskID, locked.TaskStatus)
+		}
+		return delivery.StopEscalationTx(ctx, tx, org, locked.Delivery, p.ActorType, p.Actor)
+	})
+	if err != nil {
+		return stopped, "", err
+	}
+	d := stopped.Delivery
+	decider := wireDecider(&d.State)
+	if _, err := delivery.SetTaskStatusTx(ctx, tx, org, stopped.ProjectID, taskID, "", "aborted", why); err != nil {
+		return stopped, "", err
+	}
+	if err := delivery.HaltDeliveryTx(ctx, tx, org, d, stopped.Conductor, why, p.ActorType, p.Actor); err != nil {
+		return stopped, "", err
+	}
+	ri := runInfo{ProjectID: stopped.ProjectID, TaskID: taskID}
+	for _, id := range stopped.All() {
+		if err := humanEvent(ctx, tx, org, id, ri, "run.aborted", p, map[string]any{"reason": db.Nullable(note), "by": by}); err != nil {
+			return stopped, "", err
+		}
+	}
+	return stopped, decider, nil
 }

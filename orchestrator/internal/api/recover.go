@@ -318,6 +318,10 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		if !t.stopped() {
 			return fail(http.StatusConflict, "conflict", "task %s is %s, not stopped", taskID, t.Status)
 		}
+		// Resume, Try again and Start over alike, whatever is kept.
+		if err := delivery.RefuseReviewOnlyStartTx(r.Context(), tx, taskID); err != nil {
+			return err
+		}
 		if !slices.Contains(t.actions(), body.Action) {
 			if body.Action == "resume" {
 				return fail(http.StatusConflict, "not_kept",
@@ -351,8 +355,9 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 			if err := delivery.RefuseLifecycleTx(r.Context(), tx, taskID); err != nil {
 				return pickUpRefusal(err)
 			}
-			if src := t.State.Source; src != nil {
-				// The adopted branch was released when the task stopped.
+			if src := t.State.Source; src != nil && !src.ReviewOnly() {
+				// The adopted branch was released when the task stopped; a
+				// review-only task holds none, as NewState.
 				if err := delivery.HoldBranchTx(r.Context(), tx, taskID, src); err != nil {
 					return err
 				}
@@ -404,7 +409,7 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 	})
 	var taken delivery.SourceRefusal
 	if errors.As(err, &taken) {
-		return fail(http.StatusConflict, taken.Code, "%s", taken.Msg)
+		return sourceFail(taken)
 	}
 	if err != nil {
 		path := "start_over"
@@ -463,6 +468,9 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 	note, decider string, override *delivery.Override, reason string) (restarted, error) {
 	var out restarted
 	if err := delivery.GuardStartTx(ctx, tx, org, taskID, override); err != nil {
+		return out, err
+	}
+	if err := delivery.RefuseReviewOnlyStartTx(ctx, tx, taskID); err != nil {
 		return out, err
 	}
 	if decider == "" {
