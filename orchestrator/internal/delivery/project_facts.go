@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -27,6 +27,7 @@ const (
 type projectFact struct {
 	ID, Title, Text, By string
 	pinnedAt            time.Time
+	cut                 bool
 }
 
 // ProjectFacts is the "Project facts" section of a briefing or a Run's
@@ -39,25 +40,28 @@ func ProjectFacts(ctx context.Context, tx pgx.Tx, projectID string) (string, err
 	if projectID == "" {
 		return "", nil
 	}
-	// Each fact's text is read only as far as clipFact can show (a rune
-	// past projectFactChars says it is cut), at most ProjectFactsMax of
-	// them, and the count of all of them for the "N more" line. Who pinned
-	// it is named as memory.pinnedBySQL names it: keep the two alike.
-	rows, err := tx.Query(ctx, `SELECT m.id, m.title, left(m.content, $2),
+	// Each fact's text is trimmed as strings.TrimSpace trims (factSpace)
+	// and read only as far as clipFact can show, with whether the whole of
+	// it, trimmed, is longer: whitespace at the cut does not hide the cut.
+	// At most ProjectFactsMax of them, and the count of all of them for the
+	// "N more" line. Who pinned it is named as memory.pinnedBySQL names it:
+	// keep the two alike.
+	rows, err := tx.Query(ctx, `SELECT m.id, m.title, left(btrim(m.content, $4), $2),
+			char_length(btrim(m.content, $4)) > $2,
 			coalesce((SELECT name FROM people WHERE id = m.pinned_by_person_id),
 				(SELECT 'the ' || replace(role::text, '_', ' ') FROM runs WHERE id = m.pinned_by_run_id), ''),
 			m.pinned_at, count(*) OVER ()
 		FROM memories m
 		WHERE m.project_id = $1 AND m.pinned_at IS NOT NULL AND m.archived_at IS NULL AND m.session_id IS NULL
 		ORDER BY greatest(m.updated_at, m.pinned_at) DESC, m.id
-		LIMIT $3`, projectID, projectFactChars+1, ProjectFactsMax)
+		LIMIT $3`, projectID, projectFactChars, ProjectFactsMax, factSpace)
 	if err != nil {
 		return "", err
 	}
 	total := 0
 	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (projectFact, error) {
 		var f projectFact
-		return f, r.Scan(&f.ID, &f.Title, &f.Text, &f.By, &f.pinnedAt, &total)
+		return f, r.Scan(&f.ID, &f.Title, &f.Text, &f.cut, &f.By, &f.pinnedAt, &total)
 	})
 	if err != nil || len(all) == 0 {
 		return "", err
@@ -69,7 +73,7 @@ func ProjectFacts(ctx context.Context, tx pgx.Tx, projectID string) (string, err
 			break
 		}
 		f.Title = oneLine(f.Title)
-		f.Text = strings.ReplaceAll(clipFact(strings.TrimSpace(f.Text)), "\n", "\n  ")
+		f.Text = strings.ReplaceAll(clipFact(f.Text, f.cut), "\n", "\n  ")
 		size := len(f.Title) + len(f.Text) + len(f.By) + len(f.ID)
 		if len(kept) > 0 && used+size > projectFactsBytes {
 			break
@@ -90,12 +94,27 @@ func ProjectFacts(ctx context.Context, tx pgx.Tx, projectID string) (string, err
 	}{kept, total - len(kept)}), nil
 }
 
-// clipFact cuts a fact's text at projectFactChars, saying so: the whole of
-// it is one get_memory away. A fence it leaves open, cut or not, is closed:
-// the facts after it, and the prompt after them, are not read as code.
-func clipFact(s string) string {
-	if utf8.RuneCountInString(s) > projectFactChars {
-		s = string([]rune(s)[:projectFactChars-1]) + "…"
+// clipFact cuts a fact's text, trimmed and read to projectFactChars runes,
+// at projectFactChars-1 and an ellipsis when the whole of it is longer
+// (cut), saying so: the whole of it is one get_memory away. A fence it
+// leaves open, cut or not, is closed: the facts after it, and the prompt
+// after them, are not read as code.
+func clipFact(s string, cut bool) string {
+	if r := []rune(s); cut && len(r) >= projectFactChars-1 {
+		s = string(r[:projectFactChars-1]) + "…"
 	}
 	return closeFence(s)
 }
+
+// factSpace is every rune strings.TrimSpace trims (unicode.IsSpace), for
+// btrim: a fact is trimmed in the database as it was in Go, so its length,
+// and whether it is cut, are the same.
+var factSpace = func() string {
+	var b strings.Builder
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if unicode.IsSpace(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}()

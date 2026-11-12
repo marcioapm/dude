@@ -145,6 +145,21 @@ func TestALongFactIsCutAndAFenceIsClosed(t *testing.T) {
 		t.Errorf("a %d-rune fact is cut:\n%s", projectFactChars, got)
 	}
 
+	// Whitespace at rune 601, or before the text, is not counted as the
+	// text: what is shown is what the whole text, trimmed, would show.
+	for name, c := range map[string]struct{ content, want string }{
+		"a space at 601":          {`repeat('a', 600) || ' ' || 'TAIL'`, strings.Repeat("a", projectFactChars-1) + "…"},
+		"a newline at 601":        {`repeat('a', 600) || E'\n' || 'TAIL'`, strings.Repeat("a", projectFactChars-1) + "…"},
+		"a no-break space at 601": {`repeat('a', 600) || U&'\00A0' || 'TAIL'`, strings.Repeat("a", projectFactChars-1) + "…"},
+		"leading whitespace":      {`E' \n\t' || repeat('a', 600)`, strings.Repeat("a", projectFactChars)},
+		"trailing whitespace":     {`repeat('a', 600) || E' \n '`, strings.Repeat("a", projectFactChars)},
+	} {
+		w.exec(t, `UPDATE memories SET content = `+c.content+` WHERE id = 'mem_long' AND organization_id = $1`)
+		if got := facts(); !strings.Contains(got+"\n", ": "+c.want+"\n") {
+			t.Errorf("%s: not shown as %q:\n%s", name, c.want, got)
+		}
+	}
+
 	// One fact longer than the whole bound is shown, the rest counted.
 	w.exec(t, `UPDATE memories SET title = repeat('T', 200), content = repeat('é', 600) WHERE id = 'mem_long' AND organization_id = $1`)
 	w.exec(t, `INSERT INTO people (id, organization_id, name) VALUES ('per_long', $1, repeat('N', 3400))`)
