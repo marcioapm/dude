@@ -395,7 +395,7 @@ func EndDispatchTx(ctx context.Context, tx pgx.Tx, c DispatchCheck, done Dispatc
 			WHERE id = $1 AND state = $4`, c.id, DispatchFailed, said, DispatchDispatching)
 		return refusef(rGithubDidNotDo, err), uerr
 	}
-	_, uerr := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, outcome = $2, woken_outcome = $2, woken_at = now(),
+	_, uerr := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, outcome = $2, woken_outcome = $2,
 			reason = $3, last_error = $4
 		WHERE id = $1 AND state = $5`, c.id, DispatchUnknown, dispatchMaybe, said, DispatchDispatching)
 	if uerr != nil {
@@ -435,7 +435,7 @@ func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchChec
 		// Late, its undelivered "may or may not" wake no longer holds, and
 		// nothing is owed until the run ends.
 		if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, run_id = $3, run_url = NULLIF($4, ''), run_status = 'queued',
-				reason = NULL, outcome = NULL, woken_outcome = NULL, woken_wait = NULL, woken_at = NULL, last_error = NULL
+				reason = NULL, outcome = NULL, woken_outcome = NULL, woken_wait = NULL, last_error = NULL
 			WHERE id = $1`, d.ID, DispatchBound, done.Run.ID, done.Run.URL); err != nil {
 			return DispatchRecorded{}, err
 		}
@@ -677,7 +677,7 @@ func deliverDispatchTx(ctx context.Context, tx pgx.Tx, org string, d DispatchRow
 		false); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_dispatches SET woken_outcome = outcome, woken_wait = NULL, woken_at = now() WHERE id = $1`, d.ID)
+	_, err = tx.Exec(ctx, `UPDATE workflow_dispatches SET woken_outcome = outcome, woken_wait = NULL WHERE id = $1`, d.ID)
 	return err
 }
 
@@ -793,7 +793,7 @@ func deliveredByWaitTx(ctx context.Context, tx pgx.Tx, waitID, told string, ev w
 		if it.Workflow == nil || it.Workflow.Outcome == "" || !strings.Contains(told, it.Workflow.Line) {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET woken_outcome = outcome, woken_wait = NULLIF($4, ''), woken_at = now()
+		if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET woken_outcome = outcome, woken_wait = NULLIF($4, '')
 			WHERE id = $1 AND outcome = $2 AND COALESCE(run_attempt, 0) = $3 AND outcome IS DISTINCT FROM woken_outcome`,
 			it.Workflow.ID, it.Workflow.Outcome, it.Workflow.Attempt, waitID); err != nil {
 			return err
@@ -806,7 +806,7 @@ func deliveredByWaitTx(ctx context.Context, tx pgx.Tx, waitID, told string, ev w
 // conductor ended first) did not reach anyone, so the outcomes they
 // carried are owed again; the supervisor's next pass wakes for them.
 func undeliverWaitsTx(ctx context.Context, tx pgx.Tx, taskID string) error {
-	_, err := tx.Exec(ctx, `UPDATE workflow_dispatches d SET woken_outcome = NULL, woken_wait = NULL, woken_at = NULL
+	_, err := tx.Exec(ctx, `UPDATE workflow_dispatches d SET woken_outcome = NULL, woken_wait = NULL
 		WHERE d.task_id = $1 AND d.woken_wait IS NOT NULL AND EXISTS (SELECT 1 FROM conductor_wakes c
 			WHERE c.task_id = $1 AND c.kind = $2 AND c.key = 'wait:' || d.woken_wait AND c.delivered_at IS NULL)`, taskID, WakeWait)
 	return err

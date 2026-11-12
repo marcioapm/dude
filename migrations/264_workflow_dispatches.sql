@@ -20,11 +20,10 @@
 --   outcome       the terminal outcome the conductor is owed a wake for:
 --                 completed, unknown, or cannot_see (failed_reads at its
 --                 bound; cleared by the next read that succeeds).
---   woken_outcome the outcome that reached the conductor, woken_at when:
---                 by its own wake, or by the held digest of a wait naming
---                 it (woken_wait, that wait). At most one per outcome,
---                 across restarts and passes; never set while it is only
---                 owed.
+--   woken_outcome the outcome that reached the conductor: by its own
+--                 wake, or by the held digest of a wait naming it
+--                 (woken_wait, that wait). At most one per outcome, across
+--                 restarts and passes; never set while it is only owed.
 --   completed_at  when the bound run was first seen completed: it is still
 --                 read for a while after, so a re-run (attempt n+1)
 --                 reopens it.
@@ -54,7 +53,6 @@ CREATE TABLE workflow_dispatches (
   last_error text CHECK (length(last_error) <= 1000),
   outcome text CHECK (outcome IN ('completed', 'unknown', 'cannot_see')),
   woken_outcome text CHECK (woken_outcome IN ('completed', 'unknown', 'cannot_see')),
-  woken_at timestamptz,
   woken_wait text,
   completed_at timestamptz,
   read_after timestamptz
@@ -67,9 +65,6 @@ CREATE UNIQUE INDEX workflow_dispatches_question_idx ON workflow_dispatches (que
 -- A run is bound to one dispatch only.
 CREATE UNIQUE INDEX workflow_dispatches_run_idx ON workflow_dispatches (repository_id, run_id) WHERE run_id IS NOT NULL;
 CREATE INDEX workflow_dispatches_task_idx ON workflow_dispatches (task_id, dispatched_at);
--- The supervisor's pass: the dispatches still read, or owed a wake.
-CREATE INDEX workflow_dispatches_live_idx ON workflow_dispatches (last_read_at NULLS FIRST)
-  WHERE state IN ('dispatching', 'bound') OR outcome IS DISTINCT FROM woken_outcome;
 ALTER TABLE workflow_dispatches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workflow_dispatches FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON workflow_dispatches
