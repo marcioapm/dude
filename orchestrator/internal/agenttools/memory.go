@@ -247,12 +247,8 @@ func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (remember
 	if err == nil && pin {
 		m, err = memory.Pin(ctx, tx, c.Org, m, true, memory.Pinner{RunID: c.RunID}, actor)
 	}
-	var bad *memory.Invalid
-	if errors.As(err, &bad) {
-		return rememberOut{}, refuse("%s", bad.Reason)
-	}
 	if err != nil {
-		return rememberOut{}, err
+		return rememberOut{}, memoryRefusal(err)
 	}
 	if c.env.kick != nil {
 		c.env.kick()
@@ -278,14 +274,20 @@ func pinByID(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (rememberO
 	}
 	actor := memory.Actor{Type: ledger.ActorAgent, ID: c.RunID, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID}
 	m, err = memory.Pin(ctx, tx, c.Org, m, *in.Pin, memory.Pinner{RunID: c.RunID}, actor)
-	var bad *memory.Invalid
-	if errors.As(err, &bad) {
-		return rememberOut{}, refuse("%s", bad.Reason)
-	}
 	if err != nil {
-		return rememberOut{}, err
+		return rememberOut{}, memoryRefusal(err)
 	}
 	return rememberOut{ID: m.ID, Pinned: m.Pinned()}, nil
+}
+
+// memoryRefusal is the memory package's refusal (memory.Invalid) as the
+// agent's, saying why; any other error is returned as it is.
+func memoryRefusal(err error) error {
+	var bad *memory.Invalid
+	if errors.As(err, &bad) {
+		return refuse("%s", bad.Reason)
+	}
+	return err
 }
 
 // resolveAbout finds what an agent names: a task by its key, or an epic by
