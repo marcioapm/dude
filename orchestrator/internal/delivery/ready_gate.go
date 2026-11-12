@@ -161,6 +161,7 @@ type gateSimplify struct {
 
 // StoredGate is the last gate computed for a pull request
 // (pull_requests.ready_gate): at which head, and when.
+// It records no profile: PR 4 must not store a verdict gate (StoreGatesTx), or it is served as the merge gate.
 type StoredGate struct {
 	Head  string     `json:"head"`
 	At    time.Time  `json:"at"`
@@ -535,6 +536,7 @@ func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 // 'person' and 'conductor' until then). The count below already takes an
 // open row of any addressee, so they will hold the verdict with no change
 // here.
+// The count has no addressee filter, so author rows would hold the merge gate too: PR 6 must add the filter.
 func gateQuestionsTx(ctx context.Context, tx pgx.Tx, st *State, attempt int, noFeedback bool) (GateItem, error) {
 	var asked, reviewing, feedback int
 	if err := tx.QueryRow(ctx, `SELECT
@@ -846,6 +848,7 @@ func verdictReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge
 	var missing []string
 	judged := map[string]string{} // by a lens's head, why it does not reach h
 	for _, lens := range lenses {
+		// TODO(review-only PR 4, decision table): a failed or running re-review of a lens at the pin is ignored (LensHeads reads completed Runs only).
 		at := p.LensHeads[lens]
 		switch {
 		case at == "":
