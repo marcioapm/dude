@@ -4,6 +4,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -385,6 +386,11 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	} else if wait > 0 {
 		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(wait)}, nil
 	}
+	if st.Source.ReviewOnly() {
+		// Never a writer, and never a word in the author's pull request
+		// but dude's review and its status comment: the verdict weighs it.
+		return w.reviewOnlyTested(ctx, sc, st, runID)
+	}
 	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
 	w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
@@ -406,6 +412,28 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 		return w.escalate(ctx, sc, st, ReasonTestBlocked, detail)
 	}
 	return w.beforePR(ctx, sc, st, testPassedLine(runID))
+}
+
+// reviewOnlyTested sends a review-only task's finished test to the
+// verdict, never to a fixer: a failed or blocked test is recorded at the
+// head it ran at, and the verdict names it and does not approve (a finding
+// the tester filed, open at the fix bar, requests changes as any lens's).
+func (w *steps) reviewOnlyTested(ctx context.Context, sc workflow.StepContext, st *State, runID string) (workflow.Result, error) {
+	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	g := judgeGate(in)
+	repo := st.Source.Repository
+	head := cmp.Or(st.RoundHeads[repo], st.Heads[repo])
+	if st.Verdict == nil {
+		st.Verdict = &VerdictState{}
+	}
+	st.Verdict.TestHead, st.Verdict.Test = head, ""
+	if g.Outcome == "fail" || g.Outcome == "blocked" {
+		st.Verdict.Test = fmt.Sprintf("the test %s %s criteria %v", runID, map[string]string{"fail": "failed", "blocked": "was blocked on"}[g.Outcome], g.Criteria)
+	}
+	return workflow.Result{Next: "verdict", State: st}, nil
 }
 
 // testFailedLine is the conductor's fact on test runID failing criteria
