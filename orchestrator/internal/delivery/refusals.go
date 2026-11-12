@@ -260,5 +260,5 @@ const (
 	rDispatchTriggersUnreadable             = "dude cannot read the triggers (on:) of %s at %s: %v. Nothing was dispatched"
 	rDispatchNoTrigger                      = "%s at %s has no workflow_dispatch trigger (it runs on %s): GitHub cannot start it by hand. Nothing was dispatched"
 	rDispatchNeedsPerson                    = "%s runs on %s, not on a push or pull request: it is not CI this change already runs, and the person decides it. Ask them (ask_person), naming %s and the ref %s; once they have answered yes, call run_workflow again with questionId"
-	rWaitNotDispatchOfThisTask              = "%s is not a workflow this task dispatched (run_workflow's dispatchId; workflow_runs lists them)"
+	rWaitNotDispatchOfThisTask              = "%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches)"
 )
