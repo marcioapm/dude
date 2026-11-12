@@ -69,9 +69,6 @@ func ProjectFacts(ctx context.Context, tx pgx.Tx, projectID string) (string, err
 	var kept []projectFact
 	used := 0
 	for _, f := range all {
-		if len(kept) == ProjectFactsMax {
-			break
-		}
 		f.Title = oneLine(f.Title)
 		f.Text = strings.ReplaceAll(clipFact(f.Text, f.cut), "\n", "\n  ")
 		size := len(f.Title) + len(f.Text) + len(f.By) + len(f.ID)
