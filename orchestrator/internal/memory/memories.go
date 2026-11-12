@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
@@ -190,9 +191,14 @@ type Patch struct {
 
 // Update changes m, already read (and checked by the caller).
 func Update(ctx context.Context, tx pgx.Tx, org string, m Memory, p Patch, by Actor) (Memory, error) {
+	// Locked and read again, as Pin does: the pinned guard below sees a pin
+	// committed since the caller read m, and a pin waits for this edit.
+	m, err := lock(ctx, tx, m.ID)
+	if err != nil {
+		return Memory{}, err
+	}
 	id := m.ID
 	title, content, kind, project := m.Title, m.Content, m.Kind, m.ProjectID
-	var err error
 	if p.Title != nil {
 		title = *p.Title
 	}
@@ -286,14 +292,16 @@ type Pinner struct {
 // is detail search finds when the work needs it, and a fact about one task
 // is that task's detail, not the project's. Unpinning is always allowed.
 func Pin(ctx context.Context, tx pgx.Tx, org string, m Memory, pinned bool, who Pinner, by Actor) (Memory, error) {
-	// The row is locked and its pin read again: of two pins at once, the
-	// second waits, finds it pinned, and records nothing.
-	var now bool
-	if err := tx.QueryRow(ctx, `SELECT pinned_at IS NOT NULL FROM memories WHERE id = $1 FOR UPDATE`, m.ID).Scan(&now); err != nil {
+	// The row is locked and read again, refs and all: of two pins at once,
+	// the second waits, finds it pinned, and records nothing; and what is
+	// checked is the memory as it is now, not the copy the caller read
+	// before a PATCH elsewhere made it about a task (Update locks it too).
+	m, err := lock(ctx, tx, m.ID)
+	if err != nil {
 		return Memory{}, err
 	}
-	if now == pinned {
-		return get(ctx, tx, m.ID)
+	if m.Pinned() == pinned {
+		return m, nil
 	}
 	if pinned {
 		if err := Pinnable(m); err != nil {
@@ -302,11 +310,11 @@ func Pin(ctx context.Context, tx pgx.Tx, org string, m Memory, pinned bool, who 
 	}
 	id := m.ID
 	ev := EvUnpinned
-	var err error
 	if pinned {
 		ev = EvPinned
 		_, err = tx.Exec(ctx, `UPDATE memories SET pinned_at = now(), pinned_by_person_id = $2, pinned_by_run_id = $3 WHERE id = $1`,
 			id, db.Nullable(who.PersonID), db.Nullable(who.RunID))
+		err = pinRefused(err)
 	} else {
 		_, err = tx.Exec(ctx, `UPDATE memories SET pinned_at = NULL, pinned_by_person_id = NULL, pinned_by_run_id = NULL WHERE id = $1`, id)
 	}
@@ -317,6 +325,16 @@ func Pin(ctx context.Context, tx pgx.Tx, org string, m Memory, pinned bool, who 
 		return Memory{}, err
 	}
 	return get(ctx, tx, id)
+}
+
+// pinRefused is the database's own refusal of a pin (migration 262's
+// CHECK, 23514) as Pinnable's: a refusal the caller is told, never a
+// failure.
+func pinRefused(err error) error {
+	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23514" {
+		return invalid("only a project's own fact, of no brainstorm session, is pinned")
+	}
+	return err
 }
 
 // Pinnable refuses what may not be pinned, saying why (Pin).
@@ -484,6 +502,15 @@ func Get(ctx context.Context, tx pgx.Tx, id string, v Viewer) (Memory, error) {
 // get reads one memory just written by the caller, whoever may read it.
 func get(ctx context.Context, tx pgx.Tx, id string) (Memory, error) {
 	return getWhere(ctx, tx, ` WHERE m.id = $1`, id)
+}
+
+// lock takes a memory's row lock for the rest of tx and reads it, refs
+// and all, as it is now: what a write since the caller's read changed.
+func lock(ctx context.Context, tx pgx.Tx, id string) (Memory, error) {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM memories WHERE id = $1 FOR UPDATE`, id); err != nil {
+		return Memory{}, err
+	}
+	return get(ctx, tx, id)
 }
 
 func getWhere(ctx context.Context, tx pgx.Tx, where string, args ...any) (Memory, error) {
