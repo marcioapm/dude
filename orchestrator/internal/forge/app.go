@@ -2,6 +2,7 @@ package forge
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -16,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -443,13 +445,14 @@ func (g *GitHub) exchange(ctx context.Context, method, target, authorization str
 	}
 	if res.StatusCode >= 300 {
 		var e struct {
-			Message string `json:"message"`
+			Message string            `json:"message"`
+			Errors  []json.RawMessage `json:"errors"`
 		}
 		_ = json.Unmarshal(data, &e)
 		if e.Message == "" {
 			e.Message = fmt.Sprintf("%s %s failed", method, target)
 		}
-		refusal := &Error{Status: res.StatusCode, Message: e.Message}
+		refusal := &Error{Status: res.StatusCode, Message: e.Message, Details: errorDetails(e.Errors)}
 		markRateLimit(refusal, res.Header, "rate limit: ")
 		if Transient(refusal) {
 			refusal.RetryAfter = retryAfter(res.Header, time.Now())
@@ -494,4 +497,22 @@ func (g *GitHub) redirectRefusal(method, target string, status int) error {
 	}
 	return &Error{Status: status, Refusal: RefusalRedirect,
 		Message: fmt.Sprintf("GitHub answered %s %s with a redirect, which an agent's read does not follow", method, path)}
+}
+
+// errorDetails is GitHub's "errors" list as Error.Details: each a string,
+// or an object's message, else its code.
+func errorDetails(list []json.RawMessage) string {
+	var out []string
+	for _, raw := range list {
+		var text string
+		if json.Unmarshal(raw, &text) == nil {
+			out = append(out, text)
+			continue
+		}
+		var o struct{ Message, Code string }
+		if json.Unmarshal(raw, &o) == nil {
+			out = append(out, cmp.Or(o.Message, o.Code))
+		}
+	}
+	return strings.Join(slices.DeleteFunc(out, func(s string) bool { return s == "" }), "\n")
 }
