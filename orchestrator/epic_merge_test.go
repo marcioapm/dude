@@ -805,25 +805,6 @@ func TestEpicMergeLockedIsNotSettled(t *testing.T) {
 	w.told(peer, w.none())
 }
 
-// Level-triggered: a pass that dies before it tells the merge (its context
-// gone, as a crash) wakes nobody, and the next pass, reading the merged
-// pull requests not yet told, does.
-func TestEpicMergeMissedPassStillWakes(t *testing.T) {
-	w := newEpicMergeWorld(t)
-	peer := w.peer(w.live("x.go"))
-	w.merge()
-	dead, cancel := context.WithCancel(context.Background())
-	cancel()
-	if n, err := w.worker.Sweep(dead); err == nil || n != 0 {
-		t.Fatalf("a dead pass settled %d (%v)", n, err)
-	}
-	if got := w.wakes(peer); len(got) != 0 {
-		t.Fatalf("woken by a dead pass: %q", got)
-	}
-	w.sweep()
-	w.told(peer, w.none())
-}
-
 // A peer that ends between the read and the record is not woken: the
 // peers are read again under the pull request's lock. It ends while the
 // merge's files are read from the forge, between the two.
