@@ -13,7 +13,7 @@
 {{- else if .Ended}} {{.Status}}{{with .Error}}: {{clip (oneLine .) 120}}{{end}}
 {{- else}} not ended ({{.Status}})
 {{- end}}
-{{- else if eq .Kind "workflow"}}{{template "wakes/wait/workflow" .Workflow}}
+{{- else if eq .Kind "workflow"}}{{.Workflow.Line}}
 {{- else if eq .State "merged"}}{{.PR}} was merged
 {{- else if eq .State "closed"}}{{.PR}} was closed
 {{- else if .MovedTo}}{{.PR}}'s head moved to {{short .MovedTo}}: its checks will never finish on {{short .Head}}

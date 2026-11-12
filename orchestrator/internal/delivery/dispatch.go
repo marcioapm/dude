@@ -77,6 +77,9 @@ const (
 	DispatchInputsMax  = 25
 	DispatchInputChars = 1000
 	workflowLineChars  = 600
+	// workflowItemChars bounds a dispatch's item in a wait's digest, so
+	// WaitMaxConditions of them fit its line.
+	workflowItemChars = 200
 )
 
 // Dispatch states and outcomes (workflow_dispatches.state, outcome).
@@ -701,6 +704,8 @@ type workflowFacts struct {
 	// BranchRuns: the conductor may read a branch's runs
 	// (github_branch_runs).
 	BranchRuns bool
+	// Line is its item in a wait's digest, up to workflowItemChars.
+	Line string
 }
 
 func workflowView(d DispatchRow, branchRuns bool) workflowFacts {
@@ -724,6 +729,7 @@ func workflowItemTx(ctx context.Context, tx pgx.Tx, id string) (waitItem, error)
 		return waitItem{}, err
 	}
 	v := workflowView(d, true)
+	v.Line = clip(oneLine(render(waitWorkflowTmpl, v)), workflowItemChars)
 	it := waitItem{Kind: "workflow", Workflow: &v}
 	switch {
 	case d.Outcome == DispatchCompleted && d.Conclusion == "success":
@@ -738,10 +744,13 @@ func workflowItemTx(ctx context.Context, tx pgx.Tx, id string) (waitItem, error)
 
 // deliveredByWaitTx marks the terminal outcomes a wait's digest told the
 // conductor as delivered: each workflow item of ev with an outcome, as it
-// was read (an outcome changed since is not marked).
-func deliveredByWaitTx(ctx context.Context, tx pgx.Tx, waitID string, ev waitEval) error {
+// was read (an outcome changed since is not marked), whose whole line is
+// in told, the digest as stored (clipped to its bound). An item cut from
+// it reached no one: it stays owed, and the supervisor's next pass, with
+// the wait ended, wakes for it.
+func deliveredByWaitTx(ctx context.Context, tx pgx.Tx, waitID, told string, ev waitEval) error {
 	for _, it := range ev.items {
-		if it.Workflow == nil || it.Workflow.Outcome == "" {
+		if it.Workflow == nil || it.Workflow.Outcome == "" || !strings.Contains(told, it.Workflow.Line) {
 			continue
 		}
 		if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET woken_outcome = outcome, woken_wait = NULLIF($4, ''), woken_at = now()

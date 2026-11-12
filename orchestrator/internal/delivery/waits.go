@@ -195,7 +195,7 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 			out.Digest = renderWaitDigest(ev, "", false, true, nil, ask.Note)
 			// Told in this call's result: the outcomes it names reached
 			// the conductor.
-			return out, deliveredByWaitTx(ctx, tx, "", ev)
+			return out, deliveredByWaitTx(ctx, tx, "", out.Digest, ev)
 		}
 	}
 	if err := endOpenWaitsTx(ctx, tx, ref.TaskID, WaitReplaced); err != nil {
@@ -533,9 +533,15 @@ func EvaluateWaitTx(ctx context.Context, tx pgx.Tx, org, taskID, waitID string) 
 	if _, err := RecordWakeTx(ctx, tx, org, taskID, WakeWait, "wait:"+waitID, digest); err != nil {
 		return false, err
 	}
-	// The workflow outcomes this digest tells are delivered by it (should
-	// its conductor end before it is told, EndWaitsTx owes them again).
-	if err := deliveredByWaitTx(ctx, tx, waitID, v.ev); err != nil {
+	// The workflow outcomes this digest tells, as stored (clipped), are
+	// delivered by it (should its conductor end before it is told,
+	// EndWaitsTx owes them again); one cut from it is still owed.
+	var told string
+	if err := tx.QueryRow(ctx, `SELECT line FROM conductor_wakes WHERE task_id = $1 AND key = $2`, taskID, "wait:"+waitID).
+		Scan(&told); err != nil {
+		return false, err
+	}
+	if err := deliveredByWaitTx(ctx, tx, waitID, told, v.ev); err != nil {
 		return false, err
 	}
 	return true, endWaitTx(ctx, tx, org, taskID, waitID, v.conductor, v.by, v.ev, digest)

@@ -1,12 +1,17 @@
 package orchestrator_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -179,4 +184,74 @@ func TestAReservationLeftDispatchingEndsUnknown(t *testing.T) {
 	})
 	// The answer is spent: dude cannot tell that it was not used.
 	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_crash"}`, "q_crash already authorized dispatch wfd_crash")
+}
+
+// F4: a wait's digest is clipped to its bound. Each workflow item is
+// bounded (200 runes), so eight long outcomes fit the digest, with or
+// without the longest note; every outcome reaches the conductor exactly
+// once, in the digest or by a later wake. (An item cut from a digest
+// anyway stays owed: delivery's TestAnItemCutFromTheDigestIsStillOwed.)
+func TestProbeClippedDigestMarksAllDelivered(t *testing.T) {
+	for _, note := range []string{"", strings.Repeat("n", delivery.WaitNoteMax)} {
+		t.Run(map[bool]string{true: "no note", false: "long note"}[note == ""], func(t *testing.T) {
+			w, task, _ := dispatchWorld(t)
+			w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2400 })
+			first := w.dispatched(task, `{"workflow":"ci.yml"}`)
+			ids := []string{first}
+			for i := 1; i < delivery.WaitMaxConditions; i++ {
+				id := fmt.Sprintf("wfd_clip%d", i)
+				mustExec(t, w.owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, state, run_id)
+					SELECT $2, organization_id, task_id, repository_id, workflow, ref, 'bound', 2500 + $3::int FROM workflow_dispatches WHERE id = $1`,
+					first, id, i)
+				ids = append(ids, id)
+			}
+			var conds []string
+			for _, id := range ids {
+				conds = append(conds, `{"workflowEnded":"`+id+`"}`)
+			}
+			args, _ := json.Marshal(map[string]any{"conditions": json.RawMessage("[" + strings.Join(conds, ",") + "]"), "deadline": "30m", "note": note})
+			out := w.must(task, "wait_for", string(args))
+			waitID, _ := out["waitId"].(string)
+			// All end unknown, each with a long reason, while the wait is open.
+			mustExec(t, w.owner, `UPDATE workflow_dispatches SET state = 'unknown', outcome = 'unknown', reason = $2 WHERE task_id = $1`,
+				task, strings.Repeat("r", 900))
+			if err := w.prs.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+				_, err := delivery.EvaluateWaitTx(context.Background(), tx, w.org, task, waitID)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			digest := w.str(`SELECT line FROM conductor_wakes WHERE task_id = $1 AND key = $2`, task, "wait:"+waitID)
+			var inDigest []string
+			for _, id := range ids {
+				if strings.Contains(digest, "("+id+")") {
+					inDigest = append(inDigest, id)
+				}
+			}
+			// Bounded items come before the note, so the clip takes the
+			// note first: all eight fit either way.
+			if len(inDigest) != len(ids) {
+				t.Fatalf("eight bounded items did not fit: %d in %q", len(inDigest), digest)
+			}
+			for range 3 {
+				mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE task_id = $1`, task)
+				w.supervise()
+			}
+			wakes := w.workflowWakes(task)
+			for _, id := range ids {
+				told := 0
+				if slices.Contains(inDigest, id) {
+					told++
+				}
+				for _, l := range wakes {
+					if strings.Contains(l, "("+id+")") {
+						told++
+					}
+				}
+				if told != 1 {
+					t.Errorf("%s told %d times (digest %q, wakes %q)", id, told, digest, wakes)
+				}
+			}
+		})
+	}
 }
