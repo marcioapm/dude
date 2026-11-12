@@ -18,6 +18,8 @@ import (
 
 type DiffFile struct {
 	Path string `json:"path"`
+	// A rename's path before it, where it is known (a branch snapshot's).
+	PreviousPath string `json:"previousPath,omitempty"`
 	// M, A, D or R. An untracked file is A: to a person it is new.
 	Status    string     `json:"status"`
 	Additions int        `json:"additions"`

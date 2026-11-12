@@ -96,6 +96,11 @@ class PullRequest:
     draft: bool
     state: str = "open"
     merged_at: str | None = None
+    # The commit the merge made (GitHub's merge_commit_sha), and the base
+    # the pull request's files are listed against once its base moved
+    # past it: GitHub keeps listing what the pull request changed.
+    merge_commit_sha: str | None = None
+    files_base: str | None = None
     comments: list[dict] = field(default_factory=list)
     reviews: list[dict] = field(default_factory=list)
     requested_reviewers: list[str] = field(default_factory=list)
@@ -162,6 +167,8 @@ class FakeGitHub:
     def _init_repository(self) -> None:
         """What each repository has of its own; the rest a sibling shares."""
         self.pulls: dict[int, PullRequest] = {}
+        # GET /pulls/{n}/files answered, per pull request: who read a merge's files.
+        self.files_reads: dict[int, int] = {}
         self.hooks: list[dict] = []
         self.deliveries: list[tuple[str, int]] = []
         # The X-GitHub-Delivery GUID of the last webhook sent: dude stores it by that id.
@@ -563,11 +570,12 @@ class FakeGitHub:
             review["state"] = "DISMISSED"
             return 200, dict(review)
 
-    def merge(self, number: int) -> None:
+    def merge(self, number: int, sha: str | None = None) -> None:
         with self._lock:
             pr = self.pulls[number]
             pr.state = "closed"
             pr.merged_at = _now()
+            pr.merge_commit_sha = sha or self.branch_sha(pr.head)
         self.send_webhook("pull_request", {"action": "closed", "pull_request": {"number": number}})
 
     def merge_into_base(self, number: int) -> str:
@@ -583,7 +591,8 @@ class FakeGitHub:
                             env={"GIT_AUTHOR_NAME": "Gus Human", "GIT_AUTHOR_EMAIL": "gus@example.com",
                                  "GIT_COMMITTER_NAME": "Gus Human", "GIT_COMMITTER_EMAIL": "gus@example.com"})
         self._git_out("update-ref", f"refs/heads/{pr.base}", sha, base)
-        self.merge(number)
+        pr.files_base = base
+        self.merge(number, sha)
         for other in list(self.pulls.values()):
             if other.number != number and other.base == pr.base and other.state == "open":
                 self.send_webhook("pull_request", {"action": "synchronize", "pull_request": {"number": other.number}})
@@ -857,7 +866,7 @@ class FakeGitHub:
         """GET /pulls/{n}/files: each file the pull request changes against
         its base, with its patch (the diff's hunks, no header)."""
         pr = self.pulls[number]
-        spec = f"refs/heads/{pr.base}...refs/heads/{pr.head}"
+        spec = f"{pr.files_base or 'refs/heads/' + pr.base}...refs/heads/{pr.head}"
         status: dict[str, str] = {}
         for line in self._git_out("diff", "--name-status", spec).splitlines():
             code, _, name = line.partition("\t")
@@ -912,6 +921,8 @@ class FakeGitHub:
                 comments = list(self.issues[int(m[1])].comments)
             return 200, comments[(page - 1) * per_page:page * per_page]
         if (m := re.fullmatch(rf"{prefix}/pulls/(\d+)/files", path)) and int(m[1]) in self.pulls:
+            with self._lock:
+                self.files_reads[int(m[1])] = self.files_reads.get(int(m[1]), 0) + 1
             return 200, self.files(int(m[1]))[(page - 1) * per_page:page * per_page]
         return None
 
@@ -976,6 +987,7 @@ class FakeGitHub:
                     "draft": pr.draft,
                     "state": pr.state,
                     "merged_at": pr.merged_at,
+                    "merge_commit_sha": pr.merge_commit_sha,
                     "head": {"sha": self.github.branch_sha(pr.head) or "0" * 40, "ref": pr.head,
                              "repo": {"full_name": pr.head_repo or full}},
                     "base": {"ref": pr.base, "repo": {"full_name": full}},
@@ -1086,6 +1098,7 @@ class FakeGitHub:
                     with gh._lock:
                         gh.merges.append({"number": pr.number, "method": body.get("merge_method")})
                         pr.state, pr.merged_at = "closed", _now()
+                        pr.merge_commit_sha = gh.branch_sha(pr.head)
                     self._send(200, {"merged": True, "sha": gh.branch_sha(pr.head), "message": "Pull Request successfully merged"})
                     gh.send_webhook("pull_request", {"action": "closed", "pull_request": {"number": pr.number}})
                     return None
