@@ -1,4 +1,4 @@
--- 263_epic_merge_wakes.sql — a merge on an epic wakes its peers' conductors
+-- 264_epic_merge_wakes.sql — a merge on an epic wakes its peers' conductors
 -- (delivery.EpicMerges).
 --
 -- pull_requests.merge_commit_sha: the commit GitHub's merge made, as the
