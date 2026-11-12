@@ -29,7 +29,7 @@ func (s *Syncer) SuperviseDispatches(ctx context.Context, every time.Duration) (
 	var batch []due
 	if err := s.DB.InSystem(ctx, "workflow-supervisor", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT d.id, d.organization_id FROM workflow_dispatches d JOIN tasks t ON t.id = d.task_id
-			WHERE (d.state IN ('binding', 'bound') OR d.outcome IS DISTINCT FROM d.woken_outcome
+			WHERE (d.state IN ('dispatching', 'bound') OR d.outcome IS DISTINCT FROM d.woken_outcome
 			       OR d.state = 'completed' AND d.completed_at > now() - $3::interval)
 			  AND t.status::text NOT IN ('done', 'aborted', 'failed')
 			  AND (d.last_read_at IS NULL OR d.last_read_at < now() - $1::interval)
@@ -83,10 +83,9 @@ func (s *Syncer) superviseDispatch(ctx context.Context, org, id string) error {
 	})
 }
 
-// readDispatch reads the dispatch's state on GitHub, no transaction open:
-// the candidates while binding, the bound run after. Any failure,
-// including having no GitHub to read, is "cannot tell": while binding as
-// well, never "no candidates".
+// readDispatch reads the bound run's state on GitHub, no transaction
+// open. Any failure, including having no GitHub to read, is "cannot
+// tell".
 func (s *Syncer) readDispatch(ctx context.Context, org string, t delivery.DispatchTarget) delivery.DispatchRead {
 	gh, err := s.Forges.For(ctx, org)
 	if err == nil && gh == nil {
@@ -94,13 +93,6 @@ func (s *Syncer) readDispatch(ctx context.Context, org string, t delivery.Dispat
 	}
 	if err != nil {
 		return delivery.DispatchRead{Err: err}
-	}
-	if t.RunID == 0 {
-		runs, err := gh.DispatchedRuns(ctx, t.Slug, t.Workflow, t.Ref, t.Since)
-		if err != nil {
-			return delivery.DispatchRead{Err: err}
-		}
-		return delivery.DispatchRead{Candidates: runs}
 	}
 	run, err := gh.RunStateOf(ctx, t.Slug, t.RunID)
 	if err != nil {

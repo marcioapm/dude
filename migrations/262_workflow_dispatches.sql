@@ -1,18 +1,20 @@
 -- 262_workflow_dispatches.sql — run_workflow: a conductor's
 -- workflow_dispatch and its supervision to the end.
 --
--- One row per dispatch. Asked for run details, GitHub answers the dispatch
--- with its run's id, bound at once (state bound); an older GitHub answers
--- with none, and the run is bound afterwards (run_id) from the runs that
--- were not there before the dispatch (prior_runs), and every pass of the supervisor
--- re-reads it and stores what it saw (status, conclusion, attempt,
--- last_seen_at): the decision is always taken from this stored state,
--- never from an event that might have been missed, and a restart resumes
--- from the rows.
---   state         binding (no run bound yet), bound (reading the run),
---                 completed, or unknown (it could not be told which run,
---                 or none came: reason says why); the last two end the
---                 supervision.
+-- One row per dispatch, reserved (dispatching) before the dispatch is
+-- sent, so one person's answer (question_id) cannot authorize two. Asked
+-- for run details, GitHub answers the dispatch with its run's id, bound at
+-- once (state bound); an older GitHub answers with none, and the dispatch
+-- is unknown: dude never guesses its run. Every pass of the supervisor
+-- re-reads a bound run and stores what it saw (status, conclusion,
+-- attempt, last_seen_at): the decision is always taken from this stored
+-- state, never from an event that might have been missed, and a restart
+-- resumes from the rows.
+--   state         dispatching (reserved; GitHub not yet answered), bound
+--                 (reading the run), completed, unknown (no run id, or
+--                 dude never heard GitHub's answer: reason says why), or
+--                 failed (GitHub refused the dispatch: no workflow ran,
+--                 and the answer is not spent).
 --   failed_reads  consecutive reads that failed (auth, 5xx, rate limit):
 --                 "cannot tell", never "not yet"; last_error is the latest.
 --   outcome       the terminal outcome the conductor is owed a wake for:
@@ -23,9 +25,6 @@
 --                 it (woken_wait, that wait). At most one per outcome,
 --                 across restarts and passes; never set while it is only
 --                 owed.
---   prior_runs    the workflow_dispatch runs of the workflow and ref seen
---                 just before the dispatch: never this dispatch's run;
---                 NULL when that read failed.
 --   completed_at  when the bound run was first seen completed: it is still
 --                 read for a while after, so a re-run (attempt n+1)
 --                 reopens it.
@@ -41,7 +40,7 @@ CREATE TABLE workflow_dispatches (
   dispatched_by text REFERENCES runs(id) ON DELETE SET NULL,
   question_id text REFERENCES questions(id) ON DELETE SET NULL,
   dispatched_at timestamptz NOT NULL DEFAULT now(),
-  state text NOT NULL DEFAULT 'binding' CHECK (state IN ('binding', 'bound', 'completed', 'unknown')),
+  state text NOT NULL DEFAULT 'dispatching' CHECK (state IN ('dispatching', 'bound', 'completed', 'unknown', 'failed')),
   reason text CHECK (length(reason) <= 1000),
   run_id bigint,
   run_attempt int,
@@ -57,23 +56,26 @@ CREATE TABLE workflow_dispatches (
   woken_outcome text CHECK (woken_outcome IN ('completed', 'unknown', 'cannot_see')),
   woken_at timestamptz,
   woken_wait text,
-  prior_runs bigint[],
   completed_at timestamptz,
   read_after timestamptz
 );
--- A person's answer authorizes one dispatch.
-CREATE UNIQUE INDEX workflow_dispatches_question_idx ON workflow_dispatches (question_id) WHERE question_id IS NOT NULL;
+-- A person's answer authorizes one dispatch: reserved before it is sent,
+-- so a second call is refused before any POST. A dispatch GitHub refused
+-- (failed) ran nothing and does not spend it.
+CREATE UNIQUE INDEX workflow_dispatches_question_idx ON workflow_dispatches (question_id)
+  WHERE question_id IS NOT NULL AND state <> 'failed';
 -- A run is bound to one dispatch only.
 CREATE UNIQUE INDEX workflow_dispatches_run_idx ON workflow_dispatches (repository_id, run_id) WHERE run_id IS NOT NULL;
 CREATE INDEX workflow_dispatches_task_idx ON workflow_dispatches (task_id, dispatched_at);
 -- The supervisor's pass: the dispatches still read, or owed a wake.
 CREATE INDEX workflow_dispatches_live_idx ON workflow_dispatches (last_read_at NULLS FIRST)
-  WHERE state IN ('binding', 'bound') OR outcome IS DISTINCT FROM woken_outcome;
+  WHERE state IN ('dispatching', 'bound') OR outcome IS DISTINCT FROM woken_outcome;
 ALTER TABLE workflow_dispatches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workflow_dispatches FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON workflow_dispatches
   USING (organization_id = current_organization_id()) WITH CHECK (organization_id = current_organization_id());
-GRANT SELECT, INSERT, UPDATE ON workflow_dispatches TO dude_app;
+-- DELETE: a reservation whose call sent nothing (refused first) goes.
+GRANT SELECT, INSERT, UPDATE, DELETE ON workflow_dispatches TO dude_app;
 -- The supervisor's cross-tenant probe for dispatches to read.
 GRANT SELECT ON workflow_dispatches TO dude_sweeper;
 

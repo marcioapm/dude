@@ -171,48 +171,51 @@ func TestOnlyTheTasksOwnCIIsFree(t *testing.T) {
 	})
 }
 
-// An older GitHub (204, no run id): exactly one new candidate run is
-// bound; two are unknown, never a guess; none is unknown only once the
-// bound has passed.
-func TestADispatchBindsOnlyItsOneRun(t *testing.T) {
+// An older GitHub (or GHES) answers the dispatch 204, with no run id: the
+// dispatch went out, and dude cannot know which run it started. It is
+// unknown at once, never bound (not even to the one run of that workflow
+// and ref there is), and the conductor is woken once, told to look with
+// github_branch_runs. A second dispatch of the same workflow and ref is
+// not refused: nothing is left to tell apart.
+func TestA204DispatchIsUnknownAndNeverBound(t *testing.T) {
 	w, task, branch := dispatchWorld(t)
 	w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = true })
 	one := w.dispatched(task, `{"workflow":"ci.yml"}`)
-	w.supervise()
-	if state := w.str(`SELECT state FROM workflow_dispatches WHERE id = $1`, one); state != delivery.DispatchBinding {
-		t.Fatalf("no run yet: %s", state)
+	if got := w.str(`SELECT state || ' ' || COALESCE(run_id::text, 'none') || ': ' || reason FROM workflow_dispatches WHERE id = $1`, one); got != "unknown none: GitHub did not say which run this dispatch started; look with `github_branch_runs`" {
+		t.Fatalf("204: %s", got)
 	}
-	now := w.str(`SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`)
-	w.gh.SetWorkflowRun(901, fakegithub.WorkflowRun{Workflow: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: now})
-	w.gh.SetWorkflowRun(950, fakegithub.WorkflowRun{Workflow: "ci.yml", Branch: branch, Event: "push", Status: "queued", CreatedAt: now})
-	w.supervise()
-	if got := w.str(`SELECT state || ' ' || run_id || ' ' || run_status FROM workflow_dispatches WHERE id = $1`, one); got != "bound 901 queued" {
-		t.Fatalf("one candidate: %s", got)
-	}
-
-	// Two more runs for a second dispatch: which is it is not told.
-	two := w.dispatched(task, `{"workflow":"ci.yml"}`)
-	w.gh.SetWorkflowRun(902, fakegithub.WorkflowRun{Workflow: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: now})
-	w.gh.SetWorkflowRun(903, fakegithub.WorkflowRun{Workflow: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: now})
-	w.supervise()
-	if got := w.str(`SELECT state || ' ' || COALESCE(run_id::text, 'none') FROM workflow_dispatches WHERE id = $1`, two); got != "unknown none" {
-		t.Fatalf("two candidates: %s", got)
-	}
-	if wakes := w.workflowWakes(task); len(wakes) != 1 || !strings.Contains(wakes[0], "dude does not guess") || !strings.Contains(wakes[0], "is unknown") {
+	if wakes := w.workflowWakes(task); len(wakes) != 1 || !strings.Contains(wakes[0], one) || !strings.Contains(wakes[0], "is unknown: GitHub did not say which run") {
 		t.Fatalf("wakes %q", wakes)
 	}
-
-	// None: binding while within the bound, unknown past it.
-	three := w.dispatched(task, `{"workflow":"ci.yml"}`)
-	w.supervise()
-	if state := w.str(`SELECT state FROM workflow_dispatches WHERE id = $1`, three); state != delivery.DispatchBinding {
-		t.Fatalf("none within the bound: %s", state)
+	// The one run there is, new since the dispatch: still not bound.
+	w.gh.SetWorkflowRun(901, fakegithub.WorkflowRun{Workflow: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
+	for range 3 {
+		mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE id = $1`, one)
+		w.supervise()
 	}
-	mustExec(t, w.owner, `UPDATE workflow_dispatches SET dispatched_at = now() - interval '6 minutes' WHERE id = $1`, three)
-	w.supervise()
-	if got := w.str(`SELECT state || ': ' || reason FROM workflow_dispatches WHERE id = $1`, three); !strings.HasPrefix(got, "unknown: no run of ci.yml on "+branch) {
-		t.Fatalf("none past the bound: %s", got)
+	if got := w.dispatchRow(one); got != "unknown none" {
+		t.Fatalf("after passes: %s", got)
 	}
+	if n := len(w.workflowWakes(task)); n != 1 {
+		t.Fatalf("%d wakes for one 204", n)
+	}
+	two := w.dispatched(task, `{"workflow":"ci.yml"}`)
+	if got := w.dispatchRow(two); got != "unknown none" {
+		t.Fatalf("second 204: %s", got)
+	}
+	w.gh.Set(func(s *fakegithub.Server) {
+		if len(s.Dispatches) != 2 {
+			t.Errorf("dispatched %d", len(s.Dispatches))
+		}
+	})
+	w.until("the conductor told the 204", func() bool {
+		for _, s := range w.woken(task) {
+			if strings.Contains(s, one) && strings.Contains(s, "github_branch_runs") {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // Level-triggered: with no webhook or event delivered at all, a run that

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
-	"time"
 )
 
 // A workflow's on: reads as the events it names, in each of YAML's forms;
@@ -34,24 +33,14 @@ func TestWorkflowTriggersReadsEveryFormOfOn(t *testing.T) {
 }
 
 // A dispatch posts the ref and inputs to the workflow's dispatches and
-// takes GitHub's 204; the dispatched runs are that workflow's, branch's and
-// event's since a time, and a run of another event or branch GitHub
-// answers anyway is left out.
+// takes an older GitHub's 204 as no run (ID 0); a run is read by its id.
 func TestDispatchAndItsRunsAsGitHubAnswers(t *testing.T) {
 	var posted map[string]any
-	var listed string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "POST" && r.URL.Path == "/repos/acme/api/actions/workflows/deploy.yml/dispatches":
 			_ = json.NewDecoder(r.Body).Decode(&posted)
 			w.WriteHeader(204)
-		case r.URL.Path == "/repos/acme/api/actions/workflows/deploy.yml/runs":
-			listed = r.URL.RawQuery
-			fmt.Fprint(w, `{"workflow_runs":[
-				{"id":9,"event":"workflow_dispatch","head_branch":"dude/t","status":"queued","conclusion":null,"run_attempt":1,"created_at":"2026-11-12T10:00:05Z"},
-				{"id":8,"event":"push","head_branch":"dude/t","status":"completed","conclusion":"success","run_attempt":1,"created_at":"2026-11-12T10:00:06Z"},
-				{"id":7,"event":"workflow_dispatch","head_branch":"main","status":"queued","run_attempt":1,"created_at":"2026-11-12T10:00:07Z"},
-				{"id":6,"event":"workflow_dispatch","head_branch":"dude/t","status":"queued","run_attempt":1,"created_at":"2026-11-12T09:00:00Z"}]}`)
 		case r.URL.Path == "/repos/acme/api/actions/runs/9":
 			fmt.Fprint(w, `{"id":9,"status":"completed","conclusion":"failure","run_attempt":2,"html_url":"https://x/9"}`)
 		default:
@@ -65,17 +54,6 @@ func TestDispatchAndItsRunsAsGitHubAnswers(t *testing.T) {
 	}
 	if posted["ref"] != "dude/t" || posted["inputs"].(map[string]any)["env"] != "staging" || posted["return_run_details"] != true {
 		t.Fatalf("posted %v", posted)
-	}
-	since := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
-	runs, err := gh.DispatchedRuns(context.Background(), "acme/api", "deploy.yml", "dude/t", since)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runs) != 1 || runs[0].ID != 9 || runs[0].Status != "queued" {
-		t.Fatalf("runs %+v", runs)
-	}
-	if listed != "branch=dude%2Ft&created=%3E%3D2026-11-12T10%3A00%3A00Z&event=workflow_dispatch&per_page=20" {
-		t.Errorf("listed with %s", listed)
 	}
 	st, err := gh.RunStateOf(context.Background(), "acme/api", 9)
 	if err != nil || st.Conclusion != "failure" || st.Attempt != 2 || st.URL != "https://x/9" {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
@@ -23,20 +24,23 @@ import (
 // run_workflow: the conductor starts a GitHub Actions workflow
 // (workflow_dispatch) and dude supervises its run to the end.
 //
-// Binding never guesses. The dispatch asks GitHub for the run's details,
-// and the run id it answers with (200) is bound at once. Only an older
-// GitHub (or GHES), which answers 204 and no id, leaves a dispatch to bind
-// afterwards: from the runs of that workflow and ref that were not there
-// just before the dispatch (prior_runs); a second dispatch of the same
-// workflow and ref is refused while one is unbound, and more than one new
-// run is unknown.
+// Binding never guesses. The call reserves its row (dispatching) before
+// anything is sent, so the unique index on question_id refuses a second
+// call spending the same answer before it reaches GitHub. The dispatch
+// asks GitHub for the run's details, and the run id it answers with (200)
+// is bound at once. An older GitHub (or GHES) answers 204 and no id: the
+// dispatch went out, and dude cannot know which run it started, so it is
+// unknown at once and the conductor is told to look with
+// github_branch_runs. A row left dispatching (dude stopped between the
+// reserve and GitHub's answer) is unknown past DispatchReservedFor, and is
+// never sent again.
 //
 // Supervision is level-triggered: every pass re-reads the bound run's
 // status, conclusion and attempt and stores what it saw
 // (workflow_dispatches). What the conductor is told is decided from that
 // stored state alone, never from an event that might have been missed; a
 // restart resumes from the rows. A read that fails is "cannot tell",
-// counted, never "not yet" (nor "no candidates" while binding): past
+// counted, never "not yet": past
 // DispatchCannotSeeReads in a row the conductor is told dude cannot see
 // the run.
 //
@@ -58,12 +62,10 @@ const EvWorkflowDispatched = "workflow.dispatched"
 
 // Bounds of supervision, in code (no settings).
 const (
-	// DispatchSkew is how far before dispatched_at a run may be created and
-	// still be a candidate (204 only): GitHub's clock is not dude's.
-	DispatchSkew = time.Minute
-	// DispatchBindWithin is how long a dispatch waits for its run to
-	// appear before it is unknown (204 only).
-	DispatchBindWithin = 5 * time.Minute
+	// DispatchReservedFor is how long a reserved dispatch may wait for
+	// GitHub's answer before the supervisor ends it unknown: well past the
+	// call's reads and its POST (forge's request timeout).
+	DispatchReservedFor = 5 * time.Minute
 	// DispatchFollowAfter is how long a completed run is still read: a
 	// re-run (GitHub re-runs only a completed run, attempt n+1) reopens it.
 	DispatchFollowAfter = 30 * time.Minute
@@ -79,11 +81,21 @@ const (
 
 // Dispatch states and outcomes (workflow_dispatches.state, outcome).
 const (
-	DispatchBinding   = "binding"
-	DispatchBound     = "bound"
-	DispatchCompleted = "completed"
-	DispatchUnknown   = "unknown"
-	DispatchCannotSee = "cannot_see"
+	DispatchDispatching = "dispatching"
+	DispatchBound       = "bound"
+	DispatchCompleted   = "completed"
+	DispatchUnknown     = "unknown"
+	DispatchFailed      = "failed"
+	DispatchCannotSee   = "cannot_see"
+)
+
+// Why a dispatch is unknown.
+const (
+	// GitHub answered 204: the dispatch went out, its run not named.
+	dispatchNoRunID = "GitHub did not say which run this dispatch started; look with `github_branch_runs`"
+	// The row stayed reserved: dude stopped between the reserve and
+	// GitHub's answer, or GitHub's answer was lost.
+	dispatchMaybe = "dude may or may not have dispatched this: it never heard GitHub's answer; look with `github_branch_runs`"
 )
 
 // DispatchApproval is the choice a person picks to authorize workflow on
@@ -114,17 +126,18 @@ type DispatchCheck struct {
 	questionID       string
 	questionOK       bool
 	gh               *forge.GitHub
+	// id is the dispatch's row, reserved (dispatching) by the check.
+	id string
 }
 
 // DispatchDone is what was done on GitHub: the workflow's triggers,
-// whether it was free CI, the run GitHub answered with (0 for none: an
-// older GitHub), and the runs there before the dispatch (nil when that
-// read failed).
+// whether it was free CI, whether the dispatch was sent (Posted), and the
+// run GitHub answered with (0 for none: an older GitHub).
 type DispatchDone struct {
 	Triggers []string
 	CI       bool
+	Posted   bool
 	Run      forge.DispatchedRun
-	Prior    []int64
 }
 
 // dispatchRef is a ref as GitHub's dispatch takes it: a branch or tag
@@ -141,11 +154,13 @@ func dispatchRef(ref string) string {
 
 // CheckDispatchTx checks a run_workflow call: the live conductor of a task
 // not ended, one of the task's repositories on GitHub, a workflow file
-// name, the ref (the task's branch by default), the inputs, no other
-// dispatch of the workflow and ref still unbound, and the named question,
-// if any: on this task, addressed to a person, offering the approving
-// choice for this workflow and ref, answered with it, and not spent on
-// another dispatch.
+// name, the ref (the task's branch by default), the inputs, and the named
+// question, if any: on this task, addressed to a person, offering the
+// approving choice for this workflow and ref, answered with it, and not
+// spent on another dispatch. It then reserves the dispatch's row
+// (dispatching), before anything is sent: a second call with the same
+// answer is refused by the row's unique question_id, here, never after a
+// second POST.
 func CheckDispatchTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, in DispatchAsk) (DispatchCheck, error) {
 	c := DispatchCheck{ref: ref, gh: gh}
 	if err := liveConductorOr(ctx, tx, ref, rYouAreNoLongerThisTask4); err != nil {
@@ -214,23 +229,35 @@ func CheckDispatchTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		}
 	}
 	c.inputs = in.Inputs
-	// An older GitHub answers a dispatch with no run id: while one of this
-	// workflow and ref is unbound, a second would make its run ambiguous.
-	var unbound string
-	err = tx.QueryRow(ctx, `SELECT id FROM workflow_dispatches WHERE repository_id = $1 AND workflow = $2 AND ref = $3
-		AND state = 'binding' ORDER BY dispatched_at LIMIT 1`, c.repoID, c.workflow, c.branch).Scan(&unbound)
-	if err == nil {
-		return c, refusef(rDispatchUnbound, c.workflow, c.branch, unbound)
-	}
-	if !db.IsNotFound(err) {
-		return c, err
+	if c.inputs == nil {
+		c.inputs = map[string]string{}
 	}
 	if c.questionID = strings.TrimSpace(in.QuestionID); c.questionID != "" {
 		if err := checkDispatchQuestionTx(ctx, tx, &c); err != nil {
 			return c, err
 		}
 	}
-	return c, nil
+	return c, reserveDispatchTx(ctx, tx, &c)
+}
+
+// reserveDispatchTx inserts c's row, dispatching. Another call that
+// reserved the same answer and committed first makes the insert wait for
+// it and fail on workflow_dispatches_question_idx: refused as spent.
+func reserveDispatchTx(ctx context.Context, tx pgx.Tx, c *DispatchCheck) error {
+	raw, err := json.Marshal(c.inputs)
+	if err != nil {
+		return err
+	}
+	c.id = ids.New("wfd")
+	_, err = tx.Exec(ctx, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, inputs,
+			dispatched_by, question_id, dispatched_at, state)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, NULLIF($9, ''), now(), $10)`,
+		c.id, c.ref.Org, c.ref.TaskID, c.repoID, c.workflow, c.branch, raw, c.ref.RunID, c.questionID, DispatchDispatching)
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "workflow_dispatches_question_idx" {
+		return refusef(rDispatchQuestionReserved, c.questionID)
+	}
+	return err
 }
 
 // checkDispatchQuestionTx: c's question is this task's, addressed to a
@@ -259,8 +286,11 @@ func checkDispatchQuestionTx(ctx context.Context, tx pgx.Tx, c *DispatchCheck) e
 	if choiceOf(options, answer) != i {
 		return refusef(rDispatchQuestionNotApproved, c.questionID, clip(oneLine(answer), 120), approve)
 	}
+	// A failed dispatch (GitHub refused it: no workflow ran) does not
+	// spend the answer.
 	var spent string
-	err = tx.QueryRow(ctx, `SELECT id FROM workflow_dispatches WHERE question_id = $1`, c.questionID).Scan(&spent)
+	err = tx.QueryRow(ctx, `SELECT id FROM workflow_dispatches WHERE question_id = $1 AND state <> $2`, c.questionID,
+		DispatchFailed).Scan(&spent)
 	if err == nil {
 		return refusef(rDispatchQuestionSpent, c.questionID, spent)
 	}
@@ -273,7 +303,9 @@ func checkDispatchQuestionTx(ctx context.Context, tx pgx.Tx, c *DispatchCheck) e
 
 // DoDispatch reads the workflow's on: at the ref, refuses one with no
 // workflow_dispatch, and one that is not free CI without the person's
-// approving answer, snapshots the runs already there, then dispatches it.
+// approving answer, then dispatches it (Posted). An error with Posted
+// false: nothing was sent; with Posted set, the POST failed (EndDispatchTx
+// tells which way).
 // Free CI is a workflow that runs for the task's own change (a push to its
 // branch, a pull request into its base, as its filters say) dispatched on
 // the task's branch; a filter dude cannot evaluate is not free. No
@@ -305,21 +337,9 @@ func DoDispatch(ctx context.Context, c DispatchCheck) (DispatchDone, error) {
 		approve := DispatchApproval(c.workflow, c.branch)
 		return done, refusef(rDispatchNeedsPerson, c.workflow, strings.Join(triggers, ", "), why, approve, DispatchDecline, approve)
 	}
-	// The runs there before: never this dispatch's (read for an older
-	// GitHub's 204). A read that fails, or a full page, is "cannot tell":
-	// nil, and such a dispatch is not bound by guess.
-	if prior, err := c.gh.DispatchedRuns(ctx, c.slug, c.workflow, c.branch, time.Now().Add(-DispatchSkew)); err == nil &&
-		len(prior) < forge.DispatchedRunsPage {
-		done.Prior = []int64{}
-		for _, r := range prior {
-			done.Prior = append(done.Prior, r.ID)
-		}
-	}
+	done.Posted = true
 	run, err := c.gh.DispatchWorkflow(ctx, c.slug, c.workflow, c.branch, inputsAny(c.inputs))
 	if err != nil {
-		if forge.Refused(err) || forge.Transient(err) {
-			return done, refusef(rGithubDidNotDo, err)
-		}
 		return done, err
 	}
 	done.Run = run
@@ -338,32 +358,63 @@ func asForgeError(err error, e **forge.Error) bool {
 	return err != nil && errors.As(err, e)
 }
 
-// RecordDispatchTx records the dispatch row and its event: bound to the
-// run GitHub answered with, or binding (204) with the runs there before.
+// postRefused: GitHub answered the POST with a refusal (4xx, a rate
+// limit), so no workflow ran. Anything else (a 5xx, no answer, the call
+// cut off) may have started one.
+func postRefused(err error) bool {
+	var e *forge.Error
+	return errors.As(err, &e) && (e.Status < 500 || forge.RateLimited(err))
+}
+
+// EndDispatchTx ends c's reserved row when DoDispatch failed with err, and
+// returns what the call answers (and the error of ending it). Nothing
+// sent: the row goes, the answer with it. GitHub refused the POST:
+// failed, with its error; no workflow ran, so the person's answer is not
+// spent and may authorize a retry. Any other failure of the POST:
+// unknown, "may or may not", never sent again; the call's refusal is what
+// tells the conductor (its outcome is marked told, no wake besides).
+func EndDispatchTx(ctx context.Context, tx pgx.Tx, c DispatchCheck, done DispatchDone, err error) (error, error) {
+	if !done.Posted {
+		_, derr := tx.Exec(ctx, `DELETE FROM workflow_dispatches WHERE id = $1 AND state = $2`, c.id, DispatchDispatching)
+		return err, derr
+	}
+	said := clip(oneLine(err.Error()), 1000)
+	if postRefused(err) {
+		_, uerr := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, last_error = $3, reason = 'GitHub refused the dispatch'
+			WHERE id = $1 AND state = $4`, c.id, DispatchFailed, said, DispatchDispatching)
+		return refusef(rGithubDidNotDo, err), uerr
+	}
+	_, uerr := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, outcome = $2, woken_outcome = $2, woken_at = now(),
+			reason = $3, last_error = $4
+		WHERE id = $1 AND state = $5`, c.id, DispatchUnknown, dispatchMaybe, said, DispatchDispatching)
+	return refusef(rDispatchMaybe, c.workflow, c.branch, said, c.id), uerr
+}
+
+// RecordDispatchTx ends the reserved row with GitHub's answer and records
+// the event: bound to the run GitHub answered with (200), or unknown (204:
+// no run id, never bound by guess), whose wake is recorded now. A row the
+// supervisor already ended (past DispatchReservedFor) is left as it is.
 // Returns its id.
-func RecordDispatchTx(ctx context.Context, tx pgx.Tx, c DispatchCheck, done DispatchDone) (string, error) {
-	id := ids.New("wfd")
-	inputs := c.inputs
-	if inputs == nil {
-		inputs = map[string]string{}
-	}
-	raw, err := json.Marshal(inputs)
-	if err != nil {
-		return "", err
-	}
-	state := DispatchBinding
+func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchCheck, done DispatchDone) (string, error) {
+	id := c.id
 	if done.Run.ID != 0 {
-		state = DispatchBound
+		if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, run_id = $3, run_url = NULLIF($4, ''), run_status = 'queued'
+			WHERE id = $1 AND state = $5`, id, DispatchBound, done.Run.ID, done.Run.URL, DispatchDispatching); err != nil {
+			return "", err
+		}
+	} else {
+		tag, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, outcome = $2, reason = $3 WHERE id = $1 AND state = $4`,
+			id, DispatchUnknown, dispatchNoRunID, DispatchDispatching)
+		if err != nil {
+			return "", err
+		}
+		if tag.RowsAffected() == 1 {
+			if err := deliverStoredDispatchTx(ctx, tx, org, id); err != nil {
+				return "", err
+			}
+		}
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, inputs,
-			dispatched_by, question_id, dispatched_at, state, run_id, run_url, run_status, prior_runs)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, NULLIF($9, ''), now(), $10, NULLIF($11, 0), NULLIF($12, ''),
-			CASE WHEN $11 <> 0 THEN 'queued' END, $13)`,
-		id, c.ref.Org, c.ref.TaskID, c.repoID, c.workflow, c.branch, raw, c.ref.RunID, c.questionID, state, done.Run.ID, done.Run.URL,
-		done.Prior); err != nil {
-		return "", err
-	}
-	payload := map[string]any{"dispatchId": id, "repo": c.repo, "workflow": c.workflow, "ref": c.branch, "inputs": inputs,
+	payload := map[string]any{"dispatchId": id, "repo": c.repo, "workflow": c.workflow, "ref": c.branch, "inputs": c.inputs,
 		"triggers": done.Triggers, "ci": done.CI}
 	if done.Run.ID != 0 {
 		payload["runId"] = done.Run.ID
@@ -371,8 +422,18 @@ func RecordDispatchTx(ctx context.Context, tx pgx.Tx, c DispatchCheck, done Disp
 	if c.questionID != "" {
 		payload["questionId"] = c.questionID
 	}
-	_, err = ledger.Append(ctx, tx, c.ref.Event(EvWorkflowDispatched, ledger.ActorAgent, payload))
+	_, err := ledger.Append(ctx, tx, c.ref.Event(EvWorkflowDispatched, ledger.ActorAgent, payload))
 	return id, err
+}
+
+// deliverStoredDispatchTx is deliverDispatchTx of dispatch id as stored.
+func deliverStoredDispatchTx(ctx context.Context, tx pgx.Tx, org, id string) error {
+	d, err := scanDispatch(tx.QueryRow(ctx, `SELECT `+dispatchColumns+` FROM workflow_dispatches d JOIN repositories r ON r.id = d.repository_id
+		WHERE d.id = $1`, id))
+	if err != nil {
+		return err
+	}
+	return deliverDispatchTx(ctx, tx, org, d)
 }
 
 // Dispatched is the target of a dispatch.
@@ -401,7 +462,6 @@ type DispatchRow struct {
 	failing    *time.Time
 	woken      string
 	readAt     *time.Time
-	prior      []int64
 	completed  *time.Time
 	readAfter  *time.Time
 }
@@ -409,13 +469,13 @@ type DispatchRow struct {
 const dispatchColumns = `d.id, r.name, d.workflow, d.ref, d.dispatched_at, d.state, COALESCE(d.reason, ''), COALESCE(d.run_id, 0),
 	COALESCE(d.run_attempt, 0), COALESCE(d.run_status, ''), COALESCE(d.run_conclusion, ''), COALESCE(d.run_url, ''), d.last_seen_at,
 	d.failed_reads, COALESCE(d.last_error, ''), COALESCE(d.outcome, ''), r.url, d.task_id, d.failing_since, COALESCE(d.woken_outcome, ''),
-	d.last_read_at, d.prior_runs, d.completed_at, d.read_after`
+	d.last_read_at, d.completed_at, d.read_after`
 
 func scanDispatch(row pgx.Row) (DispatchRow, error) {
 	var d DispatchRow
 	var url string
 	err := row.Scan(&d.ID, &d.Repo, &d.Workflow, &d.Ref, &d.At, &d.State, &d.Reason, &d.RunID, &d.Attempt, &d.Status, &d.Conclusion,
-		&d.URL, &d.LastSeenAt, &d.FailedRead, &d.LastError, &d.Outcome, &url, &d.taskID, &d.failing, &d.woken, &d.readAt, &d.prior,
+		&d.URL, &d.LastSeenAt, &d.FailedRead, &d.LastError, &d.Outcome, &url, &d.taskID, &d.failing, &d.woken, &d.readAt,
 		&d.completed, &d.readAfter)
 	d.slug = forge.SlugFromURL(url)
 	return d, err
@@ -450,20 +510,20 @@ func TaskDispatchesTx(ctx context.Context, tx pgx.Tx, taskID string) ([]Dispatch
 
 // DispatchTarget is what the supervisor reads on GitHub for one dispatch.
 type DispatchTarget struct {
-	ID, Slug, Workflow, Ref string
-	Since                   time.Time
-	// RunID is the bound run; 0 while binding.
+	ID, Slug string
+	// RunID is the bound run; 0 while dispatching (nothing to read).
 	RunID int64
 	// Read is false while GitHub's Retry-After has not passed: the pass
 	// settles what is stored (a wake owed) and reads nothing.
 	Read bool
 }
 
-// following: d is read on GitHub this pass: binding, bound, or completed
-// within DispatchFollowAfter (a re-run reopens it).
+// following: d is supervised this pass: dispatching (to end it once
+// past DispatchReservedFor), bound, or completed within
+// DispatchFollowAfter (a re-run reopens it).
 func (d DispatchRow) following(now time.Time) bool {
 	switch d.State {
-	case DispatchBinding, DispatchBound:
+	case DispatchDispatching, DispatchBound:
 		return true
 	case DispatchCompleted:
 		return d.completed != nil && now.Sub(*d.completed) < DispatchFollowAfter
@@ -484,28 +544,26 @@ func DispatchTargetTx(ctx context.Context, tx pgx.Tx, id string) (DispatchTarget
 	}
 	now := time.Now()
 	follow := d.following(now)
-	return DispatchTarget{ID: d.ID, Slug: d.slug, Workflow: d.Workflow, Ref: d.Ref, Since: d.At.Add(-DispatchSkew), RunID: d.RunID,
-			Read: follow && (d.readAfter == nil || !d.readAfter.After(now))},
+	return DispatchTarget{ID: d.ID, Slug: d.slug, RunID: d.RunID,
+			Read: follow && d.RunID != 0 && (d.readAfter == nil || !d.readAfter.After(now))},
 		follow || d.Outcome != "" && d.Outcome != d.woken, nil
 }
 
-// DispatchRead is one pass's read of a dispatch on GitHub: the candidate
-// runs while binding, the bound run's state after, or the error the read
-// failed with ("cannot tell"). None of them: nothing was read this pass.
+// DispatchRead is one pass's read of a dispatch on GitHub: the bound
+// run's state, or the error the read failed with ("cannot tell"). Neither:
+// nothing was read this pass.
 type DispatchRead struct {
-	Candidates []forge.RunState
-	Run        *forge.RunState
-	Err        error
+	Run *forge.RunState
+	Err error
 }
 
-func (r DispatchRead) none() bool { return r.Err == nil && r.Run == nil && r.Candidates == nil }
+func (r DispatchRead) none() bool { return r.Err == nil && r.Run == nil }
 
 // SettleDispatchTx stores one pass's read of dispatch id and decides from
-// the stored state: binds the one new candidate (never a guess between
-// several, never a run that was there before the dispatch or is another
-// dispatch's), stores the run's status, conclusion and attempt it saw
-// (a new attempt of a completed run reopens it), counts a failed read
-// (binding too: "cannot tell", not "no run yet"), and records the
+// the stored state: ends a dispatch reserved longer than
+// DispatchReservedFor as unknown (never sent again), stores the run's
+// status, conclusion and attempt it saw (a new attempt of a completed run
+// reopens it), counts a failed read ("cannot tell"), and records the
 // conductor's wake for a terminal outcome not delivered while no open
 // wait names the dispatch. The row is locked; a pass that lost a race
 // stores nothing twice and wakes nobody twice.
@@ -517,6 +575,10 @@ func SettleDispatchTx(ctx context.Context, tx pgx.Tx, org, id string, read Dispa
 	}
 	now := time.Now().UTC()
 	switch {
+	case d.State == DispatchDispatching:
+		if now.Sub(d.At) > DispatchReservedFor {
+			d.State, d.Outcome, d.Reason = DispatchUnknown, DispatchUnknown, dispatchMaybe
+		}
 	case !d.following(now) || read.none():
 	case d.State == DispatchCompleted:
 		// Still read for a re-run: a failed read here is not "cannot see"
@@ -543,11 +605,7 @@ func SettleDispatchTx(ctx context.Context, tx pgx.Tx, org, id string, read Dispa
 			d.Outcome, d.woken = "", ""
 		}
 		d.FailedRead, d.failing, d.LastError, d.readAfter = 0, nil, "", nil
-		if d.State == DispatchBinding {
-			if err := bindDispatchTx(ctx, tx, &d, read.Candidates, now); err != nil {
-				return err
-			}
-		} else if read.Run != nil {
+		if read.Run != nil {
 			seen(&d, *read.Run, now)
 		}
 	}
@@ -620,49 +678,6 @@ func seen(d *DispatchRow, r forge.RunState, now time.Time) {
 	} else {
 		d.State, d.Conclusion, d.Outcome, d.completed = DispatchBound, "", "", nil
 	}
-}
-
-// bindDispatchTx binds d (an older GitHub answered its dispatch with no
-// run id) to its one candidate that was not there before the dispatch and
-// is not bound to another dispatch. Several are unknown (no guess); so is
-// any when the runs before could not be read; none past
-// DispatchBindWithin too.
-func bindDispatchTx(ctx context.Context, tx pgx.Tx, d *DispatchRow, candidates []forge.RunState, now time.Time) error {
-	var free []forge.RunState
-	for _, r := range candidates {
-		if slices.Contains(d.prior, r.ID) {
-			continue
-		}
-		var taken bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_dispatches o WHERE o.run_id = $1 AND o.id <> $2
-			AND o.repository_id = (SELECT repository_id FROM workflow_dispatches WHERE id = $2))`, r.ID, d.ID).Scan(&taken); err != nil {
-			return err
-		}
-		if !taken {
-			free = append(free, r)
-		}
-	}
-	switch {
-	case len(free) > 0 && d.prior == nil:
-		d.State, d.Outcome = DispatchUnknown, DispatchUnknown
-		d.Reason = fmt.Sprintf("GitHub answered the dispatch with no run id, and dude could not read the runs of %s on %s there before it: "+
-			"it cannot tell whether run %d is this one, and does not guess", d.Workflow, d.Ref, free[0].ID)
-	case len(free) == 1:
-		seen(d, free[0], now)
-	case len(free) > 1:
-		var runs []string
-		for _, r := range free {
-			runs = append(runs, strconv.FormatInt(r.ID, 10))
-		}
-		d.State, d.Outcome = DispatchUnknown, DispatchUnknown
-		d.Reason = fmt.Sprintf("%d runs of %s on %s started by workflow_dispatch since the dispatch (%s): dude does not guess which is this one",
-			len(free), d.Workflow, d.Ref, strings.Join(runs, ", "))
-	case now.Sub(d.At) > DispatchBindWithin:
-		d.State, d.Outcome = DispatchUnknown, DispatchUnknown
-		d.Reason = fmt.Sprintf("no run of %s on %s started by workflow_dispatch appeared within %s of the dispatch", d.Workflow, d.Ref,
-			DispatchBindWithin)
-	}
-	return nil
 }
 
 // conductorMayReadBranchRunsTx: the task's conductor (its newest Run, or

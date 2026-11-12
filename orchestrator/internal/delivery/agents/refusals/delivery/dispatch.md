@@ -20,7 +20,9 @@
 
 {{- define "refusals/delivery/dispatch/question-spent"}}%s already authorized dispatch %s: one answer authorizes one dispatch. Ask the person again (ask_person){{end}}
 
-{{- define "refusals/delivery/dispatch/unbound"}}%s on %s was dispatched already (%s) and dude has not yet found its run: GitHub answered that dispatch with no run id, so a second one now would leave dude unable to tell their runs apart. Wait for it to be bound or unknown (wait_for workflowEnded, or pull_requests), then dispatch again{{end}}
+{{- define "refusals/delivery/dispatch/question-reserved"}}%s is being used by another run_workflow call at the same time: one answer authorizes one dispatch, and that call sends it. Nothing was dispatched by this one{{end}}
+
+{{- define "refusals/delivery/dispatch/maybe"}}dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. Look with github_branch_runs before dispatching it again; it is listed as %s, unknown{{end}}
 
 {{- define "refusals/delivery/dispatch/no-such-workflow"}}there is no .github/workflows/%s at %s in %s{{end}}
 

@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -15,9 +14,8 @@ import (
 // A workflow_dispatch: dude starts a GitHub Actions workflow on a ref.
 // Asked with return_run_details, GitHub answers 200 with the run it
 // created (workflow-dispatch-response): that run is the dispatch's, no
-// guess. An older GitHub (or GHES) answers 204 with no run id; only then
-// is the run looked for among the runs of that workflow, on that branch, of
-// event workflow_dispatch, created since the dispatch.
+// guess. An older GitHub (or GHES) answers 204 with no run id: the
+// dispatch went out, and which run it started is not known.
 
 // WorkflowFile is a workflow's file name under .github/workflows: what
 // run_workflow names and GitHub's dispatch and runs endpoints take.
@@ -70,36 +68,6 @@ type runStateJSON struct {
 
 func (r runStateJSON) state() RunState {
 	return RunState{ID: r.ID, Status: r.Status, Conclusion: r.Conclusion, Attempt: max(r.Attempt, 1), URL: r.HTMLURL, CreatedAt: r.CreatedAt}
-}
-
-// DispatchedRunsPage bounds the candidates read for one dispatch: more
-// than one is already "cannot tell".
-const DispatchedRunsPage = 20
-
-// DispatchedRuns lists workflow's runs on branch of event
-// workflow_dispatch created at or after since, newest first. A run of
-// another event or branch GitHub returns anyway is left out.
-func (g *GitHub) DispatchedRuns(ctx context.Context, slug, workflow, branch string, since time.Time) ([]RunState, error) {
-	var listed struct {
-		Runs []runStateJSON `json:"workflow_runs"`
-	}
-	q := url.Values{"branch": {branch}, "event": {"workflow_dispatch"}, "per_page": {fmt.Sprint(DispatchedRunsPage)},
-		"created": {">=" + since.UTC().Format(time.RFC3339)}}
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/workflows/%s/runs?%s", slug, url.PathEscape(workflow), q.Encode()),
-		nil, &listed); err != nil {
-		return nil, err
-	}
-	out := []RunState{}
-	for _, r := range listed.Runs {
-		if r.Event != "workflow_dispatch" || r.HeadBranch != branch {
-			continue
-		}
-		if at, err := time.Parse(time.RFC3339, r.CreatedAt); err == nil && at.Before(since) {
-			continue
-		}
-		out = append(out, r.state())
-	}
-	return out, nil
 }
 
 // RunStateOf reads Actions run id's current status, conclusion and attempt.

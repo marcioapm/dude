@@ -258,5 +258,6 @@ rDispatchNoTrigger                      refusals/delivery/dispatch/no-trigger
 rDispatchNeedsPerson                    refusals/delivery/dispatch/needs-person
 rDispatchQuestionNotApproved            refusals/delivery/dispatch/question-not-approved
 rDispatchQuestionSpent                  refusals/delivery/dispatch/question-spent
-rDispatchUnbound                        refusals/delivery/dispatch/unbound
+rDispatchQuestionReserved               refusals/delivery/dispatch/question-reserved
+rDispatchMaybe                          refusals/delivery/dispatch/maybe
 rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-this-task

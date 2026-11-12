@@ -262,6 +262,7 @@ const (
 	rDispatchNeedsPerson                    = "%s runs on %s, but %s: it is not CI this change already runs, and the person decides it. Ask them (ask_person) with the choices %q and %q; once they have picked %q, call run_workflow again with questionId"
 	rDispatchQuestionNotApproved            = "%s was answered %q, not %q: the person did not approve this dispatch. Nothing was dispatched"
 	rDispatchQuestionSpent                  = "%s already authorized dispatch %s: one answer authorizes one dispatch. Ask the person again (ask_person)"
-	rDispatchUnbound                        = "%s on %s was dispatched already (%s) and dude has not yet found its run: GitHub answered that dispatch with no run id, so a second one now would leave dude unable to tell their runs apart. Wait for it to be bound or unknown (wait_for workflowEnded, or pull_requests), then dispatch again"
+	rDispatchQuestionReserved               = "%s is being used by another run_workflow call at the same time: one answer authorizes one dispatch, and that call sends it. Nothing was dispatched by this one"
+	rDispatchMaybe                          = "dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. Look with github_branch_runs before dispatching it again; it is listed as %s, unknown"
 	rWaitNotDispatchOfThisTask              = "%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches)"
 )

@@ -3,7 +3,6 @@ package orchestrator_test
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -36,55 +35,9 @@ func (w *world) nowRFC3339() string {
 	return w.str(`SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`)
 }
 
-// Another person's dispatch of the same workflow on the same branch, 20s
-// before ours, is never bound to ours: with run details ours is the run
-// GitHub answered with; with an older GitHub's 204 the run was there
-// before the dispatch, so it is not ours, and with no new run the dispatch
-// ends unknown.
-func TestReviewBindsAnotherDispatchersRun(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(map[bool]string{false: "run details", true: "204"}[legacy], func(t *testing.T) {
-			w, task, branch := dispatchWorld(t)
-			earlier := w.str(`SELECT to_char((now() - interval '20 seconds') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`)
-			w.gh.SetWorkflowRun(800, fakegithub.WorkflowRun{Workflow: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: earlier})
-			w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = legacy })
-			id := w.dispatched(task, `{"workflow":"ci.yml"}`)
-			w.supervise()
-			got := w.dispatchRow(id)
-			if !legacy {
-				if !strings.HasPrefix(got, "bound ") || got == "bound 800" {
-					t.Fatalf("with run details: %s", got)
-				}
-				var answered int64
-				w.gh.Set(func(s *fakegithub.Server) {
-					for rid, r := range s.WorkflowRuns {
-						if rid != 800 && r.Workflow == "ci.yml" {
-							answered = rid
-						}
-					}
-				})
-				if want := "bound " + strconv.FormatInt(answered, 10); got != want {
-					t.Fatalf("bound %s, want %s", got, want)
-				}
-				return
-			}
-			if got != "binding none" {
-				t.Fatalf("204, another's run there before: %s", got)
-			}
-			mustExec(t, w.owner, `UPDATE workflow_dispatches SET dispatched_at = now() - interval '6 minutes' WHERE id = $1`, id)
-			w.supervise()
-			if got := w.dispatchRow(id); got != "unknown none" {
-				t.Fatalf("204, no run of ours: %s", got)
-			}
-		})
-	}
-}
-
 // Back-to-back staging and production dispatches of one workflow never
 // bind each other's runs: with run details each is the run GitHub answered
-// it with; with an older GitHub the second is refused while the first is
-// unbound (the refusal says so), and once the first is bound the second
-// binds only the run that is new since it.
+// it with; with an older GitHub neither is bound, both unknown.
 func TestReviewBackToBackDispatchesSwapRuns(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "run details", true: "204"}[legacy], func(t *testing.T) {
@@ -108,44 +61,16 @@ func TestReviewBackToBackDispatchesSwapRuns(t *testing.T) {
 				}
 				return
 			}
-			w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_production","inputs":{"env":"production"}}`,
-				"deploy.yml on "+branch+" was dispatched already ("+staging+") and dude has not yet found its run")
-			now := w.nowRFC3339()
-			w.gh.SetWorkflowRun(611, fakegithub.WorkflowRun{Workflow: "deploy.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: now})
-			w.supervise()
-			if got := w.dispatchRow(staging); got != "bound 611" {
-				t.Fatalf("staging %s", got)
-			}
 			production := w.dispatched(task, `{"workflow":"deploy.yml","questionId":"q_production","inputs":{"env":"production"}}`)
+			w.gh.SetWorkflowRun(611, fakegithub.WorkflowRun{Workflow: "deploy.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
 			w.supervise()
-			if got := w.dispatchRow(production); got != "binding none" {
-				t.Fatalf("production bound a run that was there before it: %s", got)
-			}
-			w.gh.SetWorkflowRun(612, fakegithub.WorkflowRun{Workflow: "deploy.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: now})
-			w.supervise()
-			if got := w.dispatchRow(production); got != "bound 612" {
-				t.Fatalf("production %s", got)
-			}
-			if got := w.dispatchRow(staging); got != "bound 611" {
-				t.Fatalf("staging moved: %s", got)
+			for _, id := range []string{staging, production} {
+				if got := w.dispatchRow(id); got != "unknown none" {
+					t.Errorf("%s: %s", id, got)
+				}
 			}
 		})
 	}
-}
-
-// A run another dispatch is bound to is never bound again, even when it
-// is new since this one (M2).
-func TestABindingNeverTakesAnotherDispatchsRun(t *testing.T) {
-	w, task, branch := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = true })
-	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
-	mustExec(t, w.owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, state, run_id)
-		SELECT 'wfd_other', organization_id, task_id, repository_id, workflow, 'other', 'bound', 777 FROM workflow_dispatches WHERE id = $1`, id)
-	w.settleDispatch(id, delivery.DispatchRead{Candidates: []forge.RunState{{ID: 777, Status: "queued", Attempt: 1}}})
-	if got := w.dispatchRow(id); got != "binding none" {
-		t.Fatalf("bound another dispatch's run: %s", got)
-	}
-	_ = branch
 }
 
 // wakesNaming is every wake of the task (its own or a wait's digest)
@@ -346,45 +271,6 @@ func TestRacingSettlesCountEveryFailedRead(t *testing.T) {
 	_ = task
 }
 
-// Reads that fail while binding are "cannot tell", counted toward "cannot
-// see", never "no run appeared" (M17).
-func TestFailedReadsWhileBindingAreCannotTell(t *testing.T) {
-	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) {
-		s.DispatchLegacy = true
-		s.Intercept = func(r *http.Request) int {
-			if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/actions/workflows/ci.yml/runs") && len(s.Dispatches) > 0 {
-				return http.StatusBadGateway
-			}
-			return 0
-		}
-	})
-	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
-	mustExec(t, w.owner, `UPDATE workflow_dispatches SET dispatched_at = now() - interval '6 minutes' WHERE id = $1`, id)
-	for range delivery.DispatchCannotSeeReads {
-		w.supervise()
-	}
-	if got := w.str(`SELECT state || ' ' || COALESCE(outcome, 'none') || ' ' || failed_reads FROM workflow_dispatches WHERE id = $1`, id); got != "binding cannot_see 3" {
-		t.Fatalf("failed reads while binding: %s", got)
-	}
-	if wakes := w.workflowWakes(task); len(wakes) != 1 || !strings.Contains(wakes[0], "dude cannot see this workflow run") {
-		t.Fatalf("wakes %q", wakes)
-	}
-}
-
-// A dispatch whose runs before could not be read is never bound by guess.
-func TestABindingWithNoSnapshotIsUnknown(t *testing.T) {
-	w, task, branch := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = true })
-	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
-	mustExec(t, w.owner, `UPDATE workflow_dispatches SET prior_runs = NULL WHERE id = $1`, id)
-	w.gh.SetWorkflowRun(1501, fakegithub.WorkflowRun{Workflow: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
-	w.supervise()
-	if got := w.str(`SELECT state || ': ' || reason FROM workflow_dispatches WHERE id = $1`, id); !strings.Contains(got, "unknown: GitHub answered the dispatch with no run id") {
-		t.Fatalf("%s", got)
-	}
-}
-
 // A task that ended is no longer supervised: its dispatches are not read
 // and wake no one (M10).
 func TestAnEndedTasksDispatchesAreNotSupervised(t *testing.T) {
@@ -423,10 +309,10 @@ func TestARateLimitedReadWaitsForRetryAfter(t *testing.T) {
 // A full batch has the supervisor's loop run again at once.
 func TestAFullBatchOfDispatchesRunsAgain(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = true })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2100 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
-	mustExec(t, w.owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, prior_runs)
-		SELECT 'wfd_n' || n, organization_id, task_id, repository_id, workflow, 'r' || n, '{}' FROM workflow_dispatches, generate_series(1, 24) n
+	mustExec(t, w.owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, state, run_id)
+		SELECT 'wfd_n' || n, organization_id, task_id, repository_id, workflow, 'r' || n, 'bound', 3000 + n FROM workflow_dispatches, generate_series(1, 24) n
 		WHERE id = $1`, id)
 	n, err := w.prs.SuperviseDispatches(context.Background(), 0)
 	if err != nil || n != 20 {

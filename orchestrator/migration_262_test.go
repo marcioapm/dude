@@ -43,8 +43,17 @@ func TestMigration262WorkflowDispatchesUpFromMain(t *testing.T) {
 		VALUES ('wfd_2', 'org_262', 'wi_262', 'repo_262', 'ci.yml', 'main', 7)`); err == nil {
 		t.Fatal("one run bound to two dispatches")
 	}
-	if got := scalar[string](t, owner, `SELECT state || ' ' || failed_reads FROM workflow_dispatches WHERE id = 'wfd_1'`); got != "binding 0" {
+	if got := scalar[string](t, owner, `SELECT state || ' ' || failed_reads FROM workflow_dispatches WHERE id = 'wfd_1'`); got != "dispatching 0" {
 		t.Errorf("a new dispatch reads %q", got)
+	}
+	// One answer, one dispatch; one GitHub refused (failed) does not spend it.
+	mustExec(t, owner, `INSERT INTO questions (id, organization_id, task_id, prompt) VALUES ('q_262', 'org_262', 'wi_262', 'Run?')`)
+	mustExec(t, owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, question_id, state)
+		VALUES ('wfd_3', 'org_262', 'wi_262', 'repo_262', 'deploy.yml', 'main', 'q_262', 'failed'),
+		       ('wfd_4', 'org_262', 'wi_262', 'repo_262', 'deploy.yml', 'main', 'q_262', 'dispatching')`)
+	if _, err := owner.Exec(ctx, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, question_id)
+		VALUES ('wfd_5', 'org_262', 'wi_262', 'repo_262', 'deploy.yml', 'main', 'q_262')`); err == nil {
+		t.Fatal("one answer reserved by two dispatches")
 	}
 }
 
