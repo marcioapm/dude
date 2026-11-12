@@ -57,8 +57,18 @@ type VerdictState struct {
 	CIAsked string `json:"ciAsked,omitempty"`
 	// ci_stuck reached the wait for Due.
 	Stuck bool `json:"stuck,omitempty"`
-	// The last event posted at Due, and the status comment.
+	// The checks' state ("passing", "failing", "pending", "unreadable") the
+	// verdict last read at Due: failing then pending is a rerun, and the
+	// cap and ci_stuck measure it, not the time before it.
+	Checks string `json:"checks,omitempty"`
+	// A review-only test that failed or was blocked at TestHead, as the
+	// verdict names it ("" once one passed there).
+	Test     string `json:"test,omitempty"`
+	TestHead string `json:"testHead,omitempty"`
+	// The last event posted at Due, why (verdictDecision.Reason), and the
+	// status comment.
 	Posted    string `json:"posted,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 	CommentID int64  `json:"commentId,omitempty"`
 	Status    string `json:"status,omitempty"` // the status comment's last body hash
 }
@@ -87,12 +97,37 @@ type verdictInput struct {
 	Stuck bool
 	// The deferral cap is reached.
 	Capped bool
+	// A review-only test that failed or was blocked at the head ("" none).
+	Test string
+}
+
+// The verdict's reasons: part of the claim, so a later verdict at the
+// same head and event for another reason is a review of its own.
+const (
+	reasonLensFailed  = "lens-failed"
+	reasonNotReviewed = "not-reviewed"
+	reasonFindings    = "findings"
+	reasonTestFailed  = "test-failed"
+	reasonQuestion    = "question"
+	reasonUnrelatedCI = "unrelated-red-ci"
+	reasonStuck       = "ci-stuck"
+	reasonCap         = "cap"
+	reasonUnreadable  = "ci-unreadable"
+	reasonDraft       = "draft"
+	reasonApprove     = "approve"
+)
+
+// transientReason says a COMMENT for reason holds back an approval only
+// until CI passes at the head: the verdict stays due there.
+func transientReason(reason string) bool {
+	return reason == reasonUnrelatedCI || reason == reasonCap || reason == reasonStuck
 }
 
 // verdictDecision is decideVerdict's answer.
 type verdictDecision struct {
 	Action   string
 	Event    string // for verdictPost
+	Reason   string // for verdictPost: one of the reason keys above
 	Headline string
 	// Every failing item the body lists, beyond the headline's.
 	Notes []string
@@ -147,23 +182,28 @@ func decideVerdict(in verdictInput) verdictDecision {
 	if it := items[ReadyMergeable]; strings.Contains(it.Detail, "conflicts with") || strings.HasPrefix(it.Detail, "behind ") {
 		notes = append(notes, "For the author: "+it.Detail)
 	}
-	post := func(event, headline string) verdictDecision {
-		return verdictDecision{Action: verdictPost, Event: event, Headline: headline, Notes: notes}
+	post := func(event, reason, headline string) verdictDecision {
+		return verdictDecision{Action: verdictPost, Event: event, Reason: reason, Headline: headline, Notes: notes}
 	}
 	// 2. Not every lens finished at H: nothing to vouch for.
 	if len(in.Unfinished) > 0 {
-		return post(forge.EventComment, fmt.Sprintf("Could not complete the review at %s: %s did not finish", h, strings.Join(in.Unfinished, ", ")))
+		return post(forge.EventComment, reasonLensFailed, fmt.Sprintf("Could not complete the review at %s: %s did not finish", h, strings.Join(in.Unfinished, ", ")))
 	}
 	if it := items[ReadyReviewed]; !it.OK {
-		return post(forge.EventComment, fmt.Sprintf("Could not complete the review at %s: %s", h, it.Detail))
+		return post(forge.EventComment, reasonNotReviewed, fmt.Sprintf("Could not complete the review at %s: %s", h, it.Detail))
 	}
 	// 3. An open finding the pull request introduced, at the fix bar.
 	if it := items[ReadyFindings]; !it.OK {
-		return post(forge.EventRequestChanges, fmt.Sprintf("Changes requested at %s: %s", h, it.Detail))
+		return post(forge.EventRequestChanges, reasonFindings, fmt.Sprintf("Changes requested at %s: %s", h, it.Detail))
+	}
+	// 3'. The test failed or was blocked at H with no finding of its open
+	// at the fix bar (one would be row 3): named, never approved.
+	if in.Test != "" {
+		return post(forge.EventComment, reasonTestFailed, fmt.Sprintf("Reviewed at %s, not approved: %s", h, in.Test))
 	}
 	// 4. A question still open.
 	if it := items[ReadyQuestions]; !it.OK {
-		return post(forge.EventComment, fmt.Sprintf("Waiting on an answer at %s: %s", h, it.Detail))
+		return post(forge.EventComment, reasonQuestion, fmt.Sprintf("Waiting on an answer at %s: %s", h, it.Detail))
 	}
 	checks := items[ReadyChecks]
 	switch checksState(checks) {
@@ -174,7 +214,7 @@ func decideVerdict(in verdictInput) verdictDecision {
 		if !in.CIAsked {
 			return verdictDecision{Action: verdictAskCI, Why: checks.Detail}
 		}
-		d := post(forge.EventComment, fmt.Sprintf("Reviewed at %s, no issue found; not approved while CI fails at %s (%s), which looks unrelated to the change: approval follows once it passes at %s",
+		d := post(forge.EventComment, reasonUnrelatedCI, fmt.Sprintf("Reviewed at %s, no issue found; not approved while CI fails at %s (%s), which looks unrelated to the change: approval follows once it passes at %s",
 			h, h, strings.TrimPrefix(checks.Detail, "failing: "), h))
 		d.Unrelated = true
 		return d
@@ -183,21 +223,21 @@ func decideVerdict(in verdictInput) verdictDecision {
 		// that never finishes (Stuck).
 		switch {
 		case in.Stuck:
-			return post(forge.EventComment, fmt.Sprintf("Reviewed at %s, no issue found; CI has been pending at %s past the organization's patience: not approved", h, h))
+			return post(forge.EventComment, reasonStuck, fmt.Sprintf("Reviewed at %s, no issue found; CI has been pending at %s past the organization's patience: not approved", h, h))
 		case in.Capped:
-			return post(forge.EventComment, fmt.Sprintf("Reviewed at %s, no issue found; could not confirm CI at %s: not approved", h, h))
+			return post(forge.EventComment, reasonCap, fmt.Sprintf("Reviewed at %s, no issue found; could not confirm CI at %s: not approved", h, h))
 		}
 		return verdictDecision{Action: verdictDefer, Why: checks.Detail}
 	case "unreadable":
 		// 7.
-		return post(forge.EventComment, fmt.Sprintf("Reviewed at %s, no issue found; could not read CI at %s: %s", h, h, checks.Detail))
+		return post(forge.EventComment, reasonUnreadable, fmt.Sprintf("Reviewed at %s, no issue found; could not read CI at %s: %s", h, h, checks.Detail))
 	}
 	// 8. A draft is reviewed, never approved.
 	if it := items[ReadyOpen]; !it.OK {
-		return post(forge.EventComment, fmt.Sprintf("Reviewed at %s, no issue found. Draft: no approval until it is marked ready for review", h))
+		return post(forge.EventComment, reasonDraft, fmt.Sprintf("Reviewed at %s, no issue found. Draft: no approval until it is marked ready for review", h))
 	}
 	// 9.
-	return post(forge.EventApprove, fmt.Sprintf("Approved at %s: %s; %s", h, items[ReadyReviewed].Detail, checks.Detail))
+	return post(forge.EventApprove, reasonApprove, fmt.Sprintf("Approved at %s: %s; %s", h, items[ReadyReviewed].Detail, checks.Detail))
 }
 
 // verdictFinding is an open finding of the attempt, as the review shows it.
@@ -276,8 +316,10 @@ func where(f verdictFinding) string {
 // claimID is the review's claim: deterministic in the task, attempt, head,
 // round and event, so a replayed step finds its own claim, and the same
 // verdict at the same head is never posted twice.
-func claimID(st *State, head, event string) string {
-	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%d\x00%s", st.TaskID, st.Attempt, head, st.Round, event))
+// The reason is part of it: a COMMENT at H for one reason (unrelated red
+// CI) is not the COMMENT for another (the cap).
+func claimID(st *State, head, event, reason string) string {
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%d\x00%s\x00%s", st.TaskID, st.Attempt, head, st.Round, event, reason))
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -321,7 +363,8 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	head := cmp.Or(st.RoundHeads[pr.Repo], st.Heads[pr.Repo])
 	v := st.Verdict
 	if v == nil || v.Due != head {
-		v = &VerdictState{Due: head, CommentID: cmp.Or(v, &VerdictState{}).CommentID}
+		old := cmp.Or(v, &VerdictState{})
+		v = &VerdictState{Due: head, CommentID: old.CommentID, Status: old.Status, Test: old.Test, TestHead: old.TestHead}
 		st.Verdict = v
 	}
 	gh, err := w.forges.For(ctx, sc.OrganizationID)
@@ -355,7 +398,25 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		return workflow.Result{}, fmt.Errorf("no gate read for %s", prID)
 	}
 	now := time.Now()
-	in.Gate, in.CIAsked, in.Stuck = gates[0], v.CIAsked == head, v.Stuck
+	in.Gate, in.CIAsked = gates[0], v.CIAsked == head
+	if v.TestHead == head {
+		in.Test = v.Test
+	}
+	if in.Gate.Err == nil {
+		checks := ""
+		for _, it := range in.Gate.Items {
+			if it.Key == ReadyChecks {
+				checks = checksState(it)
+			}
+		}
+		// Failing, then pending: CI was rerun at H. The cap and ci_stuck
+		// measure the rerun, not the time before the failure.
+		if v.Checks == "failing" && checks == "pending" {
+			v.DeferredSince, v.Deferrals, v.Stuck = nil, 0, false
+		}
+		v.Checks = checks
+	}
+	in.Stuck = v.Stuck
 	in.Capped = v.DeferredSince != nil && now.Sub(*v.DeferredSince) >= w.s.verdictDeferCap(gh)
 	d := decideVerdict(in)
 	base := cmp.Or(st.Source.BaseBranch, "the base")
@@ -395,17 +456,18 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "waiting for CI at the reviewed head")
 	}
 	body, comments := verdictReview(d, head, base, lenses, findings, link)
-	posted, err := w.postReview(ctx, sc, st, gh, pr, head, d.Event, body, comments)
+	posted, err := w.postReview(ctx, sc, st, gh, pr, head, d.Event, d.Reason, body, comments)
 	if err != nil {
 		return workflow.Result{}, err
 	}
 	st.ReweighAt = nil
 	if posted != "" {
-		v.Posted = posted
+		v.Posted, v.Reason = posted, d.Reason
 	}
-	if !d.Unrelated || posted == "" {
-		// Only an approval held back by unrelated red CI is still owed at
-		// H (decision 2): CI's signals run the verdict again then.
+	if !transientReason(d.Reason) || posted == "" {
+		// Only an approval held back by CI at H (unrelated red CI, CI not
+		// confirmed at the cap or stuck) is still owed at H (decision 2):
+		// CI's signals run the verdict again, and green at H approves.
 		v.Due = ""
 	}
 	w.statusComment(ctx, sc, st, pr, fmt.Sprintf("%s (%s)", d.Headline, cmp.Or(reviewWord[v.Posted], "not posted")))
@@ -419,13 +481,13 @@ var reviewWord = map[string]string{forge.EventApprove: "approved", forge.EventRe
 // keeps the claim, and the step runs again after reviewRecoverDelay to
 // look for the review before anything is resubmitted.
 func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, pr PullRequestState,
-	head, event, body string, comments []forge.ReviewComment) (string, error) {
+	head, event, reason, body string, comments []forge.ReviewComment) (string, error) {
 	if gh == nil {
 		return "", fmt.Errorf("no forge credential to post the review with")
 	}
 	org := sc.OrganizationID
 	for range 2 { // the second pass is a downgrade of the account's own pull request
-		claim := claimID(st, head, event)
+		claim := claimID(st, head, event, reason)
 		marked := body + "\n\n" + forge.ReviewMarker(st.TaskID, claim)
 		base := map[string]any{"claimId": claim, "pullRequestId": pr.ID, "head": head, "event": event}
 		claimed, submitted, downgraded, err := w.claimState(ctx, org, st.TaskID, claim)

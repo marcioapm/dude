@@ -64,6 +64,20 @@ func TestDecideVerdictCoversEveryRow(t *testing.T) {
 			}
 		})
 	}
+	// 3'. A failed review-only test, no finding of its open: named, never approved.
+	if d := decideVerdict(verdictInput{Gate: gateAt(), Test: "the test run_t failed criteria [1]"}); d.Event != forge.EventComment ||
+		d.Reason != reasonTestFailed || !strings.Contains(d.Headline, "run_t failed") {
+		t.Fatalf("a failed test: %+v", d)
+	}
+	// Each COMMENT's reason is its own claim: the cap's COMMENT after an
+	// unrelated-red one at the same head is a review of its own.
+	unrelated := decideVerdict(verdictInput{Gate: gateAt(failing), CIAsked: true})
+	capped := decideVerdict(verdictInput{Gate: gateAt(pending), Capped: true})
+	st := &State{TaskID: "t", Attempt: 1}
+	if !transientReason(unrelated.Reason) || !transientReason(capped.Reason) ||
+		claimID(st, "h", unrelated.Event, unrelated.Reason) == claimID(st, "h", capped.Event, capped.Reason) {
+		t.Fatalf("unrelated %q and capped %q share a claim, or are not transient", unrelated.Reason, capped.Reason)
+	}
 	// A related failure: the conductor's lens files it, so row 3 holds and
 	// the failing checks are listed in the body too.
 	d := decideVerdict(verdictInput{Gate: gateAt(finding, failing), CIAsked: true})
