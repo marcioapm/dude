@@ -865,3 +865,34 @@ func TestAnAdoptedBranchOpensItsPullRequestIntoItsBase(t *testing.T) {
 		t.Fatalf("pull request recorded %d times into stack/base", n)
 	}
 }
+
+// Automatic paths never supersede: a task whose pull request's head
+// another live task came to hold between its start and its adopt step is
+// refused at adopt (superseded_required, raised as source_changed) and
+// goes no further; the holder is left as it was.
+func TestTheAdoptStepNeverSupersedes(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeContinue)
+	w.startDelivery(wi)
+	holder, run := w.holding(n, "feature/greet", delivery.ModeReview, w.person("Ana"))
+	w.until("the adopt step's refusal", func() bool { return w.escalationWaiting(wi) })
+	var code string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->'detail'->>'code' FROM events
+		WHERE task_id = $1 AND event_type = 'escalation.raised' ORDER BY occurred_at DESC LIMIT 1`, wi).Scan(&code)
+	if code != "superseded_required" {
+		t.Fatalf("the adopt step's refusal is %q, want superseded_required", code)
+	}
+	if got := w.phasesRun(wi); len(got) != 0 {
+		t.Fatalf("a task refused at adopt started phases: %v", got)
+	}
+	if n := w.count(`SELECT count(*) FROM task_relations WHERE kind = 'supersedes'`); n != 0 {
+		t.Fatalf("an automatic path recorded a supersede")
+	}
+	if s := w.taskStatus(holder); s != "running" {
+		t.Fatalf("the holder is %s", s)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, run); n != 1 {
+		t.Fatalf("the holder's Run was stopped")
+	}
+}
