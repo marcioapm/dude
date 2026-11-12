@@ -791,16 +791,26 @@ export const EventTypes = {
    * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
    * (decision, escalation, question, steer_read, steer_failed, pr_merged,
    * pr_closed, published, publish_refused, publish_stalled, checkout,
-   * stalled, unblocked, wait, recovered; safety in older notes); `started` when no conductor was live
+   * stalled, unblocked, wait, recovered, workflow; safety in older notes); `started` when no conductor was live
    * and the note briefed a new one.
    */
   ConductorWoken: "conductor.woken",
   /**
    * A task's conductor said what it waits on (wait_for). On its Run.
    * Payload: `{ waitId, conditions, wake, deadlineAt }`: conditions as
-   * stored, `runs_ended` (runs) or `pr_checks_final` (pr, prName, head).
+   * stored, `runs_ended` (runs), `pr_checks_final` (pr, prName, head) or
+   * `workflow_ended` (dispatch: a run_workflow dispatchId).
    */
   ConductorWaiting: "conductor.waiting",
+  /**
+   * A task's conductor dispatched a GitHub Actions workflow (run_workflow).
+   * On its Run. Payload: `{ dispatchId, repo, workflow, ref, inputs,
+   * triggers, ci, runId?, questionId? }`: ci when it ran as the task's own
+   * CI (no person asked); runId the run GitHub answered with (absent from
+   * an older GitHub, whose run dude binds afterwards); questionId the
+   * person's approving answer otherwise.
+   */
+  WorkflowDispatched: "workflow.dispatched",
   /**
    * A conductor's wait ended. On the Run that opened it. Payload:
    * `{ waitId, by, held, of }`: by `held`, `deadline`, `replaced`,
