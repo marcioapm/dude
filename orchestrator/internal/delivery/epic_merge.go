@@ -297,14 +297,22 @@ func epicMergePeers(ctx context.Context, tx pgx.Tx, m epicMerge) ([]epicPeer, er
 
 // storedMergeFiles is what m's merge changed, from the merged task's
 // stored snapshot at the pull request's head, sorted bytewise: ok false
-// when none is stored at that head.
+// when none is stored that says so. A snapshot lists what the branch
+// changes past its merge base with its target, so only one measured
+// against the base m merged into, from before the merge reached it, says
+// what the merge changed. One captured after (the capturer reads the
+// branch again when the base moves), its target already holding the head,
+// has the head for its merge base and lists nothing: not "the merge
+// changed nothing". It is passed over for an older snapshot at the head,
+// else GitHub's listing.
 func storedMergeFiles(ctx context.Context, tx pgx.Tx, m epicMerge) (files []string, ok, partial bool, err error) {
 	if m.HeadSHA == "" {
 		return nil, false, false, nil
 	}
 	err = tx.QueryRow(ctx, `SELECT `+fileNames+`, s.status = 'partial' OR `+renameUnnamed+`
 		FROM task_branch_snapshots s WHERE s.task_id = $1 AND s.repository_id = $2 AND s.head_sha = $3
-		ORDER BY s.captured_at DESC, s.id DESC LIMIT 1`, m.TaskID, m.RepoID, m.HeadSHA).Scan(&files, &partial)
+		  AND s.merge_base_sha <> s.head_sha AND s.target_ref = $4
+		ORDER BY s.captured_at DESC, s.id DESC LIMIT 1`, m.TaskID, m.RepoID, m.HeadSHA, m.Base).Scan(&files, &partial)
 	if db.IsNotFound(err) {
 		return nil, false, false, nil
 	}

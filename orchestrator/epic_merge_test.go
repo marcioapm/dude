@@ -117,6 +117,19 @@ func (w *epicMergeWorld) snapshotAt(task, repo string, attempt int, head string,
 		"["+strings.Join(files, ",")+"]", status, reason, attempt, ago.Seconds())
 }
 
+// snapshotAgainst records the merged task's branch snapshot of acme/target
+// at head, measured against target at mergeBase, listing paths, captured
+// ago before now. A read after the merge reached the target has the head
+// for its merge base and lists nothing.
+func (w *epicMergeWorld) snapshotAgainst(head, mergeBase, target string, ago time.Duration, paths ...string) {
+	mustExec(w.t, w.owner, `INSERT INTO task_branch_snapshots (id, organization_id, task_id, attempt, repository_id, repository,
+			branch_ref, target_ref, target_sha, merge_base_sha, head_sha, files, checksum, stats, status, relation, captured_at)
+		VALUES ($1, $2, $3, GREATEST(task_attempt($3), 1), $4, 'target', 'dude/x', $5, $6, $6, $7, $8::jsonb, 'c', '{}', 'complete',
+			'initial', now() - make_interval(secs => $9))`,
+		fmt.Sprintf("tbs_%s_%s_%d", w.merging, mergeBase[:8], time.Now().UnixNano()), w.org, w.merging, w.repoID, target, mergeBase, head,
+		"["+strings.Join(entries(paths...), ",")+"]", ago.Seconds())
+}
+
 // merge merges pull request #1 on GitHub and records it as the sync does.
 func (w *epicMergeWorld) merge() {
 	w.gh.Merge(1)
@@ -531,6 +544,44 @@ func TestEpicMergeOverlap(t *testing.T) {
 		w.merge()
 		w.sweep()
 		w.told(peer, w.head()+" Your branch also changes `"+shared+"`. It merged into `main`, not your base: check whether your work needs it before you go on.")
+	})
+	// The merged head read again after the merge reached main (the e2e's
+	// failure): its merge base is the head, it lists nothing, and is not
+	// what the merge changed. GitHub's listing is.
+	t.Run("the merged head read only after the merge", func(t *testing.T) {
+		w := newEpicMergeWorld(t)
+		peer := w.peer(w.live("a.go"))
+		w.snapshotAgainst(w.prHead(), w.prHead(), "main", 0)
+		f := newStubForge(t)
+		f.answer(200, "", file("a.go"))
+		w.worker.Forges = f
+		w.merge()
+		w.sweep()
+		w.told(peer, w.shared("a.go"))
+		if f.calls.Load() == 0 {
+			t.Fatal("GitHub was never asked for the merge's files")
+		}
+	})
+	t.Run("the merged head read before the merge, and again after", func(t *testing.T) {
+		w := newEpicMergeWorld(t)
+		peer := w.peer(w.live("a.go"))
+		w.snapshotAgainst(w.prHead(), strings.Repeat("c", 40), "main", time.Hour, "a.go", "b.go")
+		w.snapshotAgainst(w.prHead(), w.prHead(), "main", 0)
+		w.merge()
+		w.worker.Forges = nil
+		w.sweep()
+		w.told(peer, w.shared("a.go"))
+	})
+	t.Run("the merged head read against another target", func(t *testing.T) {
+		w := newEpicMergeWorld(t)
+		peer := w.peer(w.live("a.go"))
+		w.snapshotAgainst(w.prHead(), strings.Repeat("c", 40), "release/1.2", 0, "z.go")
+		f := newStubForge(t)
+		f.answer(200, "", file("a.go"))
+		w.worker.Forges = f
+		w.merge()
+		w.sweep()
+		w.told(peer, w.shared("a.go"))
 	})
 }
 
