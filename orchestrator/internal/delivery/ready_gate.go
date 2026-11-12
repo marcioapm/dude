@@ -288,9 +288,7 @@ func CheckProfileGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []s
 		_ = json.Unmarshal(checksJSON, &p.RecordedCheckList)
 		p.Slug = forge.SlugFromURL(url)
 		p.AcceptedHead = st.AcceptedHeads[p.Repo]
-		if verdict {
-			p.Profile, p.Pinned = profile, pins[p.ID]
-		}
+		p.Profile, p.Pinned = profile, pins[p.ID]
 		c.PRs = append(c.PRs, p)
 	}
 	rows.Close()
@@ -325,19 +323,18 @@ func CheckProfileGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []s
 		p := &c.PRs[i]
 		p.UnreviewedPush = p.Head != "" && unreviewed[p.Repo] == p.Head
 		p.Findings, p.Questions = findings, questions
-		if !verdict {
-			if p.Reviewed, err = reviewedHeadTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
-				return c, err
-			}
-		}
 		p.Policy = st.Policy
 		if p.LensHeads, err = lensHeadsTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
 			return c, err
 		}
-		if !verdict {
-			if p.Simplifies, err = gateSimplifiesTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
-				return c, err
-			}
+		if verdict {
+			continue
+		}
+		if p.Reviewed, err = reviewedHeadTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
+			return c, err
+		}
+		if p.Simplifies, err = gateSimplifiesTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
+			return c, err
 		}
 	}
 	return c, nil
