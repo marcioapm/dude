@@ -678,6 +678,22 @@ this turn's message was typed in dude, not in the chat: nothing was posted; answ
 
 branch: at most 255 characters
 
+## refusals/tools/memory/pin-not-granted
+
+pin is the conductor's: it keeps the project's memory. If every agent on the project must have it in front of it, don't save it; tell your conductor, which remembers and pins it (or pins your saved memory by id)
+
+## refusals/tools/memory/persons-pin
+
+memory %s was pinned by %s: a person's pin is theirs, and only a person unpins it. Tell them, through your task, why it no longer holds
+
+## refusals/tools/memory/pin-by-id-alone
+
+with an id, remember pins or unpins that memory: give pin true or false, and nothing else
+
+## refusals/tools/memory/remember-title-required
+
+a title is required: remember saves a new memory, unless id names one to pin or unpin
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

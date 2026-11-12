@@ -29,13 +29,17 @@ A memory can say which tasks or epics it is about. It is live as soon as it is s
 
 You can limit a search to some types: memory, task, epic or project. dude's own guide — these pages — is searchable too, as type `doc`, so an agent can answer a question about dude from the guide and link you to the page.
 
-Agents are told to search before they investigate something that may already be known, and before they save something new. `get_memory` reads one memory in full.
+Agents are told to search before they act on something they have not met in this project before — an unfamiliar failure, a convention, how a service is run — and again before they save something new. `get_memory` reads one memory in full.
 
 ## Saving a memory
 
-Agents save memories with `remember`. They are told to search first so they do not save the same thing twice, and not to save what the code or the task already says.
+Agents save memories with `remember`, and are told to save only what they had to learn the hard way: they searched, found nothing, then established it. They search again first, so they do not save the same thing twice, and not what the code or the task already says. An agent cannot edit or archive a memory: when one it finds is wrong, it saves the correction naming the wrong one and says so, for a person to archive the old one.
+
+What a memory is about does not make it the task's own: one about a task is still found across its project. So agents keep what only their task needs with the task (in their commits and what they hand back), put what every agent on an epic must follow in an epic note, and save to memory only what the next task in the project would need.
 
 People add memories in **Settings → Memory → Memories**.
+
+A project's fact can be **pinned**: it then arrives in every briefing on that project, in front of the conductor and each Run, without a search. A person pins their own facts (an organisation admin, anyone's) on the Memories page or with `dude memory pin`; the task's conductor pins with `remember`, and is the only agent that may. Only a project's live fact about no task is pinned, never the organisation's, a session's, a procedure or a note. A briefing carries at most 20 pinned facts, each cut at 600 characters and about 4 KB in all; it says how many more are pinned, and search finds them. The conductor may unpin a fact an agent pinned once it goes stale; a fact a person pinned stays pinned until a person unpins it.
 
 ## The Memory pages
 
@@ -58,5 +62,5 @@ Agents can read the embedding configuration with `settings`, section `memory`. I
 ## Who can change what
 
 - Every member can search and add memories.
-- You can change and archive your own memories. An organisation admin can change and archive anyone's, including agents' and dude's.
+- You can change, archive, pin and unpin your own memories. An organisation admin can do the same to anyone's, including agents' and dude's.
 - Only an organisation admin can rebuild the index.
