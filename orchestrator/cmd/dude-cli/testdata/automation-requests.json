@@ -576,5 +576,21 @@
     ],
     "route": "POST /v1/preview-feedback/:id/reopen",
     "body": {}
+  },
+  {
+    "args": [
+      "memory",
+      "pin",
+      "mem_1"
+    ],
+    "route": "POST /v1/memory/memories/:id/pin"
+  },
+  {
+    "args": [
+      "memory",
+      "unpin",
+      "mem_1"
+    ],
+    "route": "POST /v1/memory/memories/:id/unpin"
   }
 ]

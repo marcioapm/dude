@@ -61,7 +61,9 @@ You take this task's decisions{{if .Quiet}}, quietly: dude starts the implemente
 {{- else if .Waiting}} The delivery waits on one now: {{.Waiting}}.
 {{- else}} The delivery is at {{.Step}}; you are woken at its next decision.
 {{- end}}
-{{- end}}{{with .Epic}}
+{{- end}}{{with .Facts}}
+
+{{.}}{{end}}{{with .Epic}}
 
 {{.}}{{end}}{{with .Replay}}
 

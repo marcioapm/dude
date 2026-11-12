@@ -143,8 +143,8 @@ func (s *Server) memoryCreate(w http.ResponseWriter, r *http.Request, org string
 	return nil
 }
 
-// mayChange: a person changes their own memories; an admin, anyone's —
-// an agent's and dude's too.
+// mayChange: a person changes, archives and pins their own memories; an
+// admin, anyone's — an agent's and dude's too.
 func mayChange(r *http.Request, m memory.Memory) error {
 	p := principalOf(r)
 	if p.Admin || p.Person != "" && m.Author.Kind == "person" && m.Author.PersonID == p.Person {
@@ -182,7 +182,7 @@ func (s *Server) memoryUpdate(w http.ResponseWriter, r *http.Request, org string
 
 func (s *Server) memoryArchive(w http.ResponseWriter, r *http.Request, org string) error {
 	action := r.PathValue("action")
-	if action != "archive" && action != "restore" {
+	if action != "archive" && action != "restore" && action != "pin" && action != "unpin" {
 		return fail(http.StatusNotFound, "not_found", "no action %q", action)
 	}
 	var m memory.Memory
@@ -194,7 +194,13 @@ func (s *Server) memoryArchive(w http.ResponseWriter, r *http.Request, org strin
 		if err := mayChange(r, cur); err != nil {
 			return err
 		}
-		m, err = memory.Archive(r.Context(), tx, org, cur, action == "archive", person(r))
+		switch action {
+		case "pin", "unpin":
+			// Pinned in front of every agent on its project (memory.Pin).
+			m, err = memory.Pin(r.Context(), tx, org, cur, action == "pin", memory.Pinner{PersonID: principalOf(r).Person}, person(r))
+		default:
+			m, err = memory.Archive(r.Context(), tx, org, cur, action == "archive", person(r))
+		}
 		return err
 	})
 	if err != nil {

@@ -1806,7 +1806,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 	var raised delivery.Raises
 	var recorded *delivery.Machine
 	var conductorIn delivery.PromptInput
-	var briefing, conductorNote, restartNote, personNote, tierOverride, ranOn, conductorPrompt, orgName, coordination, replay string
+	var briefing, conductorNote, restartNote, personNote, tierOverride, ranOn, conductorPrompt, orgName, coordination, projectFacts, replay string
 	var projectSecrets []lux.Secret
 	var tier delivery.Tier
 	var noTier string
@@ -1890,6 +1890,13 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		}
 		// The task's epic, on submit only: a resume sends no prompt.
 		if stored == nil && !r.conductor() {
+			// The project's pinned facts, beside the epic: every task's Run
+			// has them. A session's agents are on no one project.
+			if r.SessionID == "" {
+				if projectFacts, err = delivery.ProjectFacts(ctx, tx, r.ProjectID); err != nil {
+					return err
+				}
+			}
 			if coordination, err = delivery.EpicBriefing(ctx, tx, r.Org, r.TaskID, r.ID, settingsRole); err != nil {
 				return err
 			}
@@ -2035,7 +2042,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Repositories: promptRepos, Decisions: decisions, Tools: s.Agent.ToolsURL != "", CLI: s.Agent.ToolsURL != "" && s.Agent.ToolsService,
 		OrgPrompt: prompts.Org, ProjectPrompt: prompts.Project, ProjectPromptMode: prompts.ProjectMode,
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
-		Coordination: coordination, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
+		Coordination: coordination, ProjectFacts: projectFacts, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
 		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh, Round: reviewRound, Decided: decided,
 	}
 	if reviewRange != nil {

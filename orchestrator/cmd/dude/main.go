@@ -16,7 +16,8 @@
 //	                                      ask a person; end your turn after
 //	dude memory search QUERY [--type T]... [--limit N]
 //	dude memory show ID                   one memory in full
-//	dude memory add --title T --content C [--kind K] [--about KEY]... [--org]
+//	dude memory add --title T --content C [--kind K] [--about KEY]... [--org] [--pin]
+//	dude memory pin|unpin ID              the conductor's: pin or unpin a project fact
 //	dude event TYPE [--data JSON]         record an event on this run
 //	dude diff [RUN] [PATH...] [--name-status] [--limit N] [--offset N]
 //	                                      what a Run of this task changed
@@ -345,11 +346,22 @@ func run(args []string, out io.Writer) error {
 			return errors.New("usage: dude memory show ID")
 		}
 		return show(out, *asJSON, call("get_memory", map[string]any{"id": args[0]}))
+	case "memory pin", "memory unpin":
+		// The conductor's: remember with an id pins or unpins that fact.
+		args, err := parse(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(args) != 1 {
+			return fmt.Errorf("usage: dude %s ID", cmd)
+		}
+		return show(out, *asJSON, call("remember", map[string]any{"id": args[0], "pin": cmd == "memory pin"}))
 	case "memory add":
 		title := fs.String("title", "", "one line another agent can scan in a list")
 		content := fs.String("content", "", "the fact, procedure or note, in Markdown; - reads it from stdin")
 		kind := fs.String("kind", "", "fact (default), procedure or note")
 		org := fs.Bool("org", false, "true in every project of the organization, not only this one")
+		pin := fs.Bool("pin", false, "a conductor's: a fact every future agent on this project must have in front of it, in every briefing")
 		var about many
 		fs.Var(&about, "about", "a task key (TEXT-12) or epic title it is about (repeatable)")
 		if _, err := parse(fs, rest); err != nil {
@@ -364,7 +376,7 @@ func run(args []string, out io.Writer) error {
 			text = string(b)
 		}
 		if *title == "" || strings.TrimSpace(text) == "" {
-			return errors.New(`usage: dude memory add --title "one line" --content "what to remember" [--kind K] [--about KEY]... [--org]`)
+			return errors.New(`usage: dude memory add --title "one line" --content "what to remember" [--kind K] [--about KEY]... [--org] [--pin]`)
 		}
 		body := map[string]any{"title": *title, "content": text}
 		if *kind != "" {
@@ -375,6 +387,9 @@ func run(args []string, out io.Writer) error {
 		}
 		if *org {
 			body["scope"] = "organization"
+		}
+		if *pin {
+			body["pin"] = true
 		}
 		return show(out, *asJSON, call("remember", body))
 	case "ask", "ask-conductor":
@@ -1232,6 +1247,8 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude memory add --title T --content C [--kind fact|procedure|note]
                   [--about KEY]... [--org]   save what the next agent should know
                                              (--content - reads stdin); live at once
+  dude memory pin|unpin ID                   the conductor's: pin a saved project fact, or
+                                             unpin one gone stale (a person's pin is theirs)
   dude event TYPE [--data JSON]              record an event on this run, e.g.
                                              dude event progress --data '{"done":3,"of":10}'
   dude diff [RUN] [PATH...] [--name-status] [--limit N] [--offset N]
