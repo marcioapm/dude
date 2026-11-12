@@ -348,22 +348,9 @@ func lensHeadsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, rep
 // path, one whose paths the pull request changed again since its last
 // completed review. "" for none; refused says GitHub would not compare.
 func missingLenses(ctx context.Context, gh *forge.GitHub, p GateFacts, base string) (missing []string, refused bool, err error) {
-	whole, err := gh.CompareCommits(ctx, p.Slug, base, p.Head)
-	if forge.Refused(err) {
-		return nil, true, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	ours := map[string]bool{}
-	var paths []string
-	for _, f := range whole.Files {
-		for _, n := range []string{f.Filename, f.PreviousFilename} {
-			if n != "" && !ours[n] {
-				ours[n] = true
-				paths = append(paths, p.Repo+"/"+n)
-			}
-		}
+	ours, paths, refused, err := prPaths(ctx, gh, p, base)
+	if refused || err != nil {
+		return nil, refused, err
 	}
 	for _, lens := range ReviewersFor(p.Policy, paths) {
 		at, ran := p.LensHeads[lens]
@@ -396,6 +383,29 @@ func missingLenses(ctx context.Context, gh *forge.GitHub, p GateFacts, base stri
 		}
 	}
 	return missing, false, nil
+}
+
+// prPaths is what the pull request changes: GitHub's compare of its base
+// with the head, each path in the repository (ours) and as
+// <repo>/<path>, for ReviewersFor. refused says GitHub would not compare.
+func prPaths(ctx context.Context, gh *forge.GitHub, p GateFacts, base string) (ours map[string]bool, paths []string, refused bool, err error) {
+	whole, err := gh.CompareCommits(ctx, p.Slug, base, p.Head)
+	if forge.Refused(err) {
+		return nil, nil, true, nil
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	ours = map[string]bool{}
+	for _, f := range whole.Files {
+		for _, n := range []string{f.Filename, f.PreviousFilename} {
+			if n != "" && !ours[n] {
+				ours[n] = true
+				paths = append(paths, p.Repo+"/"+n)
+			}
+		}
+	}
+	return ours, paths, false, nil
 }
 
 // byPath says the policy picks lens by the paths changed: a conditional
@@ -630,16 +640,41 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 	case p.Reviewed == h:
 		return true, fmt.Sprintf("reviewed at %s", short(h)), nil
 	}
-	since, err := gh.CompareCommits(ctx, p.Slug, p.Reviewed, h)
+	unreviewed, unread, stop, err := sinceReview(ctx, gh, p, p.Reviewed, base, true)
 	switch {
-	case forge.Refused(err):
-		return false, fmt.Sprintf("GitHub would not compare the reviewed %s with %s: history rewritten?", short(p.Reviewed), short(h)), nil
 	case err != nil:
 		return false, "", err
+	case stop != "":
+		return false, stop, nil
+	}
+	if len(unreviewed) > 0 {
+		detail := fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", "))
+		if len(unread) > 0 {
+			detail += fmt.Sprintf(" (GitHub would not compare the simplifier's run from %s, so its commits are not counted as reviewed simplifications)",
+				strings.Join(unread, ", "))
+		}
+		return false, detail, nil
+	}
+	return true, fmt.Sprintf("reviewed at %s; since then only reviewed simplifications and pure merges of %s", short(p.Reviewed), base), nil
+}
+
+// sinceReview is the commits from the review at from to the head that
+// nothing explains, oldest first: GitHub's pure merges of the base are
+// explained, and, with simplifications, a simplify Run's commits whose own
+// review completed (unread names those GitHub would not compare). stop is
+// why the walk could not explain the head at all ("" when it could).
+func sinceReview(ctx context.Context, gh *forge.GitHub, p GateFacts, from, base string, simplifications bool) (unreviewed, unread []string, stop string, err error) {
+	h := p.Head
+	since, err := gh.CompareCommits(ctx, p.Slug, from, h)
+	switch {
+	case forge.Refused(err):
+		return nil, nil, fmt.Sprintf("GitHub would not compare the reviewed %s with %s: history rewritten?", short(from), short(h)), nil
+	case err != nil:
+		return nil, nil, "", err
 	case since.BehindBy > 0:
-		return false, fmt.Sprintf("the head no longer descends from the reviewed %s: history rewritten since the review", short(p.Reviewed)), nil
+		return nil, nil, fmt.Sprintf("the head no longer descends from the reviewed %s: history rewritten since the review", short(from)), nil
 	case len(since.Commits) < since.TotalCommits:
-		return false, fmt.Sprintf("%d commits since the review at %s: too many to explain", since.TotalCommits, short(p.Reviewed)), nil
+		return nil, nil, fmt.Sprintf("%d commits since the review at %s: too many to explain", since.TotalCommits, short(from)), nil
 	}
 	parents := map[string][]string{}
 	for _, c := range since.Commits {
@@ -648,17 +683,18 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 			parents[c.SHA] = append(parents[c.SHA], x.SHA)
 		}
 	}
-	simplified, unread, err := simplifiedCommits(ctx, gh, p)
-	if err != nil {
-		return false, "", err
+	simplified := map[string]bool{}
+	if simplifications {
+		if simplified, unread, err = simplifiedCommits(ctx, gh, p); err != nil {
+			return nil, nil, "", err
+		}
 	}
-	// The branch's own line, head down to R by first parents: what a merge
-	// brings in under its second parent is the base's, judged with the
-	// merge.
-	var unreviewed []string
+	// The branch's own line, head down to the review by first parents:
+	// what a merge brings in under its second parent is the base's, judged
+	// with the merge.
 	at := h
 	merges := 0
-	for n := 0; at != p.Reviewed; n++ {
+	for n := 0; at != from; n++ {
 		ps, listed := parents[at]
 		if !listed || len(ps) == 0 || n == maxGateCommits {
 			unreviewed = append(unreviewed, fmt.Sprintf("the commits below %s, which do not lead back to the review", short(at)))
@@ -671,11 +707,11 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 			// past advance.MaxBaseMerges, a review of the head is cheaper
 			// than walking on.
 			if merges++; merges > advance.MaxBaseMerges {
-				return false, fmt.Sprintf("too many base merges since the last review at %s: review the head", short(p.Reviewed)), nil
+				return nil, nil, fmt.Sprintf("too many base merges since the last review at %s: review the head", short(from)), nil
 			}
 			pure, err := pureBaseMerge(ctx, gh, p.Slug, base, at, ps)
 			if err != nil {
-				return false, "", err
+				return nil, nil, "", err
 			}
 			if !pure {
 				unreviewed = append(unreviewed, short(at)+" (a merge that is not GitHub's pure merge of "+base+")")
@@ -685,16 +721,8 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 		}
 		at = ps[0]
 	}
-	if len(unreviewed) > 0 {
-		slices.Reverse(unreviewed)
-		detail := fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", "))
-		if len(unread) > 0 {
-			detail += fmt.Sprintf(" (GitHub would not compare the simplifier's run from %s, so its commits are not counted as reviewed simplifications)",
-				strings.Join(unread, ", "))
-		}
-		return false, detail, nil
-	}
-	return true, fmt.Sprintf("reviewed at %s; since then only reviewed simplifications and pure merges of %s", short(p.Reviewed), base), nil
+	slices.Reverse(unreviewed)
+	return unreviewed, unread, "", nil
 }
 
 // pureMerges remembers the merges judged GitHub's pure merge of a base,
