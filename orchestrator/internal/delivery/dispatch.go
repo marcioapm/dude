@@ -2,8 +2,8 @@ package delivery
 
 import (
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -76,13 +76,13 @@ type DispatchAsk struct {
 // DispatchCheck is a run_workflow call checked in its transaction: what to
 // read and dispatch on GitHub outside it.
 type DispatchCheck struct {
-	ref                      RunRef
-	repoID, repo, slug       string
-	workflow, branch         string
-	inputs                   map[string]string
-	questionID               string
-	questionOK               bool
-	gh                       *forge.GitHub
+	ref                RunRef
+	repoID, repo, slug string
+	workflow, branch   string
+	inputs             map[string]string
+	questionID         string
+	questionOK         bool
+	gh                 *forge.GitHub
 }
 
 // DispatchDone is what was done on GitHub: the workflow's triggers and
