@@ -1,4 +1,4 @@
--- 264_epic_merge_wakes.sql — a merge on an epic wakes its peers' conductors
+-- 265_epic_merge_wakes.sql — a merge on an epic wakes its peers' conductors
 -- (delivery.EpicMerges).
 --
 -- merge_commit_sha: GitHub's merge commit, as the pull request sync reads it.
@@ -6,9 +6,9 @@
 -- pull request without one. Those merged before this migration count as told.
 -- epic_peers_retry_at: a merge the worker could not settle waits until then.
 --
--- conductor_wakes gains kind epic_merge (its line bounded at 300, as the
--- rest). NOT VALID: no scan under ACCESS EXCLUSIVE; every existing kind is
--- still allowed.
+-- conductor_wakes gains kind epic_merge (its line bounded at 300 by 264's
+-- line check, as the rest). NOT VALID: no scan under ACCESS EXCLUSIVE;
+-- every kind 264 allows, workflow included, is still allowed.
 ALTER TABLE pull_requests
   ADD COLUMN merge_commit_sha    text CHECK (merge_commit_sha ~ '^[0-9a-f]{40,64}$'),
   ADD COLUMN epic_peers_told_at  timestamptz,
@@ -24,4 +24,4 @@ ALTER TABLE conductor_wakes DROP CONSTRAINT conductor_wakes_kind_check;
 ALTER TABLE conductor_wakes ADD CONSTRAINT conductor_wakes_kind_check
   CHECK (kind IN ('decision', 'escalation', 'question', 'safety', 'steer_read', 'steer_failed', 'pr_merged', 'pr_closed',
                   'published', 'publish_refused', 'publish_stalled', 'checkout', 'stalled', 'unblocked', 'feedback', 'wait',
-                  'recovered', 'round', 'checks', 'epic_merge')) NOT VALID;
+                  'recovered', 'round', 'checks', 'workflow', 'epic_merge')) NOT VALID;
