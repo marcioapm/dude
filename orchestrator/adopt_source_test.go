@@ -31,6 +31,15 @@ func refusedAs(t *testing.T, status int, out map[string]any, wantStatus int, cod
 	}
 }
 
+// holderNamed is the live task a superseded_required refusal names
+// (error.details.holder), nil for none.
+func holderNamed(out map[string]any) map[string]any {
+	e, _ := out["error"].(map[string]any)
+	d, _ := e["details"].(map[string]any)
+	h, _ := d["holder"].(map[string]any)
+	return h
+}
+
 // An open pull request in the project's repository, from a branch in it, is
 // adopted with GitHub's head, base and title; a branch with the base a
 // person chose, or the repository's default.
@@ -139,9 +148,7 @@ func TestASourceDudeMustNotTouchIsRefused(t *testing.T) {
 		VALUES ($1, $2, $3, 'pr', 1, 'feature/open', 'main')`, other, w.org, w.repoID)
 	status, out := w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "1"})
 	refusedAs(t, status, out, 409, "superseded_required")
-	e, _ := out["error"].(map[string]any)
-	d, _ := e["details"].(map[string]any)
-	if h, _ := d["holder"].(map[string]any); h["id"] != other {
+	if h := holderNamed(out); h["id"] != other {
 		t.Errorf("the refusal names %v, want %s", h, other)
 	}
 	// Its own source is not another task's.
@@ -338,9 +345,7 @@ func TestAReviewOnlySourceBesideALiveHolderIsAskedToSupersede(t *testing.T) {
 			status, out := w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": fmt.Sprint(n),
 				"mode": delivery.ModeReviewOnly})
 			refusedAs(t, status, out, 409, "superseded_required")
-			e, _ := out["error"].(map[string]any)
-			d, _ := e["details"].(map[string]any)
-			if h, _ := d["holder"].(map[string]any); h["id"] != holder || h["mode"] != holderMode {
+			if h := holderNamed(out); h["id"] != holder || h["mode"] != holderMode {
 				t.Fatalf("the refusal names %v, want %s in %s", h, holder, holderMode)
 			}
 		})

@@ -118,9 +118,7 @@ func TestSupersedeEveryCombination(t *testing.T) {
 			}
 			// The branch is the new task's now: asked again for a third, it is named.
 			status, out = w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": fmt.Sprint(n)})
-			e, _ := out["error"].(map[string]any)
-			d, _ := e["details"].(map[string]any)
-			if h, _ := d["holder"].(map[string]any); status != 409 || h["id"] != created {
+			if h := holderNamed(out); status != 409 || h["id"] != created {
 				t.Errorf("after the supersede the branch is held by %v (%d)", h, status)
 			}
 		})
@@ -161,9 +159,7 @@ func TestSupersedeRefusesAChangedHolder(t *testing.T) {
 	before := w.supersedeState(second)
 	status, out := w.supersede(ana, first, n, "feature/greet", delivery.ModeReviewOnly)
 	refusedAs(t, status, out, 409, "superseded_required")
-	e, _ := out["error"].(map[string]any)
-	d, _ := e["details"].(map[string]any)
-	if h, _ := d["holder"].(map[string]any); h["id"] != second {
+	if h := holderNamed(out); h["id"] != second {
 		t.Errorf("the refusal names %v, want %s", h, second)
 	}
 	if after := w.supersedeState(second); after != before {
