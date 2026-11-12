@@ -39,26 +39,21 @@ func runWorkflowNext(rec delivery.DispatchRecorded) string {
 	return runWorkflowResult.Render(rec)
 }
 
-type dispatchChecked struct {
-	delivery.DispatchCheck
-}
-
-func checkRunWorkflow(ctx context.Context, tx pgx.Tx, c Caller, in runWorkflowIn) (dispatchChecked, error) {
+func checkRunWorkflow(ctx context.Context, tx pgx.Tx, c Caller, in runWorkflowIn) (delivery.DispatchCheck, error) {
 	gh, err := githubOf(c)
 	if err != nil {
-		return dispatchChecked{}, err
+		return delivery.DispatchCheck{}, err
 	}
-	checked, err := conducted(delivery.CheckDispatchTx(ctx, tx, c.run(), gh, delivery.DispatchAsk{Repo: in.Repository,
+	return conducted(delivery.CheckDispatchTx(ctx, tx, c.run(), gh, delivery.DispatchAsk{Repo: in.Repository,
 		Workflow: in.Workflow, Ref: in.Ref, Inputs: in.Inputs, QuestionID: in.QuestionID}))
-	return dispatchChecked{checked}, err
 }
 
 // doRunWorkflow dispatches outside any transaction. When it fails, the row
 // the check reserved is ended in a transaction of its own
 // (delivery.EndDispatchTx), even when the call was cut off: dude knows
 // what happened, and the row does not wait for the supervisor.
-func doRunWorkflow(ctx context.Context, c Caller, checked dispatchChecked) (delivery.DispatchDone, error) {
-	done, err := delivery.DoDispatch(ctx, checked.DispatchCheck)
+func doRunWorkflow(ctx context.Context, c Caller, checked delivery.DispatchCheck) (delivery.DispatchDone, error) {
+	done, err := delivery.DoDispatch(ctx, checked)
 	if err == nil {
 		return done, nil
 	}
@@ -66,7 +61,7 @@ func doRunWorkflow(ctx context.Context, c Caller, checked dispatchChecked) (deli
 	answer := err
 	if c.env.db != nil {
 		if terr := c.env.db.InOrg(ctx, c.Org, func(tx pgx.Tx) (terr error) {
-			answer, terr = delivery.EndDispatchTx(ctx, tx, checked.DispatchCheck, done, err)
+			answer, terr = delivery.EndDispatchTx(ctx, tx, checked, done, err)
 			return terr
 		}); terr != nil {
 			return done, terr
@@ -75,13 +70,12 @@ func doRunWorkflow(ctx context.Context, c Caller, checked dispatchChecked) (deli
 	return conducted(done, answer)
 }
 
-func recordRunWorkflow(ctx context.Context, tx pgx.Tx, c Caller, checked dispatchChecked, done delivery.DispatchDone) (runWorkflowOut, error) {
-	rec, err := delivery.RecordDispatchTx(ctx, tx, c.Org, checked.DispatchCheck, done)
+func recordRunWorkflow(ctx context.Context, tx pgx.Tx, c Caller, checked delivery.DispatchCheck, done delivery.DispatchDone) (runWorkflowOut, error) {
+	rec, err := delivery.RecordDispatchTx(ctx, tx, c.Org, checked, done)
 	if err != nil {
 		return runWorkflowOut{}, err
 	}
-	repo, workflow, ref := checked.Dispatched()
-	out := runWorkflowOut{DispatchID: rec.ID, Repository: repo, Workflow: workflow, Ref: ref, Next: runWorkflowNext(rec)}
+	out := runWorkflowOut{DispatchID: rec.ID, Repository: rec.Repo, Workflow: rec.Workflow, Ref: rec.Ref, Next: runWorkflowNext(rec)}
 	if rec.Late {
 		out.State = rec.State
 	}

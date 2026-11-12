@@ -103,10 +103,6 @@ const (
 	dispatchMaybe = "dude may or may not have dispatched this: it never heard GitHub's answer"
 )
 
-// lookForRun is where the conductor looks for an unknown dispatch's run:
-// with github_branch_runs when it is granted, else through a person.
-func lookForRun(branchRuns bool) string { return render(lookForRunTmpl, branchRuns) }
-
 // DispatchApproval is the choice a person picks to authorize workflow on
 // ref: the one answer to a question (ask_person) the gate accepts.
 func DispatchApproval(workflow, ref string) string { return "Run " + workflow + " on " + ref }
@@ -324,7 +320,7 @@ func DoDispatch(ctx context.Context, c DispatchCheck) (DispatchDone, error) {
 	triggers, raw, err := c.gh.WorkflowTriggersAt(ctx, c.slug, c.workflow, c.branch)
 	if err != nil {
 		var e *forge.Error
-		if asForgeError(err, &e) && e.NotFound() {
+		if errors.As(err, &e) && e.NotFound() {
 			return done, refusef(rDispatchNoSuchWorkflow, c.workflow, c.branch, c.repo)
 		}
 		if forge.Refused(err) || forge.Transient(err) {
@@ -361,10 +357,6 @@ func inputsAny(in map[string]string) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-func asForgeError(err error, e **forge.Error) bool {
-	return err != nil && errors.As(err, e)
 }
 
 // postRefused: GitHub answered the POST with one of the refusals it gives
@@ -410,79 +402,62 @@ func EndDispatchTx(ctx context.Context, tx pgx.Tx, c DispatchCheck, done Dispatc
 		return err, uerr
 	}
 	branchRuns, gerr := conductorMayReadBranchRunsTx(ctx, tx, c.ref.Org, c.ref.TaskID)
-	return refusef(rDispatchMaybe, c.workflow, c.branch, said, c.id, lookForRun(branchRuns)), gerr
+	return refusef(rDispatchMaybe, c.workflow, c.branch, said, c.id, render(lookForRunTmpl, branchRuns)), gerr
 }
 
-// DispatchRecorded is a dispatch as RecordDispatchTx left it: its id, its
-// state and reason, and Late when the supervisor had already ended it
-// before GitHub's answer was recorded (the call must not say it was
-// dispatched as asked: it reports this state).
+// DispatchRecorded is a dispatch as RecordDispatchTx left it: its id,
+// target, state and reason, and Late when the supervisor ended it before
+// GitHub's answer was recorded (the call then reports this state, not
+// "Dispatched").
 type DispatchRecorded struct {
-	ID, State, Reason string
-	Late              bool
+	ID, Repo, Workflow, Ref, State, Reason string
+	Late                                   bool
 }
 
 // RecordDispatchTx ends the reserved row with GitHub's answer and records
 // the event: bound to the run GitHub answered with (200), or unknown (204:
 // no run id, never bound by guess), whose wake is recorded now.
 //
-// A row the supervisor already ended (the call outlived
-// DispatchReservedFor) is Late. When it ended unknown, "may or may not",
-// with no run, and GitHub did name the run, it is bound to it now: its
-// "may or may not" wake goes if not yet delivered, and the run's own end
-// is woken for (only when this changed the row). Any other row is left as
-// it is, and its state returned; except that a late 204 makes a "may or
-// may not" row's reason dispatchNoRunID, as GitHub did accept it.
+// A row the supervisor already ended "may or may not" (the call outlived
+// DispatchReservedFor) is Late, and GitHub's answer still says what
+// happened: a 200 binds it to its run (its "may or may not" wake goes if
+// not yet delivered, and the run's end is woken for), a 204 makes it
+// unknown for want of a run id. Any other late row is left as it is.
 func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchCheck, done DispatchDone) (DispatchRecorded, error) {
-	id := c.id
-	var settled bool
-	if done.Run.ID != 0 {
-		tag, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, run_id = $3, run_url = NULLIF($4, ''), run_status = 'queued'
-			WHERE id = $1 AND state = $5`, id, DispatchBound, done.Run.ID, done.Run.URL, DispatchDispatching)
-		if err != nil {
-			return DispatchRecorded{}, err
-		}
-		settled = tag.RowsAffected() == 1
-		if !settled {
-			// Ended by the supervisor first, "may or may not": bind the run
-			// it could not know. Its outcome is owed again once the run ends
-			// (only when this changed the row).
-			tag, err = tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, run_id = $3, run_url = NULLIF($4, ''), run_status = 'queued',
-					reason = NULL, outcome = NULL, woken_outcome = NULL, woken_wait = NULL, woken_at = NULL, last_error = NULL
-				WHERE id = $1 AND state = $5 AND reason = $6 AND run_id IS NULL`,
-				id, DispatchBound, done.Run.ID, done.Run.URL, DispatchUnknown, dispatchMaybe)
-			if err != nil {
-				return DispatchRecorded{}, err
-			}
-			// Its "may or may not" wake, not yet delivered, no longer holds.
-			if tag.RowsAffected() == 1 {
-				if _, err := tx.Exec(ctx, `DELETE FROM conductor_wakes WHERE task_id = $1 AND key = $2 AND delivered_at IS NULL`,
-					c.ref.TaskID, dispatchWakeKey(DispatchRow{ID: id, Outcome: DispatchUnknown})); err != nil {
-					return DispatchRecorded{}, err
-				}
-			}
-		}
-	} else {
-		tag, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, outcome = $2, reason = $3 WHERE id = $1 AND state = $4`,
-			id, DispatchUnknown, dispatchNoRunID, DispatchDispatching)
-		if err != nil {
-			return DispatchRecorded{}, err
-		}
-		if settled = tag.RowsAffected() == 1; settled {
-			if err := deliverStoredDispatchTx(ctx, tx, org, id); err != nil {
-				return DispatchRecorded{}, err
-			}
-		} else if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET reason = $2 WHERE id = $1 AND state = $3 AND reason = $4`,
-			id, dispatchNoRunID, DispatchUnknown, dispatchMaybe); err != nil {
-			return DispatchRecorded{}, err
-		}
-	}
-	rec := DispatchRecorded{ID: id, Late: !settled}
-	if err := tx.QueryRow(ctx, `SELECT state, COALESCE(reason, '') FROM workflow_dispatches WHERE id = $1`, id).
-		Scan(&rec.State, &rec.Reason); err != nil {
+	d, err := dispatchTx(ctx, tx, c.id, true)
+	if err != nil {
 		return DispatchRecorded{}, err
 	}
-	payload := map[string]any{"dispatchId": id, "repo": c.repo, "workflow": c.workflow, "ref": c.branch, "inputs": c.inputs,
+	late := d.State != DispatchDispatching
+	switch {
+	case late && (d.State != DispatchUnknown || d.Reason != dispatchMaybe || d.RunID != 0):
+	case done.Run.ID != 0:
+		// Late, its undelivered "may or may not" wake no longer holds, and
+		// nothing is owed until the run ends.
+		if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, run_id = $3, run_url = NULLIF($4, ''), run_status = 'queued',
+				reason = NULL, outcome = NULL, woken_outcome = NULL, woken_wait = NULL, woken_at = NULL, last_error = NULL
+			WHERE id = $1`, d.ID, DispatchBound, done.Run.ID, done.Run.URL); err != nil {
+			return DispatchRecorded{}, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM conductor_wakes WHERE task_id = $1 AND key = $2 AND delivered_at IS NULL`,
+			d.taskID, dispatchWakeKey(DispatchRow{ID: d.ID, Outcome: DispatchUnknown})); err != nil {
+			return DispatchRecorded{}, err
+		}
+		d.State, d.Reason = DispatchBound, ""
+	default:
+		// Late, it is already unknown and told: only the reason changes.
+		if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, outcome = $2, reason = $3 WHERE id = $1`,
+			d.ID, DispatchUnknown, dispatchNoRunID); err != nil {
+			return DispatchRecorded{}, err
+		}
+		d.State, d.Outcome, d.Reason = DispatchUnknown, DispatchUnknown, dispatchNoRunID
+		if !late {
+			if err := deliverDispatchTx(ctx, tx, org, d); err != nil {
+				return DispatchRecorded{}, err
+			}
+		}
+	}
+	payload := map[string]any{"dispatchId": d.ID, "repo": c.repo, "workflow": c.workflow, "ref": c.branch, "inputs": c.inputs,
 		"triggers": done.Triggers, "ci": done.CI}
 	if done.Run.ID != 0 {
 		payload["runId"] = done.Run.ID
@@ -490,22 +465,9 @@ func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchChec
 	if c.questionID != "" {
 		payload["questionId"] = c.questionID
 	}
-	_, err := ledger.Append(ctx, tx, c.ref.Event(EvWorkflowDispatched, ledger.ActorAgent, payload))
-	return rec, err
+	_, err = ledger.Append(ctx, tx, c.ref.Event(EvWorkflowDispatched, ledger.ActorAgent, payload))
+	return DispatchRecorded{ID: d.ID, Repo: d.Repo, Workflow: d.Workflow, Ref: d.Ref, State: d.State, Reason: d.Reason, Late: late}, err
 }
-
-// deliverStoredDispatchTx is deliverDispatchTx of dispatch id as stored.
-func deliverStoredDispatchTx(ctx context.Context, tx pgx.Tx, org, id string) error {
-	d, err := scanDispatch(tx.QueryRow(ctx, `SELECT `+dispatchColumns+` FROM workflow_dispatches d JOIN repositories r ON r.id = d.repository_id
-		WHERE d.id = $1`, id))
-	if err != nil {
-		return err
-	}
-	return deliverDispatchTx(ctx, tx, org, d)
-}
-
-// Dispatched is the target of a dispatch.
-func (c DispatchCheck) Dispatched() (repo, workflow, ref string) { return c.repo, c.workflow, c.branch }
 
 // DispatchRow is a dispatch as stored: what the supervisor last saw.
 type DispatchRow struct {
@@ -529,7 +491,7 @@ type DispatchRow struct {
 	taskID     string
 	failing    *time.Time
 	woken      string
-	readAt     *time.Time
+	org        string
 	completed  *time.Time
 	readAfter  *time.Time
 }
@@ -537,14 +499,23 @@ type DispatchRow struct {
 const dispatchColumns = `d.id, r.name, d.workflow, d.ref, d.dispatched_at, d.state, COALESCE(d.reason, ''), COALESCE(d.run_id, 0),
 	COALESCE(d.run_attempt, 0), COALESCE(d.run_status, ''), COALESCE(d.run_conclusion, ''), COALESCE(d.run_url, ''), d.last_seen_at,
 	d.failed_reads, COALESCE(d.last_error, ''), COALESCE(d.outcome, ''), r.url, d.task_id, d.failing_since, COALESCE(d.woken_outcome, ''),
-	d.last_read_at, d.completed_at, d.read_after`
+	d.completed_at, d.read_after, d.organization_id`
+
+// dispatchTx reads dispatch id as stored; lock takes its row for update.
+func dispatchTx(ctx context.Context, tx pgx.Tx, id string, lock bool) (DispatchRow, error) {
+	q := `SELECT ` + dispatchColumns + ` FROM workflow_dispatches d JOIN repositories r ON r.id = d.repository_id WHERE d.id = $1`
+	if lock {
+		q += ` FOR UPDATE OF d`
+	}
+	return scanDispatch(tx.QueryRow(ctx, q, id))
+}
 
 func scanDispatch(row pgx.Row) (DispatchRow, error) {
 	var d DispatchRow
 	var url string
 	err := row.Scan(&d.ID, &d.Repo, &d.Workflow, &d.Ref, &d.At, &d.State, &d.Reason, &d.RunID, &d.Attempt, &d.Status, &d.Conclusion,
-		&d.URL, &d.LastSeenAt, &d.FailedRead, &d.LastError, &d.Outcome, &url, &d.taskID, &d.failing, &d.woken, &d.readAt,
-		&d.completed, &d.readAfter)
+		&d.URL, &d.LastSeenAt, &d.FailedRead, &d.LastError, &d.Outcome, &url, &d.taskID, &d.failing, &d.woken,
+		&d.completed, &d.readAfter, &d.org)
 	d.slug = forge.SlugFromURL(url)
 	return d, err
 }
@@ -602,8 +573,7 @@ func (d DispatchRow) following(now time.Time) bool {
 // DispatchTargetTx is dispatch id's target, ok false when it is no longer
 // supervised (not followed, owed no wake).
 func DispatchTargetTx(ctx context.Context, tx pgx.Tx, id string) (DispatchTarget, bool, error) {
-	d, err := scanDispatch(tx.QueryRow(ctx, `SELECT `+dispatchColumns+` FROM workflow_dispatches d JOIN repositories r ON r.id = d.repository_id
-		WHERE d.id = $1`, id))
+	d, err := dispatchTx(ctx, tx, id, false)
 	if db.IsNotFound(err) {
 		return DispatchTarget{}, false, nil
 	}
@@ -625,8 +595,6 @@ type DispatchRead struct {
 	Err error
 }
 
-func (r DispatchRead) none() bool { return r.Err == nil && r.Run == nil }
-
 // SettleDispatchTx stores one pass's read of dispatch id and decides from
 // the stored state: ends a dispatch reserved longer than
 // DispatchReservedFor as unknown (never sent again), stores the run's
@@ -636,8 +604,7 @@ func (r DispatchRead) none() bool { return r.Err == nil && r.Run == nil }
 // wait names the dispatch. The row is locked; a pass that lost a race
 // stores nothing twice and wakes nobody twice.
 func SettleDispatchTx(ctx context.Context, tx pgx.Tx, org, id string, read DispatchRead) error {
-	d, err := scanDispatch(tx.QueryRow(ctx, `SELECT `+dispatchColumns+` FROM workflow_dispatches d JOIN repositories r ON r.id = d.repository_id
-		WHERE d.id = $1 FOR UPDATE OF d`, id))
+	d, err := dispatchTx(ctx, tx, id, true)
 	if err != nil {
 		return err
 	}
@@ -647,7 +614,7 @@ func SettleDispatchTx(ctx context.Context, tx pgx.Tx, org, id string, read Dispa
 		if now.Sub(d.At) > DispatchReservedFor {
 			d.State, d.Outcome, d.Reason = DispatchUnknown, DispatchUnknown, dispatchMaybe
 		}
-	case !d.following(now) || read.none():
+	case !d.following(now) || read.Err == nil && read.Run == nil:
 	case d.State == DispatchCompleted:
 		// Still read for a re-run: a failed read here is not "cannot see"
 		// of a run already told.
@@ -790,19 +757,14 @@ func workflowView(d DispatchRow, branchRuns bool) workflowFacts {
 // failed (GitHub refused the dispatch: nothing ran, nothing will end), a
 // known answer, never "not answered yet".
 func workflowItemTx(ctx context.Context, tx pgx.Tx, id string) (waitItem, error) {
-	d, err := scanDispatch(tx.QueryRow(ctx, `SELECT `+dispatchColumns+` FROM workflow_dispatches d JOIN repositories r ON r.id = d.repository_id
-		WHERE d.id = $1`, id))
+	d, err := dispatchTx(ctx, tx, id, false)
 	if err != nil {
 		return waitItem{}, err
 	}
 	branchRuns := false
 	if d.Outcome == DispatchUnknown {
 		// Only an unknown item says where to look.
-		var org string
-		if err := tx.QueryRow(ctx, `SELECT organization_id FROM tasks WHERE id = $1`, d.taskID).Scan(&org); err != nil {
-			return waitItem{}, err
-		}
-		if branchRuns, err = conductorMayReadBranchRunsTx(ctx, tx, org, d.taskID); err != nil {
+		if branchRuns, err = conductorMayReadBranchRunsTx(ctx, tx, d.org, d.taskID); err != nil {
 			return waitItem{}, err
 		}
 	}
