@@ -40,6 +40,7 @@ var (
 	digestNotesTmpl            = mustTemplate("briefings/digest-notes")
 	digestPeersTmpl            = mustTemplate("briefings/digest-peers")
 	epicTmpl                   = mustTemplate("briefings/epic")
+	projectFactsTmpl           = mustTemplate("briefings/project-facts")
 	epicHeldTmpl               = mustTemplate("briefings/epic-held")
 	epicNoteFromSessionTmpl    = mustTemplate("briefings/epic-note-from-session")
 	findingAcceptedTmpl        = mustTemplate("briefings/finding-accepted")

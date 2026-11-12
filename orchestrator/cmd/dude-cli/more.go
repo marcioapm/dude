@@ -606,6 +606,12 @@ var moreCommands = map[string]command{
 	"memory unarchive": {"ID", "bring an archived memory back", noFlags(func(c *cli, a []string) (any, error) {
 		return c.post("/v1/memory/memories/"+esc(a[0])+"/restore", nil)
 	})},
+	"memory pin": {"ID", "pin a project's fact: every agent on the project is briefed with it (memory unpin takes it away)", noFlags(func(c *cli, a []string) (any, error) {
+		return c.post("/v1/memory/memories/"+esc(a[0])+"/pin", nil)
+	})},
+	"memory unpin": {"ID", "unpin a fact: agents find it by search alone", noFlags(func(c *cli, a []string) (any, error) {
+		return c.post("/v1/memory/memories/"+esc(a[0])+"/unpin", nil)
+	})},
 
 	// Brainstorms
 	"brainstorm rename": {"ID TITLE", "rename a brainstorm", noFlags(func(c *cli, a []string) (any, error) {

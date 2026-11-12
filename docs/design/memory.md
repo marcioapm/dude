@@ -16,8 +16,14 @@ Decided (2026-09-28):
   bad one is archived. Approval comes later, for what goes into a prompt
   (process, skills), not for memories.
 - **Scope is the organization or one project.** No per-person memories.
-- **Agents reach memory only through tools.** Nothing is put into a prompt
-  on its own.
+- **Agents reach memory through tools, and through pinned facts.** Nothing
+  else is put into a prompt on its own. A project's fact may be pinned (by a
+  person, or by the task's conductor): every conductor briefing and every
+  Run's first prompt on that project carries its pinned facts, bounded in
+  code (20 facts, 600 characters each, about 4 KB in all; the rest are
+  counted and left to search). Decided 2026-11, superseding "only through
+  tools": a fact every agent must hold to should not depend on an agent
+  thinking to search for it.
 - **Embeddings are the deployment's**, configured by the operator
   (`DUDE_EMBEDDINGS_*`); an organization setting later. Acme's deployment
   goes through llm-proxy: `gemini-embedding-2` at 768 dimensions.

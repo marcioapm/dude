@@ -342,12 +342,8 @@ func sessionRemember(ctx context.Context, tx pgx.Tx, c Caller, in sessionRemembe
 	m, err := memory.Create(ctx, tx, c.Org, memory.New{SessionID: c.SessionID, Title: in.Title, Content: in.Content, Kind: in.Kind,
 		About: about, Author: memory.Author{Kind: "agent", RunID: c.RunID}},
 		memory.Actor{Type: ledger.ActorAgent, ID: c.RunID, RunID: c.RunID})
-	var bad *memory.Invalid
-	if errors.As(err, &bad) {
-		return rememberOut{}, refuse("%s", bad.Reason)
-	}
 	if err != nil {
-		return rememberOut{}, err
+		return rememberOut{}, memoryRefusal(err)
 	}
 	if c.env.kick != nil {
 		c.env.kick()

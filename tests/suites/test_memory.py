@@ -97,3 +97,32 @@ def test_memory_is_searched_and_added_from_the_settings(page: Page, web_url: str
     expect(toast(page, "Memory added")).to_be_visible()
     expect(page.get_by_test_id("memories")).to_contain_text("GitHub redelivers a webhook for 3 days")
     assert console_errors == []
+
+
+def test_a_project_fact_is_pinned_and_unpinned_through_the_api(client: ApiClient, org: dict, env, project: dict):
+    # A project's fact: pinned and unpinned by its author, each in the ledger.
+    fact = client.post("/v1/memory/memories", {
+        "projectId": project["id"], "title": "TestMemo is flaky on main", "content": "Rerun it once before blaming the change.",
+    }).json()
+    pinned = client.post(f"/v1/memory/memories/{fact['id']}/pin")
+    assert pinned.status_code == 200, pinned.text
+    assert pinned.json()["pinnedAt"] and pinned.json()["pinnedBy"]
+    listed = client.get("/v1/memory/memories", params={"project": project["id"]}).json()["memories"]
+    assert [m.get("pinnedAt") is not None for m in listed if m["id"] == fact["id"]] == [True]
+    unpinned = client.post(f"/v1/memory/memories/{fact['id']}/unpin")
+    assert unpinned.status_code == 200 and "pinnedAt" not in unpinned.json()
+    events = query(env.owner_dsn, "SELECT event_type FROM events WHERE payload->>'memoryId' = %s AND event_type LIKE 'memory.%%pinned' ORDER BY cursor", (fact["id"],))
+    assert [e["event_type"] for e in events] == ["memory.pinned", "memory.unpinned"]
+
+    # The organization's memory and a project's note are refused, saying why.
+    org_wide = client.post("/v1/memory/memories", {"title": "Commit messages are prose", "content": "x"}).json()
+    refused = client.post(f"/v1/memory/memories/{org_wide['id']}/pin")
+    assert refused.status_code == 422 and "only a project's memory" in refused.text
+    note = client.post("/v1/memory/memories", {"projectId": project["id"], "title": "A note", "content": "x", "kind": "note"}).json()
+    refused = client.post(f"/v1/memory/memories/{note['id']}/pin")
+    assert refused.status_code == 422 and "only a fact" in refused.text
+
+    # Another member pins nobody's memory but their own.
+    member = ApiClient(env.control_plane_url, create_api_key(env.owner_dsn, org["id"], name="pin-member"))
+    execute(env.owner_dsn, "UPDATE people SET role = 'member' WHERE id = (SELECT person_id FROM api_keys WHERE name = 'pin-member' AND organization_id = %s)", (org["id"],))
+    assert member.post(f"/v1/memory/memories/{fact['id']}/pin").status_code == 403

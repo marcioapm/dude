@@ -315,6 +315,8 @@ var routeCases = []routeCase{
 	{[]string{"run", "leave", "run_9"}, "POST", "/v1/runs/run_9/leave", ``},
 	{[]string{"question", "answer", "q_1", "yes"}, "POST", "/v1/questions/q_1/answer", `{"text":"yes"}`},
 	{[]string{"memory", "show", "mem_1"}, "GET", "/v1/memory/memories/mem_1", ``},
+	{[]string{"memory", "pin", "mem_1"}, "POST", "/v1/memory/memories/mem_1/pin", ``},
+	{[]string{"memory", "unpin", "mem_1"}, "POST", "/v1/memory/memories/mem_1/unpin", ``},
 	{[]string{"memory", "archive", "mem_1"}, "POST", "/v1/memory/memories/mem_1/archive", ``},
 	{[]string{"memory", "unarchive", "mem_1"}, "POST", "/v1/memory/memories/mem_1/restore", ``},
 	{[]string{"task", "update", "wi_12", "--repo", "web"}, "PATCH", "/v1/tasks/wi_12", `{"repositories":[{"access":"write","id":"rep_web"}]}`},

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
@@ -21,6 +22,9 @@ const (
 	EvUpdated  = "memory.updated"
 	EvArchived = "memory.archived"
 	EvRestored = "memory.restored"
+	// Pinned in front of every agent on its project, or no longer (Pin).
+	EvPinned   = "memory.pinned"
+	EvUnpinned = "memory.unpinned"
 )
 
 var kinds = map[string]bool{"fact": true, "procedure": true, "note": true}
@@ -60,6 +64,14 @@ type Memory struct {
 	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
+	// Pinned: in front of every agent on its project (Pin), since when and
+	// by whom — a person's name, or the role of the agent that pinned it.
+	PinnedAt *time.Time `json:"pinnedAt,omitempty"`
+	PinnedBy string     `json:"pinnedBy,omitempty"`
+	// Who pinned it, by id: a person, or an agent's Run. Not sent: an
+	// agent unpins only what an agent pinned (agenttools' remember).
+	PinnedByPersonID string `json:"-"`
+	PinnedByRunID    string `json:"-"`
 	// The index's view: embedded, waiting, or failed with its reason.
 	Index     string `json:"index"`
 	IndexNote string `json:"indexNote,omitempty"`
@@ -179,9 +191,14 @@ type Patch struct {
 
 // Update changes m, already read (and checked by the caller).
 func Update(ctx context.Context, tx pgx.Tx, org string, m Memory, p Patch, by Actor) (Memory, error) {
+	// Locked and read again, as Pin does: the pinned guard below sees a pin
+	// committed since the caller read m, and a pin waits for this edit.
+	m, err := lock(ctx, tx, m.ID)
+	if err != nil {
+		return Memory{}, err
+	}
 	id := m.ID
 	title, content, kind, project := m.Title, m.Content, m.Kind, m.ProjectID
-	var err error
 	if p.Title != nil {
 		title = *p.Title
 	}
@@ -204,6 +221,18 @@ func Update(ctx context.Context, tx pgx.Tx, org string, m Memory, p Patch, by Ac
 	}
 	if title, content, kind, err = clean(title, content, kind); err != nil {
 		return Memory{}, err
+	}
+	if m.Pinned() {
+		// A pinned fact stays one Pin would pin: unpin it to change that.
+		after := m
+		after.Kind, after.ProjectID = kind, project
+		if p.About != nil {
+			after.About = *p.About
+		}
+		after.ArchivedAt = nil
+		if err := Pinnable(after); err != nil {
+			return Memory{}, invalid("it is pinned: unpin it first, as %s", err)
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE memories SET title = $2, content = $3, kind = $4, project_id = $5 WHERE id = $1`,
 		id, title, content, kind, db.Nullable(project)); err != nil {
@@ -248,6 +277,84 @@ func Archive(ctx context.Context, tx pgx.Tx, org string, m Memory, archived bool
 		return Memory{}, err
 	}
 	return get(ctx, tx, id)
+}
+
+// Pinner is who pins a memory, as the briefing names them: a person, or
+// an agent's Run.
+type Pinner struct {
+	PersonID, RunID string
+}
+
+// Pin puts m, already read (and checked by the caller), in front of every
+// agent on its project, or takes it away (pinned false). Only a project's
+// own live fact, about no task, is pinned: an organization's has no
+// project to brief, a session's is its members' alone, a procedure or note
+// is detail search finds when the work needs it, and a fact about one task
+// is that task's detail, not the project's. Unpinning is always allowed.
+func Pin(ctx context.Context, tx pgx.Tx, org string, m Memory, pinned bool, who Pinner, by Actor) (Memory, error) {
+	// The row is locked and read again, refs and all: of two pins at once,
+	// the second waits, finds it pinned, and records nothing; and what is
+	// checked is the memory as it is now, not the copy the caller read
+	// before a PATCH elsewhere made it about a task (Update locks it too).
+	m, err := lock(ctx, tx, m.ID)
+	if err != nil {
+		return Memory{}, err
+	}
+	if m.Pinned() == pinned {
+		return m, nil
+	}
+	if pinned {
+		if err := Pinnable(m); err != nil {
+			return Memory{}, err
+		}
+	}
+	id := m.ID
+	ev := EvUnpinned
+	if pinned {
+		ev = EvPinned
+		_, err = tx.Exec(ctx, `UPDATE memories SET pinned_at = now(), pinned_by_person_id = $2, pinned_by_run_id = $3 WHERE id = $1`,
+			id, db.Nullable(who.PersonID), db.Nullable(who.RunID))
+		err = pinRefused(err)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE memories SET pinned_at = NULL, pinned_by_person_id = NULL, pinned_by_run_id = NULL WHERE id = $1`, id)
+	}
+	if err != nil {
+		return Memory{}, err
+	}
+	if err := record(ctx, tx, org, by, ev, id, m.ProjectID, m.SessionID, map[string]any{"title": m.Title}); err != nil {
+		return Memory{}, err
+	}
+	return get(ctx, tx, id)
+}
+
+// pinRefused is the database's own refusal of a pin (migration 262's
+// CHECK, 23514) as Pinnable's: a refusal the caller is told, never a
+// failure.
+func pinRefused(err error) error {
+	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23514" {
+		return invalid("only a project's own fact, of no brainstorm session, is pinned")
+	}
+	return err
+}
+
+// Pinnable refuses what may not be pinned, saying why (Pin).
+func Pinnable(m Memory) error {
+	switch {
+	case m.SessionID != "":
+		return invalid("a brainstorm session's memory is not pinned: it is its members' alone, and a project's agents never read it")
+	case m.ProjectID == "":
+		return invalid("only a project's memory is pinned: an organization's has no project whose agents it would brief")
+	case m.Kind != "fact":
+		return invalid("only a fact is pinned: a %s is detail that search finds when the work needs it", m.Kind)
+	case m.ArchivedAt != nil:
+		return invalid("an archived memory is not pinned: restore it first")
+	}
+	for _, r := range m.About {
+		if r.Type == "task" {
+			return invalid("a memory about a task is not pinned: it is that task's detail, not a fact every agent on the project needs")
+		}
+	}
+	return nil
 }
 
 // record appends a memory's event. A session's memory's events are on its
@@ -342,12 +449,19 @@ func setRefs(ctx context.Context, tx pgx.Tx, org, id string, refs []Ref) error {
 }
 
 // selectMemory reads a memory as people see it: who wrote it (an agent's
-// Run gives the person it worked for and its task), and its index state.
+// Run gives the person it worked for and its task), who pinned it, and its
+// index state. Who pinned it is named as a briefing names them: a person's
+// name, else the pinning Run's role ("the conductor"), else "".
+// delivery.ProjectFacts names them the same way in its own query: keep the
+// two alike.
 const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.session_id, ''), m.title, m.content, m.kind, m.author_kind,
 		coalesce(m.author_person_id, op.id, ''), coalesce(p.name, op.name, ''),
 		coalesce(r.role::text, ''), coalesce(m.created_by_run_id, ''), coalesce(tp.key_prefix || '-' || t.number, ''),
 		coalesce(m.system_reason, ''), coalesce(m.source_type, ''), coalesce(m.source_id, ''),
-		m.archived_at, m.created_at, m.updated_at,
+		m.archived_at, m.created_at, m.updated_at, m.pinned_at,
+		coalesce((SELECT name FROM people WHERE id = m.pinned_by_person_id),
+			(SELECT 'the ' || replace(role::text, '_', ' ') FROM runs WHERE id = m.pinned_by_run_id), ''),
+		coalesce(m.pinned_by_person_id, ''), coalesce(m.pinned_by_run_id, ''),
 		CASE WHEN d.embedding IS NOT NULL THEN 'embedded' WHEN d.last_error IS NOT NULL THEN 'failed' ELSE 'waiting' END,
 		coalesce(d.last_error, '')
 	FROM memories m
@@ -360,12 +474,16 @@ const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.sessio
 		ORDER BY membership.position, membership.person_id LIMIT 1) op ON true
 	LEFT JOIN search_documents d ON d.source_type = 'memory' AND d.source_id = m.id`
 
+// Pinned says m is pinned.
+func (m Memory) Pinned() bool { return m.PinnedAt != nil }
+
 func scan(row pgx.Row) (Memory, error) {
 	var m Memory
 	var srcType, srcID string
 	err := row.Scan(&m.ID, &m.ProjectID, &m.SessionID, &m.Title, &m.Content, &m.Kind, &m.Author.Kind,
 		&m.Author.PersonID, &m.Author.PersonName, &m.Author.Role, &m.Author.RunID, &m.Author.TaskKey,
-		&m.Author.Reason, &srcType, &srcID, &m.ArchivedAt, &m.CreatedAt, &m.UpdatedAt, &m.Index, &m.IndexNote)
+		&m.Author.Reason, &srcType, &srcID, &m.ArchivedAt, &m.CreatedAt, &m.UpdatedAt, &m.PinnedAt, &m.PinnedBy,
+		&m.PinnedByPersonID, &m.PinnedByRunID, &m.Index, &m.IndexNote)
 	if srcType != "" {
 		m.Source = &Ref{Type: srcType, ID: srcID}
 	}
@@ -381,6 +499,15 @@ func Get(ctx context.Context, tx pgx.Tx, id string, v Viewer) (Memory, error) {
 // get reads one memory just written by the caller, whoever may read it.
 func get(ctx context.Context, tx pgx.Tx, id string) (Memory, error) {
 	return getWhere(ctx, tx, ` WHERE m.id = $1`, id)
+}
+
+// lock takes a memory's row lock for the rest of tx and reads it, refs
+// and all, as it is now: what a write since the caller's read changed.
+func lock(ctx context.Context, tx pgx.Tx, id string) (Memory, error) {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM memories WHERE id = $1 FOR UPDATE`, id); err != nil {
+		return Memory{}, err
+	}
+	return get(ctx, tx, id)
 }
 
 func getWhere(ctx context.Context, tx pgx.Tx, where string, args ...any) (Memory, error) {
