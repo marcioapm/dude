@@ -132,6 +132,30 @@ The person withdrew reviewer question rvq_1. Decide whether a review should weig
 
 `main` moved: GLD-8 merged (#14). Call sync_base if your work depends on it; while a pull request is open on the task branch, publish is refused, so use start_phase fix to bring it in instead.
 
+## epic-merge-overlap
+
+GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes `api/auth.go`, `api/routes.go`: bring `main` in (sync_base, or start_phase fix while a pull request is open) before you go on.
+
+## epic-merge-overlap-many
+
+GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes `a.go`, `b.go`, `c.go`, `d.go` and 2 more: bring `main` in (sync_base, or start_phase fix while a pull request is open) before you go on.
+
+## epic-merge-overlap-long
+
+GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes `services/billing/internal/invoices/reconcile_test.go`, `services/billing/internal/invoices/reconcile.go` and 2 more: bring `main` in (sync_base, or start_phase fix while a pull request is open) before you go on.
+
+## epic-merge-none
+
+GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). No overlapping files with your branch.
+
+## epic-merge-unknown
+
+GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Overlap unknown: check `dude diff --task GLD-8` against your branch before you go on.
+
+## epic-merge-no-sha
+
+GLD-8 on your epic merged api#14. No overlapping files with your branch.
+
 ## voice-quiet
 
 This delivery is quiet now: decide by your defaults, post in Chat only when something needs a person, and leave the pull request to dude, which opens it by the task's choice.
