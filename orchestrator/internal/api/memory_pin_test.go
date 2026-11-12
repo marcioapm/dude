@@ -144,3 +144,33 @@ func TestAPinnedFactsEditCannotMakeItUnpinnable(t *testing.T) {
 		}
 	}
 }
+
+// Pinning what is pinned changes nothing: one memory.pinned event, the
+// same pinned_at.
+func TestPinningTwiceIsOnePin(t *testing.T) {
+	m := setupMemory(t)
+	_, created := m.do(t, "POST", "/internal/memory/memories", `{"projectId": "prj_m", "title": "Pinned", "content": "x"}`)
+	id := created["id"].(string)
+	path := "/internal/memory/memories/" + id
+	pinnedAt := func() string {
+		var at string
+		if err := m.owner.QueryRow(context.Background(), `SELECT pinned_at::text FROM memories WHERE id = $1`, id).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	if status, out := m.do(t, "POST", path+"/pin", ""); status != 200 {
+		t.Fatalf("pin: %d %v", status, out)
+	}
+	first := pinnedAt()
+	if status, out := m.do(t, "POST", path+"/pin", ""); status != 200 || out["pinnedAt"] == nil {
+		t.Fatalf("the second pin: %d %v", status, out)
+	}
+	if again := pinnedAt(); again != first {
+		t.Errorf("pinned_at moved from %s to %s", first, again)
+	}
+	var n int
+	if err := m.owner.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE event_type = 'memory.pinned' AND payload->>'memoryId' = $1`, id).Scan(&n); err != nil || n != 1 {
+		t.Errorf("%d memory.pinned events (%v), want 1", n, err)
+	}
+}

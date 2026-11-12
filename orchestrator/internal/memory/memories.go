@@ -282,8 +282,14 @@ type Pinner struct {
 // is detail search finds when the work needs it, and a fact about one task
 // is that task's detail, not the project's. Unpinning is always allowed.
 func Pin(ctx context.Context, tx pgx.Tx, org string, m Memory, pinned bool, who Pinner, by Actor) (Memory, error) {
-	if m.Pinned() == pinned {
-		return m, nil
+	// The row is locked and its pin read again: of two pins at once, the
+	// second waits, finds it pinned, and records nothing.
+	var now bool
+	if err := tx.QueryRow(ctx, `SELECT pinned_at IS NOT NULL FROM memories WHERE id = $1 FOR UPDATE`, m.ID).Scan(&now); err != nil {
+		return Memory{}, err
+	}
+	if now == pinned {
+		return get(ctx, tx, m.ID)
 	}
 	if pinned {
 		if err := Pinnable(m); err != nil {
