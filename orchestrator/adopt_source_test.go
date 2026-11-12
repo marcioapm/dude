@@ -138,7 +138,12 @@ func TestASourceDudeMustNotTouchIsRefused(t *testing.T) {
 	mustExec(t, w.owner, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, head_branch, base_branch)
 		VALUES ($1, $2, $3, 'pr', 1, 'feature/open', 'main')`, other, w.org, w.repoID)
 	status, out := w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "1"})
-	refusedAs(t, status, out, 422, "branch_taken")
+	refusedAs(t, status, out, 409, "superseded_required")
+	e, _ := out["error"].(map[string]any)
+	d, _ := e["details"].(map[string]any)
+	if h, _ := d["holder"].(map[string]any); h["id"] != other {
+		t.Errorf("the refusal names %v, want %s", h, other)
+	}
 	// Its own source is not another task's.
 	if status, out := w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "1", "taskId": other}); status != 200 {
 		t.Errorf("a task's own source refused: %d %v", status, out)
@@ -152,7 +157,50 @@ func TestASourceDudeMustNotTouchIsRefused(t *testing.T) {
 	w.deliver(live)
 	w.gh.Branch(delivery.BranchFor(live, 1), "main", "Its own")
 	status, out = w.checkSource(map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": delivery.BranchFor(live, 1)})
-	refusedAs(t, status, out, 422, "branch_taken")
+	refusedAs(t, status, out, 409, "superseded_required")
+}
+
+// Review only reads a pull request of this repository: read access is
+// enough, a protected head is allowed (it never pushes), a branch or a
+// fork is refused, and it is never the default.
+func TestAReviewOnlySourceNeedsOnlyRead(t *testing.T) {
+	w := newWorld(t)
+	locked := w.gh.OpenAsPerson("alice", "feature/locked", "main", "Protected head")
+	fork := w.gh.OpenAsPerson("mallory", "feature/fork", "main", "From a fork")
+	forked := w.gh.Pull(fork)
+	w.gh.Branch("feature/bare", "main", "Bare")
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Protected = map[string]bool{"feature/locked": true}
+		forked.HeadRepo = "mallory/target"
+		s.ReceiveStatus = 403 // no push access
+	})
+	pr := func(n int) map[string]any {
+		return map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": fmt.Sprint(n), "mode": delivery.ModeReviewOnly}
+	}
+	status, out := w.checkSource(pr(locked))
+	if status != http.StatusOK || out["mode"] != delivery.ModeReviewOnly || out["headBranch"] != "feature/locked" {
+		t.Fatalf("a protected pull request without push access to review only: %d %v", status, out)
+	}
+	status, out = w.checkSource(pr(fork))
+	refusedAs(t, status, out, 422, "pr_fork")
+	if msg, _ := out["error"].(map[string]any)["message"].(string); !strings.Contains(msg, "reviews only this repository's own pull requests") {
+		t.Errorf("fork refusal %q", msg)
+	}
+	status, out = w.checkSource(map[string]any{"kind": "branch", "repositoryId": w.repoID, "branch": "feature/bare", "mode": delivery.ModeReviewOnly})
+	refusedAs(t, status, out, 422, "bad_kind")
+	// Without it asked for, the same pull request is a writer's: refused.
+	status, out = w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": fmt.Sprint(locked)})
+	refusedAs(t, status, out, 422, "no_write")
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/repos/acme/target/pulls/") {
+				return http.StatusForbidden
+			}
+			return 0
+		}
+	})
+	status, out = w.checkSource(pr(locked))
+	refusedAs(t, status, out, 422, "no_read")
 }
 
 // The dialog's pickers: the project's repositories with whether dude may

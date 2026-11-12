@@ -639,7 +639,7 @@ func TestAStoppedAdoptedTaskCannotTakeBackABranchAnotherTaskAdopted(t *testing.T
 	}
 	for _, action := range actions {
 		status, body := w.call("/internal/tasks/"+first+"/recover", map[string]any{"action": action})
-		if status != 409 || body["error"].(map[string]any)["code"] != "branch_taken" {
+		if status != 409 || body["error"].(map[string]any)["code"] != "superseded_required" {
 			t.Fatalf("%s beside the branch's new holder: %d %v", action, status, body)
 		}
 		if after := snapshot(); after != before {

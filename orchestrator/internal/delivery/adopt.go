@@ -49,7 +49,7 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	}
 	checked, err := CheckSource(ctx, w.s.DB, gh, sc.OrganizationID, st.ProjectID, SourceRequest{
 		Kind: src.Kind, RepositoryID: src.RepositoryID, PullRequest: fmt.Sprint(src.Number),
-		Branch: src.HeadBranch, Base: src.BaseBranch, TaskID: st.TaskID,
+		Branch: src.HeadBranch, Base: src.BaseBranch, TaskID: st.TaskID, Mode: src.Mode,
 	})
 	if err != nil {
 		var refusal SourceRefusal
