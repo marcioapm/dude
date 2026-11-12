@@ -296,6 +296,17 @@ func TestTheReviewVerdictProfile(t *testing.T) {
 			},
 			merge:  answer{false, "pending: no checks have reported at the head yet"},
 			review: answer{false, "pending: no checks have reported at the head yet"}},
+		// The control for the pin-ahead cases: the pin is the recorded
+		// head, so the syncer's record is the pin's and its unknown past
+		// the grace reads as the merge profile reads it.
+		{name: "nothing reported at a pin the syncer recorded, past the grace on a pull request that had CI", key: ReadyChecks,
+			setup: func(f *gateFixture) string {
+				h := f.aheadOfTheRecord("true", "unknown", "1 hour")
+				f.exec(`UPDATE pull_requests SET head_sha = $2 WHERE id = 'pr_g' AND organization_id = $1`, h)
+				return h
+			},
+			merge:  answer{true, "no CI for this head: nothing reported within the grace"},
+			review: answer{true, "no CI for this head: nothing reported within the grace"}},
 		// A pull request that has had CI (an external status, no workflows):
 		// nothing at the pin yet is CI yet to start, not "no CI configured".
 		{name: "nothing reported at a pin ahead of the record, on a pull request that had CI and has no workflows", key: ReadyChecks,
