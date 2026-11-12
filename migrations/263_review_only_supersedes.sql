@@ -1,4 +1,4 @@
--- 262_review_only_supersedes.sql — a third way to take over work, and a
+-- 263_review_only_supersedes.sql — a third way to take over work, and a
 -- task that replaces another on the same pull request or branch.
 --
 -- task_sources.mode 'review_only': dude reviews a person's pull request,
