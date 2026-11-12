@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -643,10 +647,14 @@ func TestStartPhaseRightAfterAPersonsPushWhileThePullRequestWaits(t *testing.T) 
 	tests := w.phaseRuns(task, "test")
 
 	pushed := w.gh.CommitOnTop(w.gh.Pull(1).Head, "A person's change")
-	w.signalReadinessNoPump(task, pushed)
+	wf := w.signalReadinessNoPump(task, pushed)
 
 	if status, out := w.startPhaseNoPump(spec, `{"phase":"test"}`); status != 200 {
 		t.Fatalf("start_phase test right after the person's push: %d %v", status, out)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id = $1
+		AND name = $2 AND payload->>'head' = $3 AND consumed_at IS NULL`, wf, delivery.SignalPRFeedback, pushed); n != 1 {
+		t.Fatalf("%d pending readiness signals immediately after start_phase, want 1", n)
 	}
 	w.until("the test at the person's push completed", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'test' AND base_refs->>'target' = $2
@@ -699,4 +707,137 @@ func TestStartPhaseWhileAPollerHoldsThePullRequestWaitIsRefusedForAMoment(t *tes
 		t.Fatalf("start_phase once the lease is let go: %d %v", status, out)
 	}
 	w.until("one test started", func() bool { return w.phaseRuns(task, "test") == tests+1 })
+}
+
+// Observe the real tool's answer before releasing the poller's lease. The
+// scripted conductor must not lose the person's request at this boundary.
+func TestTheScriptedConductorRetriesAStartRefusedByThePollersLease(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", "fake/scripted")
+	answers := make(chan string, 16)
+	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log, Lux: w.syncer.Lux}).Handler())
+	t.Cleanup(tools.Close)
+	proxy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		req := r.Clone(r.Context())
+		req.URL.Scheme, req.URL.Host, req.RequestURI = "http", strings.TrimPrefix(tools.URL, "http://"), ""
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			http.Error(rw, err.Error(), 500)
+			return
+		}
+		defer res.Body.Close()
+		var body json.RawMessage
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			http.Error(rw, err.Error(), 500)
+			return
+		}
+		if r.URL.Path == "/tools/start_phase" {
+			select {
+			case answers <- fmt.Sprintf("%d %s", res.StatusCode, body):
+			default:
+			}
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(res.StatusCode)
+		_, _ = rw.Write(body)
+	}))
+	t.Cleanup(proxy.Close)
+	w.syncer.Agent.ToolsURL, w.syncer.Agent.ToolsService = proxy.URL, true
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	w.conductorSpecOf(task)
+	tests := w.phaseRuns(task, "test")
+	pushed := w.gh.CommitOnTop(w.gh.Pull(1).Head, "A person's change")
+	wf := w.signalReadinessNoPump(task, pushed)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = 'another-poller', locked_until = now() + interval '1 minute' WHERE id = $1`, wf)
+	if status, out := w.chat(task, "Test it again.\ntool: start_phase {\"phase\":\"test\"}"); status >= 300 {
+		t.Fatalf("scripted chat: %d %v", status, out)
+	}
+	// Sweep may wait for input's scripted turn; observe the HTTP answer
+	// independently rather than blocking the lease release behind that turn.
+	swept := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			if _, err := w.syncer.Sweep(ctx); err != nil {
+				swept <- err
+				return
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(untilPoll):
+			}
+		}
+		swept <- nil
+	}()
+	var refused string
+	select {
+	case refused = <-answers:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no observed scripted start_phase response")
+	}
+	if !strings.Contains(refused, "422") || !strings.Contains(refused, "start test again in a moment") {
+		t.Fatalf("unexpected refusal: %s", refused)
+	}
+	t.Logf("observed scripted refusal with lease held: %s; test Runs=%d", refused, w.phaseRuns(task, "test"))
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		for label, query := range map[string]string{
+			"task events":   `SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY cursor), '[]')::text FROM events e WHERE task_id = $1`,
+			"workflow row":  `SELECT to_jsonb(w)::text FROM workflow_runs w WHERE task_id = $1`,
+			"test Run rows": `SELECT COALESCE(jsonb_agg(to_jsonb(r)), '[]')::text FROM runs r WHERE task_id = $1 AND phase = 'test'`,
+		} {
+			var raw string
+			if err := w.owner.QueryRow(context.Background(), query, task).Scan(&raw); err != nil {
+				t.Logf("%s: %v", label, err)
+			} else {
+				t.Logf("%s: %s", label, raw)
+			}
+		}
+	}()
+	if n := w.phaseRuns(task, "test"); n != tests {
+		t.Fatalf("lease-held start created %d test Runs, want %d", n, tests)
+	}
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = NULL, locked_until = NULL WHERE id = $1`, wf)
+	// Wait for the actual successful retry before stopping the sweep loop.
+	deadline := time.After(5 * time.Second)
+retry:
+	for {
+		select {
+		case answer := <-answers:
+			if strings.HasPrefix(answer, "200 ") {
+				break retry
+			}
+			// A retry may already have read the held lease before release.
+			if !strings.Contains(answer, "start test again in a moment") {
+				t.Fatalf("retry after lease release: %s", answer)
+			}
+		case <-deadline:
+			t.Fatal("no successful retry after lease release")
+		}
+	}
+	cancel()
+	select {
+	case err := <-swept:
+		if err != nil && ctx.Err() == nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("scripted turn did not settle after lease release")
+	}
+	w.until("the scripted request starts one test after lease release", func() bool {
+		return w.phaseRuns(task, "test") == tests+1
+	})
+	w.until("the retried test completed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'test' AND status = 'completed'`, task) == tests+1
+	})
+	if n := w.phaseRuns(task, "test"); n != tests+1 {
+		t.Fatalf("%d test Runs after successful retry, want %d", n, tests+1)
+	}
 }
