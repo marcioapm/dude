@@ -144,6 +144,26 @@ func (w *epicMergeWorld) merge() {
 	})
 }
 
+// A merged pull request whose merge commit GitHub gives as no SHA (empty,
+// uppercase, short) still syncs as merged, its merge commit unknown: the
+// column's CHECK never fails the sync, so the merge is never lost.
+func TestSyncMergedWithInvalidMergeSHA(t *testing.T) {
+	for _, bad := range []string{"", strings.Repeat("A", 40), strings.Repeat("a", 39)} {
+		t.Run(fmt.Sprintf("%q", bad), func(t *testing.T) {
+			w := newWorld(t)
+			prID := w.prOf(w.reviewing())
+			w.gh.Merge(1)
+			w.gh.Pull(1).MergeSHA = &bad
+			if err := w.prs.Sync(context.Background(), w.org, prID); err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			if n := w.count(`SELECT count(*) FROM pull_requests WHERE id = $1 AND state = 'merged' AND merge_commit_sha IS NULL`, prID); n != 1 {
+				t.Fatal("not recorded merged with no merge commit")
+			}
+		})
+	}
+}
+
 func (w *epicMergeWorld) sweep() int {
 	w.t.Helper()
 	n, err := w.worker.Sweep(context.Background())
