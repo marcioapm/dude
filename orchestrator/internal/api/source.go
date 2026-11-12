@@ -15,6 +15,7 @@ import (
 func (s *Server) sourceRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /internal/projects/{id}/sources/check", s.auth(s.checkSource))
 	mux.Handle("GET /internal/projects/{id}/sources/repositories", s.auth(s.sourceRepositories))
+	mux.Handle("POST /internal/projects/{id}/tasks/supersede", s.auth(s.createSuperseding))
 	mux.Handle("GET /internal/projects/{id}/sources/repositories/{repo}/branches", s.auth(s.sourceBranches))
 }
 
@@ -152,7 +153,7 @@ func (s *Server) checkSource(w http.ResponseWriter, r *http.Request, org string)
 	var unreachable delivery.SourceUnreachable
 	switch {
 	case errors.As(err, &refusal):
-		return fail(http.StatusUnprocessableEntity, refusal.Code, "%s", refusal.Msg)
+		return sourceFail(refusal)
 	case errors.As(err, &unreachable):
 		return fail(http.StatusBadGateway, "github_unavailable", "%s", unreachable.Error())
 	case err != nil:
@@ -160,4 +161,14 @@ func (s *Server) checkSource(w http.ResponseWriter, r *http.Request, org string)
 	}
 	write(w, http.StatusOK, out)
 	return nil
+}
+
+// sourceFail is a refused source as the API answers it: 422 with the
+// rule's code, or 409 superseded_required naming the live task holding the
+// branch (holder: id, key, mode), which a person may confirm to supersede.
+func sourceFail(r delivery.SourceRefusal) error {
+	if r.Holder != nil {
+		return &httpError{status: http.StatusConflict, code: r.Code, message: r.Msg, details: map[string]any{"holder": r.Holder}}
+	}
+	return fail(http.StatusUnprocessableEntity, r.Code, "%s", r.Msg)
 }

@@ -101,6 +101,8 @@ func worldLog(t *testing.T) *slog.Logger {
 
 type world struct {
 	t *testing.T
+	// The orchestrator's API the world serves (api).
+	apiServer *api.Server
 	// dude's tools are served (withTools): its conductors can call them.
 	toolsOn   bool
 	app       *db.DB
@@ -232,8 +234,9 @@ func newWorld(t *testing.T) *world {
 		ConsoleURL: "https://console.lux.test/"}, Forges: forges, DefaultImage: "default:img"}
 	w.prs.BranchMoved = w.previews.BranchEvent
 	t.Cleanup(w.previews.Stop)
-	apiSrv := httptest.NewServer((&api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: w.log, Kick: func() {},
-		Forges: forges, PRs: w.prs, Servers: w.previews.Service}).Handler())
+	w.apiServer = &api.Server{DB: app, Lux: w.syncer.Lux, Workflow: w.runtime, Token: "svc", Log: w.log, Kick: func() {},
+		Forges: forges, PRs: w.prs, Servers: w.previews.Service}
+	apiSrv := httptest.NewServer(w.apiServer.Handler())
 	t.Cleanup(apiSrv.Close)
 	w.api = apiSrv.URL
 	_ = ctx

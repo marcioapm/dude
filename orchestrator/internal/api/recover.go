@@ -404,7 +404,7 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 	})
 	var taken delivery.SourceRefusal
 	if errors.As(err, &taken) {
-		return fail(http.StatusConflict, taken.Code, "%s", taken.Msg)
+		return sourceFail(taken)
 	}
 	if err != nil {
 		path := "start_over"
