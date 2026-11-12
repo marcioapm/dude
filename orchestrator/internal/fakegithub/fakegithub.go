@@ -217,10 +217,12 @@ type Server struct {
 	// Review writes (reviews.go). RefuseDismissal answers every dismissal
 	// 403, as protected branch rules do. ReviewTimeoutOnce takes the next
 	// review, then cuts the connection before answering. ReviewFail5xx
-	// answers that many review submissions 502, taking none of them.
+	// answers that many review submissions 502, taking none of them, with
+	// a Retry-After of ReviewRetryAfter seconds when that is set.
 	RefuseDismissal   bool
 	ReviewTimeoutOnce bool
 	ReviewFail5xx     int
+	ReviewRetryAfter  int
 }
 
 // NodeID is a pull request's GraphQL id.

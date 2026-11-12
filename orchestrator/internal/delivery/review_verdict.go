@@ -71,6 +71,11 @@ type VerdictState struct {
 	Reason    string `json:"reason,omitempty"`
 	CommentID int64  `json:"commentId,omitempty"`
 	Status    string `json:"status,omitempty"` // the status comment's last body hash
+	// The claim GitHub's answer was lost for: how often it was submitted
+	// with no answer, and looked for since the last of those (P-M2).
+	Lost        string `json:"lost,omitempty"`
+	LostSubmits int    `json:"lostSubmits,omitempty"`
+	LostLookups int    `json:"lostLookups,omitempty"`
 }
 
 // The verdict's actions.
@@ -338,9 +343,36 @@ func (s *Store) verdictDeferCap(gh *forge.GitHub) time.Duration {
 	return time.Hour
 }
 
-// reviewRecoverDelay is how long after an ambiguous answer the review is
-// looked for again before anything is resubmitted.
+// After an ambiguous answer the review is looked for (FindOwnReview) at
+// increasing delays, reviewLookups times its base, and resubmitted only
+// after the last miss. Each further ambiguous answer at the claim doubles
+// them, up to reviewRetryCeiling times the base; every wait is at least
+// GitHub's Retry-After. The base is reviewRecoverDelay (5s, 30s, 2m; 15m).
 const reviewRecoverDelay = 5 * time.Second
+
+var reviewLookups = []time.Duration{1, 6, 24}
+
+const reviewRetryCeiling = 180
+
+// reviewRetryDelay is the wait before the next lookup of a claim whose
+// answer was lost submits times, after lookups misses since.
+func reviewRetryDelay(base time.Duration, submits, lookups int) time.Duration {
+	d := base * reviewLookups[min(lookups, len(reviewLookups)-1)] << min(max(submits-1, 0), 16)
+	return min(d, base*reviewRetryCeiling)
+}
+
+// reviewRetry is postReview's wait before it runs again: the verdict
+// state (the lost claim's counts) is kept across it, unlike a Wait's.
+type reviewRetry struct {
+	After time.Duration
+	Why   string
+}
+
+func (r reviewRetry) Error() string { return r.Why }
+
+func (s *Store) reviewRecoverDelay() time.Duration {
+	return cmp.Or(s.ReviewRecoverDelay, reviewRecoverDelay)
+}
 
 // verdict ends a review-only task's review round, and runs again from its
 // wait on CI's signals while one is due.
@@ -457,6 +489,10 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	}
 	body, comments := verdictReview(d, head, base, lenses, findings, link)
 	posted, err := w.postReview(ctx, sc, st, gh, pr, head, d.Event, d.Reason, body, comments)
+	if r := (reviewRetry{}); errors.As(err, &r) {
+		_ = w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", r.Why)
+		return workflow.Result{Next: "verdict", State: st, SleepUntil: time.Now().Add(r.After)}, nil
+	}
 	if err != nil {
 		return workflow.Result{}, err
 	}
@@ -501,15 +537,27 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 			body, event = ownPullRequestBody(event, body), forge.EventComment
 			continue
 		}
+		v := st.Verdict
+		if v.Lost != claim {
+			v.Lost, v.LostSubmits, v.LostLookups = claim, 0, 0
+		}
+		delay := w.s.reviewRecoverDelay()
 		if claimed {
 			// An earlier run's answer was lost, or it stopped short: find
-			// the review before posting anything.
+			// the review before posting anything, at increasing delays.
 			found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim)
 			if err != nil {
-				return "", workflow.Wait{After: reviewRecoverDelay, Why: "looking for dude's review: " + err.Error()}
+				return "", reviewRetry{After: max(forge.RetryAfter(err), reviewRetryDelay(delay, v.LostSubmits, v.LostLookups)),
+					Why: "looking for dude's review: " + err.Error()}
 			}
 			if ok {
+				v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
 				return event, w.submitted(ctx, sc, st, pr, base, found, true)
+			}
+			if v.LostSubmits > 0 && v.LostLookups+1 < len(reviewLookups) {
+				v.LostLookups++
+				return "", reviewRetry{After: reviewRetryDelay(delay, v.LostSubmits, v.LostLookups),
+					Why: fmt.Sprintf("dude's review not found yet (lookup %d of %d): looking again before resubmitting", v.LostLookups, len(reviewLookups))}
 			}
 		} else if err := w.s.Emit(ctx, org, st, EvReviewClaimed, base); err != nil {
 			return "", err
@@ -538,6 +586,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 		}
 		switch {
 		case err == nil:
+			v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
 			return event, w.submitted(ctx, sc, st, pr, base, got, false)
 		case forge.OwnPullRequest(err) && event != forge.EventComment:
 			if err := w.s.Emit(ctx, org, st, EvReviewDowngraded, map[string]any{"claimId": claim, "pullRequestId": pr.ID,
@@ -555,8 +604,12 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 			return "", w.s.Emit(ctx, org, st, EvReviewFailed, map[string]any{"claimId": claim, "pullRequestId": pr.ID,
 				"head": head, "status": status, "message": msg})
 		}
-		// Ambiguous: GitHub may hold it. The claim stays; never resubmitted blindly.
-		return "", workflow.Wait{After: reviewRecoverDelay, Why: "GitHub's answer to dude's review was lost: " + err.Error()}
+		// Ambiguous: GitHub may hold it. The claim stays; never resubmitted
+		// blindly: looked for first, at increasing delays.
+		v.LostSubmits++
+		v.LostLookups = 0
+		return "", reviewRetry{After: max(forge.RetryAfter(err), reviewRetryDelay(delay, v.LostSubmits, 0)),
+			Why: "GitHub's answer to dude's review was lost: " + err.Error()}
 	}
 	return "", nil
 }
