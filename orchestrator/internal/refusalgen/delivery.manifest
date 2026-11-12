@@ -261,3 +261,4 @@ rDispatchQuestionSpent                  refusals/delivery/dispatch/question-spen
 rDispatchQuestionReserved               refusals/delivery/dispatch/question-reserved
 rDispatchMaybe                          refusals/delivery/dispatch/maybe
 rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-this-task
+rWaitDispatchFailed                    refusals/delivery/waits/dispatch-failed

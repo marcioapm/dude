@@ -21,3 +21,5 @@
 {{- define "refusals/delivery/waits/not-pull-request-of-this-task"}}%s is not a pull request of this task (pull_requests lists them){{end}}
 
 {{- define "refusals/delivery/waits/not-dispatch-of-this-task"}}%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches){{end}}
+
+{{- define "refusals/delivery/waits/dispatch-failed"}}GitHub refused dispatch %s (%s): nothing ran, so there is nothing to wait for. Fix what GitHub refused, then dispatch it again (run_workflow){{end}}

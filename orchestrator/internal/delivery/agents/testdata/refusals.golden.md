@@ -1738,3 +1738,7 @@ dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or
 
 %s is being used by another run_workflow call at the same time: one answer authorizes one dispatch, and that call sends it. Nothing was dispatched by this one
 
+## refusals/delivery/waits/dispatch-failed
+
+GitHub refused dispatch %s (%s): nothing ran, so there is nothing to wait for. Fix what GitHub refused, then dispatch it again (run_workflow)
+

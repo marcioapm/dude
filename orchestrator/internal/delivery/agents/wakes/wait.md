@@ -35,6 +35,7 @@
 {{- if eq .Outcome "completed"}}workflow {{.Workflow}} ({{.ID}}) completed: {{or .Conclusion "no conclusion"}}, attempt {{.Attempt}}{{with .URL}} ({{.}}){{end}}
 {{- else if eq .Outcome "unknown"}}workflow {{.Workflow}} ({{.ID}}) is unknown: {{.Reason}}; investigate, it is neither a success nor a failure
 {{- else if eq .Outcome "cannot_see"}}dude cannot see workflow {{.Workflow}} ({{.ID}}): {{.FailedRead}} reads in a row failed since {{.Failing}} ({{clip .LastError 160}}); investigate, this is not "not finished"
+{{- else if eq .State "failed"}}workflow {{.Workflow}} ({{.ID}}): GitHub refused it: {{clip .LastError 120}}; nothing ran
 {{- else if .Seen}}workflow {{.Workflow}} ({{.ID}}) still running, last seen {{.Status}}{{if gt .Attempt 1}} (attempt {{.Attempt}}){{end}} at {{.Seen}}
 {{- else}}workflow {{.Workflow}} ({{.ID}}): GitHub has not answered its dispatch yet (sent {{.At.UTC.Format "2006-01-02T15:04:05Z07:00"}}); not known to be running
 {{- end}}

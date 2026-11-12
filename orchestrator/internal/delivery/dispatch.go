@@ -721,7 +721,9 @@ func workflowView(d DispatchRow, branchRuns bool) workflowFacts {
 
 // workflowItemTx is a dispatch as a wait reads it: from what the
 // supervisor stored, no GitHub read. It holds at a terminal outcome:
-// completed (good when it succeeded), unknown, or cannot see.
+// completed (good when it succeeded), unknown, or cannot see; and at
+// failed (GitHub refused the dispatch: nothing ran, nothing will end), a
+// known answer, never "not answered yet".
 func workflowItemTx(ctx context.Context, tx pgx.Tx, id string) (waitItem, error) {
 	d, err := scanDispatch(tx.QueryRow(ctx, `SELECT `+dispatchColumns+` FROM workflow_dispatches d JOIN repositories r ON r.id = d.repository_id
 		WHERE d.id = $1`, id))
@@ -734,7 +736,7 @@ func workflowItemTx(ctx context.Context, tx pgx.Tx, id string) (waitItem, error)
 	switch {
 	case d.Outcome == DispatchCompleted && d.Conclusion == "success":
 		it.rank = rankGood
-	case d.Outcome != "":
+	case d.Outcome != "" || d.State == DispatchFailed:
 		it.rank = rankBad
 	default:
 		it.rank = rankWaiting

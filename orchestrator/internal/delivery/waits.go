@@ -64,7 +64,8 @@ type WaitCondition struct {
 	RunsEnded     []string     `json:"runsEnded,omitempty"`
 	PRChecksFinal *PRChecksAsk `json:"prChecksFinal,omitempty"`
 	// A workflow run_workflow dispatched (its dispatchId) reached a
-	// terminal outcome: completed, unknown, or dude cannot see it.
+	// terminal outcome: completed, unknown, or dude cannot see it. One
+	// GitHub refused (failed) is refused: nothing ran.
 	WorkflowEnded string `json:"workflowEnded,omitempty"`
 }
 
@@ -259,13 +260,19 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCon
 			return nil, refuseText(rWaitOneKindPerCondition)
 		case c.WorkflowEnded != "":
 			id := strings.TrimSpace(c.WorkflowEnded)
-			var ours bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_dispatches WHERE id = $1 AND task_id = $2)`, id, taskID).
-				Scan(&ours); err != nil {
+			// A dispatch GitHub refused (failed) never ran: nothing will
+			// end, and waiting on it would report a known answer as pending.
+			var state, lastError string
+			err := tx.QueryRow(ctx, `SELECT state, COALESCE(last_error, '') FROM workflow_dispatches WHERE id = $1 AND task_id = $2`, id, taskID).
+				Scan(&state, &lastError)
+			if db.IsNotFound(err) {
+				return nil, refusef(rWaitNotDispatchOfThisTask, id)
+			}
+			if err != nil {
 				return nil, err
 			}
-			if !ours {
-				return nil, refusef(rWaitNotDispatchOfThisTask, id)
+			if state == DispatchFailed {
+				return nil, refusef(rWaitDispatchFailed, id, clip(oneLine(lastError), 300))
 			}
 			out = append(out, waitCond{Kind: condWorkflowEnded, Dispatch: id})
 		case c.RunsEnded != nil:
