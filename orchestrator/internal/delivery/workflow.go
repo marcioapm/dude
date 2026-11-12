@@ -97,6 +97,8 @@ type State struct {
 	// repository: where the loop's next round starts
 	// (RangeFixRound). Nil before the loop's first round.
 	RoundHeads map[string]string `json:"roundHeads,omitempty"`
+	// A review-only task's verdict, between its runs (review_verdict.go).
+	Verdict *VerdictState `json:"verdict,omitempty"`
 	// The heads the review round in flight checks out, set as its Runs
 	// are created: RoundHeads once it completes. Heads may move under it (a
 	// publish while the reviewers work), and what they did not see must
@@ -608,6 +610,7 @@ func Workflow(s *Store, forges Forges) *workflow.Definition {
 			// branch: its body never runs.
 			"promoteCandidate": promoteCandidate,
 			"prFixDone":        w.prFixDone,
+			"verdict":          w.verdict,
 			"decide":           w.decide,
 			"recover":          w.recover,
 		},
@@ -1212,7 +1215,9 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	if err != nil {
 		return workflow.Result{}, err
 	}
-	if len(failed) > 0 {
+	if len(failed) > 0 && !st.Source.ReviewOnly() {
+		// (A review-only round goes on to its verdict, which comments
+		// that the review could not complete: lensOutcomesTx.)
 		f := failed[0]
 		detail := map[string]any{"runId": f.ID, "category": f.Category, "error": f.Error,
 			"runIds": failedIDs(failed), "categories": failedCategories(failed)}
@@ -1328,6 +1333,11 @@ func (w *steps) withFeedback(ctx context.Context, org string, st *State, finding
 
 // afterLoop goes where the review loop's exit says.
 func (w *steps) afterLoop(ctx context.Context, sc workflow.StepContext, st *State, exit *LoopExit) (workflow.Result, error) {
+	if st.Source.ReviewOnly() {
+		// No fixer, simplifier or pull request here, and no loop to bound:
+		// open findings or none, the round ends in dude's GitHub review.
+		return workflow.Result{Next: "verdict", State: st}, nil
+	}
 	switch {
 	case exit == nil:
 		return workflow.Result{Next: "fix", State: st}, nil
@@ -2031,6 +2041,9 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 	st, err := load(sc)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if st.Source.ReviewOnly() {
+		return w.awaitReviewOnly(ctx, sc, st)
 	}
 	// Every signal of the batch is read before anything is decided: they are
 	// consumed together, so one PR merging must not drop feedback on another
@@ -3032,6 +3045,14 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 		}
 	}
 	c := countStates(states)
+	if st.Source.ReviewOnly() && c.open == 0 && len(states) > 0 {
+		// The review did its job either way: merged or closed, done.
+		why := "pull request closed"
+		if c.merged > 0 {
+			why = "pull request merged"
+		}
+		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", why)
+	}
 	// A close the person already chose to wait past is not asked about
 	// again, however often this runs: only one beyond those is.
 	grown := st.closedBeyondWait(states)

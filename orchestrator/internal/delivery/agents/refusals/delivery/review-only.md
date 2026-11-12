@@ -1,3 +1,2 @@
 {{- define "refusals/delivery/review-only/no-writer"}}This task reviews pull request #%d and changes no code: no implementer, fixer or simplifier runs, and nothing is published. To have dude fix it, start a task from the pull request in Review and fix mode{{end}}
 {{- define "refusals/delivery/review-only/pr-action"}}This task reviews pull request #%d and does not change it: %s is not dude's to take here{{end}}
-{{- define "refusals/delivery/review-only/not-yet"}}This task would review pull request #%d and change no code. A review-only task can be created, but reviewing it arrives with the verdict step: it cannot start yet. To have dude review and fix the pull request now, start a task from it in Review and fix mode{{end}}

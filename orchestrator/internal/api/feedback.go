@@ -21,10 +21,6 @@ func (s *Server) feedbackRoutes(mux *http.ServeMux) {
 
 // feedbackFailure answers a refused feedback request with its code.
 func feedbackFailure(err error) error {
-	var notYet delivery.ReviewOnlyNotYet
-	if errors.As(err, &notYet) {
-		return fail(http.StatusConflict, "review_only_not_yet", "%s", notYet.Error())
-	}
 	var fe delivery.FeedbackError
 	if !errors.As(err, &fe) {
 		return err
