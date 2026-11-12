@@ -67,10 +67,8 @@ type VerdictState struct {
 	Test      string   `json:"test,omitempty"`
 	TestNotes []string `json:"testNotes,omitempty"`
 	TestHead  string   `json:"testHead,omitempty"`
-	// The last event posted at Due, why (verdictDecision.Reason), and the
-	// status comment.
+	// The last event posted at Due, and the status comment.
 	Posted    string `json:"posted,omitempty"`
-	Reason    string `json:"reason,omitempty"`
 	CommentID int64  `json:"commentId,omitempty"`
 	Status    string `json:"status,omitempty"` // the status comment's last body hash
 	// The claim GitHub's answer was lost for: how often it was submitted
@@ -506,7 +504,7 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	}
 	st.ReweighAt = nil
 	if posted != "" {
-		v.Posted, v.Reason = posted, d.Reason
+		v.Posted = posted
 	}
 	if !transientReason(d.Reason) || posted == "" {
 		// Only an approval held back by CI at H (unrelated red CI, CI not
