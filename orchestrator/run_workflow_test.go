@@ -189,7 +189,7 @@ func TestA204DispatchIsUnknownAndNeverBound(t *testing.T) {
 		t.Fatalf("wakes %q", wakes)
 	}
 	// The one run there is, new since the dispatch: still not bound.
-	w.gh.SetWorkflowRun(901, fakegithub.WorkflowRun{Name: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
+	w.gh.SetWorkflowRun(43000000901, fakegithub.WorkflowRun{Name: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
 	for range 3 {
 		mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE id = $1`, one)
 		w.supervise()
@@ -225,22 +225,22 @@ func TestA204DispatchIsUnknownAndNeverBound(t *testing.T) {
 // a restart of the supervisor.
 func TestAMissedEventChangesNothingAndTheOutcomeWakesOnce(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 920 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000000920 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.supervise()
-	if got := w.str(`SELECT state || ' ' || run_id || ' ' || run_status FROM workflow_dispatches WHERE id = $1`, id); got != "bound 920 queued" {
+	if got := w.str(`SELECT state || ' ' || run_id || ' ' || run_status FROM workflow_dispatches WHERE id = $1`, id); got != "bound 43000000920 queued" {
 		t.Fatalf("bound: %s", got)
 	}
-	w.gh.UpdateWorkflowRun(920, func(r *fakegithub.WorkflowRun) { r.Status = "in_progress" })
+	w.gh.UpdateWorkflowRun(43000000920, func(r *fakegithub.WorkflowRun) { r.Status = "in_progress" })
 	w.supervise()
 	if len(w.workflowWakes(task)) != 0 {
 		t.Fatal("woken while running")
 	}
 	// Completed on GitHub; no webhook is sent, no event delivered.
-	w.gh.UpdateWorkflowRun(920, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "failure" })
+	w.gh.UpdateWorkflowRun(43000000920, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "failure" })
 	w.supervise()
 	wakes := w.workflowWakes(task)
-	if len(wakes) != 1 || !strings.Contains(wakes[0], "completed: failure, attempt 1 (https://github.com/acme/target/actions/runs/920)") {
+	if len(wakes) != 1 || !strings.Contains(wakes[0], "completed: failure, attempt 1 (https://github.com/acme/target/actions/runs/43000000920)") {
 		t.Fatalf("wakes %q", wakes)
 	}
 	// More passes, and a new supervisor as after a restart: no second wake.
@@ -257,7 +257,7 @@ func TestAMissedEventChangesNothingAndTheOutcomeWakesOnce(t *testing.T) {
 	}
 	// A racing pass that read the run before the first one committed
 	// settles the same completed read: still one wake.
-	done := forge.RunState{ID: 920, Status: "completed", Conclusion: "failure", Attempt: 1}
+	done := forge.RunState{ID: 43000000920, Status: "completed", Conclusion: "failure", Attempt: 1}
 	for range 2 {
 		if err := w.prs.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 			return delivery.SettleDispatchTx(context.Background(), tx, w.org, id, delivery.DispatchRead{Run: &done})
@@ -283,7 +283,7 @@ func TestAMissedEventChangesNothingAndTheOutcomeWakesOnce(t *testing.T) {
 // error. A failure followed by a read that succeeds resets the count.
 func TestFailedReadsWakeCannotSeeAndASuccessResetsTheCount(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 930 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000000930 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.supervise()
 	failing := func(on bool) {
@@ -291,7 +291,7 @@ func TestFailedReadsWakeCannotSeeAndASuccessResetsTheCount(t *testing.T) {
 			s.Intercept = nil
 			if on {
 				s.Intercept = func(r *http.Request) int {
-					if strings.Contains(r.URL.Path, "/actions/runs/930") {
+					if strings.Contains(r.URL.Path, "/actions/runs/43000000930") {
 						return http.StatusBadGateway
 					}
 					return 0
@@ -332,18 +332,18 @@ func TestFailedReadsWakeCannotSeeAndASuccessResetsTheCount(t *testing.T) {
 // wakes the conductor again.
 func TestARerunAttemptIsFollowed(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 940 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000000940 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.supervise()
-	if err := w.gh.Rerun(940); err == nil {
+	if err := w.gh.Rerun(43000000940); err == nil {
 		t.Fatal("the fake re-ran a run still queued")
 	}
-	w.gh.UpdateWorkflowRun(940, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "failure" })
+	w.gh.UpdateWorkflowRun(43000000940, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "failure" })
 	w.supervise()
 	if wakes := w.workflowWakes(task); len(wakes) != 1 || !strings.Contains(wakes[0], "completed: failure, attempt 1") {
 		t.Fatalf("wakes %q", wakes)
 	}
-	if err := w.gh.Rerun(940); err != nil {
+	if err := w.gh.Rerun(43000000940); err != nil {
 		t.Fatal(err)
 	}
 	w.supervise()
@@ -356,7 +356,7 @@ func TestARerunAttemptIsFollowed(t *testing.T) {
 		t.Fatalf("a wait on a re-run held on the stale outcome: %v", out)
 	}
 	w.must(task, "wait_for", `{"deadline":"30m"}`)
-	w.gh.UpdateWorkflowRun(940, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
+	w.gh.UpdateWorkflowRun(43000000940, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
 	w.supervise()
 	if wakes := w.workflowWakes(task); len(wakes) != 2 || !strings.Contains(wakes[1], "completed: success, attempt 2") {
 		t.Fatalf("wakes %q", wakes)
@@ -374,12 +374,12 @@ func TestARerunAttemptIsFollowed(t *testing.T) {
 // and a wait open on a dispatch carries its outcome, with no second wake.
 func TestAWorkflowWaitsDeadlineReportsTheLastSeenState(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 960 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000000960 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.refused(task, "wait_for", `{"conditions":[{"workflowEnded":"wfd_nope"}],"deadline":"30m"}`, "wfd_nope is not a workflow this task dispatched")
 	out := w.must(task, "wait_for", `{"conditions":[{"workflowEnded":"`+id+`"}],"deadline":"30m"}`)
 	waitID, _ := out["waitId"].(string)
-	w.gh.UpdateWorkflowRun(960, func(r *fakegithub.WorkflowRun) { r.Status = "in_progress" })
+	w.gh.UpdateWorkflowRun(43000000960, func(r *fakegithub.WorkflowRun) { r.Status = "in_progress" })
 	w.supervise()
 	w.pump()
 	mustExec(t, w.owner, `UPDATE conductor_waits SET deadline_at = now() - interval '1 second' WHERE id = $1`, waitID)
@@ -392,7 +392,7 @@ func TestAWorkflowWaitsDeadlineReportsTheLastSeenState(t *testing.T) {
 	// Waited on again; it completes: the wait's wake is the one wake.
 	out = w.must(task, "wait_for", `{"conditions":[{"workflowEnded":"`+id+`"}],"deadline":"30m"}`)
 	waitID, _ = out["waitId"].(string)
-	w.gh.UpdateWorkflowRun(960, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
+	w.gh.UpdateWorkflowRun(43000000960, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
 	w.supervise()
 	w.pump()
 	if by := w.str(`SELECT COALESCE(ended_by, '') FROM conductor_waits WHERE id = $1`, waitID); by != delivery.WaitHeld {

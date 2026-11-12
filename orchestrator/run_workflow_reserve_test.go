@@ -163,7 +163,7 @@ func TestADispatchWhoseAnswerFailedIsMaybe(t *testing.T) {
 func TestAReservationLeftDispatchingEndsUnknown(t *testing.T) {
 	w, task, branch := dispatchWorld(t)
 	w.approvedDeploy(task, branch, "q_crash")
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2300 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000002300 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	mustExec(t, w.owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, question_id, state)
 		SELECT 'wfd_crash', organization_id, task_id, repository_id, 'deploy.yml', ref, 'q_crash', 'dispatching' FROM workflow_dispatches WHERE id = $1`, id)
@@ -202,13 +202,13 @@ func TestProbeClippedDigestMarksAllDelivered(t *testing.T) {
 	for _, note := range []string{"", strings.Repeat("n", delivery.WaitNoteMax)} {
 		t.Run(map[bool]string{true: "no note", false: "long note"}[note == ""], func(t *testing.T) {
 			w, task, _ := dispatchWorld(t)
-			w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2400 })
+			w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000002400 })
 			first := w.dispatched(task, `{"workflow":"ci.yml"}`)
 			ids := []string{first}
 			for i := 1; i < delivery.WaitMaxConditions; i++ {
 				id := fmt.Sprintf("wfd_clip%d", i)
 				mustExec(t, w.owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, state, run_id)
-					SELECT $2, organization_id, task_id, repository_id, workflow, ref, 'bound', 2500 + $3::int FROM workflow_dispatches WHERE id = $1`,
+					SELECT $2, organization_id, task_id, repository_id, workflow, ref, 'bound', 43000002500 + $3::int FROM workflow_dispatches WHERE id = $1`,
 					first, id, i)
 				ids = append(ids, id)
 			}
@@ -376,7 +376,7 @@ func (w *world) lateDispatchThen(task string, before func(id string)) (int, map[
 // wakes the conductor exactly once.
 func TestALateRunIDIsBoundToTheDispatchTheSupervisorEnded(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2600 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000002600 })
 	status, out, id := w.lateDispatch(task)
 	if status != 200 || out["dispatchId"] != id || out["state"] != delivery.DispatchBound {
 		t.Fatalf("the call: %d %v", status, out)
@@ -385,13 +385,13 @@ func TestALateRunIDIsBoundToTheDispatchTheSupervisorEnded(t *testing.T) {
 		t.Fatalf("the call's next: %q", next)
 	}
 	if got := w.str(`SELECT state || ' ' || run_id || ' ' || COALESCE(outcome, 'none') || ' ' || COALESCE(woken_outcome, 'none') || ' ' || COALESCE(reason, 'none')
-		FROM workflow_dispatches WHERE id = $1`, id); got != "bound 2600 none none none" {
+		FROM workflow_dispatches WHERE id = $1`, id); got != "bound 43000002600 none none none" {
 		t.Fatalf("the row: %s", got)
 	}
 	if wakes := w.wakesNaming(task, id); len(wakes) != 0 {
 		t.Fatalf("the stale \"may or may not\" wake is still there: %q", wakes)
 	}
-	w.gh.UpdateWorkflowRun(2600, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
+	w.gh.UpdateWorkflowRun(43000002600, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
 	for range 3 {
 		mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE id = $1`, id)
 		w.supervise()
@@ -409,7 +409,7 @@ func TestALateRunIDIsBoundToTheDispatchTheSupervisorEnded(t *testing.T) {
 // exactly once more.
 func TestALateRunIDKeepsTheDeliveredMayOrMayNotWake(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2650 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000002650 })
 	key := ""
 	status, out, id := w.lateDispatchThen(task, func(id string) {
 		key = "workflow:" + id + ":" + delivery.DispatchUnknown
@@ -423,14 +423,14 @@ func TestALateRunIDKeepsTheDeliveredMayOrMayNotWake(t *testing.T) {
 		t.Fatalf("the call: %d %v", status, out)
 	}
 	if got := w.str(`SELECT state || ' ' || run_id || ' ' || COALESCE(outcome, 'none') || ' ' || COALESCE(woken_outcome, 'none') || ' ' || COALESCE(reason, 'none')
-		FROM workflow_dispatches WHERE id = $1`, id); got != "bound 2650 none none none" {
+		FROM workflow_dispatches WHERE id = $1`, id); got != "bound 43000002650 none none none" {
 		t.Fatalf("the row: %s", got)
 	}
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key = $2 AND delivered_at IS NOT NULL
 		AND line LIKE '%may or may not%'`, task, key); n != 1 {
 		t.Fatalf("the delivered \"may or may not\" wake: %d rows, want 1 (wakes %q)", n, w.wakesNaming(task, id))
 	}
-	w.gh.UpdateWorkflowRun(2650, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
+	w.gh.UpdateWorkflowRun(43000002650, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
 	for range 3 {
 		mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE id = $1`, id)
 		w.supervise()

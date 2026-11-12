@@ -51,7 +51,7 @@ func newAppFixture(t *testing.T) *appFixture {
 	clock := &fakeClock{t: time.Now()}
 	app := fakegithub.NewApp(9001, "dude-test", &key.PublicKey)
 	app.Set(func(a *fakegithub.App) {
-		a.Installations = map[string]int64{"acme": 11, "marcio": 22}
+		a.Installations = map[string]int64{"acme": 60000011, "marcio": 60000022}
 		a.Now = clock.now
 	})
 	srv := httptest.NewServer(app.Handler())
@@ -84,11 +84,11 @@ func TestAnAppTokenIsTheInstallationOfTheRepositorysOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := f.app.Installation(org); got != 11 {
-		t.Errorf("acme/api's token is installation %d's, want 11", got)
+	if got := f.app.Installation(org); got != 60000011 {
+		t.Errorf("acme/api's token is installation %d's, want 60000011", got)
 	}
-	if got := f.app.Installation(personal); got != 22 {
-		t.Errorf("marcio/dotfiles's token is installation %d's, want 22", got)
+	if got := f.app.Installation(personal); got != 60000022 {
+		t.Errorf("marcio/dotfiles's token is installation %d's, want 60000022", got)
 	}
 	// Another repository of the same owner: the owner's installation is
 	// known, and its token is still good.
@@ -101,7 +101,7 @@ func TestAnAppTokenIsTheInstallationOfTheRepositorysOwner(t *testing.T) {
 			t.Errorf("installation lookups %v: want one for acme, by its first repository", a.Lookups)
 		}
 	})
-	if n := f.app.ExchangesFor(11); n != 1 {
+	if n := f.app.ExchangesFor(60000011); n != 1 {
 		t.Errorf("%d exchanges for acme's installation, want 1", n)
 	}
 }
@@ -139,7 +139,7 @@ func TestAnAppTokenIsRefreshedOnlyNearItsExpiry(t *testing.T) {
 	if fresh == first {
 		t.Errorf("with 9 minutes left the token was not replaced")
 	}
-	if n := f.app.ExchangesFor(11); n != 2 {
+	if n := f.app.ExchangesFor(60000011); n != 2 {
 		t.Errorf("%d exchanges, want 2", n)
 	}
 }
@@ -166,7 +166,7 @@ func TestConcurrentCallersShareOneExchange(t *testing.T) {
 			t.Fatalf("callers got different tokens: %v", tokens)
 		}
 	}
-	if n := f.app.ExchangesFor(11); n != 1 {
+	if n := f.app.ExchangesFor(60000011); n != 1 {
 		t.Errorf("%d exchanges for 20 concurrent callers, want 1", n)
 	}
 	f.app.Set(func(a *fakegithub.App) {
@@ -182,27 +182,27 @@ func TestConcurrentCallersShareOneExchange(t *testing.T) {
 
 func TestTheInstallationIDIsTheDefaultWhereGitHubNamesNone(t *testing.T) {
 	f := newAppFixture(t)
-	f.app.Set(func(a *fakegithub.App) { a.Installations["elsewhere"] = 33 })
-	g := f.client(Credential{InstallationID: "33"})
+	f.app.Set(func(a *fakegithub.App) { a.Installations["elsewhere"] = 60000033 })
+	g := f.client(Credential{InstallationID: "60000033"})
 	ctx := context.Background()
 	// No account: the credential's installation.
 	tok, err := g.Token(ctx, "")
-	if err != nil || f.app.Installation(tok) != 33 {
-		t.Errorf("no scope: %q (installation %d), %v; want installation 33", tok, f.app.Installation(tok), err)
+	if err != nil || f.app.Installation(tok) != 60000033 {
+		t.Errorf("no scope: %q (installation %d), %v; want installation 60000033", tok, f.app.Installation(tok), err)
 	}
 	// An owner GitHub knows: its own, not the default.
-	if tok, _ := g.Token(ctx, "marcio/x"); f.app.Installation(tok) != 22 {
-		t.Errorf("marcio/x got installation %d, want 22", f.app.Installation(tok))
+	if tok, _ := g.Token(ctx, "marcio/x"); f.app.Installation(tok) != 60000022 {
+		t.Errorf("marcio/x got installation %d, want 60000022", f.app.Installation(tok))
 	}
 	// An owner GitHub has no installation for: the default.
-	if tok, err := g.Token(ctx, "stranger/x"); err != nil || f.app.Installation(tok) != 33 {
-		t.Errorf("stranger/x: installation %d, %v; want the default, 33", f.app.Installation(tok), err)
+	if tok, err := g.Token(ctx, "stranger/x"); err != nil || f.app.Installation(tok) != 60000033 {
+		t.Errorf("stranger/x: installation %d, %v; want the default, 60000033", f.app.Installation(tok), err)
 	}
 	// The default is not that owner's for good: once the App is installed
 	// there, its token is that installation's.
-	f.app.Set(func(a *fakegithub.App) { a.Installations["stranger"] = 44 })
-	if tok, err := g.Token(ctx, "stranger/y"); err != nil || f.app.Installation(tok) != 44 {
-		t.Errorf("stranger/y after the install: installation %d, %v; want 44", f.app.Installation(tok), err)
+	f.app.Set(func(a *fakegithub.App) { a.Installations["stranger"] = 60000044 })
+	if tok, err := g.Token(ctx, "stranger/y"); err != nil || f.app.Installation(tok) != 60000044 {
+		t.Errorf("stranger/y after the install: installation %d, %v; want 60000044", f.app.Installation(tok), err)
 	}
 	// The same key with no default shares nothing a default decided.
 	f.app.Set(func(a *fakegithub.App) { delete(a.Installations, "stranger") })
@@ -248,12 +248,12 @@ func TestAFailedRefreshKeepsATokenStillValid(t *testing.T) {
 	if err != nil || tok != first {
 		t.Errorf("with 9 minutes left and GitHub failing: %q, %v; want the old token", tok, err)
 	}
-	if n := f.app.AttemptsFor(11); n != 2 {
+	if n := f.app.AttemptsFor(60000011); n != 2 {
 		t.Errorf("%d exchanges asked for, want 2: the refresh was tried", n)
 	}
 	f.app.Set(func(a *fakegithub.App) { a.Down = 0 })
-	if again, _ := g.Token(ctx, "acme/api"); again == first || f.app.ExchangesFor(11) != 2 {
-		t.Errorf("GitHub back: %q (exchanges %d); want a new token from a second exchange", again, f.app.ExchangesFor(11))
+	if again, _ := g.Token(ctx, "acme/api"); again == first || f.app.ExchangesFor(60000011) != 2 {
+		t.Errorf("GitHub back: %q (exchanges %d); want a new token from a second exchange", again, f.app.ExchangesFor(60000011))
 	}
 	f.clock.advance(time.Hour)
 	f.app.Set(func(a *fakegithub.App) { a.Down = 502 })
@@ -272,12 +272,12 @@ func TestAReinstalledAppIsFoundOnTheRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.clock.advance(55 * time.Minute)
-	f.app.Set(func(a *fakegithub.App) { a.Installations["acme"] = 81 })
+	f.app.Set(func(a *fakegithub.App) { a.Installations["acme"] = 60000081 })
 	if _, err := g.Token(ctx, "acme/api"); !Transient(err) {
 		t.Fatalf("the removed installation's exchange: %v, want transient", err)
 	}
-	if tok, err := g.Token(ctx, "acme/api"); err != nil || f.app.Installation(tok) != 81 {
-		t.Errorf("the retry: installation %d, %v; want 81", f.app.Installation(tok), err)
+	if tok, err := g.Token(ctx, "acme/api"); err != nil || f.app.Installation(tok) != 60000081 {
+		t.Errorf("the retry: installation %d, %v; want 60000081", f.app.Installation(tok), err)
 	}
 	// Uninstalled for good: the lookup's refusal.
 	f.clock.advance(55 * time.Minute)
@@ -356,7 +356,7 @@ func TestAnAppsAPICallsUseTheirRepositorysInstallation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(seen) != 2 || seen[0] != "acme=11" || seen[1] != "marcio=22" {
-		t.Errorf("requests went with %v, want acme=11 then marcio=22", seen)
+	if len(seen) != 2 || seen[0] != "acme=60000011" || seen[1] != "marcio=60000022" {
+		t.Errorf("requests went with %v, want acme=60000011 then marcio=60000022", seen)
 	}
 }

@@ -120,7 +120,7 @@ func newAppForges(t *testing.T, appDelay time.Duration, started ...chan struct{}
 		t.Fatal(err)
 	}
 	app := fakegithub.NewApp(9101, "dude-co", &key.PublicKey)
-	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 11} })
+	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 60000011} })
 	h := app.Handler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/app" {

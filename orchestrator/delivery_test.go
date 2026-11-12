@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3955,7 +3956,7 @@ func TestAFixerIsToldWhichCheckFailedAndWhy(t *testing.T) {
 		}
 		return false
 	})
-	for _, want := range []string{"Failing check: e2e", "https://github.test/acme/target/runs/77", "TestGreeting: expected hello",
+	for _, want := range []string{"Failing check: e2e", fmt.Sprintf("https://github.test/acme/target/runs/%d", fakegithub.DefaultCheckRunID), "TestGreeting: expected hello",
 		"greet.go:12: failure: expected hello"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the fixer's prompt lacks %q:\n%s", want, prompt)
@@ -3977,8 +3978,10 @@ func TestAFixerIsToldAnActionsJobsFailureLog(t *testing.T) {
 	w.onModel("implementer", "llm-impl")
 	downloads := httptest.NewServer(w.gh.LogDownloads())
 	t.Cleanup(downloads.Close)
-	w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()} })
-	w.gh.SetJobLog(77, "2026-10-16T19:47:01.123Z =================================== FAILURES ===\n"+
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{fakegithub.DefaultCheckRunID: fakegithub.ActionsJob()}
+	})
+	w.gh.SetJobLog(fakegithub.DefaultCheckRunID, "2026-10-16T19:47:01.123Z =================================== FAILURES ===\n"+
 		"2026-10-16T19:47:02.123Z E       AssertionError: 3 != 2\n"+
 		"2026-10-16T19:47:03.123Z ##[error]Process completed with exit code 1.\n"+
 		"2026-10-16T19:47:04.123Z Post job cleanup.\n", downloads.URL)
@@ -4012,9 +4015,9 @@ func TestAFixerOfAJobWithWarningsIsToldItsLog(t *testing.T) {
 	downloads := httptest.NewServer(w.gh.LogDownloads())
 	t.Cleanup(downloads.Close)
 	w.gh.Set(func(s *fakegithub.Server) {
-		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+		s.CheckRuns = map[int64]fakegithub.CheckRun{fakegithub.DefaultCheckRunID: fakegithub.NoisyActionsJob()}
 	})
-	w.gh.SetJobLog(77, "2026-10-23T09:12:01.123Z ruff check .\n"+
+	w.gh.SetJobLog(fakegithub.DefaultCheckRunID, "2026-10-23T09:12:01.123Z ruff check .\n"+
 		"2026-10-23T09:12:02.123Z app/backup.py:14:5: F841 Local variable `rows` is assigned to but never used\n"+
 		"2026-10-23T09:12:03.123Z ##[error]Process completed with exit code 1.\n"+
 		"2026-10-23T09:12:04.123Z Post job cleanup.\n", downloads.URL)
@@ -4038,7 +4041,7 @@ func TestAFixerOfAJobWithWarningsIsToldItsLog(t *testing.T) {
 	}
 }
 
-// failingCheckFix makes check 77 of an open pull request an Actions job of
+// failingCheckFix makes check DefaultCheckRunID of an open pull request an Actions job of
 // run's annotations and log, fails it, and returns the fix's stored check
 // and its prompt once the fix reaches lux.
 func failingCheckFix(t *testing.T, w *world, run fakegithub.CheckRun, log string, set func(*fakegithub.Server)) (forge.FailingCheck, string) {
@@ -4048,8 +4051,10 @@ func failingCheckFix(t *testing.T, w *world, run fakegithub.CheckRun, log string
 	w.onModel("implementer", "llm-impl")
 	downloads := httptest.NewServer(w.gh.LogDownloads())
 	t.Cleanup(downloads.Close)
-	w.gh.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: run} })
-	w.gh.SetJobLog(77, log, downloads.URL)
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{fakegithub.DefaultCheckRunID: run}
+	})
+	w.gh.SetJobLog(fakegithub.DefaultCheckRunID, log, downloads.URL)
 	if set != nil {
 		w.gh.Set(set)
 	}
@@ -4248,7 +4253,7 @@ func TestAFixRunsWorkspaceHoldsItsChecksLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stored map[string]string
-	if err := json.Unmarshal([]byte(original), &stored); err != nil || strings.TrimSuffix(stored["77"], "\n")+"\n" != string(got) {
+	if err := json.Unmarshal([]byte(original), &stored); err != nil || strings.TrimSuffix(stored[strconv.FormatInt(fakegithub.DefaultCheckRunID, 10)], "\n")+"\n" != string(got) {
 		t.Fatalf("persisted check log differs from the workspace file: %v", err)
 	}
 	if c.Full != "" || c.Path != "" {
@@ -4322,7 +4327,7 @@ func TestPullRequestActionsOnAPersonsBehalf(t *testing.T) {
 		t.Fatalf("rerun: %d %v", code, body)
 	}
 	// An Actions check run is a job: re-run through the Actions API.
-	if len(w.gh.JobsRerun) != 1 || w.gh.JobsRerun[0] != 77 || len(w.gh.Rerequested) != 0 {
+	if len(w.gh.JobsRerun) != 1 || w.gh.JobsRerun[0] != fakegithub.DefaultCheckRunID || len(w.gh.Rerequested) != 0 {
 		t.Errorf("jobs re-run %v, check runs re-requested %v", w.gh.JobsRerun, w.gh.Rerequested)
 	}
 	// The re-run fails again.

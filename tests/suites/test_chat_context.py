@@ -98,9 +98,9 @@ def test_a_top_level_mention_under_a_ci_report_opens_a_session_that_reads_the_fa
     view = n["eli"].get("/v1/organization/chat/slack/projects").json()
     assert [p["key"] for c in view["channels"] if c["conversationId"] == channel for p in c["projects"]] == [keys["api"]]
 
-    link = fake_github.add_actions_run(812, "Nightly", [
-        {"id": 9001, "name": "lint", "conclusion": "success"},
-        {"id": 9002, "name": "integration", "conclusion": "failure", "failed_steps": ["Run tests"],
+    link = fake_github.add_actions_run(43_000_000_812, "Nightly", [
+        {"id": 50_000_009_001, "name": "lint", "conclusion": "success"},
+        {"id": 50_000_009_002, "name": "integration", "conclusion": "failure", "failed_steps": ["Run tests"],
          "log": "2026-10-26T03:00:01.000Z FAIL test_export: timed out after 30s\n"
                 "2026-10-26T03:00:02.000Z ##[error]Process completed with exit code 1.\n"}])
     _report(n, link)
@@ -158,8 +158,8 @@ def test_a_brainstorm_with_no_project_offers_the_learned_one_and_the_askers_clic
     [earlier] = _requests(n["marcia"], 1)
     assert earlier["route"] == "brainstorm" and earlier["result"]["kind"] == "session", earlier
 
-    link = fake_github.add_actions_run(813, "Nightly", [
-        {"id": 9101, "name": "integration", "conclusion": "failure", "failed_steps": ["Run tests"], "log": "FAIL test_import\n"}])
+    link = fake_github.add_actions_run(43_000_000_813, "Nightly", [
+        {"id": 50_000_009_101, "name": "integration", "conclusion": "failure", "failed_steps": ["Run tests"], "log": "FAIL test_import\n"}])
     _report(n, link)
     # The stub can't tell this one's project: a session with none linked,
     # routing suggesting the learned one.
@@ -230,8 +230,8 @@ def test_a_project_hidden_from_slack_is_never_routed_to_linked_or_read(
     hide = {"projectIds": [n["vault"]["id"]]}
     assert _authorized(n["eli"], "PUT", "/v1/organization/chat/slack/hidden-projects", json=hide).status_code == 403
     assert _authorized(n["marcia"], "PUT", "/v1/organization/chat/slack/hidden-projects", json=hide).status_code == 200
-    link = fake_github._for_repo("vault").add_actions_run(77, "Vault nightly", [
-        {"id": 7701, "name": "rotate", "conclusion": "failure", "log": "the vault's secrets\n"}])
+    link = fake_github._for_repo("vault").add_actions_run(43_000_000_077, "Vault nightly", [
+        {"id": 50_000_007_701, "name": "rotate", "conclusion": "failure", "log": "the vault's secrets\n"}])
 
     slack.mention(channel, "", u["U2"], f"what is wrong with {keys['vault']} and {link}?")
     [req] = _requests(n["marcia"], 1)
@@ -255,7 +255,7 @@ def test_a_project_hidden_from_slack_is_never_routed_to_linked_or_read(
     vault_slug = f"{fake_github.owner}/vault"
     lines = ["read the vault's run",
              _tool("github_run_jobs", {"runId": link}),
-             _tool("github_check_log", {"repo": vault_slug, "checkId": 7701}),
+             _tool("github_check_log", {"repo": vault_slug, "checkId": 50_000_007_701}),
              _tool("list_tasks", {"project": keys["vault"]}),
              'tool: say {"text": "done"}']
     assert n["eli"].post(f"/v1/brainstorms/{session}/chat", {"text": "\n".join(lines)}).status_code in (200, 201)

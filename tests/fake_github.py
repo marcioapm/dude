@@ -51,6 +51,13 @@ REVIEWERS = [
 
 # What GitHub answers the review writes with, in its 422's "errors" list or
 # a refusal's message: the Go fake's (fakegithub/reviews.go), word for word.
+# The magnitudes of GitHub's ids today, so the suite runs at real sizes:
+# workflow run ids past 4.3e10, job and check-run ids past 5e10, comment
+# and review ids past int4 and uint32.
+FIRST_RUN_ID = 43_000_000_000
+FIRST_JOB_ID = 50_000_000_000
+FIRST_COMMENT_ID = 3_000_000_000
+
 MESSAGE_NOT_IN_DIFF = "Pull request review thread line must be part of the diff"
 MESSAGE_START_NOT_IN_HUNK = "Pull request review thread start line must be part of the same hunk as the line."
 MESSAGE_OWN_APPROVE = "Can not approve your own pull request"
@@ -138,7 +145,11 @@ class FakeGitHub:
         self.repo = repo
         self.root = root
         self.bare = root / owner / f"{repo}.git"
-        self._next_id = 1000
+        # Ids at the magnitudes GitHub hands out today (#465: a run id of
+        # 43314330828 did not fit an int4): comments and reviews past int4
+        # and uint32, check runs and jobs past 5e10, workflow runs past 4.3e10.
+        self._next_id = FIRST_COMMENT_ID
+        self._next_check_id = FIRST_JOB_ID
         self._lock = threading.Lock()
         self._daemon: subprocess.Popen | None = None
         self._server: ThreadingHTTPServer | None = None
@@ -677,8 +688,8 @@ class FakeGitHub:
         with self._lock:
             checks = self.checks.setdefault(sha, {})
             prior = checks.get(name)
-            self._next_id += 1
-            checks[name] = {"id": prior["id"] if prior else self._next_id, "name": name, "kind": kind,
+            self._next_check_id += 1
+            checks[name] = {"id": prior["id"] if prior else self._next_check_id, "name": name, "kind": kind,
                             "status": status, "conclusion": conclusion if status == "completed" else None,
                             "started_at": _now(), "completed_at": _now() if status == "completed" else None}
         if kind == "status":
@@ -712,9 +723,9 @@ class FakeGitHub:
         """A completed check run on a commit, with no webhook: CI that ran
         before dude was looking."""
         with self._lock:
-            self._next_id += 1
+            self._next_check_id += 1
             self.checks.setdefault(sha, {})[name] = {
-                "id": self._next_id, "name": name, "kind": "check_run", "status": "completed",
+                "id": self._next_check_id, "name": name, "kind": "check_run", "status": "completed",
                 "conclusion": "success", "started_at": _now(), "completed_at": _now()}
 
     def send_webhook(self, event: str, payload: dict, secret: str | None = None) -> int:
@@ -1155,7 +1166,7 @@ class FakeGitHub:
                     with gh._lock:
                         gh.dispatches.append({"workflow": m[1], "ref": body.get("ref"), "inputs": body.get("inputs") or {},
                                               "run_details": bool(body.get("return_run_details"))})
-                        run_id = 5000 + len(gh.dispatches)
+                        run_id = FIRST_RUN_ID + len(gh.dispatches)
                         gh.dispatched_runs[run_id] = {"workflow": m[1], "branch": body.get("ref"), "status": "in_progress",
                                                       "conclusion": None, "attempt": 1, "created_at": _now()}
                     if details:

@@ -16,7 +16,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/redact"
 )
 
-// checkLogForge is a forge reading check 77, an Actions job whose log is
+// checkLogForge is a forge reading check DefaultCheckRunID, an Actions job whose log is
 // log, from a fake GitHub that redirects downloads to another host.
 func checkLogForge(t *testing.T, log, secret string) (*fakegithub.Server, *forge.GitHub) {
 	t.Helper()
@@ -26,9 +26,9 @@ func checkLogForge(t *testing.T, log, secret string) (*fakegithub.Server, *forge
 	api := httptest.NewServer(fake.Handler())
 	t.Cleanup(api.Close)
 	fake.Set(func(s *fakegithub.Server) {
-		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()}
+		s.CheckRuns = map[int64]fakegithub.CheckRun{fakegithub.DefaultCheckRunID: fakegithub.ActionsJob()}
 	})
-	fake.SetJobLog(77, log, downloads.URL)
+	fake.SetJobLog(fakegithub.DefaultCheckRunID, log, downloads.URL)
 	return fake, forge.NewGitHub(forge.Credential{Auth: "pat", Secret: secret, APIBaseURL: api.URL})
 }
 
@@ -42,7 +42,7 @@ func TestGitHubCheckLogHTTPKeepsMiddleFailureWithinBudget(t *testing.T) {
 		strings.Repeat("goroutine noise\n", 4000) + "FAIL example/service 600s\n" +
 		"##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup noise\n", 4000)
 	fake, gh := checkLogForge(t, input, "ghp_check_log_"+t.Name())
-	read, err := gh.CheckLog(context.Background(), "acme/target", 77, budget)
+	read, err := gh.CheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, budget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestGitHubCheckLogHTTPKeepsGoCompilerDiagnostic(t *testing.T) {
 	input := strings.Repeat("setup noise 界\n", 4000) + diagnostic + "\n" +
 		strings.Repeat("progress "+strings.Repeat("界", 80)+"\n", 100) + exit
 	_, gh := checkLogForge(t, input, "ghp_check_log_"+t.Name())
-	read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16380)
+	read, err := gh.CheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 16380)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestGitHubCheckLogHTTPEscapedEnvelope(t *testing.T) {
 				strings.Repeat("goroutine noise\n", 4000) + "FAIL example/service 600s\n" +
 				"##[error]Process completed with exit code 2.\n" + strings.Repeat("cleanup noise\n", 4000)
 			fake, gh := checkLogForge(t, input, "local-fixture-token")
-			read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16380)
+			read, err := gh.CheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 16380)
 			if err != nil {
 				t.Fatal(err)
 			}

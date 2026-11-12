@@ -34,7 +34,7 @@ func (w *world) asApp() *fakegithub.App {
 	}
 	app := fakegithub.NewApp(7001, "dude-bot-test", &key.PublicKey)
 	app.Set(func(a *fakegithub.App) {
-		a.Installations = map[string]int64{"acme": 71}
+		a.Installations = map[string]int64{"acme": 60000071}
 		a.TokenLifetime = 5 * time.Minute
 	})
 	w.ghApp.Store(app)
@@ -81,13 +81,13 @@ func TestEveryPushCarriesAFreshAppToken(t *testing.T) {
 			t.Errorf("run %s commits as %q <%s>, want the App's bot", r.ID, spec.Env["GIT_AUTHOR_NAME"], spec.Env["GIT_COMMITTER_EMAIL"])
 		}
 		submitted := secretValue(spec, "GIT_TOKEN")
-		if app.Installation(submitted) != 71 {
+		if app.Installation(submitted) != 60000071 {
 			t.Errorf("run %s submitted with GIT_TOKEN %q, not an installation token", r.ID, submitted)
 		}
 		for _, creds := range r.PushCredentials {
 			pushes++
 			token := creds["target"]
-			if len(creds) != 1 || app.Installation(token) != 71 {
+			if len(creds) != 1 || app.Installation(token) != 60000071 {
 				t.Errorf("push credentials %v, want target's installation token", creds)
 			}
 			if token == submitted {
@@ -194,7 +194,7 @@ func TestAResumeCarriesAFreshAppToken(t *testing.T) {
 			resumedWith = s.Value
 		}
 	}
-	if app.Installation(resumedWith) != 71 || resumedWith == submittedWith {
+	if app.Installation(resumedWith) != 60000071 || resumedWith == submittedWith {
 		t.Errorf("resumed with GIT_TOKEN %q (submitted with %q), want a fresh installation token", resumedWith, submittedWith)
 	}
 }
@@ -209,7 +209,7 @@ func TestAPushAfterTheAppIsReinstalledIsRetriedWithTheNewInstallation(t *testing
 	scripted := w.lux.Decide
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "implement" {
-			app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 81} })
+			app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 60000081} })
 		}
 		return scripted(spec)
 	}
@@ -226,16 +226,16 @@ func TestAPushAfterTheAppIsReinstalledIsRetriedWithTheNewInstallation(t *testing
 	for _, r := range w.lux.Runs() {
 		for _, creds := range r.PushCredentials {
 			pushes++
-			if app.Installation(creds["target"]) != 81 {
-				t.Errorf("push credentials %v, want the new installation 81's", creds)
+			if app.Installation(creds["target"]) != 60000081 {
+				t.Errorf("push credentials %v, want the new installation 60000081's", creds)
 			}
 		}
 	}
 	if pushes != 3 {
 		t.Errorf("%d pushes, want 3", pushes)
 	}
-	if n := app.AttemptsFor(71); n == 0 || app.ExchangesFor(81) == 0 {
-		t.Errorf("exchanges asked of 71: %d, issued for 81: %d; want the removed one tried, then the new one", n, app.ExchangesFor(81))
+	if n := app.AttemptsFor(60000071); n == 0 || app.ExchangesFor(60000081) == 0 {
+		t.Errorf("exchanges asked of 60000071: %d, issued for 60000081: %d; want the removed one tried, then the new one", n, app.ExchangesFor(60000081))
 	}
 }
 
@@ -293,7 +293,7 @@ func TestAPreviewSecretNamedLikeAnOwnersTokenKeepsTheProjectsValue(t *testing.T)
 func TestARunOnAnOwnerWithoutTheAppFailsSayingSo(t *testing.T) {
 	w := newWorld(t)
 	app := w.asApp()
-	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"marcio": 72} })
+	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"marcio": 60000072} })
 	wi := w.task()
 	w.deliver(wi)
 	var why string
@@ -321,7 +321,7 @@ func TestARunOnAnOwnerWithoutTheAppFailsSayingSo(t *testing.T) {
 func TestAResumeKeepsGitTokenTheSubmittedRepositorysOwners(t *testing.T) {
 	w := newWorld(t)
 	app := w.asApp()
-	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 71, "marcio": 72} })
+	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 60000071, "marcio": 60000072} })
 	tools := httptest.NewServer((&agenttools.Server{DB: w.app, Log: w.log}).Handler())
 	t.Cleanup(tools.Close)
 	w.syncer.Agent.ToolsURL = tools.URL
@@ -335,8 +335,8 @@ func TestAResumeKeepsGitTokenTheSubmittedRepositorysOwners(t *testing.T) {
 		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status = 'running'`, wi) == 1
 	})
 	r := w.lux.Runs()[0]
-	if got := app.Installation(secretValue(submitted(t, r), "GIT_TOKEN")); got != 71 {
-		t.Fatalf("submitted with GIT_TOKEN of installation %d, want acme's 71", got)
+	if got := app.Installation(secretValue(submitted(t, r), "GIT_TOKEN")); got != 60000071 {
+		t.Fatalf("submitted with GIT_TOKEN of installation %d, want acme's 60000071", got)
 	}
 	status, body := w.callTool(tools.URL, string(r.Spec), "request_repository", `{"repository":"api","reason":"read the client"}`)
 	if status != 200 {
@@ -354,11 +354,11 @@ func TestAResumeKeepsGitTokenTheSubmittedRepositorysOwners(t *testing.T) {
 		t.Fatalf("%d resumes, want 1", len(r.ResumeSecrets))
 	}
 	sent := secretsByName(r.ResumeSecrets[0])
-	if got := app.Installation(sent["GIT_TOKEN"]); got != 71 {
-		t.Errorf("resumed with GIT_TOKEN of installation %d, want acme's 71: %v", got, sent)
+	if got := app.Installation(sent["GIT_TOKEN"]); got != 60000071 {
+		t.Errorf("resumed with GIT_TOKEN of installation %d, want acme's 60000071: %v", got, sent)
 	}
-	if got := app.Installation(sent["GIT_TOKEN_MARCIO"]); got != 72 {
-		t.Errorf("resumed with GIT_TOKEN_MARCIO of installation %d, want marcio's 72", got)
+	if got := app.Installation(sent["GIT_TOKEN_MARCIO"]); got != 60000072 {
+		t.Errorf("resumed with GIT_TOKEN_MARCIO of installation %d, want marcio's 60000072", got)
 	}
 	if _, ok := sent["GIT_TOKEN_ACME"]; ok {
 		t.Errorf("the resume sent GIT_TOKEN_ACME, which the Run does not declare")
@@ -395,7 +395,7 @@ func TestARunAcrossTwoOwnersUsesEachOwnersInstallation(t *testing.T) {
 	pushes := 0
 	for _, r := range w.lux.Runs() {
 		spec := submitted(t, r)
-		if app.Installation(secretValue(spec, "GIT_TOKEN")) != 71 || app.Installation(secretValue(spec, "GIT_TOKEN_MARCIO")) != 72 {
+		if app.Installation(secretValue(spec, "GIT_TOKEN")) != 60000071 || app.Installation(secretValue(spec, "GIT_TOKEN_MARCIO")) != 60000072 {
 			t.Errorf("run %s declares %+v, want GIT_TOKEN acme's and GIT_TOKEN_MARCIO marcio's", r.ID, spec.Secrets)
 		}
 		for _, repo := range spec.Git.Repositories {
@@ -405,8 +405,8 @@ func TestARunAcrossTwoOwnersUsesEachOwnersInstallation(t *testing.T) {
 		}
 		for _, creds := range r.PushCredentials {
 			pushes++
-			if len(creds) != 2 || app.Installation(creds["target"]) != 71 || app.Installation(creds["web"]) != 72 {
-				t.Errorf("push credentials %v, want target 71 and web 72", creds)
+			if len(creds) != 2 || app.Installation(creds["target"]) != 60000071 || app.Installation(creds["web"]) != 60000072 {
+				t.Errorf("push credentials %v, want target 60000071 and web 60000072", creds)
 			}
 		}
 	}
@@ -415,12 +415,12 @@ func TestARunAcrossTwoOwnersUsesEachOwnersInstallation(t *testing.T) {
 	}
 }
 
-// twoOwners connects the world as an App installed on acme (71) and marcio
-// (72), and names on task both target and web, which is marcio's.
+// twoOwners connects the world as an App installed on acme (60000071) and marcio
+// (60000072), and names on task both target and web, which is marcio's.
 func (w *world) twoOwners(task string) *fakegithub.App {
 	w.t.Helper()
 	app := w.asApp()
-	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 71, "marcio": 72} })
+	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{"acme": 60000071, "marcio": 60000072} })
 	webID := w.addWeb(task, "write")
 	mustExec(w.t, w.owner, `UPDATE repositories SET url = 'git://127.0.0.1/marcio/web.git' WHERE id = $1`, webID)
 	return app
@@ -439,11 +439,11 @@ func TestAResumeAcrossTwoOwnersMintsEachOwnersToken(t *testing.T) {
 	r := w.lux.Runs()[0]
 	spec := submitted(t, r)
 	sent := secretsByName(r.ResumeSecrets[0])
-	if app.Installation(sent["GIT_TOKEN"]) != 71 || sent["GIT_TOKEN"] == secretValue(spec, "GIT_TOKEN") {
-		t.Errorf("resumed with GIT_TOKEN %q, want a fresh token of acme's 71", sent["GIT_TOKEN"])
+	if app.Installation(sent["GIT_TOKEN"]) != 60000071 || sent["GIT_TOKEN"] == secretValue(spec, "GIT_TOKEN") {
+		t.Errorf("resumed with GIT_TOKEN %q, want a fresh token of acme's 60000071", sent["GIT_TOKEN"])
 	}
-	if app.Installation(sent["GIT_TOKEN_MARCIO"]) != 72 || sent["GIT_TOKEN_MARCIO"] == secretValue(spec, "GIT_TOKEN_MARCIO") {
-		t.Errorf("resumed with GIT_TOKEN_MARCIO %q, want a fresh token of marcio's 72", sent["GIT_TOKEN_MARCIO"])
+	if app.Installation(sent["GIT_TOKEN_MARCIO"]) != 60000072 || sent["GIT_TOKEN_MARCIO"] == secretValue(spec, "GIT_TOKEN_MARCIO") {
+		t.Errorf("resumed with GIT_TOKEN_MARCIO %q, want a fresh token of marcio's 60000072", sent["GIT_TOKEN_MARCIO"])
 	}
 }
 
@@ -461,8 +461,8 @@ func TestAConductorsSyncAcrossTwoOwnersCarriesEachOwnersToken(t *testing.T) {
 		t.Fatal("the conductor's checkout was never synced")
 	}
 	for _, creds := range r.SyncCredentials {
-		if len(creds) != 2 || app.Installation(creds["target"]) != 71 || app.Installation(creds["web"]) != 72 {
-			t.Errorf("sync credentials %v, want target 71 and web 72", creds)
+		if len(creds) != 2 || app.Installation(creds["target"]) != 60000071 || app.Installation(creds["web"]) != 60000072 {
+			t.Errorf("sync credentials %v, want target 60000071 and web 60000072", creds)
 		}
 	}
 }
@@ -484,8 +484,8 @@ func TestAGitHubLoginIsReadAsTheAppsInstallation(t *testing.T) {
 	}
 	// No owner was asked about: the token came from the installation
 	// GET /app/installations listed.
-	if app.ExchangesFor(71) == 0 {
-		t.Errorf("no token was minted for the listed installation 71")
+	if app.ExchangesFor(60000071) == 0 {
+		t.Errorf("no token was minted for the listed installation 60000071")
 	}
 	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{} })
 	if status, body := w.get("/internal/github/users/ana-dev", w.org); status != 502 || !strings.Contains(body, `"github_unavailable"`) {
@@ -504,7 +504,7 @@ func TestVerifyingAnAppMintsATokenForALinkedRepository(t *testing.T) {
 		t.Errorf("verify: %d %v", status, out)
 	}
 	// asApp's tokens are always due for refresh: the bot's lookup mints one too.
-	if app.ExchangesFor(71) == 0 {
+	if app.ExchangesFor(60000071) == 0 {
 		t.Error("verify minted no token")
 	}
 	app.Set(func(a *fakegithub.App) { a.Installations = map[string]int64{} })
@@ -529,7 +529,7 @@ func TestAConductorsSyncCarriesAFreshAppToken(t *testing.T) {
 		t.Fatal("the conductor's checkout was never synced")
 	}
 	for _, creds := range r.SyncCredentials {
-		if len(creds) != 1 || app.Installation(creds["target"]) != 71 {
+		if len(creds) != 1 || app.Installation(creds["target"]) != 60000071 {
 			t.Errorf("sync credentials %v, want target's installation token", creds)
 		}
 	}

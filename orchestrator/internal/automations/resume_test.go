@@ -31,7 +31,7 @@ func keptServer(t *testing.T, h *harness, id string) (*fakegithub.App, runRow) {
 		t.Fatal(err)
 	}
 	app := fakegithub.NewApp(9001, "dude-acme", &key.PublicKey)
-	app.Set(func(a *fakegithub.App) { a.Installations["acme"], a.TokenLifetime = 71, 5*time.Minute })
+	app.Set(func(a *fakegithub.App) { a.Installations["acme"], a.TokenLifetime = 60000071, 5*time.Minute })
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
 	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
@@ -71,13 +71,13 @@ func keptServer(t *testing.T, h *harness, id string) (*fakegithub.App, runRow) {
 func TestAutomationResumeMintsItsTokensOnce(t *testing.T) {
 	h := newHarness(t)
 	app, first := keptServer(t, h, "aut_mint")
-	before := app.ExchangesFor(71)
+	before := app.ExchangesFor(60000071)
 	h.deliver("d-2", "pull_request", prBody("synchronize", "acme/web", "bo"))
 	h.until("the second run resumes", func() bool { r := h.runs("aut_mint"); return len(r) == 2 && r[1].Session != "" })
 	if r := h.runs("aut_mint")[1]; r.Session != "resumed" || r.LuxRunID != first.LuxRunID {
 		t.Fatalf("second run %+v", r)
 	}
-	if n := app.ExchangesFor(71) - before; n != 1 {
+	if n := app.ExchangesFor(60000071) - before; n != 1 {
 		t.Errorf("the resume minted %d installation tokens, want 1", n)
 	}
 	h.runner.Wait()
