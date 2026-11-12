@@ -348,6 +348,10 @@ func (w *world) lateDispatch(task string) (int, map[string]any, string) {
 		close(release)
 		w.t.Fatalf("the supervisor did not end the row: %s", got)
 	}
+	if wakes := w.wakesNaming(task, id); len(wakes) != 1 || !strings.Contains(wakes[0], "may or may not") {
+		close(release)
+		w.t.Fatalf("the supervisor's wake: %q", wakes)
+	}
 	close(release)
 	r := <-results
 	w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
@@ -356,8 +360,9 @@ func (w *world) lateDispatch(task string) (int, map[string]any, string) {
 
 // L1: GitHub's answer reaches the call only after the supervisor ended
 // its row "may or may not". GitHub named the run (200): the row is bound
-// to it there, the call says so (not a plain "Dispatched"), and the run's
-// own end wakes the conductor once more, as the row changed.
+// to it there, the call says so (not a plain "Dispatched"), the "may or
+// may not" wake, not yet delivered, goes (L1a), and the run's own end
+// wakes the conductor exactly once.
 func TestALateRunIDIsBoundToTheDispatchTheSupervisorEnded(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
 	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2600 })
@@ -372,16 +377,16 @@ func TestALateRunIDIsBoundToTheDispatchTheSupervisorEnded(t *testing.T) {
 		FROM workflow_dispatches WHERE id = $1`, id); got != "bound 2600 none none none" {
 		t.Fatalf("the row: %s", got)
 	}
-	if wakes := w.wakesNaming(task, id); len(wakes) != 1 || !strings.Contains(wakes[0], "may or may not") {
-		t.Fatalf("wakes %q", wakes)
+	if wakes := w.wakesNaming(task, id); len(wakes) != 0 {
+		t.Fatalf("the stale \"may or may not\" wake is still there: %q", wakes)
 	}
 	w.gh.UpdateWorkflowRun(2600, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
-	for range 2 {
+	for range 3 {
 		mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE id = $1`, id)
 		w.supervise()
 	}
 	wakes := w.wakesNaming(task, id)
-	if len(wakes) != 2 || !strings.Contains(wakes[1], "completed: success") {
+	if len(wakes) != 1 || !strings.Contains(wakes[0], "completed: success") {
 		t.Fatalf("wakes %q", wakes)
 	}
 }

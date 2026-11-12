@@ -216,7 +216,7 @@ Dispatched; dude reads its run until it ends (and a while after, for a re-run). 
 
 ## run-workflow-late-bound
 
-GitHub's answer reached dude only after it had ended this dispatch as "may or may not"; that answer names the run GitHub started, and the dispatch is now bound to it: dude reads that run until it ends, and what you were told of it before is replaced by its end. To be woken when it does, wait_for {"workflowEnded": "<dispatchId>"}; pull_requests lists it under dispatches as dude last read it.
+GitHub's answer reached dude only after it had ended this dispatch as "may or may not"; that answer names the run GitHub started, and the dispatch is now bound to it: dude reads that run until it ends, and any "may or may not" about it no longer holds. To be woken when it does, wait_for {"workflowEnded": "<dispatchId>"}; pull_requests lists it under dispatches as dude last read it.
 
 ## run-workflow-late-unknown
 

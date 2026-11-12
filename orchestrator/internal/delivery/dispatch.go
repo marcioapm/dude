@@ -428,10 +428,10 @@ type DispatchRecorded struct {
 //
 // A row the supervisor already ended (the call outlived
 // DispatchReservedFor) is Late. When it ended unknown, "may or may not",
-// with no run, and GitHub did name the run, it is bound to it now: what
-// the conductor was told is replaced by the run's own end, woken for once
-// it ends (only when this changed the row). Any other row is left as it
-// is, and its state returned.
+// with no run, and GitHub did name the run, it is bound to it now: its
+// "may or may not" wake goes if not yet delivered, and the run's own end
+// is woken for (only when this changed the row). Any other row is left as
+// it is, and its state returned.
 func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchCheck, done DispatchDone) (DispatchRecorded, error) {
 	id := c.id
 	var settled bool
@@ -452,6 +452,13 @@ func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchChec
 				id, DispatchBound, done.Run.ID, done.Run.URL, DispatchUnknown, dispatchMaybe)
 			if err != nil {
 				return DispatchRecorded{}, err
+			}
+			// Its "may or may not" wake, not yet delivered, no longer holds.
+			if tag.RowsAffected() == 1 {
+				if _, err := tx.Exec(ctx, `DELETE FROM conductor_wakes WHERE task_id = $1 AND key = $2 AND delivered_at IS NULL`,
+					c.ref.TaskID, dispatchWakeKey(DispatchRow{ID: id, Outcome: DispatchUnknown})); err != nil {
+					return DispatchRecorded{}, err
+				}
 			}
 		}
 	} else {
