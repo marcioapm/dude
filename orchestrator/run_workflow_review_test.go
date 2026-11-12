@@ -252,7 +252,13 @@ func TestRacingSettlesCountEveryFailedRead(t *testing.T) {
 			return nil
 		})
 	}()
-	<-started
+	// The first settle failing never starts the race: fail, not hang (it
+	// hung for the whole run when an int4 parameter refused the run id).
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("the first settle ended before the race: %v", err)
+	}
 	go func() {
 		done <- w.prs.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 			return delivery.SettleDispatchTx(context.Background(), tx, w.org, id, read)

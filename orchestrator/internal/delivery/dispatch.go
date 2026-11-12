@@ -644,7 +644,9 @@ func SettleDispatchTx(ctx context.Context, tx pgx.Tx, org, id string, read Dispa
 			seen(&d, *read.Run, now)
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, reason = NULLIF($3, ''), run_id = NULLIF($4, 0),
+	// $4 is typed: untyped, NULLIF($4, 0) takes int4 from the literal, and
+	// a GitHub run id (4.3e10 today) does not fit it (#465).
+	if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, reason = NULLIF($3, ''), run_id = NULLIF($4::bigint, 0),
 			run_attempt = NULLIF($5, 0), run_status = NULLIF($6, ''), run_conclusion = NULLIF($7, ''), run_url = NULLIF($8, ''),
 			last_seen_at = $9, failed_reads = $10, failing_since = $11, last_error = NULLIF($12, ''), outcome = NULLIF($13, ''),
 			woken_outcome = NULLIF($14, ''), woken_wait = CASE WHEN $14 = '' THEN NULL ELSE woken_wait END,
