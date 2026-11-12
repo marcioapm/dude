@@ -304,7 +304,8 @@ func file(path string) map[string]any { return map[string]any{"filename": path, 
 // failed), a peer not started, one with no conductor (or only held news
 // pending), and tasks on another epic or none are not. A running delivery
 // counts as open, and a conductor not live with a reason pending that
-// would start one will be started: both woken.
+// would start one will be started: both woken, held news pending beside
+// it or not.
 func TestEpicMergeWakesLivePeersOnce(t *testing.T) {
 	w := newEpicMergeWorld(t)
 	shared := w.mergedFiles()[0]
@@ -318,6 +319,9 @@ func TestEpicMergeWakesLivePeersOnce(t *testing.T) {
 	pendingPeer := w.peer(pendingWake)
 	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line) VALUES ($1, $2, $3, 'decision', 'd:1', 'decide')`,
 		"cwk_p_"+pendingPeer, w.org, pendingPeer)
+	// Held news pending as well does not hide the reason that will start it.
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line) VALUES ($1, $2, $3, 'checkout', 'base-moved:pr_y', 'moved')`,
+		"cwk_ph_"+pendingPeer, w.org, pendingPeer)
 	ended := map[string]string{}
 	for _, status := range []string{"done", "aborted", "failed"} {
 		p := w.live(shared)
