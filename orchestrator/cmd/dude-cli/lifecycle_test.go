@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -162,6 +164,69 @@ func TestCreateFromExistingWork(t *testing.T) {
 	}
 }
 
+// --mode review-only is the API's review_only; the help says what each
+// mode does, review included (it fixes too).
+func TestCreateReviewOnlyFromAPullRequest(t *testing.T) {
+	srv, calls := fakeDude(t)
+	if _, err := runCLI(t, srv, "", "task", "create", "ABS", "--title", "Review it", "--goal", "review alice's pull request",
+		"--repo", "web", "--from-pr", "12", "--mode", "review-only"); err != nil {
+		t.Fatal(err)
+	}
+	var create call
+	for _, c := range *calls {
+		if c.method == "POST" && c.path == "/v1/tasks" {
+			create = c
+		}
+	}
+	src, _ := json.Marshal(create.body["source"])
+	if want := `{"kind":"pr","mode":"review_only","pullRequest":"12","repositoryId":"rep_web"}`; string(src) != want {
+		t.Fatalf("source %s, want %s", src, want)
+	}
+	if _, ok := create.body["supersede"]; ok {
+		t.Fatalf("supersede sent unasked: %v", create.body)
+	}
+	fs := flag.NewFlagSet("create", flag.ContinueOnError)
+	addSourceFlags(fs)
+	help := fs.Lookup("mode").Usage
+	for _, want := range []string{"continue", "review (review it and fix what the review finds)", "review-only (review a pull request and change no code)"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("--mode help %q lacks %q", help, want)
+		}
+	}
+	if strings.Contains(help, "only review it") {
+		t.Errorf("--mode help still says review only reviews: %q", help)
+	}
+}
+
+// --supersede sends the confirmation; without it, the refusal names the
+// task in the way and says how to go on.
+func TestCreateSupersedes(t *testing.T) {
+	srv, calls := fakeDude(t)
+	if _, err := runCLI(t, srv, "", "task", "create", "ABS", "--title", "Fix it", "--goal", "take over and fix the pull request",
+		"--repo", "web", "--from-pr", "12", "--supersede"); err != nil {
+		t.Fatal(err)
+	}
+	last := (*calls)[len(*calls)-1]
+	if last.path != "/v1/tasks" || last.body["supersede"] != true {
+		t.Fatalf("create %+v, want supersede true", last)
+	}
+	held := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "POST" && r.URL.Path == "/v1/tasks" {
+			w.WriteHeader(409)
+			io.WriteString(w, `{"error":{"code":"superseded_required","message":"feature/x is already the branch of ABS-7, which is still in progress","details":{"holder":{"id":"wi_7","key":"ABS-7","mode":"review_only"}}}}`)
+			return
+		}
+		srv.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(held.Close)
+	_, err := runCLI(t, held, "", "task", "create", "ABS", "--title", "Fix it", "--goal", "take over and fix the pull request",
+		"--repo", "web", "--from-pr", "12")
+	if err == nil || !strings.Contains(err.Error(), "ABS-7") || !strings.Contains(err.Error(), "--supersede") {
+		t.Fatalf("refusal %v, want ABS-7 named and --supersede offered", err)
+	}
+}
+
 func TestLifecycleArgumentsAreCheckedFirst(t *testing.T) {
 	srv, calls := fakeDude(t)
 	for _, args := range [][]string{
@@ -177,6 +242,9 @@ func TestLifecycleArgumentsAreCheckedFirst(t *testing.T) {
 		{"task", "create", "ABS", "--title", "t", "--goal", "sixteen chars or more", "--repo", "web", "--from-pr", "1", "--from-branch", "b"},
 		{"task", "create", "ABS", "--title", "t", "--goal", "sixteen chars or more", "--repo", "web", "--from-pr", "1", "--base", "main"},
 		{"task", "create", "ABS", "--title", "t", "--goal", "sixteen chars or more", "--mode", "review"},
+		{"task", "create", "ABS", "--title", "t", "--goal", "sixteen chars or more", "--supersede"},
+		{"task", "create", "ABS", "--title", "t", "--goal", "sixteen chars or more", "--repo", "web", "--from-branch", "b", "--mode", "review-only"},
+		{"task", "create", "ABS", "--title", "t", "--goal", "sixteen chars or more", "--repo", "web", "--from-pr", "1", "--mode", "review_only"},
 	} {
 		before := len(*calls)
 		if _, err := runCLI(t, srv, "", args...); err == nil {
