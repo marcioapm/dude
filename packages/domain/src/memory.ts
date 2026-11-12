@@ -45,6 +45,9 @@ export interface Memory {
   readonly source?: MemoryRef;
   readonly about: readonly MemoryRef[];
   readonly archivedAt?: string;
+  /** Pinned: in every briefing of its project's agents, since when and by whom (a person's name, or "the conductor"). */
+  readonly pinnedAt?: string;
+  readonly pinnedBy?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
   /** Searchable by meaning, by words only for now, or failed (indexNote says why). An archived one is in no search (archivedAt). */
