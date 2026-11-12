@@ -95,3 +95,21 @@ func message(out map[string]any) string {
 	s, _ := e["message"].(string)
 	return s
 }
+
+// A brainstorm session's memory is its members' alone: a member who may
+// change it is still refused a pin.
+func TestASessionsMemoryIsNotPinned(t *testing.T) {
+	m := setupMemory(t)
+	for _, q := range []string{
+		`INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ses_p', $1, 'S', 'person')`,
+		`INSERT INTO session_people (session_id, person_id, organization_id, role, invited_at, accepted_at) VALUES ('ses_p', 'per_ana', $1, 'owner', now(), now())`,
+		`INSERT INTO memories (id, organization_id, session_id, title, content, author_kind, author_person_id) VALUES ('mem_ses', $1, 'ses_p', 'S', 'x', 'person', 'per_ana')`,
+	} {
+		if _, err := m.owner.Exec(context.Background(), q, m.org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if status, out := m.do(t, "POST", "/internal/memory/memories/mem_ses/pin", ""); status != 422 || !strings.Contains(message(out), "session's memory is not pinned") {
+		t.Errorf("a session's memory pinned: %d %v", status, out)
+	}
+}
