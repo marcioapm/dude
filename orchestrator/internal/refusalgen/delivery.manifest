@@ -243,3 +243,5 @@ rChecksNoBase                           refusals/delivery/checks/no-base
 rChecksWaiverCursor                     refusals/delivery/checks/waiver-cursor
 rChecksMissingVerdict                   refusals/delivery/checks/missing
 rChecksReasonLong                       refusals/delivery/checks/reason-long
+rReviewOnlyNoWriter                     refusals/delivery/review-only/no-writer
+rReviewOnlyPRAction                     refusals/delivery/review-only/pr-action

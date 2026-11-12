@@ -43,8 +43,11 @@ type SourceRequest struct {
 const (
 	// An implementer carries the work on, then the review loop.
 	ModeContinue = "continue"
-	// The review loop at once.
+	// The review loop at once, and its fixes.
 	ModeReview = "review"
+	// Review a person's pull request and change no code: no writer Run is
+	// ever made for it (refuseReviewOnlyWriterTx).
+	ModeReviewOnly = "review_only"
 )
 
 // Source is a checked source, as task_sources keeps it.

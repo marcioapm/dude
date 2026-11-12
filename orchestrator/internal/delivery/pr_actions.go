@@ -87,6 +87,16 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		return PRActionCheck{}, refusef(rNotYoursDoTaskConductorActs, in.Action)
 	}
 	c := PRActionCheck{ref: ref, action: in.Action}
+	// A review-only task leaves the author's pull request as it is: only a
+	// rerun of failed checks, which changes no code. Its own threads
+	// (resolve_thread) come with its GitHub review.
+	if in.Action != ActionRerunChecks {
+		if n, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil {
+			return c, err
+		} else if n != 0 {
+			return c, refusef(rReviewOnlyPRAction, max(n, 0), in.Action)
+		}
+	}
 	if caller.role == RoleConductor {
 		var live bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
