@@ -400,6 +400,7 @@ A brainstorm is an agent to think something through with; it writes no code.
 | `memory show ID` | One in full |
 | `memory add --title T --content C [--kind fact\|procedure\|note] [--project P]` | Remembers something |
 | `memory archive ID`, `memory unarchive ID` | Archives or unarchives |
+| `memory pin ID`, `memory unpin ID` | Pins a project's fact into every agent's briefing on the project, or unpins it |
 
 ### automation
 
