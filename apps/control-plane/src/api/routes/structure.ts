@@ -23,7 +23,7 @@ import { REPOSITORIES_JSON, repositoryNotInProject, setTaskRepositories, taskRep
 import { SOURCE_JSON, checkTaskSource, keepMode, sameSource, setTaskSource, sourceMode, supersedeInput, supersedeWith, taskSourceInput } from "./taskSource.ts";
 import type { TaskSource } from "@dude/domain";
 import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
-import { syncTaskAttachments } from "./attachments.ts";
+import { checkTaskAttachments, syncTaskAttachments } from "./attachments.ts";
 
 const REPOSITORY_SELECT = `id, project_id AS "projectId", name, url, default_branch AS "defaultBranch", trust,
   setup_script AS "setupScript", created_at AS "createdAt"`;
@@ -464,7 +464,7 @@ type EditRefusal = { missing: true } | { started: string } | { shortGoal: true }
  * The rules an edit of a task is held to, under its row's lock: what it
  * really changes, refused once its delivery has started (sourceChanges:
  * a new source is a change), a short goal, an epic, owner or repository
- * not there.
+ * not there, an image its text may not show (thrown).
  * updateTask asks it in its transaction, and before a supersede, which
  * an edit refused must not reach.
  */
@@ -506,6 +506,10 @@ async function checkEdit(scope: OrgScope, id: string, given: EditInput, ownerGiv
   if (ownerId === null) return { noPerson: ownerGiven! };
   const noRepository = input.repositories ? await repositoryNotInProject(scope, projectId, input.repositories) : null;
   if (noRepository) return { noRepository };
+  // Its images' refusals (thrown), so a supersede is not reached for an edit they refuse.
+  if (input.goal !== undefined || input.acceptanceCriteria !== undefined) {
+    await checkTaskAttachments(scope, id, input.goal ?? current.goal, input.acceptanceCriteria ?? current.acceptanceCriteria);
+  }
   return { ok: true as const, current, input, ownerId };
 }
 

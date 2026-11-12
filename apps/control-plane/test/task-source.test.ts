@@ -294,6 +294,23 @@ test("a PATCH with a supersede and a repository not in the project is refused be
   await owner`UPDATE tasks SET status = 'done' WHERE id = ${task.id}`;
 });
 
+test("a PATCH with a supersede and a goal showing another task's image is refused before anything is stopped", async () => {
+  const held = { kind: "pr", repositoryId: REPO, pullRequest: "21", mode: "review" };
+  const supersedes = () => checks.filter((c) => String(c.path).endsWith("/tasks/supersede")).length;
+  const other = (await (await newTask()).json()) as { id: string };
+  await owner`INSERT INTO attachments (id, organization_id, task_id, name, content_type, width, height, bytes, sha256,
+      object_key, original_content_type, original_width, original_height, original_bytes, original_key)
+    VALUES ('att_others', ${ORG}, ${other.id}, 'a.png', 'image/png', 1, 1, 1, 'x', 'k/att_others', 'image/png', 1, 1, 1, 'o/att_others')`;
+  const task = (await (await newTask()).json()) as { id: string };
+  const before = supersedes();
+  const res = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true,
+    goal: "carry the pull request on, as ![shot](attachment:att_others) shows" });
+  expect(res.status).toBe(400);
+  expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_attachment_reference");
+  expect(supersedes()).toBe(before);
+  await owner`UPDATE tasks SET status = 'done' WHERE id IN (${task.id}, ${other.id})`;
+});
+
 test("the pickers ask the orchestrator, which holds the forge credential, with a bounded query", async () => {
   const repos = await router.handle(new Request(`http://dude.test/v1/projects/${PROJECT}/sources/repositories`,
     { headers: { authorization: `Bearer ${key}` } }));

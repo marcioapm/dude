@@ -232,6 +232,25 @@ const invalidReference = (message: string) => new HttpError(400, message, "inval
 export async function syncTaskAttachments(scope: OrgScope, taskId: string, goal: string, criteria: ReadonlyArray<string>): Promise<void> {
   const { sql } = scope;
   const ids = taskAttachmentIds(goal, criteria);
+  const rows = await checkTaskAttachments(scope, taskId, goal, criteria);
+  const found = ids.filter((id) => rows.some((r) => r.id === id));
+  for (const [position, id] of found.entries()) {
+    await sql`UPDATE attachments SET for_prompt = true, attached_at = COALESCE(attached_at, now()), detached_at = NULL,
+      position = ${position} WHERE id = ${id}`;
+  }
+  await sql`UPDATE attachments SET for_prompt = false, attached_at = NULL, position = 0, detached_at = now()
+    WHERE task_id = ${taskId} AND for_prompt AND NOT (id = ANY(${sql.array(found, "TEXT")}))`;
+}
+
+/**
+ * syncTaskAttachments' refusals, changing nothing: throws for a reference
+ * to another task's image, one sent with a message, or too many or too
+ * large together; answers the referenced images that exist.
+ */
+export async function checkTaskAttachments(scope: OrgScope, taskId: string, goal: string, criteria: ReadonlyArray<string>):
+  Promise<Array<{ id: string; task_id: string; directive_id: string | null; bytes: number }>> {
+  const { sql } = scope;
+  const ids = taskAttachmentIds(goal, criteria);
   const rows = ids.length === 0 ? [] : (await sql`
     SELECT id, task_id, directive_id, bytes FROM attachments WHERE id IN ${sql(ids)} ORDER BY id FOR UPDATE`) as
     Array<{ id: string; task_id: string; directive_id: string | null; bytes: number }>;
@@ -246,13 +265,7 @@ export async function syncTaskAttachments(scope: OrgScope, taskId: string, goal:
   if (rows.reduce((n, r) => n + r.bytes, 0) > ATTACHMENT_LIMITS.messageBytes) {
     throw invalidReference(`a task's images are at most ${ATTACHMENT_LIMITS.messageBytes >> 20} MiB together`);
   }
-  const found = ids.filter((id) => rows.some((r) => r.id === id));
-  for (const [position, id] of found.entries()) {
-    await sql`UPDATE attachments SET for_prompt = true, attached_at = COALESCE(attached_at, now()), detached_at = NULL,
-      position = ${position} WHERE id = ${id}`;
-  }
-  await sql`UPDATE attachments SET for_prompt = false, attached_at = NULL, position = 0, detached_at = now()
-    WHERE task_id = ${taskId} AND for_prompt AND NOT (id = ANY(${sql.array(found, "TEXT")}))`;
+  return rows;
 }
 
 export function registerAttachmentRoutes(router: Router): void {
