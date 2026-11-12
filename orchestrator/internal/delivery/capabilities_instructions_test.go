@@ -61,10 +61,16 @@ func sectionsFor(tool, role string) []string {
 		}
 		return out
 	case "search_memory":
-		return []string{"- **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating " +
-			"something that may be known"}
+		return []string{"- **Memory**: what people and agents here learned before you. Before you act on something you have not met " +
+			"here before (an unfamiliar failure, a convention, how a service is run), search it first (`search_memory`)."}
 	case "remember":
-		return []string{"save what the next agent should know (`remember`), after searching so you do not save it twice."}
+		out := []string{"Save (`remember`) only what you had to learn the hard way: you searched, found nothing, then established it. " +
+			"Search again before you save: if it is already there, do not add a second"}
+		if role != RoleBrainstorm {
+			out = append(out, "What the next task in this project would need goes in project memory (`remember`). "+
+				"Never put task-only detail in project memory.")
+		}
+		return out
 	case "emit_event":
 		return []string{"- **Progress**: `emit_event` / `dude event progress` so people can follow long work."}
 	case "create_task":
