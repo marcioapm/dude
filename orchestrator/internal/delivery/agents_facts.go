@@ -14,6 +14,7 @@ var (
 	outcomeTmpl            = mustTemplate("wakes/facts/outcome")
 	pipelineStoppedTmpl    = mustTemplate("wakes/facts/pipeline-stopped")
 	pipelineQueuedTmpl     = mustTemplate("wakes/facts/pipeline-queued")
+	pipelineCoveredTmpl    = mustTemplate("wakes/facts/pipeline-covered")
 	pipelineUnreviewedTmpl = mustTemplate("wakes/facts/pipeline-unreviewed-push")
 	roundBarTmpl           = mustTemplate("contracts/round-bar")
 	prFeedbackFactTmpl     = mustTemplate("wakes/facts/pr-feedback")

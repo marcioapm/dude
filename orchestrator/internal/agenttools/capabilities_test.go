@@ -19,9 +19,9 @@ var toolsBeforeCapabilities = map[string]string{
 	"conductor": "list_machine_sizes request_machine list_tasks list_epics ask_person emit_event list_repositories request_repository " +
 		"create_task search_memory get_memory remember run_diff findings pull_requests start_phase start_agent start_agents read_run steer restart_run stop_run decide " +
 		"dismiss_finding answer_question answer_review_question forward_review_question decide_repository_request decide_escalation update_task reply_on_pull_request publish request_review resolve_thread mark_ready " +
-		"rerun_failed_checks sync_base github_search github_issue github_pull_request github_check_log github_run_jobs message wait_for_reply note " +
+		"rerun_failed_checks sync_base github_search github_issue github_pull_request github_check_log github_run_jobs github_branch_runs message wait_for_reply note " +
 		"feedback feedback_reply limits run_chat refresh_pull_requests request_limit verify decide_checks settings wait_for recover_run",
-	"brainstorm": "list_machine_sizes request_machine github_search github_issue github_pull_request github_check_log github_run_jobs list_tasks " +
+	"brainstorm": "list_machine_sizes request_machine github_search github_issue github_pull_request github_check_log github_run_jobs github_branch_runs list_tasks " +
 		"list_epics list_repositories pull_requests findings search_memory get_memory remember propose relate ask_person name_session " +
 		"start_agent run_chat refresh_pull_requests refresh_checkout settings chat_history",
 	"implementer": "list_machine_sizes request_machine list_tasks list_epics ask_conductor emit_event list_repositories request_repository " +

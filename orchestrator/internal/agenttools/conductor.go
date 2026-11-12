@@ -819,6 +819,7 @@ type updateTaskIn struct {
 	AcceptanceCriteria *[]string    `json:"acceptanceCriteria,omitempty"`
 	AddRelations       []relationIn `json:"addRelations,omitempty"`
 	RemoveRelations    []relationIn `json:"removeRelations,omitempty"`
+	QuestionID         string       `json:"questionId,omitempty"`
 }
 
 type relationIn struct {
@@ -878,7 +879,7 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 			return withPresent(map[string]any{"updated": true, "next": relationsWrittenNext}, present), nil
 		}
 	}
-	spec := delivery.TaskSpec{Goal: in.Goal}
+	spec := delivery.TaskSpec{Goal: in.Goal, QuestionID: in.QuestionID}
 	if in.AcceptanceCriteria != nil {
 		spec.Criteria, spec.HasCriteria = *in.AcceptanceCriteria, true
 	}
@@ -891,7 +892,11 @@ func updateTask(ctx context.Context, tx pgx.Tx, c Caller, in updateTaskIn) (map[
 		return nil, refuse(rAcceptanceCriteriaTooLongAtMost, CriteriaMax)
 	}
 	err := delivery.ConductUpdateTask(ctx, tx, c.run(), spec)
-	return conducted(withPresent(map[string]any{"updated": true, "next": taskUpdatedNext}, present), err)
+	next := taskUpdatedNext
+	if strings.TrimSpace(in.QuestionID) != "" {
+		next = answerWrittenNext
+	}
+	return conducted(withPresent(map[string]any{"updated": true, "next": next}, present), err)
 }
 
 // withPresent adds to update_task's answer the relations it was asked to

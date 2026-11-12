@@ -50,6 +50,8 @@ rSayWhyDismissedReasonShownWith         refusals/delivery/conduct/say-why-dismis
 rNotFindingThisTaskFindingsLists        refusals/delivery/conduct/not-finding-this-task-findings-lists
 rAlready                                refusals/delivery/conduct/already
 rImplementerHasStartedOnThisAttempt     refusals/delivery/conduct/implementer-has-started-on-this-attempt
+rQuestionIsNotPersonsAnswerHere         refusals/delivery/conduct/question-is-not-persons-answer-here
+rAnswerChangesCriteriaOnly              refusals/delivery/conduct/answer-changes-criteria-only
 rGiveGoalAcceptanceCriteriaOrBoth       refusals/delivery/conduct/give-goal-acceptance-criteria-or-both
 rNothingWasSaved                        refusals/delivery/conduct/nothing-was-saved
 rYouAreNoLongerThisTask2                refusals/delivery/conduct-steer/you-are-no-longer-this-task-2

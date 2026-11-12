@@ -119,6 +119,10 @@ type Check struct {
 	// read (CheckRunsForbidden). Its Status is CheckUnavailable, which
 	// readers without this field take as pending: blocking, never failed.
 	Diagnostic string `json:"diagnostic,omitempty"`
+	// A cancelled Actions run's verdict (timed_out or cancelled) is final:
+	// a later read given this check (WithKnownChecks) reuses it without
+	// reading its annotations again. See cancelledSettle.
+	Settled bool `json:"settled,omitempty"`
 }
 
 // CheckRunsForbidden: GitHub refused the check-runs listing (403, not a
@@ -130,6 +134,12 @@ const (
 
 // Failed says the check finished and failed: what wakes a fixer.
 func (c Check) Failed() bool { return checkRunState(c.Status, c.Conclusion) == ChecksFailing }
+
+// TimedOut says the check hit its time limit: an app reported it
+// timed_out, or GitHub cancelled an Actions job at its timeout-minutes,
+// which checks writes as timed_out though GitHub reports it cancelled,
+// so it reads as failed.
+func (c Check) TimedOut() bool { return c.Status == "completed" && c.Conclusion == "timed_out" }
 
 // CheckDiagnostic is the first diagnostic code in a check list, or "".
 func CheckDiagnostic(checks []Check) string {
@@ -346,11 +356,13 @@ type GitHub struct {
 	testGitHost string
 	// How the organization wants dude to behave on GitHub.
 	Settings Settings
-	// The clock installation tokens' expiry is read against.
+	// The clock installation tokens' expiry, and how long ago a cancelled
+	// run ended (endedAWhileAgo), are read against.
 	now func() time.Time
 }
 
-// WithClock replaces the clock a GitHub App's tokens are judged by.
+// WithClock replaces the clock a GitHub App's tokens, and a cancelled
+// run's settling, are judged by.
 func WithClock(now func() time.Time) func(*GitHub) {
 	return func(g *GitHub) { g.now = now }
 }
@@ -807,6 +819,7 @@ func (g *GitHub) checks(ctx context.Context, slug, sha string) (string, []Check,
 	}
 	// An agent's read stops at 3 pages or 300 checks in all, saying it cut.
 	cut := false
+	known, annotationReads := knownVerdicts(ctx), 0
 pages:
 	for page, seen := 1, 0; ; page++ {
 		if isAgentRead(ctx) && (page > 3 || seen >= 300) {
@@ -846,16 +859,41 @@ pages:
 				cut = true
 				break pages
 			}
+			app := ""
+			if r.App != nil {
+				app = r.App.Slug
+			}
+			settled := false
+			if r.Status == "completed" && r.Conclusion == "cancelled" && app == ActionsApp {
+				prior, ok := known[r.ID]
+				switch {
+				case ok && (prior.Conclusion == "timed_out" || prior.Settled):
+					r.Conclusion, settled = prior.Conclusion, true
+				case isAgentRead(ctx) && annotationReads >= agentAnnotationReads:
+					// Left cancelled: not failing, never read as passing.
+				default:
+					annotationReads++
+					out, answered, err := g.cancelledByTimeLimit(ctx, slug, r.ID)
+					if err != nil {
+						return "", nil, false, err
+					}
+					// A time limit is final once seen. Not seeing one is
+					// final only when read a while after the run ended (GitHub
+					// may annotate it a moment late) and GitHub answered, or
+					// on the second such read: a refusal is read once more.
+					settled = out || (g.endedAWhileAgo(r.CompletedAt) && (answered || ok))
+					if out {
+						r.Conclusion = "timed_out"
+					}
+				}
+			}
 			rollup = worseChecks(rollup, checkRunState(r.Status, r.Conclusion))
 			link := r.HTMLURL
 			if link == "" {
 				link = r.DetailsURL
 			}
 			c := Check{Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: link,
-				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID}
-			if r.App != nil {
-				c.App = r.App.Slug
-			}
+				DurationMs: elapsed(r.StartedAt, r.CompletedAt), RunID: r.ID, App: app, Settled: settled}
 			list = append(list, c)
 		}
 		seen += len(runs.CheckRuns)
@@ -1010,7 +1048,9 @@ func (g *GitHub) graphqlURL() string {
 // checkRunState reads one check run: still running is pending; finished,
 // its conclusion decides. Neutral and skipped runs block nothing. One a
 // person cancelled, or waiting on a person's approval, or superseded, is
-// not a failure an agent could fix: not passing, but no fixer either.
+// not a failure an agent could fix: not passing, but no fixer either. A
+// job GitHub cancelled at its time limit is a failure (timed_out): checks
+// gives it that conclusion (cancelledByTimeLimit).
 func checkRunState(status, conclusion string) string {
 	if status != "completed" {
 		return ChecksPending
@@ -1022,6 +1062,83 @@ func checkRunState(status, conclusion string) string {
 		return ChecksPending
 	}
 	return ChecksFailing
+}
+
+// timeLimitAnnotation is what GitHub Actions annotates a job it cancelled
+// at its timeout-minutes with ("The job has exceeded the maximum execution
+// time of 6m0s"); the check run's conclusion is only "cancelled".
+const timeLimitAnnotation = "has exceeded the maximum execution time"
+
+// cancelledByTimeLimit says an Actions job reported as cancelled was
+// cancelled by GitHub at its time limit, not by a person or a newer run
+// (concurrency): its annotations say so. Read only for cancelled runs, so
+// a sync of passing or failing checks costs nothing more. Annotations
+// GitHub refuses (no Checks permission, gone) leave it cancelled; a
+// failure that may pass fails the read, to be tried again.
+// answered says GitHub gave the annotations: false when it refused them.
+func (g *GitHub) cancelledByTimeLimit(ctx context.Context, slug string, runID int64) (timedOut, answered bool, err error) {
+	var annotations []struct {
+		Message string `json:"message"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/check-runs/%d/annotations?per_page=50", slug, runID), nil, &annotations); err != nil {
+		var e *Error
+		if !asError(err, &e) || Transient(err) {
+			return false, false, err
+		}
+		return false, false, nil
+	}
+	for _, a := range annotations {
+		if strings.Contains(a.Message, timeLimitAnnotation) {
+			return true, true, nil
+		}
+	}
+	return false, true, nil
+}
+
+// cancelledSettle is how long after a cancelled Actions run ended its
+// annotations are taken to be complete: GitHub may add the time-limit one
+// a moment after the run reads completed. A read sooner is not final.
+const cancelledSettle = time.Minute
+
+// endedAWhileAgo says a run that completed at completedAt (GitHub's
+// timestamp) did so cancelledSettle or more ago; with no time to go by,
+// it did.
+func (g *GitHub) endedAWhileAgo(completedAt string) bool {
+	t, err := time.Parse(time.RFC3339, completedAt)
+	return err != nil || g.now().Sub(t) >= cancelledSettle
+}
+
+type knownChecksKey struct{}
+
+// WithKnownChecks gives ctx's check reads the checks stored at the last
+// read of the same pull request (pull_requests.checks_json). A completed
+// check run never changes (a re-run is a new one), so an Actions run
+// stored timed out keeps that verdict, and one stored cancelled keeps it
+// once Settled, and its annotations are not read again
+// (cancelledByTimeLimit). A cancelled one read too soon after it ended
+// is read again until a read is final; one whose annotations GitHub
+// refused is read once more.
+func WithKnownChecks(ctx context.Context, known []Check) context.Context {
+	return context.WithValue(ctx, knownChecksKey{}, known)
+}
+
+// agentAnnotationReads bounds an agent's read (github_pull_request) to
+// that many annotations reads; a cancelled run past them it has no
+// stored verdict for is left cancelled, which is never passing.
+const agentAnnotationReads = 10
+
+// knownVerdicts are ctx's known checks on cancelled Actions runs, by run
+// id: one timed out or Settled is reused; another is read once more.
+func knownVerdicts(ctx context.Context) map[int64]Check {
+	known, _ := ctx.Value(knownChecksKey{}).([]Check)
+	out := map[int64]Check{}
+	for _, c := range known {
+		if c.RunID != 0 && c.App == ActionsApp && c.Status == "completed" &&
+			(c.Conclusion == "cancelled" || c.Conclusion == "timed_out") {
+			out[c.RunID] = c
+		}
+	}
+	return out
 }
 
 // worseChecks combines two readings: failing over pending over passing

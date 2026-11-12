@@ -64,7 +64,11 @@
 
 {{- define "refusals/delivery/conduct/already"}}%s is %s already{{end}}
 
-{{- define "refusals/delivery/conduct/implementer-has-started-on-this-attempt"}}an implementer has started on this attempt: the task's text is what it was given. Record what changed as a decision with the person (ask_person), or as a follow-up task{{end}}
+{{- define "refusals/delivery/conduct/implementer-has-started-on-this-attempt"}}an implementer has started on this attempt: the task's text is what it was given. Record what changed as a decision with the person (ask_person), or as a follow-up task; once they have answered, the acceptance criteria may take their answer, naming that question (questionId){{end}}
+
+{{- define "refusals/delivery/conduct/question-is-not-persons-answer-here"}}%s is not a question of this task a person has answered: after the implementer has started, update_task writes only a person's answer into the acceptance criteria, naming their answered question{{end}}
+
+{{- define "refusals/delivery/conduct/answer-changes-criteria-only"}}after the implementer has started, a person's answer changes the acceptance criteria only, not the goal{{end}}
 
 {{- define "refusals/delivery/conduct/give-goal-acceptance-criteria-or-both"}}give a goal, acceptance criteria, or both{{end}}
 
