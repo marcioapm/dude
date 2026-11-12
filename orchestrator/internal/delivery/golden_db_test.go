@@ -307,6 +307,13 @@ func TestGoldenConductorBriefings(t *testing.T) {
 		if strings.Contains(old, "supersedes") {
 			t.Fatalf("the superseded task's briefing says it supersedes:\n%s", old)
 		}
+		// A task whose only relation out is related to another has no line.
+		related := newGoldenWorld(t)
+		related.exec(t, `INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+			VALUES ($1, 'wi_g', 'wi_p2', 'related', 'per_ana')`)
+		if b := related.in(t, briefWith(byPerson, "Ana", "Take it from here.")); strings.Contains(b, "supersedes") {
+			t.Fatalf("a related edge alone gives the supersede line:\n%s", b)
+		}
 	})
 }
 
