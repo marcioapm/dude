@@ -62,9 +62,11 @@ type VerdictState struct {
 	// cap and ci_stuck measure it, not the time before it.
 	Checks string `json:"checks,omitempty"`
 	// A review-only test that failed or was blocked at TestHead, as the
-	// verdict names it ("" once one passed there).
-	Test     string `json:"test,omitempty"`
-	TestHead string `json:"testHead,omitempty"`
+	// verdict names it ("" once one passed there), and its criteria and
+	// findings with what the tester observed, for the review's body.
+	Test      string   `json:"test,omitempty"`
+	TestNotes []string `json:"testNotes,omitempty"`
+	TestHead  string   `json:"testHead,omitempty"`
 	// The last event posted at Due, why (verdictDecision.Reason), and the
 	// status comment.
 	Posted    string `json:"posted,omitempty"`
@@ -102,8 +104,10 @@ type verdictInput struct {
 	Stuck bool
 	// The deferral cap is reached.
 	Capped bool
-	// A review-only test that failed or was blocked at the head ("" none).
-	Test string
+	// A review-only test that failed or was blocked at the head ("" none),
+	// and the notes naming what it failed (VerdictState.TestNotes).
+	Test      string
+	TestNotes []string
 }
 
 // The verdict's reasons: part of the claim, so a later verdict at the
@@ -206,7 +210,9 @@ func decideVerdict(in verdictInput) verdictDecision {
 	// 3'. The test failed or was blocked at H with no finding of its open
 	// at the fix bar (one would be row 3): named, never approved.
 	if in.Test != "" {
-		return post(forge.EventComment, reasonTestFailed, fmt.Sprintf("Reviewed at %s, not approved: %s", h, in.Test))
+		d := post(forge.EventComment, reasonTestFailed, fmt.Sprintf("Reviewed at %s, not approved: %s", h, in.Test))
+		d.Notes = append(slices.Clone(in.TestNotes), notes...)
+		return d
 	}
 	// 4. A question still open.
 	if it := items[ReadyQuestions]; !it.OK {
@@ -398,7 +404,7 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	v := st.Verdict
 	if v == nil || v.Due != head {
 		old := cmp.Or(v, &VerdictState{})
-		v = &VerdictState{Due: head, CommentID: old.CommentID, Status: old.Status, Test: old.Test, TestHead: old.TestHead}
+		v = &VerdictState{Due: head, CommentID: old.CommentID, Status: old.Status, Test: old.Test, TestNotes: old.TestNotes, TestHead: old.TestHead}
 		st.Verdict = v
 	}
 	gh, err := w.forges.For(ctx, sc.OrganizationID)
@@ -434,7 +440,7 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	now := time.Now()
 	in.Gate, in.CIAsked = gates[0], v.CIAsked == head
 	if v.TestHead == head {
-		in.Test = v.Test
+		in.Test, in.TestNotes = v.Test, v.TestNotes
 	}
 	if in.Gate.Err == nil {
 		checks := ""

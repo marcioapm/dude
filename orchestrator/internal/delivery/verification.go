@@ -291,12 +291,14 @@ type StoredVerdict struct {
 	Text      string
 	Status    string
 	Decision  string
+	// What the tester saw.
+	Observed string
 }
 
 func (s *Store) gateInput(ctx context.Context, org string, st *State, runID string) (gateInput, error) {
 	in := gateInput{RunID: runID}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT criterion, text, status, COALESCE(decision, '') FROM acceptance_verdicts
+		rows, err := tx.Query(ctx, `SELECT criterion, text, status, COALESCE(decision, ''), observed FROM acceptance_verdicts
 			WHERE run_id = $1 ORDER BY criterion`, runID)
 		if err != nil {
 			return err
@@ -429,11 +431,38 @@ func (w *steps) reviewOnlyTested(ctx context.Context, sc workflow.StepContext, s
 	if st.Verdict == nil {
 		st.Verdict = &VerdictState{}
 	}
-	st.Verdict.TestHead, st.Verdict.Test = head, ""
+	st.Verdict.TestHead, st.Verdict.Test, st.Verdict.TestNotes = head, "", nil
 	if g.Outcome == "fail" || g.Outcome == "blocked" {
-		st.Verdict.Test = fmt.Sprintf("the test %s %s criteria %v", runID, map[string]string{"fail": "failed", "blocked": "was blocked on"}[g.Outcome], g.Criteria)
+		st.Verdict.Test, st.Verdict.TestNotes = reviewOnlyTestLines(in, g)
 	}
 	return workflow.Result{Next: "verdict", State: st}, nil
+}
+
+// Bounds on what the review quotes of a criterion and of what the tester
+// observed: the task's page has the rest.
+const (
+	reviewCriterionChars = 200
+	reviewObservedChars  = 400
+)
+
+// reviewOnlyTestLines is a failed or blocked review-only test as dude's
+// review names it (L-B): the headline's words, and a note per criterion
+// behind it, with its text and what the tester observed. A finding of the
+// tester's open at the fix bar is the review's findings row, not this.
+func reviewOnlyTestLines(in gateInput, g gate) (string, []string) {
+	headline := map[string]string{"fail": "the acceptance test failed", "blocked": "the acceptance test was blocked"}[g.Outcome]
+	var notes []string
+	for _, v := range in.Verdicts {
+		if !slices.Contains(g.Criteria, v.Criterion) {
+			continue
+		}
+		n := fmt.Sprintf("Criterion %d (%s): %s", v.Criterion, v.Status, clip(strings.Join(strings.Fields(v.Text), " "), reviewCriterionChars))
+		if o := strings.Join(strings.Fields(v.Observed), " "); o != "" {
+			n += " — observed: " + clip(o, reviewObservedChars)
+		}
+		notes = append(notes, n)
+	}
+	return headline, notes
 }
 
 // testFailedLine is the conductor's fact on test runID failing criteria
