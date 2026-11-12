@@ -113,3 +113,34 @@ func TestASessionsMemoryIsNotPinned(t *testing.T) {
 		t.Errorf("a session's memory pinned: %d %v", status, out)
 	}
 }
+
+// A pinned fact's edit that would make it one Pin refuses — about a task,
+// or moved to the whole organization — is refused, and it stays pinned
+// and as it was.
+func TestAPinnedFactsEditCannotMakeItUnpinnable(t *testing.T) {
+	m := setupMemory(t)
+	_, created := m.do(t, "POST", "/internal/memory/memories", `{"projectId": "prj_m", "title": "Pinned", "content": "x"}`)
+	id := created["id"].(string)
+	path := "/internal/memory/memories/" + id
+	if status, out := m.do(t, "POST", path+"/pin", ""); status != 200 {
+		t.Fatalf("pin: %d %v", status, out)
+	}
+	for _, body := range []string{
+		`{"about": [{"type": "task", "id": "wi_m"}]}`,
+		`{"projectId": ""}`,
+	} {
+		if status, out := m.do(t, "PATCH", path, body); status != 422 || !strings.Contains(message(out), "unpin it first") {
+			t.Errorf("PATCH %s on a pinned fact: %d %v", body, status, out)
+		}
+		var pinned bool
+		var project string
+		var refs int
+		if err := m.owner.QueryRow(context.Background(), `SELECT pinned_at IS NOT NULL, coalesce(project_id, ''),
+				(SELECT count(*) FROM memory_refs WHERE memory_id = $1) FROM memories WHERE id = $1`, id).Scan(&pinned, &project, &refs); err != nil {
+			t.Fatal(err)
+		}
+		if !pinned || project != "prj_m" || refs != 0 {
+			t.Errorf("after PATCH %s: pinned %v, project %q, %d refs", body, pinned, project, refs)
+		}
+	}
+}
