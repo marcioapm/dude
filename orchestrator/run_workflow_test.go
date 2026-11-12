@@ -6,8 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/prs"
 )
 
@@ -196,6 +199,19 @@ func TestAMissedEventChangesNothingAndTheOutcomeWakesOnce(t *testing.T) {
 	}
 	if n := len(w.workflowWakes(task)); n != 1 {
 		t.Fatalf("%d wakes for one outcome", n)
+	}
+	// A racing pass that read the run before the first one committed
+	// settles the same completed read: still one wake.
+	done := forge.RunState{ID: 920, Status: "completed", Conclusion: "failure", Attempt: 1}
+	for range 2 {
+		if err := w.prs.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+			return delivery.SettleDispatchTx(context.Background(), tx, w.org, id, delivery.DispatchRead{Run: &done})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(w.workflowWakes(task)); n != 1 {
+		t.Fatalf("%d wakes after racing passes", n)
 	}
 	w.until("the conductor told the conclusion", func() bool {
 		for _, s := range w.woken(task) {
