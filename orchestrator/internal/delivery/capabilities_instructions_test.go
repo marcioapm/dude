@@ -61,10 +61,16 @@ func sectionsFor(tool, role string) []string {
 		}
 		return out
 	case "search_memory":
-		return []string{"- **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating " +
-			"something that may be known"}
+		return []string{"- **Memory**: what people and agents here learned before you. Before you act on something this project's code, " +
+			"task and briefing do not explain (an unfamiliar failure, a convention, how a service is run), search it first (`search_memory`)."}
 	case "remember":
-		return []string{"save what the next agent should know (`remember`), after searching so you do not save it twice."}
+		out := []string{"Save (`remember`) only what you had to learn the hard way: you searched, found nothing, then established it. " +
+			"Search again before you save: if it is already there, do not add a second"}
+		if role != RoleBrainstorm {
+			out = append(out, "What the next task in this project would need goes in project memory (`remember`). "+
+				"Never put task-only detail in project memory.")
+		}
+		return out
 	case "emit_event":
 		return []string{"- **Progress**: `emit_event` / `dude event progress` so people can follow long work."}
 	case "create_task":
@@ -289,7 +295,8 @@ var notTheTool = map[string][]string{
 	"message": {"first message lists them", "default merge message", "a Chat message", "your next message", "--message M",
 		"Each message reaches you", "comes to you as a message"},
 	"note": {"not a note to leave", "a short note at each decision", "--note N", "(a note, optionally another tier)",
-		"`note` is for an observation", "| low | note", "a design note", "and a note)"},
+		"`note` is for an observation", "| low | note", "a design note", "and a note)",
+		"in the note of the `decide next`"},
 	"propose":  {"before you propose anything"},
 	"publish":  {"`dude publish", "the files you publish", "publish the report", "publish the video", "Never publish code", "goes to the pull request when you publish"},
 	"verify":   {"could not verify", "`--no-verify`", "a reason a person could verify"},
@@ -455,4 +462,42 @@ func TestGoldenInstructionsWithoutGitHubRead(t *testing.T) {
 		t.Errorf("a conductor without github.read reads the red CI paragraph")
 	}
 	golden(t, "instructions-conductor-without-github-read", got)
+}
+
+// The epic-peers line is in the file of a writer that can both read its
+// peers and message them, and of no other: reviewers, the simplifier and the
+// tester read peers but never message, and a child has no epic of its own.
+// The smallest-process line is the conductor's while it drives the delivery.
+func TestThePeersAndSmallestProcessLinesFollowTheirTools(t *testing.T) {
+	const peers, smallest = "- **Peers on an epic**: before you change", "- Choose the smallest process that proves"
+	for _, c := range []struct {
+		role        string
+		without     capabilities.Key
+		child       bool
+		peers, size bool
+	}{
+		{role: RoleConductor, peers: true, size: true},
+		{role: RoleConductor, without: capabilities.Coordination, size: true},
+		{role: RoleConductor, without: capabilities.Conduct, peers: true},
+		{role: "implementer", peers: true},
+		{role: "implementer", without: capabilities.Coordination},
+		{role: "implementer", child: true},
+		{role: "fixer", peers: true},
+		{role: "reviewer"},
+		{role: "simplifier"},
+		{role: "qa_browser"},
+		{role: "investigator"},
+	} {
+		g := capabilities.Default(toolRoleOf(c.role))
+		if c.without != "" {
+			g = g.Without(c.without)
+		}
+		got := Instructions(c.role, "correctness", InstructionsInput{Tools: true, CLI: true, Checkouts: true, Grants: &g, Child: c.child})
+		if strings.Contains(got, peers) != c.peers {
+			t.Errorf("%s without %q child=%v: peers line %v, want %v", c.role, c.without, c.child, !c.peers, c.peers)
+		}
+		if strings.Contains(got, smallest) != c.size {
+			t.Errorf("%s without %q child=%v: smallest-process line %v, want %v", c.role, c.without, c.child, !c.size, c.size)
+		}
+	}
 }
