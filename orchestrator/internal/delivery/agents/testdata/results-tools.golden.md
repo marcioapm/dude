@@ -220,5 +220,5 @@ GitHub's answer reached dude only after it had ended this dispatch as "may or ma
 
 ## run-workflow-late-unknown
 
-GitHub's answer reached dude only after it had ended this dispatch, so it is not recorded as dispatched: it is unknown (dude may or may not have dispatched this: it never heard GitHub's answer). pull_requests lists it under dispatches as dude last read it; "unknown" and "cannot see" mean investigate, not success or failure.
+GitHub's answer reached dude only after it had ended this dispatch, so it is not recorded as dispatched: it is unknown (GitHub did not say which run this dispatch started). pull_requests lists it under dispatches as dude last read it; "unknown" and "cannot see" mean investigate, not success or failure.
 

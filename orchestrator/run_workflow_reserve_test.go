@@ -392,9 +392,10 @@ func TestALateRunIDIsBoundToTheDispatchTheSupervisorEnded(t *testing.T) {
 }
 
 // L1: GitHub's answer reaches the call only after the supervisor ended
-// its row, and names no run (204): nothing is left to bind. The row stays
-// as the supervisor left it, the call reports that state (never
-// "Dispatched"), and the conductor is not woken again.
+// its row, and names no run (204): nothing is left to bind. GitHub did
+// accept the dispatch, so the row's reason becomes "did not say which
+// run" (L1b), not "never heard"; it stays unknown, the call reports that
+// (never "Dispatched"), and the conductor is not woken again.
 func TestALateAnswerWithNoRunReportsTheRowsState(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
 	w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = true })
@@ -403,11 +404,12 @@ func TestALateAnswerWithNoRunReportsTheRowsState(t *testing.T) {
 		t.Fatalf("the call: %d %v", status, out)
 	}
 	next, _ := out["next"].(string)
-	if strings.Contains(next, "Dispatched") || !strings.Contains(next, "it is unknown (dude may or may not have dispatched this") {
+	if strings.Contains(next, "Dispatched") || strings.Contains(next, "may or may not") ||
+		!strings.Contains(next, "it is unknown (GitHub did not say which run this dispatch started)") {
 		t.Fatalf("the call's next: %q", next)
 	}
-	if got := w.str(`SELECT state || ' ' || COALESCE(run_id::text, 'none') || ': ' || reason FROM workflow_dispatches WHERE id = $1`, id); !strings.HasPrefix(got,
-		"unknown none: dude may or may not have dispatched this") {
+	if got := w.str(`SELECT state || ' ' || COALESCE(run_id::text, 'none') || ': ' || reason FROM workflow_dispatches WHERE id = $1`, id); got !=
+		"unknown none: GitHub did not say which run this dispatch started" {
 		t.Fatalf("the row: %s", got)
 	}
 	if wakes := w.wakesNaming(task, id); len(wakes) != 1 {

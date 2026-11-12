@@ -431,7 +431,8 @@ type DispatchRecorded struct {
 // with no run, and GitHub did name the run, it is bound to it now: its
 // "may or may not" wake goes if not yet delivered, and the run's own end
 // is woken for (only when this changed the row). Any other row is left as
-// it is, and its state returned.
+// it is, and its state returned; except that a late 204 makes a "may or
+// may not" row's reason dispatchNoRunID, as GitHub did accept it.
 func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchCheck, done DispatchDone) (DispatchRecorded, error) {
 	id := c.id
 	var settled bool
@@ -471,6 +472,9 @@ func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchChec
 			if err := deliverStoredDispatchTx(ctx, tx, org, id); err != nil {
 				return DispatchRecorded{}, err
 			}
+		} else if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET reason = $2 WHERE id = $1 AND state = $3 AND reason = $4`,
+			id, dispatchNoRunID, DispatchUnknown, dispatchMaybe); err != nil {
+			return DispatchRecorded{}, err
 		}
 	}
 	rec := DispatchRecorded{ID: id, Late: !settled}

@@ -235,6 +235,6 @@ func TestGoldenToolResults(t *testing.T) {
 		{"run-workflow", runWorkflowNext(delivery.DispatchRecorded{ID: "wfd_1", State: delivery.DispatchBound})},
 		{"run-workflow-late-bound", runWorkflowNext(delivery.DispatchRecorded{ID: "wfd_1", State: delivery.DispatchBound, Late: true})},
 		{"run-workflow-late-unknown", runWorkflowNext(delivery.DispatchRecorded{ID: "wfd_1", State: delivery.DispatchUnknown,
-			Reason: "dude may or may not have dispatched this: it never heard GitHub's answer", Late: true})},
+			Reason: "GitHub did not say which run this dispatch started", Late: true})},
 	})
 }
