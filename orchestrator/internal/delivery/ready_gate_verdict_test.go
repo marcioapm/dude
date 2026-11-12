@@ -191,6 +191,10 @@ func TestTheReviewVerdictProfile(t *testing.T) {
 			},
 			merge:  answer{false, "2 review thread(s) unresolved"},
 			review: answer{true, "2 review thread(s) unresolved"}},
+		{name: "GitHub would not count the review threads", key: ReadyThreads,
+			setup:  func(f *gateFixture) string { h := f.ready(); f.graphqlForbidden(); return h },
+			merge:  answer{false, "GitHub would not count the review threads: unreadable"},
+			review: answer{true, "threads: unreadable"}},
 		{name: "a conflict", key: ReadyMergeable,
 			setup: func(f *gateFixture) string {
 				h := f.ready()

@@ -1,6 +1,8 @@
 package delivery
 
 import (
+	"fmt"
+	"net/http"
 	"regexp"
 	"testing"
 
@@ -23,6 +25,31 @@ func sameItems(t *testing.T, got PRGate, want []GateItem) {
 		if it != want[i] {
 			t.Errorf("item %d:\n got %+v\nwant %+v", i, it, want[i])
 		}
+	}
+}
+
+// sameReadings says got's readings beside its items, the ones
+// weighReadiness acts on, are as want: MergeableUnknown, and whether any
+// GraceLeft is set (its length runs with the clock).
+func sameReadings(t *testing.T, got PRGate, mergeableUnknown, graceLeft bool) {
+	t.Helper()
+	if got.MergeableUnknown != mergeableUnknown {
+		t.Errorf("MergeableUnknown %v, want %v", got.MergeableUnknown, mergeableUnknown)
+	}
+	if (got.GraceLeft > 0) != graceLeft {
+		t.Errorf("GraceLeft %v, want set %v", got.GraceLeft, graceLeft)
+	}
+}
+
+// graphqlForbidden makes GitHub refuse every GraphQL read, as it does a
+// token without access to the review threads.
+func (f *gateFixture) graphqlForbidden() {
+	f.intercept = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodPost || r.URL.Path != "/graphql" {
+			return false
+		}
+		fmt.Fprint(w, `{"data":null,"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by integration"}]}`)
+		return true
 	}
 }
 
@@ -53,6 +80,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 		if !g.Ready {
 			t.Fatal("not ready")
 		}
+		sameReadings(t, g, false, false)
 	})
 	t.Run("every item failing", func(t *testing.T) {
 		f := newGateFixture(t)
@@ -83,6 +111,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 			{ReadyMergeable, false, "it conflicts with main: resolve the conflict"},
 			{ReadyChecks, false, "failing: e2e"},
 		})
+		sameReadings(t, g, false, false)
 	})
 	t.Run("a person's commit since the review", func(t *testing.T) {
 		f := newGateFixture(t)
@@ -90,7 +119,8 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 		f.ready()
 		f.gh.CommitFiles("feature", "Tweak", map[string]string{"app/greet.go": "package app // tweak\n"})
 		f.synced()
-		sameItems(t, f.gate(), []GateItem{
+		g := f.gate()
+		sameItems(t, g, []GateItem{
 			{ReadyOpen, true, "open"},
 			{ReadyHead, true, "at <sha>"},
 			{ReadyReviewed, false, "reviewed at <sha>; unreviewed since: <sha>"},
@@ -101,5 +131,69 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 			{ReadyMergeable, true, "clean"},
 			{ReadyChecks, true, "1 check(s) passed at the head"},
 		})
+		sameReadings(t, g, false, false)
+	})
+	// Added after the profile, each read at main (787619202) as well: the
+	// threads item when GitHub will not count the threads (a line the
+	// profile made depend on it), and the two readings beside the items.
+	t.Run("GitHub would not count the review threads", func(t *testing.T) {
+		f := newGateFixture(t)
+		f.gh.SetChecks("success")
+		f.ready()
+		f.graphqlForbidden()
+		g := f.gate()
+		sameItems(t, g, []GateItem{
+			{ReadyOpen, true, "open"},
+			{ReadyHead, true, "at <sha>"},
+			{ReadyReviewed, true, "reviewed at <sha>"},
+			{ReadySimplified, true, "the simplifier ran from <sha>, after the last change <sha>, and found nothing to simplify"},
+			{ReadyFindings, true, "no open finding at the fix bar"},
+			{ReadyQuestions, true, "nothing open to a person"},
+			{ReadyThreads, false, "GitHub would not count the review threads: unreadable"},
+			{ReadyMergeable, true, "clean"},
+			{ReadyChecks, true, "1 check(s) passed at the head"},
+		})
+		sameReadings(t, g, false, false)
+	})
+	t.Run("GitHub has not worked out mergeability", func(t *testing.T) {
+		f := newGateFixture(t)
+		f.gh.SetChecks("success")
+		f.ready()
+		f.gh.Set(func(s *fakegithub.Server) { s.MergeableUnknown[f.n] = true })
+		g := f.gate()
+		sameItems(t, g, []GateItem{
+			{ReadyOpen, true, "open"},
+			{ReadyHead, true, "at <sha>"},
+			{ReadyReviewed, true, "reviewed at <sha>"},
+			{ReadySimplified, true, "the simplifier ran from <sha>, after the last change <sha>, and found nothing to simplify"},
+			{ReadyFindings, true, "no open finding at the fix bar"},
+			{ReadyQuestions, true, "nothing open to a person"},
+			{ReadyThreads, true, "no unresolved review thread"},
+			{ReadyMergeable, false, "GitHub has not worked out whether it merges yet: retry later"},
+			{ReadyChecks, true, "1 check(s) passed at the head"},
+		})
+		sameReadings(t, g, true, false)
+	})
+	t.Run("nothing reported yet within the grace", func(t *testing.T) {
+		f := newGateFixture(t)
+		f.gh.SetChecks("none")
+		h := f.implemented(map[string]string{"app/greet.go": "package app\n", ".github/workflows/ci.yml": "on: pull_request\n"})
+		f.reviewed(h)
+		f.simplifiedEmpty(h)
+		f.synced()
+		f.exec(`UPDATE pull_requests SET head_seen_at = now() WHERE id = 'pr_g' AND organization_id = $1`)
+		g := f.gate()
+		sameItems(t, g, []GateItem{
+			{ReadyOpen, true, "open"},
+			{ReadyHead, true, "at <sha>"},
+			{ReadyReviewed, true, "reviewed at <sha>"},
+			{ReadySimplified, true, "the simplifier ran from <sha>, after the last change <sha>, and found nothing to simplify"},
+			{ReadyFindings, true, "no open finding at the fix bar"},
+			{ReadyQuestions, true, "nothing open to a person"},
+			{ReadyThreads, true, "no unresolved review thread"},
+			{ReadyMergeable, true, "clean"},
+			{ReadyChecks, false, "pending: no checks have reported at the head yet, within the grace CI has to show up"},
+		})
+		sameReadings(t, g, false, true)
 	})
 }
