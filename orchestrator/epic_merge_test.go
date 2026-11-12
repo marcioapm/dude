@@ -535,6 +535,29 @@ func TestEpicMergeOverlap(t *testing.T) {
 		w.sweep()
 		w.told(peer, w.shared("billing/old.go"))
 	})
+	// A snapshot from before previousPath was kept: the peer's rename may
+	// hide the merged path, so nothing shared is unknown, not none.
+	t.Run("the peer's rename stored without its previous name", func(t *testing.T) {
+		w := newEpicMergeWorld(t)
+		peer := w.peer(w.live())
+		w.snapshotAt(peer, w.repoID, 0, strings.Repeat("b", 40), 0, "complete", []string{`{"path":"billing/new.go","status":"R"}`})
+		f := newStubForge(t)
+		f.answer(200, "", file("billing/old.go"))
+		w.worker.Forges = f
+		w.merge()
+		w.sweep()
+		w.told(peer, w.unknown())
+	})
+	t.Run("the forge's rename without its previous name", func(t *testing.T) {
+		w := newEpicMergeWorld(t)
+		peer := w.peer(w.live("billing/old.go"))
+		f := newStubForge(t)
+		f.answer(200, "", map[string]any{"filename": "billing/new.go", "status": "renamed"})
+		w.worker.Forges = f
+		w.merge()
+		w.sweep()
+		w.told(peer, w.unknown())
+	})
 	t.Run("a rename stored without its previous name", func(t *testing.T) {
 		w := newEpicMergeWorld(t)
 		peer := w.peer(w.live("billing/old.go"))
@@ -644,10 +667,15 @@ func TestEpicMergeForgeBackOff(t *testing.T) {
 	if got := w.wakes(peer); len(got) != 0 {
 		t.Fatalf("told before 10 minutes: %q", got)
 	}
-	// At 10m10s: unknown, though the retry time has not come.
+	// At 10m10s: unknown, though the retry time has not come, and the forge
+	// is not asked before it.
 	mustExec(t, w.owner, `UPDATE pull_requests SET merged_at = now() - interval '10 minutes 10 seconds' WHERE id = $1`, w.prID)
+	calls = f.calls.Load()
 	w.sweep()
 	w.told(peer, w.unknown())
+	if f.calls.Load() != calls {
+		t.Fatalf("asked the forge %d times before its retry time", f.calls.Load()-calls)
+	}
 }
 
 // The forge answering after it failed: the next pass past the retry time
