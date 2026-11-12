@@ -153,10 +153,17 @@ func TestALongFactIsCutAndAFenceIsClosed(t *testing.T) {
 		"a no-break space at 601": {`repeat('a', 600) || U&'\00A0' || 'TAIL'`, strings.Repeat("a", projectFactChars-1) + "…"},
 		"leading whitespace":      {`E' \n\t' || repeat('a', 600)`, strings.Repeat("a", projectFactChars)},
 		"trailing whitespace":     {`repeat('a', 600) || E' \n '`, strings.Repeat("a", projectFactChars)},
+		// Trimmed as strings.TrimSpace trims, not ASCII alone.
+		"a line separator before":  {`U&'\2028' || repeat('a', 600)`, strings.Repeat("a", projectFactChars)},
+		"a no-break space at ends": {`U&'\00A0' || repeat('a', 600) || U&'\00A0'`, strings.Repeat("a", projectFactChars)},
 	} {
 		w.exec(t, `UPDATE memories SET content = `+c.content+` WHERE id = 'mem_long' AND organization_id = $1`)
-		if got := facts(); !strings.Contains(got+"\n", ": "+c.want+"\n") {
+		got := facts()
+		if !strings.Contains(got+"\n", ": "+c.want+"\n") {
 			t.Errorf("%s: not shown as %q:\n%s", name, c.want, got)
+		}
+		if !strings.HasSuffix(c.want, "…") && strings.Contains(got, "…") {
+			t.Errorf("%s: cut:\n%s", name, got)
 		}
 	}
 
