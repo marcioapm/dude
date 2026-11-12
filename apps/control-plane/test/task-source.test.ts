@@ -73,7 +73,7 @@ beforeAll(async () => {
       return Response.json({ error: { code: "github_unavailable", message: "GitHub could not be asked about it: down" } }, { status: 502 });
     }
     if (url.pathname.endsWith("/tasks/supersede")) {
-      return Response.json({ taskId: superseding, key: "SRC-99", superseded: body.holder }, { status: 201 });
+      return Response.json({ taskId: body.taskId ?? superseding, key: "SRC-99", superseded: body.holder }, { status: 201 });
     }
     if (body.pullRequest === "21") {
       // Held by a live task: refused unless confirmed, then answered as it.
@@ -248,6 +248,38 @@ test("a source a live task holds asks first; the confirmation goes to the orches
 
   // supersede without a source is a mistake, said so.
   expect((await call("POST", "/v1/tasks", { projectId: PROJECT, title: "x", goal: "sixteen characters or more", supersede: true })).status).toBe(400);
+});
+
+test("a PATCH that only confirms a supersede answers the task; one whose other fields are refused stops nothing", async () => {
+  const held = { kind: "pr", repositoryId: REPO, pullRequest: "21", mode: "review" };
+  const supersedes = () => checks.filter((c) => String(c.path).endsWith("/tasks/supersede")).length;
+  const task = (await (await newTask()).json()) as { id: string };
+
+  // Refused for the rest of the edit before the supersede: nothing is stopped.
+  const before = supersedes();
+  const short = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true, goal: "short" });
+  expect(short.status).toBe(400);
+  const noEpic = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true, epicId: "epc_nowhere" });
+  expect(noEpic.status).toBe(404);
+  const noOwner = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true, ownerId: "per_nobody" });
+  expect(noOwner.status).toBe(404);
+  expect(supersedes()).toBe(before);
+
+  // Confirmed alone: the orchestrator supersedes for this task, and the edit answers it.
+  const confirmed = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true });
+  expect(confirmed.status).toBe(200);
+  expect(((await confirmed.json()) as { id: string }).id).toBe(task.id);
+  expect(supersedes()).toBe(before + 1);
+  expect(checks.at(-1)).toMatchObject({ holder: "wi_holder", taskId: task.id, source: { number: 21, mode: "review" } });
+
+  // A task already started is refused, and stops nothing.
+  const started = (await (await newTask()).json()) as { id: string };
+  await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
+    VALUES (${"wf_" + started.id}, ${ORG}, 'task.delivery', ${"delivery:" + started.id}, ${started.id}, 'waiting', 'review', '{}'::jsonb)`;
+  const late = await call("PATCH", `/v1/tasks/${started.id}`, { source: held, supersede: true });
+  expect(late.status).toBe(409);
+  expect(supersedes()).toBe(before + 1);
+  await owner`UPDATE tasks SET status = 'done' WHERE id IN (${task.id}, ${started.id})`;
 });
 
 test("the pickers ask the orchestrator, which holds the forge credential, with a bounded query", async () => {
