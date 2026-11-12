@@ -164,13 +164,14 @@ def test_a_source_dude_must_not_touch_is_refused_with_why(
         assert resp.json()["error"]["code"] == code, (source, resp.text)
     assert len(client.get("/v1/tasks", params={"projectId": forge_project["id"]}).json()["tasks"]) == before
 
-    # Another live task's branch is taken.
+    # Another live task's branch: asked to supersede it, naming it (the flat branch_taken is gone).
     fake_github.push_branch("feature/shared")
-    client.create_task(forge_project["id"], "First", goal="Take over the shared branch first.",
-                       source={"kind": "branch", "repositoryId": repo, "branch": "feature/shared"})
+    first = client.create_task(forge_project["id"], "First", goal="Take over the shared branch first.",
+                               source={"kind": "branch", "repositoryId": repo, "branch": "feature/shared"})
     resp = client.post("/v1/tasks", {"projectId": forge_project["id"], "title": "Second", "goal": "Take over the shared branch too.",
                                      "source": {"kind": "branch", "repositoryId": repo, "branch": "feature/shared"}})
-    assert resp.status_code == 422 and resp.json()["error"]["code"] == "branch_taken", resp.text
+    assert resp.status_code == 409 and resp.json()["error"]["code"] == "superseded_required", resp.text
+    assert resp.json()["error"]["details"]["holder"]["id"] == first["id"], resp.text
 
     # A lookup the dialog makes says the same, and writes nothing.
     resp = client.post(f"/v1/projects/{forge_project['id']}/sources/check",
@@ -309,3 +310,38 @@ def test_a_ready_pull_request_by_default_is_reviewed_with_no_implementer(
     wait_until(lambda: _simplified(client, task["id"]), timeout=120, message="the review loop never finished")
     phases = _phases(client, task["id"])
     assert "implement" not in phases and phases[0] == "review", phases
+
+
+def test_superseding_a_live_task_stops_it_and_links_the_two(client: ApiClient, forge_project: dict, fake_github: FakeGitHub):
+    """Asked, then confirmed: the holder stops, the new task takes the source, and each names the other."""
+    repo = _repo_id(forge_project)
+    fake_github.open_pull("feature/held")
+    source = {"kind": "pr", "repositoryId": repo, "pullRequest": "1"}
+    first = client.create_task(forge_project["id"], "Review it", goal="Review the pull request and change nothing.",
+                               source={**source, "mode": "review_only"})
+    assert first["source"]["mode"] == "review_only"
+    body = {"projectId": forge_project["id"], "title": "Fix it", "goal": "Take the pull request over and fix it.",
+            "source": {**source, "mode": "review"}}
+    asked = client.post("/v1/tasks", body)
+    assert asked.status_code == 409, asked.text
+    holder = asked.json()["error"]["details"]["holder"]
+    assert holder == {"id": first["id"], "key": first["key"], "mode": "review_only"}, asked.text
+    # A confirmation naming another task than the holder is refused, and changes nothing.
+    stale = client.post("/v1/tasks", {**body, "supersede": "wi_not_the_holder"})
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "superseded_required", stale.text
+    assert client.get(f"/v1/tasks/{first['id']}").json()["status"] == "received"
+
+    made = client.post("/v1/tasks", {**body, "supersede": first["id"]})
+    assert made.status_code == 201, made.text
+    second = made.json()
+    assert second["source"]["mode"] == "review" and second["source"]["number"] == 1, second
+    assert client.get(f"/v1/tasks/{first['id']}").json()["status"] == "aborted"
+    mine = client.get(f"/v1/tasks/{second['id']}/relations").json()
+    theirs = client.get(f"/v1/tasks/{first['id']}/relations").json()
+    assert [r["task"]["key"] for r in mine["supersedes"]] == [first["key"]], mine
+    assert [r["task"]["key"] for r in theirs["supersededBy"]] == [second["key"]], theirs
+    assert mine["blockedBy"] == [] and theirs["blocks"] == []
+    for task, kind in ((first, "task.superseded"), (second, "task.supersedes")):
+        events = client.events(taskId=task["id"])
+        assert any(e["eventType"] == kind for e in events), (kind, [e["eventType"] for e in events])
+    assert fake_github.pulls[1].state == "open"
