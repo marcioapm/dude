@@ -282,6 +282,18 @@ test("a PATCH that only confirms a supersede answers the task; one whose other f
   await owner`UPDATE tasks SET status = 'done' WHERE id IN (${task.id}, ${started.id})`;
 });
 
+test("a PATCH with a supersede and a repository not in the project is refused before anything is stopped", async () => {
+  const held = { kind: "pr", repositoryId: REPO, pullRequest: "21", mode: "review" };
+  const supersedes = () => checks.filter((c) => String(c.path).endsWith("/tasks/supersede")).length;
+  const task = (await (await newTask()).json()) as { id: string };
+  const before = supersedes();
+  const res = await call("PATCH", `/v1/tasks/${task.id}`, { source: held, supersede: true, repositories: [{ id: "repo_nowhere" }] });
+  expect(res.status).toBe(404);
+  expect(((await res.json()) as { error: { message: string } }).error.message).toBe("repository repo_nowhere is not in this task's project");
+  expect(supersedes()).toBe(before);
+  await owner`UPDATE tasks SET status = 'done' WHERE id = ${task.id}`;
+});
+
 test("the pickers ask the orchestrator, which holds the forge credential, with a bounded query", async () => {
   const repos = await router.handle(new Request(`http://dude.test/v1/projects/${PROJECT}/sources/repositories`,
     { headers: { authorization: `Bearer ${key}` } }));

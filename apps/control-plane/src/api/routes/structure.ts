@@ -19,7 +19,7 @@ import { badRequest, conflict, json, noContent, notFound, parseBody } from "../h
 import { registerRepositoryWebhook } from "./pullRequests.ts";
 import { requireProjectEditor } from "../access.ts";
 import type { RequestContext, Router } from "../router.ts";
-import { REPOSITORIES_JSON, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
+import { REPOSITORIES_JSON, repositoryNotInProject, setTaskRepositories, taskRepositoriesInput } from "./taskRepositories.ts";
 import { SOURCE_JSON, checkTaskSource, keepMode, sameSource, setTaskSource, sourceMode, supersedeInput, supersedeWith, taskSourceInput } from "./taskSource.ts";
 import type { TaskSource } from "@dude/domain";
 import { ownerJson, peopleJson, personOf, recordAs, setTaskPeople } from "./people.ts";
@@ -452,18 +452,19 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
     return { task: rows[0]! };
   });
   refuseEdit(result, id);
-  if ("noRepository" in result) throw notFound(`repository ${result.noRepository} is not in this task's project`);
   if ("unchanged" in result) throw badRequest("nothing to change");
   return json((result as { task: Record<string, unknown> }).task);
 }
 
 type EditInput = Omit<z.input<typeof updateTaskInput>, "ownerId" | "source" | "supersede">;
-type EditRefusal = { missing: true } | { started: string } | { shortGoal: true } | { noEpic: string } | { noPerson: string };
+type EditRefusal = { missing: true } | { started: string } | { shortGoal: true } | { noEpic: string } | { noPerson: string } |
+  { noRepository: string };
 
 /**
  * The rules an edit of a task is held to, under its row's lock: what it
  * really changes, refused once its delivery has started (sourceChanges:
- * a new source is a change), a short goal, an epic or owner not there.
+ * a new source is a change), a short goal, an epic, owner or repository
+ * not there.
  * updateTask asks it in its transaction, and before a supersede, which
  * an edit refused must not reach.
  */
@@ -503,6 +504,8 @@ async function checkEdit(scope: OrgScope, id: string, given: EditInput, ownerGiv
   }
   const ownerId = ownerGiven === undefined ? undefined : await personOf(scope, ownerGiven);
   if (ownerId === null) return { noPerson: ownerGiven! };
+  const noRepository = input.repositories ? await repositoryNotInProject(scope, projectId, input.repositories) : null;
+  if (noRepository) return { noRepository };
   return { ok: true as const, current, input, ownerId };
 }
 
@@ -510,7 +513,7 @@ type TaskRow = { projectId: string; epicId: string | null; status: string; title
 
 /** Throws checkEdit's refusal as the API answers it; anything else passes. */
 function refuseEdit(result: object, id: string): void {
-  const r = result as Partial<{ missing: true; started: string; shortGoal: true; noEpic: string; noPerson: string }>;
+  const r = result as Partial<{ missing: true; started: string; shortGoal: true; noEpic: string; noPerson: string; noRepository: string }>;
   if (r.missing) throw notFound(`task ${id} not found`);
   if (r.started !== undefined) {
     throw conflict(`delivery has started (${r.started}); what it asks for can no longer change while it runs — abort it, then change it and start over`);
@@ -518,6 +521,7 @@ function refuseEdit(result: object, id: string): void {
   if (r.shortGoal) throw badRequest(TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS);
   if (r.noEpic !== undefined) throw notFound(`epic ${r.noEpic} is not in this task's project`);
   if (r.noPerson !== undefined) throw notFound(`${r.noPerson} is not one of this organisation's people`);
+  if (r.noRepository !== undefined) throw notFound(`repository ${r.noRepository} is not in this task's project`);
 }
 
 const taskPeopleInput = z.object({
