@@ -1732,7 +1732,7 @@ workflow %q is a workflow's file name under .github/workflows (ci.yml, release.y
 
 ## refusals/delivery/dispatch/maybe
 
-dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. Look with github_branch_runs before dispatching it again; it is listed as %s, unknown
+dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. It is listed as %s, unknown: %s before dispatching it again
 
 ## refusals/delivery/dispatch/question-reserved
 

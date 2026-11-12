@@ -181,10 +181,11 @@ func TestA204DispatchIsUnknownAndNeverBound(t *testing.T) {
 	w, task, branch := dispatchWorld(t)
 	w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = true })
 	one := w.dispatched(task, `{"workflow":"ci.yml"}`)
-	if got := w.str(`SELECT state || ' ' || COALESCE(run_id::text, 'none') || ': ' || reason FROM workflow_dispatches WHERE id = $1`, one); got != "unknown none: GitHub did not say which run this dispatch started; look with `github_branch_runs`" {
+	if got := w.str(`SELECT state || ' ' || COALESCE(run_id::text, 'none') || ': ' || reason FROM workflow_dispatches WHERE id = $1`, one); got != "unknown none: GitHub did not say which run this dispatch started" {
 		t.Fatalf("204: %s", got)
 	}
-	if wakes := w.workflowWakes(task); len(wakes) != 1 || !strings.Contains(wakes[0], one) || !strings.Contains(wakes[0], "is unknown: GitHub did not say which run") {
+	if wakes := w.workflowWakes(task); len(wakes) != 1 || !strings.Contains(wakes[0], one) ||
+		!strings.Contains(wakes[0], "is unknown: GitHub did not say which run this dispatch started; find it with `github_branch_runs`") {
 		t.Fatalf("wakes %q", wakes)
 	}
 	// The one run there is, new since the dispatch: still not bound.

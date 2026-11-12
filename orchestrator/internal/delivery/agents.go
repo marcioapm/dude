@@ -116,6 +116,7 @@ var (
 	recoveredTmpl              = mustTemplate("wakes/recovered")
 	workflowWakeTmpl           = mustTemplate("wakes/workflow")
 	waitWorkflowTmpl           = mustTemplate("wakes/wait/workflow")
+	lookForRunTmpl             = mustTemplate("wakes/workflow/look")
 
 	alreadyAnsweredTmpl = mustTemplate("notices/already-answered")
 	messageTmpl         = mustTemplate("notices/message")

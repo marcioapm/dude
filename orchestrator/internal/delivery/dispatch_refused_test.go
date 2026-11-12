@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
@@ -22,5 +23,25 @@ func TestOnlyGitHubsOwnRefusalsMeanNothingRan(t *testing.T) {
 	}
 	if postRefused(fmt.Errorf("cut off")) {
 		t.Error("an error with no answer is a refusal")
+	}
+}
+
+// N1: what a dispatch stores (its reason) names no tool; only the texts
+// that tell it, gated on the conductor's grant, point to
+// github_branch_runs, and without it to a person.
+func TestAnUnknownDispatchsPointerFollowsTheGrant(t *testing.T) {
+	for _, reason := range []string{dispatchNoRunID, dispatchMaybe} {
+		if strings.Contains(reason, "github_branch_runs") {
+			t.Errorf("stored reason %q names a tool", reason)
+		}
+		d := DispatchRow{ID: "wfd_1", Repo: "api", Workflow: "ci.yml", Ref: "main", State: DispatchUnknown, Outcome: DispatchUnknown, Reason: reason}
+		for _, granted := range []bool{true, false} {
+			for name, text := range map[string]string{"wake": render(workflowWakeTmpl, workflowView(d, granted)),
+				"wait item": render(waitWorkflowTmpl, workflowView(d, granted))} {
+				if strings.Contains(text, "github_branch_runs") != granted || strings.Contains(text, "ask a person") == granted {
+					t.Errorf("%s, granted %v: %q", name, granted, text)
+				}
+			}
+		}
 	}
 }

@@ -263,7 +263,7 @@ const (
 	rDispatchQuestionNotApproved            = "%s was answered %q, not %q: the person did not approve this dispatch. Nothing was dispatched"
 	rDispatchQuestionSpent                  = "%s already authorized dispatch %s: one answer authorizes one dispatch. Ask the person again (ask_person)"
 	rDispatchQuestionReserved               = "%s is being used by another run_workflow call at the same time: one answer authorizes one dispatch, and that call sends it. Nothing was dispatched by this one"
-	rDispatchMaybe                          = "dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. Look with github_branch_runs before dispatching it again; it is listed as %s, unknown"
+	rDispatchMaybe                          = "dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. It is listed as %s, unknown: %s before dispatching it again"
 	rWaitNotDispatchOfThisTask              = "%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches)"
 	rWaitDispatchFailed                     = "GitHub refused dispatch %s (%s): nothing ran, so there is nothing to wait for. Fix what GitHub refused, then dispatch it again (run_workflow)"
 )

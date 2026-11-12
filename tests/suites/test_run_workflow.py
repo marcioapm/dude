@@ -88,7 +88,8 @@ def test_an_older_github_without_run_details_is_unknown(
     """GitHub (or GHES) answering the dispatch 204 with no run id: the
     dispatch went out, and dude cannot know which run it started. It is
     unknown at once, never bound (not even to the one run there is), and
-    the conductor is woken once, told to look with github_branch_runs."""
+    the conductor is woken once, told to find it with github_branch_runs
+    (the stored reason names no tool; the wake adds it, as granted)."""
     models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
@@ -110,7 +111,7 @@ def test_an_older_github_without_run_details_is_unknown(
     woken = wait_until(lambda: next((p["text"] for p in _events(client, task["id"], "conductor.woken")
                                      if dispatched["dispatchId"] in p.get("text", "") and "is unknown" in p["text"]), None),
                        timeout=120, message="the conductor was never woken with the unknown dispatch")
-    assert "GitHub did not say which run this dispatch started" in woken and "github_branch_runs" in woken, woken
+    assert "GitHub did not say which run this dispatch started; find it with `github_branch_runs`" in woken, woken
     assert "completed" not in woken and f"/actions/runs/{run_id}" not in woken, woken
     rows = query(owner_dsn, "SELECT state, run_id FROM workflow_dispatches WHERE id = %s", (dispatched["dispatchId"],))
     assert rows == [{"state": "unknown", "run_id": None}], rows

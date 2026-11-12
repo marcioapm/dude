@@ -92,14 +92,20 @@ const (
 	DispatchCannotSee   = "cannot_see"
 )
 
-// Why a dispatch is unknown.
+// Why a dispatch is unknown. Stored, so tool-free: where to look
+// (github_branch_runs, or a person) is added when it is told, by
+// lookForRunTmpl, as the conductor's grant says.
 const (
 	// GitHub answered 204: the dispatch went out, its run not named.
-	dispatchNoRunID = "GitHub did not say which run this dispatch started; look with `github_branch_runs`"
+	dispatchNoRunID = "GitHub did not say which run this dispatch started"
 	// The row stayed reserved: dude stopped between the reserve and
 	// GitHub's answer, or GitHub's answer was lost.
-	dispatchMaybe = "dude may or may not have dispatched this: it never heard GitHub's answer; look with `github_branch_runs`"
+	dispatchMaybe = "dude may or may not have dispatched this: it never heard GitHub's answer"
 )
+
+// lookForRun is where the conductor looks for an unknown dispatch's run:
+// with github_branch_runs when it is granted, else through a person.
+func lookForRun(branchRuns bool) string { return render(lookForRunTmpl, branchRuns) }
 
 // DispatchApproval is the choice a person picks to authorize workflow on
 // ref: the one answer to a question (ask_person) the gate accepts.
@@ -400,7 +406,11 @@ func EndDispatchTx(ctx context.Context, tx pgx.Tx, c DispatchCheck, done Dispatc
 	_, uerr := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, outcome = $2, woken_outcome = $2, woken_at = now(),
 			reason = $3, last_error = $4
 		WHERE id = $1 AND state = $5`, c.id, DispatchUnknown, dispatchMaybe, said, DispatchDispatching)
-	return refusef(rDispatchMaybe, c.workflow, c.branch, said, c.id), uerr
+	if uerr != nil {
+		return err, uerr
+	}
+	branchRuns, gerr := conductorMayReadBranchRunsTx(ctx, tx, c.ref.Org, c.ref.TaskID)
+	return refusef(rDispatchMaybe, c.workflow, c.branch, said, c.id, lookForRun(branchRuns)), gerr
 }
 
 // DispatchRecorded is a dispatch as RecordDispatchTx left it: its id, its
@@ -774,7 +784,18 @@ func workflowItemTx(ctx context.Context, tx pgx.Tx, id string) (waitItem, error)
 	if err != nil {
 		return waitItem{}, err
 	}
-	v := workflowView(d, true)
+	branchRuns := false
+	if d.Outcome == DispatchUnknown {
+		// Only an unknown item says where to look.
+		var org string
+		if err := tx.QueryRow(ctx, `SELECT organization_id FROM tasks WHERE id = $1`, d.taskID).Scan(&org); err != nil {
+			return waitItem{}, err
+		}
+		if branchRuns, err = conductorMayReadBranchRunsTx(ctx, tx, org, d.taskID); err != nil {
+			return waitItem{}, err
+		}
+	}
+	v := workflowView(d, branchRuns)
 	v.Line = clip(oneLine(render(waitWorkflowTmpl, v)), workflowItemChars)
 	it := waitItem{Kind: "workflow", Workflow: &v}
 	switch {
