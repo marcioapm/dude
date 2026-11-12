@@ -147,8 +147,9 @@ type epicMerge struct {
 // epicPeer is a task woken for a merge, and what its branch changes in the
 // merged pull request's repository: Files, each path and a rename's
 // previous one, sorted bytewise; Known false when that could not be read
-// (no snapshot), Partial when the list may be cut or may miss a rename's
-// previous path. SameBase: its delivery measures the repository against
+// (no snapshot), Partial when the list may be cut, may miss a rename's
+// previous path, or may be stale (a newer capture asked for, not yet read).
+// SameBase: its delivery measures the repository against
 // the base the merge went into.
 type epicPeer struct {
 	TaskID         string
@@ -270,14 +271,14 @@ func epicMergePeers(ctx context.Context, tx pgx.Tx, m epicMerge) ([]epicPeer, er
 	rows, err := tx.Query(ctx, `SELECT t.id,
 			EXISTS (SELECT 1 FROM task_repositories tr WHERE tr.task_id = t.id AND tr.repository_id = $3 AND tr.access = 'write'),
 			s.files IS NOT NULL OR COALESCE(c.status = 'absent', false),
-			COALESCE(s.status = 'partial' OR `+renameUnnamed+`, false),
+			COALESCE(s.status = 'partial' OR `+renameUnnamed+` OR (c.status = 'pending' AND c.requested_at > s.captured_at), false),
 			`+deliveryBase+` = $5,
 			`+fileNames+`
 		FROM tasks t
 		JOIN LATERAL (SELECT w.state FROM workflow_runs w WHERE w.task_id = t.id AND w.workflow_type = $4
 			AND w.status IN ('running', 'waiting') ORDER BY w.created_at DESC LIMIT 1) w ON true
 		JOIN repositories r ON r.id = $3
-		LEFT JOIN LATERAL (SELECT s.files, s.status FROM task_branch_snapshots s
+		LEFT JOIN LATERAL (SELECT s.files, s.status, s.captured_at FROM task_branch_snapshots s
 			WHERE s.task_id = t.id AND s.repository_id = $3 AND s.attempt = task_attempt(t.id)
 			ORDER BY s.captured_at DESC, s.id DESC LIMIT 1) s ON true
 		LEFT JOIN task_branch_capture_requests c ON c.task_id = t.id AND c.repository_id = $3 AND c.attempt = task_attempt(t.id)

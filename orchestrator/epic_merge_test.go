@@ -414,6 +414,18 @@ func TestEpicMergeOverlap(t *testing.T) {
 			w.told(peer, w.unknown())
 		})
 	}
+	// The peer pushed since its snapshot, not yet read: what it lists may
+	// be stale, so nothing shared is unknown.
+	t.Run("peer branch moved since its snapshot", func(t *testing.T) {
+		w := newEpicMergeWorld(t)
+		peer := w.peer(w.live("elsewhere/only.go"))
+		mustExec(t, w.owner, `INSERT INTO task_branch_capture_requests (organization_id, task_id, attempt, repository_id, status,
+				requested_at, next_attempt_at)
+			VALUES ($1, $2, 1, $3, 'pending', now() + interval '1 second', now() + interval '1 hour')`, w.org, peer, w.repoID)
+		w.merge()
+		w.sweep()
+		w.told(peer, w.unknown())
+	})
 	t.Run("peer list cut short", func(t *testing.T) {
 		w := newEpicMergeWorld(t)
 		peer := w.peer(w.live())
