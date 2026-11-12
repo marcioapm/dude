@@ -259,10 +259,10 @@ const (
 
 // epicMergePeers are the tasks m's merge wakes: on its epic, not its own
 // task, not ended (done, cancelled, failed), with an open delivery, and a
-// conductor that is live or will be started for a reason already due. A
-// conductor that is not live is not woken: a wake would start one (the
-// wake sweep holds no reason for later but base-moved news), as an
-// unblocked task's is not (wakeUnblockedTx). A peer that has not started
+// conductor that is live or will be started for a pending reason that is
+// not held news (heldWakePrefix, which starts none). A conductor that is
+// not live otherwise is not woken: this wake would start one, as an
+// unblocked task's does not (wakeUnblockedTx). A peer that has not started
 // has no delivery: its first briefing shows the epic. Each with what its
 // branch changes in m's repository, as stored, and whether its delivery's
 // base there is the one m merged into (deliveryBase, as NotifyBaseMovedTx).
@@ -283,7 +283,8 @@ func epicMergePeers(ctx context.Context, tx pgx.Tx, m epicMerge) ([]epicPeer, er
 		LEFT JOIN task_branch_capture_requests c ON c.task_id = t.id AND c.repository_id = $3 AND c.attempt = task_attempt(t.id)
 		WHERE t.epic_id = $1 AND t.id <> $2 AND t.status NOT IN ('done', 'aborted', 'failed')
 		  AND (EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND `+LiveConductor+`)
-		       OR EXISTS (SELECT 1 FROM conductor_wakes cw WHERE cw.task_id = t.id AND cw.delivered_at IS NULL))
+		       OR EXISTS (SELECT 1 FROM conductor_wakes cw WHERE cw.task_id = t.id AND cw.delivered_at IS NULL
+		         AND cw.key NOT LIKE '`+heldWakePrefix+`%'))
 		ORDER BY t.id`, m.Epic, m.TaskID, m.RepoID, WorkflowType, m.Base)
 	if err != nil {
 		return nil, err

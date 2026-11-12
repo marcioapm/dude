@@ -290,9 +290,10 @@ func file(path string) map[string]any { return map[string]any{"filename": path, 
 // A peer on the epic with an open delivery and a live conductor is woken
 // once, told the merged task, its pull request, the merge commit and the
 // files its branch shares; the merged task, ended peers (done, cancelled,
-// failed), a peer not started, one with no conductor, and tasks on another
-// epic or none are not. A running delivery counts as open, and a conductor
-// not live with a reason already pending will be started: both woken.
+// failed), a peer not started, one with no conductor (or only held news
+// pending), and tasks on another epic or none are not. A running delivery
+// counts as open, and a conductor not live with a reason pending that
+// would start one will be started: both woken.
 func TestEpicMergeWakesLivePeersOnce(t *testing.T) {
 	w := newEpicMergeWorld(t)
 	shared := w.mergedFiles()[0]
@@ -322,6 +323,12 @@ func TestEpicMergeWakesLivePeersOnce(t *testing.T) {
 	noEpic.epic = ""
 	quiet := map[string]string{"not started": w.peer(notStarted), "no conductor": w.peer(noConductor),
 		"other epic": w.peer(otherEpic), "no epic": w.peer(noEpic)}
+	// No conductor, and only held news pending (a base that moved): that
+	// would start none, so neither does this.
+	heldOnly := w.peer(noConductor)
+	mustExec(t, w.owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line) VALUES ($1, $2, $3, 'checkout', 'base-moved:pr_x', 'moved')`,
+		"cwk_h_"+heldOnly, w.org, heldOnly)
+	quiet["only held news pending"] = heldOnly
 	for k, v := range ended {
 		quiet[k] = v
 	}
