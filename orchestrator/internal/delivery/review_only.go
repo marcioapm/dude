@@ -64,6 +64,17 @@ func RefuseReviewOnlyStartTx(ctx context.Context, tx pgx.Tx, taskID string) erro
 	return ReviewOnlyNotYet{Number: max(n, 0)}
 }
 
+// RefuseReviewOnlyPRActionTx refuses action, a write to the pull request's
+// branch, on a review-only task, in the words its conductor is refused
+// with: a person's Update branch too.
+func RefuseReviewOnlyPRActionTx(ctx context.Context, tx pgx.Tx, taskID, action string) error {
+	n, err := reviewOnlyTx(ctx, tx, taskID)
+	if err != nil || n == 0 {
+		return err
+	}
+	return refusef(rReviewOnlyPRAction, max(n, 0), action)
+}
+
 // ReviewOnlyTx says the task reviews its pull request and changes no code.
 func ReviewOnlyTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 	n, err := reviewOnlyTx(ctx, tx, taskID)

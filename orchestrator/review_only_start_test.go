@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -80,5 +81,38 @@ func TestAStoppedReviewOnlyTaskIsNotPickedBackUp(t *testing.T) {
 	}
 	if s := w.taskStatus(wi); s != "aborted" {
 		t.Fatalf("the refused task is %s", s)
+	}
+}
+
+// A person's Update branch on a review-only task's pull request is
+// refused: the task changes no code, not even a merge of its base onto
+// the author's branch. On a task in a writing mode it goes to GitHub.
+func TestUpdateBranchIsRefusedOnAReviewOnlyTasksPullRequest(t *testing.T) {
+	for _, mode := range []string{delivery.ModeReviewOnly, delivery.ModeReview} {
+		t.Run(mode, func(t *testing.T) {
+			w := newWorld(t)
+			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+			ana := w.person("Ana")
+			wi, _ := w.holding(n, "feature/greet", mode, ana)
+			prID := "pr_" + wi
+			mustExec(t, w.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
+				head_branch, base_branch, head_sha, title, state, checks)
+				SELECT $1, organization_id, project_id, $2, id, $3::int, url || '/pull/' || $3::text, 'feature/greet', 'main', $4, 'Greet', 'open', 'passing'
+				FROM repositories WHERE id = $5`, prID, wi, n, w.gh.SHA("feature/greet"), w.repoID)
+			status, out := w.callAs(ana, "/internal/pull-requests/"+prID+"/update-branch", map[string]any{})
+			if mode == delivery.ModeReviewOnly {
+				e, _ := out["error"].(map[string]any)
+				if status != 409 || e["code"] != "review_only" || !strings.Contains(fmt.Sprint(e["message"]), "update-branch is not dude's to take here") {
+					t.Fatalf("Update branch on a review-only task: %d %v", status, out)
+				}
+				if w.updateCalls() != 0 {
+					t.Fatal("GitHub was asked to update the author's branch")
+				}
+				return
+			}
+			if status != 200 || w.updateCalls() != 1 {
+				t.Fatalf("Update branch on a %s task: %d %v, %d GitHub updates", mode, status, out, w.updateCalls())
+			}
+		})
 	}
 }
