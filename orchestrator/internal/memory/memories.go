@@ -436,7 +436,7 @@ var selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.session_
 		coalesce(m.author_person_id, op.id, ''), coalesce(p.name, op.name, ''),
 		coalesce(r.role::text, ''), coalesce(m.created_by_run_id, ''), coalesce(tp.key_prefix || '-' || t.number, ''),
 		coalesce(m.system_reason, ''), coalesce(m.source_type, ''), coalesce(m.source_id, ''),
-		m.archived_at, m.created_at, m.updated_at, m.pinned_at, ` + PinnedBySQL("m") + `,
+		m.archived_at, m.created_at, m.updated_at, m.pinned_at, ` + pinnedBySQL("m") + `,
 		coalesce(m.pinned_by_person_id, ''), coalesce(m.pinned_by_run_id, ''),
 		CASE WHEN d.embedding IS NOT NULL THEN 'embedded' WHEN d.last_error IS NOT NULL THEN 'failed' ELSE 'waiting' END,
 		coalesce(d.last_error, '')
@@ -450,10 +450,11 @@ var selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.session_
 		ORDER BY membership.position, membership.person_id LIMIT 1) op ON true
 	LEFT JOIN search_documents d ON d.source_type = 'memory' AND d.source_id = m.id`
 
-// PinnedBySQL is who pinned the memory alias names, as a briefing names
+// pinnedBySQL is who pinned the memory alias names, as a briefing names
 // them: a person's name, else the pinning Run's role ("the conductor"),
-// else "" for none.
-func PinnedBySQL(alias string) string {
+// else "" for none. delivery.ProjectFacts names them the same way in its
+// own query: keep the two alike.
+func pinnedBySQL(alias string) string {
 	return fmt.Sprintf(`coalesce((SELECT name FROM people WHERE id = %[1]s.pinned_by_person_id),
 		(SELECT 'the ' || replace(role::text, '_', ' ') FROM runs WHERE id = %[1]s.pinned_by_run_id), '')`, alias)
 }
