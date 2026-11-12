@@ -125,7 +125,7 @@ func (s *Server) createSuperseding(w http.ResponseWriter, r *http.Request, org s
 				return err
 			}
 		} else {
-			stopped, _, err := stopTaskTx(ctx, tx, org, holder.ID, why, why, "supersede", true, p, true)
+			stopped, _, err := stopTaskTx(ctx, tx, org, holder.ID, why, why, "supersede", p, true)
 			if err != nil {
 				return err
 			}
