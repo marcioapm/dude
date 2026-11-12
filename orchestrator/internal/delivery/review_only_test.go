@@ -1,12 +1,16 @@
 package delivery
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -126,48 +130,100 @@ func TestGuardLeavesAWritingModeAlone(t *testing.T) {
 
 // G1b, the structure: every INSERT INTO runs that can make a task's phase
 // Run is createPhaseRunTx's, and the guard is its first statement, before
-// the creation key and Continue. The others make no writer: each is named
-// with why.
+// the creation key and Continue. The others make no writer: each is named,
+// by file and function, with why. An insert is found in any spelling
+// (runs( or public.runs, any case and spacing), in a string literal or a
+// concatenation of them, and the file's text is counted too, so none
+// escapes the walk.
 func TestGuardEveryRunsInsertGoesThroughTheGuard(t *testing.T) {
-	notPhaseRuns := map[string]string{
-		"StartPreview":           "a preview Run: no phase, no checkout to write",
-		"StartBranchPreview":     "a branch preview Run: no task",
-		"RetryBrainstorm":        "a session's brainstorm: no task",
-		"startBrainstorm":        "a session's brainstorm: no task",
-		"startSessionChildTx":    "a session's child, investigator only: no task",
-		"ReplaceLostConductorTx": "a conductor: writes only by publish (ConductPublish, guarded)",
-		"ReaskLostConductorTx":   "a conductor",
-		"startConductor":         "a conductor",
-		"RetryConductor":         "a conductor",
-	}
 	root := filepath.Join("..", "..")
+	unguarded := runsInsertsPastTheGuard(t, root)
+	for _, e := range unguarded {
+		t.Error(e)
+	}
+}
+
+// insertIntoRuns is an insert into the runs table, however it is spelt.
+var insertIntoRuns = regexp.MustCompile(`(?i)\binsert\s+into\s+(public\.)?runs\b`)
+
+// notPhaseRuns are the inserts into runs that make no phase writer, keyed
+// by "file:func" (the file relative to the orchestrator's root).
+var notPhaseRuns = map[string]string{
+	"internal/servers/previews.go:StartPreview":                  "a preview Run: no phase, no checkout to write",
+	"internal/servers/branches.go:StartBranchPreview":            "a branch preview Run: no task",
+	"internal/delivery/session_swap.go:RetryBrainstorm":          "a session's brainstorm: no task",
+	"internal/delivery/session.go:startBrainstorm":               "a session's brainstorm: no task",
+	"internal/delivery/child.go:startSessionChildTx":             "a session's child, investigator only: no task",
+	"internal/delivery/lost_conductor.go:ReplaceLostConductorTx": "a conductor: writes only by publish (ConductPublish, guarded)",
+	"internal/delivery/lost_conductor.go:ReaskLostConductorTx":   "a conductor",
+	"internal/delivery/conductor.go:startConductor":              "a conductor",
+	"internal/delivery/conductor.go:RetryConductor":              "a conductor",
+}
+
+const guardedInsert = "internal/delivery/store.go:createPhaseRunTx"
+
+// runsInsertsPastTheGuard walks the non-test Go files under root and says
+// what is wrong: an insert into runs outside createPhaseRunTx and not
+// named in notPhaseRuns, one the walk did not account for in a file's
+// text, a named one no longer there, or createPhaseRunTx's guard moved.
+func runsInsertsPastTheGuard(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
 	found := map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err
 		}
-		f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
-		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
+		rel = filepath.ToSlash(rel)
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+		if err != nil {
+			return err
+		}
+		// The file's text, its comments blanked: every insert there must be
+		// one the walk below found in a function.
+		text := []byte(string(src))
+		for _, c := range f.Comments {
+			for i := fset.Position(c.Pos()).Offset; i < fset.Position(c.End()).Offset; i++ {
+				text[i] = ' '
 			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING || !strings.Contains(strings.Join(strings.Fields(lit.Value), " "), "INSERT INTO runs ") {
+		}
+		inText := len(insertIntoRuns.FindAllIndex(text, -1))
+		walked := 0
+		for _, decl := range f.Decls {
+			name := "(top level)"
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				name = fn.Name.Name
+			}
+			key := rel + ":" + name
+			ast.Inspect(decl, func(n ast.Node) bool {
+				e, ok := n.(ast.Expr)
+				if !ok {
 					return true
 				}
-				found[fn.Name.Name] = true
-				if _, ok := notPhaseRuns[fn.Name.Name]; !ok && fn.Name.Name != "createPhaseRunTx" {
-					t.Errorf("%s: %s inserts into runs past the review-only guard: make it through createPhaseRunTx, or name it here with why",
-						path, fn.Name.Name)
+				joined, ok := stringPieces(e)
+				if !ok {
+					return true
 				}
-				return true
+				if k := len(insertIntoRuns.FindAllStringIndex(joined, -1)); k > 0 {
+					walked += k
+					found[key] = true
+					if _, named := notPhaseRuns[key]; !named && key != guardedInsert {
+						out = append(out, fmt.Sprintf("%s inserts into runs past the review-only guard: make it through createPhaseRunTx, or name it in notPhaseRuns with why", key))
+					}
+				}
+				// A string expression is taken whole: its pieces are not counted again.
+				return false
 			})
-			if fn.Name.Name == "createPhaseRunTx" && filepath.Base(path) == "store.go" {
+			if fn, ok := decl.(*ast.FuncDecl); ok && key == guardedInsert {
 				first, ok := fn.Body.List[0].(*ast.IfStmt)
 				var calls []string
 				if ok {
@@ -181,21 +237,51 @@ func TestGuardEveryRunsInsertGoesThroughTheGuard(t *testing.T) {
 					})
 				}
 				if !slices.Contains(calls, "refuseReviewOnlyWriterTx") {
-					t.Errorf("createPhaseRunTx's first statement is not the review-only guard")
+					out = append(out, "createPhaseRunTx's first statement is not the review-only guard")
 				}
 			}
+		}
+		if inText > walked {
+			out = append(out, fmt.Sprintf("%s: %d inserts into runs in its text, %d in the functions walked", rel, inText, walked))
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found["createPhaseRunTx"] {
-		t.Fatal("createPhaseRunTx's insert not found: the walk saw nothing")
+	if !found[guardedInsert] {
+		out = append(out, "createPhaseRunTx's insert not found: the walk saw nothing")
 	}
-	for name := range notPhaseRuns {
-		if !found[name] {
-			t.Errorf("%s no longer inserts into runs: drop it from the list", name)
+	for key := range notPhaseRuns {
+		if !found[key] {
+			out = append(out, fmt.Sprintf("%s no longer inserts into runs: drop it from notPhaseRuns", key))
 		}
 	}
+	return out
+}
+
+// stringPieces is a string expression's text: a literal, or literals
+// joined with +, in parentheses or not. ok is false for anything else.
+func stringPieces(e ast.Expr) (string, bool) {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return "", false
+		}
+		v, err := strconv.Unquote(e.Value)
+		if err != nil {
+			return e.Value, true
+		}
+		return v, true
+	case *ast.ParenExpr:
+		return stringPieces(e.X)
+	case *ast.BinaryExpr:
+		if e.Op != token.ADD {
+			return "", false
+		}
+		l, lok := stringPieces(e.X)
+		r, rok := stringPieces(e.Y)
+		return l + r, lok && rok
+	}
+	return "", false
 }
