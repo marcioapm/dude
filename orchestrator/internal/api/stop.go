@@ -28,9 +28,14 @@ type stopBody struct {
 }
 
 // inProgress says a task is between its start and its end, with a delivery
-// going on: what Stop stops.
-func inProgress(status string, d *delivery.Delivery) bool {
-	return d != nil && d.Live() && !delivery.NotStarted(status) && !delivery.Ended(status)
+// going on: what Stop stops. With queued, a queued task with a live
+// delivery (parked on a blocker added after its start) is too: a
+// supersede stops it, a person's Stop does not.
+func inProgress(status string, d *delivery.Delivery, queued bool) bool {
+	if d == nil || !d.Live() || delivery.Ended(status) {
+		return false
+	}
+	return !delivery.NotStarted(status) || queued && status == "queued"
 }
 
 func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) error {
@@ -65,7 +70,7 @@ func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) er
 		if err := mayDecide(r.Context(), tx, taskID, p); err != nil {
 			return err
 		}
-		stopped, decider, err := stopTaskTx(r.Context(), tx, org, taskID, note, "a person stopped the task", "stop", true, p)
+		stopped, decider, err := stopTaskTx(r.Context(), tx, org, taskID, note, "a person stopped the task", "stop", true, p, false)
 		if err != nil {
 			return err
 		}
@@ -120,11 +125,12 @@ func (s *Server) stopTask(w http.ResponseWriter, r *http.Request, org string) er
 // stopTaskTx is a person's Stop of a task in progress: every live Run
 // stopped (kept to resume with keep), the delivery halted where it stands,
 // the task aborted for why, each Run's end recorded as by. Its Stop, and a
-// supersede of a task by another on the same branch. Returns what it
-// stopped and the delivery's decider.
-func stopTaskTx(ctx context.Context, tx pgx.Tx, org, taskID, note, why, by string, keep bool, p principal) (delivery.Stopped, string, error) {
+// supersede of a task by another on the same branch (queued: a queued
+// task with a live delivery is stopped too). Returns what it stopped and
+// the delivery's decider.
+func stopTaskTx(ctx context.Context, tx pgx.Tx, org, taskID, note, why, by string, keep bool, p principal, queued bool) (delivery.Stopped, string, error) {
 	stopped, err := delivery.StopAllTx(ctx, tx, org, taskID, note, keep, func(locked delivery.Stopped) error {
-		if !inProgress(locked.TaskStatus, locked.Delivery) {
+		if !inProgress(locked.TaskStatus, locked.Delivery, queued) {
 			return fail(http.StatusConflict, "not_in_progress", "task %s is %s: only a task in progress can be stopped", taskID, locked.TaskStatus)
 		}
 		return delivery.StopEscalationTx(ctx, tx, org, locked.Delivery, p.ActorType, p.Actor)

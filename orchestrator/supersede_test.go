@@ -186,3 +186,52 @@ func TestSupersedeIsTheHoldersOwners(t *testing.T) {
 		t.Fatalf("a refused supersede left the holder %s", s)
 	}
 }
+
+// A queued holder whose delivery is live (parked on a blocker added after
+// its start) is stopped as a person's Stop stops it, not only marked: no
+// running or waiting delivery and no live Run is left, and its woken
+// workflow makes no Run on the superseded task.
+func TestSupersedeStopsAQueuedHolderWithALiveDelivery(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	ana := w.person("Ana")
+	old, _ := w.holding(n, "feature/greet", delivery.ModeContinue, ana)
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'queued' WHERE id = $1`, old)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET step = 'implementRun' WHERE task_id = $1`, old)
+	status, out := w.supersede(ana, old, n, "feature/greet", delivery.ModeReview)
+	if status != 201 {
+		t.Fatalf("supersede: %d %v", status, out)
+	}
+	if s := w.taskStatus(old); s != "aborted" {
+		t.Errorf("the old task is %s", s)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')`, old); n != 0 {
+		t.Errorf("the old task's delivery is still live")
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, old); n != 0 {
+		t.Errorf("%d live Runs left on the old task", n)
+	}
+	before := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, old)
+	// Its wake comes, whatever it was waiting for.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now() WHERE task_id = $1`, old)
+	for range 5 {
+		w.pump()
+	}
+	if after := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, old); after != before {
+		t.Fatalf("the superseded task's workflow made %d Runs after the supersede\n%s", after-before, w.describeRuns())
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.stopped'`, old); n != 1 {
+		t.Errorf("%d task.stopped on the old task", n)
+	}
+}
+
+// A person's Stop of the same queued task is unchanged: not in progress.
+func TestStopRefusesAQueuedTaskStill(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	ana := w.person("Ana")
+	old, _ := w.holding(n, "feature/greet", delivery.ModeContinue, ana)
+	mustExec(t, w.owner, `UPDATE tasks SET status = 'queued' WHERE id = $1`, old)
+	status, out := w.callAs(ana, "/internal/tasks/"+old+"/stop", map[string]any{})
+	refusedAs(t, status, out, 409, "not_in_progress")
+}

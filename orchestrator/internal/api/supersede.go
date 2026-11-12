@@ -106,20 +106,26 @@ func (s *Server) createSuperseding(w http.ResponseWriter, r *http.Request, org s
 		if err != nil {
 			return err
 		}
-		// Stopped as a person's Stop stops it; one not started yet is only
-		// marked so, having nothing running.
+		// Stopped as a person's Stop stops it; one with no live delivery
+		// (not started yet) is only marked so, having nothing running. A
+		// queued task can have a live delivery (parked on a blocker added
+		// after its start): that one is stopped.
 		why := "superseded by " + newKey
-		var status, holderProject string
-		if err := tx.QueryRow(ctx, `SELECT status::text, project_id FROM tasks WHERE id = $1`, holder.ID).Scan(&status, &holderProject); err != nil {
+		var holderProject string
+		if err := tx.QueryRow(ctx, `SELECT project_id FROM tasks WHERE id = $1`, holder.ID).Scan(&holderProject); err != nil {
+			return err
+		}
+		d, err := delivery.ReadDelivery(ctx, tx, holder.ID)
+		if err != nil {
 			return err
 		}
 		var runIDs []string
-		if delivery.NotStarted(status) {
+		if d == nil || !d.Live() {
 			if _, err := delivery.SetTaskStatusTx(ctx, tx, org, holderProject, holder.ID, "", "aborted", why); err != nil {
 				return err
 			}
 		} else {
-			stopped, _, err := stopTaskTx(ctx, tx, org, holder.ID, why, why, "supersede", true, p)
+			stopped, _, err := stopTaskTx(ctx, tx, org, holder.ID, why, why, "supersede", true, p, true)
 			if err != nil {
 				return err
 			}
