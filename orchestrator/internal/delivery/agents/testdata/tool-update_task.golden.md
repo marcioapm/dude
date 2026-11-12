@@ -1,6 +1,6 @@
 # update_task
 
-Write what Chat settled into the task: its goal, its acceptance criteria, or both (criteria replace the list). Do it before you start the implementer, whenever you and the person agreed something the task's text does not say, so the implementer's prompt has it. Refused once an implementer has started on this attempt. Its relations (addRelations, removeRelations: blocked_by, blocks, related, by task key) may change at any status, when you learn this needs other work merged first; you remove only relations this task's agents added.
+Write what Chat settled into the task: its goal, its acceptance criteria, or both (criteria replace the list). Do it before you start the implementer, whenever you and the person agreed something the task's text does not say, so the implementer's prompt has it. Once an implementer has started on this attempt it is refused, except to write a person's answer on this task into the acceptance criteria: name their answered question (questionId), and the tester judges the criteria as amended. Its relations (addRelations, removeRelations: blocked_by, blocks, related, by task key) may change at any status, when you learn this needs other work merged first; you remove only relations this task's agents added.
 
 ```json
 {
@@ -80,6 +80,10 @@ Write what Chat settled into the task: its goal, its acceptance criteria, or bot
         "additionalProperties": false
       },
       "description": "relations to remove: only ones this task's agents added"
+    },
+    "questionId": {
+      "type": "string",
+      "description": "after the implementer has started: the id of the person's answered question on this task whose answer the acceptance criteria write down"
     }
   },
   "additionalProperties": false

@@ -326,6 +326,10 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		return "", err
 	}
 	p, st := d.State.Decision, &d.State
+	settled, err := checksPassedSinceTx(ctx, tx, d)
+	if err != nil {
+		return "", err
+	}
 	if !slices.Contains(p.Phases(), in.Phase) {
 		return "", refusef(rCannotStartAtThisDecisionCan, in.Phase, pointLabel[p.Point], listOr(p.Phases()))
 	}
@@ -340,11 +344,13 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 		} else if err != nil {
 			return "", err
 		}
-		if p.Point != PointPRFeedback {
+		if p.Point != PointPRFeedback || settled && in.Phase == PhaseSimplify {
 			// No second writer past an unreviewed push of dude's on the
 			// pull request (I-3), as after a fix with then.wake after_fix.
 			// Not at the pull request's feedback (or conflict): there the
 			// fix it starts reviews that push first (prFix's reviewFirst).
+			// A simplifier where the checks passed since is held to this
+			// as at the wait (startAtPRWait).
 			if err := refusePullRequestOpenTx(ctx, tx, ref.TaskID, d); err != nil {
 				return "", err
 			}
@@ -365,6 +371,13 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 			}
 		}
 	case PhaseFix:
+		if settled {
+			// No feedback left for it: as at the wait, a fix of what note says.
+			if err := refuseFixAtPRWait(ctx, tx, st, in); err != nil {
+				return "", err
+			}
+			break
+		}
 		if p.Point == PointPRFeedback {
 			if err := prFixBound(ctx, tx, st); err != nil {
 				return "", err
@@ -380,6 +393,9 @@ func ConductStartPhase(ctx context.Context, tx pgx.Tx, ref RunRef, in StartPhase
 	if err := take(ctx, tx, ref, d, Taken{Action: "start_phase", Phase: in.Phase, Categories: in.Categories,
 		FindingIDs: in.FindingIDs, Note: clip(strings.TrimSpace(in.Note), noteChars), Then: then, Round: round}); err != nil {
 		return "", err
+	}
+	if settled {
+		return prPhaseStarted(in.Phase), nil
 	}
 	return render(conductorStartsTmpl, in.Phase), nil
 }
@@ -508,6 +524,13 @@ func ConductDecideAsk(ctx context.Context, tx pgx.Tx, ref RunRef, action, note s
 		return nil, err
 	}
 	p, st := d.State.Decision, &d.State
+	if action == "next" {
+		// Settled, the decision's next waits on the pull requests again
+		// (conductorDecision) instead of starting a fix with nothing to do.
+		if _, err := checksPassedSinceTx(ctx, tx, d); err != nil {
+			return nil, err
+		}
+	}
 	note = strings.TrimSpace(note)
 	if !slices.Contains(p.Actions(), action) {
 		if action == "open_pull_request" && st.OpenAuthority != nil && st.OpenAuthority.Voided == nil && len(st.PullRequestIDs) == 0 {
@@ -871,10 +894,17 @@ type TaskSpec struct {
 	Criteria []string
 	// Criteria given (an empty list clears them).
 	HasCriteria bool
+	// The person's answered question on this task whose answer the
+	// criteria write down: after the implementer has started, the only
+	// change update_task makes.
+	QuestionID string
 }
 
 // ConductUpdateTask is update_task: what Chat settled, written into the
-// task before the implementer is started, so its prompt has it.
+// task before the implementer is started, so its prompt has it. After it
+// started, only the acceptance criteria change, and only to write down a
+// person's answer on this task (in.QuestionID), so the tester judges what
+// the person settled.
 func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) error {
 	d, err := parked(ctx, tx, ref)
 	if err != nil {
@@ -886,8 +916,24 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 		ref.TaskID, d.State.Attempt).Scan(&started); err != nil {
 		return err
 	}
-	if started {
+	in.QuestionID = strings.TrimSpace(in.QuestionID)
+	switch {
+	case started && in.QuestionID == "":
 		return refuseText(rImplementerHasStartedOnThisAttempt)
+	case started && in.Goal != nil:
+		return refuseText(rAnswerChangesCriteriaOnly)
+	}
+	if in.QuestionID != "" {
+		// A person's answer on this task, recorded: the fact that lets the
+		// criteria the tester judges say what the person settled.
+		var answered bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM questions WHERE id = $1 AND task_id = $2
+			AND addressee = 'person' AND status = 'answered')`, in.QuestionID, ref.TaskID).Scan(&answered); err != nil {
+			return err
+		}
+		if !answered {
+			return refusef(rQuestionIsNotPersonsAnswerHere, in.QuestionID)
+		}
 	}
 	var goal string
 	var criteria []string
@@ -927,6 +973,9 @@ func ConductUpdateTask(ctx context.Context, tx pgx.Tx, ref RunRef, in TaskSpec) 
 	// now), and what they were.
 	payload := maps.Clone(after)
 	payload["before"], payload["by"] = before, "conductor"
+	if in.QuestionID != "" {
+		payload["questionId"] = in.QuestionID
+	}
 	_, err = ledger.Append(ctx, tx, ref.Event(EvTaskUpdated, ledger.ActorAgent, payload))
 	return err
 }

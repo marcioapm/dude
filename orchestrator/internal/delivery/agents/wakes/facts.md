@@ -75,6 +75,8 @@
 {{- else}}It reports itself {{.Outcome}}{{with .Note}}: {{clip (oneLine .) 300}}{{end}}
 {{- end}}; the review you queued after it ({{join .Review ", "}}) did not start.{{if .Queued}} decide next runs it; start_phase review with other reviewers replaces it.{{end}}{{end}}
 
+{{- define "wakes/facts/pipeline-covered"}}It committed nothing; the review you queued after it ({{join .Review ", "}}) is dropped, as each of those reviewers completed at these heads already.{{end}}
+
 {{- define "wakes/facts/pipeline-queued"}}The review you queued after it ({{join .Review ", "}}) waits for you: decide next runs it; start_phase review with other reviewers replaces it.{{end}}
 
 {{- define "wakes/facts/pipeline-unreviewed-push"}} The fix is on the pull request, unreviewed: nothing is published past it until a review has run.{{end}}

@@ -23,6 +23,7 @@ var (
 	publishNext          = delivery.MustText("results/publish").Render(nil)
 	relationsWrittenNext = delivery.MustText("results/update-task-relations").Render(nil)
 	taskUpdatedNext      = delivery.MustText("results/update-task").Render(nil)
+	answerWrittenNext    = delivery.MustText("results/update-task-answered").Render(nil)
 	proposedNext         = delivery.MustText("results/propose").Render(nil)
 	relationProposedNext = delivery.MustText("results/relate").Render(nil)
 	feedbackResolvedNext = delivery.MustText("results/feedback-resolve").Render(nil)
