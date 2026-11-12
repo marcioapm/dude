@@ -311,6 +311,14 @@ func TestFreeCIIsDecidedAgainstTheChangesBase(t *testing.T) {
 // the call's status and answer, and the dispatch's id.
 func (w *world) lateDispatch(task string) (int, map[string]any, string) {
 	w.t.Helper()
+	return w.lateDispatchThen(task, nil)
+}
+
+// lateDispatchThen is lateDispatch, running before (when not nil) on the
+// ended row's id once the supervisor's wake is recorded and before GitHub
+// answers.
+func (w *world) lateDispatchThen(task string, before func(id string)) (int, map[string]any, string) {
+	w.t.Helper()
 	posting, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	w.gh.Set(func(s *fakegithub.Server) {
@@ -352,6 +360,9 @@ func (w *world) lateDispatch(task string) (int, map[string]any, string) {
 		close(release)
 		w.t.Fatalf("the supervisor's wake: %q", wakes)
 	}
+	if before != nil {
+		before(id)
+	}
 	close(release)
 	r := <-results
 	w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
@@ -387,6 +398,45 @@ func TestALateRunIDIsBoundToTheDispatchTheSupervisorEnded(t *testing.T) {
 	}
 	wakes := w.wakesNaming(task, id)
 	if len(wakes) != 1 || !strings.Contains(wakes[0], "completed: success") {
+		t.Fatalf("wakes %q", wakes)
+	}
+}
+
+// L1a: the "may or may not" wake already reached the conductor when
+// GitHub's late 200 arrives. The row is still bound to the run, but the
+// delivered wake is what the conductor was told: it stays, as history.
+// Only an undelivered one goes. The run's end then wakes the conductor
+// exactly once more.
+func TestALateRunIDKeepsTheDeliveredMayOrMayNotWake(t *testing.T) {
+	w, task, _ := dispatchWorld(t)
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2650 })
+	key := ""
+	status, out, id := w.lateDispatchThen(task, func(id string) {
+		key = "workflow:" + id + ":" + delivery.DispatchUnknown
+		tag, err := w.owner.Exec(context.Background(), `UPDATE conductor_wakes SET delivered_at = now()
+			WHERE task_id = $1 AND key = $2 AND delivered_at IS NULL`, task, key)
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Errorf("marking %s delivered: %v, %d rows", key, err, tag.RowsAffected())
+		}
+	})
+	if status != 200 || out["dispatchId"] != id || out["state"] != delivery.DispatchBound {
+		t.Fatalf("the call: %d %v", status, out)
+	}
+	if got := w.str(`SELECT state || ' ' || run_id || ' ' || COALESCE(outcome, 'none') || ' ' || COALESCE(woken_outcome, 'none') || ' ' || COALESCE(reason, 'none')
+		FROM workflow_dispatches WHERE id = $1`, id); got != "bound 2650 none none none" {
+		t.Fatalf("the row: %s", got)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key = $2 AND delivered_at IS NOT NULL
+		AND line LIKE '%may or may not%'`, task, key); n != 1 {
+		t.Fatalf("the delivered \"may or may not\" wake: %d rows, want 1 (wakes %q)", n, w.wakesNaming(task, id))
+	}
+	w.gh.UpdateWorkflowRun(2650, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
+	for range 3 {
+		mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE id = $1`, id)
+		w.supervise()
+	}
+	wakes := w.wakesNaming(task, id)
+	if len(wakes) != 2 || !strings.Contains(wakes[0], "may or may not") || !strings.Contains(wakes[1], "completed: success") {
 		t.Fatalf("wakes %q", wakes)
 	}
 }
