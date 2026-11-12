@@ -656,3 +656,47 @@ func TestStartPhaseRightAfterAPersonsPushWhileThePullRequestWaits(t *testing.T) 
 		t.Fatalf("%d test Runs after start_phase, want %d", n, tests+1)
 	}
 }
+
+// The same moment, but a poller has claimed the woken wait and holds its
+// lease while it reads what changed: start_phase is refused as one to try
+// again in a moment, rewrites nothing and starts nothing; once the lease is
+// let go, the same call is taken.
+func TestStartPhaseWhileAPollerHoldsThePullRequestWaitIsRefusedForAMoment(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	spec := w.conductorSpecOf(task)
+	tests := w.phaseRuns(task, "test")
+
+	pushed := w.gh.CommitOnTop(w.gh.Pull(1).Head, "A person's change")
+	wf := w.signalReadinessNoPump(task, pushed)
+	// A poller mid-step, as claim leaves the row.
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = 'another-poller', locked_until = now() + interval '1 minute'
+		WHERE id = $1`, wf)
+
+	status, out := w.startPhaseNoPump(spec, `{"phase":"test"}`)
+	if msg, _ := out["error"].(string); status != 422 || !strings.Contains(msg, "start test again in a moment") {
+		t.Fatalf("start_phase while a poller holds the wait: %d %v, want refused for a moment", status, out)
+	}
+	var step string
+	var taken bool
+	if err := w.owner.QueryRow(context.Background(), `SELECT step, COALESCE(state->'decision' ? 'taken', false)
+		FROM workflow_runs WHERE id = $1`, wf).Scan(&step, &taken); err != nil {
+		t.Fatal(err)
+	}
+	if step != "awaitPullRequest" || taken {
+		t.Fatalf("the refused call left the delivery at %s, decision taken %v", step, taken)
+	}
+	if n := w.phaseRuns(task, "test"); n != tests {
+		t.Fatalf("%d test Runs after a refused start_phase, want %d", n, tests)
+	}
+
+	mustExec(t, w.owner, `UPDATE workflow_runs SET locked_by = NULL, locked_until = NULL WHERE id = $1`, wf)
+	if status, out := w.startPhaseNoPump(spec, `{"phase":"test"}`); status != 200 {
+		t.Fatalf("start_phase once the lease is let go: %d %v", status, out)
+	}
+	w.until("one test started", func() bool { return w.phaseRuns(task, "test") == tests+1 })
+}
