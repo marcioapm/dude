@@ -53,6 +53,15 @@ func (f *gateFixture) graphqlForbidden() {
 	}
 }
 
+// personsFeedback records a person's open feedback item on the task.
+func (f *gateFixture) personsFeedback() {
+	f.t.Helper()
+	f.exec(`INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
+		VALUES ('fbt_g', $1, 'wi_g', 1, 'per_g_'||$1, 'k')`)
+	f.exec(`INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind, anchor, status, submitted_at)
+		VALUES ('fbi_g', $1, 'wi_g', 1, 'fbt_g', 'per_g_'||$1, 'Rename it', 'general', '{"kind":"general"}', 'open', now())`)
+}
+
 // The merge profile, the gate every writing task reads, gives what it gave
 // before profiles existed, item by item, word for word: once with every
 // item holding, and once with every item failing for a reason the review
@@ -87,10 +96,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 		f.ready()
 		f.exec(`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, status, introduced)
 			VALUES ('fnd_base', $1, 'wi_g', 'run_g02', 'correctness', 'high', 'Already on main', 'open', false)`)
-		f.exec(`INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
-			VALUES ('fbt_g', $1, 'wi_g', 1, 'per_g_'||$1, 'k')`)
-		f.exec(`INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind, anchor, status, submitted_at)
-			VALUES ('fbi_g', $1, 'wi_g', 1, 'fbt_g', 'per_g_'||$1, 'Rename it', 'general', '{"kind":"general"}', 'open', now())`)
+		f.personsFeedback()
 		f.gh.SetChecks("run:failure")
 		p := f.gh.Pull(f.n)
 		f.gh.Set(func(s *fakegithub.Server) {

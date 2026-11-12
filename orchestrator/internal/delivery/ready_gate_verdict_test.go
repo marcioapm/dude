@@ -10,18 +10,25 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
-// verdict is the gate under ProfileReviewVerdict, pinned at pin ("" for
-// none), read as gate() reads the merge profile's.
-func (f *gateFixture) verdict(pin string) PRGate {
+// verdictGates is the task's gates under ProfileReviewVerdict, each pull
+// request pinned as pins says.
+func (f *gateFixture) verdictGates(pins map[string]string) []PRGate {
 	f.t.Helper()
 	var c ReadyGateCheck
 	if err := f.store.DB.InOrg(f.ctx, f.org, func(tx pgx.Tx) (err error) {
-		c, err = CheckProfileGateTx(f.ctx, tx, "wi_g", nil, ProfileReviewVerdict, map[string]string{"pr_g": pin})
+		c, err = CheckProfileGateTx(f.ctx, tx, "wi_g", nil, ProfileReviewVerdict, pins)
 		return err
 	}); err != nil {
 		f.t.Fatal(err)
 	}
-	gates := DoReadyGate(f.ctx, f.forge, c)
+	return DoReadyGate(f.ctx, f.forge, c)
+}
+
+// verdict is the gate under ProfileReviewVerdict, pinned at pin ("" for
+// none), read as gate() reads the merge profile's.
+func (f *gateFixture) verdict(pin string) PRGate {
+	f.t.Helper()
+	gates := f.verdictGates(map[string]string{"pr_g": pin})
 	if len(gates) != 1 || gates[0].Err != nil || len(gates[0].Items) != len(ReadyKeys) {
 		f.t.Fatalf("verdict gate: %+v", gates)
 	}
@@ -199,14 +206,7 @@ func TestTheReviewVerdictProfile(t *testing.T) {
 			merge:  answer{false, "fnd_v (high)"},
 			review: answer{false, "fnd_v (high)"}},
 		{name: "a person's feedback", key: ReadyQuestions,
-			setup: func(f *gateFixture) string {
-				h := f.ready()
-				f.exec(`INSERT INTO feedback_batches (id, organization_id, task_id, attempt, author_person_id, submission_key)
-					VALUES ('fbt_g', $1, 'wi_g', 1, 'per_g_'||$1, 'k')`)
-				f.exec(`INSERT INTO feedback_items (id, organization_id, task_id, attempt, batch_id, author_person_id, body, anchor_kind, anchor, status, submitted_at)
-					VALUES ('fbi_g', $1, 'wi_g', 1, 'fbt_g', 'per_g_'||$1, 'Rename it', 'general', '{"kind":"general"}', 'open', now())`)
-				return h
-			},
+			setup:  func(f *gateFixture) string { h := f.ready(); f.personsFeedback(); return h },
 			merge:  answer{false, "1 feedback item(s)"},
 			review: answer{true, "nothing open to a person"}},
 		{name: "a reviewer's question", key: ReadyQuestions,
@@ -364,15 +364,8 @@ func TestTheReviewVerdictProfileJudgesEachPullRequestAtItsOwnPin(t *testing.T) {
 	f.exec(`UPDATE pull_requests SET head_sha = '0123456789abcdef0123456789abcdef01234567' WHERE organization_id = $1`)
 	judge := func(pins map[string]string) map[string]PRGate {
 		t.Helper()
-		var c ReadyGateCheck
-		if err := f.store.DB.InOrg(f.ctx, f.org, func(tx pgx.Tx) (err error) {
-			c, err = CheckProfileGateTx(f.ctx, tx, "wi_g", nil, ProfileReviewVerdict, pins)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
 		out := map[string]PRGate{}
-		for _, g := range DoReadyGate(f.ctx, f.forge, c) {
+		for _, g := range f.verdictGates(pins) {
 			out[g.ID] = g
 		}
 		if len(out) != 2 {
