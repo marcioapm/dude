@@ -204,6 +204,14 @@ duplicate of GLD-8
 
 duplicated by GLD-9, GLD-10
 
+## relation-line-supersedes
+
+related GLD-3 · supersedes GLD-8
+
+## relation-line-superseded-by
+
+superseded by GLD-9
+
 ## relation-line-all
 
 blocked by GLD-8 (review) · blocks GLD-10 · related GLD-2, GLD-3 · duplicate of GLD-8 · duplicated by GLD-9

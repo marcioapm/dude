@@ -1958,7 +1958,8 @@ function relationLine(e: PersistedEvent, here: string | null | undefined, runs: 
   if (!p.from || !p.to) return null;
   const mine = here ?? p.to;
   const other = p.from === mine ? p.to : p.from;
-  const side = p.kind === "related" ? "related" : p.to === mine ? "blocked by" : "blocks";
+  const side = p.kind === "related" ? "related" : p.kind === "supersedes" ? (p.to === mine ? "superseded by" : "supersedes")
+    : p.to === mine ? "blocked by" : "blocks";
   const verb = e.eventType === EventTypes.TaskRelationAdded ? "added" : "removed";
   const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
   const role = run?.role ?? "conductor";
