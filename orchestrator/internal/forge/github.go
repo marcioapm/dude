@@ -74,6 +74,8 @@ type PullRequestRef struct {
 	URL     string
 	State   string
 	HeadSHA string
+	// The commit a merge made, once merged; "" when GitHub did not say.
+	MergeSHA string
 }
 
 type Status struct {
@@ -594,6 +596,7 @@ type ghPull struct {
 	Draft          bool    `json:"draft"`
 	State          string  `json:"state"`
 	MergedAt       *string `json:"merged_at"`
+	MergeCommitSHA *string `json:"merge_commit_sha"`
 	Mergeable      *bool   `json:"mergeable"`
 	MergeableState string  `json:"mergeable_state"`
 	Title          string  `json:"title"`
@@ -631,7 +634,11 @@ func (p ghPull) ref() PullRequestRef {
 	case p.Draft:
 		state = StateDraft
 	}
-	return PullRequestRef{Number: p.Number, NodeID: p.NodeID, URL: p.HTMLURL, State: state, HeadSHA: p.Head.SHA}
+	ref := PullRequestRef{Number: p.Number, NodeID: p.NodeID, URL: p.HTMLURL, State: state, HeadSHA: p.Head.SHA}
+	if state == StateMerged && p.MergeCommitSHA != nil {
+		ref.MergeSHA = *p.MergeCommitSHA
+	}
+	return ref
 }
 
 type OpenPullRequest struct {

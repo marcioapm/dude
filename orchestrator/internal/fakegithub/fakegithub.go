@@ -33,6 +33,9 @@ type Pull struct {
 	State    string
 	Draft    bool
 	MergedAt *string
+	// The commit the merge made, as GitHub's merge_commit_sha: the head
+	// merged, in the fake, which merges nothing into the base.
+	MergeSHA string
 	// Who opened it: OpenAs for the creating token, else the poster.
 	Author string
 	// Logins asked for a review.
@@ -570,9 +573,13 @@ func (s *Server) LockConversation(number int) {
 
 func (s *Server) Merge(number int) {
 	s.mu.Lock()
+	head := s.pulls[number].Head
+	s.mu.Unlock()
+	sha := s.SHA(head)
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339)
-	s.pulls[number].State, s.pulls[number].MergedAt = "closed", &now
+	s.pulls[number].State, s.pulls[number].MergedAt, s.pulls[number].MergeSHA = "closed", &now, sha
 }
 
 func (s *Server) Handler() http.Handler {
@@ -1084,9 +1091,10 @@ func (s *Server) pullJSON(p *Pull) map[string]any {
 		"number": p.Number, "node_id": s.NodeID(p.Number),
 		"html_url": fmt.Sprintf("https://github.test/%s/pull/%d", s.Slug, p.Number),
 		"draft":    p.Draft, "state": p.State, "merged_at": p.MergedAt, "title": p.Title, "body": p.Body,
-		"head":      map[string]any{"sha": head, "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
-		"base":      map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
-		"mergeable": mergeable, "mergeable_state": state, "requested_reviewers": requested,
+		"merge_commit_sha": nonEmpty(p.MergeSHA),
+		"head":             map[string]any{"sha": head, "ref": p.Head, "repo": map[string]string{"full_name": headRepo}},
+		"base":             map[string]any{"ref": p.Base, "repo": map[string]string{"full_name": s.Slug}},
+		"mergeable":        mergeable, "mergeable_state": state, "requested_reviewers": requested,
 		"user": s.userJSON(p.Author), "labels": labelsJSON(p.Labels),
 	}
 }
@@ -1796,4 +1804,12 @@ func (s *Server) reviewerCandidates(number int, q string) map[string]any {
 			"assignableUsers": map[string]any{"nodes": found},
 		},
 	}}
+}
+
+// nonEmpty is s, or nil (JSON null) for "".
+func nonEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

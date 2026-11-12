@@ -323,9 +323,10 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			had_ci = $8, head_seen_at = $7, mergeable_state = $9, behind_by = $10, checks_json = $11::jsonb,
 			reviews_json = $12::jsonb, unresolved_threads = $13, checks_pending_since = $15,
 			merged_at = CASE WHEN $2 = 'merged' THEN COALESCE(merged_at, now()) ELSE merged_at END,
-			closed_at = CASE WHEN $2 = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END
+			closed_at = CASE WHEN $2 = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END,
+			merge_commit_sha = CASE WHEN $2 = 'merged' THEN COALESCE(merge_commit_sha, NULLIF($16, '')) ELSE merge_commit_sha END
 			WHERE id = $1 AND updated_at = $14`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor, headSeenAt, hadCI,
-			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads, pr.UpdatedAt, pendingSince)
+			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads, pr.UpdatedAt, pendingSince, validSHA(status.MergeSHA))
 		if err != nil {
 			return err
 		}
@@ -1084,4 +1085,18 @@ func (s *Syncer) updateBranch(ctx context.Context, org string, gh *forge.GitHub,
 	}); err != nil {
 		s.Log.Warn("recording a branch update failed", "pr", pr.ID, "error", err)
 	}
+}
+
+// validSHA is sha when it reads as a commit's, "" otherwise: what
+// pull_requests.merge_commit_sha keeps.
+func validSHA(sha string) string {
+	if len(sha) < 40 || len(sha) > 64 {
+		return ""
+	}
+	for _, c := range sha {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return sha
 }
