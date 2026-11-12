@@ -16,7 +16,7 @@ import (
 var wakeKinds = []string{
 	"decision", "escalation", "question", "safety", "steer_read", "steer_failed", "pr_merged", "pr_closed",
 	"published", "publish_refused", "publish_stalled", "checkout", WakeStalled, WakeUnblocked, WakeFeedback, WakeWait,
-	WakeRecovered, WakeRound, WakeChecks, WakeEpicMerge,
+	WakeRecovered, WakeRound, WakeChecks, WakeWorkflow, WakeEpicMerge,
 }
 
 // The database takes a wake of every kind dude records, and its CHECK
