@@ -24,10 +24,20 @@ type runWorkflowOut struct {
 	Repository string `json:"repository"`
 	Workflow   string `json:"workflow"`
 	Ref        string `json:"ref"`
-	Next       string `json:"next"`
+	// State is the dispatch's own when the supervisor ended it before
+	// GitHub's answer was recorded: the call then does not say Dispatched.
+	State string `json:"state,omitempty"`
+	Next  string `json:"next"`
 }
 
 var runWorkflowResult = delivery.MustText("results/run-workflow")
+
+// runWorkflowNext is the call's next: Dispatched, or, when GitHub's
+// answer was recorded after the supervisor ended the row (late), what the
+// row is now.
+func runWorkflowNext(rec delivery.DispatchRecorded) string {
+	return runWorkflowResult.Render(rec)
+}
 
 type dispatchChecked struct {
 	delivery.DispatchCheck
@@ -66,12 +76,16 @@ func doRunWorkflow(ctx context.Context, c Caller, checked dispatchChecked) (deli
 }
 
 func recordRunWorkflow(ctx context.Context, tx pgx.Tx, c Caller, checked dispatchChecked, done delivery.DispatchDone) (runWorkflowOut, error) {
-	id, err := delivery.RecordDispatchTx(ctx, tx, c.Org, checked.DispatchCheck, done)
+	rec, err := delivery.RecordDispatchTx(ctx, tx, c.Org, checked.DispatchCheck, done)
 	if err != nil {
 		return runWorkflowOut{}, err
 	}
 	repo, workflow, ref := checked.Dispatched()
-	return runWorkflowOut{DispatchID: id, Repository: repo, Workflow: workflow, Ref: ref, Next: runWorkflowResult.Render(nil)}, nil
+	out := runWorkflowOut{DispatchID: rec.ID, Repository: repo, Workflow: workflow, Ref: ref, Next: runWorkflowNext(rec)}
+	if rec.Late {
+		out.State = rec.State
+	}
+	return out, nil
 }
 
 var dispatchTools = []tool{

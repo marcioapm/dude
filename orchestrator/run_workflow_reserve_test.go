@@ -303,3 +303,109 @@ func TestFreeCIIsDecidedAgainstTheChangesBase(t *testing.T) {
 		})
 	}
 }
+
+// lateDispatch calls run_workflow on ci.yml while GitHub holds its POST,
+// and, while it is held, makes the supervisor end the reserved row as it
+// does past DispatchReservedFor ("may or may not", the conductor woken).
+// GitHub then answers, and the call settles a row already ended. Returns
+// the call's status and answer, and the dispatch's id.
+func (w *world) lateDispatch(task string) (int, map[string]any, string) {
+	w.t.Helper()
+	posting, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/dispatches") {
+				once.Do(func() { close(posting) })
+				<-release
+			}
+			return 0
+		}
+	})
+	type result struct {
+		status int
+		out    map[string]any
+	}
+	results := make(chan result, 1)
+	spec := w.conductorSpecOf(task)
+	go func() {
+		status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "run_workflow", `{"workflow":"ci.yml"}`)
+		var out map[string]any
+		_ = json.Unmarshal([]byte(body), &out)
+		results <- result{status, out}
+	}()
+	select {
+	case <-posting:
+	case <-time.After(60 * time.Second):
+		close(release)
+		w.t.Fatal("the call never posted")
+	}
+	id := w.str(`SELECT id FROM workflow_dispatches WHERE task_id = $1 AND state = 'dispatching'`, task)
+	mustExec(w.t, w.owner, `UPDATE workflow_dispatches SET dispatched_at = now() - interval '6 minutes', last_read_at = NULL WHERE id = $1`, id)
+	w.supervise()
+	if got := w.str(`SELECT state || ': ' || reason FROM workflow_dispatches WHERE id = $1`, id); !strings.HasPrefix(got,
+		"unknown: dude may or may not have dispatched this") {
+		close(release)
+		w.t.Fatalf("the supervisor did not end the row: %s", got)
+	}
+	close(release)
+	r := <-results
+	w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+	return r.status, r.out, id
+}
+
+// L1: GitHub's answer reaches the call only after the supervisor ended
+// its row "may or may not". GitHub named the run (200): the row is bound
+// to it there, the call says so (not a plain "Dispatched"), and the run's
+// own end wakes the conductor once more, as the row changed.
+func TestALateRunIDIsBoundToTheDispatchTheSupervisorEnded(t *testing.T) {
+	w, task, _ := dispatchWorld(t)
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2600 })
+	status, out, id := w.lateDispatch(task)
+	if status != 200 || out["dispatchId"] != id || out["state"] != delivery.DispatchBound {
+		t.Fatalf("the call: %d %v", status, out)
+	}
+	if next, _ := out["next"].(string); strings.Contains(next, "Dispatched") || !strings.Contains(next, "the dispatch is now bound to it") {
+		t.Fatalf("the call's next: %q", next)
+	}
+	if got := w.str(`SELECT state || ' ' || run_id || ' ' || COALESCE(outcome, 'none') || ' ' || COALESCE(woken_outcome, 'none') || ' ' || COALESCE(reason, 'none')
+		FROM workflow_dispatches WHERE id = $1`, id); got != "bound 2600 none none none" {
+		t.Fatalf("the row: %s", got)
+	}
+	if wakes := w.wakesNaming(task, id); len(wakes) != 1 || !strings.Contains(wakes[0], "may or may not") {
+		t.Fatalf("wakes %q", wakes)
+	}
+	w.gh.UpdateWorkflowRun(2600, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
+	for range 2 {
+		mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE id = $1`, id)
+		w.supervise()
+	}
+	wakes := w.wakesNaming(task, id)
+	if len(wakes) != 2 || !strings.Contains(wakes[1], "completed: success") {
+		t.Fatalf("wakes %q", wakes)
+	}
+}
+
+// L1: GitHub's answer reaches the call only after the supervisor ended
+// its row, and names no run (204): nothing is left to bind. The row stays
+// as the supervisor left it, the call reports that state (never
+// "Dispatched"), and the conductor is not woken again.
+func TestALateAnswerWithNoRunReportsTheRowsState(t *testing.T) {
+	w, task, _ := dispatchWorld(t)
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = true })
+	status, out, id := w.lateDispatch(task)
+	if status != 200 || out["dispatchId"] != id || out["state"] != delivery.DispatchUnknown {
+		t.Fatalf("the call: %d %v", status, out)
+	}
+	next, _ := out["next"].(string)
+	if strings.Contains(next, "Dispatched") || !strings.Contains(next, "it is unknown (dude may or may not have dispatched this") {
+		t.Fatalf("the call's next: %q", next)
+	}
+	if got := w.str(`SELECT state || ' ' || COALESCE(run_id::text, 'none') || ': ' || reason FROM workflow_dispatches WHERE id = $1`, id); !strings.HasPrefix(got,
+		"unknown none: dude may or may not have dispatched this") {
+		t.Fatalf("the row: %s", got)
+	}
+	if wakes := w.wakesNaming(task, id); len(wakes) != 1 {
+		t.Fatalf("wakes %q", wakes)
+	}
+}

@@ -403,29 +403,63 @@ func EndDispatchTx(ctx context.Context, tx pgx.Tx, c DispatchCheck, done Dispatc
 	return refusef(rDispatchMaybe, c.workflow, c.branch, said, c.id), uerr
 }
 
+// DispatchRecorded is a dispatch as RecordDispatchTx left it: its id, its
+// state and reason, and Late when the supervisor had already ended it
+// before GitHub's answer was recorded (the call must not say it was
+// dispatched as asked: it reports this state).
+type DispatchRecorded struct {
+	ID, State, Reason string
+	Late              bool
+}
+
 // RecordDispatchTx ends the reserved row with GitHub's answer and records
 // the event: bound to the run GitHub answered with (200), or unknown (204:
-// no run id, never bound by guess), whose wake is recorded now. A row the
-// supervisor already ended (past DispatchReservedFor) is left as it is.
-// Returns its id.
-func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchCheck, done DispatchDone) (string, error) {
+// no run id, never bound by guess), whose wake is recorded now.
+//
+// A row the supervisor already ended (the call outlived
+// DispatchReservedFor) is Late. When it ended unknown, "may or may not",
+// with no run, and GitHub did name the run, it is bound to it now: what
+// the conductor was told is replaced by the run's own end, woken for once
+// it ends (only when this changed the row). Any other row is left as it
+// is, and its state returned.
+func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchCheck, done DispatchDone) (DispatchRecorded, error) {
 	id := c.id
+	var settled bool
 	if done.Run.ID != 0 {
-		if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, run_id = $3, run_url = NULLIF($4, ''), run_status = 'queued'
-			WHERE id = $1 AND state = $5`, id, DispatchBound, done.Run.ID, done.Run.URL, DispatchDispatching); err != nil {
-			return "", err
+		tag, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, run_id = $3, run_url = NULLIF($4, ''), run_status = 'queued'
+			WHERE id = $1 AND state = $5`, id, DispatchBound, done.Run.ID, done.Run.URL, DispatchDispatching)
+		if err != nil {
+			return DispatchRecorded{}, err
+		}
+		settled = tag.RowsAffected() == 1
+		if !settled {
+			// Ended by the supervisor first, "may or may not": bind the run
+			// it could not know. Its outcome is owed again once the run ends
+			// (only when this changed the row).
+			tag, err = tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, run_id = $3, run_url = NULLIF($4, ''), run_status = 'queued',
+					reason = NULL, outcome = NULL, woken_outcome = NULL, woken_wait = NULL, woken_at = NULL, last_error = NULL
+				WHERE id = $1 AND state = $5 AND reason = $6 AND run_id IS NULL`,
+				id, DispatchBound, done.Run.ID, done.Run.URL, DispatchUnknown, dispatchMaybe)
+			if err != nil {
+				return DispatchRecorded{}, err
+			}
 		}
 	} else {
 		tag, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, outcome = $2, reason = $3 WHERE id = $1 AND state = $4`,
 			id, DispatchUnknown, dispatchNoRunID, DispatchDispatching)
 		if err != nil {
-			return "", err
+			return DispatchRecorded{}, err
 		}
-		if tag.RowsAffected() == 1 {
+		if settled = tag.RowsAffected() == 1; settled {
 			if err := deliverStoredDispatchTx(ctx, tx, org, id); err != nil {
-				return "", err
+				return DispatchRecorded{}, err
 			}
 		}
+	}
+	rec := DispatchRecorded{ID: id, Late: !settled}
+	if err := tx.QueryRow(ctx, `SELECT state, COALESCE(reason, '') FROM workflow_dispatches WHERE id = $1`, id).
+		Scan(&rec.State, &rec.Reason); err != nil {
+		return DispatchRecorded{}, err
 	}
 	payload := map[string]any{"dispatchId": id, "repo": c.repo, "workflow": c.workflow, "ref": c.branch, "inputs": c.inputs,
 		"triggers": done.Triggers, "ci": done.CI}
@@ -436,7 +470,7 @@ func RecordDispatchTx(ctx context.Context, tx pgx.Tx, org string, c DispatchChec
 		payload["questionId"] = c.questionID
 	}
 	_, err := ledger.Append(ctx, tx, c.ref.Event(EvWorkflowDispatched, ledger.ActorAgent, payload))
-	return id, err
+	return rec, err
 }
 
 // deliverStoredDispatchTx is deliverDispatchTx of dispatch id as stored.
