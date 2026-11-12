@@ -66,9 +66,6 @@ type EpicMerges struct {
 	DB     *db.DB
 	Forges Forges
 	Log    *slog.Logger
-	// Skip, when set, passes over a pull request as a missed event would
-	// (tests).
-	Skip func(prID string) bool
 }
 
 // Sweep tells the peers of the merged pull requests not yet told, and due:
@@ -93,9 +90,6 @@ func (e *EpicMerges) Sweep(ctx context.Context) (int, error) {
 	}
 	n := 0
 	for _, d := range todo {
-		if e.Skip != nil && e.Skip(d.ID) {
-			continue
-		}
 		told, err := e.tell(ctx, d.Org, d.ID)
 		if ctx.Err() != nil {
 			return n, ctx.Err()
