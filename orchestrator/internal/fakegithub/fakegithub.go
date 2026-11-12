@@ -205,9 +205,12 @@ type Server struct {
 	// when set, is what a dispatch answers instead (422: no
 	// workflow_dispatch trigger). DispatchRunID, when set, is the id of a
 	// run each dispatch creates, queued, as GitHub would (then bumped).
+	// DispatchLegacy answers 204 even when asked for the run's details, as
+	// an older GitHub or GHES does.
 	Dispatches     []Dispatch
 	DispatchStatus int
 	DispatchRunID  int64
+	DispatchLegacy bool
 }
 
 // NodeID is a pull request's GraphQL id.

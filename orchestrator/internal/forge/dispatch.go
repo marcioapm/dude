@@ -6,29 +6,45 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
 )
 
-// A workflow_dispatch: dude starts a GitHub Actions workflow on a ref and
-// finds its run afterwards. GitHub answers a dispatch with 204 and no run
-// id, so the run is found by what it is: a run of that workflow, on that
-// branch, of event workflow_dispatch, created since the dispatch.
+// A workflow_dispatch: dude starts a GitHub Actions workflow on a ref.
+// Asked with return_run_details, GitHub answers 200 with the run it
+// created (workflow-dispatch-response): that run is the dispatch's, no
+// guess. An older GitHub (or GHES) answers 204 with no run id; only then
+// is the run looked for among the runs of that workflow, on that branch, of
+// event workflow_dispatch, created since the dispatch.
 
 // WorkflowFile is a workflow's file name under .github/workflows: what
 // run_workflow names and GitHub's dispatch and runs endpoints take.
 var WorkflowFile = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.ya?ml$`)
 
+// DispatchedRun is the run GitHub says a dispatch created; ID 0 when it
+// answered 204 (no run details).
+type DispatchedRun struct {
+	ID  int64
+	URL string
+}
+
 // DispatchWorkflow starts workflow (its file name or id) on ref with
-// inputs: POST /repos/{slug}/actions/workflows/{workflow}/dispatches.
-// GitHub answers 204 with no run id.
-func (g *GitHub) DispatchWorkflow(ctx context.Context, slug, workflow, ref string, inputs map[string]any) error {
+// inputs: POST /repos/{slug}/actions/workflows/{workflow}/dispatches, with
+// return_run_details. GitHub answers 200 with the run's id and URLs; an
+// older one 204 with none (ID 0).
+func (g *GitHub) DispatchWorkflow(ctx context.Context, slug, workflow, ref string, inputs map[string]any) (DispatchedRun, error) {
 	if inputs == nil {
 		inputs = map[string]any{}
 	}
-	return g.do(ctx, "POST", fmt.Sprintf("/repos/%s/actions/workflows/%s/dispatches", slug, url.PathEscape(workflow)),
-		map[string]any{"ref": ref, "inputs": inputs}, nil)
+	var out struct {
+		ID      int64  `json:"workflow_run_id"`
+		HTMLURL string `json:"html_url"`
+	}
+	err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/actions/workflows/%s/dispatches", slug, url.PathEscape(workflow)),
+		map[string]any{"ref": ref, "inputs": inputs, "return_run_details": true}, &out)
+	return DispatchedRun{ID: out.ID, URL: out.HTMLURL}, err
 }
 
 // RunState is one Actions run as dude supervises it: its status
@@ -56,9 +72,9 @@ func (r runStateJSON) state() RunState {
 	return RunState{ID: r.ID, Status: r.Status, Conclusion: r.Conclusion, Attempt: max(r.Attempt, 1), URL: r.HTMLURL, CreatedAt: r.CreatedAt}
 }
 
-// dispatchedRunsPage bounds the candidates read for one dispatch: more
+// DispatchedRunsPage bounds the candidates read for one dispatch: more
 // than one is already "cannot tell".
-const dispatchedRunsPage = 20
+const DispatchedRunsPage = 20
 
 // DispatchedRuns lists workflow's runs on branch of event
 // workflow_dispatch created at or after since, newest first. A run of
@@ -67,7 +83,7 @@ func (g *GitHub) DispatchedRuns(ctx context.Context, slug, workflow, branch stri
 	var listed struct {
 		Runs []runStateJSON `json:"workflow_runs"`
 	}
-	q := url.Values{"branch": {branch}, "event": {"workflow_dispatch"}, "per_page": {fmt.Sprint(dispatchedRunsPage)},
+	q := url.Values{"branch": {branch}, "event": {"workflow_dispatch"}, "per_page": {fmt.Sprint(DispatchedRunsPage)},
 		"created": {">=" + since.UTC().Format(time.RFC3339)}}
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/workflows/%s/runs?%s", slug, url.PathEscape(workflow), q.Encode()),
 		nil, &listed); err != nil {
@@ -96,22 +112,152 @@ func (g *GitHub) RunStateOf(ctx context.Context, slug string, id int64) (RunStat
 }
 
 // WorkflowTriggersAt reads workflow file name's on: at ref, as an agent's
-// read (its budget): the events it runs on, sorted. A file that does not
-// parse, or names no on:, is an error.
-func (g *GitHub) WorkflowTriggersAt(ctx context.Context, slug, name, ref string) ([]string, error) {
+// read (its budget): the events it runs on, sorted, and the file itself. A
+// file that does not parse, or names no on:, is an error.
+func (g *GitHub) WorkflowTriggersAt(ctx context.Context, slug, name, ref string) ([]string, []byte, error) {
 	ctx = agentReadContext(ctx)
 	if err := g.readBudget(ctx, slug, "core"); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	raw, err := g.FileAt(ctx, slug, ".github/workflows/"+name, ref, maxWorkflowBytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	events, ok := WorkflowTriggers(raw)
 	if !ok {
-		return nil, fmt.Errorf(".github/workflows/%s at %s has no on: dude can read", name, ref)
+		return nil, nil, fmt.Errorf(".github/workflows/%s at %s has no on: dude can read", name, ref)
 	}
-	return events, nil
+	return events, raw, nil
+}
+
+// WorkflowRunsForChange reads one workflow file's on: for a task's own
+// change, its branch pushed and its pull request into base: ActionsExpected
+// when it runs on a pull_request or pull_request_target whose branch
+// filters admit base, or on a push whose branch filters admit branch (a
+// push filtered to tags alone does not); ActionsNotExpected when it runs
+// on neither (schedule, release, a push to main, tags); "" when it cannot
+// tell: the file does not parse, or a filter dude does not evaluate (paths,
+// types, branches-ignore, a glob beyond * and **). As
+// WorkflowRunsOnPullRequests, "cannot tell" is never read as yes.
+func WorkflowRunsForChange(raw []byte, branch, base string) string {
+	on, ok := workflowOn(raw)
+	if !ok {
+		return ""
+	}
+	admits := func(event string, filter *yaml.Node) string {
+		var target string
+		switch event {
+		case "pull_request", "pull_request_target":
+			target = base
+		case "push":
+			target = branch
+		default:
+			return ActionsNotExpected
+		}
+		if filter == nil || filter.Kind == yaml.ScalarNode && (filter.Value == "" || filter.Tag == "!!null") {
+			return ActionsExpected
+		}
+		if filter.Kind != yaml.MappingNode {
+			return ""
+		}
+		var branches *yaml.Node
+		tags := false
+		for i := 0; i+1 < len(filter.Content); i += 2 {
+			switch k := filter.Content[i].Value; {
+			case k == "branches":
+				branches = filter.Content[i+1]
+			case event == "push" && (k == "tags" || k == "tags-ignore"):
+				tags = true
+			default:
+				// paths, paths-ignore, branches-ignore, types: not read here.
+				return ""
+			}
+		}
+		if branches == nil {
+			if tags {
+				// A push filtered to tags alone runs on no branch.
+				return ActionsNotExpected
+			}
+			return ActionsExpected
+		}
+		var patterns []string
+		switch branches.Kind {
+		case yaml.ScalarNode:
+			patterns = []string{branches.Value}
+		case yaml.SequenceNode:
+			for _, n := range branches.Content {
+				if n.Kind != yaml.ScalarNode {
+					return ""
+				}
+				patterns = append(patterns, n.Value)
+			}
+		default:
+			return ""
+		}
+		for _, p := range patterns {
+			matched, ok := branchGlob(p, target)
+			if !ok {
+				return ""
+			}
+			if matched {
+				return ActionsExpected
+			}
+		}
+		return ActionsNotExpected
+	}
+	out := ActionsNotExpected
+	merge := func(v string) {
+		switch {
+		case v == ActionsExpected:
+			out = ActionsExpected
+		case v == "" && out != ActionsExpected:
+			out = ""
+		}
+	}
+	switch on.Kind {
+	case yaml.ScalarNode:
+		merge(admits(on.Value, nil))
+	case yaml.SequenceNode:
+		for _, n := range on.Content {
+			merge(admits(n.Value, nil))
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(on.Content); i += 2 {
+			merge(admits(on.Content[i].Value, on.Content[i+1]))
+		}
+	default:
+		return ""
+	}
+	return out
+}
+
+// branchGlob matches a workflow's branch filter pattern as GitHub does,
+// for the patterns dude evaluates: a plain name, * (any characters but /)
+// and ** (any). ok false for any other special character (?, +, [, ], !)
+// or a pattern dude does not read.
+func branchGlob(pattern, name string) (matched, ok bool) {
+	if pattern == "" || strings.ContainsAny(pattern, "?+[]!\\") {
+		return false, false
+	}
+	var re strings.Builder
+	re.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch {
+		case strings.HasPrefix(pattern[i:], "**"):
+			re.WriteString(".*")
+			i++
+		case pattern[i] == '*':
+			re.WriteString("[^/]*")
+		default:
+			re.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+		}
+	}
+	re.WriteString("$")
+	r, err := regexp.Compile(re.String())
+	if err != nil {
+		return false, false
+	}
+	return r.MatchString(name), true
 }
 
 // WorkflowTriggers reads one workflow file's on: as WorkflowRunsOnPullRequests
