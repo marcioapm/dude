@@ -125,7 +125,10 @@ type instructionData struct {
 	Role string
 	// Which of the tools dude.md names this Run has.
 	Ask, AskConductor, Event, CreateTask, Repository, RunDiff, SyncBase, SearchMemory, Remember, RequestMachine bool
-	ChildToolNames                                                                                              string
+	// remember's pin: a Run that conducts keeps the project's memory
+	// (agenttools' mayPin).
+	Pin            bool
+	ChildToolNames string
 	// How a role that reads GitHub reads what was written outside dude.
 	ExternalTextNote string
 	// What the Run reaches of the web (webOf).
@@ -218,6 +221,7 @@ func (in InstructionsInput) data(role string) instructionData {
 	return instructionData{InstructionsInput: in, Role: role, Ask: has["ask_person"] || in.Tools && !in.Child && grants.Tool("ask_conductor"), AskConductor: in.Tools && !in.Child && grants.Tool("ask_conductor"), Event: has["emit_event"],
 		CreateTask: has["create_task"], Repository: has["request_repository"], RunDiff: has["run_diff"], SyncBase: has["sync_base"],
 		SearchMemory: has["search_memory"], Remember: has["remember"], RequestMachine: has["request_machine"],
+		Pin:              has["remember"] && grants.Has(capabilities.Conduct),
 		ChildToolNames:   joinList(childTools, ", ", ", and "),
 		ExternalTextNote: ExternalTextNote, Reach: in.webOf(*grants), grants: *grants}
 }

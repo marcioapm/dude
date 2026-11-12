@@ -350,6 +350,7 @@ func run(args []string, out io.Writer) error {
 		content := fs.String("content", "", "the fact, procedure or note, in Markdown; - reads it from stdin")
 		kind := fs.String("kind", "", "fact (default), procedure or note")
 		org := fs.Bool("org", false, "true in every project of the organization, not only this one")
+		pin := fs.Bool("pin", false, "a conductor's: a fact every future agent on this project must have in front of it, in every briefing")
 		var about many
 		fs.Var(&about, "about", "a task key (TEXT-12) or epic title it is about (repeatable)")
 		if _, err := parse(fs, rest); err != nil {
@@ -364,7 +365,7 @@ func run(args []string, out io.Writer) error {
 			text = string(b)
 		}
 		if *title == "" || strings.TrimSpace(text) == "" {
-			return errors.New(`usage: dude memory add --title "one line" --content "what to remember" [--kind K] [--about KEY]... [--org]`)
+			return errors.New(`usage: dude memory add --title "one line" --content "what to remember" [--kind K] [--about KEY]... [--org] [--pin]`)
 		}
 		body := map[string]any{"title": *title, "content": text}
 		if *kind != "" {
@@ -375,6 +376,9 @@ func run(args []string, out io.Writer) error {
 		}
 		if *org {
 			body["scope"] = "organization"
+		}
+		if *pin {
+			body["pin"] = true
 		}
 		return show(out, *asJSON, call("remember", body))
 	case "ask", "ask-conductor":

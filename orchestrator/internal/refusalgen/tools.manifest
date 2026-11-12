@@ -103,6 +103,7 @@ rTypesAreMemoryTaskEpicAnd             refusals/tools/memory/types-are-memory-ta
 rNoGuideSection                        refusals/tools/memory/no-guide-section
 rMemoryWasArchivedNoLongerHeld         refusals/tools/memory/memory-was-archived-no-longer-held
 rScopeProjectOrOrganization            refusals/tools/memory/scope-project-or-organization
+rPinNotGranted                         refusals/tools/memory/pin-not-granted
 rArguments                             refusals/tools/server/arguments
 rTooManyCallsAtMostMinute              refusals/tools/server/too-many-calls-at-most-minute
 rLimitedCallsInRunThisRun              refusals/tools/server/limited-calls-in-run-this-run

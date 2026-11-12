@@ -19,3 +19,7 @@ task keys (TEXT-12) or epic titles this is about, in this project
 {{- define "tools/remember/scope" -}}
 project (default): this project only; organization: true in every project
 {{- end}}
+
+{{- define "tools/remember/pin" -}}
+a conductor's: true for a fact every future agent on this project must have in front of it: pinned facts arrive in every briefing
+{{- end}}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/capabilities"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/guide"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
@@ -193,14 +194,25 @@ type rememberIn struct {
 	Kind    string   `json:"kind,omitempty"`
 	About   []string `json:"about,omitempty"`
 	Scope   string   `json:"scope,omitempty"`
+	Pin     bool     `json:"pin,omitempty"`
 }
 
 type rememberOut struct {
-	ID string `json:"id"`
+	ID     string `json:"id"`
+	Pinned bool   `json:"pinned,omitempty"`
 }
+
+// mayPin says c may pin what it remembers: a Run that drives its task's
+// delivery (conduct), which is the one that keeps the project's memory —
+// it hears people, decides, and outlives the phase Runs. A phase Run
+// learns task detail; it tells its conductor what every agent must have.
+func mayPin(c Caller) bool { return c.grants.Has(capabilities.Conduct) }
 
 func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (rememberOut, error) {
 	project := c.ProjectID
+	if in.Pin && !mayPin(c) {
+		return rememberOut{}, refuseText(rPinNotGranted)
+	}
 	switch in.Scope {
 	case "", "project":
 	case "organization":
@@ -216,11 +228,15 @@ func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (remember
 		}
 		about = append(about, ref)
 	}
+	actor := memory.Actor{Type: ledger.ActorAgent, ID: c.RunID, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID}
 	m, err := memory.Create(ctx, tx, c.Org, memory.New{
 		ProjectID: project, Title: in.Title, Content: in.Content, Kind: in.Kind, About: about,
 		Author: memory.Author{Kind: "agent", RunID: c.RunID},
 		Source: &memory.Ref{Type: "task", ID: c.TaskID},
-	}, memory.Actor{Type: ledger.ActorAgent, ID: c.RunID, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID})
+	}, actor)
+	if err == nil && in.Pin {
+		m, err = memory.Pin(ctx, tx, c.Org, m, true, memory.Pinner{RunID: c.RunID}, actor)
+	}
 	var bad *memory.Invalid
 	if errors.As(err, &bad) {
 		return rememberOut{}, refuse("%s", bad.Reason)
@@ -231,7 +247,7 @@ func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (remember
 	if c.env.kick != nil {
 		c.env.kick()
 	}
-	return rememberOut{ID: m.ID}, nil
+	return rememberOut{ID: m.ID, Pinned: m.Pinned()}, nil
 }
 
 // resolveAbout finds what an agent names: a task by its key, or an epic by

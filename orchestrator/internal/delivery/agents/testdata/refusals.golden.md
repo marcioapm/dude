@@ -678,6 +678,10 @@ this turn's message was typed in dude, not in the chat: nothing was posted; answ
 
 branch: at most 255 characters
 
+## refusals/tools/memory/pin-not-granted
+
+pin is the conductor's: it keeps the project's memory. Remember it unpinned, and tell your conductor if every agent on the project must have it in front of it
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

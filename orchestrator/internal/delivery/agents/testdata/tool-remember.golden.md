@@ -31,6 +31,10 @@ Save something worth knowing next time, for every agent and person on this proje
     "scope": {
       "type": "string",
       "description": "project (default): this project only; organization: true in every project"
+    },
+    "pin": {
+      "type": "boolean",
+      "description": "a conductor's: true for a fact every future agent on this project must have in front of it: pinned facts arrive in every briefing"
     }
   },
   "required": [

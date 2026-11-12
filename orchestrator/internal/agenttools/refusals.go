@@ -107,6 +107,7 @@ const (
 	rNoGuideSection                        = "no section %s in dude's guide: search it with types [\"doc\"] for the ids it has"
 	rMemoryWasArchivedNoLongerHeld         = "memory %s was archived: it is no longer held true"
 	rScopeProjectOrOrganization            = "scope is project or organization"
+	rPinNotGranted                         = "pin is the conductor's: it keeps the project's memory. Remember it unpinned, and tell your conductor if every agent on the project must have it in front of it"
 	rArguments                             = "arguments: %v"
 	rTooManyCallsAtMostMinute              = "too many calls: at most %d a minute; slow down"
 	rLimitedCallsInRunThisRun              = "%s is limited to %d calls in a run; this run has used them"
