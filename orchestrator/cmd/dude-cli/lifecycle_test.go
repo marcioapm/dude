@@ -227,6 +227,29 @@ func TestCreateSupersedes(t *testing.T) {
 	}
 }
 
+// --start on a review-only task gets the orchestrator's refusal as it
+// words it (refusals/delivery/review-only/not-yet), after the create.
+func TestCreateReviewOnlyWithStartIsRefusedTheStart(t *testing.T) {
+	srv, _ := fakeDude(t)
+	const refusal = `{"error":{"code":"review_only_not_yet","message":"This task would review pull request #12 and change no code. A review-only task can be created, but reviewing it arrives with the verdict step: it cannot start yet."}}`
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/tasks/wi_13/deliver" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(409)
+			io.WriteString(w, refusal)
+			return
+		}
+		srv.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(refusing.Close)
+	_, err := runCLI(t, refusing, "", "task", "create", "ABS", "--title", "Review it", "--goal", "review alice's pull request",
+		"--repo", "web", "--from-pr", "12", "--mode", "review-only", "--start")
+	if err == nil || !strings.Contains(err.Error(), "ABS-13 was created, but starting it failed") ||
+		!strings.Contains(err.Error(), "review_only_not_yet") || !strings.Contains(err.Error(), "arrives with the verdict step") {
+		t.Fatalf("create --start of a review-only task: %v, want the start's refusal", err)
+	}
+}
+
 func TestLifecycleArgumentsAreCheckedFirst(t *testing.T) {
 	srv, calls := fakeDude(t)
 	for _, args := range [][]string{

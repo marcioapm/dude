@@ -249,4 +249,5 @@ const (
 	rChecksReasonLong                       = "a reason is at most %d characters, and %s's is %d: say what decides the verdict, the Run's Chat keeps the rest"
 	rReviewOnlyNoWriter                     = "This task reviews pull request #%d and changes no code: no implementer, fixer or simplifier runs, and nothing is published. To have dude fix it, start a task from the pull request in Review and fix mode"
 	rReviewOnlyPRAction                     = "This task reviews pull request #%d and does not change it: %s is not dude's to take here"
+	rReviewOnlyNotYet                       = "This task would review pull request #%d and change no code. A review-only task can be created, but reviewing it arrives with the verdict step: it cannot start yet. To have dude review and fix the pull request now, start a task from it in Review and fix mode"
 )

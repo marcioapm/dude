@@ -2,6 +2,8 @@ package delivery
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
@@ -38,6 +40,28 @@ func refuseReviewOnlyWriterTx(ctx context.Context, tx pgx.Tx, taskID string) err
 		return err
 	}
 	return refusef(rReviewOnlyNoWriter, max(n, 0))
+}
+
+// ReviewOnlyNotYet refuses starting a review-only task: the step that ends
+// its delivery (the verdict) is not here yet, and without it the review
+// loop would go on to a writer the guard refuses.
+type ReviewOnlyNotYet struct{ Number int }
+
+func (e ReviewOnlyNotYet) Error() string { return fmt.Sprintf(rReviewOnlyNotYet, e.Number) }
+
+// IsReviewOnlyNotYet says err is ReviewOnlyNotYet.
+func IsReviewOnlyNotYet(err error) bool { return errors.As(err, new(ReviewOnlyNotYet)) }
+
+// RefuseReviewOnlyStartTx is every start path's refusal of a review-only
+// task (Deliver, Talk it through, a Chat start, Start when unblocked,
+// Start over, Resume, Try again).
+// PR 4 (the verdict step) removes this refusal.
+func RefuseReviewOnlyStartTx(ctx context.Context, tx pgx.Tx, taskID string) error {
+	n, err := reviewOnlyTx(ctx, tx, taskID)
+	if err != nil || n == 0 {
+		return err
+	}
+	return ReviewOnlyNotYet{Number: max(n, 0)}
 }
 
 // ReviewOnlyTx says the task reviews its pull request and changes no code.

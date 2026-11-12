@@ -294,9 +294,9 @@ func NewState(ctx context.Context, tx pgx.Tx, taskID, projectID string, policy P
 		return st, err
 	}
 	if src.ReviewOnly() {
-		// It writes nothing, so it holds no branch; and its tester runs only
-		// when its conductor starts one.
-		st.Policy.Test = false
+		// It writes nothing, so it holds no branch; its tester runs only
+		// when its conductor starts one, and it has no simplifier.
+		st.Policy.Test, st.Policy.Simplify = false, false
 	} else if err := HoldBranchTx(ctx, tx, taskID, src); err != nil {
 		return st, err
 	}
