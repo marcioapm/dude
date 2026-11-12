@@ -225,6 +225,41 @@ func TestTheReviewVerdictProfile(t *testing.T) {
 			},
 			merge:  answer{true, "1 check(s) passed"},
 			review: answer{false, "not read at "}},
+		// The pin is GitHub's head, the syncer still records an older one
+		// first seen an hour ago: the pin is a head not yet seen, within
+		// the whole grace, whatever the older head's CI record says.
+		{name: "nothing reported at a pin ahead of the record, the recorded head seen an hour ago", key: ReadyChecks,
+			setup:  func(f *gateFixture) string { return f.aheadOfTheRecord("false", "passing", "1 hour") },
+			merge:  answer{true, "no CI for this head: nothing reported within the grace"},
+			review: answer{false, "pending: no checks have reported at the head yet"}},
+		{name: "nothing reported at a pin ahead of the record, the recorded head had CI and passed", key: ReadyChecks,
+			setup:  func(f *gateFixture) string { return f.aheadOfTheRecord("true", "passing", "1 hour") },
+			merge:  answer{true, "no CI for this head: nothing reported within the grace"},
+			review: answer{false, "pending: no checks have reported at the head yet"}},
+		{name: "nothing reported at a pin ahead of the record, the syncer past the recorded head's grace", key: ReadyChecks,
+			setup:  func(f *gateFixture) string { return f.aheadOfTheRecord("true", "unknown", "1 hour") },
+			merge:  answer{true, "no CI for this head: nothing reported within the grace"},
+			review: answer{false, "pending: no checks have reported at the head yet"}},
+		{name: "nothing reported at a pin the syncer recorded just now", key: ReadyChecks,
+			setup: func(f *gateFixture) string {
+				h := f.aheadOfTheRecord("false", "passing", "0")
+				f.exec(`UPDATE pull_requests SET head_sha = $2 WHERE id = 'pr_g' AND organization_id = $1`, h)
+				return h
+			},
+			merge:  answer{false, "pending: no checks have reported at the head yet"},
+			review: answer{false, "pending: no checks have reported at the head yet"}},
+		// A pull request that has had CI (an external status, no workflows):
+		// nothing at the pin yet is CI yet to start, not "no CI configured".
+		{name: "nothing reported at a pin ahead of the record, on a pull request that had CI and has no workflows", key: ReadyChecks,
+			setup: func(f *gateFixture) string {
+				f.gh.SetChecks("none")
+				h := f.ready()
+				f.exec(`UPDATE pull_requests SET head_sha = '0123456789abcdef0123456789abcdef01234567', head_seen_at = now() - interval '1 hour',
+					had_ci = true, checks = 'passing' WHERE id = 'pr_g' AND organization_id = $1`)
+				return h
+			},
+			merge:  answer{true, "no CI for this head: nothing reported within the grace"},
+			review: answer{false, "pending: no checks have reported at the head yet"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newGateFixture(t)
@@ -248,6 +283,21 @@ func (f *gateFixture) finding(introduced string) {
 	f.t.Helper()
 	f.exec(`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, status, introduced)
 		VALUES ('fnd_v', $1, 'wi_g', 'run_g02', 'correctness', 'high', 'It crashes', 'open', ` + introduced + `)`)
+}
+
+// aheadOfTheRecord is a reviewed pull request whose workflows run on pull
+// requests, nothing reported at its head (the pin, returned), while the
+// syncer records an older head first seen seen ago, with its CI record
+// (SQL: had_ci, checks).
+func (f *gateFixture) aheadOfTheRecord(hadCI, checks, seen string) string {
+	f.t.Helper()
+	f.gh.SetChecks("none")
+	h := f.implemented(map[string]string{"app/greet.go": "package app\n", ".github/workflows/ci.yml": "on: pull_request\n"})
+	f.reviewed(h)
+	f.simplifiedEmpty(h)
+	f.exec(`UPDATE pull_requests SET head_sha = '0123456789abcdef0123456789abcdef01234567', head_seen_at = now() - $2::interval,
+		had_ci = `+hadCI+`, checks = '`+checks+`' WHERE id = 'pr_g' AND organization_id = $1`, seen)
+	return h
 }
 
 // With no pin, the verdict is judged at the recorded head, as the merge

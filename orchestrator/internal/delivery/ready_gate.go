@@ -587,6 +587,15 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	if verdict && p.Pinned != "" {
 		// The verdict is judged at the head it reviewed, whatever the
 		// sync recorded since.
+		if p.Pinned != p.Head {
+			// The syncer's record of the recorded head (when it was first
+			// seen, the checks it recorded there) is not the pin's: the pin
+			// is a head not yet seen, within the whole grace (graceLeft),
+			// never one the syncer judged (syncerJudgedGrace). HadCI stays:
+			// it is the pull request's, and cleared it would read a pin
+			// nothing reported at yet as "no CI configured".
+			p.HeadSeenAt, p.RecordedChecks = nil, ""
+		}
 		p.Head, recorded = p.Pinned, "the verdict reviewed"
 	}
 	g := PRGate{ID: p.ID, Repo: p.Repo, Number: p.Number, Head: p.Head}
