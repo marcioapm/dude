@@ -371,7 +371,7 @@ func TestAnAppPullRequestWaitsForTheFrozenOwnerThenOpensOnceAsThem(t *testing.T)
 	for _, r := range w.lux.Runs() {
 		for _, creds := range r.PushCredentials {
 			pushes++
-			if app.Installation(creds["target"]) != 71 {
+			if app.Installation(creds["target"]) != 60000071 {
 				t.Fatalf("push did not use installation token: %v", creds)
 			}
 		}
