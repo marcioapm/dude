@@ -19,6 +19,8 @@ export interface RunDiffHunk {
 
 export interface RunDiffFile {
   path: string;
+  /** A rename's path before it, where it is known (a branch snapshot's). */
+  previousPath?: string;
   /** Modified, added (untracked files too), deleted, renamed. */
   status: "M" | "A" | "D" | "R";
   additions: number;

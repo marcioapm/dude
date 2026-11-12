@@ -78,8 +78,8 @@ func Files(compared []forge.ComparedFile) ([]phases.DiffFile, Stats) {
 	st := Stats{Files: len(compared), FileCapReached: len(compared) >= forge.CompareFileCap}
 	kept := 0
 	for _, c := range compared {
-		f := phases.DiffFile{Path: c.Filename, Status: status(c.Status), Additions: c.Additions, Deletions: c.Deletions,
-			Hunks: []phases.DiffHunk{}}
+		f := phases.DiffFile{Path: c.Filename, PreviousPath: c.PreviousFilename, Status: status(c.Status),
+			Additions: c.Additions, Deletions: c.Deletions, Hunks: []phases.DiffHunk{}}
 		st.Additions += c.Additions
 		st.Deletions += c.Deletions
 		changed := c.Additions+c.Deletions > 0
