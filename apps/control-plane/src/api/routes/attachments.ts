@@ -231,9 +231,7 @@ const invalidReference = (message: string) => new HttpError(400, message, "inval
  */
 export async function syncTaskAttachments(scope: OrgScope, taskId: string, goal: string, criteria: ReadonlyArray<string>): Promise<void> {
   const { sql } = scope;
-  const ids = taskAttachmentIds(goal, criteria);
-  const rows = await checkTaskAttachments(scope, taskId, goal, criteria);
-  const found = ids.filter((id) => rows.some((r) => r.id === id));
+  const found = await checkTaskAttachments(scope, taskId, goal, criteria);
   for (const [position, id] of found.entries()) {
     await sql`UPDATE attachments SET for_prompt = true, attached_at = COALESCE(attached_at, now()), detached_at = NULL,
       position = ${position} WHERE id = ${id}`;
@@ -245,10 +243,11 @@ export async function syncTaskAttachments(scope: OrgScope, taskId: string, goal:
 /**
  * syncTaskAttachments' refusals, changing nothing: throws for a reference
  * to another task's image, one sent with a message, or too many or too
- * large together; answers the referenced images that exist.
+ * large together; answers the ids of the referenced images that exist, in
+ * their order of first appearance.
  */
 export async function checkTaskAttachments(scope: OrgScope, taskId: string, goal: string, criteria: ReadonlyArray<string>):
-  Promise<Array<{ id: string; task_id: string; directive_id: string | null; bytes: number }>> {
+  Promise<string[]> {
   const { sql } = scope;
   const ids = taskAttachmentIds(goal, criteria);
   const rows = ids.length === 0 ? [] : (await sql`
@@ -265,7 +264,7 @@ export async function checkTaskAttachments(scope: OrgScope, taskId: string, goal
   if (rows.reduce((n, r) => n + r.bytes, 0) > ATTACHMENT_LIMITS.messageBytes) {
     throw invalidReference(`a task's images are at most ${ATTACHMENT_LIMITS.messageBytes >> 20} MiB together`);
   }
-  return rows;
+  return ids.filter((id) => rows.some((r) => r.id === id));
 }
 
 export function registerAttachmentRoutes(router: Router): void {
