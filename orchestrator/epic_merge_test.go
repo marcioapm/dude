@@ -77,7 +77,7 @@ func (w *epicMergeWorld) peer(p peerSpec) string {
 				locked_by, locked_until)
 			VALUES($1,$2,$3,$1,$4,$5::text::workflow_run_status,'awaitPullRequest',$6::jsonb,
 				CASE WHEN $5::text = 'running' THEN 'another-worker' END, CASE WHEN $5::text = 'running' THEN now() + interval '1 hour' END)`,
-			"wf_"+id, w.org, deliveryType, id, p.deliveryStatus, state)
+			"wf_"+id, w.org, delivery.WorkflowType, id, p.deliveryStatus, state)
 	}
 	if p.conductor {
 		mustExec(t, w.owner, `INSERT INTO runs(id, organization_id, project_id, task_id, attempt, status, role, kind)
@@ -88,8 +88,6 @@ func (w *epicMergeWorld) peer(p peerSpec) string {
 	}
 	return id
 }
-
-const deliveryType = delivery.WorkflowType
 
 // snapshot records task's branch snapshot of acme/target at head, at the
 // task's attempt, captured now.
@@ -193,15 +191,6 @@ func (w *epicMergeWorld) head() string {
 	return fmt.Sprintf("%s on your epic merged target#%d (%s).", key, number, sha[:12])
 }
 
-func (w *epicMergeWorld) key() string {
-	var key string
-	if err := w.owner.QueryRow(context.Background(), `SELECT p.key_prefix || '-' || t.number FROM tasks t JOIN projects p ON p.id = t.project_id
-		WHERE t.id = $1`, w.merging).Scan(&key); err != nil {
-		w.t.Fatal(err)
-	}
-	return key
-}
-
 // The whole lines a peer may be told.
 func (w *epicMergeWorld) shared(files ...string) string {
 	return w.head() + " Your branch also changes `" + strings.Join(files, "`, `") +
@@ -211,7 +200,9 @@ func (w *epicMergeWorld) shared(files ...string) string {
 func (w *epicMergeWorld) none() string { return w.head() + " No overlapping files with your branch." }
 
 func (w *epicMergeWorld) unknown() string {
-	return w.head() + " Overlap unknown: check `dude diff --task " + w.key() + "` against your branch before you go on."
+	head := w.head()
+	key, _, _ := strings.Cut(head, " ")
+	return head + " Overlap unknown: check `dude diff --task " + key + "` against your branch before you go on."
 }
 
 // told says task was told line, once.
