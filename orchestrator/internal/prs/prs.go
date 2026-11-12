@@ -629,14 +629,16 @@ func (s *Syncer) withBots(ctx context.Context, org string, gh *forge.GitHub, pr 
 	return forge.RideAlong(batch, requested, open), nil
 }
 
-// ownVerdicts are the ids of dude's verdict comments among fs: marked, and
+// ownVerdicts are the ids of dude's verdict comments and GitHub reviews
+// among fs (VerdictMarker, ReviewMarker): marked, and
 // by the account dude posts as, which is asked of GitHub only when a
 // comment carries the marker. A person's copy of the marker is theirs.
 func ownVerdicts(ctx context.Context, gh *forge.GitHub, fs []forge.Feedback) (map[string]bool, error) {
 	out := map[string]bool{}
 	self := ""
 	for _, f := range fs {
-		if !forge.VerdictMarked(f) {
+		review := forge.ReviewMarked(f)
+		if !forge.VerdictMarked(f) && !review {
 			continue
 		}
 		if self == "" {
@@ -645,7 +647,7 @@ func ownVerdicts(ctx context.Context, gh *forge.GitHub, fs []forge.Feedback) (ma
 				return nil, err
 			}
 		}
-		if forge.OwnVerdict(f, self) {
+		if forge.OwnVerdict(f, self) || review && strings.EqualFold(f.Author, self) {
 			out[f.ID] = true
 		}
 	}

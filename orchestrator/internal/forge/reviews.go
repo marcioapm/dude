@@ -59,6 +59,15 @@ func ReviewMarker(taskID, claimID string) string {
 	return "<!-- dude:review task=" + taskID + " claim=" + claimID + " -->"
 }
 
+var reviewMarkerLine = regexp.MustCompile(`^<!-- dude:review task=[A-Za-z0-9_-]+ claim=[A-Za-z0-9_-]+ -->$`)
+
+// ReviewMarked says the feedback ends in a ReviewMarker, read as Own reads
+// ReplyMarker. Anyone can type it: alone it says nothing of whose it is.
+func ReviewMarked(f Feedback) bool {
+	last, ok := markerLine(f.Body)
+	return ok && reviewMarkerLine.MatchString(last)
+}
+
 // reviewMarked says body ends in marker, read as Own reads ReplyMarker
 // (markerLine).
 func reviewMarked(body, marker string) bool {
