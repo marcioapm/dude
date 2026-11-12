@@ -62,7 +62,7 @@ func TestReviewBackToBackDispatchesSwapRuns(t *testing.T) {
 				return
 			}
 			production := w.dispatched(task, `{"workflow":"deploy.yml","questionId":"q_production","inputs":{"env":"production"}}`)
-			w.gh.SetWorkflowRun(611, fakegithub.WorkflowRun{Workflow: "deploy.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
+			w.gh.SetWorkflowRun(611, fakegithub.WorkflowRun{Name: "deploy.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
 			w.supervise()
 			for _, id := range []string{staging, production} {
 				if got := w.dispatchRow(id); got != "unknown none" {

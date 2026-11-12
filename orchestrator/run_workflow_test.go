@@ -189,7 +189,7 @@ func TestA204DispatchIsUnknownAndNeverBound(t *testing.T) {
 		t.Fatalf("wakes %q", wakes)
 	}
 	// The one run there is, new since the dispatch: still not bound.
-	w.gh.SetWorkflowRun(901, fakegithub.WorkflowRun{Workflow: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
+	w.gh.SetWorkflowRun(901, fakegithub.WorkflowRun{Name: "ci.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
 	for range 3 {
 		mustExec(t, w.owner, `UPDATE workflow_dispatches SET last_read_at = NULL WHERE id = $1`, one)
 		w.supervise()

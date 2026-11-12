@@ -47,10 +47,8 @@ type WorkflowRun struct {
 	Jobs                                             []WorkflowJob
 	// When it was created (RFC 3339), which orders a branch's runs.
 	CreatedAt string
-	// The workflow's file name (its runs list filters on it) and the
-	// attempt: 0 reads as 1; a re-run is the same id, attempt n+1.
-	Workflow string
-	Attempt  int
+	// The attempt: 0 reads as 1; a re-run is the same id, attempt n+1.
+	Attempt int
 }
 
 // WorkflowJob is one job of a WorkflowRun; FailedSteps' steps failed, the
@@ -90,17 +88,14 @@ func (s *Server) runJSON(id int64, run WorkflowRun) map[string]any {
 	}
 	return map[string]any{"id": id, "name": run.Name, "head_branch": run.Branch, "head_sha": run.HeadSHA,
 		"event": run.Event, "status": run.Status, "conclusion": conclusion, "created_at": run.CreatedAt,
-		"run_attempt": max(run.Attempt, 1), "path": ".github/workflows/" + run.Workflow,
-		"html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d", s.Slug, id)}
+		"run_attempt": max(run.Attempt, 1), "html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d", s.Slug, id)}
 }
 
 // workflowRuns lists the repository's runs as GitHub does: newest first
 // (by CreatedAt, then id), of one branch when branch is given, a page of
-// per_page. Under a workflow (actions/workflows/{workflow}/runs) only its
-// runs; event and created (">=" a time) filter as GitHub's do.
+// per_page.
 func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
-	branch, workflow, event := r.URL.Query().Get("branch"), r.PathValue("workflow"), r.URL.Query().Get("event")
-	created := strings.TrimPrefix(r.URL.Query().Get("created"), ">=")
+	branch := r.URL.Query().Get("branch")
 	type listed struct {
 		id  int64
 		run WorkflowRun
@@ -108,8 +103,7 @@ func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
 	var all []listed
 	s.mu.Lock()
 	for id, run := range s.WorkflowRuns {
-		if (branch == "" || run.Branch == branch) && (workflow == "" || run.Workflow == workflow) &&
-			(event == "" || run.Event == event) && (created == "" || run.CreatedAt >= created) {
+		if branch == "" || run.Branch == branch {
 			all = append(all, listed{id, run})
 		}
 	}

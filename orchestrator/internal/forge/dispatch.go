@@ -52,31 +52,22 @@ type RunState struct {
 	ID                 int64
 	Status, Conclusion string
 	Attempt            int
-	URL, CreatedAt     string
-}
-
-type runStateJSON struct {
-	ID         int64  `json:"id"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	Attempt    int    `json:"run_attempt"`
-	HTMLURL    string `json:"html_url"`
-	CreatedAt  string `json:"created_at"`
-	Event      string `json:"event"`
-	HeadBranch string `json:"head_branch"`
-}
-
-func (r runStateJSON) state() RunState {
-	return RunState{ID: r.ID, Status: r.Status, Conclusion: r.Conclusion, Attempt: max(r.Attempt, 1), URL: r.HTMLURL, CreatedAt: r.CreatedAt}
+	URL                string
 }
 
 // RunStateOf reads Actions run id's current status, conclusion and attempt.
 func (g *GitHub) RunStateOf(ctx context.Context, slug string, id int64) (RunState, error) {
-	var r runStateJSON
+	var r struct {
+		ID         int64  `json:"id"`
+		Status     string `json:"status"`
+		Conclusion string `json:"conclusion"`
+		Attempt    int    `json:"run_attempt"`
+		HTMLURL    string `json:"html_url"`
+	}
 	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/runs/%d", slug, id), nil, &r); err != nil {
 		return RunState{}, err
 	}
-	return r.state(), nil
+	return RunState{ID: r.ID, Status: r.Status, Conclusion: r.Conclusion, Attempt: max(r.Attempt, 1), URL: r.HTMLURL}, nil
 }
 
 // WorkflowTriggersAt reads workflow file name's on: at ref, as an agent's

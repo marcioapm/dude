@@ -780,7 +780,7 @@ class FakeGitHub:
     def _dispatched_run_json(self, run_id: int, run: dict) -> dict:
         return {"id": run_id, "name": run["workflow"], "head_branch": run["branch"], "event": "workflow_dispatch",
                 "status": run["status"], "conclusion": run["conclusion"], "run_attempt": run["attempt"],
-                "created_at": run["created_at"], "path": ".github/workflows/" + run["workflow"],
+                "created_at": run["created_at"],
                 "html_url": f"https://github.com/{self.owner}/{self.repo}/actions/runs/{run_id}"}
 
     def write_file(self, branch: str, path: str, content: str, message: str, author: str = "Gus Human") -> str:
@@ -1480,15 +1480,6 @@ class FakeGitHub:
                     self.end_headers()
                     self.wfile.write(data)
                     return
-                if m := re.fullmatch(rf"{prefix}/actions/workflows/([^/]+)/runs", path):
-                    from urllib.parse import parse_qs
-                    q = {k: v[0] for k, v in parse_qs(query).items()}
-                    created = q.get("created", "").removeprefix(">=")
-                    with self.github._lock:
-                        runs = [self.github._dispatched_run_json(i, r) for i, r in sorted(self.github.dispatched_runs.items(), reverse=True)
-                                if r["workflow"] == m[1] and r["branch"] == q.get("branch", r["branch"])
-                                and q.get("event", "workflow_dispatch") == "workflow_dispatch" and r["created_at"] >= created]
-                    return self._send(200, {"total_count": len(runs), "workflow_runs": runs})
                 if (m := re.fullmatch(rf"{prefix}/actions/runs/(\d+)", path)) and int(m[1]) in self.github.dispatched_runs:
                     with self.github._lock:
                         return self._send(200, self.github._dispatched_run_json(int(m[1]), self.github.dispatched_runs[int(m[1])]))

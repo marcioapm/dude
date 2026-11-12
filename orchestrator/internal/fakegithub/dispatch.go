@@ -11,8 +11,6 @@ import (
 type Dispatch struct {
 	Workflow, Ref string
 	Inputs        map[string]any
-	// Whether the dispatch asked for the run's details.
-	RunDetails bool
 }
 
 // dispatch answers POST actions/workflows/{workflow}/dispatches as GitHub
@@ -38,7 +36,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workflow := r.PathValue("workflow")
-	s.Dispatches = append(s.Dispatches, Dispatch{Workflow: workflow, Ref: body.Ref, Inputs: body.Inputs, RunDetails: body.RunDetails})
+	s.Dispatches = append(s.Dispatches, Dispatch{Workflow: workflow, Ref: body.Ref, Inputs: body.Inputs})
 	details := body.RunDetails && !s.DispatchLegacy
 	id := s.DispatchRunID
 	if id == 0 && details {
@@ -48,7 +46,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		if s.WorkflowRuns == nil {
 			s.WorkflowRuns = map[int64]WorkflowRun{}
 		}
-		s.WorkflowRuns[id] = WorkflowRun{Name: workflow, Workflow: workflow, Branch: body.Ref, Event: "workflow_dispatch",
+		s.WorkflowRuns[id] = WorkflowRun{Name: workflow, Branch: body.Ref, Event: "workflow_dispatch",
 			Status: "queued", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 		if s.DispatchRunID != 0 {
 			s.DispatchRunID++

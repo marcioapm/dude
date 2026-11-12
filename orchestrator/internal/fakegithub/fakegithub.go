@@ -964,7 +964,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}/logs", s.jobLogs)
 	mux.HandleFunc("GET "+prefix+"/actions/runs", s.workflowRuns)
 	mux.HandleFunc("POST "+prefix+"/actions/workflows/{workflow}/dispatches", s.dispatch)
-	mux.HandleFunc("GET "+prefix+"/actions/workflows/{workflow}/runs", s.workflowRuns)
 	mux.HandleFunc("GET "+prefix+"/actions/runs/{id}", s.workflowRun)
 	mux.HandleFunc("GET "+prefix+"/actions/runs/{id}/jobs", s.workflowRunJobs)
 	mux.HandleFunc("GET "+prefix+"/check-runs/{id}", s.checkRun)
