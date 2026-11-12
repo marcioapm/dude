@@ -24,6 +24,7 @@ import hmac
 import json
 import os
 import re
+import socket
 import uuid
 import subprocess
 import threading
@@ -47,6 +48,23 @@ REVIEWERS = [
     {"login": "tom", "name": "Tom Okafor", "avatarUrl": ""},
     {"login": "bo", "name": "Bo Lindqvist", "avatarUrl": ""},
 ]
+
+# What GitHub answers the review writes with, in its 422's "errors" list or
+# a refusal's message: the Go fake's (fakegithub/reviews.go), word for word.
+MESSAGE_NOT_IN_DIFF = "Pull request review thread line must be part of the diff"
+MESSAGE_START_NOT_IN_HUNK = "Pull request review thread start line must be part of the same hunk as the line."
+MESSAGE_OWN_APPROVE = "Can not approve your own pull request"
+MESSAGE_OWN_REQUEST = "Can not request changes on your own pull request"
+MESSAGE_PROTECTED = "You are not authorized to dismiss this pull request review due to protected branch rules."
+MESSAGE_DISMISSED = "Can not dismiss a review that has already been dismissed"
+MESSAGE_NOT_DISMISSABLE = "Can not dismiss a commented pull request review"
+REVIEW_STATES = {"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}
+
+
+def _unprocessable(detail: str) -> tuple[int, dict]:
+    """GitHub's 422 for a request it validated and refused: what was wrong in "errors"."""
+    return 422, {"message": "Unprocessable Entity", "errors": [detail]}
+
 
 @dataclass
 class TokenProfile:
@@ -180,6 +198,14 @@ class FakeGitHub:
         # GitHub Actions runs by id (add_actions_run), and their jobs' logs by job id.
         self.actions_runs: dict[int, dict] = {}
         self.job_logs: dict[int, str] = {}
+        # The review writes' knobs, as the Go fake's: refuse_dismissal answers
+        # every dismissal 403, as protected branch rules do;
+        # drop_review_response_once takes the next review, then cuts the
+        # connection before answering; review_fail_5xx answers that many
+        # review posts 502.
+        self.refuse_dismissal = False
+        self.drop_review_response_once = False
+        self.review_fail_5xx = 0
 
     def _conflicting(self, pr: PullRequest) -> bool:
         if pr.conflicting:
@@ -397,7 +423,138 @@ class FakeGitHub:
                                "body": body, "submitted_at": _now(), "commit_id": self.branch_sha(pr.head)})
             if reviewer in pr.requested_reviewers:
                 pr.requested_reviewers.remove(reviewer)
+        self._review_submitted(number)
+
+    def _review_submitted(self, number: int) -> None:
+        """GitHub tells of a submitted review, a person's or the token's."""
         self.send_webhook("pull_request_review", {"action": "submitted", "pull_request": {"number": number}})
+
+    def request_review(self, number: int, login: str) -> None:
+        """A person asks someone to review the pull request on GitHub, and
+        GitHub says so by webhook, naming who was asked."""
+        with self._lock:
+            pr = self.pulls[number]
+            if login not in pr.requested_reviewers:
+                pr.requested_reviewers.append(login)
+        self.send_webhook("pull_request", {"action": "review_requested", "pull_request": {"number": number},
+                                           "requested_reviewer": {"login": login}})
+
+    # -- the review writes, as the Go fake's (fakegithub/reviews.go) ----------
+
+    def _diff_hunks(self, base: str, commit: str) -> dict[str, dict[str, dict[int, int]]]:
+        """Per path, the hunk each line of base...commit's diff is in, by
+        side ("RIGHT", "LEFT") and line number.
+
+        Known limit, renames: validated with --no-renames, while /files
+        uses rename detection, and neither matches GitHub; see the
+        test-quality review of PR 1 (renamed-file divergence)."""
+        out: dict[str, dict[str, dict[int, int]]] = {}
+        diff = subprocess.run(["git", "diff", "--no-color", "--no-renames", f"refs/heads/{base}...{commit}"],
+                              cwd=self.bare, capture_output=True, text=True)
+        if diff.returncode:
+            return out
+        sides: dict[str, dict[int, int]] | None = None
+        hunk, left, right = -1, 0, 0
+        for line in diff.stdout.split("\n"):
+            if line.startswith("diff --git "):
+                sides, hunk = None, -1
+            elif line.startswith("+++ "):
+                if line.startswith("+++ b/"):
+                    sides = out[line[len("+++ b/"):]] = {"RIGHT": {}, "LEFT": {}}
+            elif line.startswith("--- "):
+                if line.startswith("--- a/") and sides is None:
+                    # A deleted file's diff names only its base.
+                    sides = out[line[len("--- a/"):]] = {"RIGHT": {}, "LEFT": {}}
+            elif line.startswith("@@ ") and sides is not None:
+                f = line.split()
+                left = int(f[1].lstrip("-").split(",")[0])
+                right = int(f[2].lstrip("+").split(",")[0])
+                hunk += 1
+            elif hunk >= 0 and sides is not None and line:
+                if line[0] == " ":
+                    sides["LEFT"][left] = sides["RIGHT"][right] = hunk
+                    left, right = left + 1, right + 1
+                elif line[0] == "-":
+                    sides["LEFT"][left] = hunk
+                    left += 1
+                elif line[0] == "+":
+                    sides["RIGHT"][right] = hunk
+                    right += 1
+        return out
+
+    def post_review(self, number: int, body: dict) -> tuple[int, dict, bool]:
+        """POST /pulls/{n}/reviews: a submitted review on a commit the
+        repository has, each comment on a line of the diff, by the token's
+        login, which may not approve or request changes on its own pull
+        request. The status, the answer, and whether to drop it."""
+        pr = self.pulls.get(number)
+        if pr is None:
+            return 404, {"message": "Not Found"}, False
+        with self._lock:
+            failing = self.review_fail_5xx > 0
+            if failing:
+                self.review_fail_5xx -= 1
+        if failing:
+            return 502, {"message": "Server Error"}, False
+        event, commit, comments = body.get("event") or "", body.get("commit_id") or "", body.get("comments") or []
+        state = REVIEW_STATES.get(event)
+        if state is None:
+            return *_unprocessable(f"Event {json.dumps(event)} is not one of APPROVE, REQUEST_CHANGES, COMMENT"), False
+        if not commit:
+            return *_unprocessable("commit_id is required"), False
+        known = subprocess.run(["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=self.bare, capture_output=True)
+        if known.returncode:
+            return *_unprocessable(f"No commit found for SHA: {commit}"), False
+        hunks = self._diff_hunks(pr.base, commit) if comments else {}
+        for c in comments:
+            side = c.get("side") or "RIGHT"
+            h = hunks.get(c.get("path"), {}).get(side, {}).get(c.get("line") or 0)
+            if h is None:
+                return *_unprocessable(MESSAGE_NOT_IN_DIFF), False
+            if (c.get("start_line") or 0) > 0:
+                start_side = c.get("start_side") or side
+                if hunks[c["path"]].get(start_side, {}).get(c["start_line"]) != h:
+                    return *_unprocessable(MESSAGE_START_NOT_IN_HUNK), False
+        with self._lock:
+            poster = self.token_login
+            if poster.lower() == pr.author.lower() and event != "COMMENT":
+                return *_unprocessable(MESSAGE_OWN_APPROVE if event == "APPROVE" else MESSAGE_OWN_REQUEST), False
+            self._next_id += 1
+            rid = self._next_id
+            review = {"id": rid, "node_id": f"PRR_{rid}",
+                      "user": {"login": poster, "type": "Bot" if poster.endswith("[bot]") else "User"},
+                      "state": state, "body": body.get("body") or "", "submitted_at": _now(), "commit_id": commit,
+                      "html_url": f"https://github.test/{self.owner}/{self.repo}/pull/{number}#pullrequestreview-{rid}"}
+            pr.reviews.append(review)
+            pr.requested_reviewers = [r for r in pr.requested_reviewers if r.lower() != poster.lower()]
+            for c in comments:
+                self._next_id += 1
+                pr.comments.append({"id": self._next_id, "body": c.get("body") or "", "user": {"login": poster},
+                                    "created_at": review["submitted_at"], "path": c["path"], "line": c["line"],
+                                    "in_reply_to_id": None, "pull_request_review_id": rid,
+                                    "html_url": f"https://github.test/{self.owner}/{self.repo}/pull/{number}#discussion_r{self._next_id}"})
+            drop, self.drop_review_response_once = self.drop_review_response_once, False
+            return 200, dict(review), drop
+
+    def dismiss_review(self, number: int, review_id: int) -> tuple[int, dict]:
+        """PUT /pulls/{n}/reviews/{id}/dismissals: an approval or a change
+        request is dismissed, unless refuse_dismissal stands for the
+        branch's protection."""
+        pr = self.pulls.get(number)
+        if pr is None:
+            return 404, {"message": "Not Found"}
+        with self._lock:
+            review = next((r for r in pr.reviews if r["id"] == review_id), None)
+            if review is None:
+                return 404, {"message": "Not Found"}
+            if self.refuse_dismissal:
+                return 403, {"message": MESSAGE_PROTECTED}
+            if review["state"] == "DISMISSED":
+                return _unprocessable(MESSAGE_DISMISSED)
+            if review["state"] not in ("APPROVED", "CHANGES_REQUESTED"):
+                return _unprocessable(MESSAGE_NOT_DISMISSABLE)
+            review["state"] = "DISMISSED"
+            return 200, dict(review)
 
     def merge(self, number: int) -> None:
         with self._lock:
@@ -886,6 +1043,8 @@ class FakeGitHub:
             def do_PUT(self) -> None:
                 gh, body = self.github, self._body()
                 prefix = f"/repos/{gh.owner}/{gh.repo}"
+                if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews/(\d+)/dismissals", self.path):
+                    return self._send(*gh.dismiss_review(int(m[1]), int(m[2])))
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/merge", self.path):
                     pr = gh.pulls[int(m[1])]
                     if pr.state != "open":
@@ -954,6 +1113,18 @@ class FakeGitHub:
                     with gh._lock:
                         gh.jobs_rerun.append(int(m[1]))
                     return self._send(201, {})
+                if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews", self.path):
+                    # As the other writes: answered, then told by webhook.
+                    status, answer, drop = gh.post_review(int(m[1]), body)
+                    if drop:
+                        # Taken, and the answer never arrives: the connection is cut.
+                        self.close_connection = True
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                    else:
+                        self._send(status, answer)
+                    if status == 200:
+                        gh._review_submitted(int(m[1]))
+                    return None
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/requested_reviewers", self.path):
                     pr = gh.pulls[int(m[1])]
                     with gh._lock:

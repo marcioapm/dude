@@ -226,7 +226,7 @@ jobs:
 
       - name: The E2E harness's own checks (shard split, browser channel, ui auto-mark), and the Go test partition's
         working-directory: tests
-        run: uv run pytest suites/test_shard.py suites/test_harness.py suites/test_go_partition.py -q
+        run: uv run pytest suites/test_shard.py suites/test_harness.py suites/test_go_partition.py suites/test_fake_github_reviews.py -q
 
   e2e:
     runs-on: ubuntu-26.04
