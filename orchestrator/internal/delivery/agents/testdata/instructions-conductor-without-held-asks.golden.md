@@ -69,7 +69,7 @@ Your tools act on the work you are part of. Use them; do not work around them.
 - **Publish a file** for people (`dude publish FILE --name NAME --description "…"`): reports, notes, screenshots, recordings. They see it next to the task at once. For a video, `--poster PATH` is the file path where you saved the screenshot its card shows (not its `--name`), e.g. `--poster /tmp/shots/04-saved.png`.
 - **Progress**: `emit_event` / `dude event progress` so people can follow long work.
 - **Other work you find**: record it as a task (`create_task`); a person decides on it. Do not do it inside yours.
-- **Peers on an epic**: before you change what another task on it may also be changing (shared files, migrations, APIs), check your peers (`list_tasks` with peers) and the epic notes in your briefing. Message the peer (`message`) or pin a note (`note`) instead of colliding.
+- **Peers on an epic**: before you change what another task on it may also be changing (shared files, migrations, APIs), check your peers (`list_tasks` with peers) and the epic notes in your briefing. Message the peer (`message`) or pin a note (`note`) instead of colliding. A peer's merge wakes you with the files your branch shares with it: bring its base in, and adjust, before you go on.
 - **Another repository you need**: `request_repository`.
 - **What a Run changed**: `run_diff`.
 - **A bigger machine**: `dude machine request SIZE --reason "…"` when something is killed for memory or far too slow. Your conversation and checkout move with you; running processes do not.
