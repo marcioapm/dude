@@ -167,6 +167,8 @@ class FakeGitHub:
     def _init_repository(self) -> None:
         """What each repository has of its own; the rest a sibling shares."""
         self.pulls: dict[int, PullRequest] = {}
+        # GET /pulls/{n}/files answered, per pull request: who read a merge's files.
+        self.files_reads: dict[int, int] = {}
         self.hooks: list[dict] = []
         self.deliveries: list[tuple[str, int]] = []
         # The X-GitHub-Delivery GUID of the last webhook sent: dude stores it by that id.
@@ -891,6 +893,8 @@ class FakeGitHub:
                 comments = list(self.issues[int(m[1])].comments)
             return 200, comments[(page - 1) * per_page:page * per_page]
         if (m := re.fullmatch(rf"{prefix}/pulls/(\d+)/files", path)) and int(m[1]) in self.pulls:
+            with self._lock:
+                self.files_reads[int(m[1])] = self.files_reads.get(int(m[1]), 0) + 1
             return 200, self.files(int(m[1]))[(page - 1) * per_page:page * per_page]
         return None
 
