@@ -186,7 +186,7 @@ type Grants struct {
 // session.name once a member has named a's session (titled_by 'person',
 // which the agent may not override), and with its role's FromChat when a's
 // session was started from a chat thread. Nothing is stored per
-// organisation or per agent: a.Org is carried for callers, not read here.
+// organisation or per agent, and Resolve does not read a.Org.
 func Resolve(ctx context.Context, tx pgx.Tx, a Agent) (Grants, error) {
 	g := Default(a.Role)
 	// Session investigators have no task conductor; retain their existing
