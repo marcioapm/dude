@@ -530,10 +530,9 @@ func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 //
 // TODO(review-only PR 6): questions to the pull request's author arrive
 // as review_questions rows with addressee 'author' (the CHECK allows only
-// 'person' and 'conductor' until then). The count below already takes an
-// open row of any addressee, so they will hold the verdict with no change
-// here.
-// The count has no addressee filter, so author rows would hold the merge gate too: PR 6 must add the filter.
+// 'person' and 'conductor' until then). The count below takes an open row
+// of any addressee, so author rows would hold the verdict with no change
+// here; the merge gate needs an addressee filter then (PR 6).
 func gateQuestionsTx(ctx context.Context, tx pgx.Tx, st *State, attempt int, noFeedback bool) (GateItem, error) {
 	var asked, reviewing, feedback int
 	if err := tx.QueryRow(ctx, `SELECT
