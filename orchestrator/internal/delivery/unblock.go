@@ -344,7 +344,7 @@ func (a *AutoStarts) notFired(ctx context.Context, tx pgx.Tx, org, taskID, gener
 
 // startRefused says err is the start's own deterministic refusal, which
 // firing again would meet again: the task gone (TaskNotFound, no row), a
-// review-only task (ReviewOnlyNotYet), a policy or delivery state that does not decode (PolicyError, a JSON
+// a policy or delivery state that does not decode (PolicyError, a JSON
 // error, as PolicyFor and LoadDelivery wrap it), or a write the data
 // refuses (SQLSTATE class 22 data exception, 23 integrity violation:
 // NameOnlyRepository's insert, the delivery's start).
@@ -353,7 +353,7 @@ func startRefused(err error) bool {
 	var policy PolicyError
 	var syntax *json.SyntaxError
 	var typ *json.UnmarshalTypeError
-	if errors.As(err, &notFound) || errors.As(err, &policy) || IsReviewOnlyNotYet(err) ||
+	if errors.As(err, &notFound) || errors.As(err, &policy) ||
 		errors.As(err, &syntax) || errors.As(err, &typ) || db.IsNotFound(err) {
 		return true
 	}

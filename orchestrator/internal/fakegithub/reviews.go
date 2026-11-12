@@ -112,12 +112,15 @@ func (s *Server) postReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	failing := s.ReviewFail5xx > 0
+	failing, after := s.ReviewFail5xx > 0, s.ReviewRetryAfter
 	if failing {
 		s.ReviewFail5xx--
 	}
 	s.mu.Unlock()
 	if failing {
+		if after > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(after))
+		}
 		fail(w, http.StatusBadGateway, "Server Error")
 		return
 	}

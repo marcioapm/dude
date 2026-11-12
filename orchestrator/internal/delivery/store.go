@@ -89,6 +89,12 @@ type Store struct {
 	// How long a quiet conductor has to take a decision; zero means
 	// QuietDecisionWait. Tests shorten it.
 	DecisionWait time.Duration
+	// How long a review-only verdict defers at one head; zero means the
+	// organization's CI patience (verdictDeferCap). Tests shorten it.
+	VerdictDeferCap time.Duration
+	// The base of the waits after GitHub's answer to a review is lost
+	// (reviewRetryDelay); zero means reviewRecoverDelay. Tests shorten it.
+	ReviewRecoverDelay time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).

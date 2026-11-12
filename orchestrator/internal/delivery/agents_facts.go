@@ -25,6 +25,7 @@ var (
 	testPassedTmpl         = mustTemplate("wakes/facts/test-passed")
 	mergeNotRetestTmpl     = mustTemplate("wakes/facts/merge-not-retested")
 	feedbackOpenTmpl       = mustTemplate("wakes/facts/feedback-open")
+	verdictChecksTmpl      = mustTemplate("wakes/facts/verdict-checks")
 
 	answerTmpl            = mustTemplate("notices/told/answer")
 	answerItemTmpl        = mustTemplate("notices/told/answer-item")

@@ -848,7 +848,6 @@ func verdictReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge
 	var missing []string
 	judged := map[string]string{} // by a lens's head, why it does not reach h
 	for _, lens := range lenses {
-		// TODO(review-only PR 4, decision table): a failed or running re-review of a lens at the pin is ignored (LensHeads reads completed Runs only).
 		at := p.LensHeads[lens]
 		switch {
 		case at == "":

@@ -57,6 +57,10 @@ func failingLine(g PRGate) string {
 // once per move, waking nobody, naming the gate's failing items when it
 // moves out.
 func (s *Store) moveReadiness(ctx context.Context, org string, st *State, gates []PRGate, ready bool, open int) error {
+	if st.Source.ReviewOnly() {
+		// dude delivered nothing here: never ready to merge.
+		return nil
+	}
 	return s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var moved bool
 		var err error

@@ -4,6 +4,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -290,12 +291,14 @@ type StoredVerdict struct {
 	Text      string
 	Status    string
 	Decision  string
+	// What the tester saw.
+	Observed string
 }
 
 func (s *Store) gateInput(ctx context.Context, org string, st *State, runID string) (gateInput, error) {
 	in := gateInput{RunID: runID}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT criterion, text, status, COALESCE(decision, '') FROM acceptance_verdicts
+		rows, err := tx.Query(ctx, `SELECT criterion, text, status, COALESCE(decision, ''), observed FROM acceptance_verdicts
 			WHERE run_id = $1 ORDER BY criterion`, runID)
 		if err != nil {
 			return err
@@ -385,6 +388,11 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 	} else if wait > 0 {
 		return workflow.Result{Next: "testVerdict", State: st, SleepUntil: time.Now().Add(wait)}, nil
 	}
+	if st.Source.ReviewOnly() {
+		// Never a writer, and never a word in the author's pull request
+		// but dude's review and its status comment: the verdict weighs it.
+		return w.reviewOnlyTested(ctx, sc, st, runID)
+	}
 	w.s.CommentVerdict(ctx, sc.OrganizationID, st, w.forges)
 	w.s.RefreshVerification(ctx, sc.OrganizationID, st, w.forges)
 	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
@@ -406,6 +414,55 @@ func (w *steps) testVerdict(ctx context.Context, sc workflow.StepContext) (workf
 		return w.escalate(ctx, sc, st, ReasonTestBlocked, detail)
 	}
 	return w.beforePR(ctx, sc, st, testPassedLine(runID))
+}
+
+// reviewOnlyTested sends a review-only task's finished test to the
+// verdict, never to a fixer: a failed or blocked test is recorded at the
+// head it ran at, and the verdict names it and does not approve (a finding
+// the tester filed, open at the fix bar, requests changes as any lens's).
+func (w *steps) reviewOnlyTested(ctx context.Context, sc workflow.StepContext, st *State, runID string) (workflow.Result, error) {
+	in, err := w.s.gateInput(ctx, sc.OrganizationID, st, runID)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	g := judgeGate(in)
+	repo := st.Source.Repository
+	head := cmp.Or(st.RoundHeads[repo], st.Heads[repo])
+	if st.Verdict == nil {
+		st.Verdict = &VerdictState{}
+	}
+	st.Verdict.TestHead, st.Verdict.Test, st.Verdict.TestNotes = head, "", nil
+	if g.Outcome == "fail" || g.Outcome == "blocked" {
+		st.Verdict.Test, st.Verdict.TestNotes = reviewOnlyTestLines(in, g)
+	}
+	return workflow.Result{Next: "verdict", State: st}, nil
+}
+
+// Bounds on what the review quotes of a criterion and of what the tester
+// observed: the task's page has the rest.
+const (
+	reviewCriterionChars = 200
+	reviewObservedChars  = 400
+)
+
+// reviewOnlyTestLines is a failed or blocked review-only test as dude's
+// review names it (L-B): the headline's words, and a note per criterion
+// behind it, with its text and what the tester observed. A finding of the
+// tester's open at the fix bar is the review's findings row, not this.
+func reviewOnlyTestLines(in gateInput, g gate) (string, []string) {
+	headline := map[string]string{"fail": "the acceptance test failed", "blocked": "the acceptance test was blocked"}[g.Outcome]
+	var notes []string
+	for _, v := range in.Verdicts {
+		if !slices.Contains(g.Criteria, v.Criterion) {
+			continue
+		}
+		n := fmt.Sprintf("Criterion %d (%s): %s", v.Criterion, v.Status, clip(strings.Join(strings.Fields(v.Text), " "), reviewCriterionChars))
+		if o := strings.Join(strings.Fields(v.Observed), " "); o != "" {
+			n += " — observed: " + clip(o, reviewObservedChars)
+		}
+		notes = append(notes, n)
+	}
+	return headline, notes
 }
 
 // testFailedLine is the conductor's fact on test runID failing criteria
