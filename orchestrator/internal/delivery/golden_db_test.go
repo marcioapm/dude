@@ -294,6 +294,20 @@ func TestGoldenConductorBriefings(t *testing.T) {
 		}
 		golden(t, "briefing-conductor-bounded", w.in(t, briefWith(byPerson, "Cy", "Is it done?")))
 	})
+	// The line comes from the relation alone: GLD-7 superseded GLD-8. A
+	// related edge, or the edge seen from the old task, says nothing.
+	t.Run("supersedes", func(t *testing.T) {
+		w := newGoldenWorld(t)
+		w.exec(t, `INSERT INTO task_relations (organization_id, from_task_id, to_task_id, kind, created_by_person)
+			VALUES ($1, 'wi_g', 'wi_p1', 'supersedes', 'per_ana'), ($1, 'wi_g', 'wi_p2', 'related', 'per_ana')`)
+		golden(t, "briefing-conductor-supersedes", w.in(t, briefWith(byPerson, "Ana", "Take it from here.")))
+		old := w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+			return briefing(ctx, tx, "wi_p1", "run_cond1", "Ana", "And this one?", byPerson)
+		})
+		if strings.Contains(old, "supersedes") {
+			t.Fatalf("the superseded task's briefing says it supersedes:\n%s", old)
+		}
+	})
 }
 
 func TestGoldenEpicBriefings(t *testing.T) {

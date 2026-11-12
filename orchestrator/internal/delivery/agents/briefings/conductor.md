@@ -9,6 +9,10 @@ Conductor, {{$who}} wrote in the Chat of {{.Key}}, {{printf "%q" .Title}}. You a
 ## The task
 
 {{.Key}} · {{.TaskID}} · status {{.Status}}
+{{- with .Supersedes}}
+
+This task supersedes {{.}}; read its open findings and unanswered author questions before starting.
+{{- end}}
 
 Goal:
 
