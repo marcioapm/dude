@@ -2,6 +2,7 @@ package fakelux
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,63 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
+
+// A retryable start is not interchangeable with arbitrary tool failures.
+// Exercise callTool's actual HTTP path, including its final status/report.
+func TestStartPhaseRetriesOnlyThePollersMomentaryRefusal(t *testing.T) {
+	const moment = `{"code":"","error":"the delivery is reading what changed on its pull requests now; start test again in a moment"}`
+	for _, tc := range []struct {
+		name, tool, body                         string
+		status, succeedAt, wantCalls, wantStatus int
+	}{
+		{"lease released", "start_phase", moment, 422, 2, 2, 200},
+		{"permanent refusal", "start_phase", `{"error":"Deliver takes this task's decisions"}`, 422, 0, 1, 422},
+		{"other momentary refusal", "start_phase", `{"error":"something else; try again in a moment"}`, 422, 0, 1, 422},
+		{"different tool", "decide", moment, 422, 0, 1, 422},
+		{"server failure", "start_phase", moment, 500, 0, 1, 500},
+		{"lease never released", "start_phase", moment, 422, 0, 21, 422},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			tools := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if tc.succeedAt > 0 && calls >= tc.succeedAt {
+					w.WriteHeader(200)
+					_, _ = w.Write([]byte(`{"started":"test"}`))
+					return
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(tools.Close)
+			s := New("", "k", nil)
+			t.Cleanup(s.Close)
+			spec, err := json.Marshal(lux.Spec{Workload: lux.Workload{
+				Services: []lux.Service{{Name: "dude", URL: tools.URL}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := &Run{ID: "retry-test", Spec: spec, behavior: Behaviour{Conductor: true}}
+			run.cond = sync.NewCond(&s.mu)
+			s.mu.Lock()
+			status := s.callTool(run, tc.tool, `{"phase":"test"}`)
+			s.mu.Unlock()
+			if status != tc.wantStatus || calls != tc.wantCalls {
+				t.Fatalf("status %d, calls %d; want status %d, calls %d", status, calls, tc.wantStatus, tc.wantCalls)
+			}
+			if tc.name == "lease never released" {
+				found := false
+				for _, record := range run.records {
+					found = found || strings.Contains(fmt.Sprint(record), "retry limit reached")
+				}
+				if !found {
+					t.Fatal("retry exhaustion was not clearly reported")
+				}
+			}
+		})
+	}
+}
 
 // Before any plugin priced a Run, lux answers pending with no amounts; a
 // priced one comes back as the test set it, through the real client.
