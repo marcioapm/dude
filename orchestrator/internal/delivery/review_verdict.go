@@ -641,6 +641,10 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 	if rerun && st.Verdict != nil && st.Verdict.Due != "" {
 		return workflow.Result{Next: "verdict", State: st}, nil
 	}
-	st.ReweighAt = nil
+	// A verdict still owed keeps its timer (the grace's end, the cap):
+	// a signal that did not run it never leaves it waiting on signals alone.
+	if st.Verdict == nil || st.Verdict.Due == "" {
+		st.ReweighAt = nil
+	}
 	return waitForPR(st), nil
 }
