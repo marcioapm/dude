@@ -604,6 +604,10 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 			// never one the syncer judged (syncerJudgedGrace). HadCI stays:
 			// it is the pull request's, and cleared it would read a pin
 			// nothing reported at yet as "no CI configured".
+			// While the pin is ahead of the record, graceLeft is the whole
+			// grace on every evaluation: a verdict must not defer on
+			// GraceLeft alone if the sync never catches up (PR 4 bounds
+			// its deferrals).
 			p.HeadSeenAt, p.RecordedChecks = nil, ""
 		}
 		p.Head, recorded = p.Pinned, "the verdict reviewed"
