@@ -1452,7 +1452,7 @@ the note is at most %d characters
 
 ## refusals/delivery/waits/one-kind-per-condition
 
-each condition is exactly one of runsEnded or prChecksFinal
+each condition is exactly one of runsEnded, prChecksFinal or workflowEnded
 
 ## refusals/delivery/waits/runs-count
 
@@ -1665,6 +1665,82 @@ after the implementer has started, a person's answer changes the acceptance crit
 ## refusals/delivery/conduct/question-is-not-persons-answer-here
 
 %s is not a question of this task a person has answered: after the implementer has started, update_task writes only a person's answer into the acceptance criteria, naming their answered question
+
+## refusals/delivery/dispatch/input-too-long
+
+input %q: a name of up to 100 characters and a value of up to %d
+
+## refusals/delivery/dispatch/name-ref
+
+this task has no branch yet: name the ref to run the workflow on
+
+## refusals/delivery/dispatch/needs-person
+
+%s runs on %s, but %s: it is not CI this change already runs, and the person decides it. Ask them (ask_person) with the choices %q and %q; once they have picked %q, call run_workflow again with questionId
+
+## refusals/delivery/dispatch/no-such-workflow
+
+there is no .github/workflows/%s at %s in %s
+
+## refusals/delivery/dispatch/no-trigger
+
+%s at %s has no workflow_dispatch trigger (it runs on %s): GitHub cannot start it by hand. Nothing was dispatched
+
+## refusals/delivery/dispatch/not-on-github
+
+%s is not on a GitHub dude is connected to
+
+## refusals/delivery/dispatch/not-task-repository
+
+%q is not one of this task's repositories: name one of %s
+
+## refusals/delivery/dispatch/question-not-answered
+
+%s is not a question of this task a person has answered: ask the person first (ask_person) with the choices %q and %q, and pass their answered question's id as questionId
+
+## refusals/delivery/dispatch/question-not-naming
+
+%s does not offer the choice %q: the person's answer authorizes only the workflow and ref its choice names. Ask about this one (ask_person) with the choices %q and %q
+
+## refusals/delivery/dispatch/ref-unreadable
+
+%q is not a branch or tag name
+
+## refusals/delivery/dispatch/too-many-inputs
+
+at most %d inputs to a workflow
+
+## refusals/delivery/dispatch/triggers-unreadable
+
+dude cannot read the triggers (on:) of %s at %s: %v. Nothing was dispatched
+
+## refusals/delivery/dispatch/workflow-file
+
+workflow %q is a workflow's file name under .github/workflows (ci.yml, release.yaml)
+
+## refusals/delivery/waits/not-dispatch-of-this-task
+
+%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches)
+
+## refusals/delivery/dispatch/question-not-approved
+
+%s was answered %q, not %q: the person did not approve this dispatch. Nothing was dispatched
+
+## refusals/delivery/dispatch/question-spent
+
+%s already authorized dispatch %s: one answer authorizes one dispatch. Ask the person again (ask_person)
+
+## refusals/delivery/dispatch/maybe
+
+dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. It is listed as %s, unknown: %s before dispatching it again
+
+## refusals/delivery/dispatch/question-reserved
+
+%s is being used by another run_workflow call at the same time: one answer authorizes one dispatch, and that call sends it. Nothing was dispatched by this one
+
+## refusals/delivery/waits/dispatch-failed
+
+GitHub refused dispatch %s (%s): nothing ran, so there is nothing to wait for. Fix what GitHub refused, then dispatch it again (run_workflow)
 
 ## refusals/delivery/review-only/no-writer
 

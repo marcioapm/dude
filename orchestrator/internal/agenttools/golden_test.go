@@ -232,5 +232,9 @@ func TestGoldenToolResults(t *testing.T) {
 		{"refresh-checkout-none", checkoutText("next", struct{ Requested, Pending, Unlinked string }{})},
 		{"refresh-checkout-git-refused", cloneFailureReason("git said: ref not found.")},
 		{"refresh-checkout-external", checkoutText("external", delivery.ExternalText("abcd1234", "…"))},
+		{"run-workflow", runWorkflowNext(delivery.DispatchRecorded{ID: "wfd_1", State: delivery.DispatchBound})},
+		{"run-workflow-late-bound", runWorkflowNext(delivery.DispatchRecorded{ID: "wfd_1", State: delivery.DispatchBound, Late: true})},
+		{"run-workflow-late-unknown", runWorkflowNext(delivery.DispatchRecorded{ID: "wfd_1", State: delivery.DispatchUnknown,
+			Reason: "GitHub did not say which run this dispatch started", Late: true})},
 	})
 }

@@ -1,6 +1,6 @@
 # wait_for
 
-Say what you are waiting on, then end your turn: dude checks it in its own cycle and wakes you once, when it holds or at the deadline, with what held, what did not and what else happened meanwhile, worst first. conditions: runsEnded (Runs of this task; a restarted Run counts by its replacement) and prChecksFinal (a pull request's checks passing or failing on a head, the head moving, or the pull request ending; on an open pull request each fix dude publishes moves its head: wait on the new head). With no conditions it is a timer. One wait at a time: a new one replaces it. Waiting decides nothing, and dude's own wakes — decisions, escalations, child results, cohort digests — still come. If it already holds you are told so at once. Refused for another task's Run or pull request.
+Say what you are waiting on, then end your turn: dude checks it in its own cycle and wakes you once, when it holds or at the deadline, with what held, what did not and what else happened meanwhile, worst first. conditions: runsEnded (Runs of this task; a restarted Run counts by its replacement) and prChecksFinal (a pull request's checks passing or failing on a head, the head moving, or the pull request ending; on an open pull request each fix dude publishes moves its head: wait on the new head) and workflowEnded (a workflow run_workflow dispatched: completed, unknown, or dude cannot see it). With no conditions it is a timer. One wait at a time: a new one replaces it. Waiting decides nothing, and dude's own wakes — decisions, escalations, child results, cohort digests — still come. If it already holds you are told so at once. Refused for another task's Run, pull request or dispatch.
 
 ```json
 {
@@ -40,11 +40,14 @@ Say what you are waiting on, then end your turn: dude checks it in its own cycle
               "pr"
             ],
             "additionalProperties": false
+          },
+          "workflowEnded": {
+            "type": "string"
           }
         },
         "additionalProperties": false
       },
-      "description": "up to 8, each one of: {\"runsEnded\": [\"run_…\"]} or {\"prChecksFinal\": {\"pr\": \"repo#12\", \"head\": \"\u003cfull SHA; default its head now\u003e\"}}"
+      "description": "up to 8, each one of: {\"runsEnded\": [\"run_…\"]}, {\"prChecksFinal\": {\"pr\": \"repo#12\", \"head\": \"\u003cfull SHA; default its head now\u003e\"}} or {\"workflowEnded\": \"wfd_…\"}"
     },
     "wake": {
       "type": "string",

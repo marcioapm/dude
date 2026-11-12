@@ -198,6 +198,13 @@ class FakeGitHub:
         # GitHub Actions runs by id (add_actions_run), and their jobs' logs by job id.
         self.actions_runs: dict[int, dict] = {}
         self.job_logs: dict[int, str] = {}
+        # workflow_dispatch: each dispatch asked for (workflow, ref, inputs),
+        # and the run GitHub creates for it, by id (complete_dispatched_run).
+        self.dispatches: list[dict] = []
+        self.dispatched_runs: dict[int, dict] = {}
+        # An older GitHub (or GHES): a dispatch answers 204 even when asked
+        # for the run's details.
+        self.dispatch_legacy = False
         # The review writes' knobs, as the Go fake's: refuse_dismissal answers
         # every dismissal 403, as protected branch rules do;
         # drop_review_response_once takes the next review, then cuts the
@@ -755,6 +762,27 @@ class FakeGitHub:
             issue.updated_at = _now()
             return self._next_id
 
+    def complete_dispatched_run(self, run_id: int, conclusion: str = "success") -> None:
+        """A dispatched run ends on GitHub. No webhook: dude has to notice
+        by reading it."""
+        with self._lock:
+            self.dispatched_runs[run_id].update(status="completed", conclusion=conclusion)
+
+    def rerun_dispatched_run(self, run_id: int) -> None:
+        """A person re-runs a dispatched run: GitHub re-runs only a completed
+        run, as the same id with attempt n+1. No webhook."""
+        with self._lock:
+            run = self.dispatched_runs[run_id]
+            if run["status"] != "completed":
+                raise ValueError(f"run {run_id} is {run['status']}: GitHub re-runs only a completed run")
+            run.update(status="queued", conclusion=None, attempt=run["attempt"] + 1)
+
+    def _dispatched_run_json(self, run_id: int, run: dict) -> dict:
+        return {"id": run_id, "name": run["workflow"], "head_branch": run["branch"], "event": "workflow_dispatch",
+                "status": run["status"], "conclusion": run["conclusion"], "run_attempt": run["attempt"],
+                "created_at": run["created_at"],
+                "html_url": f"https://github.com/{self.owner}/{self.repo}/actions/runs/{run_id}"}
+
     def write_file(self, branch: str, path: str, content: str, message: str, author: str = "Gus Human") -> str:
         """A person pushes a commit writing one file to a branch; its sha. No webhook."""
         import os
@@ -1105,6 +1133,25 @@ class FakeGitHub:
                     return self._graphql(body)
                 gh = self.github
                 prefix = f"/repos/{gh.owner}/{gh.repo}"
+                if m := re.fullmatch(rf"{prefix}/actions/workflows/([^/]+)/dispatches", self.path):
+                    # Asked with return_run_details, GitHub answers 200 with
+                    # the run it created (workflow-dispatch-response); an
+                    # older GitHub (dispatch_legacy), or a dispatch not
+                    # asking, 204 and no run id. The run appears in progress.
+                    details = bool(body.get("return_run_details")) and not gh.dispatch_legacy
+                    with gh._lock:
+                        gh.dispatches.append({"workflow": m[1], "ref": body.get("ref"), "inputs": body.get("inputs") or {},
+                                              "run_details": bool(body.get("return_run_details"))})
+                        run_id = 5000 + len(gh.dispatches)
+                        gh.dispatched_runs[run_id] = {"workflow": m[1], "branch": body.get("ref"), "status": "in_progress",
+                                                      "conclusion": None, "attempt": 1, "created_at": _now()}
+                    if details:
+                        return self._send(200, {"workflow_run_id": run_id,
+                                                "run_url": f"https://api.github.com/repos/{gh.owner}/{gh.repo}/actions/runs/{run_id}",
+                                                "html_url": f"https://github.com/{gh.owner}/{gh.repo}/actions/runs/{run_id}"})
+                    self.send_response(204)
+                    self.end_headers()
+                    return
                 if m := re.fullmatch(rf"{prefix}/check-runs/(\d+)/rerequest", self.path):
                     # Only the app that owns a check run may re-request it;
                     # a token may not, as on GitHub.
@@ -1419,6 +1466,23 @@ class FakeGitHub:
                     states = {st["state"] for st in statuses}
                     combined = next((x for x in ("failure", "error", "pending") if x in states), "success" if states else "pending")
                     return self._send(200, {"state": combined, "total_count": len(statuses), "statuses": statuses})
+                if m := re.fullmatch(rf"{prefix}/contents/(.+)", path):
+                    # A file at a ref, raw, as dude reads a workflow's on:.
+                    from urllib.parse import parse_qs, unquote
+                    ref = parse_qs(query).get("ref", [""])[0]
+                    content = self.github.file_at(ref, unquote(m[1])) if ref and not ref.startswith("-") else None
+                    if content is None or self.headers.get("accept") != "application/vnd.github.raw":
+                        return self._send(404, {"message": "Not Found"})
+                    data = content.encode()
+                    self.send_response(200)
+                    self.send_header("content-type", "application/vnd.github.raw")
+                    self.send_header("content-length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                if (m := re.fullmatch(rf"{prefix}/actions/runs/(\d+)", path)) and int(m[1]) in self.github.dispatched_runs:
+                    with self.github._lock:
+                        return self._send(200, self.github._dispatched_run_json(int(m[1]), self.github.dispatched_runs[int(m[1])]))
                 if m := re.fullmatch(rf"{prefix}/actions/runs/(\d+)", path):
                     run = self.github.actions_runs.get(int(m[1]))
                     if run is None:

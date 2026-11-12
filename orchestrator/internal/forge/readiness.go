@@ -317,16 +317,9 @@ func (g *GitHub) actionsExpected(ctx context.Context, slug, ref string, files []
 // pull_request_target, no filter), ActionsNotExpected when it names
 // neither, "" when it cannot tell (unparseable, or a filter).
 func WorkflowRunsOnPullRequests(raw []byte) string {
-	var doc map[string]yaml.Node
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return ""
-	}
-	// YAML 1.1 reads a bare on as true: a key "true".
-	on, ok := doc["on"]
+	on, ok := workflowOn(raw)
 	if !ok {
-		if on, ok = doc["true"]; !ok {
-			return ""
-		}
+		return ""
 	}
 	isPR := func(s string) bool { return s == "pull_request" || s == "pull_request_target" }
 	switch on.Kind {
@@ -360,4 +353,20 @@ func WorkflowRunsOnPullRequests(raw []byte) string {
 		return out
 	}
 	return ""
+}
+
+// workflowOn is one workflow file's on: node; ok false when the file does
+// not parse or names none. WorkflowRunsOnPullRequests and WorkflowTriggers
+// read it.
+func workflowOn(raw []byte) (yaml.Node, bool) {
+	var doc map[string]yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return yaml.Node{}, false
+	}
+	// YAML 1.1 reads a bare on as true: a key "true".
+	on, ok := doc["on"]
+	if !ok {
+		on, ok = doc["true"]
+	}
+	return on, ok
 }
