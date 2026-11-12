@@ -185,10 +185,10 @@ type conductorBrief struct {
 	MoreCriteria               int
 	Runs, Findings             briefLines
 	// The current attempt's open reviewer questions, one line each.
-	Questions            []string
+	Questions                   []string
 	Digest, Facts, Epic, Replay string
-	PullRequests         []briefPullRequest
-	Heads                []RepoHead
+	PullRequests                []briefPullRequest
+	Heads                       []RepoHead
 	// Who decides: no live delivery, Deliver's policy (a person accepted
 	// its defaults), or else the conductor — quietly (Quiet) or not.
 	NoDelivery, DeliverDecides, Quiet bool
