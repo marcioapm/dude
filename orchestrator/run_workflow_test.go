@@ -18,11 +18,18 @@ const (
 	ciWorkflow     = "name: CI\non:\n  push:\n  pull_request:\n  workflow_dispatch:\njobs: {}\n"
 	deployWorkflow = "name: Deploy\non:\n  workflow_dispatch:\n    inputs:\n      env: {}\njobs: {}\n"
 	pushWorkflow   = "name: Lint\non: [push, pull_request]\njobs: {}\n"
+	// A production deploy on every push to main, and a release on tags:
+	// both run on push, and neither is this change's CI.
+	prodWorkflow    = "name: Prod\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}\n"
+	releaseWorkflow = "name: Release\non:\n  push:\n    tags: ['v*']\n  workflow_dispatch:\njobs: {}\n"
+	nightlyWorkflow = "name: Nightly\non:\n  schedule:\n    - cron: '0 3 * * *'\n  workflow_dispatch:\njobs: {}\n"
+	docsWorkflow    = "name: Docs\non:\n  workflow_dispatch:\njobs: {}\n"
 )
 
-// dispatchWorld is a conducted task in review whose branch has three
-// workflows: ci.yml (CI, dispatchable), deploy.yml (dispatch only) and
-// lint.yml (no workflow_dispatch).
+// dispatchWorld is a conducted task in review whose branch has these
+// workflows: ci.yml (CI, dispatchable), deploy.yml and deploy-docs.yml
+// (dispatch only), lint.yml (no workflow_dispatch), prod.yml (push to
+// main), release.yml (push tags) and nightly.yml (schedule).
 func dispatchWorld(t *testing.T) (*world, string, string) {
 	t.Helper()
 	w := conducting(t)
@@ -32,7 +39,9 @@ func dispatchWorld(t *testing.T) (*world, string, string) {
 	}
 	branch := w.str(`SELECT head_branch FROM pull_requests WHERE task_id = $1`, task)
 	w.gh.CommitFiles(branch, "workflows", map[string]string{".github/workflows/ci.yml": ciWorkflow,
-		".github/workflows/deploy.yml": deployWorkflow, ".github/workflows/lint.yml": pushWorkflow})
+		".github/workflows/deploy.yml": deployWorkflow, ".github/workflows/lint.yml": pushWorkflow,
+		".github/workflows/prod.yml": prodWorkflow, ".github/workflows/release.yml": releaseWorkflow,
+		".github/workflows/nightly.yml": nightlyWorkflow, ".github/workflows/deploy-docs.yml": docsWorkflow})
 	return w, task, branch
 }
 
@@ -89,26 +98,45 @@ func TestRunWorkflowRefusesAWorkflowWithNoDispatchTrigger(t *testing.T) {
 }
 
 // CI the change already runs is the conductor's to dispatch; a workflow
-// that is not CI needs the person's answered question on this task naming
-// it: not another task's, not an unanswered one, not one about something
-// else.
+// that is not CI needs the person's answered question on this task offering
+// the approving choice for that workflow and ref, answered with it: not
+// another task's, not an unanswered one, not one about something else, not
+// one naming deploy-docs.yml for deploy.yml, not a "no", and not one spent
+// on a dispatch already.
 func TestRunWorkflowNeedsThePersonsAnswerForAWorkflowThatIsNotCI(t *testing.T) {
 	w, task, branch := dispatchWorld(t)
 	w.dispatched(task, `{"workflow":"ci.yml"}`)
 
-	w.refused(task, "run_workflow", `{"workflow":"deploy.yml"}`, "it is not CI this change already runs, and the person decides it. Ask them (ask_person)")
+	approve := delivery.DispatchApproval("deploy.yml", branch)
+	w.refused(task, "run_workflow", `{"workflow":"deploy.yml"}`, "it is not CI this change already runs, and the person decides it. Ask them (ask_person) with the choices \""+approve+"\" and \""+delivery.DispatchDecline+"\"")
 	other := w.task()
-	mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, prompt, status, answer, answered_at, addressee)
-		VALUES ('q_other', $1, $2, 'Run deploy?', 'answered', 'yes', now(), 'person'),
-		       ('q_open', $1, $3, 'Run deploy?', 'open', NULL, NULL, 'person'),
-		       ('q_conductor', $1, $3, 'Run deploy?', 'answered', 'yes', now(), 'conductor'),
-		       ('q_else', $1, $3, 'Merge it?', 'answered', 'yes', now(), 'person'),
-		       ('q_deploy', $1, $3, 'May I run deploy on the branch?', 'answered', 'yes', now(), 'person')`, w.org, other, task)
+	choices := `["` + approve + `", "` + delivery.DispatchDecline + `"]`
+	docs := `["` + delivery.DispatchApproval("deploy-docs.yml", branch) + `", "` + delivery.DispatchDecline + `"]`
+	mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, prompt, options, status, answer, answered_at, addressee)
+		VALUES ('q_other', $1, $2, 'Run deploy.yml?', $4::jsonb, 'answered', $5, now(), 'person'),
+		       ('q_open', $1, $3, 'Run deploy.yml?', $4::jsonb, 'open', NULL, NULL, 'person'),
+		       ('q_conductor', $1, $3, 'Run deploy.yml?', $4::jsonb, 'answered', $5, now(), 'conductor'),
+		       ('q_else', $1, $3, 'Merge it?', '["Yes", "No"]', 'answered', 'Yes', now(), 'person'),
+		       ('q_prose', $1, $3, 'May I run deploy.yml on the branch?', '[]', 'answered', 'yes', now(), 'person'),
+		       ('q_no', $1, $3, 'Run deploy.yml?', $4::jsonb, 'answered', 'No. Do not deploy.', now(), 'person'),
+		       ('q_decline', $1, $3, 'Run deploy.yml?', $4::jsonb, 'answered', $7, now(), 'person'),
+		       ('q_docs', $1, $3, 'Run deploy-docs.yml?', $6::jsonb, 'answered', $8, now(), 'person'),
+		       ('q_deploy', $1, $3, 'Run deploy.yml?', $4::jsonb, 'answered', $5, now(), 'person')`,
+		w.org, other, task, choices, approve, docs, delivery.DispatchDecline, delivery.DispatchApproval("deploy-docs.yml", branch))
 	for _, q := range []string{"q_other", "q_open", "q_conductor"} {
 		w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"`+q+`"}`, q+" is not a question of this task a person has answered")
 	}
-	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_else"}`, "q_else does not name deploy.yml")
+	for _, q := range []string{"q_else", "q_prose", "q_docs"} {
+		w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"`+q+`"}`, q+" does not offer the choice \""+approve+"\"")
+	}
+	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_no"}`, `q_no was answered "No. Do not deploy.", not "`+approve+`": the person did not approve`)
+	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_decline"}`, "the person did not approve")
+	// Approved for this ref, not another.
+	w.gh.Branch("release", branch, "release")
+	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","ref":"release","questionId":"q_deploy"}`, "q_deploy does not offer the choice")
 	id := w.dispatched(task, `{"workflow":"deploy.yml","questionId":"q_deploy","inputs":{"env":"staging"}}`)
+	// One answer, one dispatch.
+	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_deploy","inputs":{"env":"production"}}`, "q_deploy already authorized dispatch "+id)
 
 	w.gh.Set(func(s *fakegithub.Server) {
 		if len(s.Dispatches) != 2 || s.Dispatches[1].Workflow != "deploy.yml" || s.Dispatches[1].Ref != branch || s.Dispatches[1].Inputs["env"] != "staging" {
@@ -116,15 +144,39 @@ func TestRunWorkflowNeedsThePersonsAnswerForAWorkflowThatIsNotCI(t *testing.T) {
 		}
 	})
 	if got := w.str(`SELECT workflow || ' ' || ref || ' ' || (inputs->>'env') || ' ' || question_id || ' ' || state
-		FROM workflow_dispatches WHERE id = $1`, id); got != "deploy.yml "+branch+" staging q_deploy binding" {
+		FROM workflow_dispatches WHERE id = $1`, id); got != "deploy.yml "+branch+" staging q_deploy bound" {
 		t.Errorf("dispatch row %q", got)
 	}
 }
 
-// Exactly one candidate run is bound; two are unknown, never a guess; none
-// is unknown only once the bound has passed.
+// Free CI is a workflow that runs for this task's own change, dispatched
+// on the task's branch. A deploy on push to main, a release on tags, a
+// schedule, and CI on another ref all need the person.
+func TestOnlyTheTasksOwnCIIsFree(t *testing.T) {
+	w, task, branch := dispatchWorld(t)
+	for _, wf := range []string{"prod.yml", "release.yml", "nightly.yml"} {
+		w.refused(task, "run_workflow", `{"workflow":"`+wf+`"}`, "it is not CI this change already runs")
+	}
+	w.gh.Branch("release", branch, "release")
+	w.refused(task, "run_workflow", `{"workflow":"ci.yml","ref":"release"}`, "release is not this task's branch")
+	// refs/heads/ is stripped: the task's branch, free.
+	id := w.dispatched(task, `{"workflow":"ci.yml","ref":"refs/heads/`+branch+`"}`)
+	if got := w.str(`SELECT ref FROM workflow_dispatches WHERE id = $1`, id); got != branch {
+		t.Errorf("ref %q", got)
+	}
+	w.gh.Set(func(s *fakegithub.Server) {
+		if len(s.Dispatches) != 1 || s.Dispatches[0].Ref != branch {
+			t.Errorf("dispatched %+v", s.Dispatches)
+		}
+	})
+}
+
+// An older GitHub (204, no run id): exactly one new candidate run is
+// bound; two are unknown, never a guess; none is unknown only once the
+// bound has passed.
 func TestADispatchBindsOnlyItsOneRun(t *testing.T) {
 	w, task, branch := dispatchWorld(t)
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchLegacy = true })
 	one := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.supervise()
 	if state := w.str(`SELECT state FROM workflow_dispatches WHERE id = $1`, one); state != delivery.DispatchBinding {
@@ -151,15 +203,14 @@ func TestADispatchBindsOnlyItsOneRun(t *testing.T) {
 	}
 
 	// None: binding while within the bound, unknown past it.
-	w.gh.Branch("release", branch, "release")
-	three := w.dispatched(task, `{"workflow":"ci.yml","ref":"release"}`)
+	three := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.supervise()
 	if state := w.str(`SELECT state FROM workflow_dispatches WHERE id = $1`, three); state != delivery.DispatchBinding {
 		t.Fatalf("none within the bound: %s", state)
 	}
 	mustExec(t, w.owner, `UPDATE workflow_dispatches SET dispatched_at = now() - interval '6 minutes' WHERE id = $1`, three)
 	w.supervise()
-	if got := w.str(`SELECT state || ': ' || reason FROM workflow_dispatches WHERE id = $1`, three); !strings.HasPrefix(got, "unknown: no run of ci.yml on release") {
+	if got := w.str(`SELECT state || ': ' || reason FROM workflow_dispatches WHERE id = $1`, three); !strings.HasPrefix(got, "unknown: no run of ci.yml on "+branch) {
 		t.Fatalf("none past the bound: %s", got)
 	}
 }
@@ -271,22 +322,46 @@ func TestFailedReadsWakeCannotSeeAndASuccessResetsTheCount(t *testing.T) {
 	}
 }
 
-// A re-run is the same run with attempt n+1: supervision follows the
-// latest attempt and the outcome names the one it ended on.
+// A re-run is the same run with attempt n+1, and GitHub re-runs only a
+// completed run: the completed dispatch is still read, the re-run reopens
+// it, the stale outcome is not reported, and the new attempt's outcome
+// wakes the conductor again.
 func TestARerunAttemptIsFollowed(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
 	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 940 })
-	w.dispatched(task, `{"workflow":"ci.yml"}`)
+	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.supervise()
-	w.gh.UpdateWorkflowRun(940, func(r *fakegithub.WorkflowRun) { r.Status, r.Attempt = "in_progress", 2 })
+	if err := w.gh.Rerun(940); err == nil {
+		t.Fatal("the fake re-ran a run still queued")
+	}
+	w.gh.UpdateWorkflowRun(940, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "failure" })
 	w.supervise()
-	if got := w.str(`SELECT run_attempt || ' ' || run_status FROM workflow_dispatches WHERE task_id = $1`, task); got != "2 in_progress" {
+	if wakes := w.workflowWakes(task); len(wakes) != 1 || !strings.Contains(wakes[0], "completed: failure, attempt 1") {
+		t.Fatalf("wakes %q", wakes)
+	}
+	if err := w.gh.Rerun(940); err != nil {
+		t.Fatal(err)
+	}
+	w.supervise()
+	if got := w.str(`SELECT state || ' ' || run_attempt || ' ' || run_status || ' ' || COALESCE(outcome, 'none') FROM workflow_dispatches WHERE id = $1`, id); got != "bound 2 queued none" {
 		t.Fatalf("stored %s", got)
 	}
-	w.gh.UpdateWorkflowRun(940, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion, r.Attempt = "completed", "success", 3 })
+	// A wait opened now waits on the re-run: the old failure is not told.
+	out := w.must(task, "wait_for", `{"conditions":[{"workflowEnded":"`+id+`"}],"deadline":"30m"}`)
+	if out["holds"] == true {
+		t.Fatalf("a wait on a re-run held on the stale outcome: %v", out)
+	}
+	w.must(task, "wait_for", `{"deadline":"30m"}`)
+	w.gh.UpdateWorkflowRun(940, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
 	w.supervise()
-	if wakes := w.workflowWakes(task); len(wakes) != 1 || !strings.Contains(wakes[0], "completed: success, attempt 3") {
+	if wakes := w.workflowWakes(task); len(wakes) != 2 || !strings.Contains(wakes[1], "completed: success, attempt 2") {
 		t.Fatalf("wakes %q", wakes)
+	}
+	// Past DispatchFollowAfter it is no longer read.
+	mustExec(t, w.owner, `UPDATE workflow_dispatches SET completed_at = now() - interval '31 minutes', last_read_at = NULL WHERE id = $1`, id)
+	w.supervise()
+	if n := w.count(`SELECT count(*) FROM workflow_dispatches WHERE id = $1 AND last_read_at IS NULL`, id); n != 1 {
+		t.Error("a completed dispatch past the bound was read")
 	}
 }
 

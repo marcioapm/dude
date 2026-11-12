@@ -256,4 +256,7 @@ rDispatchNoSuchWorkflow                 refusals/delivery/dispatch/no-such-workf
 rDispatchTriggersUnreadable             refusals/delivery/dispatch/triggers-unreadable
 rDispatchNoTrigger                      refusals/delivery/dispatch/no-trigger
 rDispatchNeedsPerson                    refusals/delivery/dispatch/needs-person
+rDispatchQuestionNotApproved            refusals/delivery/dispatch/question-not-approved
+rDispatchQuestionSpent                  refusals/delivery/dispatch/question-spent
+rDispatchUnbound                        refusals/delivery/dispatch/unbound
 rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-this-task

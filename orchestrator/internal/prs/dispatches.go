@@ -22,16 +22,18 @@ const dispatchesPerPass = 20
 // wake, last read longer than every ago is read on GitHub now, and what it
 // saw is stored and decided on. Level-triggered: nothing here waits for a
 // webhook; a run that ended while no event came is seen by the next pass.
-// Returns how many it read.
+// Returns how many it took: a full batch (dispatchesPerPass) has its loop
+// run again at once, so a backlog is not read 20 per interval.
 func (s *Syncer) SuperviseDispatches(ctx context.Context, every time.Duration) (int, error) {
 	type due struct{ ID, Org string }
 	var batch []due
 	if err := s.DB.InSystem(ctx, "workflow-supervisor", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT d.id, d.organization_id FROM workflow_dispatches d JOIN tasks t ON t.id = d.task_id
-			WHERE (d.state IN ('binding', 'bound') OR d.outcome IS DISTINCT FROM d.woken_outcome)
+			WHERE (d.state IN ('binding', 'bound') OR d.outcome IS DISTINCT FROM d.woken_outcome
+			       OR d.state = 'completed' AND d.completed_at > now() - $3::interval)
 			  AND t.status::text NOT IN ('done', 'aborted', 'failed')
 			  AND (d.last_read_at IS NULL OR d.last_read_at < now() - $1::interval)
-			ORDER BY d.last_read_at NULLS FIRST, d.id LIMIT $2`, every.String(), dispatchesPerPass)
+			ORDER BY d.last_read_at NULLS FIRST, d.id LIMIT $2`, every.String(), dispatchesPerPass, delivery.DispatchFollowAfter.String())
 		if err != nil {
 			return err
 		}
@@ -52,7 +54,11 @@ func (s *Syncer) SuperviseDispatches(ctx context.Context, every time.Duration) (
 			s.Log.Warn("supervising a dispatched workflow failed", "dispatch", d.ID, "error", err)
 		}
 	}
-	return 0, nil
+	if len(batch) < dispatchesPerPass {
+		// Not a full batch: none is left due; the loop waits its interval.
+		return 0, nil
+	}
+	return len(batch), nil
 }
 
 func (s *Syncer) superviseDispatch(ctx context.Context, org, id string) error {
@@ -65,7 +71,10 @@ func (s *Syncer) superviseDispatch(ctx context.Context, org, id string) error {
 	}); err != nil || !live {
 		return err
 	}
-	read := s.readDispatch(ctx, org, target)
+	var read delivery.DispatchRead
+	if target.Read {
+		read = s.readDispatch(ctx, org, target)
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -76,7 +85,8 @@ func (s *Syncer) superviseDispatch(ctx context.Context, org, id string) error {
 
 // readDispatch reads the dispatch's state on GitHub, no transaction open:
 // the candidates while binding, the bound run after. Any failure,
-// including having no GitHub to read, is "cannot tell".
+// including having no GitHub to read, is "cannot tell": while binding as
+// well, never "no candidates".
 func (s *Syncer) readDispatch(ctx context.Context, org string, t delivery.DispatchTarget) delivery.DispatchRead {
 	gh, err := s.Forges.For(ctx, org)
 	if err == nil && gh == nil {
@@ -87,7 +97,10 @@ func (s *Syncer) readDispatch(ctx context.Context, org string, t delivery.Dispat
 	}
 	if t.RunID == 0 {
 		runs, err := gh.DispatchedRuns(ctx, t.Slug, t.Workflow, t.Ref, t.Since)
-		return delivery.DispatchRead{Candidates: runs, Err: err}
+		if err != nil {
+			return delivery.DispatchRead{Err: err}
+		}
+		return delivery.DispatchRead{Candidates: runs}
 	}
 	run, err := gh.RunStateOf(ctx, t.Slug, t.RunID)
 	if err != nil {

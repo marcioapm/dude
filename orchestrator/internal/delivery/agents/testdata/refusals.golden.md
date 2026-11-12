@@ -1660,7 +1660,7 @@ this task has no branch yet: name the ref to run the workflow on
 
 ## refusals/delivery/dispatch/needs-person
 
-%s runs on %s, not on a push or pull request: it is not CI this change already runs, and the person decides it. Ask them (ask_person), naming %s and the ref %s; once they have answered yes, call run_workflow again with questionId
+%s runs on %s, but %s: it is not CI this change already runs, and the person decides it. Ask them (ask_person) with the choices %q and %q; once they have picked %q, call run_workflow again with questionId
 
 ## refusals/delivery/dispatch/no-such-workflow
 
@@ -1680,11 +1680,11 @@ there is no .github/workflows/%s at %s in %s
 
 ## refusals/delivery/dispatch/question-not-answered
 
-%s is not a question of this task a person has answered: ask the person first (ask_person), naming the workflow, and pass their answered question's id as questionId
+%s is not a question of this task a person has answered: ask the person first (ask_person) with the choices %q and %q, and pass their answered question's id as questionId
 
 ## refusals/delivery/dispatch/question-not-naming
 
-%s does not name %s: the person's answer authorizes the workflow their question named. Ask about this one (ask_person)
+%s does not offer the choice %q: the person's answer authorizes only the workflow and ref its choice names. Ask about this one (ask_person) with the choices %q and %q
 
 ## refusals/delivery/dispatch/ref-unreadable
 
@@ -1705,4 +1705,16 @@ workflow %q is a workflow's file name under .github/workflows (ci.yml, release.y
 ## refusals/delivery/waits/not-dispatch-of-this-task
 
 %s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches)
+
+## refusals/delivery/dispatch/question-not-approved
+
+%s was answered %q, not %q: the person did not approve this dispatch. Nothing was dispatched
+
+## refusals/delivery/dispatch/question-spent
+
+%s already authorized dispatch %s: one answer authorizes one dispatch. Ask the person again (ask_person)
+
+## refusals/delivery/dispatch/unbound
+
+%s on %s was dispatched already (%s) and dude has not yet found its run: GitHub answered that dispatch with no run id, so a second one now would leave dude unable to tell their runs apart. Wait for it to be bound or unknown (wait_for workflowEnded, or pull_requests), then dispatch again
 

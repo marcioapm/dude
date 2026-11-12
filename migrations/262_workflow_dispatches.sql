@@ -1,8 +1,10 @@
 -- 262_workflow_dispatches.sql — run_workflow: a conductor's
 -- workflow_dispatch and its supervision to the end.
 --
--- One row per dispatch. GitHub answers a dispatch with no run id, so the
--- run is bound afterwards (run_id), and every pass of the supervisor
+-- One row per dispatch. Asked for run details, GitHub answers the dispatch
+-- with its run's id, bound at once (state bound); an older GitHub answers
+-- with none, and the run is bound afterwards (run_id) from the runs that
+-- were not there before the dispatch (prior_runs), and every pass of the supervisor
 -- re-reads it and stores what it saw (status, conclusion, attempt,
 -- last_seen_at): the decision is always taken from this stored state,
 -- never from an event that might have been missed, and a restart resumes
@@ -16,8 +18,18 @@
 --   outcome       the terminal outcome the conductor is owed a wake for:
 --                 completed, unknown, or cannot_see (failed_reads at its
 --                 bound; cleared by the next read that succeeds).
---   woken_outcome the outcome it was woken for, woken_at when: at most
---                 one wake per outcome, across restarts and passes.
+--   woken_outcome the outcome that reached the conductor, woken_at when:
+--                 by its own wake, or by the held digest of a wait naming
+--                 it (woken_wait, that wait). At most one per outcome,
+--                 across restarts and passes; never set while it is only
+--                 owed.
+--   prior_runs    the workflow_dispatch runs of the workflow and ref seen
+--                 just before the dispatch: never this dispatch's run;
+--                 NULL when that read failed.
+--   completed_at  when the bound run was first seen completed: it is still
+--                 read for a while after, so a re-run (attempt n+1)
+--                 reopens it.
+--   read_after    GitHub's Retry-After: no read before it.
 CREATE TABLE workflow_dispatches (
   id text PRIMARY KEY,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -43,8 +55,14 @@ CREATE TABLE workflow_dispatches (
   last_error text CHECK (length(last_error) <= 1000),
   outcome text CHECK (outcome IN ('completed', 'unknown', 'cannot_see')),
   woken_outcome text CHECK (woken_outcome IN ('completed', 'unknown', 'cannot_see')),
-  woken_at timestamptz
+  woken_at timestamptz,
+  woken_wait text,
+  prior_runs bigint[],
+  completed_at timestamptz,
+  read_after timestamptz
 );
+-- A person's answer authorizes one dispatch.
+CREATE UNIQUE INDEX workflow_dispatches_question_idx ON workflow_dispatches (question_id) WHERE question_id IS NOT NULL;
 -- A run is bound to one dispatch only.
 CREATE UNIQUE INDEX workflow_dispatches_run_idx ON workflow_dispatches (repository_id, run_id) WHERE run_id IS NOT NULL;
 CREATE INDEX workflow_dispatches_task_idx ON workflow_dispatches (task_id, dispatched_at);

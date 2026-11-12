@@ -1,1 +1,1 @@
-Dispatched; dude finds its run and reads it until it ends. To be woken when it does, wait_for {"workflowEnded": "<dispatchId>"}; pull_requests lists it under dispatches as dude last read it. "unknown" and "cannot see" mean investigate (github_branch_runs), not success or failure.
+Dispatched; dude reads its run until it ends (and a while after, for a re-run). To be woken when it does, wait_for {"workflowEnded": "<dispatchId>"}; pull_requests lists it under dispatches as dude last read it. "unknown" and "cannot see" mean investigate, not success or failure.

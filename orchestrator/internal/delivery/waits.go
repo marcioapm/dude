@@ -193,7 +193,9 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 		if ev.holds {
 			out.Holds = true
 			out.Digest = renderWaitDigest(ev, "", false, true, nil, ask.Note)
-			return out, nil
+			// Told in this call's result: the outcomes it names reached
+			// the conductor.
+			return out, deliveredByWaitTx(ctx, tx, "", ev)
 		}
 	}
 	if err := endOpenWaitsTx(ctx, tx, ref.TaskID, WaitReplaced); err != nil {
@@ -531,6 +533,11 @@ func EvaluateWaitTx(ctx context.Context, tx pgx.Tx, org, taskID, waitID string) 
 	if _, err := RecordWakeTx(ctx, tx, org, taskID, WakeWait, "wait:"+waitID, digest); err != nil {
 		return false, err
 	}
+	// The workflow outcomes this digest tells are delivered by it (should
+	// its conductor end before it is told, EndWaitsTx owes them again).
+	if err := deliveredByWaitTx(ctx, tx, waitID, v.ev); err != nil {
+		return false, err
+	}
 	return true, endWaitTx(ctx, tx, org, taskID, waitID, v.conductor, v.by, v.ev, digest)
 }
 
@@ -628,6 +635,10 @@ func waitEndedEvent(ctx context.Context, tx pgx.Tx, org, taskID, waitID, conduct
 // nothing tells the next conductor of a wait it did not open.
 func EndWaitsTx(ctx context.Context, tx pgx.Tx, taskID, by string) error {
 	if by == WaitConductorEnded {
+		// The workflow outcomes those digests carried reached no one.
+		if err := undeliverWaitsTx(ctx, tx, taskID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM conductor_wake_attempts o USING conductor_wakes c
 			WHERE o.wake_id = c.id AND c.task_id = $1 AND c.kind = $2 AND c.delivered_at IS NULL`, taskID, WakeWait); err != nil {
 			return err
