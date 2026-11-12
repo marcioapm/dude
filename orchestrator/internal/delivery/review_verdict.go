@@ -115,17 +115,19 @@ const (
 	reasonTestFailed  = "test-failed"
 	reasonQuestion    = "question"
 	reasonUnrelatedCI = "unrelated-red-ci"
-	reasonStuck       = "ci-stuck"
-	reasonCap         = "cap"
-	reasonUnreadable  = "ci-unreadable"
-	reasonDraft       = "draft"
-	reasonApprove     = "approve"
+	// CI pending at H past the cap or the organization's patience
+	// (ci_stuck): one claim, whichever headline it was posted with, so
+	// the cap's COMMENT is not posted again when ci_stuck follows (L-A).
+	reasonCIUnconfirmed = "ci-unconfirmed"
+	reasonUnreadable    = "ci-unreadable"
+	reasonDraft         = "draft"
+	reasonApprove       = "approve"
 )
 
 // transientReason says a COMMENT for reason holds back an approval only
 // until CI passes at the head: the verdict stays due there.
 func transientReason(reason string) bool {
-	return reason == reasonUnrelatedCI || reason == reasonCap || reason == reasonStuck
+	return reason == reasonUnrelatedCI || reason == reasonCIUnconfirmed
 }
 
 // verdictDecision is decideVerdict's answer.
@@ -228,9 +230,9 @@ func decideVerdict(in verdictInput) verdictDecision {
 		// that never finishes (Stuck).
 		switch {
 		case in.Stuck:
-			return post(forge.EventComment, reasonStuck, fmt.Sprintf("Reviewed at %s, no issue found; CI has been pending at %s past the organization's patience: not approved", h, h))
+			return post(forge.EventComment, reasonCIUnconfirmed, fmt.Sprintf("Reviewed at %s, no issue found; CI has been pending at %s past the organization's patience: not approved", h, h))
 		case in.Capped:
-			return post(forge.EventComment, reasonCap, fmt.Sprintf("Reviewed at %s, no issue found; could not confirm CI at %s: not approved", h, h))
+			return post(forge.EventComment, reasonCIUnconfirmed, fmt.Sprintf("Reviewed at %s, no issue found; could not confirm CI at %s: not approved", h, h))
 		}
 		return verdictDecision{Action: verdictDefer, Why: checks.Detail}
 	case "unreadable":

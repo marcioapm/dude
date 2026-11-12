@@ -78,6 +78,12 @@ func TestDecideVerdictCoversEveryRow(t *testing.T) {
 		claimID(st, "h", unrelated.Event, unrelated.Reason) == claimID(st, "h", capped.Event, capped.Reason) {
 		t.Fatalf("unrelated %q and capped %q share a claim, or are not transient", unrelated.Reason, capped.Reason)
 	}
+	// L-A: the cap and ci_stuck are the same claim (CI not confirmed at
+	// H), each with its own headline.
+	stuck := decideVerdict(verdictInput{Gate: gateAt(pending), Stuck: true})
+	if claimID(st, "h", stuck.Event, stuck.Reason) != claimID(st, "h", capped.Event, capped.Reason) || stuck.Headline == capped.Headline {
+		t.Fatalf("stuck %+v and capped %+v: want one claim, two headlines", stuck, capped)
+	}
 	// A related failure: the conductor's lens files it, so row 3 holds and
 	// the failing checks are listed in the body too.
 	d := decideVerdict(verdictInput{Gate: gateAt(finding, failing), CIAsked: true})

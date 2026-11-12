@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
@@ -13,6 +14,44 @@ import (
 func (w *world) verdictCap(cap time.Duration) {
 	store := &delivery.Store{DB: w.app, SyncPullRequest: w.prs.Sync, VerdictDeferCap: cap}
 	w.runtime.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
+}
+
+// L-A: the cap's COMMENT, then ci_stuck for the same pending CI at H, is
+// the same claim ("CI not confirmed at H"): exactly one COMMENT at H, and
+// the verdict is still owed there, so green CI then approves.
+func TestTheCapThenCIStuckPostsOneComment(t *testing.T) {
+	w := newWorld(t)
+	w.verdictCap(time.Nanosecond)
+	w.gh.SetChecks("pending")
+	wi, n := w.reviewOnly()
+	head := w.gh.SHA("feature/greet")
+	w.agentsDone(wi, "commented at the cap", func() bool { return len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi) })
+	if got := w.dudeReviews(wi, n); got[0].State != "COMMENTED" || !strings.Contains(got[0].Body, "could not confirm CI") {
+		t.Fatalf("at the cap: %+v", got)
+	}
+	// The sync's patience runs out on the same pending CI: ci_stuck.
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes' WHERE task_id = $1`, wi)
+	stuckSignalled := func() bool {
+		return w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id = (SELECT id FROM workflow_runs WHERE task_id = $1)
+			AND idempotency_key LIKE '%:stuck:%' AND consumed_at IS NOT NULL`, wi) > 0
+	}
+	w.agentsDone(wi, "ci_stuck consumed by the wait", func() bool { return stuckSignalled() && w.waitingOnPR(wi) })
+	w.advanced()
+	var atHead []fakegithub.Review
+	for _, r := range w.dudeReviews(wi, n) {
+		if r.CommitID == head {
+			atHead = append(atHead, r)
+		}
+	}
+	if len(atHead) != 1 {
+		t.Fatalf("%d COMMENTs at the same head for the same pending CI, want 1: %+v", len(atHead), atHead)
+	}
+	// Still owed at H: green CI there approves.
+	w.gh.SetChecks("success")
+	w.agentsDone(wi, "approved once green at H", func() bool { return len(w.dudeReviews(wi, n)) == 2 })
+	if got := w.dudeReviews(wi, n); got[1].State != "APPROVED" || got[1].CommitID != head {
+		t.Fatalf("after CI passed at H: %+v", got)
+	}
 }
 
 // C-M1: CI pending at H (deferred), then failing (the conductor judges it
