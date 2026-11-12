@@ -91,10 +91,11 @@ func ProjectFacts(ctx context.Context, tx pgx.Tx, projectID string) (string, err
 }
 
 // clipFact cuts a fact's text at projectFactChars, saying so: the whole of
-// it is one get_memory away.
+// it is one get_memory away. A fence it leaves open, cut or not, is closed:
+// the facts after it, and the prompt after them, are not read as code.
 func clipFact(s string) string {
-	if utf8.RuneCountInString(s) <= projectFactChars {
-		return s
+	if utf8.RuneCountInString(s) > projectFactChars {
+		s = string([]rune(s)[:projectFactChars-1]) + "…"
 	}
-	return closeFence(string([]rune(s)[:projectFactChars-1]) + "…")
+	return closeFence(s)
 }

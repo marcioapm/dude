@@ -122,3 +122,55 @@ func TestOverTheBoundTheMostRecentFactsAreKeptAndTheRestCounted(t *testing.T) {
 		t.Errorf("%d bytes, %d shown:\n%s", len(got), shown, got)
 	}
 }
+
+// A fact's text over projectFactChars runes is cut, saying so; one fact
+// over the whole bytes bound is still shown, as the first fact always is;
+// and a fence a fact leaves open, cut or not, is closed, so neither the
+// facts after it nor the prompt after them are read as code.
+func TestALongFactIsCutAndAFenceIsClosed(t *testing.T) {
+	w := newGoldenWorld(t)
+	facts := func() string {
+		return w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) { return ProjectFacts(ctx, tx, "prj_g") })
+	}
+	// 601 runes, multi-byte: cut at 599 and an ellipsis.
+	w.exec(t, `INSERT INTO memories (id, organization_id, project_id, title, content, author_kind, system_reason, pinned_at, pinned_by_person_id)
+		VALUES ('mem_long', $1, 'prj_g', 'Long', repeat('é', 601), 'system', 'test', now(), 'per_ana')`)
+	got := facts()
+	if !strings.Contains(got, ": "+strings.Repeat("é", projectFactChars-1)+"…") || strings.Contains(got, strings.Repeat("é", projectFactChars)) {
+		t.Errorf("a %d-rune fact is not cut at %d with an ellipsis:\n%s", projectFactChars+1, projectFactChars-1, got)
+	}
+	// Exactly projectFactChars runes: shown whole.
+	w.exec(t, `UPDATE memories SET content = repeat('é', 600) WHERE id = 'mem_long' AND organization_id = $1`)
+	if got := facts(); !strings.Contains(got, strings.Repeat("é", projectFactChars)) || strings.Contains(got, "…") {
+		t.Errorf("a %d-rune fact is cut:\n%s", projectFactChars, got)
+	}
+
+	// One fact longer than the whole bound is shown, the rest counted.
+	w.exec(t, `UPDATE memories SET title = repeat('T', 200), content = repeat('é', 600) WHERE id = 'mem_long' AND organization_id = $1`)
+	w.exec(t, `INSERT INTO people (id, organization_id, name) VALUES ('per_long', $1, repeat('N', 3400))`)
+	w.exec(t, `UPDATE memories SET pinned_by_person_id = 'per_long' WHERE id = 'mem_long' AND organization_id = $1`)
+	w.exec(t, `INSERT INTO memories (id, organization_id, project_id, title, content, author_kind, system_reason, pinned_at, pinned_by_person_id, updated_at)
+		VALUES ('mem_older', $1, 'prj_g', 'Older', 'x', 'system', 'test', now() - interval '1 day', 'per_ana', now() - interval '1 day')`)
+	got = facts()
+	if !strings.Contains(got, "**"+strings.Repeat("T", 200)+"**") || strings.Contains(got, "**Older**") || !strings.Contains(got, "1 more is pinned") {
+		t.Errorf("a fact over %d bytes is not shown alone, the other counted:\n%s", projectFactsBytes, got)
+	}
+	w.exec(t, `UPDATE memories SET pinned_at = NULL, pinned_by_person_id = NULL WHERE organization_id = $1`)
+
+	// An open fence, not cut: closed before the next fact, and the prompt.
+	w.exec(t, `INSERT INTO memories (id, organization_id, project_id, title, content, author_kind, system_reason, pinned_at, pinned_by_person_id)
+		VALUES ('mem_fence', $1, 'prj_g', 'Fenced', E'Run it so:\n`+"```"+`sh\nmake test', 'system', 'test', now() - interval '1 hour', 'per_ana'),
+		       ('mem_after', $1, 'prj_g', 'After', 'y', 'system', 'test', now(), 'per_ana')`)
+	got = facts()
+	prompt := Prompt(PhaseImplement, PromptInput{Title: "T", ProjectFacts: got, Coordination: "## On this epic\n\nC"})
+	if f := UnclosedFence(prompt[:strings.Index(prompt, "**After**")]); f != "" {
+		t.Errorf("the fence is still open at the next fact:\n%s", got)
+	}
+	if UnclosedFence(prompt) != "" {
+		t.Errorf("the fence is still open at the prompt's end:\n%s", prompt)
+	}
+	// The facts come before the epic in a phase's prompt.
+	if facts, epic := strings.Index(prompt, "## Project facts"), strings.Index(prompt, "## On this epic"); facts < 0 || epic < 0 || facts > epic {
+		t.Errorf("the facts (at %d) are not before the epic (at %d):\n%s", facts, epic, prompt)
+	}
+}
