@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -131,21 +132,27 @@ func TestARefusedDispatchFreesTheAnswer(t *testing.T) {
 
 // A POST whose answer failed (a 502: GitHub may have started the run) is
 // unknown, "may or may not", told in the call's refusal (no wake besides),
-// and spends the answer: dude never sends it again.
+// and spends the answer: dude never sends it again. So is a 408, which a
+// proxy in front of GitHub may answer after forwarding the POST: only
+// GitHub's own refusals free the answer.
 func TestADispatchWhoseAnswerFailedIsMaybe(t *testing.T) {
-	w, task, branch := dispatchWorld(t)
-	w.approvedDeploy(task, branch, "q_maybe")
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchStatus = http.StatusBadGateway })
-	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_maybe"}`, "dude may or may not have started it")
-	if got := w.str(`SELECT state || ' ' || woken_outcome || ': ' || reason FROM workflow_dispatches WHERE question_id = 'q_maybe'`); !strings.HasPrefix(got,
-		"unknown unknown: dude may or may not have dispatched this") {
-		t.Fatalf("lost answer: %s", got)
-	}
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchStatus = 0 })
-	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_maybe"}`, "q_maybe already authorized dispatch")
-	w.supervise()
-	if n := len(w.workflowWakes(task)); n != 0 {
-		t.Fatalf("%d wakes beside the call's refusal", n)
+	for _, status := range []int{http.StatusBadGateway, http.StatusRequestTimeout} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			w, task, branch := dispatchWorld(t)
+			w.approvedDeploy(task, branch, "q_maybe")
+			w.gh.Set(func(s *fakegithub.Server) { s.DispatchStatus = status })
+			w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_maybe"}`, "dude may or may not have started it")
+			if got := w.str(`SELECT state || ' ' || woken_outcome || ': ' || reason FROM workflow_dispatches WHERE question_id = 'q_maybe'`); !strings.HasPrefix(got,
+				"unknown unknown: dude may or may not have dispatched this") {
+				t.Fatalf("lost answer: %s", got)
+			}
+			w.gh.Set(func(s *fakegithub.Server) { s.DispatchStatus = 0 })
+			w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_maybe"}`, "q_maybe already authorized dispatch")
+			w.supervise()
+			if n := len(w.workflowWakes(task)); n != 0 {
+				t.Fatalf("%d wakes beside the call's refusal", n)
+			}
+		})
 	}
 }
 

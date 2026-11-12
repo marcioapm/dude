@@ -361,12 +361,22 @@ func asForgeError(err error, e **forge.Error) bool {
 	return err != nil && errors.As(err, e)
 }
 
-// postRefused: GitHub answered the POST with a refusal (4xx, a rate
-// limit), so no workflow ran. Anything else (a 5xx, no answer, the call
-// cut off) may have started one.
+// postRefused: GitHub answered the POST with one of the refusals it gives
+// before it creates a run (a bad request, no auth, forbidden or rate
+// limited, no such workflow, a conflict, invalid inputs, too many
+// requests), so no workflow ran. Any other status (a 5xx, or a 4xx such
+// as 408 or 499 a proxy in front of GitHub may answer after forwarding
+// the request), no answer, or the call cut off: it may have started one.
 func postRefused(err error) bool {
 	var e *forge.Error
-	return errors.As(err, &e) && (e.Status < 500 || forge.RateLimited(err))
+	if !errors.As(err, &e) {
+		return false
+	}
+	switch e.Status {
+	case 400, 401, 403, 404, 409, 422, 429:
+		return true
+	}
+	return false
 }
 
 // EndDispatchTx ends c's reserved row when DoDispatch failed with err, and
