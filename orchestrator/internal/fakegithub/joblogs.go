@@ -47,6 +47,10 @@ type WorkflowRun struct {
 	Jobs                                             []WorkflowJob
 	// When it was created (RFC 3339), which orders a branch's runs.
 	CreatedAt string
+	// The workflow's file name (its runs list filters on it) and the
+	// attempt: 0 reads as 1; a re-run is the same id, attempt n+1.
+	Workflow string
+	Attempt  int
 }
 
 // WorkflowJob is one job of a WorkflowRun; FailedSteps' steps failed, the
@@ -76,15 +80,27 @@ func (s *Server) workflowRun(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Not Found")
 		return
 	}
-	write(w, 200, map[string]any{"id": id, "name": run.Name, "head_branch": run.Branch, "head_sha": run.HeadSHA, "event": run.Event,
-		"status": run.Status, "conclusion": run.Conclusion, "html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d", s.Slug, id)})
+	write(w, 200, s.runJSON(id, run))
+}
+
+func (s *Server) runJSON(id int64, run WorkflowRun) map[string]any {
+	var conclusion any
+	if run.Conclusion != "" {
+		conclusion = run.Conclusion
+	}
+	return map[string]any{"id": id, "name": run.Name, "head_branch": run.Branch, "head_sha": run.HeadSHA,
+		"event": run.Event, "status": run.Status, "conclusion": conclusion, "created_at": run.CreatedAt,
+		"run_attempt": max(run.Attempt, 1), "path": ".github/workflows/" + run.Workflow,
+		"html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d", s.Slug, id)}
 }
 
 // workflowRuns lists the repository's runs as GitHub does: newest first
 // (by CreatedAt, then id), of one branch when branch is given, a page of
-// per_page.
+// per_page. Under a workflow (actions/workflows/{workflow}/runs) only its
+// runs; event and created (">=" a time) filter as GitHub's do.
 func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
-	branch := r.URL.Query().Get("branch")
+	branch, workflow, event := r.URL.Query().Get("branch"), r.PathValue("workflow"), r.URL.Query().Get("event")
+	created := strings.TrimPrefix(r.URL.Query().Get("created"), ">=")
 	type listed struct {
 		id  int64
 		run WorkflowRun
@@ -92,7 +108,8 @@ func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
 	var all []listed
 	s.mu.Lock()
 	for id, run := range s.WorkflowRuns {
-		if branch == "" || run.Branch == branch {
+		if (branch == "" || run.Branch == branch) && (workflow == "" || run.Workflow == workflow) &&
+			(event == "" || run.Event == event) && (created == "" || run.CreatedAt >= created) {
 			all = append(all, listed{id, run})
 		}
 	}
@@ -102,9 +119,7 @@ func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
 	})
 	runs := []any{}
 	for _, l := range page(r, all) {
-		runs = append(runs, map[string]any{"id": l.id, "name": l.run.Name, "head_branch": l.run.Branch, "head_sha": l.run.HeadSHA,
-			"event": l.run.Event, "status": l.run.Status, "conclusion": l.run.Conclusion, "created_at": l.run.CreatedAt,
-			"html_url": fmt.Sprintf("https://github.com/%s/actions/runs/%d", s.Slug, l.id)})
+		runs = append(runs, s.runJSON(l.id, l.run))
 	}
 	write(w, 200, map[string]any{"total_count": len(all), "workflow_runs": runs})
 }

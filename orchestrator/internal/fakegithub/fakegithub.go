@@ -201,6 +201,13 @@ type Server struct {
 	downloadAuth []string
 	// Actions workflow runs by id (joblogs.go: SetWorkflowRun).
 	WorkflowRuns map[int64]WorkflowRun
+	// Workflow dispatches asked for (dispatch.go), in order; DispatchStatus,
+	// when set, is what a dispatch answers instead (422: no
+	// workflow_dispatch trigger). DispatchRunID, when set, is the id of a
+	// run each dispatch creates, queued, as GitHub would (then bumped).
+	Dispatches     []Dispatch
+	DispatchStatus int
+	DispatchRunID  int64
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -941,6 +948,8 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}/logs", s.jobLogs)
 	mux.HandleFunc("GET "+prefix+"/actions/runs", s.workflowRuns)
+	mux.HandleFunc("POST "+prefix+"/actions/workflows/{workflow}/dispatches", s.dispatch)
+	mux.HandleFunc("GET "+prefix+"/actions/workflows/{workflow}/runs", s.workflowRuns)
 	mux.HandleFunc("GET "+prefix+"/actions/runs/{id}", s.workflowRun)
 	mux.HandleFunc("GET "+prefix+"/actions/runs/{id}/jobs", s.workflowRunJobs)
 	mux.HandleFunc("GET "+prefix+"/check-runs/{id}", s.checkRun)
