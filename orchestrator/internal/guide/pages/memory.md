@@ -29,11 +29,13 @@ A memory can say which tasks or epics it is about. It is live as soon as it is s
 
 You can limit a search to some types: memory, task, epic or project. dude's own guide — these pages — is searchable too, as type `doc`, so an agent can answer a question about dude from the guide and link you to the page.
 
-Agents are told to search before they investigate something that may already be known, and before they save something new. `get_memory` reads one memory in full.
+Agents are told to search before they act on something they have not met in this project before — an unfamiliar failure, a convention, how a service is run — and again before they save something new. `get_memory` reads one memory in full.
 
 ## Saving a memory
 
-Agents save memories with `remember`. They are told to search first so they do not save the same thing twice, and not to save what the code or the task already says.
+Agents save memories with `remember`, and are told to save only what they had to learn the hard way: they searched, found nothing, then established it. They search again first, so they do not save the same thing twice, and not what the code or the task already says. An agent cannot edit or archive a memory: when one it finds is wrong, it saves the correction naming the wrong one and says so, for a person to archive the old one.
+
+What a memory is about does not make it the task's own: one about a task is still found across its project. So agents keep what only their task needs with the task (in their commits and what they hand back), put what every agent on an epic must follow in an epic note, and save to memory only what the next task in the project would need.
 
 People add memories in **Settings → Memory → Memories**.
 
