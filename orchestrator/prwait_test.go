@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -591,3 +592,68 @@ func TestTheSimplifierWhileMergeabilityIsUnknownComesBackToReady(t *testing.T) {
 	w.timersElapse(task)
 	w.until("ready to merge with no sync", func() bool { return w.taskStatus(task) == "ready_to_merge" })
 }
+
+// startPhaseNoPump calls start_phase as the conductor whose spec is given,
+// pumping nothing: the workflow stays exactly as the test left it.
+func (w *world) startPhaseNoPump(spec, args string) (int, map[string]any) {
+	w.t.Helper()
+	status, body := w.callTool(w.syncer.Agent.ToolsURL, spec, "start_phase", args)
+	var out map[string]any
+	_ = json.Unmarshal([]byte(body), &out)
+	return status, out
+}
+
+// signalReadinessNoPump sends pr.feedback {kind: readiness} as prs.go does
+// after a person's push with nothing actionable, and runs no poller: the
+// delivery is left "running" at awaitPullRequest, unclaimed.
+func (w *world) signalReadinessNoPump(task, head string) string {
+	w.t.Helper()
+	var wf string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM workflow_runs WHERE task_id = $1`, task).Scan(&wf); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := w.runtime.Signal(context.Background(), w.org, wf, delivery.SignalPRFeedback,
+		map[string]any{"kind": "readiness", "head": head}, "readiness:"+head); err != nil {
+		w.t.Fatal(err)
+	}
+	var status, step string
+	if err := w.owner.QueryRow(context.Background(), `SELECT status::text, step FROM workflow_runs WHERE id = $1`, wf).
+		Scan(&status, &step); err != nil {
+		w.t.Fatal(err)
+	}
+	if status != "running" || step != "awaitPullRequest" {
+		w.t.Fatalf("after the readiness signal the delivery is %s at %s, want running at awaitPullRequest", status, step)
+	}
+	return wf
+}
+
+// A person pushed to the pull request; prs.go signals readiness, which
+// wakes the wait ("running") until the poller runs awaitPullRequest again.
+// The conductor's start_phase landing in that moment is taken, as it would
+// be a moment later, not refused as "not waiting on a decision" (#456).
+func TestStartPhaseRightAfterAPersonsPushWhileThePullRequestWaits(t *testing.T) {
+	w := conducting(t)
+	w.onModel("qa_browser", "fake/scripted")
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.until("waiting on the pull request", func() bool { return w.waitingOnPR(task) })
+	spec := w.conductorSpecOf(task)
+	tests := w.phaseRuns(task, "test")
+
+	pushed := w.gh.CommitOnTop(w.gh.Pull(1).Head, "A person's change")
+	w.signalReadinessNoPump(task, pushed)
+
+	if status, out := w.startPhaseNoPump(spec, `{"phase":"test"}`); status != 200 {
+		t.Fatalf("start_phase test right after the person's push: %d %v", status, out)
+	}
+	w.until("the test at the person's push completed", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'test' AND base_refs->>'target' = $2
+			AND status = 'completed'`, task, pushed) == 1
+	})
+	if n := w.phaseRuns(task, "test"); n != tests+1 {
+		t.Fatalf("%d test Runs after start_phase, want %d", n, tests+1)
+	}
+}
+
