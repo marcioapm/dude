@@ -205,3 +205,30 @@ func TestAnOwnPullRequestsApprovalIsDowngradedToAComment(t *testing.T) {
 		t.Fatalf("%d downgrades", e)
 	}
 }
+
+// Decision 2: CI failing at the reviewed head. The conductor is woken
+// first (a decision at pull request feedback, offered review and test
+// only); judged unrelated (its "next"), the review is posted without
+// approving; once CI passes at that head, the approval follows.
+func TestRedCIAtTheHeadIsTheConductorsBeforeAnyApproval(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("failure")
+	wi, n := w.reviewOnly()
+	w.agentsDone(wi, "commented without approving", func() bool { return len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi) })
+	if d := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decision_awaited'
+		AND payload->>'point' = $2`, wi, delivery.PointPRFeedback); d != 1 {
+		t.Fatalf("%d decisions about the failing checks, want 1", d)
+	}
+	got := w.dudeReviews(wi, n)
+	if got[0].State != "COMMENTED" || !strings.Contains(got[0].Body, "not approved while CI fails") {
+		t.Fatalf("with red CI: %+v", got)
+	}
+	w.gh.SetChecks("success")
+	w.until("approved once green at the head", func() bool { w.sync(); w.advanced(); return len(w.dudeReviews(wi, n)) == 2 })
+	if got := w.dudeReviews(wi, n); got[1].State != "APPROVED" || got[1].CommitID != got[0].CommitID {
+		t.Fatalf("after CI passed: %+v", got)
+	}
+	if c := w.writers(wi); c != 0 {
+		t.Fatalf("%d writers", c)
+	}
+}

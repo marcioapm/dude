@@ -142,8 +142,10 @@ func decideVerdict(in verdictInput) verdictDecision {
 			notes = append(notes, it.Detail)
 		}
 	}
-	if it := items[ReadyMergeable]; it.Detail != "" && !strings.HasPrefix(it.Detail, "clean") && !strings.HasPrefix(it.Detail, "mergeable") {
-		notes = append(notes, "Mergeability: "+it.Detail)
+	// Informational under this profile (always OK): a conflict or a branch
+	// behind is the author's to update, said in the body.
+	if it := items[ReadyMergeable]; strings.Contains(it.Detail, "conflicts with") || strings.HasPrefix(it.Detail, "behind ") {
+		notes = append(notes, "For the author: "+it.Detail)
 	}
 	post := func(event, headline string) verdictDecision {
 		return verdictDecision{Action: verdictPost, Event: event, Headline: headline, Notes: notes}
@@ -401,8 +403,9 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	if posted != "" {
 		v.Posted = posted
 	}
-	if v.Posted == forge.EventApprove || v.Posted == "" {
-		// Approved, or nothing posted (head moved): no verdict owed here.
+	if !d.Unrelated || posted == "" {
+		// Only an approval held back by unrelated red CI is still owed at
+		// H (decision 2): CI's signals run the verdict again then.
 		v.Due = ""
 	}
 	w.statusComment(ctx, sc, st, pr, fmt.Sprintf("%s (%s)", d.Headline, cmp.Or(reviewWord[v.Posted], "not posted")))
