@@ -769,9 +769,9 @@ test("263 marks merged pull requests told, adds the merge commit, and lets an ep
     expect(await wake("before", "epic_merge", 10)).toContain("conductor_wakes_kind_check");
 
     expect((await migrate(url, { log: () => {} })).applied).toEqual(["263_epic_merge_wakes.sql"]);
-    expect([...await sql`SELECT id, epic_peers_told_at, merge_commit_sha FROM pull_requests ORDER BY id`]).toEqual([
-      { id: "pr_merged", epic_peers_told_at: new Date("2026-01-02T03:04:05Z"), merge_commit_sha: null },
-      { id: "pr_open", epic_peers_told_at: null, merge_commit_sha: null },
+    expect([...await sql`SELECT id, epic_peers_told_at, epic_peers_retry_at, merge_commit_sha FROM pull_requests ORDER BY id`]).toEqual([
+      { id: "pr_merged", epic_peers_told_at: new Date("2026-01-02T03:04:05Z"), epic_peers_retry_at: null, merge_commit_sha: null },
+      { id: "pr_open", epic_peers_told_at: null, epic_peers_retry_at: null, merge_commit_sha: null },
     ]);
     const sha = (v: string) => sql`UPDATE pull_requests SET merge_commit_sha = ${v} WHERE id = 'pr_open'`.then(() => "set", (e: Error) => e.message);
     expect(await sha("a".repeat(40))).toBe("set");

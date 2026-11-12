@@ -10,12 +10,17 @@
 -- sets it in the transaction that records the wakes. A pull request merged
 -- before this migration is marked told: its peers are not woken for it now.
 --
+-- pull_requests.epic_peers_retry_at: a merged pull request the worker
+-- could not settle (the forge would not give its files, or telling a peer
+-- failed) is not tried again before it; NULL: on the next pass.
+--
 -- conductor_wakes: kind epic_merge, its line bounded at 300 like the rest.
 -- NOT VALID: no scan of the table under ACCESS EXCLUSIVE; every row there
 -- holds a kind the constraint it replaces allowed, all of which this allows.
 ALTER TABLE pull_requests
-  ADD COLUMN merge_commit_sha   text CHECK (merge_commit_sha ~ '^[0-9a-f]{40,64}$'),
-  ADD COLUMN epic_peers_told_at timestamptz;
+  ADD COLUMN merge_commit_sha    text CHECK (merge_commit_sha ~ '^[0-9a-f]{40,64}$'),
+  ADD COLUMN epic_peers_told_at  timestamptz,
+  ADD COLUMN epic_peers_retry_at timestamptz;
 
 UPDATE pull_requests SET epic_peers_told_at = COALESCE(merged_at, now()) WHERE state = 'merged';
 

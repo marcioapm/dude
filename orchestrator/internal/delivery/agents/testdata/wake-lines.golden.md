@@ -144,6 +144,14 @@ GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes `a.go`
 
 GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes `services/billing/internal/invoices/reconcile_test.go`, `services/billing/internal/invoices/reconcile.go` and 2 more: bring `main` in (sync_base, or start_phase fix while a pull request is open) before you go on.
 
+## epic-merge-overlap-one-long
+
+GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes 1 file it changed: bring `main` in (sync_base, or start_phase fix while a pull request is open) before you go on.
+
+## epic-merge-overlap-other-base
+
+GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). Your branch also changes `api/auth.go`. It merged into `release/1.2`, not your base: check whether your work needs it before you go on.
+
 ## epic-merge-none
 
 GLD-8 on your epic merged api#14 (aaaaaaaaaaaa). No overlapping files with your branch.
