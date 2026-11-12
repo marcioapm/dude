@@ -88,6 +88,8 @@ type PromptInput struct {
 	// (MachineChoices.Line), last in a phase's prompt; "" says nothing. A
 	// conductor's and a session agent's prompt get it after, at submit.
 	Machine string
+	// The project's pinned facts (ProjectFacts), "" for none.
+	ProjectFacts string
 	// The task's epic as the Run is briefed on it (EpicBriefing): its
 	// peers, the notes in force, messages held for it. "" off an epic.
 	Coordination string
@@ -417,6 +419,9 @@ func Prompt(phase string, in PromptInput) string {
 	}
 	if n := strings.TrimSpace(in.RestartNote); n != "" {
 		add(render(restartedTmpl, n))
+	}
+	if f := strings.TrimSpace(in.ProjectFacts); f != "" {
+		add(f)
 	}
 	if c := strings.TrimSpace(in.Coordination); c != "" {
 		add(c)

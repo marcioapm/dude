@@ -5,63 +5,44 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// 262 applies over main's schema with conductor wakes of every kind
-// already there, keeps them, and takes the workflow kind (its 600
-// characters) and a dispatch row; a run is bound to one dispatch only.
-func TestMigration262WorkflowDispatchesUpFromMain(t *testing.T) {
-	owner, apply := dbtest.Upgrade(t, "262")
+// Migration 262, up from main's schema: every memory already there is
+// unpinned and stays as it was, a project's fact can then be pinned, and
+// nothing else can — a session's memory, the organization's, a note.
+func TestMigration262PinsOnlyAProjectsFact(t *testing.T) {
 	ctx := context.Background()
-	mustExec(t, owner, `INSERT INTO organizations (id, name, slug) VALUES ('org_262', 'O', 'o262')`)
-	mustExec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_262', 'org_262', 'P', 'p262', 'P')`)
-	mustExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('wi_262', 'org_262', 'prj_262', 1, 'T')`)
-	mustExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_262', 'org_262', 'prj_262', 'target', 'https://github.com/acme/target.git')`)
-	mustExec(t, owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
-		VALUES ('cwk_a', 'org_262', 'wi_262', 'recovered', 'k1', $1), ('cwk_b', 'org_262', 'wi_262', 'checks', 'k2', 'x')`, strings.Repeat("r", 600))
-	if _, err := owner.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
-		VALUES ('cwk_c', 'org_262', 'wi_262', 'workflow', 'k3', 'x')`); err == nil {
-		t.Fatal("a workflow wake before 262")
+	owner, apply := dbtest.Upgrade(t, "262")
+	for _, q := range []string{
+		`INSERT INTO organizations (id, name, slug) VALUES ('org_m', 'O', 'o')`,
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_m', 'org_m', 'P', 'p', 'P')`,
+		`INSERT INTO sessions (id, organization_id, title, titled_by) VALUES ('ses_m', 'org_m', 'S', 'person')`,
+		`INSERT INTO memories (id, organization_id, project_id, session_id, kind, title, content, author_kind, system_reason) VALUES
+			('mem_fact', 'org_m', 'prj_m', NULL, 'fact', 'F', 'x', 'system', 'test'),
+			('mem_note', 'org_m', 'prj_m', NULL, 'note', 'N', 'x', 'system', 'test'),
+			('mem_org', 'org_m', NULL, NULL, 'fact', 'O', 'x', 'system', 'test'),
+			('mem_ses', 'org_m', NULL, 'ses_m', 'fact', 'S', 'x', 'system', 'test')`,
+	} {
+		if _, err := owner.Exec(ctx, q); err != nil {
+			t.Fatalf("%v\n%s", err, q)
+		}
 	}
 	apply()
-
-	if n := scalar[int](t, owner, `SELECT count(*) FROM conductor_wakes WHERE task_id = 'wi_262'`); n != 2 {
-		t.Fatalf("%d wakes kept", n)
+	var pinned, all int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FILTER (WHERE pinned_at IS NOT NULL), count(*) FROM memories`).Scan(&pinned, &all); err != nil || pinned != 0 || all != 4 {
+		t.Fatalf("after 262: %d of %d pinned (%v)", pinned, all, err)
 	}
-	mustExec(t, owner, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
-		VALUES ('cwk_c', 'org_262', 'wi_262', 'workflow', 'k3', $1)`, strings.Repeat("w", 600))
-	if _, err := owner.Exec(ctx, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
-		VALUES ('cwk_d', 'org_262', 'wi_262', 'workflow', 'k4', $1)`, strings.Repeat("w", 601)); err == nil {
-		t.Fatal("a workflow wake past 600 characters")
+	if _, err := owner.Exec(ctx, `UPDATE memories SET pinned_at = now() WHERE id = 'mem_fact'`); err != nil {
+		t.Errorf("a project's fact is not pinned: %v", err)
 	}
-	mustExec(t, owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, run_id)
-		VALUES ('wfd_1', 'org_262', 'wi_262', 'repo_262', 'ci.yml', 'main', 7)`)
-	if _, err := owner.Exec(ctx, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, run_id)
-		VALUES ('wfd_2', 'org_262', 'wi_262', 'repo_262', 'ci.yml', 'main', 7)`); err == nil {
-		t.Fatal("one run bound to two dispatches")
+	for _, id := range []string{"mem_note", "mem_org", "mem_ses"} {
+		if _, err := owner.Exec(ctx, `UPDATE memories SET pinned_at = now() WHERE id = $1`, id); err == nil || !strings.Contains(err.Error(), "memories_pinned_project_fact") {
+			t.Errorf("%s pinned: %v", id, err)
+		}
 	}
-	if got := scalar[string](t, owner, `SELECT state || ' ' || failed_reads FROM workflow_dispatches WHERE id = 'wfd_1'`); got != "dispatching 0" {
-		t.Errorf("a new dispatch reads %q", got)
+	var indexed bool
+	if err := owner.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'memories_pinned_idx')`).Scan(&indexed); err != nil || !indexed {
+		t.Errorf("no index for the briefing's read (%v)", err)
 	}
-	// One answer, one dispatch; one GitHub refused (failed) does not spend it.
-	mustExec(t, owner, `INSERT INTO questions (id, organization_id, task_id, prompt) VALUES ('q_262', 'org_262', 'wi_262', 'Run?')`)
-	mustExec(t, owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, question_id, state)
-		VALUES ('wfd_3', 'org_262', 'wi_262', 'repo_262', 'deploy.yml', 'main', 'q_262', 'failed'),
-		       ('wfd_4', 'org_262', 'wi_262', 'repo_262', 'deploy.yml', 'main', 'q_262', 'dispatching')`)
-	if _, err := owner.Exec(ctx, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, question_id)
-		VALUES ('wfd_5', 'org_262', 'wi_262', 'repo_262', 'deploy.yml', 'main', 'q_262')`); err == nil {
-		t.Fatal("one answer reserved by two dispatches")
-	}
-}
-
-func scalar[T any](t *testing.T, c *pgx.Conn, sql string) T {
-	t.Helper()
-	var v T
-	if err := c.QueryRow(context.Background(), sql).Scan(&v); err != nil {
-		t.Fatal(err)
-	}
-	return v
 }

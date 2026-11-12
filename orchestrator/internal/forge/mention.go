@@ -30,20 +30,26 @@ var verdictMarker = regexp.MustCompile(`^<!-- dude:verdict task=[A-Za-z0-9_-]+ -
 // marker inside a blockquote or a code fence, or above their own words,
 // and stays theirs.
 func Own(f Feedback) bool {
-	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(f.Body, " \t\r\n"), "\r\n", "\n"), "\n")
-	ind, rest := indent(lines[len(lines)-1])
-	// The marker line itself goes through the fence reading: a marker that
-	// ends a list item ends a fence left open in it.
-	return strings.TrimSpace(rest) == ReplyMarker && ind <= 3 && !fenced(lines)
+	last, ok := markerLine(f.Body)
+	return ok && last == ReplyMarker
 }
 
 // VerdictMarked says the feedback ends in a VerdictMarker, read as Own
 // reads ReplyMarker. Anyone can type it: alone it says nothing of whose
 // comment it is (OwnVerdict).
 func VerdictMarked(f Feedback) bool {
-	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(f.Body, " \t\r\n"), "\r\n", "\n"), "\n")
+	last, ok := markerLine(f.Body)
+	return ok && verdictMarker.MatchString(last)
+}
+
+// markerLine is body's last non-blank line, trimmed, and whether a marker
+// there counts: indented at most 3 spaces, outside any code fence and
+// blockquote. The marker line itself goes through the fence reading: a
+// marker that ends a list item ends a fence left open in it.
+func markerLine(body string) (string, bool) {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimRight(body, " \t\r\n"), "\r\n", "\n"), "\n")
 	ind, rest := indent(lines[len(lines)-1])
-	return verdictMarker.MatchString(strings.TrimSpace(rest)) && ind <= 3 && !fenced(lines)
+	return strings.TrimSpace(rest), ind <= 3 && !fenced(lines)
 }
 
 // OwnVerdict says the feedback is dude's verdict comment: verdict-marked

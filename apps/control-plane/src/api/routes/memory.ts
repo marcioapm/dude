@@ -32,6 +32,9 @@ export function registerMemoryRoutes(router: Router): void {
   router.patch("/v1/memory/memories/:id", forward("PATCH", memory));
   router.post("/v1/memory/memories/:id/archive", forward("POST", (ctx) => `${memory(ctx)}/archive`));
   router.post("/v1/memory/memories/:id/restore", forward("POST", (ctx) => `${memory(ctx)}/restore`));
+  // Pinned: in every briefing of the memory's project (owner or admin, as an edit).
+  router.post("/v1/memory/memories/:id/pin", forward("POST", (ctx) => `${memory(ctx)}/pin`));
+  router.post("/v1/memory/memories/:id/unpin", forward("POST", (ctx) => `${memory(ctx)}/unpin`));
   router.get("/v1/memory/index", forward("GET", () => "/internal/memory/index"));
   router.post("/v1/memory/index/retry", forward("POST", () => "/internal/memory/index/retry"));
   const reindex = forward("POST", () => "/internal/memory/index/reindex");

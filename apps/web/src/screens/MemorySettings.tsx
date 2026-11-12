@@ -488,6 +488,7 @@ function MemoriesPage({ version, client, scope, projects, embedder, onOpen, add 
                       detail={[KIND_LABEL[m.kind], m.source?.label ? `learned on ${m.source.label}` : null, ago(m.createdAt)].filter(Boolean).join(" · ")}
                       trailing={
                         <>
+                          {m.pinnedAt && !m.archivedAt ? <Badge size="sm" icon="pin" title={m.pinnedBy ? `Pinned by ${m.pinnedBy}: in every agent's briefing` : "Pinned: in every agent's briefing"}>Pinned</Badge> : null}
                           {m.archivedAt ? <Badge size="sm" icon="archive">Archived</Badge> : null}
                           {m.index === "waiting" && embedder && !m.archivedAt ? <Badge size="sm" emphasis="subtle" icon="clock">Text only</Badge> : null}
                           {m.index === "failed" && !m.archivedAt ? <Badge size="sm" tone="danger" icon="alert" title={m.indexNote}>Not embedded</Badge> : null}
@@ -563,6 +564,13 @@ function MemoryDialog({ client, scope, projects, admin, memory, onClose, onSaved
       description={memory ? undefined : "Live as soon as you add it: agents find it the next time they search."}
       footer={
         <>
+          {memory && canChange && (memory.pinnedAt || (memory.projectId && memory.kind === "fact" && !memory.archivedAt)) ? (
+            <Button variant="quiet" leadingIcon="pin" disabled={busy} data-testid="memory-pin"
+              title={memory.pinnedAt ? undefined : "Every agent on this project is briefed with a pinned fact"}
+              onClick={() => void save(() => client.pinMemory(memory.id, !memory.pinnedAt), onSaved, memory.pinnedAt ? "Memory unpinned" : "Memory pinned")}>
+              {memory.pinnedAt ? "Unpin" : "Pin"}
+            </Button>
+          ) : null}
           {memory && canChange ? (
             <Button variant="quiet" leadingIcon={memory.archivedAt ? "retry" : "archive"} disabled={busy}
               onClick={() => void save(() => client.archiveMemory(memory.id, !memory.archivedAt), onSaved, memory.archivedAt ? "Memory restored" : "Memory archived")}>

@@ -113,6 +113,8 @@ func automationCases(t *testing.T) []automationCase {
 		{[]string{"preview", "reopen-feedback", "pfb_1", "--note", "still broken"}, "", "POST", "/v1/preview-feedback/pfb_1/reopen", `{"note":"still broken"}`, ""},
 		{[]string{"preview", "resolve-feedback", "pfb_1"}, "", "POST", "/v1/preview-feedback/pfb_1/resolve", `{}`, ""},
 		{[]string{"preview", "reopen-feedback", "pfb_1"}, "", "POST", "/v1/preview-feedback/pfb_1/reopen", `{}`, ""},
+		{[]string{"memory", "pin", "mem_1"}, "", "POST", "/v1/memory/memories/mem_1/pin", ``, ""},
+		{[]string{"memory", "unpin", "mem_1"}, "", "POST", "/v1/memory/memories/mem_1/unpin", ``, ""},
 	}
 }
 

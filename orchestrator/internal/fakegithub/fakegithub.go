@@ -70,6 +70,9 @@ type Comment struct {
 	InReplyTo int64
 	// A line comment's line in the file; 0 for none.
 	Line int
+	// The review a line comment was submitted in (POST /pulls/{n}/reviews);
+	// 0 for one left on its own.
+	ReviewID int64
 }
 
 type Server struct {
@@ -211,6 +214,13 @@ type Server struct {
 	DispatchStatus int
 	DispatchRunID  int64
 	DispatchLegacy bool
+	// Review writes (reviews.go). RefuseDismissal answers every dismissal
+	// 403, as protected branch rules do. ReviewTimeoutOnce takes the next
+	// review, then cuts the connection before answering. ReviewFail5xx
+	// answers that many review submissions 502, taking none of them.
+	RefuseDismissal   bool
+	ReviewTimeoutOnce bool
+	ReviewFail5xx     int
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -689,6 +699,8 @@ func (s *Server) Handler() http.Handler {
 		write(w, 200, s.pullJSON(p))
 	})
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
+	mux.HandleFunc("POST "+prefix+"/pulls/{n}/reviews", s.postReview)
+	mux.HandleFunc("PUT "+prefix+"/pulls/{n}/reviews/{id}/dismissals", s.dismissReview)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", s.lineComments)
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.postComment)
 	mux.HandleFunc("PATCH "+prefix+"/issues/{n}", func(w http.ResponseWriter, r *http.Request) {
@@ -1326,6 +1338,9 @@ func (s *Server) commentsJSON(p *Pull, comments []Comment, anchor string) []any 
 		if c.InReplyTo != 0 {
 			m["in_reply_to_id"] = c.InReplyTo
 		}
+		if c.ReviewID != 0 {
+			m["pull_request_review_id"] = c.ReviewID
+		}
 		out = append(out, m)
 	}
 	return out
@@ -1477,8 +1492,7 @@ func (s *Server) reviews(w http.ResponseWriter, r *http.Request) {
 	n, _ := strconv.Atoi(r.PathValue("n"))
 	if p := s.pulls[n]; p != nil {
 		for _, rv := range p.Reviews {
-			out = append(out, map[string]any{"id": rv.ID, "user": s.userJSON(rv.Login), "state": rv.State,
-				"body": rv.Body, "submitted_at": rv.SubmittedAt, "commit_id": rv.CommitID})
+			out = append(out, s.reviewJSON(p, rv)) // as GitHub lists them: node_id and html_url too
 		}
 	}
 	write(w, 200, page(r, out))

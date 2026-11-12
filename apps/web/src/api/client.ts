@@ -1314,6 +1314,11 @@ export class ApiClient {
     return this.#request("POST", `/v1/memory/memories/${encodeURIComponent(id)}/${archived ? "archive" : "restore"}`);
   }
 
+  /** Pins a project's fact into every briefing of its agents, or unpins it. */
+  pinMemory(id: string, pinned: boolean): Promise<Memory> {
+    return this.#request("POST", `/v1/memory/memories/${encodeURIComponent(id)}/${pinned ? "pin" : "unpin"}`);
+  }
+
   memoryIndex(project?: string): Promise<IndexStatus> {
     return this.#request("GET", `/v1/memory/index${qs({ project })}`);
   }

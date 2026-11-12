@@ -879,6 +879,9 @@ export const EventTypes = {
   MemoryUpdated: "memory.updated",
   MemoryArchived: "memory.archived",
   MemoryRestored: "memory.restored",
+  // Pinned into every briefing of its project, or no longer. Payload: `{ memoryId, title }`.
+  MemoryPinned: "memory.pinned",
+  MemoryUnpinned: "memory.unpinned",
 
   // Cost
   CostSampled: "cost.sampled",
