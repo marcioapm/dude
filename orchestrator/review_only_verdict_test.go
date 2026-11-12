@@ -49,6 +49,13 @@ func (w *world) writers(wi string) int {
 	return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase IN ('implement', 'fix', 'simplify')`, wi)
 }
 
+// withDeliveries has the world's deliveries run on store (its timings),
+// with the world's database and pull request sync.
+func (w *world) withDeliveries(store *delivery.Store) {
+	store.DB, store.SyncPullRequest = w.app, w.prs.Sync
+	w.runtime.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
+}
+
 // G1c: a review-only task runs its lenses at the pull request's head,
 // never starts a writer, and posts exactly one review pinned to that head;
 // with nothing found and CI green, an approval. It then waits, no agent
@@ -178,8 +185,7 @@ func TestPendingCIDefersTheVerdictUntilTheChecksSignal(t *testing.T) {
 func TestADeferredVerdictStopsAtItsCap(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("pending")
-	store := &delivery.Store{DB: w.app, SyncPullRequest: w.prs.Sync, VerdictDeferCap: time.Nanosecond}
-	w.runtime.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
+	w.withDeliveries(&delivery.Store{VerdictDeferCap: time.Nanosecond})
 	wi, n := w.reviewOnly()
 	w.agentsDone(wi, "commented at the cap", func() bool { return len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi) })
 	got := w.dudeReviews(wi, n)

@@ -7,21 +7,14 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
-
-// verdictCap has the world's deliveries cap a deferred verdict at cap.
-func (w *world) verdictCap(cap time.Duration) {
-	store := &delivery.Store{DB: w.app, SyncPullRequest: w.prs.Sync, VerdictDeferCap: cap}
-	w.runtime.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
-}
 
 // L-A: the cap's COMMENT, then ci_stuck for the same pending CI at H, is
 // the same claim ("CI not confirmed at H"): exactly one COMMENT at H, and
 // the verdict is still owed there, so green CI then approves.
 func TestTheCapThenCIStuckPostsOneComment(t *testing.T) {
 	w := newWorld(t)
-	w.verdictCap(time.Nanosecond)
+	w.withDeliveries(&delivery.Store{VerdictDeferCap: time.Nanosecond})
 	w.gh.SetChecks("pending")
 	wi, n := w.reviewOnly()
 	head := w.gh.SHA("feature/greet")
@@ -62,7 +55,7 @@ func TestTheCapThenCIStuckPostsOneComment(t *testing.T) {
 func TestAnUnrelatedRedThenASlowRerunStillApproves(t *testing.T) {
 	w := newWorld(t)
 	const cap = 3 * time.Second
-	w.verdictCap(cap)
+	w.withDeliveries(&delivery.Store{VerdictDeferCap: cap})
 	w.gh.SetChecks("pending")
 	wi, n := w.reviewOnly()
 	head := w.gh.SHA("feature/greet")

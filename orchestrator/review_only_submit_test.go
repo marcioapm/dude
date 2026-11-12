@@ -9,7 +9,6 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
-	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // reviewCalls records when dude POSTs a review and when it lists the
@@ -58,8 +57,7 @@ func (w *world) pumpFor(d time.Duration) {
 func TestPersistent5xxSubmitsAreBoundedAndSpacedIncreasingly(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("success")
-	store := &delivery.Store{DB: w.app, SyncPullRequest: w.prs.Sync, ReviewRecoverDelay: 100 * time.Millisecond}
-	w.runtime.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
+	w.withDeliveries(&delivery.Store{ReviewRecoverDelay: 100 * time.Millisecond})
 	w.gh.Set(func(s *fakegithub.Server) { s.ReviewFail5xx = 1 << 30 })
 	calls := w.recordReviewCalls()
 	wi, _ := w.reviewOnly()
@@ -93,8 +91,7 @@ func TestPersistent5xxSubmitsAreBoundedAndSpacedIncreasingly(t *testing.T) {
 func TestALostReviewAnswerWaitsGitHubsRetryAfter(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("success")
-	store := &delivery.Store{DB: w.app, SyncPullRequest: w.prs.Sync, ReviewRecoverDelay: 100 * time.Millisecond}
-	w.runtime.Register(delivery.Workflow(store, forge.Resolver{DB: w.app}))
+	w.withDeliveries(&delivery.Store{ReviewRecoverDelay: 100 * time.Millisecond})
 	w.gh.Set(func(s *fakegithub.Server) { s.ReviewFail5xx, s.ReviewRetryAfter = 1<<30, 7 })
 	calls := w.recordReviewCalls()
 	wi, _ := w.reviewOnly()
