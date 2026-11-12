@@ -63,12 +63,17 @@ func TestStartPhaseRetriesOnlyThePollersMomentaryRefusal(t *testing.T) {
 				t.Fatalf("status %d, calls %d; want status %d, calls %d", status, calls, tc.wantStatus, tc.wantCalls)
 			}
 			if tc.name == "lease never released" {
-				found := false
+				reports := 0
 				for _, record := range run.records {
-					found = found || strings.Contains(fmt.Sprint(record), "retry limit reached")
+					if r := fmt.Sprint(record); strings.Contains(r, "dude start_phase ") {
+						reports++
+						if !strings.Contains(r, "retry limit reached after 21 attempts") {
+							t.Errorf("exhaustion reported as %q, not the retry limit", r)
+						}
+					}
 				}
-				if !found {
-					t.Fatal("retry exhaustion was not clearly reported")
+				if reports != 1 {
+					t.Fatalf("retry exhaustion reported %d times, want once", reports)
 				}
 			}
 		})

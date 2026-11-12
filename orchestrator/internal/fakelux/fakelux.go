@@ -2355,7 +2355,8 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		// fake's mutex is released so the poller can make progress.
 		for retries := 0; err == nil && startPhaseLeaseRefusal(status, body, args); retries++ {
 			if retries == 20 {
-				s.saidOfTool(run, tool, 0, fmt.Errorf("retry limit reached after 21 attempts: %s", body))
+				// One report: saidOfTool below says it, not also "answered 422".
+				err = fmt.Errorf("retry limit reached after 21 attempts: %s", body)
 				break
 			}
 			s.mu.Unlock()
