@@ -82,12 +82,13 @@ def test_the_conductor_dispatches_a_workflow_and_is_woken_with_its_conclusion(
 
 
 
-def test_an_older_github_without_run_details_binds_the_one_new_run(
+def test_an_older_github_without_run_details_is_unknown(
     client: ApiClient, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str
 ):
-    """GitHub (or GHES) answering the dispatch 204 with no run id: dude
-    binds the one run that is new since the dispatch, and the conductor is
-    woken with its conclusion the same way."""
+    """GitHub (or GHES) answering the dispatch 204 with no run id: the
+    dispatch went out, and dude cannot know which run it started. It is
+    unknown at once, never bound (not even to the one run there is), and
+    the conductor is woken once, told to look with github_branch_runs."""
     models = {**forge_project["agentModels"], **client.on_models({"conductor": "fake/defaults"})}
     assert client.patch(f"/v1/projects/{forge_project['id']}", {"agentModels": models}).status_code == 200
     assert client.patch(f"/v1/projects/{forge_project['id']}/settings",
@@ -103,9 +104,13 @@ def test_an_older_github_without_run_details_binds_the_one_new_run(
                             message="no workflow.dispatched event")[0]
     assert "runId" not in dispatched, dispatched
     assert fake_github.dispatches[0]["run_details"] is True, fake_github.dispatches
+    # The run GitHub started is there, new since the dispatch: still never bound.
     run_id = max(fake_github.dispatched_runs)
     fake_github.complete_dispatched_run(run_id, "success")
     woken = wait_until(lambda: next((p["text"] for p in _events(client, task["id"], "conductor.woken")
-                                     if dispatched["dispatchId"] in p.get("text", "") and "completed: success" in p["text"]), None),
-                       timeout=120, message="the conductor was never woken with the bound run's conclusion")
-    assert f"/actions/runs/{run_id}" in woken
+                                     if dispatched["dispatchId"] in p.get("text", "") and "is unknown" in p["text"]), None),
+                       timeout=120, message="the conductor was never woken with the unknown dispatch")
+    assert "GitHub did not say which run this dispatch started" in woken and "github_branch_runs" in woken, woken
+    assert "completed" not in woken and f"/actions/runs/{run_id}" not in woken, woken
+    rows = query(owner_dsn, "SELECT state, run_id FROM workflow_dispatches WHERE id = %s", (dispatched["dispatchId"],))
+    assert rows == [{"state": "unknown", "run_id": None}], rows

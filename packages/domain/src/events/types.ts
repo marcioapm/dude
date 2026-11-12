@@ -807,7 +807,7 @@ export const EventTypes = {
    * On its Run. Payload: `{ dispatchId, repo, workflow, ref, inputs,
    * triggers, ci, runId?, questionId? }`: ci when it ran as the task's own
    * CI (no person asked); runId the run GitHub answered with (absent from
-   * an older GitHub, whose run dude binds afterwards); questionId the
+   * an older GitHub: that dispatch is unknown, never bound); questionId the
    * person's approving answer otherwise.
    */
   WorkflowDispatched: "workflow.dispatched",
