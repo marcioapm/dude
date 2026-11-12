@@ -184,6 +184,9 @@ class FakeGitHub:
         # and the run GitHub creates for it, by id (complete_dispatched_run).
         self.dispatches: list[dict] = []
         self.dispatched_runs: dict[int, dict] = {}
+        # An older GitHub (or GHES): a dispatch answers 204 even when asked
+        # for the run's details.
+        self.dispatch_legacy = False
 
     def _conflicting(self, pr: PullRequest) -> bool:
         if pr.conflicting:
@@ -608,6 +611,15 @@ class FakeGitHub:
         with self._lock:
             self.dispatched_runs[run_id].update(status="completed", conclusion=conclusion)
 
+    def rerun_dispatched_run(self, run_id: int) -> None:
+        """A person re-runs a dispatched run: GitHub re-runs only a completed
+        run, as the same id with attempt n+1. No webhook."""
+        with self._lock:
+            run = self.dispatched_runs[run_id]
+            if run["status"] != "completed":
+                raise ValueError(f"run {run_id} is {run['status']}: GitHub re-runs only a completed run")
+            run.update(status="queued", conclusion=None, attempt=run["attempt"] + 1)
+
     def _dispatched_run_json(self, run_id: int, run: dict) -> dict:
         return {"id": run_id, "name": run["workflow"], "head_branch": run["branch"], "event": "workflow_dispatch",
                 "status": run["status"], "conclusion": run["conclusion"], "run_attempt": run["attempt"],
@@ -963,13 +975,21 @@ class FakeGitHub:
                 gh = self.github
                 prefix = f"/repos/{gh.owner}/{gh.repo}"
                 if m := re.fullmatch(rf"{prefix}/actions/workflows/([^/]+)/dispatches", self.path):
-                    # GitHub answers 204 and no run id; the run appears
-                    # queued, then in progress.
+                    # Asked with return_run_details, GitHub answers 200 with
+                    # the run it created (workflow-dispatch-response); an
+                    # older GitHub (dispatch_legacy), or a dispatch not
+                    # asking, 204 and no run id. The run appears in progress.
+                    details = bool(body.get("return_run_details")) and not gh.dispatch_legacy
                     with gh._lock:
-                        gh.dispatches.append({"workflow": m[1], "ref": body.get("ref"), "inputs": body.get("inputs") or {}})
+                        gh.dispatches.append({"workflow": m[1], "ref": body.get("ref"), "inputs": body.get("inputs") or {},
+                                              "run_details": bool(body.get("return_run_details"))})
                         run_id = 5000 + len(gh.dispatches)
                         gh.dispatched_runs[run_id] = {"workflow": m[1], "branch": body.get("ref"), "status": "in_progress",
                                                       "conclusion": None, "attempt": 1, "created_at": _now()}
+                    if details:
+                        return self._send(200, {"workflow_run_id": run_id,
+                                                "run_url": f"https://api.github.com/repos/{gh.owner}/{gh.repo}/actions/runs/{run_id}",
+                                                "html_url": f"https://github.com/{gh.owner}/{gh.repo}/actions/runs/{run_id}"})
                     self.send_response(204)
                     self.end_headers()
                     return
