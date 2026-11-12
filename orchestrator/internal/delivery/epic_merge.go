@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -153,10 +154,6 @@ type epicPeer struct {
 	Files          []string
 }
 
-// errEpicMergeFiles is a merge whose files the forge did not give in time:
-// tried again later.
-var errEpicMergeFiles = errors.New("the merged pull request's files could not be read yet")
-
 // tell settles one merged pull request: its peers read, the merge's files
 // read (stored, else from the forge, outside any transaction), then the
 // wakes recorded and the pull request marked told in one transaction that
@@ -170,13 +167,13 @@ func (e *EpicMerges) tell(ctx context.Context, org, prID string) (bool, error) {
 	if err := e.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var epic *string
 		var url string
-		var head, mergeSHA *string
+		var mergeSHA *string
 		err := tx.QueryRow(ctx, `SELECT pr.task_id, p.key_prefix || '-' || t.number, t.epic_id, pr.repository_id, r.name, pr.base_branch, r.url,
 				pr.head_sha, pr.merge_commit_sha, pr.number, `+epicMergeExpired+`, COALESCE(pr.epic_peers_retry_at > now(), false)
 			FROM pull_requests pr JOIN tasks t ON t.id = pr.task_id JOIN projects p ON p.id = t.project_id
 			JOIN repositories r ON r.id = pr.repository_id
 			WHERE pr.id = $2 AND pr.state = 'merged' AND pr.epic_peers_told_at IS NULL`, epicMergeRetryFor.Seconds(), prID).Scan(
-			&m.TaskID, &m.TaskKey, &epic, &m.RepoID, &m.Repo, &m.Base, &url, &head, &mergeSHA, &m.Number, &expired, &waiting)
+			&m.TaskID, &m.TaskKey, &epic, &m.RepoID, &m.Repo, &m.Base, &url, &m.HeadSHA, &mergeSHA, &m.Number, &expired, &waiting)
 		if db.IsNotFound(err) {
 			return nil
 		}
@@ -184,7 +181,7 @@ func (e *EpicMerges) tell(ctx context.Context, org, prID string) (bool, error) {
 			return err
 		}
 		m.Slug = forge.SlugFromURL(url)
-		m.HeadSHA, m.MergeSHA = deref(head), deref(mergeSHA)
+		m.MergeSHA = deref(mergeSHA)
 		if epic == nil {
 			return nil
 		}
@@ -206,7 +203,7 @@ func (e *EpicMerges) tell(ctx context.Context, org, prID string) (bool, error) {
 		var err error
 		merged, mergedKnown, mergedPartial, err = e.forgeMergeFiles(ctx, org, m)
 		if err != nil && !expired {
-			return false, errors.Join(errEpicMergeFiles, err)
+			return false, fmt.Errorf("reading the merged pull request's files: %w", err)
 		}
 	}
 	settled := false
@@ -242,14 +239,14 @@ func (e *EpicMerges) tell(ctx context.Context, org, prID string) (bool, error) {
 	return settled && err == nil, err
 }
 
-// fileNames (SQL, over a snapshot s) is every path its files name: each
-// file's, and a rename's previous one where the snapshot kept it.
-// renameUnnamed (SQL, over s) says a rename in it has no previous path
-// (a snapshot from before it was kept): the list may miss a name.
+// Over a snapshot s: fileNames is every path its files name, each file's
+// and a rename's previous one; snapshotPartial says the list may be cut,
+// or miss a name (a rename stored before its previous path was kept).
 const (
 	fileNames = `COALESCE(ARRAY(SELECT DISTINCT n FROM jsonb_array_elements(s.files) f,
 		LATERAL (VALUES (f->>'path'), (f->>'previousPath')) v(n) WHERE n IS NOT NULL), '{}')`
-	renameUnnamed = `EXISTS (SELECT 1 FROM jsonb_array_elements(s.files) f WHERE f->>'status' = 'R' AND NOT f ? 'previousPath')`
+	snapshotPartial = `(s.status = 'partial'
+		OR EXISTS (SELECT 1 FROM jsonb_array_elements(s.files) f WHERE f->>'status' = 'R' AND NOT f ? 'previousPath'))`
 )
 
 // epicMergePeers are the tasks m's merge wakes: on its epic, not its own
@@ -265,7 +262,7 @@ func epicMergePeers(ctx context.Context, tx pgx.Tx, m epicMerge) ([]epicPeer, er
 	rows, err := tx.Query(ctx, `SELECT t.id,
 			EXISTS (SELECT 1 FROM task_repositories tr WHERE tr.task_id = t.id AND tr.repository_id = $3 AND tr.access = 'write'),
 			s.files IS NOT NULL OR COALESCE(c.status = 'absent', false),
-			COALESCE(s.status = 'partial' OR `+renameUnnamed+` OR (c.status = 'pending' AND c.requested_at > s.captured_at), false),
+			COALESCE(`+snapshotPartial+` OR (c.status = 'pending' AND c.requested_at > s.captured_at), false),
 			`+deliveryBase+` = $5,
 			`+fileNames+`
 		FROM tasks t
@@ -302,10 +299,7 @@ func epicMergePeers(ctx context.Context, tx pgx.Tx, m epicMerge) ([]epicPeer, er
 // changed nothing". It is passed over for an older snapshot at the head,
 // else GitHub's listing.
 func storedMergeFiles(ctx context.Context, tx pgx.Tx, m epicMerge) (files []string, ok, partial bool, err error) {
-	if m.HeadSHA == "" {
-		return nil, false, false, nil
-	}
-	err = tx.QueryRow(ctx, `SELECT `+fileNames+`, s.status = 'partial' OR `+renameUnnamed+`
+	err = tx.QueryRow(ctx, `SELECT `+fileNames+`, `+snapshotPartial+`
 		FROM task_branch_snapshots s WHERE s.task_id = $1 AND s.repository_id = $2 AND s.head_sha = $3
 		  AND s.merge_base_sha <> s.head_sha AND s.target_ref = $4
 		ORDER BY s.captured_at DESC, s.id DESC LIMIT 1`, m.TaskID, m.RepoID, m.HeadSHA, m.Base).Scan(&files, &partial)
