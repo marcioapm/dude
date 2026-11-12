@@ -10,7 +10,7 @@
 
 {{- define "refusals/delivery/waits/too-many-conditions"}}at most %d conditions to a wait{{end}}
 
-{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded or prChecksFinal{{end}}
+{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal or workflowEnded{{end}}
 
 {{- define "refusals/delivery/waits/runs-count"}}runsEnded names 1 to %d Runs{{end}}
 
@@ -19,3 +19,5 @@
 {{- define "refusals/delivery/waits/head-not-full-sha"}}head %q is not a full commit SHA: give all 40 (or 64) characters, or leave it out for the pull request's head now{{end}}
 
 {{- define "refusals/delivery/waits/not-pull-request-of-this-task"}}%s is not a pull request of this task (pull_requests lists them){{end}}
+
+{{- define "refusals/delivery/waits/not-dispatch-of-this-task"}}%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches){{end}}

@@ -1436,6 +1436,9 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 	case WakeRecovered:
 		// A refusal's reason and, for a copy gone, the person's warning.
 		limit = recoveredLineChars
+	case WakeWorkflow:
+		// A dispatched run's outcome, its link, and a read's error.
+		limit = workflowLineChars
 	}
 	text := clip(oneLine(line), limit)
 	if kind == "escalation" && strings.HasSuffix(key, ":decided") {

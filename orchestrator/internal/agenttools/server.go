@@ -573,7 +573,7 @@ func find(name, role string, grants capabilities.Grants) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, prActionTools, baseSyncTools, githubReadTools, refreshTools, coordinationTools, feedbackTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, dispatchTools, baseSyncTools, githubReadTools, refreshTools, coordinationTools, feedbackTools, brainstormTools)
 }
 
 // hasSessionDefinition says a session agent has its own tool called name.

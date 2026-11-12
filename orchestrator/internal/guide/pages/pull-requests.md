@@ -1,6 +1,6 @@
 ---
 title: Pull requests
-covers: [tool:pull_requests, tool:refresh_pull_requests, tool:reply_on_pull_request, tool:resolve_thread, tool:request_review, tool:mark_ready, tool:rerun_failed_checks, tool:sync_base]
+covers: [tool:pull_requests, tool:refresh_pull_requests, tool:reply_on_pull_request, tool:resolve_thread, tool:request_review, tool:mark_ready, tool:rerun_failed_checks, tool:run_workflow, tool:sync_base]
 ---
 dude opens a pull request once the work is reviewed and tested, then keeps working on it until a person merges it. This page explains how the pull request opens, what wakes a fixer, how CI is handled, and how a task keeps up with its base branch.
 
@@ -54,6 +54,8 @@ A fix that changes nothing in a repository spends none of that pull request's bu
 If checks stay pending on one commit longer than **Ask when CI is stuck after** (60 minutes by default, **Settings → GitHub**), dude asks a person: **CI is stuck**. A runner may be gone, or a required check never starts.
 
 The conductor can run the failed checks again with `rerun_failed_checks`, once per commit, for a failure that is not the code's — a flaky runner, an outage. A real failure goes to a fixer. It can ask you for one more rerun on the same commit with `request_limit`.
+
+The conductor can start a GitHub Actions workflow that has a `workflow_dispatch` trigger with `run_workflow`, on the task's branch by default. CI the change already runs (a workflow that also runs on push or pull_request) it starts on its own; anything else (a release, a deploy, a schedule-only job) only after you answer its question naming that workflow. dude finds the run and keeps reading it until it ends, and the conductor is woken once with the outcome: completed with its conclusion, "unknown" when dude cannot tell which run is the one it started, or "cannot see" when GitHub keeps refusing or failing dude's reads. The last two mean investigate, not success or failure.
 
 ## Merging
 

@@ -13,6 +13,7 @@
 {{- else if .Ended}} {{.Status}}{{with .Error}}: {{clip (oneLine .) 120}}{{end}}
 {{- else}} not ended ({{.Status}})
 {{- end}}
+{{- else if eq .Kind "workflow"}}{{template "wakes/wait/workflow" .Workflow}}
 {{- else if eq .State "merged"}}{{.PR}} was merged
 {{- else if eq .State "closed"}}{{.PR}} was closed
 {{- else if .MovedTo}}{{.PR}}'s head moved to {{short .MovedTo}}: its checks will never finish on {{short .Head}}
@@ -27,5 +28,14 @@
 {{- else if eq .What "reviewed"}}{{.N}} pull request review{{if gt .N 1}}s{{end}}
 {{- else if eq .What "feedback"}}{{.N}} feedback submission{{if gt .N 1}}s{{end}}
 {{- else}}{{.N}} message{{if gt .N 1}}s{{end}} from people in Chat
+{{- end}}
+{{- end}}
+
+{{- define "wakes/wait/workflow"}}
+{{- if eq .Outcome "completed"}}workflow {{.Workflow}} ({{.ID}}) completed: {{or .Conclusion "no conclusion"}}, attempt {{.Attempt}}{{with .URL}} ({{.}}){{end}}
+{{- else if eq .Outcome "unknown"}}workflow {{.Workflow}} ({{.ID}}) is unknown: {{.Reason}}; investigate, it is neither a success nor a failure
+{{- else if eq .Outcome "cannot_see"}}dude cannot see workflow {{.Workflow}} ({{.ID}}): {{.FailedRead}} reads in a row failed since {{.Failing}} ({{clip .LastError 160}}); investigate, this is not "not finished"
+{{- else if .Seen}}workflow {{.Workflow}} ({{.ID}}) still running, last seen {{.Status}}{{if gt .Attempt 1}} (attempt {{.Attempt}}){{end}} at {{.Seen}}
+{{- else}}workflow {{.Workflow}} ({{.ID}}) still running, its run not found yet (dispatched {{.At.UTC.Format "2006-01-02T15:04:05Z07:00"}})
 {{- end}}
 {{- end}}

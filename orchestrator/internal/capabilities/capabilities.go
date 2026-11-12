@@ -105,7 +105,7 @@ var All = []Capability{
 		Tools: []string{"findings", "pull_requests"}},
 	{Key: Conduct, Description: "Drive the task's delivery: start phases and agents, steer and restart Runs, decide, update the task, publish, and act on its pull requests.",
 		Tools: []string{"start_phase", "start_agent", "steer", "restart_run", "decide", "dismiss_finding", "answer_review_question",
-			"decide_escalation", "answer_question", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks"}},
+			"decide_escalation", "answer_question", "update_task", "publish", "request_review", "mark_ready", "rerun_failed_checks", "run_workflow"}},
 	{Key: ChecksDecide, Description: "Decide a writer's checks report the checks gate asks about: whether each pass is backed, a failure pre-existing or the waived one, a not-run check deferred, and whether a check is missing.",
 		Tools: []string{"decide_checks"}},
 	{Key: AsksHeld, Description: "Forward a reviewer's question dude gave you first to the person, and decide agents' repository requests: deny, approve read access to one of the project's repositories, or forward to the owner.",

@@ -243,3 +243,17 @@ rChecksNoBase                           refusals/delivery/checks/no-base
 rChecksWaiverCursor                     refusals/delivery/checks/waiver-cursor
 rChecksMissingVerdict                   refusals/delivery/checks/missing
 rChecksReasonLong                       refusals/delivery/checks/reason-long
+rDispatchWorkflowFile                   refusals/delivery/dispatch/workflow-file
+rDispatchNotTaskRepository              refusals/delivery/dispatch/not-task-repository
+rDispatchNotOnGitHub                    refusals/delivery/dispatch/not-on-github
+rDispatchNameRef                        refusals/delivery/dispatch/name-ref
+rDispatchRefUnreadable                  refusals/delivery/dispatch/ref-unreadable
+rDispatchTooManyInputs                  refusals/delivery/dispatch/too-many-inputs
+rDispatchInputTooLong                   refusals/delivery/dispatch/input-too-long
+rDispatchQuestionNotAnswered            refusals/delivery/dispatch/question-not-answered
+rDispatchQuestionNotNaming              refusals/delivery/dispatch/question-not-naming
+rDispatchNoSuchWorkflow                 refusals/delivery/dispatch/no-such-workflow
+rDispatchTriggersUnreadable             refusals/delivery/dispatch/triggers-unreadable
+rDispatchNoTrigger                      refusals/delivery/dispatch/no-trigger
+rDispatchNeedsPerson                    refusals/delivery/dispatch/needs-person
+rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-this-task

@@ -63,6 +63,9 @@ const (
 type WaitCondition struct {
 	RunsEnded     []string     `json:"runsEnded,omitempty"`
 	PRChecksFinal *PRChecksAsk `json:"prChecksFinal,omitempty"`
+	// A workflow run_workflow dispatched (its dispatchId) reached a
+	// terminal outcome: completed, unknown, or dude cannot see it.
+	WorkflowEnded string `json:"workflowEnded,omitempty"`
 }
 
 // PRChecksAsk names a pull request (12, #12, repo#12) and the head its
@@ -104,11 +107,14 @@ type waitCond struct {
 	PR     string `json:"pr,omitempty"`
 	PRName string `json:"prName,omitempty"`
 	Head   string `json:"head,omitempty"`
+	// workflow_ended: the workflow_dispatches row.
+	Dispatch string `json:"dispatch,omitempty"`
 }
 
 const (
 	condRunsEnded     = "runs_ended"
 	condPRChecksFinal = "pr_checks_final"
+	condWorkflowEnded = "workflow_ended"
 )
 
 // parseWaitDeadline reads a deadline: a Go duration, or an RFC 3339 time,
@@ -240,9 +246,26 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCon
 	}
 	out := make([]waitCond, 0, len(in))
 	for _, c := range in {
+		kinds := 0
+		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != ""} {
+			if set {
+				kinds++
+			}
+		}
 		switch {
-		case c.RunsEnded != nil && c.PRChecksFinal != nil, c.RunsEnded == nil && c.PRChecksFinal == nil:
+		case kinds != 1:
 			return nil, refuseText(rWaitOneKindPerCondition)
+		case c.WorkflowEnded != "":
+			id := strings.TrimSpace(c.WorkflowEnded)
+			var ours bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_dispatches WHERE id = $1 AND task_id = $2)`, id, taskID).
+				Scan(&ours); err != nil {
+				return nil, err
+			}
+			if !ours {
+				return nil, refusef(rWaitNotDispatchOfThisTask, id)
+			}
+			out = append(out, waitCond{Kind: condWorkflowEnded, Dispatch: id})
 		case c.RunsEnded != nil:
 			var runs []string
 			for _, id := range c.RunsEnded {
@@ -304,7 +327,10 @@ type waitItem struct {
 	// when it moved; Polled, when dude last read it.
 	PR, Head, State, Checks, MovedTo, Polled string
 	Failing                                  []string
-	rank                                     int
+	// A dispatched workflow (Kind "workflow"): as the supervisor last
+	// stored it.
+	Workflow *workflowFacts
+	rank     int
 }
 
 // waitEval is a wait's conditions as they read now.
@@ -341,6 +367,13 @@ func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all 
 			}
 		case condPRChecksFinal:
 			it, err := prItemTx(ctx, tx, c)
+			if err != nil {
+				return ev, err
+			}
+			held = it.rank != rankWaiting
+			ev.items = append(ev.items, it)
+		case condWorkflowEnded:
+			it, err := workflowItemTx(ctx, tx, c.Dispatch)
 			if err != nil {
 				return ev, err
 			}
