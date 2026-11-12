@@ -462,3 +462,36 @@ func TestGoldenInstructionsWithoutGitHubRead(t *testing.T) {
 	}
 	golden(t, "instructions-conductor-without-github-read", got)
 }
+
+// The epic-peers line is in the file of a writer that can both read its
+// peers and message them, and of no other: reviewers, the simplifier and the
+// tester read peers but never message, and a child has no epic of its own.
+func TestThePeersLineFollowsItsTools(t *testing.T) {
+	const peers = "- **Peers on an epic**: before you change"
+	for _, c := range []struct {
+		role    string
+		without capabilities.Key
+		child   bool
+		peers   bool
+	}{
+		{role: RoleConductor, peers: true},
+		{role: RoleConductor, without: capabilities.Coordination},
+		{role: "implementer", peers: true},
+		{role: "implementer", without: capabilities.Coordination},
+		{role: "implementer", child: true},
+		{role: "fixer", peers: true},
+		{role: "reviewer"},
+		{role: "simplifier"},
+		{role: "qa_browser"},
+		{role: "investigator"},
+	} {
+		g := capabilities.Default(toolRoleOf(c.role))
+		if c.without != "" {
+			g = g.Without(c.without)
+		}
+		got := Instructions(c.role, "correctness", InstructionsInput{Tools: true, CLI: true, Checkouts: true, Grants: &g, Child: c.child})
+		if strings.Contains(got, peers) != c.peers {
+			t.Errorf("%s without %q child=%v: peers line %v, want %v", c.role, c.without, c.child, !c.peers, c.peers)
+		}
+	}
+}
