@@ -82,6 +82,27 @@ func (g PRGate) Failing() []GateItem {
 	return out
 }
 
+// GateProfile is which question the gate answers. ProfileMerge, the zero
+// value, is the one every writing task asks: is merging the only act left?
+// ProfileReviewVerdict is a review-only task's: may dude approve another's
+// pull request at the head it reviewed? The same items, the same reads;
+// some judged differently (doGate).
+type GateProfile int
+
+const (
+	ProfileMerge GateProfile = iota
+	ProfileReviewVerdict
+)
+
+// VerdictDraft is the open item's detail, under ProfileReviewVerdict, for
+// a draft: not closed, reviewed, but not to be approved.
+const VerdictDraft = "it is a draft: reviewed, no approval until it is marked ready for review"
+
+// VerdictNoLens is the reviewed item's detail, under ProfileReviewVerdict,
+// when the policy picks no lens for the pull request's paths: not a
+// review that found something, but one that cannot be verified at all.
+const VerdictNoLens = "the policy picks no lens for these paths: nothing reviewed them, so the verdict cannot be verified"
+
 // ReadyGateCheck is the gate's first part, read in a transaction: per pull
 // request, what dude knows of it.
 type ReadyGateCheck struct {
@@ -122,6 +143,11 @@ type GateFacts struct {
 	// The check list it stored (checks_json): a cancelled Actions run's
 	// verdict there is not read again (forge.WithKnownChecks).
 	RecordedCheckList []forge.Check
+	// Profile is the question the gate answers for it, and Pinned, under
+	// ProfileReviewVerdict, the head the verdict reviewed: judged in Head's
+	// place ("" for the recorded head).
+	Profile GateProfile
+	Pinned  string
 }
 
 // gateSimplify is a completed simplify Run: where it started in the
@@ -135,6 +161,7 @@ type gateSimplify struct {
 
 // StoredGate is the last gate computed for a pull request
 // (pull_requests.ready_gate): at which head, and when.
+// It records no profile: PR 4 must not store a verdict gate (StoreGatesTx), or it is served as the merge gate.
 type StoredGate struct {
 	Head  string     `json:"head"`
 	At    time.Time  `json:"at"`
@@ -217,7 +244,16 @@ func (s *Store) ReadyGateFor(ctx context.Context, org string, gh *forge.GitHub, 
 // CheckReadyGateTx reads what dude knows of the task's pull requests
 // prIDs (every open or draft one of the task when nil) for their gate.
 func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []string) (ReadyGateCheck, error) {
+	return CheckProfileGateTx(ctx, tx, taskID, prIDs, ProfileMerge, nil)
+}
+
+// CheckProfileGateTx is CheckReadyGateTx for the gate's profile: the
+// findings and questions items are read for it here, so it is chosen
+// before the read, not after. pins, by pull request id, are the heads a
+// review verdict reviewed (GateFacts.Pinned).
+func CheckProfileGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []string, profile GateProfile, pins map[string]string) (ReadyGateCheck, error) {
 	var c ReadyGateCheck
+	verdict := profile == ProfileReviewVerdict
 	d, err := ReadDelivery(ctx, tx, taskID)
 	if err != nil {
 		return c, err
@@ -252,6 +288,7 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 		_ = json.Unmarshal(checksJSON, &p.RecordedCheckList)
 		p.Slug = forge.SlugFromURL(url)
 		p.AcceptedHead = st.AcceptedHeads[p.Repo]
+		p.Profile, p.Pinned = profile, pins[p.ID]
 		c.PRs = append(c.PRs, p)
 	}
 	rows.Close()
@@ -261,8 +298,11 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 	if len(c.PRs) == 0 {
 		return c, nil
 	}
+	// A review verdict reads none of dude's pushes, R or the simplify Runs
+	// (verdictReviewed reads the lens heads alone, and item 4 does not
+	// apply): it skips their reads. The merge profile reads each as before.
 	unreviewed := map[string]string{}
-	if d != nil {
+	if d != nil && !verdict {
 		pushes, err := unreviewedPRPushesTx(ctx, tx, taskID, st)
 		if err != nil {
 			return c, err
@@ -271,11 +311,11 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 			unreviewed[p.Repo] = p.Head
 		}
 	}
-	findings, err := gateFindingsTx(ctx, tx, taskID, attempt)
+	findings, err := gateFindingsTx(ctx, tx, taskID, attempt, verdict)
 	if err != nil {
 		return c, err
 	}
-	questions, err := gateQuestionsTx(ctx, tx, st, attempt)
+	questions, err := gateQuestionsTx(ctx, tx, st, attempt, verdict)
 	if err != nil {
 		return c, err
 	}
@@ -283,11 +323,14 @@ func CheckReadyGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []str
 		p := &c.PRs[i]
 		p.UnreviewedPush = p.Head != "" && unreviewed[p.Repo] == p.Head
 		p.Findings, p.Questions = findings, questions
-		if p.Reviewed, err = reviewedHeadTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
-			return c, err
-		}
 		p.Policy = st.Policy
 		if p.LensHeads, err = lensHeadsTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
+			return c, err
+		}
+		if verdict {
+			continue
+		}
+		if p.Reviewed, err = reviewedHeadTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
 			return c, err
 		}
 		if p.Simplifies, err = gateSimplifiesTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
@@ -348,22 +391,9 @@ func lensHeadsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, rep
 // path, one whose paths the pull request changed again since its last
 // completed review. "" for none; refused says GitHub would not compare.
 func missingLenses(ctx context.Context, gh *forge.GitHub, p GateFacts, base string) (missing []string, refused bool, err error) {
-	whole, err := gh.CompareCommits(ctx, p.Slug, base, p.Head)
-	if forge.Refused(err) {
-		return nil, true, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	ours := map[string]bool{}
-	var paths []string
-	for _, f := range whole.Files {
-		for _, n := range []string{f.Filename, f.PreviousFilename} {
-			if n != "" && !ours[n] {
-				ours[n] = true
-				paths = append(paths, p.Repo+"/"+n)
-			}
-		}
+	ours, paths, refused, err := prPaths(ctx, gh, p, base)
+	if refused || err != nil {
+		return nil, refused, err
 	}
 	for _, lens := range ReviewersFor(p.Policy, paths) {
 		at, ran := p.LensHeads[lens]
@@ -398,6 +428,29 @@ func missingLenses(ctx context.Context, gh *forge.GitHub, p GateFacts, base stri
 	return missing, false, nil
 }
 
+// prPaths is what the pull request changes: GitHub's compare of its base
+// with the head, each path in the repository (ours) and as
+// <repo>/<path>, for ReviewersFor. refused says GitHub would not compare.
+func prPaths(ctx context.Context, gh *forge.GitHub, p GateFacts, base string) (ours map[string]bool, paths []string, refused bool, err error) {
+	whole, err := gh.CompareCommits(ctx, p.Slug, base, p.Head)
+	if forge.Refused(err) {
+		return nil, nil, true, nil
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	ours = map[string]bool{}
+	for _, f := range whole.Files {
+		for _, n := range []string{f.Filename, f.PreviousFilename} {
+			if n != "" && !ours[n] {
+				ours[n] = true
+				paths = append(paths, p.Repo+"/"+n)
+			}
+		}
+	}
+	return ours, paths, false, nil
+}
+
 // byPath says the policy picks lens by the paths changed: a conditional
 // rule with paths, not a reviewer it always asks for.
 func byPath(p Policy, lens string) bool {
@@ -425,10 +478,14 @@ func gateSimplifiesTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int
 }
 
 // gateFindingsTx is the findings item: the attempt's open findings at the
-// fix bar (atFixBar, IsBlocking), a reviewer's or the tester's.
-func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (GateItem, error) {
+// fix bar (atFixBar, IsBlocking), a reviewer's or the tester's. With
+// introducedOnly (a review verdict), only those the pull request
+// introduced: one a reviewer said is already on the base is not the
+// author's to fix, and one it said nothing of counts as introduced.
+func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, introducedOnly bool) (GateItem, error) {
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, status::text, COALESCE(trivial, false), title FROM review_findings
-		WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` ORDER BY created_at, id`, taskID, attempt)
+		WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+`
+		AND (NOT $3::boolean OR introduced IS DISTINCT FROM false) ORDER BY created_at, id`, taskID, attempt, introducedOnly)
 	if err != nil {
 		return GateItem{}, err
 	}
@@ -454,18 +511,29 @@ func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) 
 			blocking = append(blocking, fmt.Sprintf("%s (%s) %s", f.ID, found[i].Severity, found[i].Title))
 		}
 	}
-	if len(blocking) == 0 {
-		return GateItem{Key: ReadyFindings, OK: true, Detail: "no open finding at the fix bar"}, nil
+	bar := "at the fix bar"
+	if introducedOnly {
+		bar += " introduced by the pull request"
 	}
-	return GateItem{Key: ReadyFindings, Detail: fmt.Sprintf("%d open finding(s) at the fix bar: %s",
-		len(blocking), strings.Join(blocking, "; "))}, nil
+	if len(blocking) == 0 {
+		return GateItem{Key: ReadyFindings, OK: true, Detail: "no open finding " + bar}, nil
+	}
+	return GateItem{Key: ReadyFindings, Detail: fmt.Sprintf("%d open finding(s) %s: %s",
+		len(blocking), bar, strings.Join(blocking, "; "))}, nil
 }
 
 // gateQuestionsTx is the questions item: no question of the conductor's
 // open to a person, no reviewer's question open, no escalation waiting on
 // a decision, and no person's feedback still to handle
-// (BlockingFeedbackTx).
-func gateQuestionsTx(ctx context.Context, tx pgx.Tx, st *State, attempt int) (GateItem, error) {
+// (BlockingFeedbackTx). A review verdict (noFeedback) does not count
+// feedback: there is no writer to hand it to.
+//
+// TODO(review-only PR 6): questions to the pull request's author arrive
+// as review_questions rows with addressee 'author' (the CHECK allows only
+// 'person' and 'conductor' until then). The count below takes an open row
+// of any addressee, so author rows would hold the verdict with no change
+// here; the merge gate needs an addressee filter then (PR 6).
+func gateQuestionsTx(ctx context.Context, tx pgx.Tx, st *State, attempt int, noFeedback bool) (GateItem, error) {
 	var asked, reviewing, feedback int
 	if err := tx.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM questions q JOIN runs r ON r.id = q.run_id AND r.role = 'conductor'
@@ -475,9 +543,11 @@ func gateQuestionsTx(ctx context.Context, tx pgx.Tx, st *State, attempt int) (Ga
 		st.TaskID, attempt).Scan(&asked, &reviewing); err != nil {
 		return GateItem{}, err
 	}
-	feedback, err := BlockingFeedbackTx(ctx, tx, st.TaskID, attempt)
-	if err != nil {
-		return GateItem{}, err
+	if !noFeedback {
+		var err error
+		if feedback, err = BlockingFeedbackTx(ctx, tx, st.TaskID, attempt); err != nil {
+			return GateItem{}, err
+		}
 	}
 	var open []string
 	if asked > 0 {
@@ -522,6 +592,26 @@ func DoReadyGate(ctx context.Context, gh *forge.GitHub, c ReadyGateCheck) []PRGa
 }
 
 func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) {
+	verdict := p.Profile == ProfileReviewVerdict
+	recorded := "dude last recorded"
+	if verdict && p.Pinned != "" {
+		// The verdict is judged at the head it reviewed, whatever the
+		// sync recorded since.
+		if p.Pinned != p.Head {
+			// The syncer's record of the recorded head (when it was first
+			// seen, the checks it recorded there) is not the pin's: the pin
+			// is a head not yet seen, within the whole grace (graceLeft),
+			// never one the syncer judged (syncerJudgedGrace). HadCI stays:
+			// it is the pull request's, and cleared it would read a pin
+			// nothing reported at yet as "no CI configured".
+			// While the pin is ahead of the record, graceLeft is the whole
+			// grace on every evaluation: a verdict must not defer on
+			// GraceLeft alone if the sync never catches up (PR 4 bounds
+			// its deferrals).
+			p.HeadSeenAt, p.RecordedChecks = nil, ""
+		}
+		p.Head, recorded = p.Pinned, "the verdict reviewed"
+	}
 	g := PRGate{ID: p.ID, Repo: p.Repo, Number: p.Number, Head: p.Head}
 	add := func(key string, ok bool, format string, args ...any) {
 		g.Items = append(g.Items, GateItem{Key: key, OK: ok, Detail: fmt.Sprintf(format, args...)})
@@ -554,6 +644,8 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	switch {
 	case f.State == forge.StateMerged || f.State == forge.StateClosed:
 		add(ReadyOpen, false, "it is %s", f.State)
+	case (f.Draft || f.State == forge.StateDraft) && verdict:
+		add(ReadyOpen, false, "%s", VerdictDraft)
 	case f.Draft || f.State == forge.StateDraft:
 		add(ReadyOpen, false, "it is a draft: mark it ready for review")
 	default:
@@ -564,36 +656,52 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	if headOK {
 		add(ReadyHead, true, "at %s", short(p.Head))
 	} else {
-		add(ReadyHead, false, "GitHub shows %s, dude last recorded %s: not ready, re-evaluate once it is synced", short(f.HeadSHA), short(p.Head))
+		add(ReadyHead, false, "GitHub shows %s, %s %s: not ready, re-evaluate once it is synced", short(f.HeadSHA), recorded, short(p.Head))
 	}
 	// 3. reviewed_through_head
-	reviewed, detail, err := gateReviewed(ctx, gh, p, f)
+	judge := gateReviewed
+	if verdict {
+		judge = verdictReviewed
+	}
+	reviewed, detail, err := judge(ctx, gh, p, f)
 	if err != nil {
 		return g, err
 	}
 	add(ReadyReviewed, reviewed, "%s", detail)
 	// 4. simplified_after_last_change
-	simplified, detail, err := gateSimplified(ctx, gh, p, reviewed)
-	if err != nil {
-		return g, err
+	if verdict {
+		add(ReadySimplified, true, "not applicable: review only")
+	} else {
+		simplified, detail, err := gateSimplified(ctx, gh, p, reviewed)
+		if err != nil {
+			return g, err
+		}
+		add(ReadySimplified, simplified, "%s", detail)
 	}
-	add(ReadySimplified, simplified, "%s", detail)
 	// 5, 6: dude's own.
 	g.Items = append(g.Items, p.Findings, p.Questions)
-	// 7. threads
+	// 7. threads: under a review verdict, other reviewers' threads are
+	// theirs (dude's own open ones are findings), said and not judged.
 	switch {
 	case f.ThreadsUnknown:
-		add(ReadyThreads, false, "GitHub would not count the review threads: unreadable")
+		add(ReadyThreads, verdict, "GitHub would not count the review threads: unreadable")
 	case f.UnresolvedThreads > 0:
-		add(ReadyThreads, false, "%d review thread(s) unresolved: each is a person's open feedback", f.UnresolvedThreads)
+		add(ReadyThreads, verdict, "%d review thread(s) unresolved: each is a person's open feedback", f.UnresolvedThreads)
 	default:
 		add(ReadyThreads, true, "no unresolved review thread")
 	}
-	// 8. mergeable
+	// 8. mergeable: under a review verdict, a conflict or a branch behind
+	// is the author's to update, said and not judged; branch protection
+	// holds the merge anyway.
 	ok, detail := gateMergeable(f)
-	add(ReadyMergeable, ok, "%s", detail)
-	g.MergeableUnknown = !ok && mergeableUnknown(f)
+	add(ReadyMergeable, ok || verdict, "%s", detail)
+	g.MergeableUnknown = !ok && !verdict && mergeableUnknown(f)
 	// 9. checks
+	if verdict && !headOK {
+		// GitHub read the checks at its head, not the one reviewed.
+		add(ReadyChecks, false, "not read at %s: GitHub's head is %s", short(p.Head), short(f.HeadSHA))
+		return g, nil
+	}
 	now := time.Now()
 	ok, detail = gateChecks(f, p, now)
 	add(ReadyChecks, ok, "%s", detail)
@@ -630,16 +738,41 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 	case p.Reviewed == h:
 		return true, fmt.Sprintf("reviewed at %s", short(h)), nil
 	}
-	since, err := gh.CompareCommits(ctx, p.Slug, p.Reviewed, h)
+	unreviewed, unread, stop, err := sinceReview(ctx, gh, p, p.Reviewed, base, true)
 	switch {
-	case forge.Refused(err):
-		return false, fmt.Sprintf("GitHub would not compare the reviewed %s with %s: history rewritten?", short(p.Reviewed), short(h)), nil
 	case err != nil:
 		return false, "", err
+	case stop != "":
+		return false, stop, nil
+	}
+	if len(unreviewed) > 0 {
+		detail := fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", "))
+		if len(unread) > 0 {
+			detail += fmt.Sprintf(" (GitHub would not compare the simplifier's run from %s, so its commits are not counted as reviewed simplifications)",
+				strings.Join(unread, ", "))
+		}
+		return false, detail, nil
+	}
+	return true, fmt.Sprintf("reviewed at %s; since then only reviewed simplifications and pure merges of %s", short(p.Reviewed), base), nil
+}
+
+// sinceReview is the commits from the review at from to the head that
+// nothing explains, oldest first: GitHub's pure merges of the base are
+// explained, and, with simplifications, a simplify Run's commits whose own
+// review completed (unread names those GitHub would not compare). stop is
+// why the walk could not explain the head at all ("" when it could).
+func sinceReview(ctx context.Context, gh *forge.GitHub, p GateFacts, from, base string, simplifications bool) (unreviewed, unread []string, stop string, err error) {
+	h := p.Head
+	since, err := gh.CompareCommits(ctx, p.Slug, from, h)
+	switch {
+	case forge.Refused(err):
+		return nil, nil, fmt.Sprintf("GitHub would not compare the reviewed %s with %s: history rewritten?", short(from), short(h)), nil
+	case err != nil:
+		return nil, nil, "", err
 	case since.BehindBy > 0:
-		return false, fmt.Sprintf("the head no longer descends from the reviewed %s: history rewritten since the review", short(p.Reviewed)), nil
+		return nil, nil, fmt.Sprintf("the head no longer descends from the reviewed %s: history rewritten since the review", short(from)), nil
 	case len(since.Commits) < since.TotalCommits:
-		return false, fmt.Sprintf("%d commits since the review at %s: too many to explain", since.TotalCommits, short(p.Reviewed)), nil
+		return nil, nil, fmt.Sprintf("%d commits since the review at %s: too many to explain", since.TotalCommits, short(from)), nil
 	}
 	parents := map[string][]string{}
 	for _, c := range since.Commits {
@@ -648,17 +781,18 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 			parents[c.SHA] = append(parents[c.SHA], x.SHA)
 		}
 	}
-	simplified, unread, err := simplifiedCommits(ctx, gh, p)
-	if err != nil {
-		return false, "", err
+	simplified := map[string]bool{}
+	if simplifications {
+		if simplified, unread, err = simplifiedCommits(ctx, gh, p); err != nil {
+			return nil, nil, "", err
+		}
 	}
-	// The branch's own line, head down to R by first parents: what a merge
-	// brings in under its second parent is the base's, judged with the
-	// merge.
-	var unreviewed []string
+	// The branch's own line, head down to the review by first parents:
+	// what a merge brings in under its second parent is the base's, judged
+	// with the merge.
 	at := h
 	merges := 0
-	for n := 0; at != p.Reviewed; n++ {
+	for n := 0; at != from; n++ {
 		ps, listed := parents[at]
 		if !listed || len(ps) == 0 || n == maxGateCommits {
 			unreviewed = append(unreviewed, fmt.Sprintf("the commits below %s, which do not lead back to the review", short(at)))
@@ -671,11 +805,11 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 			// past advance.MaxBaseMerges, a review of the head is cheaper
 			// than walking on.
 			if merges++; merges > advance.MaxBaseMerges {
-				return false, fmt.Sprintf("too many base merges since the last review at %s: review the head", short(p.Reviewed)), nil
+				return nil, nil, fmt.Sprintf("too many base merges since the last review at %s: review the head", short(from)), nil
 			}
 			pure, err := pureBaseMerge(ctx, gh, p.Slug, base, at, ps)
 			if err != nil {
-				return false, "", err
+				return nil, nil, "", err
 			}
 			if !pure {
 				unreviewed = append(unreviewed, short(at)+" (a merge that is not GitHub's pure merge of "+base+")")
@@ -685,16 +819,63 @@ func gateReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.Re
 		}
 		at = ps[0]
 	}
-	if len(unreviewed) > 0 {
-		slices.Reverse(unreviewed)
-		detail := fmt.Sprintf("reviewed at %s; unreviewed since: %s", short(p.Reviewed), strings.Join(unreviewed, ", "))
-		if len(unread) > 0 {
-			detail += fmt.Sprintf(" (GitHub would not compare the simplifier's run from %s, so its commits are not counted as reviewed simplifications)",
-				strings.Join(unread, ", "))
-		}
-		return false, detail, nil
+	slices.Reverse(unreviewed)
+	return unreviewed, unread, "", nil
+}
+
+// verdictReviewed is item 3 under ProfileReviewVerdict: every lens the
+// policy picks for the pull request's paths completed a review at the
+// head, or at a commit from which only GitHub's pure merges of the base
+// lead to it. Nothing else is explained: no simplifier runs on another's
+// pull request, and a person's acceptance of a round is not a review.
+func verdictReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge.ReadinessFacts) (bool, string, error) {
+	h := p.Head
+	if h == "" {
+		return false, "no head recorded", nil
 	}
-	return true, fmt.Sprintf("reviewed at %s; since then only reviewed simplifications and pure merges of %s", short(p.Reviewed), base), nil
+	base := cmp.Or(f.BaseBranch, p.BaseBranch)
+	_, paths, refused, err := prPaths(ctx, gh, p, base)
+	switch {
+	case err != nil:
+		return false, "", err
+	case refused:
+		return false, fmt.Sprintf("GitHub would not compare %s with %s to say which lenses the changed paths require", base, short(h)), nil
+	}
+	lenses := ReviewersFor(p.Policy, paths)
+	if len(lenses) == 0 {
+		return false, VerdictNoLens, nil
+	}
+	var missing []string
+	judged := map[string]string{} // by a lens's head, why it does not reach h
+	for _, lens := range lenses {
+		// TODO(review-only PR 4, decision table): a failed or running re-review of a lens at the pin is ignored (LensHeads reads completed Runs only).
+		at := p.LensHeads[lens]
+		switch {
+		case at == "":
+			missing = append(missing, lens)
+			continue
+		case at == h:
+			continue
+		}
+		why, seen := judged[at]
+		if !seen {
+			unreviewed, _, stop, err := sinceReview(ctx, gh, p, at, base, false)
+			if err != nil {
+				return false, "", err
+			}
+			if why = stop; why == "" && len(unreviewed) > 0 {
+				why = "unreviewed since: " + strings.Join(unreviewed, ", ")
+			}
+			judged[at] = why
+		}
+		if why != "" {
+			missing = append(missing, fmt.Sprintf("%s (reviewed at %s; %s)", lens, short(at), why))
+		}
+	}
+	if len(missing) > 0 {
+		return false, fmt.Sprintf("no completed review at %s by %s", short(h), strings.Join(missing, "; ")), nil
+	}
+	return true, fmt.Sprintf("reviewed at %s by %s (since a lens's review, only pure merges of %s)", short(h), strings.Join(lenses, ", "), base), nil
 }
 
 // pureMerges remembers the merges judged GitHub's pure merge of a base,
