@@ -449,12 +449,18 @@ func setRefs(ctx context.Context, tx pgx.Tx, org, id string, refs []Ref) error {
 }
 
 // selectMemory reads a memory as people see it: who wrote it (an agent's
-// Run gives the person it worked for and its task), and its index state.
-var selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.session_id, ''), m.title, m.content, m.kind, m.author_kind,
+// Run gives the person it worked for and its task), who pinned it, and its
+// index state. Who pinned it is named as a briefing names them: a person's
+// name, else the pinning Run's role ("the conductor"), else "".
+// delivery.ProjectFacts names them the same way in its own query: keep the
+// two alike.
+const selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.session_id, ''), m.title, m.content, m.kind, m.author_kind,
 		coalesce(m.author_person_id, op.id, ''), coalesce(p.name, op.name, ''),
 		coalesce(r.role::text, ''), coalesce(m.created_by_run_id, ''), coalesce(tp.key_prefix || '-' || t.number, ''),
 		coalesce(m.system_reason, ''), coalesce(m.source_type, ''), coalesce(m.source_id, ''),
-		m.archived_at, m.created_at, m.updated_at, m.pinned_at, ` + pinnedBySQL("m") + `,
+		m.archived_at, m.created_at, m.updated_at, m.pinned_at,
+		coalesce((SELECT name FROM people WHERE id = m.pinned_by_person_id),
+			(SELECT 'the ' || replace(role::text, '_', ' ') FROM runs WHERE id = m.pinned_by_run_id), ''),
 		coalesce(m.pinned_by_person_id, ''), coalesce(m.pinned_by_run_id, ''),
 		CASE WHEN d.embedding IS NOT NULL THEN 'embedded' WHEN d.last_error IS NOT NULL THEN 'failed' ELSE 'waiting' END,
 		coalesce(d.last_error, '')
@@ -467,15 +473,6 @@ var selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.session_
 		WHERE membership.task_id = t.id AND p.removed_at IS NULL
 		ORDER BY membership.position, membership.person_id LIMIT 1) op ON true
 	LEFT JOIN search_documents d ON d.source_type = 'memory' AND d.source_id = m.id`
-
-// pinnedBySQL is who pinned the memory alias names, as a briefing names
-// them: a person's name, else the pinning Run's role ("the conductor"),
-// else "" for none. delivery.ProjectFacts names them the same way in its
-// own query: keep the two alike.
-func pinnedBySQL(alias string) string {
-	return fmt.Sprintf(`coalesce((SELECT name FROM people WHERE id = %[1]s.pinned_by_person_id),
-		(SELECT 'the ' || replace(role::text, '_', ' ') FROM runs WHERE id = %[1]s.pinned_by_run_id), '')`, alias)
-}
 
 // Pinned says m is pinned.
 func (m Memory) Pinned() bool { return m.PinnedAt != nil }

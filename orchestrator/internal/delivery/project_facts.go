@@ -44,8 +44,8 @@ func ProjectFacts(ctx context.Context, tx pgx.Tx, projectID string) (string, err
 	// and read only as far as clipFact can show, with whether the whole of
 	// it, trimmed, is longer: whitespace at the cut does not hide the cut.
 	// At most ProjectFactsMax of them, and the count of all of them for the
-	// "N more" line. Who pinned it is named as memory.pinnedBySQL names it:
-	// keep the two alike.
+	// "N more" line. Who pinned it is named as memory's selectMemory names
+	// it: keep the two alike.
 	rows, err := tx.Query(ctx, `SELECT m.id, m.title, left(btrim(m.content, $4), $2),
 			char_length(btrim(m.content, $4)) > $2,
 			coalesce((SELECT name FROM people WHERE id = m.pinned_by_person_id),
