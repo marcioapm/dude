@@ -255,3 +255,44 @@ func TestProbeClippedDigestMarksAllDelivered(t *testing.T) {
 		})
 	}
 }
+
+// F6: free CI is decided against the base the task's change goes into: its
+// pull request's base when it has one, else its delivery's base for the
+// repository, else the repository's default branch. A workflow whose only
+// trigger for the change is a pull_request filtered to one branch is free
+// against that base, and needs the person against any other.
+func TestFreeCIIsDecidedAgainstTheChangesBase(t *testing.T) {
+	prOnly := func(base string) string {
+		return "name: PR\non:\n  pull_request:\n    branches: [" + base + "]\n  workflow_dispatch:\njobs: {}\n"
+	}
+	for _, c := range []struct{ name, pr, delivery, free, notFree string }{
+		{"the pull request's base", "main", "develop", "main", "develop"},
+		{"the delivery's base", "", "develop", "develop", "main"},
+		{"the default branch", "", "", "main", "develop"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, task, branch := dispatchWorld(t)
+			repo := w.str(`SELECT r.name FROM repositories r JOIN pull_requests p ON p.repository_id = r.id WHERE p.task_id = $1`, task)
+			if def := w.str(`SELECT default_branch FROM repositories WHERE name = $1 AND organization_id = $2`, repo, w.org); def != "main" {
+				t.Fatalf("default branch %q", def)
+			}
+			if c.pr == "" {
+				mustExec(t, w.owner, `DELETE FROM pull_requests WHERE task_id = $1`, task)
+			} else {
+				mustExec(t, w.owner, `UPDATE pull_requests SET base_branch = $2 WHERE task_id = $1`, task, c.pr)
+			}
+			bases := "{}"
+			if c.delivery != "" {
+				bases = `{"` + repo + `": "` + c.delivery + `"}`
+			}
+			mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{bases}', $2::jsonb) WHERE task_id = $1`, task, bases)
+			w.gh.CommitFiles(branch, "pr workflows", map[string]string{".github/workflows/free.yml": prOnly(c.free),
+				".github/workflows/other.yml": prOnly(c.notFree)})
+			w.refused(task, "run_workflow", `{"workflow":"other.yml"}`, "a pull request into "+c.free+"), or dude cannot tell")
+			id := w.dispatched(task, `{"workflow":"free.yml"}`)
+			if got := w.str(`SELECT COALESCE(question_id, 'free') FROM workflow_dispatches WHERE id = $1`, id); got != "free" {
+				t.Fatalf("free.yml: %s", got)
+			}
+		})
+	}
+}
