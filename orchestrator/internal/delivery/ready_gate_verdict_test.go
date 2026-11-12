@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -123,6 +124,49 @@ func TestTheReviewVerdictProfile(t *testing.T) {
 			},
 			merge:  answer{true, "pure merges of main"},
 			review: answer{true, "only pure merges of main"}},
+		// The lens's review is not an ancestor of the pin: the walk stops,
+		// and its reason is the lens's, not a pass.
+		{name: "history rewritten since a lens's review", key: ReadyReviewed,
+			setup: func(f *gateFixture) string {
+				f.ready()
+				// A force-push: the branch restarted from main.
+				if out, err := exec.Command("git", "-C", f.gh.Repo, "update-ref", "refs/heads/feature", "refs/heads/main").CombinedOutput(); err != nil {
+					f.t.Fatalf("%v %s", err, out)
+				}
+				f.gh.CommitFiles("feature", "Greet again", map[string]string{"app/greet.go": "package app // again\n"})
+				return f.synced()
+			},
+			merge:  answer{false, "history rewritten since the review"},
+			review: answer{false, "history rewritten since the review"}},
+		{name: "more commits since a lens's review than the walk explains", key: ReadyReviewed,
+			setup: func(f *gateFixture) string {
+				f.ready()
+				for range maxGateCommits + 1 {
+					f.gh.CommitOnTop("feature", "A person's commit")
+				}
+				return f.synced()
+			},
+			merge:  answer{false, "unreviewed since: the commits below"},
+			review: answer{false, "unreviewed since: the commits below"}},
+		{name: "GitHub would not compare a lens's review with the pin", key: ReadyReviewed,
+			setup: func(f *gateFixture) string {
+				h := f.ready()
+				f.reviewed("0123456789abcdef0123456789abcdef01234567", "correctness")
+				return h
+			},
+			merge:  answer{false, "GitHub would not compare the reviewed 0123456"},
+			review: answer{false, "GitHub would not compare the reviewed 0123456"}},
+		// No lens picked: the item fails, and says it cannot be verified,
+		// not that a review found something.
+		{name: "the policy picks no lens", key: ReadyReviewed,
+			setup: func(f *gateFixture) string {
+				f.st.Policy.RequiredReviewers = nil
+				f.st.Policy.ConditionalReviewers = nil
+				f.saveState()
+				return f.ready()
+			},
+			merge:  answer{true, "reviewed at"},
+			review: answer{false, VerdictNoLens}},
 		{name: "a person accepted the round at a head nobody reviewed", key: ReadyReviewed,
 			setup: func(f *gateFixture) string {
 				f.ready()
@@ -302,6 +346,51 @@ func (f *gateFixture) aheadOfTheRecord(hadCI, checks, seen string) string {
 	f.exec(`UPDATE pull_requests SET head_sha = '0123456789abcdef0123456789abcdef01234567', head_seen_at = now() - $2::interval,
 		had_ci = `+hadCI+`, checks = '`+checks+`' WHERE id = 'pr_g' AND organization_id = $1`, seen)
 	return h
+}
+
+// Two pull requests of one task, each given its own pin, are each judged
+// at their own: never at the other's, and one given no pin at its
+// recorded head.
+func TestTheReviewVerdictProfileJudgesEachPullRequestAtItsOwnPin(t *testing.T) {
+	f := newGateFixture(t)
+	f.gh.SetChecks("run:success")
+	h1 := f.ready()
+	n2 := f.gh.OpenAsPerson("dude-bot", "feature2", "main", "Wave")
+	h2 := f.gh.SHA("feature2")
+	f.exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch,
+		base_branch, head_sha, title, body, state, checks)
+		VALUES ('pr_g2', $1, 'prj_g', 'wi_g', 'repo_g', $2, 'https://github.com/acme/repo/pull/2', 'feature2', 'main', $3, 'Wave', '', 'open', 'passing')`,
+		n2, h2)
+	f.exec(`UPDATE pull_requests SET head_sha = '0123456789abcdef0123456789abcdef01234567' WHERE organization_id = $1`)
+	judge := func(pins map[string]string) map[string]PRGate {
+		t.Helper()
+		var c ReadyGateCheck
+		if err := f.store.DB.InOrg(f.ctx, f.org, func(tx pgx.Tx) (err error) {
+			c, err = CheckProfileGateTx(f.ctx, tx, "wi_g", nil, ProfileReviewVerdict, pins)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]PRGate{}
+		for _, g := range DoReadyGate(f.ctx, f.forge, c) {
+			out[g.ID] = g
+		}
+		if len(out) != 2 {
+			t.Fatalf("gates: %+v", out)
+		}
+		return out
+	}
+	gates := judge(map[string]string{"pr_g": h1, "pr_g2": h2})
+	for id, h := range map[string]string{"pr_g": h1, "pr_g2": h2} {
+		if gates[id].Head != h {
+			t.Errorf("%s judged at %s, want its pin %s", id, gates[id].Head, h)
+		}
+		holds(t, gates[id], ReadyHead, true, "at "+short(h))
+	}
+	// A pin for the second only: the first is judged at its recorded head.
+	gates = judge(map[string]string{"pr_g2": h2})
+	holds(t, gates["pr_g"], ReadyHead, false, "dude last recorded 0123456")
+	holds(t, gates["pr_g2"], ReadyHead, true, "at "+short(h2))
 }
 
 // With no pin, the verdict is judged at the recorded head, as the merge

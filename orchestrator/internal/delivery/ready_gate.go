@@ -98,6 +98,11 @@ const (
 // a draft: not closed, reviewed, but not to be approved.
 const VerdictDraft = "it is a draft: reviewed, no approval until it is marked ready for review"
 
+// VerdictNoLens is the reviewed item's detail, under ProfileReviewVerdict,
+// when the policy picks no lens for the pull request's paths: not a
+// review that found something, but one that cannot be verified at all.
+const VerdictNoLens = "the policy picks no lens for these paths: nothing reviewed them, so the verdict cannot be verified"
+
 // ReadyGateCheck is the gate's first part, read in a transaction: per pull
 // request, what dude knows of it.
 type ReadyGateCheck struct {
@@ -829,7 +834,7 @@ func verdictReviewed(ctx context.Context, gh *forge.GitHub, p GateFacts, f forge
 	}
 	lenses := ReviewersFor(p.Policy, paths)
 	if len(lenses) == 0 {
-		return false, "the policy picks no lens for these paths: nothing reviewed them", nil
+		return false, VerdictNoLens, nil
 	}
 	var missing []string
 	judged := map[string]string{} // by a lens's head, why it does not reach h
