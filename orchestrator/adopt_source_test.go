@@ -325,3 +325,24 @@ func TestASourceGitHubWillNotConfirmIsRefused(t *testing.T) {
 	status, out = w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": "1"})
 	refusedAs(t, status, out, 502, "github_unavailable")
 }
+
+// Supersede applies in every combination: a review-only source beside a
+// live holder, in a writing mode or review only, is asked first
+// (superseded_required, naming it), never adopted beside it.
+func TestAReviewOnlySourceBesideALiveHolderIsAskedToSupersede(t *testing.T) {
+	for _, holderMode := range []string{delivery.ModeReview, delivery.ModeContinue, delivery.ModeReviewOnly} {
+		t.Run(holderMode, func(t *testing.T) {
+			w := newWorld(t)
+			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+			holder, _ := w.holding(n, "feature/greet", holderMode, w.person("Ana"))
+			status, out := w.checkSource(map[string]any{"kind": "pr", "repositoryId": w.repoID, "pullRequest": fmt.Sprint(n),
+				"mode": delivery.ModeReviewOnly})
+			refusedAs(t, status, out, 409, "superseded_required")
+			e, _ := out["error"].(map[string]any)
+			d, _ := e["details"].(map[string]any)
+			if h, _ := d["holder"].(map[string]any); h["id"] != holder || h["mode"] != holderMode {
+				t.Fatalf("the refusal names %v, want %s in %s", h, holder, holderMode)
+			}
+		})
+	}
+}
