@@ -39,19 +39,25 @@ func ProjectFacts(ctx context.Context, tx pgx.Tx, projectID string) (string, err
 	if projectID == "" {
 		return "", nil
 	}
-	rows, err := tx.Query(ctx, `SELECT m.id, m.title, m.content,
+	// Each fact's text is read only as far as clipFact can show (a rune
+	// past projectFactChars says it is cut), at most ProjectFactsMax of
+	// them, and the count of all of them for the "N more" line. Who pinned
+	// it is named as memory.pinnedBySQL names it: keep the two alike.
+	rows, err := tx.Query(ctx, `SELECT m.id, m.title, left(m.content, $2),
 			coalesce((SELECT name FROM people WHERE id = m.pinned_by_person_id),
 				(SELECT 'the ' || replace(role::text, '_', ' ') FROM runs WHERE id = m.pinned_by_run_id), ''),
-			m.pinned_at
+			m.pinned_at, count(*) OVER ()
 		FROM memories m
 		WHERE m.project_id = $1 AND m.pinned_at IS NOT NULL AND m.archived_at IS NULL AND m.session_id IS NULL
-		ORDER BY greatest(m.updated_at, m.pinned_at) DESC, m.id`, projectID)
+		ORDER BY greatest(m.updated_at, m.pinned_at) DESC, m.id
+		LIMIT $3`, projectID, projectFactChars+1, ProjectFactsMax)
 	if err != nil {
 		return "", err
 	}
+	total := 0
 	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (projectFact, error) {
 		var f projectFact
-		return f, r.Scan(&f.ID, &f.Title, &f.Text, &f.By, &f.pinnedAt)
+		return f, r.Scan(&f.ID, &f.Title, &f.Text, &f.By, &f.pinnedAt, &total)
 	})
 	if err != nil || len(all) == 0 {
 		return "", err
@@ -81,7 +87,7 @@ func ProjectFacts(ctx context.Context, tx pgx.Tx, projectID string) (string, err
 	return render(projectFactsTmpl, struct {
 		Facts []projectFact
 		More  int
-	}{kept, len(all) - len(kept)}), nil
+	}{kept, total - len(kept)}), nil
 }
 
 // clipFact cuts a fact's text at projectFactChars, saying so: the whole of
