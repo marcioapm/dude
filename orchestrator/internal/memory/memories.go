@@ -67,6 +67,10 @@ type Memory struct {
 	// by whom — a person's name, or the role of the agent that pinned it.
 	PinnedAt *time.Time `json:"pinnedAt,omitempty"`
 	PinnedBy string     `json:"pinnedBy,omitempty"`
+	// Who pinned it, by id: a person, or an agent's Run. Not sent: an
+	// agent unpins only what an agent pinned (agenttools' remember).
+	PinnedByPersonID string `json:"-"`
+	PinnedByRunID    string `json:"-"`
 	// The index's view: embedded, waiting, or failed with its reason.
 	Index     string `json:"index"`
 	IndexNote string `json:"indexNote,omitempty"`
@@ -433,6 +437,7 @@ var selectMemory = `SELECT m.id, coalesce(m.project_id, ''), coalesce(m.session_
 		coalesce(r.role::text, ''), coalesce(m.created_by_run_id, ''), coalesce(tp.key_prefix || '-' || t.number, ''),
 		coalesce(m.system_reason, ''), coalesce(m.source_type, ''), coalesce(m.source_id, ''),
 		m.archived_at, m.created_at, m.updated_at, m.pinned_at, ` + PinnedBySQL("m") + `,
+		coalesce(m.pinned_by_person_id, ''), coalesce(m.pinned_by_run_id, ''),
 		CASE WHEN d.embedding IS NOT NULL THEN 'embedded' WHEN d.last_error IS NOT NULL THEN 'failed' ELSE 'waiting' END,
 		coalesce(d.last_error, '')
 	FROM memories m
@@ -461,7 +466,8 @@ func scan(row pgx.Row) (Memory, error) {
 	var srcType, srcID string
 	err := row.Scan(&m.ID, &m.ProjectID, &m.SessionID, &m.Title, &m.Content, &m.Kind, &m.Author.Kind,
 		&m.Author.PersonID, &m.Author.PersonName, &m.Author.Role, &m.Author.RunID, &m.Author.TaskKey,
-		&m.Author.Reason, &srcType, &srcID, &m.ArchivedAt, &m.CreatedAt, &m.UpdatedAt, &m.PinnedAt, &m.PinnedBy, &m.Index, &m.IndexNote)
+		&m.Author.Reason, &srcType, &srcID, &m.ArchivedAt, &m.CreatedAt, &m.UpdatedAt, &m.PinnedAt, &m.PinnedBy,
+		&m.PinnedByPersonID, &m.PinnedByRunID, &m.Index, &m.IndexNote)
 	if srcType != "" {
 		m.Source = &Ref{Type: srcType, ID: srcID}
 	}

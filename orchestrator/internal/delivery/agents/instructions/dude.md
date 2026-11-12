@@ -32,7 +32,7 @@ Your tools act on the work you are part of. Use them; do not work around them.
 - **Ask a person**: `ask_person`, when you cannot go on without a decision only a person can make. Several questions go in one call. The answer comes back as your next message, even hours later; your work is kept meanwhile.
 {{- end}}
 {{- if .Remember}}
-- **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known; save what the next agent should know (`remember`), after searching so you do not save it twice.{{if .Pin}} Its `pin` is for a fact every future agent on this project must have in front of it: pinned facts arrive in every briefing.{{end}}
+- **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known; save what the next agent should know (`remember`), after searching so you do not save it twice.{{if .Pin}} Its `pin` is for a fact every future agent on this project must have in front of it: pinned facts arrive in every briefing. Unpin a pinned fact that has gone stale by its id (`remember` with `id` and `pin: false`); a person's pin is theirs.{{end}}
 {{- else if .SearchMemory}}
 - **Memory**: what people and agents here learned before you. Search it (`search_memory`) before investigating something that may be known.
 {{- end}}

@@ -188,13 +188,16 @@ func getOneMemory(ctx context.Context, tx pgx.Tx, c Caller, in getMemoryIn) (mem
 
 // ---- remember ----------------------------------------------------------------
 
+// rememberIn saves a memory, or, with ID, pins or unpins an existing one:
+// title and content are then left out, and pin says which.
 type rememberIn struct {
-	Title   string   `json:"title"`
-	Content string   `json:"content"`
+	ID      string   `json:"id,omitempty"`
+	Title   string   `json:"title,omitempty"`
+	Content string   `json:"content,omitempty"`
 	Kind    string   `json:"kind,omitempty"`
 	About   []string `json:"about,omitempty"`
 	Scope   string   `json:"scope,omitempty"`
-	Pin     bool     `json:"pin,omitempty"`
+	Pin     *bool    `json:"pin,omitempty"`
 }
 
 type rememberOut struct {
@@ -210,8 +213,15 @@ func mayPin(c Caller) bool { return c.grants.Has(capabilities.Conduct) }
 
 func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (rememberOut, error) {
 	project := c.ProjectID
-	if in.Pin && !mayPin(c) {
+	pin := in.Pin != nil && *in.Pin
+	if (pin || strings.TrimSpace(in.ID) != "") && !mayPin(c) {
 		return rememberOut{}, refuseText(rPinNotGranted)
+	}
+	if strings.TrimSpace(in.ID) != "" {
+		return pinByID(ctx, tx, c, in)
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		return rememberOut{}, refuseText(rRememberTitleRequired)
 	}
 	switch in.Scope {
 	case "", "project":
@@ -234,7 +244,7 @@ func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (remember
 		Author: memory.Author{Kind: "agent", RunID: c.RunID},
 		Source: &memory.Ref{Type: "task", ID: c.TaskID},
 	}, actor)
-	if err == nil && in.Pin {
+	if err == nil && pin {
 		m, err = memory.Pin(ctx, tx, c.Org, m, true, memory.Pinner{RunID: c.RunID}, actor)
 	}
 	var bad *memory.Invalid
@@ -246,6 +256,34 @@ func remember(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (remember
 	}
 	if c.env.kick != nil {
 		c.env.kick()
+	}
+	return rememberOut{ID: m.ID, Pinned: m.Pinned()}, nil
+}
+
+// pinByID pins or unpins a memory already saved, the conductor's way to
+// pin what a phase Run remembered (rPinNotGranted) without saving it twice,
+// and to unpin a fact gone stale. The same rules as a person's pin
+// (memory.Pin) and the same events. A person's pin is theirs: an agent
+// unpins only what an agent pinned.
+func pinByID(ctx context.Context, tx pgx.Tx, c Caller, in rememberIn) (rememberOut, error) {
+	if in.Pin == nil || in.Title != "" || in.Content != "" || in.Kind != "" || len(in.About) > 0 || in.Scope != "" {
+		return rememberOut{}, refuseText(rPinByIDAlone)
+	}
+	m, err := getOneMemory(ctx, tx, c, getMemoryIn{ID: in.ID})
+	if err != nil {
+		return rememberOut{}, err
+	}
+	if !*in.Pin && m.Pinned() && m.PinnedByPersonID != "" {
+		return rememberOut{}, refuse(rPersonsPin, m.ID, m.PinnedBy)
+	}
+	actor := memory.Actor{Type: ledger.ActorAgent, ID: c.RunID, ProjectID: c.ProjectID, TaskID: c.TaskID, RunID: c.RunID}
+	m, err = memory.Pin(ctx, tx, c.Org, m, *in.Pin, memory.Pinner{RunID: c.RunID}, actor)
+	var bad *memory.Invalid
+	if errors.As(err, &bad) {
+		return rememberOut{}, refuse("%s", bad.Reason)
+	}
+	if err != nil {
+		return rememberOut{}, err
 	}
 	return rememberOut{ID: m.ID, Pinned: m.Pinned()}, nil
 }

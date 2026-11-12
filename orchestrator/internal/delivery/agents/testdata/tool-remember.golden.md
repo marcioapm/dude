@@ -6,9 +6,13 @@ Save something worth knowing next time, for every agent and person on this proje
 {
   "type": "object",
   "properties": {
+    "id": {
+      "type": "string",
+      "description": "a conductor's: an existing project fact's id, with pin true or false and nothing else, to pin or unpin it instead of saving one: pin what a phase Run saved, or unpin a pinned fact that has gone stale. A person's pin is theirs: only a person unpins it"
+    },
     "title": {
       "type": "string",
-      "description": "one line that says what it is, as another agent would scan it in a list"
+      "description": "one line that says what it is, as another agent would scan it in a list; required unless id is given"
     },
     "content": {
       "type": "string",
@@ -33,14 +37,13 @@ Save something worth knowing next time, for every agent and person on this proje
       "description": "project (default): this project only; organization: true in every project"
     },
     "pin": {
-      "type": "boolean",
-      "description": "a conductor's: true for a fact every future agent on this project must have in front of it: pinned facts arrive in every briefing"
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "description": "a conductor's: true for a fact every future agent on this project must have in front of it: pinned facts arrive in every briefing. With id, true pins that fact and false unpins it"
     }
   },
-  "required": [
-    "title",
-    "content"
-  ],
   "additionalProperties": false
 }
 ```

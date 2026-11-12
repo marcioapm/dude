@@ -104,6 +104,9 @@ rNoGuideSection                        refusals/tools/memory/no-guide-section
 rMemoryWasArchivedNoLongerHeld         refusals/tools/memory/memory-was-archived-no-longer-held
 rScopeProjectOrOrganization            refusals/tools/memory/scope-project-or-organization
 rPinNotGranted                         refusals/tools/memory/pin-not-granted
+rRememberTitleRequired                 refusals/tools/memory/remember-title-required
+rPinByIDAlone                          refusals/tools/memory/pin-by-id-alone
+rPersonsPin                            refusals/tools/memory/persons-pin
 rArguments                             refusals/tools/server/arguments
 rTooManyCallsAtMostMinute              refusals/tools/server/too-many-calls-at-most-minute
 rLimitedCallsInRunThisRun              refusals/tools/server/limited-calls-in-run-this-run
