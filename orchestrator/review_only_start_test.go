@@ -116,3 +116,20 @@ func TestUpdateBranchIsRefusedOnAReviewOnlyTasksPullRequest(t *testing.T) {
 		})
 	}
 }
+
+// Picking a stopped review-only task back up beside another live task on
+// its pull request answers the same whichever way: Resume and Try again
+// hold no branch for it, as Start over (NewState) holds none, so neither
+// is refused superseded_required while the other is not.
+func TestAStoppedReviewOnlyTaskBesideAHolderIsAnsweredAlikeEveryWay(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	ana := w.person("Ana")
+	wi, _ := w.holding(n, "feature/greet", delivery.ModeReviewOnly, ana)
+	w.stop(ana, wi, map[string]any{})
+	w.holding(n, "feature/greet", delivery.ModeReview, ana)
+	for _, action := range []string{"restart", "resume", "retry"} {
+		status, out := w.callAs(ana, "/internal/tasks/"+wi+"/recover", map[string]any{"action": action})
+		notYet(t, action, status, out)
+	}
+}
