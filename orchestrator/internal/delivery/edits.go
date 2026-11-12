@@ -256,6 +256,10 @@ func ConductPublish(ctx context.Context, tx pgx.Tx, ref RunRef, message string) 
 	if !live {
 		return "", refuseText(rYouAreNoLongerThisTask3)
 	}
+	// Before its read-only checkout's refusal: this one says why.
+	if err := refuseReviewOnlyWriterTx(ctx, tx, ref.TaskID); err != nil {
+		return "", err
+	}
 	d, err := ReadDelivery(ctx, tx, ref.TaskID)
 	if err != nil {
 		return "", err

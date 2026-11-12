@@ -250,6 +250,12 @@ func refuseEndedDeliveryTx(ctx context.Context, tx pgx.Tx, locked *Delivery, tas
 }
 
 func createPhaseRunTx(ctx context.Context, tx pgx.Tx, org string, in PhaseRun) (string, error) {
+	// Every writer Run is made here: none for a task that only reviews.
+	if Publishes[in.Phase] {
+		if err := refuseReviewOnlyWriterTx(ctx, tx, in.TaskID); err != nil {
+			return "", err
+		}
+	}
 	var runID string
 	if in.Key != "" {
 		var err error

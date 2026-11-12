@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -48,6 +49,10 @@ func blockedFailure(err error) error {
 // transaction of its own, the refused one having rolled back, and answers
 // it; any other error passes through.
 func (s *Server) refusedStart(ctx context.Context, org, taskID, path string, p principal, err error) error {
+	var notYet delivery.ReviewOnlyNotYet
+	if errors.As(err, &notYet) {
+		return fail(http.StatusConflict, "review_only_not_yet", "%s", notYet.Error())
+	}
 	if delivery.StartRefusalReason(err) == "" {
 		return err
 	}

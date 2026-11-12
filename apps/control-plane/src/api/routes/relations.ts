@@ -100,7 +100,7 @@ async function getRelations(ctx: RequestContext): Promise<Response> {
 interface EdgeRow {
   fromId: string;
   toId: string;
-  kind: "blocks" | "related" | "duplicates";
+  kind: TaskRelationKind;
   why: string | null;
   createdAt: string;
   person: string | null;
@@ -135,7 +135,8 @@ export async function readRelations(scope: OrgScope, here: TaskRow, person: stri
     const from = e.fromId === here.id ? here : other;
     const to = e.toId === here.id ? here : other;
     // A duplicates edge is Close's and Reopen's: nobody removes it here.
-    const may = e.kind === "duplicates" ? { can: false, by: null } : removal(e.kind, from, to, here, person);
+    // duplicates and supersedes are Close's and a supersede's: nobody removes them here.
+    const may = e.kind === "duplicates" || e.kind === "supersedes" ? { can: false, by: null } : removal(e.kind, from, to, here, person);
     const view: TaskRelationView = {
       task: { id: other.id, key: other.key, title: other.title, status: other.status,
         project: other.projectId !== here.projectId ? other.projectName : null,
@@ -146,6 +147,7 @@ export async function readRelations(scope: OrgScope, here: TaskRow, person: stri
     };
     if (e.kind === "related") out.related.push(view);
     else if (e.kind === "duplicates") (e.fromId === here.id ? out.duplicateOf : out.duplicatedBy).push(view);
+    else if (e.kind === "supersedes") (e.fromId === here.id ? (out.supersedes ??= []) : (out.supersededBy ??= [])).push(view);
     else if (e.toId === here.id) out.blockedBy.push(view);
     else out.blocks.push(view);
   }

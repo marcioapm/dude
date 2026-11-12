@@ -1061,11 +1061,16 @@ func (s *Syncer) Reconcile(ctx context.Context, every time.Duration) (int, error
 // a refusal is, with GitHub's reason. Best effort either way: what the
 // sync read is recorded already.
 func (s *Syncer) updateBranch(ctx context.Context, org string, gh *forge.GitHub, slug string, pr tracked, head string) {
-	var tried bool
+	var tried, reviewOnly bool
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		// A review-only task never writes to the author's branch.
+		var err error
+		if reviewOnly, err = delivery.ReviewOnlyTx(ctx, tx, pr.TaskID); err != nil || reviewOnly {
+			return err
+		}
 		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
 			AND payload->>'action' = 'update-branch' AND payload->>'head' = $3)`, pr.TaskID, delivery.EvPullRequestAction, head).Scan(&tried)
-	}); err != nil || tried {
+	}); err != nil || tried || reviewOnly {
 		return
 	}
 	err := gh.UpdateBranch(ctx, slug, pr.Number, head)

@@ -23,6 +23,17 @@ export const REPOSITORIES_JSON = `COALESCE((
   FROM task_repositories wr JOIN repositories r ON r.id = wr.repository_id
   WHERE wr.task_id = tasks.id), '[]'::json) AS repositories`;
 
+/** The id of one of repos that is not in the project, or null when all are. */
+export async function repositoryNotInProject(scope: OrgScope, projectId: string, repos: TaskRepositoriesInput): Promise<string | null> {
+  const ids = repos.map((r) => r.id);
+  if (ids.length === 0) return null;
+  const found = (await scope.sql`
+    SELECT id FROM repositories WHERE project_id = ${projectId}
+      AND id IN (SELECT jsonb_array_elements_text(${ids}::jsonb))`) as Array<{ id: string }>;
+  const known = new Set(found.map((r) => r.id));
+  return ids.find((id) => !known.has(id)) ?? null;
+}
+
 /**
  * Replace a task's repositories. Returns the id of one that is not in
  * its project, or null when all were set.
@@ -34,15 +45,8 @@ export async function setTaskRepositories(
   taskId: string,
   repos: TaskRepositoriesInput,
 ): Promise<string | null> {
-  const ids = repos.map((r) => r.id);
-  if (ids.length > 0) {
-    const found = (await scope.sql`
-      SELECT id FROM repositories WHERE project_id = ${projectId}
-        AND id IN (SELECT jsonb_array_elements_text(${ids}::jsonb))`) as Array<{ id: string }>;
-    const known = new Set(found.map((r) => r.id));
-    const missing = ids.find((id) => !known.has(id));
-    if (missing) return missing;
-  }
+  const missing = await repositoryNotInProject(scope, projectId, repos);
+  if (missing) return missing;
   await scope.sql`DELETE FROM task_repositories WHERE task_id = ${taskId}`;
   for (const r of repos) {
     await scope.sql`

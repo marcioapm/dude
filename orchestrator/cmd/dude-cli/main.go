@@ -883,11 +883,18 @@ var commands = map[string]command{
 				}
 				if src != nil {
 					body["source"] = src
+					if *from.supersede {
+						body["supersede"] = true
+					}
 				}
 				if *epic != "" {
 					body["epicId"] = *epic
 				}
 				v, err := c.request("POST", "/v1/tasks", body)
+				var he *httpError
+				if errors.As(err, &he) && strings.Contains(he.body, "superseded_required") {
+					return nil, fmt.Errorf("%w\nrun it again with --supersede to stop that task and take the work over in this one", err)
+				}
 				if err != nil {
 					return nil, err
 				}

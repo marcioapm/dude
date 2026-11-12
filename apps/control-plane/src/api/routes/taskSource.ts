@@ -6,6 +6,7 @@
  * the goal is.
  */
 
+import { z } from "zod";
 import { taskSourceInputSchema, taskSourceModeSchema, type TaskSource, type TaskSourceInput } from "@dude/domain";
 import type { OrgScope } from "../../db/client.ts";
 import { HttpError } from "../http.ts";
@@ -20,24 +21,39 @@ export const SOURCE_JSON = `(SELECT json_strip_nulls(json_build_object('kind', s
     'number', s.number, 'title', s.title, 'headBranch', s.head_branch, 'baseBranch', s.base_branch, 'mode', s.mode))
   FROM task_sources s JOIN repositories r ON r.id = s.repository_id WHERE s.task_id = tasks.id) AS source`;
 
+/** A live task holding the branch a source names: what superseded_required names, and what a confirmation stops. */
+export interface SourceHolder { id: string; key: string; mode: string }
+
+/**
+ * A person's answer to superseded_required: true stops whichever live task
+ * holds the branch, a task id only that one (refused again if the holder
+ * changed since they were asked).
+ */
+export const supersedeInput = z.union([z.literal(true), z.string().min(1)]).optional();
+export type Supersede = z.infer<typeof supersedeInput>;
+
 /**
  * The orchestrator's verdict on a source: resolved, or why not, as the
- * error the API answers (422 with the rule's code; 502 when GitHub could
- * not be asked). taskId names the task it is for, so its own branch is not
- * another task's. Its mode is the one asked for, else the orchestrator's
- * default for what the source is.
+ * error the API answers (422 with the rule's code; 409 superseded_required
+ * naming the live task that holds its branch, in details.holder; 502 when
+ * GitHub could not be asked). taskId names the task it is for, so its own
+ * branch is not another task's. Its mode is the one asked for, else the
+ * orchestrator's default for what the source is. With supersede, the
+ * holder confirmed comes back as `supersedes`.
  */
 export async function checkTaskSource(ctx: RequestContext, projectId: string, source: TaskSourceInput,
-  taskId: string | null): Promise<TaskSource> {
+  taskId: string | null, supersede?: Supersede): Promise<TaskSource & { supersedes?: SourceHolder }> {
   const body = {
-    kind: source.kind, repositoryId: source.repositoryId, taskId: taskId ?? "",
+    kind: source.kind, repositoryId: source.repositoryId, taskId: taskId ?? "", ...(source.mode ? { mode: source.mode } : {}),
+    ...(supersede === true ? { supersede: true } : supersede ? { supersedeTask: supersede } : {}),
     ...(source.kind === "pr" ? { pullRequest: source.pullRequest } : { branch: source.branch, base: source.base ?? "" }),
   };
   const res = await orchestrator(ctx.principal.organizationId, "POST",
     `/internal/projects/${encodeURIComponent(projectId)}/sources/check`, JSON.stringify(body), ctx.principal);
-  const out = (await res.json().catch(() => ({}))) as Record<string, unknown> & { error?: { code?: string; message?: string } };
+  const out = (await res.json().catch(() => ({}))) as Record<string, unknown> & { error?: { code?: string; message?: string; details?: unknown } };
   if (!res.ok) {
-    throw new HttpError(res.status, out.error?.message ?? "GitHub could not be asked about the source", out.error?.code ?? "error");
+    throw new HttpError(res.status, out.error?.message ?? "GitHub could not be asked about the source", out.error?.code ?? "error",
+      out.error?.details);
   }
   const found = taskSourceModeSchema.safeParse(out.mode);
   return {
@@ -45,7 +61,25 @@ export async function checkTaskSource(ctx: RequestContext, projectId: string, so
     ...(typeof out.number === "number" ? { number: out.number, title: (out.title as string) ?? "" } : {}),
     headBranch: out.headBranch as string, baseBranch: out.baseBranch as string,
     mode: source.mode ?? (found.success ? found.data : "review"),
+    ...(out.supersedes ? { supersedes: out.supersedes as SourceHolder } : {}),
   };
+}
+
+/**
+ * Supersede, as a person confirmed: the orchestrator stops the holder as
+ * their Stop does, attaches the source to the task (made from `create`,
+ * or `taskId`'s, not yet started) and links the two, in one transaction.
+ * Its answer is the task's id.
+ */
+export async function supersedeWith(ctx: RequestContext, projectId: string, source: TaskSource & { supersedes?: SourceHolder },
+  target: { taskId: string } | { create: Record<string, unknown> }): Promise<string> {
+  const { supersedes, ...kept } = source;
+  const res = await orchestrator(ctx.principal.organizationId, "POST",
+    `/internal/projects/${encodeURIComponent(projectId)}/tasks/supersede`,
+    JSON.stringify({ holder: supersedes!.id, source: kept, ...target }), ctx.principal);
+  const out = (await res.json().catch(() => ({}))) as { taskId?: string; error?: { code?: string; message?: string; details?: unknown } };
+  if (!res.ok) throw new HttpError(res.status, out.error?.message ?? "the task could not be superseded", out.error?.code ?? "error", out.error?.details);
+  return out.taskId!;
 }
 
 /**
@@ -81,30 +115,41 @@ export function sourceMode(stored: TaskSource, given: TaskSourceInput): TaskSour
 
 /**
  * Keep the task's source, replacing any: null clears it. The repository a
- * source is in is one the task works on, with write access.
+ * source is in is one the task works on, with write access, or read for
+ * review only. Another live task holding its branch is refused
+ * (superseded_required, naming it): superseding is the orchestrator's
+ * (supersedeWith). The holder read is the orchestrator's branchHolder
+ * (delivery/source.go): keep the two the same.
  */
 export async function setTaskSource(scope: OrgScope, organizationId: string, taskId: string, source: TaskSource | null) {
   if (source) {
     await scope.sql`SELECT id FROM repositories WHERE id = ${source.repositoryId} FOR UPDATE`;
-    const holders = await scope.sql`
-      SELECT p.key_prefix || '-' || t.number AS key FROM tasks t JOIN projects p ON p.id = t.project_id
+    const holders = (await scope.sql`
+      SELECT t.id, p.key_prefix || '-' || t.number AS key,
+        COALESCE((SELECT s.mode FROM task_sources s WHERE s.task_id = t.id), '') AS mode
+      FROM tasks t JOIN projects p ON p.id = t.project_id
       WHERE t.id <> ${taskId} AND t.status NOT IN ('done', 'aborted', 'failed')
         AND (EXISTS (SELECT 1 FROM task_sources s WHERE s.task_id = t.id
                      AND s.repository_id = ${source.repositoryId} AND s.head_branch = ${source.headBranch})
           OR EXISTS (SELECT 1 FROM workflow_runs w JOIN task_repositories tr ON tr.task_id = w.task_id
                      WHERE w.task_id = t.id AND tr.repository_id = ${source.repositoryId}
                        AND w.status IN ('running', 'waiting') AND w.state->>'branch' = ${source.headBranch}))
-      LIMIT 1`;
-    if (holders[0]) throw new HttpError(422, `${source.headBranch} is already the branch of ${holders[0].key}, which is still in progress`, "branch_taken");
+      ORDER BY t.created_at LIMIT 1`) as SourceHolder[];
+    const holder = holders[0];
+    if (holder) {
+      throw new HttpError(409, `${source.headBranch} is already the branch of ${holder.key}, which is still in progress: ` +
+        `confirm to stop ${holder.key} and take the work over in this task`, "superseded_required", { holder });
+    }
   }
   await scope.sql`DELETE FROM task_sources WHERE task_id = ${taskId}`;
   if (!source) return;
+  const access = source.mode === "review_only" ? "read" : "write";
   await scope.sql`
     INSERT INTO task_sources (task_id, organization_id, repository_id, kind, number, title, head_branch, base_branch, mode)
     VALUES (${taskId}, ${organizationId}, ${source.repositoryId}, ${source.kind}, ${source.number ?? null},
             ${source.title ?? null}, ${source.headBranch}, ${source.baseBranch}, ${source.mode})`;
   await scope.sql`
     INSERT INTO task_repositories (organization_id, task_id, repository_id, access)
-    VALUES (${organizationId}, ${taskId}, ${source.repositoryId}, 'write')
-    ON CONFLICT (task_id, repository_id) DO UPDATE SET access = 'write'`;
+    VALUES (${organizationId}, ${taskId}, ${source.repositoryId}, ${access}::repository_access)
+    ON CONFLICT (task_id, repository_id) DO UPDATE SET access = EXCLUDED.access`;
 }
