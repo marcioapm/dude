@@ -53,7 +53,7 @@ This Run has none of dude's tools: you cannot ask a person, read dude's memory o
 - **Other work you find**: record it as a task (`create_task`); a person decides on it. Do not do it inside yours.
 {{- end}}
 {{- if and (not .Child) (ne .Role "investigator") (.Granted "list_tasks" "message")}}
-- **Peers on an epic**: before you change what another task on it may also be changing (shared files, migrations, APIs), check your peers (`list_tasks` with peers) and the epic notes in your briefing. Message the peer (`message`){{if .Granted "note"}} or pin a note (`note`){{end}} instead of colliding.
+- **Peers on an epic**: before you change what another task on it may also be changing (shared files, migrations, APIs), check your peers (`list_tasks` with peers) and the epic notes in your briefing. Message the peer (`message`){{if .Granted "note"}} or pin a note (`note`){{end}} instead of colliding.{{if eq .Role "conductor"}} A peer's merge wakes you with the files your branch shares with it: bring its base in, and adjust, before you go on.{{end}}
 {{- end}}
 {{- if .Repository}}
 - **Another repository you need**: `request_repository`.

@@ -298,6 +298,10 @@ func run(log *slog.Logger) error {
 		// Start when unblocked: the requests a merge marked due, each fired
 		// in its own transaction after every blocker is read again.
 		{"auto-starts", time.Second, (&delivery.AutoStarts{DB: database, Starter: runtime}).Sweep},
+		// A merge on an epic: each peer's live conductor woken once, with
+		// the files its branch shares with the merge. Read from the pull
+		// requests merged and not yet told, never from the sync's event.
+		{"epic-merges", 2 * time.Second, (&delivery.EpicMerges{DB: database, Forges: forges, Log: log}).Sweep},
 		{"artifacts", time.Second, (&phases.Artifacts{DB: database, Lux: luxClient, Log: log}).Sweep},
 		// Each Run carries its own next read (every set.LuxCostEvery); the
 		// loop only looks for the ones due.

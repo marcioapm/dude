@@ -77,6 +77,19 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"review-question-answered", reviewQuestionAnsweredLine("rvq_1", "In UTC.\nAlways.", false)},
 		{"review-question-withdrawn", reviewQuestionAnsweredLine("rvq_1", "the code is gone", true)},
 		{"base-moved", baseMovedLine("main", "GLD-8", 14)},
+		{"epic-merge-overlap", epicMergeLine(goldenEpicMerge, epicOverlap{Known: true, SameBase: true, Files: []string{"api/auth.go", "api/routes.go"}})},
+		{"epic-merge-overlap-many", epicMergeLine(goldenEpicMerge, epicOverlap{Known: true, SameBase: true,
+			Files: []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go"}})},
+		{"epic-merge-overlap-long", epicMergeLine(goldenEpicMerge, epicOverlap{Known: true, SameBase: true, Files: []string{
+			"services/billing/internal/invoices/reconcile_test.go", "services/billing/internal/invoices/reconcile.go",
+			"services/billing/internal/ledger/postings.go", "services/billing/migrations/0042_invoice_state.sql"}})},
+		{"epic-merge-overlap-one-long", epicMergeLine(goldenEpicMerge, epicOverlap{Known: true, SameBase: true, Files: []string{
+			"services/" + strings.Repeat("very_long_directory_name/", 10) + "reconcile.go"}})},
+		{"epic-merge-overlap-other-base", epicMergeLine(epicMerge{TaskKey: "GLD-8", Repo: "api", Base: "release/1.2", Number: 14, MergeSHA: headA},
+			epicOverlap{Known: true, Files: []string{"api/auth.go"}})},
+		{"epic-merge-none", epicMergeLine(goldenEpicMerge, epicOverlap{Known: true})},
+		{"epic-merge-unknown", epicMergeLine(goldenEpicMerge, epicOverlap{})},
+		{"epic-merge-no-sha", epicMergeLine(epicMerge{TaskKey: "GLD-8", Repo: "api", Base: "main", Number: 14}, epicOverlap{Known: true})},
 		{"voice-quiet", VoiceChangedLine(VoiceQuiet)},
 		{"voice-chatty", VoiceChangedLine(VoiceChatty)},
 		{"wait-held", renderWaitDigest(waitEval{held: 2, of: 2, waitedAll: true, items: []waitItem{
@@ -320,3 +333,6 @@ func refusalLines(prefix, golden string) [][2]string {
 func TestGoldenDomainRefusals(t *testing.T) {
 	goldenLines(t, "refusals-domain", refusalLines("refusals/domain/", "refusals-domain"))
 }
+
+// goldenEpicMerge is a merged pull request on an epic, for its wake lines.
+var goldenEpicMerge = epicMerge{TaskKey: "GLD-8", Repo: "api", Base: "main", Number: 14, MergeSHA: headA}

@@ -169,8 +169,10 @@ func (s *Store) recordAdopted(ctx context.Context, org string, st *State, repo R
 		// The task's now: an attempt started over takes it from the last.
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, node_id, url,
-			                           head_branch, base_branch, head_sha, title, state, checks, adopted)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::pull_request_state, 'unknown', true)
+			                           head_branch, base_branch, head_sha, title, state, checks, adopted, epic_peers_told_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::pull_request_state, 'unknown', true,
+			        -- Merged before dude knew it: no peer is woken for an old merge.
+			        CASE WHEN $13 = 'merged' THEN now() END)
 			ON CONFLICT (repository_id, number) DO UPDATE SET task_id = EXCLUDED.task_id, adopted = true, updated_at = now()`,
 			id, org, st.ProjectID, st.TaskID, repo.ID, src.Number, db.Nullable(pr.NodeID), pr.URL, src.HeadBranch,
 			src.BaseBranch, pr.HeadSHA, src.Title, pr.State)

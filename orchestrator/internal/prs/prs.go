@@ -323,9 +323,10 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			had_ci = $8, head_seen_at = $7, mergeable_state = $9, behind_by = $10, checks_json = $11::jsonb,
 			reviews_json = $12::jsonb, unresolved_threads = $13, checks_pending_since = $15,
 			merged_at = CASE WHEN $2 = 'merged' THEN COALESCE(merged_at, now()) ELSE merged_at END,
-			closed_at = CASE WHEN $2 = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END
+			closed_at = CASE WHEN $2 = 'closed' THEN COALESCE(closed_at, now()) ELSE closed_at END,
+			merge_commit_sha = CASE WHEN $2 = 'merged' THEN COALESCE(merge_commit_sha, CASE WHEN $16 ~ '^[0-9a-f]{40,64}$' THEN $16 END) ELSE merge_commit_sha END
 			WHERE id = $1 AND updated_at = $14`, pr.ID, status.State, status.Checks, status.Review, status.HeadSHA, cursor, headSeenAt, hadCI,
-			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads, pr.UpdatedAt, pendingSince)
+			status.Mergeable, status.BehindBy, checksJSON, reviewsJSON, status.UnresolvedThreads, pr.UpdatedAt, pendingSince, status.MergeSHA)
 		if err != nil {
 			return err
 		}

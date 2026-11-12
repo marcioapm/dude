@@ -74,6 +74,8 @@ type PullRequestRef struct {
 	URL     string
 	State   string
 	HeadSHA string
+	// The commit a merge made, once merged; "" when GitHub did not say.
+	MergeSHA string
 }
 
 type Status struct {
@@ -594,6 +596,7 @@ type ghPull struct {
 	Draft          bool    `json:"draft"`
 	State          string  `json:"state"`
 	MergedAt       *string `json:"merged_at"`
+	MergeCommitSHA *string `json:"merge_commit_sha"`
 	Mergeable      *bool   `json:"mergeable"`
 	MergeableState string  `json:"mergeable_state"`
 	Title          string  `json:"title"`
@@ -631,7 +634,11 @@ func (p ghPull) ref() PullRequestRef {
 	case p.Draft:
 		state = StateDraft
 	}
-	return PullRequestRef{Number: p.Number, NodeID: p.NodeID, URL: p.HTMLURL, State: state, HeadSHA: p.Head.SHA}
+	ref := PullRequestRef{Number: p.Number, NodeID: p.NodeID, URL: p.HTMLURL, State: state, HeadSHA: p.Head.SHA}
+	if state == StateMerged && p.MergeCommitSHA != nil {
+		ref.MergeSHA = *p.MergeCommitSHA
+	}
+	return ref
 }
 
 type OpenPullRequest struct {
@@ -1998,11 +2005,13 @@ type ghLabel struct {
 }
 
 type ghFile struct {
-	Filename  string `json:"filename"`
-	Status    string `json:"status"`
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	Patch     string `json:"patch"`
+	Filename string `json:"filename"`
+	// A rename's name before it.
+	PreviousFilename string `json:"previous_filename"`
+	Status           string `json:"status"`
+	Additions        int    `json:"additions"`
+	Deletions        int    `json:"deletions"`
+	Patch            string `json:"patch"`
 }
 
 type ghIssue struct {
@@ -2210,14 +2219,31 @@ func (g *GitHub) PullRequestRead(ctx context.Context, slug string, number, maxFi
 // PullFiles is the paths a pull request changes, up to max (GitHub lists
 // at most 3000).
 func (g *GitHub) PullFiles(ctx context.Context, slug string, number, max int) ([]string, error) {
-	var out []string
+	files, err := g.PullFileList(ctx, slug, number, max)
+	out := make([]string, len(files))
+	for i, f := range files {
+		out[i] = f.Path
+	}
+	return out, err
+}
+
+// PullFile is one file a pull request changes: its path, its GitHub
+// status, and a rename's previous path.
+type PullFile struct {
+	Path, Status, Previous string
+}
+
+// PullFileList is the files a pull request changes, up to max (GitHub
+// lists at most 3000), each with a rename's previous path.
+func (g *GitHub) PullFileList(ctx context.Context, slug string, number, max int) ([]PullFile, error) {
+	var out []PullFile
 	for page := 1; page <= (max+99)/100; page++ {
 		var batch []ghFile
 		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100&page=%d", slug, number, page), nil, &batch); err != nil {
 			return nil, err
 		}
 		for _, f := range batch {
-			out = append(out, f.Filename)
+			out = append(out, PullFile{Path: f.Filename, Status: f.Status, Previous: f.PreviousFilename})
 		}
 		if len(batch) < 100 {
 			break

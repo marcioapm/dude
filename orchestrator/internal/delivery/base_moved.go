@@ -29,7 +29,7 @@ func NotifyBaseMovedTx(ctx context.Context, tx pgx.Tx, org, prID string) error {
 			AND w.status IN ('running', 'waiting') ORDER BY w.created_at DESC LIMIT 1) w ON true
 		WHERE tr.repository_id = $1 AND tr.access = 'write' AND t.id <> $2
 		  AND t.status NOT IN ('done', 'aborted', 'failed')
-		  AND COALESCE(NULLIF(w.state->'bases'->>r.name, ''), r.default_branch) = $3
+		  AND `+deliveryBase+` = $3
 		  AND EXISTS (SELECT 1 FROM runs c WHERE c.task_id = t.id AND c.role = 'conductor' AND c.kind = 'agent'
 		    AND c.status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))
 		ORDER BY t.id`, repoID, mergingTask, base, WorkflowType)
@@ -61,6 +61,11 @@ func NotifyBaseMovedTx(ctx context.Context, tx pgx.Tx, org, prID string) error {
 	}
 	return nil
 }
+
+// deliveryBase (SQL, over a delivery's state w.state and a repository r)
+// is the base the delivery measures r against: the one it was given, else
+// r's default branch.
+const deliveryBase = `COALESCE(NULLIF(w.state->'bases'->>r.name, ''), r.default_branch)`
 
 // baseMovedLine tells a conductor base moved: task key merged pull request
 // number into it.

@@ -64,7 +64,7 @@ func TestFilesSayWhatTheyCouldNotShow(t *testing.T) {
 	if f := files[3]; f.Binary || f.Truncated {
 		t.Errorf("an empty file is neither binary nor truncated: %+v", f)
 	}
-	if f := files[4]; f.Status != "R" || f.Binary || f.Truncated {
+	if f := files[4]; f.Status != "R" || f.PreviousPath != "old.ts" || f.Binary || f.Truncated {
 		t.Errorf("a rename with no lines: %+v", f)
 	}
 	if f := files[5]; f.Status != "D" || f.Truncated || len(f.Hunks) != 1 {

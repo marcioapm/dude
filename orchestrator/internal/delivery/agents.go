@@ -90,6 +90,7 @@ var (
 
 	baseMovedTmpl              = mustTemplate("wakes/base-moved")
 	decisionWaitingTmpl        = mustTemplate("wakes/decision-waiting")
+	epicMergeTmpl              = mustTemplate("wakes/epic-merge")
 	escalatedTmpl              = mustTemplate("wakes/escalated")
 	escalationAnsweredTmpl     = mustTemplate("wakes/escalation-answered")
 	escalationOnBannerTmpl     = mustTemplate("wakes/escalation-on-banner")
