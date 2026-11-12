@@ -83,6 +83,8 @@ func TestGoldenDeliveryLines(t *testing.T) {
 	add("relation-line", RelationLine(rels))
 	add("relation-line-duplicate", RelationLine(&TaskRelationsOut{DuplicateOf: "GLD-8"}))
 	add("relation-line-duplicated-by", RelationLine(&TaskRelationsOut{DuplicatedBy: []string{"GLD-9", "GLD-10"}}))
+	add("relation-line-supersedes", RelationLine(&TaskRelationsOut{Related: []string{"GLD-3"}, Supersedes: "GLD-8"}))
+	add("relation-line-superseded-by", RelationLine(&TaskRelationsOut{SupersededBy: "GLD-9"}))
 	duplicateRels := *rels
 	duplicateRels.DuplicateOf, duplicateRels.DuplicatedBy = "GLD-8", []string{"GLD-9"}
 	add("relation-line-all", RelationLine(&duplicateRels))

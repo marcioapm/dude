@@ -1,4 +1,4 @@
--- 263_workflow_dispatches.sql — run_workflow: a conductor's
+-- 264_workflow_dispatches.sql — run_workflow: a conductor's
 -- workflow_dispatch and its supervision to the end.
 --
 -- One row per dispatch, reserved (dispatching) before the dispatch is

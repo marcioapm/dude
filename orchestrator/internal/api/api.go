@@ -51,6 +51,9 @@ type Server struct {
 	// Wakes the loops after a change, so a person's action takes effect
 	// without waiting for the next tick.
 	Kick func()
+	// AfterSupersedeStop, when set, runs in a supersede's transaction after
+	// the old task stopped: a test's fault, to show the whole rolls back.
+	AfterSupersedeStop func() error
 	// The Web Push keys browsers subscribe with (notify.Notifier.Keys).
 	PushKeys func(context.Context) (public, private string, err error)
 	// GitHub, for the actions a person takes on a pull request, and the

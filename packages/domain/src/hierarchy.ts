@@ -341,7 +341,7 @@ export type TaskRepository = z.infer<typeof taskRepositorySchema>;
  * request or a branch continues, a pull request marked ready is reviewed;
  * omitted on a saved one, it stays as saved.
  */
-export const taskSourceModeSchema = z.enum(["continue", "review"]);
+export const taskSourceModeSchema = z.enum(["continue", "review", "review_only"]);
 export type TaskSourceMode = z.infer<typeof taskSourceModeSchema>;
 
 export const taskSourceInputSchema = z.discriminatedUnion("kind", [

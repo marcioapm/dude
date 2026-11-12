@@ -353,6 +353,17 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		}
 		out["method"], out["sha"] = method, sha
 	case "update-branch":
+		// A review-only task changes no code: not even a merge of its base
+		// onto the author's branch. Its merge button is the person's own.
+		if err := s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
+			err := delivery.RefuseReviewOnlyPRActionTx(r.Context(), tx, pr.TaskID, "update-branch")
+			if delivery.IsRefusal(err) {
+				return fail(http.StatusConflict, "review_only", "%s", err.Error())
+			}
+			return err
+		}); err != nil {
+			return err
+		}
 		if err := gh.UpdateBranch(r.Context(), slug, pr.Number, pr.HeadSHA); err != nil {
 			return forgeRefusal(err, "GitHub would not update the branch")
 		}

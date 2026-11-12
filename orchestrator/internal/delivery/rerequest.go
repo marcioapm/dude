@@ -57,7 +57,8 @@ import (
 // after the next holder has asked; each session lost that way can add one
 // such request, so repeated losses can repeat a login's request.
 func (s *Store) RerequestReviews(ctx context.Context, org string, st *State, gh *forge.GitHub, heads map[string]string) error {
-	if gh == nil || len(heads) == 0 {
+	// A review-only task moved no head: its reviewers are the author's to ask.
+	if gh == nil || len(heads) == 0 || st.Source.ReviewOnly() {
 		return nil
 	}
 	// Admitted before any database work, so a caller past the bound is

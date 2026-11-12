@@ -266,4 +266,7 @@ const (
 	rDispatchMaybe                          = "dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. It is listed as %s, unknown: %s before dispatching it again"
 	rWaitNotDispatchOfThisTask              = "%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches)"
 	rWaitDispatchFailed                     = "GitHub refused dispatch %s (%s): nothing ran, so there is nothing to wait for. Fix what GitHub refused, then dispatch it again (run_workflow)"
+	rReviewOnlyNoWriter                     = "This task reviews pull request #%d and changes no code: no implementer, fixer or simplifier runs, and nothing is published. To have dude fix it, start a task from the pull request in Review and fix mode"
+	rReviewOnlyPRAction                     = "This task reviews pull request #%d and does not change it: %s is not dude's to take here"
+	rReviewOnlyNotYet                       = "This task would review pull request #%d and change no code. A review-only task can be created, but reviewing it arrives with the verdict step: it cannot start yet. To have dude review and fix the pull request now, start a task from it in Review and fix mode"
 )

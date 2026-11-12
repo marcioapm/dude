@@ -49,7 +49,7 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 	}
 	checked, err := CheckSource(ctx, w.s.DB, gh, sc.OrganizationID, st.ProjectID, SourceRequest{
 		Kind: src.Kind, RepositoryID: src.RepositoryID, PullRequest: fmt.Sprint(src.Number),
-		Branch: src.HeadBranch, Base: src.BaseBranch, TaskID: st.TaskID,
+		Branch: src.HeadBranch, Base: src.BaseBranch, TaskID: st.TaskID, Mode: src.Mode,
 	})
 	if err != nil {
 		var refusal SourceRefusal
@@ -126,6 +126,9 @@ func tookOverLine(src *Source, head string, changed int) string {
 
 // Continues says the work taken over goes to an implementer before review.
 func (s *Source) Continues() bool { return s != nil && s.Mode == ModeContinue }
+
+// ReviewOnly says the task reviews the pull request and changes no code.
+func (s *Source) ReviewOnly() bool { return s != nil && s.Mode == ModeReviewOnly }
 
 // adoptedPR and adoptedBranch say what existing work the delivery took over.
 func (st *State) adoptedPR() bool     { return st.Source != nil && st.Source.Kind == SourcePR }
