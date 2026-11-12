@@ -221,6 +221,35 @@ func TestSupersedeStopsAQueuedHolderWithALiveDelivery(t *testing.T) {
 	}
 }
 
+// A started holder whose delivery is not live (dead-lettered here) but
+// whose Run still runs is refused as a person's Stop refuses it, not
+// marked aborted beside its live Run: nothing changes, and the Run is not
+// left running on a task the branch was released from.
+func TestSupersedeRefusesAStartedHolderWithNoLiveDelivery(t *testing.T) {
+	w := newWorld(t)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	ana := w.person("Ana")
+	old, run := w.holding(n, "feature/greet", delivery.ModeContinue, ana)
+	mustExec(t, w.owner, `UPDATE workflow_runs SET status = 'dead_lettered' WHERE task_id = $1`, old)
+	before := w.supersedeState(old)
+	status, out := w.supersede(ana, old, n, "feature/greet", delivery.ModeReview)
+	refusedAs(t, status, out, 409, "not_in_progress")
+	if after := w.supersedeState(old); after != before {
+		t.Fatalf("a refused supersede changed things:\n%s\n%s", before, after)
+	}
+	for range 5 {
+		w.pump()
+	}
+	if s := w.taskStatus(old); s != "running" {
+		t.Errorf("the old task is %s", s)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running'`, run); n != 1 {
+		t.Errorf("the old task's Run changed under a refused supersede")
+	}
+	status, out = w.callAs(ana, "/internal/tasks/"+old+"/stop", map[string]any{})
+	refusedAs(t, status, out, 409, "not_in_progress")
+}
+
 // A person's Stop of the same queued task is unchanged: not in progress.
 func TestStopRefusesAQueuedTaskStill(t *testing.T) {
 	w := newWorld(t)
