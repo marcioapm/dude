@@ -2348,6 +2348,26 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 			"kind": "other", "status": "in_progress", "rawInput": input})
 	}
 	status, body, err := s.toolRequest(run, tool, args)
+	if tool == "start_phase" && run.behavior.Conductor {
+		// The conductor's tool instructions distinguish this short lease
+		// refusal from permanent 422s. Retry that request, not every tool or
+		// refusal. Each HTTP transaction has ended before waiting, and the
+		// fake's mutex is released so the poller can make progress.
+		for retries := 0; err == nil && startPhaseLeaseRefusal(status, body, args); retries++ {
+			if retries == 20 {
+				// One report: saidOfTool below says it, not also "answered 422".
+				err = fmt.Errorf("retry limit reached after 21 attempts: %s", body)
+				break
+			}
+			s.mu.Unlock()
+			alive := s.delay(100 * time.Millisecond)
+			s.mu.Lock()
+			if !alive || s.isClosed() {
+				return 0
+			}
+			status, body, err = s.toolRequest(run, tool, args)
+		}
+	}
 	if s.isClosed() {
 		return 0
 	}
@@ -2396,6 +2416,21 @@ func (s *Server) callTool(run *Run, tool, args string) int {
 		run.lastID, run.lastAnswer = answer.ID, body
 	}
 	return status
+}
+
+// startPhaseLeaseRefusal deliberately matches the whole retry instruction:
+// a different 422, a transport error, or another tool is not safe to replay.
+// This refusal currently exposes no typed code through agenttools.
+func startPhaseLeaseRefusal(status int, body []byte, args string) bool {
+	if status != http.StatusUnprocessableEntity {
+		return false
+	}
+	var in struct{ Phase string }
+	var out struct{ Error string }
+	if json.Unmarshal([]byte(args), &in) != nil || json.Unmarshal(body, &out) != nil || strings.TrimSpace(in.Phase) == "" {
+		return false
+	}
+	return out.Error == "the delivery is reading what changed on its pull requests now; start "+strings.TrimSpace(in.Phase)+" again in a moment"
 }
 
 var lastField = regexp.MustCompile(`\{\{last\.([A-Za-z0-9_.]+)\}\}`)

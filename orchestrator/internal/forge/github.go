@@ -189,6 +189,9 @@ type Feedback struct {
 	Kind      string
 	// Where a person reads it on GitHub, when GitHub said.
 	URL string
+	// For a line comment that replies in a review thread, GitHub's id of
+	// the comment it answers (in_reply_to_id); 0 otherwise.
+	InReplyTo int64
 }
 
 // Error is GitHub refusing a request.
@@ -206,6 +209,10 @@ type Error struct {
 	// each "name=access" joined by ",". "" when GitHub sent none, or sent
 	// anything else (see acceptedPermissions).
 	AcceptedPermissions string
+	// Details is the "errors" list of GitHub's answer, one per line (a
+	// string's text, or an object's message or code): where a 422 says
+	// what it refused, its message being "Unprocessable Entity".
+	Details string
 }
 
 // acceptedPermissions is h's X-Accepted-GitHub-Permissions, normalised,
@@ -1153,10 +1160,14 @@ type ghComment struct {
 	UpdatedAt string  `json:"updated_at"`
 	HTMLURL   string  `json:"html_url"`
 	User      *ghUser `json:"user"`
+	// The line comment a reply answers, the thread's first; 0 for one
+	// that starts a thread, and for conversation comments.
+	InReplyTo int64 `json:"in_reply_to_id"`
 }
 
 type ghReview struct {
 	ID          int64   `json:"id"`
+	NodeID      string  `json:"node_id"`
 	Body        string  `json:"body"`
 	State       string  `json:"state"`
 	SubmittedAt *string `json:"submitted_at"`
@@ -1203,7 +1214,7 @@ func (g *GitHub) Feedback(ctx context.Context, slug string, st Status, since str
 	}
 	for _, c := range line {
 		out = append(out, Feedback{ID: fmt.Sprintf("line-comment-%d", c.ID), Author: login(c.User), Body: c.Body, Path: c.Path,
-			CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, Kind: KindLineComment, URL: c.HTMLURL})
+			CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, Kind: KindLineComment, URL: c.HTMLURL, InReplyTo: c.InReplyTo})
 	}
 	for _, r := range reviews {
 		// A reviewer who writes only "please rename this" in the review box
