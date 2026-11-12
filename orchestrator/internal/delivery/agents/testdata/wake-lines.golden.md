@@ -244,3 +244,39 @@ dude woke you; 12 things:
 
 Read what you need with your tools; take the decision waiting, or tell the person what you propose.
 
+## workflow-unknown-no-run-id
+
+Workflow deploy.yml you dispatched (wfd_1) on api at main is unknown: GitHub did not say which run this dispatch started; find it with `github_branch_runs`. It is neither a success nor a failure.
+
+## wait-workflow-unknown-no-run-id
+
+workflow deploy.yml (wfd_1) unknown, neither success nor failure: GitHub did not say which run this dispatch started; find it with `github_branch_runs`
+
+## workflow-unknown-no-run-id-without-branch-runs
+
+Workflow deploy.yml you dispatched (wfd_1) on api at main is unknown: GitHub did not say which run this dispatch started; ask a person to find it on GitHub. It is neither a success nor a failure.
+
+## wait-workflow-unknown-no-run-id-without-branch-runs
+
+workflow deploy.yml (wfd_1) unknown, neither success nor failure: GitHub did not say which run this dispatch started; ask a person to find it on GitHub
+
+## workflow-unknown-maybe
+
+Workflow deploy.yml you dispatched (wfd_1) on api at main is unknown: dude may or may not have dispatched this: it never heard GitHub's answer; find it with `github_branch_runs`. It is neither a success nor a failure.
+
+## wait-workflow-unknown-maybe
+
+workflow deploy.yml (wfd_1) unknown, neither success nor failure: dude may or may not have dispatched this: it never heard GitHub's answer; find it with `github_branch_runs`
+
+## workflow-unknown-maybe-without-branch-runs
+
+Workflow deploy.yml you dispatched (wfd_1) on api at main is unknown: dude may or may not have dispatched this: it never heard GitHub's answer; ask a person to find it on GitHub. It is neither a success nor a failure.
+
+## wait-workflow-unknown-maybe-without-branch-runs
+
+workflow deploy.yml (wfd_1) unknown, neither success nor failure: dude may or may not have dispatched this: it never heard GitHub's answer; ask a person to find it on GitHub
+
+## wait-workflow-refused
+
+workflow deploy.yml (wfd_1): GitHub refused it: github 422: Unexpected inputs provided: ["env"]; nothing ran
+

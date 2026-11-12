@@ -1,6 +1,6 @@
 ---
 title: Pull requests
-covers: [tool:pull_requests, tool:refresh_pull_requests, tool:reply_on_pull_request, tool:resolve_thread, tool:request_review, tool:mark_ready, tool:rerun_failed_checks, tool:sync_base]
+covers: [tool:pull_requests, tool:refresh_pull_requests, tool:reply_on_pull_request, tool:resolve_thread, tool:request_review, tool:mark_ready, tool:rerun_failed_checks, tool:run_workflow, tool:sync_base]
 ---
 dude opens a pull request once the work is reviewed and tested, then keeps working on it until a person merges it. This page explains how the pull request opens, what wakes a fixer, how CI is handled, and how a task keeps up with its base branch.
 
@@ -54,6 +54,8 @@ A fix that changes nothing in a repository spends none of that pull request's bu
 If checks stay pending on one commit longer than **Ask when CI is stuck after** (60 minutes by default, **Settings → GitHub**), dude asks a person: **CI is stuck**. A runner may be gone, or a required check never starts.
 
 The conductor can run the failed checks again with `rerun_failed_checks`, once per commit, for a failure that is not the code's — a flaky runner, an outage. A real failure goes to a fixer. It can ask you for one more rerun on the same commit with `request_limit`.
+
+The conductor can start a GitHub Actions workflow that has a `workflow_dispatch` trigger with `run_workflow`, on the task's branch by default. CI the change already runs (a workflow that runs on a push to the task's branch or a pull request into its base, as its filters say), on the task's branch, it starts on its own; anything else (a deploy on push to main, a release on tags, a schedule, a workflow whose filters dude cannot read, or another ref) only after you pick "Run <workflow> on <ref>" in its question, and each answer allows one run. GitHub tells dude which run the dispatch started; an older GitHub (or GitHub Enterprise Server) does not, and dude never guesses: that dispatch is "unknown" at once, which means find its run with `github_branch_runs`. dude keeps reading the run until it ends (and for 30 minutes after, so a re-run is followed), and the conductor is told each outcome once: completed with its conclusion, "unknown" when dude cannot tell which run is the one it started (or whether a dispatch it never heard back about went out), or "cannot see" when GitHub keeps refusing or failing dude's reads. The last two mean investigate, not success or failure. A dispatch GitHub refuses (a bad input, no such workflow, no permission) ran nothing: the conductor is told so with GitHub's error, cannot wait on it, and your answer still allows one run.
 
 ## Merging
 

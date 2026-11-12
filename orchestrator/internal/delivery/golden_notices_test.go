@@ -36,7 +36,7 @@ func TestGoldenToolResults(t *testing.T) {
 // The reasons dude wakes the conductor with, one line each, and the note
 // they are delivered in.
 func TestGoldenWakeLines(t *testing.T) {
-	goldenLines(t, "wake-lines", [][2]string{
+	lines := [][2]string{
 		{"decision-waiting-start", decisionWaitingNote(PointStart, "")},
 		{"decision-waiting-implemented", decisionWaitingNote(PointImplemented, "Run run_impl finished: 2 files changed.")},
 		{"decision-waiting-reviewed", decisionWaitingNote(PointReviewed, "")},
@@ -124,7 +124,31 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"stalled-child", goldenStall().Text(ConductorOptions(true))},
 		{"note-one", WakeNote([]string{"A decision waits."})},
 		{"note-many", WakeNote([]string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"})},
-	})
+	}
+	// A dispatch's wake and wait item: an unknown one says where to look,
+	// as the conductor's grant says; a refused one is terminal.
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	wf := func(state, outcome, reason, lastError string) DispatchRow {
+		return DispatchRow{ID: "wfd_1", Repo: "api", Workflow: "deploy.yml", Ref: "main", At: at, State: state, Outcome: outcome,
+			Reason: reason, LastError: lastError}
+	}
+	for _, c := range []struct {
+		name string
+		d    DispatchRow
+	}{
+		{"no-run-id", wf(DispatchUnknown, DispatchUnknown, dispatchNoRunID, "")},
+		{"maybe", wf(DispatchUnknown, DispatchUnknown, dispatchMaybe, "github 502: Bad Gateway")},
+	} {
+		for _, granted := range []bool{true, false} {
+			suffix := map[bool]string{true: "", false: "-without-branch-runs"}[granted]
+			lines = append(lines,
+				[2]string{"workflow-unknown-" + c.name + suffix, render(workflowWakeTmpl, workflowView(c.d, granted))},
+				[2]string{"wait-workflow-unknown-" + c.name + suffix, render(waitWorkflowTmpl, workflowView(c.d, granted))})
+		}
+	}
+	lines = append(lines, [2]string{"wait-workflow-refused", render(waitWorkflowTmpl,
+		workflowView(wf(DispatchFailed, "", "GitHub refused the dispatch", `github 422: Unexpected inputs provided: ["env"]`), true))})
+	goldenLines(t, "wake-lines", lines)
 }
 
 // The send-back of a reported failure the conductor did not pass.

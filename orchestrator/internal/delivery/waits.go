@@ -63,6 +63,10 @@ const (
 type WaitCondition struct {
 	RunsEnded     []string     `json:"runsEnded,omitempty"`
 	PRChecksFinal *PRChecksAsk `json:"prChecksFinal,omitempty"`
+	// A workflow run_workflow dispatched (its dispatchId) reached a
+	// terminal outcome: completed, unknown, or dude cannot see it. One
+	// GitHub refused (failed) is refused: nothing ran.
+	WorkflowEnded string `json:"workflowEnded,omitempty"`
 }
 
 // PRChecksAsk names a pull request (12, #12, repo#12) and the head its
@@ -104,11 +108,14 @@ type waitCond struct {
 	PR     string `json:"pr,omitempty"`
 	PRName string `json:"prName,omitempty"`
 	Head   string `json:"head,omitempty"`
+	// workflow_ended: the workflow_dispatches row.
+	Dispatch string `json:"dispatch,omitempty"`
 }
 
 const (
 	condRunsEnded     = "runs_ended"
 	condPRChecksFinal = "pr_checks_final"
+	condWorkflowEnded = "workflow_ended"
 )
 
 // parseWaitDeadline reads a deadline: a Go duration, or an RFC 3339 time,
@@ -187,7 +194,9 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 		if ev.holds {
 			out.Holds = true
 			out.Digest = renderWaitDigest(ev, "", false, true, nil, ask.Note)
-			return out, nil
+			// Told in this call's result: the outcomes it names reached
+			// the conductor.
+			return out, deliveredByWaitTx(ctx, tx, "", out.Digest, ev)
 		}
 	}
 	if err := endOpenWaitsTx(ctx, tx, ref.TaskID, WaitReplaced); err != nil {
@@ -240,9 +249,32 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCon
 	}
 	out := make([]waitCond, 0, len(in))
 	for _, c := range in {
+		kinds := 0
+		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != ""} {
+			if set {
+				kinds++
+			}
+		}
 		switch {
-		case c.RunsEnded != nil && c.PRChecksFinal != nil, c.RunsEnded == nil && c.PRChecksFinal == nil:
+		case kinds != 1:
 			return nil, refuseText(rWaitOneKindPerCondition)
+		case c.WorkflowEnded != "":
+			id := strings.TrimSpace(c.WorkflowEnded)
+			// A dispatch GitHub refused (failed) never ran: nothing will
+			// end, and waiting on it would report a known answer as pending.
+			var state, lastError string
+			err := tx.QueryRow(ctx, `SELECT state, COALESCE(last_error, '') FROM workflow_dispatches WHERE id = $1 AND task_id = $2`, id, taskID).
+				Scan(&state, &lastError)
+			if db.IsNotFound(err) {
+				return nil, refusef(rWaitNotDispatchOfThisTask, id)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if state == DispatchFailed {
+				return nil, refusef(rWaitDispatchFailed, id, clip(oneLine(lastError), 300))
+			}
+			out = append(out, waitCond{Kind: condWorkflowEnded, Dispatch: id})
 		case c.RunsEnded != nil:
 			var runs []string
 			for _, id := range c.RunsEnded {
@@ -304,7 +336,10 @@ type waitItem struct {
 	// when it moved; Polled, when dude last read it.
 	PR, Head, State, Checks, MovedTo, Polled string
 	Failing                                  []string
-	rank                                     int
+	// A dispatched workflow (Kind "workflow"): as the supervisor last
+	// stored it.
+	Workflow *workflowFacts
+	rank     int
 }
 
 // waitEval is a wait's conditions as they read now.
@@ -341,6 +376,13 @@ func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all 
 			}
 		case condPRChecksFinal:
 			it, err := prItemTx(ctx, tx, c)
+			if err != nil {
+				return ev, err
+			}
+			held = it.rank != rankWaiting
+			ev.items = append(ev.items, it)
+		case condWorkflowEnded:
+			it, err := workflowItemTx(ctx, tx, c.Dispatch)
 			if err != nil {
 				return ev, err
 			}
@@ -498,6 +540,17 @@ func EvaluateWaitTx(ctx context.Context, tx pgx.Tx, org, taskID, waitID string) 
 	if _, err := RecordWakeTx(ctx, tx, org, taskID, WakeWait, "wait:"+waitID, digest); err != nil {
 		return false, err
 	}
+	// The workflow outcomes this digest tells, as stored (clipped), are
+	// delivered by it (should its conductor end before it is told,
+	// EndWaitsTx owes them again); one cut from it is still owed.
+	var told string
+	if err := tx.QueryRow(ctx, `SELECT line FROM conductor_wakes WHERE task_id = $1 AND key = $2`, taskID, "wait:"+waitID).
+		Scan(&told); err != nil {
+		return false, err
+	}
+	if err := deliveredByWaitTx(ctx, tx, waitID, told, v.ev); err != nil {
+		return false, err
+	}
 	return true, endWaitTx(ctx, tx, org, taskID, waitID, v.conductor, v.by, v.ev, digest)
 }
 
@@ -595,6 +648,10 @@ func waitEndedEvent(ctx context.Context, tx pgx.Tx, org, taskID, waitID, conduct
 // nothing tells the next conductor of a wait it did not open.
 func EndWaitsTx(ctx context.Context, tx pgx.Tx, taskID, by string) error {
 	if by == WaitConductorEnded {
+		// The workflow outcomes those digests carried reached no one.
+		if err := undeliverWaitsTx(ctx, tx, taskID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM conductor_wake_attempts o USING conductor_wakes c
 			WHERE o.wake_id = c.id AND c.task_id = $1 AND c.kind = $2 AND c.delivered_at IS NULL`, taskID, WakeWait); err != nil {
 			return err

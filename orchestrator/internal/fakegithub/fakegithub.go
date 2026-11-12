@@ -206,6 +206,16 @@ type Server struct {
 	downloadAuth []string
 	// Actions workflow runs by id (joblogs.go: SetWorkflowRun).
 	WorkflowRuns map[int64]WorkflowRun
+	// Workflow dispatches asked for (dispatch.go), in order; DispatchStatus,
+	// when set, is what a dispatch answers instead (422: no
+	// workflow_dispatch trigger). DispatchRunID, when set, is the id of a
+	// run each dispatch creates, queued, as GitHub would (then bumped).
+	// DispatchLegacy answers 204 even when asked for the run's details, as
+	// an older GitHub or GHES does.
+	Dispatches     []Dispatch
+	DispatchStatus int
+	DispatchRunID  int64
+	DispatchLegacy bool
 	// Review writes (reviews.go). RefuseDismissal answers every dismissal
 	// 403, as protected branch rules do. ReviewTimeoutOnce takes the next
 	// review, then cuts the connection before answering. ReviewFail5xx
@@ -959,6 +969,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}/logs", s.jobLogs)
 	mux.HandleFunc("GET "+prefix+"/actions/runs", s.workflowRuns)
+	mux.HandleFunc("POST "+prefix+"/actions/workflows/{workflow}/dispatches", s.dispatch)
 	mux.HandleFunc("GET "+prefix+"/actions/runs/{id}", s.workflowRun)
 	mux.HandleFunc("GET "+prefix+"/actions/runs/{id}/jobs", s.workflowRunJobs)
 	mux.HandleFunc("GET "+prefix+"/check-runs/{id}", s.checkRun)

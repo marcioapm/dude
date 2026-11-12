@@ -345,6 +345,12 @@ func run(log *slog.Logger) error {
 			}
 			return pullRequests.Reconcile(ctx, set.ReconcileEvery)
 		}},
+		// Workflows the conductor dispatched (run_workflow): each re-read
+		// on GitHub every prs.DispatchReadEvery and decided on from what
+		// was stored, never from a webhook.
+		{"workflow-supervisor", 10 * time.Second, func(ctx context.Context) (int, error) {
+			return pullRequests.SuperviseDispatches(ctx, prs.DispatchReadEvery)
+		}},
 	}
 	var wakers []chan struct{}
 	var wg sync.WaitGroup

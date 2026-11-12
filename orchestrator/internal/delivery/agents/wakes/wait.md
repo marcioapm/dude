@@ -13,6 +13,7 @@
 {{- else if .Ended}} {{.Status}}{{with .Error}}: {{clip (oneLine .) 120}}{{end}}
 {{- else}} not ended ({{.Status}})
 {{- end}}
+{{- else if eq .Kind "workflow"}}{{.Workflow.Line}}
 {{- else if eq .State "merged"}}{{.PR}} was merged
 {{- else if eq .State "closed"}}{{.PR}} was closed
 {{- else if .MovedTo}}{{.PR}}'s head moved to {{short .MovedTo}}: its checks will never finish on {{short .Head}}
@@ -27,5 +28,15 @@
 {{- else if eq .What "reviewed"}}{{.N}} pull request review{{if gt .N 1}}s{{end}}
 {{- else if eq .What "feedback"}}{{.N}} feedback submission{{if gt .N 1}}s{{end}}
 {{- else}}{{.N}} message{{if gt .N 1}}s{{end}} from people in Chat
+{{- end}}
+{{- end}}
+
+{{- define "wakes/wait/workflow"}}
+{{- if eq .Outcome "completed"}}workflow {{.Workflow}} ({{.ID}}) completed: {{or .Conclusion "no conclusion"}}, attempt {{.Attempt}}{{with .URL}} ({{.}}){{end}}
+{{- else if eq .Outcome "unknown"}}workflow {{.Workflow}} ({{.ID}}) unknown, neither success nor failure: {{.Reason}}; {{template "wakes/workflow/look" .BranchRuns}}
+{{- else if eq .Outcome "cannot_see"}}dude cannot see workflow {{.Workflow}} ({{.ID}}): {{.FailedRead}} reads in a row failed since {{.Failing}} ({{clip .LastError 160}}); investigate, this is not "not finished"
+{{- else if eq .State "failed"}}workflow {{.Workflow}} ({{.ID}}): GitHub refused it: {{clip .LastError 120}}; nothing ran
+{{- else if .Seen}}workflow {{.Workflow}} ({{.ID}}) still running, last seen {{.Status}}{{if gt .Attempt 1}} (attempt {{.Attempt}}){{end}} at {{.Seen}}
+{{- else}}workflow {{.Workflow}} ({{.ID}}): GitHub has not answered its dispatch yet (sent {{.At.UTC.Format "2006-01-02T15:04:05Z07:00"}}); not known to be running
 {{- end}}
 {{- end}}

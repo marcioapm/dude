@@ -465,6 +465,17 @@ func pullRequests(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestsIn) (
 		out = append(out, pr)
 	}
 	result := map[string]any{"pullRequests": out}
+	// The workflows run_workflow dispatched, as the supervisor last stored
+	// them: no GitHub read.
+	// The newest delivery.DispatchesListed, and how many in all.
+	dispatches, total, err := delivery.TaskDispatchesTx(ctx, tx, c.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if len(dispatches) > 0 {
+		result["dispatches"] = dispatches
+		result["dispatchCount"] = total
+	}
 	if len(ids) == 0 {
 		return result, nil
 	}
