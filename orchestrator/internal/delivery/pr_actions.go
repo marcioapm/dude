@@ -91,10 +91,8 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 	// rerun of failed checks, which changes no code. Its own threads
 	// (resolve_thread) come with its GitHub review.
 	if in.Action != ActionRerunChecks {
-		if n, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil {
+		if err := RefuseReviewOnlyPRActionTx(ctx, tx, ref.TaskID, in.Action); err != nil {
 			return c, err
-		} else if n != 0 {
-			return c, refusef(rReviewOnlyPRAction, max(n, 0), in.Action)
 		}
 	}
 	if caller.role == RoleConductor {
