@@ -8,6 +8,7 @@ import (
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
 // reRounds is a world whose review-only debounce is debounce.
@@ -166,6 +167,27 @@ func TestAPushToADraftDismissesTheApproval(t *testing.T) {
 	w.until("H1's approval dismissed", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewDismissed) == 1 })
 	if got := w.dudeReviews(wi, n); got[0].State != "DISMISSED" || !w.gh.Pull(n).Draft {
 		t.Fatalf("after the push to the draft: %+v", got)
+	}
+}
+
+// GitHub fails every dismissal until round 2's lens runs: the verdict at
+// H2 dismisses H1's approval after it is posted.
+func TestATransientDismissalFailureIsDismissedAfterTheVerdict(t *testing.T) {
+	w := newWorld(t)
+	w.reRounds(time.Second)
+	wi, n, _ := w.approvedAtH1()
+	w.gh.Set(func(s *fakegithub.Server) { s.DismissFail5xx = 1000 })
+	scripted := w.lux.Decide
+	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
+		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" {
+			w.gh.Set(func(s *fakegithub.Server) { s.DismissFail5xx = 0 })
+		}
+		return scripted(spec)
+	}
+	h2 := w.push("second.md")
+	w.agentsDone(wi, "approved at H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
+	if got := w.dudeReviews(wi, n); got[0].State != "DISMISSED" || w.events(wi, delivery.EvReviewDismissed) != 1 {
+		t.Fatalf("H1's approval after the verdict at H2: %+v", got)
 	}
 }
 

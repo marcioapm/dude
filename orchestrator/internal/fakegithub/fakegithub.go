@@ -221,7 +221,9 @@ type Server struct {
 	// review, then cuts the connection before answering. ReviewFail5xx
 	// answers that many review submissions 502, taking none of them, with
 	// a Retry-After of ReviewRetryAfter seconds when that is set.
+	// DismissFail5xx answers that many dismissals 502, dismissing nothing.
 	RefuseDismissal   bool
+	DismissFail5xx    int
 	ReviewTimeoutOnce bool
 	ReviewFail5xx     int
 	ReviewRetryAfter  int

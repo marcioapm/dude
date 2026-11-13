@@ -213,6 +213,9 @@ func (s *Server) dismissReview(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Not Found")
 	case s.RefuseDismissal:
 		fail(w, 403, MessageProtected)
+	case s.DismissFail5xx > 0:
+		s.DismissFail5xx--
+		fail(w, 502, "Bad Gateway")
 	case p.Reviews[i].State == "DISMISSED":
 		unprocessable(w, MessageDismissed)
 	case p.Reviews[i].State != "APPROVED" && p.Reviews[i].State != "CHANGES_REQUESTED":
