@@ -389,6 +389,44 @@ func TestAWaiverOfAnotherCheckKeepsNoDeferredPromise(t *testing.T) {
 	}
 }
 
+// A check deferred once, then run and passed in a later turn, is no
+// promise: turn 1 defers bench and make test is rejected, so the report is
+// sent back; turn 2 runs both and both pass, and the conductor backs them.
+// The pull request opens, CI goes green, and the task is ready with no
+// second ask.
+func TestACheckDeferredThenRunAndPassedIsNoPromise(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("success")
+	wi := w.checksDelivery(fakeagent.ChecksDeferredModel, &checksConductor{reject: true, keepDeferred: true})
+	impl := ""
+	w.until("the implementer's turn that passes bench", func() bool {
+		if impl == "" {
+			impl = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' ORDER BY created_at LIMIT 1), '')`, wi)
+		}
+		return impl != "" && w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND (payload->>'verified')::bool
+			AND payload->'checks' @> $3::jsonb`, impl, delivery.EvRunChecksJudged,
+			fmt.Sprintf(`[{"command":%q,"result":"pass"}]`, fakeagent.DeferredCommand)) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->'checks' @> '[{"result":"deferred"}]'`,
+		impl, delivery.EvRunChecksJudged); n != 1 {
+		t.Fatalf("%d judgements deferring bench, want the first turn's", n)
+	}
+	w.until("ready to merge", func() bool {
+		w.sync()
+		w.pump()
+		return w.taskStatus(wi) == "ready_to_merge"
+	})
+	if n := len(w.deferredWakes(wi)); n != 0 {
+		t.Errorf("%d second asks about a check run and passed since", n)
+	}
+	if raised, asked := w.dischargeRaised(wi); raised+asked != 0 {
+		t.Errorf("%d/%d discharge escalations", raised, asked)
+	}
+	if ok, detail := w.storedDeferred(wi); !ok || detail != "no check deferred" {
+		t.Errorf("the deferred item: %v %q", ok, detail)
+	}
+}
+
 // Rejected at the second ask, the check is not kept: not ready, and the
 // rejection goes to a person as a held report does after the rounds
 // (checks_unverified), with no retry offered: there is no writer's turn.

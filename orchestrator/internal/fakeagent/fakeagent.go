@@ -1062,8 +1062,10 @@ const (
 	// ChecksDeferredModel is ChecksBaseShownModel that also reports a
 	// check not run, which a later phase runs: as in the trials, a manual
 	// workflow (DeferredWorkflow) the conductor dispatches once the pull
-	// request is open.
+	// request is open. Sent back, it runs both and both pass
+	// (DeferredRunOutput).
 	ChecksDeferredModel = "fake/checks-deferred"
+	DeferredRunOutput   = "bench.yml completed: success"
 	DeferredWorkflow    = "bench.yml"
 	DeferredCommand     = "gh workflow run " + DeferredWorkflow
 	FailingCommand      = "make test"
@@ -1101,6 +1103,11 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 	case model == ChecksBaseShownModel:
 		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
 			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"}), true
+	case model == ChecksDeferredModel && turn > 0:
+		// Sent back, it runs both, and both pass: the check it deferred is
+		// run after all.
+		return [][3]string{{FailingCommand, CheckOutputs[1], "0"}, {DeferredCommand, DeferredRunOutput, "0"}},
+			ChecksReport([3]string{FailingCommand, "pass", "ok"}, [3]string{DeferredCommand, "pass", DeferredRunOutput}), true
 	case model == ChecksDeferredModel:
 		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
 			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"},

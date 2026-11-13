@@ -30,12 +30,13 @@ import (
 // of the attempt is kept at the pull requests' heads or a person waived it.
 //
 // Outstanding is level-triggered from the ledger, read once per weigh
-// (readDeferredTx): every judgement of the attempt's writers that deferred
-// a check makes a promise (the union over their judged turns, not each
-// Run's newest: a person's waiver of a held report, or a later turn that
-// no longer lists the command, keeps no promise), and from its newest
-// deferral only a backed answer at the heads, or a person's discharge
-// waiver, keeps it.
+// (readDeferredTx), every judgement of the attempt's writers in cursor
+// order: one that defers a check makes a promise (the union over their
+// judged turns, not each Run's newest: a person's waiver of a held report,
+// or a later turn that no longer lists the command, keeps no promise); a
+// newer one that lists the command as kept (pass, pre-existing, waived)
+// ends it, as the gate passed it. From its newest deferral only a backed
+// answer at the heads, or a person's discharge waiver, keeps it.
 
 // ChecksDischarge marks a second checks ask (and its answer): the attempt,
 // the open pull requests' heads it was asked at (repository to head), and
@@ -106,16 +107,16 @@ func newDeferredState() *deferredState {
 }
 
 // deferredRead (SQL, $1 the task, $2 its attempt, 0 for the latest): the
-// attempt's writer judgements that deferred a check, and every second ask,
-// answer and discharge waiver, oldest first. One arm per event type, each
-// a literal so generic plans can prove the partial indexes' predicates
+// attempt's writer judgements (each may defer a check, or keep one a
+// judgement before deferred), and every second ask, answer and discharge
+// waiver, oldest first. One arm per event type, each a literal so generic
+// plans can prove the partial indexes' predicates
 // (events_run_checks_settled_idx, _asked_idx, _decided_idx) and never scan
 // a Run's every event.
 const deferredRead = `WITH r AS (SELECT id, phase FROM runs WHERE task_id = $1
 		AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)))
 	SELECT e.event_type, e.cursor, e.run_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
 		WHERE e.event_type = 'run.checks.judged' AND r.phase IN ('implement','fix','simplify')
-		AND e.payload->'checks' @> '[{"result":"deferred"}]'
 	UNION ALL
 	SELECT e.event_type, e.cursor, e.run_id, e.payload, COALESCE((e.payload->>'deadline')::timestamptz <= now(), true)
 		FROM r JOIN events e ON e.run_id = r.id WHERE e.event_type = 'run.checks.asked' AND e.payload ? 'discharge'
@@ -162,26 +163,21 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 		switch typ {
 		case EvRunChecksJudged:
 			for _, c := range p.Checks {
-				if c.Result != CheckDeferred {
-					continue
+				command := strings.TrimSpace(c.Command)
+				switch c.Result {
+				case CheckDeferred:
+					// A deferral is a new promise: what kept an older one
+					// does not keep it.
+					s.drop(at, command)
+					at[command] = len(s.checks)
+					s.checks = append(s.checks, deferredCheck{RunID: runID, Turn: p.Turn, Command: command, Reason: c.Reason})
+				case CheckPass, CheckPreexisting, CheckWaived:
+					// A newer judgement that keeps the command (run and
+					// passed, as the gate passes any) ends its promise.
+					s.drop(at, command)
 				}
-				d := deferredCheck{RunID: runID, Turn: p.Turn, Command: strings.TrimSpace(c.Command), Reason: c.Reason}
-				// A deferral is a new promise: what kept an older one does
-				// not keep it.
-				delete(s.latest, d.Command)
-				delete(s.backed, d.Command)
-				delete(s.asked, d.Command)
-				delete(s.waived, d.Command)
-				if i, ok := at[d.Command]; ok {
-					s.checks = slices.Delete(s.checks, i, i+1)
-					for k, j := range at {
-						if j > i {
-							at[k] = j - 1
-						}
-					}
-				}
-				at[d.Command] = len(s.checks)
-				s.checks = append(s.checks, d)
+				// Any other result, or a judgement that does not list the
+				// command, changes nothing.
 			}
 		case EvRunChecksAsked:
 			s.asks[cursor] = &dischargeAsk{Heads: heads, Deadline: p.Deadline, Overdue: overdue}
@@ -223,6 +219,26 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 		}
 	}
 	return s, nil
+}
+
+// drop ends command's promise, if any (at: each command's index in
+// s.checks), and forgets what was said about it since its deferral.
+func (s *deferredState) drop(at map[string]int, command string) {
+	delete(s.latest, command)
+	delete(s.backed, command)
+	delete(s.asked, command)
+	delete(s.waived, command)
+	i, ok := at[command]
+	if !ok {
+		return
+	}
+	s.checks = slices.Delete(s.checks, i, i+1)
+	delete(at, command)
+	for k, j := range at {
+		if j > i {
+			at[k] = j - 1
+		}
+	}
 }
 
 // Where an outstanding deferred check stands at the heads read.
