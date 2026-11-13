@@ -104,14 +104,7 @@ func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) 
 		log.Warn("agent.timeout is not a Go duration: next rounds resume their predecessor's lux Run whatever time it has left",
 			"timeout", agent.Timeout)
 	}
-	s := &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
-	// An opt-in test clock, outside the configuration schema as
-	// DUDE_TEST_CONDUCTOR_ANSWER_WAIT is: a review-only task's debounce
-	// after the author's push (3 minutes otherwise).
-	if d, err := time.ParseDuration(os.Getenv("DUDE_TEST_REVIEW_DEBOUNCE")); err == nil && d > 0 {
-		s.ReviewDebounce = d
-	}
-	return s
+	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
 }
 
 // testConductorAnswerWait is an opt-in process-start test clock, deliberately
@@ -119,7 +112,12 @@ func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) 
 // Syncer's production defaults (delivery.ConductorAnswerWait, for both
 // ConductorAnswerWait and HeldAskWait) unchanged; run gives it to both.
 func testConductorAnswerWait(getenv func(string) string) (time.Duration, error) {
-	const key = "DUDE_TEST_CONDUCTOR_ANSWER_WAIT"
+	return testClock(getenv, "DUDE_TEST_CONDUCTOR_ANSWER_WAIT")
+}
+
+// testClock is the opt-in test clock key names: zero when unset, and an
+// error that fails startup unless it is a positive Go duration.
+func testClock(getenv func(string) string, key string) (time.Duration, error) {
 	value := getenv(key)
 	if value == "" {
 		return 0, nil
@@ -163,6 +161,10 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	reviewDebounce, err := testClock(os.Getenv, "DUDE_TEST_REVIEW_DEBOUNCE")
+	if err != nil {
+		return err
+	}
 	database, err := db.Open(ctx, set.DatabaseURL)
 	if err != nil {
 		return err
@@ -193,6 +195,9 @@ func run(log *slog.Logger) error {
 	forges := forge.Resolver{DB: database, TestGitHost: os.Getenv("DUDE_TEST_GITHUB_GIT_HOST")}
 	runtime := workflow.New(database, fmt.Sprintf("orchestrator-%s-%d", host, os.Getpid()), log)
 	store := deliveryStore(database, agent, log)
+	// An opt-in test clock, as DUDE_TEST_CONDUCTOR_ANSWER_WAIT: a
+	// review-only task's debounce after the author's push (zero: 3 minutes).
+	store.ReviewDebounce = reviewDebounce
 	runtime.Register(delivery.Workflow(store, forges))
 	// Every delivery has a conductor: those in flight from before, handed
 	// to a quiet one, before this process runs any step.

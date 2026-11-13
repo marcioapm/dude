@@ -57,3 +57,19 @@ func TestRunAppliesTheTestWaits(t *testing.T) {
 		t.Fatalf("run applies the test waits %d times, want once", n)
 	}
 }
+
+// DUDE_TEST_REVIEW_DEBOUNCE is parsed as DUDE_TEST_CONDUCTOR_ANSWER_WAIT:
+// a malformed value fails startup.
+func TestTestReviewDebounce(t *testing.T) {
+	for value, want := range map[string]time.Duration{"": 0, "2s": 2 * time.Second, "0s": -1, "soon": -1} {
+		got, err := testClock(func(key string) string {
+			if key != "DUDE_TEST_REVIEW_DEBOUNCE" {
+				t.Fatalf("unexpected key %s", key)
+			}
+			return value
+		}, "DUDE_TEST_REVIEW_DEBOUNCE")
+		if want < 0 && err == nil || want >= 0 && (err != nil || got != want) {
+			t.Errorf("%q: got %s, %v", value, got, err)
+		}
+	}
+}
