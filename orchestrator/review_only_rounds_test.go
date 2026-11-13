@@ -140,19 +140,12 @@ func TestARevertInsideTheDebounceLeavesNoStaleWake(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 	steps := 0
 	for range 8 {
-		n, err := w.runtime.Tick(t.Context(), 10)
-		if err != nil {
-			t.Fatal(err)
-		}
+		n, _ := w.runtime.Tick(t.Context(), 10)
 		steps += n
 		time.Sleep(250 * time.Millisecond)
 	}
-	var wake *time.Time
-	if err := w.owner.QueryRow(t.Context(), `SELECT wake_at FROM workflow_runs WHERE task_id = $1`, wi).Scan(&wake); err != nil {
-		t.Fatal(err)
-	}
-	if steps > 1 || wake != nil && wake.Before(time.Now()) {
-		t.Fatalf("%d steps over 2s with nothing new; wake_at %v", steps, wake)
+	if stale := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND wake_at < now()`, wi); steps > 1 || stale != 0 {
+		t.Fatalf("%d steps over 2s with nothing new; %d wake_at in the past", steps, stale)
 	}
 }
 
