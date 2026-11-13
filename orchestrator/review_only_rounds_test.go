@@ -196,11 +196,8 @@ func TestADraftIsApprovedOnceMarkedReady(t *testing.T) {
 			var n int
 			if first {
 				w.gh.SetChecks("success")
-				w.cleanLenses()
-				n = w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
-				w.draft(n, true)
-				wi = w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
-				w.startDelivery(wi)
+				wi, n = w.reviewOnly()
+				w.draft(n, true) // before its first round's lens runs
 				h = w.gh.SHA("feature/greet")
 			} else {
 				wi, n, _ = w.approvedAtH1()
