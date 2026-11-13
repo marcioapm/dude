@@ -68,28 +68,59 @@ func repliesTo(p *fakegithub.Pull, id int64) []fakegithub.Comment {
 }
 
 // A finding fixed at H2: dude's thread on it gets "Fixed at <H2>." and is
-// resolved, and the verdict at H2 approves; replayed, nothing is posted again.
-func TestAFixedFindingsThreadIsRepliedToAndResolved(t *testing.T) {
-	w := newWorld(t)
-	w.reRounds(time.Second)
-	wi, n, _ := w.findingThenVerdict(func() string { return "fixed" })
-	root := w.dudeLineComments(n)[0]
-	h2 := w.push("polite.md")
-	w.agentsDone(wi, "approved at H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
-	if got := reviewsAt(w.dudeReviews(wi, n), h2); got[0].State != "APPROVED" {
-		t.Fatalf("at H2: %+v", got)
-	}
-	r := repliesTo(w.gh.Pull(n), root.ID)
-	if len(r) != 1 || r[0].Body != "Fixed at "+h2[:7]+"." {
-		t.Fatalf("replies in dude's thread: %+v", r)
-	}
-	if !w.gh.ResolvedThreads[w.gh.ThreadID(root.ID)] {
-		t.Fatal("dude's thread on the fixed finding is not resolved")
-	}
-	w.sync()
-	w.advanced()
-	if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 1 {
-		t.Fatalf("%d replies after replay", len(r))
+// resolved, and the verdict at H2 approves; replayed, nothing is posted
+// again. A thread a person resolved is left alone. A thread read that
+// fails never holds the verdict, and is recorded once, not retried at
+// the next verdict.
+func TestDudesThreadsAfterAFix(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(s *fakegithub.Server, root int64)
+		check func(w *world, wi string, n int, root fakegithub.Comment, h2 string)
+	}{
+		{"fixed", nil, func(w *world, wi string, n int, root fakegithub.Comment, h2 string) {
+			r := repliesTo(w.gh.Pull(n), root.ID)
+			if len(r) != 1 || r[0].Body != "Fixed at "+h2[:7]+"." || !w.gh.ResolvedThreads[w.gh.ThreadID(root.ID)] {
+				w.t.Fatalf("dude's thread on the fixed finding: replies %+v, resolved %v", r, w.gh.ResolvedThreads)
+			}
+			w.sync()
+			w.advanced()
+			if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 1 {
+				w.t.Fatalf("%d replies after replay", len(r))
+			}
+		}},
+		{"resolved by a person", func(s *fakegithub.Server, root int64) {
+			s.ResolvedThreads = map[string]bool{s.ThreadID(root): true}
+		}, func(w *world, wi string, n int, root fakegithub.Comment, h2 string) {
+			if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 0 {
+				w.t.Fatalf("dude answered in a thread a person resolved: %+v", r)
+			}
+		}},
+		{"sync failure", func(s *fakegithub.Server, root int64) { s.ThreadsStatus = 502 },
+			func(w *world, wi string, n int, root fakegithub.Comment, h2 string) {
+				w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 0 })
+				h3 := w.push("third.md")
+				w.agentsDone(wi, "reviewed H3", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h3)) == 1 && w.waitingOnPR(wi) })
+				if e, r := w.events(wi, delivery.EvReviewThreadSyncFailed), repliesTo(w.gh.Pull(n), root.ID); e != 1 || len(r) != 0 {
+					w.t.Fatalf("%d thread sync failures recorded, want 1; replies %+v", e, r)
+				}
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.reRounds(time.Second)
+			wi, n, _ := w.findingThenVerdict(func() string { return "fixed" })
+			root := w.dudeLineComments(n)[0]
+			if tc.setup != nil {
+				w.gh.Set(func(s *fakegithub.Server) { tc.setup(s, root.ID) })
+			}
+			h2 := w.push("polite.md")
+			w.agentsDone(wi, "approved at H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
+			if got := reviewsAt(w.dudeReviews(wi, n), h2); got[0].State != "APPROVED" {
+				t.Fatalf("at H2: %+v", got)
+			}
+			tc.check(w, wi, n, root, h2)
+		})
 	}
 }
 
@@ -112,40 +143,6 @@ func TestAStillOpenFindingIsListedNotRepeated(t *testing.T) {
 	}
 	if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 0 || w.gh.ResolvedThreads[w.gh.ThreadID(root.ID)] {
 		t.Fatalf("an open finding's thread was answered or resolved: %+v", r)
-	}
-}
-
-// A thread a person resolved is left alone, even once the finding is fixed.
-func TestAPersonResolvedThreadIsLeftAlone(t *testing.T) {
-	w := newWorld(t)
-	w.reRounds(time.Second)
-	wi, n, _ := w.findingThenVerdict(func() string { return "fixed" })
-	root := w.dudeLineComments(n)[0]
-	w.gh.Set(func(s *fakegithub.Server) {
-		if s.ResolvedThreads == nil {
-			s.ResolvedThreads = map[string]bool{}
-		}
-		s.ResolvedThreads[s.ThreadID(root.ID)] = true
-	})
-	h2 := w.push("polite.md")
-	w.agentsDone(wi, "approved at H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
-	if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 0 {
-		t.Fatalf("dude answered in a thread a person resolved: %+v", r)
-	}
-}
-
-// A reply that fails never holds the verdict: recorded, not retried.
-func TestAThreadSyncFailureNeverBlocksTheVerdict(t *testing.T) {
-	w := newWorld(t)
-	w.reRounds(time.Second)
-	wi, n, _ := w.findingThenVerdict(func() string { return "fixed" })
-	w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 502 })
-	h2 := w.push("polite.md")
-	w.agentsDone(wi, "approved at H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
-	w.sync()
-	w.advanced()
-	if e := w.events(wi, delivery.EvReviewThreadSyncFailed); e != 1 {
-		t.Fatalf("%d thread sync failures recorded, want 1", e)
 	}
 }
 
