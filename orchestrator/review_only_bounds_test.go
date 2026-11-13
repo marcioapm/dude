@@ -21,13 +21,17 @@ func TestAPushDuringARoundAbandonsItsVerdictThenReReviews(t *testing.T) {
 	w.lux.Decide = func(spec map[string]any) fakelux.Behaviour {
 		if labels, _ := spec["labels"].(map[string]any); labels["dude.phase"] == "review" && h3 == "" {
 			h3 = w.gh.CommitFiles("feature/greet", "alice's third", map[string]string{"third.md": "third\n"})
+			w.sync() // signalled mid-round, and never again
 		}
 		return scripted(spec)
 	}
 	h2 := w.push("second.md")
-	w.agentsDone(wi, "reviewed H3", func() bool {
-		w.sync()
-		return h3 != "" && len(reviewsAt(w.dudeReviews(wi, n), h3)) == 1 && w.waitingOnPR(wi)
+	w.until("reviewed H3", func() bool {
+		w.advanced()
+		for _, id := range w.pendingPhaseRuns(wi) {
+			w.finished(id)
+		}
+		return len(reviewsAt(w.dudeReviews(wi, n), h3)) == 1 && w.waitingOnPR(wi)
 	})
 	if got := reviewsAt(w.dudeReviews(wi, n), h2); len(got) != 0 {
 		t.Fatalf("a review at the stale head H2: %+v", got)

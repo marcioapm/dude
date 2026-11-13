@@ -499,9 +499,8 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 			return workflow.Result{}, err
 		}
 		w.statusComment(ctx, sc, st, pr, fmt.Sprintf("No review posted for %s: %s", short(head), d.Why))
-		// The wait looks at the new head at once: the push that moved it may
-		// have been signalled while the round ran.
-		st.reweighNow()
+		// The push that moved the head was signalled while the round ran:
+		// that signal, unconsumed until the wait, wakes it at once.
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "the pull request moved past the reviewed head")
 	case verdictAskCI:
 		// As a writing delivery's conductor hears failing checks at its
