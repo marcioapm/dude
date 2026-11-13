@@ -290,7 +290,7 @@ func TestSettingsMachineSizesAndGitHubMatchTheirPages(t *testing.T) {
 
 	gh := f.settingsRoute(t, "/v1/forge/settings")
 	ghRules := map[string]coverageRule{"reviewLogins.*": mapped}
-	for _, k := range []string{"whoCanWake", "openAs", "requestReviewFrom", "mergeMethod", "whenBehind", "fixRoundsPerPr", "ciStuckMinutes", "checksFixRounds"} {
+	for _, k := range []string{"whoCanWake", "openAs", "requestReviewFrom", "mergeMethod", "whenBehind", "fixRoundsPerPr", "ciStuckMinutes", "checksFixRounds", "maxReviewRounds", "reviewCostCap"} {
 		ghRules[k] = mapped
 	}
 	if err := classifyResponse(gh, ghRules); err != nil {
