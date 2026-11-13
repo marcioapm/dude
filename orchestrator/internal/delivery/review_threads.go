@@ -169,8 +169,8 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 // thread's reply gives it.
 func withdrawnNote(note string) string {
 	note = strings.TrimPrefix(note, DismissedByConductor)
-	if n, ok := strings.CutPrefix(strings.ToLower(note), "withdrawn:"); ok {
-		note = strings.TrimSpace(note[len(note)-len(n):])
+	if p := len("withdrawn:"); len(note) >= p && strings.EqualFold(note[:p], "withdrawn:") {
+		note = note[p:]
 	}
 	return strings.TrimRight(strings.TrimSpace(note), ".")
 }

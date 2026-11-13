@@ -112,3 +112,18 @@ func TestVerdictReviewPlacesFindings(t *testing.T) {
 		}
 	}
 }
+
+// A withdrawal's note loses its "withdrawn:" in any case, never panicking
+// on text whose lowercase is longer (Ⱥ is 2 bytes, ⱥ 3).
+func TestWithdrawnNote(t *testing.T) {
+	for in, want := range map[string]string{
+		DismissedByConductor + "Withdrawn: intended.": "intended",
+		"WITHDRAWN:ȺȺȺȺȺȺȺȺȺȺȺ":                       "ȺȺȺȺȺȺȺȺȺȺȺ",
+		"Withdrawn: ȺȺȺȺȺȺȺȺȺȺȺ":                      "ȺȺȺȺȺȺȺȺȺȺȺ",
+		"Ⱥ":                                           "Ⱥ",
+	} {
+		if got := withdrawnNote(in); got != want {
+			t.Errorf("withdrawnNote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
