@@ -238,10 +238,11 @@ func ConductChecksTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks
 	if strings.TrimSpace(in.Ask) != "" {
 		return conductDischargeTx(ctx, tx, ref, in, projectID)
 	}
-	if open, err := openDischargeTx(ctx, tx, in.RunID, in.Turn); err != nil {
+	if open, err := openDischargeTx(ctx, tx, ref.TaskID, in.RunID, in.Turn); err != nil {
 		return 0, err
 	} else if open != nil {
-		return 0, refuseText(rChecksAskMissing)
+		// Named, so a conductor that lost the wake can answer it.
+		return 0, refusef(rChecksAskMissing, open.Discharge.Key)
 	}
 	if in.Turn != latest {
 		return 0, refusef(rChecksNotLatestTurn, latest)

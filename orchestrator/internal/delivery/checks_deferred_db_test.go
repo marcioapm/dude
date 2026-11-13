@@ -16,8 +16,10 @@ import (
 // bench, and one open pull request on repository web at a head the test
 // moves (setHead); ask asks the conductor to keep it at the current head.
 type deferredFixture struct {
-	t     *testing.T
-	app   interface{ InOrg(context.Context, string, func(pgx.Tx) error) error }
+	t   *testing.T
+	app interface {
+		InOrg(context.Context, string, func(pgx.Tx) error) error
+	}
 	owner *pgx.Conn
 	org   string
 }
@@ -31,6 +33,8 @@ func newDeferredFixture(t *testing.T) *deferredFixture {
 		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_d', $1, 'prj_d', 1, 'T', 'g', 'review')`,
 		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, phase, role, kind)
 			VALUES ('run_d', $1, 'prj_d', 'wi_d', 1, 'completed', 'implement', 'implementer', 'agent')`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+			VALUES ('run_c', $1, 'prj_d', 'wi_d', 1, 'running', 'conductor', 'agent')`,
 		`INSERT INTO events (id, organization_id, project_id, run_id, task_id, event_type, actor_type, actor_id, source, payload)
 			VALUES ('evt_d_j', $1, 'prj_d', 'run_d', 'wi_d', 'run.checks.judged', 'system', 'dude', 'orchestrator',
 			'{"turn": 1, "verified": true, "checks": [{"command": "bench", "result": "deferred", "reason": "later"}]}')`,
@@ -118,7 +122,17 @@ func TestAnAskAtHeadsMovedAwayAndBackIsAnswerable(t *testing.T) {
 	if got := f.standing("h1"); got != deferredAsked {
 		t.Fatalf("at H1 before the answer: %s", got)
 	}
+	// An answer that names no ask is refused, naming the open ask at the
+	// pull request's heads, H1's, though H2's is newer.
+	ctx := context.Background()
 	var r Refusal
+	if err := f.app.InOrg(ctx, f.org, func(tx pgx.Tx) error {
+		_, err := ConductChecksTx(ctx, tx, RunRef{Org: f.org, ProjectID: "prj_d", TaskID: "wi_d", RunID: "run_c"},
+			DecideChecks{RunID: "run_d", Turn: 1, Checks: []ConductedCheck{{Command: "bench", Verdict: VerdictBacked, Reason: "kept"}}})
+		return err
+	}); !errors.As(err, &r) || r.Msg != fmt.Sprintf(rChecksAskMissing, k1) {
+		t.Errorf("no ask named: %v", err)
+	}
 	if err := f.answer(k2); !errors.As(err, &r) || !strings.Contains(r.Msg, fmt.Sprintf("ask %q is superseded", k2)) {
 		t.Fatalf("the answer to the ask at H2, the pull request at H1: %v", err)
 	}

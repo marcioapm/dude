@@ -81,7 +81,7 @@ type dischargeAnswer struct {
 // dischargeAsk is one second ask at heads (headsID): whether its
 // deadline has passed (on the database's clock) and whether it is answered.
 type dischargeAsk struct {
-	Heads             string
+	Heads, Key        string
 	Deadline          time.Time
 	Overdue, Answered bool
 }
@@ -181,7 +181,7 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 				// command, changes nothing.
 			}
 		case EvRunChecksAsked:
-			s.asks[cursor] = &dischargeAsk{Heads: heads, Deadline: p.Deadline, Overdue: overdue}
+			s.asks[cursor] = &dischargeAsk{Heads: heads, Key: dis.Key, Deadline: p.Deadline, Overdue: overdue}
 			for _, c := range p.Checks {
 				command := strings.TrimSpace(c.Command)
 				if s.asked[command] == nil {
@@ -334,6 +334,9 @@ func deferredItem(s *deferredState, id string) GateItem {
 			stands = "no conductor decides this delivery: a person settles it"
 		case deferredAsked:
 			stands = "the conductor is asked to keep it at this head"
+			if a := s.asks[s.asked[c.Command][id]]; a != nil && a.Key != "" {
+				stands += " (ask " + a.Key + ")"
+			}
 		default:
 			stands = "the conductor is asked once CI has reported at the head"
 		}
@@ -398,7 +401,7 @@ func askDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt i
 		return false, err
 	}
 	// Marked asked, as the next read would read it (cursor -1: this ask).
-	s.asks[-1] = &dischargeAsk{Heads: id, Deadline: asked.Deadline}
+	s.asks[-1] = &dischargeAsk{Heads: id, Key: key, Deadline: asked.Deadline}
 	for _, c := range ask {
 		if s.asked[c.Command] == nil {
 			s.asked[c.Command] = map[string]int64{}
@@ -428,15 +431,22 @@ func deferredWakeLine(anchor deferredCheck, asked ChecksAsked) string {
 	}{anchor.RunID, strings.Join(heads, ", "), asked.Discharge.Key, ChecksWaitWords(), anchor.Turn, checks})
 }
 
-// openDischargeTx is the newest second ask about runID's turn the
-// conductor has not answered; nil for none.
-func openDischargeTx(ctx context.Context, tx pgx.Tx, runID string, turn int64) (*ChecksAsked, error) {
+// gateHeadsSQL (SQL, $3 the task): the open pull requests' heads by
+// repository, as gateHeads reads them, as JSON: the heads an ask must be
+// at to be answered.
+const gateHeadsSQL = `(SELECT COALESCE(jsonb_object_agg(rp.name, COALESCE(pr.head_sha, '')), '{}') FROM pull_requests pr
+	JOIN repositories rp ON rp.id = pr.repository_id WHERE pr.task_id = $3 AND pr.state IN ('open', 'draft'))`
+
+// openDischargeTx is the second ask about runID's turn the conductor has
+// not answered, the one at the pull requests' heads first (the one an
+// answer is taken for), else the newest; nil for none.
+func openDischargeTx(ctx context.Context, tx pgx.Tx, taskID, runID string, turn int64) (*ChecksAsked, error) {
 	var raw []byte
 	err := tx.QueryRow(ctx, `SELECT a.payload FROM events a WHERE a.run_id = $1 AND a.event_type = 'run.checks.asked'
 		AND (a.payload->>'turn')::bigint = $2 AND a.payload ? 'discharge'
 		AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = a.run_id AND v.event_type = 'run.checks.conducted'
 			AND (v.payload->>'askCursor')::bigint = a.cursor)
-		ORDER BY a.cursor DESC LIMIT 1`, runID, turn).Scan(&raw)
+		ORDER BY a.payload->'discharge'->'heads' = `+gateHeadsSQL+` DESC, a.cursor DESC LIMIT 1`, runID, turn, taskID).Scan(&raw)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -463,9 +473,7 @@ func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChe
 	err := tx.QueryRow(ctx, `SELECT a.payload, a.cursor,
 			EXISTS (SELECT 1 FROM events v WHERE v.run_id = a.run_id AND v.event_type = 'run.checks.conducted'
 				AND (v.payload->>'askCursor')::bigint = a.cursor),
-			(SELECT COALESCE(jsonb_object_agg(rp.name, COALESCE(pr.head_sha, '')), '{}') FROM pull_requests pr
-				JOIN repositories rp ON rp.id = pr.repository_id WHERE pr.task_id = $3 AND pr.state IN ('open', 'draft'))
-				IS DISTINCT FROM a.payload->'discharge'->'heads'
+			`+gateHeadsSQL+` IS DISTINCT FROM a.payload->'discharge'->'heads'
 		FROM events a WHERE a.run_id = $1 AND a.event_type = 'run.checks.asked' AND a.payload->'discharge'->>'key' = $2
 			AND (a.payload->>'turn')::bigint = $4`,
 		in.RunID, strings.TrimSpace(in.Ask), ref.TaskID, in.Turn).Scan(&raw, &askCursor, &answered, &superseded)

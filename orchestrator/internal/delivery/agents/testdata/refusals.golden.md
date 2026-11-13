@@ -1752,7 +1752,7 @@ This task reviews pull request #%d and does not change it: %s is not dude's to t
 
 ## refusals/delivery/checks/ask-missing
 
-that turn's deferred checks are asked about again by a second checks wake: answer it with the ask that wake names (ask), so the answer counts at the heads it was asked at
+that turn's deferred checks are asked about again by a second checks wake: answer it with the ask it names, here ask %q, so the answer counts at the heads it was asked at
 
 ## refusals/delivery/checks/ask-superseded
 

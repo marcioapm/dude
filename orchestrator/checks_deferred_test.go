@@ -161,17 +161,17 @@ func TestADeferredCheckHoldsReadyUntilTheConductorKeepsIt(t *testing.T) {
 	if n := w.readyEvents(task); n != 0 {
 		t.Fatalf("%d ready_to_merge events", n)
 	}
-	if ok, detail := w.storedDeferred(task); ok || detail != deferredDetail("the conductor is asked to keep it at this head") {
+	run, turn, key := w.secondAsk(task)
+	if ok, detail := w.storedDeferred(task); ok || detail != deferredDetail("the conductor is asked to keep it at this head (ask "+key+")") {
 		t.Fatalf("the deferred item: %v %q", ok, detail)
 	}
-	run, turn, key := w.secondAsk(task)
 	head := w.gh.SHA(w.gh.Pull(1).Head)
 	if wakes := w.deferredWakes(task); len(wakes) != 1 || wakes[0] != deferredWake(run, turn, key, head) {
 		t.Fatalf("second asks' wakes:\n got %q\nwant %q", wakes, deferredWake(run, turn, key, head))
 	}
 	// An answer must name the ask it answers.
 	if status, out := w.as(task, "decide_checks", fmt.Sprintf(`{"runId":%q,"turn":%s,"checks":[{"command":%q,"verdict":"backed","reason":"kept"}],"missing":{"verdict":"none","reason":"not asked"}}`,
-		run, turn, fakeagent.DeferredCommand)); status != 422 || !strings.Contains(fmt.Sprint(out["error"]), "answer it with the ask that wake names") {
+		run, turn, fakeagent.DeferredCommand)); status != 422 || !strings.Contains(fmt.Sprint(out["error"]), fmt.Sprintf("answer it with the ask it names, here ask %q,", key)) {
 		t.Fatalf("no ask named: %d %v", status, out)
 	}
 	// Deferred is no verdict now: the later phase has come.
@@ -219,7 +219,7 @@ func TestALateAnswerAboutOldHeadsKeepsNothingAtNewOnes(t *testing.T) {
 	if first == second {
 		t.Fatalf("one ask %s at both heads", first)
 	}
-	if ok, detail := w.storedDeferred(task); ok || detail != deferredDetail("the conductor is asked to keep it at this head") {
+	if ok, detail := w.storedDeferred(task); ok || detail != deferredDetail("the conductor is asked to keep it at this head (ask "+second+")") {
 		t.Fatalf("the deferred item at H2: %v %q", ok, detail)
 	}
 	// The late answer about H1.
@@ -231,7 +231,7 @@ func TestALateAnswerAboutOldHeadsKeepsNothingAtNewOnes(t *testing.T) {
 	if n := w.readyEvents(task); n != 0 {
 		t.Fatalf("ready to merge at %s on an answer about the heads before", h2[:7])
 	}
-	if ok, detail := w.storedDeferred(task); ok || detail != deferredDetail("the conductor is asked to keep it at this head") {
+	if ok, detail := w.storedDeferred(task); ok || detail != deferredDetail("the conductor is asked to keep it at this head (ask "+second+")") {
 		t.Fatalf("the deferred item after the late answer: %v %q", ok, detail)
 	}
 	if status, out := w.answerAsk(task, second, delivery.VerdictBacked, "the pull request's CI at "+h2[:7]+" ran it: success"); status != 200 {
@@ -272,7 +272,8 @@ func TestACheckKeptAtOldHeadsIsAskedAgainAtNewOnes(t *testing.T) {
 	if s := w.taskStatus(task); s == "ready_to_merge" {
 		t.Fatal("ready at H2 on a check kept at H1")
 	}
-	if ok, detail := w.storedDeferred(task); ok || detail != deferredDetail("the conductor is asked to keep it at this head") {
+	_, _, key := w.secondAsk(task)
+	if ok, detail := w.storedDeferred(task); ok || detail != deferredDetail("the conductor is asked to keep it at this head (ask "+key+")") {
 		t.Fatalf("the deferred item at H2: %v %q", ok, detail)
 	}
 }
@@ -384,7 +385,7 @@ func TestAWaiverOfAnotherCheckKeepsNoDeferredPromise(t *testing.T) {
 		t.Fatal("ready to merge with the deferred check never run: the waiver of another check kept it")
 	}
 	if ok, detail := w.storedDeferred(wi); ok || !strings.HasPrefix(detail, fmt.Sprintf("1 deferred check(s) not kept: %q (deferred: ", fakeagent.DeferredCommand)) ||
-		!strings.HasSuffix(detail, " — the conductor is asked to keep it at this head") {
+		!strings.Contains(detail, " — the conductor is asked to keep it at this head (ask checks:") {
 		t.Fatalf("the deferred item: %v %q", ok, detail)
 	}
 }

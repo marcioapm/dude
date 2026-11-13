@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -52,7 +53,7 @@ func TestGoldenDeferredChecks(t *testing.T) {
 	s.latest["open the page in a browser"] = dischargeAnswer{Verdict: VerdictReject, Reason: "no tester ran"}
 	s.asked["ci workflow on the pull request"] = map[string]int64{"h": 7}
 	s.asked["make bench"] = map[string]int64{"h": 8}
-	s.asks[7] = &dischargeAsk{Heads: "h"}
+	s.asks[7] = &dischargeAsk{Heads: "h", Key: "checks:run_impl:42:d1:0a1b2c3d4e5f"}
 	s.asks[8] = &dischargeAsk{Heads: "h", Overdue: true}
 	policy := newDeferredState()
 	policy.checks = s.checks[:1]
@@ -64,7 +65,18 @@ func TestGoldenDeferredChecks(t *testing.T) {
 		{"item-no-conductor", deferredItem(policy, "h").Detail},
 		{"escalation", deferredEscalation(s, "h", true)["message"].(string)},
 		{"escalation-no-conductor", deferredEscalation(policy, "h", true)["message"].(string)},
+		{"refusal-ask-missing", fmt.Sprintf(rChecksAskMissing, "checks:run_impl:42:d1:0a1b2c3d4e5f")},
 	})
+}
+
+// A conductor that lost the second ask's id is refused with the open ask
+// named: the one at the pull requests' heads.
+func TestTheAskMissingRefusalNamesTheOpenAsk(t *testing.T) {
+	key := "checks:run_impl:42:d1:0a1b2c3d4e5f"
+	err := refusef(rChecksAskMissing, key)
+	if !strings.Contains(err.Error(), fmt.Sprintf("here ask %q,", key)) {
+		t.Fatalf("the refusal does not name the ask: %v", err)
+	}
 }
 
 // A gate stored before the deferred item existed (nine items) is served

@@ -4,7 +4,7 @@ The pull request is open at api at fedcba9, web at 0123456, with CI reported the
 
 ## item-conducted
 
-4 deferred check(s) not kept: "gh workflow run bench.yml" (deferred: the conductor dispatches it (run_workflow) once the pull request exists) — the conductor is asked once CI has reported at the head; "ci workflow on the pull request" (deferred: the PR's CI runs it) — the conductor is asked to keep it at this head; "open the page in a browser" (deferred: the tester runs it) — the conductor rejected it (no tester ran): a person settles it; "make bench" (deferred: the conductor verifies it at the head) — the conductor did not answer by the ask's deadline: a person settles it
+4 deferred check(s) not kept: "gh workflow run bench.yml" (deferred: the conductor dispatches it (run_workflow) once the pull request exists) — the conductor is asked once CI has reported at the head; "ci workflow on the pull request" (deferred: the PR's CI runs it) — the conductor is asked to keep it at this head (ask checks:run_impl:42:d1:0a1b2c3d4e5f); "open the page in a browser" (deferred: the tester runs it) — the conductor rejected it (no tester ran): a person settles it; "make bench" (deferred: the conductor verifies it at the head) — the conductor did not answer by the ask's deadline: a person settles it
 
 ## item-no-conductor
 
@@ -20,4 +20,8 @@ Deferred checks not kept:
 
 Deferred checks not kept:
 - gh workflow run bench.yml: deferred (the conductor dispatches it (run_workflow) once the pull request exists), and no conductor decides this delivery to keep it
+
+## refusal-ask-missing
+
+that turn's deferred checks are asked about again by a second checks wake: answer it with the ask it names, here ask "checks:run_impl:42:d1:0a1b2c3d4e5f", so the answer counts at the heads it was asked at
 

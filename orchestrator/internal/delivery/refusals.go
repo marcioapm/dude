@@ -240,7 +240,7 @@ const (
 	rChecksRunNotOfTask                     = "that Run is not a writer Run of this task's current attempt: decide only the checks reports your task's Runs ask you about"
 	rChecksNotLatestTurn                    = "that is not the Run's latest turn: its latest is %d, and a verdict on an earlier turn is never read. Decide the turn the latest checks wake names"
 	rChecksNotWaiting                       = "the checks gate is not waiting on you for that Run's turn: it was decided already, or it was never asked of you"
-	rChecksAskMissing                       = "that turn's deferred checks are asked about again by a second checks wake: answer it with the ask that wake names (ask), so the answer counts at the heads it was asked at"
+	rChecksAskMissing                       = "that turn's deferred checks are asked about again by a second checks wake: answer it with the ask it names, here ask %q, so the answer counts at the heads it was asked at"
 	rChecksNoSuchAsk                        = "%q is not a second checks ask about that Run's turn: give the ask the second checks wake names, with its runId and turn"
 	rChecksAskSuperseded                    = "ask %q is superseded: the pull requests' heads moved and a newer second checks wake asks again at the new heads. Evidence at the old heads keeps nothing there: answer the newest wake, with its ask, once the check is kept at its heads"
 	rChecksIncomplete                       = "decide every reported check, in the report's order and by its exact command, one verdict each: %s"

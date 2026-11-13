@@ -357,7 +357,7 @@ def test_a_deferred_check_holds_ready_until_the_conductor_keeps_it(
     assert [(it["key"], it["ok"]) for it in gate["items"] if not it["ok"]] == [("deferred", False)], gate
     assert next(it for it in gate["items"] if it["key"] == "deferred")["detail"] == (
         '1 deferred check(s) not kept: "gh workflow run bench.yml" (deferred: Deliver\'s defaults: not-run) '
-        "— the conductor is asked to keep it at this head"), gate
+        f"— the conductor is asked to keep it at this head (ask {key})"), gate
     # The conductor keeps it: bench.yml on the task's branch (it runs for
     # pull requests, so no person's answer is needed), to its end.
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": 'tool: run_workflow {"workflow": "bench.yml"}'})
