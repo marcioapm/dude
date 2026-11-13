@@ -95,6 +95,10 @@ type Store struct {
 	// The base of the waits after GitHub's answer to a review is lost
 	// (reviewRetryDelay); zero means reviewRecoverDelay. Tests shorten it.
 	ReviewRecoverDelay time.Duration
+	// How long a review-only task waits after the author's last push
+	// before its next round (reviewDebounce); zero means 3 minutes.
+	// Tests and the e2e suite (DUDE_TEST_REVIEW_DEBOUNCE) shorten it.
+	ReviewDebounce time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).
@@ -743,9 +747,16 @@ func (s *Store) AmendFindingIDs(ctx context.Context, org string, st *State, ids 
 // the tester's: the next test judges those.
 func (s *Store) AttemptedFindings(ctx context.Context, org string, st *State) (map[string][]string, error) {
 	out := map[string][]string{}
+	// A review-only task fixes nothing: a re-review judges every finding
+	// of the attempt still open (design §6.2); one the conductor withdrew
+	// (accepted) is not open, and not shown.
+	attempted := ` AND fix_attempts > 0`
+	if st.Source.ReviewOnly() {
+		attempted = ""
+	}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT category, id FROM review_findings
-			WHERE task_id = $1 AND status = 'open' AND fix_attempts > 0 AND `+thisAttempt+` AND `+fromReview+` ORDER BY created_at`,
+			WHERE task_id = $1 AND status = 'open'`+attempted+` AND `+thisAttempt+` AND `+fromReview+` ORDER BY created_at`,
 			st.TaskID, st.Attempt)
 		if err != nil {
 			return err

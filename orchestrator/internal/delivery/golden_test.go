@@ -336,6 +336,10 @@ func TestGoldenResumeRounds(t *testing.T) {
 	golden(t, "resume-test-afresh", RoundMessage(PhaseTest, from, to, "", nil, nil, nil, ""))
 	// A round on the same head (a retry): nothing to name as changed.
 	golden(t, "resume-review-same-head", RoundMessage(PhaseReview, to, to, "", nil, nil, nil, ""))
+	// A review-only task's re-review after the author's push: the
+	// findings are the author's to have fixed (design §6.2).
+	golden(t, "resume-review-review-only", RoundMessage(PhaseReview, map[string]string{"api": "aaa111"},
+		map[string]string{"api": "bbb222"}, "", goldenFindings()[:1], nil, nil, "", true))
 	// A fixer's round: the implementer's first carries the fix contract,
 	// a fixer's next does not; what it fixes is Prompt(PhaseFix)'s.
 	fixIn := PromptInput{Findings: goldenFindings(), Tools: true, CLI: true,

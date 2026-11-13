@@ -104,7 +104,14 @@ func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) 
 		log.Warn("agent.timeout is not a Go duration: next rounds resume their predecessor's lux Run whatever time it has left",
 			"timeout", agent.Timeout)
 	}
-	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
+	s := &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
+	// An opt-in test clock, outside the configuration schema as
+	// DUDE_TEST_CONDUCTOR_ANSWER_WAIT is: a review-only task's debounce
+	// after the author's push (3 minutes otherwise).
+	if d, err := time.ParseDuration(os.Getenv("DUDE_TEST_REVIEW_DEBOUNCE")); err == nil && d > 0 {
+		s.ReviewDebounce = d
+	}
+	return s
 }
 
 // testConductorAnswerWait is an opt-in process-start test clock, deliberately

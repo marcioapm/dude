@@ -71,6 +71,9 @@ type VerdictState struct {
 	Posted    string `json:"posted,omitempty"`
 	CommentID int64  `json:"commentId,omitempty"`
 	Status    string `json:"status,omitempty"` // the status comment's last body hash
+	// An approval of dude's GitHub refused to dismiss: the status comment
+	// names it under every line from then on (decision 3).
+	DismissRefused string `json:"dismissRefused,omitempty"`
 	// The claim GitHub's answer was lost for: how often it was submitted
 	// with no answer, and looked for since the last of those (P-M2).
 	Lost        string `json:"lost,omitempty"`
@@ -402,7 +405,8 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	v := st.Verdict
 	if v == nil || v.Due != head {
 		old := cmp.Or(v, &VerdictState{})
-		v = &VerdictState{Due: head, CommentID: old.CommentID, Status: old.Status, Test: old.Test, TestNotes: old.TestNotes, TestHead: old.TestHead}
+		v = &VerdictState{Due: head, CommentID: old.CommentID, Status: old.Status, Test: old.Test, TestNotes: old.TestNotes, TestHead: old.TestHead,
+			DismissRefused: old.DismissRefused}
 		st.Verdict = v
 	}
 	gh, err := w.forges.For(ctx, sc.OrganizationID)
@@ -467,6 +471,9 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 			return workflow.Result{}, err
 		}
 		w.statusComment(ctx, sc, st, pr, fmt.Sprintf("No review posted for %s: %s", short(head), d.Why))
+		// The wait looks at the new head at once: the push that moved it may
+		// have been signalled while the round ran.
+		st.reweighNow()
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "the pull request moved past the reviewed head")
 	case verdictAskCI:
 		// As a writing delivery's conductor hears failing checks at its
@@ -667,7 +674,11 @@ func (w *steps) claimState(ctx context.Context, org, taskID, claim string) (clai
 // are logged; the review is the record.
 func (w *steps) statusComment(ctx context.Context, sc workflow.StepContext, st *State, pr PullRequestState, line string) {
 	v := st.Verdict
-	body := "dude's review of this pull request — " + line + "\n\n" + forge.VerdictMarker(st.TaskID)
+	body := "dude's review of this pull request — " + line + "\n\n"
+	if v.DismissRefused != "" {
+		body += v.DismissRefused + "\n\n"
+	}
+	body += forge.VerdictMarker(st.TaskID)
 	sum := sha256.Sum256([]byte(body))
 	hash := hex.EncodeToString(sum[:8])
 	if v.Status == hash {
@@ -759,6 +770,34 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 			return res, err
 		}
 	}
+	// The author's push (design §6.1): every head dude did not review is
+	// theirs here. Its stale approval goes at once; the next round after
+	// the debounce.
+	if len(st.PullRequestIDs) > 0 {
+		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs[:1])
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		if len(states) > 0 && states[0].State == forge.StateOpen && states[0].HeadSHA != "" {
+			pr := states[0]
+			if pr.HeadSHA != st.reviewedHead(pr.Repo) {
+				gh, err := w.forges.For(ctx, sc.OrganizationID)
+				if err != nil {
+					return workflow.Result{}, err
+				}
+				var settings forge.Settings
+				if gh != nil {
+					settings = gh.Settings
+				}
+				if err := w.newHead(ctx, sc, st, gh, pr, settings); err != nil {
+					return workflow.Result{}, err
+				}
+				if st.RoundDueAt != nil && st.RoundDueHead == pr.HeadSHA && !time.Now().Before(*st.RoundDueAt) {
+					return w.startRound(ctx, sc, st, pr)
+				}
+			}
+		}
+	}
 	if rerun && st.Verdict != nil && st.Verdict.Due != "" {
 		return workflow.Result{Next: "verdict", State: st}, nil
 	}
@@ -767,5 +806,10 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 	if st.Verdict == nil || st.Verdict.Due == "" {
 		st.ReweighAt = nil
 	}
-	return waitForPR(st), nil
+	res := waitForPR(st)
+	if st.RoundDueAt != nil && (res.SleepUntil.IsZero() || st.RoundDueAt.Before(res.SleepUntil)) {
+		// The debounce's end wakes the wait, signal or none.
+		res.SleepUntil = *st.RoundDueAt
+	}
+	return res, nil
 }

@@ -505,7 +505,7 @@ func TestTheReviewersContractSurvivesAnyInstructions(t *testing.T) {
 	if got := ParseFindings(reviewSummary); len(got) != 0 {
 		t.Errorf("the summary's own example parses as findings: %+v", got)
 	}
-	if !strings.Contains(earlierFindings([]Finding{{Title: "x"}}), "never judge by which files the fix touched") {
+	if !strings.Contains(earlierFindings([]Finding{{Title: "x"}}, false), "never judge by which files the fix touched") {
 		t.Error("a re-review is not told to judge a fix by the code")
 	}
 }
