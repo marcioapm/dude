@@ -1,6 +1,8 @@
 package orchestrator_test
 
 import (
+	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -70,5 +72,55 @@ func TestASupervisorPassThatFailsToSettleWakesCannotSee(t *testing.T) {
 	w.supervise()
 	if n := len(w.workflowWakes(task)); n != 1 {
 		t.Fatalf("%d cannot-see wakes for one stretch", n)
+	}
+}
+
+// A pass that settles again ends the stretch: the count is back to 0, and
+// a later stretch is a new "cannot see", woken again.
+func TestASettledPassEndsASettleFailureStretch(t *testing.T) {
+	w, task, id, refuse := cannotTellWorld(t, 43000003200)
+	refuse(true)
+	for range delivery.DispatchCannotSeeReads - 1 {
+		w.supervise()
+	}
+	// Stretches are reads apart, not within the second a wake key holds.
+	mustExec(t, w.owner, `UPDATE workflow_dispatches SET failing_since = failing_since - interval '1 hour' WHERE id = $1`, id)
+	w.supervise()
+	refuse(false)
+	w.supervise()
+	if got := w.failing(id); got != "bound 0 false false" {
+		t.Fatalf("after a settled pass: %s", got)
+	}
+	refuse(true)
+	for range delivery.DispatchCannotSeeReads {
+		w.supervise()
+	}
+	if wakes := w.workflowWakes(task); len(wakes) != 2 || cannotSeeWakes(wakes) != 2 {
+		t.Fatalf("wakes %q", wakes)
+	}
+}
+
+// A pass cancelled mid-read (the orchestrator stopping) learned nothing
+// about GitHub: it records no failed read.
+func TestACancelledSupervisorPassRecordsNoFailedRead(t *testing.T) {
+	w, _, id, _ := cannotTellWorld(t, 43000003300)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if strings.Contains(r.URL.Path, "/actions/runs/") {
+				cancel()
+			}
+			return 0
+		}
+	})
+	if _, err := w.prs.SuperviseDispatches(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("the pass read nothing to cancel")
+	}
+	if got := w.failing(id); got != "bound 0 false false" {
+		t.Fatalf("after a cancelled pass: %s", got)
 	}
 }
