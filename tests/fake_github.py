@@ -1377,7 +1377,7 @@ class FakeGitHub:
                     with self.github._lock:
                         shas = [sha for sha, checks in self.github.checks.items()
                                 if any(c["kind"] == "check_run" for c in checks.values())]
-                    runs = [{"id": i + 1, "head_sha": sha} for i, sha in enumerate(reversed(shas))]
+                    runs = [{"id": FIRST_RUN_ID + i + 1, "head_sha": sha} for i, sha in enumerate(reversed(shas))]
                     return self._send(200, {"total_count": len(runs), "workflow_runs": runs})
                 if path == f"{prefix}/hooks":
                     return self._send(200, self.github.hooks)
