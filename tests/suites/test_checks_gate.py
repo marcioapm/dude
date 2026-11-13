@@ -17,7 +17,7 @@ from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
 from env import TestEnvironment
-from helpers import ApiClient, query, sign_in, wait_until
+from helpers import ApiClient, query, sign_in, wait_until, webhook_secret
 
 
 CHECKS_MODELS = {
@@ -321,7 +321,11 @@ def test_a_deferred_check_holds_ready_until_the_conductor_keeps_it(
     again and again. The conductor dispatches bench.yml on the branch
     (run_workflow), the run completes, and it answers backed with that
     dispatch, naming the ask: then the task is ready to merge."""
-    _credential(client, fake_github)
+    credential = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token", "apiBaseUrl": fake_github.api_url})
+    assert credential.status_code == 200, credential.text
+    # Webhooks, so each check set is a sync dude acts on at once.
+    fake_github.webhook_url = env.control_plane_url + credential.json()["webhookPath"]
+    fake_github.webhook_secret = webhook_secret(env.owner_dsn, client.get("/v1/me").json()["organization"]["id"])
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 0}).status_code == 200
     fake_github.write_file("main", ".github/workflows/bench.yml", BENCH, "Bench")
     task = _start(client, fake_github, "fake/checks-deferred")
@@ -342,12 +346,12 @@ def test_a_deferred_check_holds_ready_until_the_conductor_keeps_it(
         "or reject; missing is not asked again (give none). The ask names these heads: if they move, a new wake asks again, and an answer to this one is refused. "
         "The pull request is not ready until you answer, and unanswered by the deadline it goes to a person. "
         "\"gh workflow run bench.yml\" deferred (Deliver's defaults: not-run): kept (backed) or reject?"], wakes
-    # Weighed at least twice more (each new green check is a sync that
-    # moves): still not ready, and never was.
-    for name in ("lint", "docs"):
+    # Weighed at least twice more (a check going pending, then green, is a
+    # move each sync signals): still not ready, and never was.
+    for status in ("in_progress", "completed"):
         before = _gate_at(env, task["id"])
-        fake_github.set_check(number, name)
-        wait_until(lambda: _gate_at(env, task["id"]) > before, timeout=60, message=f"the gate was not weighed again after {name}")
+        fake_github.set_check(number, "lint", status=status)
+        wait_until(lambda: _gate_at(env, task["id"]) > before, timeout=60, message=f"the gate was not weighed again at lint {status}")
     assert query(env.owner_dsn, "SELECT 1 FROM events WHERE task_id = %s AND event_type = 'task.ready_to_merge'", (task["id"],)) == []
     gate = query(env.owner_dsn, "SELECT ready_gate FROM pull_requests WHERE task_id = %s", (task["id"],))[0]["ready_gate"]
     assert [(it["key"], it["ok"]) for it in gate["items"] if not it["ok"]] == [("deferred", False)], gate
