@@ -206,6 +206,12 @@ func TestTwoPushesInsideTheDebounceAreOneRound(t *testing.T) {
 	if e := w.events(wi, delivery.EvReviewRoundStarted); e != 1 {
 		t.Fatalf("%d rounds started, want 1", e)
 	}
+	// The second push reset the timer: H3's round is due later than H2's.
+	if later := w.count(`SELECT count(*) FROM events a, events b WHERE a.task_id = $1 AND b.task_id = $1 AND a.event_type = $2
+		AND b.event_type = $2 AND a.payload->>'head' = $3 AND b.payload->>'head' = $4
+		AND (b.payload->>'dueAt')::timestamptz > (a.payload->>'dueAt')::timestamptz`, wi, delivery.EvReviewRoundDue, h2, h3); later != 1 {
+		t.Fatal("the push of H3 did not reset the debounce")
+	}
 	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2`, wi, h2); r != 0 {
 		t.Fatalf("%d lens Runs at H2", r)
 	}
