@@ -449,10 +449,13 @@ func openDischargeTx(ctx context.Context, tx pgx.Tx, runID string, turn int64) (
 
 // conductDischargeTx records the conductor's answer to the second ask its
 // key names (in.Ask): each deferred check backed (kept at that ask's
-// heads, and no others) or rejected. An ask a newer one at other heads
-// superseded (the heads moved) is refused: its evidence keeps nothing at
-// the heads the pull requests are at now. The delivery weighs readiness
-// again; a rejected check holds the gate until a person settles it.
+// heads, and no others) or rejected. An ask is answerable while its heads
+// are the gate's heads, the open pull requests' (gateHeads); one at other
+// heads is superseded and refused: its evidence keeps nothing at the
+// heads the pull requests are at now. Heads that moved away and back (H1,
+// H2, H1) make the ask at H1 answerable again: no new ask is made there,
+// the same key's. The delivery weighs readiness again; a rejected check
+// holds the gate until a person settles it.
 func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks, projectID string) (int64, error) {
 	var raw []byte
 	var askCursor int64
@@ -460,9 +463,9 @@ func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChe
 	err := tx.QueryRow(ctx, `SELECT a.payload, a.cursor,
 			EXISTS (SELECT 1 FROM events v WHERE v.run_id = a.run_id AND v.event_type = 'run.checks.conducted'
 				AND (v.payload->>'askCursor')::bigint = a.cursor),
-			EXISTS (SELECT 1 FROM runs r JOIN events n ON n.run_id = r.id WHERE r.task_id = $3 AND r.attempt = task_attempt($3)
-				AND n.event_type = 'run.checks.asked' AND n.payload ? 'discharge' AND n.cursor > a.cursor
-				AND n.payload->'discharge'->'heads' <> a.payload->'discharge'->'heads')
+			(SELECT COALESCE(jsonb_object_agg(rp.name, COALESCE(pr.head_sha, '')), '{}') FROM pull_requests pr
+				JOIN repositories rp ON rp.id = pr.repository_id WHERE pr.task_id = $3 AND pr.state IN ('open', 'draft'))
+				IS DISTINCT FROM a.payload->'discharge'->'heads'
 		FROM events a WHERE a.run_id = $1 AND a.event_type = 'run.checks.asked' AND a.payload->'discharge'->>'key' = $2
 			AND (a.payload->>'turn')::bigint = $4`,
 		in.RunID, strings.TrimSpace(in.Ask), ref.TaskID, in.Turn).Scan(&raw, &askCursor, &answered, &superseded)
