@@ -559,6 +559,11 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		}
 	}
 	v.Draft = posted != "" && d.Reason == reasonDraft
+	if v.Draft {
+		// The time a draft waited is not CI unconfirmed at an open pull
+		// request: once ready, the cap and ci_stuck count afresh (R3-1).
+		v.DeferredSince, v.Deferrals, v.Stuck = nil, 0, false
+	}
 	if !transientReason(d.Reason) && !v.Draft || posted == "" {
 		// Only an approval held back by CI at H (unrelated red CI, CI not
 		// confirmed at the cap or stuck) or by the draft is still owed at
