@@ -511,9 +511,10 @@ func (w *world) movedHead() string {
 // A deferred check held when the delivery leaves its conductor (handed to
 // Deliver's policy) after dude asked the conductor to keep it: no
 // conductor will answer, so the item says a person settles it (not that
-// the conductor is asked), and a person is asked, once, by the same
-// checks_unverified escalation a reject raises. At new heads no conductor
-// is asked. A waiver settles it, and the task is ready to merge.
+// the conductor is asked, though it was asked at these heads), and a
+// person is asked, once, by the same checks_unverified escalation a
+// reject raises. No conductor is asked again. A waiver settles it, and
+// the task is ready to merge.
 func TestADeferredCheckHandedToDeliverWaitsOnAPerson(t *testing.T) {
 	w, task := deferredWorld(t)
 	w.until("the conductor asked to keep the deferred check", func() bool {
@@ -537,7 +538,6 @@ func TestADeferredCheckHandedToDeliverWaitsOnAPerson(t *testing.T) {
 	if d := w.decider(task); d != delivery.DeciderPolicy {
 		t.Fatalf("decided by %s after the handover", d)
 	}
-	w.movedHead()
 	w.until("the discharge escalation with a person", func() bool {
 		w.sync()
 		w.reweigh(task)
