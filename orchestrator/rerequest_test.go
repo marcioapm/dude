@@ -312,8 +312,8 @@ func TestAnOwnerAuthoredPullRequestsFixAsksItsReviewerAsTheApp(t *testing.T) {
 		t.Fatalf("review requests %v, want the opening's then jerv's once", reqs)
 	}
 	token, ok := strings.CutPrefix(reqs[1].Auth, "Bearer ")
-	if !ok || token == "ana-token" || app.Installation(token) != 71 {
-		t.Fatalf("re-request authorized as %q, want an installation token of 71", reqs[1].Auth)
+	if !ok || token == "ana-token" || app.Installation(token) != 60000071 {
+		t.Fatalf("re-request authorized as %q, want an installation token of 60000071", reqs[1].Auth)
 	}
 	if p := w.gh.Pull(1); slices.Contains(p.Requested, "ana") || !slices.Contains(p.Requested, "jerv") {
 		t.Errorf("requested %v", p.Requested)
@@ -381,7 +381,7 @@ func TestAFixWhoseSiblingParksForItsOwnerHasAskedItsReviewersFirst(t *testing.T)
 	if len(reqs) != 2 || !slices.Equal(reqs[1].Logins, []string{"jerv"}) {
 		t.Fatalf("review requests %v, want the opening's then jerv's", reqs)
 	}
-	if token, _ := strings.CutPrefix(reqs[1].Auth, "Bearer "); app.Installation(token) != 71 {
+	if token, _ := strings.CutPrefix(reqs[1].Auth, "Bearer "); app.Installation(token) != 60000071 {
 		t.Fatalf("re-request authorized as %q, want an installation token", reqs[1].Auth)
 	}
 

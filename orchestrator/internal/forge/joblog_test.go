@@ -46,7 +46,7 @@ func jobLog(setupLines int) string {
 	return b.String()
 }
 
-// logWorld is a fake GitHub whose job 77 is an Actions job that failed by
+// logWorld is a fake GitHub whose job DefaultCheckRunID is an Actions job that failed by
 // its exit code, with log, and the download host its logs redirect to: on
 // the same address, another port, as a different host by URL.
 func logWorld(t *testing.T, log string) (*fakegithub.Server, *GitHub) {
@@ -56,8 +56,10 @@ func logWorld(t *testing.T, log string) (*fakegithub.Server, *GitHub) {
 	t.Cleanup(downloads.Close)
 	api := httptest.NewServer(fake.Handler())
 	t.Cleanup(api.Close)
-	fake.Set(func(s *fakegithub.Server) { s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.ActionsJob()} })
-	fake.SetJobLog(77, log, downloads.URL)
+	fake.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{fakegithub.DefaultCheckRunID: fakegithub.ActionsJob()}
+	})
+	fake.SetJobLog(fakegithub.DefaultCheckRunID, log, downloads.URL)
 	return fake, NewGitHub(Credential{Auth: "pat", Secret: "ghp_log_" + t.Name(), APIBaseURL: api.URL})
 }
 
@@ -71,7 +73,7 @@ func TestFailureExcerptCompilerHTTP(t *testing.T) {
 	for _, budget := range []int{4000, 16380, 65536} {
 		t.Run(fmt.Sprint(budget), func(t *testing.T) {
 			memory := (CheckLogRead{Tail: input}).Cut(budget)
-			read, err := gh.CheckLog(context.Background(), "acme/target", 77, budget)
+			read, err := gh.CheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, budget)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,7 +94,7 @@ func TestFailureExcerptCompilerHTTP(t *testing.T) {
 // download host never sees the token.
 func TestAnActionsJobsFailureIsTheEndOfItsLog(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(200))
-	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +123,7 @@ func TestAnActionsJobsFailureIsTheEndOfItsLog(t *testing.T) {
 // The limit is the caller's: a smaller one keeps less of the same end.
 func TestALogTailKeepsTheCallersLimit(t *testing.T) {
 	_, gh := logWorld(t, jobLog(10))
-	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 200)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +190,7 @@ func TestALogGitHubWillNotGiveFallsBackToTheCheckRun(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			fake, gh := logWorld(t, jobLog(5))
 			fake.Set(func(s *fakegithub.Server) { s.LogStatus = status })
-			read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+			read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 			if err != nil || read.Text != ".github:442: failure: Process completed with exit code 1." || read.Unread != why ||
 				read.Source != "check_run" {
 				t.Errorf("%+v, %v", read, err)
@@ -197,14 +199,14 @@ func TestALogGitHubWillNotGiveFallsBackToTheCheckRun(t *testing.T) {
 	}
 	fake, gh := logWorld(t, jobLog(5))
 	fake.Set(func(s *fakegithub.Server) { s.LogStatus = http.StatusBadGateway })
-	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 	if !Transient(err) || read.Unread != "GitHub was unavailable" || read.Text != ".github:442: failure: Process completed with exit code 1." {
 		t.Errorf("a 502 reading the log: %+v, %v; want transient, with the check run's words and why", read, err)
 	}
 	// An expired log the fake serves as GitHub does (410, no LogStatus).
-	fake.SetJobLog(77, "", "")
+	fake.SetJobLog(fakegithub.DefaultCheckRunID, "", "")
 	fake.Set(func(s *fakegithub.Server) { s.LogStatus = 0 })
-	if read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000); err != nil || read.Unread != "the log has expired" {
+	if read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000); err != nil || read.Unread != "the log has expired" {
 		t.Errorf("an expired log: %+v, %v", read, err)
 	}
 }
@@ -213,7 +215,7 @@ func TestALogGitHubWillNotGiveFallsBackToTheCheckRun(t *testing.T) {
 // what the check run said.
 func TestAnEmptyJobLogIsSaidToBeEmpty(t *testing.T) {
 	_, gh := logWorld(t, "\uFEFF\n\n")
-	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 	if err != nil || read.Unread != "the log is empty" || read.Source != "check_run" ||
 		read.Text != ".github:442: failure: Process completed with exit code 1." {
 		t.Errorf("%+v, %v", read, err)
@@ -225,7 +227,7 @@ func TestAnEmptyJobLogIsSaidToBeEmpty(t *testing.T) {
 func TestARefusedCheckRunSaysTheCheckRunWasRefused(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(5))
 	fake.Set(func(s *fakegithub.Server) { s.CheckRunStatus = http.StatusForbidden })
-	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 	var e *Error
 	if !errors.As(err, &e) || e.Status != http.StatusForbidden ||
 		read.Unread != "GitHub refused to show the check run (HTTP 403)" || read.Text != "" {
@@ -262,8 +264,8 @@ func TestAnExitOnlyCheckOutputUsesTheActionsLog(t *testing.T) {
 			case "text":
 				run.Text = "Process completed with exit code 127."
 			}
-			fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = run })
-			read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+			fake.Set(func(s *fakegithub.Server) { s.CheckRuns[fakegithub.DefaultCheckRunID] = run })
+			read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 			if err != nil || !strings.Contains(read.Text, "AssertionError: 3 != 2") {
 				t.Fatalf("exit-only %s: %q, %v", field, read.Text, err)
 			}
@@ -276,8 +278,8 @@ func TestAnExitOnlyCheckOutputUsesTheActionsLog(t *testing.T) {
 // included, and neither the warning nor the notice.
 func TestAnActionsJobWithWarningsAndNoticesGivesItsLog(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(5))
-	fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = fakegithub.NoisyActionsJob() })
-	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	fake.Set(func(s *fakegithub.Server) { s.CheckRuns[fakegithub.DefaultCheckRunID] = fakegithub.NoisyActionsJob() })
+	read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 	if err != nil || read.Source != "log" || read.Unread != "" {
 		t.Fatalf("%+v, %v", read, err)
 	}
@@ -297,11 +299,11 @@ func TestAnActionsJobWithWarningsAndNoticesGivesItsLog(t *testing.T) {
 func TestAnActionsJobThatSaysWhyGivesItsWordsThenItsLog(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(5))
 	fake.Set(func(s *fakegithub.Server) {
-		s.CheckRuns[77] = fakegithub.CheckRun{App: "github-actions", Title: "1 test failed", Annotations: []fakegithub.Annotation{
+		s.CheckRuns[fakegithub.DefaultCheckRunID] = fakegithub.CheckRun{App: "github-actions", Title: "1 test failed", Annotations: []fakegithub.Annotation{
 			{Path: "tests/test_backup.py", Line: 57, Level: "failure", Message: "AssertionError: 3 != 2"},
 			{Path: ".github", Line: 2, Level: "warning", Message: "Node.js 20 is deprecated"}}}
 	})
-	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,11 +318,11 @@ func TestAnActionsJobThatSaysWhyGivesItsWordsThenItsLog(t *testing.T) {
 func TestACheckOfAnotherAppIsReadAsBefore(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(5))
 	fake.Set(func(s *fakegithub.Server) {
-		s.CheckRuns[77] = fakegithub.CheckRun{App: "circleci", Title: "lint", Annotations: []fakegithub.Annotation{
+		s.CheckRuns[fakegithub.DefaultCheckRunID] = fakegithub.CheckRun{App: "circleci", Title: "lint", Annotations: []fakegithub.Annotation{
 			{Path: ".circleci", Line: 1, Level: "failure", Message: "Process completed with exit code 1."},
 			{Path: "main.go", Line: 3, Level: "warning", Message: "unused variable"}}}
 	})
-	read, err := gh.CheckOutput(context.Background(), "acme/target", 77, 4000)
+	read, err := gh.CheckOutput(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 4000)
 	if err != nil || read.Source != "check_run" || read.Actions || read.Unread != "" ||
 		read.Text != "lint\n.circleci:1: failure: Process completed with exit code 1.\nmain.go:3: warning: unused variable" {
 		t.Errorf("%+v, %v", read, err)
@@ -334,14 +336,14 @@ func TestACheckOfAnotherAppIsReadAsBefore(t *testing.T) {
 // job, the check run for any other.
 func TestAnAgentReadsACheckLog(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(5))
-	read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16<<10)
+	read, err := gh.CheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 16<<10)
 	if err != nil || read.Source != "log" || !read.Actions || !strings.Contains(read.Text, "##[error]Process completed with exit code 1.") {
 		t.Fatalf("%+v, %v", read, err)
 	}
 	fake.Set(func(s *fakegithub.Server) {
-		s.CheckRuns[77] = fakegithub.CheckRun{App: "circleci", Summary: "lint failed"}
+		s.CheckRuns[fakegithub.DefaultCheckRunID] = fakegithub.CheckRun{App: "circleci", Summary: "lint failed"}
 	})
-	if read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16<<10); err != nil || read.Source != "check_run" ||
+	if read, err := gh.CheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 16<<10); err != nil || read.Source != "check_run" ||
 		read.Actions || read.Text != "lint failed" {
 		t.Errorf("%+v, %v", read, err)
 	}
@@ -350,8 +352,8 @@ func TestAnAgentReadsACheckLog(t *testing.T) {
 // (g) github_check_log's read of the JERV-1 shape is the log.
 func TestAnAgentReadsTheLogOfAJobWithWarnings(t *testing.T) {
 	fake, gh := logWorld(t, jobLog(5))
-	fake.Set(func(s *fakegithub.Server) { s.CheckRuns[77] = fakegithub.NoisyActionsJob() })
-	read, err := gh.CheckLog(context.Background(), "acme/target", 77, 16<<10)
+	fake.Set(func(s *fakegithub.Server) { s.CheckRuns[fakegithub.DefaultCheckRunID] = fakegithub.NoisyActionsJob() })
+	read, err := gh.CheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, 16<<10)
 	if err != nil || read.Source != "log" || !strings.Contains(read.Text, "AssertionError: 3 != 2") || strings.Contains(read.Text, "Node.js") {
 		t.Fatalf("%+v, %v", read, err)
 	}

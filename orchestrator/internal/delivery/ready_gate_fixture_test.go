@@ -42,7 +42,7 @@ func newGateFixture(t *testing.T) *gateFixture {
 	f := &gateFixture{t: t, ctx: context.Background(), org: dbtest.Org(t, owner), owner: owner, store: &Store{DB: app}}
 	f.gh = fakegithub.New(bareRepo(t), "acme/repo")
 	f.n = f.gh.OpenAsPerson("dude-bot", "feature", "main", "Greet")
-	f.gh.Set(func(s *fakegithub.Server) { s.StatusID = 9 })
+	f.gh.Set(func(s *fakegithub.Server) { s.StatusID = fakegithub.JobID(9) })
 	mux := http.NewServeMux()
 	mux.Handle("/repos/acme/repo", f.gh.Handler())
 	mux.Handle("/repos/acme/repo/", f.gh.Handler())

@@ -23,7 +23,7 @@ func TestAutomationAgentActsAsTheApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	fakeApp := fakegithub.NewApp(9103, "acme-dude", &key.PublicKey)
-	fakeApp.Installations["acme"] = 71
+	fakeApp.Installations["acme"] = 60000071
 	fake := httptest.NewServer(fakeApp.Handler())
 	defer fake.Close()
 	block := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
@@ -53,7 +53,7 @@ func TestAutomationAgentActsAsTheApp(t *testing.T) {
 		t.Errorf("as the App: env %v", spec.Env)
 	}
 	token := secret(spec, gitTokenSecret)
-	if token == "" || fakeApp.Installation(token) != 71 {
+	if token == "" || fakeApp.Installation(token) != 60000071 {
 		t.Errorf("as the App: GIT_TOKEN %q is not acme's installation token", token)
 	}
 

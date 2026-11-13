@@ -59,7 +59,7 @@ func TestAFilteredWorkflowWithNoChecksIsReadyAfterTheGrace(t *testing.T) {
 // the task is ready to merge.
 func TestActionsReportingAfterAnExternalStatusIsReady(t *testing.T) {
 	w := newWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.StatusID = 9 })
+	w.gh.Set(func(s *fakegithub.Server) { s.StatusID = fakegithub.JobID(9) })
 	w.gh.SetChecks("success")
 	wi := w.prOpen(w.task(), prAt{seed: map[string]string{".github/workflows/ci.yml": "on: pull_request\njobs: {}\n"}})
 	w.withinGrace(wi)

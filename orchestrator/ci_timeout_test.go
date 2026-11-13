@@ -36,8 +36,8 @@ func TestAJobCancelledAtItsTimeLimitRaisesTheFeedbackDecision(t *testing.T) {
 	// A person cancelled the job: GitHub annotates nothing about time. Only
 	// readiness may change (passing to pending): nothing to act on.
 	w.gh.Set(func(s *fakegithub.Server) {
-		s.CheckRunID = 601
-		s.CheckRuns = map[int64]fakegithub.CheckRun{601: {App: "github-actions"}}
+		s.CheckRunID = 50000000601
+		s.CheckRuns = map[int64]fakegithub.CheckRun{50000000601: {App: "github-actions"}}
 	})
 	w.gh.SetChecks("run:cancelled")
 	w.untilChecks(task, "pending")
@@ -54,11 +54,11 @@ func TestAJobCancelledAtItsTimeLimitRaisesTheFeedbackDecision(t *testing.T) {
 
 	// The re-run hangs and GitHub cancels it at timeout-minutes.
 	w.gh.Set(func(s *fakegithub.Server) {
-		s.CheckRunID = 602
-		s.CheckRuns[602] = fakegithub.CheckRun{App: "github-actions", Annotations: []fakegithub.Annotation{
+		s.CheckRunID = 50000000602
+		s.CheckRuns[50000000602] = fakegithub.CheckRun{App: "github-actions", Annotations: []fakegithub.Annotation{
 			{Path: ".github", Line: 1, Level: "failure", Message: "The job has exceeded the maximum execution time of 6m0s"}}}
 	})
-	w.gh.SetJobLog(602, "2026-11-11T10:00:01.000Z === RUN   TestSum\n2026-11-11T10:06:00.000Z ##[error]The operation was canceled.\n", downloads.URL)
+	w.gh.SetJobLog(50000000602, "2026-11-11T10:00:01.000Z === RUN   TestSum\n2026-11-11T10:06:00.000Z ##[error]The operation was canceled.\n", downloads.URL)
 	w.until("the timed-out job to reach the conductor", func() bool {
 		w.sync()
 		return w.decisionAt(task) == delivery.PointPRFeedback
@@ -71,7 +71,7 @@ func TestAJobCancelledAtItsTimeLimitRaisesTheFeedbackDecision(t *testing.T) {
 	annotationReads := func() int {
 		n := 0
 		for _, r := range w.gh.Requests() {
-			if r == "GET /repos/acme/target/check-runs/602/annotations" {
+			if r == "GET /repos/acme/target/check-runs/50000000602/annotations" {
 				n++
 			}
 		}
@@ -105,10 +105,10 @@ func TestAJobCancelledAtItsTimeLimitRaisesTheFeedbackDecision(t *testing.T) {
 		WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, task).Scan(&feedback); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(feedback, `"runId": 602`) || !strings.Contains(feedback, `"timedOut": true`) || strings.Contains(feedback, `"runId": 601`) {
+	if !strings.Contains(feedback, `"runId": 50000000602`) || !strings.Contains(feedback, `"timedOut": true`) || strings.Contains(feedback, `"runId": 50000000601`) {
 		t.Fatalf("the decision's feedback does not name the timed-out check: %s", feedback)
 	}
-	log := w.must(task, "github_check_log", `{"repo":"acme/target","checkId":602}`)
+	log := w.must(task, "github_check_log", `{"repo":"acme/target","checkId":50000000602}`)
 	if text, _ := quoted(field(log, "log").(string)); !strings.Contains(text, "=== RUN   TestSum") {
 		t.Fatalf("the timed-out job's log: %v", log)
 	}

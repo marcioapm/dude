@@ -622,18 +622,7 @@ func SettleDispatchTx(ctx context.Context, tx pgx.Tx, org, id string, read Dispa
 			seen(&d, *read.Run, now)
 		}
 	case read.Err != nil:
-		d.FailedRead++
-		if d.failing == nil {
-			d.failing = &now
-		}
-		d.LastError = clip(oneLine(read.Err.Error()), 1000)
-		if after := forge.RetryAfter(read.Err); after > 0 {
-			t := now.Add(after)
-			d.readAfter = &t
-		}
-		if d.FailedRead >= DispatchCannotSeeReads && d.Outcome == "" {
-			d.Outcome = DispatchCannotSee
-		}
+		d.failedRead(read.Err, now)
 	default:
 		if d.Outcome == DispatchCannotSee {
 			// Seen again: the next "cannot see" is a new one.
@@ -644,13 +633,60 @@ func SettleDispatchTx(ctx context.Context, tx pgx.Tx, org, id string, read Dispa
 			seen(&d, *read.Run, now)
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, reason = NULLIF($3, ''), run_id = NULLIF($4, 0),
+	// $4 is typed: untyped, NULLIF($4, 0) takes int4 from the literal, and
+	// a GitHub run id (4.3e10 today) does not fit it (#465).
+	if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET state = $2, reason = NULLIF($3, ''), run_id = NULLIF($4::bigint, 0),
 			run_attempt = NULLIF($5, 0), run_status = NULLIF($6, ''), run_conclusion = NULLIF($7, ''), run_url = NULLIF($8, ''),
 			last_seen_at = $9, failed_reads = $10, failing_since = $11, last_error = NULLIF($12, ''), outcome = NULLIF($13, ''),
 			woken_outcome = NULLIF($14, ''), woken_wait = CASE WHEN $14 = '' THEN NULL ELSE woken_wait END,
 			completed_at = $15, read_after = $16, last_read_at = now()
 		WHERE id = $1`, d.ID, d.State, d.Reason, d.RunID, d.Attempt, d.Status, d.Conclusion, d.URL, d.LastSeenAt, d.FailedRead,
 		d.failing, d.LastError, d.Outcome, d.woken, d.completed, d.readAfter); err != nil {
+		return err
+	}
+	return deliverDispatchTx(ctx, tx, org, d)
+}
+
+// failedRead counts one read that could not tell ("cannot tell", never
+// "not yet"): the stretch's start, the latest error, GitHub's Retry-After,
+// and "cannot see" once DispatchCannotSeeReads have failed in a row.
+func (d *DispatchRow) failedRead(err error, now time.Time) {
+	d.FailedRead++
+	if d.failing == nil {
+		d.failing = &now
+	}
+	d.LastError = clip(oneLine(err.Error()), 1000)
+	if after := forge.RetryAfter(err); after > 0 {
+		t := now.Add(after)
+		d.readAfter = &t
+	}
+	if d.FailedRead >= DispatchCannotSeeReads && d.Outcome == "" {
+		d.Outcome = DispatchCannotSee
+	}
+}
+
+// DispatchFailedTx records that a supervisor pass over dispatch id failed
+// with err (its settle, not GitHub's read): a failed read like any other,
+// so a pass that keeps failing reaches the conductor as "cannot see"
+// instead of a log line. It writes only the failed-read fields, not the
+// run's, so whatever made the settle fail does not fail this too.
+func DispatchFailedTx(ctx context.Context, tx pgx.Tx, org, id string, err error) error {
+	d, rerr := dispatchTx(ctx, tx, id, true)
+	if db.IsNotFound(rerr) {
+		return nil
+	}
+	if rerr != nil {
+		return rerr
+	}
+	// Only a dispatch still followed toward its outcome (reserved, or bound
+	// to a run) is one dude cannot tell about; a completed one was told.
+	if d.State != DispatchDispatching && d.State != DispatchBound {
+		return nil
+	}
+	d.failedRead(err, time.Now().UTC())
+	if _, err := tx.Exec(ctx, `UPDATE workflow_dispatches SET failed_reads = $2, failing_since = $3, last_error = NULLIF($4, ''),
+			outcome = NULLIF($5, ''), read_after = $6, last_read_at = now()
+		WHERE id = $1`, d.ID, d.FailedRead, d.failing, d.LastError, d.Outcome, d.readAfter); err != nil {
 		return err
 	}
 	return deliverDispatchTx(ctx, tx, org, d)

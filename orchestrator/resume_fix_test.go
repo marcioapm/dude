@@ -270,9 +270,9 @@ func TestAResumedPullRequestFixHasOnlyThisRoundsCheckExcerpt(t *testing.T) {
 	downloads := httptest.NewServer(w.gh.LogDownloads())
 	t.Cleanup(downloads.Close)
 	w.gh.Set(func(s *fakegithub.Server) {
-		s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+		s.CheckRuns = map[int64]fakegithub.CheckRun{fakegithub.DefaultCheckRunID: fakegithub.NoisyActionsJob()}
 	})
-	w.gh.SetJobLog(77, "current-round: AssertionError: 3 != 2\n##[error]Process completed with exit code 1.\n", downloads.URL)
+	w.gh.SetJobLog(fakegithub.DefaultCheckRunID, "current-round: AssertionError: 3 != 2\n##[error]Process completed with exit code 1.\n", downloads.URL)
 	w.gh.SetChecks("run:failure")
 	w.until("the resumed CI fix", func() bool {
 		w.sync()

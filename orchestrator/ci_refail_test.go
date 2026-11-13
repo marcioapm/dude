@@ -39,7 +39,7 @@ func testChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnother
 				passing, pending, failing = "success", "pending", "failure"
 				failsAs = func(id int64) { w.gh.Set(func(s *fakegithub.Server) { s.StatusID = id }) }
 			}
-			failsAs(501)
+			failsAs(50000000501)
 			w.gh.SetChecks(passing)
 			wi := w.reviewing()
 			prOpen.Store(true)
@@ -61,7 +61,7 @@ func testChecksFailingAgainOnAnUnchangedHeadAfterAFixThatPushedNothingGetAnother
 				}
 			} else {
 				w.gh.SetChecks(pending)
-				failsAs(502)
+				failsAs(50000000502)
 			}
 			w.untilChecks(wi, "pending")
 			w.gh.SetChecks(failing)
@@ -108,7 +108,7 @@ func TestDistinctFailedJobsOnTheSameHeadWakeAWaitingConductor(t *testing.T) {
 	}
 	var jobs atomic.Value
 	setJobs := func(js ...job) { jobs.Store(js) }
-	setJobs(job{501, "unit", "in_progress", ""}, job{502, "integration", "in_progress", ""})
+	setJobs(job{50000000501, "unit", "in_progress", ""}, job{50000000502, "integration", "in_progress", ""})
 	github := w.gh.Handler()
 	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/graphql" {
@@ -183,7 +183,7 @@ func TestDistinctFailedJobsOnTheSameHeadWakeAWaitingConductor(t *testing.T) {
 	}
 
 	before, pending := signals(), checksJSON()
-	setJobs(job{501, "unit", "completed", "failure"}, job{502, "integration", "in_progress", ""})
+	setJobs(job{50000000501, "unit", "completed", "failure"}, job{50000000502, "integration", "in_progress", ""})
 	wake(before, pending)
 	first := checksJSON()
 	wait()
@@ -193,11 +193,11 @@ func TestDistinctFailedJobsOnTheSameHeadWakeAWaitingConductor(t *testing.T) {
 		t.Fatal("the same failed job woke the conductor after wait")
 	}
 
-	setJobs(job{501, "unit", "completed", "failure"}, job{502, "integration", "completed", "failure"})
+	setJobs(job{50000000501, "unit", "completed", "failure"}, job{50000000502, "integration", "completed", "failure"})
 	wake(before+1, first)
 	wait()
 	// GitHub may return the identical jobs in another order.
-	setJobs(job{502, "integration", "completed", "failure"}, job{501, "unit", "completed", "failure"})
+	setJobs(job{50000000502, "integration", "completed", "failure"}, job{50000000501, "unit", "completed", "failure"})
 	w.syncRounds(3)
 	assertSignals(before + 2)
 	if !w.waitingOnPR(task) {
@@ -206,7 +206,7 @@ func TestDistinctFailedJobsOnTheSameHeadWakeAWaitingConductor(t *testing.T) {
 
 	// A rerun replaces unit's id without changing its name or the head;
 	// integration keeps the rollup failing even while unit runs again.
-	setJobs(job{503, "unit", "in_progress", ""}, job{502, "integration", "completed", "failure"})
+	setJobs(job{50000000503, "unit", "in_progress", ""}, job{50000000502, "integration", "completed", "failure"})
 	w.syncRounds(3)
 	assertSignals(before + 2)
 	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1 AND checks::text = 'failing'`, task); n != 1 {
@@ -216,10 +216,10 @@ func TestDistinctFailedJobsOnTheSameHeadWakeAWaitingConductor(t *testing.T) {
 		t.Fatal("the pending rerun woke the conductor")
 	}
 	rerunning := checksJSON()
-	setJobs(job{503, "unit", "completed", "failure"}, job{502, "integration", "completed", "failure"})
+	setJobs(job{50000000503, "unit", "completed", "failure"}, job{50000000502, "integration", "completed", "failure"})
 	wake(before+2, rerunning)
 	wait()
-	setJobs(job{502, "integration", "completed", "failure"}, job{503, "unit", "completed", "failure"})
+	setJobs(job{50000000502, "integration", "completed", "failure"}, job{50000000503, "unit", "completed", "failure"})
 	w.syncRounds(3)
 	assertSignals(before + 3)
 	if !w.waitingOnPR(task) {

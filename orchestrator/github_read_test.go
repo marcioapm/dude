@@ -80,7 +80,7 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 				w = s.world
 				read = func(tool, args string) map[string]any { return s.read(run, tool, args) }
 				scope, column = s.sessionOf(run), "session_id"
-				if status, _ := s.tool(run, "github_check_log", `{"repo":"acme/web","checkId":77}`); status != 422 {
+				if status, _ := s.tool(run, "github_check_log", `{"repo":"acme/web","checkId":50000000077}`); status != 422 {
 					t.Fatalf("outside repo: %d", status)
 				}
 			} else {
@@ -88,17 +88,17 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 				w, task = conductingWithAnotherProject(t)
 				read = func(tool, args string) map[string]any { return w.must(task, tool, args) }
 				scope, column = task, "task_id"
-				w.refused(task, "github_check_log", `{"repo":"acme/web","checkId":77}`, "not a repository you may read")
+				w.refused(task, "github_check_log", `{"repo":"acme/web","checkId":50000000077}`, "not a repository you may read")
 			}
 			downloads := httptest.NewServer(w.gh.LogDownloads())
 			t.Cleanup(downloads.Close)
 			// JERV-1's shape: GitHub's warning and notice beside the exit
 			// code's failure. The read is the log, not those annotations.
 			w.gh.Set(func(s *fakegithub.Server) {
-				s.CheckRuns = map[int64]fakegithub.CheckRun{77: fakegithub.NoisyActionsJob()}
+				s.CheckRuns = map[int64]fakegithub.CheckRun{50000000077: fakegithub.NoisyActionsJob()}
 			})
-			w.gh.SetJobLog(77, log, downloads.URL)
-			out := read("github_check_log", `{"repo":"acme/target","checkId":77}`)
+			w.gh.SetJobLog(50000000077, log, downloads.URL)
+			out := read("github_check_log", `{"repo":"acme/target","checkId":50000000077}`)
 			text, ok := quoted(field(out, "log").(string))
 			if !ok || !strings.Contains(text, "AssertionError: 3 != 2") || !strings.Contains(text, "Post job cleanup.") ||
 				!strings.Contains(text, "Process completed with exit code 1.") || !strings.Contains(text, "… [lines omitted]") ||
@@ -120,10 +120,10 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 			}
 			// Scan beyond an early wrapper error and retain the later diagnosis,
 			// even when a long cleanup pushes both outside the rolling tail.
-			w.gh.SetJobLog(77, "##[error]early wrapper error\n"+strings.Repeat("progress\n", 3000)+
+			w.gh.SetJobLog(50000000077, "##[error]early wrapper error\n"+strings.Repeat("progress\n", 3000)+
 				"E       AssertionError: later diagnosis\n##[error]Process completed with exit code 1.\n"+
 				strings.Repeat("Post job cleanup.\n", 1000), downloads.URL)
-			out = read("github_check_log", `{"repo":"acme/target","checkId":77}`)
+			out = read("github_check_log", `{"repo":"acme/target","checkId":50000000077}`)
 			text, ok = quoted(field(out, "log").(string))
 			if !ok || !strings.Contains(text, "early wrapper error") || !strings.Contains(text, "AssertionError: later diagnosis") ||
 				!strings.Contains(text, "Process completed with exit code 1.") || !strings.Contains(text, "… [lines omitted]") ||
@@ -133,7 +133,7 @@ func TestBrainstormAndConductorReadCheckLogs(t *testing.T) {
 			}
 			// A log GitHub refuses: the check run's failure, and why.
 			w.gh.Set(func(s *fakegithub.Server) { s.LogStatus = http.StatusForbidden })
-			out = read("github_check_log", `{"repo":"acme/target","checkId":77}`)
+			out = read("github_check_log", `{"repo":"acme/target","checkId":50000000077}`)
 			text, _ = quoted(field(out, "log").(string))
 			if field(out, "source") != "check_run" || field(out, "unread") != "GitHub refused: no Actions: Read permission" ||
 				text != ".github:243: failure: Process completed with exit code 1." {
@@ -213,7 +213,7 @@ func TestABrainstormReadsItsLinkedRepositorysIssuesAndPullRequests(t *testing.T)
 		t.Errorf("reviews %v, threads %v", field(p, "reviews"), field(p, "unresolvedThreads"))
 	}
 	if conclusion := field(p, "checks", 0, "conclusion"); conclusion != "failure" ||
-		field(p, "checks", 0, "id") != float64(77) || field(p, "checks", 0, "log") != true {
+		field(p, "checks", 0, "id") != float64(50000000077) || field(p, "checks", 0, "log") != true {
 		t.Errorf("checks %v", field(p, "checks"))
 	}
 	if path != "rollup.go" || field(p, "files", 0, "additions") != float64(3) || !strings.Contains(diff, "+func Count() int { return 1 }") {
@@ -247,7 +247,7 @@ func TestABrainstormIsRefusedARepositoryNotLinkedAndGitHubIsNotAsked(t *testing.
 		{"github_search", `{"repo":"acme/web","query":"elsewhere","kind":"issue"}`},
 		{"github_issue", `{"repo":"acme/web","number":101}`},
 		{"github_pull_request", `{"repo":"acme/web","number":1}`},
-		{"github_check_log", `{"repo":"acme/web","checkId":77}`},
+		{"github_check_log", `{"repo":"acme/web","checkId":50000000077}`},
 		{"github_issue", `{"repo":"torvalds/linux","number":1}`},
 		{"github_search", `{"repo":"acme/target","query":"repo:acme/web elsewhere","kind":"issue"}`},
 	} {
@@ -313,7 +313,7 @@ func TestAConductorReadsItsProjectsRepositoryAndNoOther(t *testing.T) {
 	w.refused(task, "github_issue", `{"repo":"acme/web","number":101}`, "acme/web is not a repository you may read: only your task's project, acme/target")
 	w.refused(task, "github_search", `{"repo":"acme/web","kind":"issue"}`, "only your task's project, acme/target")
 	w.refused(task, "github_pull_request", `{"repo":"acme/web","number":1}`, "only your task's project, acme/target")
-	w.refused(task, "github_check_log", `{"repo":"acme/web","checkId":77}`, "only your task's project, acme/target")
+	w.refused(task, "github_check_log", `{"repo":"acme/web","checkId":50000000077}`, "only your task's project, acme/target")
 	if w.requests() != before {
 		t.Errorf("refused reads reached GitHub: %v", w.web.Requests())
 	}
@@ -425,7 +425,7 @@ func TestTheSixtyFirstReadInAnHourIsRefused(t *testing.T) {
 	mustExec(t, w.owner, `UPDATE events SET run_id = 'run_previous_reader' WHERE run_id = $1 AND event_type = 'agent.tool.attempted'`, conductor)
 	before := w.requests()
 	w.refused(task, "github_search", `{"repo":"acme/target","kind":"issue"}`, "at most 60 GitHub reads an hour")
-	w.refused(task, "github_check_log", `{"repo":"acme/target","checkId":77}`, "at most 60 GitHub reads an hour")
+	w.refused(task, "github_check_log", `{"repo":"acme/target","checkId":50000000077}`, "at most 60 GitHub reads an hour")
 	if w.requests() != before {
 		t.Error("the 61st read reached GitHub")
 	}

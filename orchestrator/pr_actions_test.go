@@ -75,7 +75,7 @@ func TestTheConductorActsOnItsOwnPullRequest(t *testing.T) {
 	w.sync()
 	w.must(task, "rerun_failed_checks", `{"pr":"1"}`)
 	w.gh.Set(func(s *fakegithub.Server) {
-		if !slices.Equal(s.JobsRerun, []int64{77}) {
+		if !slices.Equal(s.JobsRerun, []int64{fakegithub.DefaultCheckRunID}) {
 			t.Errorf("jobs re-run %v", s.JobsRerun)
 		}
 	})
@@ -167,7 +167,7 @@ func (w *world) rerunRefusedWith(status *atomic.Int32) *atomic.Int32 {
 	asked := &atomic.Int32{}
 	w.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
-			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/actions/jobs/77/rerun") {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, fmt.Sprintf("/actions/jobs/%d/rerun", fakegithub.DefaultCheckRunID)) {
 				asked.Add(1)
 				return int(status.Load())
 			}
@@ -205,7 +205,7 @@ func TestARerunGitHubRefusedDoesNotSpendTheHeadsRerun(t *testing.T) {
 	status.Store(0)
 	w.must(task, "rerun_failed_checks", `{"pr":"1"}`)
 	w.gh.Set(func(s *fakegithub.Server) {
-		if !slices.Equal(s.JobsRerun, []int64{77}) {
+		if !slices.Equal(s.JobsRerun, []int64{fakegithub.DefaultCheckRunID}) {
 			t.Errorf("jobs re-run %v", s.JobsRerun)
 		}
 	})
@@ -235,7 +235,7 @@ func TestARerunGitHubFailedOnStillSpendsTheHeadsRerun(t *testing.T) {
 func TestARerunGitHubPartlyRefusedStillSpendsTheHeadsRerun(t *testing.T) {
 	w, task := rerunWorld(t)
 	checks, err := json.Marshal([]forge.Check{
-		{Name: "first", RunID: 77, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
+		{Name: "first", RunID: fakegithub.DefaultCheckRunID, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
 		{Name: "second", RunID: 78, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
 	})
 	if err != nil {
@@ -263,7 +263,7 @@ func TestARerunGitHubPartlyRefusedStillSpendsTheHeadsRerun(t *testing.T) {
 	}
 	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "already")
 	w.gh.Set(func(s *fakegithub.Server) {
-		if !slices.Equal(s.JobsRerun, []int64{77}) || refused.Load() != 1 {
+		if !slices.Equal(s.JobsRerun, []int64{fakegithub.DefaultCheckRunID}) || refused.Load() != 1 {
 			t.Errorf("successful jobs %v, refused requests %d", s.JobsRerun, refused.Load())
 		}
 	})
@@ -293,7 +293,7 @@ func TestSimultaneousRerunsAskGitHubOnce(t *testing.T) {
 		t.Fatalf("statuses %v, want one success", statuses)
 	}
 	w.gh.Set(func(s *fakegithub.Server) {
-		if !slices.Equal(s.JobsRerun, []int64{77}) {
+		if !slices.Equal(s.JobsRerun, []int64{fakegithub.DefaultCheckRunID}) {
 			t.Errorf("jobs re-run %v", s.JobsRerun)
 		}
 	})

@@ -52,6 +52,17 @@ func (s *Syncer) SuperviseDispatches(ctx context.Context, every time.Duration) (
 	for _, d := range batch {
 		if err := s.superviseDispatch(ctx, d.Org, d.ID); err != nil {
 			s.Log.Warn("supervising a dispatched workflow failed", "dispatch", d.ID, "error", err)
+			if ctx.Err() != nil {
+				continue
+			}
+			// "Can't tell" is never silence: the failure counts as a failed
+			// read, in its own transaction, and enough in a row wake the
+			// conductor "cannot see" (#465).
+			if rerr := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+				return delivery.DispatchFailedTx(ctx, tx, d.Org, d.ID, err)
+			}); rerr != nil {
+				s.Log.Warn("recording a dispatched workflow's failed supervision failed", "dispatch", d.ID, "error", rerr)
+			}
 		}
 	}
 	if len(batch) < dispatchesPerPass {

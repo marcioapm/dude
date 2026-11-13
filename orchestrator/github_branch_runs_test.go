@@ -19,13 +19,13 @@ func mainHistory(w *world) {
 	job := func(id int64, name, conclusion string) fakegithub.WorkflowJob {
 		return fakegithub.WorkflowJob{ID: id, Name: name, Status: "completed", Conclusion: conclusion}
 	}
-	w.gh.SetWorkflowRun(700, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "sha700", Status: "completed",
+	w.gh.SetWorkflowRun(43000000700, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "sha700", Status: "completed",
 		Conclusion: "success", CreatedAt: "2026-11-11T09:00:00Z", Jobs: []fakegithub.WorkflowJob{job(7001, "unit", "success"), job(7002, "lint", "success")}})
-	w.gh.SetWorkflowRun(702, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "sha702", Status: "completed",
+	w.gh.SetWorkflowRun(43000000702, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "sha702", Status: "completed",
 		Conclusion: "success", CreatedAt: "2026-11-11T11:00:00Z", Jobs: []fakegithub.WorkflowJob{job(7021, "unit", "success"), job(7022, "lint", "success")}})
-	w.gh.SetWorkflowRun(701, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "sha701", Status: "completed",
+	w.gh.SetWorkflowRun(43000000701, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "sha701", Status: "completed",
 		Conclusion: "failure", CreatedAt: "2026-11-11T10:00:00Z", Jobs: []fakegithub.WorkflowJob{job(7011, "unit", "failure"), job(7012, "lint", "success")}})
-	w.gh.SetWorkflowRun(703, fakegithub.WorkflowRun{Name: "CI", Branch: "feature", Event: "pull_request", HeadSHA: "sha703", Status: "completed",
+	w.gh.SetWorkflowRun(43000000703, fakegithub.WorkflowRun{Name: "CI", Branch: "feature", Event: "pull_request", HeadSHA: "sha703", Status: "completed",
 		Conclusion: "failure", CreatedAt: "2026-11-11T12:00:00Z", Jobs: []fakegithub.WorkflowJob{job(7031, "unit", "failure")}})
 }
 
@@ -47,8 +47,8 @@ func TestAConductorReadsTheBaseBranchsRecentRuns(t *testing.T) {
 			unit       string
 			createdAt  string
 			conclusion string
-		}{{702, "sha702", "success", "2026-11-11T11:00:00Z", "success"}, {701, "sha701", "failure", "2026-11-11T10:00:00Z", "failure"},
-			{700, "sha700", "success", "2026-11-11T09:00:00Z", "success"}} {
+		}{{43000000702, "sha702", "success", "2026-11-11T11:00:00Z", "success"}, {43000000701, "sha701", "failure", "2026-11-11T10:00:00Z", "failure"},
+			{43000000700, "sha700", "success", "2026-11-11T09:00:00Z", "success"}} {
 			run := runs[i]
 			if field(run, "id") != want.id || field(run, "headSha") != want.sha || field(run, "createdAt") != want.createdAt ||
 				field(run, "conclusion") != want.conclusion {
@@ -63,7 +63,7 @@ func TestAConductorReadsTheBaseBranchsRecentRuns(t *testing.T) {
 		}
 	}
 	other := w.must(task, "github_branch_runs", `{"repo":"acme/target","branch":"feature"}`)
-	if runs, _ := other["runs"].([]any); len(runs) != 1 || field(runs[0], "id") != float64(703) {
+	if runs, _ := other["runs"].([]any); len(runs) != 1 || field(runs[0], "id") != float64(43000000703) {
 		t.Fatalf("feature's runs: %v", other)
 	}
 	// Recorded as reads, without what GitHub said.
@@ -114,9 +114,9 @@ func TestBranchRunsReadsCountAgainstTheHour(t *testing.T) {
 func TestBranchRunsResultStaysOutOfTheLedger(t *testing.T) {
 	w, task := conductingWithAnotherProject(t)
 	mainHistory(w)
-	w.gh.SetWorkflowRun(704, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "okapi-sha-704", Status: "completed",
+	w.gh.SetWorkflowRun(43000000704, fakegithub.WorkflowRun{Name: "CI", Branch: "main", Event: "push", HeadSHA: "okapi-sha-704", Status: "completed",
 		Conclusion: "failure", CreatedAt: "2026-11-11T13:00:00Z", Jobs: []fakegithub.WorkflowJob{
-			{ID: 7041, Name: "pangolin-job", Status: "completed", Conclusion: "failure"}}})
+			{ID: 50000007041, Name: "pangolin-job", Status: "completed", Conclusion: "failure"}}})
 	out := w.must(task, "github_branch_runs", `{"repo":"acme/target"}`)
 	if field(out, "runs", 0, "headSha") != "okapi-sha-704" {
 		t.Fatalf("read %v", out)

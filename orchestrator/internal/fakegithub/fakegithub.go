@@ -186,8 +186,8 @@ type Server struct {
 	// what a check run's read answers instead (403: no Checks permission).
 	CheckRuns      map[int64]CheckRun
 	CheckRunStatus int
-	// The id the one check run of SetChecks("run:…") reports: 77 when
-	// unset. A re-run on GitHub is a new check run, with a new id: a job
+	// The id the one check run of SetChecks("run:…") reports:
+	// DefaultCheckRunID when unset. A re-run on GitHub is a new check run, with a new id: a job
 	// re-run through the Actions API moves it on.
 	CheckRunID int64
 	// The id the one commit status of SetChecks("failure"), "success" or
@@ -266,8 +266,28 @@ type ReviewRequest struct {
 	Auth string
 }
 
+// The magnitudes of the ids GitHub hands out today, so every test runs
+// with ids the size production sees (#465: a run id of 43314330828 did not
+// fit the int4 Postgres inferred for a parameter). Run ids are past 4.3e10,
+// job and check-run ids past 5e10, comment and review ids past both int4
+// and uint32.
+const (
+	FirstRunID     int64 = 43_000_000_000
+	FirstJobID     int64 = 50_000_000_000
+	FirstCommentID int64 = 3_000_000_000
+	// A repository id as GitHub issues them now.
+	FirstRepositoryID int64 = 900_000_000
+)
+
+// JobID is the job or check-run id a test names n.
+func JobID(n int64) int64 { return FirstJobID + n }
+
+// DefaultCheckRunID is the id of SetChecks("run:…")'s one check run when a
+// test sets none.
+const DefaultCheckRunID = FirstJobID + 77
+
 // Comment and review ids, unique across repositories as GitHub's are.
-var nextID atomic.Int64
+var nextID = func() *atomic.Int64 { var n atomic.Int64; n.Store(FirstCommentID); return &n }()
 
 func New(repo, slug string) *Server {
 	return &Server{Repo: repo, Slug: slug, pulls: map[int]*Pull{},
@@ -629,7 +649,7 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte(body))
 	})
 	mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, map[string]any{"default_branch": "main", "full_name": s.Slug})
+		write(w, 200, map[string]any{"id": FirstRepositoryID, "default_branch": "main", "full_name": s.Slug})
 	})
 	mux.HandleFunc("POST "+prefix+"/merges", func(w http.ResponseWriter, r *http.Request) {
 		var in struct{ Base, Head string }
@@ -964,7 +984,7 @@ func (s *Server) Handler() http.Handler {
 		// check run.
 		if strings.HasPrefix(s.checks, "run:") {
 			s.checks = "run:pending"
-			s.CheckRunID = max(s.CheckRunID, 77) + 1
+			s.CheckRunID = max(s.CheckRunID, DefaultCheckRunID) + 1
 		}
 		s.mu.Unlock()
 		write(w, 201, map[string]any{})
@@ -1469,7 +1489,7 @@ func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 	state, forbidden, message, id := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage, s.CheckRunID
 	s.mu.Unlock()
 	if id == 0 {
-		id = 77
+		id = DefaultCheckRunID
 	}
 	if message != "" {
 		fail(w, 403, message)

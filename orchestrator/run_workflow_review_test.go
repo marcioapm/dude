@@ -53,16 +53,16 @@ func TestReviewBackToBackDispatchesSwapRuns(t *testing.T) {
 				production := w.dispatched(task, `{"workflow":"deploy.yml","questionId":"q_production","inputs":{"env":"production"}}`)
 				// The fake answers dispatch n with run 70000+n: staging is the
 				// first dispatch, production the second.
-				if got := w.dispatchRow(staging); got != "bound 70001" {
+				if got := w.dispatchRow(staging); got != "bound 43000070001" {
 					t.Errorf("staging %s", got)
 				}
-				if got := w.dispatchRow(production); got != "bound 70002" {
+				if got := w.dispatchRow(production); got != "bound 43000070002" {
 					t.Errorf("production %s", got)
 				}
 				return
 			}
 			production := w.dispatched(task, `{"workflow":"deploy.yml","questionId":"q_production","inputs":{"env":"production"}}`)
-			w.gh.SetWorkflowRun(611, fakegithub.WorkflowRun{Name: "deploy.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
+			w.gh.SetWorkflowRun(43000000611, fakegithub.WorkflowRun{Name: "deploy.yml", Branch: branch, Event: "workflow_dispatch", Status: "queued", CreatedAt: w.nowRFC3339()})
 			w.supervise()
 			for _, id := range []string{staging, production} {
 				if got := w.dispatchRow(id); got != "unknown none" {
@@ -95,10 +95,10 @@ func (w *world) wakesNaming(task, id string) []string {
 // the conductor with it: exactly once.
 func TestReviewReplacedWaitLosesOutcome(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 1960 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000001960 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.must(task, "wait_for", `{"conditions":[{"workflowEnded":"`+id+`"}],"deadline":"30m"}`)
-	done := forge.RunState{ID: 1960, Status: "completed", Conclusion: "failure", Attempt: 1}
+	done := forge.RunState{ID: 43000001960, Status: "completed", Conclusion: "failure", Attempt: 1}
 	if err := w.prs.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 		if err := delivery.SettleDispatchTx(context.Background(), tx, w.org, id, delivery.DispatchRead{Run: &done}); err != nil {
 			return err
@@ -134,10 +134,10 @@ func TestReviewReplacedWaitLosesOutcome(t *testing.T) {
 // would have carried is owed, and woken for once.
 func TestAnOutcomeOwedWhenTheConductorEndsIsWoken(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 1970 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000001970 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.must(task, "wait_for", `{"conditions":[{"workflowEnded":"`+id+`"}],"deadline":"30m"}`)
-	done := forge.RunState{ID: 1970, Status: "completed", Conclusion: "failure", Attempt: 1}
+	done := forge.RunState{ID: 43000001970, Status: "completed", Conclusion: "failure", Attempt: 1}
 	if err := w.prs.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 		if err := delivery.SettleDispatchTx(context.Background(), tx, w.org, id, delivery.DispatchRead{Run: &done}); err != nil {
 			return err
@@ -161,11 +161,11 @@ func TestAnOutcomeOwedWhenTheConductorEndsIsWoken(t *testing.T) {
 // for once.
 func TestAHeldDigestNotToldIsOwedAgain(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 1980 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000001980 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	out := w.must(task, "wait_for", `{"conditions":[{"workflowEnded":"`+id+`"}],"deadline":"30m"}`)
 	waitID, _ := out["waitId"].(string)
-	w.gh.UpdateWorkflowRun(1980, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "failure" })
+	w.gh.UpdateWorkflowRun(43000001980, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "failure" })
 	w.supervise()
 	if err := w.prs.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 		_, err := delivery.EvaluateWaitTx(context.Background(), tx, w.org, task, waitID)
@@ -198,14 +198,14 @@ func TestAHeldDigestNotToldIsOwedAgain(t *testing.T) {
 // again clears what was delivered).
 func TestASecondStretchOfFailedReadsWakesAgain(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 1990 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000001990 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	failing := func(on bool) {
 		w.gh.Set(func(s *fakegithub.Server) {
 			s.Intercept = nil
 			if on {
 				s.Intercept = func(r *http.Request) int {
-					if strings.Contains(r.URL.Path, "/actions/runs/1990") {
+					if strings.Contains(r.URL.Path, "/actions/runs/43000001990") {
 						return http.StatusBadGateway
 					}
 					return 0
@@ -252,7 +252,13 @@ func TestRacingSettlesCountEveryFailedRead(t *testing.T) {
 			return nil
 		})
 	}()
-	<-started
+	// The first settle failing never starts the race: fail, not hang (it
+	// hung for the whole run when an int4 parameter refused the run id).
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("the first settle ended before the race: %v", err)
+	}
 	go func() {
 		done <- w.prs.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
 			return delivery.SettleDispatchTx(context.Background(), tx, w.org, id, read)
@@ -275,10 +281,10 @@ func TestRacingSettlesCountEveryFailedRead(t *testing.T) {
 // and wake no one (M10).
 func TestAnEndedTasksDispatchesAreNotSupervised(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2010 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000002010 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	mustExec(t, w.owner, `UPDATE tasks SET status = 'done' WHERE id = $1`, task)
-	w.gh.UpdateWorkflowRun(2010, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
+	w.gh.UpdateWorkflowRun(43000002010, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
 	w.supervise()
 	if got := w.str(`SELECT state || ' ' || (last_read_at IS NULL)::text FROM workflow_dispatches WHERE id = $1`, id); got != "bound true" {
 		t.Fatalf("an ended task's dispatch was read: %s", got)
@@ -291,10 +297,10 @@ func TestAnEndedTasksDispatchesAreNotSupervised(t *testing.T) {
 // A rate-limited read's Retry-After is honoured: no read before it.
 func TestARateLimitedReadWaitsForRetryAfter(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2020 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000002020 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	w.settleDispatch(id, delivery.DispatchRead{Err: &forge.Error{Status: 429, Message: "rate limit", RetryAfter: time.Hour}})
-	w.gh.UpdateWorkflowRun(2020, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
+	w.gh.UpdateWorkflowRun(43000002020, func(r *fakegithub.WorkflowRun) { r.Status, r.Conclusion = "completed", "success" })
 	w.supervise()
 	if got := w.str(`SELECT state || ' ' || failed_reads FROM workflow_dispatches WHERE id = $1`, id); got != "bound 1" {
 		t.Fatalf("read before Retry-After: %s", got)
@@ -309,7 +315,7 @@ func TestARateLimitedReadWaitsForRetryAfter(t *testing.T) {
 // A full batch has the supervisor's loop run again at once.
 func TestAFullBatchOfDispatchesRunsAgain(t *testing.T) {
 	w, task, _ := dispatchWorld(t)
-	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 2100 })
+	w.gh.Set(func(s *fakegithub.Server) { s.DispatchRunID = 43000002100 })
 	id := w.dispatched(task, `{"workflow":"ci.yml"}`)
 	mustExec(t, w.owner, `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, state, run_id)
 		SELECT 'wfd_n' || n, organization_id, task_id, repository_id, workflow, 'r' || n, 'bound', 3000 + n FROM workflow_dispatches, generate_series(1, 24) n

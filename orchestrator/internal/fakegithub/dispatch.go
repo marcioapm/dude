@@ -40,7 +40,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	details := body.RunDetails && !s.DispatchLegacy
 	id := s.DispatchRunID
 	if id == 0 && details {
-		id = 70000 + int64(len(s.Dispatches))
+		id = FirstRunID + 70000 + int64(len(s.Dispatches))
 	}
 	if id != 0 {
 		if s.WorkflowRuns == nil {
