@@ -1060,9 +1060,12 @@ const (
 	ChecksOtherFailureModel = "fake/checks-other-failure"
 	ChecksBaseShownModel    = "fake/checks-base-shown"
 	// ChecksDeferredModel is ChecksBaseShownModel that also reports a
-	// browser check not run, which a later phase runs.
+	// check not run, which a later phase runs: as in the trials, a manual
+	// workflow (DeferredWorkflow) the conductor dispatches once the pull
+	// request is open.
 	ChecksDeferredModel = "fake/checks-deferred"
-	DeferredCommand     = "open the greeting page in a browser"
+	DeferredWorkflow    = "bench.yml"
+	DeferredCommand     = "gh workflow run " + DeferredWorkflow
 	FailingCommand      = "make test"
 	OtherFailingCommand = "make lint"
 	// BaseDir is where BaseCommand checks the task's base out.
@@ -1101,7 +1104,7 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 	case model == ChecksDeferredModel:
 		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
 			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"},
-				[3]string{DeferredCommand, "not-run", "needs a browser: " + DeferredToLater}), true
+				[3]string{DeferredCommand, "not-run", "a manual workflow on GitHub: " + DeferredToLater}), true
 	case model == ChecksOtherFailureModel:
 		return [][3]string{{OtherFailingCommand, "lint: 1 issue\nexit status 1", "1"}},
 			ChecksReport([3]string{OtherFailingCommand, "fail", "one lint issue"}), true

@@ -302,33 +302,69 @@ def test_with_no_judgement_tier_the_conductor_still_decides_checks(client: ApiCl
     assert not fake_github.pulls
 
 
+BENCH = "name: Bench\non:\n  pull_request:\n  workflow_dispatch:\njobs: {}\n"
+
+
+def _gate_at(env: TestEnvironment, task_id: str) -> str:
+    rows = query(env.owner_dsn, "SELECT ready_gate->>'at' AS at FROM pull_requests WHERE task_id = %s AND ready_gate IS NOT NULL", (task_id,))
+    return rows[0]["at"] if rows else ""
+
+
 @pytest.mark.e2e
 def test_a_deferred_check_holds_ready_until_the_conductor_keeps_it(
     client: ApiClient, env: TestEnvironment, fake_github: FakeGitHub
 ):
-    """The trial of 2026-11-12/13: a check not run, deferred by the
-    conductor to a later phase, is asked about again once the pull request
-    is open and its CI has reported (none configured here). The ready gate's
-    deferred item holds the task in review until the conductor answers
-    backed, citing a completed dispatch; then it is ready to merge."""
+    """The trial of 2026-11-12/13: the implementer reports the bench
+    workflow not run, and the conductor defers it to a later phase. The
+    pull request opens and its CI goes green; dude asks the conductor again,
+    once, and the gate's deferred item holds the task in review, weighed
+    again and again. The conductor dispatches bench.yml on the branch
+    (run_workflow), the run completes, and it answers backed with that
+    dispatch, naming the ask: then the task is ready to merge."""
     _credential(client, fake_github)
     assert client.patch("/v1/forge/settings", {"checksFixRounds": 0}).status_code == 200
+    fake_github.write_file("main", ".github/workflows/bench.yml", BENCH, "Bench")
     task = _start(client, fake_github, "fake/checks-deferred")
     _wait_pr(client, fake_github, task["id"])
-    asked = wait_until(lambda: query(env.owner_dsn, """SELECT run_id, payload->>'turn' AS turn FROM events
-        WHERE task_id = %s AND event_type = 'run.checks.asked' AND payload ? 'discharge'""", (task["id"],)),
+    number = next(iter(fake_github.pulls))
+    fake_github.set_check(number, "ci")
+    asked = wait_until(lambda: query(env.owner_dsn, """SELECT run_id, payload->>'turn' AS turn, payload->'discharge'->>'key' AS key
+        FROM events WHERE task_id = %s AND event_type = 'run.checks.asked' AND payload ? 'discharge'""", (task["id"],)),
         timeout=90, message="the conductor was never asked again about the deferred check")
     assert len(asked) == 1, asked
+    run, turn, key = asked[0]["run_id"], asked[0]["turn"], asked[0]["key"]
+    head = fake_github.branch_sha(fake_github.pulls[number].head)
     wakes = query(env.owner_dsn, "SELECT line FROM conductor_wakes WHERE task_id = %s AND key LIKE 'checks:%%:d%%'", (task["id"],))
-    assert len(wakes) == 1 and "keep the checks you deferred" in wakes[0]["line"], wakes
-    gate = wait_until(lambda: (g := query(env.owner_dsn, "SELECT ready_gate FROM pull_requests WHERE task_id = %s AND ready_gate IS NOT NULL",
-                                          (task["id"],))) and g[0]["ready_gate"], timeout=60, message="no gate stored")
-    deferred = next(it for it in gate["items"] if it["key"] == "deferred")
-    assert not deferred["ok"] and '"open the greeting page in a browser"' in deferred["detail"], deferred
-    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] != "ready_to_merge"
-    decide = {"runId": asked[0]["run_id"], "turn": int(asked[0]["turn"]),
-              "checks": [{"command": "open the greeting page in a browser", "verdict": "backed",
-                          "reason": "dispatch wd_e2e (browser.yml on the branch) completed: success"}],
+    assert [w["line"] for w in wakes] == [
+        f"The pull request is open at checks at {head[:7]}, with CI reported there: keep the checks you deferred to this later phase, "
+        f"then answer with decide_checks (runId {run}, turn {turn}, ask {key}), one verdict per check in this order. Deferred is no verdict now: "
+        "backed, with a reason citing the evidence at these heads (a dispatch id and its outcome, a verify result, or the pull request's CI at this head), "
+        "or reject; missing is not asked again (give none). The ask names these heads: if they move, a new wake asks again, and an answer to this one is refused. "
+        "The pull request is not ready until you answer, and unanswered by the deadline it goes to a person. "
+        "\"gh workflow run bench.yml\" deferred (Deliver's defaults: not-run): kept (backed) or reject?"], wakes
+    # Weighed at least twice more (each new green check is a sync that
+    # moves): still not ready, and never was.
+    for name in ("lint", "docs"):
+        before = _gate_at(env, task["id"])
+        fake_github.set_check(number, name)
+        wait_until(lambda: _gate_at(env, task["id"]) > before, timeout=60, message=f"the gate was not weighed again after {name}")
+    assert query(env.owner_dsn, "SELECT 1 FROM events WHERE task_id = %s AND event_type = 'task.ready_to_merge'", (task["id"],)) == []
+    gate = query(env.owner_dsn, "SELECT ready_gate FROM pull_requests WHERE task_id = %s", (task["id"],))[0]["ready_gate"]
+    assert [(it["key"], it["ok"]) for it in gate["items"] if not it["ok"]] == [("deferred", False)], gate
+    assert next(it for it in gate["items"] if it["key"] == "deferred")["detail"] == (
+        '1 deferred check(s) not kept: "gh workflow run bench.yml" (deferred: Deliver\'s defaults: not-run) '
+        "— the conductor is asked to keep it at this head"), gate
+    # The conductor keeps it: bench.yml on the task's branch (it runs for
+    # pull requests, so no person's answer is needed), to its end.
+    resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": 'tool: run_workflow {"workflow": "bench.yml"}'})
+    assert resp.status_code in (200, 201), resp.text
+    dispatched = wait_until(lambda: [e["payload"] for e in client.events(taskId=task["id"], limit=1000)
+                                     if e["eventType"] == "workflow.dispatched"], timeout=90, message="bench.yml was never dispatched")[0]
+    assert dispatched["workflow"] == "bench.yml" and dispatched["runId"] in fake_github.dispatched_runs, (dispatched, fake_github.dispatched_runs)
+    fake_github.complete_dispatched_run(dispatched["runId"], "success")
+    decide = {"runId": run, "turn": int(turn), "ask": key,
+              "checks": [{"command": "gh workflow run bench.yml", "verdict": "backed",
+                          "reason": f"dispatch {dispatched['dispatchId']} (bench.yml run {dispatched['runId']} on the branch) completed: success"}],
               "missing": {"verdict": "none", "reason": "not asked"}}
     resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": f"tool: decide_checks {json.dumps(decide)}"})
     assert resp.status_code in (200, 201), resp.text
