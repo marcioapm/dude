@@ -99,7 +99,7 @@ def test_the_authors_fix_is_re_reviewed_and_approved_with_dudes_thread_resolved(
     fake_github.add_check_run(h2)
     second = wait_until(lambda: next(iter(ours(h2)), None), timeout=120, message="dude never re-reviewed H2")
     assert second["state"] == "APPROVED", second
-    assert len(ours(h1)) == 1 and len(ours(h2)) == 1, fake_github.pulls[1].reviews
+    assert len([r for r in fake_github.pulls[1].reviews if marker in r["body"]]) == 2, fake_github.pulls[1].reviews
     replies = wait_until(
         lambda: [c for c in fake_github.pulls[1].comments if c.get("in_reply_to_id") == roots[0]["id"]] or None,
         timeout=30, message="dude never answered in its thread")

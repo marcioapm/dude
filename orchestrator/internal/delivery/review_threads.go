@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -116,10 +117,7 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 	for _, t := range due {
 		base := map[string]any{"pullRequestId": pr.ID, "findingId": t.FindingID, "commentId": t.CommentID, "head": head}
 		with := func(kv ...any) map[string]any {
-			out := map[string]any{}
-			for k, v := range base {
-				out[k] = v
-			}
+			out := maps.Clone(base)
 			for i := 0; i+1 < len(kv); i += 2 {
 				out[kv[i].(string)] = kv[i+1]
 			}
@@ -142,6 +140,9 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 			// A person resolved it (or it is gone): theirs, left alone.
 			continue
 		}
+		// Crash recovery only: a step that died between the reply and the
+		// resolve (a failed resolve is recorded, settling the thread) only
+		// resolves on its next run.
 		if !t.Replied {
 			text := fmt.Sprintf("Fixed at %s.", short(head))
 			if t.Status == "accepted" {

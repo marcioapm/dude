@@ -834,7 +834,11 @@ func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err erro
 // ConductDismiss is dismiss_finding: an open finding of the task left as
 // it is, with the reason, as a person accepting it is.
 func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reason string) error {
-	if ok, err := reviewOnlyWaitingTx(ctx, tx, ref); err != nil {
+	_, reviewOnly, err := reviewOnlyTx(ctx, tx, ref.TaskID)
+	if err != nil {
+		return err
+	}
+	if ok, err := reviewOnlyWaitingTx(ctx, tx, ref, reviewOnly); err != nil {
 		return err
 	} else if !ok {
 		if _, err := parked(ctx, tx, ref); err != nil {
@@ -846,7 +850,7 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 		return refuseText(rSayWhyDismissedReasonShownWith)
 	}
 	var title, status string
-	err := tx.QueryRow(ctx, `SELECT title, status::text FROM review_findings WHERE id = $1 AND task_id = $2 FOR UPDATE`,
+	err = tx.QueryRow(ctx, `SELECT title, status::text FROM review_findings WHERE id = $1 AND task_id = $2 FOR UPDATE`,
 		findingID, ref.TaskID).Scan(&title, &status)
 	if db.IsNotFound(err) {
 		return refusef(rNotFindingThisTaskFindingsLists, findingID)
@@ -866,9 +870,7 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 		map[string]any{"findingId": findingID, "status": "accepted", "note": note, "title": title, "by": "conductor"})); err != nil {
 		return err
 	}
-	if _, reviewOnly, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil {
-		return err
-	} else if reviewOnly {
+	if reviewOnly {
 		// The verdict at the same head is weighed again (design §6.6): a
 		// withdrawal can turn REQUEST_CHANGES into APPROVE without a round.
 		d, err := ReadDelivery(ctx, tx, ref.TaskID)
@@ -886,11 +888,12 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 const SignalKindRecheck = "recheck"
 
 // reviewOnlyWaitingTx says the caller is the live conductor of a
-// review-only task waiting on its pull request after its verdict: there
-// it may withdraw a finding with no decision pending (design §6.6).
-func reviewOnlyWaitingTx(ctx context.Context, tx pgx.Tx, ref RunRef) (bool, error) {
-	if _, ok, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil || !ok {
-		return false, err
+// review-only task (reviewOnly) waiting on its pull request after its
+// verdict: there it may withdraw a finding with no decision pending
+// (design §6.6).
+func reviewOnlyWaitingTx(ctx context.Context, tx pgx.Tx, ref RunRef, reviewOnly bool) (bool, error) {
+	if !reviewOnly {
+		return false, nil
 	}
 	if err := liveConductor(ctx, tx, ref); err != nil {
 		return false, err
