@@ -840,7 +840,8 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 	}
 	// The author's push (design §6.1): every head dude did not review is
 	// theirs here. Its stale approval goes at once; the next round after
-	// the debounce.
+	// the debounce. (A re-request of dude's review at the same head reaches
+	// no wait yet: the sync does not surface review_requested; PR 7.)
 	if len(st.PullRequestIDs) > 0 {
 		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs[:1])
 		if err != nil {

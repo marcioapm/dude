@@ -1551,6 +1551,10 @@ class FakeGitHub:
                                              "message": "expected hello"}])
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews", path):
                     return self._send(200, self.github.pulls[int(m[1])].reviews)
+                if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews/(\d+)/comments", path):
+                    # The line comments a review made (the Go fake's reviewComments).
+                    return self._send(200, [c for c in self.github.pulls[int(m[1])].comments
+                                            if c.get("pull_request_review_id") == int(m[2]) and not c.get("in_reply_to_id")])
                 if m := re.fullmatch(rf"{prefix}/issues/(\d+)/comments", path):
                     # Paged as GitHub pages it, with its Link header: dude reads
                     # page 1, then the last page it names.
