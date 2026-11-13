@@ -35,10 +35,14 @@ const (
 	ReadyThreads    = "threads"
 	ReadyMergeable  = "mergeable"
 	ReadyChecks     = "checks"
+	// ReadyDeferred: no check the conductor deferred to a later phase is
+	// still outstanding (checks_deferred.go). dude's own, as findings and
+	// questions are.
+	ReadyDeferred = "deferred"
 )
 
 // ReadyKeys are the gate's items in order.
-var ReadyKeys = []string{ReadyOpen, ReadyHead, ReadyReviewed, ReadySimplified, ReadyFindings, ReadyQuestions, ReadyThreads, ReadyMergeable, ReadyChecks}
+var ReadyKeys = []string{ReadyOpen, ReadyHead, ReadyReviewed, ReadySimplified, ReadyFindings, ReadyQuestions, ReadyThreads, ReadyMergeable, ReadyChecks, ReadyDeferred}
 
 // GateItem is one item of a pull request's gate: whether it holds, and a
 // person's words for what it found.
@@ -132,7 +136,7 @@ type GateFacts struct {
 	// The attempt's completed simplify Runs in this repository.
 	Simplifies []gateSimplify
 	// The items read from dude's own records.
-	Findings, Questions GateItem
+	Findings, Questions, Deferred GateItem
 	// The syncer's CI record of the pull request (prs.Syncer.Sync): whether
 	// it has had CI, the checks it recorded at Head (pending within its
 	// grace when GitHub reports nothing on a pull request that had CI),
@@ -181,6 +185,8 @@ func (s StoredGate) WithOwnItems(p GateFacts) StoredGate {
 			items[i] = p.Findings
 		case ReadyQuestions:
 			items[i] = p.Questions
+		case ReadyDeferred:
+			items[i] = p.Deferred
 		}
 		ready = ready && items[i].OK
 	}
@@ -319,10 +325,17 @@ func CheckProfileGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []s
 	if err != nil {
 		return c, err
 	}
+	// A review verdict has no writer whose checks could be deferred.
+	deferred := GateItem{Key: ReadyDeferred, OK: true, Detail: "not applicable: review only"}
+	if !verdict {
+		if deferred, err = gateDeferredTx(ctx, tx, taskID, attempt, gateHeads(c.PRs), d.Conducted()); err != nil {
+			return c, err
+		}
+	}
 	for i := range c.PRs {
 		p := &c.PRs[i]
 		p.UnreviewedPush = p.Head != "" && unreviewed[p.Repo] == p.Head
-		p.Findings, p.Questions = findings, questions
+		p.Findings, p.Questions, p.Deferred = findings, questions, deferred
 		p.Policy = st.Policy
 		if p.LensHeads, err = lensHeadsTx(ctx, tx, taskID, attempt, p.Repo); err != nil {
 			return c, err
@@ -338,6 +351,16 @@ func CheckProfileGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []s
 		}
 	}
 	return c, nil
+}
+
+// gateHeads are the pull requests' heads by repository: what a deferred
+// check is kept at.
+func gateHeads(prs []GateFacts) map[string]string {
+	heads := map[string]string{}
+	for _, p := range prs {
+		heads[p.Repo] = p.Head
+	}
+	return heads
 }
 
 // reviewedFrom (SQL, $1 the task, $2 the attempt, $3 the repository): a
@@ -623,6 +646,8 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 				g.Items = append(g.Items, p.Findings)
 			case ReadyQuestions:
 				g.Items = append(g.Items, p.Questions)
+			case ReadyDeferred:
+				g.Items = append(g.Items, p.Deferred)
 			default:
 				add(k, false, "%s", why)
 			}
@@ -700,6 +725,7 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	if verdict && !headOK {
 		// GitHub read the checks at its head, not the one reviewed.
 		add(ReadyChecks, false, "not read at %s: GitHub's head is %s", short(p.Head), short(f.HeadSHA))
+		g.Items = append(g.Items, p.Deferred)
 		return g, nil
 	}
 	now := time.Now()
@@ -708,6 +734,8 @@ func doGate(ctx context.Context, gh *forge.GitHub, p GateFacts) (PRGate, error) 
 	if !ok && checksInGrace(f, p, now) {
 		g.GraceLeft = graceLeft(p, now)
 	}
+	// 10. deferred: dude's own.
+	g.Items = append(g.Items, p.Deferred)
 	return g, nil
 }
 

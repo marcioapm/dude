@@ -364,7 +364,10 @@ func (e *Escalation) Actions() []string {
 		// with their reason.
 		out = append(out, "retry", "accept")
 	case ReasonChecksUnverified:
-		out = append(out, "retry", ActionWaive)
+		if !e.discharge() {
+			out = append(out, "retry")
+		}
+		out = append(out, ActionWaive)
 	case ReasonTestBlocked:
 		// Test again (after someone told dude how to run it), or ship what
 		// could not be checked, with a reason.
@@ -2180,8 +2183,13 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			if err != nil {
 				return workflow.Result{}, err
 			}
-			err = w.weighReadiness(ctx, sc, st, states)
-			return st.reweighed(waitAgain), err
+			if err := w.weighReadiness(ctx, sc, st, states); err != nil {
+				return st.reweighed(waitAgain), err
+			}
+			if res, escalated, err := w.deferredRejected(ctx, sc, st); escalated || err != nil {
+				return res, err
+			}
+			return st.reweighed(waitAgain), nil
 		}
 		return waitAgain, nil
 	}
@@ -3063,8 +3071,13 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	case !grown && c.open > 0:
 		// The rest are still open: what is merged is taken, so whether the
 		// task is ready depends on those.
-		err := w.weighReadiness(ctx, sc, st, states)
-		return st.reweighed(waitAgain), false, err
+		if err := w.weighReadiness(ctx, sc, st, states); err != nil {
+			return st.reweighed(waitAgain), false, err
+		}
+		if res, escalated, err := w.deferredRejected(ctx, sc, st); escalated || err != nil {
+			return res, true, err
+		}
+		return st.reweighed(waitAgain), false, nil
 	case !grown && c.merged > 0:
 		return workflow.Result{}, true, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "done", "pull requests merged")
 	case c.open == 0 && c.merged == 0:
@@ -3149,7 +3162,12 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	}
 	// Kept for the conductor's pull_requests, which serves it while the
 	// head it was judged at is the one recorded.
-	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error { return StoreGatesTx(ctx, tx, gates, time.Now()) }); err != nil {
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		if err := askDeferredTx(ctx, tx, sc.OrganizationID, st, gates); err != nil {
+			return err
+		}
+		return StoreGatesTx(ctx, tx, gates, time.Now())
+	}); err != nil {
 		return err
 	}
 	if unknown {
@@ -3166,6 +3184,74 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	// transaction: one lost to a retry would never be written again (the
 	// status has moved).
 	return w.s.moveReadiness(ctx, sc.OrganizationID, st, gates, ready, len(open))
+}
+
+// askDeferredTx keeps the conductor's promise of a deferred check: once
+// every open pull request is at the head dude recorded and its CI has
+// reported there (the head and checks items hold), the later phase the
+// check was deferred to has come, and the conductor is asked to keep it
+// (AskDeferredTx, once per attempt and heads). Each gate's deferred item
+// is read again after, so it says the conductor is asked.
+func askDeferredTx(ctx context.Context, tx pgx.Tx, org string, st *State, gates []PRGate) error {
+	if !st.conducted() || len(gates) == 0 {
+		return nil
+	}
+	heads := map[string]string{}
+	for _, g := range gates {
+		holds := map[string]bool{}
+		for _, it := range g.Items {
+			holds[it.Key] = it.OK
+		}
+		if g.Err != nil || !holds[ReadyHead] || !holds[ReadyChecks] {
+			return nil
+		}
+		if ok, judged := holds[ReadyDeferred]; ok || !judged {
+			// Nothing deferred outstanding here (every gate reads the same).
+			return nil
+		}
+		heads[g.Repo] = g.Head
+	}
+	asked, err := AskDeferredTx(ctx, tx, org, st.TaskID, st.Attempt, heads)
+	if err != nil || !asked {
+		return err
+	}
+	item, err := gateDeferredTx(ctx, tx, st.TaskID, st.Attempt, heads, true)
+	if err != nil {
+		return err
+	}
+	for i := range gates {
+		for j, it := range gates[i].Items {
+			if it.Key == ReadyDeferred {
+				gates[i].Items[j] = item
+			}
+		}
+	}
+	return nil
+}
+
+// deferredRejected escalates, for a person, the deferred checks the
+// conductor rejected once the pull request was open (DeferredRejectedTx):
+// checks_unverified, as a report held after the rounds, its retry not
+// offered (there is no writer's turn to send back). The gate's deferred
+// item holds the pull request in review until a person settles it.
+// escalated: it did, res the wait on that decision.
+func (w *steps) deferredRejected(ctx context.Context, sc workflow.StepContext, st *State) (res workflow.Result, escalated bool, err error) {
+	if st.Escalation != nil || !st.conducted() {
+		return res, false, nil
+	}
+	var detail map[string]any
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		detail, err = DeferredRejectedTx(ctx, tx, st.TaskID, st.Attempt)
+		return err
+	}); err != nil || detail == nil {
+		return res, false, err
+	}
+	res, err = w.escalate(ctx, sc, st, ReasonChecksUnverified, detail)
+	if e := st.Escalation; err == nil && e != nil {
+		// Decided, it goes back to waiting on the pull requests.
+		e.At, e.AtSignals = "awaitPullRequest", []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}
+	}
+	return res, err == nil, err
 }
 
 // onlyUnknownOrGrace says whether g fails on nothing but what no sync
@@ -3417,6 +3503,12 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 				_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Reason: why, Why: WhyPersonGate})
 				return err
 			})
+		}
+		if e.discharge() {
+			// Back to the pull requests, the gate weighed again at once:
+			// the waiver settles the deferred item.
+			st.reweighNow()
+			return st.reweighed(resumeEscalationAt(st, e)), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, why)
 		}
 		return resumeEscalationAt(st, e), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, status, why)
 	}
