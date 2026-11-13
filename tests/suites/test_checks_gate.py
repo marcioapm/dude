@@ -17,7 +17,7 @@ from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
 from env import TestEnvironment
-from helpers import ApiClient, sign_in, wait_until
+from helpers import ApiClient, query, sign_in, wait_until
 
 
 CHECKS_MODELS = {
@@ -300,3 +300,38 @@ def test_with_no_judgement_tier_the_conductor_still_decides_checks(client: ApiCl
     assert [e["payload"]["verified"] for e in events] == [False, False], events
     assert not any(e["payload"].get("skipped") for e in events), events
     assert not fake_github.pulls
+
+
+@pytest.mark.e2e
+def test_a_deferred_check_holds_ready_until_the_conductor_keeps_it(
+    client: ApiClient, env: TestEnvironment, fake_github: FakeGitHub
+):
+    """The trial of 2026-11-12/13: a check not run, deferred by the
+    conductor to a later phase, is asked about again once the pull request
+    is open and its CI has reported (none configured here). The ready gate's
+    deferred item holds the task in review until the conductor answers
+    backed, citing a completed dispatch; then it is ready to merge."""
+    _credential(client, fake_github)
+    assert client.patch("/v1/forge/settings", {"checksFixRounds": 0}).status_code == 200
+    task = _start(client, fake_github, "fake/checks-deferred")
+    _wait_pr(client, fake_github, task["id"])
+    asked = wait_until(lambda: query(env.owner_dsn, """SELECT run_id, payload->>'turn' AS turn FROM events
+        WHERE task_id = %s AND event_type = 'run.checks.asked' AND payload ? 'discharge'""", (task["id"],)),
+        timeout=90, message="the conductor was never asked again about the deferred check")
+    assert len(asked) == 1, asked
+    wakes = query(env.owner_dsn, "SELECT line FROM conductor_wakes WHERE task_id = %s AND key LIKE 'checks:%%:d%%'", (task["id"],))
+    assert len(wakes) == 1 and "keep the checks you deferred" in wakes[0]["line"], wakes
+    gate = wait_until(lambda: (g := query(env.owner_dsn, "SELECT ready_gate FROM pull_requests WHERE task_id = %s AND ready_gate IS NOT NULL",
+                                          (task["id"],))) and g[0]["ready_gate"], timeout=60, message="no gate stored")
+    deferred = next(it for it in gate["items"] if it["key"] == "deferred")
+    assert not deferred["ok"] and '"open the greeting page in a browser"' in deferred["detail"], deferred
+    assert client.get(f"/v1/tasks/{task['id']}").json()["status"] != "ready_to_merge"
+    decide = {"runId": asked[0]["run_id"], "turn": int(asked[0]["turn"]),
+              "checks": [{"command": "open the greeting page in a browser", "verdict": "backed",
+                          "reason": "dispatch wd_e2e (browser.yml on the branch) completed: success"}],
+              "missing": {"verdict": "none", "reason": "not asked"}}
+    resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": f"tool: decide_checks {json.dumps(decide)}"})
+    assert resp.status_code in (200, 201), resp.text
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "ready_to_merge", timeout=120,
+               message="the task never became ready once the deferred check was kept")
+    assert len(query(env.owner_dsn, "SELECT 1 FROM conductor_wakes WHERE task_id = %s AND key LIKE 'checks:%%:d%%'", (task["id"],))) == 1
