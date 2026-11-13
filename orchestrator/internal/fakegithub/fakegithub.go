@@ -275,19 +275,12 @@ const (
 	FirstRunID     int64 = 43_000_000_000
 	FirstJobID     int64 = 50_000_000_000
 	FirstCommentID int64 = 3_000_000_000
-	// Installation and repository ids as GitHub issues them now.
-	FirstInstallationID int64 = 60_000_000
-	FirstRepositoryID   int64 = 900_000_000
+	// A repository id as GitHub issues them now.
+	FirstRepositoryID int64 = 900_000_000
 )
-
-// RunID is the workflow run id a test names n: a real GitHub's magnitude.
-func RunID(n int64) int64 { return FirstRunID + n }
 
 // JobID is the job or check-run id a test names n.
 func JobID(n int64) int64 { return FirstJobID + n }
-
-// InstallationID is the App installation id a test names n.
-func InstallationID(n int64) int64 { return FirstInstallationID + n }
 
 // DefaultCheckRunID is the id of SetChecks("run:…")'s one check run when a
 // test sets none.
