@@ -206,6 +206,27 @@ func (g *GitHub) DismissReview(ctx context.Context, slug string, number int, rev
 	return reviewAnswer("dismiss", err)
 }
 
+// PostedComment is one line comment a review made.
+type PostedComment struct {
+	ID         int64
+	Path, Body string
+	URL        string
+}
+
+// ReviewComments is the line comments review reviewID made, in the order
+// it made them (GET /pulls/{n}/reviews/{id}/comments).
+func (g *GitHub) ReviewComments(ctx context.Context, slug string, number int, reviewID int64) ([]PostedComment, error) {
+	got, err := pages[ghComment](ctx, g, fmt.Sprintf("/repos/%s/pulls/%d/reviews/%d/comments", slug, number, reviewID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PostedComment, 0, len(got))
+	for _, c := range got {
+		out = append(out, PostedComment{ID: c.ID, Path: c.Path, Body: c.Body, URL: c.HTMLURL})
+	}
+	return out, nil
+}
+
 // FindOwnReview recovers a review whose answer was lost: the newest one by
 // dude's account (Login) whose body ends with ReviewMarker(taskID,
 // claimID). A person's review quoting the marker is not dude's, nor is one

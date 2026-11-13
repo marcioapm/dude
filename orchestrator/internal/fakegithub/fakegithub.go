@@ -729,6 +729,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/reviews", s.postReview)
 	mux.HandleFunc("PUT "+prefix+"/pulls/{n}/reviews/{id}/dismissals", s.dismissReview)
+	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews/{id}/comments", s.reviewComments)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", s.lineComments)
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.postComment)
 	mux.HandleFunc("PATCH "+prefix+"/issues/{n}", func(w http.ResponseWriter, r *http.Request) {
@@ -1349,6 +1350,25 @@ func (s *Server) lineComments(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	write(w, 200, s.commentsJSON(p, p.LineComments, "discussion_r"))
+}
+
+// reviewComments is GET /pulls/{n}/reviews/{id}/comments: the line
+// comments a review made, in the order it made them.
+func (s *Server) reviewComments(w http.ResponseWriter, r *http.Request) {
+	p := s.number(w, r)
+	if p == nil {
+		return
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var of []Comment
+	for _, c := range p.LineComments {
+		if c.ReviewID == id && c.InReplyTo == 0 {
+			of = append(of, c)
+		}
+	}
+	write(w, 200, s.commentsJSON(p, of, "discussion_r"))
 }
 
 func (s *Server) commentsJSON(p *Pull, comments []Comment, anchor string) []any {

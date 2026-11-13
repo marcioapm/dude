@@ -260,6 +260,9 @@ type verdictFinding struct {
 	Line                                                    int
 	Trivial                                                 bool
 	Introduced                                              *bool
+	// The inline comment an earlier review of dude's made for it, if one
+	// did: not repeated, listed as still open (design §6.4).
+	earlier *inlinePost
 }
 
 // blocks says the finding holds APPROVE back: at the fix bar, and not said
@@ -275,6 +278,13 @@ const maxInline = 20
 // §4.5): the headline at H, the lenses, every failing item, the findings
 // on the base ("Already on <base>"), a link. postReview adds the marker. Pure.
 func verdictReview(d verdictDecision, head, base string, lenses []string, findings []verdictFinding, link string) (string, []forge.ReviewComment) {
+	body, comments, _ := verdictReviewOf(d, head, base, lenses, findings, link)
+	return body, comments
+}
+
+// verdictReviewOf is verdictReview with, for each inline comment, the
+// finding it is for.
+func verdictReviewOf(d verdictDecision, head, base string, lenses []string, findings []verdictFinding, link string) (string, []forge.ReviewComment, []string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s**\n\nReviewed commit: `%s`", d.Headline, head)
 	if len(lenses) > 0 {
@@ -287,10 +297,19 @@ func verdictReview(d verdictDecision, head, base string, lenses []string, findin
 		}
 	}
 	var comments []forge.ReviewComment
-	var onBase []string
+	var ids []string
+	var onBase, stillOpen []string
 	for _, f := range findings {
 		if f.Introduced != nil && !*f.Introduced {
 			onBase = append(onBase, fmt.Sprintf("- %s (%s)%s", f.Title, f.Severity, where(f)))
+			continue
+		}
+		if e := f.earlier; e != nil {
+			line := fmt.Sprintf("- %s (%s)%s", f.Title, f.Severity, where(f))
+			if e.URL != "" {
+				line += ": " + e.URL
+			}
+			stillOpen = append(stillOpen, e.Head, line)
 			continue
 		}
 		text := "**" + f.Title + "** (" + f.Severity + ")"
@@ -307,6 +326,15 @@ func verdictReview(d verdictDecision, head, base string, lenses []string, findin
 			continue
 		}
 		comments = append(comments, forge.ReviewComment{Path: f.File, Line: f.Line, Body: text})
+		ids = append(ids, f.ID)
+	}
+	// Pairs of (head, line), grouped by the head the comment was made at.
+	for i, last := 0, ""; i < len(stillOpen); i += 2 {
+		if stillOpen[i] != last {
+			last = stillOpen[i]
+			fmt.Fprintf(&b, "\n\n**Still open from %s**", short(last))
+		}
+		b.WriteString("\n" + stillOpen[i+1])
 	}
 	if len(onBase) > 0 {
 		fmt.Fprintf(&b, "\n\n**Already on %s (not blocking)**\n%s", base, strings.Join(onBase, "\n"))
@@ -314,7 +342,7 @@ func verdictReview(d verdictDecision, head, base string, lenses []string, findin
 	if link != "" {
 		b.WriteString("\n\n" + link)
 	}
-	return b.String(), comments
+	return b.String(), comments, ids
 }
 
 func where(f verdictFinding) string {
@@ -500,8 +528,22 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		st.ReweighAt = &at
 		return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "waiting for CI at the reviewed head")
 	}
-	body, comments := verdictReview(d, head, base, lenses, findings, link)
-	posted, err := w.postReview(ctx, sc, st, gh, pr, head, d.Event, d.Reason, body, comments)
+	// A finding dude already commented on inline, still open, is listed in
+	// the body, not commented on again (design §6.4).
+	var earlier map[string]inlinePost
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
+		earlier, err = earlierPostsTx(ctx, tx, st.TaskID, prID)
+		return err
+	}); err != nil {
+		return workflow.Result{}, err
+	}
+	for i := range findings {
+		if p, ok := earlier[findings[i].ID]; ok {
+			findings[i].earlier = &p
+		}
+	}
+	body, comments, ids := verdictReviewOf(d, head, base, lenses, findings, link)
+	posted, err := w.postReview(ctx, sc, st, gh, pr, head, d.Event, d.Reason, body, comments, ids)
 	if r := (reviewRetry{}); errors.As(err, &r) {
 		_ = w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", r.Why)
 		return workflow.Result{Next: "verdict", State: st, SleepUntil: time.Now().Add(r.After)}, nil
@@ -512,6 +554,12 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	st.ReweighAt = nil
 	if posted != "" {
 		v.Posted = posted
+		// After the verdict, best effort: dude's threads in step, and an
+		// approval of dude's at another commit still standing dismissed.
+		w.syncThreads(ctx, sc, st, gh, pr, head)
+		if err := w.dismissApprovals(ctx, sc, st, gh, pr, head, "superseded"); err != nil {
+			return workflow.Result{}, err
+		}
 	}
 	if !transientReason(d.Reason) || posted == "" {
 		// Only an approval held back by CI at H (unrelated red CI, CI not
@@ -530,7 +578,7 @@ var reviewWord = map[string]string{forge.EventApprove: "approved", forge.EventRe
 // keeps the claim, and the step runs again after reviewRecoverDelay to
 // look for the review before anything is resubmitted.
 func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, pr PullRequestState,
-	head, event, reason, body string, comments []forge.ReviewComment) (string, error) {
+	head, event, reason, body string, comments []forge.ReviewComment, ids []string) (string, error) {
 	if gh == nil {
 		return "", fmt.Errorf("no forge credential to post the review with")
 	}
@@ -565,7 +613,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 			}
 			if ok {
 				v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
-				return event, w.submitted(ctx, sc, st, pr, base, found, true)
+				return event, w.submitted(ctx, sc, st, pr, base, found, true, w.reviewPosts(ctx, gh, pr, found.ID, comments, ids))
 			}
 			if v.LostSubmits > 0 && v.LostLookups+1 < len(reviewLookups) {
 				v.LostLookups++
@@ -600,7 +648,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 		switch {
 		case err == nil:
 			v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
-			return event, w.submitted(ctx, sc, st, pr, base, got, false)
+			return event, w.submitted(ctx, sc, st, pr, base, got, false, w.reviewPosts(ctx, gh, pr, got.ID, comments, ids))
 		case forge.OwnPullRequest(err) && event != forge.EventComment:
 			if err := w.s.Emit(ctx, org, st, EvReviewDowngraded, map[string]any{"claimId": claim, "pullRequestId": pr.ID,
 				"head": head, "from": event, "why": forge.RefusalOwnPullRequest}); err != nil {
@@ -627,11 +675,29 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 	return "", nil
 }
 
+// reviewPosts is the review's inline comments, each with the finding it
+// is for, read back from GitHub (the submit's answer has no comments).
+// Unreadable, none: the threads are then not kept in step.
+func (w *steps) reviewPosts(ctx context.Context, gh *forge.GitHub, pr PullRequestState, reviewID int64, comments []forge.ReviewComment, ids []string) []inlinePost {
+	if len(comments) == 0 {
+		return nil
+	}
+	got, err := gh.ReviewComments(ctx, pr.Slug, pr.Number, reviewID)
+	if err != nil {
+		slog.Warn("reading dude's review comments back failed", "pr", pr.ID, "review", reviewID, "error", err)
+		return nil
+	}
+	return postedComments(got, comments, ids)
+}
+
 // submitted records the review GitHub holds, then reads the pull request
 // back so its reviews show dude's.
 func (w *steps) submitted(ctx context.Context, sc workflow.StepContext, st *State, pr PullRequestState, base map[string]any,
-	got forge.SubmittedReview, recovered bool) error {
+	got forge.SubmittedReview, recovered bool, posts []inlinePost) error {
 	payload := map[string]any{"reviewId": got.ID, "url": got.URL}
+	if len(posts) > 0 {
+		payload["comments"] = posts
+	}
 	for k, v := range base {
 		payload[k] = v
 	}
@@ -741,7 +807,7 @@ func verdictFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo string) (
 // due at the head GitHub shows; everything else is context for the next
 // round (PR 5), and wakes nobody here.
 func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, error) {
-	ended, rerun := false, false
+	ended, rerun, recheck := false, false, false
 	for _, sig := range sc.Signals {
 		if sig.Name != SignalPRFeedback {
 			continue
@@ -753,6 +819,8 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 		switch {
 		case s.Kind == "terminal":
 			ended = true
+		case s.Kind == SignalKindRecheck:
+			recheck = true
 		case s.Kind == "ci_stuck":
 			if st.Verdict != nil {
 				st.Verdict.Stuck = true
@@ -795,6 +863,10 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 				if st.RoundDueAt != nil && st.RoundDueHead == pr.HeadSHA && !time.Now().Before(*st.RoundDueAt) {
 					return w.startRound(ctx, sc, st, pr)
 				}
+			} else if recheck && st.Verdict != nil && st.RoundDueAt == nil {
+				// The conductor withdrew a finding: the verdict again at the
+				// head reviewed, no new round (its claim names the event).
+				st.Verdict.Due, rerun = pr.HeadSHA, true
 			}
 		}
 	}

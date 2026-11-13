@@ -199,7 +199,11 @@ func (w *steps) dismissApprovals(ctx context.Context, sc workflow.StepContext, s
 	}
 	for _, a := range approvals {
 		payload := map[string]any{"pullRequestId": pr.ID, "reviewId": a.ID, "commitId": a.CommitID, "head": head, "why": why}
-		err := gh.DismissReview(ctx, pr.Slug, pr.Number, a.ID, fmt.Sprintf("Head moved to %s; re-reviewing.", short(head)))
+		msg := fmt.Sprintf("Head moved to %s; re-reviewing.", short(head))
+		if why != "head_moved" {
+			msg = fmt.Sprintf("Superseded by dude's review at %s.", short(head))
+		}
+		err := gh.DismissReview(ctx, pr.Slug, pr.Number, a.ID, msg)
 		switch {
 		case err == nil:
 			if err := w.s.Emit(ctx, sc.OrganizationID, st, EvReviewDismissed, payload); err != nil {

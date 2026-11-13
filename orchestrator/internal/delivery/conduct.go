@@ -834,8 +834,12 @@ func GateAnswer(ctx context.Context, tx pgx.Tx, st *State) (draft bool, err erro
 // ConductDismiss is dismiss_finding: an open finding of the task left as
 // it is, with the reason, as a person accepting it is.
 func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reason string) error {
-	if _, err := parked(ctx, tx, ref); err != nil {
+	if ok, err := reviewOnlyWaitingTx(ctx, tx, ref); err != nil {
 		return err
+	} else if !ok {
+		if _, err := parked(ctx, tx, ref); err != nil {
+			return err
+		}
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -862,7 +866,40 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 		map[string]any{"findingId": findingID, "status": "accepted", "note": note, "title": title, "by": "conductor"})); err != nil {
 		return err
 	}
+	if _, reviewOnly, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil {
+		return err
+	} else if reviewOnly {
+		// The verdict at the same head is weighed again (design §6.6): a
+		// withdrawal can turn REQUEST_CHANGES into APPROVE without a round.
+		d, err := ReadDelivery(ctx, tx, ref.TaskID)
+		if err != nil || d == nil || !d.Live() || d.Step != "awaitPullRequest" {
+			return err
+		}
+		return workflow.SignalTx(ctx, tx, ref.Org, d.WorkflowID, SignalPRFeedback, map[string]any{"kind": SignalKindRecheck}, "recheck:"+findingID)
+	}
 	return GateItemSettledTx(ctx, tx, ref.Org, ref.TaskID, "finding:"+findingID)
+}
+
+// SignalKindRecheck is a pull request feedback signal's kind for a
+// review-only task whose finding the conductor withdrew: its wait runs
+// the verdict again at the reviewed head.
+const SignalKindRecheck = "recheck"
+
+// reviewOnlyWaitingTx says the caller is the live conductor of a
+// review-only task waiting on its pull request after its verdict: there
+// it may withdraw a finding with no decision pending (design §6.6).
+func reviewOnlyWaitingTx(ctx context.Context, tx pgx.Tx, ref RunRef) (bool, error) {
+	if _, ok, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil || !ok {
+		return false, err
+	}
+	if err := liveConductor(ctx, tx, ref); err != nil {
+		return false, err
+	}
+	d, err := LoadDelivery(ctx, tx, ref.TaskID)
+	if err != nil {
+		return false, err
+	}
+	return d != nil && d.Live() && d.Step == "awaitPullRequest" && !Ended(d.TaskStatus), nil
 }
 
 // EvFindingResolved is a finding's status changed by hand: a person's, or
