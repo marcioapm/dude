@@ -37,15 +37,8 @@ func (w *world) findingThenVerdict(verdict func() string) (string, int, string) 
 		return fakelux.Behaviour{Reply: "```yaml\nverdicts:\n  F1: " + verdict() + "\n```\n"}
 	}
 	w.startDelivery(wi)
-	if w.lensesOnLux {
-		// On the fake lux, through the syncer: a later round can resume them.
-		w.until("changes requested at H1", func() bool {
-			w.sync()
-			return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 1 && w.waitingOnPR(wi)
-		})
-	} else {
-		w.agentsDone(wi, "changes requested at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 1 && w.waitingOnPR(wi) })
-	}
+	// On the fake lux, through the syncer: a later round can resume it.
+	w.until("changes requested at H1", func() bool { w.sync(); return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 1 && w.waitingOnPR(wi) })
 	if got := w.dudeReviews(wi, n); got[0].State != "CHANGES_REQUESTED" {
 		w.t.Fatalf("at H1: %+v", got)
 	}
@@ -145,7 +138,6 @@ func TestAStillOpenFindingIsListedNotRepeated(t *testing.T) {
 			w := newWorld(t)
 			w.reRounds(time.Second)
 			w.onModel("reviewer", "llm-review") // not scripted: lux keeps the prompt
-			w.lensesOnLux = true
 			if resume {
 				mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"resumeRounds":true}' WHERE id = $1`, w.project)
 			}

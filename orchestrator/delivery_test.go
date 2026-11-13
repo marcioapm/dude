@@ -105,24 +105,22 @@ type world struct {
 	// The orchestrator's API the world serves (api).
 	apiServer *api.Server
 	// dude's tools are served (withTools): its conductors can call them.
-	toolsOn bool
-	// findingThenVerdict's first round runs on the fake lux.
-	lensesOnLux bool
-	app         *db.DB
-	owner       *pgx.Conn
-	org         string
-	project     string
-	repoID      string
-	gh          *fakegithub.Server
-	web         *fakegithub.Server
-	apiRepo     *fakegithub.Server
-	marcioWeb   *fakegithub.Server
-	lux         *fakelux.Server
-	log         *slog.Logger
-	runtime     *workflow.Runtime
-	syncer      *phases.Syncer
-	artifacts   *phases.Artifacts
-	prs         *prs.Syncer
+	toolsOn   bool
+	app       *db.DB
+	owner     *pgx.Conn
+	org       string
+	project   string
+	repoID    string
+	gh        *fakegithub.Server
+	web       *fakegithub.Server
+	apiRepo   *fakegithub.Server
+	marcioWeb *fakegithub.Server
+	lux       *fakelux.Server
+	log       *slog.Logger
+	runtime   *workflow.Runtime
+	syncer    *phases.Syncer
+	artifacts *phases.Artifacts
+	prs       *prs.Syncer
 	// Branch previews, and a task's servers.
 	previews *servers.Previews
 	// The key servers requests are made as (do).
