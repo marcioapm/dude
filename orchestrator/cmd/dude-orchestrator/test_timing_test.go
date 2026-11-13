@@ -14,21 +14,24 @@ func TestTestConductorAnswerWait(t *testing.T) {
 	if delivery.ConductorAnswerWait != 10*time.Minute {
 		t.Fatal("production answer wait changed")
 	}
+	// DUDE_TEST_REVIEW_DEBOUNCE is parsed alike: a malformed value fails startup.
 	for _, tt := range []struct {
-		value string
-		want  time.Duration
-		bad   bool
+		key, value string
+		want       time.Duration
+		bad        bool
 	}{
-		{"", 0, false}, {"30s", 30 * time.Second, false},
-		{"0s", 0, true}, {"-1s", 0, true}, {"invalid", 0, true},
+		{"DUDE_TEST_CONDUCTOR_ANSWER_WAIT", "", 0, false}, {"DUDE_TEST_CONDUCTOR_ANSWER_WAIT", "30s", 30 * time.Second, false},
+		{"DUDE_TEST_CONDUCTOR_ANSWER_WAIT", "0s", 0, true}, {"DUDE_TEST_CONDUCTOR_ANSWER_WAIT", "-1s", 0, true},
+		{"DUDE_TEST_CONDUCTOR_ANSWER_WAIT", "invalid", 0, true}, {"DUDE_TEST_REVIEW_DEBOUNCE", "2s", 2 * time.Second, false},
+		{"DUDE_TEST_REVIEW_DEBOUNCE", "soon", 0, true},
 	} {
-		t.Run(tt.value, func(t *testing.T) {
-			got, err := testConductorAnswerWait(func(key string) string {
-				if key != "DUDE_TEST_CONDUCTOR_ANSWER_WAIT" {
+		t.Run(tt.key+"="+tt.value, func(t *testing.T) {
+			got, err := testClock(func(key string) string {
+				if key != tt.key {
 					t.Fatalf("unexpected key %s", key)
 				}
 				return tt.value
-			})
+			}, tt.key)
 			if got != tt.want || (err != nil) != tt.bad {
 				t.Fatalf("got %s, %v; want %s, error=%v", got, err, tt.want, tt.bad)
 			}
@@ -55,21 +58,5 @@ func TestRunAppliesTheTestWaits(t *testing.T) {
 	}
 	if n := strings.Count(string(src), "withTestWaits(syncer, answerWait)"); n != 1 {
 		t.Fatalf("run applies the test waits %d times, want once", n)
-	}
-}
-
-// DUDE_TEST_REVIEW_DEBOUNCE is parsed as DUDE_TEST_CONDUCTOR_ANSWER_WAIT:
-// a malformed value fails startup.
-func TestTestReviewDebounce(t *testing.T) {
-	for value, want := range map[string]time.Duration{"": 0, "2s": 2 * time.Second, "0s": -1, "soon": -1} {
-		got, err := testClock(func(key string) string {
-			if key != "DUDE_TEST_REVIEW_DEBOUNCE" {
-				t.Fatalf("unexpected key %s", key)
-			}
-			return value
-		}, "DUDE_TEST_REVIEW_DEBOUNCE")
-		if want < 0 && err == nil || want >= 0 && (err != nil || got != want) {
-			t.Errorf("%q: got %s, %v", value, got, err)
-		}
 	}
 }

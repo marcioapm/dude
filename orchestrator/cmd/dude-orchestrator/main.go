@@ -107,16 +107,12 @@ func deliveryStore(database *db.DB, agent phases.AgentConfig, log *slog.Logger) 
 	return &delivery.Store{DB: database, ToolsService: agent.ToolsService, RunTimeLimit: limit}
 }
 
-// testConductorAnswerWait is an opt-in process-start test clock, deliberately
-// outside the runtime configuration schema and project settings. Zero leaves
-// Syncer's production defaults (delivery.ConductorAnswerWait, for both
-// ConductorAnswerWait and HeldAskWait) unchanged; run gives it to both.
-func testConductorAnswerWait(getenv func(string) string) (time.Duration, error) {
-	return testClock(getenv, "DUDE_TEST_CONDUCTOR_ANSWER_WAIT")
-}
-
-// testClock is the opt-in test clock key names: zero when unset, and an
-// error that fails startup unless it is a positive Go duration.
+// testClock is an opt-in process-start test clock, deliberately outside the
+// runtime configuration schema and project settings: zero when key is unset,
+// and an error that fails startup unless it is a positive Go duration. Zero
+// DUDE_TEST_CONDUCTOR_ANSWER_WAIT leaves Syncer's production defaults
+// (delivery.ConductorAnswerWait, for both ConductorAnswerWait and
+// HeldAskWait) unchanged; run gives it to both.
 func testClock(getenv func(string) string, key string) (time.Duration, error) {
 	value := getenv(key)
 	if value == "" {
@@ -157,7 +153,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	answerWait, err := testConductorAnswerWait(os.Getenv)
+	answerWait, err := testClock(os.Getenv, "DUDE_TEST_CONDUCTOR_ANSWER_WAIT")
 	if err != nil {
 		return err
 	}
