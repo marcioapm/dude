@@ -275,16 +275,10 @@ func (f verdictFinding) blocks() bool {
 // maxInline bounds the review's inline comments; the rest go in its body.
 const maxInline = 20
 
-// verdictReview is the review's body and inline comments for d (design
-// §4.5): the headline at H, the lenses, every failing item, the findings
-// on the base ("Already on <base>"), a link. postReview adds the marker. Pure.
-func verdictReview(d verdictDecision, head, base string, lenses []string, findings []verdictFinding, link string) (string, []forge.ReviewComment) {
-	body, comments, _ := verdictReviewOf(d, head, base, lenses, findings, link)
-	return body, comments
-}
-
-// verdictReviewOf is verdictReview with, for each inline comment, the
-// finding it is for.
+// verdictReviewOf is the review's body and inline comments for d (design
+// §4.5), with the finding each inline comment is for: the headline at H,
+// the lenses, every failing item, the findings on the base ("Already on
+// <base>"), a link. postReview adds the marker. Pure.
 func verdictReviewOf(d verdictDecision, head, base string, lenses []string, findings []verdictFinding, link string) (string, []forge.ReviewComment, []string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s**\n\nReviewed commit: `%s`", d.Headline, head)

@@ -96,7 +96,7 @@ func TestDecideVerdictCoversEveryRow(t *testing.T) {
 // ones inline when they name a line; non-blocking ones marked nits.
 func TestVerdictReviewPlacesFindings(t *testing.T) {
 	no, yes := false, true
-	body, inline := verdictReview(verdictDecision{Headline: "Changes requested"}, "a8f3e1c0ffee", "main", []string{"correctness"},
+	body, inline, _ := verdictReviewOf(verdictDecision{Headline: "Changes requested"}, "a8f3e1c0ffee", "main", []string{"correctness"},
 		[]verdictFinding{
 			{Title: "Off by one", Severity: "high", File: "a.go", Line: 3, Introduced: &yes},
 			{Title: "Old typo", Severity: "medium", File: "b.go", Line: 9, Introduced: &no},
