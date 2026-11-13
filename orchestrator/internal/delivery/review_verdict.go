@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -674,29 +675,43 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 	return "", nil
 }
 
-// reviewPosts is the review's inline comments, each with the finding it
-// is for, read back from GitHub (the submit's answer has no comments).
-// Unreadable, none: the threads are then not kept in step.
-func (w *steps) reviewPosts(ctx context.Context, gh *forge.GitHub, pr PullRequestState, reviewID int64, comments []forge.ReviewComment, ids []string) []inlinePost {
+// reviewPosts is review_submitted's record of the review's inline
+// comments read back from GitHub (the submit's answer has none):
+// "comments", each with the finding it is for, and "unmatched", the
+// findings whose comment was not found (all of them when unreadable),
+// whose threads are then not kept in step.
+func (w *steps) reviewPosts(ctx context.Context, gh *forge.GitHub, pr PullRequestState, reviewID int64, comments []forge.ReviewComment, ids []string) map[string]any {
 	if len(comments) == 0 {
 		return nil
 	}
 	got, err := gh.ReviewComments(ctx, pr.Slug, pr.Number, reviewID)
 	if err != nil {
 		slog.Warn("reading dude's review comments back failed", "pr", pr.ID, "review", reviewID, "error", err)
-		return nil
 	}
-	return postedComments(got, comments, ids)
+	return postedRecord(postedComments(got, comments, ids), ids)
+}
+
+// postedRecord is review_submitted's comments and unmatched for posts,
+// the matched comments of the findings ids.
+func postedRecord(posts []inlinePost, ids []string) map[string]any {
+	out := map[string]any{}
+	if len(posts) > 0 {
+		out["comments"] = posts
+	}
+	if unmatched := slices.DeleteFunc(slices.Clone(ids), func(id string) bool {
+		return slices.ContainsFunc(posts, func(p inlinePost) bool { return p.FindingID == id })
+	}); len(unmatched) > 0 {
+		out["unmatched"] = unmatched
+	}
+	return out
 }
 
 // submitted records the review GitHub holds, then reads the pull request
 // back so its reviews show dude's.
 func (w *steps) submitted(ctx context.Context, sc workflow.StepContext, st *State, pr PullRequestState, base map[string]any,
-	got forge.SubmittedReview, recovered bool, posts []inlinePost) error {
+	got forge.SubmittedReview, recovered bool, posts map[string]any) error {
 	payload := map[string]any{"reviewId": got.ID, "url": got.URL}
-	if len(posts) > 0 {
-		payload["comments"] = posts
-	}
+	maps.Copy(payload, posts)
 	for k, v := range base {
 		payload[k] = v
 	}

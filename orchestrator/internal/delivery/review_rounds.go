@@ -70,17 +70,22 @@ func (w *steps) newHead(ctx context.Context, sc workflow.StepContext, st *State,
 		return nil
 	}
 	if why, payload, err := w.roundsBound(ctx, sc, st, settings); err != nil || why != "" {
-		if err != nil || st.RoundsStopped == why {
-			return err
-		}
-		st.RoundsStopped, st.RoundDueAt, st.RoundDueHead = why, nil, ""
-		payload["pullRequestId"], payload["head"], payload["why"] = pr.ID, head, why
-		if err := w.s.Emit(ctx, sc.OrganizationID, st, EvReviewRoundsStopped, payload); err != nil {
+		if err != nil {
 			return err
 		}
 		line := fmt.Sprintf("dude stopped re-reviewing after %d rounds; re-request to continue", st.Round)
 		if why == "cost" {
 			line = fmt.Sprintf("dude stopped re-reviewing: this review reached its cost cap after %d rounds; re-request to continue", st.Round)
+		}
+		if st.RoundsStopped == why {
+			// Unchanged, no edit (its hash); a refusal since is named.
+			w.statusComment(ctx, sc, st, pr, line)
+			return nil
+		}
+		st.RoundsStopped, st.RoundDueAt, st.RoundDueHead = why, nil, ""
+		payload["pullRequestId"], payload["head"], payload["why"] = pr.ID, head, why
+		if err := w.s.Emit(ctx, sc.OrganizationID, st, EvReviewRoundsStopped, payload); err != nil {
+			return err
 		}
 		w.statusComment(ctx, sc, st, pr, line)
 		return nil

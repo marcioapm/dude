@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 )
 
@@ -71,53 +72,54 @@ func TestAForcePushIsReviewedWholeAndFresh(t *testing.T) {
 	}
 }
 
-// Bounds: with maxReviewRounds 2, the third push starts no round, and the
-// status comment says so; the task keeps waiting.
-func TestTheRoundsBoundStopsReReviewing(t *testing.T) {
-	w := newWorld(t)
-	w.reRounds(500 * time.Millisecond)
-	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"maxReviewRounds":2}' WHERE organization_id = $1`, w.org)
-	wi, n, _ := w.approvedAtH1()
-	h2 := w.push("second.md")
-	w.agentsDone(wi, "reviewed H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
-	runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, wi)
-	w.push("third.md")
-	w.until("stopped", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewRoundsStopped) == 1 })
-	time.Sleep(time.Second)
-	w.sync()
-	w.advanced()
-	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, wi); r != runs {
-		t.Fatalf("%d Runs after the bound", r-runs)
-	}
-	if c := w.verdictComments(wi, n); len(c) != 1 || !strings.Contains(c[0].Body, "dude stopped re-reviewing after 2 rounds; re-request to continue") {
-		t.Fatalf("status comment %+v", c)
-	}
-	if s := w.taskStatus(wi); s != "review" || !w.waitingOnPR(wi) {
-		t.Fatalf("the task is %s: the bound must not end it", s)
-	}
-	// Still stale-approval safe past the bound.
-	if e := w.events(wi, delivery.EvReviewDismissed); e != 2 {
-		t.Fatalf("%d dismissals, want H1's and H2's", e)
-	}
-}
-
-// Bounds: the attempt's Runs at the cost cap: no round on a push.
-func TestTheCostCapStopsReReviewing(t *testing.T) {
-	w := newWorld(t)
-	w.reRounds(500 * time.Millisecond)
-	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"reviewCostCap":1.5}' WHERE organization_id = $1`, w.org)
-	wi, n, _ := w.approvedAtH1()
-	mustExec(t, w.owner, `UPDATE runs SET agent_cost_usd = 2 WHERE task_id = $1 AND phase = 'review'`, wi)
-	runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, wi)
-	w.push("second.md")
-	w.until("stopped", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewRoundsStopped) == 1 })
-	time.Sleep(time.Second)
-	w.advanced()
-	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, wi); r != runs {
-		t.Fatalf("%d Runs past the cost cap", r-runs)
-	}
-	if c := w.verdictComments(wi, n); len(c) != 1 || !strings.Contains(c[0].Body, "cost cap") {
-		t.Fatalf("status comment %+v", c)
+// Bounds: past maxReviewRounds (2: the third push), or with the attempt's
+// Runs at the cost cap, a push starts no round, and the status comment
+// says so; the task keeps waiting, and stale approvals still go. In the
+// cost row H1's dismissal fails transiently, then GitHub refuses it at a
+// later push: the stopped status comment then names the refusal.
+func TestABoundStopsReReviewing(t *testing.T) {
+	for _, tc := range []struct{ name, settings, line string }{
+		{"rounds", `{"maxReviewRounds":2}`, "dude stopped re-reviewing after 2 rounds; re-request to continue"},
+		{"cost", `{"reviewCostCap":1.5}`, "dude stopped re-reviewing: this review reached its cost cap after 1 rounds; re-request to continue"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.reRounds(500 * time.Millisecond)
+			mustExec(t, w.owner, `UPDATE forge_credentials SET settings = $2 WHERE organization_id = $1`, w.org, tc.settings)
+			wi, n, h1 := w.approvedAtH1()
+			if tc.name == "rounds" {
+				h2 := w.push("second.md")
+				w.agentsDone(wi, "reviewed H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
+			} else {
+				mustExec(t, w.owner, `UPDATE runs SET agent_cost_usd = 2 WHERE task_id = $1 AND phase = 'review'`, wi)
+				w.gh.Set(func(s *fakegithub.Server) { s.DismissFail5xx = 1 })
+			}
+			runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, wi)
+			w.push("third.md")
+			w.until("stopped", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewRoundsStopped) == 1 })
+			if tc.name == "cost" {
+				// Refused once the rounds are stopped: named all the same.
+				w.gh.Set(func(s *fakegithub.Server) { s.RefuseDismissal = true })
+				w.push("fourth.md")
+				w.until("refused", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewDismissRefused) == 1 })
+				tc.line += "\n\nCould not dismiss the approval at " + h1[:7]
+			}
+			time.Sleep(time.Second)
+			w.sync()
+			w.advanced()
+			if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, wi); r != runs {
+				t.Fatalf("%d Runs after the bound", r-runs)
+			}
+			if c := w.verdictComments(wi, n); len(c) != 1 || !strings.Contains(c[0].Body, tc.line) {
+				t.Fatalf("status comment %+v", c)
+			}
+			if s := w.taskStatus(wi); s != "review" || !w.waitingOnPR(wi) {
+				t.Fatalf("the task is %s: the bound must not end it", s)
+			}
+			if e := w.events(wi, delivery.EvReviewDismissed); tc.name == "rounds" && e != 2 {
+				t.Fatalf("%d dismissals, want H1's and H2's", e)
+			}
+		})
 	}
 }
 

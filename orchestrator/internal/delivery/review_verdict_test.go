@@ -127,3 +127,17 @@ func TestWithdrawnNote(t *testing.T) {
 		}
 	}
 }
+
+// An inline comment not found in GitHub's read-back is named on
+// review_submitted (unmatched), not dropped silently.
+func TestAnUnmatchedInlineCommentIsRecorded(t *testing.T) {
+	comments := []forge.ReviewComment{{Path: "a.go", Body: "A"}, {Path: "b.go", Body: "B"}}
+	got := []forge.PostedComment{{ID: 7, Path: "a.go", Body: "A\n"}, {ID: 8, Path: "b.go", Body: "B, edited"}}
+	rec := postedRecord(postedComments(got, comments, []string{"f1", "f2"}), []string{"f1", "f2"})
+	if p, _ := rec["comments"].([]inlinePost); len(p) != 1 || p[0].FindingID != "f1" || p[0].CommentID != 7 {
+		t.Errorf("comments %+v", rec["comments"])
+	}
+	if u, _ := rec["unmatched"].([]string); len(u) != 1 || u[0] != "f2" {
+		t.Errorf("unmatched %+v", rec["unmatched"])
+	}
+}
