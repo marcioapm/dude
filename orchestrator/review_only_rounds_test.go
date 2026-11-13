@@ -53,7 +53,8 @@ func reviewsAt(rs []fakegithub.Review, head string) []fakegithub.Review {
 func TestAnAuthorsPushDismissesTheApprovalAndReReviews(t *testing.T) {
 	w := newWorld(t)
 	w.reRounds(2 * time.Second)
-	wi, n, h1 := w.approvedAtH1()
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"resumeRounds":true}' WHERE id = $1`, w.project)
+	wi, n, _ := w.approvedAtH1()
 	h2 := w.push("second.md")
 	w.until("the approval at H1 dismissed", func() bool {
 		w.advanced()
@@ -72,8 +73,9 @@ func TestAnAuthorsPushDismissesTheApprovalAndReReviews(t *testing.T) {
 	if got := reviewsAt(w.dudeReviews(wi, n), h2); got[0].State != "APPROVED" {
 		t.Fatalf("at H2: %+v", got)
 	}
-	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2`, wi, h2); r == 0 {
-		t.Fatal("no lens reviewed H2")
+	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2
+		AND continues_run_id IS NOT NULL`, wi, h2); r == 0 {
+		t.Fatal("no lens went on from its round at H1")
 	}
 	if e := w.events(wi, delivery.EvReviewRoundStarted); e != 1 {
 		t.Fatalf("%d rounds started, want 1", e)
@@ -97,7 +99,6 @@ func TestAnAuthorsPushDismissesTheApprovalAndReReviews(t *testing.T) {
 	if c := w.writers(wi); c != 0 {
 		t.Fatalf("%d writers", c)
 	}
-	_ = h1
 }
 
 // Decision 3: GitHub refuses the dismissal (branch protection). Recorded

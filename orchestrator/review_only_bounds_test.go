@@ -52,7 +52,7 @@ func TestAForcePushIsReviewedWholeAndFresh(t *testing.T) {
 	w := newWorld(t)
 	w.reRounds(time.Second)
 	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"resumeRounds":true}' WHERE id = $1`, w.project)
-	wi, n, h1 := w.approvedAtH1()
+	wi, n, _ := w.approvedAtH1()
 	// Rewritten from main: H1 is no ancestor of the new head.
 	if err := w.gh.DeleteBranch("feature/greet"); err != nil {
 		t.Fatal(err)
@@ -68,21 +68,6 @@ func TestAForcePushIsReviewedWholeAndFresh(t *testing.T) {
 	if e := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'fresh' = 'true'`,
 		wi, delivery.EvReviewRoundStarted); e != 1 {
 		t.Fatalf("the round at the rewrite is not fresh (%d)", e)
-	}
-	_ = h1
-}
-
-// A small push with rounds resuming: the lens goes on from its last round.
-func TestASmallPushResumesTheLenses(t *testing.T) {
-	w := newWorld(t)
-	w.reRounds(time.Second)
-	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"resumeRounds":true}' WHERE id = $1`, w.project)
-	wi, n, _ := w.approvedAtH1()
-	h2 := w.push("second.md")
-	w.agentsDone(wi, "approved at H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
-	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2
-		AND continues_run_id IS NOT NULL`, wi, h2); r == 0 {
-		t.Fatal("no lens went on from its round at H1")
 	}
 }
 
