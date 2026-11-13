@@ -70,59 +70,50 @@ func repliesTo(p *fakegithub.Pull, id int64) []fakegithub.Comment {
 	return out
 }
 
-// A finding fixed at H2: dude's thread on it gets "Fixed at <H2>." and is
-// resolved, and the verdict at H2 approves; replayed, nothing is posted
-// again. A thread a person resolved is left alone. A thread read that
-// fails never holds the verdict, and is recorded once, not retried at
-// the next verdict.
+// A finding fixed at H2, after each later verdict (H2's, then H3's):
+// dude's thread on it has the one reply it should and is resolved as it
+// should be. Fixed, "Fixed at <H2>." and resolved, never posted again; a
+// thread a person resolved is left alone; a thread read that fails never
+// holds the verdict, is recorded once, and is not retried at H3's.
 func TestDudesThreadsAfterAFix(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		setup func(s *fakegithub.Server, root int64)
-		check func(w *world, wi string, n int, root fakegithub.Comment, h2 string)
+		name     string
+		threads  int  // ThreadsStatus until H2's verdict
+		resolved bool // by a person before the push
+		reply    bool // dude's "Fixed at <H2>."
+		failures int
 	}{
-		{"fixed", nil, func(w *world, wi string, n int, root fakegithub.Comment, h2 string) {
-			r := repliesTo(w.gh.Pull(n), root.ID)
-			if len(r) != 1 || r[0].Body != "Fixed at "+h2[:7]+"." || !w.gh.ResolvedThreads[w.gh.ThreadID(root.ID)] {
-				w.t.Fatalf("dude's thread on the fixed finding: replies %+v, resolved %v", r, w.gh.ResolvedThreads)
-			}
-			w.sync()
-			w.advanced()
-			if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 1 {
-				w.t.Fatalf("%d replies after replay", len(r))
-			}
-		}},
-		{"resolved by a person", func(s *fakegithub.Server, root int64) {
-			s.ResolvedThreads = map[string]bool{s.ThreadID(root): true}
-		}, func(w *world, wi string, n int, root fakegithub.Comment, h2 string) {
-			if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 0 {
-				w.t.Fatalf("dude answered in a thread a person resolved: %+v", r)
-			}
-		}},
-		{"sync failure", func(s *fakegithub.Server, root int64) { s.ThreadsStatus = 502 },
-			func(w *world, wi string, n int, root fakegithub.Comment, h2 string) {
-				w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 0 })
-				h3 := w.push("third.md")
-				w.agentsDone(wi, "reviewed H3", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h3)) == 1 && w.waitingOnPR(wi) })
-				if e, r := w.events(wi, delivery.EvReviewThreadSyncFailed), repliesTo(w.gh.Pull(n), root.ID); e != 1 || len(r) != 0 {
-					w.t.Fatalf("%d thread sync failures recorded, want 1; replies %+v", e, r)
-				}
-			}},
+		{"fixed", 0, false, true, 0},
+		{"resolved by a person", 0, true, false, 0},
+		{"sync failure", 502, false, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
 			w.reRounds(time.Second)
 			wi, n, _ := w.findingThenVerdict(func() string { return "fixed" })
 			root := w.dudeLineComments(n)[0]
-			if tc.setup != nil {
-				w.gh.Set(func(s *fakegithub.Server) { tc.setup(s, root.ID) })
-			}
+			thread := w.gh.ThreadID(root.ID)
+			w.gh.Set(func(s *fakegithub.Server) {
+				s.ThreadsStatus, s.ResolvedThreads = tc.threads, map[string]bool{thread: tc.resolved}
+			})
 			h2 := w.push("polite.md")
 			w.agentsDone(wi, "approved at H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
 			if got := reviewsAt(w.dudeReviews(wi, n), h2); got[0].State != "APPROVED" {
 				t.Fatalf("at H2: %+v", got)
 			}
-			tc.check(w, wi, n, root, h2)
+			w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 0 })
+			h3 := w.push("third.md")
+			w.agentsDone(wi, "reviewed H3", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h3)) == 1 && w.waitingOnPR(wi) })
+			r := repliesTo(w.gh.Pull(n), root.ID)
+			if tc.reply != (len(r) == 1 && r[0].Body == "Fixed at "+h2[:7]+".") || !tc.reply && len(r) != 0 || len(r) > 1 {
+				t.Fatalf("replies in dude's thread: %+v", r)
+			}
+			if w.gh.ResolvedThreads[thread] != (tc.reply || tc.resolved) {
+				t.Fatalf("thread resolved: %v", w.gh.ResolvedThreads[thread])
+			}
+			if e := w.events(wi, delivery.EvReviewThreadSyncFailed); e != tc.failures {
+				t.Fatalf("%d thread sync failures recorded, want %d", e, tc.failures)
+			}
 		})
 	}
 }
