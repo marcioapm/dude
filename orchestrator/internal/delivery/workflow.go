@@ -3396,6 +3396,50 @@ func (w *steps) escalationWaitTx(ctx context.Context, tx pgx.Tx, st *State) (wor
 	return res, nil
 }
 
+// dischargeKept settles an open, undecided discharge escalation whose
+// cause is gone: every deferred check is kept at the pull requests' heads
+// now (dischargeKeptTx), as a backed answer after the ask's deadline
+// keeps it. Recorded as the escalation withdrawn by dude (task.decided,
+// resolved, saying why), the conductor's questions about it closed; back
+// to the pull requests, the gate weighed again at once. Level-triggered:
+// read on every wake of decide, whoever holds the escalation.
+func (w *steps) dischargeKept(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, bool, error) {
+	if e := st.Escalation; e == nil || e.Decided != nil || !e.discharge() {
+		return workflow.Result{}, false, nil
+	}
+	var e *Escalation
+	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+		// Under the delivery's lock, as every decision: a person's waiver
+		// committed meanwhile is not withdrawn after it.
+		_, current, err := LockEscalationTx(ctx, tx, st.TaskID)
+		if err != nil {
+			return err
+		}
+		if current != nil && current.WorkflowID == sc.WorkflowRunID && current.State.Escalation != nil {
+			*st = current.State
+		}
+		open := st.Escalation
+		if open == nil || open.Decided != nil || !open.discharge() {
+			return nil
+		}
+		kept, why, err := dischargeKeptTx(ctx, tx, st.TaskID)
+		if err != nil || !kept {
+			return err
+		}
+		if err := withdrawEscalationTx(ctx, tx, sc, st, open, ActionResolved, "dude", why); err != nil {
+			return err
+		}
+		e = open
+		_, err = SetTaskStatusTx(ctx, tx, sc.OrganizationID, st.ProjectID, st.TaskID, "", "review", "the conductor kept the deferred checks")
+		return err
+	}); err != nil || e == nil {
+		return workflow.Result{}, false, err
+	}
+	st.Escalation = nil
+	st.reweighNow()
+	return st.reweighed(resumeEscalationAt(st, e)), true, nil
+}
+
 // decide carries out a decision on an escalation, or hands an unanswered
 // conductor-held item to the person once its deadline or availability fails.
 func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.Result, error) {
@@ -3405,6 +3449,9 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 	}
 	// The decision is on the escalation, taken with the request; the signal
 	// only wakes this step to carry it out.
+	if res, settled, err := w.dischargeKept(ctx, sc, st); err != nil || settled {
+		return res, err
+	}
 	if st.Escalation == nil || st.Escalation.Decided == nil {
 		var waiting workflow.Result
 		if e := st.Escalation; e != nil && e.HeldBy() == HolderConductor {

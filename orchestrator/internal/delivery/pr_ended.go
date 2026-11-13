@@ -197,7 +197,8 @@ func (w *steps) endLoop(ctx context.Context, sc workflow.StepContext, st *State,
 			}
 		}
 		if d != nil && d.WorkflowID == sc.WorkflowRunID && d.State.Escalation != nil && d.State.Escalation.Decided == nil {
-			return withdrawEscalationTx(ctx, tx, sc, st, d.State.Escalation, action, why)
+			return withdrawEscalationTx(ctx, tx, sc, st, d.State.Escalation, action, "forge",
+				"Withdrawn: "+why+" on GitHub, which ends the delivery.")
 		}
 		return nil
 	}); err != nil {
@@ -221,20 +222,20 @@ func (w *steps) endLoop(ctx context.Context, sc workflow.StepContext, st *State,
 
 // withdrawEscalationTx records that the escalation waits on nobody now, as
 // ChecksFinishedTx records one the checks settled: decided by the system
-// (task.decided, which ends the banner), the conductor's questions about it
-// closed, a failed Run kept to resume let go.
-func withdrawEscalationTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, e *Escalation, action, why string) error {
+// (task.decided by actorID, with note, which ends the banner), the
+// conductor's questions about it closed, a failed Run kept to resume let
+// go.
+func withdrawEscalationTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, e *Escalation, action, actorID, note string) error {
 	if err := closeEscalationQuestionsTx(ctx, tx, sc.OrganizationID, st.ProjectID, st.TaskID,
 		EscalationKey(sc.WorkflowRunID, st.Escalations),
-		EscalationDecision{Action: action, ActorType: ledger.ActorSystem, ActorID: "forge"}, false, ""); err != nil {
+		EscalationDecision{Action: action, ActorType: ledger.ActorSystem, ActorID: actorID}, false, ""); err != nil {
 		return err
 	}
 	if err := ReleaseKeptTx(ctx, tx, st.TaskID); err != nil {
 		return err
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvTaskDecided, OrganizationID: sc.OrganizationID, ProjectID: st.ProjectID,
-		TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: "forge", Source: ledger.SourceOrchestrator,
-		CorrelationID: st.TaskID, Payload: map[string]any{"reason": e.Reason, "action": action,
-			"note": "Withdrawn: " + why + " on GitHub, which ends the delivery."}})
+		TaskID: st.TaskID, ActorType: ledger.ActorSystem, ActorID: actorID, Source: ledger.SourceOrchestrator,
+		CorrelationID: st.TaskID, Payload: map[string]any{"reason": e.Reason, "action": action, "note": note}})
 	return err
 }

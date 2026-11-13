@@ -344,7 +344,7 @@ def test_a_deferred_check_holds_ready_until_the_conductor_keeps_it(
         f"then answer with decide_checks (runId {run}, turn {turn}, ask {key}), one verdict per check in this order. Deferred is no verdict now: "
         "backed, with a reason citing the evidence at these heads (a dispatch id and its outcome, a verify result, or the pull request's CI at this head), "
         "or reject; missing is not asked again (give none). The ask names these heads: if they move, a new wake asks again, and an answer to this one is refused. "
-        "The pull request is not ready until you answer, and unanswered by the deadline it goes to a person. "
+        "The pull request is not ready until you answer. You have 10 min: unanswered by then, a person is asked to settle it; a later answer still counts if it is backed at these heads while the pull requests are at them. "
         "\"gh workflow run bench.yml\" deferred (Deliver's defaults: not-run): kept (backed) or reject?"], wakes
     # Weighed at least twice more (a check going pending, then green, is a
     # move each sync signals): still not ready, and never was.

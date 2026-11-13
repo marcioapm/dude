@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // A deferred check is a promise: the conductor passed a check not run
@@ -421,10 +422,10 @@ func deferredWakeLine(anchor deferredCheck, asked ChecksAsked) string {
 		heads = append(heads, repo+" at "+short(asked.Discharge.Heads[repo]))
 	}
 	return render(checksDeferredWake, struct {
-		RunID, Heads, Ask string
-		Turn              int64
-		Checks            []check
-	}{anchor.RunID, strings.Join(heads, ", "), asked.Discharge.Key, anchor.Turn, checks})
+		RunID, Heads, Ask, Wait string
+		Turn                    int64
+		Checks                  []check
+	}{anchor.RunID, strings.Join(heads, ", "), asked.Discharge.Key, ChecksWaitWords(), anchor.Turn, checks})
 }
 
 // openDischargeTx is the newest second ask about runID's turn the
@@ -496,7 +497,48 @@ func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChe
 	if err := tx.QueryRow(ctx, `SELECT max(cursor) FROM events WHERE run_id = $1 AND event_type = 'run.checks.conducted'`, in.RunID).Scan(&cursor); err != nil {
 		return 0, err
 	}
+	// A late answer still counts: a discharge escalation raised at the
+	// ask's deadline is weighed again at once (decide, dischargeKeptTx),
+	// and settled if nothing is left for a person.
+	d, err := ReadDelivery(ctx, tx, ref.TaskID)
+	if err != nil {
+		return 0, err
+	}
+	if waitsAtDecide(d) && d.State.Escalation.discharge() {
+		if err := workflow.SignalTx(ctx, tx, ref.Org, d.WorkflowID, SignalHumanDecision, nil, fmt.Sprintf("deferred:%d", cursor)); err != nil {
+			return 0, err
+		}
+	}
 	return cursor, GateItemSettledTx(ctx, tx, ref.Org, ref.TaskID, fmt.Sprintf("deferred:%d", cursor))
+}
+
+// dischargeKeptTx says the open discharge escalation needs no person any
+// more: read from the stored gate facts as the weigh reads them, every
+// deferred check of the attempt is kept at the open pull requests' heads
+// (a backed answer there, however late). why says so, for the record.
+func dischargeKeptTx(ctx context.Context, tx pgx.Tx, taskID string) (kept bool, why string, err error) {
+	c, err := CheckReadyGateTx(ctx, tx, taskID, nil)
+	if err != nil || c.deferred == nil || len(c.PRs) == 0 {
+		return false, "", err
+	}
+	id := headsID(gateHeads(c.PRs))
+	if len(c.deferred.outstanding(id)) > 0 {
+		return false, "", nil
+	}
+	if len(c.deferred.checks) == 0 {
+		return true, "Resolved: no deferred check is outstanding any more (a later turn ran it and the checks gate passed it), so no person need settle it.", nil
+	}
+	return true, fmt.Sprintf("Resolved by the conductor's answer: every deferred check (%s) is kept at the pull requests' heads, so no person need settle it.",
+		strings.Join(deferredCommands(c.deferred.checks), ", ")), nil
+}
+
+// deferredCommands are the checks' commands, quoted.
+func deferredCommands(checks []deferredCheck) []string {
+	out := make([]string, len(checks))
+	for i, c := range checks {
+		out[i] = fmt.Sprintf("%q", clip(oneLine(c.Command), escalatedItemMax))
+	}
+	return out
 }
 
 // deferredEscalation is the escalation's detail for the deferred checks

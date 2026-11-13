@@ -106,7 +106,7 @@ func deferredWake(run, turn, key, head string) string {
 		"then answer with decide_checks (runId %s, turn %s, ask %s), one verdict per check in this order. Deferred is no verdict now: "+
 		"backed, with a reason citing the evidence at these heads (a dispatch id and its outcome, a verify result, or the pull request's CI at this head), "+
 		"or reject; missing is not asked again (give none). The ask names these heads: if they move, a new wake asks again, and an answer to this one is refused. "+
-		"The pull request is not ready until you answer, and unanswered by the deadline it goes to a person. %q deferred (Deliver's defaults: not-run): kept (backed) or reject?",
+		"The pull request is not ready until you answer. You have 10 min: unanswered by then, a person is asked to settle it; a later answer still counts if it is backed at these heads while the pull requests are at them. %q deferred (Deliver's defaults: not-run): kept (backed) or reject?",
 		head[:7], run, turn, key, fakeagent.DeferredCommand)
 }
 
@@ -424,6 +424,88 @@ func TestACheckDeferredThenRunAndPassedIsNoPromise(t *testing.T) {
 	}
 	if ok, detail := w.storedDeferred(wi); !ok || detail != "no check deferred" {
 		t.Errorf("the deferred item: %v %q", ok, detail)
+	}
+}
+
+// overdueDischarge has the task's second ask pass its deadline unanswered
+// and waits for the discharge escalation it raises.
+func (w *world) overdueDischarge(task string) {
+	w.t.Helper()
+	w.until("the conductor asked to keep the deferred check", func() bool {
+		w.sync()
+		w.pump()
+		return len(w.deferredWakes(task)) == 1
+	})
+	mustExec(w.t, w.owner, `UPDATE events SET payload = jsonb_set(payload, '{deadline}', to_jsonb(now() - interval '1 second'))
+		WHERE task_id = $1 AND event_type = $2 AND payload ? 'discharge'`, task, delivery.EvRunChecksAsked)
+	w.until("the discharge escalation", func() bool {
+		w.reweigh(task)
+		w.pump()
+		return w.escalationReason(task) == delivery.ReasonChecksUnverified
+	})
+}
+
+// The trial's own flow: the conductor dispatches bench.yml, a person
+// approves, the run takes minutes, and the ask's deadline passes, so the
+// discharge escalation is raised. The conductor's backed answer, late but
+// at the current heads, still counts: dude settles the escalation as
+// resolved by it, saying why, with no person's action, and the task is
+// ready. One escalation was ever raised, and no person was asked.
+func TestABackedAnswerAfterTheDeadlineSettlesTheEscalation(t *testing.T) {
+	w, task := deferredWorld(t)
+	w.overdueDischarge(task)
+	head := w.gh.SHA(w.gh.Pull(1).Head)
+	if status, out := w.answerDeferred(task, delivery.VerdictBacked, "dispatch wfd_1 of bench.yml at "+head[:7]+" completed: success"); status != 200 {
+		t.Fatalf("the late backed answer: %d %v", status, out)
+	}
+	w.until("ready to merge once kept, late", func() bool {
+		w.sync()
+		w.pump()
+		return w.taskStatus(task) == "ready_to_merge"
+	})
+	if raised, asked := w.dischargeRaised(task); raised != 1 || asked != 0 {
+		t.Errorf("%d discharge escalations raised, %d asked of a person, want 1 and 0", raised, asked)
+	}
+	if got := w.str(`SELECT COALESCE(string_agg(payload->>'action' || ': ' || (payload->>'note'), ' | '), '') FROM events
+		WHERE task_id = $1 AND event_type = 'task.decided'`, task); got != "resolved: Resolved by the conductor's answer: every deferred check (\""+
+		fakeagent.DeferredCommand+"\") is kept at the pull requests' heads, so no person need settle it." {
+		t.Errorf("the escalation's settling: %q", got)
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND workflow_type = 'task.delivery' AND state ? 'escalation'`, task); n != 0 {
+		t.Errorf("an escalation still open in the delivery's state")
+	}
+	if ok, detail := w.storedDeferred(task); !ok || detail != "1 deferred check(s) kept" {
+		t.Errorf("the deferred item: %v %q", ok, detail)
+	}
+}
+
+// A reject after the deadline keeps the escalation: it is a person's to
+// settle, and at its deadline it goes to them. Nothing is resolved.
+func TestARejectAfterTheDeadlineStillGoesToAPerson(t *testing.T) {
+	w, task := deferredWorld(t)
+	w.overdueDischarge(task)
+	if status, out := w.answerDeferred(task, delivery.VerdictReject, "bench.yml was not dispatched: the person declined"); status != 200 {
+		t.Fatalf("the late reject: %d %v", status, out)
+	}
+	for range 3 {
+		w.sync()
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND workflow_type = 'task.delivery'
+		AND state->'escalation'->>'reason' = $2 AND NOT (state->'escalation' ? 'decided')`, task, delivery.ReasonChecksUnverified); n != 1 {
+		t.Fatalf("the escalation is not open after a late reject")
+	}
+	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now(), state = jsonb_set(state, '{escalation,raisedAt}', to_jsonb(now() - interval '1 hour'))
+		WHERE task_id = $1 AND workflow_type = 'task.delivery' AND status = 'waiting'`, task)
+	w.until("the escalation with a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	if raised, asked := w.dischargeRaised(task); raised != 1 || asked != 1 {
+		t.Errorf("%d discharge escalations raised, %d asked of a person, want 1 and 1", raised, asked)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.decided'`, task); n != 0 {
+		t.Errorf("%d decisions on the escalation, want none before the person's", n)
+	}
+	if n := w.readyEvents(task); n != 0 {
+		t.Fatal("ready to merge with a deferred check rejected")
 	}
 }
 

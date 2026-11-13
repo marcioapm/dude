@@ -52,6 +52,10 @@ const (
 // orchestrator's settings shorten it.
 var ChecksAnswerWait = ConductorAnswerWait
 
+// ChecksWaitWords is ChecksAnswerWait in words ("10 min"): how long a
+// checks wake says the conductor has.
+func ChecksWaitWords() string { return duration(int64(ChecksAnswerWait.Seconds())) }
+
 // ChecksBase is a target-branch commit a failure is measured against.
 type ChecksBase struct{ Repo, Branch, SHA string }
 
