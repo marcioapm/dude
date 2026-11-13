@@ -48,9 +48,11 @@ func reviewsAt(rs []fakegithub.Review, head string) []fakegithub.Review {
 	return out
 }
 
-// G3: dude approved H1; the author pushes H2. The approval at H1 is
-// dismissed at once ("Head moved…"); after the debounce round 2 reviews
-// H2 and exactly one review is posted there; nothing runs again after.
+// G3: dude approved H1; the author pushes H2, then H3 inside the
+// debounce. The approval at H1 is dismissed at once ("Head moved…"); H3's
+// push resets the timer, and after it one round reviews H3 (none H2), its
+// lens going on from H1's (resumeRounds), and exactly one review is
+// posted there; nothing runs again after.
 func TestAnAuthorsPushDismissesTheApprovalAndReReviews(t *testing.T) {
 	w := newWorld(t)
 	w.reRounds(2 * time.Second)
@@ -64,22 +66,33 @@ func TestAnAuthorsPushDismissesTheApprovalAndReReviews(t *testing.T) {
 	if got := w.dudeReviews(wi, n); got[0].State != "DISMISSED" {
 		t.Fatalf("H1's approval after the push: %+v", got)
 	}
-	if got := reviewsAt(w.dudeReviews(wi, n), h2); len(got) != 0 {
-		t.Fatalf("reviewed H2 before the debounce: %+v", got)
+	h3 := w.push("third.md")
+	w.advanced()
+	if got := reviewsAt(w.dudeReviews(wi, n), h3); len(got) != 0 {
+		t.Fatalf("reviewed H3 before the debounce: %+v", got)
 	}
-	if c := w.verdictComments(wi, n); len(c) != 1 || !strings.Contains(c[0].Body, "Waiting 2s for more pushes") {
+	if c := w.verdictComments(wi, n); len(c) != 1 || !strings.Contains(c[0].Body, "Waiting 2s for more pushes before re-reviewing "+h3[:7]) {
 		t.Fatalf("status comment during the debounce: %+v", c)
 	}
-	w.agentsDone(wi, "approved at H2", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
-	if got := reviewsAt(w.dudeReviews(wi, n), h2); got[0].State != "APPROVED" {
-		t.Fatalf("at H2: %+v", got)
+	w.agentsDone(wi, "approved at H3", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h3)) == 1 && w.waitingOnPR(wi) })
+	if got := reviewsAt(w.dudeReviews(wi, n), h3); got[0].State != "APPROVED" {
+		t.Fatalf("at H3: %+v", got)
 	}
 	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2
-		AND continues_run_id IS NOT NULL`, wi, h2); r == 0 {
+		AND continues_run_id IS NOT NULL`, wi, h3); r == 0 {
 		t.Fatal("no lens went on from its round at H1")
+	}
+	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2`, wi, h2); r != 0 {
+		t.Fatalf("%d lens Runs at H2", r)
 	}
 	if e := w.events(wi, delivery.EvReviewRoundStarted); e != 1 {
 		t.Fatalf("%d rounds started, want 1", e)
+	}
+	// H3's push reset the timer: its round is due later than H2's.
+	if later := w.count(`SELECT count(*) FROM events a, events b WHERE a.task_id = $1 AND b.task_id = $1 AND a.event_type = $2
+		AND b.event_type = $2 AND a.payload->>'head' = $3 AND b.payload->>'head' = $4
+		AND (b.payload->>'dueAt')::timestamptz > (a.payload->>'dueAt')::timestamptz`, wi, delivery.EvReviewRoundDue, h2, h3); later != 1 {
+		t.Fatal("the push of H3 did not reset the debounce")
 	}
 	// Replayed: nothing more is posted or dismissed.
 	runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1`, wi)
@@ -176,31 +189,5 @@ func TestAPushToADraftDismissesTheApproval(t *testing.T) {
 	w.until("H1's approval dismissed", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewDismissed) == 1 })
 	if got := w.dudeReviews(wi, n); got[0].State != "DISMISSED" || !w.gh.Pull(n).Draft {
 		t.Fatalf("after the push to the draft: %+v", got)
-	}
-}
-
-// Debounce: two pushes a moment apart are one round, at the second head.
-func TestTwoPushesInsideTheDebounceAreOneRound(t *testing.T) {
-	w := newWorld(t)
-	w.reRounds(3 * time.Second)
-	wi, n, _ := w.approvedAtH1()
-	h2 := w.push("second.md")
-	w.advanced()
-	h3 := w.push("third.md")
-	w.agentsDone(wi, "reviewed H3", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h3)) == 1 && w.waitingOnPR(wi) })
-	if got := reviewsAt(w.dudeReviews(wi, n), h2); len(got) != 0 {
-		t.Fatalf("reviewed H2 inside the debounce: %+v", got)
-	}
-	if e := w.events(wi, delivery.EvReviewRoundStarted); e != 1 {
-		t.Fatalf("%d rounds started, want 1", e)
-	}
-	// The second push reset the timer: H3's round is due later than H2's.
-	if later := w.count(`SELECT count(*) FROM events a, events b WHERE a.task_id = $1 AND b.task_id = $1 AND a.event_type = $2
-		AND b.event_type = $2 AND a.payload->>'head' = $3 AND b.payload->>'head' = $4
-		AND (b.payload->>'dueAt')::timestamptz > (a.payload->>'dueAt')::timestamptz`, wi, delivery.EvReviewRoundDue, h2, h3); later != 1 {
-		t.Fatal("the push of H3 did not reset the debounce")
-	}
-	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2`, wi, h2); r != 0 {
-		t.Fatalf("%d lens Runs at H2", r)
 	}
 }
