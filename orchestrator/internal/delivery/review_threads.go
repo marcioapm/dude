@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -139,11 +138,7 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 			return out
 		}
 		failed := func(step string, err error) {
-			status, msg := 0, err.Error()
-			var e *forge.Error
-			if errors.As(err, &e) {
-				status, msg = e.Status, e.Message
-			}
+			status, msg := forgeFailure(err)
 			_ = w.s.Emit(ctx, sc.OrganizationID, st, EvReviewThreadSyncFailed, with("step", step, "status", status, "message", msg))
 		}
 		thread, err := gh.ThreadOfComment(ctx, pr.Slug, pr.Number, t.CommentID)

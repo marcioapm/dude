@@ -73,21 +73,15 @@ func (w *steps) newHead(ctx context.Context, sc workflow.StepContext, st *State,
 		if err != nil {
 			return err
 		}
-		line := fmt.Sprintf("dude stopped re-reviewing after %d rounds; re-request to continue", st.Round)
-		if why == "cost" {
-			line = fmt.Sprintf("dude stopped re-reviewing: this review reached its cost cap after %d rounds; re-request to continue", st.Round)
+		if st.RoundsStopped != why {
+			st.RoundsStopped, st.RoundDueAt, st.RoundDueHead = why, nil, ""
+			payload["pullRequestId"], payload["head"], payload["why"] = pr.ID, head, why
+			if err := w.s.Emit(ctx, sc.OrganizationID, st, EvReviewRoundsStopped, payload); err != nil {
+				return err
+			}
 		}
-		if st.RoundsStopped == why {
-			// Unchanged, no edit (its hash); a refusal since is named.
-			w.statusComment(ctx, sc, st, pr, line)
-			return nil
-		}
-		st.RoundsStopped, st.RoundDueAt, st.RoundDueHead = why, nil, ""
-		payload["pullRequestId"], payload["head"], payload["why"] = pr.ID, head, why
-		if err := w.s.Emit(ctx, sc.OrganizationID, st, EvReviewRoundsStopped, payload); err != nil {
-			return err
-		}
-		w.statusComment(ctx, sc, st, pr, line)
+		// Unchanged, no edit (its hash); a refusal since is named.
+		w.statusComment(ctx, sc, st, pr, stoppedLine(why, st.Round))
 		return nil
 	}
 	at := time.Now().Add(w.s.reviewDebounce())
@@ -97,6 +91,15 @@ func (w *steps) newHead(ctx context.Context, sc workflow.StepContext, st *State,
 	}
 	w.statusComment(ctx, sc, st, pr, fmt.Sprintf("Waiting %s for more pushes before re-reviewing %s", spoken(w.s.reviewDebounce()), short(head)))
 	return nil
+}
+
+// stoppedLine is the status comment's line once the bound why stopped the
+// rounds after round.
+func stoppedLine(why string, round int) string {
+	if why == "cost" {
+		return fmt.Sprintf("dude stopped re-reviewing: this review reached its cost cap after %d rounds; re-request to continue", round)
+	}
+	return fmt.Sprintf("dude stopped re-reviewing after %d rounds; re-request to continue", round)
 }
 
 // spoken is d as the status comment says it: "3 minutes", "2s".
@@ -169,6 +172,15 @@ func (w *steps) roundsBound(ctx context.Context, sc workflow.StepContext, st *St
 	return "", nil, nil
 }
 
+// forgeFailure is GitHub's status and message for err, as a refusal's
+// event records them (0 and the error when GitHub gave none).
+func forgeFailure(err error) (int, string) {
+	if e := (*forge.Error)(nil); errors.As(err, &e) {
+		return e.Status, e.Message
+	}
+	return 0, err.Error()
+}
+
 // ownReview is one of dude's reviews the task submitted.
 type ownReview struct {
 	ID       int64
@@ -215,11 +227,7 @@ func (w *steps) dismissApprovals(ctx context.Context, sc workflow.StepContext, s
 				return err
 			}
 		case forge.DismissRefused(err) || forge.Refused(err) && !forge.Transient(err):
-			var e *forge.Error
-			payload["status"], payload["message"] = 0, err.Error()
-			if errors.As(err, &e) {
-				payload["status"], payload["message"] = e.Status, e.Message
-			}
+			payload["status"], payload["message"] = forgeFailure(err)
 			if err := w.s.Emit(ctx, sc.OrganizationID, st, EvReviewDismissRefused, payload); err != nil {
 				return err
 			}
