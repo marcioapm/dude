@@ -58,11 +58,10 @@ func (s *Syncer) SuperviseDispatches(ctx context.Context, every time.Duration) (
 			// "Can't tell" is never silence: the failure counts as a failed
 			// read, in its own transaction, and enough in a row wake the
 			// conductor "cannot see" (#465).
-			failed := err
-			if err := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
-				return delivery.DispatchFailedTx(ctx, tx, d.Org, d.ID, failed)
-			}); err != nil {
-				s.Log.Warn("recording a dispatched workflow's failed supervision failed", "dispatch", d.ID, "error", err)
+			if rerr := s.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
+				return delivery.DispatchFailedTx(ctx, tx, d.Org, d.ID, err)
+			}); rerr != nil {
+				s.Log.Warn("recording a dispatched workflow's failed supervision failed", "dispatch", d.ID, "error", rerr)
 			}
 		}
 	}
