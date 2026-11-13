@@ -186,15 +186,39 @@ func TestARevertInsideTheDebounceLeavesNoStaleWake(t *testing.T) {
 // A push to a pull request turned draft dismisses dude's approval at the
 // old head at once; the round at the draft comments, once however often
 // the wait wakes; marked ready at that head, it is approved, once. A task
-// started on a draft is approved alike once it is marked ready.
+// started on a draft is approved alike once it is marked ready. R3-1: the
+// time it was a draft is not CI unconfirmed at an open pull request. A
+// deferral (carry=cap) or ci_stuck (carry=stuck) at the draft, before its
+// COMMENT, neither caps nor ends the verdict once ready with CI pending.
 func TestADraftIsApprovedOnceMarkedReady(t *testing.T) {
-	for _, first := range []bool{false, true} {
-		t.Run(fmt.Sprint("first=", first), func(t *testing.T) {
+	const cap = 3 * time.Second
+	for _, tc := range []struct {
+		first bool
+		carry string
+	}{{false, ""}, {true, ""}, {true, "cap"}, {true, "stuck"}} {
+		t.Run(fmt.Sprint("first=", tc.first, ",carry=", tc.carry), func(t *testing.T) {
+			first := tc.first
 			w := newWorld(t)
 			w.reRounds(time.Second)
 			var wi, h string
 			var n int
-			if first {
+			if tc.carry != "" {
+				store := &delivery.Store{ReviewDebounce: time.Second}
+				if tc.carry == "cap" {
+					store.VerdictDeferCap = cap
+				}
+				w.withDeliveries(store)
+				w.gh.SetChecks("pending")
+				wi, n = w.reviewOnly()
+				w.draft(n, true)
+				h = w.gh.SHA("feature/greet")
+				w.agentsDone(wi, "deferred at the draft", func() bool { return w.events(wi, delivery.EvVerdictDeferred) > 0 && w.waitingOnPR(wi) })
+				if tc.carry == "stuck" { // the sync's patience runs out at the draft
+					mustExec(t, w.owner, `UPDATE pull_requests SET checks_pending_since = now() - interval '61 minutes' WHERE task_id = $1`, wi)
+					w.agentsDone(wi, "ci_stuck's COMMENT at the draft", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h)) == 1 && w.waitingOnPR(wi) })
+				}
+				w.gh.SetChecks("success")
+			} else if first {
 				w.gh.SetChecks("success")
 				wi, n = w.reviewOnly()
 				w.draft(n, true) // before its first round's lens runs
@@ -208,24 +232,41 @@ func TestADraftIsApprovedOnceMarkedReady(t *testing.T) {
 					t.Fatalf("after the push to the draft: %+v", got)
 				}
 			}
-			w.agentsDone(wi, "commented at the draft", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h)) == 1 && w.waitingOnPR(wi) })
+			before := len(reviewsAt(w.dudeReviews(wi, n), h)) // ci_stuck's COMMENT
+			w.agentsDone(wi, "commented at the draft", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h)) == before+1 && w.waitingOnPR(wi) })
 			status := w.verdictComments(wi, n)
 			for range 3 { // the draft's wait woken again: nothing more posted or edited
 				w.sync()
 				w.advanced()
 				time.Sleep(300 * time.Millisecond)
 			}
-			if got := reviewsAt(w.dudeReviews(wi, n), h); len(got) != 1 || got[0].State != "COMMENTED" {
+			if got := reviewsAt(w.dudeReviews(wi, n), h); len(got) != before+1 || got[before].State != "COMMENTED" || !strings.Contains(got[before].Body, "Draft:") {
 				t.Fatalf("at the draft: %+v", got)
 			}
 			if c := w.verdictComments(wi, n); len(c) != 1 || c[0].Body != status[0].Body {
 				t.Fatalf("status comment while a draft: %+v, was %+v", c, status)
 			}
-			w.draft(n, false)
-			w.agentsDone(wi, "approved once ready", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h)) == 2 && w.waitingOnPR(wi) })
+			if tc.carry != "" {
+				// Past the cap since the deferral at the draft; CI reruns on
+				// ready_for_review.
+				time.Sleep(cap)
+				w.gh.SetChecks("pending")
+				deferred := w.events(wi, delivery.EvVerdictDeferred)
+				w.draft(n, false)
+				w.agentsDone(wi, "deferred once ready", func() bool {
+					return w.events(wi, delivery.EvVerdictDeferred) > deferred || len(reviewsAt(w.dudeReviews(wi, n), h)) > before+1
+				})
+				if got := reviewsAt(w.dudeReviews(wi, n), h); len(got) != before+1 {
+					t.Fatalf("CI pending for seconds once ready, yet: %q", got[len(got)-1].Body)
+				}
+				w.gh.SetChecks("success")
+			} else {
+				w.draft(n, false)
+			}
+			w.agentsDone(wi, "approved once ready", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h)) == before+2 && w.waitingOnPR(wi) })
 			w.sync()
 			w.advanced()
-			if got := reviewsAt(w.dudeReviews(wi, n), h); len(got) != 2 || got[1].State != "APPROVED" {
+			if got := reviewsAt(w.dudeReviews(wi, n), h); len(got) != before+2 || got[before+1].State != "APPROVED" {
 				t.Fatalf("after ready: %+v", got)
 			}
 		})
