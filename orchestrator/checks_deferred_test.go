@@ -194,8 +194,10 @@ func TestTheSecondChecksAskIsRecordedAndDeliveredOnce(t *testing.T) {
 		}
 		return len(w.deferredWakes(task)) == 1
 	})
+	// The gate weighed again and again (its timer due each time): no new
+	// ask.
 	for range 3 {
-		w.sync()
+		w.reweigh(task)
 		if _, err := w.runtime.Tick(ctx, 10); err != nil {
 			t.Fatal(err)
 		}
@@ -213,7 +215,7 @@ func TestTheSecondChecksAskIsRecordedAndDeliveredOnce(t *testing.T) {
 		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'checks:%:d%' AND delivered_at IS NOT NULL`, task) == 1
 	})
 	for range 5 {
-		w.sync()
+		w.reweigh(task)
 		w.pump()
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload ? 'discharge'`, task, delivery.EvRunChecksAsked); n != 1 {
@@ -226,6 +228,14 @@ func TestTheSecondChecksAskIsRecordedAndDeliveredOnce(t *testing.T) {
 		task, fakeagent.KeepDeferred); n != 1 {
 		t.Errorf("the conductor was woken %d times with the second ask, want once", n)
 	}
+}
+
+// reweigh has the delivery waiting on its pull request weigh its gate
+// again now: its timer (reweighAt) due.
+func (w *world) reweigh(task string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{reweighAt}', to_jsonb(now())), wake_at = now()
+		WHERE task_id = $1 AND workflow_type = 'task.delivery' AND step = 'awaitPullRequest' AND status = 'waiting'`, task)
 }
 
 // With no conductor deciding (Deliver's rules), deferred is never a
