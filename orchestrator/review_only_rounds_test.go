@@ -154,6 +154,21 @@ func TestARevertInsideTheDebounceLeavesNoStaleWake(t *testing.T) {
 	}
 }
 
+// A push to a pull request turned draft dismisses dude's approval at the
+// old head at once, the pull request still a draft.
+func TestAPushToADraftDismissesTheApproval(t *testing.T) {
+	w := newWorld(t)
+	w.reRounds(time.Minute)
+	wi, n, _ := w.approvedAtH1()
+	pull := w.gh.Pull(n)
+	w.gh.Set(func(*fakegithub.Server) { pull.Draft = true })
+	w.push("second.md")
+	w.until("H1's approval dismissed", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewDismissed) == 1 })
+	if got := w.dudeReviews(wi, n); got[0].State != "DISMISSED" || !w.gh.Pull(n).Draft {
+		t.Fatalf("after the push to the draft: %+v", got)
+	}
+}
+
 // Debounce: two pushes a moment apart are one round, at the second head.
 func TestTwoPushesInsideTheDebounceAreOneRound(t *testing.T) {
 	w := newWorld(t)

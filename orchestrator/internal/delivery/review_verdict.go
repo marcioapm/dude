@@ -851,11 +851,14 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 		if len(states) > 0 {
 			pr = states[0]
 		}
-		live := pr.State == forge.StateOpen && pr.HeadSHA != ""
+		// A draft is a live pull request too: its push dismisses the stale
+		// approval at once, and its round runs (the verdict comments on a
+		// draft rather than approving).
+		live := (pr.State == forge.StateOpen || pr.State == forge.StateDraft) && pr.HeadSHA != ""
 		if st.RoundDueAt != nil && (!live || pr.HeadSHA != st.RoundDueHead) {
 			// The head the round was owed at is gone (a revert, the pull
-			// request no longer open): no round there, and no wake on its
-			// past due time. A newer head arms its own below.
+			// request closed): no round there, and no wake on its past due
+			// time. A newer head arms its own below.
 			st.RoundDueAt, st.RoundDueHead = nil, ""
 		}
 		if live {
