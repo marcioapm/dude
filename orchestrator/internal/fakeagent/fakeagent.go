@@ -178,7 +178,8 @@ const Questions = `{"questions":[{"header":"Layout","question":"Does it overflow
 const PeerModel = "fake/peer"
 
 // DoneModel's implementer finds the goal met already: it commits nothing
-// and says so, as one continuing work that is finished should.
+// and says so, as one continuing work that is finished should; its
+// reviewer finds nothing.
 const DoneModel = "fake/done"
 
 // PeerQuestion and PeerAnswer are what PeerModel's implementers say.
@@ -1204,6 +1205,10 @@ func forPhase(phase, model, runID string, fixed bool) Step {
 	case "review":
 		if fixed && model == StuckModel {
 			return Step{Reply: "The finding is still there.\n\n" + StillVerdict}
+		}
+		if model == DoneModel {
+			// A reviewer with nothing to say: the change is clean.
+			return Step{Reply: "No findings."}
 		}
 		if fixed {
 			// Shown the finding it raised, it judges the fix.

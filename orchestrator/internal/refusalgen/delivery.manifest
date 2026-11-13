@@ -264,4 +264,3 @@ rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-t
 rWaitDispatchFailed                    refusals/delivery/waits/dispatch-failed
 rReviewOnlyNoWriter                     refusals/delivery/review-only/no-writer
 rReviewOnlyPRAction                     refusals/delivery/review-only/pr-action
-rReviewOnlyNotYet                       refusals/delivery/review-only/not-yet

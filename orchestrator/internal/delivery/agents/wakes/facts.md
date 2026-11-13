@@ -39,6 +39,8 @@
 
 {{- define "wakes/facts/pr-conflict"}}The pull request {{.Repo}}#{{.Number}} conflicts with {{.Base}} (at {{.BaseHead}}); it shows {{.Head}}. Decide to have an integration fixer merge {{.Base}} into it, start a fix with your own note, or wait.{{end}}
 
+{{- define "wakes/facts/verdict-checks"}}dude reviewed {{.Repo}} at {{.Head}}, and CI fails there: {{.Checks}}. Before dude posts its review, look at the failure (pull_requests reads its logs and main's CI). If the change caused it, start a review (start_phase review) with a note naming the failing checks, so a lens files it as a finding: dude then requests changes. If it is not the change's (infrastructure, flaky, already red on the base), rerun_failed_checks unless a run is in progress, then next: dude posts its review without approving, and approves only once CI passes at {{.Head}}.{{end}}
+
 {{- define "wakes/facts/took-over"}}Took over {{.Head}} at {{.SHA}}, {{.Files}} files changed against {{.Base}}. {{if .Continues}}Saved as work to continue: an implementer carries it on.{{else}}Saved as work to review as it is.{{end}}{{end}}
 
 {{- define "wakes/facts/test-failed"}}test {{.RunID}} failed: criteria {{.Criteria}}, {{.Findings}} blocking findings of the tester's; test fix round {{.Round}} of {{.Max}}.{{end}}

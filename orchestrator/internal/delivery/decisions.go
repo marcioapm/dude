@@ -78,6 +78,8 @@ type Pending struct {
 	// A delivery that took over existing work, before any of its Runs: the
 	// work is there to review at its start, and to carry on after it.
 	Adopted bool `json:"adopted,omitempty"`
+	// A review-only task's: no writer is ever offered (reviewOnlyPhases).
+	ReviewOnly bool `json:"reviewOnly,omitempty"`
 	// Taken by the conductor (decide, start_phase), set as it is taken so
 	// a second is refused before the workflow acts on the first.
 	Taken *Taken `json:"taken,omitempty"`
@@ -321,6 +323,9 @@ func (st *State) deliverOpens() bool { return !st.chatty() }
 
 // Phases is what the conductor may start at a decision point.
 func (d *Pending) Phases() []string {
+	if d.ReviewOnly {
+		return reviewOnlyPhases
+	}
 	switch d.Point {
 	case PointStart:
 		if d.Adopted {
@@ -668,7 +673,8 @@ func toConductorTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *
 func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, st *State, point, policy, line, kind string, settled bool) (workflow.Result, error) {
 	st.Directed, st.PendingRunIDs, st.Routed = nil, nil, nil
 	st.Decision = &Pending{Point: point, Policy: policy,
-		Adopted: st.Source != nil && st.HeadRunID == "" && (point == PointStart || point == PointImplemented)}
+		Adopted:    st.Source != nil && st.HeadRunID == "" && (point == PointStart || point == PointImplemented),
+		ReviewOnly: st.Source.ReviewOnly()}
 	if point == PointBeforePR {
 		st.GateRequired, st.ChoiceGate = true, false
 	}

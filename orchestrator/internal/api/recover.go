@@ -318,10 +318,6 @@ func (s *Server) recoverTask(w http.ResponseWriter, r *http.Request, org string)
 		if !t.stopped() {
 			return fail(http.StatusConflict, "conflict", "task %s is %s, not stopped", taskID, t.Status)
 		}
-		// Resume, Try again and Start over alike, whatever is kept.
-		if err := delivery.RefuseReviewOnlyStartTx(r.Context(), tx, taskID); err != nil {
-			return err
-		}
 		if !slices.Contains(t.actions(), body.Action) {
 			if body.Action == "resume" {
 				return fail(http.StatusConflict, "not_kept",
@@ -468,9 +464,6 @@ func (s *Server) restartTx(ctx context.Context, tx pgx.Tx, org, taskID string, t
 	note, decider string, override *delivery.Override, reason string) (restarted, error) {
 	var out restarted
 	if err := delivery.GuardStartTx(ctx, tx, org, taskID, override); err != nil {
-		return out, err
-	}
-	if err := delivery.RefuseReviewOnlyStartTx(ctx, tx, taskID); err != nil {
 		return out, err
 	}
 	if decider == "" {

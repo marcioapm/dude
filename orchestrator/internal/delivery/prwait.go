@@ -20,6 +20,11 @@ import (
 // prWaitPhases are what may start while the delivery waits on its pull requests.
 var prWaitPhases = []string{PhaseFix, PhaseReview, PhaseSimplify, PhaseTest}
 
+// reviewOnlyPhases are all a review-only task's conductor is offered: its
+// lenses and the tester, which commits nothing. The writer guard refuses
+// the rest anyway (refuseReviewOnlyWriterTx); this keeps them unoffered.
+var reviewOnlyPhases = []string{PhaseReview, PhaseTest}
+
 // waitingOnPR says the delivery is parked on its pull requests, no phase
 // running.
 func (d *Delivery) waitingOnPR() bool {
@@ -44,8 +49,12 @@ func startAtPRWait(ctx context.Context, tx pgx.Tx, ref RunRef, w *Delivery, in S
 	if d == nil || d.WorkflowID != w.WorkflowID || !d.waitingOnPR() {
 		return "", refuseText(rDeliveryMovedOnAsYouAsked)
 	}
-	if !slices.Contains(prWaitPhases, in.Phase) {
-		return "", refusef(rCannotStartWhileDeliveryWaitsOn, in.Phase, listOr(prWaitPhases))
+	offered := prWaitPhases
+	if d.State.Source.ReviewOnly() {
+		offered = reviewOnlyPhases
+	}
+	if !slices.Contains(offered, in.Phase) {
+		return "", refusef(rCannotStartWhileDeliveryWaitsOn, in.Phase, listOr(offered))
 	}
 	if held, err := stepHolds(ctx, tx, d.WorkflowID, ""); err != nil {
 		return "", err
