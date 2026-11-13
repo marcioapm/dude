@@ -39,19 +39,34 @@ type inlinePost struct {
 	Head      string `json:"-"`
 }
 
-// postedComments maps the review's line comments to the findings they are
-// for, by path and body, as postReview made them (ids[i] is comments[i]'s).
-func postedComments(got []forge.PostedComment, comments []forge.ReviewComment, ids []string) []inlinePost {
+// postedComments is review_submitted's record of the review's line
+// comments read back (got): "comments", each with the finding it is for,
+// matched by path and body as postReview made them (ids[i] is
+// comments[i]'s), and "unmatched", the findings whose comment was not found.
+func postedComments(got []forge.PostedComment, comments []forge.ReviewComment, ids []string) map[string]any {
 	used := make([]bool, len(comments))
-	var out []inlinePost
+	var posts []inlinePost
 	for _, c := range got {
 		for i, m := range comments {
 			if !used[i] && i < len(ids) && m.Path == c.Path && strings.TrimSpace(m.Body) == strings.TrimSpace(c.Body) {
 				used[i] = true
-				out = append(out, inlinePost{FindingID: ids[i], CommentID: c.ID, URL: c.URL})
+				posts = append(posts, inlinePost{FindingID: ids[i], CommentID: c.ID, URL: c.URL})
 				break
 			}
 		}
+	}
+	var unmatched []string
+	for i, id := range ids {
+		if i >= len(used) || !used[i] {
+			unmatched = append(unmatched, id)
+		}
+	}
+	out := map[string]any{}
+	if len(posts) > 0 {
+		out["comments"] = posts
+	}
+	if len(unmatched) > 0 {
+		out["unmatched"] = unmatched
 	}
 	return out
 }

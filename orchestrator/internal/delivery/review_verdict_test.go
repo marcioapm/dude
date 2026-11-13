@@ -133,7 +133,7 @@ func TestWithdrawnNote(t *testing.T) {
 func TestAnUnmatchedInlineCommentIsRecorded(t *testing.T) {
 	comments := []forge.ReviewComment{{Path: "a.go", Body: "A"}, {Path: "b.go", Body: "B"}}
 	got := []forge.PostedComment{{ID: 7, Path: "a.go", Body: "A\n"}, {ID: 8, Path: "b.go", Body: "B, edited"}}
-	rec := postedRecord(postedComments(got, comments, []string{"f1", "f2"}), []string{"f1", "f2"})
+	rec := postedComments(got, comments, []string{"f1", "f2"})
 	if p, _ := rec["comments"].([]inlinePost); len(p) != 1 || p[0].FindingID != "f1" || p[0].CommentID != 7 {
 		t.Errorf("comments %+v", rec["comments"])
 	}

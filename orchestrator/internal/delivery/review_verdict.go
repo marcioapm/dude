@@ -676,9 +676,8 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 
 // reviewPosts is review_submitted's record of the review's inline
 // comments read back from GitHub (the submit's answer has none):
-// "comments", each with the finding it is for, and "unmatched", the
-// findings whose comment was not found (all of them when unreadable),
-// whose threads are then not kept in step.
+// postedComments (the findings unmatched, all of them when unreadable,
+// have their threads not kept in step).
 func (w *steps) reviewPosts(ctx context.Context, gh *forge.GitHub, pr PullRequestState, reviewID int64, comments []forge.ReviewComment, ids []string) map[string]any {
 	if len(comments) == 0 {
 		return nil
@@ -687,22 +686,7 @@ func (w *steps) reviewPosts(ctx context.Context, gh *forge.GitHub, pr PullReques
 	if err != nil {
 		slog.Warn("reading dude's review comments back failed", "pr", pr.ID, "review", reviewID, "error", err)
 	}
-	return postedRecord(postedComments(got, comments, ids), ids)
-}
-
-// postedRecord is review_submitted's comments and unmatched for posts,
-// the matched comments of the findings ids.
-func postedRecord(posts []inlinePost, ids []string) map[string]any {
-	out := map[string]any{}
-	if len(posts) > 0 {
-		out["comments"] = posts
-	}
-	if unmatched := slices.DeleteFunc(slices.Clone(ids), func(id string) bool {
-		return slices.ContainsFunc(posts, func(p inlinePost) bool { return p.FindingID == id })
-	}); len(unmatched) > 0 {
-		out["unmatched"] = unmatched
-	}
-	return out
+	return postedComments(got, comments, ids)
 }
 
 // submitted records the review GitHub holds, then reads the pull request
