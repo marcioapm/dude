@@ -105,7 +105,7 @@ func TestDudesThreadsAfterAFix(t *testing.T) {
 			h3 := w.push("third.md")
 			w.agentsDone(wi, "reviewed H3", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h3)) == 1 && w.waitingOnPR(wi) })
 			r := repliesTo(w.gh.Pull(n), root.ID)
-			if tc.reply != (len(r) == 1 && r[0].Body == "Fixed at "+h2[:7]+".") || !tc.reply && len(r) != 0 || len(r) > 1 {
+			if want := map[bool]int{true: 1}[tc.reply]; len(r) != want || want == 1 && r[0].Body != "Fixed at "+h2[:7]+"." {
 				t.Fatalf("replies in dude's thread: %+v", r)
 			}
 			if w.gh.ResolvedThreads[thread] != (tc.reply || tc.resolved) {
