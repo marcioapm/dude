@@ -1,0 +1,2 @@
+The pull request is open at {{.Heads}}, with CI reported there: keep the checks you deferred to this later phase, then answer with decide_checks (runId {{.RunID}}, turn {{.Turn}}), one verdict per check in this order. Deferred is no verdict now: backed, with a reason citing the evidence (a dispatch id and its outcome, a verify result, or the pull request's CI at this head), or reject; missing is not asked again (give none). The pull request is not ready until you answer.
+{{- range .Checks}} {{printf "%q" .Command}} deferred ({{.Reason}}): kept (backed) or reject?{{end}}

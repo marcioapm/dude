@@ -493,6 +493,12 @@ func ChecksDefaults(input string) [][2]string {
 		if next := checksWakeRun.FindStringIndex(rest); next != nil {
 			rest = rest[:next[0]]
 		}
+		if strings.Contains(input[max(0, m[0]-400):m[0]], KeepDeferred) {
+			// The second ask about deferred checks, once the pull request
+			// is open: keeping one takes running it (a workflow, a verify),
+			// which Deliver's defaults never do. Left to the test's script.
+			continue
+		}
 		var checks []map[string]string
 		found := checksWakeCheck.FindAllStringSubmatchIndex(rest, -1)
 		for k, ci := range found {
@@ -559,6 +565,10 @@ func failedAtBase(question string) bool {
 	n, err := strconv.Atoi(code)
 	return ok && err == nil && n >= 1 && n <= 125
 }
+
+// KeepDeferred is what the second checks ask (delivery's
+// wakes/checks-deferred) says before its call to decide.
+const KeepDeferred = "keep the checks you deferred to this later phase"
 
 // ManualChecks is a test script's instruction to keep checks decisions
 // explicit (for example a Chat script that later calls decide_checks).
