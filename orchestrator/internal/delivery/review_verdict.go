@@ -72,6 +72,9 @@ type VerdictState struct {
 	Posted    string `json:"posted,omitempty"`
 	CommentID int64  `json:"commentId,omitempty"`
 	Status    string `json:"status,omitempty"` // the status comment's last body hash
+	// The event posted was the draft's COMMENT: the verdict is owed again
+	// at Due once the pull request is open, and not before.
+	Draft bool `json:"draft,omitempty"`
 	// An approval of dude's GitHub refused to dismiss: the status comment
 	// names it under every line from then on (decision 3).
 	DismissRefused string `json:"dismissRefused,omitempty"`
@@ -555,10 +558,12 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 			return workflow.Result{}, err
 		}
 	}
-	if !transientReason(d.Reason) || posted == "" {
+	v.Draft = posted != "" && d.Reason == reasonDraft
+	if !transientReason(d.Reason) && !v.Draft || posted == "" {
 		// Only an approval held back by CI at H (unrelated red CI, CI not
-		// confirmed at the cap or stuck) is still owed at H (decision 2):
-		// CI's signals run the verdict again, and green at H approves.
+		// confirmed at the cap or stuck) or by the draft is still owed at
+		// H (decision 2): CI's signals, or the pull request marked ready,
+		// run the verdict again, and green at H, open, approves.
 		v.Due = ""
 	}
 	w.statusComment(ctx, sc, st, pr, fmt.Sprintf("%s (%s)", d.Headline, cmp.Or(reviewWord[v.Posted], "not posted")))
@@ -889,6 +894,10 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 				// The conductor withdrew a finding: the verdict again at the
 				// head reviewed, no new round (its claim names the event).
 				st.Verdict.Due, rerun = pr.HeadSHA, true
+			} else if v := st.Verdict; v != nil && v.Draft && v.Due == pr.HeadSHA {
+				// The draft's COMMENT stands at the head: the verdict again
+				// once it is marked ready, never on a wake while a draft.
+				rerun = pr.State == forge.StateOpen
 			}
 		}
 	}

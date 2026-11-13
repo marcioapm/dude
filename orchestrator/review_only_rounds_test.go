@@ -38,6 +38,12 @@ func (w *world) push(file string) string {
 	return w.gh.SHA("feature/greet")
 }
 
+// draft turns pull request n into a draft, or marks it ready for review.
+func (w *world) draft(n int, on bool) {
+	pull := w.gh.Pull(n)
+	w.gh.Set(func(*fakegithub.Server) { pull.Draft = on })
+}
+
 func reviewsAt(rs []fakegithub.Review, head string) []fakegithub.Review {
 	var out []fakegithub.Review
 	for _, r := range rs {
@@ -178,16 +184,53 @@ func TestARevertInsideTheDebounceLeavesNoStaleWake(t *testing.T) {
 }
 
 // A push to a pull request turned draft dismisses dude's approval at the
-// old head at once, the pull request still a draft.
-func TestAPushToADraftDismissesTheApproval(t *testing.T) {
-	w := newWorld(t)
-	w.reRounds(time.Minute)
-	wi, n, _ := w.approvedAtH1()
-	pull := w.gh.Pull(n)
-	w.gh.Set(func(*fakegithub.Server) { pull.Draft = true })
-	w.push("second.md")
-	w.until("H1's approval dismissed", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewDismissed) == 1 })
-	if got := w.dudeReviews(wi, n); got[0].State != "DISMISSED" || !w.gh.Pull(n).Draft {
-		t.Fatalf("after the push to the draft: %+v", got)
+// old head at once; the round at the draft comments, once however often
+// the wait wakes; marked ready at that head, it is approved, once. A task
+// started on a draft is approved alike once it is marked ready.
+func TestADraftIsApprovedOnceMarkedReady(t *testing.T) {
+	for _, first := range []bool{false, true} {
+		t.Run(fmt.Sprint("first=", first), func(t *testing.T) {
+			w := newWorld(t)
+			w.reRounds(time.Second)
+			var wi, h string
+			var n int
+			if first {
+				w.gh.SetChecks("success")
+				w.cleanLenses()
+				n = w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+				w.draft(n, true)
+				wi = w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
+				w.startDelivery(wi)
+				h = w.gh.SHA("feature/greet")
+			} else {
+				wi, n, _ = w.approvedAtH1()
+				w.draft(n, true)
+				h = w.push("second.md")
+				w.until("H1's approval dismissed", func() bool { w.advanced(); return w.events(wi, delivery.EvReviewDismissed) == 1 })
+				if got := w.dudeReviews(wi, n); got[0].State != "DISMISSED" || !w.gh.Pull(n).Draft {
+					t.Fatalf("after the push to the draft: %+v", got)
+				}
+			}
+			w.agentsDone(wi, "commented at the draft", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h)) == 1 && w.waitingOnPR(wi) })
+			status := w.verdictComments(wi, n)
+			for range 3 { // the draft's wait woken again: nothing more posted or edited
+				w.sync()
+				w.advanced()
+				time.Sleep(300 * time.Millisecond)
+			}
+			if got := reviewsAt(w.dudeReviews(wi, n), h); len(got) != 1 || got[0].State != "COMMENTED" {
+				t.Fatalf("at the draft: %+v", got)
+			}
+			if c := w.verdictComments(wi, n); len(c) != 1 || c[0].Body != status[0].Body {
+				t.Fatalf("status comment while a draft: %+v, was %+v", c, status)
+			}
+			w.draft(n, false)
+			w.agentsDone(wi, "approved once ready", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h)) == 2 && w.waitingOnPR(wi) })
+			w.sync()
+			w.advanced()
+			if got := reviewsAt(w.dudeReviews(wi, n), h); len(got) != 2 || got[1].State != "APPROVED" {
+				t.Fatalf("after ready: %+v", got)
+			}
+		})
 	}
 }
