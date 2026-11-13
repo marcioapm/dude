@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -118,6 +119,38 @@ func TestARefusedDismissalNeverBlocksTheRound(t *testing.T) {
 	}
 	if c := w.verdictComments(wi, n); len(c) != 1 || !strings.Contains(c[0].Body, "Could not dismiss the approval at "+h1[:7]) {
 		t.Fatalf("status comment %+v", c)
+	}
+}
+
+// The author reverts to H1 inside the debounce: the round owed at H2 is
+// dropped, and the wait never wakes on a due time already past.
+func TestARevertInsideTheDebounceLeavesNoStaleWake(t *testing.T) {
+	w := newWorld(t)
+	w.reRounds(time.Second)
+	wi, _, h1 := w.approvedAtH1()
+	w.push("second.md")
+	w.advanced()
+	if out, err := exec.Command("git", "-C", w.gh.Repo, "update-ref", "refs/heads/feature/greet", h1).CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	w.sync()
+	w.advanced()
+	time.Sleep(1500 * time.Millisecond)
+	steps := 0
+	for range 8 {
+		n, err := w.runtime.Tick(t.Context(), 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		steps += n
+		time.Sleep(250 * time.Millisecond)
+	}
+	var wake *time.Time
+	if err := w.owner.QueryRow(t.Context(), `SELECT wake_at FROM workflow_runs WHERE task_id = $1`, wi).Scan(&wake); err != nil {
+		t.Fatal(err)
+	}
+	if steps > 1 || wake != nil && wake.Before(time.Now()) {
+		t.Fatalf("%d steps over 2s with nothing new; wake_at %v", steps, wake)
 	}
 }
 

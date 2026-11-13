@@ -847,8 +847,18 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 		if err != nil {
 			return workflow.Result{}, err
 		}
-		if len(states) > 0 && states[0].State == forge.StateOpen && states[0].HeadSHA != "" {
-			pr := states[0]
+		var pr PullRequestState
+		if len(states) > 0 {
+			pr = states[0]
+		}
+		live := pr.State == forge.StateOpen && pr.HeadSHA != ""
+		if st.RoundDueAt != nil && (!live || pr.HeadSHA != st.RoundDueHead) {
+			// The head the round was owed at is gone (a revert, the pull
+			// request no longer open): no round there, and no wake on its
+			// past due time. A newer head arms its own below.
+			st.RoundDueAt, st.RoundDueHead = nil, ""
+		}
+		if live {
 			if pr.HeadSHA != st.reviewedHead(pr.Repo) {
 				gh, err := w.forges.For(ctx, sc.OrganizationID)
 				if err != nil {
