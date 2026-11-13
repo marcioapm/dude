@@ -2183,11 +2183,12 @@ func (w *steps) awaitPullRequest(ctx context.Context, sc workflow.StepContext) (
 			if err != nil {
 				return workflow.Result{}, err
 			}
-			if err := w.weighReadiness(ctx, sc, st, states); err != nil {
+			escalation, err := w.weighReadiness(ctx, sc, st, states)
+			if err != nil {
 				return st.reweighed(waitAgain), err
 			}
-			if res, escalated, err := w.deferredRejected(ctx, sc, st); escalated || err != nil {
-				return res, err
+			if escalation != nil {
+				return w.deferredEscalate(ctx, sc, st, escalation)
 			}
 			return st.reweighed(waitAgain), nil
 		}
@@ -3071,10 +3072,12 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 	case !grown && c.open > 0:
 		// The rest are still open: what is merged is taken, so whether the
 		// task is ready depends on those.
-		if err := w.weighReadiness(ctx, sc, st, states); err != nil {
+		escalation, err := w.weighReadiness(ctx, sc, st, states)
+		if err != nil {
 			return st.reweighed(waitAgain), false, err
 		}
-		if res, escalated, err := w.deferredRejected(ctx, sc, st); escalated || err != nil {
+		if escalation != nil {
+			res, err := w.deferredEscalate(ctx, sc, st, escalation)
 			return res, true, err
 		}
 		return st.reweighed(waitAgain), false, nil
@@ -3107,7 +3110,11 @@ const graceMargin = 5 * time.Second
 // review when one no longer does. The gate asks no approval beyond what
 // GitHub's branch protection asks. The factory never merges: ready to
 // merge is what a person is told, and merging is theirs.
-func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st *State, states []PullRequestState) error {
+//
+// From the same read it keeps the conductor's deferred checks
+// (deferredDue): escalation is the detail of a checks_unverified
+// escalation for a person to raise (deferredEscalation), nil for none.
+func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st *State, states []PullRequestState) (escalation map[string]any, err error) {
 	var open []string
 	for _, s := range states {
 		if s.State == forge.StateMerged || s.State == forge.StateClosed {
@@ -3116,17 +3123,17 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 		open = append(open, s.ID)
 	}
 	var gates []PRGate
+	var deferred *deferredState
 	if len(open) > 0 {
 		var gh *forge.GitHub
 		if w.forges != nil {
 			var err error
 			if gh, err = w.forges.For(ctx, sc.OrganizationID); err != nil {
-				return err
+				return nil, err
 			}
 		}
-		var err error
-		if gates, err = w.s.ReadyGateFor(ctx, sc.OrganizationID, gh, st.TaskID, open); err != nil {
-			return err
+		if gates, deferred, err = w.s.readyGate(ctx, sc.OrganizationID, gh, st.TaskID, open); err != nil {
+			return nil, err
 		}
 	}
 	ready := len(gates) > 0
@@ -3138,7 +3145,7 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 			// status stays as it was, and the gate is read again soon —
 			// after GitHub's Retry-After when it gave one — the step's
 			// attempts not spent on GitHub's outage.
-			return workflow.Wait{After: max(forge.RetryAfter(g.Err), readyGateRetry),
+			return nil, workflow.Wait{After: max(forge.RetryAfter(g.Err), readyGateRetry),
 				Why: "the ready gate could not read GitHub: " + g.Err.Error()}
 		}
 		ready = ready && g.Ready
@@ -3162,96 +3169,95 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	}
 	// Kept for the conductor's pull_requests, which serves it while the
 	// head it was judged at is the one recorded.
+	heads, due := deferredDue(gates)
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		if err := askDeferredTx(ctx, tx, sc.OrganizationID, st, gates); err != nil {
-			return err
+		if deferred != nil && due {
+			asked, err := askDeferredTx(ctx, tx, sc.OrganizationID, st.TaskID, st.Attempt, heads, deferred)
+			if err != nil {
+				return err
+			}
+			if asked {
+				// The item says the conductor is asked now.
+				setItem(gates, deferredItem(deferred, headsID(heads)))
+			}
 		}
 		return StoreGatesTx(ctx, tx, gates, time.Now())
 	}); err != nil {
-		return err
+		return nil, err
+	}
+	if deferred != nil && st.Escalation == nil {
+		escalation = deferredEscalation(deferred, headsID(heads), due)
 	}
 	if unknown {
-		return workflow.Wait{After: mergeableRetry, Why: "GitHub has not worked out whether the pull request merges yet"}
+		return escalation, workflow.Wait{After: mergeableRetry, Why: "GitHub has not worked out whether the pull request merges yet"}
 	}
 	// Read again once the grace is over (waitForPR's timer), not held to
-	// it as a Wait would: a signal meanwhile is acted on at once.
+	// it as a Wait would: a signal meanwhile is acted on at once. So too
+	// at a second checks ask's deadline, unanswered: no sync sees it pass.
 	st.ReweighAt = nil
 	if grace > 0 {
 		at := time.Now().Add(grace + graceMargin)
 		st.ReweighAt = &at
 	}
-	// The move, its event and the conductor's Chat notice in one
-	// transaction: one lost to a retry would never be written again (the
-	// status has moved).
-	return w.s.moveReadiness(ctx, sc.OrganizationID, st, gates, ready, len(open))
-}
-
-// askDeferredTx keeps the conductor's promise of a deferred check: once
-// every open pull request is at the head dude recorded and its CI has
-// reported there (the head and checks items hold), the later phase the
-// check was deferred to has come, and the conductor is asked to keep it
-// (AskDeferredTx, once per attempt and heads). Each gate's deferred item
-// is read again after, so it says the conductor is asked.
-func askDeferredTx(ctx context.Context, tx pgx.Tx, org string, st *State, gates []PRGate) error {
-	if !st.conducted() || len(gates) == 0 {
-		return nil
-	}
-	heads := map[string]string{}
-	for _, g := range gates {
-		holds := map[string]bool{}
-		for _, it := range g.Items {
-			holds[it.Key] = it.OK
-		}
-		if g.Err != nil || !holds[ReadyHead] || !holds[ReadyChecks] {
-			return nil
-		}
-		if ok, judged := holds[ReadyDeferred]; ok || !judged {
-			// Nothing deferred outstanding here (every gate reads the same).
-			return nil
-		}
-		heads[g.Repo] = g.Head
-	}
-	asked, err := AskDeferredTx(ctx, tx, org, st.TaskID, st.Attempt, heads)
-	if err != nil || !asked {
-		return err
-	}
-	item, err := gateDeferredTx(ctx, tx, st.TaskID, st.Attempt, heads, true)
-	if err != nil {
-		return err
-	}
-	for i := range gates {
-		for j, it := range gates[i].Items {
-			if it.Key == ReadyDeferred {
-				gates[i].Items[j] = item
+	if deferred != nil {
+		if at := deferred.deadline(headsID(heads)); !at.IsZero() {
+			at = at.Add(graceMargin)
+			if st.ReweighAt == nil || at.Before(*st.ReweighAt) {
+				st.ReweighAt = &at
 			}
 		}
 	}
-	return nil
+	// The move, its event and the conductor's Chat notice in one
+	// transaction: one lost to a retry would never be written again (the
+	// status has moved).
+	return escalation, w.s.moveReadiness(ctx, sc.OrganizationID, st, gates, ready, len(open))
 }
 
-// deferredRejected escalates, for a person, the deferred checks the
-// conductor rejected once the pull request was open (DeferredRejectedTx):
-// checks_unverified, as a report held after the rounds, its retry not
-// offered (there is no writer's turn to send back). The gate's deferred
-// item holds the pull request in review until a person settles it.
-// escalated: it did, res the wait on that decision.
-func (w *steps) deferredRejected(ctx context.Context, sc workflow.StepContext, st *State) (res workflow.Result, escalated bool, err error) {
-	if st.Escalation != nil || !st.conducted() {
-		return res, false, nil
+// deferredDue says the later phase a deferred check was put off to has
+// come: every open pull request is at the head dude recorded and its CI
+// has reported there (the head and checks items hold), so the conductor
+// is asked to keep it, or, with none, a person settles it. heads are the
+// pull requests' heads by repository.
+func deferredDue(gates []PRGate) (heads map[string]string, due bool) {
+	heads = map[string]string{}
+	due = len(gates) > 0
+	for _, g := range gates {
+		heads[g.Repo] = g.Head
+		for _, it := range g.Items {
+			if (it.Key == ReadyHead || it.Key == ReadyChecks) && !it.OK {
+				due = false
+			}
+		}
+		due = due && g.Err == nil
 	}
-	var detail map[string]any
-	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
-		detail, err = DeferredRejectedTx(ctx, tx, st.TaskID, st.Attempt)
-		return err
-	}); err != nil || detail == nil {
-		return res, false, err
+	return heads, due
+}
+
+// setItem replaces the item of it's key in every gate.
+func setItem(gates []PRGate, it GateItem) {
+	for i := range gates {
+		for j := range gates[i].Items {
+			if gates[i].Items[j].Key == it.Key {
+				gates[i].Items[j] = it
+			}
+		}
 	}
-	res, err = w.escalate(ctx, sc, st, ReasonChecksUnverified, detail)
+}
+
+// deferredEscalate escalates, for a person, the deferred checks only a
+// person can settle now (deferredEscalation: the conductor rejected one,
+// left its ask unanswered past the deadline, or no conductor decides the
+// delivery): checks_unverified, as a report held after the rounds, its
+// retry not offered (there is no writer's turn to send back). The gate's
+// deferred item holds the pull request in review until a person settles
+// it. res is the wait on that decision.
+func (w *steps) deferredEscalate(ctx context.Context, sc workflow.StepContext, st *State, detail map[string]any) (workflow.Result, error) {
+	res, err := w.escalate(ctx, sc, st, ReasonChecksUnverified, detail)
 	if e := st.Escalation; err == nil && e != nil {
 		// Decided, it goes back to waiting on the pull requests.
 		e.At, e.AtSignals = "awaitPullRequest", []string{SignalPRFeedback, SignalHumanDecision, SignalHumanFeedback}
 	}
-	return res, err == nil, err
+	return res, err
 }
 
 // onlyUnknownOrGrace says whether g fails on nothing but what no sync

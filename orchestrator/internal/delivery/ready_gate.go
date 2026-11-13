@@ -111,6 +111,10 @@ const VerdictNoLens = "the policy picks no lens for these paths: nothing reviewe
 // request, what dude knows of it.
 type ReadyGateCheck struct {
 	PRs []GateFacts
+	// deferred is where the attempt's deferred checks stand, read once
+	// with the rest (nil under ProfileReviewVerdict): weighReadiness asks
+	// and escalates from it, at no second read.
+	deferred *deferredState
 }
 
 // GateFacts is what dude knows of one pull request for its gate.
@@ -176,19 +180,33 @@ type StoredGate struct {
 // WithOwnItems is the stored gate with dude's own items (findings,
 // questions) as p reads them now, and Ready judged again with them: those
 // change with no change of the head.
+//
+// A gate stored before an item was added lacks it: dude's own is read now
+// like the others, and any other is served failing, not yet weighed, so
+// the gate never reads not ready with every item it lists holding.
 func (s StoredGate) WithOwnItems(p GateFacts) StoredGate {
-	items := slices.Clone(s.Items)
-	ready := len(items) == len(ReadyKeys)
-	for i, it := range items {
-		switch it.Key {
+	stored := map[string]GateItem{}
+	for _, it := range s.Items {
+		stored[it.Key] = it
+	}
+	items := make([]GateItem, len(ReadyKeys))
+	ready := true
+	for i, key := range ReadyKeys {
+		it, ok := stored[key]
+		switch key {
 		case ReadyFindings:
-			items[i] = p.Findings
+			it = p.Findings
 		case ReadyQuestions:
-			items[i] = p.Questions
+			it = p.Questions
 		case ReadyDeferred:
-			items[i] = p.Deferred
+			it = p.Deferred
+		default:
+			if !ok {
+				it = GateItem{Key: key, Detail: "not weighed yet at this head"}
+			}
 		}
-		ready = ready && items[i].OK
+		items[i] = it
+		ready = ready && it.OK
 	}
 	s.Items, s.Ready = items, ready
 	return s
@@ -237,14 +255,21 @@ func StoredGatesTx(ctx context.Context, tx pgx.Tx, taskID string) (map[string]St
 // ReadyGateFor reads the gate of the task's pull requests prIDs (every
 // open one of the task when nil), in both parts.
 func (s *Store) ReadyGateFor(ctx context.Context, org string, gh *forge.GitHub, taskID string, prIDs []string) ([]PRGate, error) {
+	gates, _, err := s.readyGate(ctx, org, gh, taskID, prIDs)
+	return gates, err
+}
+
+// readyGate is ReadyGateFor, with where the attempt's deferred checks
+// stand as its transaction read them.
+func (s *Store) readyGate(ctx context.Context, org string, gh *forge.GitHub, taskID string, prIDs []string) ([]PRGate, *deferredState, error) {
 	var c ReadyGateCheck
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		c, err = CheckReadyGateTx(ctx, tx, taskID, prIDs)
 		return err
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return DoReadyGate(ctx, gh, c), nil
+	return DoReadyGate(ctx, gh, c), c.deferred, nil
 }
 
 // CheckReadyGateTx reads what dude knows of the task's pull requests
@@ -328,9 +353,10 @@ func CheckProfileGateTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []s
 	// A review verdict has no writer whose checks could be deferred.
 	deferred := GateItem{Key: ReadyDeferred, OK: true, Detail: "not applicable: review only"}
 	if !verdict {
-		if deferred, err = gateDeferredTx(ctx, tx, taskID, attempt, gateHeads(c.PRs), d.Conducted()); err != nil {
+		if c.deferred, err = readDeferredTx(ctx, tx, taskID, attempt, d.Conducted()); err != nil {
 			return c, err
 		}
+		deferred = deferredItem(c.deferred, headsID(gateHeads(c.PRs)))
 	}
 	for i := range c.PRs {
 		p := &c.PRs[i]

@@ -10,6 +10,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -23,13 +24,22 @@ import (
 // still outstanding (a second checks ask, its run.checks.asked carrying
 // Discharge), where deferred is no longer a verdict. Backed keeps the
 // promise at those heads; reject leaves it broken, for a person to settle
-// (checks_unverified, as a report held after the rounds). The ready gate's
-// deferred item holds only when every deferred check of the attempt is
-// kept or a person waived it.
+// (checks_unverified, as a report held after the rounds), and so does no
+// answer by the ask's deadline, or no conductor deciding the delivery at
+// all. The ready gate's deferred item holds only when every deferred check
+// of the attempt is kept at the pull requests' heads or a person waived it.
+//
+// Outstanding is level-triggered from the ledger, read once per weigh
+// (readDeferredTx): every judgement of the attempt's writers that deferred
+// a check makes a promise (the union over their judged turns, not each
+// Run's newest: a person's waiver of a held report, or a later turn that
+// no longer lists the command, keeps no promise), and from its newest
+// deferral only a backed answer at the heads, or a person's discharge
+// waiver, keeps it.
 
 // ChecksDischarge marks a second checks ask (and its answer): the attempt,
 // the open pull requests' heads it was asked at (repository to head), and
-// its key (DischargeKey).
+// its key (DischargeKey), which the wake names and the answer must cite.
 type ChecksDischarge struct {
 	Attempt int               `json:"attempt"`
 	Heads   map[string]string `json:"heads"`
@@ -51,9 +61,9 @@ func headsID(heads map[string]string) string {
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
-// deferredCheck is one deferred check of the attempt: the newest gated
-// Run whose judgement deferred it, that judgement's turn, the command and
-// the conductor's reason.
+// deferredCheck is one deferred check of the attempt: the newest writer
+// judgement that deferred it (its Run and turn), the command and the
+// conductor's reason.
 type deferredCheck struct {
 	RunID, ProjectID string
 	Turn             int64
@@ -61,87 +71,87 @@ type deferredCheck struct {
 }
 
 // dischargeAnswer is the conductor's answer about one check at a second
-// ask: at which heads, its verdict and reason, and its event's cursor.
+// ask: its verdict and reason.
 type dischargeAnswer struct {
-	Heads           string
 	Verdict, Reason string
-	Cursor          int64
 }
 
-// deferredState is where each deferred check of the attempt stands.
+// dischargeAsk is one second ask at heads (headsID): whether its
+// deadline has passed (on the database's clock) and whether it is answered.
+type dischargeAsk struct {
+	Heads             string
+	Deadline          time.Time
+	Overdue, Answered bool
+}
+
+// deferredState is where each deferred check of the attempt stands, read
+// once (readDeferredTx). Every map is by command, and holds only what
+// happened since the command's newest deferral.
 type deferredState struct {
 	checks []deferredCheck
-	// By command: the latest answer, a backed answer by heads, the heads
-	// it was asked at, and a person's waiver after the latest reject.
+	// conducted: a live conductor decides the delivery.
+	conducted bool
+	// The latest answer; the heads it was backed at; the asks about it
+	// by heads (their cursor, a key of asks); a person's waiver.
 	latest map[string]dischargeAnswer
 	backed map[string]map[string]bool
-	asked  map[string]map[string]bool
-	waived map[string]int64
+	asked  map[string]map[string]int64
+	waived map[string]bool
+	asks   map[int64]*dischargeAsk
 }
 
-// readDeferredTx reads the attempt's deferred checks and every second ask,
-// answer and waiver about them.
-func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (*deferredState, error) {
-	// Each gated Run's newest judgement that is not unchanged, as gatedRuns
-	// reads it.
-	rows, err := tx.Query(ctx, `SELECT id, project_id, turn, checks FROM (
-		SELECT DISTINCT ON (r.id) r.id, COALESCE(r.project_id, '') AS project_id, r.created_at,
-			COALESCE((e.payload->>'turn')::bigint, 0) AS turn, COALESCE(e.payload->'checks', '[]'::jsonb) AS checks
-		FROM events e JOIN runs r ON r.id = e.run_id
-		WHERE r.task_id = $1 AND r.phase IN ('implement','fix','simplify') AND e.event_type = $3
-		 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
-		ORDER BY r.id, (e.payload->>'unchanged')::boolean IS TRUE, e.cursor DESC) latest
-		ORDER BY created_at, id`, taskID, attempt, EvRunChecksJudged)
+func newDeferredState() *deferredState {
+	return &deferredState{latest: map[string]dischargeAnswer{}, backed: map[string]map[string]bool{},
+		asked: map[string]map[string]int64{}, waived: map[string]bool{}, asks: map[int64]*dischargeAsk{}}
+}
+
+// deferredRead (SQL, $1 the task, $2 its attempt, 0 for the latest): the
+// attempt's writer judgements that deferred a check, and every second ask,
+// answer and discharge waiver, oldest first. One arm per event type, each
+// a literal so generic plans can prove the partial indexes' predicates
+// (events_run_checks_settled_idx, _asked_idx, _decided_idx) and never scan
+// a Run's every event.
+const deferredRead = `WITH r AS (SELECT id, phase FROM runs WHERE task_id = $1
+		AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)))
+	SELECT e.event_type, e.cursor, e.run_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
+		WHERE e.event_type = 'run.checks.judged' AND r.phase IN ('implement','fix','simplify')
+		AND e.payload->'checks' @> '[{"result":"deferred"}]'
+	UNION ALL
+	SELECT e.event_type, e.cursor, e.run_id, e.payload, COALESCE((e.payload->>'deadline')::timestamptz <= now(), true)
+		FROM r JOIN events e ON e.run_id = r.id WHERE e.event_type = 'run.checks.asked' AND e.payload ? 'discharge'
+	UNION ALL
+	SELECT e.event_type, e.cursor, e.run_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
+		WHERE e.event_type = 'run.checks.conducted' AND e.payload ? 'discharge'
+	UNION ALL
+	SELECT e.event_type, e.cursor, e.run_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
+		WHERE e.event_type = 'run.checks.decided' AND e.payload ? 'discharge' AND e.payload->>'action' = '` + ActionWaive + `'
+	ORDER BY 2`
+
+// readDeferredTx reads where the attempt's deferred checks stand; conducted
+// says a live conductor decides the delivery.
+func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, conducted bool) (*deferredState, error) {
+	rows, err := tx.Query(ctx, deferredRead, taskID, attempt)
 	if err != nil {
 		return nil, err
 	}
-	s := &deferredState{latest: map[string]dischargeAnswer{}, backed: map[string]map[string]bool{},
-		asked: map[string]map[string]bool{}, waived: map[string]int64{}}
+	s := newDeferredState()
+	s.conducted = conducted
 	at := map[string]int{}
-	var runID, projectID string
-	var turn int64
-	var raw []byte
-	if _, err := pgx.ForEachRow(rows, []any{&runID, &projectID, &turn, &raw}, func() error {
-		var checks []struct{ Command, Result, Reason string }
-		if json.Unmarshal(raw, &checks) != nil {
-			return nil
-		}
-		for _, c := range checks {
-			if c.Result != CheckDeferred {
-				continue
-			}
-			d := deferredCheck{runID, projectID, turn, strings.TrimSpace(c.Command), c.Reason}
-			if i, ok := at[d.Command]; ok {
-				// The newest Run that deferred it holds the promise.
-				s.checks[i] = d
-				continue
-			}
-			at[d.Command] = len(s.checks)
-			s.checks = append(s.checks, d)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	if len(s.checks) == 0 {
-		return s, nil
-	}
-	// The second asks, their answers and a person's waivers, oldest first.
-	rows, err = tx.Query(ctx, `SELECT e.event_type, e.cursor, e.payload FROM events e JOIN runs r ON r.id = e.run_id
-		WHERE r.task_id = $1 AND r.attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1))
-		AND e.event_type IN ($3, $4, $5) AND e.payload ? 'discharge'
-		ORDER BY e.cursor`, taskID, attempt, EvRunChecksAsked, EvRunChecksConducted, EvRunChecksDecided)
-	if err != nil {
-		return nil, err
-	}
-	var typ string
+	var typ, runID string
 	var cursor int64
-	_, err = pgx.ForEachRow(rows, []any{&typ, &cursor, &raw}, func() error {
+	var raw []byte
+	var overdue bool
+	_, err = pgx.ForEachRow(rows, []any{&typ, &cursor, &runID, &raw, &overdue}, func() error {
 		var p struct {
-			Discharge json.RawMessage  `json:"discharge"`
-			Checks    []ConductedCheck `json:"checks"`
-			Action    string           `json:"action"`
-			Commands  []string         `json:"commands"`
+			Turn     int64     `json:"turn"`
+			Deadline time.Time `json:"deadline"`
+			// An ask's and an answer's ChecksDischarge; a waiver's true.
+			Discharge json.RawMessage `json:"discharge"`
+			Checks    []struct {
+				Command, Result, Reason, Verdict, Evidence string
+			} `json:"checks"`
+			AskCursor int64    `json:"askCursor"`
+			Commands  []string `json:"commands"`
 		}
 		if json.Unmarshal(raw, &p) != nil {
 			return nil
@@ -149,64 +159,123 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) 
 		var dis ChecksDischarge
 		_ = json.Unmarshal(p.Discharge, &dis)
 		heads := headsID(dis.Heads)
-		mark := func(m map[string]map[string]bool, command string) {
-			if m[command] == nil {
-				m[command] = map[string]bool{}
-			}
-			m[command][heads] = true
-		}
 		switch typ {
-		case EvRunChecksAsked:
-			var asked struct {
-				Check []Check `json:"checks"`
+		case EvRunChecksJudged:
+			for _, c := range p.Checks {
+				if c.Result != CheckDeferred {
+					continue
+				}
+				d := deferredCheck{RunID: runID, Turn: p.Turn, Command: strings.TrimSpace(c.Command), Reason: c.Reason}
+				// A deferral is a new promise: what kept an older one does
+				// not keep it.
+				delete(s.latest, d.Command)
+				delete(s.backed, d.Command)
+				delete(s.asked, d.Command)
+				delete(s.waived, d.Command)
+				if i, ok := at[d.Command]; ok {
+					s.checks = slices.Delete(s.checks, i, i+1)
+					for k, j := range at {
+						if j > i {
+							at[k] = j - 1
+						}
+					}
+				}
+				at[d.Command] = len(s.checks)
+				s.checks = append(s.checks, d)
 			}
-			_ = json.Unmarshal(raw, &asked)
-			for _, c := range asked.Check {
-				mark(s.asked, strings.TrimSpace(c.Command))
+		case EvRunChecksAsked:
+			s.asks[cursor] = &dischargeAsk{Heads: heads, Deadline: p.Deadline, Overdue: overdue}
+			for _, c := range p.Checks {
+				command := strings.TrimSpace(c.Command)
+				if s.asked[command] == nil {
+					s.asked[command] = map[string]int64{}
+				}
+				s.asked[command][heads] = cursor
 			}
 		case EvRunChecksConducted:
+			if a := s.asks[p.AskCursor]; a != nil {
+				a.Answered = true
+			}
 			for _, v := range p.Checks {
 				command := strings.TrimSpace(v.Command)
-				s.latest[command] = dischargeAnswer{heads, v.Verdict, v.Reason, cursor}
+				s.latest[command] = dischargeAnswer{v.Verdict, v.Reason}
 				if v.Verdict == VerdictBacked {
-					mark(s.backed, command)
+					if s.backed[command] == nil {
+						s.backed[command] = map[string]bool{}
+					}
+					s.backed[command][heads] = true
 				}
 			}
 		case EvRunChecksDecided:
-			if p.Action == ActionWaive {
-				for _, c := range p.Commands {
-					s.waived[strings.TrimSpace(c)] = cursor
-				}
+			for _, c := range p.Commands {
+				s.waived[strings.TrimSpace(c)] = true
 			}
 		}
 		return nil
 	})
-	return s, err
+	if err != nil {
+		return nil, err
+	}
+	// The project of each Run that deferred one, for the second ask's ref.
+	for i, c := range s.checks {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(project_id, '') FROM runs WHERE id = $1`, c.RunID).Scan(&s.checks[i].ProjectID); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 // Where an outstanding deferred check stands at the heads read.
 const (
 	deferredKept     = "kept"
 	deferredRejected = "rejected"
-	deferredAsked    = "asked"
-	deferredToAsk    = "to ask"
+	// deferredOverdue: asked at these heads, unanswered past the ask's
+	// deadline.
+	deferredOverdue = "overdue"
+	// deferredPerson: no conductor decides the delivery to keep it.
+	deferredPerson = "person"
+	deferredAsked  = "asked"
+	deferredToAsk  = "to ask"
 )
 
 // standing is where check stands at heads.
 func (s *deferredState) standing(c deferredCheck, heads string) string {
 	last, answered := s.latest[c.Command]
 	switch {
-	case answered && last.Verdict == VerdictReject && s.waived[c.Command] > last.Cursor:
-		// A person waived it after the conductor rejected it.
+	case s.waived[c.Command]:
+		// A person waived it at a discharge escalation.
 		return deferredKept
 	case answered && last.Verdict == VerdictReject:
 		return deferredRejected
 	case s.backed[c.Command][heads]:
 		return deferredKept
-	case s.asked[c.Command][heads]:
+	case !s.conducted:
+		// Whatever was asked before the delivery left its conductor,
+		// no conductor will answer it now.
+		return deferredPerson
+	}
+	if cursor, ok := s.asked[c.Command][heads]; ok {
+		if a := s.asks[cursor]; a != nil && a.Overdue && !a.Answered {
+			return deferredOverdue
+		}
 		return deferredAsked
 	}
 	return deferredToAsk
+}
+
+// deadline is the earliest deadline of an ask at heads still waiting on
+// the conductor's answer; zero for none.
+func (s *deferredState) deadline(heads string) time.Time {
+	var at time.Time
+	for _, c := range s.checks {
+		if s.standing(c, heads) != deferredAsked {
+			continue
+		}
+		if a := s.asks[s.asked[c.Command][heads]]; a != nil && !a.Deadline.IsZero() && (at.IsZero() || a.Deadline.Before(at)) {
+			at = a.Deadline
+		}
+	}
+	return at
 }
 
 // outstanding are the deferred checks not kept at heads.
@@ -223,21 +292,11 @@ func (s *deferredState) outstanding(heads string) []deferredCheck {
 // deferredItemMax bounds a reason quoted in the gate's deferred item.
 const deferredItemMax = 200
 
-// gateDeferredTx is the deferred item: no deferred check of the attempt
-// outstanding at heads (the open pull requests' heads). Its detail names
-// each one: its command, the conductor's reason for deferring it, and
-// where it stands. conducted: a conductor decides the delivery, so it is
-// asked; without one, a person settles it.
-func gateDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, heads map[string]string, conducted bool) (GateItem, error) {
-	s, err := readDeferredTx(ctx, tx, taskID, attempt)
-	if err != nil {
-		return GateItem{}, err
-	}
-	return deferredItem(s, headsID(heads), conducted), nil
-}
-
-// deferredItem is the deferred item from s at the heads named id.
-func deferredItem(s *deferredState, id string, conducted bool) GateItem {
+// deferredItem is the deferred item from s at the heads named id: no
+// deferred check of the attempt outstanding there. Its detail names each
+// one: its command, the conductor's reason for deferring it, and where it
+// stands.
+func deferredItem(s *deferredState, id string) GateItem {
 	open := s.outstanding(id)
 	if len(open) == 0 {
 		if len(s.checks) == 0 {
@@ -248,14 +307,16 @@ func deferredItem(s *deferredState, id string, conducted bool) GateItem {
 	parts := make([]string, len(open))
 	for i, c := range open {
 		var stands string
-		switch st := s.standing(c, id); {
-		case st == deferredRejected:
+		switch s.standing(c, id) {
+		case deferredRejected:
 			stands = "the conductor rejected it (" + clip(oneLine(cmp.Or(s.latest[c.Command].Reason, "no reason given")), deferredItemMax) +
 				"): a person settles it"
-		case st == deferredAsked:
-			stands = "the conductor is asked to keep it at this head"
-		case !conducted:
+		case deferredOverdue:
+			stands = "the conductor did not answer by the ask's deadline: a person settles it"
+		case deferredPerson:
 			stands = "no conductor decides this delivery: a person settles it"
+		case deferredAsked:
+			stands = "the conductor is asked to keep it at this head"
 		default:
 			stands = "the conductor is asked once CI has reported at the head"
 		}
@@ -266,16 +327,16 @@ func deferredItem(s *deferredState, id string, conducted bool) GateItem {
 
 var checksDeferredWake = mustTemplate("wakes/checks-deferred")
 
-// AskDeferredTx asks the task's conductor, once per attempt and heads, to
-// keep the deferred checks of the attempt still outstanding at heads (the
-// open pull requests' heads, each with CI reported): a second checks ask
-// on the newest Run that deferred one, its wake keyed DischargeKey. A
-// check the conductor rejected, or already asked about at these heads, is
-// not asked again. Returns whether it asked now.
-func AskDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, heads map[string]string) (bool, error) {
-	s, err := readDeferredTx(ctx, tx, taskID, attempt)
-	if err != nil || len(s.checks) == 0 {
-		return false, err
+// askDeferredTx asks the task's conductor, once per attempt and heads, to
+// keep the deferred checks s has still to ask about at heads (the open
+// pull requests' heads, each with CI reported): a second checks ask on the
+// newest Run that deferred one, its wake keyed DischargeKey and naming
+// that key, which the answer cites. A check the conductor rejected, or
+// already asked about at these heads, is not asked again. It marks s
+// asked. Returns whether it asked now.
+func askDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, heads map[string]string, s *deferredState) (bool, error) {
+	if !s.conducted {
+		return false, nil
 	}
 	id := headsID(heads)
 	var ask []deferredCheck
@@ -283,7 +344,7 @@ func AskDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt i
 	for _, c := range s.checks {
 		if s.standing(c, id) == deferredToAsk {
 			ask = append(ask, c)
-			anchor = c // checks are oldest Run first: the newest is last
+			anchor = c // checks are oldest deferral first: the newest is last
 		}
 	}
 	if len(ask) == 0 {
@@ -296,15 +357,17 @@ func AskDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt i
 	}
 	key := DischargeKey(anchor.RunID, anchor.Turn, attempt, heads)
 	var exists bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2 AND payload->'discharge'->>'key' = $3)`,
-		anchor.RunID, EvRunChecksAsked, key).Scan(&exists); err != nil || exists {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'run.checks.asked'
+		AND payload->'discharge'->>'key' = $2)`, anchor.RunID, key).Scan(&exists); err != nil || exists {
 		return false, err
 	}
 	asked := ChecksAsked{Turn: anchor.Turn, Discharge: &ChecksDischarge{Attempt: attempt, Heads: heads, Key: key}}
 	for _, c := range ask {
 		asked.Check = append(asked.Check, Check{Command: c.Command, Result: CheckDeferred, Evidence: c.Reason})
 	}
-	if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&asked.Deadline); err != nil {
+	// The first ask's wait: unanswered past it, a person is asked
+	// (deferredEscalation).
+	if err := tx.QueryRow(ctx, `SELECT now() + make_interval(secs => $1)`, ChecksAnswerWait.Seconds()).Scan(&asked.Deadline); err != nil {
 		return false, err
 	}
 	raw, _ := json.Marshal(asked)
@@ -314,13 +377,23 @@ func AskDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt i
 	if _, err := ledger.Append(ctx, tx, ref.Event(EvRunChecksAsked, ledger.ActorSystem, payload)); err != nil {
 		return false, err
 	}
-	_, err = RecordWakeTx(ctx, tx, org, taskID, WakeChecks, key, deferredWakeLine(anchor, asked))
-	return err == nil, err
+	if _, err := RecordWakeTx(ctx, tx, org, taskID, WakeChecks, key, deferredWakeLine(anchor, asked)); err != nil {
+		return false, err
+	}
+	// Marked asked, as the next read would read it (cursor -1: this ask).
+	s.asks[-1] = &dischargeAsk{Heads: id, Deadline: asked.Deadline}
+	for _, c := range ask {
+		if s.asked[c.Command] == nil {
+			s.asked[c.Command] = map[string]int64{}
+		}
+		s.asked[c.Command][id] = -1
+	}
+	return true, nil
 }
 
-// deferredWakeLine is the second ask's wake: the Run and turn to answer,
-// the heads, and one line per check with the conductor's own reason for
-// deferring it.
+// deferredWakeLine is the second ask's wake: the Run, turn and ask to
+// answer, the heads, and one line per check with the conductor's own
+// reason for deferring it.
 func deferredWakeLine(anchor deferredCheck, asked ChecksAsked) string {
 	type check struct{ Command, Reason string }
 	checks := make([]check, len(asked.Check))
@@ -332,37 +405,66 @@ func deferredWakeLine(anchor deferredCheck, asked ChecksAsked) string {
 		heads = append(heads, repo+" at "+short(asked.Discharge.Heads[repo]))
 	}
 	return render(checksDeferredWake, struct {
-		RunID, Heads string
-		Turn         int64
-		Checks       []check
-	}{anchor.RunID, strings.Join(heads, ", "), anchor.Turn, checks})
+		RunID, Heads, Ask string
+		Turn              int64
+		Checks            []check
+	}{anchor.RunID, strings.Join(heads, ", "), asked.Discharge.Key, anchor.Turn, checks})
 }
 
 // openDischargeTx is the newest second ask about runID's turn the
 // conductor has not answered; nil for none.
-func openDischargeTx(ctx context.Context, tx pgx.Tx, runID string, turn int64) (*ChecksAsked, int64, error) {
+func openDischargeTx(ctx context.Context, tx pgx.Tx, runID string, turn int64) (*ChecksAsked, error) {
 	var raw []byte
-	var cursor int64
-	err := tx.QueryRow(ctx, `SELECT a.payload, a.cursor FROM events a WHERE a.run_id = $1 AND a.event_type = $2
-		AND (a.payload->>'turn')::bigint = $3 AND a.payload ? 'discharge'
-		AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = a.run_id AND v.event_type = $4
+	err := tx.QueryRow(ctx, `SELECT a.payload FROM events a WHERE a.run_id = $1 AND a.event_type = 'run.checks.asked'
+		AND (a.payload->>'turn')::bigint = $2 AND a.payload ? 'discharge'
+		AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = a.run_id AND v.event_type = 'run.checks.conducted'
 			AND (v.payload->>'askCursor')::bigint = a.cursor)
-		ORDER BY a.cursor DESC LIMIT 1`, runID, EvRunChecksAsked, turn, EvRunChecksConducted).Scan(&raw, &cursor)
+		ORDER BY a.cursor DESC LIMIT 1`, runID, turn).Scan(&raw)
 	if err == pgx.ErrNoRows {
-		return nil, 0, nil
+		return nil, nil
 	}
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	asked := &ChecksAsked{}
-	return asked, cursor, json.Unmarshal(raw, asked)
+	return asked, json.Unmarshal(raw, asked)
 }
 
-// conductDischargeTx records the conductor's answer to a second ask: each
-// deferred check backed (kept at the ask's heads) or rejected. The
-// delivery weighs readiness again; a rejected check holds the gate until a
-// person settles it (DeferredRejectedTx).
-func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks, projectID string, asked *ChecksAsked, askCursor int64) (int64, error) {
+// conductDischargeTx records the conductor's answer to the second ask its
+// key names (in.Ask): each deferred check backed (kept at that ask's
+// heads, and no others) or rejected. An ask a newer one at other heads
+// superseded (the heads moved) is refused: its evidence keeps nothing at
+// the heads the pull requests are at now. The delivery weighs readiness
+// again; a rejected check holds the gate until a person settles it.
+func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks, projectID string) (int64, error) {
+	var raw []byte
+	var askCursor int64
+	var answered, superseded bool
+	err := tx.QueryRow(ctx, `SELECT a.payload, a.cursor,
+			EXISTS (SELECT 1 FROM events v WHERE v.run_id = a.run_id AND v.event_type = 'run.checks.conducted'
+				AND (v.payload->>'askCursor')::bigint = a.cursor),
+			EXISTS (SELECT 1 FROM runs r JOIN events n ON n.run_id = r.id WHERE r.task_id = $3 AND r.attempt = task_attempt($3)
+				AND n.event_type = 'run.checks.asked' AND n.payload ? 'discharge' AND n.cursor > a.cursor
+				AND n.payload->'discharge'->'heads' <> a.payload->'discharge'->'heads')
+		FROM events a WHERE a.run_id = $1 AND a.event_type = 'run.checks.asked' AND a.payload->'discharge'->>'key' = $2
+			AND (a.payload->>'turn')::bigint = $4`,
+		in.RunID, strings.TrimSpace(in.Ask), ref.TaskID, in.Turn).Scan(&raw, &askCursor, &answered, &superseded)
+	if err == pgx.ErrNoRows {
+		return 0, refusef(rChecksNoSuchAsk, in.Ask)
+	}
+	if err != nil {
+		return 0, err
+	}
+	asked := &ChecksAsked{}
+	if err := json.Unmarshal(raw, asked); err != nil {
+		return 0, err
+	}
+	switch {
+	case superseded:
+		return 0, refusef(rChecksAskSuperseded, in.Ask)
+	case answered:
+		return 0, refuseText(rChecksNotWaiting)
+	}
 	if err := checkVerdicts(asked, in); err != nil {
 		return 0, err
 	}
@@ -375,45 +477,57 @@ func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChe
 		return 0, err
 	}
 	var cursor int64
-	if err := tx.QueryRow(ctx, `SELECT max(cursor) FROM events WHERE run_id = $1 AND event_type = $2`, in.RunID, EvRunChecksConducted).Scan(&cursor); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT max(cursor) FROM events WHERE run_id = $1 AND event_type = 'run.checks.conducted'`, in.RunID).Scan(&cursor); err != nil {
 		return 0, err
 	}
 	return cursor, GateItemSettledTx(ctx, tx, ref.Org, ref.TaskID, fmt.Sprintf("deferred:%d", cursor))
 }
 
-// DeferredRejectedTx is the escalation's detail for the attempt's deferred
-// checks the conductor rejected at a second ask and no person has settled
-// since; nil for none. The escalation is checks_unverified, as a report
-// held after the rounds: a person waives (or stops); there is no writer's
-// turn to send back, so no retry (Discharge).
-func DeferredRejectedTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) (map[string]any, error) {
-	s, err := readDeferredTx(ctx, tx, taskID, attempt)
-	if err != nil {
-		return nil, err
-	}
+// deferredEscalation is the escalation's detail for the deferred checks
+// only a person can settle now at heads (id): the conductor rejected them,
+// left the ask unanswered past its deadline, or no conductor decides the
+// delivery (once due: the heads recorded and CI reported there); nil for
+// none. The escalation is checks_unverified, as a report held after the
+// rounds: a person waives (or stops); there is no writer's turn to send
+// back, so no retry (Escalation.discharge). Once waived, the checks are
+// kept, so it is raised once.
+func deferredEscalation(s *deferredState, id string, due bool) map[string]any {
 	var anchor deferredCheck
 	var commands []string
 	var unverified []UnverifiedCheck
 	var lines []string
 	for _, c := range s.checks {
-		if s.standing(c, "") != deferredRejected {
+		var why, line string
+		switch s.standing(c, id) {
+		case deferredRejected:
+			why = clip(oneLine(cmp.Or(s.latest[c.Command].Reason, "no reason given")), escalatedItemMax)
+			line = "deferred, then rejected by the conductor once the pull request was open: " + why
+		case deferredOverdue:
+			why = "the conductor did not answer the ask to keep it by its deadline"
+			line = "deferred, then " + why
+		case deferredPerson:
+			if !due {
+				continue
+			}
+			why = "no conductor decides this delivery to keep it"
+			line = "deferred (" + clip(oneLine(cmp.Or(c.Reason, "no reason given")), escalatedItemMax) + "), and " + why
+		default:
 			continue
 		}
 		anchor = c
-		why := clip(oneLine(cmp.Or(s.latest[c.Command].Reason, "no reason given")), escalatedItemMax)
 		commands = append(commands, c.Command)
 		unverified = append(unverified, UnverifiedCheck{clip(oneLine(c.Command), escalatedItemMax), why})
-		lines = append(lines, fmt.Sprintf("- %s: deferred, then rejected by the conductor once the pull request was open: %s", c.Command, why))
+		lines = append(lines, fmt.Sprintf("- %s: %s", c.Command, line))
 	}
 	if len(commands) == 0 {
-		return nil, nil
+		return nil
 	}
 	return map[string]any{"runId": anchor.RunID, "rounds": 0, "discharge": true, "commands": commands, "unverified": unverified,
-		"message": "Deferred checks not kept:\n" + strings.Join(lines, "\n")}, nil
+		"message": "Deferred checks not kept:\n" + strings.Join(lines, "\n")}
 }
 
-// discharge says a checks_unverified escalation is of deferred checks the
-// conductor rejected after the pull request opened (DeferredRejectedTx),
+// discharge says a checks_unverified escalation is of deferred checks only
+// a person can settle once the pull request is open (deferredEscalation),
 // not of a writer's held report.
 func (e *Escalation) discharge() bool {
 	if e == nil || e.Reason != ReasonChecksUnverified {

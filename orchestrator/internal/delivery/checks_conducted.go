@@ -194,6 +194,9 @@ type DecideChecks struct {
 	Turn    int64            `json:"turn"`
 	Checks  []ConductedCheck `json:"checks"`
 	Missing ConductedMissing `json:"missing"`
+	// Ask is the second checks ask an answer is to (its key, which the
+	// second checks wake names): "" for the first ask.
+	Ask string `json:"ask,omitempty"`
 }
 
 // ConductChecksTx records the task's live conductor's verdict on a
@@ -224,15 +227,17 @@ func ConductChecksTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks
 	if err != nil {
 		return 0, err
 	}
-	// A second ask about the turn's deferred checks, once the pull
-	// request is open, is answered first: the turn need not be the Run's
-	// latest (a completed Run's report is the one that deferred them).
-	discharge, askCursor, err := openDischargeTx(ctx, tx, in.RunID, in.Turn)
-	if err != nil {
-		return 0, err
+	// An answer to a second ask about the turn's deferred checks, once
+	// the pull request is open, names the ask: the turn need not be the
+	// Run's latest (a completed Run's report is the one that deferred
+	// them), and the ask, not the turn, says at which heads it is kept.
+	if strings.TrimSpace(in.Ask) != "" {
+		return conductDischargeTx(ctx, tx, ref, in, projectID)
 	}
-	if discharge != nil {
-		return conductDischargeTx(ctx, tx, ref, in, projectID, discharge, askCursor)
+	if open, err := openDischargeTx(ctx, tx, in.RunID, in.Turn); err != nil {
+		return 0, err
+	} else if open != nil {
+		return 0, refuseText(rChecksAskMissing)
 	}
 	if in.Turn != latest {
 		return 0, refusef(rChecksNotLatestTurn, latest)

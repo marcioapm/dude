@@ -236,6 +236,9 @@ rRecoverAlreadyRecovered               refusals/delivery/recover/already-recover
 rChecksRunNotOfTask                     refusals/delivery/checks/run-not-of-task
 rChecksNotLatestTurn                    refusals/delivery/checks/not-latest-turn
 rChecksNotWaiting                       refusals/delivery/checks/not-waiting
+rChecksAskMissing                       refusals/delivery/checks/ask-missing
+rChecksNoSuchAsk                        refusals/delivery/checks/no-such-ask
+rChecksAskSuperseded                    refusals/delivery/checks/ask-superseded
 rChecksIncomplete                       refusals/delivery/checks/incomplete
 rChecksNeedsReason                      refusals/delivery/checks/needs-reason
 rChecksVerdictNotAllowed                refusals/delivery/checks/verdict-not-allowed
