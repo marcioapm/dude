@@ -48,3 +48,13 @@ describe("parseMarkdown breaks", () => {
     expect(on("one\n\ntwo")).toEqual([para(t("one")), para(t("two"))]);
   });
 });
+
+describe("a fence opener, as CommonMark and GitHub read it", () => {
+  test("a run of backticks with a backtick after it on its line is a code span", () => {
+    expect(parseMarkdown("```make bench``` is slow\nnext")).toEqual([para({ t: "code", v: "make bench" }, t(" is slow next"))]);
+  });
+
+  test("a tilde fence's info may hold a backtick, and the fence stays open", () => {
+    expect(parseMarkdown("~~~ `x`\ncode\n")).toEqual([{ t: "code", lang: "", v: "code\n", open: true }]);
+  });
+});

@@ -94,7 +94,9 @@ export function safeUrl(raw: string): string | null {
 // Block level
 // ---------------------------------------------------------------------------
 
-const FENCE_RE = /^(\s{0,3})(`{3,}|~{3,})\s*([^\s`]*)\s*(.*)$/;
+// A run of backticks with a backtick after it on its line is a code span, not
+// a fence (CommonMark, GitHub, and the attachment parsers); tildes may.
+const FENCE_RE = /^(\s{0,3})(`{3,}(?=[^`]*$)|~{3,})\s*([^\s`]*)\s*(.*)$/;
 const HEADING_RE = /^(#{1,6})(?:[ \t]+(.*?))?[ \t]*#*[ \t]*$/;
 const HR_RE = /^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 // HR_RE backtracks for milliseconds on a long "- - - … x" line; a rule holds
