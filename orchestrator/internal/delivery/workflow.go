@@ -3422,7 +3422,7 @@ func (w *steps) dischargeKept(ctx context.Context, sc workflow.StepContext, st *
 		if open == nil || open.Decided != nil || !open.discharge() {
 			return nil
 		}
-		kept, why, err := dischargeKeptTx(ctx, tx, st.TaskID)
+		kept, why, err := dischargeKeptTx(ctx, tx, st.TaskID, st.PullRequestIDs)
 		if err != nil || !kept {
 			return err
 		}

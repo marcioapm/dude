@@ -431,11 +431,15 @@ func deferredWakeLine(anchor deferredCheck, asked ChecksAsked) string {
 	}{anchor.RunID, strings.Join(heads, ", "), asked.Discharge.Key, ChecksWaitWords(), anchor.Turn, checks})
 }
 
-// gateHeadsSQL (SQL, $3 the task): the open pull requests' heads by
-// repository, as gateHeads reads them, as JSON: the heads an ask must be
-// at to be answered.
-const gateHeadsSQL = `(SELECT COALESCE(jsonb_object_agg(rp.name, COALESCE(pr.head_sha, '')), '{}') FROM pull_requests pr
-	JOIN repositories rp ON rp.id = pr.repository_id WHERE pr.task_id = $3 AND pr.state IN ('open', 'draft'))`
+// gateHeadsSQL (SQL, $3 the task): the heads by repository of the
+// delivery's open or draft pull requests (State.PullRequestIDs), as JSON:
+// the map gateHeads builds for the weigh, the last in created_at, id order
+// winning a repository. An ask must be at these heads to be answered.
+const gateHeadsSQL = `(SELECT COALESCE(jsonb_object_agg(rp.name, COALESCE(pr.head_sha, '') ORDER BY pr.created_at, pr.id), '{}')
+	FROM pull_requests pr JOIN repositories rp ON rp.id = pr.repository_id
+	WHERE pr.task_id = $3 AND pr.state IN ('open', 'draft') AND pr.id IN (
+		SELECT jsonb_array_elements_text(COALESCE(w.state->'pullRequestIds', '[]')) FROM (SELECT state FROM workflow_runs
+		WHERE task_id = $3 AND workflow_type = '` + WorkflowType + `' ORDER BY created_at DESC LIMIT 1) w))`
 
 // openDischargeTx is the second ask about runID's turn the conductor has
 // not answered, the one at the pull requests' heads first (the one an
@@ -524,11 +528,17 @@ func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChe
 }
 
 // dischargeKeptTx says the open discharge escalation needs no person any
-// more: read from the stored gate facts as the weigh reads them, every
-// deferred check of the attempt is kept at the open pull requests' heads
-// (a backed answer there, however late). why says so, for the record.
-func dischargeKeptTx(ctx context.Context, tx pgx.Tx, taskID string) (kept bool, why string, err error) {
-	c, err := CheckReadyGateTx(ctx, tx, taskID, nil)
+// more: read from the stored gate facts as the weigh reads them (the
+// delivery's open pull requests, prIDs filtered to open), every deferred
+// check of the attempt is kept at their heads (a backed answer there,
+// however late). why says so, for the record.
+func dischargeKeptTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []string) (kept bool, why string, err error) {
+	var open []string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(id), '{}') FROM pull_requests
+		WHERE id = ANY($1) AND state IN ('open', 'draft')`, prIDs).Scan(&open); err != nil || len(open) == 0 {
+		return false, "", err
+	}
+	c, err := CheckReadyGateTx(ctx, tx, taskID, open)
 	if err != nil || c.deferred == nil || len(c.PRs) == 0 {
 		return false, "", err
 	}

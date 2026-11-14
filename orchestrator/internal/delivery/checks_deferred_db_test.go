@@ -40,6 +40,9 @@ func newDeferredFixture(t *testing.T) *deferredFixture {
 			'{"turn": 1, "verified": true, "checks": [{"command": "bench", "result": "deferred", "reason": "later"}]}')`,
 		`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
 			VALUES ('pr_d', $1, 'prj_d', 'wi_d', 'repo_d', 1, 'https://x/pull/1', 'dude/wi_d', 'main', 'h1', 'T')`,
+		`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step, state)
+			VALUES ('wf_d', $1, '` + WorkflowType + `', 'd', 'wi_d', 'running', 'awaitPullRequest',
+			'{"taskId": "wi_d", "projectId": "prj_d", "attempt": 1, "decider": "conductor", "pullRequestIds": ["pr_d"]}')`,
 	} {
 		if _, err := owner.Exec(context.Background(), q, org); err != nil {
 			t.Fatal(err)
@@ -144,6 +147,39 @@ func TestAnAskAtHeadsMovedAwayAndBackIsAnswerable(t *testing.T) {
 	}
 	if got := f.standing("h2"); got == deferredKept {
 		t.Errorf("kept at H2 on an answer about H1")
+	}
+}
+
+// An open pull request of the task that is not the delivery's (an earlier
+// attempt's, left open on another repository) is no head the gate weighs:
+// the ask at the delivery's heads is answerable, and the answer keeps
+// every deferred check, so a discharge escalation needs no person.
+func TestAStrayOpenPullRequestLeavesTheAskAnswerable(t *testing.T) {
+	f := newDeferredFixture(t)
+	for _, q := range []string{
+		`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch) VALUES ('repo_api', $1, 'prj_d', 'api', 'git://x/api.git', 'main')`,
+		`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+			VALUES ('pr_old', $1, 'prj_d', 'wi_d', 'repo_api', 2, 'https://x/pull/2', 'dude/wi_d-old', 'main', 'old', 'T')`,
+	} {
+		if _, err := f.owner.Exec(context.Background(), q, f.org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k := f.ask("h1")
+	if err := f.answer(k); err != nil {
+		t.Fatalf("the answer to the ask at the delivery's heads: %v", err)
+	}
+	ctx := context.Background()
+	var kept bool
+	if err := f.app.InOrg(ctx, f.org, func(tx pgx.Tx) error {
+		var err error
+		kept, _, err = dischargeKeptTx(ctx, tx, "wi_d", []string{"pr_d"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !kept {
+		t.Errorf("dischargeKeptTx: false, with bench backed at the delivery's heads")
 	}
 }
 
