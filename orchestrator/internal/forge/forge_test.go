@@ -804,7 +804,16 @@ func TestRerunFailedRerunsEachWorkflowRunOnce(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p := strings.TrimPrefix(r.URL.Path, "/repos/acme/api")
 			if job, ok := strings.CutPrefix(p, "/actions/jobs/"); ok && r.Method == "GET" {
-				fmt.Fprintf(w, `{"id":%s,"run_id":%d}`, job, runOf[job])
+				switch job {
+				case "5":
+					w.WriteHeader(502)
+					fmt.Fprint(w, `{"message":"Bad Gateway"}`)
+				case "1", "2", "3":
+					fmt.Fprintf(w, `{"id":%s,"run_id":%d}`, job, runOf[job])
+				default: // a job GitHub no longer has
+					w.WriteHeader(404)
+					fmt.Fprint(w, `{"message":"Not Found"}`)
+				}
 				return
 			}
 			posts = append(posts, p)
@@ -865,6 +874,13 @@ func TestRerunFailedRerunsEachWorkflowRunOnce(t *testing.T) {
 	}
 	if _, n, _, err = rerun(nil, failed(8, "coderabbit")); n != 0 || !Refused(err) {
 		t.Errorf("only a refused app's check: %d re-run (%v)", n, err)
+	}
+	// Every lookup comes before any re-run: GitHub failing one (502) leaves
+	// nothing asked, and says so.
+	var unasked *NothingAsked
+	posts, n, _, err = rerun(nil, failed(1, ActionsApp), failed(3, ActionsApp), failed(5, ActionsApp))
+	if n != 0 || len(posts) != 0 || !errors.As(err, &unasked) || Refused(err) {
+		t.Errorf("a lookup failed: %d re-run (%v), asked %v", n, err, posts)
 	}
 }
 
