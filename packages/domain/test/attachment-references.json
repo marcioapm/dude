@@ -18,5 +18,7 @@
   ["`![a](attachment:att_in)` and ![b](attachment:att_out)", ["att_out"]],
   ["```\n![a](attachment:att_fence)\n```\t\n![b](attachment:att_after)", ["att_after"]],
   ["```\n![a](attachment:att_fence)\n```\u00a0\n![b](attachment:att_still)", []],
+  ["```make bench``` is slow\n![a](attachment:att_span)", ["att_span"]],
+  ["~~~ `x`\n![a](attachment:att_tilde)\n~~~\n![b](attachment:att_past)", ["att_past"]],
   ["![x](https://e.com/a.png) [y](attachment:att_l) ![z](attachment:other) ![w]()", []]
 ]
