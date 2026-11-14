@@ -215,40 +215,35 @@ func TestAReviewOnlyRoundAfterAPushRunsTheLensThePushRequires(t *testing.T) {
 }
 
 // The separation: every guard above is review-only's. A conducted writing
-// task's conductor, at the same points, is as before: a free-text
-// dismissal dismisses, ask_person is offered after a review round, its
-// directed lenses alone run, and a top-level reply posts.
+// task's conductor, new work or a pull request adopted to review and fix
+// or to continue, is as before after its directed round (keepsFreedoms),
+// and a top-level reply posts.
 func TestAWritingDeliveryKeepsItsConductorsFreedoms(t *testing.T) {
-	w := conducting(t)
-	w.requireReviewers(`{"requiredReviewers":["correctness","tests","performance"]}`)
-	task := w.task()
-	w.talk(task)
-	w.implemented(task)
-	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
-	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-	w.keepsFreedoms(task)
-	w.must(task, "decide", `{"action":"ask_person","note":"Fix the rest, or stop?"}`)
-
-	reviewing := w.reviewing()
-	if status, out := w.chat(reviewing, "Tell the reviewers where it stands."); status >= 300 {
-		t.Fatalf("chat: %d %v", status, out)
-	}
-	w.must(reviewing, "reply_on_pull_request", `{"pr":"1","text":"Pushed the fix; CI is running."}`)
-}
-
-// The separation on an adopted pull request: review-only is one mode of a
-// source, and a pull request adopted to review and fix, or to continue, is
-// a writing delivery. Its conductor keeps every freedom above.
-func TestAWritingDeliveryOnAnAdoptedPullRequestKeepsItsConductorsFreedoms(t *testing.T) {
-	for _, mode := range []string{delivery.ModeReview, delivery.ModeContinue} {
+	for _, mode := range []string{"new", delivery.ModeReview, delivery.ModeContinue} {
 		t.Run(mode, func(t *testing.T) {
 			w := conducting(t)
 			w.requireReviewers(`{"requiredReviewers":["correctness","tests","performance"]}`)
-			wi, n := w.adoptedConducted(mode)
+			var wi, replier, pr string
+			if mode == "new" {
+				wi = w.task()
+				w.talk(wi)
+				w.implemented(wi)
+			} else {
+				var n int
+				wi, n = w.adoptedConducted(mode)
+				replier, pr = wi, fmt.Sprint(n)
+			}
 			w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 			w.untilDecision(wi, delivery.PointReviewed)
 			w.keepsFreedoms(wi)
-			w.must(wi, "reply_on_pull_request", fmt.Sprintf(`{"pr":"%d","text":"Looking at it now."}`, n))
+			if mode == "new" {
+				w.must(wi, "decide", `{"action":"ask_person","note":"Fix the rest, or stop?"}`)
+				replier, pr = w.reviewing(), "1"
+				if status, out := w.chat(replier, "Tell the reviewers where it stands."); status >= 300 {
+					t.Fatalf("chat: %d %v", status, out)
+				}
+			}
+			w.must(replier, "reply_on_pull_request", fmt.Sprintf(`{"pr":%q,"text":"Looking at it now."}`, pr))
 		})
 	}
 }
