@@ -205,3 +205,17 @@ func TestACompareOverTwoMergeBasesNamesOneAndEachStatus(t *testing.T) {
 		t.Fatalf("files %+v, want F.md modified with its blob", cmp.Files)
 	}
 }
+
+// A pull request body is at most 65,536 characters, as on GitHub: one
+// over is refused with a 422 and the body is left as it was.
+func TestAPullRequestBodyOverGitHubsLimitIsRefused(t *testing.T) {
+	fake, client, number := branchContract(t)
+	at := strings.Repeat("é", 65_536)
+	if err := client.EditPullRequest(context.Background(), fake.Slug, number, at); err != nil {
+		t.Fatalf("a body at the limit: %v", err)
+	}
+	contractStatus(t, client.EditPullRequest(context.Background(), fake.Slug, number, at+"x"), http.StatusUnprocessableEntity)
+	if got, _ := client.PullRequestBody(context.Background(), fake.Slug, number); got != at {
+		t.Errorf("the body changed on a refused edit: %d characters", len([]rune(got)))
+	}
+}
