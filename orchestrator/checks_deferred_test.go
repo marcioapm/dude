@@ -23,9 +23,8 @@ import (
 )
 
 // deferredWorld delivers a task whose implementer reports a check not run
-// that a later phase runs (fakeagent.ChecksDeferredModel's browser check,
-// in the trials the bench workflow), which the defaults-taking conductor
-// defers; the pull request opens and its CI goes green. It returns the
+// that a later phase runs (fakeagent.ChecksDeferredModel's bench
+// workflow), which the defaults-taking conductor defers; the pull request opens and its CI goes green. It returns the
 // task once the delivery waits on the pull request with CI reported.
 func deferredWorld(t *testing.T) (*world, string) {
 	w := defaultsConducting(t)
@@ -340,15 +339,14 @@ func TestAWaiverOfAnotherCheckKeepsNoDeferredPromise(t *testing.T) {
 	w := newWorld(t)
 	mustExec(t, w.owner, `UPDATE forge_credentials SET settings = '{"checksFixRounds":0}' WHERE organization_id = $1`, w.org)
 	w.gh.SetChecks("success")
-	// The scripted conductor rejects the failure and defers the browser
-	// check, as the trial's did lint and bench.
+	// The scripted conductor rejects the failure and defers bench.
 	wi := w.checksDelivery(fakeagent.ChecksDeferredModel, &checksConductor{reject: true, keepDeferred: true})
 	w.until("the checks escalation", func() bool { return w.checksEscalations(wi) == 1 })
 	w.until("the escalation with a person", func() bool { return w.taskStatus(wi) == "awaiting_input" })
 	impl := w.str(`SELECT id FROM runs WHERE task_id = $1 AND phase = 'implement' ORDER BY created_at LIMIT 1`, wi)
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->'checks' @> '[{"result":"deferred"}]'`,
 		impl, delivery.EvRunChecksJudged); n != 1 {
-		t.Fatalf("%d judgements deferring the browser check", n)
+		t.Fatalf("%d judgements deferring bench", n)
 	}
 	owner, _, _ := w.people(wi)
 	// Every writer reports the same (the fixer and simplifier too): each

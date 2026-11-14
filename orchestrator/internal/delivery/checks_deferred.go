@@ -88,8 +88,8 @@ type dischargeAsk struct {
 }
 
 // deferredState is where each deferred check of the attempt stands, read
-// once (readDeferredTx). Every map is by command, and holds only what
-// happened since the command's newest deferral.
+// once (readDeferredTx). Every map but asks is by command, and holds only
+// what happened since the command's newest deferral.
 type deferredState struct {
 	checks []deferredCheck
 	// attempt: the attempt read, which a second ask names.
@@ -475,13 +475,11 @@ func openDischargeTx(ctx context.Context, tx pgx.Tx, taskID, runID string, turn 
 
 // conductDischargeTx records the conductor's answer to the second ask its
 // key names (in.Ask): each deferred check backed (kept at that ask's
-// heads, and no others) or rejected. An ask is answerable while its heads
-// are the gate's heads, the open pull requests' (gateHeads); one at other
-// heads is superseded and refused: its evidence keeps nothing at the
-// heads the pull requests are at now. Heads that moved away and back (H1,
-// H2, H1) make the ask at H1 answerable again: no new ask is made there,
-// the same key's. The delivery weighs readiness again; a rejected check
-// holds the gate until a person settles it.
+// heads, and no others) or rejected. An ask is answerable only while its
+// heads are the delivery's pull requests' heads (deliveryHeadsTx), as
+// evidence at other heads keeps nothing at these; heads that move away and
+// back make the old ask answerable again. The delivery weighs readiness
+// again; a rejected check holds the gate until a person settles it.
 func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks, projectID string) (int64, error) {
 	var raw []byte
 	var askCursor int64

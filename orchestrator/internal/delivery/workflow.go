@@ -3233,7 +3233,7 @@ func deferredDue(gates []PRGate) (heads map[string]string, due bool) {
 	return heads, due
 }
 
-// setItem replaces the item of it's key in every gate.
+// setItem replaces the item with its key in every gate.
 func setItem(gates []PRGate, it GateItem) {
 	for i := range gates {
 		for j := range gates[i].Items {
