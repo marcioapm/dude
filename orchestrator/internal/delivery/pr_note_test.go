@@ -18,6 +18,11 @@ func TestTheConductorsNoteIsTextNotMarkers(t *testing.T) {
 	if got, err := conductorNote("```go test -bench .``` gives 1043 ns/op"); err != nil || got != "```go test -bench .``` gives 1043 ns/op" {
 		t.Errorf("a code span: %q %v", got, err)
 	}
+	// A tilde fence's info may hold a backtick: it opens a fence all the
+	// same, and is closed like any other.
+	if got, err := conductorNote("~~~ `x`\ncode\n"); err != nil || got != "~~~ `x`\ncode\n~~~" {
+		t.Errorf("a tilde fence: %q %v", got, err)
+	}
 	if _, err := conductorNote(strings.Repeat("é", pullRequestNoteMax/2+1)); err == nil {
 		t.Error("a note over the bound in bytes was taken")
 	}
