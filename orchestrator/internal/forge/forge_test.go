@@ -882,6 +882,16 @@ func TestRerunFailedRerunsEachWorkflowRunOnce(t *testing.T) {
 	if n != 0 || len(posts) != 0 || !errors.As(err, &unasked) || Refused(err) {
 		t.Errorf("a lookup failed: %d re-run (%v), asked %v", n, err, posts)
 	}
+	// A job GitHub no longer has (404) has nothing to re-run: the others
+	// are; with none, the 404 is the answer, so nothing reads as done.
+	posts, n, _, err = rerun(nil, failed(1, ActionsApp), failed(6, ActionsApp), failed(3, ActionsApp))
+	if err != nil || n != 2 || !slices.Equal(posts, []string{"/actions/runs/100/rerun-failed-jobs", "/actions/runs/200/rerun-failed-jobs"}) {
+		t.Errorf("one job gone: %d re-run (%v), asked %v", n, err, posts)
+	}
+	posts, n, _, err = rerun(nil, failed(6, ActionsApp), failed(7, ActionsApp))
+	if n != 0 || len(posts) != 0 || !Refused(err) {
+		t.Errorf("every job gone: %d re-run (%v), asked %v", n, err, posts)
+	}
 }
 
 // An Actions check's link is its job's, in its workflow run
