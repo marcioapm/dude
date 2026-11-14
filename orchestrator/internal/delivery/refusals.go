@@ -132,6 +132,7 @@ const (
 	rNotThreadInYourFeedbackYou             = "%s is not a thread in your feedback: you resolve only those"
 	rGithubReRunFailedChecksOn              = "GitHub's re-run of the failed checks on %s#%d may or may not have happened (%v); this head is not run again automatically"
 	rGithubRefusedToRunFailedChecksOn       = "GitHub refused to run the failed checks on %s#%d again (%v): nothing was re-run; ask again once CI on this head has finished"
+	rGithubCouldNotBeReadNothingRerun       = "GitHub could not be read for the failed checks on %s#%d (%v): nothing was re-run; ask again"
 	rGithubDidNotDo                         = "GitHub did not do it: %v"
 	rNoteNotDudesPullRequest                = "%s#%d was not opened by dude: its description is its author's, and dude writes no section into it. Say it on the pull request instead (reply_on_pull_request)"
 	rNoteTextRequired                       = "say what the note holds: text is required"
@@ -277,4 +278,8 @@ const (
 	rWaitDispatchFailed                     = "GitHub refused dispatch %s (%s): nothing ran, so there is nothing to wait for. Fix what GitHub refused, then dispatch it again (run_workflow)"
 	rReviewOnlyNoWriter                     = "This task reviews pull request #%d and changes no code: no implementer, fixer or simplifier runs, and nothing is published. To have dude fix it, start a task from the pull request in Review and fix mode"
 	rReviewOnlyPRAction                     = "This task reviews pull request #%d and does not change it: %s is not dude's to take here"
+	rReviewOnlyDismissGrounds               = "This task only reviews: that no one here fixes a finding is no reason to dismiss it, and its author fixes what dude's review asks for. Dismiss a finding only when it is wrong or a duplicate, starting the reason with \"wrong: \" and the evidence, or \"duplicate: \" and the id of the finding it repeats"
+	rReviewOnlyDismissWrongEvidence         = "Say what shows the finding is wrong after \"wrong: \": the code or the run that contradicts it"
+	rReviewOnlyDismissDuplicateOf           = "%s is not another open finding of this task: name the open finding this one duplicates after \"duplicate: \" (findings lists them), so one of a set of duplicates stays open"
+	rReviewOnlyNoOwnComment                 = "This task reviews pull request #%d: dude's review and its status comment are the output, so post no review or summary of your own there. Reply only in a thread someone started (in_reply_to)"
 )

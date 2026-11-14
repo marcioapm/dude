@@ -128,6 +128,7 @@ rNotReviewThread                        refusals/delivery/pr-actions/not-review-
 rNotThreadInYourFeedbackYou             refusals/delivery/pr-actions/not-thread-in-your-feedback-you
 rGithubReRunFailedChecksOn              refusals/delivery/pr-actions/github-re-run-failed-checks-on
 rGithubRefusedToRunFailedChecksOn       refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on
+rGithubCouldNotBeReadNothingRerun       refusals/delivery/pr-actions/github-could-not-be-read-nothing-rerun
 rGithubDidNotDo                         refusals/delivery/pr-actions/github-did-not-do
 rNoteNotDudesPullRequest                refusals/delivery/pr-actions/note-not-dudes-pull-request
 rNoteTextRequired                       refusals/delivery/pr-actions/note-text-required
@@ -273,3 +274,7 @@ rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-t
 rWaitDispatchFailed                    refusals/delivery/waits/dispatch-failed
 rReviewOnlyNoWriter                     refusals/delivery/review-only/no-writer
 rReviewOnlyPRAction                     refusals/delivery/review-only/pr-action
+rReviewOnlyDismissGrounds               refusals/delivery/review-only/dismiss-grounds
+rReviewOnlyDismissWrongEvidence         refusals/delivery/review-only/dismiss-wrong-evidence
+rReviewOnlyDismissDuplicateOf           refusals/delivery/review-only/dismiss-duplicate-of
+rReviewOnlyNoOwnComment                 refusals/delivery/review-only/no-own-comment

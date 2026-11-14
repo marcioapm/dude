@@ -46,7 +46,7 @@ func TestAReviewOnlyTestFailureGoesToTheVerdictNotAFixer(t *testing.T) {
 			}
 			// L-B: the review names the criterion and what the tester
 			// observed, not an internal run id and a bare number.
-			body, _ := verdictReview(d, "abc1234", "main", nil, nil, "")
+			body, _, _ := verdictReviewOf(d, "abc1234", "main", nil, nil, "")
 			for _, want := range []string{"it greets", c.observed} {
 				if !strings.Contains(body, want) {
 					t.Errorf("the review lacks %q:\n%s", want, body)

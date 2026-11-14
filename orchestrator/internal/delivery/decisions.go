@@ -348,6 +348,11 @@ func (d *Pending) Phases() []string {
 
 // Actions is what decide may say at a decision point.
 func (d *Pending) Actions() []string {
+	if d.ReviewOnly && afterLoopPoint(d.Point) {
+		// Only next, which posts dude's review: there is no fix to ask the
+		// person about. start_phase and Chat still reach the lenses and them.
+		return []string{"next"}
+	}
 	switch d.Point {
 	case PointBeforePR:
 		return []string{"ask_person", "open_pull_request"}
@@ -356,6 +361,10 @@ func (d *Pending) Actions() []string {
 	}
 	return []string{"next", "ask_person"}
 }
+
+// afterLoopPoint says point ends a review loop's round, where a writing
+// delivery's next would fix.
+func afterLoopPoint(point string) bool { return point == PointReviewed || point == PointFixed }
 
 // pointLabel is how a decision point reads in a note.
 var pointLabel = func() map[string]string {
@@ -677,6 +686,11 @@ func toConductorKindTx(ctx context.Context, tx pgx.Tx, sc workflow.StepContext, 
 		ReviewOnly: st.Source.ReviewOnly()}
 	if point == PointBeforePR {
 		st.GateRequired, st.ChoiceGate = true, false
+	}
+	if st.Decision.ReviewOnly && afterLoopPoint(point) {
+		// Review only: what next does here, so a round's findings are not
+		// read as a choice to fix them (Actions).
+		line = strings.TrimSpace(line + " " + reviewOnlyNext)
 	}
 	if point == PointBeforePR {
 		// A person's answer that opens it and still holds: said, so the

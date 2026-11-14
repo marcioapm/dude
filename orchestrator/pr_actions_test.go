@@ -161,13 +161,13 @@ func TestAConductorsActionIsInThePullRequestRecordWithoutAWebhook(t *testing.T) 
 	}
 }
 
-// rerunRefusedWith makes GitHub answer each Actions job rerun with status
+// rerunRefusedWith makes GitHub answer each Actions workflow rerun with status
 // while it is set (0 lets it through); the reruns it was asked for.
 func (w *world) rerunRefusedWith(status *atomic.Int32) *atomic.Int32 {
 	asked := &atomic.Int32{}
 	w.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
-			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, fmt.Sprintf("/actions/jobs/%d/rerun", fakegithub.DefaultCheckRunID)) {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, fmt.Sprintf("/actions/runs/%d/rerun-failed-jobs", fakegithub.DefaultWorkflowRunID)) {
 				asked.Add(1)
 				return int(status.Load())
 			}
@@ -234,9 +234,12 @@ func TestARerunGitHubFailedOnStillSpendsTheHeadsRerun(t *testing.T) {
 
 func TestARerunGitHubPartlyRefusedStillSpendsTheHeadsRerun(t *testing.T) {
 	w, task := rerunWorld(t)
+	other := fakegithub.FirstRunID + 78
+	w.gh.SetWorkflowRun(other, fakegithub.WorkflowRun{Name: "lint", Status: "completed", Conclusion: "failure",
+		Jobs: []fakegithub.WorkflowJob{{ID: fakegithub.JobID(78), Name: "second", Status: "completed", Conclusion: "failure"}}})
 	checks, err := json.Marshal([]forge.Check{
 		{Name: "first", RunID: fakegithub.DefaultCheckRunID, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
-		{Name: "second", RunID: 78, App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
+		{Name: "second", RunID: fakegithub.JobID(78), App: forge.ActionsApp, Status: "completed", Conclusion: "failure"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +248,7 @@ func TestARerunGitHubPartlyRefusedStillSpendsTheHeadsRerun(t *testing.T) {
 	var refused atomic.Int32
 	w.gh.Set(func(s *fakegithub.Server) {
 		s.Intercept = func(r *http.Request) int {
-			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/actions/jobs/78/rerun") {
+			if r.Method == "POST" && strings.HasSuffix(r.URL.Path, fmt.Sprintf("/actions/runs/%d/rerun-failed-jobs", other)) {
 				refused.Add(1)
 				return http.StatusConflict
 			}
@@ -267,6 +270,90 @@ func TestARerunGitHubPartlyRefusedStillSpendsTheHeadsRerun(t *testing.T) {
 			t.Errorf("successful jobs %v, refused requests %d", s.JobsRerun, refused.Load())
 		}
 	})
+}
+
+// A job whose check's link does not name its workflow run is looked up
+// first; GitHub failing that lookup (502) leaves nothing re-run, and dude
+// knows it: the head's rerun is not spent, the conductor is told so, and
+// asked again with GitHub well, the job is re-run.
+func TestARerunWhoseLookupFailedDoesNotSpendTheHeadsRerun(t *testing.T) {
+	w, task := rerunWorld(t)
+	checks, err := json.Marshal([]forge.Check{
+		{Name: "e2e", RunID: fakegithub.DefaultCheckRunID, App: forge.ActionsApp, Status: "completed", Conclusion: "failure",
+			URL: fmt.Sprintf("https://github.test/acme/target/runs/%d", fakegithub.DefaultCheckRunID)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_json = $2 WHERE task_id = $1`, task, checks)
+	var failing atomic.Bool
+	failing.Store(true)
+	var looked, posted atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			switch {
+			case r.Method == "GET" && strings.HasSuffix(r.URL.Path, fmt.Sprintf("/actions/jobs/%d", fakegithub.DefaultCheckRunID)):
+				looked.Add(1)
+				if failing.Load() {
+					return http.StatusBadGateway
+				}
+			case r.Method == "POST" && strings.Contains(r.URL.Path, "/actions/"):
+				posted.Add(1)
+			}
+			return 0
+		}
+	})
+	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "nothing was re-run")
+	if n := posted.Load(); n != 0 {
+		t.Errorf("%d re-runs asked after a failed lookup, want none", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'released' IN (SELECT id FROM events WHERE task_id = $1 AND payload->>'claimed' = 'true')`, task); n != 1 {
+		t.Errorf("%d releases of the claim recorded, want 1", n)
+	}
+	// A person's re-run through the API is told the same.
+	code, body := w.callAs(w.person("owner"), "/internal/pull-requests/"+w.prOf(task)+"/rerun-failed", map[string]any{})
+	if msg, _ := body["error"].(map[string]any)["message"].(string); code != http.StatusBadGateway || !strings.Contains(msg, "nothing was re-run") {
+		t.Errorf("the API's re-run with the lookup failing: %d %v", code, body)
+	}
+	if n := posted.Load(); n != 0 {
+		t.Errorf("%d re-runs asked after a failed lookup, want none", n)
+	}
+	failing.Store(false)
+	w.must(task, "rerun_failed_checks", `{"pr":"1"}`)
+	w.gh.Set(func(s *fakegithub.Server) {
+		if !slices.Equal(s.RunsRerun, []int64{fakegithub.DefaultWorkflowRunID}) {
+			t.Errorf("workflow runs re-run %v", s.RunsRerun)
+		}
+	})
+	if n := looked.Load(); n != 3 {
+		t.Errorf("the job was looked up %d times, want 3", n)
+	}
+}
+
+// Two failed jobs of one matrix: GitHub re-runs a job by restarting its
+// workflow run and then refuses the other job's re-run (403, already
+// running), as it did live. The workflow run's failed jobs are re-run in
+// one call: both run again, both counted.
+func TestARerunRerunsEveryFailedJobOfAMatrix(t *testing.T) {
+	w := conducting(t)
+	task := w.reviewing()
+	if status, out := w.chat(task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	w.gh.Set(func(s *fakegithub.Server) { s.MatrixJobs = []int64{fakegithub.JobID(78)} })
+	w.gh.SetChecks("run:failure")
+	w.sync()
+	out := w.must(task, "rerun_failed_checks", `{"pr":"1"}`)
+	w.gh.Set(func(s *fakegithub.Server) {
+		if !slices.Equal(s.JobsRerun, []int64{fakegithub.DefaultCheckRunID, fakegithub.JobID(78)}) ||
+			!slices.Equal(s.RunsRerun, []int64{fakegithub.DefaultWorkflowRunID}) {
+			t.Errorf("jobs re-run %v, workflow runs re-run %v", s.JobsRerun, s.RunsRerun)
+		}
+	})
+	if out["rerun"] != float64(2) {
+		t.Errorf("answered %v, want 2 checks re-run", out)
+	}
 }
 
 // Two simultaneous reruns claim the head before GitHub is asked: exactly

@@ -517,6 +517,7 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 		}
 		var lastFix []FixRange
 		var questions []EarlierQuestion
+		reviewOnly := false
 		if in.Phase == PhaseReview {
 			if lastFix, err = LastFixTx(ctx, tx, in.ParentRunID); err != nil {
 				return "", err
@@ -526,8 +527,11 @@ func roundMessageTx(ctx context.Context, tx pgx.Tx, in PhaseRun, p predecessorRo
 			if questions, err = EarlierQuestionsTx(ctx, tx, created); err != nil {
 				return "", err
 			}
+			if _, reviewOnly, err = reviewOnlyTx(ctx, tx, in.TaskID); err != nil {
+				return "", err
+			}
 		}
-		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID))
+		message = RoundMessage(in.Phase, p.BaseRefs, in.BaseRefs, reason, findings, questions, lastFix, carryFrom(in, p.ID), reviewOnly)
 		if in.Phase == PhaseReview && in.Round > 0 {
 			// Its round, as a fresh reviewer's prompt has it.
 			decided, err := DecidedFindingsTx(ctx, tx, in.TaskID, in.Attempt)
@@ -661,10 +665,10 @@ func roundRanges(from, to map[string]string) []roundRange {
 // this round follows (LastFixTx); carry, a test round's previous run the
 // tester may carry criteria from ("" retests every one).
 func RoundMessage(phase string, from, to map[string]string, reason string, findings []Finding, questions []EarlierQuestion,
-	lastFix []FixRange, carry string) string {
+	lastFix []FixRange, carry string, reviewOnly ...bool) string {
 	list := ""
 	if len(findings) > 0 {
-		list = earlierFindings(findings)
+		list = earlierFindings(findings, len(reviewOnly) > 0 && reviewOnly[0])
 	}
 	format := findingFormat
 	return render(roundTmpl, struct {

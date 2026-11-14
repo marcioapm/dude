@@ -38,6 +38,8 @@
 
 {{- define "refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on"}}GitHub refused to run the failed checks on %s#%d again (%v): nothing was re-run; ask again once CI on this head has finished{{end}}
 
+{{- define "refusals/delivery/pr-actions/github-could-not-be-read-nothing-rerun"}}GitHub could not be read for the failed checks on %s#%d (%v): nothing was re-run; ask again{{end}}
+
 {{- define "refusals/delivery/pr-actions/github-did-not-do"}}GitHub did not do it: %v{{end}}
 
 {{- define "refusals/delivery/pr-actions/note-not-dudes-pull-request"}}%s#%d was not opened by dude: its description is its author's, and dude writes no section into it. Say it on the pull request instead (reply_on_pull_request){{end}}

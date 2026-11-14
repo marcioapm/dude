@@ -521,6 +521,9 @@ class TestEnvironment:
                 # An agent waiting on a person is parked after seconds, not
                 # the policy's minutes, so the suite sees it happen.
                 "DUDE_PARK_AFTER": "3s",
+                # A review-only task re-reviews the author's push after
+                # seconds, not the 3 minutes' debounce.
+                "DUDE_TEST_REVIEW_DEBOUNCE": "2s",
                 # A task's conductor is parked a few seconds after its turn.
                 "DUDE_CONDUCTOR_WARM": "4s",
                 # A conductor's wake reasons are gathered for a second, not

@@ -99,6 +99,12 @@ type State struct {
 	RoundHeads map[string]string `json:"roundHeads,omitempty"`
 	// A review-only task's verdict, between its runs (review_verdict.go).
 	Verdict *VerdictState `json:"verdict,omitempty"`
+	// A review-only task's next round (review_rounds.go): when it starts,
+	// the debounce's end, and the head the author pushed that it is for.
+	RoundDueAt   *time.Time `json:"roundDueAt,omitempty"`
+	RoundDueHead string     `json:"roundDueHead,omitempty"`
+	// The bound that stopped its re-review rounds ("rounds", "cost").
+	RoundsStopped string `json:"roundsStopped,omitempty"`
 	// The heads the review round in flight checks out, set as its Runs
 	// are created: RoundHeads once it completes. Heads may move under it (a
 	// publish while the reviewers work), and what they did not see must
@@ -932,6 +938,13 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		categories, reasons, st.RetryCategories = retrying, eachFor(retrying, ReasonRetry), nil
 	case d != nil && len(d.Categories) > 0:
 		categories, reasons = d.Categories, eachFor(d.Categories, ReasonDirected)
+		if st.Source.ReviewOnly() {
+			// T3: the verdict needs every lens it requires (verdictReviewed):
+			// the conductor adds lenses, it removes none.
+			if categories, reasons, err = w.withRequiredLenses(ctx, sc, st, categories, reasons); err != nil {
+				return workflow.Result{}, err
+			}
+		}
 	case reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0:
 		// A check that the simplifier changed no behaviour: the policy's
 		// required reviewers, whatever paths it touched.
@@ -1309,7 +1322,9 @@ func (w *steps) policyExit(st *State, findings []FindingState, conv Convergence)
 func (w *steps) loopFindings(ctx context.Context, org string, st *State) ([]FindingState, Convergence, error) {
 	var conv Convergence
 	read := &conv
-	if st.conductsRounds() {
+	if st.conductsRounds() || st.Source.ReviewOnly() {
+		// A review-only task's findings staying open across rounds are the
+		// author's choice, not a loop failing to converge (design §6.7).
 		read = nil
 	}
 	findings, err := w.s.findings(ctx, org, st, fromReview, read)

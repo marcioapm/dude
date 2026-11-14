@@ -2044,6 +2044,7 @@ func (s *Syncer) spec(ctx context.Context, r phaseRun, stored *lux.StoredSpec, i
 		Branch: runBranch(r), ConductorNote: conductorNote, RestartNote: restartNote, PersonNote: personNote, Images: delivery.PromptImages(taskImages),
 		Coordination: coordination, ProjectFacts: projectFacts, Replay: replay, Bases: taskBranch.Bases, Adopted: adopted, LastFix: lastFix,
 		WriterChecks: writerChecks, Questions: questions, RetestsAfresh: retestsAfresh, Round: reviewRound, Decided: decided,
+		ReviewOnly: taskBranch.Source.ReviewOnly(),
 	}
 	if reviewRange != nil {
 		promptIn.ReviewBase, promptIn.ReviewOf = reviewRange.Base, reviewRange.Of

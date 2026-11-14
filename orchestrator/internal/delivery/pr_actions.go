@@ -274,7 +274,9 @@ const maxReviewLogins = 10
 // PRActionDone is what GitHub did.
 type PRActionDone struct {
 	Asked, Refused []string
-	Rerun          int
+	// Rerun: failed checks GitHub was asked to run again; Running: those
+	// whose workflow run GitHub said was already running.
+	Rerun, Running int
 	Thread         string
 	// pull_request_note: the description as GitHub has it now.
 	Body string
@@ -334,19 +336,25 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 			return done, ghRefusal(err)
 		}
 	case ActionRerunChecks:
-		n, err := gh.RerunFailed(ctx, c.slug, c.checks)
-		if err != nil && n == 0 && forge.Refused(err) {
+		n, running, err := gh.RerunFailed(ctx, c.slug, c.checks)
+		var unasked *forge.NothingAsked
+		if err != nil && n == 0 && (forge.Refused(err) || errors.As(err, &unasked)) {
 			// GitHub answered no and ran nothing (a workflow still running,
-			// a job too old): the head's rerun is not spent. The release is
-			// recorded by the caller as the refusal's event.
-			return done, Refusal{Msg: fmt.Sprintf(rGithubRefusedToRunFailedChecksOn, c.repo, c.number, err),
+			// a job too old), or could not be read before anything was
+			// asked: the head's rerun is not spent. The release is recorded
+			// by the caller as the refusal's event.
+			msg := fmt.Sprintf(rGithubRefusedToRunFailedChecksOn, c.repo, c.number, err)
+			if !forge.Refused(err) {
+				msg = fmt.Sprintf(rGithubCouldNotBeReadNothingRerun, c.repo, c.number, err)
+			}
+			return done, Refusal{Msg: msg,
 				Event: &RefusalEvent{Type: EvPullRequestAction, Payload: map[string]any{"action": ActionRerunChecks,
 					"repo": c.repo, "number": c.number, "head": c.head, "released": c.claim}}}
 		}
 		if err != nil {
 			return done, refusef(rGithubReRunFailedChecksOn, c.repo, c.number, err)
 		}
-		done.Rerun = n
+		done.Rerun, done.Running = n, running
 	case ActionNote:
 		// A note is refused rather than taking the room dude's
 		// Verification section needs: past prBodyMax GitHub refuses the
@@ -391,6 +399,9 @@ func RecordPRActionTx(ctx context.Context, tx pgx.Tx, c PRActionCheck, done PRAc
 		payload["thread"] = done.Thread
 	case ActionRerunChecks:
 		payload["rerun"] = done.Rerun
+		if done.Running > 0 {
+			payload["alreadyRunning"] = done.Running
+		}
 		// The claim written before GitHub was called is this head's record.
 		return payload, nil
 	case ActionNote:

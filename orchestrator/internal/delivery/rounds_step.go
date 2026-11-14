@@ -72,6 +72,13 @@ func (w *steps) goesOn(ctx context.Context, sc workflow.StepContext, st *State, 
 		if err != nil {
 			return nil, err
 		}
+		if st.Source.ReviewOnly() && change.Measured && !change.Descends {
+			// The author rewrote history (a force-push): fresh eyes on the
+			// whole branch, not a resume over a diff from lost commits.
+			// Review-only only: a writing mode's heads are dude's pushes,
+			// and a person's is handled where it lands (refreshPRWaitHeads).
+			return nil, nil
+		}
 		return &Continue{Predecessor: p.ID, DeltaLines: change.deltaLines()}, nil
 	}
 }
