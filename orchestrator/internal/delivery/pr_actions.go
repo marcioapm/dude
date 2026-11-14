@@ -216,7 +216,9 @@ const maxReviewLogins = 10
 // PRActionDone is what GitHub did.
 type PRActionDone struct {
 	Asked, Refused []string
-	Rerun          int
+	// Rerun: failed checks GitHub was asked to run again; Running: those
+	// whose workflow run GitHub said was already running.
+	Rerun, Running int
 	Thread         string
 }
 
@@ -274,7 +276,7 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 			return done, ghRefusal(err)
 		}
 	case ActionRerunChecks:
-		n, err := gh.RerunFailed(ctx, c.slug, c.checks)
+		n, running, err := gh.RerunFailed(ctx, c.slug, c.checks)
 		if err != nil && n == 0 && forge.Refused(err) {
 			// GitHub answered no and ran nothing (a workflow still running,
 			// a job too old): the head's rerun is not spent. The release is
@@ -286,7 +288,7 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 		if err != nil {
 			return done, refusef(rGithubReRunFailedChecksOn, c.repo, c.number, err)
 		}
-		done.Rerun = n
+		done.Rerun, done.Running = n, running
 	}
 	return done, nil
 }
@@ -309,6 +311,9 @@ func RecordPRActionTx(ctx context.Context, tx pgx.Tx, c PRActionCheck, done PRAc
 		payload["thread"] = done.Thread
 	case ActionRerunChecks:
 		payload["rerun"] = done.Rerun
+		if done.Running > 0 {
+			payload["alreadyRunning"] = done.Running
+		}
 		// The claim written before GitHub was called is this head's record.
 		return payload, nil
 	}

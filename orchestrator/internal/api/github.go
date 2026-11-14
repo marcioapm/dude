@@ -369,7 +369,7 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		}
 	case "rerun-failed":
 		_ = json.Unmarshal(checks, &pr.Checks)
-		n, err := gh.RerunFailed(r.Context(), slug, pr.Checks)
+		n, running, err := gh.RerunFailed(r.Context(), slug, pr.Checks)
 		if err != nil {
 			return forgeRefusal(err, "GitHub would not re-run the checks")
 		}
@@ -377,6 +377,9 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 			return fail(http.StatusConflict, "conflict", "no failed check to re-run")
 		}
 		out["rerun"] = n
+		if running > 0 {
+			out["alreadyRunning"] = running
+		}
 	case "reviewers":
 		if len(body.Logins) == 0 {
 			return fail(http.StatusBadRequest, "bad_request", "logins: whom to ask for a review")

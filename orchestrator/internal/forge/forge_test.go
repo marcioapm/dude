@@ -785,9 +785,71 @@ func TestUnreadableCheckRunsWakeNobody(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
 	defer srv.Close()
-	n, err := NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL}).RerunFailed(context.Background(), "acme/api", []Check{diag})
+	n, _, err := NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL}).RerunFailed(context.Background(), "acme/api", []Check{diag})
 	if n != 0 || err != nil || requests.Load() != 0 {
 		t.Errorf("re-ran %d (%v) with %d requests for a diagnostic", n, err, requests.Load())
+	}
+}
+
+// GitHub re-runs a failed job by restarting its workflow run, and then
+// refuses the run's other jobs (403, already running): a matrix's two
+// failed jobs are one rerun-failed-jobs of their run, both counted.
+func TestRerunFailedRerunsEachWorkflowRunOnce(t *testing.T) {
+	runOf := map[string]int64{"1": 100, "2": 100, "3": 200}
+	rerun := func(busy []int64, checks ...Check) (posts []string, n, running int, err error) {
+		started := map[int64]bool{}
+		for _, id := range busy {
+			started[id] = true
+		}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p := strings.TrimPrefix(r.URL.Path, "/repos/acme/api")
+			if job, ok := strings.CutPrefix(p, "/actions/jobs/"); ok && r.Method == "GET" {
+				fmt.Fprintf(w, `{"id":%s,"run_id":%d}`, job, runOf[job])
+				return
+			}
+			posts = append(posts, p)
+			var run int64
+			if job, ok := strings.CutSuffix(strings.TrimPrefix(p, "/actions/jobs/"), "/rerun"); ok {
+				run = runOf[job]
+			} else if id, ok := strings.CutSuffix(strings.TrimPrefix(p, "/actions/runs/"), "/rerun-failed-jobs"); ok {
+				fmt.Sscan(id, &run)
+			}
+			if started[run] && run != 0 {
+				w.WriteHeader(403)
+				fmt.Fprint(w, `{"message":"The workflow run containing this job is already running"}`)
+				return
+			}
+			started[run] = true
+			w.WriteHeader(201)
+			fmt.Fprint(w, `{}`)
+		}))
+		defer srv.Close()
+		n, running, err = NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL}).RerunFailed(context.Background(), "acme/api", checks)
+		return posts, n, running, err
+	}
+	failed := func(id int64, app string) Check {
+		return Check{Name: fmt.Sprint(id), Status: "completed", Conclusion: "failure", RunID: id, App: app}
+	}
+	posts, n, _, err := rerun(nil, failed(1, ActionsApp), failed(2, ActionsApp))
+	if err != nil || n != 2 || !slices.Equal(posts, []string{"/actions/runs/100/rerun-failed-jobs"}) {
+		t.Errorf("one workflow run: %d re-run (%v), asked %v", n, err, posts)
+	}
+	posts, n, _, err = rerun(nil, failed(1, ActionsApp), failed(3, ActionsApp), failed(2, ActionsApp))
+	if err != nil || n != 3 || !slices.Equal(posts, []string{"/actions/runs/100/rerun-failed-jobs", "/actions/runs/200/rerun-failed-jobs"}) {
+		t.Errorf("two workflow runs: %d re-run (%v), asked %v", n, err, posts)
+	}
+	posts, n, _, err = rerun(nil, failed(9, "coderabbit"))
+	if err != nil || n != 1 || !slices.Equal(posts, []string{"/check-runs/9/rerequest"}) {
+		t.Errorf("another app's check: %d re-run (%v), asked %v", n, err, posts)
+	}
+	// A run already running is in progress, not a failure: the other run
+	// is still asked; with nothing else asked, the 403 is the answer.
+	posts, n, running, err := rerun([]int64{100}, failed(1, ActionsApp), failed(2, ActionsApp), failed(3, ActionsApp))
+	if err != nil || n != 1 || running != 2 || len(posts) != 2 {
+		t.Errorf("one run already running: %d re-run, %d running (%v), asked %v", n, running, err, posts)
+	}
+	if _, n, running, err = rerun([]int64{100}, failed(1, ActionsApp)); n != 0 || running != 1 || !AlreadyRunning(err) {
+		t.Errorf("all already running: %d re-run, %d running (%v)", n, running, err)
 	}
 }
 

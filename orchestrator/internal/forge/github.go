@@ -1466,27 +1466,69 @@ func (g *GitHub) Merge(ctx context.Context, slug string, number int, method, sha
 	return out.SHA, err
 }
 
-// RerunFailed asks GitHub to run each failed check run again. An Actions
-// check run is a job, re-run through the Actions API (its id is the
-// job's). Any other app's is re-requested through the checks API, which
-// GitHub allows only the app that owns it: with a token, GitHub refuses,
-// and says so.
-func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (int, error) {
-	n := 0
+// RerunFailed asks GitHub to run each failed check run again: n is the
+// failed checks it asked for. An Actions check run is a job (its id is the
+// job's), and GitHub re-runs a job by restarting its workflow run, after
+// which it refuses the run's other jobs (403, already running): so failed
+// jobs are grouped by workflow run (the jobs API's run_id: a check's own
+// link is to the check run, not the workflow run), each run asked once to
+// re-run its failed jobs. A run GitHub says is already running is in
+// progress, not a failure: its checks are counted in running and the other
+// runs are still asked; when nothing else was, that 403 is the error.
+// Every lookup comes before any re-run: a failed one leaves nothing asked. Any other app's
+// check is re-requested through the checks API, which GitHub allows only
+// the app that owns it: with a token, GitHub refuses, and says so.
+func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (n, running int, err error) {
+	var others, runs []int64
+	jobs := map[int64]int{} // failed jobs by workflow run
 	for _, c := range checks {
 		if !c.Failed() || c.RunID == 0 {
 			continue
 		}
-		path := fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, c.RunID)
-		if c.App == ActionsApp {
-			path = fmt.Sprintf("/repos/%s/actions/jobs/%d/rerun", slug, c.RunID)
+		if c.App != ActionsApp {
+			others = append(others, c.RunID)
+			continue
 		}
-		if err := g.do(ctx, "POST", path, map[string]any{}, nil); err != nil {
-			return n, err
+		var job struct {
+			RunID int64 `json:"run_id"`
+		}
+		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/jobs/%d", slug, c.RunID), nil, &job); err != nil {
+			return 0, 0, err
+		}
+		if jobs[job.RunID] == 0 {
+			runs = append(runs, job.RunID)
+		}
+		jobs[job.RunID]++
+	}
+	for _, id := range others {
+		if err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, id), map[string]any{}, nil); err != nil {
+			return n, running, err
 		}
 		n++
 	}
-	return n, nil
+	var refused error
+	for _, id := range runs {
+		err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/actions/runs/%d/rerun-failed-jobs", slug, id), map[string]any{}, nil)
+		switch {
+		case AlreadyRunning(err):
+			running, refused = running+jobs[id], err
+		case err != nil:
+			return n, running, err
+		default:
+			n += jobs[id]
+		}
+	}
+	if n == 0 {
+		return 0, running, refused
+	}
+	return n, running, nil
+}
+
+// AlreadyRunning is GitHub refusing to re-run a workflow run that is
+// running: its jobs are already in progress.
+func AlreadyRunning(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Status == 403 && strings.Contains(strings.ToLower(e.Message), "already running")
 }
 
 // RequestReviewers asks people, and teams named "org/slug", for a review
