@@ -1104,8 +1104,9 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
 			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"}), true
 	case model == ChecksDeferredModel && turn > 0:
-		// Sent back, it runs both, and both pass: the check it deferred is
-		// run after all.
+		// Sent back (ChecksSentBack: fakelux plays this turn only on a
+		// send-back), it runs both, and both pass: the check it deferred
+		// is run after all.
 		return [][3]string{{FailingCommand, CheckOutputs[1], "0"}, {DeferredCommand, DeferredRunOutput, "0"}},
 			ChecksReport([3]string{FailingCommand, "pass", "ok"}, [3]string{DeferredCommand, "pass", DeferredRunOutput}), true
 	case model == ChecksDeferredModel:
@@ -1118,6 +1119,10 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 	}
 	return nil, "", false
 }
+
+// ChecksSentBack opens the checks gate's send-back (delivery's
+// notices/checks): a turn answering it is a checks model's later turn.
+const ChecksSentBack = "Your checks report was not verified."
 
 // everyWriterReports are the checks models whose report every writer
 // phase makes, not the implementer's alone.
