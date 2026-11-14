@@ -3172,7 +3172,7 @@ func (w *steps) weighReadiness(ctx context.Context, sc workflow.StepContext, st 
 	heads, due := deferredDue(gates)
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		if deferred != nil && due {
-			asked, err := askDeferredTx(ctx, tx, sc.OrganizationID, st.TaskID, st.Attempt, heads, deferred)
+			asked, err := askDeferredTx(ctx, tx, sc.OrganizationID, st.TaskID, heads, deferred)
 			if err != nil {
 				return err
 			}

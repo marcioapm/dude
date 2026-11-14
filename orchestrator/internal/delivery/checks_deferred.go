@@ -92,6 +92,8 @@ type dischargeAsk struct {
 // happened since the command's newest deferral.
 type deferredState struct {
 	checks []deferredCheck
+	// attempt: the attempt read, which a second ask names.
+	attempt int
 	// conducted: a live conductor decides the delivery.
 	conducted bool
 	// The latest answer; the heads it was backed at; the asks about it
@@ -108,15 +110,14 @@ func newDeferredState() *deferredState {
 		asked: map[string]map[string]int64{}, waived: map[string]bool{}, asks: map[int64]*dischargeAsk{}}
 }
 
-// deferredRead (SQL, $1 the task, $2 its attempt, 0 for the latest): the
+// deferredRead (SQL, $1 the task, $2 its attempt): the
 // attempt's writer judgements (each may defer a check, or keep one a
 // judgement before deferred), and every second ask, answer and discharge
 // waiver, oldest first. One arm per event type, each a literal so generic
 // plans can prove the partial indexes' predicates
 // (events_run_checks_settled_idx, _asked_idx, _decided_idx) and never scan
 // a Run's every event.
-const deferredRead = `WITH r AS (SELECT id, phase, COALESCE(project_id, '') AS project_id FROM runs WHERE task_id = $1
-		AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)))
+const deferredRead = `WITH r AS (SELECT id, phase, COALESCE(project_id, '') AS project_id FROM runs WHERE task_id = $1 AND attempt = $2)
 	SELECT e.event_type, e.cursor, e.run_id, r.project_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
 		WHERE e.event_type = 'run.checks.judged' AND r.phase IN ('implement','fix','simplify')
 	UNION ALL
@@ -138,7 +139,7 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 		return nil, err
 	}
 	s := newDeferredState()
-	s.conducted = conducted
+	s.conducted, s.attempt = conducted, attempt
 	at := map[string]int{}
 	var typ, runID, projectID string
 	var cursor int64
@@ -349,7 +350,7 @@ var checksDeferredWake = mustTemplate("wakes/checks-deferred")
 // that key, which the answer cites. A check the conductor rejected, or
 // already asked about at these heads, is not asked again. It marks s
 // asked. Returns whether it asked now.
-func askDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt int, heads map[string]string, s *deferredState) (bool, error) {
+func askDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, heads map[string]string, s *deferredState) (bool, error) {
 	if !s.conducted {
 		return false, nil
 	}
@@ -365,18 +366,13 @@ func askDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt i
 	if len(ask) == 0 {
 		return false, nil
 	}
-	if attempt == 0 {
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(attempt), 0) FROM runs WHERE task_id = $1`, taskID).Scan(&attempt); err != nil {
-			return false, err
-		}
-	}
-	key := DischargeKey(anchor.RunID, anchor.Turn, attempt, heads)
+	key := DischargeKey(anchor.RunID, anchor.Turn, s.attempt, heads)
 	var exists bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'run.checks.asked'
 		AND payload->'discharge'->>'key' = $2)`, anchor.RunID, key).Scan(&exists); err != nil || exists {
 		return false, err
 	}
-	asked := ChecksAsked{Turn: anchor.Turn, Discharge: &ChecksDischarge{Attempt: attempt, Heads: heads, Key: key}}
+	asked := ChecksAsked{Turn: anchor.Turn, Discharge: &ChecksDischarge{Attempt: s.attempt, Heads: heads, Key: key}}
 	for _, c := range ask {
 		asked.Check = append(asked.Check, Check{Command: c.Command, Result: CheckDeferred, Evidence: c.Reason})
 	}

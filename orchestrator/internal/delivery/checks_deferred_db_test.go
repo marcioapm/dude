@@ -69,7 +69,7 @@ func (f *deferredFixture) ask(head string) string {
 		if err != nil {
 			return err
 		}
-		_, err = askDeferredTx(ctx, tx, f.org, "wi_d", 1, heads, s)
+		_, err = askDeferredTx(ctx, tx, f.org, "wi_d", heads, s)
 		return err
 	}); err != nil {
 		f.t.Fatal(err)
