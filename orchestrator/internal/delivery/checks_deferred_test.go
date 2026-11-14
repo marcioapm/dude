@@ -102,3 +102,49 @@ func TestAStoredGateFromBeforeAnItemIsServedWhole(t *testing.T) {
 		t.Fatalf("served %+v", got)
 	}
 }
+
+// A discharge escalation whose checks all wait on an open second ask past
+// its deadline names that ask, and its wake says a backed answer to it
+// settles the escalation; one with a check rejected (or no conductor to
+// answer) names none, as only a person settles it. A held report's
+// checks_unverified escalation reads no ask, whatever its detail holds.
+func TestADischargeEscalationNamesTheOpenAskThatSettlesIt(t *testing.T) {
+	const key = "checks:run_impl:42:d1:0a1b2c3d4e5f"
+	overdue := func() *deferredState {
+		s := newDeferredState()
+		s.conducted = true
+		s.checks = []deferredCheck{{RunID: "run_impl", Turn: 42, Command: "gh workflow run bench.yml", Reason: "the conductor dispatches it"},
+			{RunID: "run_impl", Turn: 42, Command: "make bench", Reason: "the conductor verifies it"}}
+		s.asked["gh workflow run bench.yml"] = map[string]int64{"h": 7}
+		s.asked["make bench"] = map[string]int64{"h": 7}
+		s.asks[7] = &dischargeAsk{Key: key, RunID: "run_impl", Turn: 42, Overdue: true}
+		return s
+	}
+	line := func(detail map[string]any) string {
+		return escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: detail})
+	}
+	const settles = "A backed decide_checks answer to the open second checks ask (runId run_impl, turn 42, ask " + key +
+		") at the current heads settles this escalation by itself, with no person's waiver: keep the checks, then answer it. " +
+		"Waive is for a check that was not kept; a reject still goes to the person."
+	d := deferredEscalation(overdue(), "h", true)
+	if got := fmt.Sprint(d["asks"]); got != fmt.Sprint([]DischargeOpenAsk{{"run_impl", 42, key}}) {
+		t.Errorf("the open asks: %s", got)
+	}
+	if l := line(d); !strings.Contains(l, settles) {
+		t.Errorf("the discharge wake lacks the settling line:\n%s", l)
+	}
+	rejected := overdue()
+	rejected.latest["make bench"] = dischargeAnswer{Verdict: VerdictReject, Reason: "not run"}
+	d = deferredEscalation(rejected, "h", true)
+	if _, ok := d["asks"]; ok {
+		t.Errorf("an escalation with a check rejected names an ask: %v", d["asks"])
+	}
+	if l := line(d); strings.Contains(l, "settles this escalation") {
+		t.Errorf("a rejected check's wake says an answer settles it:\n%s", l)
+	}
+	held := map[string]any{"runId": "run_impl", "message": "held", "asks": []DischargeOpenAsk{{"run_impl", 42, key}}}
+	without := map[string]any{"runId": "run_impl", "message": "held"}
+	if line(held) != line(without) {
+		t.Errorf("a held report's wake reads an ask:\n%s", line(held))
+	}
+}
