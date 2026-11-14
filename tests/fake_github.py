@@ -191,6 +191,8 @@ class FakeGitHub:
         self.merges: list[dict] = []
         self.updates: list[int] = []
         self.jobs_rerun: list[int] = []
+        # Workflow runs re-run and running again: GitHub refuses them.
+        self._rerunning: set[int] = set()
         self.review_requests: list[tuple[int, list[str]]] = []
         self.receive_requests: list[str] = []
         # Branches GitHub reports as protected.
@@ -690,6 +692,8 @@ class FakeGitHub:
             checks[name] = {"id": prior["id"] if prior else self._next_check_id, "name": name, "kind": kind,
                             "status": status, "conclusion": conclusion if status == "completed" else None,
                             "started_at": _now(), "completed_at": _now() if status == "completed" else None}
+            if status == "completed":
+                self._rerunning.discard(self._workflow_run_of(checks[name]["id"]))
         if kind == "status":
             state = "pending" if status != "completed" else conclusion
             self.send_webhook("status", {"sha": sha, "state": state, "context": name})
@@ -697,6 +701,12 @@ class FakeGitHub:
             self.send_webhook("check_run", {"action": status, "check_run": {"head_sha": sha, "name": name}})
             if status == "completed":
                 self.send_webhook("check_suite", {"action": "completed", "check_suite": {"head_sha": sha}})
+
+    def _workflow_run_of(self, job: int) -> int:
+        """The workflow run a job (an Actions check run) is in: an
+        add_actions_run's that lists it, else one of its own."""
+        return next((run for run, r in self.actions_runs.items() if any(j["id"] == job for j in r["jobs"])),
+                    FIRST_RUN_ID + job - FIRST_JOB_ID)
 
     def open_pull(self, head: str, base: str = "main", title: str | None = None, author: str = "gus",
                   head_repo: str | None = None, draft: bool = False, body: str = "") -> str:
@@ -1179,8 +1189,27 @@ class FakeGitHub:
                     # a token may not, as on GitHub.
                     return self._send(403, {"message": "Invalid OAuth application client_id or secret."})
                 if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)/rerun", self.path):
+                    # As GitHub: a job's re-run restarts its workflow run,
+                    # which refuses another until it is done.
                     with gh._lock:
+                        run = gh._workflow_run_of(int(m[1]))
+                        if run in gh._rerunning:
+                            return self._send(403, {"message": "The workflow run containing this job is already running"})
+                        gh._rerunning.add(run)
                         gh.jobs_rerun.append(int(m[1]))
+                    return self._send(201, {})
+                if m := re.fullmatch(rf"{prefix}/actions/runs/(\d+)/rerun-failed-jobs", self.path):
+                    with gh._lock:
+                        run = int(m[1])
+                        if run in gh._rerunning:
+                            return self._send(403, {"message": "This workflow is already running"})
+                        failed = [c["id"] for checks in gh.checks.values() for c in checks.values()
+                                  if c["kind"] == "check_run" and c["conclusion"] in ("failure", "timed_out", "cancelled")
+                                  and gh._workflow_run_of(c["id"]) == run]
+                        if not failed:
+                            return self._send(403, {"message": "This workflow run cannot be retried"})
+                        gh._rerunning.add(run)
+                        gh.jobs_rerun.extend(failed)
                     return self._send(201, {})
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews", self.path):
                     # As the other writes: answered, then told by webhook.
@@ -1523,6 +1552,9 @@ class FakeGitHub:
                                       [{"name": s, "conclusion": "failure"} for s in j.get("failed_steps", [])]}
                             for j in run["jobs"]]
                     return self._send(200, {"total_count": len(jobs), "jobs": jobs})
+                if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)", path):
+                    with self.github._lock:
+                        return self._send(200, {"id": int(m[1]), "run_id": self.github._workflow_run_of(int(m[1]))})
                 if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)/logs", path):
                     if int(m[1]) not in self.github.job_logs:
                         return self._send(404, {"message": "Not Found"})
