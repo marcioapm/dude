@@ -205,3 +205,32 @@ func TestACompareOverTwoMergeBasesNamesOneAndEachStatus(t *testing.T) {
 		t.Fatalf("files %+v, want F.md modified with its blob", cmp.Files)
 	}
 }
+
+// As GitHub: a job the fake has not reported is not found, and a workflow
+// run with no failed job cannot be retried. The checks' links are as
+// GitHub's, so a re-run reads the run from them; a job whose link does
+// not say is looked up.
+func TestRerunFailedJobsContract(t *testing.T) {
+	fake, client, _ := branchContract(t)
+	ctx := context.Background()
+	failed := func(id int64) forge.Check {
+		return forge.Check{Name: "e2e", Status: "completed", Conclusion: "failure", RunID: id, App: forge.ActionsApp,
+			URL: "https://github.test/acme/repo/runs/1"}
+	}
+	fake.SetChecks("run:failure")
+	if _, _, err := client.RerunFailed(ctx, fake.Slug, []forge.Check{failed(fakegithub.JobID(4242))}); !forge.Refused(err) {
+		t.Errorf("an unknown job re-run: %v, want a 404", err)
+	}
+	if n, _, err := client.RerunFailed(ctx, fake.Slug, []forge.Check{failed(fakegithub.DefaultCheckRunID)}); err != nil || n != 1 {
+		t.Errorf("the failed job re-run: %d (%v)", n, err)
+	}
+	fake.SetChecks("run:success")
+	if _, _, err := client.RerunFailed(ctx, fake.Slug, []forge.Check{failed(fakegithub.DefaultCheckRunID)}); !forge.Refused(err) {
+		t.Errorf("a run with nothing failed re-run: %v, want refused", err)
+	}
+	fake.Set(func(s *fakegithub.Server) {
+		if !slices.Equal(s.RunsRerun, []int64{fakegithub.DefaultWorkflowRunID}) {
+			t.Errorf("workflow runs re-run %v", s.RunsRerun)
+		}
+	})
+}
