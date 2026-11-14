@@ -938,7 +938,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		if st.Source.ReviewOnly() {
 			// T3: the verdict needs every lens it requires (verdictReviewed):
 			// the conductor adds lenses, it removes none.
-			categories, reasons = withRequiredLenses(st, categories, reasons)
+			if categories, reasons, err = w.withRequiredLenses(ctx, sc, st, categories, reasons); err != nil {
+				return workflow.Result{}, err
+			}
 		}
 	case reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0:
 		// A check that the simplifier changed no behaviour: the policy's

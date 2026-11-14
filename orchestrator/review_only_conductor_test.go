@@ -138,6 +138,48 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 	}
 }
 
+// T3 in a later round: the author pushes a path a conditional required
+// lens matches (database on migrations/**). The conductor's directed round
+// at the new head still runs it: the round's lenses are the verdict gate's,
+// read from the live compare, not the paths at adoption, and the verdict
+// is not "could not complete".
+func TestAReviewOnlyRoundAfterAPushRunsTheLensThePushRequires(t *testing.T) {
+	w := conducting(t)
+	w.gh.SetChecks("success")
+	w.cleanLenses()
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"requiredReviewers":["correctness"],
+		"conditionalReviewers":[{"category":"database","whenPathsMatch":["migrations/**"]}]}' WHERE id = $1`, w.project)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
+	if status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{}); status != 201 {
+		t.Fatalf("talk: %d %v", status, out)
+	}
+	w.until("its first decision", func() bool { return w.decisionAt(wi) != "" })
+	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.untilDecision(wi, delivery.PointReviewed)
+	w.must(wi, "decide", `{"action":"next"}`)
+	w.agentsDone(wi, "the first verdict", func() bool { return len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi) })
+	if c := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND category = 'database'`, wi); c != 0 {
+		t.Fatalf("%d database lenses before any migration", c)
+	}
+
+	head := w.push("migrations/001_greetings.sql")
+	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.untilDecision(wi, delivery.PointReviewed)
+	if c := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND category = 'database'
+		AND base_refs->>'target' = $2`, wi, head); c != 1 {
+		t.Fatalf("%d database lenses at %s, the push's migration requires one (%v)", c, head,
+			w.ids(`SELECT category FROM runs WHERE task_id = $1 AND phase = 'review' ORDER BY created_at`, wi))
+	}
+	w.must(wi, "decide", `{"action":"next"}`)
+	w.agentsDone(wi, "the verdict at the push", func() bool {
+		return len(reviewsAt(w.dudeReviews(wi, n), head)) == 1 && w.waitingOnPR(wi)
+	})
+	if r := reviewsAt(w.dudeReviews(wi, n), head)[0]; r.State != "APPROVED" || strings.Contains(r.Body, "could not complete") {
+		t.Fatalf("the verdict at the push: %s %q", r.State, r.Body)
+	}
+}
+
 // The separation: every guard above is review-only's. A conducted writing
 // task's conductor, at the same points, is as before: a free-text
 // dismissal dismisses, ask_person is offered after a review round, its

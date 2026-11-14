@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // Review only: a task that reviews a person's pull request and changes no
@@ -58,19 +59,56 @@ func ReviewOnlyTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 }
 
 // withRequiredLenses is a review-only round's lenses: the conductor's,
-// then each lens the verdict's gate requires for the pull request's
-// changed paths (ReviewersFor, as verdictReviewed reads it) that it left
-// out, with ReasonRequired.
-func withRequiredLenses(st *State, categories []string, reasons map[string][]string) ([]string, map[string][]string) {
+// then each lens the verdict's gate requires that it left out, with
+// ReasonRequired. The gate's lenses are ReviewersFor over the paths
+// verdictReviewed reads (prPaths: GitHub's compare of the base with the
+// head, renames' previous names too), not the paths at adoption: an
+// author's push since may add a path a conditional rule matches. Where
+// GitHub would not compare, the paths at adoption stand.
+func (w *steps) withRequiredLenses(ctx context.Context, sc workflow.StepContext, st *State, categories []string,
+	reasons map[string][]string) ([]string, map[string][]string, error) {
+	paths, err := w.verdictPaths(ctx, sc, st)
+	if err != nil {
+		return nil, nil, err
+	}
 	out := slices.Clone(categories)
 	reasons = maps.Clone(reasons)
-	for _, lens := range ReviewersFor(st.Policy, st.ChangedPaths) {
+	for _, lens := range ReviewersFor(st.Policy, paths) {
 		if !slices.Contains(out, lens) {
 			out = append(out, lens)
 			reasons[lens] = []string{ReasonRequired}
 		}
 	}
-	return out, reasons
+	return out, reasons, nil
+}
+
+// verdictPaths is what the review-only task's pull request changes at the
+// head the round reviews, as the verdict's gate measures it (prPaths),
+// with the paths at adoption; those alone when GitHub cannot say.
+func (w *steps) verdictPaths(ctx context.Context, sc workflow.StepContext, st *State) ([]string, error) {
+	paths := slices.Clone(st.ChangedPaths)
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
+	if err != nil || gh == nil || len(st.PullRequestIDs) == 0 {
+		return paths, err
+	}
+	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range states {
+		head := cmp.Or(st.Heads[p.Repo], p.HeadSHA)
+		if p.Slug == "" || head == "" {
+			continue
+		}
+		_, live, refused, err := prPaths(ctx, gh, GateFacts{Repo: p.Repo, Slug: p.Slug, Head: head}, st.Source.BaseBranch)
+		if err != nil {
+			return nil, err
+		}
+		if !refused {
+			paths = append(paths, live...)
+		}
+	}
+	return paths, nil
 }
 
 // A review-only dismissal's grounds, the first word of its reason: the
