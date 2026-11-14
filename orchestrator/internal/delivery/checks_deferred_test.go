@@ -175,4 +175,12 @@ func TestADischargeEscalationNamesOnlyItsOwnCurrentAsk(t *testing.T) {
 	if l := escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: d}); strings.Contains(l, "settles this escalation") {
 		t.Errorf("the wake says an answer settles it while another check is outstanding:\n%s", l)
 	}
+	// Once that ask is overdue too, both are named, and the wake asks for
+	// an answer to each.
+	s.asks[11].Overdue = true
+	l := escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: deferredEscalation(s, "h", true)})
+	if !strings.Contains(l, "A backed decide_checks answer to each open second checks ask (runId run_impl, turn 42, ask k7; runId run_impl, turn 43, ask k11)") ||
+		!strings.Contains(l, "keep the checks, then answer each.") {
+		t.Errorf("the wake for two asks:\n%s", l)
+	}
 }
