@@ -61,16 +61,31 @@ func ReviewOnlyTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 
 // withRequiredLenses is a review-only round's lenses: the conductor's,
 // then each lens the verdict's gate requires that it left out, with
-// ReasonRequired. The gate's lenses are ReviewersFor over the paths
-// verdictReviewed reads (prPaths: GitHub's compare of the base with the
-// head, renames' previous names too), not the paths at adoption: an
-// author's push since may add a path a conditional rule matches. Where
-// GitHub would not compare, the paths at adoption stand.
+// ReasonRequired. The gate reads the paths as verdictReviewed does
+// (prPaths at the round's head), which an author's push may have changed
+// since adoption; the paths at adoption stand where GitHub would not
+// compare (prPaths gives none).
 func (w *steps) withRequiredLenses(ctx context.Context, sc workflow.StepContext, st *State, categories []string,
 	reasons map[string][]string) ([]string, map[string][]string, error) {
-	paths, err := w.verdictPaths(ctx, sc, st)
+	paths := slices.Clone(st.ChangedPaths)
+	gh, err := w.forges.For(ctx, sc.OrganizationID)
 	if err != nil {
 		return nil, nil, err
+	}
+	if gh != nil && len(st.PullRequestIDs) > 0 {
+		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, p := range states {
+			if head := cmp.Or(st.Heads[p.Repo], p.HeadSHA); p.Slug != "" && head != "" {
+				_, live, _, err := prPaths(ctx, gh, GateFacts{Repo: p.Repo, Slug: p.Slug, Head: head}, st.Source.BaseBranch)
+				if err != nil {
+					return nil, nil, err
+				}
+				paths = append(paths, live...)
+			}
+		}
 	}
 	out := slices.Clone(categories)
 	reasons = maps.Clone(reasons)
@@ -83,35 +98,6 @@ func (w *steps) withRequiredLenses(ctx context.Context, sc workflow.StepContext,
 	return out, reasons, nil
 }
 
-// verdictPaths is what the review-only task's pull request changes at the
-// head the round reviews, as the verdict's gate measures it (prPaths),
-// with the paths at adoption; those alone when GitHub cannot say.
-func (w *steps) verdictPaths(ctx context.Context, sc workflow.StepContext, st *State) ([]string, error) {
-	paths := slices.Clone(st.ChangedPaths)
-	gh, err := w.forges.For(ctx, sc.OrganizationID)
-	if err != nil || gh == nil || len(st.PullRequestIDs) == 0 {
-		return paths, err
-	}
-	states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range states {
-		head := cmp.Or(st.Heads[p.Repo], p.HeadSHA)
-		if p.Slug == "" || head == "" {
-			continue
-		}
-		_, live, refused, err := prPaths(ctx, gh, GateFacts{Repo: p.Repo, Slug: p.Slug, Head: head}, st.Source.BaseBranch)
-		if err != nil {
-			return nil, err
-		}
-		if !refused {
-			paths = append(paths, live...)
-		}
-	}
-	return paths, nil
-}
-
 // A review-only dismissal's grounds, the first word of its reason: the
 // finding is wrong (the evidence follows), or a duplicate of another
 // finding of the task (its id follows). dismiss_finding's schema is the
@@ -119,21 +105,19 @@ func (w *steps) verdictPaths(ctx context.Context, sc workflow.StepContext, st *S
 const (
 	GroundsWrong     = "wrong"
 	GroundsDuplicate = "duplicate"
-	// The fewest characters, trimmed, of a "wrong:" dismissal's evidence.
-	minWrongEvidence = 10
+	minWrongEvidence = 10 // runes, trimmed
 )
 
 // reviewOnlyGroundsTx reads a review-only task's dismissal reason as its
 // grounds, recorded with the dismissal, or refuses it: "wrong: <evidence>",
-// or "duplicate: <finding id>" naming another open finding of the task. The
-// one it duplicates must be open, so a set of duplicates always leaves one
-// open and counted by the verdict: no cycle dismisses them all.
+// or "duplicate: <finding id>" naming another open finding of the task, so
+// a set of duplicates always leaves one open and counted by the verdict.
+// Concurrent dismissals are serialized by liveConductor's chat lock.
 func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reason string) (map[string]any, error) {
 	word, rest, _ := strings.Cut(reason, ":")
 	rest = strings.TrimSpace(rest)
 	switch strings.ToLower(strings.TrimSpace(word)) {
 	case GroundsWrong:
-		// Evidence says something: a letter or digit, and more than a word.
 		if len([]rune(rest)) < minWrongEvidence || !strings.ContainsFunc(rest, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
 			return nil, refuseText(rReviewOnlyDismissWrongEvidence)
 		}
