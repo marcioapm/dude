@@ -1188,17 +1188,9 @@ class FakeGitHub:
                     # Only the app that owns a check run may re-request it;
                     # a token may not, as on GitHub.
                     return self._send(403, {"message": "Invalid OAuth application client_id or secret."})
-                if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)/rerun", self.path):
-                    # As GitHub: a job's re-run restarts its workflow run,
-                    # which refuses another until it is done.
-                    with gh._lock:
-                        run = gh._workflow_run_of(int(m[1]))
-                        if run in gh._rerunning:
-                            return self._send(403, {"message": "The workflow run containing this job is already running"})
-                        gh._rerunning.add(run)
-                        gh.jobs_rerun.append(int(m[1]))
-                    return self._send(201, {})
                 if m := re.fullmatch(rf"{prefix}/actions/runs/(\d+)/rerun-failed-jobs", self.path):
+                    # As GitHub: a workflow run re-runs its failed jobs, and
+                    # refuses again until it is done.
                     with gh._lock:
                         run = int(m[1])
                         if run in gh._rerunning:
@@ -1559,7 +1551,12 @@ class FakeGitHub:
                             for j in run["jobs"]]
                     return self._send(200, {"total_count": len(jobs), "jobs": jobs})
                 if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)", path):
+                    # As GitHub: a job it does not have is not found.
                     with self.github._lock:
+                        known = [c["id"] for cs in self.github.checks.values() for c in cs.values()] + \
+                            [j["id"] for r in self.github.actions_runs.values() for j in r["jobs"]]
+                        if int(m[1]) not in known:
+                            return self._send(404, {"message": "Not Found"})
                         return self._send(200, {"id": int(m[1]), "run_id": self.github._workflow_run_of(int(m[1]))})
                 if m := re.fullmatch(rf"{prefix}/actions/jobs/(\d+)/logs", path):
                     if int(m[1]) not in self.github.job_logs:
