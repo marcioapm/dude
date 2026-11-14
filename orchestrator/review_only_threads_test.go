@@ -176,7 +176,7 @@ func TestAWithdrawalApprovesAtTheSameHead(t *testing.T) {
 	runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi)
 	var finding string
 	_ = w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding)
-	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"withdrawn: the author showed it is intended"}`)
+	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"wrong: the author showed the behaviour is intended"}`)
 	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
 	if got := reviewsAt(w.dudeReviews(wi, n), h1); got[1].State != "APPROVED" {
 		t.Fatalf("after the withdrawal: %+v", got)
@@ -185,7 +185,7 @@ func TestAWithdrawalApprovesAtTheSameHead(t *testing.T) {
 		t.Fatalf("%d lens Runs for a withdrawal", r-runs)
 	}
 	r := repliesTo(w.gh.Pull(n), root.ID)
-	if len(r) != 1 || r[0].Body != "Withdrawn: the author showed it is intended." {
+	if len(r) != 1 || r[0].Body != "Withdrawn: the author showed the behaviour is intended." {
 		t.Fatalf("replies in dude's thread: %+v", r)
 	}
 	if !w.gh.ResolvedThreads[w.gh.ThreadID(root.ID)] {
