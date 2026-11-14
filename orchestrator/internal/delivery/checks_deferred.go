@@ -638,7 +638,7 @@ func deferredEscalation(s *deferredState, id string, due bool) map[string]any {
 
 // DischargeOpenAsk is a second checks ask a discharge escalation's checks
 // wait on, unanswered past its deadline: answered backed at the current
-// heads, it settles the escalation (dischargeKept), so the conductor's
+// heads, it settles the escalation (dischargeKeptTx), so the conductor's
 // escalation wake names it.
 type DischargeOpenAsk struct {
 	RunID string `json:"runId"`
