@@ -52,6 +52,10 @@ const (
 // orchestrator's settings shorten it.
 var ChecksAnswerWait = ConductorAnswerWait
 
+// ChecksWaitWords is ChecksAnswerWait in words ("10 min"): how long a
+// checks wake says the conductor has.
+func ChecksWaitWords() string { return duration(int64(ChecksAnswerWait.Seconds())) }
+
 // ChecksBase is a target-branch commit a failure is measured against.
 type ChecksBase struct{ Repo, Branch, SHA string }
 
@@ -69,6 +73,10 @@ type ChecksAsked struct {
 	// "repo: branch at sha".
 	Bases     []ChecksBase `json:"bases,omitempty"`
 	TestPhase bool         `json:"testPhase,omitempty"`
+	// Discharge marks the second ask about a turn's deferred checks, once
+	// the pull request is open (AskDeferredTx): each check's Result is
+	// CheckDeferred, its Evidence the conductor's reason for deferring it.
+	Discharge *ChecksDischarge `json:"discharge,omitempty"`
 }
 
 // ConductedCheck is the conductor's verdict on one reported check.
@@ -106,7 +114,7 @@ const ChecksWaiting = `EXISTS (SELECT 1 FROM ` + checksAsked + `)`
 
 // checksAsked (SQL, over a Run aliased r): the gate's open ask of
 // ChecksWaiting, as events a.
-const checksAsked = `events a WHERE a.run_id = r.id AND a.event_type = '` + EvRunChecksAsked + `'
+const checksAsked = `events a WHERE a.run_id = r.id AND a.event_type = '` + EvRunChecksAsked + `' AND NOT a.payload ? 'discharge'
 	AND (a.payload->>'deadline')::timestamptz > now()
 	AND (a.payload->>'turn')::bigint = (SELECT COALESCE(max(t.cursor), 0) FROM events t WHERE t.run_id = r.id AND t.event_type = 'agent.session.stopped')
 	AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = r.id AND v.event_type IN ('` + EvRunChecksConducted + `', '` + EvRunChecksJudged + `')
@@ -130,7 +138,8 @@ func ChecksConductorUnavailableTx(ctx context.Context, tx pgx.Tx, taskID string)
 // and park apply. A repeat for the same turn changes nothing.
 func AskChecksTx(ctx context.Context, tx pgx.Tx, ref RunRef, asked ChecksAsked, line string) error {
 	var exists bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2 AND (payload->>'turn')::bigint = $3)`,
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type = $2 AND (payload->>'turn')::bigint = $3
+		AND NOT payload ? 'discharge')`,
 		ref.RunID, EvRunChecksAsked, asked.Turn).Scan(&exists); err != nil || exists {
 		return err
 	}
@@ -155,7 +164,7 @@ func AskChecksTx(ctx context.Context, tx pgx.Tx, ref RunRef, asked ChecksAsked, 
 func ChecksAskedTx(ctx context.Context, tx pgx.Tx, runID string, turn int64) (asked *ChecksAsked, overdue bool, err error) {
 	var raw []byte
 	err = tx.QueryRow(ctx, `SELECT payload, (payload->>'deadline')::timestamptz <= now() FROM events
-		WHERE run_id = $1 AND event_type = $2 AND (payload->>'turn')::bigint = $3 ORDER BY cursor LIMIT 1`,
+		WHERE run_id = $1 AND event_type = $2 AND (payload->>'turn')::bigint = $3 AND NOT payload ? 'discharge' ORDER BY cursor LIMIT 1`,
 		runID, EvRunChecksAsked, turn).Scan(&raw, &overdue)
 	if db.IsNotFound(err) {
 		return nil, false, nil
@@ -173,7 +182,7 @@ func ConductedChecksTx(ctx context.Context, tx pgx.Tx, runID string, turn int64)
 	var raw []byte
 	var c ConductedChecks
 	err := tx.QueryRow(ctx, `SELECT payload, cursor FROM events WHERE run_id = $1 AND event_type = $2
-		AND (payload->>'turn')::bigint = $3 ORDER BY cursor LIMIT 1`, runID, EvRunChecksConducted, turn).Scan(&raw, &c.Cursor)
+		AND (payload->>'turn')::bigint = $3 AND NOT payload ? 'discharge' ORDER BY cursor LIMIT 1`, runID, EvRunChecksConducted, turn).Scan(&raw, &c.Cursor)
 	if db.IsNotFound(err) {
 		return nil, nil
 	}
@@ -189,6 +198,9 @@ type DecideChecks struct {
 	Turn    int64            `json:"turn"`
 	Checks  []ConductedCheck `json:"checks"`
 	Missing ConductedMissing `json:"missing"`
+	// Ask is the second checks ask an answer is to (its key, which the
+	// second checks wake names): "" for the first ask.
+	Ask string `json:"ask,omitempty"`
 }
 
 // ConductChecksTx records the task's live conductor's verdict on a
@@ -219,6 +231,19 @@ func ConductChecksTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks
 	if err != nil {
 		return 0, err
 	}
+	// An answer to a second ask about the turn's deferred checks, once
+	// the pull request is open, names the ask: the turn need not be the
+	// Run's latest (a completed Run's report is the one that deferred
+	// them), and the ask, not the turn, says at which heads it is kept.
+	if strings.TrimSpace(in.Ask) != "" {
+		return conductDischargeTx(ctx, tx, ref, in, projectID)
+	}
+	if open, err := openDischargeTx(ctx, tx, ref.TaskID, in.RunID, in.Turn); err != nil {
+		return 0, err
+	} else if open != nil {
+		// Named, so a conductor that lost the wake can answer it.
+		return 0, refusef(rChecksAskMissing, open.Discharge.Key)
+	}
 	if in.Turn != latest {
 		return 0, refusef(rChecksNotLatestTurn, latest)
 	}
@@ -228,7 +253,7 @@ func ConductChecksTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks
 	}
 	var settled bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE run_id = $1 AND event_type IN ($2, $3)
-		AND (payload->>'turn')::bigint = $4)`, in.RunID, EvRunChecksConducted, EvRunChecksJudged, in.Turn).Scan(&settled); err != nil {
+		AND (payload->>'turn')::bigint = $4 AND NOT payload ? 'discharge')`, in.RunID, EvRunChecksConducted, EvRunChecksJudged, in.Turn).Scan(&settled); err != nil {
 		return 0, err
 	}
 	if asked == nil || settled {
@@ -279,6 +304,11 @@ func checkVerdicts(asked *ChecksAsked, in DecideChecks) error {
 			}
 		case CheckNotRun:
 			allowed = []string{VerdictDeferred, VerdictReject}
+		case CheckDeferred:
+			// The second ask, once the pull request is open: the later
+			// phase has come, so deferring again is no verdict. Backed
+			// cites the evidence it was kept by.
+			allowed = []string{VerdictBacked, VerdictReject}
 		case CheckPass:
 		default:
 			allowed = []string{VerdictReject}
@@ -292,6 +322,10 @@ func checkVerdicts(asked *ChecksAsked, in DecideChecks) error {
 		if v.Verdict == VerdictSameAsWaived && v.WaiverCursor != asked.Waivers[i].Cursor {
 			return refusef(rChecksWaiverCursor, c.Command, asked.Waivers[i].Cursor)
 		}
+	}
+	if asked.Discharge != nil {
+		// The second ask does not ask about missing checks again.
+		return nil
 	}
 	if in.Missing.Verdict != MissingNone && in.Missing.Verdict != MissingFound || strings.TrimSpace(in.Missing.Reason) == "" {
 		return refuseText(rChecksMissingVerdict)

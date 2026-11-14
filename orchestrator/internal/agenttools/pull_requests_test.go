@@ -250,7 +250,7 @@ func TestPullRequestsGivesEachOpenPullRequestItsReadyGate(t *testing.T) {
 				t.Errorf("%s's item %d is %s, want %s", p.Repo, i, it.Key, delivery.ReadyKeys[i])
 			}
 			switch it.Key {
-			case delivery.ReadyFindings, delivery.ReadyQuestions:
+			case delivery.ReadyFindings, delivery.ReadyQuestions, delivery.ReadyDeferred:
 				if !it.OK {
 					t.Errorf("%s: %s fails with nothing open: %s", p.Repo, it.Key, it.Detail)
 				}

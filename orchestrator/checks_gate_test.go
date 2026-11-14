@@ -34,8 +34,10 @@ type checksConductor struct {
 	mu      sync.Mutex
 	decided []delivery.DecideChecks
 	reject  bool
-	silent  bool
-	busy    bool
+	// keepDeferred: with reject, a check not run is still deferred.
+	keepDeferred bool
+	silent       bool
+	busy         bool
 }
 
 // checksReason is what the scripted conductor says of every verdict.
@@ -74,7 +76,7 @@ func (c *checksConductor) decide(w *world) {
 				if wv := asked.Waivers[i]; wv != nil && !c.reject && w.sameFailure(in.RunID, wv, v.Command) {
 					v.Verdict, v.WaiverCursor = delivery.VerdictSameAsWaived, wv.Cursor
 				}
-				if c.reject && asked.Check[i].Result != delivery.CheckPass {
+				if c.reject && asked.Check[i].Result != delivery.CheckPass && !(c.keepDeferred && v.Verdict == delivery.VerdictDeferred) {
 					v.Verdict = delivery.VerdictReject
 				}
 			}

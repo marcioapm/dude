@@ -2198,7 +2198,13 @@ func (s *Server) turn(run *Run) {
 		s.edit(run, b.FinishEdits)
 	}
 	commands, checks := b.Commands, b.Checks
-	if c, report, ok := fakeagent.ChecksTurn(b.ChecksModel, run.turnsEnded); ok && checks != "" && b.Commands != nil {
+	turn := run.turnsEnded
+	if b.ChecksModel == fakeagent.ChecksDeferredModel && (len(run.Inputs) == 0 || !strings.HasPrefix(run.Inputs[len(run.Inputs)-1], fakeagent.ChecksSentBack)) {
+		// It runs the check it deferred only when its report was sent
+		// back: any other turn reports as its first.
+		turn = 0
+	}
+	if c, report, ok := fakeagent.ChecksTurn(b.ChecksModel, turn); ok && checks != "" && b.Commands != nil {
 		commands, checks = c, report
 	}
 	if !asking {

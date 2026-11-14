@@ -560,6 +560,14 @@ func failedAtBase(question string) bool {
 	return ok && err == nil && n >= 1 && n <= 125
 }
 
+// KeepDeferred is what the second checks ask (delivery's
+// wakes/checks-deferred) says before its call to decide. That call names
+// its ask ("turn N, ask KEY"), which checksWakeRun does not match:
+// keeping a deferred check takes running it (a workflow, a verify), which
+// Deliver's defaults never do, so ChecksDefaults leaves it to the test's
+// script.
+const KeepDeferred = "keep the checks you deferred to this later phase"
+
 // ManualChecks is a test script's instruction to keep checks decisions
 // explicit (for example a Chat script that later calls decide_checks).
 const ManualChecks = "Test script decides checks explicitly."
@@ -1052,9 +1060,14 @@ const (
 	ChecksOtherFailureModel = "fake/checks-other-failure"
 	ChecksBaseShownModel    = "fake/checks-base-shown"
 	// ChecksDeferredModel is ChecksBaseShownModel that also reports a
-	// browser check not run, which a later phase runs.
+	// check not run, which a later phase runs: as in the trials, a manual
+	// workflow (DeferredWorkflow) the conductor dispatches once the pull
+	// request is open. Sent back, it runs both and both pass
+	// (DeferredRunOutput).
 	ChecksDeferredModel = "fake/checks-deferred"
-	DeferredCommand     = "open the greeting page in a browser"
+	DeferredRunOutput   = "bench.yml completed: success"
+	DeferredWorkflow    = "bench.yml"
+	DeferredCommand     = "gh workflow run " + DeferredWorkflow
 	FailingCommand      = "make test"
 	OtherFailingCommand = "make lint"
 	// BaseDir is where BaseCommand checks the task's base out.
@@ -1090,16 +1103,26 @@ func ChecksTurn(model string, turn int) (commands [][3]string, report string, ok
 	case model == ChecksBaseShownModel:
 		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
 			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"}), true
+	case model == ChecksDeferredModel && turn > 0:
+		// Sent back (ChecksSentBack: fakelux plays this turn only on a
+		// send-back), it runs both, and both pass: the check it deferred
+		// is run after all.
+		return [][3]string{{FailingCommand, CheckOutputs[1], "0"}, {DeferredCommand, DeferredRunOutput, "0"}},
+			ChecksReport([3]string{FailingCommand, "pass", "ok"}, [3]string{DeferredCommand, "pass", DeferredRunOutput}), true
 	case model == ChecksDeferredModel:
 		return [][3]string{{BaseCommand, PreexistingOutputs[0], "1"}, {FailingCommand, PreexistingOutputs[0], "1"}},
 			ChecksReport([3]string{FailingCommand, "fail", "TestClock fails the same at the starting commit"},
-				[3]string{DeferredCommand, "not-run", "needs a browser: " + DeferredToLater}), true
+				[3]string{DeferredCommand, "not-run", "a manual workflow on GitHub: " + DeferredToLater}), true
 	case model == ChecksOtherFailureModel:
 		return [][3]string{{OtherFailingCommand, "lint: 1 issue\nexit status 1", "1"}},
 			ChecksReport([3]string{OtherFailingCommand, "fail", "one lint issue"}), true
 	}
 	return nil, "", false
 }
+
+// ChecksSentBack opens the checks gate's send-back (delivery's
+// notices/checks): a turn answering it is a checks model's later turn.
+const ChecksSentBack = "Your checks report was not verified."
 
 // everyWriterReports are the checks models whose report every writer
 // phase makes, not the implementer's alone.
