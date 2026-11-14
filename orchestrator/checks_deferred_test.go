@@ -116,6 +116,34 @@ func deferredDetail(stands string) string {
 	return fmt.Sprintf("1 deferred check(s) not kept: %q (deferred: Deliver's defaults: not-run) — %s", fakeagent.DeferredCommand, stands)
 }
 
+// untilAsked waits for the conductor's one second checks ask about task.
+func (w *world) untilAsked(task string) {
+	w.t.Helper()
+	w.until("the conductor asked to keep the deferred check", func() bool {
+		w.sync()
+		w.pump()
+		return len(w.deferredWakes(task)) == 1
+	})
+}
+
+// untilReady waits, syncing, for task to be ready to merge.
+func (w *world) untilReady(task, what string) {
+	w.t.Helper()
+	w.until(what, func() bool {
+		w.sync()
+		w.pump()
+		return w.taskStatus(task) == "ready_to_merge"
+	})
+}
+
+// escalationDue has the task's escalation pass its conductor's deadline
+// now, so it goes to a person.
+func (w *world) escalationDue(task string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET wake_at = now(), state = jsonb_set(state, '{escalation,raisedAt}', to_jsonb(now() - interval '1 hour'))
+		WHERE task_id = $1 AND workflow_type = 'task.delivery' AND status = 'waiting'`, task)
+}
+
 // readyEvents counts the task's task.ready_to_merge events.
 func (w *world) readyEvents(task string) int {
 	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'task.ready_to_merge'`, task)
@@ -149,11 +177,7 @@ func (w *world) dischargeRaised(task string) (raised, asked int) {
 // ready to merge.
 func TestADeferredCheckHoldsReadyUntilTheConductorKeepsIt(t *testing.T) {
 	w, task := deferredWorld(t)
-	w.until("the conductor asked to keep the deferred check", func() bool {
-		w.sync()
-		w.pump()
-		return len(w.deferredWakes(task)) == 1
-	})
+	w.untilAsked(task)
 	w.weighedTwice(task)
 	if s := w.taskStatus(task); s == "ready_to_merge" {
 		t.Fatal("ready to merge with a deferred check never run")
@@ -181,11 +205,7 @@ func TestADeferredCheckHoldsReadyUntilTheConductorKeepsIt(t *testing.T) {
 	if status, out := w.answerDeferred(task, delivery.VerdictBacked, "the pull request's CI at "+head[:7]+" ran it: success"); status != 200 {
 		t.Fatalf("backed: %d %v", status, out)
 	}
-	w.until("ready to merge once kept", func() bool {
-		w.sync()
-		w.pump()
-		return w.taskStatus(task) == "ready_to_merge"
-	})
+	w.untilReady(task, "ready to merge once kept")
 	if ok, detail := w.storedDeferred(task); !ok || detail != "1 deferred check(s) kept" {
 		t.Errorf("the deferred item once kept: %v %q", ok, detail)
 	}
@@ -202,11 +222,7 @@ func TestADeferredCheckHoldsReadyUntilTheConductorKeepsIt(t *testing.T) {
 // H2 makes it ready.
 func TestALateAnswerAboutOldHeadsKeepsNothingAtNewOnes(t *testing.T) {
 	w, task := deferredWorld(t)
-	w.until("the conductor asked at H1", func() bool {
-		w.sync()
-		w.pump()
-		return len(w.deferredWakes(task)) == 1
-	})
+	w.untilAsked(task)
 	_, _, first := w.secondAsk(task)
 	h2 := w.movedHead()
 	w.until("the conductor asked again at H2", func() bool {
@@ -237,30 +253,18 @@ func TestALateAnswerAboutOldHeadsKeepsNothingAtNewOnes(t *testing.T) {
 	if status, out := w.answerAsk(task, second, delivery.VerdictBacked, "the pull request's CI at "+h2[:7]+" ran it: success"); status != 200 {
 		t.Fatalf("backed at H2: %d %v", status, out)
 	}
-	w.until("ready to merge once kept at H2", func() bool {
-		w.sync()
-		w.pump()
-		return w.taskStatus(task) == "ready_to_merge"
-	})
+	w.untilReady(task, "ready to merge once kept at H2")
 }
 
 // Backed at H1, the check is kept at H1 only: a push to H2 holds the pull
 // request in review and asks again there.
 func TestACheckKeptAtOldHeadsIsAskedAgainAtNewOnes(t *testing.T) {
 	w, task := deferredWorld(t)
-	w.until("the conductor asked at H1", func() bool {
-		w.sync()
-		w.pump()
-		return len(w.deferredWakes(task)) == 1
-	})
+	w.untilAsked(task)
 	if status, out := w.answerDeferred(task, delivery.VerdictBacked, "the pull request's CI ran it: success"); status != 200 {
 		t.Fatalf("backed at H1: %d %v", status, out)
 	}
-	w.until("ready at H1", func() bool {
-		w.sync()
-		w.pump()
-		return w.taskStatus(task) == "ready_to_merge"
-	})
+	w.untilReady(task, "ready at H1")
 	w.movedHead()
 	w.until("asked again at H2", func() bool {
 		w.sync()
@@ -283,11 +287,7 @@ func TestACheckKeptAtOldHeadsIsAskedAgainAtNewOnes(t *testing.T) {
 // stop. Before the deadline, nothing is raised.
 func TestAnUnansweredSecondAskGoesToAPersonAtItsDeadline(t *testing.T) {
 	w, task := deferredWorld(t)
-	w.until("the conductor asked to keep the deferred check", func() bool {
-		w.sync()
-		w.pump()
-		return len(w.deferredWakes(task)) == 1
-	})
+	w.untilAsked(task)
 	// The delivery wakes itself at the deadline: no sync sees it pass.
 	if n := w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND workflow_type = 'task.delivery' AND status = 'waiting'
 		AND wake_at BETWEEN (SELECT (payload->>'deadline')::timestamptz FROM events WHERE task_id = $1 AND event_type = $2 AND payload ? 'discharge')
@@ -310,8 +310,7 @@ func TestAnUnansweredSecondAskGoesToAPersonAtItsDeadline(t *testing.T) {
 		t.Errorf("the deferred item: %v %q", ok, detail)
 	}
 	// The conductor holds it; at its deadline it goes to a person.
-	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now(), state = jsonb_set(state, '{escalation,raisedAt}', to_jsonb(now() - interval '1 hour'))
-		WHERE task_id = $1 AND workflow_type = 'task.delivery' AND status = 'waiting'`, task)
+	w.escalationDue(task)
 	w.until("the escalation with a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
 	for range 3 {
 		w.sync()
@@ -329,11 +328,7 @@ func TestAnUnansweredSecondAskGoesToAPersonAtItsDeadline(t *testing.T) {
 	if status, out := w.decide(owner, task, delivery.ActionWaive, "bench is run by hand on release"); status != 200 {
 		t.Fatalf("waive: %d %v", status, out)
 	}
-	w.until("ready to merge once a person waived it", func() bool {
-		w.sync()
-		w.pump()
-		return w.taskStatus(task) == "ready_to_merge"
-	})
+	w.untilReady(task, "ready to merge once a person waived it")
 }
 
 // A person's waiver of another check keeps no deferred promise: bench is
@@ -375,11 +370,7 @@ func TestAWaiverOfAnotherCheckKeepsNoDeferredPromise(t *testing.T) {
 		impl, delivery.EvRunChecksJudged); got != "[]" {
 		t.Fatalf("the waiver's judgement lists %s", got)
 	}
-	w.until("the conductor asked to keep the deferred check", func() bool {
-		w.sync()
-		w.pump()
-		return len(w.deferredWakes(wi)) == 1
-	})
+	w.untilAsked(wi)
 	w.weighedTwice(wi)
 	if n := w.readyEvents(wi); n != 0 {
 		t.Fatal("ready to merge with the deferred check never run: the waiver of another check kept it")
@@ -412,11 +403,7 @@ func TestACheckDeferredThenRunAndPassedIsNoPromise(t *testing.T) {
 		impl, delivery.EvRunChecksJudged); n != 1 {
 		t.Fatalf("%d judgements deferring bench, want the first turn's", n)
 	}
-	w.until("ready to merge", func() bool {
-		w.sync()
-		w.pump()
-		return w.taskStatus(wi) == "ready_to_merge"
-	})
+	w.untilReady(wi, "ready to merge")
 	if n := len(w.deferredWakes(wi)); n != 0 {
 		t.Errorf("%d second asks about a check run and passed since", n)
 	}
@@ -432,11 +419,7 @@ func TestACheckDeferredThenRunAndPassedIsNoPromise(t *testing.T) {
 // and waits for the discharge escalation it raises.
 func (w *world) overdueDischarge(task string) {
 	w.t.Helper()
-	w.until("the conductor asked to keep the deferred check", func() bool {
-		w.sync()
-		w.pump()
-		return len(w.deferredWakes(task)) == 1
-	})
+	w.untilAsked(task)
 	mustExec(w.t, w.owner, `UPDATE events SET payload = jsonb_set(payload, '{deadline}', to_jsonb(now() - interval '1 second'))
 		WHERE task_id = $1 AND event_type = $2 AND payload ? 'discharge'`, task, delivery.EvRunChecksAsked)
 	w.until("the discharge escalation", func() bool {
@@ -459,11 +442,7 @@ func TestABackedAnswerAfterTheDeadlineSettlesTheEscalation(t *testing.T) {
 	if status, out := w.answerDeferred(task, delivery.VerdictBacked, "dispatch wfd_1 of bench.yml at "+head[:7]+" completed: success"); status != 200 {
 		t.Fatalf("the late backed answer: %d %v", status, out)
 	}
-	w.until("ready to merge once kept, late", func() bool {
-		w.sync()
-		w.pump()
-		return w.taskStatus(task) == "ready_to_merge"
-	})
+	w.untilReady(task, "ready to merge once kept, late")
 	if raised, asked := w.dischargeRaised(task); raised != 1 || asked != 0 {
 		t.Errorf("%d discharge escalations raised, %d asked of a person, want 1 and 0", raised, asked)
 	}
@@ -496,8 +475,7 @@ func TestARejectAfterTheDeadlineStillGoesToAPerson(t *testing.T) {
 		AND state->'escalation'->>'reason' = $2 AND NOT (state->'escalation' ? 'decided')`, task, delivery.ReasonChecksUnverified); n != 1 {
 		t.Fatalf("the escalation is not open after a late reject")
 	}
-	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now(), state = jsonb_set(state, '{escalation,raisedAt}', to_jsonb(now() - interval '1 hour'))
-		WHERE task_id = $1 AND workflow_type = 'task.delivery' AND status = 'waiting'`, task)
+	w.escalationDue(task)
 	w.until("the escalation with a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
 	if raised, asked := w.dischargeRaised(task); raised != 1 || asked != 1 {
 		t.Errorf("%d discharge escalations raised, %d asked of a person, want 1 and 1", raised, asked)
@@ -516,11 +494,7 @@ func TestARejectAfterTheDeadlineStillGoesToAPerson(t *testing.T) {
 // A person's waiver settles it, and the task is ready to merge.
 func TestADeferredCheckTheConductorRejectsWaitsOnAPerson(t *testing.T) {
 	w, task := deferredWorld(t)
-	w.until("the conductor asked to keep the deferred check", func() bool {
-		w.sync()
-		w.pump()
-		return len(w.deferredWakes(task)) == 1
-	})
+	w.untilAsked(task)
 	if status, out := w.answerDeferred(task, delivery.VerdictReject, "bench.yml was not dispatched: the person declined"); status != 200 {
 		t.Fatalf("reject: %d %v", status, out)
 	}
@@ -529,8 +503,7 @@ func TestADeferredCheckTheConductorRejectsWaitsOnAPerson(t *testing.T) {
 		return w.escalationReason(task) == delivery.ReasonChecksUnverified
 	})
 	// The conductor holds it; at its deadline it goes to a person.
-	mustExec(t, w.owner, `UPDATE workflow_runs SET wake_at = now(), state = jsonb_set(state, '{escalation,raisedAt}', to_jsonb(now() - interval '1 hour'))
-		WHERE task_id = $1 AND workflow_type = 'task.delivery' AND status = 'waiting'`, task)
+	w.escalationDue(task)
 	w.until("the escalation handed to a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
 	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'escalation'`, task); n != 1 {
 		t.Fatalf("%d escalation questions asked of a person, want 1", n)
@@ -550,11 +523,7 @@ func TestADeferredCheckTheConductorRejectsWaitsOnAPerson(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("waive: %d %v", status, out)
 	}
-	w.until("ready to merge once a person waived it", func() bool {
-		w.sync()
-		w.pump()
-		return w.taskStatus(task) == "ready_to_merge"
-	})
+	w.untilReady(task, "ready to merge once a person waived it")
 }
 
 // Exactly once: weighing the gate again, and a restart between recording
@@ -638,11 +607,7 @@ func (w *world) movedHead() string {
 // the task is ready to merge.
 func TestADeferredCheckHandedToDeliverWaitsOnAPerson(t *testing.T) {
 	w, task := deferredWorld(t)
-	w.until("the conductor asked to keep the deferred check", func() bool {
-		w.sync()
-		w.pump()
-		return len(w.deferredWakes(task)) == 1
-	})
+	w.untilAsked(task)
 	// The delivery leaves its conductor, as a person's accept of Deliver's
 	// defaults hands it over (SetDeciderTx), and its head moves.
 	if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
@@ -691,11 +656,7 @@ func TestADeferredCheckHandedToDeliverWaitsOnAPerson(t *testing.T) {
 	if status, out := w.decide(owner, task, delivery.ActionWaive, "bench is run by hand on release"); status != 200 {
 		t.Fatalf("waive: %d %v", status, out)
 	}
-	w.until("ready to merge once a person waived it", func() bool {
-		w.sync()
-		w.pump()
-		return w.taskStatus(task) == "ready_to_merge"
-	})
+	w.untilReady(task, "ready to merge once a person waived it")
 	if raised, asked := w.dischargeRaised(task); raised != 0 || asked != 1 {
 		t.Errorf("%d/%d discharge escalations after the waiver, want 0 and 1", raised, asked)
 	}
