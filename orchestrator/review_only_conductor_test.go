@@ -216,6 +216,43 @@ func TestAWritingDeliveryKeepsItsConductorsFreedoms(t *testing.T) {
 	w.must(reviewing, "reply_on_pull_request", `{"pr":"1","text":"Pushed the fix; CI is running."}`)
 }
 
+// The separation on an adopted pull request: review-only is one mode of a
+// source, and a pull request adopted to review and fix, or to continue, is
+// a writing delivery. Its conductor keeps every freedom above.
+func TestAWritingDeliveryOnAnAdoptedPullRequestKeepsItsConductorsFreedoms(t *testing.T) {
+	for _, mode := range []string{delivery.ModeReview, delivery.ModeContinue} {
+		t.Run(mode, func(t *testing.T) {
+			w := conducting(t)
+			mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"requiredReviewers":["correctness","tests","performance"]}'
+				WHERE id = $1`, w.project)
+			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+			wi := w.adopted("pr", n, "feature/greet", "main", mode)
+			if status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{}); status != 201 {
+				t.Fatalf("talk: %d %v", status, out)
+			}
+			w.until("its first decision", func() bool { return w.decisionAt(wi) != "" })
+			t.Logf("first decision at %s", w.decisionAt(wi))
+			w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+			w.untilDecision(wi, delivery.PointReviewed)
+			if got := w.ids(`SELECT DISTINCT category FROM runs WHERE task_id = $1 AND phase = 'review'`, wi); len(got) != 1 || got[0] != "correctness" {
+				t.Fatalf("an adopted %s task's directed round ran %v, want its correctness alone", mode, got)
+			}
+			if a := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decision_awaited'
+				AND payload->>'point' = $2 AND payload->>'actions' = '["next", "ask_person"]' AND payload->>'note' NOT LIKE '%posts dude''s review%'`,
+				wi, delivery.PointReviewed); a != 1 {
+				t.Fatalf("%d decisions after an adopted %s task's round offering next and ask_person, as before", a, mode)
+			}
+			f := w.openFinding(wi)
+			w.must(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Valid finding, but not fixed here"}`, f))
+			if g := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload ? 'grounds'`,
+				wi, delivery.EvFindingResolved); g != 0 {
+				t.Fatalf("an adopted %s task's dismissal recorded grounds", mode)
+			}
+			w.must(wi, "reply_on_pull_request", fmt.Sprintf(`{"pr":"%d","text":"Looking at it now."}`, n))
+		})
+	}
+}
+
 // T5: red CI at a review-only task's head wakes its conductor, which may
 // rerun the failed checks: neither the writer guard nor the pull request
 // actions' review-only refusal stops it.
