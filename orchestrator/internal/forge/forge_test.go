@@ -808,6 +808,11 @@ func TestRerunFailedRerunsEachWorkflowRunOnce(t *testing.T) {
 				return
 			}
 			posts = append(posts, p)
+			if p == "/check-runs/8/rerequest" {
+				w.WriteHeader(403)
+				fmt.Fprint(w, `{"message":"Resource not accessible by integration"}`)
+				return
+			}
 			var run int64
 			if job, ok := strings.CutSuffix(strings.TrimPrefix(p, "/actions/jobs/"), "/rerun"); ok {
 				run = runOf[job]
@@ -850,6 +855,16 @@ func TestRerunFailedRerunsEachWorkflowRunOnce(t *testing.T) {
 	}
 	if _, n, running, err = rerun([]int64{100}, failed(1, ActionsApp)); n != 0 || running != 1 || !AlreadyRunning(err) {
 		t.Errorf("all already running: %d re-run, %d running (%v)", n, running, err)
+	}
+	// GitHub always refuses a token another app's check: that refusal does
+	// not keep the Actions runs from being asked, and is the answer only
+	// when nothing was re-run.
+	posts, n, _, err = rerun(nil, failed(8, "coderabbit"), failed(1, ActionsApp))
+	if err != nil || n != 1 || !slices.Contains(posts, "/actions/runs/100/rerun-failed-jobs") {
+		t.Errorf("a refused app's check and an Actions job: %d re-run (%v), asked %v", n, err, posts)
+	}
+	if _, n, _, err = rerun(nil, failed(8, "coderabbit")); n != 0 || !Refused(err) {
+		t.Errorf("only a refused app's check: %d re-run (%v)", n, err)
 	}
 }
 

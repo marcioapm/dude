@@ -8,6 +8,7 @@
 package forge
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1476,9 +1477,11 @@ func (g *GitHub) Merge(ctx context.Context, slug string, number int, method, sha
 // says is already running is in progress, not a failure: its checks are
 // counted in running and the other runs are still asked; when nothing else
 // was, that 403 is the error. Every lookup comes before any re-run: a
-// failed one leaves nothing asked. Any other app's check is re-requested
-// through the checks API, which GitHub allows only the app that owns it:
-// with a token, GitHub refuses, and says so.
+// failed one leaves nothing asked. The workflow runs are asked first. Any
+// other app's check is re-requested through the checks API, which GitHub
+// allows only the app that owns it: with a token, GitHub refuses, and says
+// so. Such a refusal, like a run already running, does not stop the
+// others, and is the error only when nothing was re-run.
 func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (n, running int, err error) {
 	var others, runs []int64
 	jobs := map[int64]int{} // failed jobs by workflow run
@@ -1505,22 +1508,27 @@ func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (
 		}
 		jobs[run]++
 	}
-	for _, id := range others {
-		if err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, id), map[string]any{}, nil); err != nil {
-			return n, running, err
-		}
-		n++
-	}
 	var refused error
 	for _, id := range runs {
 		err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/actions/runs/%d/rerun-failed-jobs", slug, id), map[string]any{}, nil)
 		switch {
 		case AlreadyRunning(err):
-			running, refused = running+jobs[id], err
+			running, refused = running+jobs[id], cmp.Or(refused, err)
 		case err != nil:
 			return n, running, err
 		default:
 			n += jobs[id]
+		}
+	}
+	for _, id := range others {
+		err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, id), map[string]any{}, nil)
+		switch {
+		case Refused(err):
+			refused = cmp.Or(refused, err)
+		case err != nil:
+			return n, running, err
+		default:
+			n++
 		}
 	}
 	if n == 0 {
