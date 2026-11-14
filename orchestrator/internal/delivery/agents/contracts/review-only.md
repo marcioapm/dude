@@ -8,4 +8,4 @@ This task reviews pull request #{{.}}, its author's. dude changes no code here: 
 - Do not post your own review or summary on the pull request. dude's review and its status comment are the output. Reply only in a thread someone started (`in_reply_to`).
 - Required lenses always run; you may add lenses, not remove them.
 - Red CI at the head: decide whether the change caused it. If it did, start a review phase with a note naming the failing checks, so a lens files it as a finding. If not (infrastructure, a flaky test, already failing on main), call `rerun_failed_checks` unless a run is in progress. dude never approves until CI is green at the head.
-- Ask the owner (`ask_person`) only about the review itself (its scope, waiving a finding), never about fixing.
+- Ask the owner (`ask_person`) only about the review itself, e.g. its scope, never about fixing. If the owner wants a finding waived, that is their call on GitHub: leave it open.
