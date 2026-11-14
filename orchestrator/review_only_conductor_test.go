@@ -83,6 +83,18 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 	// T4: no top-level comment of the conductor's.
 	w.refused(wi, "reply_on_pull_request", fmt.Sprintf(`{"pr":"%d","text":"My review: changes requested."}`, n),
 		"dude's review and its status comment are the output")
+	// T4 refuses only its own top-level post: a reply in a thread someone
+	// started still posts there.
+	line := w.gh.LineComment(n, "alice", "FACTORY.md", "Why record it here?")
+	w.until("alice's line comment read", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'feedbackId' = $3`,
+			wi, delivery.EvPullRequestCommented, fmt.Sprintf("line-comment-%d", line)) > 0
+	})
+	w.must(wi, "reply_on_pull_request", fmt.Sprintf(`{"pr":"%d","text":"The review covers it.","in_reply_to":"line-comment-%d"}`, n, line))
+	if lines := w.gh.Pull(n).LineComments; lines[len(lines)-1].InReplyTo != line || !strings.HasPrefix(lines[len(lines)-1].Body, "The review covers it.") {
+		t.Fatalf("the thread's reply: %+v", lines[len(lines)-1])
+	}
 
 	// T1: grounds, or refused.
 	for _, reason := range []string{"Valid finding, but not fixed here", "no fixer runs on this task", "wrong:"} {
@@ -129,12 +141,11 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 		t.Fatalf("a duplicate of a dismissed finding left it %v", s)
 	}
 
-	// T2: next posts the verdict: the review is complete (not row 2).
+	// T2: next posts the verdict: open findings at the fix bar request
+	// changes (T1's outcome is never APPROVE), and the review is complete.
 	w.must(wi, "decide", `{"action":"next"}`)
 	w.agentsDone(wi, "dude's review", func() bool { return len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi) })
-	r := w.dudeReviews(wi, n)[0]
-	if strings.Contains(r.Body, "could not complete") || r.State == "APPROVED" && w.count(`SELECT count(*) FROM review_findings
-		WHERE task_id = $1 AND status = 'open'`, wi) > 0 {
+	if r := w.dudeReviews(wi, n)[0]; r.State != "CHANGES_REQUESTED" || strings.Contains(r.Body, "could not complete") {
 		t.Fatalf("the verdict: %s %q", r.State, r.Body)
 	}
 	if c := w.writers(wi); c != 0 {
