@@ -842,7 +842,12 @@ var errBodyChanged = errors.New("body changed during update")
 // issue body, so the body is read again just before the PATCH and, if a
 // person changed it since, merged again from theirs. A person's edit
 // landing between that last read and the PATCH itself, about one
-// round-trip, is still overwritten.
+// round-trip, is still overwritten; so is a concurrent write of dude's own
+// (the conductor's note beside a refresh of the Verification section), and
+// pull_requests.body then holds whichever of the two was recorded last.
+// Each writer keeps every other section it reads: the next refresh writes
+// a lost Verification section again, and the conductor is told to write a
+// lost note again (pull_request_note).
 func refreshBody(ctx context.Context, gh *forge.GitHub, slug string, number int, merge func(string) string) (string, error) {
 	body, err := gh.PullRequestBody(ctx, slug, number)
 	if err != nil {
