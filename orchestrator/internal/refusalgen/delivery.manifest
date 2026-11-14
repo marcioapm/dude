@@ -264,3 +264,6 @@ rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-t
 rWaitDispatchFailed                    refusals/delivery/waits/dispatch-failed
 rReviewOnlyNoWriter                     refusals/delivery/review-only/no-writer
 rReviewOnlyPRAction                     refusals/delivery/review-only/pr-action
+rReviewOnlyDismissGrounds               refusals/delivery/review-only/dismiss-grounds
+rReviewOnlyDismissWrongEvidence         refusals/delivery/review-only/dismiss-wrong-evidence
+rReviewOnlyDismissDuplicateOf           refusals/delivery/review-only/dismiss-duplicate-of

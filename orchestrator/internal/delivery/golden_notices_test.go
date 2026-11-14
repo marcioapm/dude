@@ -289,6 +289,9 @@ func TestGoldenRefusals(t *testing.T) {
 	for _, prefix := range []string{"refusals/tools/", "refusals/delivery/"} {
 		lines = append(lines, refusalLines(prefix, "refusals")...)
 	}
+	// The review-only conductor's are pinned on their own
+	// (TestGoldenReviewOnlyRefusals), leaving this one the writing mode's.
+	lines = slices.DeleteFunc(lines, func(l [2]string) bool { return reviewOnlyConductorRefusal(l[0]) })
 	goldenLines(t, "refusals", lines)
 }
 

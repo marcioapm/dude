@@ -1,7 +1,9 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -51,4 +53,44 @@ func RefuseReviewOnlyPRActionTx(ctx context.Context, tx pgx.Tx, taskID, action s
 func ReviewOnlyTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 	_, ok, err := reviewOnlyTx(ctx, tx, taskID)
 	return ok, err
+}
+
+// A review-only dismissal's grounds, the first word of its reason: the
+// finding is wrong (the evidence follows), or a duplicate of another
+// finding of the task (its id follows). dismiss_finding's schema is the
+// writing mode's; only the reason is read here.
+const (
+	GroundsWrong     = "wrong"
+	GroundsDuplicate = "duplicate"
+)
+
+// reviewOnlyGroundsTx reads a review-only task's dismissal reason as its
+// grounds, recorded with the dismissal, or refuses it: "wrong: <evidence>",
+// or "duplicate: <finding id>" naming another finding of the task, open or
+// settled.
+func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reason string) (map[string]any, error) {
+	word, rest, _ := strings.Cut(reason, ":")
+	rest = strings.TrimSpace(rest)
+	switch strings.ToLower(strings.TrimSpace(word)) {
+	case GroundsWrong:
+		if rest == "" {
+			return nil, refuseText(rReviewOnlyDismissWrongEvidence)
+		}
+		return map[string]any{"kind": GroundsWrong, "evidence": clip(oneLine(rest), 1000)}, nil
+	case GroundsDuplicate:
+		of, _, _ := strings.Cut(rest, " ")
+		of = strings.Trim(of, ".,;")
+		var exists bool
+		if of != "" && of != findingID {
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_findings WHERE id = $1 AND task_id = $2)`,
+				of, taskID).Scan(&exists); err != nil {
+				return nil, err
+			}
+		}
+		if !exists {
+			return nil, refusef(rReviewOnlyDismissDuplicateOf, cmp.Or(of, "no finding"))
+		}
+		return map[string]any{"kind": GroundsDuplicate, "duplicateOf": of}, nil
+	}
+	return nil, refuseText(rReviewOnlyDismissGrounds)
 }
