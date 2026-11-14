@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -431,26 +432,47 @@ func deferredWakeLine(anchor deferredCheck, asked ChecksAsked) string {
 	}{anchor.RunID, strings.Join(heads, ", "), asked.Discharge.Key, ChecksWaitWords(), anchor.Turn, checks})
 }
 
-// gateHeadsSQL (SQL, $3 the task): the heads by repository of the
-// delivery's open or draft pull requests (State.PullRequestIDs), as JSON:
-// the map gateHeads builds for the weigh, the last in created_at, id order
-// winning a repository. An ask must be at these heads to be answered.
-const gateHeadsSQL = `(SELECT COALESCE(jsonb_object_agg(rp.name, COALESCE(pr.head_sha, '') ORDER BY pr.created_at, pr.id), '{}')
-	FROM pull_requests pr JOIN repositories rp ON rp.id = pr.repository_id
-	WHERE pr.task_id = $3 AND pr.state IN ('open', 'draft') AND pr.id IN (
-		SELECT jsonb_array_elements_text(COALESCE(w.state->'pullRequestIds', '[]')) FROM (SELECT state FROM workflow_runs
-		WHERE task_id = $3 AND workflow_type = '` + WorkflowType + `' ORDER BY created_at DESC LIMIT 1) w))`
+// deliveryHeadsTx is the task's delivery (nil for none) and the heads of
+// its open or draft pull requests (State.PullRequestIDs) by repository,
+// the last in created_at, id order winning, as the weigh reads them
+// (gateHeads): the heads a second ask must be at to be answered. Another
+// pull request of the task, say an earlier attempt's left open, is not
+// the delivery's.
+func deliveryHeadsTx(ctx context.Context, tx pgx.Tx, taskID string) (*Delivery, map[string]string, error) {
+	d, err := ReadDelivery(ctx, tx, taskID)
+	if err != nil || d == nil {
+		return d, map[string]string{}, err
+	}
+	rows, err := tx.Query(ctx, `SELECT r.name, COALESCE(pr.head_sha, '') FROM pull_requests pr
+		JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.id = ANY($1) AND pr.state IN ('open', 'draft') ORDER BY pr.created_at, pr.id`, d.State.PullRequestIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	heads := map[string]string{}
+	var repo, head string
+	_, err = pgx.ForEachRow(rows, []any{&repo, &head}, func() error {
+		heads[repo] = head
+		return nil
+	})
+	return d, heads, err
+}
 
 // openDischargeTx is the second ask about runID's turn the conductor has
 // not answered, the one at the pull requests' heads first (the one an
 // answer is taken for), else the newest; nil for none.
 func openDischargeTx(ctx context.Context, tx pgx.Tx, taskID, runID string, turn int64) (*ChecksAsked, error) {
+	_, heads, err := deliveryHeadsTx(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	at, _ := json.Marshal(heads)
 	var raw []byte
-	err := tx.QueryRow(ctx, `SELECT a.payload FROM events a WHERE a.run_id = $1 AND a.event_type = 'run.checks.asked'
+	err = tx.QueryRow(ctx, `SELECT a.payload FROM events a WHERE a.run_id = $1 AND a.event_type = 'run.checks.asked'
 		AND (a.payload->>'turn')::bigint = $2 AND a.payload ? 'discharge'
 		AND NOT EXISTS (SELECT 1 FROM events v WHERE v.run_id = a.run_id AND v.event_type = 'run.checks.conducted'
 			AND (v.payload->>'askCursor')::bigint = a.cursor)
-		ORDER BY a.payload->'discharge'->'heads' = `+gateHeadsSQL+` DESC, a.cursor DESC LIMIT 1`, runID, turn, taskID).Scan(&raw)
+		ORDER BY a.payload->'discharge'->'heads' = $3::jsonb DESC, a.cursor DESC LIMIT 1`, runID, turn, string(at)).Scan(&raw)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -473,14 +495,13 @@ func openDischargeTx(ctx context.Context, tx pgx.Tx, taskID, runID string, turn 
 func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChecks, projectID string) (int64, error) {
 	var raw []byte
 	var askCursor int64
-	var answered, superseded bool
+	var answered bool
 	err := tx.QueryRow(ctx, `SELECT a.payload, a.cursor,
 			EXISTS (SELECT 1 FROM events v WHERE v.run_id = a.run_id AND v.event_type = 'run.checks.conducted'
-				AND (v.payload->>'askCursor')::bigint = a.cursor),
-			`+gateHeadsSQL+` IS DISTINCT FROM a.payload->'discharge'->'heads'
+				AND (v.payload->>'askCursor')::bigint = a.cursor)
 		FROM events a WHERE a.run_id = $1 AND a.event_type = 'run.checks.asked' AND a.payload->'discharge'->>'key' = $2
-			AND (a.payload->>'turn')::bigint = $4`,
-		in.RunID, strings.TrimSpace(in.Ask), ref.TaskID, in.Turn).Scan(&raw, &askCursor, &answered, &superseded)
+			AND (a.payload->>'turn')::bigint = $3`,
+		in.RunID, strings.TrimSpace(in.Ask), in.Turn).Scan(&raw, &askCursor, &answered)
 	if err == pgx.ErrNoRows {
 		return 0, refusef(rChecksNoSuchAsk, in.Ask)
 	}
@@ -491,8 +512,12 @@ func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChe
 	if err := json.Unmarshal(raw, asked); err != nil {
 		return 0, err
 	}
+	d, heads, err := deliveryHeadsTx(ctx, tx, ref.TaskID)
+	if err != nil {
+		return 0, err
+	}
 	switch {
-	case superseded:
+	case !maps.Equal(heads, asked.Discharge.Heads):
 		return 0, refusef(rChecksAskSuperseded, in.Ask)
 	case answered:
 		return 0, refuseText(rChecksNotWaiting)
@@ -515,10 +540,6 @@ func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChe
 	// A late answer still counts: a discharge escalation raised at the
 	// ask's deadline is weighed again at once (decide, dischargeKeptTx),
 	// and settled if nothing is left for a person.
-	d, err := ReadDelivery(ctx, tx, ref.TaskID)
-	if err != nil {
-		return 0, err
-	}
 	if waitsAtDecide(d) && d.State.Escalation.discharge() {
 		if err := workflow.SignalTx(ctx, tx, ref.Org, d.WorkflowID, SignalHumanDecision, nil, fmt.Sprintf("deferred:%d", cursor)); err != nil {
 			return 0, err
@@ -529,20 +550,21 @@ func conductDischargeTx(ctx context.Context, tx pgx.Tx, ref RunRef, in DecideChe
 
 // dischargeKeptTx says the open discharge escalation needs no person any
 // more: read from the stored gate facts as the weigh reads them (the
-// delivery's open pull requests, prIDs filtered to open), every deferred
-// check of the attempt is kept at their heads (a backed answer there,
-// however late). why says so, for the record.
+// delivery's pull requests prIDs still open), every deferred check of the
+// attempt is kept at their heads (a backed answer there, however late).
+// why says so, for the record.
 func dischargeKeptTx(ctx context.Context, tx pgx.Tx, taskID string, prIDs []string) (kept bool, why string, err error) {
-	var open []string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(id), '{}') FROM pull_requests
-		WHERE id = ANY($1) AND state IN ('open', 'draft')`, prIDs).Scan(&open); err != nil || len(open) == 0 {
+	if len(prIDs) == 0 {
+		// None of the delivery's: nil would read every pull request of the task.
+		return false, "", nil
+	}
+	c, err := CheckReadyGateTx(ctx, tx, taskID, prIDs)
+	// Still open, as weighReadiness weighs them.
+	open := slices.DeleteFunc(c.PRs, func(p GateFacts) bool { return p.State == forge.StateMerged || p.State == forge.StateClosed })
+	if err != nil || c.deferred == nil || len(open) == 0 {
 		return false, "", err
 	}
-	c, err := CheckReadyGateTx(ctx, tx, taskID, open)
-	if err != nil || c.deferred == nil || len(c.PRs) == 0 {
-		return false, "", err
-	}
-	id := headsID(gateHeads(c.PRs))
+	id := headsID(gateHeads(open))
 	if len(c.deferred.outstanding(id)) > 0 {
 		return false, "", nil
 	}
