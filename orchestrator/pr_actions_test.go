@@ -272,6 +272,65 @@ func TestARerunGitHubPartlyRefusedStillSpendsTheHeadsRerun(t *testing.T) {
 	})
 }
 
+// A job whose check's link does not name its workflow run is looked up
+// first; GitHub failing that lookup (502) leaves nothing re-run, and dude
+// knows it: the head's rerun is not spent, the conductor is told so, and
+// asked again with GitHub well, the job is re-run.
+func TestARerunWhoseLookupFailedDoesNotSpendTheHeadsRerun(t *testing.T) {
+	w, task := rerunWorld(t)
+	checks, err := json.Marshal([]forge.Check{
+		{Name: "e2e", RunID: fakegithub.DefaultCheckRunID, App: forge.ActionsApp, Status: "completed", Conclusion: "failure",
+			URL: fmt.Sprintf("https://github.test/acme/target/runs/%d", fakegithub.DefaultCheckRunID)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, w.owner, `UPDATE pull_requests SET checks_json = $2 WHERE task_id = $1`, task, checks)
+	var failing atomic.Bool
+	failing.Store(true)
+	var looked, posted atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			switch {
+			case r.Method == "GET" && strings.HasSuffix(r.URL.Path, fmt.Sprintf("/actions/jobs/%d", fakegithub.DefaultCheckRunID)):
+				looked.Add(1)
+				if failing.Load() {
+					return http.StatusBadGateway
+				}
+			case r.Method == "POST" && strings.Contains(r.URL.Path, "/actions/"):
+				posted.Add(1)
+			}
+			return 0
+		}
+	})
+	w.refused(task, "rerun_failed_checks", `{"pr":"1"}`, "nothing was re-run")
+	if n := posted.Load(); n != 0 {
+		t.Errorf("%d re-runs asked after a failed lookup, want none", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.action'
+		AND payload->>'released' IN (SELECT id FROM events WHERE task_id = $1 AND payload->>'claimed' = 'true')`, task); n != 1 {
+		t.Errorf("%d releases of the claim recorded, want 1", n)
+	}
+	// A person's re-run through the API is told the same.
+	code, body := w.callAs(w.person("owner"), "/internal/pull-requests/"+w.prOf(task)+"/rerun-failed", map[string]any{})
+	if msg, _ := body["error"].(map[string]any)["message"].(string); code != http.StatusBadGateway || !strings.Contains(msg, "nothing was re-run") {
+		t.Errorf("the API's re-run with the lookup failing: %d %v", code, body)
+	}
+	if n := posted.Load(); n != 0 {
+		t.Errorf("%d re-runs asked after a failed lookup, want none", n)
+	}
+	failing.Store(false)
+	w.must(task, "rerun_failed_checks", `{"pr":"1"}`)
+	w.gh.Set(func(s *fakegithub.Server) {
+		if !slices.Equal(s.RunsRerun, []int64{fakegithub.DefaultWorkflowRunID}) {
+			t.Errorf("workflow runs re-run %v", s.RunsRerun)
+		}
+	})
+	if n := looked.Load(); n != 3 {
+		t.Errorf("the job was looked up %d times, want 3", n)
+	}
+}
+
 // Two failed jobs of one matrix: GitHub re-runs a job by restarting its
 // workflow run and then refuses the other job's re-run (403, already
 // running), as it did live. The workflow run's failed jobs are re-run in

@@ -277,11 +277,17 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 		}
 	case ActionRerunChecks:
 		n, running, err := gh.RerunFailed(ctx, c.slug, c.checks)
-		if err != nil && n == 0 && forge.Refused(err) {
+		var unasked *forge.NothingAsked
+		if err != nil && n == 0 && (forge.Refused(err) || errors.As(err, &unasked)) {
 			// GitHub answered no and ran nothing (a workflow still running,
-			// a job too old): the head's rerun is not spent. The release is
-			// recorded by the caller as the refusal's event.
-			return done, Refusal{Msg: fmt.Sprintf(rGithubRefusedToRunFailedChecksOn, c.repo, c.number, err),
+			// a job too old), or could not be read before anything was
+			// asked: the head's rerun is not spent. The release is recorded
+			// by the caller as the refusal's event.
+			msg := fmt.Sprintf(rGithubRefusedToRunFailedChecksOn, c.repo, c.number, err)
+			if !forge.Refused(err) {
+				msg = fmt.Sprintf(rGithubCouldNotBeReadNothingRerun, c.repo, c.number, err)
+			}
+			return done, Refusal{Msg: msg,
 				Event: &RefusalEvent{Type: EvPullRequestAction, Payload: map[string]any{"action": ActionRerunChecks,
 					"repo": c.repo, "number": c.number, "head": c.head, "released": c.claim}}}
 		}

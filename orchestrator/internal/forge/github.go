@@ -1477,11 +1477,12 @@ func (g *GitHub) Merge(ctx context.Context, slug string, number int, method, sha
 // says is already running is in progress, not a failure: its checks are
 // counted in running and the other runs are still asked; when nothing else
 // was, that 403 is the error. Every lookup comes before any re-run: a
-// failed one leaves nothing asked. The workflow runs are asked first. Any
-// other app's check is re-requested through the checks API, which GitHub
-// allows only the app that owns it: with a token, GitHub refuses, and says
-// so. Such a refusal, like a run already running, does not stop the
-// others, and is the error only when nothing was re-run.
+// failed one leaves nothing asked, and its error is a NothingAsked. The
+// workflow runs are asked first. Any other app's check is re-requested
+// through the checks API, which GitHub allows only the app that owns it:
+// with a token, GitHub refuses, and says so. Such a refusal, like a run
+// already running, does not stop the others, and is the error only when
+// nothing was re-run.
 func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (n, running int, err error) {
 	var others, runs []int64
 	jobs := map[int64]int{} // failed jobs by workflow run
@@ -1499,7 +1500,7 @@ func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (
 				RunID int64 `json:"run_id"`
 			}
 			if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/jobs/%d", slug, c.RunID), nil, &job); err != nil {
-				return 0, 0, err
+				return 0, 0, &NothingAsked{Err: err}
 			}
 			run = job.RunID
 		}
@@ -1536,6 +1537,13 @@ func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (
 	}
 	return n, running, nil
 }
+
+// NothingAsked is RerunFailed failing before it asked GitHub to re-run
+// anything (a lookup GitHub failed): whatever Err says, nothing ran.
+type NothingAsked struct{ Err error }
+
+func (e *NothingAsked) Error() string { return e.Err.Error() }
+func (e *NothingAsked) Unwrap() error { return e.Err }
 
 // actionsJobURL is an Actions check run's link on GitHub: its job, in its
 // workflow run, of an attempt or the latest.
