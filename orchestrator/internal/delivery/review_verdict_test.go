@@ -96,7 +96,7 @@ func TestDecideVerdictCoversEveryRow(t *testing.T) {
 // ones inline when they name a line; non-blocking ones marked nits.
 func TestVerdictReviewPlacesFindings(t *testing.T) {
 	no, yes := false, true
-	body, inline := verdictReview(verdictDecision{Headline: "Changes requested"}, "a8f3e1c0ffee", "main", []string{"correctness"},
+	body, inline, _ := verdictReviewOf(verdictDecision{Headline: "Changes requested"}, "a8f3e1c0ffee", "main", []string{"correctness"},
 		[]verdictFinding{
 			{Title: "Off by one", Severity: "high", File: "a.go", Line: 3, Introduced: &yes},
 			{Title: "Old typo", Severity: "medium", File: "b.go", Line: 9, Introduced: &no},
@@ -110,5 +110,34 @@ func TestVerdictReviewPlacesFindings(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("body lacks %q:\n%s", want, body)
 		}
+	}
+}
+
+// A withdrawal's note loses its "withdrawn:" in any case, never panicking
+// on text whose lowercase is longer (Ⱥ is 2 bytes, ⱥ 3).
+func TestWithdrawnNote(t *testing.T) {
+	for in, want := range map[string]string{
+		DismissedByConductor + "Withdrawn: intended.": "intended",
+		"WITHDRAWN:ȺȺȺȺȺȺȺȺȺȺȺ":                       "ȺȺȺȺȺȺȺȺȺȺȺ",
+		"Withdrawn: ȺȺȺȺȺȺȺȺȺȺȺ":                      "ȺȺȺȺȺȺȺȺȺȺȺ",
+		"Ⱥ":                                           "Ⱥ",
+	} {
+		if got := withdrawnNote(in); got != want {
+			t.Errorf("withdrawnNote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An inline comment not found in GitHub's read-back is named on
+// review_submitted (unmatched), not dropped silently.
+func TestAnUnmatchedInlineCommentIsRecorded(t *testing.T) {
+	comments := []forge.ReviewComment{{Path: "a.go", Body: "A"}, {Path: "b.go", Body: "B"}}
+	got := []forge.PostedComment{{ID: 7, Path: "a.go", Body: "A\n"}, {ID: 8, Path: "b.go", Body: "B, edited"}}
+	rec := postedComments(got, comments, []string{"f1", "f2"})
+	if p, _ := rec["comments"].([]inlinePost); len(p) != 1 || p[0].FindingID != "f1" || p[0].CommentID != 7 {
+		t.Errorf("comments %+v", rec["comments"])
+	}
+	if u, _ := rec["unmatched"].([]string); len(u) != 1 || u[0] != "f2" {
+		t.Errorf("unmatched %+v", rec["unmatched"])
 	}
 }

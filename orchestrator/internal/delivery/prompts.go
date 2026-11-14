@@ -70,6 +70,9 @@ type PromptInput struct {
 	// unresolved threads, changes requested and red checks are the
 	// reviewers' context.
 	Adopted *AdoptedContext
+	// A review-only task's: its earlier findings are the author's to have
+	// fixed (contracts/earlier-findings).
+	ReviewOnly bool
 	// Implement phase of a task that took over unfinished work: the work
 	// it carries on. nil for new work.
 	Continues *Source
@@ -237,8 +240,11 @@ var findingFormat = render(mustTemplate("contracts/finding-format"), Instruction
 // Whether a finding was fixed is the reviewer's call, made by reading the
 // code — not inferred from which files a fix touched, which retires a
 // finding at line 40 because line 200 of the same file changed.
-func earlierFindings(findings []Finding) string {
-	return render(earlierFindingsTmpl, findings)
+func earlierFindings(findings []Finding, reviewOnly bool) string {
+	return render(earlierFindingsTmpl, struct {
+		ReviewOnly bool
+		Findings   []Finding
+	}{reviewOnly, findings})
 }
 
 // severityNote tells a reviewer what its severities cause, the fix bar:
@@ -374,7 +380,7 @@ func Prompt(phase string, in PromptInput) string {
 			}
 		}
 		if len(in.Findings) > 0 {
-			add(earlierFindings(in.Findings))
+			add(earlierFindings(in.Findings, in.ReviewOnly))
 		}
 		if q := earlierQuestions(in.Questions); q != "" {
 			add(q)
@@ -399,7 +405,7 @@ func Prompt(phase string, in PromptInput) string {
 			add(render(retestAfreshTmpl, nil))
 		}
 		if len(in.Findings) > 0 {
-			add(earlierFindings(in.Findings))
+			add(earlierFindings(in.Findings, in.ReviewOnly))
 		}
 		if in.WriterChecks != "" {
 			add(in.WriterChecks)

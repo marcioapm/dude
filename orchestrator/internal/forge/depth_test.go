@@ -39,7 +39,7 @@ func TestSettingsFallBackToDefaultsForWhatTheyDoNotKnow(t *testing.T) {
 	if s.WhoCanWake != WakeCollaborators || s.MergeMethod != "rebase" || s.FixRoundsPerPR != 5 || s.WhenBehind != "tell" {
 		t.Errorf("settings = %+v", s)
 	}
-	if d := ReadSettings(nil); d.MergeMethod != "squash" || d.CIStuck().Minutes() != 60 {
+	if d := ReadSettings(nil); d.MergeMethod != "squash" || d.CIStuck().Minutes() != 60 || d.MaxReviewRounds != 10 || d.ReviewCostCap != 0 {
 		t.Errorf("defaults = %+v", d)
 	}
 }
@@ -301,12 +301,12 @@ func TestSavingSettingsRefusesWhatDudeDoesNotKnow(t *testing.T) {
 		t.Errorf("settings = %+v, %v", s, err)
 	}
 	for _, bad := range []string{`{"mergeMethod":"octopus"}`, `{"whoCanWake":"everyone"}`, `{"fixRoundsPerPr":51}`,
-		`{"fixRoundsPerPr":"five"}`, `{"ciStuckMinutes":-1}`, `{"ciStuckMinutes":0}`} {
+		`{"fixRoundsPerPr":"five"}`, `{"ciStuckMinutes":-1}`, `{"ciStuckMinutes":0}`, `{"maxReviewRounds":101}`, `{"reviewCostCap":-1}`} {
 		if _, err := ParseSettings([]byte(bad)); err == nil {
 			t.Errorf("%s was accepted", bad)
 		}
 	}
-	if keys := SettingKeys(); len(keys) != 9 || keys[0] != "whoCanWake" {
+	if keys := SettingKeys(); len(keys) != 11 || keys[0] != "whoCanWake" {
 		t.Errorf("keys = %v", keys)
 	}
 }

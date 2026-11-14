@@ -38,6 +38,12 @@ type Settings struct {
 	CIStuckMinutes int `json:"ciStuckMinutes"`
 	// Times an unbacked checks report is sent back before a person decides.
 	ChecksFixRounds int `json:"checksFixRounds"`
+	// A review-only task's review rounds per attempt, the first included,
+	// before it stops re-reviewing the author's pushes (design §6.7).
+	MaxReviewRounds int `json:"maxReviewRounds"`
+	// The most a review-only task's attempt may cost in USD, its Runs
+	// summed, before it stops re-reviewing; 0, no cap.
+	ReviewCostCap float64 `json:"reviewCostCap"`
 }
 
 func DefaultSettings() Settings {
@@ -51,6 +57,7 @@ func DefaultSettings() Settings {
 		FixRoundsPerPR:    5,
 		CIStuckMinutes:    60,
 		ChecksFixRounds:   2,
+		MaxReviewRounds:   10,
 	}
 }
 
@@ -81,6 +88,12 @@ func ReadSettings(raw []byte) Settings {
 	}
 	if s.ChecksFixRounds < 0 || s.ChecksFixRounds > 20 {
 		s.ChecksFixRounds = d.ChecksFixRounds
+	}
+	if s.MaxReviewRounds < 1 || s.MaxReviewRounds > 100 {
+		s.MaxReviewRounds = d.MaxReviewRounds
+	}
+	if s.ReviewCostCap < 0 {
+		s.ReviewCostCap = 0
 	}
 	if s.ReviewLogins == nil {
 		s.ReviewLogins = []string{}
@@ -123,6 +136,12 @@ func ParseSettings(raw []byte) (Settings, error) {
 	}
 	if s.ChecksFixRounds < 0 || s.ChecksFixRounds > 20 {
 		return Settings{}, fmt.Errorf("checksFixRounds must be from 0 to 20")
+	}
+	if s.MaxReviewRounds != 0 && (s.MaxReviewRounds < 1 || s.MaxReviewRounds > 100) {
+		return Settings{}, fmt.Errorf("maxReviewRounds must be from 1 to 100")
+	}
+	if s.ReviewCostCap < 0 {
+		return Settings{}, fmt.Errorf("reviewCostCap must be 0 (no cap) or more")
 	}
 	// Absent is the default; given, it is what the person chose, and 0
 	// would be read back as the default: refused, not saved as another.
