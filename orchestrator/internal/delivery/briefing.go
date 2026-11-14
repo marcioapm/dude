@@ -162,6 +162,13 @@ func briefing(ctx context.Context, tx pgx.Tx, taskID, conductorRunID, person, me
 	if err := briefDecider(ctx, tx, &b, taskID); err != nil {
 		return "", err
 	}
+	// A review-only task's conductor is told what its role's fixing,
+	// publishing and opening do not apply to (contracts/review-only).
+	if n, ok, err := reviewOnlyTx(ctx, tx, taskID); err != nil {
+		return "", err
+	} else if ok {
+		b.ReviewOnly = render(reviewOnlyContractTmpl, n)
+	}
 	// The project's pinned facts, beside the epic: every briefing has them.
 	if b.Facts, err = ProjectFacts(ctx, tx, project); err != nil {
 		return "", err
@@ -200,6 +207,8 @@ type conductorBrief struct {
 	Escalated string
 	// The key of the task this one superseded (its supersedes relation).
 	Supersedes string
+	// A review-only task's contract (contracts/review-only), "" otherwise.
+	ReviewOnly string
 }
 
 // briefLines is a bounded list: its total, and the lines shown.

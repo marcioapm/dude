@@ -849,6 +849,14 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 	if reason == "" {
 		return refuseText(rSayWhyDismissedReasonShownWith)
 	}
+	var grounds map[string]any
+	if reviewOnly {
+		// T1: a review-only dismissal states its grounds; "nobody here
+		// fixes it" is none (contracts/review-only).
+		if grounds, err = reviewOnlyGroundsTx(ctx, tx, ref.TaskID, findingID, reason); err != nil {
+			return err
+		}
+	}
 	var title, status string
 	err = tx.QueryRow(ctx, `SELECT title, status::text FROM review_findings WHERE id = $1 AND task_id = $2 FOR UPDATE`,
 		findingID, ref.TaskID).Scan(&title, &status)
@@ -866,8 +874,11 @@ func ConductDismiss(ctx context.Context, tx pgx.Tx, ref RunRef, findingID, reaso
 		WHERE id = $1`, findingID, note); err != nil {
 		return err
 	}
-	if _, err = ledger.Append(ctx, tx, ref.Event(EvFindingResolved, ledger.ActorAgent,
-		map[string]any{"findingId": findingID, "status": "accepted", "note": note, "title": title, "by": "conductor"})); err != nil {
+	payload := map[string]any{"findingId": findingID, "status": "accepted", "note": note, "title": title, "by": "conductor"}
+	if grounds != nil {
+		payload["grounds"] = grounds
+	}
+	if _, err = ledger.Append(ctx, tx, ref.Event(EvFindingResolved, ledger.ActorAgent, payload)); err != nil {
 		return err
 	}
 	if reviewOnly {

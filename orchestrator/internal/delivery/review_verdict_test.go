@@ -113,14 +113,22 @@ func TestVerdictReviewPlacesFindings(t *testing.T) {
 	}
 }
 
-// A withdrawal's note loses its "withdrawn:" in any case, never panicking
-// on text whose lowercase is longer (Ⱥ is 2 bytes, ⱥ 3).
+// A withdrawal's note loses its "withdrawn:" (a writing task's free text)
+// or "wrong:" (a review-only task's grounds) in any case, and a duplicate
+// reads as one; never panicking on text whose lowercase is longer (Ⱥ is 2
+// bytes, ⱥ 3). Other text keeps its colon.
 func TestWithdrawnNote(t *testing.T) {
 	for in, want := range map[string]string{
-		DismissedByConductor + "Withdrawn: intended.": "intended",
-		"WITHDRAWN:ȺȺȺȺȺȺȺȺȺȺȺ":                       "ȺȺȺȺȺȺȺȺȺȺȺ",
-		"Withdrawn: ȺȺȺȺȺȺȺȺȺȺȺ":                      "ȺȺȺȺȺȺȺȺȺȺȺ",
-		"Ⱥ":                                           "Ⱥ",
+		DismissedByConductor + "Withdrawn: intended.":         "intended",
+		"WITHDRAWN:ȺȺȺȺȺȺȺȺȺȺȺ":                               "ȺȺȺȺȺȺȺȺȺȺȺ",
+		"Withdrawn: ȺȺȺȺȺȺȺȺȺȺȺ":                              "ȺȺȺȺȺȺȺȺȺȺȺ",
+		"Ⱥ":                                                   "Ⱥ",
+		DismissedByConductor + "wrong: the author showed it.": "the author showed it",
+		"WRONG:ȺȺȺȺȺȺȺȺȺȺȺ":                                   "ȺȺȺȺȺȺȺȺȺȺȺ",
+		"Ⱥ: ȺȺȺ":                                              "Ⱥ: ȺȺȺ",
+		"duplicate: f-123 says the same.":                     "duplicate of f-123 says the same",
+		"Duplicate:f-123":                                     "duplicate of f-123",
+		"Note: kept as written":                               "Note: kept as written",
 	} {
 		if got := withdrawnNote(in); got != want {
 			t.Errorf("withdrawnNote(%q) = %q, want %q", in, got, want)

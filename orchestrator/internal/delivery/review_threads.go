@@ -177,11 +177,19 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 }
 
 // withdrawnNote is the conductor's reason a finding was withdrawn, as the
-// thread's reply gives it.
+// thread's reply ("Withdrawn: <note>.") gives it. A writing task's reason
+// is free text, which may start "withdrawn:"; a review-only task's starts
+// with its grounds, "wrong: <evidence>" or "duplicate: <id> …". The
+// leading word is dropped, except that a duplicate reads "duplicate of
+// <id> …".
 func withdrawnNote(note string) string {
 	note = strings.TrimPrefix(note, DismissedByConductor)
-	if p := len("withdrawn:"); len(note) >= p && strings.EqualFold(note[:p], "withdrawn:") {
-		note = note[p:]
+	for _, p := range []struct{ word, as string }{{"withdrawn:", ""}, {"wrong:", ""}, {"duplicate:", "duplicate of "}} {
+		// Compared bytewise: a rune whose lowercase is longer cannot match.
+		if n := len(p.word); len(note) >= n && strings.EqualFold(note[:n], p.word) {
+			note = p.as + strings.TrimSpace(note[n:])
+			break
+		}
 	}
 	return strings.TrimRight(strings.TrimSpace(note), ".")
 }

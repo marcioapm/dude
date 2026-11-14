@@ -134,6 +134,9 @@ var (
 	integrationMergeWhenTmpl = mustTemplate("briefings/integration-merge-when")
 	integrationReviewTmpl    = mustTemplate("briefings/integration-review")
 	replayTmpl               = mustTemplate("briefings/replay")
+
+	reviewOnlyContractTmpl = mustTemplate("contracts/review-only")
+	reviewOnlyNext         = render(mustTemplate("wakes/review-only-next"), nil)
 )
 
 // mustTemplate is the named template, or a panic naming its file. A name
