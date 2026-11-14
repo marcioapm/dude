@@ -88,6 +88,10 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 	for _, reason := range []string{"Valid finding, but not fixed here", "no fixer runs on this task", "wrong:"} {
 		w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":%q}`, f, reason), "wrong")
 	}
+	// Evidence says something: a letter or digit, and more than a word.
+	for _, reason := range []string{"WRONG : .", "wrong: nope", "wrong: ----------------"} {
+		w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":%q}`, f, reason), `Say what shows the finding is wrong after "wrong: "`)
+	}
 	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: fnd_nope"}`, f), "fnd_nope is not another open finding")
 	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, f, f), "is not another open finding")
 	if s := w.ids(`SELECT status::text FROM review_findings WHERE id = $1`, f); len(s) != 1 || s[0] != "open" {

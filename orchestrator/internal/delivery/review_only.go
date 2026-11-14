@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 
@@ -118,6 +119,8 @@ func (w *steps) verdictPaths(ctx context.Context, sc workflow.StepContext, st *S
 const (
 	GroundsWrong     = "wrong"
 	GroundsDuplicate = "duplicate"
+	// The fewest characters, trimmed, of a "wrong:" dismissal's evidence.
+	minWrongEvidence = 10
 )
 
 // reviewOnlyGroundsTx reads a review-only task's dismissal reason as its
@@ -130,7 +133,8 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 	rest = strings.TrimSpace(rest)
 	switch strings.ToLower(strings.TrimSpace(word)) {
 	case GroundsWrong:
-		if rest == "" {
+		// Evidence says something: a letter or digit, and more than a word.
+		if len([]rune(rest)) < minWrongEvidence || !strings.ContainsFunc(rest, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
 			return nil, refuseText(rReviewOnlyDismissWrongEvidence)
 		}
 		return map[string]any{"kind": GroundsWrong, "evidence": clip(oneLine(rest), 1000)}, nil
