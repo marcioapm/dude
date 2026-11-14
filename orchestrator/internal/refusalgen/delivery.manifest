@@ -267,3 +267,4 @@ rReviewOnlyPRAction                     refusals/delivery/review-only/pr-action
 rReviewOnlyDismissGrounds               refusals/delivery/review-only/dismiss-grounds
 rReviewOnlyDismissWrongEvidence         refusals/delivery/review-only/dismiss-wrong-evidence
 rReviewOnlyDismissDuplicateOf           refusals/delivery/review-only/dismiss-duplicate-of
+rReviewOnlyNoOwnComment                 refusals/delivery/review-only/no-own-comment

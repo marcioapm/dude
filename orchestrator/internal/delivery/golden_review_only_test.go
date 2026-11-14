@@ -8,7 +8,7 @@ import (
 
 // reviewOnlyConductorRefusals are the refusals only a review-only task's
 // conductor meets (PR 5b).
-var reviewOnlyConductorRefusals = []string{"dismiss-grounds", "dismiss-wrong-evidence", "dismiss-duplicate-of"}
+var reviewOnlyConductorRefusals = []string{"dismiss-grounds", "dismiss-wrong-evidence", "dismiss-duplicate-of", "no-own-comment"}
 
 func reviewOnlyConductorRefusal(key string) bool {
 	name, ok := strings.CutPrefix(key, "refusals/delivery/review-only/")

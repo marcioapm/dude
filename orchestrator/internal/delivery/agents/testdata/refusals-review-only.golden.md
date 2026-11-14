@@ -10,3 +10,7 @@ This task only reviews: that no one here fixes a finding is no reason to dismiss
 
 Say what shows the finding is wrong after "wrong: ": the code or the run that contradicts it
 
+## refusals/delivery/review-only/no-own-comment
+
+This task reviews pull request #%d: dude's review and its status comment are the output, so post no review or summary of your own there. Reply only in a thread someone started (in_reply_to)
+

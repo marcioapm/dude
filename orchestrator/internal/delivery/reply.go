@@ -135,6 +135,15 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	if !live {
 		return ReplyPost{}, refuseText(rYouAreNoLongerThisTask5)
 	}
+	if batch == nil && strings.TrimSpace(in.InReplyTo) == "" {
+		// T4: a review-only task's conductor posts no review of its own:
+		// dude's review is the output. Replies in a thread stay its.
+		if n, ok, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil {
+			return ReplyPost{}, err
+		} else if ok {
+			return ReplyPost{}, refusef(rReviewOnlyNoOwnComment, n)
+		}
+	}
 	text := strings.TrimSpace(in.Text)
 	switch {
 	case text == "":
