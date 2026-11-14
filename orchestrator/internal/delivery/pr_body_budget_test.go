@@ -81,6 +81,7 @@ func TestThePullRequestBodyFitsGitHubsLimit(t *testing.T) {
 	const sentence = "The settings page lets an admin choose the tiers. "
 	compact := "51 earlier Runs omitted.\n- **Simplifier** — backed\n" +
 		"  - 30 checks reported; checks omitted from this account: see the task's Activity."
+	headline := "Checks account omitted: see the task's Activity."
 	// The conductor's section at its bound (pull_request_note).
 	note := "<!-- dude:conductor -->\n" + strings.Repeat("n", 4000) + "\n<!-- /dude:conductor -->"
 	dropped := "<!-- dude:conductor -->\n(the conductor's note was dropped to fit GitHub's limit)\n<!-- /dude:conductor -->"
@@ -96,7 +97,7 @@ func TestThePullRequestBodyFitsGitHubsLimit(t *testing.T) {
 	}, {
 		"a description leaving less than a compact Run",
 		strings.Repeat(sentence, 637),
-		"Checks account omitted: see the task's Activity.", "", "",
+		headline, "", "",
 	}, {
 		"a 26,000-character description and the conductor's note, which fits",
 		strings.Repeat(sentence, 520),
@@ -104,7 +105,7 @@ func TestThePullRequestBodyFitsGitHubsLimit(t *testing.T) {
 	}, {
 		"a description leaving less than a compact Run, and the conductor's note",
 		strings.Repeat(sentence, 637),
-		"Checks account omitted: see the task's Activity.", note, dropped,
+		headline, note, dropped,
 	}} {
 		if _, err := owner.Exec(ctx, `UPDATE tasks SET goal = $1 WHERE id = 'wi_pb'`, c.goal); err != nil {
 			t.Fatal(err)
