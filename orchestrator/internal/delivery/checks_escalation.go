@@ -151,6 +151,18 @@ func settleChecksTx(ctx context.Context, tx pgx.Tx, org, projectID, taskID strin
 			decided["personName"] = name
 		}
 	}
+	if e.discharge() {
+		// Deferred checks the conductor rejected once the pull request was
+		// open: no writer's turn is held, so a waiver records only which
+		// commands it settles (readDeferredTx reads them).
+		var detail struct {
+			Commands []string `json:"commands"`
+		}
+		e.decode(&detail)
+		decided["discharge"], decided["commands"] = true, detail.Commands
+		_, err := ledger.Append(ctx, tx, ref.Event(EvRunChecksDecided, ledger.ActorHuman, decided))
+		return err
+	}
 	if action == "retry" {
 		var detail struct {
 			Message string `json:"message"`

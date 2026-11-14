@@ -1750,3 +1750,15 @@ This task reviews pull request #%d and changes no code: no implementer, fixer or
 
 This task reviews pull request #%d and does not change it: %s is not dude's to take here
 
+## refusals/delivery/checks/ask-missing
+
+that turn's deferred checks are asked about again by a second checks wake: answer it with the ask it names, here ask %q, so the answer counts at the heads it was asked at
+
+## refusals/delivery/checks/ask-superseded
+
+ask %q is superseded: the pull requests' heads moved and a newer second checks wake asks again at the new heads. Evidence at the old heads keeps nothing there: answer the newest wake, with its ask, once the check is kept at its heads
+
+## refusals/delivery/checks/no-such-ask
+
+%q is not a second checks ask about that Run's turn: give the ask the second checks wake names, with its runId and turn
+

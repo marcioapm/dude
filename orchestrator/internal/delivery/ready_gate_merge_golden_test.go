@@ -85,6 +85,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 			{ReadyThreads, true, "no unresolved review thread"},
 			{ReadyMergeable, true, "clean"},
 			{ReadyChecks, true, "1 check(s) passed at the head"},
+			{ReadyDeferred, true, "no check deferred"},
 		})
 		if !g.Ready {
 			t.Fatal("not ready")
@@ -116,6 +117,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 			{ReadyThreads, false, "2 review thread(s) unresolved: each is a person's open feedback"},
 			{ReadyMergeable, false, "it conflicts with main: resolve the conflict"},
 			{ReadyChecks, false, "failing: e2e"},
+			{ReadyDeferred, true, "no check deferred"},
 		})
 		sameReadings(t, g, false, false)
 	})
@@ -136,6 +138,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 			{ReadyThreads, true, "no unresolved review thread"},
 			{ReadyMergeable, true, "clean"},
 			{ReadyChecks, true, "1 check(s) passed at the head"},
+			{ReadyDeferred, true, "no check deferred"},
 		})
 		sameReadings(t, g, false, false)
 	})
@@ -158,6 +161,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 			{ReadyThreads, false, "GitHub would not count the review threads: unreadable"},
 			{ReadyMergeable, true, "clean"},
 			{ReadyChecks, true, "1 check(s) passed at the head"},
+			{ReadyDeferred, true, "no check deferred"},
 		})
 		sameReadings(t, g, false, false)
 	})
@@ -177,6 +181,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 			{ReadyThreads, true, "no unresolved review thread"},
 			{ReadyMergeable, false, "GitHub has not worked out whether it merges yet: retry later"},
 			{ReadyChecks, true, "1 check(s) passed at the head"},
+			{ReadyDeferred, true, "no check deferred"},
 		})
 		sameReadings(t, g, true, false)
 	})
@@ -199,6 +204,7 @@ func TestTheMergeProfileIsTheGateAsItWas(t *testing.T) {
 			{ReadyThreads, true, "no unresolved review thread"},
 			{ReadyMergeable, true, "clean"},
 			{ReadyChecks, false, "pending: no checks have reported at the head yet, within the grace CI has to show up"},
+			{ReadyDeferred, true, "no check deferred"},
 		})
 		sameReadings(t, g, false, true)
 	})

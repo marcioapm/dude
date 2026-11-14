@@ -51,6 +51,10 @@ const (
 	ReasonTestFailedCriteria = "test_failed_criteria"
 	ReasonTestBlocked        = "test_blocked"
 	ActionWaive              = "waive"
+	// ActionResolved: no one's action, the record (task.decided) of a
+	// discharge escalation dude withdrew once its cause was gone
+	// (dischargeKept). Never offered.
+	ActionResolved = "resolved"
 )
 
 // NeedsReason says an action on an escalation must carry a person's

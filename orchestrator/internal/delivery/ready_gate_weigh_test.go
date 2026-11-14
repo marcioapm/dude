@@ -22,7 +22,8 @@ func (f *gateFixture) weighOnce(status string) error {
 		f.t.Fatal(err)
 	}
 	w := &steps{s: f.store, forges: forgeOf{f.forge}}
-	return w.weighReadiness(f.ctx, workflow.StepContext{OrganizationID: f.org, Step: "awaitPullRequest"}, &f.st, states)
+	_, err = w.weighReadiness(f.ctx, workflow.StepContext{OrganizationID: f.org, Step: "awaitPullRequest"}, &f.st, states)
+	return err
 }
 
 func (f *gateFixture) taskStatus() string {
