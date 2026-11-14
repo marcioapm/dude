@@ -1782,3 +1782,7 @@ a note holds no HTML comment (<!--): dude's own sections are marked with them. N
 
 say what the note holds: text is required
 
+## refusals/delivery/pr-actions/note-no-room
+
+the description of %s#%d would run past GitHub's limit with this note, and leave dude's Verification section no room: nothing was written. Your section has room for %d characters now; keep it to that, and link the rest
+

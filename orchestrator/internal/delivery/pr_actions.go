@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -343,12 +344,25 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 		}
 		done.Rerun = n
 	case ActionNote:
-		body, err := refreshBody(ctx, gh, c.slug, c.number, func(body string) string { return replaceConductorNote(body, c.note) })
+		// A note is refused rather than taking the room dude's
+		// Verification section needs: past prBodyMax GitHub refuses the
+		// description whole, every later refresh with it.
+		var room int
+		body, err := refreshBody(ctx, gh, c.slug, c.number, func(body string) string {
+			merged := replaceConductorNote(body, c.note)
+			if room = prBodyMax - prBodyMargin - utf8.RuneCountInString(merged); room < 0 {
+				return body
+			}
+			return merged
+		})
 		if errors.Is(err, errBodyChanged) {
 			return done, refusef(rNoteBodyKeepsChanging, c.repo, c.number)
 		}
 		if err != nil {
 			return done, ghRefusal(err)
+		}
+		if room < 0 {
+			return done, refusef(rNoteNoRoom, c.repo, c.number, max(0, utf8.RuneCountInString(c.note)+room))
 		}
 		done.Body = body
 	}

@@ -138,6 +138,7 @@ const (
 	rNoteAtMostBytes                        = "a note is at most %d bytes: keep it to what the description needs, and link the rest"
 	rNoteNoMarkers                          = "a note holds no HTML comment (<!--): dude's own sections are marked with them. Nothing was written"
 	rNoteBodyKeepsChanging                  = "the description of %s#%d kept changing while dude wrote your note: nothing was written. Try again in a moment"
+	rNoteNoRoom                             = "the description of %s#%d would run past GitHub's limit with this note, and leave dude's Verification section no room: nothing was written. Your section has room for %d characters now; keep it to that, and link the rest"
 	rDeliveryMovedOnAsYouAsked              = "the delivery moved on as you asked; you are woken at its next decision"
 	rCannotStartWhileDeliveryWaitsOn        = "%s cannot start while the delivery waits on its pull requests; it can start %s"
 	rDeliveryReadingWhatChangedOnIts        = "the delivery is reading what changed on its pull requests now; start %s again in a moment"

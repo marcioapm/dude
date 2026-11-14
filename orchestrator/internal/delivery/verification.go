@@ -947,10 +947,25 @@ func (v verificationParts) fit(compose func(section string) string) string {
 	return out
 }
 
-// into puts v between body's verification markers (fit).
+// into puts v between body's verification markers (fit). The conductor's
+// section (pull_request_note) gives way last: with the checks account at
+// its headline and the body still past prBodyMax, its text is replaced by
+// noteDropped and the section fitted again, so the Verification section
+// lands.
 func (v verificationParts) into(body string) string {
-	return v.fit(func(section string) string { return replaceVerification(body, section) })
+	out := v.fit(func(section string) string { return replaceVerification(body, section) })
+	if utf8.RuneCountInString(out) > prBodyMax {
+		// Shorter only where the body holds the conductor's section.
+		if dropped := replaceConductorNote(body, noteDropped); len(dropped) < len(body) {
+			return v.into(dropped)
+		}
+	}
+	return out
 }
+
+// noteDropped is the conductor's section once dude's Verification section
+// needed its room.
+const noteDropped = "(the conductor's note was dropped to fit GitHub's limit)"
 
 // replaceVerification puts section between dude's verification markers in
 // body (replaceMarked).

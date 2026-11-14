@@ -134,6 +134,7 @@ rNoteTextRequired                       refusals/delivery/pr-actions/note-text-r
 rNoteAtMostBytes                        refusals/delivery/pr-actions/note-at-most-bytes
 rNoteNoMarkers                          refusals/delivery/pr-actions/note-no-markers
 rNoteBodyKeepsChanging                  refusals/delivery/pr-actions/note-body-keeps-changing
+rNoteNoRoom                             refusals/delivery/pr-actions/note-no-room
 rDeliveryMovedOnAsYouAsked              refusals/delivery/prwait/delivery-moved-on-as-you-asked
 rCannotStartWhileDeliveryWaitsOn        refusals/delivery/prwait/cannot-start-while-delivery-waits-on
 rDeliveryReadingWhatChangedOnIts        refusals/delivery/prwait/delivery-reading-what-changed-on-its

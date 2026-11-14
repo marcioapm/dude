@@ -49,3 +49,5 @@
 {{- define "refusals/delivery/pr-actions/note-no-markers"}}a note holds no HTML comment (<!--): dude's own sections are marked with them. Nothing was written{{end}}
 
 {{- define "refusals/delivery/pr-actions/note-body-keeps-changing"}}the description of %s#%d kept changing while dude wrote your note: nothing was written. Try again in a moment{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-no-room"}}the description of %s#%d would run past GitHub's limit with this note, and leave dude's Verification section no room: nothing was written. Your section has room for %d characters now; keep it to that, and link the rest{{end}}

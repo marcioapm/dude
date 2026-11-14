@@ -79,17 +79,32 @@ func TestThePullRequestBodyFitsGitHubsLimit(t *testing.T) {
 		"Checks were verified against the Run's recorded commands.\n\n"
 	// Sentences of 50 characters.
 	const sentence = "The settings page lets an admin choose the tiers. "
+	compact := "51 earlier Runs omitted.\n- **Simplifier** — backed\n" +
+		"  - 30 checks reported; checks omitted from this account: see the task's Activity."
+	// The conductor's section at its bound (pull_request_note).
+	note := "<!-- dude:conductor -->\n" + strings.Repeat("n", 4000) + "\n<!-- /dude:conductor -->"
+	dropped := "<!-- dude:conductor -->\n(the conductor's note was dropped to fit GitHub's limit)\n<!-- /dude:conductor -->"
 	for i, c := range []struct {
 		name, goal, checks string
+		// note: the conductor's section in the person's body, and as the
+		// refresh leaves it.
+		note, noted string
 	}{{
 		"a 30,000-character description",
 		strings.Repeat(sentence, 600),
-		"51 earlier Runs omitted.\n- **Simplifier** — backed\n" +
-			"  - 30 checks reported; checks omitted from this account: see the task's Activity.",
+		compact, "", "",
 	}, {
 		"a description leaving less than a compact Run",
 		strings.Repeat(sentence, 637),
-		"Checks account omitted: see the task's Activity.",
+		"Checks account omitted: see the task's Activity.", "", "",
+	}, {
+		"a 26,000-character description and the conductor's note, which fits",
+		strings.Repeat(sentence, 520),
+		compact, note, note,
+	}, {
+		"a description leaving less than a compact Run, and the conductor's note",
+		strings.Repeat(sentence, 637),
+		"Checks account omitted: see the task's Activity.", note, dropped,
 	}} {
 		if _, err := owner.Exec(ctx, `UPDATE tasks SET goal = $1 WHERE id = 'wi_pb'`, c.goal); err != nil {
 			t.Fatal(err)
@@ -105,6 +120,9 @@ func TestThePullRequestBodyFitsGitHubsLimit(t *testing.T) {
 		pr := gh.Pull(number)
 		edited := strings.Replace(replaceSection(opened, "## Verification\nNot tested yet."),
 			"\n\n---\n", "\n\nA reviewer's note.\n\n---\n", 1)
+		if c.note != "" {
+			edited += "\n\n" + c.note
+		}
 		gh.Set(func(*fakegithub.Server) { pr.Body = edited })
 		prID := fmt.Sprintf("pr_pb%d", i)
 		if _, err := owner.Exec(ctx, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id,
@@ -119,6 +137,9 @@ func TestThePullRequestBodyFitsGitHubsLimit(t *testing.T) {
 		gh.Set(func(*fakegithub.Server) { refreshed = pr.Body })
 		if refreshed == edited {
 			t.Fatalf("%s: the refresh left the body as the person did", c.name)
+		}
+		if c.note != "" && !strings.HasSuffix(refreshed, "\n\n"+c.noted) {
+			t.Errorf("%s: the conductor's section ends\n%s\nwant\n%s", c.name, refreshed[max(0, len(refreshed)-200):], c.noted)
 		}
 		for _, body := range []struct{ how, text string }{{"opened", opened}, {"refreshed", refreshed}} {
 			if n := utf8.RuneCountInString(body.text); n > 65_536 {
