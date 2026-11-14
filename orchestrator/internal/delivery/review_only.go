@@ -98,17 +98,11 @@ func (w *steps) withRequiredLenses(ctx context.Context, sc workflow.StepContext,
 	return out, reasons, nil
 }
 
-// A review-only dismissal's grounds, the first word of its reason: the
-// finding is wrong (the evidence follows), or a duplicate of another
-// finding of the task (its id follows). dismiss_finding's schema is the
-// writing mode's; only the reason is read here.
-const (
-	GroundsWrong     = "wrong"
-	GroundsDuplicate = "duplicate"
-	minWrongEvidence = 10 // runes, trimmed
-)
+// minWrongEvidence is the fewest runes, trimmed, of "wrong:" evidence.
+const minWrongEvidence = 10
 
-// reviewOnlyGroundsTx reads a review-only task's dismissal reason as its
+// reviewOnlyGroundsTx reads a review-only task's dismissal reason (only
+// the reason: dismiss_finding's schema is the writing mode's) as its
 // grounds, recorded with the dismissal, or refuses it: "wrong: <evidence>",
 // or "duplicate: <finding id>" naming another open finding of the task, so
 // a set of duplicates always leaves one open and counted by the verdict.
@@ -116,13 +110,13 @@ const (
 func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reason string) (map[string]any, error) {
 	word, rest, _ := strings.Cut(reason, ":")
 	rest = strings.TrimSpace(rest)
-	switch strings.ToLower(strings.TrimSpace(word)) {
-	case GroundsWrong:
+	switch kind := strings.ToLower(strings.TrimSpace(word)); kind {
+	case "wrong":
 		if len([]rune(rest)) < minWrongEvidence || !strings.ContainsFunc(rest, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
 			return nil, refuseText(rReviewOnlyDismissWrongEvidence)
 		}
-		return map[string]any{"kind": GroundsWrong, "evidence": clip(oneLine(rest), 1000)}, nil
-	case GroundsDuplicate:
+		return map[string]any{"kind": kind, "evidence": clip(oneLine(rest), 1000)}, nil
+	case "duplicate":
 		of, _, _ := strings.Cut(rest, " ")
 		of = strings.Trim(of, ".,;")
 		var exists bool
@@ -135,7 +129,7 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 		if !exists {
 			return nil, refusef(rReviewOnlyDismissDuplicateOf, cmp.Or(of, "no finding"))
 		}
-		return map[string]any{"kind": GroundsDuplicate, "duplicateOf": of}, nil
+		return map[string]any{"kind": kind, "duplicateOf": of}, nil
 	}
 	return nil, refuseText(rReviewOnlyDismissGrounds)
 }
