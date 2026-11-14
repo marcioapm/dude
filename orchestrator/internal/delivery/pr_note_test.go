@@ -13,6 +13,11 @@ func TestTheConductorsNoteIsTextNotMarkers(t *testing.T) {
 	if got, err := conductorNote("  ```\nBenchmarkMax 1043 ns/op\n"); err != nil || got != "```\nBenchmarkMax 1043 ns/op\n```" {
 		t.Errorf("an open fence: %q %v", got, err)
 	}
+	// A code span at a line's start opens no fence on GitHub: a closer
+	// added after it would open one, and swallow what follows.
+	if got, err := conductorNote("```go test -bench .``` gives 1043 ns/op"); err != nil || got != "```go test -bench .``` gives 1043 ns/op" {
+		t.Errorf("a code span: %q %v", got, err)
+	}
 	if _, err := conductorNote(strings.Repeat("é", pullRequestNoteMax/2+1)); err == nil {
 		t.Error("a note over the bound in bytes was taken")
 	}

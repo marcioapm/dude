@@ -56,10 +56,11 @@ func ImageRefs(text string) []ImageRef {
 
 // fenceAfter is the fence open after line, given the one open before it
 // ("" for none), and whether line is code: inside a fence, or one's opener
-// or closer.
+// or closer. A run of backticks with a backtick after it on its line is a
+// code span, not a fence, as CommonMark reads it (forge.fenced too).
 func fenceAfter(fence, line string) (string, bool) {
 	opener := ""
-	if m := fenceOpen.FindStringSubmatch(line); m != nil {
+	if m := fenceOpen.FindStringSubmatch(line); m != nil && (m[1][0] == '~' || !strings.Contains(line[len(m[0]):], "`")) {
 		opener = m[1]
 	}
 	switch {

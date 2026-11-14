@@ -77,6 +77,9 @@ func TestTheBodyRefreshTouchesOnlyDudesMarkedSection(t *testing.T) {
 		{"an unclosed tilde fence",
 			"~~~~\nExample.\n",
 			"~~~~\nExample.\n~~~~\n\n" + wantMarked(section, "\n")},
+		{"a code span at a line's start is no fence",
+			"```go test -bench .``` gives 1043 ns/op\n",
+			"```go test -bench .``` gives 1043 ns/op\n\n" + wantMarked(section, "\n")},
 		{"an empty body", "", wantMarked(section, "\n")},
 	}
 	for _, c := range cases {
