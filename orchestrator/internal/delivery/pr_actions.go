@@ -20,8 +20,9 @@ import (
 // (agents never hold a token): ask for reviews, resolve a review thread,
 // mark a draft ready, re-run failed checks, write the conductor's section
 // of the description. Each is one of the task's own pull requests; each is
-// recorded as pull_request.action by the Run that asked. Like a reply (reply.go), an action is checked in a transaction,
-// done on GitHub with none open, then recorded.
+// recorded as pull_request.action by the Run that asked. Like a reply
+// (reply.go), an action is checked in a transaction, done on GitHub with
+// none open, then recorded.
 
 // PR actions.
 const (
@@ -253,8 +254,11 @@ const pullRequestNoteMax = 4000
 
 // The hidden lines around the conductor's section of a description it
 // writes (pull_request_note): what lies between them is the conductor's.
+// conductorStart is forge.ReplyMarker's literal on purpose: both say the
+// conductor wrote what they mark. A description is no feedback, and its
+// section ends in conductorEnd, so forge.Own never reads it as a reply.
 const (
-	conductorStart = "<!-- dude:conductor -->"
+	conductorStart = forge.ReplyMarker
 	conductorEnd   = "<!-- /dude:conductor -->"
 )
 
