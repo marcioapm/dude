@@ -87,6 +87,12 @@ type Server struct {
 	HookPatches int
 	// The combined status every commit reports; "" is success.
 	checks string
+	// SetChecks("run:…")'s workflow run (DefaultWorkflowRunID) was re-run
+	// and runs again: GitHub refuses to re-run it, or any job of it, again.
+	running bool
+	// More jobs of SetChecks("run:…")'s workflow run, by id, reported as
+	// its one check run is: a matrix (name "e2e (n)").
+	MatrixJobs []int64
 	// Who the token comments as; "" is Login. A personal access token
 	// comments as its owner, often a person rather than a bot.
 	Poster string
@@ -100,8 +106,9 @@ type Server struct {
 	// Update-branch and merge requests received, by pull request.
 	Updates, Merges []int
 	// Check runs asked to run again: through the checks API, and Actions
-	// jobs through the Actions API.
-	Rerequested, JobsRerun []int64
+	// jobs through the Actions API (each failed job of a workflow run
+	// re-run); the workflow runs re-run.
+	Rerequested, JobsRerun, RunsRerun []int64
 	// GitHub has not worked out whether it merges yet (after a push).
 	MergeableUnknown map[int]bool
 	// The head a pull request's read shows instead of its branch's commit,
@@ -285,6 +292,10 @@ func JobID(n int64) int64 { return FirstJobID + n }
 // DefaultCheckRunID is the id of SetChecks("run:…")'s one check run when a
 // test sets none.
 const DefaultCheckRunID = FirstJobID + 77
+
+// DefaultWorkflowRunID is the workflow run of SetChecks("run:…")'s check
+// runs, and of any job no WorkflowRun lists.
+const DefaultWorkflowRunID = FirstRunID + 77
 
 // Comment and review ids, unique across repositories as GitHub's are.
 var nextID = func() *atomic.Int64 { var n atomic.Int64; n.Store(FirstCommentID); return &n }()
@@ -584,7 +595,7 @@ func (s *Server) RequestReview(number int, login string) {
 func (s *Server) SetChecks(state string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.checks = state
+	s.checks, s.running = state, false
 }
 
 // Close closes a pull request without merging it, as a person would.
@@ -976,17 +987,47 @@ func (s *Server) Handler() http.Handler {
 		s.mu.Unlock()
 		write(w, 201, map[string]any{})
 	})
+	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		s.mu.Lock()
+		run := s.runOfJob(id)
+		s.mu.Unlock()
+		write(w, 200, map[string]any{"id": id, "run_id": run})
+	})
+	// As GitHub: re-running a job restarts its workflow run, which then
+	// refuses another job's re-run until it is done.
 	mux.HandleFunc("POST "+prefix+"/actions/jobs/{id}/rerun", func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		s.mu.Lock()
-		s.JobsRerun = append(s.JobsRerun, id)
-		// As GitHub: the job re-run is queued again, not failed, as a new
-		// check run.
-		if strings.HasPrefix(s.checks, "run:") {
-			s.checks = "run:pending"
-			s.CheckRunID = max(s.CheckRunID, DefaultCheckRunID) + 1
+		defer s.mu.Unlock()
+		if !s.rerunLocked(s.runOfJob(id), []int64{id}) {
+			fail(w, 403, "The workflow run containing this job is already running")
+			return
 		}
-		s.mu.Unlock()
+		write(w, 201, map[string]any{})
+	})
+	mux.HandleFunc("POST "+prefix+"/actions/runs/{id}/rerun-failed-jobs", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var failed []int64
+		if run, ok := s.WorkflowRuns[id]; ok {
+			for _, j := range run.Jobs {
+				if j.Conclusion == "failure" || j.Conclusion == "timed_out" || j.Conclusion == "cancelled" {
+					failed = append(failed, j.ID)
+				}
+			}
+		} else if id == DefaultWorkflowRunID {
+			failed = append([]int64{max(s.CheckRunID, DefaultCheckRunID)}, s.MatrixJobs...)
+		} else {
+			fail(w, 404, "Not Found")
+			return
+		}
+		if !s.rerunLocked(id, failed) {
+			fail(w, 403, "This workflow is already running")
+			return
+		}
+		s.RunsRerun = append(s.RunsRerun, id)
 		write(w, 201, map[string]any{})
 	})
 	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}/logs", s.jobLogs)
@@ -1482,11 +1523,45 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, out)
 }
 
+// runOfJob is the workflow run job id is in: a WorkflowRun's, else
+// DefaultWorkflowRunID.
+func (s *Server) runOfJob(id int64) int64 {
+	for run, r := range s.WorkflowRuns {
+		if slices.ContainsFunc(r.Jobs, func(j WorkflowJob) bool { return j.ID == id }) {
+			return run
+		}
+	}
+	return DefaultWorkflowRunID
+}
+
+// rerunLocked re-runs jobs of workflow run id, false when it is running.
+// SetChecks("run:…")'s re-run is queued again, not failed, as a new check
+// run.
+func (s *Server) rerunLocked(id int64, jobs []int64) bool {
+	if run, ok := s.WorkflowRuns[id]; ok {
+		if run.Status != "completed" {
+			return false
+		}
+		run.Attempt, run.Status, run.Conclusion = max(run.Attempt, 1)+1, "queued", ""
+		s.WorkflowRuns[id] = run
+	} else if s.running {
+		return false
+	} else {
+		s.running = true
+		if strings.HasPrefix(s.checks, "run:") {
+			s.checks = "run:pending"
+			s.CheckRunID = max(s.CheckRunID, DefaultCheckRunID) + 1
+		}
+	}
+	s.JobsRerun = append(s.JobsRerun, jobs...)
+	return true
+}
+
 // checkRuns: GitHub Actions' way of reporting. SetChecks("run:failure")
 // reports through check runs instead of statuses.
 func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	state, forbidden, message, id := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage, s.CheckRunID
+	state, forbidden, message, id, matrix := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage, s.CheckRunID, slices.Clone(s.MatrixJobs)
 	s.mu.Unlock()
 	if id == 0 {
 		id = DefaultCheckRunID
@@ -1505,10 +1580,16 @@ func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 		if conclusion == "pending" {
 			status, conclusion = "in_progress", ""
 		}
-		runs = append(runs, map[string]any{"id": id, "name": "e2e", "status": status, "conclusion": conclusion,
-			"app":      map[string]string{"slug": "github-actions"},
-			"html_url": fmt.Sprintf("https://github.test/%s/runs/%d", s.Slug, id), "started_at": "2026-09-28T10:00:00Z",
-			"completed_at": "2026-09-28T10:04:12Z"})
+		for i, job := range append([]int64{id}, matrix...) {
+			name := "e2e"
+			if i > 0 {
+				name = fmt.Sprintf("e2e (%d)", i)
+			}
+			runs = append(runs, map[string]any{"id": job, "name": name, "status": status, "conclusion": conclusion,
+				"app":      map[string]string{"slug": "github-actions"},
+				"html_url": fmt.Sprintf("https://github.test/%s/runs/%d", s.Slug, job), "started_at": "2026-09-28T10:00:00Z",
+				"completed_at": "2026-09-28T10:04:12Z"})
+		}
 	}
 	write(w, 200, map[string]any{"total_count": len(runs), "check_runs": runs})
 }
