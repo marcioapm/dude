@@ -79,10 +79,12 @@ type dischargeAnswer struct {
 	Verdict, Reason string
 }
 
-// dischargeAsk is one second ask: its key, its deadline, whether that
-// has passed (on the database's clock) and whether it is answered.
+// dischargeAsk is one second ask: its key, the Run and turn it is about,
+// its deadline, whether that has passed (on the database's clock) and
+// whether it is answered.
 type dischargeAsk struct {
-	Key               string
+	Key, RunID        string
+	Turn              int64
 	Deadline          time.Time
 	Overdue, Answered bool
 }
@@ -183,7 +185,7 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 				// command, changes nothing.
 			}
 		case EvRunChecksAsked:
-			s.asks[cursor] = &dischargeAsk{Key: dis.Key, Deadline: p.Deadline, Overdue: overdue}
+			s.asks[cursor] = &dischargeAsk{Key: dis.Key, RunID: runID, Turn: p.Turn, Deadline: p.Deadline, Overdue: overdue}
 			for _, c := range p.Checks {
 				command := strings.TrimSpace(c.Command)
 				if s.asked[command] == nil {
@@ -392,7 +394,7 @@ func askDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, heads map
 		return false, err
 	}
 	// Marked asked, as the next read would read it (cursor -1: this ask).
-	s.asks[-1] = &dischargeAsk{Key: key, Deadline: asked.Deadline}
+	s.asks[-1] = &dischargeAsk{Key: key, RunID: anchor.RunID, Turn: anchor.Turn, Deadline: asked.Deadline}
 	for _, c := range ask {
 		if s.asked[c.Command] == nil {
 			s.asked[c.Command] = map[string]int64{}
@@ -585,13 +587,28 @@ func deferredEscalation(s *deferredState, id string, due bool) map[string]any {
 	var commands []string
 	var unverified []UnverifiedCheck
 	var lines []string
+	// The open asks the checks wait on, past their deadline: when every
+	// check not kept here is one of theirs, a backed answer settles the
+	// escalation (dischargeKeptTx needs none outstanding). Any other check
+	// not kept, escalated or still asked, is one of the others.
+	var asks []DischargeOpenAsk
+	others := false
 	for _, c := range s.checks {
 		var why, line string
-		switch s.standing(c, id) {
+		st := s.standing(c, id)
+		others = others || st != deferredKept && st != deferredOverdue
+		switch st {
 		case deferredRejected:
 			why = clip(oneLine(cmp.Or(s.latest[c.Command].Reason, "no reason given")), escalatedItemMax)
 			line = "deferred, then rejected by the conductor once the pull request was open: " + why
 		case deferredOverdue:
+			if a := s.asks[s.asked[c.Command][id]]; a != nil && a.Key != "" {
+				if o := (DischargeOpenAsk{a.RunID, a.Turn, a.Key}); !slices.Contains(asks, o) {
+					asks = append(asks, o)
+				}
+			} else {
+				others = true
+			}
 			why = "the conductor did not answer the ask to keep it by its deadline"
 			line = "deferred, then " + why
 		case deferredPerson:
@@ -611,8 +628,22 @@ func deferredEscalation(s *deferredState, id string, due bool) map[string]any {
 	if len(commands) == 0 {
 		return nil
 	}
-	return map[string]any{"runId": anchor.RunID, "rounds": 0, "discharge": true, "commands": commands, "unverified": unverified,
+	detail := map[string]any{"runId": anchor.RunID, "rounds": 0, "discharge": true, "commands": commands, "unverified": unverified,
 		"message": "Deferred checks not kept:\n" + strings.Join(lines, "\n")}
+	if len(asks) > 0 && !others {
+		detail["asks"] = asks
+	}
+	return detail
+}
+
+// DischargeOpenAsk is a second checks ask a discharge escalation's checks
+// wait on, unanswered past its deadline: answered backed at the current
+// heads, it settles the escalation (dischargeKeptTx), so the conductor's
+// escalation wake names it.
+type DischargeOpenAsk struct {
+	RunID string `json:"runId"`
+	Turn  int64  `json:"turn"`
+	Key   string `json:"key"`
 }
 
 // discharge says a checks_unverified escalation is of deferred checks only

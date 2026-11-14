@@ -3969,8 +3969,9 @@ func escalatedLine(e *Escalation) string {
 			Criterion    int
 			Text, Status string
 		} `json:"criteria"`
-		Message    string            `json:"message"`
-		Unverified []UnverifiedCheck `json:"unverified"`
+		Message    string             `json:"message"`
+		Unverified []UnverifiedCheck  `json:"unverified"`
+		Asks       []DischargeOpenAsk `json:"asks"`
 	}
 	e.decode(&d)
 	var criteria []string
@@ -3996,15 +3997,22 @@ func escalatedLine(e *Escalation) string {
 	criteria, criteriaLeft := shown(criteria)
 	unverified, unverifiedLeft := shown(unverified)
 	reason := e.Reason
+	var asks []string
+	if e.discharge() {
+		for _, a := range d.Asks {
+			asks = append(asks, fmt.Sprintf("runId %s, turn %d, ask %s", a.RunID, a.Turn, a.Key))
+		}
+	}
 	return render(escalatedTmpl, struct {
 		Reason                        string
 		Actions, FindingIDs           []string
 		Verdict, Stuck, NotConverging bool
 		Criteria, Unverified          []string
 		CriteriaLeft, UnverifiedLeft  int
+		Asks                          []string
 	}{strings.ReplaceAll(reason, "_", " "), e.Actions(), e.findingIDs(),
 		reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked,
-		reason == "stuck", reason == ReasonNotConverging, criteria, unverified, criteriaLeft, unverifiedLeft})
+		reason == "stuck", reason == ReasonNotConverging, criteria, unverified, criteriaLeft, unverifiedLeft, asks})
 }
 
 // The escalated wake lists at most escalatedItemsMax criteria or checks,

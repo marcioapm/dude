@@ -442,6 +442,19 @@ func (w *world) overdueDischarge(task string) {
 func TestABackedAnswerAfterTheDeadlineSettlesTheEscalation(t *testing.T) {
 	w, task := deferredWorld(t)
 	w.overdueDischarge(task)
+	// The conductor is told the open ask settles it, by its key, and that
+	// waive is not how to say the check was kept.
+	_, _, key := w.secondAsk(task)
+	var woken string
+	w.until("the escalation's wake", func() bool {
+		w.pump()
+		woken = w.str(`SELECT COALESCE(string_agg(line, ' | '), '') FROM conductor_wakes WHERE task_id = $1 AND kind = 'escalation'`, task)
+		return woken != ""
+	})
+	if !strings.Contains(woken, "ask "+key+") at the current heads settles this escalation by itself, with no person's waiver") ||
+		!strings.Contains(woken, "Waive is for a check that was not kept; a reject still goes to the person.") {
+		t.Errorf("the escalation's wake does not say a backed answer to %s settles it: %q", key, woken)
+	}
 	head := w.gh.SHA(w.gh.Pull(1).Head)
 	if status, out := w.answerDeferred(task, delivery.VerdictBacked, "dispatch wfd_1 of bench.yml at "+head[:7]+" completed: success"); status != 200 {
 		t.Fatalf("the late backed answer: %d %v", status, out)
