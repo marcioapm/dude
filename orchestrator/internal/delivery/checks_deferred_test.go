@@ -53,12 +53,12 @@ func TestGoldenDeferredChecks(t *testing.T) {
 	s.latest["open the page in a browser"] = dischargeAnswer{Verdict: VerdictReject, Reason: "no tester ran"}
 	s.asked["ci workflow on the pull request"] = map[string]int64{"h": 7}
 	s.asked["make bench"] = map[string]int64{"h": 8}
-	s.asks[7] = &dischargeAsk{Heads: "h", Key: "checks:run_impl:42:d1:0a1b2c3d4e5f"}
-	s.asks[8] = &dischargeAsk{Heads: "h", Overdue: true}
+	s.asks[7] = &dischargeAsk{Key: "checks:run_impl:42:d1:0a1b2c3d4e5f"}
+	s.asks[8] = &dischargeAsk{Overdue: true}
 	policy := newDeferredState()
 	policy.checks = s.checks[:1]
 	policy.asked["gh workflow run bench.yml"] = map[string]int64{"h": 7}
-	policy.asks[7] = &dischargeAsk{Heads: "h"}
+	policy.asks[7] = &dischargeAsk{}
 	goldenTexts(t, "deferred-checks", [][2]string{
 		{"wake", deferredWakeLine(anchor, asked)},
 		{"item-conducted", deferredItem(s, "h").Detail},

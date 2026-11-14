@@ -78,10 +78,10 @@ type dischargeAnswer struct {
 	Verdict, Reason string
 }
 
-// dischargeAsk is one second ask at heads (headsID): whether its
-// deadline has passed (on the database's clock) and whether it is answered.
+// dischargeAsk is one second ask: its key, its deadline, whether that
+// has passed (on the database's clock) and whether it is answered.
 type dischargeAsk struct {
-	Heads, Key        string
+	Key               string
 	Deadline          time.Time
 	Overdue, Answered bool
 }
@@ -181,7 +181,7 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 				// command, changes nothing.
 			}
 		case EvRunChecksAsked:
-			s.asks[cursor] = &dischargeAsk{Heads: heads, Key: dis.Key, Deadline: p.Deadline, Overdue: overdue}
+			s.asks[cursor] = &dischargeAsk{Key: dis.Key, Deadline: p.Deadline, Overdue: overdue}
 			for _, c := range p.Checks {
 				command := strings.TrimSpace(c.Command)
 				if s.asked[command] == nil {
@@ -401,7 +401,7 @@ func askDeferredTx(ctx context.Context, tx pgx.Tx, org, taskID string, attempt i
 		return false, err
 	}
 	// Marked asked, as the next read would read it (cursor -1: this ask).
-	s.asks[-1] = &dischargeAsk{Heads: id, Key: key, Deadline: asked.Deadline}
+	s.asks[-1] = &dischargeAsk{Key: key, Deadline: asked.Deadline}
 	for _, c := range ask {
 		if s.asked[c.Command] == nil {
 			s.asked[c.Command] = map[string]int64{}
