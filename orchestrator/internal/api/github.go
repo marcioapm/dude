@@ -369,7 +369,12 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 		}
 	case "rerun-failed":
 		_ = json.Unmarshal(checks, &pr.Checks)
-		n, err := gh.RerunFailed(r.Context(), slug, pr.Checks)
+		n, running, err := gh.RerunFailed(r.Context(), slug, pr.Checks)
+		if unasked := (*forge.NothingAsked)(nil); errors.As(err, &unasked) && !forge.Refused(err) {
+			// GitHub could not be read before anything was asked: say so,
+			// rather than an internal error that may have re-run something.
+			return fail(http.StatusBadGateway, "github_unavailable", "GitHub could not be read: %s; nothing was re-run; ask again", err.Error())
+		}
 		if err != nil {
 			return forgeRefusal(err, "GitHub would not re-run the checks")
 		}
@@ -377,6 +382,9 @@ func (s *Server) pullRequestAction(w http.ResponseWriter, r *http.Request, org s
 			return fail(http.StatusConflict, "conflict", "no failed check to re-run")
 		}
 		out["rerun"] = n
+		if running > 0 {
+			out["alreadyRunning"] = running
+		}
 	case "reviewers":
 		if len(body.Logins) == 0 {
 			return fail(http.StatusBadRequest, "bad_request", "logins: whom to ask for a review")

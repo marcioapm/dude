@@ -3956,7 +3956,7 @@ func TestAFixerIsToldWhichCheckFailedAndWhy(t *testing.T) {
 		}
 		return false
 	})
-	for _, want := range []string{"Failing check: e2e", fmt.Sprintf("https://github.test/acme/target/runs/%d", fakegithub.DefaultCheckRunID), "TestGreeting: expected hello",
+	for _, want := range []string{"Failing check: e2e", fmt.Sprintf("https://github.test/acme/target/actions/runs/%d/job/%d", fakegithub.DefaultWorkflowRunID, fakegithub.DefaultCheckRunID), "TestGreeting: expected hello",
 		"greet.go:12: failure: expected hello"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the fixer's prompt lacks %q:\n%s", want, prompt)

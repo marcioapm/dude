@@ -1762,3 +1762,7 @@ ask %q is superseded: the pull requests' heads moved and a newer second checks w
 
 %q is not a second checks ask about that Run's turn: give the ask the second checks wake names, with its runId and turn
 
+## refusals/delivery/pr-actions/github-could-not-be-read-nothing-rerun
+
+GitHub could not be read for the failed checks on %s#%d (%v): nothing was re-run; ask again
+
