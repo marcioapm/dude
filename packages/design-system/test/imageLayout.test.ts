@@ -108,6 +108,11 @@ describe("move in the criteria", () => {
   test("a numbered list's continuation is indented to its content", () => {
     expect(insertReference("10. Ten\n11. Eleven", A, 0, "criteria").text).toBe(`10. Ten\n    ${A}\n11. Eleven`);
   });
+  test("a code span leading the item opens no fence: the image lands before the fence that is open", () => {
+    expect(insertReference("- [ ] ```npm test``` passes\n  ```\n  log", A, 0, "criteria").text).toBe(
+      `- [ ] \`\`\`npm test\`\`\` passes\n  ${A}\n  \`\`\`\n  log`,
+    );
+  });
 });
 
 describe("between fields", () => {

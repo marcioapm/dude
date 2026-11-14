@@ -41,3 +41,15 @@
 {{- define "refusals/delivery/pr-actions/github-could-not-be-read-nothing-rerun"}}GitHub could not be read for the failed checks on %s#%d (%v): nothing was re-run; ask again{{end}}
 
 {{- define "refusals/delivery/pr-actions/github-did-not-do"}}GitHub did not do it: %v{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-not-dudes-pull-request"}}%s#%d was not opened by dude: its description is its author's, and dude writes no section into it. Say it on the pull request instead (reply_on_pull_request){{end}}
+
+{{- define "refusals/delivery/pr-actions/note-text-required"}}say what the note holds: text is required{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-at-most-bytes"}}a note is at most %d bytes: keep it to what the description needs, and link the rest{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-no-markers"}}a note holds no HTML comment (<!--): dude's own sections are marked with them. Nothing was written{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-body-keeps-changing"}}the description of %s#%d kept changing while dude wrote your note: nothing was written. Try again in a moment{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-no-room"}}the description of %s#%d would run past GitHub's limit with this note, and leave dude's Verification section no room: nothing was written. Your section has room for %d characters now; keep it to that, and link the rest{{end}}

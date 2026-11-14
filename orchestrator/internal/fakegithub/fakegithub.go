@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakegit"
 )
@@ -753,6 +754,9 @@ func (s *Server) Handler() http.Handler {
 			fail(w, 400, err.Error())
 			return
 		}
+		if tooLong(w, in.Body) {
+			return
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		p.Body = in.Body
@@ -1085,12 +1089,25 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
+// tooLong refuses a pull request body over GitHub's 65,536 characters, as
+// GitHub does, with a 422.
+func tooLong(w http.ResponseWriter, body string) bool {
+	if utf8.RuneCountInString(body) <= 65_536 {
+		return false
+	}
+	fail(w, 422, "Validation Failed: body is too long (maximum is 65536 characters)")
+	return true
+}
+
 func (s *Server) openPull(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Title, Body, Head, Base string
 		Draft                   bool
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
+	if tooLong(w, in.Body) {
+		return
+	}
 	s.mu.Lock()
 	auth := r.Header.Get("Authorization")
 	s.OpenAuth = append(s.OpenAuth, auth)

@@ -61,6 +61,8 @@ function fenceStep(text: string, open: string | null): string | null {
   const m = FENCE.exec(text);
   if (!m) return open;
   const mark = m[1]!;
+  // A backtick run with a backtick after it on its line is a code span, not a fence.
+  if (mark[0] === "`" && text.slice(m[0].length).includes("`")) return open;
   if (open === null) return mark;
   return mark[0] === open[0] && mark.length >= open.length && text.trim() === mark ? null : open;
 }

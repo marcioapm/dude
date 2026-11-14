@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { parseMarkdown } from "@dude/design-system";
+import { criteriaLines, parseMarkdown } from "@dude/design-system";
 import { criteriaFromMarkdown, criteriaToMarkdown, type ParsedCriteria } from "../src/screens/criteria.ts";
 
 const from = (src: string) => criteriaFromMarkdown(src);
@@ -65,6 +65,12 @@ describe("criteriaFromMarkdown", () => {
 
   test("a stray fence is stray as a whole: list-like lines inside it are not criteria", () => {
     expect(from("```\n- inside\n```\n- outside")).toEqual({ items: ["outside"], stray: true });
+  });
+
+  test("a line-leading code span opens no fence: the items after it are criteria", () => {
+    const src = "```make bench``` is slow\n- [ ] one\n- [ ] two";
+    expect(from(src)).toEqual({ items: ["one", "two"], stray: true });
+    expect(criteriaLines(src).stray).toEqual([0]);
   });
 
   test("a dash without a space is text, not an item", () => {

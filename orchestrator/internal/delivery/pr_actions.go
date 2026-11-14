@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -17,10 +18,11 @@ import (
 
 // GitHub actions dude takes on a task's pull request for one of its agents
 // (agents never hold a token): ask for reviews, resolve a review thread,
-// mark a draft ready, re-run failed checks. Each is one of the task's own
-// pull requests; each is recorded as pull_request.action by the Run that
-// asked. Like a reply (reply.go), an action is checked in a transaction,
-// done on GitHub with none open, then recorded.
+// mark a draft ready, re-run failed checks, write the conductor's section
+// of the description. Each is one of the task's own pull requests; each is
+// recorded as pull_request.action by the Run that asked. Like a reply
+// (reply.go), an action is checked in a transaction, done on GitHub with
+// none open, then recorded.
 
 // PR actions.
 const (
@@ -28,6 +30,7 @@ const (
 	ActionResolveThread = "resolve_thread"
 	ActionMarkReady     = "mark_ready"
 	ActionRerunChecks   = "rerun_failed_checks"
+	ActionNote          = "pull_request_note"
 )
 
 // PRAction is an agent's request.
@@ -40,6 +43,8 @@ type PRAction struct {
 	// resolve_thread: the thread, by GitHub's node id (PRRT_…) or by the
 	// feedback id of a comment in it (line-comment-…).
 	Thread string
+	// pull_request_note: the conductor's section of the description.
+	Text string
 }
 
 // PRActionCheck is an action checked and not yet done.
@@ -52,6 +57,7 @@ type PRActionCheck struct {
 	nodeID, head string
 	logins       []string
 	thread       string
+	note         string
 	checks       []forge.Check
 	// rerun_failed_checks: the event claiming the head.
 	claim string
@@ -124,10 +130,11 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 	var url, state string
 	var nodeID, head *string
 	var checks []byte
-	err = tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.state::text, pr.node_id, pr.head_sha, pr.checks_json
+	var adopted bool
+	err = tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.state::text, pr.node_id, pr.head_sha, pr.checks_json, pr.adopted
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
-		ref.TaskID, number, repo).Scan(&c.prID, &repo, &url, &state, &nodeID, &head, &checks)
+		ref.TaskID, number, repo).Scan(&c.prID, &repo, &url, &state, &nodeID, &head, &checks, &adopted)
 	if db.IsNotFound(err) {
 		return c, refusef(rNotPullRequestYourTaskYou, in.PR)
 	}
@@ -202,6 +209,16 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, err
 		}
 		c.claim = claim
+	case ActionNote:
+		// dude writes its sections only into a description it opened, as
+		// the Verification and Review sections (refreshBodies): a pull
+		// request it took over is its author's.
+		if adopted {
+			return c, refusef(rNoteNotDudesPullRequest, repo, number)
+		}
+		if c.note, err = conductorNote(in.Text); err != nil {
+			return c, err
+		}
 	default:
 		return c, refusef(rNoPullRequestAction, in.Action)
 	}
@@ -209,6 +226,47 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 }
 
 func (c PRActionCheck) PullRequestID() string { return c.prID }
+
+// conductorNote is the conductor's text as its section holds it, or a
+// Refusal: not empty, at most pullRequestNoteMax bytes, and no HTML
+// comment in it, since dude's markers are HTML comments (one could end the
+// section or pass for dude's own, and one left open hides the rest of the
+// description); a fence it leaves open is closed, so the section's end
+// marker stays a marker.
+func conductorNote(text string) (string, error) {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	switch {
+	case text == "":
+		return "", refuseText(rNoteTextRequired)
+	case len(text) > pullRequestNoteMax:
+		return "", refusef(rNoteAtMostBytes, pullRequestNoteMax)
+	case strings.Contains(text, "<!--"):
+		return "", refuseText(rNoteNoMarkers)
+	}
+	if fence := UnclosedFence(text); fence != "" {
+		text += "\n" + fence
+	}
+	return text, nil
+}
+
+// pullRequestNoteMax bounds the conductor's section of a description.
+const pullRequestNoteMax = 4000
+
+// The hidden lines around the conductor's section of a description it
+// writes (pull_request_note): what lies between them is the conductor's.
+// conductorStart is forge.ReplyMarker's literal on purpose: both say the
+// conductor wrote what they mark. A description is no feedback, and its
+// section ends in conductorEnd, so forge.Own never reads it as a reply.
+const (
+	conductorStart = forge.ReplyMarker
+	conductorEnd   = "<!-- /dude:conductor -->"
+)
+
+// replaceConductorNote puts note between the conductor's markers in body
+// (replaceMarked): a person's text and dude's other sections are kept.
+func replaceConductorNote(body, note string) string {
+	return replaceMarked(body, conductorStart, conductorEnd, conductorStart+"\n"+note+"\n"+conductorEnd)
+}
 
 // maxReviewLogins bounds one request_review.
 const maxReviewLogins = 10
@@ -220,6 +278,8 @@ type PRActionDone struct {
 	// whose workflow run GitHub said was already running.
 	Rerun, Running int
 	Thread         string
+	// pull_request_note: the description as GitHub has it now.
+	Body string
 }
 
 // DoPRAction does it on GitHub, with no transaction open. A refusal of
@@ -295,6 +355,28 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 			return done, refusef(rGithubReRunFailedChecksOn, c.repo, c.number, err)
 		}
 		done.Rerun, done.Running = n, running
+	case ActionNote:
+		// A note is refused rather than taking the room dude's
+		// Verification section needs: past prBodyMax GitHub refuses the
+		// description whole, every later refresh with it.
+		var room int
+		body, err := refreshBody(ctx, gh, c.slug, c.number, func(body string) string {
+			merged := replaceConductorNote(body, c.note)
+			if room = prBodyMax - prBodyMargin - utf8.RuneCountInString(merged); room < 0 {
+				return body
+			}
+			return merged
+		})
+		if errors.Is(err, errBodyChanged) {
+			return done, refusef(rNoteBodyKeepsChanging, c.repo, c.number)
+		}
+		if err != nil {
+			return done, ghRefusal(err)
+		}
+		if room < 0 {
+			return done, refusef(rNoteNoRoom, c.repo, c.number, max(0, utf8.RuneCountInString(c.note)+room))
+		}
+		done.Body = body
 	}
 	return done, nil
 }
@@ -322,6 +404,12 @@ func RecordPRActionTx(ctx context.Context, tx pgx.Tx, c PRActionCheck, done PRAc
 		}
 		// The claim written before GitHub was called is this head's record.
 		return payload, nil
+	case ActionNote:
+		payload["note"] = c.note
+		// The description as GitHub has it now, a person's edits included.
+		if _, err := tx.Exec(ctx, `UPDATE pull_requests SET body = $2, updated_at = now() WHERE id = $1`, c.prID, done.Body); err != nil {
+			return payload, err
+		}
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: c.ref.Org, ProjectID: c.ref.ProjectID,
 		TaskID: c.ref.TaskID, RunID: c.ref.RunID, ActorType: ledger.ActorAgent, ActorID: c.ref.RunID,

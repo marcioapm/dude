@@ -45,6 +45,18 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const trimBlanks = (s: string) => s.replace(/^[ \t]+|[ \t]+$/g, "");
 
 /**
+ * The fence line opens, or undefined. A run of backticks with a backtick
+ * after it on its line is a code span, not a fence, as CommonMark reads it
+ * (delivery.fenceAfter too); a tilde fence's info may hold backticks.
+ */
+function fenceOpener(line: string): string | undefined {
+  const m = FENCE.exec(line);
+  if (!m) return undefined;
+  const opener = m[1]!;
+  return opener[0] === "~" || !line.slice(m[0].length).includes("`") ? opener : undefined;
+}
+
+/**
  * The attachment references in Markdown, in order. Inside a fenced code
  * block or a code span it is text, as Markdown renders it, not a reference.
  */
@@ -53,7 +65,7 @@ export function attachmentReferences(text: string): AttachmentReference[] {
   let fence: string | null = null;
   let offset = 0;
   for (const line of text.split("\n")) {
-    const opener = FENCE.exec(line)?.[1];
+    const opener = fenceOpener(line);
     if (fence !== null) {
       if (opener && opener[0] === fence[0] && opener.length >= fence.length && trimBlanks(line) === opener) fence = null;
     } else if (opener) {
