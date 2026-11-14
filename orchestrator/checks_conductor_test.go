@@ -16,7 +16,7 @@ import (
 )
 
 // The dude#224 shape, minus the ask: the implementer reports a failure
-// that fails the same at the task's base and a browser check not run; the
+// that fails the same at the task's base and a manual workflow not run; the
 // conductor decides them pre-existing and deferred (decide_checks), and the
 // work publishes with no question asked and no wait on a person.
 func TestAConductorVerdictPublishesAReportedFailureWithoutAPerson(t *testing.T) {

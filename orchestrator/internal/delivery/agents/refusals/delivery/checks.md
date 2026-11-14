@@ -8,3 +8,6 @@
 {{define "refusals/delivery/checks/waiver-cursor"}}same_as_waived for %q must cite the waiver it matches: waiverCursor %d{{end}}
 {{define "refusals/delivery/checks/missing"}}missing needs verdict none or missing, and a reason{{end}}
 {{define "refusals/delivery/checks/reason-long"}}a reason is at most %d characters, and %s's is %d: say what decides the verdict, the Run's Chat keeps the rest{{end}}
+{{define "refusals/delivery/checks/ask-missing"}}that turn's deferred checks are asked about again by a second checks wake: answer it with the ask it names, here ask %q, so the answer counts at the heads it was asked at{{end}}
+{{define "refusals/delivery/checks/no-such-ask"}}%q is not a second checks ask about that Run's turn: give the ask the second checks wake names, with its runId and turn{{end}}
+{{define "refusals/delivery/checks/ask-superseded"}}ask %q is superseded: the pull requests' heads moved and a newer second checks wake asks again at the new heads. Evidence at the old heads keeps nothing there: answer the newest wake, with its ask, once the check is kept at its heads{{end}}

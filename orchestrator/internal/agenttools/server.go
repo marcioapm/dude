@@ -623,8 +623,12 @@ func defineFor[In, Out any](name string, session bool,
 		}}
 }
 
-// toolTextData is what a tool's description may name: create_task's GoalMin.
-var toolTextData = struct{ GoalMin int }{GoalMin}
+// toolTextData is what a tool's description may name: create_task's
+// GoalMin, and how long decide_checks says a checks wake waits.
+var toolTextData = struct {
+	GoalMin    int
+	ChecksWait string
+}{GoalMin, delivery.ChecksWaitWords()}
 
 // describeParameters gives schema's properties their descriptions from the
 // tool's text, each by its path ("questions.header" for a field of the
