@@ -26,7 +26,7 @@ export interface ThinkingBlockProps extends Omit<HTMLAttributes<HTMLDivElement>,
   readonly label?: string | undefined;
 }
 
-const FENCE_LINE = /^(`{3,}|~{3,})/;
+const FENCE_LINE = /^(`{3,}(?=[^`]*$)|~{3,})/;
 
 /**
  * The first (or, `fromEnd`, the last) line worth previewing: non-blank
