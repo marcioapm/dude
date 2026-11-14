@@ -87,7 +87,7 @@ definition answers it where there is one.
 | `base.sync` | `sync_base` |
 | `github.read` | `github_search`, `github_issue`, `github_pull_request`, `github_check_log` |
 | `delivery.read` | `findings`, `pull_requests` |
-| `conduct` | `start_phase`, `start_agent`, `steer`, `restart_run`, `decide`, `dismiss_finding`, `decide_escalation`, `update_task`, `publish`, `request_review`, `mark_ready`, `rerun_failed_checks` |
+| `conduct` | `start_phase`, `start_agent`, `steer`, `restart_run`, `decide`, `dismiss_finding`, `decide_escalation`, `update_task`, `publish`, `request_review`, `mark_ready`, `rerun_failed_checks`, `pull_request_note` |
 | `session` | `propose`, `relate` |
 | `session.name` | `name_session`; `Resolve` withholds it once a member has named the session (`sessions.titled_by = 'person'`), read at each tool request and at the Run's submit |
 | `session.agents` | `start_agent` (a brainstorm's: read-only investigator children of its session) |
@@ -229,7 +229,7 @@ marked as external text.
 - Every call is a ledger event (`agent.tool.dude`) with its arguments and
   result, so the chat shows it like any other tool call.
 - The pull request actions (`request_review`, `resolve_thread`,
-  `mark_ready`, `rerun_failed_checks`) also write `agent.tool.attempted`
+  `mark_ready`, `rerun_failed_checks`, `pull_request_note`) also write `agent.tool.attempted`
   once a call passes dude's own checks and before GitHub is called. Their
   per-Run and per-minute budgets count that attempt, so a call GitHub
   refuses still spends them. The successful call's `agent.tool.dude` is

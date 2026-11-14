@@ -29,6 +29,7 @@
 		"stop_run" "stop_run stops a child agent you started, with your reason"
 		"recover_run" "recover_run pushes an ended writer's unpublished commits to a branch of their own") ".")
 	"reply_on_pull_request" "reply_on_pull_request answers on one of the task's pull requests, whoever decides."
+	"pull_request_note" "Where a criterion or a person asks for something in the pull request's description, write it with pull_request_note, your own section there, rather than asking a person to paste it."
 	"github_search github_issue github_pull_request" (print "github_search, github_issue and github_pull_request read the project's repositories on GitHub (issues, any pull request, its conversation, reviews, threads, checks and diffs), at most 60 reads an hour" (.List "" "" "refresh_pull_requests" ", refresh_pull_requests included") "; reading another pull request lets you do nothing on it.")
 	"" .ExternalTextNote
 	"publish" "publish takes what you committed in your checkout to the task branch, while you decide."

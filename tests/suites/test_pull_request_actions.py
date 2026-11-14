@@ -88,9 +88,20 @@ def test_the_conductor_acts_on_its_own_pull_request_and_nowhere_else(
          _call("rerun_failed_checks", pr=str(other_number)))
     wait_until(lambda: len(fake_github.jobs_rerun) == 1, timeout=60, message="the failed check never ran again")
 
-    done = wait_until(lambda: (lambda a: a if len(a) >= 4 else None)(_actions(client, task["id"])), timeout=30,
+    # A line a criterion asks for in the description, in the conductor's own
+    # section; the person's text is kept, and another's description is untouched.
+    with fake_github._lock:
+        fake_github.pulls[number].body = "Mine: keep this.\n\n" + fake_github.pulls[number].body
+    _say(client, task["id"], _call("pull_request_note", pr=str(number), text="BenchmarkMax-8 1043 ns/op"),
+         _call("pull_request_note", pr=str(other_number), text="BenchmarkMax-8 1043 ns/op"))
+    wait_until(lambda: "<!-- dude:conductor -->\nBenchmarkMax-8 1043 ns/op\n<!-- /dude:conductor -->" in fake_github.pulls[number].body,
+               timeout=60, message="the note never reached the description")
+    assert fake_github.pulls[number].body.startswith("Mine: keep this.\n\n"), fake_github.pulls[number].body
+    assert "dude:conductor" not in fake_github.pulls[other_number].body
+
+    done = wait_until(lambda: (lambda a: a if len(a) >= 5 else None)(_actions(client, task["id"])), timeout=30,
                       message="the actions were not recorded")
-    assert [a["action"] for a in done] == ["request_review", "resolve_thread", "mark_ready", "rerun_failed_checks"], done
+    assert [a["action"] for a in done] == ["request_review", "resolve_thread", "mark_ready", "rerun_failed_checks", "pull_request_note"], done
     assert all(a["number"] == number for a in done), done
     assert len(fake_github.jobs_rerun) == 1
 

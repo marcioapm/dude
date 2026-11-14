@@ -1,6 +1,6 @@
 ---
 title: Pull requests
-covers: [tool:pull_requests, tool:refresh_pull_requests, tool:reply_on_pull_request, tool:resolve_thread, tool:request_review, tool:mark_ready, tool:rerun_failed_checks, tool:run_workflow, tool:sync_base]
+covers: [tool:pull_requests, tool:refresh_pull_requests, tool:reply_on_pull_request, tool:resolve_thread, tool:request_review, tool:mark_ready, tool:rerun_failed_checks, tool:pull_request_note, tool:run_workflow, tool:sync_base]
 ---
 dude opens a pull request once the work is reviewed and tested, then keeps working on it until a person merges it. This page explains how the pull request opens, what wakes a fixer, how CI is handled, and how a task keeps up with its base branch.
 
@@ -83,6 +83,6 @@ Writing agents (implementer, fixer, simplifier, conductor) can bring the base in
 - `pull_requests` lists the task's pull requests: state, head, checks, reviews, unresolved threads and people's feedback, as dude last read them.
 - `refresh_pull_requests` reads them from GitHub now. Each pull request it reads is one of the task's 60 GitHub reads an hour.
 - `reply_on_pull_request` answers a comment as dude's GitHub login. `resolve_thread` resolves a review thread once its request is done.
-- The conductor can also `request_review` (repository collaborators only), `mark_ready` a draft (only when you agreed it is ready) and `rerun_failed_checks`.
+- The conductor can also `request_review` (repository collaborators only), `mark_ready` a draft (only when you agreed it is ready) and `rerun_failed_checks`, and write its own section of a description dude opened (`pull_request_note`), say a benchmark's line a criterion asks for there; your own text in the description is never touched.
 
 No agent can merge a pull request or press **Update branch**.

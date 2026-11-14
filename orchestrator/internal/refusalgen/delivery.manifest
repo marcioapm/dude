@@ -129,6 +129,11 @@ rNotThreadInYourFeedbackYou             refusals/delivery/pr-actions/not-thread-
 rGithubReRunFailedChecksOn              refusals/delivery/pr-actions/github-re-run-failed-checks-on
 rGithubRefusedToRunFailedChecksOn       refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on
 rGithubDidNotDo                         refusals/delivery/pr-actions/github-did-not-do
+rNoteNotDudesPullRequest                refusals/delivery/pr-actions/note-not-dudes-pull-request
+rNoteTextRequired                       refusals/delivery/pr-actions/note-text-required
+rNoteAtMostBytes                        refusals/delivery/pr-actions/note-at-most-bytes
+rNoteNoMarkers                          refusals/delivery/pr-actions/note-no-markers
+rNoteBodyKeepsChanging                  refusals/delivery/pr-actions/note-body-keeps-changing
 rDeliveryMovedOnAsYouAsked              refusals/delivery/prwait/delivery-moved-on-as-you-asked
 rCannotStartWhileDeliveryWaitsOn        refusals/delivery/prwait/cannot-start-while-delivery-waits-on
 rDeliveryReadingWhatChangedOnIts        refusals/delivery/prwait/delivery-reading-what-changed-on-its

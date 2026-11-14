@@ -20,6 +20,7 @@ const (
 	threadsPerRun        = 50
 	readiesPerRun        = 5
 	rerunsPerRun         = 10
+	notesPerRun          = 20
 )
 
 type requestReviewIn struct {
@@ -34,6 +35,11 @@ type resolveThreadIn struct {
 
 type prOnlyIn struct {
 	PR string `json:"pr"`
+}
+
+type pullRequestNoteIn struct {
+	PR   string `json:"pr"`
+	Text string `json:"text"`
 }
 
 func checkPRAction(ctx context.Context, tx pgx.Tx, c Caller, in delivery.PRAction) (delivery.PRActionCheck, error) {
@@ -61,6 +67,10 @@ func rerunFailedChecks(ctx context.Context, tx pgx.Tx, c Caller, in prOnlyIn) (d
 	return checkPRAction(ctx, tx, c, delivery.PRAction{Action: delivery.ActionRerunChecks, PR: in.PR})
 }
 
+func pullRequestNote(ctx context.Context, tx pgx.Tx, c Caller, in pullRequestNoteIn) (delivery.PRActionCheck, error) {
+	return checkPRAction(ctx, tx, c, delivery.PRAction{Action: delivery.ActionNote, PR: in.PR, Text: in.Text})
+}
+
 func doPRAction(ctx context.Context, c Caller, p delivery.PRActionCheck) (delivery.PRActionDone, error) {
 	gh, err := githubOf(c)
 	if err != nil {
@@ -78,4 +88,5 @@ var prActionTools = []tool{
 	around(define("resolve_thread", resolveThread).before(forgeFor).limit(threadsPerRun).countingAttempts(), doPRAction, recordPRAction),
 	around(define("mark_ready", markReady).before(forgeFor).limit(readiesPerRun).countingAttempts(), doPRAction, recordPRAction),
 	around(define("rerun_failed_checks", rerunFailedChecks).before(forgeFor).limit(rerunsPerRun).countingAttempts(), doPRAction, recordPRAction),
+	around(define("pull_request_note", pullRequestNote).before(forgeFor).limit(notesPerRun).countingAttempts(), doPRAction, recordPRAction),
 }
