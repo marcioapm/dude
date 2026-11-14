@@ -1562,10 +1562,15 @@ func (s *Server) rerunLocked(id int64, jobs []int64) bool {
 func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	state, forbidden, message, id, matrix := s.checks, s.CheckRunsForbidden, s.CheckRunsForbiddenMessage, s.CheckRunID, slices.Clone(s.MatrixJobs)
-	s.mu.Unlock()
 	if id == 0 {
 		id = DefaultCheckRunID
 	}
+	jobs := append([]int64{id}, matrix...)
+	runOf := map[int64]int64{}
+	for _, job := range jobs {
+		runOf[job] = s.runOfJob(job)
+	}
+	s.mu.Unlock()
 	if message != "" {
 		fail(w, 403, message)
 		return
@@ -1580,14 +1585,16 @@ func (s *Server) checkRuns(w http.ResponseWriter, r *http.Request) {
 		if conclusion == "pending" {
 			status, conclusion = "in_progress", ""
 		}
-		for i, job := range append([]int64{id}, matrix...) {
+		for i, job := range jobs {
 			name := "e2e"
 			if i > 0 {
 				name = fmt.Sprintf("e2e (%d)", i)
 			}
+			// As GitHub: an Actions check run's link is its job, in its
+			// workflow run.
 			runs = append(runs, map[string]any{"id": job, "name": name, "status": status, "conclusion": conclusion,
 				"app":      map[string]string{"slug": "github-actions"},
-				"html_url": fmt.Sprintf("https://github.test/%s/runs/%d", s.Slug, job), "started_at": "2026-09-28T10:00:00Z",
+				"html_url": fmt.Sprintf("https://github.test/%s/actions/runs/%d/job/%d", s.Slug, runOf[job], job), "started_at": "2026-09-28T10:00:00Z",
 				"completed_at": "2026-09-28T10:04:12Z"})
 		}
 	}

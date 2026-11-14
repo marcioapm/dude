@@ -853,6 +853,45 @@ func TestRerunFailedRerunsEachWorkflowRunOnce(t *testing.T) {
 	}
 }
 
+// An Actions check's link is its job's, in its workflow run
+// (…/actions/runs/{run}[/attempts/{n}]/job/{job}): the run is read from it,
+// without asking GitHub. A link that is not its own job's is not trusted.
+func TestRerunFailedReadsTheWorkflowRunFromTheChecksLink(t *testing.T) {
+	var gets, posts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/repos/acme/api")
+		if r.Method == "GET" {
+			gets = append(gets, p)
+			fmt.Fprint(w, `{"run_id":300}`)
+			return
+		}
+		posts = append(posts, p)
+		w.WriteHeader(201)
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+	job := func(id int64, url string) Check {
+		return Check{Name: fmt.Sprint(id), Status: "completed", Conclusion: "failure", RunID: id, App: ActionsApp, URL: url}
+	}
+	n, _, err := NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL}).RerunFailed(context.Background(), "acme/api", []Check{
+		job(1, "https://github.com/acme/api/actions/runs/100/job/1"),
+		job(2, "https://github.com/acme/api/actions/runs/100/attempts/2/job/2"),
+		job(3, "https://github.com/acme/api/actions/runs/200/job/3?pr=7"),
+		// Not its own job's link, and no run in it: both are asked.
+		job(4, "https://github.com/acme/api/actions/runs/200/job/99"),
+		job(5, "https://github.com/acme/api/runs/5"),
+	})
+	if err != nil || n != 5 {
+		t.Errorf("%d re-run (%v)", n, err)
+	}
+	if !slices.Equal(gets, []string{"/actions/jobs/4", "/actions/jobs/5"}) {
+		t.Errorf("looked up %v, want only the jobs whose link does not name their run", gets)
+	}
+	if want := []string{"/actions/runs/100/rerun-failed-jobs", "/actions/runs/200/rerun-failed-jobs", "/actions/runs/300/rerun-failed-jobs"}; !slices.Equal(posts, want) {
+		t.Errorf("asked %v, want %v", posts, want)
+	}
+}
+
 // A matrix build has more check runs than a page holds: a failure on the
 // second page is a failure.
 func TestEveryPageOfCheckRunsCounts(t *testing.T) {

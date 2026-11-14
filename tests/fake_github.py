@@ -1498,10 +1498,16 @@ class FakeGitHub:
                 if m := re.fullmatch(rf"{prefix}/commits/([^/]+)/check-runs", path):
                     if self._rate_limited("check-runs"):
                         return None
-                    runs = [{"id": c["id"], "name": c["name"], "status": c["status"], "conclusion": c["conclusion"],
-                             "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/runs/{c['id']}",
-                             "started_at": c["started_at"], "completed_at": c["completed_at"], "app": {"slug": "github-actions"}}
-                            for c in self._checks(m[1], "check_run")]
+                    # As GitHub: an Actions check run's link is its job, in
+                    # its workflow run.
+                    listed = self._checks(m[1], "check_run")
+                    with self.github._lock:
+                        runs = [{"id": c["id"], "name": c["name"], "status": c["status"], "conclusion": c["conclusion"],
+                                 "html_url": f"https://github.test/{self.github.owner}/{self.github.repo}/actions/runs/"
+                                             f"{self.github._workflow_run_of(c['id'])}/job/{c['id']}",
+                                 "started_at": c["started_at"], "completed_at": c["completed_at"],
+                                 "app": {"slug": "github-actions"}}
+                                for c in listed]
                     # GitHub refuses a token without check-run access only
                     # when there are runs to show; with none it answers 0.
                     if runs and not (self._profile() or TokenProfile()).checks:

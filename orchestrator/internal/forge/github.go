@@ -1470,14 +1470,15 @@ func (g *GitHub) Merge(ctx context.Context, slug string, number int, method, sha
 // failed checks it asked for. An Actions check run is a job (its id is the
 // job's), and GitHub re-runs a job by restarting its workflow run, after
 // which it refuses the run's other jobs (403, already running): so failed
-// jobs are grouped by workflow run (the jobs API's run_id: a check's own
-// link is to the check run, not the workflow run), each run asked once to
-// re-run its failed jobs. A run GitHub says is already running is in
-// progress, not a failure: its checks are counted in running and the other
-// runs are still asked; when nothing else was, that 403 is the error.
-// Every lookup comes before any re-run: a failed one leaves nothing asked. Any other app's
-// check is re-requested through the checks API, which GitHub allows only
-// the app that owns it: with a token, GitHub refuses, and says so.
+// jobs are grouped by workflow run, each run asked once to re-run its
+// failed jobs. A job's workflow run is in its check's link (actionsJobURL);
+// GitHub's jobs API is asked only when the link does not say. A run GitHub
+// says is already running is in progress, not a failure: its checks are
+// counted in running and the other runs are still asked; when nothing else
+// was, that 403 is the error. Every lookup comes before any re-run: a
+// failed one leaves nothing asked. Any other app's check is re-requested
+// through the checks API, which GitHub allows only the app that owns it:
+// with a token, GitHub refuses, and says so.
 func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (n, running int, err error) {
 	var others, runs []int64
 	jobs := map[int64]int{} // failed jobs by workflow run
@@ -1489,16 +1490,20 @@ func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (
 			others = append(others, c.RunID)
 			continue
 		}
-		var job struct {
-			RunID int64 `json:"run_id"`
+		run, ok := workflowRunOf(c)
+		if !ok {
+			var job struct {
+				RunID int64 `json:"run_id"`
+			}
+			if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/jobs/%d", slug, c.RunID), nil, &job); err != nil {
+				return 0, 0, err
+			}
+			run = job.RunID
 		}
-		if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/jobs/%d", slug, c.RunID), nil, &job); err != nil {
-			return 0, 0, err
+		if jobs[run] == 0 {
+			runs = append(runs, run)
 		}
-		if jobs[job.RunID] == 0 {
-			runs = append(runs, job.RunID)
-		}
-		jobs[job.RunID]++
+		jobs[run]++
 	}
 	for _, id := range others {
 		if err := g.do(ctx, "POST", fmt.Sprintf("/repos/%s/check-runs/%d/rerequest", slug, id), map[string]any{}, nil); err != nil {
@@ -1522,6 +1527,25 @@ func (g *GitHub) RerunFailed(ctx context.Context, slug string, checks []Check) (
 		return 0, running, refused
 	}
 	return n, running, nil
+}
+
+// actionsJobURL is an Actions check run's link on GitHub: its job, in its
+// workflow run, of an attempt or the latest.
+var actionsJobURL = regexp.MustCompile(`/actions/runs/(\d+)(?:/attempts/\d+)?/job/(\d+)`)
+
+// workflowRunOf reads an Actions check's workflow run from its link, when
+// the link is its own job's.
+func workflowRunOf(c Check) (int64, bool) {
+	m := actionsJobURL.FindStringSubmatch(c.URL)
+	if m == nil {
+		return 0, false
+	}
+	run, err1 := strconv.ParseInt(m[1], 10, 64)
+	job, err2 := strconv.ParseInt(m[2], 10, 64)
+	if err1 != nil || err2 != nil || job != c.RunID || run == 0 {
+		return 0, false
+	}
+	return run, true
 }
 
 // AlreadyRunning is GitHub refusing to re-run a workflow run that is
