@@ -571,6 +571,9 @@ func TestTheConductorsNoteIsRefusedOutsideItsOwnSection(t *testing.T) {
 	room := 65_536 - 256 - len(long) - len("\n\n<!-- dude:conductor -->\n\n<!-- /dude:conductor -->")
 	refused(fmt.Sprintf(`{"pr":"1","text":%q}`, strings.Repeat("x", room+1)), fmt.Sprintf("has room for %d characters now", room))
 	w.must(task, "pull_request_note", fmt.Sprintf(`{"pr":"1","text":%q}`, strings.Repeat("x", room)))
+	if got, want := w.pullBody(1), "<!-- dude:conductor -->\n"+strings.Repeat("x", room)+"\n<!-- /dude:conductor -->"; !strings.HasSuffix(got, want) {
+		t.Fatalf("the note at the room left is not in the description (%d bytes)", len(got))
+	}
 	w.gh.Set(func(*fakegithub.Server) { pull.Body = "" })
 	before = ""
 
