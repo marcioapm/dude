@@ -148,3 +148,31 @@ func TestADischargeEscalationNamesTheOpenAskThatSettlesIt(t *testing.T) {
 		t.Errorf("a held report's wake reads an ask:\n%s", line(held))
 	}
 }
+
+// Of a check's asks, only the one at the current heads is named: not an
+// older or newer one at other heads. And none is named while another
+// deferred check at these heads waits on an ask not yet overdue: a backed
+// answer to the overdue one would not settle the escalation, as that check
+// is outstanding still.
+func TestADischargeEscalationNamesOnlyItsOwnCurrentAsk(t *testing.T) {
+	s := newDeferredState()
+	s.conducted = true
+	s.checks = []deferredCheck{{RunID: "run_impl", Turn: 42, Command: "make bench", Reason: "the conductor verifies it"}}
+	s.asked["make bench"] = map[string]int64{"old": 3, "h": 7, "new": 9}
+	s.asks[3] = &dischargeAsk{Key: "k3", RunID: "run_impl", Turn: 42, Overdue: true}
+	s.asks[7] = &dischargeAsk{Key: "k7", RunID: "run_impl", Turn: 42, Overdue: true}
+	s.asks[9] = &dischargeAsk{Key: "k9", RunID: "run_impl", Turn: 42, Overdue: true}
+	if got := fmt.Sprint(deferredEscalation(s, "h", true)["asks"]); got != fmt.Sprint([]DischargeOpenAsk{{"run_impl", 42, "k7"}}) {
+		t.Errorf("the open asks at heads h: %s", got)
+	}
+	s.checks = append(s.checks, deferredCheck{RunID: "run_impl", Turn: 43, Command: "make e2e", Reason: "the conductor runs it"})
+	s.asked["make e2e"] = map[string]int64{"h": 11}
+	s.asks[11] = &dischargeAsk{Key: "k11", RunID: "run_impl", Turn: 43}
+	d := deferredEscalation(s, "h", true)
+	if _, ok := d["asks"]; ok {
+		t.Errorf("an ask is named while another check's ask is not yet overdue: %v", d["asks"])
+	}
+	if l := escalatedLine(&Escalation{Reason: ReasonChecksUnverified, Detail: d}); strings.Contains(l, "settles this escalation") {
+		t.Errorf("the wake says an answer settles it while another check is outstanding:\n%s", l)
+	}
+}

@@ -588,14 +588,17 @@ func deferredEscalation(s *deferredState, id string, due bool) map[string]any {
 	var unverified []UnverifiedCheck
 	var lines []string
 	// The open asks the checks wait on, past their deadline: when every
-	// check here is one of theirs, a backed answer settles the escalation.
+	// check not kept here is one of theirs, a backed answer settles the
+	// escalation (dischargeKeptTx needs none outstanding). Any other check
+	// not kept, escalated or still asked, is one of the others.
 	var asks []DischargeOpenAsk
 	others := false
 	for _, c := range s.checks {
 		var why, line string
-		switch s.standing(c, id) {
+		st := s.standing(c, id)
+		others = others || st != deferredKept && st != deferredOverdue
+		switch st {
 		case deferredRejected:
-			others = true
 			why = clip(oneLine(cmp.Or(s.latest[c.Command].Reason, "no reason given")), escalatedItemMax)
 			line = "deferred, then rejected by the conductor once the pull request was open: " + why
 		case deferredOverdue:
@@ -612,7 +615,6 @@ func deferredEscalation(s *deferredState, id string, due bool) map[string]any {
 			if !due {
 				continue
 			}
-			others = true
 			why = "no conductor decides this delivery to keep it"
 			line = "deferred (" + clip(oneLine(cmp.Or(c.Reason, "no reason given")), escalatedItemMax) + "), and " + why
 		default:
