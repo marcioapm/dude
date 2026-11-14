@@ -1,6 +1,6 @@
 ## refusals/delivery/review-only/dismiss-duplicate-of
 
-%s is not another open finding of this task: name the open finding this one duplicates after "duplicate: " (findings lists them). A duplicate of a dismissed or resolved finding would leave neither on record, so one of a set of duplicates stays open
+%s is not another open finding of this task: name the open finding this one duplicates after "duplicate: " (findings lists them), so one of a set of duplicates stays open
 
 ## refusals/delivery/review-only/dismiss-grounds
 
