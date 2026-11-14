@@ -115,18 +115,18 @@ func newDeferredState() *deferredState {
 // plans can prove the partial indexes' predicates
 // (events_run_checks_settled_idx, _asked_idx, _decided_idx) and never scan
 // a Run's every event.
-const deferredRead = `WITH r AS (SELECT id, phase FROM runs WHERE task_id = $1
+const deferredRead = `WITH r AS (SELECT id, phase, COALESCE(project_id, '') AS project_id FROM runs WHERE task_id = $1
 		AND attempt = COALESCE(NULLIF($2, 0), (SELECT max(attempt) FROM runs WHERE task_id = $1)))
-	SELECT e.event_type, e.cursor, e.run_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
+	SELECT e.event_type, e.cursor, e.run_id, r.project_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
 		WHERE e.event_type = 'run.checks.judged' AND r.phase IN ('implement','fix','simplify')
 	UNION ALL
-	SELECT e.event_type, e.cursor, e.run_id, e.payload, COALESCE((e.payload->>'deadline')::timestamptz <= now(), true)
+	SELECT e.event_type, e.cursor, e.run_id, r.project_id, e.payload, COALESCE((e.payload->>'deadline')::timestamptz <= now(), true)
 		FROM r JOIN events e ON e.run_id = r.id WHERE e.event_type = 'run.checks.asked' AND e.payload ? 'discharge'
 	UNION ALL
-	SELECT e.event_type, e.cursor, e.run_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
+	SELECT e.event_type, e.cursor, e.run_id, r.project_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
 		WHERE e.event_type = 'run.checks.conducted' AND e.payload ? 'discharge'
 	UNION ALL
-	SELECT e.event_type, e.cursor, e.run_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
+	SELECT e.event_type, e.cursor, e.run_id, r.project_id, e.payload, false FROM r JOIN events e ON e.run_id = r.id
 		WHERE e.event_type = 'run.checks.decided' AND e.payload ? 'discharge' AND e.payload->>'action' = '` + ActionWaive + `'
 	ORDER BY 2`
 
@@ -140,11 +140,11 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 	s := newDeferredState()
 	s.conducted = conducted
 	at := map[string]int{}
-	var typ, runID string
+	var typ, runID, projectID string
 	var cursor int64
 	var raw []byte
 	var overdue bool
-	_, err = pgx.ForEachRow(rows, []any{&typ, &cursor, &runID, &raw, &overdue}, func() error {
+	_, err = pgx.ForEachRow(rows, []any{&typ, &cursor, &runID, &projectID, &raw, &overdue}, func() error {
 		var p struct {
 			Turn     int64     `json:"turn"`
 			Deadline time.Time `json:"deadline"`
@@ -172,7 +172,7 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 					// does not keep it.
 					s.drop(at, command)
 					at[command] = len(s.checks)
-					s.checks = append(s.checks, deferredCheck{RunID: runID, Turn: p.Turn, Command: command, Reason: c.Reason})
+					s.checks = append(s.checks, deferredCheck{RunID: runID, ProjectID: projectID, Turn: p.Turn, Command: command, Reason: c.Reason})
 				case CheckPass, CheckPreexisting, CheckWaived:
 					// A newer judgement that keeps the command (run and
 					// passed, as the gate passes any) ends its promise.
@@ -213,12 +213,6 @@ func readDeferredTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 	})
 	if err != nil {
 		return nil, err
-	}
-	// The project of each Run that deferred one, for the second ask's ref.
-	for i, c := range s.checks {
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(project_id, '') FROM runs WHERE id = $1`, c.RunID).Scan(&s.checks[i].ProjectID); err != nil {
-			return nil, err
-		}
 	}
 	return s, nil
 }
