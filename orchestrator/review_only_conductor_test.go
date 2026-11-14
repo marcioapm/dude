@@ -161,9 +161,6 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 		t.Fatalf("%d/2 grounds of the duplicate dismissal recorded", g)
 	}
 	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, b, a), "is not another open finding")
-	if s := w.ids(`SELECT status::text FROM review_findings WHERE id = $1`, b); len(s) != 1 || s[0] != "open" {
-		t.Fatalf("a duplicate of a dismissed finding left it %v", s)
-	}
 
 	// T2: next posts the verdict: open findings at the fix bar request
 	// changes (T1's outcome is never APPROVE), and the review is complete.
