@@ -96,7 +96,7 @@ export function safeUrl(raw: string): string | null {
 
 // A run of backticks with a backtick after it on its line is a code span, not
 // a fence (CommonMark, GitHub, the attachment parsers, and criteria.ts's
-// fenceStep); tildes may.
+// fenceStep); a tilde fence's info may hold backticks.
 const FENCE_RE = /^(\s{0,3})(`{3,}(?=[^`]*$)|~{3,})\s*([^\s`]*)\s*(.*)$/;
 const HEADING_RE = /^(#{1,6})(?:[ \t]+(.*?))?[ \t]*#*[ \t]*$/;
 const HR_RE = /^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
