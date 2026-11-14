@@ -2,27 +2,55 @@ package orchestrator_test
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
-// reviewOnlyConducted starts a review-only task on alice's pull request
-// with the conductor's tools served and the lenses filing the scripted
-// finding, talked through: parked at its start; task and number.
-func (w *world) reviewOnlyConducted() (string, int) {
+// requireReviewers merges policy (JSON) into the project's delivery policy.
+func (w *world) requireReviewers(policy string) {
 	w.t.Helper()
-	w.withTools()
+	mustExec(w.t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || $2::jsonb WHERE id = $1`, w.project, policy)
+}
+
+// adoptedConducted adopts alice's pull request in mode and talks it
+// through: parked at its first decision; task and number.
+func (w *world) adoptedConducted(mode string) (string, int) {
+	w.t.Helper()
 	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
-	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
-	status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{})
-	if status != 201 {
+	wi := w.adopted("pr", n, "feature/greet", "main", mode)
+	if status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{}); status != 201 {
 		w.t.Fatalf("talk: %d %v", status, out)
 	}
 	w.until("its first decision", func() bool { return w.decisionAt(wi) != "" })
-	w.t.Logf("first decision at %s", w.decisionAt(wi))
 	return wi, n
+}
+
+// reviewLenses is the categories of the task's review Runs.
+func (w *world) reviewLenses(wi string) []string {
+	return w.ids(`SELECT DISTINCT category FROM runs WHERE task_id = $1 AND phase = 'review' ORDER BY 1`, wi)
+}
+
+// keepsFreedoms checks a writing task's conductor, after its directed
+// correctness round: that lens alone ran, next and ask_person are offered
+// with no review-only note, and a free-text dismissal records no grounds.
+func (w *world) keepsFreedoms(wi string) {
+	w.t.Helper()
+	if got := w.reviewLenses(wi); len(got) != 1 || got[0] != "correctness" {
+		w.t.Fatalf("a writing task's directed round ran %v, want its correctness alone", got)
+	}
+	if a := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decision_awaited'
+		AND payload->>'point' = $2 AND payload->>'actions' = '["next", "ask_person"]' AND payload->>'note' NOT LIKE '%posts dude''s review%'`,
+		wi, delivery.PointReviewed); a != 1 {
+		w.t.Fatalf("%d decisions after a writing task's round offering next and ask_person, as before", a)
+	}
+	w.must(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Valid finding, but not fixed here"}`, w.openFindings(wi, 1)[0]))
+	if g := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload ? 'grounds'`,
+		wi, delivery.EvFindingResolved); g != 0 {
+		w.t.Fatalf("a writing task's dismissal recorded grounds")
+	}
 }
 
 // untilDecision runs the task's phase Runs, deciding nothing, until its
@@ -39,14 +67,21 @@ func (w *world) untilDecision(wi, point string) {
 	})
 }
 
-// openFinding is one of the task's open findings.
-func (w *world) openFinding(wi string) string {
+// openFindings is the task's open findings, oldest first: at least want.
+func (w *world) openFindings(wi string, want int) []string {
 	w.t.Helper()
 	ids := w.ids(`SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open' ORDER BY created_at, id`, wi)
-	if len(ids) == 0 {
-		w.t.Fatal("no open finding")
+	if len(ids) < want {
+		w.t.Fatalf("open findings %v, want %d", ids, want)
 	}
-	return ids[0]
+	return ids
+}
+
+// dismissedWith is how many conductor dismissals of the task recorded
+// grounds whose key is value.
+func (w *world) dismissedWith(wi, key, value string) int {
+	return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload->'grounds'->>$3 = $4`,
+		wi, delivery.EvFindingResolved, key, value)
 }
 
 // T1-T4 on a review-only task: a dismissal states its grounds; after the
@@ -56,21 +91,14 @@ func (w *world) openFinding(wi string) string {
 func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 	w := conducting(t)
 	w.gh.SetChecks("success")
-	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"requiredReviewers":["correctness","tests","performance"]}'
-		WHERE id = $1`, w.project)
-	wi, n := w.reviewOnlyConducted()
+	w.requireReviewers(`{"requiredReviewers":["correctness","tests","performance"]}`)
+	wi, n := w.adoptedConducted(delivery.ModeReviewOnly)
 	// T3: the conductor directs correctness alone; the policy's other
 	// required lenses run too.
 	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
-	w.until("the round's lenses", func() bool {
-		w.advanced()
-		return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi) > 0
-	})
-	got := w.ids(`SELECT DISTINCT category FROM runs WHERE task_id = $1 AND phase = 'review' ORDER BY 1`, wi)
-	for _, lens := range []string{"correctness", "performance", "tests"} {
-		if !strings.Contains(strings.Join(got, ","), lens) {
-			t.Fatalf("the round ran %v: %s was required", got, lens)
-		}
+	w.until("the round's lenses", func() bool { w.advanced(); return len(w.reviewLenses(wi)) > 0 })
+	if got := w.reviewLenses(wi); !slices.Contains(got, "performance") || !slices.Contains(got, "tests") {
+		t.Fatalf("the round ran %v: performance and tests were required", got)
 	}
 	w.untilDecision(wi, delivery.PointReviewed)
 	if a := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decision_awaited'
@@ -78,7 +106,7 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 		wi, delivery.PointReviewed); a != 1 {
 		t.Fatalf("%d decisions after the round saying next posts dude's review, offering only next", a)
 	}
-	f := w.openFinding(wi)
+	f := w.openFindings(wi, 1)[0]
 
 	// T4: no top-level comment of the conductor's.
 	w.refused(wi, "reply_on_pull_request", fmt.Sprintf(`{"pr":"%d","text":"My review: changes requested."}`, n),
@@ -96,16 +124,20 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 		t.Fatalf("the thread's reply: %+v", lines[len(lines)-1])
 	}
 
-	// T1: grounds, or refused.
-	for _, reason := range []string{"Valid finding, but not fixed here", "no fixer runs on this task", "wrong:"} {
-		w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":%q}`, f, reason), "wrong")
+	// T1: grounds, or refused. "wrong:" evidence says something: a letter
+	// or digit, and more than a word.
+	for reason, want := range map[string]string{
+		"Valid finding, but not fixed here": "no reason to dismiss it",
+		"no fixer runs on this task":        "no reason to dismiss it",
+		"wrong:":                            `Say what shows the finding is wrong after "wrong: "`,
+		"WRONG : .":                         `Say what shows the finding is wrong after "wrong: "`,
+		"wrong: nope":                       `Say what shows the finding is wrong after "wrong: "`,
+		"wrong: ----------------":           `Say what shows the finding is wrong after "wrong: "`,
+		"duplicate: fnd_nope":               "fnd_nope is not another open finding",
+		"duplicate: " + f:                   "is not another open finding",
+	} {
+		w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":%q}`, f, reason), want)
 	}
-	// Evidence says something: a letter or digit, and more than a word.
-	for _, reason := range []string{"WRONG : .", "wrong: nope", "wrong: ----------------"} {
-		w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":%q}`, f, reason), `Say what shows the finding is wrong after "wrong: "`)
-	}
-	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: fnd_nope"}`, f), "fnd_nope is not another open finding")
-	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, f, f), "is not another open finding")
 	if s := w.ids(`SELECT status::text FROM review_findings WHERE id = $1`, f); len(s) != 1 || s[0] != "open" {
 		t.Fatalf("refused dismissals left the finding %v", s)
 	}
@@ -115,26 +147,18 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 
 	// T1: wrong, with its evidence, is accepted and recorded.
 	w.must(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"wrong: FACTORY.md records it at line 3"}`, f))
-	if g := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2
-		AND payload->'grounds'->>'kind' = 'wrong' AND payload->'grounds'->>'evidence' = 'FACTORY.md records it at line 3'`,
-		wi, delivery.EvFindingResolved); g != 1 {
-		t.Fatalf("%d dismissals recorded with their grounds", g)
+	if g := w.dismissedWith(wi, "evidence", "FACTORY.md records it at line 3") + w.dismissedWith(wi, "kind", "wrong"); g != 2 {
+		t.Fatalf("%d/2 grounds of the wrong dismissal recorded", g)
 	}
 
 	// T1: a duplicate names another open finding, so a set of duplicates
-	// always leaves one open and counted: not the dismissed one, and not
-	// back round a cycle.
-	open := w.ids(`SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open' ORDER BY created_at, id`, wi)
-	if len(open) < 2 {
-		t.Fatalf("open findings %v, want two to duplicate", open)
-	}
+	// always leaves one open: not the dismissed one, nor round a cycle.
+	open := w.openFindings(wi, 2)
 	a, b := open[0], open[1]
 	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, a, f), "is not another open finding")
 	w.must(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Duplicate: %s."}`, a, b))
-	if g := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2
-		AND payload->'grounds'->>'kind' = 'duplicate' AND payload->'grounds'->>'duplicateOf' = $3`,
-		wi, delivery.EvFindingResolved, b); g != 1 {
-		t.Fatalf("%d duplicate dismissals recorded with their grounds", g)
+	if g := w.dismissedWith(wi, "duplicateOf", b) + w.dismissedWith(wi, "kind", "duplicate"); g != 2 {
+		t.Fatalf("%d/2 grounds of the duplicate dismissal recorded", g)
 	}
 	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, b, a), "is not another open finding")
 	if s := w.ids(`SELECT status::text FROM review_findings WHERE id = $1`, b); len(s) != 1 || s[0] != "open" {
@@ -162,14 +186,9 @@ func TestAReviewOnlyRoundAfterAPushRunsTheLensThePushRequires(t *testing.T) {
 	w := conducting(t)
 	w.gh.SetChecks("success")
 	w.cleanLenses()
-	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"requiredReviewers":["correctness"],
-		"conditionalReviewers":[{"category":"database","whenPathsMatch":["migrations/**"]}]}' WHERE id = $1`, w.project)
-	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
-	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
-	if status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{}); status != 201 {
-		t.Fatalf("talk: %d %v", status, out)
-	}
-	w.until("its first decision", func() bool { return w.decisionAt(wi) != "" })
+	w.requireReviewers(`{"requiredReviewers":["correctness"],
+		"conditionalReviewers":[{"category":"database","whenPathsMatch":["migrations/**"]}]}`)
+	wi, n := w.adoptedConducted(delivery.ModeReviewOnly)
 	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 	w.untilDecision(wi, delivery.PointReviewed)
 	w.must(wi, "decide", `{"action":"next"}`)
@@ -201,27 +220,13 @@ func TestAReviewOnlyRoundAfterAPushRunsTheLensThePushRequires(t *testing.T) {
 // directed lenses alone run, and a top-level reply posts.
 func TestAWritingDeliveryKeepsItsConductorsFreedoms(t *testing.T) {
 	w := conducting(t)
-	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"requiredReviewers":["correctness","tests","performance"]}'
-		WHERE id = $1`, w.project)
+	w.requireReviewers(`{"requiredReviewers":["correctness","tests","performance"]}`)
 	task := w.task()
 	w.talk(task)
 	w.implemented(task)
 	w.must(task, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 	w.until("round 1", func() bool { return w.decisionAt(task) == delivery.PointReviewed })
-	if got := w.ids(`SELECT DISTINCT category FROM runs WHERE task_id = $1 AND phase = 'review'`, task); len(got) != 1 || got[0] != "correctness" {
-		t.Fatalf("a writing task's directed round ran %v, want its correctness alone", got)
-	}
-	if a := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decision_awaited'
-		AND payload->>'point' = $2 AND payload->>'actions' = '["next", "ask_person"]' AND payload->>'note' NOT LIKE '%posts dude''s review%'`,
-		task, delivery.PointReviewed); a != 1 {
-		t.Fatalf("%d decisions after a writing task's round offering next and ask_person, as before", a)
-	}
-	f := w.openFinding(task)
-	w.must(task, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Valid finding, but not fixed here"}`, f))
-	if g := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload ? 'grounds'`,
-		task, delivery.EvFindingResolved); g != 0 {
-		t.Fatalf("a writing task's dismissal recorded grounds")
-	}
+	w.keepsFreedoms(task)
 	w.must(task, "decide", `{"action":"ask_person","note":"Fix the rest, or stop?"}`)
 
 	reviewing := w.reviewing()
@@ -238,31 +243,11 @@ func TestAWritingDeliveryOnAnAdoptedPullRequestKeepsItsConductorsFreedoms(t *tes
 	for _, mode := range []string{delivery.ModeReview, delivery.ModeContinue} {
 		t.Run(mode, func(t *testing.T) {
 			w := conducting(t)
-			mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"requiredReviewers":["correctness","tests","performance"]}'
-				WHERE id = $1`, w.project)
-			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
-			wi := w.adopted("pr", n, "feature/greet", "main", mode)
-			if status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{}); status != 201 {
-				t.Fatalf("talk: %d %v", status, out)
-			}
-			w.until("its first decision", func() bool { return w.decisionAt(wi) != "" })
-			t.Logf("first decision at %s", w.decisionAt(wi))
+			w.requireReviewers(`{"requiredReviewers":["correctness","tests","performance"]}`)
+			wi, n := w.adoptedConducted(mode)
 			w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
 			w.untilDecision(wi, delivery.PointReviewed)
-			if got := w.ids(`SELECT DISTINCT category FROM runs WHERE task_id = $1 AND phase = 'review'`, wi); len(got) != 1 || got[0] != "correctness" {
-				t.Fatalf("an adopted %s task's directed round ran %v, want its correctness alone", mode, got)
-			}
-			if a := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.decision_awaited'
-				AND payload->>'point' = $2 AND payload->>'actions' = '["next", "ask_person"]' AND payload->>'note' NOT LIKE '%posts dude''s review%'`,
-				wi, delivery.PointReviewed); a != 1 {
-				t.Fatalf("%d decisions after an adopted %s task's round offering next and ask_person, as before", a, mode)
-			}
-			f := w.openFinding(wi)
-			w.must(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Valid finding, but not fixed here"}`, f))
-			if g := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload ? 'grounds'`,
-				wi, delivery.EvFindingResolved); g != 0 {
-				t.Fatalf("an adopted %s task's dismissal recorded grounds", mode)
-			}
+			w.keepsFreedoms(wi)
 			w.must(wi, "reply_on_pull_request", fmt.Sprintf(`{"pr":"%d","text":"Looking at it now."}`, n))
 		})
 	}
@@ -275,10 +260,7 @@ func TestAReviewOnlyConductorRerunsUnrelatedRedCI(t *testing.T) {
 	w := newWorld(t)
 	w.gh.SetChecks("run:failure")
 	w.withTools()
-	w.cleanLenses()
-	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
-	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
-	w.startDelivery(wi)
+	wi, n := w.reviewOnly()
 	w.until("the decision about the failing checks", func() bool {
 		w.sync()
 		w.advanced()
