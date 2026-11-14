@@ -88,8 +88,8 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 	for _, reason := range []string{"Valid finding, but not fixed here", "no fixer runs on this task", "wrong:"} {
 		w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":%q}`, f, reason), "wrong")
 	}
-	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: fnd_nope"}`, f), "fnd_nope is not another finding")
-	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, f, f), "is not another finding")
+	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: fnd_nope"}`, f), "fnd_nope is not another open finding")
+	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, f, f), "is not another open finding")
 	if s := w.ids(`SELECT status::text FROM review_findings WHERE id = $1`, f); len(s) != 1 || s[0] != "open" {
 		t.Fatalf("refused dismissals left the finding %v", s)
 	}
@@ -103,6 +103,26 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 		AND payload->'grounds'->>'kind' = 'wrong' AND payload->'grounds'->>'evidence' = 'FACTORY.md records it at line 3'`,
 		wi, delivery.EvFindingResolved); g != 1 {
 		t.Fatalf("%d dismissals recorded with their grounds", g)
+	}
+
+	// T1: a duplicate names another open finding, so a set of duplicates
+	// always leaves one open and counted: not the dismissed one, and not
+	// back round a cycle.
+	open := w.ids(`SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open' ORDER BY created_at, id`, wi)
+	if len(open) < 2 {
+		t.Fatalf("open findings %v, want two to duplicate", open)
+	}
+	a, b := open[0], open[1]
+	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, a, f), "is not another open finding")
+	w.must(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Duplicate: %s."}`, a, b))
+	if g := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2
+		AND payload->'grounds'->>'kind' = 'duplicate' AND payload->'grounds'->>'duplicateOf' = $3`,
+		wi, delivery.EvFindingResolved, b); g != 1 {
+		t.Fatalf("%d duplicate dismissals recorded with their grounds", g)
+	}
+	w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"duplicate: %s"}`, b, a), "is not another open finding")
+	if s := w.ids(`SELECT status::text FROM review_findings WHERE id = $1`, b); len(s) != 1 || s[0] != "open" {
+		t.Fatalf("a duplicate of a dismissed finding left it %v", s)
 	}
 
 	// T2: next posts the verdict: the review is complete (not row 2).

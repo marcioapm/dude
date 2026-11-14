@@ -84,8 +84,9 @@ const (
 
 // reviewOnlyGroundsTx reads a review-only task's dismissal reason as its
 // grounds, recorded with the dismissal, or refuses it: "wrong: <evidence>",
-// or "duplicate: <finding id>" naming another finding of the task, open or
-// settled.
+// or "duplicate: <finding id>" naming another open finding of the task. The
+// one it duplicates must be open, so a set of duplicates always leaves one
+// open and counted by the verdict: no cycle dismisses them all.
 func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reason string) (map[string]any, error) {
 	word, rest, _ := strings.Cut(reason, ":")
 	rest = strings.TrimSpace(rest)
@@ -100,7 +101,7 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 		of = strings.Trim(of, ".,;")
 		var exists bool
 		if of != "" && of != findingID {
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_findings WHERE id = $1 AND task_id = $2)`,
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_findings WHERE id = $1 AND task_id = $2 AND status = 'open')`,
 				of, taskID).Scan(&exists); err != nil {
 				return nil, err
 			}
