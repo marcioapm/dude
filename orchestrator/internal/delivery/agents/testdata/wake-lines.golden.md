@@ -50,6 +50,10 @@ Escalation: checks unverified. Actions: retry, waive, stop. Decide non-person-on
 
 Escalation: checks unverified. Actions: retry, waive, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The checks not verified: make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; make check: exit 1; and 3 more.
 
+## escalated-checks-discharge
+
+Escalation: checks unverified. Actions: waive, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. A backed decide_checks answer to the open second checks ask (runId run_impl, turn 42, ask checks:run_impl:42:d1:0a1b2c3d4e5f) at the current heads settles this escalation by itself, with no person's waiver: keep the checks, then answer it. Waive is for a check that was not kept; a reject still goes to the person. The checks not verified: gh workflow run bench.yml: the conductor did not answer the ask to keep it by its deadline.
+
 ## escalation-answered
 
 The owner's answer to your question qst_1 decided the escalation: retry. The delivery goes on.
