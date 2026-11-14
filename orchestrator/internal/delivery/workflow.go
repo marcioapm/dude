@@ -935,6 +935,11 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		categories, reasons, st.RetryCategories = retrying, eachFor(retrying, ReasonRetry), nil
 	case d != nil && len(d.Categories) > 0:
 		categories, reasons = d.Categories, eachFor(d.Categories, ReasonDirected)
+		if st.Source.ReviewOnly() {
+			// T3: the verdict needs every lens it requires (verdictReviewed):
+			// the conductor adds lenses, it removes none.
+			categories, reasons = withRequiredLenses(st, categories, reasons)
+		}
 	case reviewRange != nil && reviewRange.Of == RangeSimplify && len(st.Policy.RequiredReviewers) > 0:
 		// A check that the simplifier changed no behaviour: the policy's
 		// required reviewers, whatever paths it touched.

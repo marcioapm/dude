@@ -3,6 +3,8 @@ package delivery
 import (
 	"cmp"
 	"context"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -53,6 +55,22 @@ func RefuseReviewOnlyPRActionTx(ctx context.Context, tx pgx.Tx, taskID, action s
 func ReviewOnlyTx(ctx context.Context, tx pgx.Tx, taskID string) (bool, error) {
 	_, ok, err := reviewOnlyTx(ctx, tx, taskID)
 	return ok, err
+}
+
+// withRequiredLenses is a review-only round's lenses: the conductor's,
+// then each lens the verdict's gate requires for the pull request's
+// changed paths (ReviewersFor, as verdictReviewed reads it) that it left
+// out, with ReasonRequired.
+func withRequiredLenses(st *State, categories []string, reasons map[string][]string) ([]string, map[string][]string) {
+	out := slices.Clone(categories)
+	reasons = maps.Clone(reasons)
+	for _, lens := range ReviewersFor(st.Policy, st.ChangedPaths) {
+		if !slices.Contains(out, lens) {
+			out = append(out, lens)
+			reasons[lens] = []string{ReasonRequired}
+		}
+	}
+	return out, reasons
 }
 
 // A review-only dismissal's grounds, the first word of its reason: the
