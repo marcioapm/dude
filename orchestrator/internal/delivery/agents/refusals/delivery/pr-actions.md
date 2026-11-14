@@ -39,3 +39,13 @@
 {{- define "refusals/delivery/pr-actions/github-refused-to-run-failed-checks-on"}}GitHub refused to run the failed checks on %s#%d again (%v): nothing was re-run; ask again once CI on this head has finished{{end}}
 
 {{- define "refusals/delivery/pr-actions/github-did-not-do"}}GitHub did not do it: %v{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-not-dudes-pull-request"}}%s#%d was not opened by dude: its description is its author's, and dude writes no section into it. Say it on the pull request instead (reply_on_pull_request){{end}}
+
+{{- define "refusals/delivery/pr-actions/note-text-required"}}say what the note holds: text is required{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-at-most-bytes"}}a note is at most %d bytes: keep it to what the description needs, and link the rest{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-no-markers"}}a note holds no HTML comment (<!--): dude's own sections are marked with them. Nothing was written{{end}}
+
+{{- define "refusals/delivery/pr-actions/note-body-keeps-changing"}}the description of %s#%d kept changing while dude wrote your note: nothing was written. Try again in a moment{{end}}
