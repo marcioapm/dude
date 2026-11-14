@@ -990,8 +990,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/actions/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		s.mu.Lock()
-		run := s.runOfJob(id)
+		run, ok := s.runOfKnownJob(id)
 		s.mu.Unlock()
+		if !ok {
+			fail(w, 404, "Not Found")
+			return
+		}
 		write(w, 200, map[string]any{"id": id, "run_id": run})
 	})
 	// As GitHub: re-running a job restarts its workflow run, which then
@@ -1018,9 +1022,18 @@ func (s *Server) Handler() http.Handler {
 				}
 			}
 		} else if id == DefaultWorkflowRunID {
-			failed = append([]int64{max(s.CheckRunID, DefaultCheckRunID)}, s.MatrixJobs...)
+			if conclusion := strings.TrimPrefix(s.checks, "run:"); conclusion == "failure" || conclusion == "timed_out" || conclusion == "cancelled" {
+				failed = append([]int64{max(s.CheckRunID, DefaultCheckRunID)}, s.MatrixJobs...)
+			}
 		} else {
 			fail(w, 404, "Not Found")
+			return
+		}
+		run, listed := s.WorkflowRuns[id]
+		running := listed && run.Status != "completed" || !listed && s.running
+		if len(failed) == 0 && !running {
+			// As GitHub: a run with no failed job has nothing to re-run.
+			fail(w, 403, "This workflow run cannot be retried")
 			return
 		}
 		if !s.rerunLocked(id, failed) {
@@ -1532,6 +1545,20 @@ func (s *Server) runOfJob(id int64) int64 {
 		}
 	}
 	return DefaultWorkflowRunID
+}
+
+// runOfKnownJob is the workflow run of a job the fake reports (a
+// WorkflowRun's, or SetChecks("run:…")'s check runs); false for any other,
+// which GitHub would not find.
+func (s *Server) runOfKnownJob(id int64) (int64, bool) {
+	run := s.runOfJob(id)
+	if _, ok := s.WorkflowRuns[run]; ok {
+		return run, true
+	}
+	if strings.HasPrefix(s.checks, "run:") && (id == max(s.CheckRunID, DefaultCheckRunID) || slices.Contains(s.MatrixJobs, id)) {
+		return run, true
+	}
+	return 0, false
 }
 
 // rerunLocked re-runs jobs of workflow run id, false when it is running.
