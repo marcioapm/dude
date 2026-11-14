@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -27,9 +28,14 @@ import (
 // workflow), which the defaults-taking conductor defers; the pull request opens and its CI goes green. It returns the
 // task once the delivery waits on the pull request with CI reported.
 func deferredWorld(t *testing.T) (*world, string) {
+	return deferredWorldAt(t, "success")
+}
+
+// deferredWorldAt is deferredWorld with the pull request's CI at checks.
+func deferredWorldAt(t *testing.T, checks string) (*world, string) {
 	w := defaultsConducting(t)
 	w.onModel("implementer", fakeagent.ChecksDeferredModel)
-	w.gh.SetChecks("success")
+	w.gh.SetChecks(checks)
 	task := w.task()
 	w.deliverByAPI(task)
 	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -528,17 +534,25 @@ func TestADeferredCheckTheConductorRejectsWaitsOnAPerson(t *testing.T) {
 // the second ask's wake and its delivery (the wake's row there,
 // undelivered, the syncer new), record no second ask and deliver one wake.
 func TestTheSecondChecksAskIsRecordedAndDeliveredOnce(t *testing.T) {
-	w, task := deferredWorld(t)
+	// CI pending until the delivery waits on the pull request, so no ask
+	// is made (and swept to the conductor) while the world is built.
+	w, task := deferredWorldAt(t, "pending")
+	if n := len(w.deferredWakes(task)); n != 0 {
+		t.Fatalf("%d second asks with CI pending", n)
+	}
+	w.gh.SetChecks("success")
 	ctx := context.Background()
-	// The workflow alone (no syncer sweep): the ask is recorded, its wake
-	// not delivered.
-	w.until("the second ask recorded", func() bool {
+	// The workflow alone (no syncer sweep, which until's pump runs): the
+	// ask is recorded, its wake not delivered.
+	for deadline := time.Now().Add(20 * time.Second); len(w.deferredWakes(task)) != 1; time.Sleep(untilPoll) {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the second ask recorded")
+		}
 		w.sync()
 		if _, err := w.runtime.Tick(ctx, 10); err != nil {
 			t.Fatal(err)
 		}
-		return len(w.deferredWakes(task)) == 1
-	})
+	}
 	// The gate weighed again and again (its timer due each time): no new
 	// ask.
 	for range 3 {
