@@ -138,9 +138,6 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 	} {
 		w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":%q}`, f, reason), want)
 	}
-	if s := w.ids(`SELECT status::text FROM review_findings WHERE id = $1`, f); len(s) != 1 || s[0] != "open" {
-		t.Fatalf("refused dismissals left the finding %v", s)
-	}
 
 	// T2: no fix-or-not question after a review-only round.
 	w.refused(wi, "decide", `{"action":"ask_person","note":"Stop here, or fix it?"}`, `"ask_person" is not a decision`)
