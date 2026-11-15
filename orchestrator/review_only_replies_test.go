@@ -113,6 +113,47 @@ func TestRepliesThatDoNotReachTheConductor(t *testing.T) {
 	}
 }
 
+// The token comments as a person (a PAT) and no factory login is set:
+// dude's own unmarked "Withdrawn: …" reply in its thread is still dude's,
+// not a person's reply. No Chat message, no addressed record, no wake. A
+// person's reply in the same thread still reaches the conductor.
+func TestDudesOwnThreadReplyIsNotAPersonsReply(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
+	root := w.dudeLineComments(n)[0]
+	w.gh.Set(func(s *fakegithub.Server) { s.Poster = "pat-owner" })
+	var finding string
+	if err := w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding); err != nil {
+		t.Fatalf("the open finding: %v", err)
+	}
+	before := w.mentions(wi)
+	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"wrong: the caller checks for nil at greet.go:3"}`)
+	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
+	var withdrawn int64
+	for _, c := range repliesTo(w.gh.Pull(n), root.ID) {
+		if c.Author == "pat-owner" && strings.HasPrefix(c.Body, "Withdrawn: ") {
+			withdrawn = c.ID
+		}
+	}
+	if withdrawn == 0 {
+		t.Fatalf("no Withdrawn reply by pat-owner: %+v", repliesTo(w.gh.Pull(n), root.ID))
+	}
+	w.syncs(5)
+	if m := w.replyMessages(wi, withdrawn); m != 0 || w.mentions(wi) != before {
+		t.Errorf("dude's Withdrawn reply reached the conductor: %d, %d messages", m, w.mentions(wi)-before)
+	}
+	if c := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'addressed' = 'conductor'`, wi); c != 0 {
+		t.Errorf("%d comments recorded as addressed to the conductor", c)
+	}
+	if w.woke(wi, "Withdrawn: ") {
+		t.Error("the conductor was woken by dude's own reply")
+	}
+	reply := w.gh.ReplyInThread(n, "alice", root.ID, "Thanks, agreed.")
+	w.until("alice's reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
+}
+
 // A writing task: a plain reply in a thread whose last word is the
 // conductor's reply_on_pull_request is fixer feedback, as before; only
 // the @mention reached the conductor.

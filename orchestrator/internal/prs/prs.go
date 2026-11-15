@@ -204,19 +204,28 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	var fresh, edited, rewritten []forge.Feedback
 	var workflowRunID, workflowStep, escalationReason string
 	var recorded []string // the events this sync appended: what changed
-	// dude's own line comments, by GitHub id, with the finding each is
-	// for: on a review-only task, a reply in one of their threads is
-	// addressed to dude as a mention is (forge.RepliesToDude). Empty for a
-	// writing task.
-	var threads map[int64]string
+	// dude's own review threads, with the finding each is for: on a
+	// review-only task, a reply in one of them is addressed to dude as a
+	// mention is (forge.RepliesToDude), and dude's own replies there are
+	// not. nil for a writing task. Read before the comments are, so that
+	// asking GitHub who dude posts as (OwnThreadReplies) holds no
+	// transaction open.
+	var threads *forge.Threads
 	toDude := func(f forge.Feedback) bool {
 		return forge.AddressedToDude(f, s.FactoryLogins) || forge.RepliesToDude(f, s.FactoryLogins, threads)
 	}
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		var err error
+		threads, err = delivery.DudesThreadsTx(ctx, tx, pr.TaskID)
+		return err
+	}); err != nil {
+		return err
+	}
+	if err := delivery.OwnThreadReplies(ctx, gh, threads, listed); err != nil {
+		return err
+	}
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var err error
-		if threads, err = delivery.DudesThreadsTx(ctx, tx, pr.TaskID); err != nil {
-			return err
-		}
 		// The cursor narrows the query; the ledger decides what is new.
 		// Feedback at the cursor's own second comes back every time, because
 		// the listing is inclusive, so anything already recorded is dropped
@@ -463,7 +472,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 				continue
 			}
 			if _, err := delivery.MentionTx(ctx, tx, delivery.Mention{Org: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID,
-				Repo: pr.RepoName, Number: pr.Number, Feedback: f, Finding: threads[f.InReplyTo]}); err != nil {
+				Repo: pr.RepoName, Number: pr.Number, Feedback: f, Finding: threads.Finding(f.InReplyTo)}); err != nil {
 				return err
 			}
 		}

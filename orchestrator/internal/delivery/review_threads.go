@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -177,39 +178,77 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 	}
 }
 
-// DudesThreadsTx is, for a review-only task, the GitHub ids of dude's own
-// line comments on its pull requests, each with the finding it is for
-// ("" for one that is no finding's): its reviews' inline comments
-// (review_submitted's comments), its replies in those threads
-// (thread_replied's replyId) and its conductor's replies (a chat.message
-// posted on GitHub). A line comment answering one of them is addressed to
-// dude (forge.RepliesToDude). nil for a writing task: its routing is a
+// DudesThreadsTx is, for a review-only task, dude's own review threads on
+// its pull requests (forge.Threads): its reviews' inline comments
+// (review_submitted's comments), each a thread's root with the finding it
+// is for, and its replies in them (thread_replied's replyId), dude's own.
+// A line comment answering a root is addressed to dude
+// (forge.RepliesToDude). nil for a writing task: its routing is a
 // mention's alone.
-func DudesThreadsTx(ctx context.Context, tx pgx.Tx, taskID string) (map[int64]string, error) {
+func DudesThreadsTx(ctx context.Context, tx pgx.Tx, taskID string) (*forge.Threads, error) {
 	if ok, err := ReviewOnlyTx(ctx, tx, taskID); err != nil || !ok {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT c.id, c.finding FROM events e, LATERAL (
-			SELECT (x->>'commentId')::bigint, COALESCE(x->>'findingId', '') FROM jsonb_array_elements(
+	rows, err := tx.Query(ctx, `SELECT c.id, c.finding, c.root FROM events e, LATERAL (
+			SELECT (x->>'commentId')::bigint, COALESCE(x->>'findingId', ''), true FROM jsonb_array_elements(
 				CASE WHEN e.event_type = $2 AND jsonb_typeof(e.payload->'comments') = 'array' THEN e.payload->'comments' END) x
-			UNION ALL SELECT substring(e.payload->>'replyId' FROM '^line-comment-([0-9]+)$')::bigint, '' WHERE e.event_type = $3
-			UNION ALL SELECT substring(e.payload->'github'->>'feedbackId' FROM '^line-comment-([0-9]+)$')::bigint, ''
-				WHERE e.event_type = $4 AND e.payload->>'by' = 'conductor') c(id, finding)
+			UNION ALL SELECT substring(e.payload->>'replyId' FROM '^line-comment-([0-9]+)$')::bigint, '', false WHERE e.event_type = $3
+			UNION ALL SELECT substring(e.payload->'github'->>'feedbackId' FROM '^line-comment-([0-9]+)$')::bigint, '', true
+				WHERE e.event_type = $4 AND e.payload->>'by' = 'conductor') c(id, finding, root)
 		WHERE e.task_id = $1 AND e.event_type IN ($2, $3, $4) AND c.id IS NOT NULL`,
 		taskID, EvReviewSubmitted, EvReviewThreadReplied, EvChatMessage)
 	if err != nil {
 		return nil, err
 	}
-	out := map[int64]string{}
+	out := &forge.Threads{Roots: map[int64]string{}, Own: map[int64]bool{}}
 	var id int64
 	var finding string
-	_, err = pgx.ForEachRow(rows, []any{&id, &finding}, func() error {
-		if out[id] == "" {
-			out[id] = finding
+	var root bool
+	_, err = pgx.ForEachRow(rows, []any{&id, &finding, &root}, func() error {
+		switch {
+		case !root:
+			out.Own[id] = true
+		case out.Roots[id] == "":
+			out.Roots[id] = finding
 		}
 		return nil
 	})
 	return out, err
+}
+
+// dudesThreadReply is the words of a reply syncThreads posts in dude's
+// thread: "Fixed at <sha>." or "Withdrawn: <note>.".
+var dudesThreadReply = regexp.MustCompile(`^(?:Fixed at \S+|(?s:Withdrawn: .*))\.$`)
+
+// OwnThreadReplies adds to a review-only task's threads (DudesThreadsTx)
+// dude's replies in them not recorded yet: a reply posted and listed
+// before its thread_replied event, or whose event was lost. They are line
+// comments by self, the account dude posts as, in the words syncThreads
+// posts. Asks GitHub who self is only when one may be; a writing task's
+// (nil) threads are left as they are.
+func OwnThreadReplies(ctx context.Context, gh *forge.GitHub, t *forge.Threads, listed []forge.Feedback) error {
+	if t == nil {
+		return nil
+	}
+	self := ""
+	for _, f := range listed {
+		if f.Kind != forge.KindLineComment || f.InReplyTo == 0 || !dudesThreadReply.MatchString(f.Body) {
+			continue
+		}
+		if _, ok := t.Roots[f.InReplyTo]; !ok {
+			continue
+		}
+		if self == "" {
+			var err error
+			if self, err = gh.Login(ctx); err != nil {
+				return err
+			}
+		}
+		if strings.EqualFold(f.Author, self) {
+			t.Own[forge.LineCommentID(f.ID)] = true
+		}
+	}
+	return nil
 }
 
 // threadFindingTx is the finding dude's thread is about, as the wake of
