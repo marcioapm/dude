@@ -40,7 +40,7 @@ It came from the pull request, not Chat, and hands you no decisions: answer it t
 
 {{.Comment}}
 
-Judge the code, as "When the author replies in a thread" says: dismiss the finding as wrong, answer in the thread why it stands, or ask the owner.{{end}}
+No person's decision waits on it, but the finding is yours to judge: read the code, as "When the author replies in a thread" says, then dismiss the finding as wrong, answer in the thread why it stands, or ask the owner.{{end}}
 
 {{- define "notices/told/talk-it-through"}}Let's talk this task through before anything is built. Read it and the code, then ask me what you need to know, or propose a plan.{{end}}
 

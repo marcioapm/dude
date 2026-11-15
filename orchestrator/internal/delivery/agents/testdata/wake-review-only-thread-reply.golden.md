@@ -14,5 +14,5 @@ greet(nil) panics.
 
 Check for nil.
 
-Judge the code, as "When the author replies in a thread" says: dismiss the finding as wrong, answer in the thread why it stands, or ask the owner.
+No person's decision waits on it, but the finding is yours to judge: read the code, as "When the author replies in a thread" says, then dismiss the finding as wrong, answer in the thread why it stands, or ask the owner.
 
