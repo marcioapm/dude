@@ -199,6 +199,10 @@ func TestARerunNamesThePullRequestAsGitHubDoes(t *testing.T) {
 	w.refused(task, "reply_on_pull_request", `{"pr":"https://github.com/someone-else/`+repo+`/pull/1","text":"Hi."}`,
 		"not a pull request of your task")
 	w.must(task, "reply_on_pull_request", `{"pr":"https://github.com/`+w.gh.Slug+`/pull/1/files?w=1","text":"Hi."}`)
+	w.refused(task, "wait_for", `{"conditions":[{"prChecksFinal":{"pr":"someone-else/`+repo+`#1"}}],"deadline":"30m","note":"x"}`,
+		"is not a pull request of this task")
+	w.refused(task, "request_limit", `{"limit":"rerun","pr":"someone-else/`+repo+`#1","reason":"CI flaked"}`,
+		"no open pull request of this task by that name")
 }
 
 // GitHub refusing a rerun outright (a workflow still running) reruns
