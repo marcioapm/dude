@@ -36,7 +36,7 @@ const (
 // PRAction is an agent's request.
 type PRAction struct {
 	Action string
-	// The pull request: its number, or repo#number.
+	// The pull request: its number, repo#number, owner/repo#number or URL.
 	PR string
 	// request_review: whom to ask, GitHub logins.
 	Logins []string
@@ -123,7 +123,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, refuseText(rYouResolveOnlyReviewThreadsIn)
 		}
 	}
-	repo, number, err := parsePR(in.PR)
+	owner, repo, number, err := parsePR(in.PR)
 	if err != nil {
 		return c, err
 	}
@@ -135,7 +135,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
 		ref.TaskID, number, repo).Scan(&c.prID, &repo, &url, &state, &nodeID, &head, &checks, &adopted)
-	if db.IsNotFound(err) {
+	if db.IsNotFound(err) || err == nil && !ownedBy(url, owner) {
 		return c, refusef(rNotPullRequestYourTaskYou, in.PR)
 	}
 	if err != nil {

@@ -181,17 +181,17 @@ func (r LimitRequest) payload() map[string]any {
 	return p
 }
 
-// rerunTarget is the open pull request a rerun request names (repo#n, #n
-// or n), or the task's only open one when it names none.
+// rerunTarget is the open pull request a rerun request names (as parsePR
+// reads it), or the task's only open one when it names none.
 func rerunTarget(ctx context.Context, tx pgx.Tx, taskID, named string) (LimitsPR, error) {
-	repo, number := "", 0
+	owner, repo, number := "", "", 0
 	if strings.TrimSpace(named) != "" {
 		var err error
-		if repo, number, err = parsePR(named); err != nil {
+		if owner, repo, number, err = parsePR(named); err != nil {
 			return LimitsPR{}, err
 		}
 	}
-	rows, err := tx.Query(ctx, `SELECT r.name, pr.number, COALESCE(pr.head_sha, '')
+	rows, err := tx.Query(ctx, `SELECT r.name, pr.number, COALESCE(pr.head_sha, ''), r.url
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.state IN ('open', 'draft') AND ($2 = 0 OR pr.number = $2) AND ($3 = '' OR r.name = $3)
 		ORDER BY pr.created_at, pr.id`, taskID, number, repo)
@@ -200,8 +200,13 @@ func rerunTarget(ctx context.Context, tx pgx.Tx, taskID, named string) (LimitsPR
 	}
 	prs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (LimitsPR, error) {
 		var p LimitsPR
-		return p, r.Scan(&p.Repo, &p.Number, &p.Head)
+		var url string
+		if err := r.Scan(&p.Repo, &p.Number, &p.Head, &url); err != nil || !ownedBy(url, owner) {
+			return LimitsPR{}, err // another owner's: number 0, dropped below
+		}
+		return p, nil
 	})
+	prs = slices.DeleteFunc(prs, func(p LimitsPR) bool { return p.Number == 0 })
 	switch {
 	case err != nil:
 		return LimitsPR{}, err
