@@ -11,9 +11,13 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/guide"
 )
 
-// guideIDs are every tool granted by a capability and every settings section.
+// guideIDs are every tool granted by a capability, a review-only
+// conductor's own (reviewOnlyTools), and every settings section.
 func guideIDs() []string {
 	var out []string
+	for _, t := range reviewOnlyTools {
+		out = append(out, "tool:"+t)
+	}
 	for _, c := range capabilities.All {
 		for _, t := range c.Tools {
 			out = append(out, "tool:"+t)

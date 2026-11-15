@@ -164,7 +164,9 @@ func TestTheRegistryHasNoDeadEntries(t *testing.T) {
 		}
 	}
 	for name := range names {
-		if len(unlocked[name]) == 0 {
+		// A review-only conductor's own (reviewOnlyTools) is reached
+		// through conduct on a review-only task alone.
+		if len(unlocked[name]) == 0 && !slices.Contains(reviewOnlyTools, name) {
 			t.Errorf("tool %s is reachable through no capability", name)
 		}
 	}
