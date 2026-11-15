@@ -193,10 +193,9 @@ func DudesThreadsTx(ctx context.Context, tx pgx.Tx, taskID string) (*forge.Threa
 			SELECT (x->>'commentId')::bigint, COALESCE(x->>'findingId', ''), true FROM jsonb_array_elements(
 				CASE WHEN e.event_type = $2 AND jsonb_typeof(e.payload->'comments') = 'array' THEN e.payload->'comments' END) x
 			UNION ALL SELECT substring(e.payload->>'replyId' FROM '^line-comment-([0-9]+)$')::bigint, '', false WHERE e.event_type = $3
-			UNION ALL SELECT substring(e.payload->'github'->>'feedbackId' FROM '^line-comment-([0-9]+)$')::bigint, '', true
-				WHERE e.event_type = $4 AND e.payload->>'by' = 'conductor') c(id, finding, root)
-		WHERE e.task_id = $1 AND e.event_type IN ($2, $3, $4) AND c.id IS NOT NULL`,
-		taskID, EvReviewSubmitted, EvReviewThreadReplied, EvChatMessage)
+		) c(id, finding, root)
+		WHERE e.task_id = $1 AND e.event_type IN ($2, $3) AND c.id IS NOT NULL`,
+		taskID, EvReviewSubmitted, EvReviewThreadReplied)
 	if err != nil {
 		return nil, err
 	}
