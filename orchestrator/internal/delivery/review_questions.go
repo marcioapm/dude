@@ -170,6 +170,17 @@ func ConductAnswerReviewQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id,
 	if withdraw == (strings.TrimSpace(answer) != "") {
 		return SettledReviewQuestion{}, refuseText(rAnswerOrWithdrawReviewQuestion)
 	}
+	// An earlier attempt's question to the author is not this conductor's
+	// to settle: it holds, routes and times out nothing now (askOfAttempt).
+	if d != nil {
+		var other bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_questions q WHERE q.id = $1 AND q.task_id = $2
+			AND q.addressee = 'author' AND NOT `+askOfAttempt+`)`, id, ref.TaskID, d.State.Attempt).Scan(&other); err != nil {
+			return SettledReviewQuestion{}, err
+		} else if other {
+			return SettledReviewQuestion{}, refuseText(fmt.Sprintf(mReviewQuestionNotFound, id))
+		}
+	}
 	by := ReviewQuestionBy{Run: ref.RunID, TaskID: ref.TaskID}
 	var out SettledReviewQuestion
 	if withdraw {

@@ -379,6 +379,11 @@ func TestStartOverWithAnOpenAuthorQuestion(t *testing.T) {
 			t.Errorf("attempt 2 posted %s at H1: %q", r.State, r.Body)
 		}
 	}
+	// Nor is it attempt 2's conductor's to settle (correctness L3).
+	w.refused(wi, "answer_review_question", fmt.Sprintf(`{"id":%q,"withdraw":true,"reason":"stale"}`, q), q+" is not a reviewer question of this task")
+	if s := w.ids(`SELECT status FROM review_questions WHERE id = $1`, q)[0]; s != "open" {
+		t.Errorf("attempt 1's question is %s", s)
+	}
 }
 
 // The timeout, on dude's clock: a finding's question is withdrawn and the
