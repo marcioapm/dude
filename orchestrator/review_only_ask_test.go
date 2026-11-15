@@ -282,6 +282,11 @@ func TestOnlyTheAnswerOfAnAuthorWhoMayNotWakeIsHeard(t *testing.T) {
 	line := w.gh.LineComment(n, "alice", "greet.md", "@dude please rename this too.")
 	w.until("the answer in Chat", func() bool { w.sync(); return w.conversationMessages(wi, answer) == 1 })
 	w.syncs(2)
+	// The answer is the conductor's, not ignored as not permitted (L2).
+	if c := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'feedbackId' = $2 AND payload->>'addressed' = 'conductor' AND NOT payload ? 'ignored'`, wi, fmt.Sprintf("issue-comment-%d", answer)); c != 1 {
+		t.Errorf("alice's answer is not shown as addressed to the conductor")
+	}
 	if c := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
 		AND payload->>'feedbackId' = $2 AND payload->>'ignored' = 'not_permitted'`, wi, fmt.Sprintf("line-comment-%d", line)); c != 1 {
 		t.Errorf("alice's line comment mentioning dude is not ignored as not permitted")
