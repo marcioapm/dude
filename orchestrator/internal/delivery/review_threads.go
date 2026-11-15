@@ -156,11 +156,7 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 		// resolve (a failed resolve is recorded, settling the thread) only
 		// resolves on its next run.
 		if !t.Replied {
-			text := fmt.Sprintf("Fixed at %s.", short(head))
-			if t.Status == "accepted" {
-				text = "Withdrawn: " + withdrawnNote(t.Note) + "."
-			}
-			posted, err := gh.ReplyToLineComment(ctx, pr.Slug, pr.Number, t.CommentID, text)
+			posted, err := gh.ReplyToLineComment(ctx, pr.Slug, pr.Number, t.CommentID, threadReplyText(t.Status, t.Note, head))
 			if err != nil {
 				failed("reply", err)
 				continue
@@ -215,8 +211,18 @@ func DudesThreadsTx(ctx context.Context, tx pgx.Tx, taskID string) (*forge.Threa
 	return out, err
 }
 
+// threadReplyText is the reply syncThreads posts in dude's thread for a
+// finding of status ("accepted" is withdrawn) at head: "Withdrawn:
+// <note>." or "Fixed at <sha>.". dudesThreadReply recognises it.
+func threadReplyText(status, note, head string) string {
+	if status == "accepted" {
+		return "Withdrawn: " + withdrawnNote(note) + "."
+	}
+	return fmt.Sprintf("Fixed at %s.", short(head))
+}
+
 // dudesThreadReply is the words of a reply syncThreads posts in dude's
-// thread: "Fixed at <sha>." or "Withdrawn: <note>.".
+// thread (threadReplyText): "Fixed at <sha>." or "Withdrawn: <note>.".
 var dudesThreadReply = regexp.MustCompile(`^(?:Fixed at \S+|(?s:Withdrawn: .*))\.$`)
 
 // OwnThreadReplies adds to a review-only task's threads (DudesThreadsTx)

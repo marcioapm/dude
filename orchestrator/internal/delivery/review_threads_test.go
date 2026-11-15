@@ -84,10 +84,23 @@ func TestOwnThreadRepliesNotRecordedYet(t *testing.T) {
 		line("line-comment-13", "pat-owner", "Thanks, I will look.", 1),
 		line("line-comment-14", "pat-owner", "Fixed at abc1234.", 2),
 		{ID: "issue-comment-15", Author: "pat-owner", Body: "Fixed at abc1234.", Kind: forge.KindComment},
+		// What syncThreads posts, whatever its words: both statuses, a
+		// note over lines, a head not known.
+		line("line-comment-20", "pat-owner", threadReplyText("accepted", "wrong: the caller\nchecks it.", "abc1234def"), 1),
+		line("line-comment-21", "pat-owner", threadReplyText("accepted", "duplicate: rf_2", "abc1234def"), 1),
+		line("line-comment-22", "pat-owner", threadReplyText("resolved", "", "abc1234def5678"), 1),
+		line("line-comment-23", "pat-owner", threadReplyText("resolved", "", ""), 1),
+		// Near misses by dude's own account: its owner's words, not dude's.
+		line("line-comment-30", "pat-owner", "Fixed the typo, thanks.", 1),
+		line("line-comment-31", "pat-owner", "Withdrawn:x.", 1),
+		line("line-comment-32", "pat-owner", "Fixed at abc1234. Also the other one.", 1),
+		line("line-comment-33", "pat-owner", "Withdrawn: ok", 1),
+		line("line-comment-34", "pat-owner", "Fixed at abc1234", 1),
+		line("line-comment-35", "pat-owner", "Fixed at abc 1234.", 1),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if want := map[int64]bool{10: true, 11: true}; !reflect.DeepEqual(threads.Own, want) {
+	if want := map[int64]bool{10: true, 11: true, 20: true, 21: true, 22: true, 23: true}; !reflect.DeepEqual(threads.Own, want) {
 		t.Fatalf("own %v, want %v", threads.Own, want)
 	}
 	if err := OwnThreadReplies(t.Context(), nil, nil, []forge.Feedback{line("line-comment-10", "pat-owner", "Fixed at a.", 1)}); err != nil {
