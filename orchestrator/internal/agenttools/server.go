@@ -360,13 +360,12 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 		resolve = capabilities.Resolve
 	}
 	err = s.DB.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child); err != nil {
+		// Whether the Run is a started child, and whether its task is review
+		// only (delivery.ReviewOnlyTx's question), in the one row read.
+		if err := tx.QueryRow(ctx, `SELECT r.source_kind IS NOT NULL,
+				EXISTS (SELECT 1 FROM task_sources s WHERE s.task_id = r.task_id AND s.mode = $2)
+			FROM runs r WHERE r.id = $1`, c.RunID, delivery.ModeReviewOnly).Scan(&c.Child, &c.reviewOnly); err != nil {
 			return err
-		}
-		if c.TaskID != "" {
-			if c.reviewOnly, err = delivery.ReviewOnlyTx(ctx, tx, c.TaskID); err != nil {
-				return err
-			}
 		}
 		c.grants, err = resolve(ctx, tx, c.agent())
 		return err
