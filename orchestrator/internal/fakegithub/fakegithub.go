@@ -547,6 +547,24 @@ func (s *Server) LineComment(number int, author, path, body string) int64 {
 	return id
 }
 
+// ReplyInThread replies, as author, in the review thread of line comment
+// to (in_reply_to_id); its id.
+func (s *Server) ReplyInThread(number int, author string, to int64, body string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pulls[number]
+	path := ""
+	for _, c := range p.LineComments {
+		if c.ID == to {
+			path = c.Path
+		}
+	}
+	id := nextID.Add(1)
+	p.LineComments = append(p.LineComments, Comment{ID: id, Author: author, Body: body, Path: path, InReplyTo: to,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+	return id
+}
+
 // EditComment changes a conversation or line comment's words, as its
 // author editing it on GitHub does.
 func (s *Server) EditComment(number int, id int64, body string) {
