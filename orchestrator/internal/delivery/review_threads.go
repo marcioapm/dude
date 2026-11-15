@@ -237,10 +237,7 @@ func OwnThreadReplies(ctx context.Context, gh *forge.GitHub, t *forge.Threads, l
 	}
 	self := ""
 	for _, f := range listed {
-		if f.Kind != forge.KindLineComment || f.InReplyTo == 0 || !dudesThreadReply.MatchString(f.Body) {
-			continue
-		}
-		if _, ok := t.Roots[f.InReplyTo]; !ok {
+		if _, ours := t.Roots[f.InReplyTo]; !ours || f.Kind != forge.KindLineComment || f.InReplyTo == 0 || !dudesThreadReply.MatchString(f.Body) {
 			continue
 		}
 		if self == "" {
