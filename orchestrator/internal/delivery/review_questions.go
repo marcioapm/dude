@@ -175,7 +175,7 @@ func ConductAnswerReviewQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id,
 	if d != nil {
 		var other bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_questions q WHERE q.id = $1 AND q.task_id = $2
-			AND q.addressee = 'author' AND NOT `+askOfAttempt+`)`, id, ref.TaskID, d.State.Attempt).Scan(&other); err != nil {
+			AND q.addressee = 'author' AND NOT `+askOfAttempt("$3")+`)`, id, ref.TaskID, d.State.Attempt).Scan(&other); err != nil {
 			return SettledReviewQuestion{}, err
 		} else if other {
 			return SettledReviewQuestion{}, refuseText(fmt.Sprintf(mReviewQuestionNotFound, id))

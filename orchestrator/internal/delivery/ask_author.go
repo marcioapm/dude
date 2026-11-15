@@ -346,16 +346,25 @@ func AuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string) (*AuthorAsks, e
 	return out, nil
 }
 
-// askOfAttempt (SQL, over review_questions q, the attempt as $3): a
-// question asked by a Run of that attempt, as gateQuestionsTx and
+// askOfAttempt (SQL, over review_questions q, the attempt the placeholder
+// p): a question asked by a Run of that attempt, as gateQuestionsTx and
 // openReviewQuestionsTx scope theirs; 0 (a state from before attempts)
 // takes any. An earlier attempt's question to the author holds, routes
 // and times out nothing in a later one.
-const askOfAttempt = `($3 = 0 OR EXISTS (SELECT 1 FROM runs k WHERE k.id = q.run_id AND k.attempt = $3))`
+func askOfAttempt(p string) string {
+	return `(` + p + ` = 0 OR EXISTS (SELECT 1 FROM runs k WHERE k.id = q.run_id AND k.attempt = ` + p + `))`
+}
+
+// openAsksOf: task $1's open questions to the author ($2) of attempt $3.
+var openAsksOf = `q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND ` + askOfAttempt("$3")
+
+// untimedAsksOf: openAsksOf not timed out yet ($5, EvAuthorQuestionTimedOut).
+var untimedAsksOf = openAsksOf + `
+	AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = q.task_id AND e.event_type = $5 AND e.payload->>'questionId' = q.id)`
 
 func openAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) ([]AuthorAsk, error) {
 	rows, err := tx.Query(ctx, `SELECT q.id, COALESCE(q.asked_of, ''), q.question, COALESCE(q.finding_id, ''), COALESCE(q.github_url, ''),
-		q.created_at, q.github_comment_id IS NULL FROM review_questions q WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND `+askOfAttempt+`
+		q.created_at, q.github_comment_id IS NULL FROM review_questions q WHERE `+openAsksOf+`
 		ORDER BY q.created_at, q.id`, taskID, HolderAuthor, attempt)
 	if err != nil {
 		return nil, err
@@ -369,7 +378,7 @@ func openAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int
 // (WithdrawRefusedAskTx, github_refused) held nothing.
 func settledAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT q.id FROM review_questions q WHERE q.task_id = $1 AND q.status <> 'open' AND q.addressee = $2
-		AND `+askOfAttempt+` AND NOT q.github_refused
+		AND `+askOfAttempt("$3")+` AND NOT q.github_refused
 		ORDER BY q.created_at, q.id`, taskID, HolderAuthor, attempt)
 	if err != nil {
 		return nil, err
@@ -447,9 +456,7 @@ func (w *steps) expireAuthorAsks(ctx context.Context, sc workflow.StepContext, s
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT q.id, COALESCE(q.asked_of, ''), COALESCE(q.finding_id, ''), q.created_at, q.created_at <= now() - $4 * interval '1 second'
-			FROM review_questions q WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND `+askOfAttempt+`
-			  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = q.task_id AND e.event_type = $5 AND e.payload->>'questionId' = q.id)
-			ORDER BY q.created_at, q.id`,
+			FROM review_questions q WHERE `+untimedAsksOf+` ORDER BY q.created_at, q.id`,
 			st.TaskID, HolderAuthor, st.Attempt, timeout.Seconds(), EvAuthorQuestionTimedOut)
 		if err != nil {
 			return err
@@ -506,9 +513,7 @@ func (w *steps) withAskTimer(ctx context.Context, sc workflow.StepContext, st *S
 		if err != nil {
 			return err
 		}
-		return tx.QueryRow(ctx, `SELECT min(q.created_at) + $4 * interval '1 second' FROM review_questions q
-			WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND `+askOfAttempt+`
-			  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = q.task_id AND e.event_type = $5 AND e.payload->>'questionId' = q.id)`,
+		return tx.QueryRow(ctx, `SELECT min(q.created_at) + $4 * interval '1 second' FROM review_questions q WHERE `+untimedAsksOf,
 			st.TaskID, HolderAuthor, st.Attempt, timeout.Seconds(), EvAuthorQuestionTimedOut).Scan(&due)
 	}); err != nil {
 		return res, err
