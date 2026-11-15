@@ -324,10 +324,14 @@ func openAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string) ([]AuthorAs
 }
 
 // settledAuthorAsksTx is the ids of the task's author questions no longer
-// open that GitHub took (a refused post never held anything), oldest first.
+// open that were asked (RecordAskTx recorded them, posted or with GitHub's
+// answer lost: either may have held the verdict), oldest first. A post
+// GitHub refused (WithdrawRefusedAskTx) was never recorded asked and held
+// nothing.
 func settledAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT id FROM review_questions WHERE task_id = $1 AND status <> 'open' AND addressee = $2
-		AND github_comment_id IS NOT NULL ORDER BY created_at, id`, taskID, HolderAuthor)
+	rows, err := tx.Query(ctx, `SELECT q.id FROM review_questions q WHERE q.task_id = $1 AND q.status <> 'open' AND q.addressee = $2
+		AND EXISTS (SELECT 1 FROM events e WHERE e.task_id = q.task_id AND e.event_type = $3 AND e.payload->>'questionId' = q.id)
+		ORDER BY q.created_at, q.id`, taskID, HolderAuthor, EvAuthorAsked)
 	if err != nil {
 		return nil, err
 	}

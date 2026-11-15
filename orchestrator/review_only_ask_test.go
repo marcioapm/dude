@@ -174,6 +174,30 @@ func TestAskTheAuthorRefusedAndLost(t *testing.T) {
 	}
 }
 
+// A post that never reached GitHub, its answer lost: the question held
+// the verdict at H1 (COMMENT, dude's approval dismissed); withdrawn, dude
+// approves at H1 again (correctness M1).
+func TestALostAskNeverPostedThenWithdrawnApprovesAgain(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	wi, n, h1 := w.approvedAtH1()
+	w.gh.Set(func(s *fakegithub.Server) { s.CommentLostOnce = true })
+	q, _ := w.must(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Why lower case?"}`, n))["questionId"].(string)
+	if len(w.askComments(n)) != 0 {
+		t.Fatal("the lost post reached GitHub")
+	}
+	w.agentsDone(wi, "a COMMENT at H1", func() bool {
+		rs := reviewsAt(w.dudeReviews(wi, n), h1)
+		return len(rs) == 2 && rs[0].State == "DISMISSED" && w.waitingOnPR(wi)
+	})
+	w.syncs(2)
+	w.must(wi, "answer_review_question", fmt.Sprintf(`{"id":%q,"withdraw":true,"reason":"it never posted"}`, q))
+	w.agentsDone(wi, "a standing approval at H1", func() bool {
+		rs := reviewsAt(w.dudeReviews(wi, n), h1)
+		return len(rs) == 3 && rs[2].State == "APPROVED" && w.waitingOnPR(wi)
+	})
+}
+
 // The timeout, on dude's clock: a finding's question is withdrawn and the
 // finding stands (REQUEST_CHANGES again, no COMMENT for the question); a
 // free-standing one wakes the conductor once, and stays open.

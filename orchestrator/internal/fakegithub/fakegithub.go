@@ -236,6 +236,9 @@ type Server struct {
 	// CommentTimeoutOnce takes the next conversation comment, then cuts
 	// the connection before answering: dude cannot tell it was posted.
 	CommentTimeoutOnce bool
+	// CommentLostOnce cuts the connection of the next conversation
+	// comment before taking it: it never posted, and dude cannot tell.
+	CommentLostOnce bool
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -1515,6 +1518,14 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 	}
 	c := Comment{Author: s.poster(), Body: in.Body, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 	if r.PathValue("id") == "" {
+		if s.CommentLostOnce {
+			// Never taken, and no answer: the connection is cut first.
+			s.CommentLostOnce = false
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
 		c.ID = nextID.Add(1)
 		p.Comments = append(p.Comments, c)
 		if s.CommentTimeoutOnce {
