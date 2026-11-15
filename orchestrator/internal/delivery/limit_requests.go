@@ -198,20 +198,15 @@ func rerunTarget(ctx context.Context, tx pgx.Tx, taskID, named string) (LimitsPR
 	if err != nil {
 		return LimitsPR{}, err
 	}
-	type row struct {
-		pr  LimitsPR
-		url string
-	}
-	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (row, error) {
-		var x row
-		return x, r.Scan(&x.pr.Repo, &x.pr.Number, &x.pr.Head, &x.url)
-	})
 	var prs []LimitsPR
-	for _, x := range all {
-		if namedBy(x.url, x.pr.Repo, owner, repo) {
-			prs = append(prs, x.pr)
+	var p LimitsPR
+	var url string
+	_, err = pgx.ForEachRow(rows, []any{&p.Repo, &p.Number, &p.Head, &url}, func() error {
+		if namedBy(url, p.Repo, owner, repo) {
+			prs = append(prs, p)
 		}
-	}
+		return nil
+	})
 	switch {
 	case err != nil:
 		return LimitsPR{}, err
