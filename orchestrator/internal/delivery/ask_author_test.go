@@ -3,6 +3,7 @@ package delivery
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
@@ -40,17 +41,26 @@ func TestDecideVerdictWithAnAuthorQuestion(t *testing.T) {
 // The asked author's conversation comment answers; anyone else's, a line
 // comment, dude's own marked reply, and a writing task's (nil) never do.
 func TestAuthorAsksAnswers(t *testing.T) {
-	a := &AuthorAsks{Conversation: map[string]bool{"alice": true}}
+	asked := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	a := &AuthorAsks{Conversation: map[string]time.Time{"alice": asked}}
+	const after, before = "2026-11-15T10:00:05Z", "2026-11-15T09:59:00Z"
 	for _, c := range []struct {
 		f    forge.Feedback
 		want bool
 	}{
-		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindComment}, true},
-		{forge.Feedback{Author: "Alice", Body: "No.", Kind: forge.KindComment}, true},
-		{forge.Feedback{Author: "bob", Body: "No.", Kind: forge.KindComment}, false},
-		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindLineComment}, false},
-		{forge.Feedback{Author: "alice", Body: "  ", Kind: forge.KindComment}, false},
-		{forge.Feedback{Author: "alice", Body: "x\n\n" + forge.ReplyMarker, Kind: forge.KindComment}, false},
+		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindComment, CreatedAt: after}, true},
+		{forge.Feedback{Author: "Alice", Body: "No.", Kind: forge.KindComment, CreatedAt: after}, true},
+		// Made at the question's own second: the listing's granularity.
+		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindComment, CreatedAt: "2026-11-15T10:00:00Z"}, true},
+		{forge.Feedback{Author: "bob", Body: "No.", Kind: forge.KindComment, CreatedAt: after}, false},
+		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindLineComment, CreatedAt: after}, false},
+		{forge.Feedback{Author: "alice", Body: "  ", Kind: forge.KindComment, CreatedAt: after}, false},
+		{forge.Feedback{Author: "alice", Body: "x\n\n" + forge.ReplyMarker, Kind: forge.KindComment, CreatedAt: after}, false},
+		// Made before the question (or an edit of one, which keeps its
+		// creation): not an answer.
+		{forge.Feedback{Author: "alice", Body: "Thanks, will look tomorrow.", Kind: forge.KindComment, CreatedAt: before}, false},
+		{forge.Feedback{Author: "alice", Body: "Edited since.", Kind: forge.KindComment, CreatedAt: before, UpdatedAt: after}, false},
+		{forge.Feedback{Author: "alice", Body: "No time.", Kind: forge.KindComment}, false},
 	} {
 		if got := a.Answers(c.f); got != c.want {
 			t.Errorf("%+v: %v", c.f, got)

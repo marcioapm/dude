@@ -251,15 +251,17 @@ func replyTargetTx(ctx context.Context, tx pgx.Tx, taskID string, gh *forge.GitH
 // AuthorAsks are a review-only task's open questions to its author: what
 // the syncer routes the author's answers by, and what a wake names.
 type AuthorAsks struct {
-	// Logins asked on the conversation (no finding's thread): their next
-	// conversation comment is an answer, addressed to the conductor.
-	Conversation map[string]bool
+	// Logins asked on the conversation (no finding's thread), each with
+	// when its oldest open question there was asked: their conversation
+	// comment made since is an answer, addressed to the conductor.
+	Conversation map[string]time.Time
 	Open         []AuthorAsk
 }
 
 // AuthorAsk is one open question to the author.
 type AuthorAsk struct {
 	ID, Login, Question, FindingID, URL string
+	At                                  time.Time
 }
 
 // line is the question as a wake and the verdict name it.
@@ -274,13 +276,19 @@ func (a AuthorAsk) line() string {
 // Answers says f is the asked author's conversation comment while a
 // question to them waits there: addressed to the conductor, mention or
 // not, and theirs to send whoever else may wake (the author may always
-// answer dude's question to them). nil asks (a writing task's) never.
+// answer dude's question to them). Only a comment made since the oldest
+// open question to them there (GitHub's second): an older one, or an edit
+// of one, is not an answer. nil asks (a writing task's) never.
 func (a *AuthorAsks) Answers(f forge.Feedback) bool {
 	if a == nil || f.Kind != forge.KindComment || forge.Own(f) || strings.TrimSpace(f.Body) == "" {
 		return false
 	}
-	for l := range a.Conversation {
-		if strings.EqualFold(l, f.Author) {
+	made, err := time.Parse(time.RFC3339, f.CreatedAt)
+	if err != nil {
+		return false
+	}
+	for l, asked := range a.Conversation {
+		if strings.EqualFold(l, f.Author) && !made.Before(asked.Truncate(time.Second)) {
 			return true
 		}
 	}
@@ -311,10 +319,10 @@ func AuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string) (*AuthorAsks, e
 	if err != nil {
 		return nil, err
 	}
-	out := &AuthorAsks{Conversation: map[string]bool{}, Open: open}
+	out := &AuthorAsks{Conversation: map[string]time.Time{}, Open: open}
 	for _, q := range open {
-		if q.FindingID == "" {
-			out.Conversation[q.Login] = true
+		if at, ok := out.Conversation[q.Login]; q.FindingID == "" && (!ok || q.At.Before(at)) {
+			out.Conversation[q.Login] = q.At
 		}
 	}
 	return out, nil
@@ -328,8 +336,8 @@ func AuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string) (*AuthorAsks, e
 const askOfAttempt = `($3 = 0 OR EXISTS (SELECT 1 FROM runs k WHERE k.id = q.run_id AND k.attempt = $3))`
 
 func openAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) ([]AuthorAsk, error) {
-	rows, err := tx.Query(ctx, `SELECT q.id, COALESCE(q.asked_of, ''), q.question, COALESCE(q.finding_id, ''), COALESCE(q.github_url, '')
-		FROM review_questions q WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND `+askOfAttempt+`
+	rows, err := tx.Query(ctx, `SELECT q.id, COALESCE(q.asked_of, ''), q.question, COALESCE(q.finding_id, ''), COALESCE(q.github_url, ''),
+		q.created_at FROM review_questions q WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND `+askOfAttempt+`
 		ORDER BY q.created_at, q.id`, taskID, HolderAuthor, attempt)
 	if err != nil {
 		return nil, err
