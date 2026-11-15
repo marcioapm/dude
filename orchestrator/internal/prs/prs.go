@@ -211,11 +211,18 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	// asking GitHub who dude posts as (OwnThreadReplies) holds no
 	// transaction open.
 	var threads *forge.Threads
+	// The conductor's open questions to the author (ask_author): the
+	// author's conversation comment while one waits there is an answer,
+	// addressed to the conductor. nil for a writing task.
+	var asks *delivery.AuthorAsks
 	toDude := func(f forge.Feedback) bool {
-		return forge.AddressedToDude(f, s.FactoryLogins) || forge.RepliesToDude(f, s.FactoryLogins, threads)
+		return forge.AddressedToDude(f, s.FactoryLogins) || forge.RepliesToDude(f, s.FactoryLogins, threads) || asks.Answers(f)
 	}
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		threads, err = delivery.DudesThreadsTx(ctx, tx, pr.TaskID)
+		if threads, err = delivery.DudesThreadsTx(ctx, tx, pr.TaskID); err != nil {
+			return err
+		}
+		asks, err = delivery.AuthorAsksTx(ctx, tx, pr.TaskID)
 		return err
 	}); err != nil {
 		return err
@@ -279,6 +286,12 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	waking, err := s.wakers(ctx, org, gh, slug, heard)
 	if err != nil {
 		return err
+	}
+	// The pull request's author may always answer dude's question to them.
+	for _, f := range heard {
+		if asks.Answers(f) {
+			waking[f.Author] = true
+		}
 	}
 	if status.ThreadsUnknown {
 		status.UnresolvedThreads = pr.UnresolvedThreads
@@ -470,7 +483,14 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 				continue
 			}
 			if _, err := delivery.MentionTx(ctx, tx, delivery.Mention{Org: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID,
-				Repo: pr.RepoName, Number: pr.Number, Feedback: f, Finding: threads.Finding(f.InReplyTo)}); err != nil {
+				Repo: pr.RepoName, Number: pr.Number, Feedback: f, Finding: threads.Finding(f.InReplyTo), Asks: asks.Lines()}); err != nil {
+				return err
+			}
+		}
+		// An author question whose post's answer was lost: its comment,
+		// dude's own, found by its marker (review only; asks nil else).
+		if asks != nil {
+			if err := delivery.RecoverAsksTx(ctx, tx, pr.TaskID); err != nil {
 				return err
 			}
 		}
