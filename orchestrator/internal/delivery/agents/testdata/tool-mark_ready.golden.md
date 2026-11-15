@@ -8,7 +8,7 @@ Mark one of your task's draft pull requests ready for review, on GitHub. Only wh
   "properties": {
     "pr": {
       "type": "string",
-      "description": "the pull request: its number, or repo#number, one of your task's"
+      "description": "the pull request: its number, repo#number, owner/repo#number or URL, one of your task's"
     }
   },
   "required": [
