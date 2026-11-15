@@ -165,12 +165,22 @@ func TestAskTheAuthorRefusedAndLost(t *testing.T) {
 	if w.count(`SELECT count(*) FROM review_questions WHERE id = $1 AND status = 'open' AND github_comment_id IS NULL`, q) != 1 {
 		t.Fatalf("the lost post's question: %v", out)
 	}
+	// bob quotes the marker, and GitHub lists his comment first: only
+	// dude's own comment is the question's.
+	bob := w.gh.Comment(n, "bob", "quoting: <!-- dude:ask id="+q+" -->")
+	w.gh.Set(func(*fakegithub.Server) {
+		last := len(pull.Comments) - 1
+		pull.Comments = append([]fakegithub.Comment{pull.Comments[last]}, pull.Comments[:last]...)
+	})
 	w.until("its comment recovered", func() bool {
 		w.sync()
 		return w.count(`SELECT count(*) FROM review_questions WHERE id = $1 AND github_comment_id LIKE 'issue-comment-%'`, q) == 1
 	})
 	if c := w.askComments(n); len(c) != 1 || fmt.Sprintf("issue-comment-%d", c[0].ID) != w.ids(`SELECT github_comment_id FROM review_questions WHERE id = $1`, q)[0] {
 		t.Errorf("recovered a comment other than dude's: %+v", c)
+	}
+	if got := w.ids(`SELECT github_comment_id FROM review_questions WHERE id = $1`, q)[0]; got == fmt.Sprintf("issue-comment-%d", bob) {
+		t.Errorf("recovered bob's comment quoting the marker")
 	}
 }
 
