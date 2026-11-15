@@ -24,6 +24,9 @@ type Mention struct {
 	Repo                   string
 	Number                 int
 	Feedback               forge.Feedback
+	// For a reply in one of dude's review threads (DudesThreadsTx), the
+	// finding the thread is about: the wake names it. "" otherwise.
+	Finding string
 }
 
 // github is where a mention came from, as its chat.message carries it.
@@ -83,6 +86,11 @@ func MentionTx(ctx context.Context, tx pgx.Tx, m Mention) (bool, error) {
 	w := Writer{ActorType: ledger.ActorIntegration, ActorID: "github:" + m.Feedback.Author, Name: m.Feedback.Author + " (GitHub)",
 		Shown: body, Via: map[string]any{"github": m.github()}}
 	text := m.told(body)
+	if f, err := threadFindingTx(ctx, tx, m.Finding); err != nil {
+		return false, err
+	} else if f != nil {
+		text += "\n\n" + render(mentionFindingTmpl, struct{ ID, Title, Severity, Comment string }{f.ID, f.Title, f.Severity, f.inlineText()})
+	}
 	ref := RunRef{Org: m.Org, ProjectID: m.ProjectID, TaskID: m.TaskID}
 	var ending bool
 	find := func() error {

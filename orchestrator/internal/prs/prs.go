@@ -204,7 +204,19 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	var fresh, edited, rewritten []forge.Feedback
 	var workflowRunID, workflowStep, escalationReason string
 	var recorded []string // the events this sync appended: what changed
+	// dude's own line comments, by GitHub id, with the finding each is
+	// for: on a review-only task, a reply in one of their threads is
+	// addressed to dude as a mention is (forge.RepliesToDude). Empty for a
+	// writing task.
+	var threads map[int64]string
+	toDude := func(f forge.Feedback) bool {
+		return forge.AddressedToDude(f, s.FactoryLogins) || forge.RepliesToDude(f, s.FactoryLogins, threads)
+	}
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		var err error
+		if threads, err = delivery.DudesThreadsTx(ctx, tx, pr.TaskID); err != nil {
+			return err
+		}
 		// The cursor narrows the query; the ledger decides what is new.
 		// Feedback at the cursor's own second comes back every time, because
 		// the listing is inclusive, so anything already recorded is dropped
@@ -244,7 +256,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			case body != f.Body:
 				rewritten = append(rewritten, f)
 			}
-			if !slices.Contains(mentioned, f.ID) && !ownVerdict[f.ID] && forge.AddressedToDude(f, s.FactoryLogins) {
+			if !slices.Contains(mentioned, f.ID) && !ownVerdict[f.ID] && toDude(f) {
 				edited = append(edited, f)
 			}
 		}
@@ -414,7 +426,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			if f.URL != "" {
 				p["url"] = f.URL
 			}
-			addressed := forge.AddressedToDude(f, s.FactoryLogins)
+			addressed := toDude(f)
 			switch {
 			case forge.Own(f) || ownVerdict[f.ID]:
 				p["own"] = true
@@ -447,11 +459,11 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// message to the task's conductor, with the record of it, so a
 		// comment recorded is never one whose message was lost.
 		for _, f := range heard {
-			if !waking[f.Author] || ownVerdict[f.ID] || !forge.AddressedToDude(f, s.FactoryLogins) {
+			if !waking[f.Author] || ownVerdict[f.ID] || !toDude(f) {
 				continue
 			}
 			if _, err := delivery.MentionTx(ctx, tx, delivery.Mention{Org: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID,
-				Repo: pr.RepoName, Number: pr.Number, Feedback: f}); err != nil {
+				Repo: pr.RepoName, Number: pr.Number, Feedback: f, Finding: threads[f.InReplyTo]}); err != nil {
 				return err
 			}
 		}

@@ -34,6 +34,7 @@ var (
 	restartLineTmpl       = mustTemplate("notices/told/restarted")
 	taskChangedTmpl       = mustTemplate("notices/told/task-changed")
 	mentionTmpl           = mustTemplate("notices/told/mention")
+	mentionFindingTmpl    = mustTemplate("notices/told/mention-finding")
 	githubReadNoteTmpl    = mustTemplate("notices/told/github-read")
 	talkWhenUnblockedTmpl = mustTemplate("notices/told/talk-when-unblocked")
 	publishLandingTmpl    = mustTemplate("refusals/words/publish-landing")

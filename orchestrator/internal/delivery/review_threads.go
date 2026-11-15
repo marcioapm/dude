@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -174,6 +175,60 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 		}
 		_ = w.s.Emit(ctx, sc.OrganizationID, st, EvReviewThreadResolved, with("threadId", thread.ID))
 	}
+}
+
+// DudesThreadsTx is, for a review-only task, the GitHub ids of dude's own
+// line comments on its pull requests, each with the finding it is for
+// ("" for one that is no finding's): its reviews' inline comments
+// (review_submitted's comments), its replies in those threads
+// (thread_replied's replyId) and its conductor's replies (a chat.message
+// posted on GitHub). A line comment answering one of them is addressed to
+// dude (forge.RepliesToDude). nil for a writing task: its routing is a
+// mention's alone.
+func DudesThreadsTx(ctx context.Context, tx pgx.Tx, taskID string) (map[int64]string, error) {
+	if ok, err := ReviewOnlyTx(ctx, tx, taskID); err != nil || !ok {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT c.id, c.finding FROM events e, LATERAL (
+			SELECT (x->>'commentId')::bigint, COALESCE(x->>'findingId', '') FROM jsonb_array_elements(
+				CASE WHEN e.event_type = $2 AND jsonb_typeof(e.payload->'comments') = 'array' THEN e.payload->'comments' END) x
+			UNION ALL SELECT substring(e.payload->>'replyId' FROM '^line-comment-([0-9]+)$')::bigint, '' WHERE e.event_type = $3
+			UNION ALL SELECT substring(e.payload->'github'->>'feedbackId' FROM '^line-comment-([0-9]+)$')::bigint, ''
+				WHERE e.event_type = $4 AND e.payload->>'by' = 'conductor') c(id, finding)
+		WHERE e.task_id = $1 AND e.event_type IN ($2, $3, $4) AND c.id IS NOT NULL`,
+		taskID, EvReviewSubmitted, EvReviewThreadReplied, EvChatMessage)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64]string{}
+	var id int64
+	var finding string
+	_, err = pgx.ForEachRow(rows, []any{&id, &finding}, func() error {
+		if out[id] == "" {
+			out[id] = finding
+		}
+		return nil
+	})
+	return out, err
+}
+
+// threadFindingTx is the finding dude's thread is about, as the wake of
+// a reply in it names it: nil when it is no finding's.
+func threadFindingTx(ctx context.Context, tx pgx.Tx, findingID string) (*verdictFinding, error) {
+	if findingID == "" {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, description, suggested_fix, COALESCE(acceptance, ''),
+			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced
+		FROM review_findings WHERE id = $1`, findingID)
+	if err != nil {
+		return nil, err
+	}
+	f, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByPos[verdictFinding])
+	if db.IsNotFound(err) {
+		return nil, nil
+	}
+	return &f, err
 }
 
 // withdrawnNote is the conductor's reason a finding was withdrawn, as the
