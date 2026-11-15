@@ -16,14 +16,13 @@ import (
 // the POST returns and in what the pull request then lists.
 func TestAReplyToAReplyIsInReplyToTheRoot(t *testing.T) {
 	fake, _, n := branchContract(t)
-	s := httptest.NewServer(fake.Handler())
-	t.Cleanup(s.Close)
-	srv := s.URL
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
 	root := fake.LineComment(n, "alice", "greet.md", "Why lower case?")
 	first := fake.ReplyInThread(n, "bob", root, "On purpose.")
 	post := func(to int64) map[string]any {
 		t.Helper()
-		resp, err := http.Post(fmt.Sprintf("%s/repos/%s/pulls/%d/comments/%d/replies", srv, fake.Slug, n, to),
+		resp, err := http.Post(fmt.Sprintf("%s/repos/%s/pulls/%d/comments/%d/replies", srv.URL, fake.Slug, n, to),
 			"application/json", strings.NewReader(`{"body":"Noted."}`))
 		if err != nil {
 			t.Fatal(err)
