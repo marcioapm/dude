@@ -386,22 +386,29 @@ func RecoverAsksTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 }
 
 // authorQuestionTimeoutTx is the project's author_question_timeout: its
-// delivery policy's authorQuestionTimeoutMinutes, else 3 days; the Store's
-// own (tests) over both.
+// delivery policy's authorQuestionTimeoutMinutes, a positive whole number,
+// else 3 days (absent, not a whole number, out of range or not positive:
+// never an error, since every wait pass reads it); the Store's own (tests)
+// over both.
 func (s *Store) authorQuestionTimeoutTx(ctx context.Context, tx pgx.Tx, projectID string) (time.Duration, error) {
 	if s.AuthorQuestionTimeout > 0 {
 		return s.AuthorQuestionTimeout, nil
 	}
-	var minutes int
-	if err := tx.QueryRow(ctx, `SELECT COALESCE((delivery_policy->>'authorQuestionTimeoutMinutes')::int, 0) FROM projects WHERE id = $1`,
+	var minutes float64
+	if err := tx.QueryRow(ctx, `SELECT CASE WHEN jsonb_typeof(delivery_policy->'authorQuestionTimeoutMinutes') = 'number'
+			THEN (delivery_policy->>'authorQuestionTimeoutMinutes')::float8 ELSE 0 END FROM projects WHERE id = $1`,
 		projectID).Scan(&minutes); err != nil && !db.IsNotFound(err) {
 		return 0, err
 	}
-	if minutes > 0 {
+	if minutes >= 1 && minutes <= maxAuthorQuestionMinutes && minutes == float64(int64(minutes)) {
 		return time.Duration(minutes) * time.Minute, nil
 	}
 	return AuthorQuestionTimeout, nil
 }
+
+// maxAuthorQuestionMinutes bounds the setting (deliveryPolicySchema's
+// authorQuestionTimeoutMinutes): 90 days.
+const maxAuthorQuestionMinutes = 90 * 24 * 60
 
 // expireAuthorAsks is the review-only wait's timer for questions to the
 // author, on dude's clock: each open one past the timeout is settled, once.

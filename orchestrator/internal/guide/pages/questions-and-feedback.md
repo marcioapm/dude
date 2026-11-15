@@ -71,7 +71,7 @@ Under the conductor, the question goes to the conductor first: the task keeps ru
 
 ## A question to the pull request's author
 
-On a review-only task, the conductor can ask the pull request's author on GitHub with `ask_author`, in the thread of one of dude's findings or on the conversation. It asks only what the author alone knows, such as intent. While the question is open, dude does not approve: its review is a comment that says what it waits for. The author's reply reaches the conductor, which closes the question with `answer_review_question`, and dude weighs its review again at the same commit. With no answer after 3 days (the project's `authorQuestionTimeoutMinutes`), a question about a finding is withdrawn and the finding stands. For any other question, the conductor decides, and may ask you. A writing task's conductor has no `ask_author`.
+On a review-only task, the conductor can ask the pull request's author on GitHub with `ask_author`, in the thread of one of dude's findings or on the conversation. It asks only what the author alone knows, such as intent. While the question is open, dude does not approve: its review is a comment that says what it waits for. The author's reply reaches the conductor, which closes the question with `answer_review_question`, and dude weighs its review again at the same commit. With no answer after 3 days, a question about a finding is withdrawn and the finding stands. For any other question, the conductor decides, and may ask you. A writing task's conductor has no `ask_author`.
 
 ## Escalations
 
