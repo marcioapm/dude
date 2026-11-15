@@ -68,6 +68,7 @@ var tools = []tool{
 	define("decide_escalation", decideEscalation),
 	define("update_task", updateTask),
 	around(define("reply_on_pull_request", replyOnPullRequest).before(forgeFor), postReply, recordReply),
+	around(define("ask_author", askAuthor).before(forgeFor), postAsk, recordAsk),
 	define("publish", publish),
 }
 

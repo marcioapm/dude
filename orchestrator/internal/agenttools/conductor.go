@@ -810,6 +810,47 @@ func recordReply(ctx context.Context, tx pgx.Tx, _ Caller, p delivery.ReplyPost,
 	return delivery.RecordReplyTx(ctx, tx, p, posted)
 }
 
+type askAuthorIn struct {
+	PR        string `json:"pr"`
+	Question  string `json:"question"`
+	FindingID string `json:"finding_id,omitempty"`
+}
+
+// ask_author is a review-only conductor's question to the pull request's
+// author: checked and recorded open under the Chat lock, posted with no
+// transaction open, then recorded (delivery.AskPost).
+func askAuthor(ctx context.Context, tx pgx.Tx, c Caller, in askAuthorIn) (delivery.AskPost, error) {
+	gh, err := githubOf(c)
+	if err != nil {
+		return delivery.AskPost{}, err
+	}
+	return conducted(delivery.CheckAskAuthorTx(ctx, tx, c.run(), gh, delivery.AskAuthor{PR: in.PR, Question: in.Question, FindingID: in.FindingID}))
+}
+
+func postAsk(ctx context.Context, c Caller, p delivery.AskPost) (delivery.AskPosted, error) {
+	gh, err := githubOf(c)
+	if err != nil {
+		return delivery.AskPosted{}, err
+	}
+	got := delivery.PostAsk(ctx, gh, p)
+	if got.Refused != "" {
+		// GitHub did not take it: the question, committed open in the
+		// check, is withdrawn in a transaction of its own (the call's
+		// Refusal records nothing more).
+		if err := c.env.db.InOrg(ctx, c.Org, func(tx pgx.Tx) error {
+			return delivery.WithdrawRefusedAskTx(ctx, tx, p, got.Refused)
+		}); err != nil {
+			return got, err
+		}
+		return conducted(got, delivery.RefuseAsk(got.Refused))
+	}
+	return got, nil
+}
+
+func recordAsk(ctx context.Context, tx pgx.Tx, _ Caller, p delivery.AskPost, got delivery.AskPosted) (delivery.AskedOut, error) {
+	return delivery.RecordAskTx(ctx, tx, p, got)
+}
+
 type publishIn struct {
 	Message string `json:"message,omitempty"`
 }

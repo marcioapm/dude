@@ -106,6 +106,9 @@ type Caller struct {
 	AutomationScope AutomationScope
 	// Its capabilities (capabilities.Resolve), resolved with the token.
 	grants capabilities.Grants
+	// Its task reviews a person's pull request (task_sources.mode
+	// review_only): only then is ask_author listed.
+	reviewOnly bool
 	// What the server lends a call: set on each, not part of who calls.
 	env env
 }
@@ -360,6 +363,11 @@ func (s *Server) lookup(ctx context.Context, token string) (Caller, error) {
 		if err := tx.QueryRow(ctx, `SELECT source_kind IS NOT NULL FROM runs WHERE id=$1`, c.RunID).Scan(&c.Child); err != nil {
 			return err
 		}
+		if c.TaskID != "" {
+			if c.reviewOnly, err = delivery.ReviewOnlyTx(ctx, tx, c.TaskID); err != nil {
+				return err
+			}
+		}
 		c.grants, err = resolve(ctx, tx, c.agent())
 		return err
 	})
@@ -528,7 +536,36 @@ func (c Caller) tools() []tool {
 		create, _ := find("create_task", c.Role, c.grants)
 		return append(append([]tool{create}, githubReadTools...), automationCommentTool, postToChatTool)
 	}
-	return granted(c.Role, c.grants)
+	return withReviewOnlyTools(granted(c.Role, c.grants), c)
+}
+
+// reviewOnlyTools are a review-only task's conductor's alone, beside what
+// conduct grants it: no capability names them, so no writing task's Run
+// is listed or given one (find refuses it as no tool of its), and no
+// writing briefing or tool list changes.
+var reviewOnlyTools = []string{"ask_author"}
+
+// reviewOnlyTool is the review-only tool name c may call, if it is one.
+func (c Caller) reviewOnlyTool(name string) (tool, bool) {
+	if !c.reviewOnly || c.Role != delivery.RoleConductor || !c.grants.Has(capabilities.Conduct) || !slices.Contains(reviewOnlyTools, name) {
+		return tool{}, false
+	}
+	for _, t := range allTools() {
+		if t.name == name && !t.session {
+			return t, true
+		}
+	}
+	return tool{}, false
+}
+
+// withReviewOnlyTools is tools with a review-only conductor's own added.
+func withReviewOnlyTools(tools []tool, c Caller) []tool {
+	for _, name := range reviewOnlyTools {
+		if t, ok := c.reviewOnlyTool(name); ok {
+			tools = append(tools, t)
+		}
+	}
+	return tools
 }
 
 func (c Caller) findTool(name string) (tool, bool) {
@@ -541,6 +578,9 @@ func (c Caller) findTool(name string) (tool, bool) {
 			}
 		}
 		return tool{}, false
+	}
+	if t, ok := c.reviewOnlyTool(name); ok {
+		return t, true
 	}
 	return find(name, c.Role, c.grants)
 }
