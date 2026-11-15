@@ -35,10 +35,7 @@ func TestAnAuthorsReplyInDudesThreadReachesTheConductor(t *testing.T) {
 	w.withTools()
 	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
 	root := w.dudeLineComments(n)[0]
-	var finding string
-	if err := w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding); err != nil {
-		t.Fatalf("the open finding: %v", err)
-	}
+	finding := w.openFinding(wi)
 	reply := w.gh.ReplyInThread(n, "alice", root.ID, "This is intentional: the caller already checks for nil.")
 	w.until("the reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
 	w.until("the conductor told", func() bool { return w.woke(wi, "alice wrote to you on pull request") })
@@ -125,22 +122,29 @@ func TestDudesOwnThreadReplyIsNotAPersonsReply(t *testing.T) {
 	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
 	root := w.dudeLineComments(n)[0]
 	w.gh.Set(func(s *fakegithub.Server) { s.Poster = "pat-owner" })
-	var finding string
-	if err := w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding); err != nil {
-		t.Fatalf("the open finding: %v", err)
-	}
+	w.withdrawnIsNotAPersonsReply(wi, n, h1, root.ID, func(int64) {})
+}
+
+// withdrawnIsNotAPersonsReply dismisses the task's open finding, so dude
+// replies "Withdrawn: …" as pat-owner in root's thread; forget(its id)
+// runs before 5 syncs. The reply reaches no conductor: no Chat message,
+// no addressed record, no wake. alice's reply after it still does.
+func (w *world) withdrawnIsNotAPersonsReply(wi string, n int, h1 string, root int64, forget func(int64)) {
+	t := w.t
+	t.Helper()
 	before := w.mentions(wi)
-	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"wrong: the caller checks for nil at greet.go:3"}`)
+	w.must(wi, "dismiss_finding", `{"id":"`+w.openFinding(wi)+`","reason":"wrong: the caller checks for nil at greet.go:3"}`)
 	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
 	var withdrawn int64
-	for _, c := range repliesTo(w.gh.Pull(n), root.ID) {
-		if c.Author == "pat-owner" && strings.HasPrefix(c.Body, "Withdrawn: ") {
+	for _, c := range repliesTo(w.gh.Pull(n), root) {
+		if c.Author == "pat-owner" && c.Body == "Withdrawn: the caller checks for nil at greet.go:3." {
 			withdrawn = c.ID
 		}
 	}
 	if withdrawn == 0 {
-		t.Fatalf("no Withdrawn reply by pat-owner: %+v", repliesTo(w.gh.Pull(n), root.ID))
+		t.Fatalf("no Withdrawn reply by pat-owner: %+v", repliesTo(w.gh.Pull(n), root))
 	}
+	forget(withdrawn)
 	w.syncs(5)
 	if m := w.replyMessages(wi, withdrawn); m != 0 || w.mentions(wi) != before {
 		t.Errorf("dude's Withdrawn reply reached the conductor: %d, %d messages", m, w.mentions(wi)-before)
@@ -152,8 +156,18 @@ func TestDudesOwnThreadReplyIsNotAPersonsReply(t *testing.T) {
 	if w.woke(wi, "Withdrawn: ") {
 		t.Error("the conductor was woken by dude's own reply")
 	}
-	reply := w.gh.ReplyInThread(n, "alice", root.ID, "Thanks, agreed.")
+	reply := w.gh.ReplyInThread(n, "alice", root, "Thanks, agreed.")
 	w.until("alice's reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
+}
+
+// openFinding is the task's one open finding.
+func (w *world) openFinding(task string) string {
+	w.t.Helper()
+	ids := w.ids(`SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, task)
+	if len(ids) != 1 {
+		w.t.Fatalf("the open finding: %v", ids)
+	}
+	return ids[0]
 }
 
 // The window between dude's reply in its thread and its thread_replied
@@ -174,41 +188,13 @@ func TestDudesUnrecordedThreadReplyIsNotAPersonsReply(t *testing.T) {
 	if len(roots) != 1 || roots[0].Author != "pat-owner" {
 		t.Fatalf("dude's thread, by the PAT's owner: %+v", roots)
 	}
-	root := roots[0]
-	var finding string
-	if err := w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding); err != nil {
-		t.Fatalf("the open finding: %v", err)
-	}
-	before := w.mentions(wi)
-	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"wrong: the caller checks for nil at greet.go:3"}`)
-	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
-	var withdrawn int64
-	for _, c := range repliesTo(w.gh.Pull(n), root.ID) {
-		if c.Author == "pat-owner" && c.Body == "Withdrawn: the caller checks for nil at greet.go:3." {
-			withdrawn = c.ID
-		}
-	}
-	if withdrawn == 0 {
-		t.Fatalf("no Withdrawn reply by pat-owner: %+v", repliesTo(w.gh.Pull(n), root.ID))
-	}
 	// Its thread_replied never recorded, and the reply never listed yet:
 	// only the window path (OwnThreadReplies) can tell it is dude's.
-	id := fmt.Sprintf("line-comment-%d", withdrawn)
-	mustExec(t, w.owner, `DELETE FROM events WHERE task_id = $1 AND event_type = 'review.thread_replied'`, wi)
-	mustExec(t, w.owner, `DELETE FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented' AND payload->>'feedbackId' = $2`, wi, id)
-	w.syncs(5)
-	if m := w.replyMessages(wi, withdrawn); m != 0 || w.mentions(wi) != before {
-		t.Errorf("dude's unrecorded Withdrawn reply reached the conductor: %d, %d messages", m, w.mentions(wi)-before)
-	}
-	if c := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
-		AND payload->>'addressed' = 'conductor'`, wi); c != 0 {
-		t.Errorf("%d comments recorded as addressed to the conductor", c)
-	}
-	if w.woke(wi, "Withdrawn: ") {
-		t.Error("the conductor was woken by dude's own reply")
-	}
-	reply := w.gh.ReplyInThread(n, "alice", root.ID, "Thanks, agreed.")
-	w.until("alice's reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
+	w.withdrawnIsNotAPersonsReply(wi, n, h1, roots[0].ID, func(withdrawn int64) {
+		mustExec(t, w.owner, `DELETE FROM events WHERE task_id = $1 AND event_type = 'review.thread_replied'`, wi)
+		mustExec(t, w.owner, `DELETE FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented' AND payload->>'feedbackId' = $2`,
+			wi, fmt.Sprintf("line-comment-%d", withdrawn))
+	})
 }
 
 // A reply recorded before dude's thread was known (its review_submitted
