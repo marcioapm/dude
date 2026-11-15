@@ -8,7 +8,7 @@ Answer on one of your task's pull requests, as dude's GitHub login: for a questi
   "properties": {
     "pr": {
       "type": "string",
-      "description": "the pull request: its number, or repo#number, one of your task's"
+      "description": "the pull request: its number, repo#number, owner/repo#number or URL, one of your task's"
     },
     "text": {
       "type": "string",
