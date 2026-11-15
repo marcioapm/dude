@@ -43,21 +43,29 @@ func TestLookupReadsReviewOnlyWithTheRun(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 	s = &Server{DB: &db.DB{Pool: pool}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	ownerExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('t2', $1, 'p', 2, 'Review')`, org)
+	ownerExec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ('t2', $1, 'p', 2, 'Review'),
+		('t3', $1, 'p', 3, 'Adopted'), ('t4', $1, 'p', 4, 'Continued')`, org)
 	ownerExec(t, owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status, mcp_token_hash)
-		VALUES ('rw', $1, 'p', 't', 1, 'conductor', 'agent', 'running', $2), ('rr', $1, 'p', 't2', 1, 'conductor', 'agent', 'running', $3)`,
-		org, HashToken("tok-writing"), HashToken("tok-review"))
+		VALUES ('rw', $1, 'p', 't', 1, 'conductor', 'agent', 'running', $2), ('rr', $1, 'p', 't2', 1, 'conductor', 'agent', 'running', $3),
+		('ra', $1, 'p', 't3', 1, 'conductor', 'agent', 'running', $4), ('rc', $1, 'p', 't4', 1, 'conductor', 'agent', 'running', $5)`,
+		org, HashToken("tok-writing"), HashToken("tok-review"), HashToken("tok-adopted"), HashToken("tok-continued"))
 	ownerExec(t, owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch) VALUES ('repo', $1, 'p', 'r', 'https://github.com/o/r', 'main')`, org)
+	// A writing task adopted from a pull request (review or continue
+	// mode) has a source row too: it is not review only (tests M2).
 	ownerExec(t, owner, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, mode, number, head_branch, base_branch)
-		VALUES ('t2', $1, 'repo', 'pr', $2, 7, 'feature/x', 'main')`, org, delivery.ModeReviewOnly)
+		VALUES ('t2', $1, 'repo', 'pr', $2, 7, 'feature/x', 'main'), ('t3', $1, 'repo', 'pr', $3, 8, 'feature/y', 'main'),
+		('t4', $1, 'repo', 'pr', $4, 9, 'feature/z', 'main')`, org, delivery.ModeReviewOnly, delivery.ModeReview, delivery.ModeContinue)
 	for _, c := range []struct {
 		token      string
 		reviewOnly bool
-	}{{"tok-writing", false}, {"tok-review", true}} {
+	}{{"tok-writing", false}, {"tok-adopted", false}, {"tok-continued", false}, {"tok-review", true}} {
 		counter.n.Store(0)
 		got, err := s.lookup(ctx, c.token)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if n := counter.n.Load(); n > lookupStatements {
+			t.Errorf("%s: the lookup ran %d statements, want at most %d", c.token, n, lookupStatements)
 		}
 		t.Logf("%s: %d statements", c.token, counter.n.Load())
 		if got.reviewOnly != c.reviewOnly {
