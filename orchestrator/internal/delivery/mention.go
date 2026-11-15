@@ -58,6 +58,15 @@ func (m Mention) told(body string) string {
 	}{m.Feedback.Author, m.Repo, where, body, m.Feedback.ID, m.Number})
 }
 
+// toldAbout is told, then, for a reply in dude's thread on finding f, the
+// finding it disputes and dude's comment there (nil f: told alone).
+func (m Mention) toldAbout(body string, f *verdictFinding) string {
+	if f == nil {
+		return m.told(body)
+	}
+	return m.told(body) + "\n\n" + render(mentionFindingTmpl, struct{ ID, Title, Severity, Comment string }{f.ID, f.Title, f.Severity, f.inlineText()})
+}
+
 // MentionTx delivers a mention as a message in the task's Chat, the way a
 // person's message is delivered — to its live conductor, or to one it
 // starts, briefed — except that it changes nobody's decisions and answers
@@ -85,19 +94,18 @@ func MentionTx(ctx context.Context, tx pgx.Tx, m Mention) (bool, error) {
 	body := clipBytes(strings.TrimSpace(m.Feedback.Body), ChatMessageMax)
 	w := Writer{ActorType: ledger.ActorIntegration, ActorID: "github:" + m.Feedback.Author, Name: m.Feedback.Author + " (GitHub)",
 		Shown: body, Via: map[string]any{"github": m.github()}}
-	text := m.told(body)
-	if f, err := threadFindingTx(ctx, tx, m.Finding); err != nil {
+	f, err := threadFindingTx(ctx, tx, m.Finding)
+	if err != nil {
 		return false, err
-	} else if f != nil {
-		text += "\n\n" + render(mentionFindingTmpl, struct{ ID, Title, Severity, Comment string }{f.ID, f.Title, f.Severity, f.inlineText()})
 	}
+	text := m.toldAbout(body, f)
 	ref := RunRef{Org: m.Org, ProjectID: m.ProjectID, TaskID: m.TaskID}
 	var ending bool
 	find := func() error {
 		return tx.QueryRow(ctx, `SELECT r.id, `+Ending+` FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+` FOR NO KEY UPDATE`,
 			m.TaskID).Scan(&ref.RunID, &ending)
 	}
-	err := find()
+	err = find()
 	if err == nil && ending {
 		// Its container stopped and nothing will resume it: ended here, as
 		// Chat ends it, so the mention reaches its replacement.

@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // reviewOnlyConductorRefusals are the refusals only a review-only task's
@@ -39,4 +41,19 @@ func TestGoldenReviewOnlyConductorBriefing(t *testing.T) {
 		VALUES ('wi_g', $1, 'repo_api', 'pr', 12, 'feature/export', 'main', 'review_only')`)
 	w.delivery(t, "conductorDecision", `{"decider":"conductor","decision":{"point":"after_review","policy":"reviewExit","reviewOnly":true}}`)
 	golden(t, "briefing-conductor-review-only", w.in(t, briefWith(byWake, "", "dude woke you; one thing:\n- A decision waits.")))
+}
+
+// The wake of the author's reply in dude's thread on a finding (review
+// only): a mention's text, then the finding and dude's comment. With no
+// finding it is a mention's, byte for byte (delivery-lines' mention).
+func TestGoldenReviewOnlyThreadReply(t *testing.T) {
+	m := Mention{Repo: "api", Number: 12, Feedback: forge.Feedback{ID: "line-comment-9", Author: "alice",
+		URL: "https://x/9", Path: "api/x.go", InReplyTo: 3}}
+	f := &verdictFinding{ID: "rf_1", Severity: "medium", Title: "Nil is not checked", Description: "greet(nil) panics.",
+		Fix: "Check for nil."}
+	if m.toldAbout("x", nil) != m.told("x") {
+		t.Fatal("a reply with no finding is told differently from a mention")
+	}
+	goldenTexts(t, "wake-review-only-thread-reply", [][2]string{
+		{"reply on a finding", m.toldAbout("This is intentional: the caller already checks for nil.", f)}})
 }
