@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -410,13 +411,15 @@ func (s *Store) authorQuestionTimeoutTx(ctx context.Context, tx pgx.Tx, projectI
 	if s.AuthorQuestionTimeout > 0 {
 		return s.AuthorQuestionTimeout, nil
 	}
-	var minutes float64
+	// The number's text, parsed here: a cast in SQL errors on one out of
+	// float8's range (1e400).
+	var text string
 	if err := tx.QueryRow(ctx, `SELECT CASE WHEN jsonb_typeof(delivery_policy->'authorQuestionTimeoutMinutes') = 'number'
-			THEN (delivery_policy->>'authorQuestionTimeoutMinutes')::float8 ELSE 0 END FROM projects WHERE id = $1`,
-		projectID).Scan(&minutes); err != nil && !db.IsNotFound(err) {
+			THEN delivery_policy->>'authorQuestionTimeoutMinutes' ELSE '' END FROM projects WHERE id = $1`,
+		projectID).Scan(&text); err != nil && !db.IsNotFound(err) {
 		return 0, err
 	}
-	if minutes >= 1 && minutes <= maxAuthorQuestionMinutes && minutes == float64(int64(minutes)) {
+	if minutes, err := strconv.ParseFloat(text, 64); err == nil && minutes >= 1 && minutes <= maxAuthorQuestionMinutes && minutes == float64(int64(minutes)) {
 		return time.Duration(minutes) * time.Minute, nil
 	}
 	return AuthorQuestionTimeout, nil

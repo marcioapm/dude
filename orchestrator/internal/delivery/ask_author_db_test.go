@@ -27,6 +27,11 @@ func TestAuthorQuestionTimeoutFromThePolicy(t *testing.T) {
 		{`{"authorQuestionTimeoutMinutes":-3}`, 72 * time.Hour},
 		{`{"authorQuestionTimeoutMinutes":"x"}`, 72 * time.Hour},
 		{`{"authorQuestionTimeoutMinutes":"1.5"}`, 72 * time.Hour},
+		// A numeric string is not a number (tests L4).
+		{`{"authorQuestionTimeoutMinutes":"5"}`, 72 * time.Hour},
+		{`{"authorQuestionTimeoutMinutes":5.0}`, 5 * time.Minute},
+		// Out of float8's range: the default, not an error (correctness L4).
+		{`{"authorQuestionTimeoutMinutes":1e400}`, 72 * time.Hour},
 		{`{"authorQuestionTimeoutMinutes":1.5}`, 72 * time.Hour},
 		{`{"authorQuestionTimeoutMinutes":null}`, 72 * time.Hour},
 		{`{"authorQuestionTimeoutMinutes":99999999999}`, 72 * time.Hour},
