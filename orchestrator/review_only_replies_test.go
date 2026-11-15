@@ -36,7 +36,9 @@ func TestAnAuthorsReplyInDudesThreadReachesTheConductor(t *testing.T) {
 	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
 	root := w.dudeLineComments(n)[0]
 	var finding string
-	_ = w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding)
+	if err := w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding); err != nil {
+		t.Fatalf("the open finding: %v", err)
+	}
 	reply := w.gh.ReplyInThread(n, "alice", root.ID, "This is intentional: the caller already checks for nil.")
 	w.until("the reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
 	w.until("the conductor told", func() bool { return w.woke(wi, "alice wrote to you on pull request") })
@@ -168,15 +170,22 @@ func TestAWritingDeliveryRoutesAReplyToItsConductorAsBefore(t *testing.T) {
 	if ours.Author != fakegithub.Login || ours.InReplyTo != line {
 		t.Fatalf("the conductor's reply: %+v", ours)
 	}
+	// Answering the conductor's reply: GitHub points it at the thread's
+	// root, bob's line comment, not at the conductor's reply.
 	reply := w.gh.ReplyInThread(1, "bob", ours.ID, "Then please document why it is needed.")
+	if got := repliesTo(w.gh.Pull(1), line); len(got) != 2 || got[1].ID != reply {
+		t.Fatalf("bob's reply is not in reply to the root: %+v", got)
+	}
 	w.until("a fixer for the reply", func() bool { w.sync(); return w.fixes(task) == 1 })
 	w.syncs(3)
 	if m := w.replyMessages(task, reply); m != 0 || w.mentions(task) != 1 {
 		t.Errorf("the reply reached the conductor: %d, %d messages", m, w.mentions(task))
 	}
 	var addressed string
-	_ = w.owner.QueryRow(t.Context(), `SELECT COALESCE(payload->>'addressed', '') FROM events WHERE task_id = $1
-		AND event_type = 'pull_request.commented' AND payload->>'feedbackId' = $2`, task, fmt.Sprintf("line-comment-%d", reply)).Scan(&addressed)
+	if err := w.owner.QueryRow(t.Context(), `SELECT COALESCE(payload->>'addressed', '') FROM events WHERE task_id = $1
+		AND event_type = 'pull_request.commented' AND payload->>'feedbackId' = $2`, task, fmt.Sprintf("line-comment-%d", reply)).Scan(&addressed); err != nil {
+		t.Fatalf("the reply's record: %v", err)
+	}
 	if addressed != "" {
 		t.Errorf("the reply was recorded as addressed to %q", addressed)
 	}

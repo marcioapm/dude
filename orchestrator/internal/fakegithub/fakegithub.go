@@ -548,7 +548,8 @@ func (s *Server) LineComment(number int, author, path, body string) int64 {
 }
 
 // ReplyInThread replies, as author, in the review thread of line comment
-// to (in_reply_to_id); its id.
+// to; its id. Its in_reply_to_id is the thread's root, as GitHub sets it
+// for a reply to a reply too.
 func (s *Server) ReplyInThread(number int, author string, to int64, body string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -557,6 +558,9 @@ func (s *Server) ReplyInThread(number int, author string, to int64, body string)
 	for _, c := range p.LineComments {
 		if c.ID == to {
 			path = c.Path
+			if c.InReplyTo != 0 {
+				to = c.InReplyTo
+			}
 		}
 	}
 	id := nextID.Add(1)
@@ -1517,6 +1521,10 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.ID, c.Path = nextID.Add(1), parent.Path
+	if parent.InReplyTo != 0 {
+		// A reply to a reply: GitHub points it at the thread's root.
+		c.InReplyTo = parent.InReplyTo
+	}
 	p.LineComments = append(p.LineComments, c)
 	write(w, 201, s.commentsJSON(p, []Comment{c}, "discussion_r")[0])
 }
