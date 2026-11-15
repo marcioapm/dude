@@ -43,7 +43,7 @@ func TestDecideVerdictWithAnAuthorQuestion(t *testing.T) {
 func TestAuthorAsksAnswers(t *testing.T) {
 	asked := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
 	a := &AuthorAsks{Conversation: map[string]time.Time{"alice": asked}}
-	const after, before = "2026-11-15T10:00:05Z", "2026-11-15T09:59:00Z"
+	const after, before = "2026-11-15T10:00:05Z", "2026-11-15T09:58:00Z"
 	for _, c := range []struct {
 		f    forge.Feedback
 		want bool
@@ -52,12 +52,17 @@ func TestAuthorAsksAnswers(t *testing.T) {
 		{forge.Feedback{Author: "Alice", Body: "No.", Kind: forge.KindComment, CreatedAt: after}, true},
 		// Made at the question's own second: the listing's granularity.
 		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindComment, CreatedAt: "2026-11-15T10:00:00Z"}, true},
+		// 30s before it on GitHub's clock: within askClockGrace, so the
+		// clocks' skew does not drop a fast answer.
+		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindComment, CreatedAt: "2026-11-15T09:59:30Z"}, true},
+		// At the grace's very edge: still since.
+		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindComment, CreatedAt: "2026-11-15T09:59:00Z"}, true},
 		{forge.Feedback{Author: "bob", Body: "No.", Kind: forge.KindComment, CreatedAt: after}, false},
 		{forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindLineComment, CreatedAt: after}, false},
 		{forge.Feedback{Author: "alice", Body: "  ", Kind: forge.KindComment, CreatedAt: after}, false},
 		{forge.Feedback{Author: "alice", Body: "x\n\n" + forge.ReplyMarker, Kind: forge.KindComment, CreatedAt: after}, false},
-		// Made before the question (or an edit of one, which keeps its
-		// creation): not an answer.
+		// Made two minutes before the question (or an edit of one, which
+		// keeps its creation): not an answer.
 		{forge.Feedback{Author: "alice", Body: "Thanks, will look tomorrow.", Kind: forge.KindComment, CreatedAt: before}, false},
 		{forge.Feedback{Author: "alice", Body: "Edited since.", Kind: forge.KindComment, CreatedAt: before, UpdatedAt: after}, false},
 		{forge.Feedback{Author: "alice", Body: "No time.", Kind: forge.KindComment}, false},

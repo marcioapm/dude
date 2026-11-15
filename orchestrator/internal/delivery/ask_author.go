@@ -287,8 +287,9 @@ func (a AuthorAsk) line() string {
 // question to them waits there: addressed to the conductor, mention or
 // not, and theirs to send whoever else may wake (the author may always
 // answer dude's question to them). Only a comment made since the oldest
-// open question to them there (GitHub's second): an older one, or an edit
-// of one, is not an answer. nil asks (a writing task's) never.
+// open question to them there (GitHub's second, less askClockGrace): an
+// older one, or an edit of one, is not an answer. nil asks (a writing
+// task's) never.
 func (a *AuthorAsks) Answers(f forge.Feedback) bool {
 	if a == nil || f.Kind != forge.KindComment || forge.Own(f) || strings.TrimSpace(f.Body) == "" {
 		return false
@@ -298,12 +299,18 @@ func (a *AuthorAsks) Answers(f forge.Feedback) bool {
 		return false
 	}
 	for l, asked := range a.Conversation {
-		if strings.EqualFold(l, f.Author) && !made.Before(asked.Truncate(time.Second)) {
+		if strings.EqualFold(l, f.Author) && !made.Before(asked.Truncate(time.Second).Add(-askClockGrace)) {
 			return true
 		}
 	}
 	return false
 }
+
+// askClockGrace is how far before a question's created_at (dude's DB
+// clock) a time from another clock (GitHub's, the orchestrator's) still
+// counts as since it: the clocks may be skewed. Erring early costs at most
+// one extra message to the conductor.
+const askClockGrace = time.Minute
 
 // Lines is the wake's list of the open questions; "" for none or nil.
 func (a *AuthorAsks) Lines() []AuthorAsk {
@@ -384,13 +391,13 @@ func authorAsksLines(open []AuthorAsk) string {
 // RecoverAsksTx fills in the comment of an open author question whose
 // post's answer was lost: dude's own comment (forge.Own, recorded own by
 // the sync) carrying its askMarker, recorded since the question was
-// asked. A review-only task's sync calls it, only when one is lost
+// asked (less askClockGrace). A review-only task's sync calls it, only when one is lost
 // (AuthorAsks.Lost).
 func RecoverAsksTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 	_, err := tx.Exec(ctx, `UPDATE review_questions q SET github_comment_id = e.payload->>'feedbackId', github_url = e.payload->>'url'
 		FROM events e WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND q.github_comment_id IS NULL
-		  AND e.task_id = $1 AND e.event_type = $3 AND e.payload->>'own' = 'true' AND e.occurred_at >= q.created_at
-		  AND strpos(e.payload->>'body', '<!-- dude:ask id=' || q.id || ' -->') > 0`, taskID, HolderAuthor, EvPullRequestCommented)
+		  AND e.task_id = $1 AND e.event_type = $3 AND e.payload->>'own' = 'true' AND e.occurred_at >= q.created_at - $4 * interval '1 second'
+		  AND strpos(e.payload->>'body', '<!-- dude:ask id=' || q.id || ' -->') > 0`, taskID, HolderAuthor, EvPullRequestCommented, askClockGrace.Seconds())
 	return err
 }
 
