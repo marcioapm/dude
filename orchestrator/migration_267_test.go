@@ -28,6 +28,9 @@ func TestMigration267AuthorQuestionsUpFromMain(t *testing.T) {
 	}
 	mustExec(t, owner, `INSERT INTO review_questions (id, organization_id, task_id, n, category, question, addressee, asked_of, github_comment_id, github_url)
 		VALUES ('rvq_c', 'org_267', 'wi_267', 3, 'conductor', 'Q?', 'author', 'alice', 'issue-comment-1', 'https://x')`)
+	if r := scalar[int](t, owner, `SELECT count(*) FROM review_questions WHERE github_refused`); r != 0 {
+		t.Errorf("%d questions marked refused by GitHub", r)
+	}
 	if _, err := owner.Exec(ctx, `INSERT INTO review_questions (id, organization_id, task_id, n, category, question, addressee)
 		VALUES ('rvq_d', 'org_267', 'wi_267', 4, 'conductor', 'Q?', 'someone')`); err == nil {
 		t.Fatal("an unknown addressee")

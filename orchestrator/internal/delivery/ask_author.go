@@ -162,8 +162,8 @@ func PostAsk(ctx context.Context, gh *forge.GitHub, p AskPost) AskPosted {
 // WithdrawRefusedAskTx withdraws a question GitHub did not take, and
 // answers the conductor's Refusal.
 func WithdrawRefusedAskTx(ctx context.Context, tx pgx.Tx, p AskPost, why string) error {
-	if _, err := tx.Exec(ctx, `UPDATE review_questions SET status = 'withdrawn', answered_at = now() WHERE id = $1 AND status = 'open'`,
-		p.QuestionID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE review_questions SET status = 'withdrawn', answered_at = now(), github_refused = true
+		WHERE id = $1 AND status = 'open'`, p.QuestionID); err != nil {
 		return err
 	}
 	_, err := ledger.Append(ctx, tx, p.ref.Event(EvReviewQuestionWithdrawn, ledger.ActorAgent,
@@ -356,15 +356,13 @@ func openAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int
 }
 
 // settledAuthorAsksTx is the ids of the task's author questions no longer
-// open that were asked (RecordAskTx recorded them, posted or with GitHub's
-// answer lost: either may have held the verdict), oldest first. A post
-// GitHub refused (WithdrawRefusedAskTx) was never recorded asked and held
-// nothing.
+// open, oldest first: any of them may have held the verdict (posted, its
+// answer lost, or its record never written). Only a post GitHub refused
+// (WithdrawRefusedAskTx, github_refused) held nothing.
 func settledAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT q.id FROM review_questions q WHERE q.task_id = $1 AND q.status <> 'open' AND q.addressee = $2
-		AND `+askOfAttempt+`
-		AND EXISTS (SELECT 1 FROM events e WHERE e.task_id = q.task_id AND e.event_type = $4 AND e.payload->>'questionId' = q.id)
-		ORDER BY q.created_at, q.id`, taskID, HolderAuthor, attempt, EvAuthorAsked)
+		AND `+askOfAttempt+` AND NOT q.github_refused
+		ORDER BY q.created_at, q.id`, taskID, HolderAuthor, attempt)
 	if err != nil {
 		return nil, err
 	}

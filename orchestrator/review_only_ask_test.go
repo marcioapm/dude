@@ -139,16 +139,7 @@ func TestAskTheAuthorOnTheConversationHoldsTheApproval(t *testing.T) {
 	// recheck, as a withdrawn finding sends): its claim is the same, so
 	// nothing is posted again (I1).
 	claims := w.events(wi, delivery.EvReviewClaimed)
-	wf := w.str(`SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')`, wi)
-	if err := w.runtime.Signal(context.Background(), w.org, wf, delivery.SignalPRFeedback, map[string]any{"kind": delivery.SignalKindRecheck}, "recheck:probe"); err != nil {
-		t.Fatal(err)
-	}
-	// Consumed, the wait went on to the verdict step and back.
-	w.agentsDone(wi, "the verdict ran again at H1", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id = $1 AND consumed_at IS NULL`, wf) == 0 && w.waitingOnPR(wi)
-	})
-	w.syncs(2)
-	w.advanced()
+	w.recheck(wi, "recheck:probe")
 	if got := reviewsAt(w.dudeReviews(wi, n), h1); len(got) != 2 || w.events(wi, delivery.EvReviewClaimed) != claims {
 		t.Fatalf("the verdict's re-run at H1 posted again: %+v", got)
 	}
@@ -175,12 +166,19 @@ func TestAskTheAuthorOnTheConversationHoldsTheApproval(t *testing.T) {
 func TestAskTheAuthorRefusedAndLost(t *testing.T) {
 	w := newWorld(t)
 	w.withTools()
-	wi, n, _ := w.approvedAtH1()
+	wi, n, h1 := w.approvedAtH1()
 	pull := w.gh.Pull(n)
 	w.gh.Set(func(*fakegithub.Server) { pull.Locked = true })
 	w.refused(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Why?"}`, n), "GitHub did not take the question")
 	if c := w.count(`SELECT count(*) FROM review_questions WHERE task_id = $1 AND addressee = 'author' AND status = 'withdrawn'`, wi); c != 1 {
 		t.Fatalf("%d refused questions withdrawn", c)
+	}
+	// The refused question held nothing: the verdict run again at H1
+	// claims and posts nothing new (tests M1).
+	claims := w.events(wi, delivery.EvReviewClaimed)
+	w.recheck(wi, "recheck:refused")
+	if rs := reviewsAt(w.dudeReviews(wi, n), h1); len(rs) != 1 || w.events(wi, delivery.EvReviewClaimed) != claims {
+		t.Fatalf("a refused question changed the verdict at H1: %+v", rs)
 	}
 	w.gh.Set(func(s *fakegithub.Server) { pull.Locked = false; s.CommentTimeoutOnce = true })
 	out := w.must(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Why lower case?"}`, n))
@@ -229,6 +227,46 @@ func TestALostAskNeverPostedThenWithdrawnApprovesAgain(t *testing.T) {
 		rs := reviewsAt(w.dudeReviews(wi, n), h1)
 		return len(rs) == 3 && rs[2].State == "APPROVED" && w.waitingOnPR(wi)
 	})
+}
+
+// A post that reached GitHub whose record was never written (RecordAskTx
+// failed, or the orchestrator restarted): the open question held the
+// verdict at H1 all the same; withdrawn, dude approves at H1 again
+// (correctness L2). The record's loss is simulated by removing what
+// RecordAskTx wrote: the asked event and the comment.
+func TestAnAskWhoseRecordWasLostThenWithdrawnApprovesAgain(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	wi, n, h1 := w.approvedAtH1()
+	q, _ := w.must(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Why lower case?"}`, n))["questionId"].(string)
+	mustExec(t, w.owner, `DELETE FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvAuthorAsked)
+	mustExec(t, w.owner, `UPDATE review_questions SET github_comment_id = NULL, github_url = NULL WHERE id = $1`, q)
+	w.agentsDone(wi, "a COMMENT at H1", func() bool {
+		rs := reviewsAt(w.dudeReviews(wi, n), h1)
+		return len(rs) == 2 && rs[0].State == "DISMISSED" && w.waitingOnPR(wi)
+	})
+	w.syncs(2)
+	w.must(wi, "answer_review_question", fmt.Sprintf(`{"id":%q,"withdraw":true,"reason":"not needed"}`, q))
+	w.agentsDone(wi, "a standing approval at H1", func() bool {
+		rs := reviewsAt(w.dudeReviews(wi, n), h1)
+		return len(rs) == 3 && rs[2].State == "APPROVED" && w.waitingOnPR(wi)
+	})
+}
+
+// recheck has the verdict run again at the head (as a withdrawn finding
+// does), and waits for the wait to consume it and come back.
+func (w *world) recheck(wi, key string) {
+	w.t.Helper()
+	wf := w.str(`SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')`, wi)
+	if err := w.runtime.Signal(context.Background(), w.org, wf, delivery.SignalPRFeedback, map[string]any{"kind": delivery.SignalKindRecheck}, key); err != nil {
+		w.t.Fatal(err)
+	}
+	// Consumed, the wait went on to the verdict step and back.
+	w.agentsDone(wi, "the verdict ran again", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id = $1 AND consumed_at IS NULL`, wf) == 0 && w.waitingOnPR(wi)
+	})
+	w.syncs(2)
+	w.advanced()
 }
 
 // A pull request author who may not wake anyone (WhoCanWake) may still
