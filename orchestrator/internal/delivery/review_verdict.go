@@ -208,8 +208,10 @@ func decideVerdict(in verdictInput) verdictDecision {
 	if it := items[ReadyMergeable]; strings.Contains(it.Detail, "conflicts with") || strings.HasPrefix(it.Detail, "behind ") {
 		notes = append(notes, "For the author: "+it.Detail)
 	}
+	// The open author questions' lines, and their ids as a claim's suffix
+	// (":id…", "" for none).
 	var asked []string
-	askIDs := reasonAuthorQuestion
+	askIDs := ""
 	for _, a := range in.Asks {
 		asked = append(asked, a.line())
 		askIDs += ":" + a.ID
@@ -231,11 +233,7 @@ func decideVerdict(in verdictInput) verdictDecision {
 	// open author questions are part of its claim: asked since, the review
 	// is posted again, listing them.
 	if it := items[ReadyFindings]; !it.OK {
-		reason := reasonFindings
-		if len(asked) > 0 {
-			reason += strings.TrimPrefix(askIDs, reasonAuthorQuestion)
-		}
-		return post(forge.EventRequestChanges, reason, fmt.Sprintf("Changes requested at %s: %s", h, it.Detail))
+		return post(forge.EventRequestChanges, reasonFindings+askIDs, fmt.Sprintf("Changes requested at %s: %s", h, it.Detail))
 	}
 	// 3'. The test failed or was blocked at H with no finding of its open
 	// at the fix bar (one would be row 3): named, never approved.
@@ -247,7 +245,7 @@ func decideVerdict(in verdictInput) verdictDecision {
 	// 4. A question still open. One to the author is not a defect: a
 	// COMMENT naming it, never REQUEST_CHANGES, and never APPROVE.
 	if len(asked) > 0 {
-		return post(forge.EventComment, askIDs, fmt.Sprintf("Reviewed at %s. Before approving: %s", h, strings.Join(asked, "; ")))
+		return post(forge.EventComment, reasonAuthorQuestion+askIDs, fmt.Sprintf("Reviewed at %s. Before approving: %s", h, strings.Join(asked, "; ")))
 	}
 	if it := items[ReadyQuestions]; !it.OK {
 		return post(forge.EventComment, reasonQuestion, fmt.Sprintf("Waiting on an answer at %s: %s", h, it.Detail))
