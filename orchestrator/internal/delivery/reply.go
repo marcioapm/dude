@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,7 +19,7 @@ import (
 // Reply is reply_on_pull_request: the conductor's answer on one of its
 // task's pull requests.
 type Reply struct {
-	// The pull request: its number, or repo#number.
+	// The pull request: its number, repo#number, owner/repo#number or URL.
 	PR   string
 	Text string
 	// The feedback answered (issue-comment-…, line-comment-…, review-…):
@@ -151,14 +152,16 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	case len(text) > ChatMessageMax:
 		return ReplyPost{}, refusef(rReplyAtMostBytesAsChat, ChatMessageMax)
 	}
-	repo, number, err := parsePR(in.PR)
+	owner, repo, number, err := parsePR(in.PR)
 	if err != nil {
 		return ReplyPost{}, err
 	}
 	var url string
-	err = tx.QueryRow(ctx, `SELECT r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
-		ref.TaskID, number, repo).Scan(&repo, &url)
+	prID, err := taskPullRequest(ctx, tx, ref.TaskID, number, owner, repo)
+	if err == nil {
+		err = tx.QueryRow(ctx, `SELECT r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = $1`, prID).Scan(&repo, &url)
+	}
 	if db.IsNotFound(err) {
 		return ReplyPost{}, refusef(rNotPullRequestYourTaskYou2, in.PR)
 	}
@@ -231,17 +234,71 @@ func RecordReplyTx(ctx context.Context, tx pgx.Tx, p ReplyPost, posted forge.Pos
 	return Replied{Repo: p.repo, Number: p.number, CommentID: posted.ID, URL: posted.URL}, err
 }
 
-// parsePR reads a pull request as the conductor names it: 12, #12, or
-// repo#12.
-func parsePR(s string) (string, int, error) {
+var (
+	prURL  = regexp.MustCompile(`^(?:https?://)?[^/\s]+/([\w.-]+)/([\w.-]+)/pull/(\d+)(?:[/?#]\S*)?$`)
+	prRepo = regexp.MustCompile(`^(?:([\w.-]+)/)?([\w.-]+)$`)
+)
+
+// parsePR reads a pull request as the conductor names it: 12, #12,
+// repo#12, owner/repo#12, or its URL (https://github.com/owner/repo/pull/12,
+// with /files, a query or a #fragment after it). The owner is "" unless
+// named.
+func parsePR(s string) (owner, repo string, number int, err error) {
 	s = strings.TrimSpace(s)
-	repo, num, found := strings.Cut(s, "#")
-	if !found {
-		repo, num = "", s
+	name, num := "", s
+	if m := prURL.FindStringSubmatch(s); m != nil {
+		owner, repo, num = m[1], m[2], m[3]
+	} else if before, after, found := strings.Cut(s, "#"); found {
+		name, num = strings.TrimSpace(before), after
+	}
+	if name != "" {
+		m := prRepo.FindStringSubmatch(name)
+		if m == nil {
+			return "", "", 0, refusef(rNamePullRequestByItsNumber, s)
+		}
+		owner, repo = m[1], m[2]
 	}
 	n, err := strconv.Atoi(num)
 	if err != nil || n <= 0 {
-		return "", 0, refusef(rNamePullRequestByItsNumber, s)
+		return "", "", 0, refusef(rNamePullRequestByItsNumber, s)
 	}
-	return strings.TrimSpace(repo), n, nil
+	return owner, repo, n, nil
+}
+
+// namedBy is whether the repository at url, named name in dude, is the one
+// a pull request was named in (parsePR's owner and repo). Named with an
+// owner, the owner and repo are GitHub's, matched against the end of its
+// clone URL as GitHub does, case aside; dude's name may differ. Named
+// repo#N, the repo is dude's name. Named by number alone, any repository is.
+func namedBy(url, name, owner, repo string) bool {
+	if owner == "" {
+		return repo == "" || name == repo
+	}
+	slugOwner, slugRepo, _ := strings.Cut(forge.SlugFromURL(url), "/")
+	return strings.EqualFold(slugOwner, owner) && strings.EqualFold(slugRepo, repo)
+}
+
+// taskPullRequest is the id of the task's pull request numbered number in
+// the repository named (namedBy), the newest if several are; pgx.ErrNoRows
+// if none is, which the caller refuses as it does a missing row.
+func taskPullRequest(ctx context.Context, tx pgx.Tx, taskID string, number int, owner, repo string) (string, error) {
+	rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.task_id = $1 AND pr.number = $2 ORDER BY pr.created_at DESC`, taskID, number)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name, url string
+		if err := rows.Scan(&id, &name, &url); err != nil {
+			return "", err
+		}
+		if namedBy(url, name, owner, repo) {
+			return id, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", pgx.ErrNoRows
 }
