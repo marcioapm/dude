@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
+	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
 
 // The project's authorQuestionTimeoutMinutes: unset, zero, negative or not
@@ -83,6 +84,31 @@ func TestAuthorAsksTxKeepsTheOldestConversationQuestion(t *testing.T) {
 	between := forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindComment, CreatedAt: "2026-11-15T10:30:00Z"}
 	if !asks.Answers(between) {
 		t.Error("alice's comment between the two questions is not an answer")
+	}
+}
+
+// withAskTimer wakes the wait for its own attempt's open author question
+// only: attempt 1's sets no timer in attempt 2 (tests L3).
+func TestAskTimerIsTheAttempts(t *testing.T) {
+	w := newGoldenWorld(t)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+		VALUES ('run_cond1', $1, 'prj_g', 'wi_g', 1, 'completed', 'conductor', 'agent')`)
+	w.exec(t, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee, asked_of, created_at)
+		VALUES ('rvq_1', $1, 'wi_g', 'run_cond1', 1, 'conductor', 'Q?', 'author', 'alice', '2026-11-15 10:00Z')`)
+	s := &steps{s: &Store{DB: w.app}}
+	sc := workflow.StepContext{OrganizationID: w.org, WorkflowRunID: "wfr_g"}
+	for _, c := range []struct {
+		attempt int
+		want    time.Time
+	}{{1, time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)}, {2, time.Time{}}} {
+		st := &State{TaskID: "wi_g", ProjectID: "prj_g", Attempt: c.attempt}
+		res, err := s.withAskTimer(context.Background(), sc, st, workflow.Result{AwaitSignals: []string{SignalPRFeedback}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.SleepUntil.Equal(c.want) {
+			t.Errorf("attempt %d: sleeps until %s, want %s", c.attempt, res.SleepUntil, c.want)
+		}
 	}
 }
 
