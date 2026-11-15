@@ -156,6 +156,39 @@ func TestDudesOwnThreadReplyIsNotAPersonsReply(t *testing.T) {
 	w.until("alice's reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
 }
 
+// A reply recorded before dude's thread was known (its review_submitted
+// not yet read as listing it) is recorded as plain feedback; edited once
+// the thread is known, it reaches the conductor once, by the edited path.
+func TestAReplyRecordedBeforeItsThreadWasKnownIsDeliveredOnceEdited(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	wi, n, _ := w.findingThenVerdict(func() string { return "still" })
+	root := w.dudeLineComments(n)[0]
+	// dude's review is not read as listing its thread yet: its comments
+	// are moved aside, and back once the reply is recorded.
+	move := func(from, to string) {
+		mustExec(t, w.owner, `UPDATE events SET payload = jsonb_set(payload - $2::text, ARRAY[$3::text], payload->$2::text)
+			WHERE task_id = $1 AND event_type = 'pull_request.review_submitted' AND payload ? $2::text`, wi, from, to)
+	}
+	move("comments", "hidden")
+	reply := w.gh.ReplyInThread(n, "alice", root.ID, "This is intentional.")
+	w.until("the reply recorded", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+			AND payload->>'feedbackId' = $2`, wi, fmt.Sprintf("line-comment-%d", reply)) == 1
+	})
+	if m := w.replyMessages(wi, reply); m != 0 {
+		t.Fatalf("delivered before its thread was known: %d", m)
+	}
+	move("hidden", "comments")
+	w.gh.EditComment(n, reply, "This is intentional: see greet.go:3.")
+	w.until("the edited reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
+	w.syncs(3)
+	if m := w.replyMessages(wi, reply); m != 1 {
+		t.Errorf("the reply came %d times", m)
+	}
+}
+
 // A writing task: a plain reply in a thread whose last word is the
 // conductor's reply_on_pull_request is fixer feedback, as before; only
 // the @mention reached the conductor.
