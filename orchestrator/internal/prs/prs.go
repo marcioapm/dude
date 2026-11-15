@@ -287,12 +287,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if err != nil {
 		return err
 	}
-	// The pull request's author may always answer dude's question to them.
-	for _, f := range heard {
-		if asks.Answers(f) {
-			waking[f.Author] = true
-		}
-	}
+	// The pull request's author may always answer dude's question to them:
+	// that comment alone (Answers), not every comment of theirs.
+	wakes := func(f forge.Feedback) bool { return waking[f.Author] || asks.Answers(f) }
 	if status.ThreadsUnknown {
 		status.UnresolvedThreads = pr.UnresolvedThreads
 	}
@@ -450,7 +447,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			switch {
 			case forge.Own(f) || ownVerdict[f.ID]:
 				p["own"] = true
-			case !waking[f.Author] && (addressed || forge.IsActionableComment(f, s.FactoryLogins)):
+			case !wakes(f) && (addressed || forge.IsActionableComment(f, s.FactoryLogins)):
 				// Shown on the task, not acted on: say why.
 				p["ignored"] = "not_permitted"
 			case addressed:
@@ -479,7 +476,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// message to the task's conductor, with the record of it, so a
 		// comment recorded is never one whose message was lost.
 		for _, f := range heard {
-			if !waking[f.Author] || ownVerdict[f.ID] || !toDude(f) {
+			if !wakes(f) || ownVerdict[f.ID] || !toDude(f) {
 				continue
 			}
 			if _, err := delivery.MentionTx(ctx, tx, delivery.Mention{Org: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID,
@@ -531,7 +528,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 
 	var permitted []forge.Feedback
 	for _, f := range fresh {
-		if waking[f.Author] && !ownVerdict[f.ID] {
+		if wakes(f) && !ownVerdict[f.ID] {
 			permitted = append(permitted, f)
 		}
 	}

@@ -198,6 +198,28 @@ func TestALostAskNeverPostedThenWithdrawnApprovesAgain(t *testing.T) {
 	})
 }
 
+// A pull request author who may not wake anyone (WhoCanWake) may still
+// answer dude's question: that comment alone. Their mention of dude in a
+// line comment, heard in the same sync, stays not permitted (L2).
+func TestOnlyTheAnswerOfAnAuthorWhoMayNotWakeIsHeard(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	wi, n, _ := w.approvedAtH1()
+	w.gh.Set(func(s *fakegithub.Server) { s.Permissions["alice"] = "none" })
+	w.must(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Should greet also handle names?"}`, n))
+	answer := w.gh.Comment(n, "alice", "No, names come later.")
+	line := w.gh.LineComment(n, "alice", "greet.md", "@dude please rename this too.")
+	w.until("the answer in Chat", func() bool { w.sync(); return w.conversationMessages(wi, answer) == 1 })
+	w.syncs(2)
+	if c := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'feedbackId' = $2 AND payload->>'ignored' = 'not_permitted'`, wi, fmt.Sprintf("line-comment-%d", line)); c != 1 {
+		t.Errorf("alice's line comment mentioning dude is not ignored as not permitted")
+	}
+	if m := w.replyMessages(wi, line); m != 0 {
+		t.Errorf("alice's line comment reached the conductor: %d", m)
+	}
+}
+
 // Start over ends attempt 1's delivery, and its question to the author
 // with it: attempt 2's verdict is not held by it, alice's next comment is
 // not routed to attempt 2's conductor as its answer, and it never times
