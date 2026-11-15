@@ -32,6 +32,10 @@ func TestMigration267AuthorQuestionsUpFromMain(t *testing.T) {
 		VALUES ('rvq_d', 'org_267', 'wi_267', 4, 'conductor', 'Q?', 'someone')`); err == nil {
 		t.Fatal("an unknown addressee")
 	}
+	// Added NOT VALID: no validation scan under ACCESS EXCLUSIVE.
+	if v := scalar[bool](t, owner, `SELECT convalidated FROM pg_constraint WHERE conname = 'review_questions_addressee_check'`); v {
+		t.Error("the widened CHECK was validated by a full scan")
+	}
 	// The held-question withdrawal (248) leaves the author's question open.
 	mustExec(t, owner, `SELECT withdraw_held_review_questions('wi_267')`)
 	if s := scalar[string](t, owner, `SELECT status FROM review_questions WHERE id = 'rvq_c'`); s != "open" {

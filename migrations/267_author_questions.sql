@@ -10,9 +10,12 @@
 -- The handover sweep and withdraw_held_review_questions read addressee
 -- 'conductor' only (248): an author's question is never handed to a person
 -- by them; it waits on GitHub. Every existing row keeps its addressee.
+-- The widened CHECK is added NOT VALID (as 242): every existing row is
+-- 'person' or 'conductor', so no scan of review_questions under ACCESS
+-- EXCLUSIVE is needed; new and updated rows are checked all the same.
 ALTER TABLE review_questions DROP CONSTRAINT review_questions_addressee_check;
 ALTER TABLE review_questions ADD CONSTRAINT review_questions_addressee_check
-  CHECK (addressee IN ('person', 'conductor', 'author'));
+  CHECK (addressee IN ('person', 'conductor', 'author')) NOT VALID;
 
 ALTER TABLE review_questions
   ADD COLUMN github_comment_id text,
