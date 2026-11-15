@@ -58,6 +58,34 @@ func TestAuthorQuestionTimeoutFromThePolicy(t *testing.T) {
 	})
 }
 
+// Two open conversation questions to alice, at T1 < T2: her comment since
+// the older one is an answer, so Conversation keeps T1 (tests L1).
+func TestAuthorAsksTxKeepsTheOldestConversationQuestion(t *testing.T) {
+	w := newGoldenWorld(t)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+		VALUES ('run_cond1', $1, 'prj_g', 'wi_g', 1, 'running', 'conductor', 'agent')`)
+	w.exec(t, `INSERT INTO task_sources (task_id, organization_id, repository_id, kind, mode, number, head_branch, base_branch)
+		VALUES ('wi_g', $1, 'repo_api', 'pr', $2, 12, 'feature/x', 'main')`, ModeReviewOnly)
+	w.delivery(t, "awaitPullRequest", `{"taskId":"wi_g","projectId":"prj_g","attempt":1}`)
+	t1, t2 := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC), time.Date(2026, 11, 15, 11, 0, 0, 0, time.UTC)
+	// The newer inserted first: the fold, not the insertion, picks T1.
+	w.exec(t, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee, asked_of, created_at)
+		VALUES ('rvq_2', $1, 'wi_g', 'run_cond1', 1, 'conductor', 'Q2?', 'author', 'alice', $2),
+		('rvq_1', $1, 'wi_g', 'run_cond1', 2, 'conductor', 'Q1?', 'author', 'alice', $3)`, t2, t1)
+	var asks *AuthorAsks
+	w.in(t, func(ctx context.Context, tx pgx.Tx) (_ string, err error) {
+		asks, err = AuthorAsksTx(ctx, tx, "wi_g")
+		return "", err
+	})
+	if asks == nil || !asks.Conversation["alice"].Equal(t1) || len(asks.Open) != 2 {
+		t.Fatalf("the open questions: %+v", asks)
+	}
+	between := forge.Feedback{Author: "alice", Body: "No.", Kind: forge.KindComment, CreatedAt: "2026-11-15T10:30:00Z"}
+	if !asks.Answers(between) {
+		t.Error("alice's comment between the two questions is not an answer")
+	}
+}
+
 // CheckAskAuthorTx's refusals, each with no question recorded: a writing
 // task (the second layer behind the tool's absence), an empty or too long
 // question, a pull request whose author dude does not know, and a finding
