@@ -214,8 +214,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	toDude := func(f forge.Feedback) bool {
 		return forge.AddressedToDude(f, s.FactoryLogins) || forge.RepliesToDude(f, s.FactoryLogins, threads)
 	}
-	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var err error
+	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
 		threads, err = delivery.DudesThreadsTx(ctx, tx, pr.TaskID)
 		return err
 	}); err != nil {
@@ -225,7 +224,6 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		return err
 	}
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		var err error
 		// The cursor narrows the query; the ledger decides what is new.
 		// Feedback at the cursor's own second comes back every time, because
 		// the listing is inclusive, so anything already recorded is dropped
