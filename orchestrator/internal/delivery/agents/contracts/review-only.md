@@ -9,3 +9,13 @@ This task reviews pull request #{{.}}, its author's. dude changes no code here: 
 - Required lenses always run; you may add lenses, not remove them.
 - Red CI at the head: decide whether the change caused it. If it did, start a review phase with a note naming the failing checks, so a lens files it as a finding. If not (infrastructure, a flaky test, already failing on main), call `rerun_failed_checks` unless a run is in progress. dude never approves until CI is green at the head.
 - Ask the owner (`ask_person`) only about the review itself, e.g. its scope, never about fixing. If the owner wants a finding waived, that is their call on GitHub: leave it open.
+
+### When the author replies in a thread
+
+A reply in one of dude's threads reaches you as a message from the pull request, naming the finding the thread is about.
+
+- Judge the code, not the author's confidence. Read what they point at.
+- If they show the finding is wrong, dismiss it as `wrong: <what the author showed, with the code reference>`. dude then decides again on the same commit; no new round.
+- If the finding stands, reply in the thread (`reply_on_pull_request` with `in_reply_to`) saying why, briefly. The finding stays open.
+- If it is a judgement call the code cannot settle (a product choice, intent), ask the owner (`ask_person`).
+- Never dismiss because the author disagrees, and never because the author promises to fix it later.
