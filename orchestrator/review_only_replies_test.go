@@ -156,6 +156,61 @@ func TestDudesOwnThreadReplyIsNotAPersonsReply(t *testing.T) {
 	w.until("alice's reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
 }
 
+// The window between dude's reply in its thread and its thread_replied
+// event (or an event lost): the pull request sync lists dude's own
+// "Withdrawn: …" with nothing recorded for it. It is still dude's, by the
+// token's login and syncThreads' words: no Chat message, no addressed
+// record, no wake. A person's reply in the same thread still arrives.
+func TestDudesUnrecordedThreadReplyIsNotAPersonsReply(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	// A PAT whose owner comments, from the first sync on: the login read
+	// (cached per credential for the process) is pat-owner's. A secret of
+	// this test's own keeps another test's cached login out.
+	w.gh.Set(func(s *fakegithub.Server) { s.Poster = "pat-owner" })
+	mustExec(t, w.owner, `UPDATE forge_credentials SET secret = 'ghp_window_' || organization_id WHERE organization_id = $1`, w.org)
+	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
+	roots := w.dudeLineComments(n)
+	if len(roots) != 1 || roots[0].Author != "pat-owner" {
+		t.Fatalf("dude's thread, by the PAT's owner: %+v", roots)
+	}
+	root := roots[0]
+	var finding string
+	if err := w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding); err != nil {
+		t.Fatalf("the open finding: %v", err)
+	}
+	before := w.mentions(wi)
+	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"wrong: the caller checks for nil at greet.go:3"}`)
+	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
+	var withdrawn int64
+	for _, c := range repliesTo(w.gh.Pull(n), root.ID) {
+		if c.Author == "pat-owner" && c.Body == "Withdrawn: the caller checks for nil at greet.go:3." {
+			withdrawn = c.ID
+		}
+	}
+	if withdrawn == 0 {
+		t.Fatalf("no Withdrawn reply by pat-owner: %+v", repliesTo(w.gh.Pull(n), root.ID))
+	}
+	// Its thread_replied never recorded, and the reply never listed yet:
+	// only the window path (OwnThreadReplies) can tell it is dude's.
+	id := fmt.Sprintf("line-comment-%d", withdrawn)
+	mustExec(t, w.owner, `DELETE FROM events WHERE task_id = $1 AND event_type = 'review.thread_replied'`, wi)
+	mustExec(t, w.owner, `DELETE FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented' AND payload->>'feedbackId' = $2`, wi, id)
+	w.syncs(5)
+	if m := w.replyMessages(wi, withdrawn); m != 0 || w.mentions(wi) != before {
+		t.Errorf("dude's unrecorded Withdrawn reply reached the conductor: %d, %d messages", m, w.mentions(wi)-before)
+	}
+	if c := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
+		AND payload->>'addressed' = 'conductor'`, wi); c != 0 {
+		t.Errorf("%d comments recorded as addressed to the conductor", c)
+	}
+	if w.woke(wi, "Withdrawn: ") {
+		t.Error("the conductor was woken by dude's own reply")
+	}
+	reply := w.gh.ReplyInThread(n, "alice", root.ID, "Thanks, agreed.")
+	w.until("alice's reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
+}
+
 // A reply recorded before dude's thread was known (its review_submitted
 // not yet read as listing it) is recorded as plain feedback; edited once
 // the thread is known, it reaches the conductor once, by the edited path.

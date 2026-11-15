@@ -49,11 +49,17 @@ func (w *world) findingThenVerdict(verdict func() string) (string, int, string) 
 }
 
 // dudeLineComments are pull request n's line comments by dude's account
-// that start a thread.
+// (the token's: Login, or a PAT's Poster) that start a thread.
 func (w *world) dudeLineComments(n int) []fakegithub.Comment {
+	self := fakegithub.Login
+	w.gh.Set(func(s *fakegithub.Server) {
+		if s.Poster != "" {
+			self = s.Poster
+		}
+	})
 	var out []fakegithub.Comment
 	for _, c := range w.gh.Pull(n).LineComments {
-		if c.Author == fakegithub.Login && c.InReplyTo == 0 {
+		if c.Author == self && c.InReplyTo == 0 {
 			out = append(out, c)
 		}
 	}
