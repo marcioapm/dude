@@ -495,10 +495,10 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		if findings, err = verdictFindingsTx(ctx, tx, st, pr.Repo); err != nil {
 			return err
 		}
-		if in.Asks, err = openAuthorAsksTx(ctx, tx, st.TaskID); err != nil {
+		if in.Asks, err = openAuthorAsksTx(ctx, tx, st.TaskID, st.Attempt); err != nil {
 			return err
 		}
-		if in.Settled, err = settledAuthorAsksTx(ctx, tx, st.TaskID); err != nil {
+		if in.Settled, err = settledAuthorAsksTx(ctx, tx, st.TaskID, st.Attempt); err != nil {
 			return err
 		}
 		link, err = taskLink(ctx, tx, st.TaskID)

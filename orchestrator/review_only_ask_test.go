@@ -198,6 +198,54 @@ func TestALostAskNeverPostedThenWithdrawnApprovesAgain(t *testing.T) {
 	})
 }
 
+// Start over ends attempt 1's delivery, and its question to the author
+// with it: attempt 2's verdict is not held by it, alice's next comment is
+// not routed to attempt 2's conductor as its answer, and it never times
+// out in attempt 2 (correctness M2).
+func TestStartOverWithAnOpenAuthorQuestion(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	wi, n, h1 := w.approvedAtH1()
+	ana := w.ownedBy(wi, "Ana")
+	q, _ := w.must(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Why lower case?"}`, n))["questionId"].(string)
+	w.agentsDone(wi, "a COMMENT at H1", func() bool {
+		rs := reviewsAt(w.dudeReviews(wi, n), h1)
+		return len(rs) == 2 && rs[1].State == "COMMENTED" && w.waitingOnPR(wi)
+	})
+	if out := w.stop(ana, wi, map[string]any{"andRestart": true}); out["attempt"] != float64(2) {
+		t.Fatalf("stop and start over answered %v", out)
+	}
+	w.agentsDone(wi, "attempt 2's verdict at H1", func() bool {
+		rs := reviewsAt(w.dudeReviews(wi, n), h1)
+		return len(rs) == 3 && w.waitingOnPR(wi) &&
+			w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND (state->>'attempt')::int = 2 AND step = 'awaitPullRequest'`, wi) == 1
+	})
+	if rs := reviewsAt(w.dudeReviews(wi, n), h1); rs[2].State != "APPROVED" || strings.Contains(rs[2].Body, "Why lower case?") {
+		t.Fatalf("attempt 2's verdict is held by attempt 1's question: %+v", rs[2])
+	}
+	answer := w.gh.Comment(n, "alice", "Because the CLI lower-cases.")
+	w.syncs(3)
+	if m := w.conversationMessages(wi, answer); m != 0 {
+		t.Errorf("alice's comment reached attempt 2's conductor as an answer")
+	}
+	// Long past its timeout, and a wait pass (CI moving at H1).
+	mustExec(t, w.owner, `UPDATE review_questions SET created_at = now() - interval '4 days' WHERE id = $1`, q)
+	w.gh.SetChecks("pending")
+	w.syncs(2)
+	w.gh.SetChecks("success")
+	w.agentsDone(wi, "a wait pass", func() bool { w.sync(); return w.waitingOnPR(wi) })
+	w.syncs(2)
+	w.advanced()
+	if e := w.events(wi, delivery.EvAuthorQuestionTimedOut); e != 0 {
+		t.Errorf("attempt 1's question timed out in attempt 2: %d", e)
+	}
+	for _, r := range reviewsAt(w.dudeReviews(wi, n), h1)[2:] {
+		if r.State != "APPROVED" {
+			t.Errorf("attempt 2 posted %s at H1: %q", r.State, r.Body)
+		}
+	}
+}
+
 // The timeout, on dude's clock: a finding's question is withdrawn and the
 // finding stands (REQUEST_CHANGES again, no COMMENT for the question); a
 // free-standing one wakes the conductor once, and stays open.
