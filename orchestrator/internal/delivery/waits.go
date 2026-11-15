@@ -304,13 +304,12 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCon
 			if head != "" && !fullSHA.MatchString(head) {
 				return nil, refusef(rWaitHeadNotFullSHA, head)
 			}
-			prID, err := taskPullRequest(ctx, tx, taskID, number, owner, repo)
-			if err != nil {
-				return nil, err
-			}
 			var name, now string
-			err = tx.QueryRow(ctx, `SELECT r.name, pr.head_sha FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-				WHERE pr.id = $1`, prID).Scan(&name, &now)
+			prID, err := taskPullRequest(ctx, tx, taskID, number, owner, repo)
+			if err == nil {
+				err = tx.QueryRow(ctx, `SELECT r.name, pr.head_sha FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+					WHERE pr.id = $1`, prID).Scan(&name, &now)
+			}
 			if db.IsNotFound(err) {
 				return nil, refusef(rWaitNotPullRequestOfThisTask, c.PRChecksFinal.PR)
 			}

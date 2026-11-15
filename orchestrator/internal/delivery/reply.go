@@ -156,13 +156,12 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	if err != nil {
 		return ReplyPost{}, err
 	}
-	prID, err := taskPullRequest(ctx, tx, ref.TaskID, number, owner, repo)
-	if err != nil {
-		return ReplyPost{}, err
-	}
 	var url string
-	err = tx.QueryRow(ctx, `SELECT r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-		WHERE pr.id = $1`, prID).Scan(&repo, &url)
+	prID, err := taskPullRequest(ctx, tx, ref.TaskID, number, owner, repo)
+	if err == nil {
+		err = tx.QueryRow(ctx, `SELECT r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+			WHERE pr.id = $1`, prID).Scan(&repo, &url)
+	}
 	if db.IsNotFound(err) {
 		return ReplyPost{}, refusef(rNotPullRequestYourTaskYou2, in.PR)
 	}
@@ -280,7 +279,8 @@ func namedBy(url, name, owner, repo string) bool {
 }
 
 // taskPullRequest is the id of the task's pull request numbered number in
-// the repository named (namedBy), the newest if several are; "" if none is.
+// the repository named (namedBy), the newest if several are; pgx.ErrNoRows
+// if none is, which the caller refuses as it does a missing row.
 func taskPullRequest(ctx context.Context, tx pgx.Tx, taskID string, number int, owner, repo string) (string, error) {
 	rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 		WHERE pr.task_id = $1 AND pr.number = $2 ORDER BY pr.created_at DESC`, taskID, number)
@@ -297,5 +297,8 @@ func taskPullRequest(ctx context.Context, tx pgx.Tx, taskID string, number int, 
 			return id, nil
 		}
 	}
-	return "", rows.Err()
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", pgx.ErrNoRows
 }
