@@ -253,6 +253,46 @@ func TestOnlyTheAnswerOfAnAuthorWhoMayNotWakeIsHeard(t *testing.T) {
 	}
 }
 
+// waitPass has the task's pull request wait run once more (a readiness
+// signal, which reruns no verdict that is not due), and waits for it.
+func (w *world) waitPass(wi, key string) {
+	w.t.Helper()
+	wf := w.str(`SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')`, wi)
+	if err := w.runtime.Signal(context.Background(), w.org, wf, delivery.SignalPRFeedback, map[string]any{"kind": "readiness"}, key); err != nil {
+		w.t.Fatal(err)
+	}
+	w.until("the wait ran again", func() bool {
+		w.advanced()
+		return w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id = $1 AND consumed_at IS NULL`, wf) == 0 && w.waitingOnPR(wi)
+	})
+}
+
+// The project's timeout of an hour: a question asked half an hour ago has
+// not timed out after a pass of the wait's timer, and the wait sleeps
+// until it is due, an hour after it was asked (I4).
+func TestAnAuthorQuestionWaitsForTheProjectsTimeout(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	mustExec(t, w.owner, `UPDATE projects SET delivery_policy = delivery_policy || '{"authorQuestionTimeoutMinutes":60}' WHERE id = $1`, w.project)
+	wi, n, h1 := w.approvedAtH1()
+	q, _ := w.must(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Is a changelog entry planned?"}`, n))["questionId"].(string)
+	w.agentsDone(wi, "a COMMENT at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
+	// Asked half an hour ago: not due for another half hour.
+	mustExec(t, w.owner, `UPDATE review_questions SET created_at = now() - interval '30 minutes' WHERE id = $1`, q)
+	w.waitPass(wi, "pass:1h")
+	if e := w.events(wi, delivery.EvAuthorQuestionTimedOut); e != 0 {
+		t.Fatalf("a question asked half an hour ago timed out: %d", e)
+	}
+	var off float64
+	if err := w.owner.QueryRow(context.Background(), `SELECT extract(epoch FROM w.wake_at - (q.created_at + interval '1 hour'))
+		FROM workflow_runs w, review_questions q WHERE w.task_id = $1 AND w.status = 'waiting' AND q.id = $2`, wi, q).Scan(&off); err != nil {
+		t.Fatal(err)
+	}
+	if off < -2 || off > 2 {
+		t.Errorf("the wait sleeps until %+.0fs from the question's due time", off)
+	}
+}
+
 // Start over ends attempt 1's delivery, and its question to the author
 // with it: attempt 2's verdict is not held by it, alice's next comment is
 // not routed to attempt 2's conductor as its answer, and it never times
@@ -283,12 +323,9 @@ func TestStartOverWithAnOpenAuthorQuestion(t *testing.T) {
 	if m := w.conversationMessages(wi, answer); m != 0 {
 		t.Errorf("alice's comment reached attempt 2's conductor as an answer")
 	}
-	// Long past its timeout, and a wait pass (CI moving at H1).
+	// Long past its timeout, and a pass of attempt 2's wait.
 	mustExec(t, w.owner, `UPDATE review_questions SET created_at = now() - interval '4 days' WHERE id = $1`, q)
-	w.gh.SetChecks("pending")
-	w.syncs(2)
-	w.gh.SetChecks("success")
-	w.agentsDone(wi, "a wait pass", func() bool { w.sync(); return w.waitingOnPR(wi) })
+	w.waitPass(wi, "pass:attempt-2")
 	w.syncs(2)
 	w.advanced()
 	if e := w.events(wi, delivery.EvAuthorQuestionTimedOut); e != 0 {
@@ -335,6 +372,9 @@ func TestAuthorQuestionsTimeOut(t *testing.T) {
 	}
 	w.syncs(3)
 	w.advanced()
+	// Another pass of the wait's timer: the free-standing question, still
+	// open, is not timed out again (L1).
+	w.waitPass(wi, "pass:after-timeouts")
 	if e := w.events(wi, delivery.EvAuthorQuestionTimedOut); e != 2 {
 		t.Errorf("%d timeouts after more syncs", e)
 	}
