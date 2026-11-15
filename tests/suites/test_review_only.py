@@ -7,8 +7,10 @@ GitHub review pinned to that head, then waits on the pull request.
 
 from __future__ import annotations
 
+import json
+
 from fake_github import FakeGitHub
-from helpers import ApiClient, wait_until
+from helpers import ApiClient, query, wait_until
 
 
 def test_a_clean_pull_request_with_green_ci_is_approved_at_its_head(
@@ -108,3 +110,70 @@ def test_the_authors_fix_is_re_reviewed_and_approved_with_dudes_thread_resolved(
                message="dude's thread on the fixed finding was not resolved")
     phases = [r["phase"] for r in client.task_runs(task["id"]) if r["phase"]]
     assert phases and set(phases) <= {"review"}, phases
+
+
+def test_the_authors_reply_in_dudes_thread_reaches_the_conductor_and_a_wrong_finding_is_withdrawn(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str
+):
+    """REQUEST_CHANGES at H1; the author replies in dude's thread, no mention → the conductor hears it, naming the finding;
+    the (scripted) conductor dismisses it as wrong → APPROVE at H1, no new round, dude's thread withdrawn and resolved."""
+    resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token",
+                                                "apiBaseUrl": fake_github.api_url, "publicUrl": "https://dude.example.com"})
+    assert resp.status_code == 200, resp.text
+    resp = client.patch(f"/v1/projects/{forge_project['id']}", {
+        "deliveryPolicy": {"requiredReviewers": ["correctness"]},
+        # fake/scripted's reviewer files one finding on FACTORY.md:1.
+        "agentModels": client.on_models({"reviewer": "fake/scripted"}),
+    })
+    assert resp.status_code == 200, resp.text
+    fake_github.open_pull("feature/greet", title="Greet in Portuguese", author="gus")
+    h1 = fake_github.commit_file("feature/greet", "FACTORY.md", "Olá\n", "Greet in Portuguese")
+    fake_github.add_check_run(h1)
+    task = client.create_task(
+        forge_project["id"], "Review the Portuguese greeting", goal="Review the pull request and change nothing.",
+        source={"kind": "pr", "repositoryId": forge_project["repositories"][0]["id"], "pullRequest": "#1",
+                "mode": "review_only"},
+    )
+    resp = client.post(f"/v1/tasks/{task['id']}/deliver")
+    assert resp.status_code == 201, resp.text
+
+    marker = f"<!-- dude:review task={task['id']} "
+
+    def ours() -> list[dict]:
+        return [r for r in fake_github.pulls[1].reviews if marker in r["body"] and r["commit_id"] == h1]
+
+    first = wait_until(lambda: next(iter(ours()), None), timeout=120, message="dude never reviewed H1")
+    assert first["state"] == "CHANGES_REQUESTED", first
+    root = next(c for c in fake_github.pulls[1].comments
+                if c.get("path") and c.get("pull_request_review_id") == first["id"] and not c.get("in_reply_to_id"))
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
+               message="the task never went back to waiting on the pull request")
+    finding = query(owner_dsn, "SELECT id FROM review_findings WHERE task_id = %s AND status = 'open'", (task["id"],))
+    assert len(finding) == 1, finding
+    reviews = len([r for r in client.task_runs(task["id"]) if r["phase"] == "review"])
+
+    # The author's reply, no @mention. The scripted conductor carries out
+    # the tool line it is told: what a real one decides on reading the code.
+    dismiss = {"id": finding[0]["id"], "reason": "wrong: FACTORY.md:1 is the greeting the task asks for, as the author showed"}
+    reply = fake_github.comment(1, "This is intentional: the greeting is meant to be Portuguese.\n\n"
+                                f"tool: dismiss_finding {json.dumps(dismiss)}", author="gus", in_reply_to=root["id"])
+    told = wait_until(
+        lambda: next((e for e in client.events(taskId=task["id"]) if e["eventType"] == "chat.message"
+                      and (e["payload"].get("github") or {}).get("feedbackId") == f"line-comment-{reply}"), None),
+        timeout=60, message="the author's reply never reached the conductor")
+    assert told["payload"]["github"]["login"] == "gus", told
+    names = f"It replies in dude's thread on finding {finding[0]['id']}"
+    assert query(owner_dsn, """SELECT 1 FROM runs WHERE task_id = %s AND role = 'conductor' AND strpos(prompt, %s) > 0
+        UNION ALL SELECT 1 FROM directives WHERE task_id = %s AND strpos(text, %s) > 0""",
+                 (task["id"], names, task["id"], names)), "the conductor was not told which finding the thread is about"
+
+    second = wait_until(lambda: len(ours()) == 2 and ours()[1], timeout=120, message="dude never decided again at H1")
+    assert second["state"] == "APPROVED", second
+    assert len([r for r in client.task_runs(task["id"]) if r["phase"] == "review"]) == reviews, "a new round ran"
+    replies = wait_until(
+        lambda: [c["body"] for c in fake_github.pulls[1].comments
+                 if c.get("in_reply_to_id") == root["id"] and c["user"]["login"] == fake_github.token_login] or None,
+        timeout=30, message="dude never answered in its thread")
+    assert replies == ["Withdrawn: FACTORY.md:1 is the greeting the task asks for, as the author showed."], replies
+    wait_until(lambda: fake_github.thread_id(root["id"]) in fake_github.resolved_threads, timeout=30,
+               message="dude's thread on the withdrawn finding was not resolved")

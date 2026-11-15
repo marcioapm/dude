@@ -254,6 +254,49 @@ func Mentions(body string, factoryLogins []string) bool {
 // Who may address it is the same rule as who may wake a fixer (MayWake),
 // applied by the caller.
 func AddressedToDude(f Feedback, factoryLogins []string) bool {
+	return fromAPerson(f, factoryLogins) && Mentions(f.Body, factoryLogins)
+}
+
+// Threads are dude's review threads on a review-only task's pull
+// requests, by GitHub's comment id. GitHub gives every reply in a review
+// thread the thread's first comment as its in_reply_to_id, so a thread is
+// known by its root alone.
+type Threads struct {
+	// Roots are dude's reviews' inline comments, each a thread's first
+	// comment, with the finding it is for ("" for one that is no
+	// finding's).
+	Roots map[int64]string
+	// Own are dude's replies in those threads ("Fixed at …",
+	// "Withdrawn: …"): dude's, never a reply to it, whatever account
+	// posted them.
+	Own map[int64]bool
+}
+
+// Finding is the finding dude's thread with this root is for; "" for
+// none, or with no threads.
+func (t *Threads) Finding(root int64) string {
+	if t == nil {
+		return ""
+	}
+	return t.Roots[root]
+}
+
+// RepliesToDude says a line comment replies in one of dude's threads and
+// is not dude's own, as AddressedToDude reads that, nor one of dude's
+// replies there. For a review-only task, the author answering dude's
+// review there is a message to its conductor, mention or not; a writing
+// task passes no threads.
+func RepliesToDude(f Feedback, factoryLogins []string, t *Threads) bool {
+	if t == nil || f.Kind != KindLineComment || f.InReplyTo == 0 || t.Own[LineCommentID(f.ID)] {
+		return false
+	}
+	_, ours := t.Roots[f.InReplyTo]
+	return ours && fromAPerson(f, factoryLogins)
+}
+
+// fromAPerson: not a bot's, a factory login's or dude's own reply, and
+// not empty.
+func fromAPerson(f Feedback, factoryLogins []string) bool {
 	if isBot(f.Author) || Own(f) || strings.TrimSpace(f.Body) == "" {
 		return false
 	}
@@ -262,7 +305,7 @@ func AddressedToDude(f Feedback, factoryLogins []string) bool {
 			return false
 		}
 	}
-	return Mentions(f.Body, factoryLogins)
+	return true
 }
 
 // Posted is a comment dude posted: its feedback id (as Feedback names

@@ -413,14 +413,18 @@ class FakeGitHub:
         )
         return [line for line in result.stdout.splitlines() if line]
 
-    def comment(self, number: int, body: str, author: str = "reviewer", path: str | None = None) -> int:
-        """A person's comment, on the conversation or (with a path) on a line; its id."""
+    def comment(self, number: int, body: str, author: str = "reviewer", path: str | None = None,
+                in_reply_to: int | None = None) -> int:
+        """A person's comment, on the conversation or (with a path) on a line; its id.
+        With in_reply_to, a reply in that line comment's review thread, on its path."""
         with self._lock:
+            if in_reply_to is not None:
+                path = next(c["path"] for c in self.pulls[number].comments if c["id"] == in_reply_to and c.get("path"))
             self._next_id += 1
             anchor = "discussion_r" if path else "issuecomment-"
             self.pulls[number].comments.append(
                 {"id": self._next_id, "body": body, "user": {"login": author},
-                 "created_at": _now(), "path": path,
+                 "created_at": _now(), "path": path, "in_reply_to_id": in_reply_to,
                  "html_url": f"https://github.test/{self.owner}/{self.repo}/pull/{number}#{anchor}{self._next_id}"}
             )
             comment_id = self._next_id

@@ -76,3 +76,35 @@ func TestWhoseVerdictCommentIsDudes(t *testing.T) {
 		t.Error("a verdict comment is dude's with no account known")
 	}
 }
+
+// A line comment replying in one of dude's threads, by a person, is
+// addressed to dude; anything else is not, whoever's thread it is in.
+func TestRepliesToDude(t *testing.T) {
+	threads := &Threads{Roots: map[int64]string{7: "rf_1"}, Own: map[int64]bool{9: true}}
+	reply := Feedback{ID: "line-comment-8", Author: "alice", Body: "This is intentional.", Kind: KindLineComment, InReplyTo: 7}
+	for _, c := range []struct {
+		name string
+		edit func(f *Feedback)
+		want bool
+	}{
+		{"the author's reply", func(*Feedback) {}, true},
+		{"in another thread", func(f *Feedback) { f.InReplyTo = 8 }, false},
+		{"a thread's first comment", func(f *Feedback) { f.InReplyTo = 0 }, false},
+		{"a conversation comment", func(f *Feedback) { f.Kind = KindComment }, false},
+		{"a bot's", func(f *Feedback) { f.Author = "lint[bot]" }, false},
+		{"a factory login's", func(f *Feedback) { f.Author = "Dude-Bot" }, false},
+		{"dude's own reply", func(f *Feedback) { f.Body = "Because.\n\n" + ReplyMarker }, false},
+		{"empty", func(f *Feedback) { f.Body = " " }, false},
+		{"dude's unmarked reply in its thread", func(f *Feedback) { f.ID, f.Body = "line-comment-9", "Withdrawn: wrong." }, false},
+		{"a reply to dude's reply's id", func(f *Feedback) { f.InReplyTo = 9 }, false},
+	} {
+		f := reply
+		c.edit(&f)
+		if got := RepliesToDude(f, []string{"dude-bot"}, threads); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+	if RepliesToDude(reply, nil, nil) {
+		t.Error("a writing task (no threads) has replies to dude")
+	}
+}

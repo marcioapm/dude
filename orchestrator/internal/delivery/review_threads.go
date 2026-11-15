@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/workflow"
 )
@@ -154,11 +156,7 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 		// resolve (a failed resolve is recorded, settling the thread) only
 		// resolves on its next run.
 		if !t.Replied {
-			text := fmt.Sprintf("Fixed at %s.", short(head))
-			if t.Status == "accepted" {
-				text = "Withdrawn: " + withdrawnNote(t.Note) + "."
-			}
-			posted, err := gh.ReplyToLineComment(ctx, pr.Slug, pr.Number, t.CommentID, text)
+			posted, err := gh.ReplyToLineComment(ctx, pr.Slug, pr.Number, t.CommentID, threadReplyText(t.Status, t.Note, head))
 			if err != nil {
 				failed("reply", err)
 				continue
@@ -174,6 +172,104 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 		}
 		_ = w.s.Emit(ctx, sc.OrganizationID, st, EvReviewThreadResolved, with("threadId", thread.ID))
 	}
+}
+
+// DudesThreadsTx is, for a review-only task, dude's own review threads on
+// its pull requests (forge.Threads): its reviews' inline comments
+// (review_submitted's comments), each a thread's root with the finding it
+// is for, and its replies in them (thread_replied's replyId), dude's own.
+// A line comment answering a root is addressed to dude
+// (forge.RepliesToDude). nil for a writing task: its routing is a
+// mention's alone.
+func DudesThreadsTx(ctx context.Context, tx pgx.Tx, taskID string) (*forge.Threads, error) {
+	if ok, err := ReviewOnlyTx(ctx, tx, taskID); err != nil || !ok {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT c.id, c.finding, c.root FROM events e, LATERAL (
+			SELECT (x->>'commentId')::bigint, COALESCE(x->>'findingId', ''), true FROM jsonb_array_elements(
+				CASE WHEN e.event_type = $2 AND jsonb_typeof(e.payload->'comments') = 'array' THEN e.payload->'comments' END) x
+			UNION ALL SELECT substring(e.payload->>'replyId' FROM '^line-comment-([0-9]+)$')::bigint, '', false WHERE e.event_type = $3
+		) c(id, finding, root)
+		WHERE e.task_id = $1 AND e.event_type IN ($2, $3) AND c.id IS NOT NULL`,
+		taskID, EvReviewSubmitted, EvReviewThreadReplied)
+	if err != nil {
+		return nil, err
+	}
+	out := &forge.Threads{Roots: map[int64]string{}, Own: map[int64]bool{}}
+	var id int64
+	var finding string
+	var root bool
+	_, err = pgx.ForEachRow(rows, []any{&id, &finding, &root}, func() error {
+		switch {
+		case !root:
+			out.Own[id] = true
+		case out.Roots[id] == "":
+			out.Roots[id] = finding
+		}
+		return nil
+	})
+	return out, err
+}
+
+// threadReplyText is the reply syncThreads posts in dude's thread for a
+// finding of status ("accepted" is withdrawn) at head: "Withdrawn:
+// <note>." or "Fixed at <sha>.". dudesThreadReply recognises it.
+func threadReplyText(status, note, head string) string {
+	if status == "accepted" {
+		return "Withdrawn: " + withdrawnNote(note) + "."
+	}
+	return fmt.Sprintf("Fixed at %s.", short(head))
+}
+
+// dudesThreadReply is the words of a reply syncThreads posts in dude's
+// thread (threadReplyText): "Fixed at <sha>." or "Withdrawn: <note>.".
+var dudesThreadReply = regexp.MustCompile(`^(?:Fixed at \S+|(?s:Withdrawn: .*))\.$`)
+
+// OwnThreadReplies adds to a review-only task's threads (DudesThreadsTx)
+// dude's replies in them not recorded yet: a reply posted and listed
+// before its thread_replied event, or whose event was lost. They are line
+// comments by self, the account dude posts as, in the words syncThreads
+// posts. Asks GitHub who self is only when one may be; a writing task's
+// (nil) threads are left as they are.
+func OwnThreadReplies(ctx context.Context, gh *forge.GitHub, t *forge.Threads, listed []forge.Feedback) error {
+	if t == nil {
+		return nil
+	}
+	self := ""
+	for _, f := range listed {
+		if _, ours := t.Roots[f.InReplyTo]; !ours || f.Kind != forge.KindLineComment || f.InReplyTo == 0 || !dudesThreadReply.MatchString(f.Body) {
+			continue
+		}
+		if self == "" {
+			var err error
+			if self, err = gh.Login(ctx); err != nil {
+				return err
+			}
+		}
+		if strings.EqualFold(f.Author, self) {
+			t.Own[forge.LineCommentID(f.ID)] = true
+		}
+	}
+	return nil
+}
+
+// threadFindingTx is the finding dude's thread is about, as the wake of
+// a reply in it names it: nil when it is no finding's.
+func threadFindingTx(ctx context.Context, tx pgx.Tx, findingID string) (*verdictFinding, error) {
+	if findingID == "" {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, description, suggested_fix, COALESCE(acceptance, ''),
+			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced
+		FROM review_findings WHERE id = $1`, findingID)
+	if err != nil {
+		return nil, err
+	}
+	f, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByPos[verdictFinding])
+	if db.IsNotFound(err) {
+		return nil, nil
+	}
+	return &f, err
 }
 
 // withdrawnNote is the conductor's reason a finding was withdrawn, as the

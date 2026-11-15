@@ -275,6 +275,20 @@ func (f verdictFinding) blocks() bool {
 	return (f.Introduced == nil || *f.Introduced) && IsBlocking(atFixBar([]FindingState{{Severity: f.Severity, Status: "open", Trivial: f.Trivial}})[0])
 }
 
+// inlineText is the words of dude's inline comment for the finding.
+func (f verdictFinding) inlineText() string {
+	text := "**" + f.Title + "** (" + f.Severity + ")"
+	if !f.blocks() {
+		text = "nit: " + text
+	}
+	for _, s := range []string{f.Description, f.Fix, f.Acceptance} {
+		if s != "" {
+			text += "\n\n" + s
+		}
+	}
+	return text
+}
+
 // maxInline bounds the review's inline comments; the rest go in its body.
 const maxInline = 20
 
@@ -310,15 +324,7 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 			stillOpen = append(stillOpen, e.Head, line)
 			continue
 		}
-		text := "**" + f.Title + "** (" + f.Severity + ")"
-		if !f.blocks() {
-			text = "nit: " + text
-		}
-		for _, s := range []string{f.Description, f.Fix, f.Acceptance} {
-			if s != "" {
-				text += "\n\n" + s
-			}
-		}
+		text := f.inlineText()
 		if f.File == "" || len(comments) >= maxInline && !f.blocks() {
 			b.WriteString("\n- " + strings.ReplaceAll(text, "\n", " ") + where(f))
 			continue
