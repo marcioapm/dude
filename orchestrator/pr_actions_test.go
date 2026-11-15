@@ -189,6 +189,18 @@ func rerunWorld(t *testing.T) (*world, string) {
 	return w, task
 }
 
+// A pull request named as GitHub shows it, owner/repo#N or its URL, is the
+// task's; the same name under another owner is not.
+func TestARerunNamesThePullRequestAsGitHubDoes(t *testing.T) {
+	w, task := rerunWorld(t)
+	owner, repo, _ := strings.Cut(w.gh.Slug, "/")
+	w.must(task, "rerun_failed_checks", `{"pr":"`+owner+"/"+repo+`#1"}`)
+	w.refused(task, "rerun_failed_checks", `{"pr":"someone-else/`+repo+`#1"}`, "not a pull request of your task")
+	w.refused(task, "reply_on_pull_request", `{"pr":"https://github.com/someone-else/`+repo+`/pull/1","text":"Hi."}`,
+		"not a pull request of your task")
+	w.must(task, "reply_on_pull_request", `{"pr":"https://github.com/`+w.gh.Slug+`/pull/1/files?w=1","text":"Hi."}`)
+}
+
 // GitHub refusing a rerun outright (a workflow still running) reruns
 // nothing, so the head's one rerun is not spent: asked again, dude asks
 // GitHub again, and that rerun, once it happens, is the head's.
