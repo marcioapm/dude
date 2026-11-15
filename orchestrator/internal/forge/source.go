@@ -26,6 +26,8 @@ type PullRequestSource struct {
 	// The repositories those branches are in, owner/name: a fork's head is
 	// in another; "" when GitHub no longer has the head's (a deleted fork).
 	HeadRepo, BaseRepo string
+	// Who opened it, by login ("" when GitHub did not say).
+	Author string
 }
 
 // Fork says the pull request's head is not in its base's repository.
@@ -43,6 +45,9 @@ func (g *GitHub) PullRequestSource(ctx context.Context, slug string, number int)
 	}
 	if p.Base.Repo != nil {
 		out.BaseRepo = p.Base.Repo.FullName
+	}
+	if p.User != nil {
+		out.Author = p.User.Login
 	}
 	return out, nil
 }

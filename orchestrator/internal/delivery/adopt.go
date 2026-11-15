@@ -96,6 +96,9 @@ func (w *steps) adopt(ctx context.Context, sc workflow.StepContext) (workflow.Re
 		return workflow.Result{}, err
 	}
 	st.Source.HeadSHA = head
+	if src.ReviewOnly() {
+		st.Source.Author = checked.Author
+	}
 	st.Heads = map[string]string{repo.Name: head}
 	st.ChangedPaths = nil
 	for _, p := range changed {

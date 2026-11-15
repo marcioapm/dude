@@ -233,6 +233,9 @@ type Server struct {
 	ReviewTimeoutOnce bool
 	ReviewFail5xx     int
 	ReviewRetryAfter  int
+	// CommentTimeoutOnce takes the next conversation comment, then cuts
+	// the connection before answering: dude cannot tell it was posted.
+	CommentTimeoutOnce bool
 }
 
 // NodeID is a pull request's GraphQL id.
@@ -1514,6 +1517,14 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 	if r.PathValue("id") == "" {
 		c.ID = nextID.Add(1)
 		p.Comments = append(p.Comments, c)
+		if s.CommentTimeoutOnce {
+			// Taken, and the answer never arrives: the connection is cut.
+			s.CommentTimeoutOnce = false
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
 		write(w, 201, s.commentsJSON(p, []Comment{c}, "issuecomment")[0])
 		return
 	}

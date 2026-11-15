@@ -76,6 +76,8 @@ type Source struct {
 	// The head when the delivery took it over: a later head is someone's
 	// work on it, dude's or a person's.
 	HeadSHA string `json:"headSha,omitempty"`
+	// A review-only pull request's author, by login: whom ask_author asks.
+	Author string `json:"author,omitempty"`
 	// The live task the check found holding the branch, which a person
 	// confirmed this one supersedes; nil for none. Not kept.
 	Supersedes *SourceHolder `json:"supersedes,omitempty"`
@@ -185,6 +187,8 @@ func CheckSource(ctx context.Context, d *db.DB, gh *forge.GitHub, org, projectID
 		out.Mode = ModeReview
 		if reviewOnly {
 			out.Mode = ModeReviewOnly
+			// Who ask_author asks: read with the pull request already.
+			out.Author = pr.Author
 		} else if pr.State == forge.StateDraft {
 			out.Mode = ModeContinue
 		}
