@@ -222,8 +222,9 @@ const (
 	mAskAuthorLost = "GitHub's answer to the post was lost (%s): the comment may not have posted. The question is open; dude finds the comment on the next sync of the pull request. Do not ask again unless findings shows it never posted."
 )
 
-// replyTargetTx is the task's pull request named pr, as reply_on_pull_request
-// reads it: its repository's name in dude, its number, GitHub slug and id.
+// replyTargetTx is the task's pull request named pr, for reply_on_pull_request
+// (CheckReplyTx) and ask_author alike: its repository's name in dude, its
+// number, GitHub slug and id.
 func replyTargetTx(ctx context.Context, tx pgx.Tx, taskID string, gh *forge.GitHub, pr string) (repo string, number int, slug, prID string, err error) {
 	owner, name, number, err := parsePR(pr)
 	if err != nil {

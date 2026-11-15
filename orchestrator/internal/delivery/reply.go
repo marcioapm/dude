@@ -152,25 +152,9 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	case len(text) > ChatMessageMax:
 		return ReplyPost{}, refusef(rReplyAtMostBytesAsChat, ChatMessageMax)
 	}
-	owner, repo, number, err := parsePR(in.PR)
+	repo, number, slug, _, err := replyTargetTx(ctx, tx, ref.TaskID, gh, in.PR)
 	if err != nil {
 		return ReplyPost{}, err
-	}
-	var url string
-	prID, err := taskPullRequest(ctx, tx, ref.TaskID, number, owner, repo)
-	if err == nil {
-		err = tx.QueryRow(ctx, `SELECT r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-			WHERE pr.id = $1`, prID).Scan(&repo, &url)
-	}
-	if db.IsNotFound(err) {
-		return ReplyPost{}, refusef(rNotPullRequestYourTaskYou2, in.PR)
-	}
-	if err != nil {
-		return ReplyPost{}, err
-	}
-	slug := forge.SlugFromURL(url)
-	if gh == nil || slug == "" {
-		return ReplyPost{}, refusef(rNotOnGithubDudeConnectedThere, repo, number)
 	}
 	p := ReplyPost{ref: ref, repo: repo, number: number, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo), by: "conductor"}
 	if batch != nil {
