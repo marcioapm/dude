@@ -535,7 +535,14 @@ func (c Caller) tools() []tool {
 		create, _ := find("create_task", c.Role, c.grants)
 		return append(append([]tool{create}, githubReadTools...), automationCommentTool, postToChatTool)
 	}
-	return withReviewOnlyTools(granted(c.Role, c.grants), c)
+	// With a review-only conductor's own (reviewOnlyTools) added.
+	out := granted(c.Role, c.grants)
+	for _, name := range reviewOnlyTools {
+		if t, ok := c.reviewOnlyTool(name); ok {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // reviewOnlyTools are a review-only task's conductor's alone, beside what
@@ -555,16 +562,6 @@ func (c Caller) reviewOnlyTool(name string) (tool, bool) {
 		}
 	}
 	return tool{}, false
-}
-
-// withReviewOnlyTools is tools with a review-only conductor's own added.
-func withReviewOnlyTools(tools []tool, c Caller) []tool {
-	for _, name := range reviewOnlyTools {
-		if t, ok := c.reviewOnlyTool(name); ok {
-			tools = append(tools, t)
-		}
-	}
-	return tools
 }
 
 func (c Caller) findTool(name string) (tool, bool) {
