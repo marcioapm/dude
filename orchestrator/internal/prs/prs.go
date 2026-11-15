@@ -485,8 +485,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			}
 		}
 		// An author question whose post's answer was lost: its comment,
-		// dude's own, found by its marker (review only; asks nil else).
-		if asks != nil {
+		// dude's own, found by its marker (review only; only when one is
+		// lost).
+		if asks.Lost() {
 			if err := delivery.RecoverAsksTx(ctx, tx, pr.TaskID); err != nil {
 				return err
 			}

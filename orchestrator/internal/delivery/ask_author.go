@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -263,6 +264,14 @@ type AuthorAsks struct {
 type AuthorAsk struct {
 	ID, Login, Question, FindingID, URL string
 	At                                  time.Time
+	// Its post's answer was lost: no comment yet (RecoverAsksTx).
+	Lost bool
+}
+
+// Lost says a question's post answer was lost, its comment still to be
+// found (RecoverAsksTx); false for nil.
+func (a *AuthorAsks) Lost() bool {
+	return a != nil && slices.ContainsFunc(a.Open, func(q AuthorAsk) bool { return q.Lost })
 }
 
 // line is the question as a wake and the verdict name it.
@@ -338,7 +347,7 @@ const askOfAttempt = `($3 = 0 OR EXISTS (SELECT 1 FROM runs k WHERE k.id = q.run
 
 func openAuthorAsksTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int) ([]AuthorAsk, error) {
 	rows, err := tx.Query(ctx, `SELECT q.id, COALESCE(q.asked_of, ''), q.question, COALESCE(q.finding_id, ''), COALESCE(q.github_url, ''),
-		q.created_at FROM review_questions q WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND `+askOfAttempt+`
+		q.created_at, q.github_comment_id IS NULL FROM review_questions q WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND `+askOfAttempt+`
 		ORDER BY q.created_at, q.id`, taskID, HolderAuthor, attempt)
 	if err != nil {
 		return nil, err
@@ -376,11 +385,13 @@ func authorAsksLines(open []AuthorAsk) string {
 
 // RecoverAsksTx fills in the comment of an open author question whose
 // post's answer was lost: dude's own comment (forge.Own, recorded own by
-// the sync) carrying its askMarker. A review-only task's sync calls it.
+// the sync) carrying its askMarker, recorded since the question was
+// asked. A review-only task's sync calls it, only when one is lost
+// (AuthorAsks.Lost).
 func RecoverAsksTx(ctx context.Context, tx pgx.Tx, taskID string) error {
 	_, err := tx.Exec(ctx, `UPDATE review_questions q SET github_comment_id = e.payload->>'feedbackId', github_url = e.payload->>'url'
 		FROM events e WHERE q.task_id = $1 AND q.status = 'open' AND q.addressee = $2 AND q.github_comment_id IS NULL
-		  AND e.task_id = $1 AND e.event_type = $3 AND e.payload->>'own' = 'true'
+		  AND e.task_id = $1 AND e.event_type = $3 AND e.payload->>'own' = 'true' AND e.occurred_at >= q.created_at
 		  AND strpos(e.payload->>'body', '<!-- dude:ask id=' || q.id || ' -->') > 0`, taskID, HolderAuthor, EvPullRequestCommented)
 	return err
 }
