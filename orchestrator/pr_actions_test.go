@@ -226,6 +226,19 @@ func TestAPullRequestNamedWithItsOwnerIsMatchedByGitHubsName(t *testing.T) {
 	w.must(task, "request_limit", `{"limit":"rerun","pr":"`+owner+"/"+repo+`#1","reason":"CI flaked"}`)
 }
 
+// Named by number alone, a number two of the task's repositories share is the
+// newest pull request's.
+func TestAPullRequestNamedByNumberIsTheNewestOfThatNumber(t *testing.T) {
+	w, task := rerunWorld(t)
+	mustExec(t, w.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+		VALUES ('repo_web', $1, $2, 'web', 'https://github.com/acme/web.git', 'main')`, w.org, w.project)
+	mustExec(t, w.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
+		head_branch, base_branch, head_sha, title, state, created_at) VALUES ('pr_web', $1, $2, $3, 'repo_web', 1,
+		'https://github.com/acme/web/pull/1', 'feature/web', 'main', 'x', 'Web', 'closed', now() + interval '1 hour')`,
+		w.org, w.project, task)
+	w.refused(task, "mark_ready", `{"pr":"1"}`, "web#1 is closed: there is nothing to do on it")
+}
+
 // GitHub refusing a rerun outright (a workflow still running) reruns
 // nothing, so the head's one rerun is not spent: asked again, dude asks
 // GitHub again, and that rerun, once it happens, is the head's.
