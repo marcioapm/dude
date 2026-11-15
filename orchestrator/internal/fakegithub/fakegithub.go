@@ -554,19 +554,27 @@ func (s *Server) ReplyInThread(number int, author string, to int64, body string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.pulls[number]
-	path := ""
-	for _, c := range p.LineComments {
-		if c.ID == to {
-			path = c.Path
-			if c.InReplyTo != 0 {
-				to = c.InReplyTo
+	c := Comment{ID: nextID.Add(1), Author: author, Body: body, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	p.inThread(&c, to)
+	p.LineComments = append(p.LineComments, c)
+	return c.ID
+}
+
+// inThread puts reply c in the review thread of line comment to: its path,
+// and the thread's root as its in_reply_to_id, as GitHub sets it for a
+// reply to a reply too. false when there is no such line comment.
+func (p *Pull) inThread(c *Comment, to int64) bool {
+	c.InReplyTo = to
+	found := false
+	for _, l := range p.LineComments {
+		if l.ID == to {
+			found, c.Path = true, l.Path
+			if l.InReplyTo != 0 {
+				c.InReplyTo = l.InReplyTo
 			}
 		}
 	}
-	id := nextID.Add(1)
-	p.LineComments = append(p.LineComments, Comment{ID: id, Author: author, Body: body, Path: path, InReplyTo: to,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339)})
-	return id
+	return found
 }
 
 // EditComment changes a conversation or line comment's words, as its
@@ -1509,22 +1517,12 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 		write(w, 201, s.commentsJSON(p, []Comment{c}, "issuecomment")[0])
 		return
 	}
-	c.InReplyTo, _ = strconv.ParseInt(r.PathValue("id"), 10, 64)
-	var parent *Comment
-	for i := range p.LineComments {
-		if p.LineComments[i].ID == c.InReplyTo {
-			parent = &p.LineComments[i]
-		}
-	}
-	if parent == nil {
+	to, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if !p.inThread(&c, to) {
 		fail(w, 404, "Not Found")
 		return
 	}
-	c.ID, c.Path = nextID.Add(1), parent.Path
-	if parent.InReplyTo != 0 {
-		// A reply to a reply: GitHub points it at the thread's root.
-		c.InReplyTo = parent.InReplyTo
-	}
+	c.ID = nextID.Add(1)
 	p.LineComments = append(p.LineComments, c)
 	write(w, 201, s.commentsJSON(p, []Comment{c}, "discussion_r")[0])
 }
