@@ -112,6 +112,57 @@ func TestAskTimerIsTheAttempts(t *testing.T) {
 	}
 }
 
+// A writing task started over keeps attempt 1's reviewer questions to the
+// person and the conductor open in attempt 2 (the 248 trigger withdraws
+// conductor rows only on a handover): attempt 2's conductor settles them,
+// as at main. Only an author row is scoped to its attempt (tests O2).
+func TestAWritingConductorSettlesAnEarlierAttemptsReviewerQuestion(t *testing.T) {
+	w := newGoldenWorld(t)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+		VALUES ('run_rev1', $1, 'prj_g', 'wi_g', 1, 'completed', 'reviewer', 'agent'),
+		('run_cond2', $1, 'prj_g', 'wi_g', 2, 'running', 'conductor', 'agent')`)
+	w.exec(t, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee)
+		VALUES ('rvq_p', $1, 'wi_g', 'run_rev1', 1, 'security', 'Who may export?', 'person'),
+		('rvq_c', $1, 'wi_g', 'run_rev1', 2, 'security', 'UTC months?', 'conductor')`)
+	w.delivery(t, "review", `{"taskId":"wi_g","projectId":"prj_g","attempt":2,"decider":"conductor"}`)
+	ref := RunRef{Org: w.org, ProjectID: "prj_g", TaskID: "wi_g", RunID: "run_cond2"}
+	for _, c := range []struct {
+		id, answer string
+		withdraw   bool
+		want       string
+	}{{"rvq_p", "Only its own.", false, "answered"}, {"rvq_c", "", true, "withdrawn"}} {
+		w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) {
+			out, err := ConductAnswerReviewQuestion(ctx, tx, ref, c.id, c.answer, c.withdraw, "moot")
+			if err == nil && out.Status != c.want {
+				t.Errorf("%s: %s, want %s", c.id, out.Status, c.want)
+			}
+			return "", err
+		})
+	}
+	if n := w.count(t, `SELECT count(*) FROM review_questions WHERE task_id = 'wi_g' AND status = 'open'`); n != 0 {
+		t.Errorf("%d of attempt 1's reviewer questions still open", n)
+	}
+}
+
+// A lost ask's own comment, recorded by an orchestrator whose clock runs
+// 30s behind the database's, is still found: RecoverAsksTx's grace
+// (tests O5).
+func TestRecoverAsksTakesAnOwnCommentWithinTheGrace(t *testing.T) {
+	w := newGoldenWorld(t)
+	w.exec(t, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind)
+		VALUES ('run_cond1', $1, 'prj_g', 'wi_g', 1, 'running', 'conductor', 'agent')`)
+	w.exec(t, `INSERT INTO review_questions (id, organization_id, task_id, run_id, n, category, question, addressee, asked_of, created_at)
+		VALUES ('rvq_l', $1, 'wi_g', 'run_cond1', 1, 'conductor', 'Q?', 'author', 'alice', '2026-11-15 10:00:00Z')`)
+	w.exec(t, `INSERT INTO events (id, organization_id, event_type, task_id, actor_type, actor_id, source, payload, occurred_at)
+		VALUES ('ev_own', $1, $2, 'wi_g', 'integration', 'github', 'test',
+			jsonb_build_object('own', true, 'feedbackId', 'c77', 'url', 'https://x/c77', 'body', '@alice Q?'||chr(10)||$3::text),
+			'2026-11-15 09:59:30Z')`, EvPullRequestCommented, askMarker("rvq_l"))
+	w.in(t, func(ctx context.Context, tx pgx.Tx) (string, error) { return "", RecoverAsksTx(ctx, tx, "wi_g") })
+	if n := w.count(t, `SELECT count(*) FROM review_questions WHERE id = 'rvq_l' AND github_comment_id = 'c77' AND github_url = 'https://x/c77'`); n != 1 {
+		t.Error("the comment 30s before the question's created_at was not recovered")
+	}
+}
+
 // CheckAskAuthorTx's refusals, each with no question recorded: a writing
 // task (the second layer behind the tool's absence), an empty or too long
 // question, a pull request whose author dude does not know, and a finding
