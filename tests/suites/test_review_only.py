@@ -227,6 +227,9 @@ def test_the_conductor_asks_the_author_and_their_answer_lets_dude_approve(
     held = wait_until(lambda: len(ours()) == 2 and ours()[1], timeout=120, message="dude never decided again at H")
     assert held["state"] == "COMMENTED", held
     assert "Before approving: @gus, Should the greeting also be in English?" in held["body"], held["body"]
+    # The question holds the approval back: dude's APPROVE at H stands no longer.
+    wait_until(lambda: ours()[0]["state"] == "DISMISSED", timeout=60,
+               message="dude's approval at H still stands beside the COMMENT")
 
     answer = {"id": question[0]["id"], "answer": "gus: Portuguese only, English comes later"}
     reply = fake_github.comment(1, "Portuguese only for now; English comes in a later pull request.\n\n"

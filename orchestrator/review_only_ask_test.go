@@ -5,6 +5,7 @@ package orchestrator_test
 // holds dude's verdict. A writing task sees none of it.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -124,10 +125,32 @@ func TestAskTheAuthorOnTheConversationHoldsTheApproval(t *testing.T) {
 	if !strings.Contains(rs[1].Body, "https://") {
 		t.Errorf("the COMMENT does not link the question: %q", rs[1].Body)
 	}
+	// The question holds the approval back: dude's APPROVE at H1 stands
+	// no longer (I3).
+	if rs[0].State != "DISMISSED" {
+		t.Errorf("dude's approval at H1 still stands beside the COMMENT: %+v", rs[0])
+	}
 	w.syncs(4)
 	w.advanced()
 	if got := reviewsAt(w.dudeReviews(wi, n), h1); len(got) != 2 {
 		t.Fatalf("a re-sync posted again: %+v", got)
+	}
+	// The verdict runs again at H1 with the same open question (a
+	// recheck, as a withdrawn finding sends): its claim is the same, so
+	// nothing is posted again (I1).
+	claims := w.events(wi, delivery.EvReviewClaimed)
+	wf := w.str(`SELECT id FROM workflow_runs WHERE task_id = $1 AND status IN ('running', 'waiting')`, wi)
+	if err := w.runtime.Signal(context.Background(), w.org, wf, delivery.SignalPRFeedback, map[string]any{"kind": delivery.SignalKindRecheck}, "recheck:probe"); err != nil {
+		t.Fatal(err)
+	}
+	// Consumed, the wait went on to the verdict step and back.
+	w.agentsDone(wi, "the verdict ran again at H1", func() bool {
+		return w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id = $1 AND consumed_at IS NULL`, wf) == 0 && w.waitingOnPR(wi)
+	})
+	w.syncs(2)
+	w.advanced()
+	if got := reviewsAt(w.dudeReviews(wi, n), h1); len(got) != 2 || w.events(wi, delivery.EvReviewClaimed) != claims {
+		t.Fatalf("the verdict's re-run at H1 posted again: %+v", got)
 	}
 	// Someone else's conversation comment is not an answer.
 	bob := w.gh.Comment(n, "bob", "Looks fine to me.")
