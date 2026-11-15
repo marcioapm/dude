@@ -1,0 +1,1 @@
+Your question {{.ID}} to the pull request's author timed out: {{.Reason}}. dude asks nothing more on GitHub. Withdraw it (answer_review_question with withdraw and a reason) and dude's verdict proceeds without it, or ask the owner (ask_person) whether to approve without the answer, then withdraw it.

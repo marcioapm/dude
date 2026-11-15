@@ -27,6 +27,9 @@ type Mention struct {
 	// For a reply in one of dude's review threads (DudesThreadsTx), the
 	// finding the thread is about: the wake names it. "" otherwise.
 	Finding string
+	// On a review-only task, the conductor's open questions to the pull
+	// request's author (AuthorAsksTx): the wake lists them. nil otherwise.
+	Asks []AuthorAsk
 }
 
 // github is where a mention came from, as its chat.message carries it.
@@ -99,6 +102,9 @@ func MentionTx(ctx context.Context, tx pgx.Tx, m Mention) (bool, error) {
 		return false, err
 	}
 	text := m.toldAbout(body, f)
+	if asks := authorAsksLines(m.Asks); asks != "" {
+		text += "\n\n" + asks
+	}
 	ref := RunRef{Org: m.Org, ProjectID: m.ProjectID, TaskID: m.TaskID}
 	var ending bool
 	find := func() error {

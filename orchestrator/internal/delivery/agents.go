@@ -108,6 +108,8 @@ var (
 	relayOutcomeTmpl           = mustTemplate("notices/told/relay-outcome")
 	runFailedTmpl              = mustTemplate("wakes/run-failed")
 	stalledTmpl                = mustTemplate("wakes/stalled")
+	authorAsksTmpl             = mustTemplate("wakes/author-asks")
+	authorAskTimedOutTmpl      = mustTemplate("wakes/author-question-timed-out")
 	steerFailedTmpl            = mustTemplate("wakes/steer-failed")
 	steerReadTmpl              = mustTemplate("wakes/steer-read")
 	unblockedTmpl              = mustTemplate("wakes/unblocked")

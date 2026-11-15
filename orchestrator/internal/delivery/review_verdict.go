@@ -113,6 +113,12 @@ type verdictInput struct {
 	// and the notes naming what it failed (VerdictState.TestNotes).
 	Test      string
 	TestNotes []string
+	// The conductor's open questions to the pull request's author
+	// (ask_author): never APPROVE while one is open.
+	Asks []AuthorAsk
+	// Its settled (answered or withdrawn) author questions, by id: part of
+	// an approval's claim.
+	Settled []string
 }
 
 // The verdict's reasons: part of the claim, so a later verdict at the
@@ -131,6 +137,10 @@ const (
 	reasonUnreadable    = "ci-unreadable"
 	reasonDraft         = "draft"
 	reasonApprove       = "approve"
+	// An open question to the author, the findings settled: a COMMENT
+	// naming it. Its reason carries the questions' ids, so the same
+	// questions at the same head are commented on once.
+	reasonAuthorQuestion = "author-question"
 )
 
 // transientReason says a COMMENT for reason holds back an approval only
@@ -198,6 +208,15 @@ func decideVerdict(in verdictInput) verdictDecision {
 	if it := items[ReadyMergeable]; strings.Contains(it.Detail, "conflicts with") || strings.HasPrefix(it.Detail, "behind ") {
 		notes = append(notes, "For the author: "+it.Detail)
 	}
+	var asked []string
+	askIDs := reasonAuthorQuestion
+	for _, a := range in.Asks {
+		asked = append(asked, a.line())
+		askIDs += ":" + a.ID
+	}
+	if len(asked) > 0 {
+		notes = append(notes, "Before approving: "+strings.Join(asked, "; "))
+	}
 	post := func(event, reason, headline string) verdictDecision {
 		return verdictDecision{Action: verdictPost, Event: event, Reason: reason, Headline: headline, Notes: notes}
 	}
@@ -208,9 +227,15 @@ func decideVerdict(in verdictInput) verdictDecision {
 	if it := items[ReadyReviewed]; !it.OK {
 		return post(forge.EventComment, reasonNotReviewed, fmt.Sprintf("Could not complete the review at %s: %s", h, it.Detail))
 	}
-	// 3. An open finding the pull request introduced, at the fix bar.
+	// 3. An open finding the pull request introduced, at the fix bar. Its
+	// open author questions are part of its claim: asked since, the review
+	// is posted again, listing them.
 	if it := items[ReadyFindings]; !it.OK {
-		return post(forge.EventRequestChanges, reasonFindings, fmt.Sprintf("Changes requested at %s: %s", h, it.Detail))
+		reason := reasonFindings
+		if len(asked) > 0 {
+			reason += strings.TrimPrefix(askIDs, reasonAuthorQuestion)
+		}
+		return post(forge.EventRequestChanges, reason, fmt.Sprintf("Changes requested at %s: %s", h, it.Detail))
 	}
 	// 3'. The test failed or was blocked at H with no finding of its open
 	// at the fix bar (one would be row 3): named, never approved.
@@ -219,7 +244,11 @@ func decideVerdict(in verdictInput) verdictDecision {
 		d.Notes = append(slices.Clone(in.TestNotes), notes...)
 		return d
 	}
-	// 4. A question still open.
+	// 4. A question still open. One to the author is not a defect: a
+	// COMMENT naming it, never REQUEST_CHANGES, and never APPROVE.
+	if len(asked) > 0 {
+		return post(forge.EventComment, askIDs, fmt.Sprintf("Reviewed at %s. Before approving: %s", h, strings.Join(asked, "; ")))
+	}
 	if it := items[ReadyQuestions]; !it.OK {
 		return post(forge.EventComment, reasonQuestion, fmt.Sprintf("Waiting on an answer at %s: %s", h, it.Detail))
 	}
@@ -254,8 +283,14 @@ func decideVerdict(in verdictInput) verdictDecision {
 	if it := items[ReadyOpen]; !it.OK {
 		return post(forge.EventComment, reasonDraft, fmt.Sprintf("Reviewed at %s, no issue found. Draft: no approval until it is marked ready for review", h))
 	}
-	// 9.
-	return post(forge.EventApprove, reasonApprove, fmt.Sprintf("Approved at %s: %s; %s", h, items[ReadyReviewed].Detail, checks.Detail))
+	// 9. Approved after author questions were settled at this head: their
+	// ids are part of the claim, so an approval dismissed for a question
+	// (dismissApprovalsAt) is posted anew.
+	approve := reasonApprove
+	for _, id := range in.Settled {
+		approve += ":" + id
+	}
+	return post(forge.EventApprove, approve, fmt.Sprintf("Approved at %s: %s; %s", h, items[ReadyReviewed].Detail, checks.Detail))
 }
 
 // verdictFinding is an open finding of the attempt, as the review shows it.
@@ -460,6 +495,12 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		if findings, err = verdictFindingsTx(ctx, tx, st, pr.Repo); err != nil {
 			return err
 		}
+		if in.Asks, err = openAuthorAsksTx(ctx, tx, st.TaskID); err != nil {
+			return err
+		}
+		if in.Settled, err = settledAuthorAsksTx(ctx, tx, st.TaskID); err != nil {
+			return err
+		}
 		link, err = taskLink(ctx, tx, st.TaskID)
 		return err
 	}); err != nil {
@@ -560,7 +601,9 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		// After the verdict, best effort: dude's threads in step, and an
 		// approval of dude's at another commit still standing dismissed.
 		w.syncThreads(ctx, sc, st, gh, pr, head)
-		if err := w.dismissApprovals(ctx, sc, st, gh, pr, head, "superseded"); err != nil {
+		// An approval of dude's at H itself stands no longer once a
+		// question to the author holds it back.
+		if err := w.dismissApprovalsAt(ctx, sc, st, gh, pr, head, "superseded", len(in.Asks) > 0 && posted != forge.EventApprove); err != nil {
 			return workflow.Result{}, err
 		}
 	}
@@ -578,7 +621,11 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		v.Due = ""
 	}
 	w.statusComment(ctx, sc, st, pr, fmt.Sprintf("%s (%s)", d.Headline, cmp.Or(reviewWord[v.Posted], "not posted")))
-	return waitForPR(st), w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "dude's review at "+short(head)+": "+cmp.Or(reviewWord[v.Posted], "not posted"))
+	res, err := w.withAskTimer(ctx, sc, st, waitForPR(st))
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	return res, w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", "dude's review at "+short(head)+": "+cmp.Or(reviewWord[v.Posted], "not posted"))
 }
 
 var reviewWord = map[string]string{forge.EventApprove: "approved", forge.EventRequestChanges: "changes requested", forge.EventComment: "commented"}
@@ -841,6 +888,14 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 	if st.ReweighAt != nil && (len(sc.Signals) == 0 || !time.Now().Before(*st.ReweighAt)) {
 		rerun = true
 	}
+	// Questions to the author past their timeout, on dude's clock (design
+	// §7.6): a finding's withdrawn, the verdict weighed again; the next
+	// one's due time wakes this wait, no agent running.
+	expired, askDue, err := w.expireAuthorAsks(ctx, sc, st)
+	if err != nil {
+		return workflow.Result{}, err
+	}
+	recheck = recheck || expired
 	if ended {
 		if res, finished, err := w.pullRequestEnded(ctx, sc, st); err != nil || finished {
 			return res, err
@@ -908,6 +963,9 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 	if st.RoundDueAt != nil && (res.SleepUntil.IsZero() || st.RoundDueAt.Before(res.SleepUntil)) {
 		// The debounce's end wakes the wait, signal or none.
 		res.SleepUntil = *st.RoundDueAt
+	}
+	if !askDue.IsZero() && (res.SleepUntil.IsZero() || askDue.Before(res.SleepUntil)) {
+		res.SleepUntil = askDue
 	}
 	return res, nil
 }
