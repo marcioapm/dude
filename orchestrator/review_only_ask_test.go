@@ -29,7 +29,7 @@ func (w *world) openAsk(wi string) string {
 	return ids[0]
 }
 
-// dudeConversation is pull request n's conversation comments by dude's
+// askComments is pull request n's conversation comments by dude's
 // account carrying an ask marker.
 func (w *world) askComments(n int) []fakegithub.Comment {
 	var out []fakegithub.Comment
@@ -217,12 +217,19 @@ func TestALostAskNeverPostedThenWithdrawnApprovesAgain(t *testing.T) {
 	if len(w.askComments(n)) != 0 {
 		t.Fatal("the lost post reached GitHub")
 	}
+	w.heldThenWithdrawn(wi, n, h1, q, "it never posted")
+}
+
+// heldThenWithdrawn: open question q held the verdict at h1 (a COMMENT,
+// dude's approval dismissed); withdrawn, dude approves at h1 again.
+func (w *world) heldThenWithdrawn(wi string, n int, h1, q, reason string) {
+	w.t.Helper()
 	w.agentsDone(wi, "a COMMENT at H1", func() bool {
 		rs := reviewsAt(w.dudeReviews(wi, n), h1)
 		return len(rs) == 2 && rs[0].State == "DISMISSED" && w.waitingOnPR(wi)
 	})
 	w.syncs(2)
-	w.must(wi, "answer_review_question", fmt.Sprintf(`{"id":%q,"withdraw":true,"reason":"it never posted"}`, q))
+	w.must(wi, "answer_review_question", fmt.Sprintf(`{"id":%q,"withdraw":true,"reason":%q}`, q, reason))
 	w.agentsDone(wi, "a standing approval at H1", func() bool {
 		rs := reviewsAt(w.dudeReviews(wi, n), h1)
 		return len(rs) == 3 && rs[2].State == "APPROVED" && w.waitingOnPR(wi)
@@ -241,16 +248,7 @@ func TestAnAskWhoseRecordWasLostThenWithdrawnApprovesAgain(t *testing.T) {
 	q, _ := w.must(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Why lower case?"}`, n))["questionId"].(string)
 	mustExec(t, w.owner, `DELETE FROM events WHERE task_id = $1 AND event_type = $2`, wi, delivery.EvAuthorAsked)
 	mustExec(t, w.owner, `UPDATE review_questions SET github_comment_id = NULL, github_url = NULL WHERE id = $1`, q)
-	w.agentsDone(wi, "a COMMENT at H1", func() bool {
-		rs := reviewsAt(w.dudeReviews(wi, n), h1)
-		return len(rs) == 2 && rs[0].State == "DISMISSED" && w.waitingOnPR(wi)
-	})
-	w.syncs(2)
-	w.must(wi, "answer_review_question", fmt.Sprintf(`{"id":%q,"withdraw":true,"reason":"not needed"}`, q))
-	w.agentsDone(wi, "a standing approval at H1", func() bool {
-		rs := reviewsAt(w.dudeReviews(wi, n), h1)
-		return len(rs) == 3 && rs[2].State == "APPROVED" && w.waitingOnPR(wi)
-	})
+	w.heldThenWithdrawn(wi, n, h1, q, "not needed")
 }
 
 // recheck has the verdict run again at the head (as a withdrawn finding
