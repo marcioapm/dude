@@ -177,3 +177,65 @@ def test_the_authors_reply_in_dudes_thread_reaches_the_conductor_and_a_wrong_fin
     assert replies == ["Withdrawn: FACTORY.md:1 is the greeting the task asks for, as the author showed."], replies
     wait_until(lambda: fake_github.thread_id(root["id"]) in fake_github.resolved_threads, timeout=30,
                message="dude's thread on the withdrawn finding was not resolved")
+
+
+def test_the_conductor_asks_the_author_and_their_answer_lets_dude_approve(
+    client: ApiClient, forge_project: dict, fake_github: FakeGitHub, owner_dsn: str
+):
+    """APPROVE at H; the (scripted) conductor asks the author on the conversation (ask_author) → dude's review at H
+    becomes a COMMENT naming the question; the author answers on the conversation, no mention → the conductor hears
+    it and closes the question (answer_review_question) → APPROVE at H again, no new round."""
+    resp = client.post("/v1/forge/credential", {"auth": "pat", "secret": "fake-token",
+                                                "apiBaseUrl": fake_github.api_url, "publicUrl": "https://dude.example.com"})
+    assert resp.status_code == 200, resp.text
+    resp = client.patch(f"/v1/projects/{forge_project['id']}", {
+        "deliveryPolicy": {"requiredReviewers": ["correctness"]},
+        "agentModels": client.on_models({"reviewer": "fake/done"}),
+    })
+    assert resp.status_code == 200, resp.text
+    head = fake_github.open_pull("feature/greet", title="Greet in Portuguese", author="gus")
+    fake_github.add_check_run(head)
+    task = client.create_task(
+        forge_project["id"], "Review the Portuguese greeting", goal="Review the pull request and change nothing.",
+        source={"kind": "pr", "repositoryId": forge_project["repositories"][0]["id"], "pullRequest": "#1",
+                "mode": "review_only"},
+    )
+    resp = client.post(f"/v1/tasks/{task['id']}/deliver")
+    assert resp.status_code == 201, resp.text
+    marker = f"<!-- dude:review task={task['id']} "
+
+    def ours() -> list[dict]:
+        return [r for r in fake_github.pulls[1].reviews if marker in r["body"] and r["commit_id"] == head]
+
+    first = wait_until(lambda: next(iter(ours()), None), timeout=120, message="dude never reviewed H")
+    assert first["state"] == "APPROVED", first
+    wait_until(lambda: client.get(f"/v1/tasks/{task['id']}").json()["status"] == "review", timeout=60,
+               message="the task never went back to waiting on the pull request")
+    reviews = len([r for r in client.task_runs(task["id"]) if r["phase"] == "review"])
+
+    # The scripted conductor carries out the tool line it is told.
+    ask = {"pr": "1", "question": "Should the greeting also be in English?"}
+    resp = client.post(f"/v1/tasks/{task['id']}/chat", {"text": f"tool: ask_author {json.dumps(ask)}"})
+    assert resp.status_code in (200, 201), resp.text
+    asked = wait_until(lambda: next((c for c in fake_github.pulls[1].comments
+                                     if not c.get("path") and "<!-- dude:ask id=" in c["body"]), None),
+                       timeout=60, message="the question never reached the pull request")
+    assert asked["body"].startswith("@gus Should the greeting also be in English?"), asked
+    question = query(owner_dsn, "SELECT id FROM review_questions WHERE task_id = %s AND addressee = 'author' AND status = 'open'",
+                     (task["id"],))
+    assert len(question) == 1, question
+    held = wait_until(lambda: len(ours()) == 2 and ours()[1], timeout=120, message="dude never decided again at H")
+    assert held["state"] == "COMMENTED", held
+    assert "Before approving: @gus, Should the greeting also be in English?" in held["body"], held["body"]
+
+    answer = {"id": question[0]["id"], "answer": "gus: Portuguese only, English comes later"}
+    reply = fake_github.comment(1, "Portuguese only for now; English comes in a later pull request.\n\n"
+                                f"tool: answer_review_question {json.dumps(answer)}", author="gus")
+    wait_until(
+        lambda: next((e for e in client.events(taskId=task["id"]) if e["eventType"] == "chat.message"
+                      and (e["payload"].get("github") or {}).get("feedbackId") == f"issue-comment-{reply}"), None),
+        timeout=60, message="the author's answer never reached the conductor")
+    third = wait_until(lambda: len(ours()) == 3 and ours()[2], timeout=120, message="dude never approved again at H")
+    assert third["state"] == "APPROVED", third
+    assert query(owner_dsn, "SELECT status FROM review_questions WHERE id = %s", (question[0]["id"],))[0]["status"] == "answered"
+    assert len([r for r in client.task_runs(task["id"]) if r["phase"] == "review"]) == reviews, "a new round ran"
