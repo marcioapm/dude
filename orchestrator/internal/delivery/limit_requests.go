@@ -193,20 +193,25 @@ func rerunTarget(ctx context.Context, tx pgx.Tx, taskID, named string) (LimitsPR
 	}
 	rows, err := tx.Query(ctx, `SELECT r.name, pr.number, COALESCE(pr.head_sha, ''), r.url
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-		WHERE pr.task_id = $1 AND pr.state IN ('open', 'draft') AND ($2 = 0 OR pr.number = $2) AND ($3 = '' OR r.name = $3)
-		ORDER BY pr.created_at, pr.id`, taskID, number, repo)
+		WHERE pr.task_id = $1 AND pr.state IN ('open', 'draft') AND ($2 = 0 OR pr.number = $2)
+		ORDER BY pr.created_at, pr.id`, taskID, number)
 	if err != nil {
 		return LimitsPR{}, err
 	}
-	prs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (LimitsPR, error) {
-		var p LimitsPR
-		var url string
-		if err := r.Scan(&p.Repo, &p.Number, &p.Head, &url); err != nil || !ownedBy(url, owner) {
-			return LimitsPR{}, err // another owner's: number 0, dropped below
-		}
-		return p, nil
+	type row struct {
+		pr  LimitsPR
+		url string
+	}
+	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (row, error) {
+		var x row
+		return x, r.Scan(&x.pr.Repo, &x.pr.Number, &x.pr.Head, &x.url)
 	})
-	prs = slices.DeleteFunc(prs, func(p LimitsPR) bool { return p.Number == 0 })
+	var prs []LimitsPR
+	for _, x := range all {
+		if namedBy(x.url, x.pr.Repo, owner, repo) {
+			prs = append(prs, x.pr)
+		}
+	}
 	switch {
 	case err != nil:
 		return LimitsPR{}, err

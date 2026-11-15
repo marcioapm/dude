@@ -28,3 +28,24 @@ func TestParsePRReadsEachWayAPullRequestIsNamed(t *testing.T) {
 		}
 	}
 }
+
+// Named with an owner, a repository is matched by GitHub's owner/repo (its
+// URL's end, case aside); named repo#N, by its name in dude.
+func TestNamedByMatchesGitHubsNameOrDudes(t *testing.T) {
+	const url = "https://github.com/acme/target.git"
+	for _, c := range []struct {
+		owner, repo string
+		want        bool
+	}{
+		{"", "", true}, {"", "tgt", true}, {"", "target", false},
+		{"acme", "target", true}, {"ACME", "Target", true},
+		{"acme", "tgt", false}, {"someone-else", "target", false},
+	} {
+		if got := namedBy(url, "tgt", c.owner, c.repo); got != c.want {
+			t.Errorf("namedBy(%q, tgt, %q, %q) = %v, want %v", url, c.owner, c.repo, got, c.want)
+		}
+	}
+	if namedBy("/tmp/remote.git", "target", "acme", "target") {
+		t.Error("a repository with no owner/repo in its URL matched a named owner")
+	}
+}

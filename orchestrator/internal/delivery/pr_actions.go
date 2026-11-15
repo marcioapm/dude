@@ -127,15 +127,18 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 	if err != nil {
 		return c, err
 	}
+	prID, err := taskPullRequest(ctx, tx, ref.TaskID, number, owner, repo)
+	if err != nil {
+		return c, err
+	}
 	var url, state string
 	var nodeID, head *string
 	var checks []byte
 	var adopted bool
 	err = tx.QueryRow(ctx, `SELECT pr.id, r.name, r.url, pr.state::text, pr.node_id, pr.head_sha, pr.checks_json, pr.adopted
 		FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
-		ref.TaskID, number, repo).Scan(&c.prID, &repo, &url, &state, &nodeID, &head, &checks, &adopted)
-	if db.IsNotFound(err) || err == nil && !ownedBy(url, owner) {
+		WHERE pr.id = $1`, prID).Scan(&c.prID, &repo, &url, &state, &nodeID, &head, &checks, &adopted)
+	if db.IsNotFound(err) {
 		return c, refusef(rNotPullRequestYourTaskYou, in.PR)
 	}
 	if err != nil {

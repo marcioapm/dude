@@ -156,11 +156,14 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	if err != nil {
 		return ReplyPost{}, err
 	}
+	prID, err := taskPullRequest(ctx, tx, ref.TaskID, number, owner, repo)
+	if err != nil {
+		return ReplyPost{}, err
+	}
 	var url string
 	err = tx.QueryRow(ctx, `SELECT r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
-		WHERE pr.task_id = $1 AND pr.number = $2 AND ($3 = '' OR r.name = $3) ORDER BY pr.created_at DESC LIMIT 1`,
-		ref.TaskID, number, repo).Scan(&repo, &url)
-	if db.IsNotFound(err) || err == nil && !ownedBy(url, owner) {
+		WHERE pr.id = $1`, prID).Scan(&repo, &url)
+	if db.IsNotFound(err) {
 		return ReplyPost{}, refusef(rNotPullRequestYourTaskYou2, in.PR)
 	}
 	if err != nil {
@@ -263,12 +266,36 @@ func parsePR(s string) (owner, repo string, number int, err error) {
 	return owner, repo, n, nil
 }
 
-// ownedBy is whether a repository's clone URL is under owner; any URL is
-// when the pull request was named without one.
-func ownedBy(url, owner string) bool {
+// namedBy is whether the repository at url, named name in dude, is the one
+// a pull request was named in (parsePR's owner and repo). Named with an
+// owner, the owner and repo are GitHub's, matched against the end of its
+// clone URL as GitHub does, case aside; dude's name may differ. Named
+// repo#N, the repo is dude's name. Named by number alone, any repository is.
+func namedBy(url, name, owner, repo string) bool {
 	if owner == "" {
-		return true
+		return repo == "" || name == repo
 	}
-	slugOwner, _, _ := strings.Cut(forge.SlugFromURL(url), "/")
-	return strings.EqualFold(slugOwner, owner)
+	slugOwner, slugRepo, _ := strings.Cut(forge.SlugFromURL(url), "/")
+	return strings.EqualFold(slugOwner, owner) && strings.EqualFold(slugRepo, repo)
+}
+
+// taskPullRequest is the id of the task's pull request numbered number in
+// the repository named (namedBy), the newest if several are; "" if none is.
+func taskPullRequest(ctx context.Context, tx pgx.Tx, taskID string, number int, owner, repo string) (string, error) {
+	rows, err := tx.Query(ctx, `SELECT pr.id, r.name, r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+		WHERE pr.task_id = $1 AND pr.number = $2 ORDER BY pr.created_at DESC`, taskID, number)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name, url string
+		if err := rows.Scan(&id, &name, &url); err != nil {
+			return "", err
+		}
+		if namedBy(url, name, owner, repo) {
+			return id, nil
+		}
+	}
+	return "", rows.Err()
 }

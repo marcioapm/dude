@@ -205,6 +205,27 @@ func TestARerunNamesThePullRequestAsGitHubDoes(t *testing.T) {
 		"no open pull request of this task by that name")
 }
 
+// A repository's name in dude may differ from GitHub's: a pull request named
+// with its owner is matched against GitHub's owner/repo, one named repo#N
+// against dude's name.
+func TestAPullRequestNamedWithItsOwnerIsMatchedByGitHubsName(t *testing.T) {
+	w, task := rerunWorld(t)
+	mustExec(t, w.owner, `UPDATE repositories SET name = 'tgt' WHERE id = $1`, w.repoID)
+	owner, repo, _ := strings.Cut(w.gh.Slug, "/")
+	w.must(task, "reply_on_pull_request", `{"pr":"https://github.com/`+w.gh.Slug+`/pull/1","text":"Hi."}`)
+	w.must(task, "reply_on_pull_request", `{"pr":"`+owner+"/"+repo+`#1","text":"Hi."}`)
+	w.must(task, "reply_on_pull_request", `{"pr":"tgt#1","text":"Hi."}`)
+	w.refused(task, "reply_on_pull_request", `{"pr":"someone-else/`+repo+`#1","text":"Hi."}`, "not a pull request of your task")
+	w.refused(task, "reply_on_pull_request", `{"pr":"`+owner+`/tgt#1","text":"Hi."}`, "not a pull request of your task")
+	w.must(task, "rerun_failed_checks", `{"pr":"`+owner+"/"+repo+`#1"}`)
+	w.refused(task, "wait_for", `{"conditions":[{"prChecksFinal":{"pr":"someone-else/`+repo+`#1"}}],"deadline":"30m","note":"x"}`,
+		"is not a pull request of this task")
+	w.must(task, "wait_for", `{"conditions":[{"prChecksFinal":{"pr":"`+owner+"/"+repo+`#1"}}],"deadline":"30m","note":"x"}`)
+	w.refused(task, "request_limit", `{"limit":"rerun","pr":"someone-else/`+repo+`#1","reason":"CI flaked"}`,
+		"no open pull request of this task by that name")
+	w.must(task, "request_limit", `{"limit":"rerun","pr":"`+owner+"/"+repo+`#1","reason":"CI flaked"}`)
+}
+
 // GitHub refusing a rerun outright (a workflow still running) reruns
 // nothing, so the head's one rerun is not spent: asked again, dude asks
 // GitHub again, and that rerun, once it happens, is the head's.
