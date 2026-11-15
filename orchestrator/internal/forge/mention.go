@@ -254,6 +254,22 @@ func Mentions(body string, factoryLogins []string) bool {
 // Who may address it is the same rule as who may wake a fixer (MayWake),
 // applied by the caller.
 func AddressedToDude(f Feedback, factoryLogins []string) bool {
+	return fromAPerson(f, factoryLogins) && Mentions(f.Body, factoryLogins)
+}
+
+// RepliesToDude says a line comment replies in a thread on one of dude's
+// own comments (threads, by GitHub's comment id) and is not dude's own,
+// as AddressedToDude reads that. For a review-only task, the author
+// answering dude's review there is a message to its conductor, mention or
+// not; a writing task passes no threads.
+func RepliesToDude[V any](f Feedback, factoryLogins []string, threads map[int64]V) bool {
+	_, ours := threads[f.InReplyTo]
+	return f.Kind == KindLineComment && f.InReplyTo != 0 && ours && fromAPerson(f, factoryLogins)
+}
+
+// fromAPerson: not a bot's, a factory login's or dude's own reply, and
+// not empty.
+func fromAPerson(f Feedback, factoryLogins []string) bool {
 	if isBot(f.Author) || Own(f) || strings.TrimSpace(f.Body) == "" {
 		return false
 	}
@@ -262,7 +278,7 @@ func AddressedToDude(f Feedback, factoryLogins []string) bool {
 			return false
 		}
 	}
-	return Mentions(f.Body, factoryLogins)
+	return true
 }
 
 // Posted is a comment dude posted: its feedback id (as Feedback names
