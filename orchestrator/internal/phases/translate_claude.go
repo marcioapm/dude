@@ -63,9 +63,10 @@ func (t *translator) claudeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ 
 			}
 		}
 	case "result":
-		// The turn's cost, as Claude Code's running total for this process:
-		// a resumed one starts again from zero, so a total lower than the
-		// last is a new process's.
+		// The turn's cost, as Claude Code's running total for its session:
+		// a resume (--resume) carries it on, a new session starts it from
+		// zero (claudeSessionStarted). A total lower than the last is a new
+		// session's all the same.
 		t.claudeCost = line.TotalCostUSD
 		if e := line.failure(); e != "" {
 			t.turnError = e
@@ -327,11 +328,21 @@ func boundTasks(tasks []map[string]any) []map[string]any {
 }
 
 // claudeProcessStarted: a resumed agent is a new Claude Code process. Its
-// running cost starts again from zero, and its tasks are numbered from 1
-// again, so neither is read against the last process's.
+// tasks are numbered from 1 again, so none is read against the last
+// process's. Its running cost is not reset: Claude Code resumed into its
+// session carries the session's total on, so the next turn costs what that
+// total grew by (ABS-30: counted from zero, each resume counted the whole
+// session again). Only a new session starts it from zero
+// (claudeSessionStarted).
 func (t *translator) claudeProcessStarted() {
-	t.claudeCostSeen, t.claudeCost = 0, 0
 	t.claudeTasks, t.claudeTaskNext = nil, 0
+}
+
+// claudeSessionStarted: the resumed agent is in a new session (lux could
+// not reload its own, sessionKept): its running cost starts from zero, and
+// its first total is all its own.
+func (t *translator) claudeSessionStarted() {
+	t.claudeCostSeen, t.claudeCost = 0, 0
 }
 
 // claudeTurnHalf records one half of a Claude turn's end. lux relays a
@@ -362,7 +373,7 @@ func (t *translator) claudeTurnHalf(ctx context.Context, tx pgx.Tx, s *Syncer, h
 }
 
 // claudeTurnEnd: the turn's tokens, as Claude Code's result line counts
-// them for this turn, and its cost, the change in the process's running
+// them for this turn, and its cost, the change in the session's running
 // total. A turn that ended on a failed request fails the Run, as an ACP
 // turn that answered with an error does; one that did not runs the idle
 // held for it.
