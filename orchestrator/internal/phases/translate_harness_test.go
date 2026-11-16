@@ -708,9 +708,9 @@ func TestTheClaudeRecordingEndsAsLuxRelaysAResult(t *testing.T) {
 }
 
 // A resumed Claude Code is a new process in the same session: its running
-// cost carries the session's on (--resume keeps it), so its first turn
-// costs what the total grew by; and its tasks are numbered from 1 again,
-// so a TaskUpdate names its own process's task.
+// cost carries the session's on (lux reloads the session), so its first
+// turn costs what the total grew by; and its tasks are numbered from 1
+// again, so a TaskUpdate names its own process's task.
 func TestAResumedClaudeCodeCountsItsOwnCostAndTasks(t *testing.T) {
 	w := newHarnessWorld(t)
 	session := map[string]any{"type": "lux.session", "data": map[string]any{"sessionId": "s1"}}

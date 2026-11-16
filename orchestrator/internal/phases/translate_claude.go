@@ -64,9 +64,9 @@ func (t *translator) claudeEvent(ctx context.Context, tx pgx.Tx, s *Syncer, typ 
 		}
 	case "result":
 		// The turn's cost, as Claude Code's running total for its session:
-		// a resume (--resume) carries it on, a new session starts it from
-		// zero (claudeSessionStarted). A total lower than the last is a new
-		// session's all the same.
+		// a resume into its session (lux reloads it) carries it on, a new
+		// session starts it from zero (claudeSessionStarted). A total
+		// lower than the last is a new session's all the same.
 		t.claudeCost = line.TotalCostUSD
 		if e := line.failure(); e != "" {
 			t.turnError = e
