@@ -727,11 +727,7 @@ func TestAResumedClaudeCodeCountsItsOwnCostAndTasks(t *testing.T) {
 	if !slices.Equal(costs, []any{0.25, 0.5}) {
 		t.Errorf("turn costs = %v, want [0.25 0.5]", costs)
 	}
-	var cost float64
-	if err := w.owner.QueryRow(context.Background(), `SELECT agent_cost_usd::float8 FROM runs WHERE id = $1`, w.run.ID).Scan(&cost); err != nil {
-		t.Fatal(err)
-	}
-	if cost != 0.75 {
+	if cost := w.runCost(); cost != 0.75 {
 		t.Errorf("run cost %v, want the session's 0.75", cost)
 	}
 	plans := ofType(events, evPlanUpdated)

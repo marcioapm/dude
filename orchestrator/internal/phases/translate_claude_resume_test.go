@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -38,17 +39,7 @@ func (w *harnessWorld) runCost() float64 {
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
-func nearAll(got, want []float64) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if !near(got[i], want[i]) {
-			return false
-		}
-	}
-	return true
-}
+func nearAll(got, want []float64) bool { return slices.EqualFunc(got, want, near) }
 
 // Claude Code resumed into its session (the same session id) carries the
 // session's running total on: each turn costs what that total grew by, and
