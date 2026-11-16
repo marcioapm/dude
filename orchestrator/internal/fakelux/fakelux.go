@@ -2014,6 +2014,7 @@ func (s *Server) play(run *Run, epoch, start int, spec map[string]any, resumed b
 	if resumed && run.loseSession {
 		run.loseSession = false
 		run.SessionID = fmt.Sprintf("ses_%s_%d", run.ID, epoch)
+		run.say().cost = 0
 		s.recordEvent(run, "lux.warning", map[string]any{"message": "session/load failed, starting a new session: session not found"})
 	}
 	s.recordEvent(run, "lux.session", map[string]any{"sessionId": run.SessionID})
