@@ -211,11 +211,18 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	// asking GitHub who dude posts as (OwnThreadReplies) holds no
 	// transaction open.
 	var threads *forge.Threads
+	// The conductor's open questions to the author (ask_author): the
+	// author's conversation comment while one waits there is an answer,
+	// addressed to the conductor. nil for a writing task.
+	var asks *delivery.AuthorAsks
 	toDude := func(f forge.Feedback) bool {
-		return forge.AddressedToDude(f, s.FactoryLogins) || forge.RepliesToDude(f, s.FactoryLogins, threads)
+		return forge.AddressedToDude(f, s.FactoryLogins) || forge.RepliesToDude(f, s.FactoryLogins, threads) || asks.Answers(f)
 	}
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
-		threads, err = delivery.DudesThreadsTx(ctx, tx, pr.TaskID)
+		if threads, err = delivery.DudesThreadsTx(ctx, tx, pr.TaskID); err != nil {
+			return err
+		}
+		asks, err = delivery.AuthorAsksTx(ctx, tx, pr.TaskID)
 		return err
 	}); err != nil {
 		return err
@@ -280,6 +287,9 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if err != nil {
 		return err
 	}
+	// The pull request's author may always answer dude's question to them:
+	// that comment alone (Answers), not every comment of theirs.
+	wakes := func(f forge.Feedback) bool { return waking[f.Author] || asks.Answers(f) }
 	if status.ThreadsUnknown {
 		status.UnresolvedThreads = pr.UnresolvedThreads
 	}
@@ -437,7 +447,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 			switch {
 			case forge.Own(f) || ownVerdict[f.ID]:
 				p["own"] = true
-			case !waking[f.Author] && (addressed || forge.IsActionableComment(f, s.FactoryLogins)):
+			case !wakes(f) && (addressed || forge.IsActionableComment(f, s.FactoryLogins)):
 				// Shown on the task, not acted on: say why.
 				p["ignored"] = "not_permitted"
 			case addressed:
@@ -466,11 +476,19 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		// message to the task's conductor, with the record of it, so a
 		// comment recorded is never one whose message was lost.
 		for _, f := range heard {
-			if !waking[f.Author] || ownVerdict[f.ID] || !toDude(f) {
+			if !wakes(f) || ownVerdict[f.ID] || !toDude(f) {
 				continue
 			}
 			if _, err := delivery.MentionTx(ctx, tx, delivery.Mention{Org: org, ProjectID: pr.ProjectID, TaskID: pr.TaskID,
-				Repo: pr.RepoName, Number: pr.Number, Feedback: f, Finding: threads.Finding(f.InReplyTo)}); err != nil {
+				Repo: pr.RepoName, Number: pr.Number, Feedback: f, Finding: threads.Finding(f.InReplyTo), Asks: asks.Lines()}); err != nil {
+				return err
+			}
+		}
+		// An author question whose post's answer was lost: its comment,
+		// dude's own, found by its marker (review only; only when one is
+		// lost).
+		if asks.Lost() {
+			if err := delivery.RecoverAsksTx(ctx, tx, pr.TaskID); err != nil {
 				return err
 			}
 		}
@@ -511,7 +529,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 
 	var permitted []forge.Feedback
 	for _, f := range fresh {
-		if waking[f.Author] && !ownVerdict[f.ID] {
+		if wakes(f) && !ownVerdict[f.ID] {
 			permitted = append(permitted, f)
 		}
 	}

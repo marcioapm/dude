@@ -170,6 +170,17 @@ func ConductAnswerReviewQuestion(ctx context.Context, tx pgx.Tx, ref RunRef, id,
 	if withdraw == (strings.TrimSpace(answer) != "") {
 		return SettledReviewQuestion{}, refuseText(rAnswerOrWithdrawReviewQuestion)
 	}
+	// An earlier attempt's question to the author is not this conductor's
+	// to settle: it holds, routes and times out nothing now (askOfAttempt).
+	if d != nil {
+		var other bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM review_questions q WHERE q.id = $1 AND q.task_id = $2
+			AND q.addressee = 'author' AND NOT `+askOfAttempt("$3")+`)`, id, ref.TaskID, d.State.Attempt).Scan(&other); err != nil {
+			return SettledReviewQuestion{}, err
+		} else if other {
+			return SettledReviewQuestion{}, refuseText(fmt.Sprintf(mReviewQuestionNotFound, id))
+		}
+	}
 	by := ReviewQuestionBy{Run: ref.RunID, TaskID: ref.TaskID}
 	var out SettledReviewQuestion
 	if withdraw {
@@ -232,14 +243,14 @@ func WithdrawReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, reason st
 // reason.
 func settleReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, status, text string, by ReviewQuestionBy) (SettledReviewQuestion, error) {
 	out := SettledReviewQuestion{ID: id, Status: status}
-	var question string
+	var question, addressee string
 	err := tx.QueryRow(ctx, `UPDATE review_questions q SET status = $2,
 			answer = CASE WHEN $2 = 'answered' THEN $3 END,
 			answered_by_person = CASE WHEN $5 = '' THEN NULLIF($4, '') END,
 			answered_by_run = NULLIF($5, ''), answered_at = now()
 		FROM tasks t WHERE q.id = $1 AND q.status = 'open' AND t.id = q.task_id AND ($6 = '' OR q.task_id = $6)
-		RETURNING q.task_id, t.project_id, q.question`, id, status, text, by.Person, by.Run, by.TaskID).
-		Scan(&out.TaskID, &out.ProjectID, &question)
+		RETURNING q.task_id, t.project_id, q.question, q.addressee`, id, status, text, by.Person, by.Run, by.TaskID).
+		Scan(&out.TaskID, &out.ProjectID, &question, &addressee)
 	if db.IsNotFound(err) {
 		var current string
 		err := tx.QueryRow(ctx, `SELECT status FROM review_questions WHERE id = $1 AND ($2 = '' OR task_id = $2)`, id, by.TaskID).
@@ -288,6 +299,13 @@ func settleReviewQuestionTx(ctx context.Context, tx pgx.Tx, org, id, status, tex
 	}
 	if err := GateItemSettledTx(ctx, tx, org, out.TaskID, "review-question:"+id); err != nil {
 		return out, err
+	}
+	if addressee == HolderAuthor {
+		// A review-only task's verdict at the reviewed head again, with
+		// no new round: the question no longer holds it (design §7.5).
+		if err := recheckReviewOnlyTx(ctx, tx, org, out.TaskID, "settled:"+id); err != nil {
+			return out, err
+		}
 	}
 	if !by.conductor() && d.State.conducted() {
 		// The conductor decides whether a review should weigh it.

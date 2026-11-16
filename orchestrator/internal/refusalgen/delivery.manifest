@@ -278,3 +278,9 @@ rReviewOnlyDismissGrounds               refusals/delivery/review-only/dismiss-gr
 rReviewOnlyDismissWrongEvidence         refusals/delivery/review-only/dismiss-wrong-evidence
 rReviewOnlyDismissDuplicateOf           refusals/delivery/review-only/dismiss-duplicate-of
 rReviewOnlyNoOwnComment                 refusals/delivery/review-only/no-own-comment
+rAskAuthorReviewOnly                    refusals/delivery/ask-author/review-only
+rAskAuthorQuestionRequired              refusals/delivery/ask-author/question-required
+rAskAuthorTooLong                       refusals/delivery/ask-author/too-long
+rAskAuthorUnknownAuthor                 refusals/delivery/ask-author/unknown-author
+rAskAuthorNoThread                      refusals/delivery/ask-author/no-thread
+rAskAuthorGithubRefused                 refusals/delivery/ask-author/github-refused

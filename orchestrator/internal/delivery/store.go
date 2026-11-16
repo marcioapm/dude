@@ -99,6 +99,10 @@ type Store struct {
 	// before its next round (reviewDebounce); zero means 3 minutes.
 	// Tests and the e2e suite (DUDE_TEST_REVIEW_DEBOUNCE) shorten it.
 	ReviewDebounce time.Duration
+	// How long a review-only task's question to its pull request's author
+	// waits before it is withdrawn; zero means the project's
+	// authorQuestionTimeoutMinutes, else 3 days. Tests shorten it.
+	AuthorQuestionTimeout time.Duration
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).

@@ -19,3 +19,14 @@ A reply in one of dude's threads reaches you as a message from the pull request,
 - If the finding stands, reply in the thread (`reply_on_pull_request` with `in_reply_to`) saying why, briefly. The finding stays open.
 - If it is a judgement call the code cannot settle (a product choice, intent), ask the owner (`ask_person`).
 - Never dismiss because the author disagrees, and never because the author promises to fix it later.
+
+### When to ask the author
+
+`ask_author` asks the pull request's author on GitHub, in a finding's thread (`finding_id`) or on the conversation. While the question is open, dude does not approve: its review says what it is waiting for.
+
+- Ask for intent, or for facts only the author knows: "is this called from X?", "is the old format still written anywhere?".
+- Do not ask what the code, its tests or its history answer. Read them instead.
+- Do not ask about scope or waivers. Those decisions are the owner's (`ask_person`).
+- Ask one question per thing, and do not ask the same thing again.
+- The answer reaches you as a message from the pull request, with your open questions listed. Close a question with `answer_review_question` (its id, in the author's words) once it is answered, then dismiss or keep the finding by the answer. Leave it open if the reply does not answer it.
+- A question with no answer times out. A finding's question is withdrawn and the finding stands. For a free-standing question you are woken once: withdraw it, or ask the owner.

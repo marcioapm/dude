@@ -1,6 +1,6 @@
 ---
 title: Questions and feedback
-covers: [tool:ask_conductor, tool:answer_question, tool:ask_person, tool:request_repository, tool:feedback, tool:feedback_reply, tool:feedback_resolve, tool:dismiss_finding, tool:answer_review_question, tool:forward_review_question, tool:decide_repository_request]
+covers: [tool:ask_conductor, tool:answer_question, tool:ask_person, tool:request_repository, tool:feedback, tool:feedback_reply, tool:feedback_resolve, tool:dismiss_finding, tool:answer_review_question, tool:forward_review_question, tool:decide_repository_request, tool:ask_author]
 ---
 Agents ask you things, and you tell agents things. This page covers answering an agent's question, deciding a repository request, leaving feedback on a task, accepting review findings, and answering a reviewer's question.
 
@@ -68,6 +68,10 @@ The task's owner answers it there, or withdraws it with a reason when it no long
 **While a reviewer's question is open, dude does not open the pull request.** On a pull request that is already open, a fix still goes to it and is reviewed after. Review and fixing of the other findings go on. Before the pull request opens, the task waits on you until every question of the attempt is answered or withdrawn.
 
 Under the conductor, the question goes to the conductor first: the task keeps running, shows as with the conductor, and you are not notified. The conductor answers with `answer_review_question` only when it has established the fact itself, or withdraws it. Otherwise it gives the question to you with `forward_review_question`, and the task waits on you. Its answer is recorded as the conductor's, not as your decision. If the conductor does not settle the question within 10 minutes, fails, or has no model, dude gives it to you. You can answer it yourself at any time.
+
+## A question to the pull request's author
+
+On a review-only task, the conductor can ask the pull request's author on GitHub with `ask_author`, in the thread of one of dude's findings or on the conversation. It asks only what the author alone knows, such as intent. While the question is open, dude does not approve: its review is a comment that says what it waits for. The author's reply reaches the conductor, which closes the question with `answer_review_question`, and dude weighs its review again at the same commit. With no answer after 3 days, a question about a finding is withdrawn and the finding stands. For any other question, the conductor decides, and may ask you. A writing task's conductor has no `ask_author`.
 
 ## Escalations
 

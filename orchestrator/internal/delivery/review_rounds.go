@@ -195,6 +195,13 @@ type ownReview struct {
 // anything. A REQUEST_CHANGES or a COMMENT is superseded by dude's newer
 // review and is not dismissed.
 func (w *steps) dismissApprovals(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, pr PullRequestState, head, why string) error {
+	return w.dismissApprovalsAt(ctx, sc, st, gh, pr, head, why, false)
+}
+
+// dismissApprovalsAt is dismissApprovals; sameHead dismisses dude's
+// approval at head too: a question to the author opened since it
+// (design §7.5), which holds the approval back.
+func (w *steps) dismissApprovalsAt(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, pr PullRequestState, head, why string, sameHead bool) error {
 	if gh == nil {
 		return nil
 	}
@@ -202,10 +209,10 @@ func (w *steps) dismissApprovals(ctx context.Context, sc workflow.StepContext, s
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT (s.payload->>'reviewId')::bigint, s.payload->>'event', s.payload->>'head' FROM events s
 			WHERE s.task_id = $1 AND s.event_type = $2 AND s.payload->>'pullRequestId' = $3 AND s.payload->>'event' = $4
-			  AND s.payload->>'head' <> $5 AND s.payload ? 'reviewId'
+			  AND (s.payload->>'head' <> $5 OR $8) AND s.payload ? 'reviewId'
 			  AND NOT EXISTS (SELECT 1 FROM events d WHERE d.task_id = s.task_id AND d.event_type IN ($6, $7)
 			    AND d.payload->>'reviewId' = s.payload->>'reviewId')
-			ORDER BY s.occurred_at, s.id`, st.TaskID, EvReviewSubmitted, pr.ID, forge.EventApprove, head, EvReviewDismissed, EvReviewDismissRefused)
+			ORDER BY s.occurred_at, s.id`, st.TaskID, EvReviewSubmitted, pr.ID, forge.EventApprove, head, EvReviewDismissed, EvReviewDismissRefused, sameHead)
 		if err != nil {
 			return err
 		}

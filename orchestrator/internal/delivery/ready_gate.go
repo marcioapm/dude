@@ -577,11 +577,10 @@ func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 // (BlockingFeedbackTx). A review verdict (noFeedback) does not count
 // feedback: there is no writer to hand it to.
 //
-// TODO(review-only PR 6): questions to the pull request's author arrive
-// as review_questions rows with addressee 'author' (the CHECK allows only
-// 'person' and 'conductor' until then). The count below takes an open row
-// of any addressee, so author rows would hold the verdict with no change
-// here; the merge gate needs an addressee filter then (PR 6).
+// The reviewer-question count takes an open row of any addressee, so a
+// review-only conductor's question to the pull request's author (267,
+// addressee 'author') holds the verdict like a reviewer's; it is of the
+// attempt by its run_id, as the others.
 func gateQuestionsTx(ctx context.Context, tx pgx.Tx, st *State, attempt int, noFeedback bool) (GateItem, error) {
 	var asked, reviewing, feedback int
 	if err := tx.QueryRow(ctx, `SELECT
