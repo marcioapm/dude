@@ -44,7 +44,8 @@ type harnessSay struct {
 	message, thought strings.Builder
 	// The tools started and not finished, by call id: [title, input JSON].
 	tools map[string][2]string
-	// Claude Code's running cost for this process.
+	// Claude Code's running cost for its session: carried on across the
+	// Run's resumes, from zero again in a new session (LoseSession).
 	cost float64
 	turn int
 }

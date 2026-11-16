@@ -127,7 +127,7 @@ type translator struct {
 }
 
 // harnessState is runs.harness_state: Claude Code's running cost for its
-// process, the last of it recorded, and its plan as TaskCreate and
+// session, the last of it recorded, and its plan as TaskCreate and
 // TaskUpdate built it, with the number the next task gets; the half of a
 // Claude turn's end that has arrived (claudeTurnEnd), and the idle held
 // until the other half; the tokens of the Codex turn in progress; and why
@@ -992,7 +992,7 @@ func (t *translator) session(ctx context.Context, tx pgx.Tx, s *Syncer, id strin
 	}
 	if !first {
 		// A new process: a Claude turn whose result never came ends with
-		// what it had, before the process's totals start again.
+		// what it had, before the resume can start a new session.
 		if t.claudeHalf != "" {
 			if err := t.claudeTurnEnd(ctx, tx, s); err != nil {
 				return err
@@ -1044,6 +1044,8 @@ func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id s
 	if had == "" || had == id {
 		return nil
 	}
+	// A new session: its running cost starts from zero.
+	t.claudeSessionStarted()
 	payload := map[string]any{"from": had, "to": id, "reason": reason}
 	if t.run.talker() {
 		ref := t.run.ref()

@@ -505,7 +505,8 @@ func TestClaudeCodesTasksAndCostOutliveARestart(t *testing.T) {
 	if !slices.Equal(costs, []any{0.25, 0.5}) {
 		t.Errorf("turn costs = %v, want 0.25 then 0.5", costs)
 	}
-	// A resumed process counts from zero again: its first total is its own.
+	// A total lower than the last is a new session's, counted from zero
+	// (the fallback when no new session id was seen).
 	w.feed(claudeEnd, result(0.1))
 	if e := ofType(w.events(), evModelRequestDone); len(e) != 1 || e[0].Payload["costUsd"] != 0.1 {
 		t.Errorf("after a new process: %v", e)
@@ -706,31 +707,28 @@ func TestTheClaudeRecordingEndsAsLuxRelaysAResult(t *testing.T) {
 	}
 }
 
-// A resumed Claude Code is a new process: its running cost starts from
-// zero again, however high its first total, and its tasks are numbered
-// from 1 again, so a TaskUpdate names its own process's task.
+// A resumed Claude Code is a new process in the same session: its running
+// cost carries the session's on (lux reloads the session), so its first
+// turn costs what the total grew by; and its tasks are numbered from 1
+// again, so a TaskUpdate names its own process's task.
 func TestAResumedClaudeCodeCountsItsOwnCostAndTasks(t *testing.T) {
 	w := newHarnessWorld(t)
 	session := map[string]any{"type": "lux.session", "data": map[string]any{"sessionId": "s1"}}
-	w.feedAt(1, session, claudeToolUse("a", "TaskCreate", map[string]any{"subject": "old"}), claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.10}))
+	w.feedAt(1, session, claudeToolUse("a", "TaskCreate", map[string]any{"subject": "old"}), claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.25}))
 	w.restart()
 	w.feedAt(2, session, claudeToolUse("b", "TaskCreate", map[string]any{"subject": "new"}),
 		claudeToolUse("c", "TaskUpdate", map[string]any{"taskId": "1", "status": "completed"}),
-		claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.30}))
+		claudeEnd, claudeResultLine(map[string]any{"total_cost_usd": 0.75}))
 	events := w.events()
 	var costs []any
 	for _, e := range ofType(events, evModelRequestDone) {
 		costs = append(costs, e.Payload["costUsd"])
 	}
-	if !slices.Equal(costs, []any{0.1, 0.3}) {
-		t.Errorf("turn costs = %v, want [0.1 0.3]", costs)
+	if !slices.Equal(costs, []any{0.25, 0.5}) {
+		t.Errorf("turn costs = %v, want [0.25 0.5]", costs)
 	}
-	var cost float64
-	if err := w.owner.QueryRow(context.Background(), `SELECT agent_cost_usd::float8 FROM runs WHERE id = $1`, w.run.ID).Scan(&cost); err != nil {
-		t.Fatal(err)
-	}
-	if cost != 0.4 {
-		t.Errorf("run cost %v, want 0.4", cost)
+	if cost := w.runCost(); cost != 0.75 {
+		t.Errorf("run cost %v, want the session's 0.75", cost)
 	}
 	plans := ofType(events, evPlanUpdated)
 	want := `[{"content":"new","status":"completed"}]`
