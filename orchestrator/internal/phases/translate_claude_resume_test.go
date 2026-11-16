@@ -115,3 +115,50 @@ func TestAFreshClaudeSessionInTheSameRunIsCountedInFull(t *testing.T) {
 		t.Errorf("run cost = %v, want 1.2 + 2.6", got)
 	}
 }
+
+// A turn whose result never came, ended by the resume, cost nothing yet:
+// the session's total is the one already counted, not a new session's.
+func TestAHalfTurnEndedByAResumeCostsNothingNew(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feedAt(1, append(append([]map[string]any{claudeSession("s1")}, claudeTurn(0.5)...), claudeEnd)...)
+	w.feedAt(2, append([]map[string]any{claudeSession("s1")}, claudeTurn(0.8)...)...)
+	if got := w.turnCosts(); !nearAll(got, []float64{0.5, 0, 0.3}) {
+		t.Errorf("turn costs = %v, want [0.5 0 0.3]", got)
+	}
+	if got := w.runCost(); !near(got, 0.8) {
+		t.Errorf("run cost = %v, want the session's 0.8", got)
+	}
+}
+
+// A new session's first turn, ended by the next resume with no result,
+// is read against the new session's total, not the old one's.
+func TestANewSessionsHalfTurnIsNotReadAgainstTheOldTotal(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feedAt(1, append([]map[string]any{claudeSession("s1")}, claudeTurn(1.2)...)...)
+	w.feedAt(2, claudeSession("s2"), claudeEnd)
+	w.feedAt(3, append([]map[string]any{claudeSession("s2")}, claudeTurn(0.4)...)...)
+	if got := w.turnCosts(); !nearAll(got, []float64{1.2, 0, 0.4}) {
+		t.Errorf("turn costs = %v, want [1.2 0 0.4]", got)
+	}
+	if got := w.runCost(); !near(got, 1.6) {
+		t.Errorf("run cost = %v, want 1.2 + 0.4", got)
+	}
+}
+
+// A Run from before the session was kept, its session named nowhere, is
+// resumed as the same session: its total carries on.
+func TestAResumeOfARunWithNoKnownSessionKeepsItsCost(t *testing.T) {
+	w := newHarnessWorld(t)
+	w.feedAt(1, append([]map[string]any{claudeSession("s1")}, claudeTurn(0.5)...)...)
+	for _, q := range []string{`UPDATE runs SET harness_state = harness_state - 'sessionId' WHERE id = $1`,
+		`DELETE FROM events WHERE run_id = $1 AND event_type = '` + evSessionStarted + `'`} {
+		if _, err := w.owner.Exec(t.Context(), q, w.run.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.restart()
+	w.feedAt(2, append([]map[string]any{claudeSession("s1")}, claudeTurn(0.8)...)...)
+	if got := w.runCost(); !near(got, 0.8) {
+		t.Errorf("run cost = %v, want the session's 0.8", got)
+	}
+}
