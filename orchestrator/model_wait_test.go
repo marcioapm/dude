@@ -424,20 +424,35 @@ func TestARefusalAfterAModelParkIsANewWait(t *testing.T) {
 }
 
 // A model park its conductor leaves is handed to the person as the
-// provider's refusals, not as an agent that went quiet.
+// provider's refusals, not as an agent that went quiet. The latest park
+// decides: one parked as quiet after it (resumed, then quiet) is handed
+// over as an agent that went quiet.
 func TestALeftModelParkIsHandedOverAsTheProvidersRefusals(t *testing.T) {
-	w, task, run := modelRefusingWorld(t, 2, false)
-	w.syncer.HeldAskWait = 500 * time.Millisecond
-	w.refusedFor(run, 2*time.Hour+time.Minute)
-	w.retryDue(run)
-	w.until("the task to wait on the person", func() bool { return w.taskStatus(task) == "awaiting_input" })
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.idle_handed_over'
-		AND (payload->>'model')::boolean`, run); n != 1 {
-		t.Fatalf("%d hand-overs marked model, want 1", n)
-	}
-	if got := w.str(`SELECT payload->>'reason' FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
-		ORDER BY cursor DESC LIMIT 1`, task); !strings.Contains(got, "model provider") || strings.Contains(got, "went quiet") {
-		t.Fatalf("handed over as %q, want the model provider's refusals", got)
+	for _, quietAfter := range []bool{false, true} {
+		t.Run(fmt.Sprintf("quietAfter=%v", quietAfter), func(t *testing.T) {
+			w, task, run := modelRefusingWorld(t, 2, false)
+			w.syncer.HeldAskWait = time.Hour
+			w.refusedFor(run, 2*time.Hour+time.Minute)
+			w.retryDue(run)
+			w.until("the implementer parked", func() bool { return w.runStatus(run) == "paused/idle" })
+			if quietAfter {
+				// A later park as quiet: the model park's event again, without model.
+				mustExec(t, w.owner, `INSERT INTO events (id, organization_id, project_id, task_id, run_id, event_type, actor_type, actor_id,
+					source, payload) SELECT id||'q', organization_id, project_id, task_id, run_id, event_type, actor_type, actor_id, source,
+					payload - 'model' FROM events WHERE run_id = $1 AND event_type = 'run.parked'`, run)
+			}
+			w.syncer.HeldAskWait = 500 * time.Millisecond
+			w.until("the task to wait on the person", func() bool { return w.taskStatus(task) == "awaiting_input" })
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.idle_handed_over'
+				AND (payload->>'model')::boolean = $2`, run, !quietAfter); n != 1 {
+				t.Fatalf("%d hand-overs marked model %v, want 1", n, !quietAfter)
+			}
+			got := w.str(`SELECT payload->>'reason' FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
+				ORDER BY cursor DESC LIMIT 1`, task)
+			if want := map[bool]string{false: "model provider", true: "went quiet"}[quietAfter]; !strings.Contains(got, want) {
+				t.Fatalf("handed over as %q, want %q", got, want)
+			}
+		})
 	}
 }
 
