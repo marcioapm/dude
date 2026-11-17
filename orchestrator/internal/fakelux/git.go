@@ -43,7 +43,8 @@ func hasPath(repo, ref, path string) (there, ok bool) {
 }
 
 // commitInProcess is commit's tree and commit, files over base's tree, as
-// the agent (agent <a@x>); ok false when fakegit cannot make them.
+// the agent (agent <a@x>); ok false when fakegit cannot make them. Files
+// that are already as base has them make no commit: base itself.
 func commitInProcess(repo, base string, files map[string]string, message string) (string, bool) {
 	r, opened := fakegit.Open(repo)
 	if !opened {
@@ -53,6 +54,9 @@ func commitInProcess(repo, base string, files map[string]string, message string)
 	tree, err := r.TreeWith(base, files)
 	if err != nil {
 		return "", false
+	}
+	if was, err := r.TreeOf(base); err == nil && was == tree {
+		return base, true
 	}
 	sha, err := r.CommitTree(tree.String(), []string{base}, "agent", "a@x", message)
 	if err != nil {
