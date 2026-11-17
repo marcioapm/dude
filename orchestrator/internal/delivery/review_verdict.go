@@ -95,6 +95,13 @@ type VerdictState struct {
 	ChecksNoted string `json:"checksNoted,omitempty"`
 }
 
+// settled records the claim's review as GitHub's, showing the CI note
+// note: nothing lost any more.
+func (v *VerdictState) settled(note string) {
+	v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+	v.ChecksNoted = note
+}
+
 // The verdict's actions.
 const (
 	verdictPost    = "post"
@@ -704,8 +711,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 					Why: "looking for dude's review: " + err.Error()}
 			}
 			if ok {
-				v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
-				v.ChecksNoted = note
+				v.settled(note)
 				return event, w.submitted(ctx, sc, st, pr, base, found, true, w.reviewPosts(ctx, gh, pr, found.ID, comments, ids))
 			}
 			if v.LostSubmits > 0 && v.LostLookups+1 < len(reviewLookups) {
@@ -740,8 +746,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 		}
 		switch {
 		case err == nil:
-			v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
-			v.ChecksNoted = note
+			v.settled(note)
 			return event, w.submitted(ctx, sc, st, pr, base, got, false, w.reviewPosts(ctx, gh, pr, got.ID, comments, ids))
 		case forge.OwnPullRequest(err) && event != forge.EventComment:
 			if err := w.s.Emit(ctx, org, st, EvReviewDowngraded, map[string]any{"claimId": claim, "pullRequestId": pr.ID,
@@ -796,8 +801,7 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 		// nothing to edit, and nothing posted in its place. Tried once for
 		// this change of CI: the note is taken as the one now standing.
 		slog.Warn("dude's review to refresh not found", "pr", pr.ID, "claim", claim)
-		v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
-		v.ChecksNoted = note
+		v.settled(note)
 		return nil
 	}
 	// /pulls/files has no ref: the head must be H as the diff is read.
@@ -806,7 +810,7 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 		return retry(err, "reading the head before refreshing dude's review")
 	}
 	if now != head {
-		v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+		v.settled(v.ChecksNoted)
 		return nil
 	}
 	// The comments the submit folded into the body, in its order: those
@@ -814,10 +818,9 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 	// when GitHub refused them inline (none posted, as review_submitted
 	// recorded them read back). A record that cannot tell (unread) is
 	// taken as the diff's word, so no comment is both inline and listed.
-	var posted map[string]bool
-	read := true
+	var posted, read bool
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
-		posted, read, err = claimInlineTx(ctx, tx, st.TaskID, claim)
+		posted, read, err = claimPostedTx(ctx, tx, st.TaskID, claim)
 		return err
 	}); err != nil {
 		return err
@@ -829,36 +832,33 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 			return retry(err, "reading the diff before refreshing dude's review")
 		}
 		var inline []forge.ReviewComment
-		if inline, folded = forge.PlaceComments(comments, diff); read && len(posted) == 0 {
+		if inline, folded = forge.PlaceComments(comments, diff); read && !posted {
 			folded = append(inline, folded...)
 		}
 	}
 	body := forge.FoldComments(marked, folded)
-	why := "checks: " + cmp.Or(note, "passing")
 	// A body GitHub already holds is not sent again; one an ambiguous
 	// answer left there is recorded edited all the same.
 	edited := v.LostSubmits > 0
 	if strings.TrimSpace(found.Body) != strings.TrimSpace(body) {
-		if err := gh.UpdateReview(ctx, pr.Slug, pr.Number, found.ID, body); err != nil {
-			if forge.Refused(err) {
-				// Left as it was, and not tried again until CI moves.
-				slog.Warn("GitHub refused to edit dude's review", "pr", pr.ID, "review", found.ID, "error", err)
-				v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
-				v.ChecksNoted = note
-				return nil
-			}
+		switch err := gh.UpdateReview(ctx, pr.Slug, pr.Number, found.ID, body); {
+		case err == nil:
+			edited = true
+		case forge.Refused(err):
+			// Left as it was, and not tried again until CI moves.
+			slog.Warn("GitHub refused to edit dude's review", "pr", pr.ID, "review", found.ID, "error", err)
+			edited = false
+		default:
 			return retry(err, "GitHub's answer to refreshing dude's review was lost")
 		}
-		edited = true
 	}
 	if edited {
 		if err := w.s.Emit(ctx, sc.OrganizationID, st, EvReviewEdited, map[string]any{"claimId": claim, "reviewId": found.ID,
-			"pullRequestId": pr.ID, "head": head, "why": why}); err != nil {
+			"pullRequestId": pr.ID, "head": head, "why": "checks: " + cmp.Or(note, "passing")}); err != nil {
 			return err
 		}
 	}
-	v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
-	v.ChecksNoted = note
+	v.settled(note)
 	return nil
 }
 
