@@ -142,6 +142,7 @@ func TestATransientFailurePastTheBoundParksTheRunForAPerson(t *testing.T) {
 	}
 	w.refusedFor(run, 2*time.Hour+time.Minute)
 	w.retryDue(run)
+	w.until("the Run parked", func() bool { return w.runStatus(run) == "paused/idle" })
 	w.until("the task to need a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
 	if got := w.runStatus(run); got != "paused/idle" {
 		t.Errorf("the Run is %s, want parked (paused/idle)", got)
