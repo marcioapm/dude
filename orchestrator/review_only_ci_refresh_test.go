@@ -21,27 +21,42 @@ import (
 // new round. A review that noted nothing of CI is never touched by a
 // checks signal, nor is a writing delivery's pull request.
 
-// reviewEdits are the PUTs of a review's body the fake GitHub was sent.
-func (w *world) reviewEdits() []string {
-	var out []string
+// editsAre fails the test unless the fake GitHub was sent puts PUTs of a
+// review's body and the task recorded events review_edited.
+func (w *world) editsAre(wi string, puts, events int) {
+	w.t.Helper()
 	edit := regexp.MustCompile(`^PUT .*/pulls/\d+/reviews/\d+$`)
+	var sent []string
 	for _, r := range w.gh.Requests() {
 		if edit.MatchString(r) {
-			out = append(out, r)
+			sent = append(sent, r)
 		}
 	}
-	return out
+	if e := w.events(wi, delivery.EvReviewEdited); len(sent) != puts || e != events {
+		w.t.Fatalf("%d review edits sent (%v), %d review_edited events; want %d and %d", len(sent), sent, e, puts, events)
+	}
+}
+
+// ciNote is the line of a review's body that lists the failing checks.
+var ciNote = regexp.MustCompile(`\n- failing: [^\n]*`)
+
+// still answers every later round's lens: F1 is still open.
+func still() string { return "still" }
+
+// consumedSignals is the number of task wi's signals its workflow consumed.
+func (w *world) consumedSignals(wi string) int {
+	return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+		WHERE r.task_id = $1 AND s.consumed_at IS NOT NULL`, wi)
 }
 
 // greenAtTheHead turns CI green at the head and has the sync's checks
 // signal reach the task's wait.
 func (w *world) greenAtTheHead(wi string) {
 	w.t.Helper()
-	before := w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id = (SELECT id FROM workflow_runs WHERE task_id = $1) AND consumed_at IS NOT NULL`, wi)
+	before := w.consumedSignals(wi)
 	w.gh.SetChecks("success")
 	w.agentsDone(wi, "the checks signal consumed by the wait", func() bool {
-		return w.count(`SELECT count(*) FROM workflow_signals WHERE workflow_run_id = (SELECT id FROM workflow_runs WHERE task_id = $1) AND consumed_at IS NOT NULL`, wi) > before &&
-			w.waitingOnPR(wi)
+		return w.consumedSignals(wi) > before && w.waitingOnPR(wi)
 	})
 	w.syncs(3)
 	w.advanced()
@@ -54,7 +69,7 @@ func (w *world) greenAtTheHead(wi string) {
 // edited; no new round; re-syncs change nothing more.
 func TestAReviewListingFailingChecksIsEditedOnceCIPassesAtTheHead(t *testing.T) {
 	w := newWorld(t)
-	wi, n, h1 := w.findingThenVerdictWith("failure", func() string { return "still" })
+	wi, n, h1 := w.findingThenVerdictWith("failure", still)
 	rs := reviewsAt(w.dudeReviews(wi, n), h1)
 	if len(rs) != 1 || rs[0].State != "CHANGES_REQUESTED" || !strings.Contains(rs[0].Body, "failing: ") {
 		t.Fatalf("at H1 with red CI: %+v", rs)
@@ -62,7 +77,6 @@ func TestAReviewListingFailingChecksIsEditedOnceCIPassesAtTheHead(t *testing.T) 
 	id := rs[0].ID
 	// The body a submit with CI green would have made: the original, the
 	// CI note's line alone gone.
-	ciNote := regexp.MustCompile(`\n- failing: [^\n]*`)
 	if m := ciNote.FindAllString(rs[0].Body, -1); len(m) != 1 {
 		t.Fatalf("the CI note's lines in %q: %q", rs[0].Body, m)
 	}
@@ -110,10 +124,7 @@ func TestAReviewListingFailingChecksIsEditedOnceCIPassesAtTheHead(t *testing.T) 
 	if c := w.events(wi, delivery.EvReviewClaimed); c != claims {
 		t.Fatalf("%d new claims", c-claims)
 	}
-	edits := len(w.reviewEdits())
-	if edits != 1 {
-		t.Fatalf("%d review edits sent, want 1", edits)
-	}
+	w.editsAre(wi, 1, 1)
 	// Re-synced, and CI's signal again: nothing more.
 	w.syncs(4)
 	w.advanced()
@@ -121,19 +132,14 @@ func TestAReviewListingFailingChecksIsEditedOnceCIPassesAtTheHead(t *testing.T) 
 	if got := reviewsAt(w.dudeReviews(wi, n), h1); len(got) != 1 || got[0].Body != rs[0].Body {
 		t.Fatalf("a re-sync changed the review: %+v", got)
 	}
-	if e := len(w.reviewEdits()); e != edits {
-		t.Fatalf("%d more review edits", e-edits)
-	}
-	if e := w.events(wi, delivery.EvReviewEdited); e != 1 {
-		t.Fatalf("%d review_edited events after re-syncs", e)
-	}
+	w.editsAre(wi, 1, 1)
 }
 
 // A verdict posted with CI green at H noted nothing of CI: checks
 // signals at H (red, then green again) edit nothing, post nothing.
 func TestAReviewThatNotedNoCIIsNotRefreshedByChecks(t *testing.T) {
 	w := newWorld(t)
-	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
+	wi, n, h1 := w.findingThenVerdict(still)
 	before := reviewsAt(w.dudeReviews(wi, n), h1)
 	if len(before) != 1 || strings.Contains(before[0].Body, "failing: ") {
 		t.Fatalf("at H1 with green CI: %+v", before)
@@ -147,12 +153,7 @@ func TestAReviewThatNotedNoCIIsNotRefreshedByChecks(t *testing.T) {
 	if len(after) != 1 || after[0].Body != before[0].Body || after[0].State != before[0].State {
 		t.Fatalf("after checks signals: %+v, want %+v", after, before)
 	}
-	if e := w.reviewEdits(); len(e) != 0 {
-		t.Fatalf("review edits sent: %v", e)
-	}
-	if e := w.events(wi, delivery.EvReviewEdited); e != 0 {
-		t.Fatalf("%d review_edited events", e)
-	}
+	w.editsAre(wi, 0, 0)
 	if c := w.events(wi, delivery.EvReviewClaimed); c != claims {
 		t.Fatalf("%d new claims", c-claims)
 	}
@@ -168,9 +169,10 @@ func TestAnAuthorQuestionCommentIsRefreshedOnceCIPasses(t *testing.T) {
 	w.gh.SetChecks("failure")
 	w.syncs(3)
 	w.advanced()
-	if got := reviewsAt(w.dudeReviews(wi, n), h1); len(got) != 1 || len(w.reviewEdits()) != 0 {
+	if got := reviewsAt(w.dudeReviews(wi, n), h1); len(got) != 1 {
 		t.Fatalf("red CI after an approval that noted none: %+v", got)
 	}
+	w.editsAre(wi, 0, 0)
 	w.must(wi, "ask_author", fmt.Sprintf(`{"pr":"%d","question":"Should greet also handle names?"}`, n))
 	w.agentsDone(wi, "a COMMENT at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
 	rs := reviewsAt(w.dudeReviews(wi, n), h1)
@@ -186,9 +188,7 @@ func TestAnAuthorQuestionCommentIsRefreshedOnceCIPasses(t *testing.T) {
 	if rs[1].State != "COMMENTED" || strings.Contains(rs[1].Body, "failing: ") || !strings.Contains(rs[1].Body, "Should greet also handle names?") {
 		t.Fatalf("the refreshed COMMENT: %+v", rs[1])
 	}
-	if e := w.events(wi, delivery.EvReviewEdited); e != 1 {
-		t.Fatalf("%d review_edited events", e)
-	}
+	w.editsAre(wi, 1, 1)
 }
 
 // A review whose inline comment GitHub refused, so that its submit folded
@@ -197,7 +197,7 @@ func TestAnAuthorQuestionCommentIsRefreshedOnceCIPasses(t *testing.T) {
 func TestARefreshedReviewKeepsTheCommentsItsSubmitFolded(t *testing.T) {
 	w := newWorld(t)
 	w.gh.Set(func(s *fakegithub.Server) { s.NotInDiffOnce = true })
-	wi, n, h1 := w.findingRequested("alice", "failure", func() string { return "still" })
+	wi, n, h1 := w.findingRequested("alice", "failure", still)
 	if c := w.dudeLineComments(n); len(c) != 0 {
 		t.Fatalf("inline comments after GitHub refused them: %+v", c)
 	}
@@ -207,15 +207,13 @@ func TestARefreshedReviewKeepsTheCommentsItsSubmitFolded(t *testing.T) {
 	}
 	// FoldComments trims the body it folds into: blank lines compared as one.
 	blank := regexp.MustCompile(`\n{3,}`)
-	want := blank.ReplaceAllString(regexp.MustCompile(`\n- failing: [^\n]*`).ReplaceAllString(rs[0].Body, ""), "\n\n")
+	want := blank.ReplaceAllString(ciNote.ReplaceAllString(rs[0].Body, ""), "\n\n")
 	w.greenAtTheHead(wi)
 	rs = reviewsAt(w.dudeReviews(wi, n), h1)
 	if len(rs) != 1 || blank.ReplaceAllString(rs[0].Body, "\n\n") != want {
 		t.Fatalf("the refreshed review:\n%q\nwant the body:\n%q", rs, want)
 	}
-	if e := len(w.reviewEdits()); e != 1 {
-		t.Fatalf("%d review edits, want 1", e)
-	}
+	w.editsAre(wi, 1, 1)
 }
 
 // A refreshed downgrade: on a pull request dude's own account opened, the
@@ -224,20 +222,18 @@ func TestARefreshedReviewKeepsTheCommentsItsSubmitFolded(t *testing.T) {
 // body is the original without its CI note, byte for byte.
 func TestARefreshedOwnPullRequestCommentKeepsItsBody(t *testing.T) {
 	w := newWorld(t)
-	wi, n, h1 := w.findingRequested(fakegithub.Login, "failure", func() string { return "still" })
+	wi, n, h1 := w.findingRequested(fakegithub.Login, "failure", still)
 	rs := reviewsAt(w.dudeReviews(wi, n), h1)
 	if len(rs) != 1 || !strings.Contains(rs[0].Body, "dude cannot request changes") || len(w.dudeLineComments(n)) != 1 {
 		t.Fatalf("at H1, downgraded with red CI: %+v", rs)
 	}
-	id, want := rs[0].ID, regexp.MustCompile(`\n- failing: [^\n]*`).ReplaceAllString(rs[0].Body, "")
+	id, want := rs[0].ID, ciNote.ReplaceAllString(rs[0].Body, "")
 	w.greenAtTheHead(wi)
 	rs = reviewsAt(w.dudeReviews(wi, n), h1)
 	if len(rs) != 1 || rs[0].ID != id || rs[0].State != "COMMENTED" || rs[0].Body != want {
 		t.Fatalf("the refreshed COMMENT:\n%+v\nwant review %d with body:\n%s", rs, id, want)
 	}
-	if e, ev := len(w.reviewEdits()), w.events(wi, delivery.EvReviewEdited); e != 1 || ev != 1 {
-		t.Fatalf("%d review edits, %d review_edited events, want 1 and 1", e, ev)
-	}
+	w.editsAre(wi, 1, 1)
 }
 
 // recordingSteps has the world's deliveries run on store, as
@@ -261,9 +257,9 @@ func (w *world) recordingSteps(store *delivery.Store) func() int {
 func TestALostEditAnswerIsNotSentAgain(t *testing.T) {
 	w := newWorld(t)
 	w.recordingSteps(&delivery.Store{ReviewRecoverDelay: 100 * time.Millisecond})
-	wi, n, h1 := w.findingThenVerdictWith("failure", func() string { return "still" })
+	wi, n, h1 := w.findingThenVerdictWith("failure", still)
 	rs := reviewsAt(w.dudeReviews(wi, n), h1)
-	id, want := rs[0].ID, regexp.MustCompile(`\n- failing: [^\n]*`).ReplaceAllString(rs[0].Body, "")
+	id, want := rs[0].ID, ciNote.ReplaceAllString(rs[0].Body, "")
 	w.gh.Set(func(s *fakegithub.Server) { s.UpdateFail5xx = 1 })
 	w.gh.SetChecks("success")
 	w.agentsDone(wi, "the lost edit recorded", func() bool {
@@ -276,39 +272,27 @@ func TestALostEditAnswerIsNotSentAgain(t *testing.T) {
 	if len(rs) != 1 || rs[0].ID != id || rs[0].Body != want || rs[0].State != "CHANGES_REQUESTED" {
 		t.Fatalf("after the lost edit: %+v, want review %d with body %q", rs, id, want)
 	}
-	if e := w.reviewEdits(); len(e) != 1 {
-		t.Fatalf("%d review edits sent, want the one GitHub took: %v", len(e), e)
-	}
-	if e := w.events(wi, delivery.EvReviewEdited); e != 1 {
-		t.Fatalf("%d review_edited events", e)
-	}
+	w.editsAre(wi, 1, 1) // the one GitHub took
 }
 
 // GitHub refuses the edit: the review is left as it was, and the refresh
 // is tried once for that change of CI, not again on each later signal.
 func TestARefusedEditIsTriedOncePerCIChange(t *testing.T) {
 	w := newWorld(t)
-	wi, n, h1 := w.findingThenVerdictWith("failure", func() string { return "still" })
+	wi, n, h1 := w.findingThenVerdictWith("failure", still)
 	before := reviewsAt(w.dudeReviews(wi, n), h1)
 	w.gh.Set(func(s *fakegithub.Server) { s.RefuseUpdate = true })
 	w.greenAtTheHead(wi)
-	if e := len(w.reviewEdits()); e != 1 {
-		t.Fatalf("%d review edits tried, want 1", e)
-	}
+	w.editsAre(wi, 1, 0)
 	// CI red, then green again at H: nothing more tried.
 	w.gh.SetChecks("failure")
 	w.syncs(3)
 	w.advanced()
 	w.greenAtTheHead(wi)
-	if e := len(w.reviewEdits()); e != 1 {
-		t.Fatalf("%d review edits tried after later checks signals, want the 1 refused", e)
-	}
+	w.editsAre(wi, 1, 0) // the one refused, not tried again
 	after := reviewsAt(w.dudeReviews(wi, n), h1)
 	if len(after) != 1 || after[0].Body != before[0].Body {
 		t.Fatalf("the refused review: %+v, want %+v", after, before)
-	}
-	if e := w.events(wi, delivery.EvReviewEdited); e != 0 {
-		t.Fatalf("%d review_edited events", e)
 	}
 }
 
@@ -317,16 +301,14 @@ func TestARefusedEditIsTriedOncePerCIChange(t *testing.T) {
 func TestACommentAfterARedCIReviewRunsNoVerdict(t *testing.T) {
 	w := newWorld(t)
 	verdicts := w.recordingSteps(&delivery.Store{})
-	wi, n, h1 := w.findingThenVerdictWith("failure", func() string { return "still" })
+	wi, n, h1 := w.findingThenVerdictWith("failure", still)
 	before, status := reviewsAt(w.dudeReviews(wi, n), h1), w.verdictComments(wi, n)
 	ran := verdicts()
-	consumed := w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-		WHERE r.task_id = $1 AND s.consumed_at IS NOT NULL`, wi)
+	consumed := w.consumedSignals(wi)
 	w.gh.Comment(n, "alice", "Thanks, looking at it.")
 	w.agentsDone(wi, "the comment's signal consumed by the wait", func() bool {
 		w.sync()
-		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-			WHERE r.task_id = $1 AND s.consumed_at IS NOT NULL`, wi) > consumed && w.waitingOnPR(wi)
+		return w.consumedSignals(wi) > consumed && w.waitingOnPR(wi)
 	})
 	w.syncs(3)
 	w.advanced()
@@ -336,9 +318,7 @@ func TestACommentAfterARedCIReviewRunsNoVerdict(t *testing.T) {
 	if after := reviewsAt(w.dudeReviews(wi, n), h1); len(after) != 1 || after[0].Body != before[0].Body {
 		t.Fatalf("the review after a comment: %+v", after)
 	}
-	if e := w.reviewEdits(); len(e) != 0 {
-		t.Fatalf("review edits sent: %v", e)
-	}
+	w.editsAre(wi, 0, 0)
 	if c := w.verdictComments(wi, n); len(c) != 1 || c[0].Body != status[0].Body {
 		t.Fatalf("the status comment after a comment: %+v, was %+v", c, status)
 	}
@@ -383,12 +363,7 @@ func TestAWritingDeliverysGreenChecksEditNoReview(t *testing.T) {
 	if !slices.Contains(ran, "awaitPullRequest") {
 		t.Fatalf("the writing wait never ran: %v", ran)
 	}
-	if e := w.reviewEdits(); len(e) != 0 {
-		t.Fatalf("review edits sent for a writing delivery: %v", e)
-	}
-	if e := w.events(wi, delivery.EvReviewEdited); e != 0 {
-		t.Fatalf("%d review_edited events on a writing delivery", e)
-	}
+	w.editsAre(wi, 0, 0)
 	if f := w.fixes(wi); f != 1 {
 		t.Fatalf("%d fixes after CI went green, want the one red woke", f)
 	}
