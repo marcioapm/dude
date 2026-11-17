@@ -119,32 +119,62 @@ func TestATransientTurnFailureIsRetriedAndTheRunGoesOn(t *testing.T) {
 	}
 }
 
-// Past maxTurnRetries the failure is the Run's, as any other: failed
-// with the agent's error, saying it was retried, and escalated as
-// implement_failed.
-func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
+// There is no retry count: refused continuously for the role's limit
+// (2 h), the Run is parked, not failed — with no conductor, handed to a
+// person, its error not the Run's. (Renamed from
+// TestATransientFailurePastTheBoundFailsTheRunAsBefore: the 4-retry
+// bound it encoded is gone.)
+func TestATransientFailurePastTheBoundParksTheRunForAPerson(t *testing.T) {
 	w := newWorld(t)
-	w.syncer.RetryAhead = 20 * time.Minute
 	w.implementerFailing(func(b *fakelux.Behaviour) { b.TurnError = acpLimited })
-	task := w.task()
+	task, run := w.task(), ""
 	w.deliver(task)
+	w.until("the first retry held", func() bool {
+		run = w.implementer(task)
+		return run != "" && w.turnRetries(run) == 1
+	})
+	for attempt := 2; attempt <= 6; attempt++ {
+		w.retryDue(run)
+		w.until("the next retry held", func() bool { return w.turnRetries(run) == attempt })
+	}
+	if got := w.str(`SELECT status::text FROM runs WHERE id = $1`, run); got != "running" {
+		t.Fatalf("the Run is %s after 6 retries, want running", got)
+	}
+	w.refusedFor(run, 2*time.Hour+time.Minute)
+	w.retryDue(run)
 	w.until("the task to need a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
-	run := w.implementer(task)
-	if n := w.turnRetries(run); n != 4 {
-		t.Errorf("%d retries before failing, want 4", n)
+	if got := w.runStatus(run); got != "paused/idle" {
+		t.Errorf("the Run is %s, want parked (paused/idle)", got)
 	}
-	errText := w.str(`SELECT status::text || ': ' || COALESCE(error, '') FROM runs WHERE id = $1`, run)
-	if !strings.HasPrefix(errText, "failed: the agent's turn failed: "+acpLimited) || !strings.Contains(errText, "retried a temporary model error 4 times") {
-		t.Errorf("the Run ended %q", errText)
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'`, run); n != 0 {
+		t.Errorf("%d run.failed", n)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'
-		AND payload->>'error' LIKE '%retried a temporary model error 4 times%'`, run); n != 1 {
-		t.Errorf("%d run.failed naming the retries, want 1", n)
-	}
-	if r := w.escalationReason(task); r != "implement_failed" {
-		t.Errorf("escalated for %q, want implement_failed", r)
+	if r := w.escalationReason(task); r != "" {
+		t.Errorf("escalated for %q", r)
 	}
 }
+
+// The Run's no-progress limit is the bound: set to 45 minutes for the
+// implementer, 46 minutes of refusals park it.
+func TestTheRolesTimeLimitBoundsAModelWait(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer}',
+		COALESCE(agent_models->'implementer', '{}'::jsonb) || '{"timeLimitMinutes":45}') WHERE id = $1`, w.project)
+	w.implementerFailing(func(b *fakelux.Behaviour) { b.TurnError = acpLimited })
+	task, run := w.task(), ""
+	w.deliver(task)
+	w.until("the first retry held", func() bool {
+		run = w.implementer(task)
+		return run != "" && w.turnRetries(run) == 1
+	})
+	w.refusedFor(run, 44*time.Minute)
+	w.retryDue(run)
+	w.until("the second retry held", func() bool { return w.turnRetries(run) == 2 })
+	w.refusedFor(run, 46*time.Minute)
+	w.retryDue(run)
+	w.until("the Run parked", func() bool { return w.runStatus(run) == "paused/idle" })
+}
+
 
 // A failure that is not temporary — refused credentials, a bad request —
 // is not retried: the Run fails at once.

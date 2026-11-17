@@ -1405,8 +1405,9 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 		}
 	}
 	// A temporary model error (a rate limit, an overloaded upstream, a
-	// dropped stream) is waited out and the turn retried, any role's;
-	// past the bound it fails as any other, saying it was retried.
+	// dropped stream) is waited out and the turn retried, any role's, as
+	// long as the role's limit allows; past it a phase Run is parked
+	// (parkForModel), a talker parked below, saying it was retried.
 	if retried, err := t.retryTurn(ctx, tx, s, agentErr); retried || err != nil {
 		return err
 	}

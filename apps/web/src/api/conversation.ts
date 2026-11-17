@@ -572,7 +572,8 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
 
 /**
  * A turn dude retries after a temporary model error (`run.turn.retried`),
- * in one line: "Model busy (429). Retrying in 2m 23s (attempt 2 of 4)."
+ * in one line: "Model busy (429). Retrying in 2m 23s (attempt 2)."
+ * (older events also say "of 4": their maxAttempts.)
  * The status is the one the agent's error names; an error that names none
  * (a dropped stream) is a temporary model error.
  */
