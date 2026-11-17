@@ -6,10 +6,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
 // A review-only verdict's CI note follows CI at the reviewed head: a
@@ -212,6 +215,110 @@ func TestARefreshedReviewKeepsTheCommentsItsSubmitFolded(t *testing.T) {
 	}
 	if e := len(w.reviewEdits()); e != 1 {
 		t.Fatalf("%d review edits, want 1", e)
+	}
+}
+
+// recordingSteps has the world's deliveries run on store, as
+// withDeliveries, and counts the verdict steps they commit.
+func (w *world) recordingSteps(store *delivery.Store) func() int {
+	var verdicts atomic.Int64
+	store.DB, store.SyncPullRequest = w.app, w.prs.Sync
+	def := delivery.Workflow(store, forge.Resolver{DB: w.app})
+	def.BeforeCommit = func(_, step, _ string) {
+		if step == "verdict" {
+			verdicts.Add(1)
+		}
+	}
+	w.runtime.Register(def)
+	return func() int { return int(verdicts.Load()) }
+}
+
+// An ambiguous answer to the edit (GitHub took it, the answer was lost):
+// retried, the review found already holding the body, it is not sent
+// again; one review at H, edited once, recorded once.
+func TestALostEditAnswerIsNotSentAgain(t *testing.T) {
+	w := newWorld(t)
+	w.recordingSteps(&delivery.Store{ReviewRecoverDelay: 100 * time.Millisecond})
+	wi, n, h1 := w.findingThenVerdictWith("failure", func() string { return "still" })
+	rs := reviewsAt(w.dudeReviews(wi, n), h1)
+	id, want := rs[0].ID, regexp.MustCompile(`\n- failing: [^\n]*`).ReplaceAllString(rs[0].Body, "")
+	w.gh.Set(func(s *fakegithub.Server) { s.UpdateFail5xx = 1 })
+	w.gh.SetChecks("success")
+	w.agentsDone(wi, "the lost edit recorded", func() bool {
+		w.sync()
+		return w.events(wi, delivery.EvReviewEdited) == 1 && w.waitingOnPR(wi)
+	})
+	w.syncs(3)
+	w.advanced()
+	rs = reviewsAt(w.dudeReviews(wi, n), h1)
+	if len(rs) != 1 || rs[0].ID != id || rs[0].Body != want || rs[0].State != "CHANGES_REQUESTED" {
+		t.Fatalf("after the lost edit: %+v, want review %d with body %q", rs, id, want)
+	}
+	if e := w.reviewEdits(); len(e) != 1 {
+		t.Fatalf("%d review edits sent, want the one GitHub took: %v", len(e), e)
+	}
+	if e := w.events(wi, delivery.EvReviewEdited); e != 1 {
+		t.Fatalf("%d review_edited events", e)
+	}
+}
+
+// GitHub refuses the edit: the review is left as it was, and the refresh
+// is tried once for that change of CI, not again on each later signal.
+func TestARefusedEditIsTriedOncePerCIChange(t *testing.T) {
+	w := newWorld(t)
+	wi, n, h1 := w.findingThenVerdictWith("failure", func() string { return "still" })
+	before := reviewsAt(w.dudeReviews(wi, n), h1)
+	w.gh.Set(func(s *fakegithub.Server) { s.RefuseUpdate = true })
+	w.greenAtTheHead(wi)
+	if e := len(w.reviewEdits()); e != 1 {
+		t.Fatalf("%d review edits tried, want 1", e)
+	}
+	// CI red, then green again at H: nothing more tried.
+	w.gh.SetChecks("failure")
+	w.syncs(3)
+	w.advanced()
+	w.greenAtTheHead(wi)
+	if e := len(w.reviewEdits()); e != 1 {
+		t.Fatalf("%d review edits tried after later checks signals, want the 1 refused", e)
+	}
+	after := reviewsAt(w.dudeReviews(wi, n), h1)
+	if len(after) != 1 || after[0].Body != before[0].Body {
+		t.Fatalf("the refused review: %+v, want %+v", after, before)
+	}
+	if e := w.events(wi, delivery.EvReviewEdited); e != 0 {
+		t.Fatalf("%d review_edited events", e)
+	}
+}
+
+// A signal that is not CI's (a person's comment) after a review noting red
+// CI runs no verdict: no edit, the status comment as it was.
+func TestACommentAfterARedCIReviewRunsNoVerdict(t *testing.T) {
+	w := newWorld(t)
+	verdicts := w.recordingSteps(&delivery.Store{})
+	wi, n, h1 := w.findingThenVerdictWith("failure", func() string { return "still" })
+	before, status := reviewsAt(w.dudeReviews(wi, n), h1), w.verdictComments(wi, n)
+	ran := verdicts()
+	consumed := w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+		WHERE r.task_id = $1 AND s.consumed_at IS NOT NULL`, wi)
+	w.gh.Comment(n, "alice", "Thanks, looking at it.")
+	w.agentsDone(wi, "the comment's signal consumed by the wait", func() bool {
+		w.sync()
+		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.consumed_at IS NOT NULL`, wi) > consumed && w.waitingOnPR(wi)
+	})
+	w.syncs(3)
+	w.advanced()
+	if v := verdicts(); v != ran {
+		t.Fatalf("%d verdict steps ran on a comment", v-ran)
+	}
+	if after := reviewsAt(w.dudeReviews(wi, n), h1); len(after) != 1 || after[0].Body != before[0].Body {
+		t.Fatalf("the review after a comment: %+v", after)
+	}
+	if e := w.reviewEdits(); len(e) != 0 {
+		t.Fatalf("review edits sent: %v", e)
+	}
+	if c := w.verdictComments(wi, n); len(c) != 1 || c[0].Body != status[0].Body {
+		t.Fatalf("the status comment after a comment: %+v, was %+v", c, status)
 	}
 }
 
