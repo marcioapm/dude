@@ -175,7 +175,6 @@ func TestTheRolesTimeLimitBoundsAModelWait(t *testing.T) {
 	w.until("the Run parked", func() bool { return w.runStatus(run) == "paused/idle" })
 }
 
-
 // A failure that is not temporary — refused credentials, a bad request —
 // is not retried: the Run fails at once.
 func TestANonTransientTurnFailureIsNotRetried(t *testing.T) {
