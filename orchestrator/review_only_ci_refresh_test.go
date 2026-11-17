@@ -3,7 +3,9 @@ package orchestrator_test
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
@@ -213,21 +215,52 @@ func TestARefreshedReviewKeepsTheCommentsItsSubmitFolded(t *testing.T) {
 	}
 }
 
-// The writing delivery is untouched: its pull request's checks going
-// green edit no review and send no review edit.
+// The writing delivery is untouched: its pull request's checks going red
+// at its wait wake a fixer at PointPRFeedback, as they always did, and
+// going green after are taken by the writing wait; no review-only step
+// ever runs, no review-only status comment, no review edit.
 func TestAWritingDeliverysGreenChecksEditNoReview(t *testing.T) {
 	w := newWorld(t)
-	w.gh.SetChecks("failure")
+	var mu sync.Mutex
+	var steps []string
+	w.gated(func(step, _ string) {
+		mu.Lock()
+		defer mu.Unlock()
+		steps = append(steps, step)
+	}).Store(true)
 	wi := w.reviewing()
-	w.syncs(3)
-	w.advanced()
+	n := w.gh.Pulls()[0].Number
+	consumed := func() int {
+		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, wi, delivery.SignalPRFeedback)
+	}
+	w.gh.SetChecks("failure")
+	w.until("red checks wake a fixer", func() bool { w.sync(); w.pump(); return w.fixes(wi) == 1 })
+	if consumed() == 0 {
+		t.Fatal("the writing wait did not consume the checks signal")
+	}
 	w.gh.SetChecks("success")
 	w.syncs(4)
 	w.advanced()
+	if c := w.verdictComments(wi, n); len(c) != 0 {
+		t.Fatalf("a review-only status comment on a writing delivery: %+v", c)
+	}
+	mu.Lock()
+	ran := slices.Clone(steps)
+	mu.Unlock()
+	if slices.Contains(ran, "verdict") {
+		t.Fatalf("a writing delivery ran the review-only verdict step: %v", ran)
+	}
+	if !slices.Contains(ran, "awaitPullRequest") {
+		t.Fatalf("the writing wait never ran: %v", ran)
+	}
 	if e := w.reviewEdits(); len(e) != 0 {
 		t.Fatalf("review edits sent for a writing delivery: %v", e)
 	}
 	if e := w.events(wi, delivery.EvReviewEdited); e != 0 {
 		t.Fatalf("%d review_edited events on a writing delivery", e)
+	}
+	if f := w.fixes(wi); f != 1 {
+		t.Fatalf("%d fixes after CI went green, want the one red woke", f)
 	}
 }
