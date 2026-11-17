@@ -174,10 +174,11 @@ func TestATransientFailurePastTheBoundParksTheRunForAPerson(t *testing.T) {
 	}
 }
 
-// Past the bound a talker's refused turn fails as before: parked as for
-// any failed turn (parkFailed), its error naming the retries. (The name is
-// the old phase-Run test's, whose 4-retry bound is gone: a phase Run is
-// parked now, TestATransientFailurePastTheBoundParksTheRunForAPerson.)
+// Past the bound a talker's refused turn fails as before, and the Run is
+// parked, not failed: as for any failed turn (parkFailed), resumable, its
+// error naming the retries. (The name is the old phase-Run test's, kept
+// for the test-ID gate; it is the talker's turn that fails, not its Run.
+// A phase Run is parked too: TestATransientFailurePastTheBoundParksTheRunForAPerson.)
 func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
 	tk, run := talkers(t)["conductor"](t)
 	tk.lux.FailTurns(tk.luxRunOf(run), 2, rateLimited)
