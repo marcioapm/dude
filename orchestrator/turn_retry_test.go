@@ -174,6 +174,29 @@ func TestATransientFailurePastTheBoundParksTheRunForAPerson(t *testing.T) {
 	}
 }
 
+// Past the bound a talker's refused turn fails as before: parked as for
+// any failed turn (parkFailed), its error naming the retries. (The name is
+// the old phase-Run test's, whose 4-retry bound is gone: a phase Run is
+// parked now, TestATransientFailurePastTheBoundParksTheRunForAPerson.)
+func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
+	tk, run := talkers(t)["conductor"](t)
+	tk.lux.FailTurns(tk.luxRunOf(run), 2, rateLimited)
+	if status, reached := tk.write("go on"); status != 200 || reached != run {
+		t.Fatalf("write: %d reached %q, want %s", status, reached, run)
+	}
+	tk.until("the refused turn retried", func() bool { return tk.turnRetries(run) == 1 })
+	tk.refusedFor(run, 7*24*time.Hour)
+	tk.retryDue(run)
+	tk.until("the failed turn recorded", func() bool {
+		return tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'`, run) > 0
+	})
+	if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'
+		AND payload->>'error' LIKE '%retried a temporary model error 1 time)%'`, run); n != 1 {
+		t.Errorf("%d run.failed naming the retry, want 1", n)
+	}
+	tk.parkedAfterFailure(run)
+}
+
 // The Run's no-progress limit is the bound: set to 45 minutes for the
 // implementer, 46 minutes of refusals park it.
 func TestTheRolesTimeLimitBoundsAModelWait(t *testing.T) {
