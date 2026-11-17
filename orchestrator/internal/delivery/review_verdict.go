@@ -794,9 +794,11 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 	}
 	if !ok {
 		// Not on GitHub as dude's (deleted, or another account's now):
-		// nothing to edit, and nothing posted in its place.
+		// nothing to edit, and nothing posted in its place. Tried once for
+		// this change of CI: the note is taken as the one now standing.
 		slog.Warn("dude's review to refresh not found", "pr", pr.ID, "claim", claim)
 		v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+		v.ChecksNoted = note
 		return nil
 	}
 	// /pulls/files has no ref: the head must be H as the diff is read.
@@ -842,8 +844,10 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 	if strings.TrimSpace(found.Body) != strings.TrimSpace(body) {
 		if err := gh.UpdateReview(ctx, pr.Slug, pr.Number, found.ID, body); err != nil {
 			if forge.Refused(err) {
+				// Left as it was, and not tried again until CI moves.
 				slog.Warn("GitHub refused to edit dude's review", "pr", pr.ID, "review", found.ID, "error", err)
 				v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+				v.ChecksNoted = note
 				return nil
 			}
 			return retry(err, "GitHub's answer to refreshing dude's review was lost")

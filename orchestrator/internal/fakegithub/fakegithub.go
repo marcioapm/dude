@@ -232,9 +232,11 @@ type Server struct {
 	// them (an ambiguous answer: the edit stands). NotInDiffOnce refuses
 	// the next review with inline comments as GitHub does a line not in its
 	// diff (422), whatever the lines: GitHub's diff disagreeing with /files.
+	// RefuseUpdate answers every review body edit 403, taking none.
 	RefuseDismissal   bool
 	DismissFail5xx    int
 	UpdateFail5xx     int
+	RefuseUpdate      bool
 	NotInDiffOnce     bool
 	ReviewTimeoutOnce bool
 	ReviewFail5xx     int

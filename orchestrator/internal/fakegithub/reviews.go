@@ -257,6 +257,10 @@ func (s *Server) updateReview(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "Not Found")
 		return
 	}
+	if s.RefuseUpdate {
+		fail(w, 403, "Resource not accessible by integration")
+		return
+	}
 	p.Reviews[i].Body = *in.Body
 	if s.UpdateFail5xx > 0 {
 		s.UpdateFail5xx--
