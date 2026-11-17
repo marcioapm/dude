@@ -210,15 +210,19 @@ func (t *translator) parkForModel(ctx context.Context, tx pgx.Tx, s *Syncer, wai
 	t.LastFailed = true
 	var taskStatus string
 	if t.run.TaskID != "" && t.run.SourceKind == "" {
-		if err := t.tellConductor(ctx, tx, "model-parked:"+t.run.ID+":"+parkedAt.UTC().Format(time.RFC3339Nano), waited, true); err != nil {
-			return err
-		}
+		// The status a resume puts back: read before a person is asked,
+		// which makes the task await them (as requestPause does).
 		if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, t.run.TaskID).Scan(&taskStatus); err != nil {
 			return err
 		}
+		if err := t.tellConductor(ctx, tx, "model-parked:"+t.run.ID+":"+parkedAt.UTC().Format(time.RFC3339Nano), waited, true); err != nil {
+			return err
+		}
 	}
+	// model: the person's transcript and a hand-over say the provider
+	// refused, not that the agent went quiet (dude_pause stays 'idle').
 	return s.event(ctx, tx, t.run, evParked, ledger.ActorSystem,
-		map[string]any{"reason": "idle", "message": why, "taskStatus": db.Nullable(taskStatus), "parkedAt": parkedAt})
+		map[string]any{"reason": "idle", "model": true, "message": why, "taskStatus": db.Nullable(taskStatus), "parkedAt": parkedAt})
 }
 
 // tellConductor says the model provider has refused the Run for waited:

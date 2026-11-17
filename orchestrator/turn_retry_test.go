@@ -152,6 +152,26 @@ func TestATransientFailurePastTheBoundParksTheRunForAPerson(t *testing.T) {
 	if r := w.escalationReason(task); r != "" {
 		t.Errorf("escalated for %q", r)
 	}
+	// The park says what it is: the provider's refusals, not an agent
+	// that went quiet.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'idle'
+		AND (payload->>'model')::boolean AND payload->>'taskStatus' <> 'awaiting_input'`, run); n != 1 {
+		t.Errorf("%d run.parked marked model with the status before the ask, want 1", n)
+	}
+	// The person's Resume takes it up and puts the task back.
+	before := w.str(`SELECT payload->>'taskStatus' FROM events WHERE run_id = $1 AND event_type = 'run.parked'
+		ORDER BY cursor DESC LIMIT 1`, run)
+	if status, body := w.call("/internal/runs/"+run+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the Run resumed", func() bool { return w.str(`SELECT status::text FROM runs WHERE id = $1`, run) == "running" })
+	w.until("the task back, or still awaiting a person", func() bool {
+		return w.taskStatus(task) != "awaiting_input" || w.count(`SELECT count(*) FROM events WHERE run_id = $1
+			AND event_type = 'run.unparked'`, run) > 0
+	})
+	if got := w.taskStatus(task); got != before || got == "awaiting_input" {
+		t.Errorf("the task is %s after the person's resume, want %q (before the park)", got, before)
+	}
 }
 
 // The Run's no-progress limit is the bound: set to 45 minutes for the

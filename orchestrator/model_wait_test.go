@@ -362,6 +362,24 @@ func TestARefusalAfterAModelParkIsANewWait(t *testing.T) {
 	}
 }
 
+// A model park its conductor leaves is handed to the person as the
+// provider's refusals, not as an agent that went quiet.
+func TestALeftModelParkIsHandedOverAsTheProvidersRefusals(t *testing.T) {
+	w, task, run := modelRefusingWorld(t, 2, false)
+	w.syncer.HeldAskWait = 500 * time.Millisecond
+	w.refusedFor(run, 2*time.Hour+time.Minute)
+	w.retryDue(run)
+	w.until("the task to wait on the person", func() bool { return w.taskStatus(task) == "awaiting_input" })
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.idle_handed_over'
+		AND (payload->>'model')::boolean`, run); n != 1 {
+		t.Fatalf("%d hand-overs marked model, want 1", n)
+	}
+	if got := w.str(`SELECT payload->>'reason' FROM events WHERE task_id = $1 AND event_type = 'task.status_changed'
+		ORDER BY cursor DESC LIMIT 1`, task); !strings.Contains(got, "model provider") || strings.Contains(got, "went quiet") {
+		t.Fatalf("handed over as %q, want the model provider's refusals", got)
+	}
+}
+
 // A simplifier that fails (not on a temporary model error) is a decision
 // for whoever decides the delivery: the delivery does not go on to the
 // test without it.
