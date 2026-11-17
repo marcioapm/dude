@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +68,12 @@ func TestAnUnrelatedRedThenASlowRerunStillApproves(t *testing.T) {
 	if got := w.dudeReviews(wi, n); got[0].State != "COMMENTED" || !strings.Contains(got[0].Body, "not approved while CI fails") {
 		t.Fatalf("with red CI: %+v", got)
 	}
+	// An approval held back by CI is owed again, not a note to refresh:
+	// the status line is the headline and the review's word alone.
+	if c := w.verdictComments(wi, n); len(c) != 1 || !strings.HasPrefix(c[0].Body, "dude's review of this pull request — Reviewed at "+head[:7]) ||
+		!strings.Contains(c[0].Body, "(commented)\n\n") {
+		t.Fatalf("the status comment of the COMMENT on unrelated red CI: %+v", c)
+	}
 	deferred := w.events(wi, delivery.EvVerdictDeferred)
 
 	w.gh.SetChecks("pending") // the rerun
@@ -97,5 +104,10 @@ func TestAnUnrelatedRedThenASlowRerunStillApproves(t *testing.T) {
 	}
 	if c := w.writers(wi); c != 0 {
 		t.Fatalf("%d writers", c)
+	}
+	if e, ev := w.gh.Requests(), w.events(wi, delivery.EvReviewEdited); ev != 0 || slices.ContainsFunc(e, func(r string) bool {
+		return strings.HasPrefix(r, "PUT ") && strings.Contains(r, "/reviews/") && !strings.HasSuffix(r, "/dismissals")
+	}) {
+		t.Fatalf("a review held back by CI was edited (%d review_edited): %v", ev, e)
 	}
 }

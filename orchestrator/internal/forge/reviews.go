@@ -50,6 +50,9 @@ type SubmitReview struct {
 type SubmittedReview struct {
 	ID                           int64
 	NodeID, URL, State, CommitID string
+	// The review's body as GitHub holds it (as read back; a submit's
+	// answer carries it too).
+	Body string
 }
 
 // ReviewMarker ends the body of every review dude submits: hidden, as
@@ -194,7 +197,7 @@ func (g *GitHub) SubmitReview(ctx context.Context, in SubmitReview) (SubmittedRe
 }
 
 func (r ghReview) submitted() SubmittedReview {
-	return SubmittedReview{ID: r.ID, NodeID: r.NodeID, URL: r.HTMLURL, State: r.State, CommitID: r.CommitID}
+	return SubmittedReview{ID: r.ID, NodeID: r.NodeID, URL: r.HTMLURL, State: r.State, CommitID: r.CommitID, Body: r.Body}
 }
 
 // DismissReview dismisses a review with message. A review already
@@ -204,6 +207,14 @@ func (g *GitHub) DismissReview(ctx context.Context, slug string, number int, rev
 	err := g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/reviews/%d/dismissals", slug, number, reviewID),
 		map[string]string{"message": message, "event": "DISMISS"}, nil)
 	return reviewAnswer("dismiss", err)
+}
+
+// UpdateReview replaces a submitted review's body: GitHub keeps its state
+// (APPROVED, CHANGES_REQUESTED, COMMENTED), its commit and its comments.
+// Review-only: a refreshed verdict at the head it was posted at.
+func (g *GitHub) UpdateReview(ctx context.Context, slug string, number int, reviewID int64, body string) error {
+	return g.do(ctx, "PUT", fmt.Sprintf("/repos/%s/pulls/%d/reviews/%d", slug, number, reviewID),
+		map[string]string{"body": body}, nil)
 }
 
 // PostedComment is one line comment a review made.

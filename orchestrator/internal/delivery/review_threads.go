@@ -73,12 +73,14 @@ func postedComments(got []forge.PostedComment, comments []forge.ReviewComment, i
 }
 
 // earlierPostsTx is, per finding, the latest inline comment dude's reviews
-// of the task made for it on pull request prID.
-func earlierPostsTx(ctx context.Context, tx pgx.Tx, taskID, prID string) (map[string]inlinePost, error) {
+// of the task made for it on pull request prID, but for those of the
+// reviews claimed as skip (a review's own comments are not earlier than it).
+func earlierPostsTx(ctx context.Context, tx pgx.Tx, taskID, prID string, skip ...string) (map[string]inlinePost, error) {
 	rows, err := tx.Query(ctx, `SELECT c->>'findingId', (c->>'commentId')::bigint, COALESCE(c->>'url', ''), e.payload->>'head'
 		FROM events e, jsonb_array_elements(e.payload->'comments') c
 		WHERE e.task_id = $1 AND e.event_type = $2 AND e.payload->>'pullRequestId' = $3 AND jsonb_typeof(e.payload->'comments') = 'array'
-		ORDER BY e.occurred_at, e.id`, taskID, EvReviewSubmitted, prID)
+			AND COALESCE(e.payload->>'claimId', '') <> ALL($4::text[])
+		ORDER BY e.occurred_at, e.id`, taskID, EvReviewSubmitted, prID, append([]string{}, skip...))
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +91,17 @@ func earlierPostsTx(ctx context.Context, tx pgx.Tx, taskID, prID string) (map[st
 		return nil
 	})
 	return out, err
+}
+
+// claimPostedTx says whether review_submitted recorded the review
+// submitted under claim with any inline comment read back, and whether
+// that record can be trusted (false: unread, see reviewPosts).
+func claimPostedTx(ctx context.Context, tx pgx.Tx, taskID, claim string) (posted, read bool, err error) {
+	err = tx.QueryRow(ctx, `SELECT COALESCE(bool_or(jsonb_typeof(payload->'comments') = 'array'), false),
+			NOT COALESCE(bool_or((payload->>'unread')::boolean), false)
+		FROM events WHERE task_id = $1 AND event_type = $2 AND payload->>'claimId' = $3`,
+		taskID, EvReviewSubmitted, claim).Scan(&posted, &read)
+	return posted, read, err
 }
 
 // settledThread is an earlier post whose finding is settled, with what

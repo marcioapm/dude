@@ -18,8 +18,27 @@ import (
 // REQUEST_CHANGES at H1; task, number, H1.
 func (w *world) findingThenVerdict(verdict func() string) (string, int, string) {
 	w.t.Helper()
-	w.gh.SetChecks("success")
-	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	return w.findingThenVerdictWith("success", verdict)
+}
+
+// findingThenVerdictWith is findingThenVerdict with the pull request's CI
+// in checks (SetChecks) from the start.
+func (w *world) findingThenVerdictWith(checks string, verdict func() string) (string, int, string) {
+	w.t.Helper()
+	wi, n, h1 := w.findingRequested("alice", checks, verdict)
+	if c := w.dudeLineComments(n); len(c) != 1 {
+		w.t.Fatalf("dude's inline comments at H1: %+v", c)
+	}
+	return wi, n, h1
+}
+
+// findingRequested is findingThenVerdictWith with no word on where the
+// finding was posted (inline, or folded into the body), on author's pull
+// request: dude's own account's is answered with a COMMENT (downgraded).
+func (w *world) findingRequested(author, checks string, verdict func() string) (string, int, string) {
+	w.t.Helper()
+	w.gh.SetChecks(checks)
+	n := w.gh.OpenAsPerson(author, "feature/greet", "main", "Greet")
 	h1 := w.gh.CommitFiles("feature/greet", "alice's greeting", map[string]string{"greet.md": "hello\n"})
 	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
 	round := 0
@@ -38,12 +57,13 @@ func (w *world) findingThenVerdict(verdict func() string) (string, int, string) 
 	}
 	w.startDelivery(wi)
 	// On the fake lux, through the syncer: a later round can resume it.
-	w.until("changes requested at H1", func() bool { w.sync(); return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 1 && w.waitingOnPR(wi) })
-	if got := w.dudeReviews(wi, n); got[0].State != "CHANGES_REQUESTED" {
-		w.t.Fatalf("at H1: %+v", got)
+	w.until("dude's review at H1", func() bool { w.sync(); return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 1 && w.waitingOnPR(wi) })
+	want := "CHANGES_REQUESTED"
+	if author == fakegithub.Login {
+		want = "COMMENTED"
 	}
-	if c := w.dudeLineComments(n); len(c) != 1 {
-		w.t.Fatalf("dude's inline comments at H1: %+v", c)
+	if got := w.dudeReviews(wi, n); got[0].State != want {
+		w.t.Fatalf("at H1: %+v", got)
 	}
 	return wi, n, h1
 }

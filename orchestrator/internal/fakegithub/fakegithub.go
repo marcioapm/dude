@@ -228,8 +228,16 @@ type Server struct {
 	// answers that many review submissions 502, taking none of them, with
 	// a Retry-After of ReviewRetryAfter seconds when that is set.
 	// DismissFail5xx answers that many dismissals 502, dismissing nothing.
+	// UpdateFail5xx answers that many review body edits 502 after taking
+	// them (an ambiguous answer: the edit stands). NotInDiffOnce refuses
+	// the next review with inline comments as GitHub does a line not in its
+	// diff (422), whatever the lines: GitHub's diff disagreeing with /files.
+	// RefuseUpdate answers every review body edit 403, taking none.
 	RefuseDismissal   bool
 	DismissFail5xx    int
+	UpdateFail5xx     int
+	RefuseUpdate      bool
+	NotInDiffOnce     bool
 	ReviewTimeoutOnce bool
 	ReviewFail5xx     int
 	ReviewRetryAfter  int
@@ -777,6 +785,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews", s.reviews)
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/reviews", s.postReview)
 	mux.HandleFunc("PUT "+prefix+"/pulls/{n}/reviews/{id}/dismissals", s.dismissReview)
+	mux.HandleFunc("PUT "+prefix+"/pulls/{n}/reviews/{id}", s.updateReview)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/reviews/{id}/comments", s.reviewComments)
 	mux.HandleFunc("GET "+prefix+"/pulls/{n}/comments", s.lineComments)
 	mux.HandleFunc("POST "+prefix+"/pulls/{n}/comments/{id}/replies", s.postComment)
