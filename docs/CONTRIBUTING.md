@@ -279,19 +279,25 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   (`simplify_failed`: resume, retry or stop), never a silent skip to the
   test or the pull request; one a conductor's pipeline queued a review
   behind is that pipeline's decision, the failure said.
-- **The model provider refusing is waited out, never a failure.** A turn
+- **The model provider refusing is waited out, not failed by dude.** A turn
   that ends on a temporary model error (429/502/503/504/529, overloaded,
   rate limited, a dropped stream; `phases/turn_retry.go`) is retried in the
   same session after the wait the error asks for, or a backoff, with no
   retry count. The bound is the role's no-progress limit
   (`timeLimitMinutes`, 2 h by default) of continuous refusals: past it a
-  phase Run is parked (`dude_pause` `idle`), its session and work kept,
-  and its conductor told once that the provider has refused for so long
-  (with none, the person); its steer, or a person's Resume, takes it up.
-  At 30 minutes of one wait the conductor is told once that dude is still
-  waiting. A conductor or session agent is parked as for any failed turn.
-  The stall report and the idle nudge leave a Run that is waiting out such
-  an error alone.
+  phase Run is parked (`dude_pause` `idle`, `run.parked` with `model`, so
+  the person reads that the provider refused, not that it went quiet), its
+  session and work kept, and its conductor told once that the provider has
+  refused for so long (with none, the person); its steer, or a person's
+  Resume, takes it up. At 30 minutes of one wait the conductor is told once
+  that dude is still waiting. A wait is the time actually spent refused: a
+  retried turn that goes on to work (a tool call, a plan, a thought) ends
+  it, and a later refusal starts a new one. A conductor or session agent is
+  parked as for any failed turn. The stall report and the idle nudge leave
+  a Run that is waiting out such an error alone (a retried turn in flight
+  for at most 15 minutes). lux's own hard run limit (`DUDE_AGENT_TIMEOUT`,
+  4 h of running time by default) still counts while a Run waits, and can
+  end a waiting Run before the role's bound parks it.
 - **A fix for an open pull request is pushed to it directly.** `prFix`
   starts from the pull request's heads on GitHub and its fix publishes to
   the task branch, which is the pull request's head, so its CI and
