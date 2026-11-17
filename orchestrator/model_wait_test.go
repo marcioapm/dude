@@ -327,24 +327,20 @@ func (w *world) retriedTurn(run string) (refused func(agentErr string)) {
 	}
 }
 
-// works has the agent make a tool call in its turn.
-func (w *world) works(run string) {
-	w.t.Helper()
-	w.lux.AgentSays(w.luxRunOf(run), map[string]any{"sessionUpdate": "tool_call", "toolCallId": "work-" + run, "title": "bash",
-		"kind": "execute", "status": "in_progress", "rawInput": map[string]any{"command": "make"}})
-	w.until("the work recorded", func() bool {
-		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.tool.called'`, run) > 0
-	})
-}
-
 // A retried turn that went on to work for hours, then met one refusal, is
 // not a Run refused for hours: the work ended the wait, and the refusal
-// starts a new one. Not parked, its conductor not told.
+// starts a new one. Not parked, its conductor not told. The work ends
+// only the streak it came after: the new streak, refused past the role's
+// limit with no work, parks the Run.
 func TestAWorkingRetriedTurnEndsTheModelWait(t *testing.T) {
 	w, task, run := modelRefusingWorld(t, 1, true)
 	refused := w.retriedTurn(run)
 	// It works: a tool call, two hours of it on the test clock.
-	w.works(run)
+	w.lux.AgentSays(w.luxRunOf(run), map[string]any{"sessionUpdate": "tool_call", "toolCallId": "work-1", "title": "bash",
+		"kind": "execute", "status": "in_progress", "rawInput": map[string]any{"command": "make"}})
+	w.until("the work recorded", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.tool.called'`, run) > 0
+	})
 	w.refusedFor(run, 2*time.Hour+time.Minute)
 	refused(rateLimited)
 	if got := w.runStatus(run); got != "running/" {
@@ -355,6 +351,12 @@ func TestAWorkingRetriedTurnEndsTheModelWait(t *testing.T) {
 	}
 	if n := w.modelWakes(task, run); n != 0 {
 		t.Errorf("%d model wakes for a Run that was working, want none", n)
+	}
+	refused = w.retriedTurn(run)
+	w.refusedFor(run, 2*time.Hour+time.Minute)
+	refused(rateLimited)
+	if got := w.runStatus(run); got != "paused/idle" {
+		t.Fatalf("refused past the limit in a new streak with no work, the Run is %s, want parked (paused/idle)", got)
 	}
 }
 
@@ -377,27 +379,8 @@ func TestAThinkingThenRefusedTurnDoesNotEndTheModelWait(t *testing.T) {
 	if got := w.runStatus(run); got != "paused/idle" {
 		t.Fatalf("refused past the limit after each thought, the Run is %s, want parked (paused/idle)", got)
 	}
-	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'model-parked:'||$2||':%'`, task, run); n != 1 {
-		t.Fatalf("%d model-parked wakes, want 1", n)
-	}
-}
-
-// Work ends a wait only for the streak it came after: a retried turn that
-// works, then a new streak of refusals with no work, refused past the
-// role's limit, is parked.
-func TestARefusalStreakAfterWorkIsStillBounded(t *testing.T) {
-	w, _, run := modelRefusingWorld(t, 1, true)
-	refused := w.retriedTurn(run)
-	w.works(run)
-	refused(rateLimited)
-	if n := w.harnessRetries(run); n != 1 {
-		t.Fatalf("streak of %d retries after the work, want a new one (1)", n)
-	}
-	refused = w.retriedTurn(run)
-	w.refusedFor(run, 2*time.Hour+time.Minute)
-	refused(rateLimited)
-	if got := w.runStatus(run); got != "paused/idle" {
-		t.Fatalf("refused past the limit in a streak with no work, the Run is %s, want parked (paused/idle)", got)
+	if n := w.modelWakes(task, run); n != 1 {
+		t.Fatalf("%d model wakes, want the one model-parked", n)
 	}
 }
 
