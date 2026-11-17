@@ -382,6 +382,25 @@ func TestAThinkingThenRefusedTurnDoesNotEndTheModelWait(t *testing.T) {
 	}
 }
 
+// Work ends a wait only for the streak it came after: a retried turn that
+// works, then a new streak of refusals with no work, refused past the
+// role's limit, is parked.
+func TestARefusalStreakAfterWorkIsStillBounded(t *testing.T) {
+	w, _, run := modelRefusingWorld(t, 1, true)
+	refused := w.retriedTurn(run)
+	w.works(run)
+	refused(rateLimited)
+	if n := w.harnessRetries(run); n != 1 {
+		t.Fatalf("streak of %d retries after the work, want a new one (1)", n)
+	}
+	refused = w.retriedTurn(run)
+	w.refusedFor(run, 2*time.Hour+time.Minute)
+	refused(rateLimited)
+	if got := w.runStatus(run); got != "paused/idle" {
+		t.Fatalf("refused past the limit in a streak with no work, the Run is %s, want parked (paused/idle)", got)
+	}
+}
+
 // After a model park and the conductor's steer, the next refusal starts a
 // new wait (attempt 1): the Run is not parked again at once.
 func TestARefusalAfterAModelParkIsANewWait(t *testing.T) {
