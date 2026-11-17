@@ -197,7 +197,7 @@ func TestAnAuthorQuestionCommentIsRefreshedOnceCIPasses(t *testing.T) {
 func TestARefreshedReviewKeepsTheCommentsItsSubmitFolded(t *testing.T) {
 	w := newWorld(t)
 	w.gh.Set(func(s *fakegithub.Server) { s.NotInDiffOnce = true })
-	wi, n, h1 := w.findingRequested("failure", func() string { return "still" })
+	wi, n, h1 := w.findingRequested("alice", "failure", func() string { return "still" })
 	if c := w.dudeLineComments(n); len(c) != 0 {
 		t.Fatalf("inline comments after GitHub refused them: %+v", c)
 	}
@@ -215,6 +215,28 @@ func TestARefreshedReviewKeepsTheCommentsItsSubmitFolded(t *testing.T) {
 	}
 	if e := len(w.reviewEdits()); e != 1 {
 		t.Fatalf("%d review edits, want 1", e)
+	}
+}
+
+// A refreshed downgrade: on a pull request dude's own account opened, the
+// verdict is posted as a COMMENT under a claim of its own. Refreshed once
+// CI passes, that COMMENT's own inline comment is not an earlier one: its
+// body is the original without its CI note, byte for byte.
+func TestARefreshedOwnPullRequestCommentKeepsItsBody(t *testing.T) {
+	w := newWorld(t)
+	wi, n, h1 := w.findingRequested(fakegithub.Login, "failure", func() string { return "still" })
+	rs := reviewsAt(w.dudeReviews(wi, n), h1)
+	if len(rs) != 1 || !strings.Contains(rs[0].Body, "dude cannot request changes") || len(w.dudeLineComments(n)) != 1 {
+		t.Fatalf("at H1, downgraded with red CI: %+v", rs)
+	}
+	id, want := rs[0].ID, regexp.MustCompile(`\n- failing: [^\n]*`).ReplaceAllString(rs[0].Body, "")
+	w.greenAtTheHead(wi)
+	rs = reviewsAt(w.dudeReviews(wi, n), h1)
+	if len(rs) != 1 || rs[0].ID != id || rs[0].State != "COMMENTED" || rs[0].Body != want {
+		t.Fatalf("the refreshed COMMENT:\n%+v\nwant review %d with body:\n%s", rs, id, want)
+	}
+	if e, ev := len(w.reviewEdits()), w.events(wi, delivery.EvReviewEdited); e != 1 || ev != 1 {
+		t.Fatalf("%d review edits, %d review_edited events, want 1 and 1", e, ev)
 	}
 }
 
