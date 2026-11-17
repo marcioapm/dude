@@ -585,6 +585,21 @@ class FakeGitHub:
             review["state"] = "DISMISSED"
             return 200, dict(review)
 
+    def update_review(self, number: int, review_id: int, body: str | None) -> tuple[int, dict]:
+        """PUT /pulls/{n}/reviews/{id}: the review's body is replaced; its
+        state, commit and comments are kept (as the Go fake's updateReview)."""
+        pr = self.pulls.get(number)
+        if pr is None:
+            return 404, {"message": "Not Found"}
+        if body is None:
+            return _unprocessable("body is required")
+        with self._lock:
+            review = next((r for r in pr.reviews if r["id"] == review_id), None)
+            if review is None:
+                return 404, {"message": "Not Found"}
+            review["body"] = body
+            return 200, dict(review)
+
     def merge(self, number: int, sha: str | None = None) -> None:
         with self._lock:
             pr = self.pulls[number]
@@ -1108,6 +1123,8 @@ class FakeGitHub:
                 prefix = f"/repos/{gh.owner}/{gh.repo}"
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews/(\d+)/dismissals", self.path):
                     return self._send(*gh.dismiss_review(int(m[1]), int(m[2])))
+                if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/reviews/(\d+)", self.path):
+                    return self._send(*gh.update_review(int(m[1]), int(m[2]), body.get("body")))
                 if m := re.fullmatch(rf"{prefix}/pulls/(\d+)/merge", self.path):
                     pr = gh.pulls[int(m[1])]
                     if pr.state != "open":
