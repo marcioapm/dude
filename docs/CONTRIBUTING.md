@@ -275,7 +275,23 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   reviewers; its findings go through the fixer and the usual loop, which
   then goes to the test, never to the simplifier again. The round starts
   whoever decides; under the conductor its findings are the conductor's to
-  triage, as any round's are.
+  triage, as any round's are. A simplifier that fails is a decision
+  (`simplify_failed`: resume, retry or stop), never a silent skip to the
+  test or the pull request; one a conductor's pipeline queued a review
+  behind is that pipeline's decision, the failure said.
+- **The model provider refusing is waited out, never a failure.** A turn
+  that ends on a temporary model error (429/502/503/504/529, overloaded,
+  rate limited, a dropped stream; `phases/turn_retry.go`) is retried in the
+  same session after the wait the error asks for, or a backoff, with no
+  retry count. The bound is the role's no-progress limit
+  (`timeLimitMinutes`, 2 h by default) of continuous refusals: past it a
+  phase Run is parked (`dude_pause` `idle`), its session and work kept,
+  and its conductor told once that the provider has refused for so long
+  (with none, the person); its steer, or a person's Resume, takes it up.
+  At 30 minutes of one wait the conductor is told once that dude is still
+  waiting. A conductor or session agent is parked as for any failed turn.
+  The stall report and the idle nudge leave a Run that is waiting out such
+  an error alone.
 - **A fix for an open pull request is pushed to it directly.** `prFix`
   starts from the pull request's heads on GitHub and its fix publishes to
   the task branch, which is the pull request's head, so its CI and
