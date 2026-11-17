@@ -18,7 +18,14 @@ import (
 // REQUEST_CHANGES at H1; task, number, H1.
 func (w *world) findingThenVerdict(verdict func() string) (string, int, string) {
 	w.t.Helper()
-	w.gh.SetChecks("success")
+	return w.findingThenVerdictWith("success", verdict)
+}
+
+// findingThenVerdictWith is findingThenVerdict with the pull request's CI
+// in checks (SetChecks) from the start.
+func (w *world) findingThenVerdictWith(checks string, verdict func() string) (string, int, string) {
+	w.t.Helper()
+	w.gh.SetChecks(checks)
 	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
 	h1 := w.gh.CommitFiles("feature/greet", "alice's greeting", map[string]string{"greet.md": "hello\n"})
 	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
