@@ -73,12 +73,14 @@ func postedComments(got []forge.PostedComment, comments []forge.ReviewComment, i
 }
 
 // earlierPostsTx is, per finding, the latest inline comment dude's reviews
-// of the task made for it on pull request prID.
-func earlierPostsTx(ctx context.Context, tx pgx.Tx, taskID, prID string) (map[string]inlinePost, error) {
+// of the task made for it on pull request prID, but for those of the
+// reviews claimed as skip (a review's own comments are not earlier than it).
+func earlierPostsTx(ctx context.Context, tx pgx.Tx, taskID, prID string, skip ...string) (map[string]inlinePost, error) {
 	rows, err := tx.Query(ctx, `SELECT c->>'findingId', (c->>'commentId')::bigint, COALESCE(c->>'url', ''), e.payload->>'head'
 		FROM events e, jsonb_array_elements(e.payload->'comments') c
 		WHERE e.task_id = $1 AND e.event_type = $2 AND e.payload->>'pullRequestId' = $3 AND jsonb_typeof(e.payload->'comments') = 'array'
-		ORDER BY e.occurred_at, e.id`, taskID, EvReviewSubmitted, prID)
+			AND NOT COALESCE(e.payload->>'claimId', '') = ANY($4::text[])
+		ORDER BY e.occurred_at, e.id`, taskID, EvReviewSubmitted, prID, append([]string{}, skip...))
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +91,28 @@ func earlierPostsTx(ctx context.Context, tx pgx.Tx, taskID, prID string) (map[st
 		return nil
 	})
 	return out, err
+}
+
+// claimInlineTx is the findings the review submitted under claim has an
+// inline comment for, as review_submitted recorded them read back, and
+// whether they were read (false: GitHub's answer could not be read).
+func claimInlineTx(ctx context.Context, tx pgx.Tx, taskID, claim string) (map[string]bool, bool, error) {
+	var ids []string
+	var unread bool
+	err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(c->>'findingId') FILTER (WHERE c IS NOT NULL), '{}'),
+			COALESCE(bool_or(COALESCE((e.payload->>'unread')::boolean, false)), false)
+		FROM events e LEFT JOIN LATERAL jsonb_array_elements(
+			CASE WHEN jsonb_typeof(e.payload->'comments') = 'array' THEN e.payload->'comments' ELSE '[]'::jsonb END) c ON true
+		WHERE e.task_id = $1 AND e.event_type = $2 AND e.payload->>'claimId' = $3`,
+		taskID, EvReviewSubmitted, claim).Scan(&ids, &unread)
+	if err != nil {
+		return nil, false, err
+	}
+	out := map[string]bool{}
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, !unread, nil
 }
 
 // settledThread is an earlier post whose finding is settled, with what

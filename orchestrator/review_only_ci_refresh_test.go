@@ -54,6 +54,14 @@ func TestAReviewListingFailingChecksIsEditedOnceCIPassesAtTheHead(t *testing.T) 
 		t.Fatalf("at H1 with red CI: %+v", rs)
 	}
 	id := rs[0].ID
+	// The body a submit with CI green would have made: the original, the
+	// CI note's line alone gone.
+	ciNote := regexp.MustCompile(`\n- failing: [^\n]*`)
+	if m := ciNote.FindAllString(rs[0].Body, -1); len(m) != 1 {
+		t.Fatalf("the CI note's lines in %q: %q", rs[0].Body, m)
+	}
+	want := ciNote.ReplaceAllString(rs[0].Body, "")
+	inline := len(w.dudeLineComments(n))
 	comments := w.verdictComments(wi, n)
 	if len(comments) != 1 {
 		t.Fatalf("the status comments with red CI: %+v", comments)
@@ -70,8 +78,11 @@ func TestAReviewListingFailingChecksIsEditedOnceCIPassesAtTheHead(t *testing.T) 
 	if len(rs) != 1 || rs[0].ID != id {
 		t.Fatalf("reviews at H1 after CI passed: %+v, want the one review %d", rs, id)
 	}
-	if strings.Contains(rs[0].Body, "failing: ") {
-		t.Fatalf("the review still lists the failing checks: %q", rs[0].Body)
+	if rs[0].Body != want {
+		t.Fatalf("the edited review's body:\n%s\nwant the original without its CI note:\n%s", rs[0].Body, want)
+	}
+	if c := len(w.dudeLineComments(n)); c != inline {
+		t.Fatalf("%d inline comments after the edit, were %d", c, inline)
 	}
 	if rs[0].State != "CHANGES_REQUESTED" || !strings.Contains(rs[0].Body, "Changes requested at "+h1[:7]) {
 		t.Fatalf("the edited review: %+v", rs[0])
