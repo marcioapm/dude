@@ -43,6 +43,10 @@ const (
 	EvReviewFailed = "pull_request.review_failed"
 	// No verdict yet, no agent running: {head, why, deferrals}.
 	EvVerdictDeferred = "pull_request.verdict_deferred"
+	// The review submitted at head, its claim and event the same, had its
+	// body edited in place: CI's state there changed since it was posted
+	// {claimId, reviewId, pullRequestId, head, why}.
+	EvReviewEdited = "pull_request.review_edited"
 )
 
 // VerdictState is the review-only verdict's state between its runs.
@@ -83,6 +87,12 @@ type VerdictState struct {
 	Lost        string `json:"lost,omitempty"`
 	LostSubmits int    `json:"lostSubmits,omitempty"`
 	LostLookups int    `json:"lostLookups,omitempty"`
+	// What the review posted at Due told the reader of CI there: the
+	// checks' note its body listed ("failing: …", "pending: …", or why
+	// they could not be read), "" when it listed none. A checks signal at
+	// that head while it is set runs the verdict again, and a changed note
+	// is edited into the review in place (refreshReview).
+	ChecksNoted string `json:"checksNoted,omitempty"`
 }
 
 // The verdict's actions.
@@ -515,11 +525,16 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	if v.TestHead == head {
 		in.Test, in.TestNotes = v.Test, v.TestNotes
 	}
+	// The checks' detail the body would list when they are not passing.
+	checksDetail := ""
 	if in.Gate.Err == nil {
 		checks := ""
 		for _, it := range in.Gate.Items {
 			if it.Key == ReadyChecks {
 				checks = checksState(it)
+				if !it.OK {
+					checksDetail = it.Detail
+				}
 			}
 		}
 		// Failing, then pending: CI was rerun at H. The cap and ci_stuck
@@ -585,7 +600,14 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		}
 	}
 	body, comments, ids := verdictReviewOf(d, head, base, lenses, findings, link)
-	posted, err := w.postReview(ctx, sc, st, gh, pr, head, d.Event, d.Reason, body, comments, ids)
+	// The CI note the review tells its reader, if any. An approval held
+	// back by CI (a transient reason) is owed again at H, and reruns as it
+	// always did: no note recorded for it.
+	note := ""
+	if checksDetail != "" && !transientReason(d.Reason) && slices.Contains(d.Notes, checksDetail) {
+		note = checksDetail
+	}
+	posted, err := w.postReview(ctx, sc, st, gh, pr, head, d.Event, d.Reason, body, comments, ids, note)
 	if r := (reviewRetry{}); errors.As(err, &r) {
 		_ = w.s.SetTaskStatus(ctx, sc.OrganizationID, st, "review", r.Why)
 		return workflow.Result{Next: "verdict", State: st, SleepUntil: time.Now().Add(r.After)}, nil
@@ -618,7 +640,11 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		// run the verdict again, and green at H, open, approves.
 		v.Due = ""
 	}
-	w.statusComment(ctx, sc, st, pr, fmt.Sprintf("%s (%s)", d.Headline, cmp.Or(reviewWord[v.Posted], "not posted")))
+	line := fmt.Sprintf("%s (%s)", d.Headline, cmp.Or(reviewWord[v.Posted], "not posted"))
+	if posted != "" && v.ChecksNoted != "" && !strings.Contains(d.Headline, v.ChecksNoted) {
+		line += "; " + v.ChecksNoted
+	}
+	w.statusComment(ctx, sc, st, pr, line)
 	res, err := w.withAskTimer(ctx, sc, st, waitForPR(st))
 	if err != nil {
 		return workflow.Result{}, err
@@ -633,7 +659,7 @@ var reviewWord = map[string]string{forge.EventApprove: "approved", forge.EventRe
 // keeps the claim, and the step runs again after reviewRecoverDelay to
 // look for the review before anything is resubmitted.
 func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, pr PullRequestState,
-	head, event, reason, body string, comments []forge.ReviewComment, ids []string) (string, error) {
+	head, event, reason, body string, comments []forge.ReviewComment, ids []string, note string) (string, error) {
 	if gh == nil {
 		return "", fmt.Errorf("no forge credential to post the review with")
 	}
@@ -647,6 +673,13 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 			return "", err
 		}
 		if submitted {
+			// The same review at H: its body edited in place once the CI
+			// note it shows is not CI's state there any more.
+			if st.Verdict.ChecksNoted != note {
+				if err := w.refreshReview(ctx, sc, st, gh, pr, head, claim, marked, comments, note); err != nil {
+					return "", err
+				}
+			}
 			return event, nil
 		}
 		if downgraded {
@@ -668,6 +701,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 			}
 			if ok {
 				v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+				v.ChecksNoted = note
 				return event, w.submitted(ctx, sc, st, pr, base, found, true, w.reviewPosts(ctx, gh, pr, found.ID, comments, ids))
 			}
 			if v.LostSubmits > 0 && v.LostLookups+1 < len(reviewLookups) {
@@ -703,6 +737,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 		switch {
 		case err == nil:
 			v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+			v.ChecksNoted = note
 			return event, w.submitted(ctx, sc, st, pr, base, got, false, w.reviewPosts(ctx, gh, pr, got.ID, comments, ids))
 		case forge.OwnPullRequest(err) && event != forge.EventComment:
 			if err := w.s.Emit(ctx, org, st, EvReviewDowngraded, map[string]any{"claimId": claim, "pullRequestId": pr.ID,
@@ -728,6 +763,76 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 			Why: "GitHub's answer to dude's review was lost: " + err.Error()}
 	}
 	return "", nil
+}
+
+// refreshReview edits the body of the review submitted under claim at
+// head to marked (its marker kept), the comments that cannot be inline
+// folded into it as the submit did: the CI note it showed is not CI's
+// state at head any more (note, "" for none). The review is found by its
+// marker; a body GitHub already holds is not sent again, and an ambiguous
+// answer is retried at the claim's increasing delays, never by posting
+// another review. Refused, it is logged and left as it was.
+func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, pr PullRequestState,
+	head, claim, marked string, comments []forge.ReviewComment, note string) error {
+	v := st.Verdict
+	if v.Lost != claim {
+		v.Lost, v.LostSubmits, v.LostLookups = claim, 0, 0
+	}
+	retry := func(err error, what string) error {
+		v.LostSubmits++
+		return reviewRetry{After: max(forge.RetryAfter(err), reviewRetryDelay(w.s.reviewRecoverDelay(), v.LostSubmits, 0)),
+			Why: what + ": " + err.Error()}
+	}
+	found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim)
+	if err != nil {
+		return retry(err, "looking for dude's review to refresh")
+	}
+	if !ok {
+		// Not on GitHub as dude's (deleted, or another account's now):
+		// nothing to edit, and nothing posted in its place.
+		slog.Warn("dude's review to refresh not found", "pr", pr.ID, "claim", claim)
+		v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+		return nil
+	}
+	// /pulls/files has no ref: the head must be H as the diff is read.
+	now, err := gh.Head(ctx, pr.Slug, pr.Number)
+	if err != nil {
+		return retry(err, "reading the head before refreshing dude's review")
+	}
+	if now != head {
+		v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+		return nil
+	}
+	diff, err := gh.PullDiffLines(ctx, pr.Slug, pr.Number)
+	if err != nil {
+		return retry(err, "reading the diff before refreshing dude's review")
+	}
+	_, folded := forge.PlaceComments(comments, diff)
+	body := forge.FoldComments(marked, folded)
+	why := "checks: " + cmp.Or(note, "passing")
+	// A body GitHub already holds is not sent again; one an ambiguous
+	// answer left there is recorded edited all the same.
+	edited := v.LostSubmits > 0
+	if strings.TrimSpace(found.Body) != strings.TrimSpace(body) {
+		if err := gh.UpdateReview(ctx, pr.Slug, pr.Number, found.ID, body); err != nil {
+			if forge.Refused(err) {
+				slog.Warn("GitHub refused to edit dude's review", "pr", pr.ID, "review", found.ID, "error", err)
+				v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+				return nil
+			}
+			return retry(err, "GitHub's answer to refreshing dude's review was lost")
+		}
+		edited = true
+	}
+	if edited {
+		if err := w.s.Emit(ctx, sc.OrganizationID, st, EvReviewEdited, map[string]any{"claimId": claim, "reviewId": found.ID,
+			"pullRequestId": pr.ID, "head": head, "why": why}); err != nil {
+			return err
+		}
+	}
+	v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
+	v.ChecksNoted = note
+	return nil
 }
 
 // reviewPosts is review_submitted's record of the review's inline
@@ -860,7 +965,7 @@ func verdictFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo string) (
 // due at the head GitHub shows; everything else is context for the next
 // round (PR 5), and wakes nobody here.
 func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st *State) (workflow.Result, error) {
-	ended, rerun, recheck := false, false, false
+	ended, rerun, recheck, checks := false, false, false, false
 	for _, sig := range sc.Signals {
 		if sig.Name != SignalPRFeedback {
 			continue
@@ -880,7 +985,7 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 			}
 			rerun = true
 		case s.Kind == "readiness", slices.ContainsFunc(s.Feedback, isChecks):
-			rerun = true
+			rerun, checks = true, true
 		}
 	}
 	if st.ReweighAt != nil && (len(sc.Signals) == 0 || !time.Now().Before(*st.ReweighAt)) {
@@ -946,6 +1051,12 @@ func (w *steps) awaitReviewOnly(ctx context.Context, sc workflow.StepContext, st
 				// The draft's COMMENT stands at the head: the verdict again
 				// once it is marked ready, never on a wake while a draft.
 				rerun = pr.State == forge.StateOpen
+			} else if v := st.Verdict; checks && v != nil && v.Due == "" && v.ChecksNoted != "" && st.RoundDueAt == nil {
+				// The review posted at the head told its reader CI was not
+				// passing there, and CI moved: the verdict again at that
+				// head, no new round. The same claim edits the review's
+				// body in place (refreshReview).
+				v.Due = pr.HeadSHA
 			}
 		}
 	}
