@@ -291,8 +291,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   refused for so long (with none, the person); its steer, or a person's
   Resume, takes it up. At 30 minutes of one wait the conductor is told once
   that dude is still waiting. A wait is the time actually spent refused: a
-  retried turn that goes on to work (a tool call, a plan, a thought) ends
-  it, and a later refusal starts a new one. A conductor or session agent is
+  retried turn that goes on to work (a tool call, a plan; not a thought,
+  which may stream before the same response is refused) ends it, and a
+  later refusal starts a new one. A conductor or session agent is
   parked as for any failed turn. The stall report and the idle nudge leave
   a Run that is waiting out such an error alone (a retried turn in flight
   for at most 15 minutes). lux's own hard run limit (`DUDE_AGENT_TIMEOUT`,

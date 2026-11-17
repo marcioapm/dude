@@ -304,31 +304,49 @@ func (w *world) modelWakes(task, run string) int {
 		AND (key LIKE 'model-waiting:'||$2||':%' OR key LIKE 'model-parked:'||$2||':%')`, task, run)
 }
 
+// retriedTurn sends the Run's held retry and waits for the retried turn
+// in flight; refused then fails that turn on agentErr, until dude has
+// retried it again or the Run is no longer running.
+func (w *world) retriedTurn(run string) (refused func(agentErr string)) {
+	w.t.Helper()
+	luxID, inputs := w.luxRunOf(run), w.turnRetries(run)
+	w.retryDue(run)
+	w.until("the retried turn in flight", func() bool {
+		return len(w.lux.Inputs(luxID)) == inputs && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NOT NULL
+			AND turn_done_at IS NULL`, run) == 1
+	})
+	return func(agentErr string) {
+		w.t.Helper()
+		w.until("the retried turn refused", func() bool {
+			w.lux.FailTurn(luxID, agentErr)
+			return w.turnRetries(run) == inputs+1 || w.runStatus(run) != "running/"
+		})
+		for range 3 {
+			w.pump()
+		}
+	}
+}
+
+// works has the agent make a tool call in its turn.
+func (w *world) works(run string) {
+	w.t.Helper()
+	w.lux.AgentSays(w.luxRunOf(run), map[string]any{"sessionUpdate": "tool_call", "toolCallId": "work-" + run, "title": "bash",
+		"kind": "execute", "status": "in_progress", "rawInput": map[string]any{"command": "make"}})
+	w.until("the work recorded", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.tool.called'`, run) > 0
+	})
+}
+
 // A retried turn that went on to work for hours, then met one refusal, is
 // not a Run refused for hours: the work ended the wait, and the refusal
 // starts a new one. Not parked, its conductor not told.
 func TestAWorkingRetriedTurnEndsTheModelWait(t *testing.T) {
 	w, task, run := modelRefusingWorld(t, 1, true)
-	w.retryDue(run)
-	luxID := w.luxRunOf(run)
-	w.until("the retried turn in flight", func() bool {
-		return len(w.lux.Inputs(luxID)) == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NOT NULL
-			AND turn_done_at IS NULL`, run) == 1
-	})
+	refused := w.retriedTurn(run)
 	// It works: a tool call, two hours of it on the test clock.
-	w.lux.AgentSays(luxID, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "work-1", "title": "bash", "kind": "execute",
-		"status": "in_progress", "rawInput": map[string]any{"command": "make"}})
-	w.until("the work recorded", func() bool {
-		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.tool.called'`, run) > 0
-	})
+	w.works(run)
 	w.refusedFor(run, 2*time.Hour+time.Minute)
-	w.until("one more refusal", func() bool {
-		w.lux.FailTurn(luxID, rateLimited)
-		return w.turnRetries(run) == 2 || w.runStatus(run) != "running/"
-	})
-	for range 3 {
-		w.pump()
-	}
+	refused(rateLimited)
 	if got := w.runStatus(run); got != "running/" {
 		t.Fatalf("the Run is %s after one refusal following its work, want running", got)
 	}
@@ -337,6 +355,30 @@ func TestAWorkingRetriedTurnEndsTheModelWait(t *testing.T) {
 	}
 	if n := w.modelWakes(task, run); n != 0 {
 		t.Errorf("%d model wakes for a Run that was working, want none", n)
+	}
+}
+
+// A retried turn that only thinks, then is refused (a thinking block
+// streamed before a 529), did no work: the thought may be the refused
+// response's own. The wait goes on, and past the role's limit the Run is
+// parked, its conductor told once.
+func TestAThinkingThenRefusedTurnDoesNotEndTheModelWait(t *testing.T) {
+	w, task, run := modelRefusingWorld(t, 1, true)
+	for cycle := 1; cycle <= 3 && w.runStatus(run) == "running/"; cycle++ {
+		refused := w.retriedTurn(run)
+		w.lux.AgentSays(w.luxRunOf(run), map[string]any{"sessionUpdate": "agent_thought_chunk",
+			"content": map[string]any{"type": "text", "text": "Let me look at the code."}})
+		w.refusedFor(run, 2*time.Hour+time.Minute)
+		refused(overloaded)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.thought'`, run); n == 0 {
+		t.Fatal("no thought recorded")
+	}
+	if got := w.runStatus(run); got != "paused/idle" {
+		t.Fatalf("refused past the limit after each thought, the Run is %s, want parked (paused/idle)", got)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'model-parked:'||$2||':%'`, task, run); n != 1 {
+		t.Fatalf("%d model-parked wakes, want 1", n)
 	}
 }
 
