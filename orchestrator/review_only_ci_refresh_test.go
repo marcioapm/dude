@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
 // A review-only verdict's CI note follows CI at the reviewed head: a
@@ -182,6 +183,33 @@ func TestAnAuthorQuestionCommentIsRefreshedOnceCIPasses(t *testing.T) {
 	}
 	if e := w.events(wi, delivery.EvReviewEdited); e != 1 {
 		t.Fatalf("%d review_edited events", e)
+	}
+}
+
+// A review whose inline comment GitHub refused, so that its submit folded
+// it into the body, keeps it folded there once refreshed: the edit drops
+// the CI note alone, never a folded comment.
+func TestARefreshedReviewKeepsTheCommentsItsSubmitFolded(t *testing.T) {
+	w := newWorld(t)
+	w.gh.Set(func(s *fakegithub.Server) { s.NotInDiffOnce = true })
+	wi, n, h1 := w.findingRequested("failure", func() string { return "still" })
+	if c := w.dudeLineComments(n); len(c) != 0 {
+		t.Fatalf("inline comments after GitHub refused them: %+v", c)
+	}
+	rs := reviewsAt(w.dudeReviews(wi, n), h1)
+	if len(rs) != 1 || !strings.Contains(rs[0].Body, "**Not on a changed line**") || !strings.Contains(rs[0].Body, "\n- failing: ") {
+		t.Fatalf("at H1, folded with red CI: %+v", rs)
+	}
+	// FoldComments trims the body it folds into: blank lines compared as one.
+	blank := regexp.MustCompile(`\n{3,}`)
+	want := blank.ReplaceAllString(regexp.MustCompile(`\n- failing: [^\n]*`).ReplaceAllString(rs[0].Body, ""), "\n\n")
+	w.greenAtTheHead(wi)
+	rs = reviewsAt(w.dudeReviews(wi, n), h1)
+	if len(rs) != 1 || blank.ReplaceAllString(rs[0].Body, "\n\n") != want {
+		t.Fatalf("the refreshed review:\n%q\nwant the body:\n%q", rs, want)
+	}
+	if e := len(w.reviewEdits()); e != 1 {
+		t.Fatalf("%d review edits, want 1", e)
 	}
 }
 

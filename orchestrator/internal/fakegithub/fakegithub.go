@@ -229,10 +229,13 @@ type Server struct {
 	// a Retry-After of ReviewRetryAfter seconds when that is set.
 	// DismissFail5xx answers that many dismissals 502, dismissing nothing.
 	// UpdateFail5xx answers that many review body edits 502 after taking
-	// them (an ambiguous answer: the edit stands).
+	// them (an ambiguous answer: the edit stands). NotInDiffOnce refuses
+	// the next review with inline comments as GitHub does a line not in its
+	// diff (422), whatever the lines: GitHub's diff disagreeing with /files.
 	RefuseDismissal   bool
 	DismissFail5xx    int
 	UpdateFail5xx     int
+	NotInDiffOnce     bool
 	ReviewTimeoutOnce bool
 	ReviewFail5xx     int
 	ReviewRetryAfter  int

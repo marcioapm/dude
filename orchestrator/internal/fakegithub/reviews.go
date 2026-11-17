@@ -140,6 +140,14 @@ func (s *Server) postReview(w http.ResponseWriter, r *http.Request) {
 	hunks := map[string]map[string]map[int]int{}
 	if len(in.Comments) > 0 {
 		hunks = s.diffHunks(p.Base, in.CommitID)
+		s.mu.Lock()
+		refuse := s.NotInDiffOnce
+		s.NotInDiffOnce = false
+		s.mu.Unlock()
+		if refuse {
+			unprocessable(w, MessageNotInDiff)
+			return
+		}
 	}
 	for _, c := range in.Comments {
 		side := cmp.Or(c.Side, "RIGHT")

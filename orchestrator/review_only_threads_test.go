@@ -25,6 +25,17 @@ func (w *world) findingThenVerdict(verdict func() string) (string, int, string) 
 // in checks (SetChecks) from the start.
 func (w *world) findingThenVerdictWith(checks string, verdict func() string) (string, int, string) {
 	w.t.Helper()
+	wi, n, h1 := w.findingRequested(checks, verdict)
+	if c := w.dudeLineComments(n); len(c) != 1 {
+		w.t.Fatalf("dude's inline comments at H1: %+v", c)
+	}
+	return wi, n, h1
+}
+
+// findingRequested is findingThenVerdictWith with no word on where the
+// finding was posted (inline, or folded into the body).
+func (w *world) findingRequested(checks string, verdict func() string) (string, int, string) {
+	w.t.Helper()
 	w.gh.SetChecks(checks)
 	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
 	h1 := w.gh.CommitFiles("feature/greet", "alice's greeting", map[string]string{"greet.md": "hello\n"})
@@ -48,9 +59,6 @@ func (w *world) findingThenVerdictWith(checks string, verdict func() string) (st
 	w.until("changes requested at H1", func() bool { w.sync(); return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 1 && w.waitingOnPR(wi) })
 	if got := w.dudeReviews(wi, n); got[0].State != "CHANGES_REQUESTED" {
 		w.t.Fatalf("at H1: %+v", got)
-	}
-	if c := w.dudeLineComments(n); len(c) != 1 {
-		w.t.Fatalf("dude's inline comments at H1: %+v", c)
 	}
 	return wi, n, h1
 }
