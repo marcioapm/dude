@@ -680,7 +680,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 			// The same review at H: its body edited in place once the CI
 			// note it shows is not CI's state there any more.
 			if st.Verdict.ChecksNoted != note {
-				if err := w.refreshReview(ctx, sc, st, gh, pr, head, claim, marked, comments, ids, note); err != nil {
+				if err := w.refreshReview(ctx, sc, st, gh, pr, head, claim, marked, comments, note); err != nil {
 					return "", err
 				}
 			}
@@ -770,15 +770,14 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 }
 
 // refreshReview edits the body of the review submitted under claim at
-// head to marked (its marker kept), the comments the submit did not post
-// inline (review_submitted's record) folded into it as the submit did: the
-// CI note it showed is not CI's
+// head to marked (its marker kept), the comments its submit folded folded
+// into it again as the submit did: the CI note it showed is not CI's
 // state at head any more (note, "" for none). The review is found by its
 // marker; a body GitHub already holds is not sent again, and an ambiguous
 // answer is retried at the claim's increasing delays, never by posting
 // another review. Refused, it is logged and left as it was.
 func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, pr PullRequestState,
-	head, claim, marked string, comments []forge.ReviewComment, ids []string, note string) error {
+	head, claim, marked string, comments []forge.ReviewComment, note string) error {
 	v := st.Verdict
 	if v.Lost != claim {
 		v.Lost, v.LostSubmits, v.LostLookups = claim, 0, 0
@@ -810,31 +809,29 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 		v.Lost, v.LostSubmits, v.LostLookups = "", 0, 0
 		return nil
 	}
-	// The comments the submit placed inline, as review_submitted recorded
-	// them read back; every other one it folded into the body (where the
-	// line was not in the diff, or GitHub refused them all inline). When
-	// the read back failed, the diff tells them apart, as the submit did.
-	var inline map[string]bool
+	// The comments the submit folded into the body, in its order: those
+	// whose line is not in the diff, or all of them, the placeable first,
+	// when GitHub refused them inline (none posted, as review_submitted
+	// recorded them read back). A record that cannot tell (unread) is
+	// taken as the diff's word, so no comment is both inline and listed.
+	var posted map[string]bool
 	read := true
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) (err error) {
-		inline, read, err = claimInlineTx(ctx, tx, st.TaskID, claim)
+		posted, read, err = claimInlineTx(ctx, tx, st.TaskID, claim)
 		return err
 	}); err != nil {
 		return err
 	}
 	var folded []forge.ReviewComment
-	if read {
-		for i, c := range comments {
-			if i >= len(ids) || !inline[ids[i]] {
-				folded = append(folded, c)
-			}
-		}
-	} else {
+	if len(comments) > 0 {
 		diff, err := gh.PullDiffLines(ctx, pr.Slug, pr.Number)
 		if err != nil {
 			return retry(err, "reading the diff before refreshing dude's review")
 		}
-		_, folded = forge.PlaceComments(comments, diff)
+		var inline []forge.ReviewComment
+		if inline, folded = forge.PlaceComments(comments, diff); read && len(posted) == 0 {
+			folded = append(inline, folded...)
+		}
 	}
 	body := forge.FoldComments(marked, folded)
 	why := "checks: " + cmp.Or(note, "passing")
@@ -868,7 +865,9 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 // reviewPosts is review_submitted's record of the review's inline
 // comments read back from GitHub (the submit's answer has none):
 // postedComments (the findings unmatched, all of them when unreadable,
-// have their threads not kept in step; "unread" says the read failed).
+// have their threads not kept in step). "unread" says the record cannot
+// be trusted to tell which were posted inline: the read failed, or a
+// comment GitHub holds matched none of them.
 func (w *steps) reviewPosts(ctx context.Context, gh *forge.GitHub, pr PullRequestState, reviewID int64, comments []forge.ReviewComment, ids []string) map[string]any {
 	if len(comments) == 0 {
 		return nil
@@ -878,7 +877,7 @@ func (w *steps) reviewPosts(ctx context.Context, gh *forge.GitHub, pr PullReques
 		slog.Warn("reading dude's review comments back failed", "pr", pr.ID, "review", reviewID, "error", err)
 	}
 	out := postedComments(got, comments, ids)
-	if err != nil {
+	if posts, _ := out["comments"].([]inlinePost); err != nil || len(posts) < len(got) {
 		out["unread"] = true
 	}
 	return out
