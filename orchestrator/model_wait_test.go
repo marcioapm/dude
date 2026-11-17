@@ -148,16 +148,23 @@ func TestATransientFailurePastTheBoundParksTheRun(t *testing.T) {
 }
 
 // At 30 minutes of continuous refusals the conductor is told once that
-// dude is waiting: not again at the next retry. A turn that ends without
-// failing starts a new wait, told once again at its own 30 minutes.
+// dude is waiting: not at 29, and not again at the next retry. A turn that
+// ends without failing starts a new wait, told once again at its own 30
+// minutes.
 func TestTheModelWaitNoticeIsSentOncePerWait(t *testing.T) {
-	w, task, run := modelRefusingWorld(t, 3, true)
+	w, task, run := modelRefusingWorld(t, 4, true)
 	notices := func() int {
 		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key LIKE 'model-waiting:'||$2||':%'
 			AND line LIKE '%model provider has refused%dude keeps waiting%'`, task, run)
 	}
+	w.refusedFor(run, 29*time.Minute)
+	w.retryDue(run)
+	w.until("retry 2 held", func() bool { return w.turnRetries(run) == 2 })
+	if n := notices(); n != 0 {
+		t.Fatalf("%d notices at 29 minutes of refusals, want none before 30", n)
+	}
 	w.refusedFor(run, 31*time.Minute)
-	for attempt := 2; attempt <= 3; attempt++ {
+	for attempt := 3; attempt <= 4; attempt++ {
 		w.retryDue(run)
 		w.until(fmt.Sprintf("retry %d held", attempt), func() bool { return w.turnRetries(run) == attempt })
 	}
@@ -169,7 +176,7 @@ func TestTheModelWaitNoticeIsSentOncePerWait(t *testing.T) {
 	w.retryDue(run)
 	luxID := w.luxRunOf(run)
 	w.until("the retried turn working", func() bool {
-		return len(w.lux.Inputs(luxID)) == 3 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NOT NULL
+		return len(w.lux.Inputs(luxID)) == 4 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NOT NULL
 			AND turn_done_at IS NULL`, run) == 1
 	})
 	mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status)
@@ -274,6 +281,85 @@ func TestTheStallDetectorsLeaveARunWaitingOnTheModel(t *testing.T) {
 		return len(w.lux.Inputs(w.luxRunOf(run))) == 1
 	})
 	silent("retried turn in flight")
+	// A retried turn in flight past the longest back-off (15 minutes) is
+	// no longer waiting on the model: a real hang is reported again.
+	mustExec(t, w.owner, `UPDATE directives SET sent_at = now() - interval '16 minutes'
+		WHERE run_id = $1 AND deliver_after IS NOT NULL`, run)
+	mustExec(t, w.owner, `UPDATE runs SET agent_active_at = now() - interval '3 hours', agent_busy_at = now() - interval '3 hours',
+		files_changed_at = now() - interval '3 hours', started_at = now() - interval '3 hours' WHERE id = $1`, run)
+	w.until("the hung retried turn reported", func() bool {
+		w.sweep()
+		return w.stalls(run) > 0
+	})
+}
+
+// harnessRetries is the Run's current streak of retries (turnRetries).
+func (w *world) harnessRetries(run string) int {
+	return w.count(`SELECT COALESCE((harness_state->>'turnRetries')::int, 0) FROM runs WHERE id = $1`, run)
+}
+
+// modelWakes are the conductor's wakes about the Run's model wait.
+func (w *world) modelWakes(task, run string) int {
+	return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1
+		AND (key LIKE 'model-waiting:'||$2||':%' OR key LIKE 'model-parked:'||$2||':%')`, task, run)
+}
+
+// A retried turn that went on to work for hours, then met one refusal, is
+// not a Run refused for hours: the work ended the wait, and the refusal
+// starts a new one. Not parked, its conductor not told.
+func TestAWorkingRetriedTurnEndsTheModelWait(t *testing.T) {
+	w, task, run := modelRefusingWorld(t, 1, true)
+	w.retryDue(run)
+	luxID := w.luxRunOf(run)
+	w.until("the retried turn in flight", func() bool {
+		return len(w.lux.Inputs(luxID)) == 1 && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NOT NULL
+			AND turn_done_at IS NULL`, run) == 1
+	})
+	// It works: a tool call, two hours of it on the test clock.
+	w.lux.AgentSays(luxID, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "work-1", "title": "bash", "kind": "execute",
+		"status": "in_progress", "rawInput": map[string]any{"command": "make"}})
+	w.until("the work recorded", func() bool {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.tool.called'`, run) > 0
+	})
+	w.refusedFor(run, 2*time.Hour+time.Minute)
+	w.until("one more refusal", func() bool {
+		w.lux.FailTurn(luxID, rateLimited)
+		return w.turnRetries(run) == 2 || w.runStatus(run) != "running/"
+	})
+	for range 3 {
+		w.pump()
+	}
+	if got := w.runStatus(run); got != "running/" {
+		t.Fatalf("the Run is %s after one refusal following its work, want running", got)
+	}
+	if n := w.harnessRetries(run); n != 1 {
+		t.Errorf("streak of %d retries, want a new one (1)", n)
+	}
+	if n := w.modelWakes(task, run); n != 0 {
+		t.Errorf("%d model wakes for a Run that was working, want none", n)
+	}
+}
+
+// After a model park and the conductor's steer, the next refusal starts a
+// new wait (attempt 1): the Run is not parked again at once.
+func TestARefusalAfterAModelParkIsANewWait(t *testing.T) {
+	w, task, run := modelRefusingWorld(t, 3, false)
+	w.refusedFor(run, 2*time.Hour+time.Minute)
+	w.retryDue(run)
+	w.until("the implementer parked", func() bool { return w.runStatus(run) == "paused/idle" })
+	w.must(task, "steer", fmt.Sprintf(`{"run":%q,"text":"The provider is back: carry on."}`, run))
+	w.until("refused once more after the resume", func() bool {
+		return w.turnRetries(run) == 2 || (w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'`, run) > 1)
+	})
+	for range 3 {
+		w.pump()
+	}
+	if got := w.runStatus(run); got != "running/" {
+		t.Fatalf("the Run is %s after one refusal past its resume, want running", got)
+	}
+	if n := w.harnessRetries(run); n != 1 {
+		t.Errorf("streak of %d retries after the resume, want 1", n)
+	}
 }
 
 // A simplifier that fails (not on a temporary model error) is a decision

@@ -122,8 +122,25 @@ func (t *translator) retryTurn(ctx context.Context, tx pgx.Tx, s *Syncer, agentE
 		// stops it decides.
 		return false, err
 	}
+	// A retried turn that went on to work (a tool call, a plan, a
+	// thought after the streak's last retry) ended the wait: this refusal
+	// starts a new one. Not its messages: a harness may relay the refusal
+	// itself as one (Claude Code's error line).
+	if t.TurnRetries > 0 {
+		var worked bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e.event_type IN ($3, $4, $5)
+			AND e.cursor > (SELECT COALESCE(max(l.cursor), 0) FROM events l WHERE l.run_id = $1 AND l.event_type = $2))`,
+			t.run.ID, evTurnRetried, evToolCalled, evPlanUpdated, evAgentThought).Scan(&worked); err != nil {
+			return false, err
+		}
+		if worked {
+			t.TurnRetries = 0
+		}
+	}
 	// How long the refusals have lasted: since this streak's first retry
-	// (attempt 1), on the database's clock; and the limit they may last.
+	// (attempt 1), on the database's clock against the time the
+	// orchestrator stamped that event with (their skew is seconds); and
+	// the limit they may last.
 	var waitedSecs, limitSecs float64
 	var since int64
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(extract(epoch FROM now() - w.occurred_at)::float8, 0), COALESCE(w.cursor, 0), `+roleTimeLimit+`
