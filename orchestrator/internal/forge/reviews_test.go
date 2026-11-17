@@ -390,6 +390,58 @@ func TestDismissalRefusedIsTypedAndAlreadyDismissedIsDone(t *testing.T) {
 	}
 }
 
+// UpdateReview is PUT /pulls/{n}/reviews/{id} with the body alone: no
+// event, no commit_id (GitHub keeps the review's state and commit).
+func TestUpdateReviewSendsTheBodyAlone(t *testing.T) {
+	var method, path string
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"id":7,"state":"CHANGES_REQUESTED"}`))
+	}))
+	defer srv.Close()
+	g := NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL})
+	if err := g.UpdateReview(context.Background(), "acme/repo", 3, 7, "new body"); err != nil {
+		t.Fatal(err)
+	}
+	if method != "PUT" || path != "/repos/acme/repo/pulls/3/reviews/7" {
+		t.Fatalf("sent %s %s", method, path)
+	}
+	if !reflect.DeepEqual(got, map[string]any{"body": "new body"}) {
+		t.Fatalf("sent %v, want the body alone", got)
+	}
+}
+
+// On the fake: the body is replaced, the state and commit kept; an
+// unknown review is a 404.
+func TestTheFakeKeepsAnUpdatedReviewsState(t *testing.T) {
+	fake, g, n, head := reviewFake(t)
+	ctx := context.Background()
+	out, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: head, Event: EventRequestChanges, Body: "failing: test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.UpdateReview(ctx, "acme/repo", n, out.ID, "all green"); err != nil {
+		t.Fatal(err)
+	}
+	rs := fake.Pull(n).Reviews
+	if len(rs) != 1 || rs[0].Body != "all green" || rs[0].State != "CHANGES_REQUESTED" || rs[0].CommitID != head {
+		t.Fatalf("after the edit: %+v", rs)
+	}
+	var e *Error
+	if err := g.UpdateReview(ctx, "acme/repo", n, 999999, "x"); !errors.As(err, &e) || e.Status != 404 {
+		t.Fatalf("an unknown review: %v, want a 404", err)
+	}
+	fake.Set(func(s *fakegithub.Server) { s.UpdateFail5xx = 1 })
+	if err := g.UpdateReview(ctx, "acme/repo", n, out.ID, "again"); !Transient(err) {
+		t.Fatalf("a 5xx: %v, want transient", err)
+	}
+	if rs := fake.Pull(n).Reviews; rs[0].Body != "again" || rs[0].State != "CHANGES_REQUESTED" {
+		t.Fatalf("UpdateFail5xx takes the edit: %+v", rs)
+	}
+}
+
 // A dismissal sends GitHub its message and the DISMISS event; GitHub
 // requires the message, and its 422 would read as a refusal.
 func TestADismissalSendsItsMessage(t *testing.T) {

@@ -225,3 +225,35 @@ func (s *Server) dismissReview(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, s.reviewJSON(p, p.Reviews[i]))
 	}
 }
+
+// updateReview is PUT /pulls/{n}/reviews/{id}: the review's body is
+// replaced; its state, commit and comments are kept. UpdateFail5xx takes
+// the edit and answers 502.
+func (s *Server) updateReview(w http.ResponseWriter, r *http.Request) {
+	p := s.number(w, r)
+	if p == nil {
+		return
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var in struct {
+		Body *string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Body == nil {
+		unprocessable(w, "body is required")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := slices.IndexFunc(p.Reviews, func(rv Review) bool { return rv.ID == id })
+	if i < 0 {
+		fail(w, 404, "Not Found")
+		return
+	}
+	p.Reviews[i].Body = *in.Body
+	if s.UpdateFail5xx > 0 {
+		s.UpdateFail5xx--
+		fail(w, 502, "Bad Gateway")
+		return
+	}
+	write(w, 200, s.reviewJSON(p, p.Reviews[i]))
+}
