@@ -79,6 +79,22 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	// set -u fails an unset expansion: a call without it does not prove a
 	// report with it.
 	{"a -u report with an expansion, run without -u", "set -euo pipefail && go test $PKG", "go test $PKG"},
+	// One case per grammar rule a mutant of it would let through (#484
+	// round 3); each recorded call exits 0 in bash, each report fails.
+	// PIPEFAIL SEP: the set piped into the command sets nothing in it.
+	{"the pipefail set piped", "false", "set -o pipefail | false | true"},
+	// The set succeeds, so || skips the rest.
+	{"the pipefail set ORed", "false", "set -o pipefail || false | true"},
+	// CD: ~+ is the shell's directory, so this is ../api, not api.
+	{"a cd through ~+", "make test (api)", "cd ~+/../api && make test"},
+	// CD joined by ||: when the cd succeeds, the command never runs.
+	{"a cd ORed with the command", "cd api && false", "cd api || false"},
+	// ECHO: a literal exit=0 is not the status.
+	{"an echo of a literal exit=0", "false", "false; echo exit=0"},
+	// ECHO after a pipe: $? is the status from before the pipeline.
+	{"a status echoed through a pipe", "false", "false | echo exit=$?"},
+	// WORD: ${…} opens new quoting, so its pipe is inside the word.
+	{"a pipe inside ${…} in double quotes", `true "${x:-"`, `set -o pipefail && true "${x:-" | false "}"`},
 }
 
 // unreadReports are reported commands dude does not read (a comment, a
