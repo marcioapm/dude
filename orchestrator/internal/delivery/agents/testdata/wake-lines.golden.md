@@ -36,7 +36,27 @@ Fixer run_fix's answers on the pull request were not posted: target#1's head 999
 
 ## fixer-answers-withheld-merged
 
-Fixer run_fix's answers on the pull request were not posted: the pull request was merged. Nothing it said was posted or resolved; read its report (run_chat run_fix) if the comments still need an answer.
+Fixer run_fix's delivery ended with its answers held: the pull request was merged. Nothing it said was posted or resolved. Read its report (run_chat run_fix) if the comments still need an answer.
+
+## fixer-answers-ended-in-flight
+
+Fixer run_fix's delivery ended with its answers held: the delivery was stopped. Withheld, never posted or resolved: issue-comment-2, resolving line-comment-1. Being posted as it ended, so not withheld: line-comment-1; dude tells you what each ends as. Read its report (run_chat run_fix) if the comments still need an answer.
+
+## fixer-answer-reconciled-posted
+
+Fixer run_fix's answer line-comment-1, being posted when its delivery ended (the delivery was stopped), was posted: it is on the pull request.
+
+## fixer-answer-reconciled-failed
+
+Fixer run_fix's answer line-comment-1, being posted when its delivery ended (the pull request was merged), failed: GitHub did not take it; it is not on the pull request.
+
+## fixer-answer-reconciled-withheld
+
+Fixer run_fix's answer resolving line-comment-1, being posted when its delivery ended (the pull request was closed), was not posted: the delivery ended before it was posted.
+
+## fixer-answer-reconciled-uncertain
+
+Fixer run_fix's answer issue-comment-2, being posted when its delivery ended (the delivery was stopped), is uncertain: it may have been posted; check the pull request. dude could not tell whether GitHub took it (the search for its comment was cut at its bound).
 
 ## fixer-answers-withheld-unverified
 

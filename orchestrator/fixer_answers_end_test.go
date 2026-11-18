@@ -1,0 +1,372 @@
+package orchestrator_test
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
+	"github.com/marciomartins/dude/orchestrator/internal/forge"
+)
+
+// #485 round 5: a delivery's end against a poster in flight. The end never
+// withholds an answer a poster holds (it may be on GitHub a moment later);
+// it withholds what nobody holds, blocks new claims, and leaves the held
+// one to its poster (posted, failed) or, if the poster is gone, to the
+// pr-reconciler's pass (posted, withheld, uncertain). These tests use only
+// what the delivery had before (a transport barrier in the poster's GitHub client, the
+// poster's AfterAnswerPost as the crash, the pass through the syncer), so
+// they run, and fail, on the code before the fix too.
+
+// barrier holds the first GitHub write match picks, in the poster's own
+// HTTP transport, until opened: the poster has claimed the answer and is
+// inside its write, which GitHub has not yet taken.
+type barrier struct {
+	match    func(r *http.Request, body string) bool
+	once     sync.Once
+	inside   chan struct{}
+	release  chan struct{}
+	released sync.Once
+}
+
+func newBarrier(match func(r *http.Request, body string) bool) *barrier {
+	return &barrier{match: match, inside: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (b *barrier) open() { b.released.Do(func() { close(b.release) }) }
+
+func (b *barrier) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method == "POST" {
+		var body string
+		if r.Body != nil {
+			raw, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+			body = string(raw)
+		}
+		if b.match(r, body) {
+			hit := false
+			b.once.Do(func() { hit = true })
+			if hit {
+				close(b.inside)
+				select {
+				case <-b.release:
+				case <-time.After(30 * time.Second):
+				}
+			}
+		}
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// through is the organization's GitHub with its requests through rt.
+func (a *answering) through(t *testing.T, rt http.RoundTripper) *forge.GitHub {
+	t.Helper()
+	var c forge.Credential
+	var settings []byte
+	if err := a.w.app.InOrg(context.Background(), a.w.org, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT auth::text, secret, api_base_url, settings FROM forge_credentials WHERE forge = 'github' LIMIT 1`).
+			Scan(&c.Auth, &c.Secret, &c.APIBaseURL, &settings)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gh := forge.NewGitHub(c, forge.WithTransport(rt))
+	gh.Settings = forge.ReadSettings(settings)
+	return gh
+}
+
+// answerIDs are the fixer's held answers, in the order made: three
+// replies (first, second, is), then two resolutions (first, second).
+func (a *answering) answerIDs(run string) []string {
+	return a.w.ids(`SELECT id FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor`, run, delivery.EvAnswerHeld)
+}
+
+// outcome is how held answer id is settled in dude's records: posted (its
+// chat.message or pull_request.action), withheld, uncertain, failed, or
+// "" when not settled. It fails the test if two records settle it (one
+// withheld and then posted, above all).
+func (a *answering) outcome(t *testing.T, run, id string) string {
+	t.Helper()
+	rows := a.w.ids(`SELECT CASE WHEN event_type IN ('chat.message', 'pull_request.action') THEN 'posted'
+			WHEN payload->>'withheld' = 'true' THEN 'withheld' WHEN payload->>'uncertain' = 'true' THEN 'uncertain' ELSE 'failed' END
+		FROM events WHERE run_id = $1 AND event_type IN ('chat.message', 'pull_request.action', $3)
+		  AND COALESCE(payload->>'answerId', payload->'github'->>'answerId') = $2 ORDER BY cursor`, run, id, delivery.EvAnswerFailed)
+	if len(rows) > 1 {
+		t.Errorf("answer %s is settled %d times: %v", id, len(rows), rows)
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	return rows[0]
+}
+
+// told is what dude said of the fixer's answers after its delivery ended:
+// in the task's Chat, and in the conductor's wakes.
+func (a *answering) told() string {
+	return a.w.str(`SELECT COALESCE(string_agg(t, ' | '), '') FROM (
+		SELECT payload->>'text' AS t FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+		UNION ALL SELECT line FROM conductor_wakes WHERE task_id = $1) x`, a.task)
+}
+
+// claimsAfterEnd counts claims recorded after the task's delivery ended
+// for its answers (none before the fix: there was no end to read).
+func (a *answering) claimsAfterEnd() int {
+	return a.w.count(`SELECT count(*) FROM events c WHERE c.task_id = $1 AND c.event_type = $2
+		AND c.cursor > (SELECT min(m.cursor) FROM events m WHERE m.task_id = $1 AND m.event_type = 'pull_request.answers_ended')`,
+		a.task, delivery.EvAnswerClaimed)
+}
+
+// The delivery ends — a person's Stop, the pull request merged, or closed —
+// while a poster is inside a GitHub write it claimed: a reply, or a
+// thread's resolution. The in-flight answer ends posted (it is on GitHub,
+// and true); every answer nobody held is withheld; none is recorded
+// withheld and then posted; a later pass claims nothing after the end.
+func TestRound5TheEndNeverWithholdsAnAnswerBeingPosted(t *testing.T) {
+	ends := []struct {
+		name string
+		end  func(a *answering)
+		why  string
+	}{
+		{"stopped", func(a *answering) { a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"}) }, "the delivery was stopped"},
+		{"merged", func(a *answering) {
+			a.w.gh.Merge(1)
+			a.w.until("the task done", func() bool {
+				a.w.sync()
+				return a.w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND status = 'done'`, a.task) == 1
+			})
+		}, "the pull request was merged"},
+		{"closed", func(a *answering) {
+			a.w.gh.Close(1)
+			a.w.until("the task aborted", func() bool {
+				a.w.sync()
+				return a.w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND status = 'aborted'`, a.task) == 1
+			})
+		}, "the pull request was closed"},
+	}
+	for _, end := range ends {
+		for _, write := range []string{"reply", "resolve"} {
+			t.Run(end.name+"/"+write, func(t *testing.T) {
+				a, ref := endedWithHeld(t)
+				ids := a.answerIDs(ref.RunID)
+				if len(ids) != 5 {
+					t.Fatalf("%d answers held, want 5", len(ids))
+				}
+				// The reply to the first comment, or the first thread's
+				// resolution: answer 0, or answer 3 (the replies before it
+				// posted first).
+				inFlight := 0
+				match := func(r *http.Request, _ string) bool {
+					return strings.Contains(r.URL.Path, fmt.Sprintf("/comments/%d/replies", a.first))
+				}
+				if write == "resolve" {
+					inFlight = 3
+					thread := a.w.gh.ThreadID(a.first)
+					match = func(r *http.Request, body string) bool {
+						return strings.HasSuffix(r.URL.Path, "/graphql") && strings.Contains(body, "resolveReviewThread") && strings.Contains(body, thread)
+					}
+				}
+				b := newBarrier(match)
+				defer b.open()
+				poster := &delivery.Store{DB: a.w.app}
+				gh := a.through(t, b)
+				errs := make(chan error, 1)
+				go func() { _, err := poster.PostFixerAnswers(context.Background(), a.w.org, a.task, gh); errs <- err }()
+				select {
+				case <-b.inside:
+				case err := <-errs:
+					t.Fatalf("the poster ended before its write: %v", err)
+				case <-time.After(20 * time.Second):
+					t.Fatal("the poster never reached its write")
+				}
+				end.end(a)
+				// The end, done while the write is held: the in-flight
+				// answer is not withheld.
+				if got := a.outcome(t, ref.RunID, ids[inFlight]); got == "withheld" {
+					t.Errorf("the answer being posted was withheld by the end")
+				}
+				b.open()
+				if err := <-errs; err != nil {
+					t.Logf("the poster after the end: %v", err)
+				}
+				// Passes after the end: the step's, and the syncer's.
+				for range 3 {
+					if _, err := a.store.PostFixerAnswers(context.Background(), a.w.org, a.task, a.gh); err != nil {
+						t.Logf("a pass after the end: %v", err)
+					}
+					a.w.sync()
+				}
+				for i, id := range ids {
+					got := a.outcome(t, ref.RunID, id)
+					switch {
+					case i == inFlight && got != "posted":
+						t.Errorf("the answer in flight at the end (%d) ended %q, want posted", i, got)
+					case i < inFlight && got != "posted":
+						t.Errorf("answer %d, posted before the write, ended %q", i, got)
+					case i > inFlight && got != "withheld":
+						t.Errorf("answer %d, unclaimed at the end, ended %q, want withheld", i, got)
+					}
+				}
+				if write == "reply" {
+					if n := len(a.posted("Fixed: " + a.firstID)); n != 1 {
+						t.Errorf("the reply in flight is on GitHub %d times, want once", n)
+					}
+					if n := len(a.posted("Fixed: " + a.secondID)); n != 0 {
+						t.Errorf("a withheld reply is on GitHub %d times", n)
+					}
+				} else {
+					if f, s := a.resolved(); !f || s {
+						t.Errorf("resolved %v %v; want the thread in flight only", f, s)
+					}
+				}
+				if n := a.claimsAfterEnd(); n != 0 {
+					t.Errorf("%d claims after the end", n)
+				}
+				if n := a.w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.answers_ended'`, a.task); n != 1 {
+					t.Errorf("the end recorded %d times, want once", n)
+				}
+				// The conductor was told what was withheld and what was in
+				// flight, then what it ended as.
+				wakes := a.w.str(`SELECT COALESCE(string_agg(line, ' | ' ORDER BY created_at), '') FROM conductor_wakes WHERE task_id = $1 AND kind = $2
+					AND key LIKE 'answers:run_fixer:%'`, a.task, delivery.WakeRound)
+				told := a.told()
+				label := a.firstID
+				if write == "resolve" {
+					label = "resolving " + a.firstID
+				}
+				if !strings.Contains(wakes, end.why) || !strings.Contains(wakes, "Being posted as it ended, so not withheld: "+label) {
+					t.Errorf("the end's wake %q does not name what is in flight", wakes)
+				}
+				if !strings.Contains(wakes, "Withheld, never posted or resolved:") {
+					t.Errorf("the end's wake %q does not name what was withheld", wakes)
+				}
+				if !strings.Contains(told, "answer "+label+", being posted when its delivery ended ("+end.why+"), was posted") {
+					t.Errorf("nobody was told the in-flight answer was posted: %q", told)
+				}
+			})
+		}
+	}
+}
+
+// A poster gone after GitHub took its reply, before recording it (a crash),
+// and then the delivery stopped: the pr-reconciler's pass, once the claim
+// has long expired, settles the answer from GitHub. Dude's own marked
+// comment found: posted. Claimed but never on GitHub (its write failed):
+// withheld, as ended before it was posted.
+// The search cut at its bound: uncertain, said once, never reposted.
+func TestRound5TheReconcilerSettlesAnAnswerItsPosterLeft(t *testing.T) {
+	// crashOn has the poster crash on answer i after GitHub took it,
+	// before its record.
+	crashOn := func(a *answering, ref delivery.RunRef, i int) {
+		t.Helper()
+		ids := a.answerIDs(ref.RunID)
+		crash := errors.New("the poster crashed")
+		a.store.AfterAnswerPost = func(id string) error {
+			if id == ids[i] {
+				return crash
+			}
+			return nil
+		}
+		if _, err := a.post(); !errors.Is(err, crash) {
+			t.Fatalf("the crashing post: %v", err)
+		}
+		a.store.AfterAnswerPost = nil
+	}
+	// The claim long past: the pass reads GitHub at once.
+	expire := func(a *answering, ref delivery.RunRef) {
+		mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '1 hour' WHERE run_id = $1 AND event_type = $2`,
+			ref.RunID, delivery.EvAnswerClaimed)
+	}
+	stop := func(a *answering) { a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"}) }
+
+	t.Run("its comment found", func(t *testing.T) {
+		a, ref := endedWithHeld(t)
+		ids := a.answerIDs(ref.RunID)
+		crashOn(a, ref, 2)
+		expire(a, ref)
+		stop(a)
+		for range 3 {
+			a.w.sync()
+		}
+		if got := a.outcome(t, ref.RunID, ids[2]); got != "posted" {
+			t.Errorf("the answer GitHub took ended %q, want posted", got)
+		}
+		if n := len(a.posted("Fixed: " + a.is)); n != 1 {
+			t.Errorf("the answer is on GitHub %d times, want once", n)
+		}
+		for _, i := range []int{3, 4} {
+			if got := a.outcome(t, ref.RunID, ids[i]); got != "withheld" {
+				t.Errorf("unclaimed answer %d ended %q, want withheld", i, got)
+			}
+		}
+	})
+	t.Run("never written", func(t *testing.T) {
+		a, ref := endedWithHeld(t)
+		ids := a.answerIDs(ref.RunID)
+		// The two line replies post; the conversation reply is claimed
+		// and GitHub fails its write (a 502: it may or may not have
+		// taken it), and the poster is gone.
+		a.w.gh.Set(func(s *fakegithub.Server) {
+			s.Intercept = func(r *http.Request) int {
+				if r.Method == "POST" && strings.Contains(r.URL.Path, "/issues/1/comments") {
+					return 502
+				}
+				return 0
+			}
+		})
+		if _, err := a.post(); err == nil {
+			t.Fatal("the write GitHub failed did not fail")
+		}
+		a.w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+		expire(a, ref)
+		stop(a)
+		for range 3 {
+			a.w.sync()
+		}
+		if n := len(a.posted("Fixed: " + a.is)); n != 0 {
+			t.Fatalf("the answer is on GitHub %d times, want none", n)
+		}
+		if got := a.outcome(t, ref.RunID, ids[2]); got != "withheld" {
+			t.Errorf("the answer never written ended %q, want withheld", got)
+		}
+		why := a.w.str(`SELECT COALESCE(payload->>'error', '') FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'answerId' = $3`,
+			ref.RunID, delivery.EvAnswerFailed, ids[2])
+		if why != "the delivery ended before it was posted" {
+			t.Errorf("withheld for %q", why)
+		}
+	})
+	t.Run("the search inconclusive", func(t *testing.T) {
+		a, ref := endedWithHeld(t)
+		ids := a.answerIDs(ref.RunID)
+		for i := range 1001 {
+			a.w.gh.Comment(1, "ana", fmt.Sprintf("old discussion %d", i))
+		}
+		crashOn(a, ref, 2)
+		expire(a, ref)
+		stop(a)
+		for range 3 {
+			a.w.sync()
+		}
+		if n := len(a.posted("Fixed: " + a.is)); n != 1 {
+			t.Errorf("the answer is on GitHub %d times, want once: never reposted", n)
+		}
+		if got := a.outcome(t, ref.RunID, ids[2]); got != "uncertain" {
+			t.Errorf("the answer the search could not find ended %q, want uncertain", got)
+		}
+		if n := a.w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+			AND payload->>'text' LIKE '%may have been posted; check the pull request%'`, a.task); n != 1 {
+			t.Errorf("%d notices of the uncertain answer, want one", n)
+		}
+		if n := a.w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND line LIKE '%may have been posted; check the pull request%'`, a.task); n > 1 {
+			t.Errorf("%d wakes of the uncertain answer, want at most one", n)
+		}
+	})
+}

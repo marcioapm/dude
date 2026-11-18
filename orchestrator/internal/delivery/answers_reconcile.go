@@ -44,15 +44,11 @@ func reconciledLine(runID, label, ended, outcome, why, detail string) string {
 	return render(reconciledTmpl, struct{ RunID, Label, Ended, Outcome, Why, Detail string }{runID, label, ended, outcome, why, detail})
 }
 
-// ReconciledLineForTest is reconciledLine; for the goldens.
-func ReconciledLineForTest(runID, label, ended, outcome, why, detail string) string {
-	return reconciledLine(runID, label, ended, outcome, why, detail)
-}
 
 // settleReconciliationTx settles held answer id's open reconciliation, if
-// the delivery's end opened one, as outcome, once: the live conductor is
-// woken with it, and an uncertain one is also said in the task's Chat
-// (EvChatNotice), for a person. The caller holds the Chat lock and has
+// the delivery's end opened one, as outcome, once: said in the task's Chat
+// (EvChatNotice, about answer_reconciled), and the live conductor, if any,
+// woken with it. The caller holds the Chat lock and has
 // recorded the answer's settling record in tx. No row: nothing.
 func settleReconciliationTx(ctx context.Context, tx pgx.Tx, ref RunRef, id, outcome, why, detail string) error {
 	var label, ended string
@@ -65,12 +61,14 @@ func settleReconciliationTx(ctx context.Context, tx pgx.Tx, ref RunRef, id, outc
 		return err
 	}
 	line := reconciledLine(ref.RunID, label, ended, outcome, why, detail)
-	if outcome == reconciledUncertain {
-		if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvChatNotice, OrganizationID: ref.Org, ProjectID: ref.ProjectID,
-			TaskID: ref.TaskID, RunID: ref.RunID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
-			CorrelationID: ref.TaskID, Payload: map[string]any{"about": "answer_uncertain", "answerId": id, "text": line}}); err != nil {
-			return err
-		}
+	// Said in the task's Chat whatever the outcome: a stopped or merged
+	// delivery often has no live conductor left to wake, and a person reads
+	// it there.
+	if _, err := ledger.Append(ctx, tx, ledger.Event{Type: EvChatNotice, OrganizationID: ref.Org, ProjectID: ref.ProjectID,
+		TaskID: ref.TaskID, RunID: ref.RunID, ActorType: ledger.ActorSystem, ActorID: "dude", Source: ledger.SourceOrchestrator,
+		CorrelationID: ref.TaskID, Payload: map[string]any{"about": "answer_reconciled", "answerId": id, "outcome": outcome,
+			"text": line}}); err != nil {
+		return err
 	}
 	return wakeLiveConductorTx(ctx, tx, ref.Org, ref.TaskID, WakeRound, "answer-reconciled:"+id, line)
 }
