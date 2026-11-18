@@ -259,9 +259,9 @@ func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, 
 		}
 		commit := f.commits[h.Repo]
 		if commit == "" {
-			// No commit of the fixer's there: the pull request being open
-			// is all its answer there needs.
-			continue
+			// No commit of the fixer's there: nothing of its fix is on
+			// this pull request, so a "fixed" answer there would be false.
+			return fmt.Sprintf("its fix did not change %s", h.Repo), nil
 		}
 		head := ref.HeadSHA
 		if b := branches[h.PRID]; b != "" {

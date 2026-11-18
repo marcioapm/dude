@@ -26,6 +26,9 @@ func answersLine(f FixerAnswers) string {
 	}{f, commits})
 }
 
+// Line is the conductor's wake for f (answersLine).
+func (f FixerAnswers) Line() string { return answersLine(f) }
+
 // wakeOnAnswers wakes the task's live conductor, when it has one, once per
 // fixer's answers settled, with what dude posted, resolved, failed or
 // withheld (answersLine): it may add to or correct them. A delivery under
