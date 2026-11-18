@@ -141,12 +141,12 @@ func (s *Store) PostFixerAnswers(ctx context.Context, org, taskID string, gh *fo
 func fixersToPostTx(ctx context.Context, tx pgx.Tx, org, taskID string) ([]fixerToPost, error) {
 	rows, err := tx.Query(ctx, `SELECT r.id, r.project_id, COALESCE(r.ended_at, r.created_at),
 			(SELECT jsonb_object_agg(c.repo, c.head) FROM (SELECT DISTINCT ON (e.payload->>'repo') e.payload->>'repo' AS repo, e.payload->>'headSha' AS head
-				FROM events e WHERE e.run_id = r.id AND e.event_type = $2 ORDER BY e.payload->>'repo', e.cursor DESC) c),
-			(SELECT min(e.cursor) FROM events e WHERE e.run_id = r.id AND e.event_type = $2) AS published
+				FROM events e WHERE e.run_id = r.id AND `+isCommitCreated("e")+` ORDER BY e.payload->>'repo', e.cursor DESC) c),
+			(SELECT min(e.cursor) FROM events e WHERE e.run_id = r.id AND `+isCommitCreated("e")+`) AS published
 		FROM runs r WHERE r.task_id = $1 AND r.phase = 'fix' AND r.status IN ('completed', 'failed', 'aborted')
-		  AND EXISTS (SELECT 1 FROM events e WHERE e.run_id = r.id AND e.event_type = $2)
-		  AND EXISTS (SELECT 1 FROM events h WHERE h.run_id = r.id AND h.event_type = $3 AND NOT `+answerSettled("h")+`)
-		ORDER BY published, r.id`, taskID, EvGitCommitCreated, EvAnswerHeld)
+		  AND EXISTS (SELECT 1 FROM events e WHERE e.run_id = r.id AND `+isCommitCreated("e")+`)
+		  AND EXISTS (SELECT 1 FROM events h WHERE h.run_id = r.id AND `+isHeld("h")+` AND NOT `+answerSettled("h")+`)
+		ORDER BY published, r.id`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,11 +167,28 @@ func fixersToPostTx(ctx context.Context, tx pgx.Tx, org, taskID string) ([]fixer
 // answerSettled (SQL) says the EvAnswerHeld event h is settled: a record
 // on its Run names it (its reply's chat.message, its resolution's
 // pull_request.action, or its EvAnswerFailed).
+// Its event types and the answer's id expression are literally those of
+// events_run_answer_settled_idx (migration 269), so a generic plan finds
+// the record by (run, answer id) there.
 func answerSettled(h string) string {
 	return `EXISTS (SELECT 1 FROM events s WHERE s.run_id = ` + h + `.run_id
 		AND s.event_type IN ('` + EvChatMessage + `', '` + EvPullRequestAction + `', '` + EvAnswerFailed + `')
-		AND (s.payload->>'answerId' = ` + h + `.id OR s.payload->'github'->>'answerId' = ` + h + `.id))`
+		AND ` + settledAnswerID("s") + ` = ` + h + `.id)`
 }
+
+// settledAnswerID (SQL) is the held answer a settling record on events e
+// names: a pull_request.action's or EvAnswerFailed's answerId, a
+// chat.message's github.answerId.
+func settledAnswerID(e string) string {
+	return `COALESCE(` + e + `.payload->>'answerId', ` + e + `.payload->'github'->>'answerId')`
+}
+
+// isHeld and isCommitCreated (SQL) say events e is an EvAnswerHeld or a
+// git.commit_created, with the type a literal: the partial indexes on
+// them (migrations 268, 270) are proved by a generic plan only so.
+func isHeld(e string) string { return e + `.event_type = '` + EvAnswerHeld + `'` }
+
+func isCommitCreated(e string) string { return e + `.event_type = '` + EvGitCommitCreated + `'` }
 
 // heldOf is one held answer and its id.
 type heldOf struct {
@@ -182,9 +199,9 @@ type heldOf struct {
 // unsettledTx is Run runID's held answers not settled: replies in the
 // order made, then resolutions in the order made.
 func unsettledTx(ctx context.Context, tx pgx.Tx, runID string) ([]heldOf, error) {
-	rows, err := tx.Query(ctx, `SELECT h.id, h.payload FROM events h WHERE h.run_id = $1 AND h.event_type = $2
+	rows, err := tx.Query(ctx, `SELECT h.id, h.payload FROM events h WHERE h.run_id = $1 AND `+isHeld("h")+`
 		AND NOT `+answerSettled("h")+`
-		ORDER BY h.payload->>'kind' = '`+answerResolve+`', h.cursor`, runID, EvAnswerHeld)
+		ORDER BY h.payload->>'kind' = '`+answerResolve+`', h.cursor`, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -318,8 +335,8 @@ func (s *Store) unverified(ctx context.Context, f fixerToPost, done FixerAnswers
 // be verified, unless that is already the last reason recorded.
 func recordUnverifiedTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error {
 	var last string
-	err := tx.QueryRow(ctx, `SELECT payload->>'why' FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor DESC LIMIT 1`,
-		ref.RunID, EvAnswerUnverified).Scan(&last)
+	err := tx.QueryRow(ctx, `SELECT payload->>'why' FROM events WHERE run_id = $1 AND event_type = '`+EvAnswerUnverified+`'
+		ORDER BY cursor DESC LIMIT 1`, ref.RunID).Scan(&last)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
@@ -445,8 +462,8 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 		var at time.Time
 		var released bool
 		err := tx.QueryRow(ctx, `SELECT occurred_at, COALESCE((payload->>'released')::bool, false) FROM events
-			WHERE run_id = $1 AND event_type = $2 AND payload->>'answerId' = $3 ORDER BY cursor DESC LIMIT 1`,
-			ref.RunID, EvAnswerClaimed, h.ID).Scan(&at, &released)
+			WHERE run_id = $1 AND event_type = '`+EvAnswerClaimed+`' AND payload->>'answerId' = $2 ORDER BY cursor DESC LIMIT 1`,
+			ref.RunID, h.ID).Scan(&at, &released)
 		switch {
 		case err == nil:
 			if !released && time.Since(at) < answerClaimLease {

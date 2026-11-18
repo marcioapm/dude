@@ -35,11 +35,11 @@ func settleHeldOnEndTx(ctx context.Context, tx pgx.Tx, org, taskID, why string, 
 	}
 	rows, err := tx.Query(ctx, `SELECT h.run_id, r.project_id, h.id, h.payload,
 			COALESCE((SELECT jsonb_object_agg(c.repo, c.head) FROM (SELECT DISTINCT ON (e.payload->>'repo') e.payload->>'repo' AS repo,
-				e.payload->>'headSha' AS head FROM events e WHERE e.run_id = h.run_id AND e.event_type = $3
+				e.payload->>'headSha' AS head FROM events e WHERE e.run_id = h.run_id AND `+isCommitCreated("e")+`
 				ORDER BY e.payload->>'repo', e.cursor DESC) c), '{}'::jsonb)
-		FROM runs r JOIN events h ON h.run_id = r.id AND h.event_type = $2
+		FROM runs r JOIN events h ON h.run_id = r.id AND `+isHeld("h")+`
 		WHERE r.task_id = $1 AND r.phase = 'fix' AND NOT `+answerSettled("h")+`
-		ORDER BY r.created_at, r.id, h.cursor`, taskID, EvAnswerHeld, EvGitCommitCreated)
+		ORDER BY r.created_at, r.id, h.cursor`, taskID)
 	if err != nil {
 		return nil, err
 	}
