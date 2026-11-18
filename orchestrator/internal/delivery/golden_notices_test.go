@@ -53,7 +53,7 @@ func TestGoldenWakeLines(t *testing.T) {
 			Withheld: "the pull request was merged", Cause: CauseEnded})},
 		{"fixer-answers-withheld-unverified", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
 			Withheld: "could not verify the fix is on the pull request: target#1's comparison with the fix could not be read: github 403: Forbidden",
-			Cause: CauseUnverified})},
+			Cause:    CauseUnverified})},
 		{"run-failed", runFailedLine("review · security", "run_rev", "lux: the host\nwent away "+strings.Repeat("x", 130))},
 		{"escalated-stuck", escalatedLine(&Escalation{Reason: "stuck", Step: "fix"})},
 		{"escalated-test-failed", escalatedLine(&Escalation{Reason: ReasonTestFailedCriteria, Step: "fix", Detail: map[string]any{
