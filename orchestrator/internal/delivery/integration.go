@@ -237,7 +237,7 @@ func ResolveConflictsTx(ctx context.Context, tx pgx.Tx, org, taskID, prID, repo 
 	signal := forge.Signal{Kind: "conflict", Repo: repo, Number: number, Requested: true}
 	key := fmt.Sprintf("resolve-conflicts:%s:%d:%s", repo, number, baseSHA)
 	if e := d.State.Escalation; e != nil {
-		ours := e.Reason == "pull_request_conflict" && e.about(repo, number)
+		ours := e.integrationEscalation() && e.about(repo, number)
 		if ours && e.Decided != nil {
 			var repeat bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM base_sync_requests WHERE pull_request_id=$1 AND base_sha=$2)`, prID, baseSHA).Scan(&repeat); err != nil {
@@ -279,9 +279,32 @@ func (e *Escalation) about(repo string, number int) bool {
 	return d.Repo == repo && d.Number == number
 }
 
-// integrationFailure escalates the integration as pull_request_conflict
-// (retry or wait). cause is the web's to word: causeStillConflicting,
-// causePairAttempted, causeNoMerge, or causeRunFailed with the Run's error.
+// ReasonIntegrationFailed: the Run integrating the base failed (a crash,
+// lux, a timeout, a provider refusing): nothing says the merge is hard, and
+// retrying it once the cause is gone is the recovery. A merge that did not
+// resolve the conflict stays pull_request_conflict.
+const ReasonIntegrationFailed = "integration_failed"
+
+// integrationReason is the escalation a cause raises: integration_failed
+// for a failed Run, pull_request_conflict for the rest.
+func integrationReason(cause string) string {
+	if cause == causeRunFailed {
+		return ReasonIntegrationFailed
+	}
+	return "pull_request_conflict"
+}
+
+// integrationEscalation says the escalation stops at an integration of
+// the pull request's base: the conflict it could not resolve, or its
+// failed Run.
+func (e *Escalation) integrationEscalation() bool {
+	return e.Reason == "pull_request_conflict" || e.Reason == ReasonIntegrationFailed
+}
+
+// integrationFailure escalates the integration (retry or wait): as
+// integration_failed for causeRunFailed, with the Run's error, else as
+// pull_request_conflict. cause is the web's to word: causeStillConflicting,
+// causePairAttempted, causeNoMerge, or causeRunFailed.
 func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext, st *State, cause, problem string) (workflow.Result, error) {
 	i := st.Integration
 	detail := map[string]any{"repo": i.Repo, "number": i.Number, "base": i.Base, "cause": cause, "error": problem, "integration": true}
@@ -291,7 +314,7 @@ func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext,
 	if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"cause": cause, "error": problem}); err != nil {
 		return workflow.Result{}, err
 	}
-	return w.escalate(ctx, sc, st, "pull_request_conflict", detail)
+	return w.escalate(ctx, sc, st, integrationReason(cause), detail)
 }
 
 // agentRun says the integration was an agent's Run; a merge GitHub made

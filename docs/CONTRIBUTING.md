@@ -431,7 +431,9 @@ implement → review (fan-out) ⟲ fix → simplify → [review of its diff ⟲ 
   that finishes without publishing to the conflicting repository (no
   merge: nothing to review), or a pull request
   still conflicting afterwards, escalates `pull_request_conflict` with
-  `integration: true` (retry or wait). An integration Run spends none of
+  `integration: true` (retry or wait); an integration Run that failed
+  (a crash, lux, a timeout) escalates `integration_failed` instead, with
+  the Run's error, and is no conflict (retry or wait). An integration Run spends none of
   the pull request's fix budget. With `whenBehind` `tell` nothing
   integrates by itself; the PR card's **Resolve conflicts**
   (`resolve-conflicts`, `delivery.ResolveConflictsTx`, owner only; anyone

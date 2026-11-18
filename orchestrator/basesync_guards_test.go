@@ -79,7 +79,7 @@ func TestAPersonsWaitOnAFailedIntegrationNeverLoopsOnItsPair(t *testing.T) {
 	wi := w.reviewing()
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
 	w.conflictWithMovedBase()
-	w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == delivery.ReasonIntegrationFailed })
 	before := w.count(escalations, wi)
 	if code, body := w.decide(w.person("owner"), wi, "wait", ""); code != 200 {
 		t.Fatal(code, body)
@@ -108,7 +108,7 @@ func TestBeforePRAPersonsWaitNeverLoopsOnItsPair(t *testing.T) {
 	w.untilImplemented(wi)
 	w.gh.AdvanceBase("main", "Base moved")
 	w.mergeBaseConflictsAndItsIntegrationFails()
-	w.until("failed integration", func() bool { return w.escalationReason(wi) == "pull_request_conflict" })
+	w.until("failed integration", func() bool { return w.escalationReason(wi) == delivery.ReasonIntegrationFailed })
 	before := w.count(escalations, wi)
 	if code, body := w.decide(w.person("owner"), wi, "wait", ""); code != 200 {
 		t.Fatal(code, body)
@@ -351,7 +351,7 @@ func TestResolveConflictsRefusesWhatItCannotDo(t *testing.T) {
 		wi := w.reviewing()
 		w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
 		w.conflictWithMovedBase()
-		w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+		w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == delivery.ReasonIntegrationFailed })
 		if code, msg := resolve(w, w.person("owner"), w.prOf(wi)); code != 200 {
 			t.Fatalf("resolve: %d %s", code, msg)
 		}

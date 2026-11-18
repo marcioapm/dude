@@ -153,7 +153,7 @@ func TestBeforePRIntegrationFailureCanWaitForAPerson(t *testing.T) {
 	w.untilImplemented(wi)
 	w.gh.AdvanceBase("main", "Base moved")
 	w.mergeBaseConflictsAndItsIntegrationFails()
-	w.until("failed integration", func() bool { return w.escalationReason(wi) == "pull_request_conflict" })
+	w.until("failed integration", func() bool { return w.escalationReason(wi) == delivery.ReasonIntegrationFailed })
 	w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
 	w.lux.Decide = nil
 	branch := delivery.BranchFor(wi, 1)
@@ -467,8 +467,14 @@ func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
 			}
 			w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
 			w.conflictWithMovedBase()
-			w.until("conflict escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
-			_, e := w.escalationOf(wi)
+			// With tell nothing integrated: a conflict. Otherwise the
+			// integration Run crashed: its failure, not a conflict.
+			reason := delivery.ReasonIntegrationFailed
+			if tell {
+				reason = "pull_request_conflict"
+			}
+			w.until("integration escalation", func() bool { w.sync(); return w.escalationReason(wi) == reason })
+			raw, e := w.escalationOf(wi)
 			want := "retry wait stop"
 			if tell {
 				want = "wait stop"
@@ -476,18 +482,24 @@ func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
 			if strings.Join(e.Actions(), " ") != want {
 				t.Fatalf("actions %v, want %s", e.Actions(), want)
 			}
+			if !tell && (!strings.Contains(string(raw), `"cause": "run_failed"`) || strings.Contains(string(raw), `"error": ""`)) {
+				t.Fatalf("a failed Run's escalation names no cause or error: %s", raw)
+			}
 			attempts := w.count(integrationRuns, wi)
 			if tell && attempts != 0 || !tell && attempts != 1 {
 				t.Fatalf("attempts %d", attempts)
 			}
 			w.syncRounds(3)
 			if !tell {
+				before := w.count(escalations, wi)
 				if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
 					t.Fatal(code, body)
 				}
+				// The retry starts a second integration Run, which crashes
+				// too: escalated again as a failed Run.
 				w.until("one explicit retry", func() bool {
 					w.sync()
-					return w.escalationReason(wi) == "pull_request_conflict" && w.count(integrationRuns, wi) == 2
+					return w.count(escalations, wi) == before+1 && w.escalationReason(wi) == delivery.ReasonIntegrationFailed && w.count(integrationRuns, wi) == 2
 				})
 			}
 		})
@@ -995,7 +1007,7 @@ func TestAnIntegrationIsNotChargedToThePersonsFixBudget(t *testing.T) {
 		WHERE task_id = $1`, wi)
 	w.lux.Decide = func(map[string]any) fakelux.Behaviour { return fakelux.Behaviour{Crash: true} }
 	w.conflictWithMovedBase()
-	w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == "pull_request_conflict" })
+	w.until("the failed integration's escalation", func() bool { w.sync(); return w.escalationReason(wi) == delivery.ReasonIntegrationFailed })
 	if n := w.count(integrationRuns, wi); n != 1 {
 		t.Fatalf("integration Runs %d: the spent budget stopped it", n)
 	}
@@ -1009,7 +1021,7 @@ func TestAnIntegrationIsNotChargedToThePersonsFixBudget(t *testing.T) {
 	}
 	w.until("the retried integration", func() bool {
 		w.sync()
-		return w.count(integrationRuns, wi) == 2 && w.escalationReason(wi) == "pull_request_conflict"
+		return w.count(integrationRuns, wi) == 2 && w.escalationReason(wi) == delivery.ReasonIntegrationFailed
 	})
 	if w.count(budget, wi) != 1 {
 		t.Fatal("the retry changed the person's fix budget")
