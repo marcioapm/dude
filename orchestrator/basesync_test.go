@@ -492,7 +492,8 @@ func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
 			w.syncRounds(3)
 			if !tell {
 				before := w.count(escalations, wi)
-				if code, body := w.decide(w.person("owner"), wi, "retry", ""); code != 200 {
+				owner := w.person("owner")
+				if code, body := w.decide(owner, wi, "retry", ""); code != 200 {
 					t.Fatal(code, body)
 				}
 				// The retry starts a second integration Run, which crashes
@@ -503,7 +504,7 @@ func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
 				})
 				_, failed := w.escalationOf(wi)
 				mustExec(t, w.owner, `UPDATE runs SET keep = true, kept_until = now() + interval '1 day', lux_stop_reason = 'kept' WHERE id = $1`, failed.RunID())
-				if code, body := w.decide(w.person("owner"), wi, "stop", ""); code != 200 {
+				if code, body := w.decide(owner, wi, "stop", ""); code != 200 {
 					t.Fatal(code, body)
 				}
 				w.until("the failed integration to stop", func() bool { return w.taskStatus(wi) == "aborted" })
