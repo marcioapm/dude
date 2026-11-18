@@ -227,6 +227,7 @@ func newWorld(t *testing.T) *world {
 	w.syncer.WakeWindow = 50 * time.Millisecond
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
 	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: w.log,
+		Answers: &delivery.AnswerReconciler{DB: app, Forges: forges, Log: w.log},
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}

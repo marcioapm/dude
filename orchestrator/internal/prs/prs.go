@@ -57,6 +57,9 @@ type Syncer struct {
 	// outside pull requests: branch previews follow it
 	// (servers.Service.BranchEvent). Nil: nothing.
 	BranchMoved func(ctx context.Context, org, slug, branch string, deleted bool, receivedAt time.Time) error
+	// The in-flight answers of ended deliveries (#485), settled in each
+	// Reconcile pass. Nil: none.
+	Answers *delivery.AnswerReconciler
 }
 
 // DefaultCIGrace: how long CI may take to show up on a new head.
@@ -1062,8 +1065,14 @@ const endedPollWindow = 7 * 24 * time.Hour
 
 // Reconcile syncs open PRs, and recently ended ones, not looked at within
 // `every`: the backstop for deliveries GitHub never sent or dude never
-// received.
+// received. Each pass also settles the in-flight answers of ended
+// deliveries due (Answers), counting nothing for the loop.
 func (s *Syncer) Reconcile(ctx context.Context, every time.Duration) (int, error) {
+	if s.Answers != nil {
+		if _, err := s.Answers.Sweep(ctx); err != nil {
+			s.Log.Warn("reconciling ended deliveries' in-flight answers failed", "error", err)
+		}
+	}
 	type due struct{ ID, Org string }
 	var batch []due
 	if err := s.DB.InSystem(ctx, "pr-reconciler", func(tx pgx.Tx) error {

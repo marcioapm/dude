@@ -41,11 +41,16 @@ type FixerAnswers struct {
 	Unverified string
 	// The held answers settled, by event id: the wake's key.
 	ids []string
+	// A delivery's end (Cause CauseEnded): why it ended; the answers it
+	// withheld, unclaimed; and the ones a poster held then, left in flight
+	// for their poster or the reconciliation (answers_end.go).
+	Ended                  string
+	WithheldList, InFlight []string
 }
 
 // settled says something was done, so the conductor is told.
 func (f FixerAnswers) settled() bool {
-	return len(f.Posted)+len(f.Resolved)+len(f.Failed) > 0 || f.Withheld != ""
+	return len(f.Posted)+len(f.Resolved)+len(f.Failed) > 0 || f.Withheld != "" || f.Ended != ""
 }
 
 // Causes of a fixer's withheld answers (FixerAnswers.Cause).
@@ -157,7 +162,7 @@ func fixersToPostTx(ctx context.Context, tx pgx.Tx, org, taskID string) ([]fixer
 			(SELECT min(e.cursor) FROM events e WHERE e.run_id = r.id AND `+isCommitCreated("e")+`) AS published
 		FROM runs r WHERE r.task_id = $1 AND r.phase = 'fix' AND r.status IN ('completed', 'failed', 'aborted')
 		  AND EXISTS (SELECT 1 FROM events e WHERE e.run_id = r.id AND `+isCommitCreated("e")+`)
-		  AND EXISTS (SELECT 1 FROM events h WHERE h.run_id = r.id AND `+isHeld("h")+` AND NOT `+answerSettled("h")+`)
+		  AND EXISTS (SELECT 1 FROM events h WHERE h.run_id = r.id AND `+isHeld("h")+` AND NOT `+answerSettled("h")+` AND NOT `+reconciling("h")+`)
 		ORDER BY published, r.id`, taskID)
 	if err != nil {
 		return nil, err
@@ -188,6 +193,13 @@ func answerSettled(h string) string {
 		AND ` + settledAnswerID("s") + ` = ` + h + `.id)`
 }
 
+// reconciling (SQL) says the EvAnswerHeld event h was in flight when its
+// delivery ended: the reconciliation settles it, never a poster's new
+// claim (answers_end.go).
+func reconciling(h string) string {
+	return `EXISTS (SELECT 1 FROM answer_reconciliations x WHERE x.answer_id = ` + h + `.id)`
+}
+
 // settledAnswerID (SQL) is the held answer a settling record on events e
 // names: a pull_request.action's or EvAnswerFailed's answerId, a
 // chat.message's github.answerId.
@@ -212,7 +224,7 @@ type heldOf struct {
 // order made, then resolutions in the order made.
 func unsettledTx(ctx context.Context, tx pgx.Tx, runID string) ([]heldOf, error) {
 	rows, err := tx.Query(ctx, `SELECT h.id, h.payload FROM events h WHERE h.run_id = $1 AND `+isHeld("h")+`
-		AND NOT `+answerSettled("h")+`
+		AND NOT `+answerSettled("h")+` AND NOT `+reconciling("h")+`
 		ORDER BY h.payload->>'kind' = '`+answerResolve+`', h.cursor`, runID)
 	if err != nil {
 		return nil, err
@@ -249,12 +261,32 @@ func failAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf, why stri
 	if done, err := settledTx(ctx, tx, ref.RunID, h.ID); err != nil || done {
 		return err
 	}
+	if withheld {
+		// Never withheld while a poster may be writing it to GitHub: a
+		// fresh claim, or one the delivery's end left to reconcile. Its
+		// poster, or the reconciliation, settles it.
+		if busy, err := inFlightTx(ctx, tx, ref.RunID, h.ID); err != nil || busy {
+			return err
+		}
+	}
 	p := map[string]any{"answerId": h.ID, "kind": h.Kind, "error": why}
 	if withheld {
 		p["withheld"] = true
 	}
 	_, err := ledger.Append(ctx, tx, ref.Event(EvAnswerFailed, ledger.ActorSystem, p))
 	return err
+}
+
+// inFlightTx says held answer id may be being written to GitHub: its latest
+// claim is unreleased and inside its lease, or the delivery's end left it
+// to reconcile (answer_reconciliations).
+func inFlightTx(ctx context.Context, tx pgx.Tx, runID, id string) (bool, error) {
+	var busy bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM answer_reconciliations x WHERE x.answer_id = $2)
+		OR COALESCE((SELECT NOT COALESCE((c.payload->>'released')::bool, false) AND c.occurred_at > now() - make_interval(secs => $3)
+			FROM events c WHERE c.run_id = $1 AND c.event_type = '`+EvAnswerClaimed+`' AND `+settledAnswerID("c")+` = $2
+			ORDER BY c.cursor DESC LIMIT 1), false)`, runID, id, answerClaimLease.Seconds()).Scan(&busy)
+	return busy, err
 }
 
 // postFixer posts one fixer's unsettled answers, if its fix is on every
@@ -294,6 +326,11 @@ func (s *Store) postFixer(ctx context.Context, gh *forge.GitHub, f fixerToPost) 
 			err = s.resolveHeld(ctx, gh, f.ref, h, slugs, threads, &done)
 		} else {
 			err = s.postHeldReply(ctx, gh, f.ref, h, &done)
+		}
+		if errors.Is(err, errAnswerEnded) {
+			// Its delivery ended while a poster held it: the end's
+			// reconciliation settles it, never a new claim.
+			continue
 		}
 		if err != nil {
 			return s.unverified(ctx, f, done, err)
@@ -471,32 +508,93 @@ func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, 
 	return "", "", nil
 }
 
+// errAnswerEnded: the task's delivery ended after the held answer was made
+// (EvAnswersEnded): it is not claimed, nor written to GitHub. The end
+// withheld it, or, if a poster held it then, reconciles it
+// (answers_end.go).
+var errAnswerEnded = errors.New("the delivery ended: the answer is not claimed")
+
+// BeforeAnswerWrite is a test hook: called once a held answer is claimed
+// (its claim committed), with no transaction open, just before its GitHub
+// write (the reply, or the resolution). An error stands for the poster
+// crashing there.
+type BeforeAnswerWrite func(answerID string) error
+
+// claimAnswerTx claims held answer h for a GitHub write, under the task's
+// Chat lock: skip when it is settled already; errAnswerEnded when the
+// delivery ended after it was made (no claim, ever, after the end);
+// errAnswerBusy when another poster's claim is fresh; recovering when an
+// earlier claim lapsed or was released (its write may have happened).
+func (s *Store) claimAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf) (skip, recovering bool, err error) {
+	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
+		return false, false, err
+	}
+	if ok, err := settledTx(ctx, tx, ref.RunID, h.ID); err != nil || ok {
+		return ok, false, err
+	}
+	if why, err := endedAfterTx(ctx, tx, ref.TaskID, h.ID); err != nil {
+		return false, false, err
+	} else if why != "" {
+		return false, false, errAnswerEnded
+	}
+	var at time.Time
+	var released bool
+	err = tx.QueryRow(ctx, `SELECT occurred_at, COALESCE((payload->>'released')::bool, false) FROM events
+		WHERE run_id = $1 AND event_type = '`+EvAnswerClaimed+`' AND `+settledAnswerID("events")+` = $2 ORDER BY cursor DESC LIMIT 1`,
+		ref.RunID, h.ID).Scan(&at, &released)
+	switch {
+	case err == nil:
+		if !released && time.Since(at) < answerClaimLease {
+			return false, false, errAnswerBusy
+		}
+		recovering = true
+	case !errors.Is(err, pgx.ErrNoRows):
+		return false, false, err
+	}
+	return false, recovering, nil
+}
+
+// writeClaimTx records the claim on h (EvAnswerClaimed), after
+// BeforeAnswerClaim.
+func (s *Store) writeClaimTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf) error {
+	if s.BeforeAnswerClaim != nil {
+		if err := s.BeforeAnswerClaim(h.ID); err != nil {
+			return err
+		}
+	}
+	_, err := ledger.Append(ctx, tx, ref.Event(EvAnswerClaimed, ledger.ActorSystem, map[string]any{"answerId": h.ID}))
+	return err
+}
+
+// beforeWrite is BeforeAnswerWrite, if set.
+func (s *Store) beforeWrite(id string) error {
+	if s.BeforeAnswerWrite != nil {
+		if err := s.BeforeAnswerWrite(id); err != nil {
+			return crashed{err}
+		}
+	}
+	return nil
+}
+
+// releaseClaim gives a claim back after a transient GitHub failure, so a
+// later pass retries at once rather than past the lease.
+func (s *Store) releaseClaim(ctx context.Context, ref RunRef, h heldOf) {
+	_ = s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
+		_, err := ledger.Append(ctx, tx, ref.Event(EvAnswerClaimed, ledger.ActorSystem, map[string]any{"answerId": h.ID, "released": true}))
+		return err
+	})
+}
+
 // postHeldReply posts one held reply through the reply path's steps, its
-// claim and recovery as the package comment says.
+// claim and recovery as the package comment says. Its GitHub work is bound
+// to the claim's lease (claimed): past it, nothing more is written.
 func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef, h heldOf, done *FixerAnswers) error {
 	var p ReplyPost
 	var skip, recovering bool
 	var refused error
 	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
-		if err := LockChat(ctx, tx, ref.TaskID); err != nil {
-			return err
-		}
-		if ok, err := settledTx(ctx, tx, ref.RunID, h.ID); err != nil || ok {
-			skip = ok
-			return err
-		}
-		var at time.Time
-		var released bool
-		err := tx.QueryRow(ctx, `SELECT occurred_at, COALESCE((payload->>'released')::bool, false) FROM events
-			WHERE run_id = $1 AND event_type = '`+EvAnswerClaimed+`' AND `+settledAnswerID("events")+` = $2 ORDER BY cursor DESC LIMIT 1`,
-			ref.RunID, h.ID).Scan(&at, &released)
-		switch {
-		case err == nil:
-			if !released && time.Since(at) < answerClaimLease {
-				return errAnswerBusy
-			}
-			recovering = true
-		case !errors.Is(err, pgx.ErrNoRows):
+		var err error
+		if skip, recovering, err = s.claimAnswerTx(ctx, tx, ref, h); err != nil || skip {
 			return err
 		}
 		p, err = replyPostTx(ctx, tx, ref, gh, Reply{PR: fmt.Sprintf("%s#%d", h.Repo, h.Number), Text: h.Text, InReplyTo: h.InReplyTo},
@@ -511,39 +609,35 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 			return err
 		}
 		p.by, p.answerID = RoleFixer, h.ID
-		if s.BeforeAnswerClaim != nil {
-			if err := s.BeforeAnswerClaim(h.ID); err != nil {
-				return err
-			}
-		}
-		_, err = ledger.Append(ctx, tx, ref.Event(EvAnswerClaimed, ledger.ActorSystem, map[string]any{"answerId": h.ID}))
-		return err
+		return s.writeClaimTx(ctx, tx, ref, h)
 	}); err != nil || skip {
 		return err
 	}
 	if refused != nil {
 		return s.failed(ctx, ref, h, refused.Error(), done)
 	}
+	claimed, cancel := context.WithTimeout(ctx, answerClaimLease)
+	defer cancel()
 	var posted forge.Posted
 	var err error
 	if recovering {
 		// An earlier poster may have posted it: its comment is found by
 		// the answer's marker. A bounded but incomplete search is not
 		// evidence of absence, so fail closed and retain the claim.
-		posted, err = gh.FindAnswer(ctx, p.slug, p.number, h.ID, p.thread != 0)
+		posted, err = gh.FindAnswer(claimed, p.slug, p.number, h.ID, p.thread != 0)
 		if errors.Is(err, forge.ErrSearchIncomplete) {
 			return &Unverified{RunID: ref.RunID, Why: "answer marker search was inconclusive after the bounded page limit", Err: err}
 		}
 	}
 	if err == nil && posted.ID == "" {
-		posted, err = postReply(ctx, gh, p)
+		if err = s.beforeWrite(h.ID); err != nil {
+			return err
+		}
+		posted, err = postReply(claimed, gh, p)
 	}
 	if err != nil {
 		if forge.Transient(err) {
-			_ = s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
-				_, err := ledger.Append(ctx, tx, ref.Event(EvAnswerClaimed, ledger.ActorSystem, map[string]any{"answerId": h.ID, "released": true}))
-				return err
-			})
+			s.releaseClaim(ctx, ref, h)
 			return err
 		}
 		if forge.Refused(err) {
@@ -556,6 +650,9 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 			return crashed{err}
 		}
 	}
+	// Recorded whether or not the delivery ended meanwhile: GitHub took
+	// it, so it is posted, and a reconciliation the end opened for it is
+	// settled so.
 	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
 		if err := LockChat(ctx, tx, ref.TaskID); err != nil {
 			return err
@@ -563,8 +660,10 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 		if ok, err := settledTx(ctx, tx, ref.RunID, h.ID); err != nil || ok {
 			return err
 		}
-		_, err := RecordReplyTx(ctx, tx, p, posted)
-		return err
+		if _, err := RecordReplyTx(ctx, tx, p, posted); err != nil {
+			return err
+		}
+		return settleReconciliationTx(ctx, tx, ref, h.ID, reconciledPosted, "", "")
 	}); err != nil {
 		return err
 	}
@@ -572,9 +671,24 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 	return nil
 }
 
-// resolveHeld resolves one held thread through the action path's steps.
+// resolveHeld resolves one held thread through the action path's steps,
+// claimed as a reply is (claimAnswerTx), so the delivery's end never
+// withholds a resolution GitHub may be taking. Resolving a resolved thread
+// is a no-op, so a recovering poster needs no search.
 func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h heldOf, slugs map[string]string,
 	threads map[string][]*forge.ReviewThread, done *FixerAnswers) error {
+	var skip bool
+	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
+		var err error
+		if skip, _, err = s.claimAnswerTx(ctx, tx, ref, h); err != nil || skip {
+			return err
+		}
+		return s.writeClaimTx(ctx, tx, ref, h)
+	}); err != nil || skip {
+		return err
+	}
+	claimed, cancel := context.WithTimeout(ctx, answerClaimLease)
+	defer cancel()
 	slug := slugs[h.Repo]
 	// One read of the pull request's threads per pass, however many of
 	// them the fixer resolves (threads, by pull request).
@@ -582,7 +696,7 @@ func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h
 	all, read := threads[key]
 	var err error
 	if !read {
-		if all, err = gh.ReviewThreads(ctx, slug, h.Number); err == nil {
+		if all, err = gh.ReviewThreads(claimed, slug, h.Number); err == nil {
 			threads[key] = all
 		}
 	}
@@ -594,9 +708,16 @@ func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h
 		return s.failed(ctx, ref, h, fmt.Sprintf(rNotReviewThread, h.Thread, h.Repo, h.Number), done)
 	}
 	if err == nil && !t.Resolved {
-		err = gh.ResolveReviewThread(ctx, slug, t.ID)
+		if err = s.beforeWrite(h.ID); err != nil {
+			return err
+		}
+		err = gh.ResolveReviewThread(claimed, slug, t.ID)
 	}
 	if err != nil {
+		if forge.Transient(err) {
+			s.releaseClaim(ctx, ref, h)
+			return err
+		}
 		if forge.Refused(err) {
 			return s.failed(ctx, ref, h, err.Error(), done)
 		}
@@ -613,8 +734,10 @@ func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(head_sha, '') FROM pull_requests WHERE id = $1`, h.PRID).Scan(&c.head); err != nil {
 			return err
 		}
-		_, err := RecordPRActionTx(ctx, tx, c, PRActionDone{Thread: t.ID})
-		return err
+		if _, err := RecordPRActionTx(ctx, tx, c, PRActionDone{Thread: t.ID}); err != nil {
+			return err
+		}
+		return settleReconciliationTx(ctx, tx, ref, h.ID, reconciledPosted, "", "")
 	}); err != nil {
 		return err
 	}
@@ -623,16 +746,18 @@ func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h
 }
 
 // failed settles a held answer GitHub refused (or dude's records no longer
-// allow) as failed, and reports it.
+// allow) as failed, and reports it; a reconciliation the delivery's end
+// opened for it is settled failed.
 func (s *Store) failed(ctx context.Context, ref RunRef, h heldOf, why string, done *FixerAnswers) error {
-	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error { return failAnswerTx(ctx, tx, ref, h, why, false) }); err != nil {
+	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
+		if err := failAnswerTx(ctx, tx, ref, h, why, false); err != nil {
+			return err
+		}
+		return settleReconciliationTx(ctx, tx, ref, h.ID, reconciledFailed, "", why)
+	}); err != nil {
 		return err
 	}
-	id := h.InReplyTo
-	if h.Kind == answerResolve {
-		id = "resolving " + h.Thread
-	}
-	done.Failed, done.ids = append(done.Failed, id+": "+clip(oneLine(why), 120)), append(done.ids, h.ID)
+	done.Failed, done.ids = append(done.Failed, heldLabel(h)+": "+clip(oneLine(why), 120)), append(done.ids, h.ID)
 	return nil
 }
 
