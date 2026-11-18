@@ -1814,11 +1814,3 @@ Ask one thing, in at most %d bytes
 
 dude does not know who opened pull request #%d, so it cannot ask them: ask the owner (ask_person) instead
 
-## refusals/delivery/pr-actions/fix-not-on-pull-request-yet-2
-
-Your fix is not on the pull request yet, and the thread was not resolved. Finish the checks and publication; the conductor answers and resolves after the published fix is verified. Name thread %s in your final report
-
-## refusals/delivery/reply/fix-not-on-pull-request-yet
-
-Your fix is not on the pull request yet, and nothing was posted. Finish the checks and publication; the conductor answers and resolves after the published fix is verified. Put the answer you meant for %s in your final report
-

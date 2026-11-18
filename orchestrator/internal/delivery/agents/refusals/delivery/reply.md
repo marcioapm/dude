@@ -2,7 +2,6 @@
 
 {{- define "refusals/delivery/reply/you-reply-only-pull-request-feedback"}}you reply only to the pull request feedback you were given, and you were given none{{end}}
 
-{{- define "refusals/delivery/reply/fix-not-on-pull-request-yet"}}Your fix is not on the pull request yet, and nothing was posted. Finish the checks and publication; the conductor answers and resolves after the published fix is verified. Put the answer you meant for %s in your final report{{end}}
 
 {{- define "refusals/delivery/reply/in-reply-must-be-one-comments"}}in_reply_to must be one of the comments in your feedback: %s{{end}}
 

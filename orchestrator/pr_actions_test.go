@@ -535,12 +535,12 @@ func TestRefusedReviewRequestsSpendTheBudget(t *testing.T) {
 	}
 }
 
-// A fixer answering pull request feedback is still held to its own
-// batch: another thread or comment is refused as not its own, and asking
-// for reviews is not its to do. Its own thread and comment, named while
-// it runs, are refused too (#485): its fix is not on the pull request
-// yet, and the conductor answers once the published fix is verified.
-// Nothing reaches GitHub, through later syncs too.
+// A fixer answering pull request feedback is held to its own batch:
+// another thread or comment is refused as not its own, and asking for
+// reviews is not its to do. Its own thread and comment, named while it
+// runs, are captured, not posted (#485): each answers held, is recorded on
+// its Run with what to post, and nothing reaches GitHub, not even a read,
+// however many syncs pass.
 func TestAFixerResolvesOnlyTheThreadsItWasSent(t *testing.T) {
 	w := newWorld(t)
 	task := w.reviewing()
@@ -554,57 +554,74 @@ func TestAFixerResolvesOnlyTheThreadsItWasSent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	act := func(in delivery.PRAction) error {
+	act := func(in delivery.PRAction) (map[string]any, error) {
 		var c delivery.PRActionCheck
 		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
 			c, err = delivery.CheckPRActionTx(context.Background(), tx, ref, gh, in)
 			return err
 		}); err != nil {
-			return err
+			return nil, err
 		}
 		done, err := delivery.DoPRAction(context.Background(), gh, c)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-			_, err := delivery.RecordPRActionTx(context.Background(), tx, c, done)
+		var out map[string]any
+		return out, w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+			out, err = delivery.RecordPRActionTx(context.Background(), tx, c, done)
 			return err
 		})
 	}
-	if err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", theirs)}); err == nil ||
+	w.sync()
+	requests := len(w.gh.Requests())
+	if _, err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", theirs)}); err == nil ||
 		!strings.Contains(err.Error(), "not a thread in your feedback") {
 		t.Errorf("resolving another thread: %v", err)
 	}
-	if err := act(delivery.PRAction{Action: delivery.ActionRequestReview, PR: "1", Logins: []string{"ana"}}); err == nil ||
+	if _, err := act(delivery.PRAction{Action: delivery.ActionRequestReview, PR: "1", Logins: []string{"ana"}}); err == nil ||
 		!strings.Contains(err.Error(), "not yours to do") {
 		t.Errorf("a fixer asking for reviews: %v", err)
 	}
-	if err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", mine)}); err == nil ||
-		!strings.Contains(err.Error(), "Your fix is not on the pull request yet") {
-		t.Errorf("resolving its own thread before its fix is published: %v", err)
+	out, err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", mine)})
+	if err != nil || out["held"] != delivery.AnswerHeldResolve {
+		t.Errorf("resolving its own thread before its fix is published: %v %v", out, err)
 	}
 
-	// Its replies: another comment is not its own; its own is refused
-	// until the conductor verifies the published fix.
+	// Its replies: another comment is not its own; its own is held.
 	lines := len(w.gh.Pull(1).LineComments)
-	reply := func(to int64) error {
+	reply := func(to int64) (delivery.Replied, error) {
 		var p delivery.ReplyPost
 		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
 			p, err = delivery.CheckReplyTx(context.Background(), tx, ref, gh,
 				delivery.Reply{PR: "1", Text: "Done: it says why now.", InReplyTo: fmt.Sprintf("line-comment-%d", to)})
 			return err
 		}); err != nil {
-			return err
+			return delivery.Replied{}, err
 		}
-		_, err := delivery.PostReply(context.Background(), gh, p)
-		return err
+		posted, err := delivery.PostReply(context.Background(), gh, p)
+		if err != nil {
+			return delivery.Replied{}, err
+		}
+		var r delivery.Replied
+		return r, w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+			r, err = delivery.RecordReplyTx(context.Background(), tx, p, posted)
+			return err
+		})
 	}
-	w.sync()
-	if err := reply(theirs); err == nil || !strings.Contains(err.Error(), "one of the comments in your feedback") {
+	if _, err := reply(theirs); err == nil || !strings.Contains(err.Error(), "one of the comments in your feedback") {
 		t.Errorf("replying outside its batch: %v", err)
 	}
-	if err := reply(mine); err == nil || !strings.Contains(err.Error(), "Your fix is not on the pull request yet") {
-		t.Errorf("replying in its batch before its fix is published: %v", err)
+	if r, err := reply(mine); err != nil || r.Held != delivery.AnswerHeldReply || r.URL != "" {
+		t.Errorf("replying in its batch before its fix is published: %+v %v", r, err)
+	}
+	if got := w.gh.Requests()[requests:]; len(got) != 0 {
+		t.Errorf("GitHub was asked %v while the fixer's calls were checked", got)
+	}
+	// Each captured, in order, with what dude posts later.
+	if got := w.ids(`SELECT payload->>'kind' || ' ' || COALESCE(payload->>'inReplyTo', payload->>'thread') || ' ' || COALESCE(payload->>'text', '')
+		FROM events WHERE run_id = 'run_fixer' AND event_type = $1 ORDER BY cursor`, delivery.EvAnswerHeld); strings.Join(got, "|") !=
+		fmt.Sprintf("resolve_thread line-comment-%d |reply line-comment-%d Done: it says why now.", mine, mine) {
+		t.Errorf("captured %q", got)
 	}
 	w.syncs(3)
 	if n := len(w.gh.Pull(1).LineComments); n != lines {

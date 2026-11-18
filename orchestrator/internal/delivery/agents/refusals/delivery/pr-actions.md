@@ -6,7 +6,6 @@
 
 {{- define "refusals/delivery/pr-actions/you-resolve-only-review-threads-in"}}you resolve only the review threads in your feedback, and it has none{{end}}
 
-{{- define "refusals/delivery/pr-actions/fix-not-on-pull-request-yet-2"}}Your fix is not on the pull request yet, and the thread was not resolved. Finish the checks and publication; the conductor answers and resolves after the published fix is verified. Name thread %s in your final report{{end}}
 
 {{- define "refusals/delivery/pr-actions/not-pull-request-your-task-you"}}%s is not a pull request of your task: you act only on your task's (pull_requests lists them){{end}}
 
