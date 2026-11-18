@@ -544,7 +544,9 @@ type shellCall struct {
 }
 
 // readAnnotation splits a report's trailing "(DIR)", "make test (api)",
-// into the command and the directory; ok false with none.
+// into the command and the directory; ok false with none. Whether the
+// command has a cd of its own too is shellOf's to say, on the lexed
+// command.
 func readAnnotation(s string) (cmd, dir string, ok bool) {
 	if !strings.HasSuffix(s, ")") {
 		return "", "", false
@@ -555,7 +557,7 @@ func readAnnotation(s string) (cmd, dir string, ok bool) {
 	}
 	dir = s[open+1 : len(s)-1]
 	cmd = strings.TrimRight(s[:open], " \t")
-	if cmd == "" || strings.HasPrefix(cmd, "cd ") || !plainDir(dir) {
+	if cmd == "" || !plainDir(dir) {
 		return "", "", false
 	}
 	return cmd, path.Clean(dir), true
@@ -564,18 +566,24 @@ func readAnnotation(s string) (cmd, dir string, ok bool) {
 // shellOf reads command under shellCall's grammar; reported reads a
 // report's: with its directory annotation, without PIPE or ECHO. Only
 // leading and trailing spaces, tabs and newlines are trimmed: nothing
-// inside is collapsed before it is read.
+// inside is collapsed before it is read. A report that names a directory
+// both ways ("cd api && make test (web)", however spaced, after a leading
+// set or not) is not read: it names two.
 func shellOf(command string, reported bool) shellCall {
 	s := strings.Trim(command, " \t\n")
-	annotation := ""
+	annotation, annotated := "", false
 	if reported {
 		if cmd, dir, ok := readAnnotation(s); ok {
-			s, annotation = cmd, dir
+			s, annotation, annotated = cmd, dir, true
 		}
 	}
 	toks, why := shellLex(s)
 	c := parseCall(toks, why, reported)
-	if c.dir == "" {
+	switch {
+	case !annotated || c.why != "":
+	case c.dir != "" || slices.ContainsFunc(toks, func(t shTok) bool { return plainWord(t, "cd") }):
+		c.why = "it names a directory twice, with a cd and an annotation"
+	default:
 		c.dir = annotation
 	}
 	return c

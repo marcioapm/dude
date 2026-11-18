@@ -100,6 +100,11 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	// exits 0.
 	{"&> under dash", "false", "false &> /dev/null"},
 	{"&>> under dash", "false", "false &>> /tmp/log"},
+	// A report naming two directories, a cd and an annotation, is backed
+	// by no call: here the call ran in api, the annotation says web.
+	{"a tab after cd, annotated with another directory", "cd\tapi && make test (web)", "cd api && make test"},
+	{"a pipefail set and a cd, annotated with another directory", "set -o pipefail && cd api && make test (web)", "cd api && make test"},
+	{"set -euo pipefail and a cd, annotated with another directory", "set -euo pipefail; cd api && make test (web)", "set -euo pipefail; cd api && make test"},
 }
 
 // unreadReports are reported commands dude does not read (a comment, a
