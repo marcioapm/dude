@@ -26,6 +26,11 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	{"a comment hiding the check", "false", "set -o pipefail # ignored; false | true"},
 	{"a comment after the command", "false", "true # false"},
 	{"a comment hiding the command after a cd", "false", "cd #x && false"},
+	{"env cannot execute cd", "env FOO=1 cd .", "FOO=1 cd ."},
+	{"env cannot execute export", "env FOO=1 export BAR=1", "FOO=1 export BAR=1"},
+	{"env cannot execute colon", "env FOO=1 :", "FOO=1 :"},
+	{"assignment is not env resolution", "FOO=1 custom_check", "env FOO=1 custom_check"},
+	{"background status echo", "make test", "make test & echo exit=$?"},
 	// The environment is part of what ran.
 	{"another PATH", "npx jest", "PATH=/tmp/fake npx jest"},
 	{"an assignment the call lacks", "NODE_ENV=production npx jest", "npx jest"},
