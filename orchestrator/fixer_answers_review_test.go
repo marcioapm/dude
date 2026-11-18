@@ -560,3 +560,31 @@ func TestAFixersAnswerIsNotTakenForSomeoneElsesMarkedComment(t *testing.T) {
 		t.Errorf("recorded %q", recorded)
 	}
 }
+
+// Perf F4: a fixer resolving several threads of one pull request has its
+// threads read from GitHub once in the pass, not once per resolution.
+func TestAFixersResolutionsReadThePullRequestsThreadsOnce(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	a.published(ref, a.head(), "completed")
+	from := len(a.w.gh.Requests())
+	if err := a.step(); err != nil {
+		t.Fatal(err)
+	}
+	if f, s := a.resolved(); !f || !s {
+		t.Fatalf("resolved %v %v; want both threads", f, s)
+	}
+	// fakegithub logs a GraphQL request by repository (the threads' read,
+	// owner and name in its variables); a resolution names a thread node
+	// only, and is in the write log instead.
+	reads := 0
+	for _, r := range a.w.gh.Requests()[from:] {
+		if strings.HasSuffix(r, "/graphql") {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Errorf("the pull request's threads read %d times for two resolutions, want once", reads)
+	}
+}

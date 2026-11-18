@@ -84,7 +84,7 @@ type ReplyPost struct {
 	// A fixer's reply, held (EvAnswerHeld, its event id): nothing is posted.
 	heldID string
 	// The answer dude posts for a fixer: its EvAnswerHeld id, also marked
-	// in the comment's body (answerMarker) so a post whose record was lost
+	// in the comment's body (forge.AnswerMarker) so a post whose record was lost
 	// is found again.
 	answerID string
 }

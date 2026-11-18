@@ -287,10 +287,11 @@ func (s *Store) postFixer(ctx context.Context, gh *forge.GitHub, f fixerToPost) 
 	} else if why != "" {
 		return s.withhold(ctx, f, held, why, cause)
 	}
+	threads := map[string][]*forge.ReviewThread{}
 	for _, h := range held {
 		var err error
 		if h.Kind == answerResolve {
-			err = s.resolveHeld(ctx, gh, f.ref, h, slugs, &done)
+			err = s.resolveHeld(ctx, gh, f.ref, h, slugs, threads, &done)
 		} else {
 			err = s.postHeldReply(ctx, gh, f.ref, h, &done)
 		}
@@ -556,10 +557,23 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 }
 
 // resolveHeld resolves one held thread through the action path's steps.
-func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h heldOf, slugs map[string]string, done *FixerAnswers) error {
+func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h heldOf, slugs map[string]string,
+	threads map[string][]*forge.ReviewThread, done *FixerAnswers) error {
 	slug := slugs[h.Repo]
-	lc := forge.LineCommentID(h.Thread)
-	t, err := gh.ThreadOfComment(ctx, slug, h.Number, lc)
+	// One read of the pull request's threads per pass, however many of
+	// them the fixer resolves (threads, by pull request).
+	key := fmt.Sprintf("%s#%d", h.Repo, h.Number)
+	all, read := threads[key]
+	var err error
+	if !read {
+		if all, err = gh.ReviewThreads(ctx, slug, h.Number); err == nil {
+			threads[key] = all
+		}
+	}
+	var t *forge.ReviewThread
+	if err == nil {
+		t = forge.ThreadOf(all, forge.LineCommentID(h.Thread))
+	}
 	if err == nil && t == nil {
 		return s.failed(ctx, ref, h, fmt.Sprintf(rNotReviewThread, h.Thread, h.Repo, h.Number), done)
 	}

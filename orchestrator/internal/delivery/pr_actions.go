@@ -116,7 +116,7 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		}
 	} else {
 		// A fixer: scoped to its batch's line comments, from dude's own
-		// records, before any GitHub read; then held (holdResolveTx).
+		// records, before any GitHub read; then held (holdAnswerTx).
 		if caller.ended() {
 			return c, refusef(rYourRunActsOnNothing, caller.status)
 		}

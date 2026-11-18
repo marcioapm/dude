@@ -20,33 +20,49 @@ import (
 // events, in order, are the order it made them.
 //
 // Once the fixer's fix is published (git.commit_created on its Run) and its
-// Run has ended, the delivery's step waiting on it (awaitPRFix) posts them
-// (Store.PostFixerAnswers): its replies in the order it made them, then its
-// threads resolved, each through the reply and action paths' own steps,
-// and only when every pull request they are on is open and its head, read
-// from GitHub, contains the fixer's published commit (ancestry, not
-// equality). A fixer that never published posts nothing, ever. One whose
-// fix a force-push dropped, or whose pull request ended, posts nothing:
-// its answers are withheld, and its conductor told. Fixers post in the
-// order they published. When the task has a live conductor it is woken
-// with what was posted, resolved, failed or withheld (WakeRound,
-// answersLine), and may add to or correct the answers.
+// Run has ended, the delivery's steps after it post them
+// (Store.PostFixerAnswers): awaitPRFix, first thing once the fixer has
+// ended, and movedOnPR (a retry, prFixDone's fix whose loop just ended)
+// unless awaitPRFix posted them already in the same step. Its replies in
+// the order it made them, then its threads resolved, each through the
+// reply and action paths' own steps, and only when every pull request they
+// are on is open and its head, read from GitHub, contains the fixer's
+// published commit in that repository (ancestry, not equality). A fixer
+// that never published posts nothing, ever. Fixers post in the order they
+// published.
+//
+// Withheld (EvAnswerFailed, withheld: final; the conductor told) only on
+// positive evidence the fix is not there: the pull request not open, the
+// fixer having published nothing to its repository, its branch gone, or
+// GitHub's compare saying the head does not contain the commit. Answers
+// dude cannot check (GitHub refusing a read, no GitHub, a database error)
+// stay held for later passes, the reason recorded (EvAnswerUnverified),
+// until answerVerifyBound past the fixer's end withholds them. Posting
+// never fails its step: GitHub down or another poster at work is a Wait,
+// anything else is logged and the step goes on (fixerAnswers). A delivery
+// that ends — merged, closed, stopped — withholds what is still held,
+// with no GitHub call (answers_end.go). So every held answer is settled.
+// When the task has a live conductor it is woken with what was posted,
+// resolved, failed or withheld (WakeRound, answersLine, keyed by a hash of
+// the answers settled), and may add to or correct the answers.
 //
 // Exactly once: each answer is settled by one record on the fixer's Run,
 // its chat.message (a reply) or pull_request.action (a resolution) naming
 // its answerId, or an EvAnswerFailed. Under the task's Chat lock, a reply
 // is claimed (EvAnswerClaimed) before GitHub is called, and no transaction
 // is held across GitHub: a second poster meanwhile finds the claim fresh
-// and leaves it (answerBusy). The posted comment carries the answer's id
+// and leaves it (errAnswerBusy). The posted comment carries the answer's id
 // (forge.AnswerMarker), so a poster that finds an earlier claim — one
 // that crashed between GitHub's answer and the record, or whose answer was
-// lost — looks for that comment first (forge.FindAnswer) and records it
-// rather than posting again. A claim older than answerClaimLease is taken
-// over: its holder is gone. A resolution needs no claim: resolving a
-// resolved thread is a no-op, and its record is written once, under the
-// lock. GitHub down or limiting (forge.Transient) leaves the answer to the
-// step's retry; GitHub refusing it (a deleted comment, forge.Refused) fails
-// it, recorded and reported.
+// lost — looks for that comment first (forge.FindAnswer, dude's own
+// comments only, bounded) and records it rather than posting again. A
+// claim older than answerClaimLease is taken over: its holder is taken
+// for gone (posters of a task are also serialised by its delivery's
+// workflow lease; the record is re-checked under the lock, so one that
+// outlived its lease records nothing twice). A resolution needs no claim:
+// resolving a resolved thread is a no-op, and its record is written once,
+// under the lock. GitHub refusing an answer itself (a deleted comment,
+// forge.Refused) fails that answer, recorded and reported.
 
 // Ledger events of a fixer's held answers, on its Run.
 const (
