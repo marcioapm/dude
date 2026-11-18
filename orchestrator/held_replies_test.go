@@ -2,7 +2,9 @@ package orchestrator_test
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/agenttools"
@@ -69,18 +71,35 @@ func TestAFixersRepliesWaitForItsPush(t *testing.T) {
 		t.Errorf("%d calls answered queued, want 2", n)
 	}
 
+	// Bound even a broken sweep that keeps claiming the same reply: let
+	// its first post through, then stop duplicate attempts with a transient
+	// error. Otherwise PostHeld can loop inside pump, beyond until's deadline.
+	var attempts atomic.Int32
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, fmt.Sprintf("/comments/%d/replies", own)) {
+				if attempts.Add(1) > 1 {
+					return http.StatusBadGateway
+				}
+			}
+			return 0
+		}
+	})
 	w.lux.HoldPushes = false
 	w.lux.ReleasePushes()
-	w.until("the reply and the resolution posted", func() bool {
-		n, resolved := w.fixerReplies(own)
-		return n == 1 && resolved
+	w.until("the first reply posted", func() bool {
+		n, _ := w.fixerReplies(own)
+		return n >= 1
 	})
 	w.syncs(3)
 	w.until("the fixer's work on the pull request", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fixer) == 1
 	})
-	if n, _ := w.fixerReplies(own); n != 1 {
-		t.Errorf("%d replies posted, want one", n)
+	if n, resolved := w.fixerReplies(own); n != 1 || !resolved {
+		t.Errorf("%d replies posted, resolved %v; want one reply and a resolution", n, resolved)
+	}
+	if n := attempts.Load(); n != 1 {
+		t.Errorf("%d reply post attempts, want exactly one through later syncs", n)
 	}
 	if got := w.ids(`SELECT CASE WHEN event_type = 'chat.message' THEN 'reply' ELSE payload->>'action' END FROM events
 		WHERE run_id = $1 AND (event_type = 'chat.message' AND payload->>'by' = 'fixer' OR event_type = 'pull_request.action')
