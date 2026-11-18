@@ -193,6 +193,14 @@ export function escalationWords(e: Escalation): EscalationWords {
         runId,
       };
     }
+    case "integration_failed": {
+      // The Run merging the base in failed: no conflict was found hard.
+      const which = num("number") ? `pull request ${typeof d.repo === "string" && d.repo ? `${d.repo} #${num("number")}` : `#${num("number")}`}`
+        : `the branch in ${typeof d.repo === "string" && d.repo ? d.repo : "the repository"}`;
+      const base: Words = typeof d.base === "string" && d.base ? [{ mono: d.base }] : ["its base"];
+      const parts: Words = ["The base merge Run failed", error === "." ? "" : error, ` while merging `, ...base, ` into ${which}. Nothing says the merge is hard: try again once its cause is gone, or wait on it.`];
+      return { short: "Base merge Run failed", sentence: plainWords(parts), parts, runId };
+    }
     case "pull_request_moved": {
       const which = typeof d.repo === "string" && d.repo ? `${d.repo}${d.number ? ` #${num("number")}` : ""}` : `#${num("number")}`;
       // A cause is GitHub's refusal to move or merge the fix in; without one, a person pushed.
