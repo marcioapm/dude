@@ -64,9 +64,6 @@ type PRActionCheck struct {
 	// The line comments a fixer's batch names: the only threads it may
 	// resolve. nil for the conductor, which may resolve any of the PR's.
 	batch []int64
-	// A fixer's resolution: read on GitHub, then held until its fix is
-	// on the pull request (held.go).
-	held bool
 }
 
 // prActors are who may take which action: the conductor all, a fixer
@@ -125,7 +122,6 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		if len(c.batch) == 0 {
 			return c, refuseText(rYouResolveOnlyReviewThreadsIn)
 		}
-		c.held = true
 	}
 	owner, repo, number, err := parsePR(in.PR)
 	if err != nil {
@@ -331,7 +327,7 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 		if c.batch != nil && !slices.ContainsFunc(t.CommentIDs, func(id int64) bool { return slices.Contains(c.batch, id) }) {
 			return done, refusef(rNotThreadInYourFeedbackYou, c.thread)
 		}
-		if !t.Resolved && !c.held {
+		if !t.Resolved {
 			if err := gh.ResolveReviewThread(ctx, c.slug, t.ID); err != nil {
 				return done, ghRefusal(err)
 			}
@@ -403,10 +399,6 @@ func RecordPRActionTx(ctx context.Context, tx pgx.Tx, c PRActionCheck, done PRAc
 		payload["logins"], payload["refused"] = done.Asked, db.NonNil(done.Refused)
 	case ActionResolveThread:
 		payload["thread"] = done.Thread
-		if c.held {
-			return map[string]any{"queued": HeldQueued, "thread": done.Thread}, holdTx(ctx, tx, ActionResolveThread, heldAction{
-				Ref: c.ref, Repo: c.repo, Slug: c.slug, Number: c.number, PRID: c.prID, ThreadID: done.Thread})
-		}
 	case ActionRerunChecks:
 		payload["rerun"] = done.Rerun
 		if done.Running > 0 {

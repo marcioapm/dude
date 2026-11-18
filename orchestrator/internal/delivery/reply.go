@@ -33,8 +33,6 @@ type Replied struct {
 	Number    int    `json:"number"`
 	CommentID string `json:"commentId"`
 	URL       string `json:"url"`
-	// A fixer's reply, held for its fix (held.go): not posted yet.
-	Queued string `json:"queued,omitempty"`
 }
 
 // ReplyPost is a reply checked and not yet posted.
@@ -58,10 +56,6 @@ type Replied struct {
 // records its own message, possibly in a different order from GitHub's.
 // Allowed whoever decides, and on a task that ended. GitHub refusing it is
 // the conductor's to hear (a Refusal), and nothing is recorded.
-//
-// A fixer's reply in its own batch is checked the same way and then held,
-// not posted: it goes to GitHub once the fixer's fix is on the pull
-// request (held.go).
 type ReplyPost struct {
 	ref       RunRef
 	repo      string
@@ -75,8 +69,6 @@ type ReplyPost struct {
 	body   string
 	// Who posted it: the conductor, or a fixer in its own batch.
 	by string
-	// A fixer's: held until its fix is on the pull request (held.go).
-	held bool
 }
 
 // actingRun is the Run calling a PR tool: who it is, its status, and the
@@ -166,7 +158,7 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	}
 	p := ReplyPost{ref: ref, repo: repo, number: number, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo), by: "conductor"}
 	if batch != nil {
-		p.by, p.held = "fixer", true
+		p.by = "fixer"
 	}
 	var author, said string
 	if p.inReplyTo != "" {
@@ -202,9 +194,6 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 // transaction open.
 func PostReply(ctx context.Context, gh *forge.GitHub, p ReplyPost) (forge.Posted, error) {
 	var posted forge.Posted
-	if p.held {
-		return posted, nil
-	}
 	var err error
 	if p.thread != 0 {
 		posted, err = gh.ReplyToLineComment(ctx, p.slug, p.number, p.thread, p.body)
@@ -220,10 +209,6 @@ func PostReply(ctx context.Context, gh *forge.GitHub, p ReplyPost) (forge.Posted
 // RecordReplyTx is step 3: the posted reply in Chat, on the Run that
 // posted it, whether or not it is still the task's conductor.
 func RecordReplyTx(ctx context.Context, tx pgx.Tx, p ReplyPost, posted forge.Posted) (Replied, error) {
-	if p.held {
-		return Replied{Repo: p.repo, Number: p.number, Queued: HeldQueued}, holdTx(ctx, tx, "reply", heldAction{Ref: p.ref,
-			Repo: p.repo, Slug: p.slug, Number: p.number, Text: p.text, Body: p.body, InReplyTo: p.inReplyTo, Thread: p.thread})
-	}
 	g := map[string]any{"repo": p.repo, "number": p.number, "feedbackId": posted.ID, "url": posted.URL}
 	if p.inReplyTo != "" {
 		g["inReplyTo"] = p.inReplyTo

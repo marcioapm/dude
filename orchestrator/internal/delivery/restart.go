@@ -277,11 +277,5 @@ func FailUnreadTx(ctx context.Context, tx pgx.Tx, r RunRef, at time.Time, why st
 	if err := tx.QueryRow(ctx, `SELECT status::text FROM runs WHERE id = $1`, r.RunID).Scan(&status); err != nil {
 		return err
 	}
-	// Its held replies and resolutions go out only with its fix (held.go).
-	if status != "completed" {
-		if err := DropHeldTx(ctx, tx, r); err != nil {
-			return err
-		}
-	}
 	return FeedbackRunEndedTx(ctx, tx, r.RunID, status == "completed")
 }
