@@ -266,10 +266,11 @@ func (s *Syncer) parsedChecks(ctx context.Context, r phaseRun) (d checksDecision
 func (d checksDecision) sendBack() string {
 	failed := d.unpassed()
 	// Each field one line: evidence and reasons are free text, and the
-	// send-back's lines are one per check.
+	// send-back's lines are one per check. dude's reason keeps its runs of
+	// spaces: an unbacked hint quotes recorded commands (%q) as they ran.
 	for i, v := range failed {
 		failed[i].Command, failed[i].Reason = oneLine(v.Command), oneLine(v.Reason)
-		failed[i].JudgeReason = oneLine(v.JudgeReason)
+		failed[i].JudgeReason = delivery.FlatLine(v.JudgeReason)
 	}
 	passable := len(d.bases) > 0
 	return checksText.Render(struct {

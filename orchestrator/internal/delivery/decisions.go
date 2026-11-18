@@ -1461,6 +1461,11 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 		limit = workflowLineChars
 	}
 	text := clip(oneLine(line), limit)
+	if kind == WakeChecks {
+		// A checks wake quotes recorded commands (%q), whose runs of
+		// spaces are part of what ran: only its line breaks go.
+		text = clip(FlatLine(line), limit)
+	}
 	if kind == "escalation" && strings.HasSuffix(key, ":decided") {
 		// A person's words are not a machine-generated fact to summarize.
 		text = line

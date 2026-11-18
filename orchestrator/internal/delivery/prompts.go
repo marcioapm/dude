@@ -184,6 +184,13 @@ func (in PromptInput) task() string {
 // oneLine keeps a decision on its line: its own line breaks become spaces.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
+var lineBreaks = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
+// FlatLine keeps s on one line as oneLine does, but collapses nothing
+// else: its line breaks become spaces, and runs of spaces or tabs stay,
+// as a quoted command's do.
+func FlatLine(s string) string { return strings.TrimSpace(lineBreaks.Replace(s)) }
+
 // What each reviewer flavour looks for. Narrow on purpose: a reviewer told to
 // "look for problems" finds the same generic ones every time, and one told to
 // look along a specific axis reads the diff differently — which is the reason

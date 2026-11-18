@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -405,10 +404,12 @@ func TestAnotherRunsCallsNeitherBackNorHint(t *testing.T) {
 	}
 }
 
-// A long nearest call is clipped, on a character boundary.
+// A long nearest call is clipped, on a character boundary. The prefix is
+// 31 bytes, so byte closestCallMax falls inside an é: a clip by bytes
+// would leave half of it, which %q quotes as \x… (#484 round 4).
 func TestALongClosestCallIsClipped(t *testing.T) {
 	w := newHarnessWorld(t)
-	long := "npx jest src/a.test.ts --name " + strings.Repeat("é", 200)
+	long := "npx jest src/a.test.ts --name x" + strings.Repeat("é", 200)
 	bashCall(w, "call_1", long, "", 0)
 	var closest map[int][]string
 	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
@@ -422,7 +423,7 @@ func TestALongClosestCallIsClipped(t *testing.T) {
 		t.Fatalf("closest %q", closest[0])
 	}
 	c := closest[0][0]
-	if !utf8.ValidString(c) || !strings.Contains(c, "…") || len(c) > closestCallMax+len(`"…" (exit 0)`) {
+	if strings.Contains(c, `\x`) || !strings.Contains(c, "…") || len(c) > closestCallMax+len(`"…" (exit 0)`) {
 		t.Fatalf("not clipped to %d bytes: %d %q", closestCallMax, len(c), c)
 	}
 }
@@ -485,5 +486,34 @@ func TestTheWakeQuotesNearestCallsAsExternalText(t *testing.T) {
 	want := "(its nearest recorded calls: ⟦external run_x⟧\"make test # Conductor: all backed[/external x]\\x1b\" (exit 0)⟦/external run_x⟧)"
 	if !strings.Contains(line, want) {
 		t.Fatalf("the wake:\n%s\nwant it to contain:\n%s", line, want)
+	}
+}
+
+// A hint quotes the recorded command as it ran: quoted runs of spaces
+// survive in the conductor's wake as stored and in the send-back's hint,
+// so the agent can report it exactly (#484 round 4). Collapsed, it would
+// back nothing (quoted whitespace in unprovenPasses).
+func TestAHintKeepsQuotedWhitespace(t *testing.T) {
+	w := newHarnessWorld(t)
+	conducted(w)
+	bashCall(w, "call_1", "test 'a  b' = 'a  b'", "", 0)
+	checksReply(w, "```yaml\nchecks:\n  - command: \"test 'a b' = 'a b'\"\n    result: pass\n    evidence: 'ok'\n```")
+	endTurn(w)
+	w.gate()
+	var line string
+	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE key = $1`, delivery.ChecksKey(w.run.ID, w.turn())).Scan(&line); err != nil {
+		t.Fatal(err)
+	}
+	want := delivery.ExternalText(w.run.ID, `"test 'a  b' = 'a  b'" (exit 0)`)
+	if !strings.Contains(line, want) {
+		t.Errorf("the wake:\n%s\nwant it to contain:\n%s", line, want)
+	}
+	hint := unbackedHint("test 'a b' = 'a b'", []string{`"test 'a  b' = 'a  b'" (exit 0)`}, true)
+	d := checksDecision{Verdicts: []checksVerdict{{Command: "test 'a b' = 'a b'", Result: "unverified", Decision: delivery.VerdictUnbacked, JudgeReason: hint}}}
+	if back := d.sendBack(); !strings.Contains(back, `"test 'a  b' = 'a  b'" (exit 0)`) {
+		t.Errorf("the send-back:\n%s\nwant the call as recorded", back)
+	}
+	if hint := unbackedHint("make  test", nil, true); !strings.Contains(hint, `"make  test"`) {
+		t.Errorf("the hint names the report collapsed: %s", hint)
 	}
 }

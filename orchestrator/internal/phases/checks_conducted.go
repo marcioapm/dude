@@ -379,7 +379,7 @@ func unbackedHint(command string, closest []string, asked bool) string {
 		Command string
 		Closest []string
 		Elided  bool
-	}{clipTo(oneLine(command), closestCallMax), closest, closest == nil})
+	}{clipTo(command, closestCallMax), closest, closest == nil})
 }
 
 // readCall is a recorded shell call that may back a pass, how it last
@@ -1170,7 +1170,7 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls 
 			continue
 		}
 		qs[i].Closest = closestLine(r.ID, a.Closest[i])
-		if with := render(); utf8.RuneCountInString(oneLine(with)) <= delivery.ChecksLineChars {
+		if with := render(); utf8.RuneCountInString(delivery.FlatLine(with)) <= delivery.ChecksLineChars {
 			line = with
 		} else {
 			qs[i].Closest = ""
@@ -1180,15 +1180,16 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls 
 }
 
 // closestLine is a pass's nearest calls in the wake. Each names a
-// recorded command, the agent's text (%q-quoted for its control
-// characters), so each is quoted as external text whole, with dude's
+// recorded command, the agent's text (%q-quoted, so its control
+// characters, line breaks too, are escaped and its spaces kept as
+// recorded), so each is quoted as external text whole, with dude's
 // reading of it inside the quote.
 func closestLine(runID string, closest []string) string {
 	parts := make([]string, len(closest))
 	for i, n := range closest {
 		parts[i] = delivery.ExternalText(runID, n)
 	}
-	return oneLine(strings.Join(parts, "; "))
+	return strings.Join(parts, "; ")
 }
 
 // verdictDecision is the gate's decision from the conductor's verdict, as
