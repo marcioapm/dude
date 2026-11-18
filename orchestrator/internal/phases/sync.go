@@ -812,7 +812,7 @@ const dueQuery = `SELECT ` + runColumns + ` FROM ` + runFrom + `
 // instead of opening a transaction per step. A step whose probe found
 // nothing would have selected no rows. Probe failure runs every step.
 type pending struct {
-	brainstorms, silent, unheard, unheardBrainstorms, stalls, waits, handovers, heldAsks, failed, wakes bool
+	brainstorms, silent, unheard, unheardBrainstorms, stalls, waits, handovers, heldAsks, failed, wakes, heldPosts bool
 }
 
 // What each of those steps selects from (SQL), shared by its query and its
@@ -851,6 +851,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 			{`((` + delivery.ReviewQuestionsDueSQL + `) UNION ALL (` + delivery.RepositoryRequestsDueSQL + `) UNION ALL (` + delivery.IdleParksDueSQL + `)) held`, &p.heldAsks, []any{s.heldAskWait().Seconds()}},
 			{failedForWake, &p.failed, nil},
 			{wakeableWakes, &p.wakes, []any{window.Seconds()}},
+			{delivery.HeldDue, &p.heldPosts, nil},
 		} {
 			b.Queue(`SELECT EXISTS (SELECT 1 FROM `+probe.selection+`)`, probe.args...).
 				QueryRow(func(row pgx.Row) error { return row.Scan(probe.found) })
@@ -859,7 +860,7 @@ func (s *Syncer) pending(ctx context.Context) pending {
 	})
 	if err != nil {
 		s.Log.Warn("probing the sweep's steps failed; running them all", "error", err)
-		return pending{true, true, true, true, true, true, true, true, true, true}
+		return pending{true, true, true, true, true, true, true, true, true, true, true}
 	}
 	return p
 }
@@ -869,11 +870,44 @@ func (s *Syncer) pending(ctx context.Context) pending {
 // conductors' wakes. Each step runs if the probe found it work, or once an
 // earlier step ran: that one may have made work for it (a stall report is
 // a conductor's reason to wake).
+// postHeld posts the held replies and resolutions of fixers whose Run
+// completed, its fix published to the pull request (delivery.PostHeld).
+func (s *Syncer) postHeld(ctx context.Context) error {
+	type due struct{ Org, RunID string }
+	var todo []due
+	if err := s.DB.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT DISTINCT h.organization_id, h.run_id FROM `+delivery.HeldDue)
+		if err != nil {
+			return err
+		}
+		todo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[due])
+		return err
+	}); err != nil || s.Forges == nil {
+		return err
+	}
+	for _, d := range todo {
+		gh, err := s.Forges.For(ctx, d.Org)
+		if err == nil {
+			err = delivery.PostHeld(ctx, s.DB.InOrg, gh, d.Org, d.RunID)
+		}
+		if err != nil {
+			s.Log.Warn("posting a fixer's held replies failed", "run", d.RunID, "error", err)
+		}
+	}
+	return nil
+}
+
 func (s *Syncer) beforeDue(ctx context.Context) error {
 	if _, err := (&delivery.Store{DB: s.DB}).EnqueueChildResults(ctx); err != nil {
 		return err
 	}
 	p, ran := s.pending(ctx), false
+	// A fixer's replies and resolutions held for its fix, now published.
+	if p.heldPosts {
+		if err := s.postHeld(ctx); err != nil {
+			s.Log.Warn("posting fixers' held replies failed", "error", err)
+		}
+	}
 	if p.brainstorms {
 		ran = true
 		if err := s.interruptBrainstorms(ctx); err != nil {
