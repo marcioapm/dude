@@ -100,4 +100,3 @@ func holdAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, a heldAnswer) (str
 	_ = json.Unmarshal(raw, &payload)
 	return ledger.Append(ctx, tx, ref.Event(EvAnswerHeld, ledger.ActorAgent, payload))
 }
-

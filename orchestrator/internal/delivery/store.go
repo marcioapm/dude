@@ -103,6 +103,9 @@ type Store struct {
 	// waits before it is withdrawn; zero means the project's
 	// authorQuestionTimeoutMinutes, else 3 days. Tests shorten it.
 	AuthorQuestionTimeout time.Duration
+	// Test hook (PostFixerAnswers): called once GitHub took a fixer's
+	// answer, before it is recorded; an error stands for a crash there.
+	AfterAnswerPost AfterAnswerPost
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).

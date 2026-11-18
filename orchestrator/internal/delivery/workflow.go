@@ -2750,6 +2750,13 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if pending := settle(st, sc); len(pending) > 0 {
 		return park("awaitPRFix", st, pending), nil
 	}
+	// The fixer has ended: what it answered on the pull request is posted
+	// now if its fix is there, and withheld if not (#485). Before anything
+	// else of this step, so that a pull request that ended, or a fixer that
+	// failed after publishing, still has its answers settled.
+	if err := w.fixerAnswers(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
+	}
 	// No pull request left open for the fix to reach, signalled or not: it
 	// is dropped, and nothing is opened for it (endedBeforeOpening).
 	if res, ended, err := w.endedBeforeOpening(ctx, sc, st); ended || err != nil {
@@ -2853,6 +2860,11 @@ const forgeWaitMin = 5 * time.Second
 // fix's narrow loop done), so their bodies are refreshed in a step of its
 // own.
 func (w *steps) movedOnPR(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string, promoted bool) (workflow.Result, error) {
+	// A fixer's answers not posted yet (a retry, or a fix whose loop just
+	// ended): settled as awaitPRFix does.
+	if err := w.fixerAnswers(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
+	}
 	if st.Integration == nil {
 		// An integration's comments are the fix's after it (openPullRequest).
 		st.PRFeedback = nil

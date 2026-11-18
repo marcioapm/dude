@@ -437,10 +437,10 @@ func TestSimultaneousRerunsAskGitHubOnce(t *testing.T) {
 }
 
 // A scripted fixer makes the calls its feedback names, through the tool
-// server: resolving its own batch's thread and another's. Neither is
-// resolved (#485): its fix is not on the pull request when it calls, and
-// the conductor resolves after the published fix is verified. Its fix
-// still publishes, and later syncs resolve nothing for it.
+// server: resolving its own batch's thread and another's. The other is
+// refused as not its own; its own is captured (#485), on its Run, and
+// resolved on GitHub only once its fix is published there. The foreign
+// thread never is.
 func TestAScriptedFixerResolvesItsThreadThroughTheToolServer(t *testing.T) {
 	w := newWorld(t)
 	w.withTools()
@@ -450,15 +450,37 @@ func TestAScriptedFixerResolvesItsThreadThroughTheToolServer(t *testing.T) {
 	own := w.gh.LineComment(1, "ana", "FACTORY.md", "Please explain.")
 	w.gh.EditComment(1, own, fmt.Sprintf("Please explain.\ntool: resolve_thread {\"pr\":\"1\",\"thread\":\"line-comment-%d\"}\n"+
 		"tool: resolve_thread {\"pr\":\"1\",\"thread\":\"line-comment-%d\"}", own, earlier))
-	w.until("the fixer's fix published", func() bool {
+	var fixer string
+	w.until("the fixer's calls made", func() bool {
 		w.sync()
-		return w.count(`SELECT count(*) FROM runs r WHERE r.task_id = $1 AND r.phase = 'fix' AND r.pr_feedback::text LIKE '%Please explain%'
-			AND r.status = 'completed' AND EXISTS (SELECT 1 FROM events e WHERE e.run_id = r.id AND e.event_type = $2)`, task, delivery.EvGitCommitCreated) == 1
+		fixer = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback::text LIKE '%Please explain%'
+			ORDER BY created_at DESC LIMIT 1), '')`, task)
+		return fixer != "" && w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message'
+			AND strpos(payload->>'text', 'dude resolve_thread answered') > 0`, fixer) > 0
 	})
+	// Both calls reached the tool server: the foreign one refused (422),
+	// its own captured with its thread.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message'
+		AND strpos(payload->>'text', 'dude resolve_thread answered 422') > 0`, fixer); n != 1 {
+		t.Errorf("the foreign resolution refused %d times, want once", n)
+	}
+	if got := w.ids(`SELECT payload->>'thread' FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'kind' = 'resolve_thread'`,
+		fixer, delivery.EvAnswerHeld); !slices.Equal(got, []string{fmt.Sprintf("line-comment-%d", own)}) {
+		t.Errorf("captured %v, want its own thread", got)
+	}
+	w.until("the fixer's fix published and its thread resolved", func() bool {
+		w.sync()
+		var done bool
+		w.gh.Set(func(s *fakegithub.Server) { done = s.ResolvedThreads[s.ThreadID(own)] })
+		return done
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, fixer, delivery.EvGitCommitCreated); n == 0 {
+		t.Error("its thread was resolved with no fix of its published")
+	}
 	w.syncs(3)
 	w.gh.Set(func(s *fakegithub.Server) {
-		if s.ResolvedThreads[s.ThreadID(own)] || s.ResolvedThreads[s.ThreadID(earlier)] {
-			t.Errorf("the fixer resolved %v", s.ResolvedThreads)
+		if s.ResolvedThreads[s.ThreadID(earlier)] {
+			t.Errorf("resolved a thread outside the fixer's batch: %v", s.ResolvedThreads)
 		}
 	})
 }
