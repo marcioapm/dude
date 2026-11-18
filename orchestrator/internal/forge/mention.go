@@ -381,20 +381,29 @@ func AnswerMarker(answerID string) string { return "<!-- dude:answer " + answerI
 // FindAnswer is dude's comment on pull request number marked with
 // AnswerMarker(answerID): a reply in a review thread when line, else a
 // conversation comment; a zero Posted when there is none. Only a comment
-// that is dude's own (Own) and carries the marker on a line of its own
-// counts: a person quoting it does not.
+// by dude's own login (Login, as OwnVerdict asks of a verdict) that is
+// dude's (Own) and carries the marker on a line of its own counts: a
+// person quoting it, or typing it, does not. It reads at most
+// findAnswerPages pages of 100: it runs only for a poster recovering a
+// claim (delivery.postHeldReply), and posters of a task are serialised by
+// its delivery's workflow lease, so the bound keeps one recovery inside
+// the claim's lease rather than guarding against a second poster.
 func (g *GitHub) FindAnswer(ctx context.Context, slug string, number int, answerID string, line bool) (Posted, error) {
 	path, prefix := fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number), "issue-comment-"
 	if line {
 		path, prefix = fmt.Sprintf("/repos/%s/pulls/%d/comments", slug, number), "line-comment-"
 	}
-	comments, err := pages[ghComment](ctx, g, path)
+	self, err := g.Login(ctx)
+	if err != nil {
+		return Posted{}, err
+	}
+	comments, err := pagesUpTo[ghComment](ctx, g, path, findAnswerPages)
 	if err != nil {
 		return Posted{}, err
 	}
 	marker := AnswerMarker(answerID)
 	for _, c := range comments {
-		if !Own(Feedback{Body: c.Body}) {
+		if !strings.EqualFold(login(c.User), self) || !Own(Feedback{Body: c.Body}) {
 			continue
 		}
 		for _, l := range strings.Split(strings.ReplaceAll(c.Body, "\r\n", "\n"), "\n") {
@@ -409,3 +418,7 @@ func (g *GitHub) FindAnswer(ctx context.Context, slug string, number int, answer
 	}
 	return Posted{}, nil
 }
+
+// findAnswerPages bounds FindAnswer's listing: 1,000 comments, each page
+// within forge's request timeout, ten well inside a claim's two minutes.
+const findAnswerPages = 10

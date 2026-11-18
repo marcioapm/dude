@@ -511,3 +511,52 @@ func TestAFixersAnswerOutlivingItsClaimIsRecordedOnce(t *testing.T) {
 		t.Errorf("%d replies recorded, want 3: one record per answer", n)
 	}
 }
+
+// F5 (rev485t-q): a recovering poster finds an earlier post of an answer
+// by its marker only in a comment by dude's own login. Someone else's
+// comment carrying the answer's marker and dude's reply marker (anyone can
+// type them) is not taken for dude's post: the real answer is posted.
+func TestAFixersAnswerIsNotTakenForSomeoneElsesMarkedComment(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	if r, err := a.reply(ref, a.is, "Fixed: renamed it."); err != nil || r.AnswerID == "" {
+		t.Fatalf("held reply: %+v %v", r, err)
+	}
+	id := a.w.str(`SELECT id FROM events WHERE run_id = $1 AND event_type = $2`, ref.RunID, delivery.EvAnswerHeld)
+	a.w.gh.Comment(1, "mallory", "Fixed: renamed it.\n\n"+forge.AnswerMarker(id)+"\n"+forge.ReplyMarker)
+	a.published(ref, a.head(), "completed")
+	// A poster that claimed it and was lost (a 502 GitHub may have taken):
+	// the next recovers, looking for an earlier post first.
+	down := true
+	a.w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if down && r.Method == "POST" {
+				return 502
+			}
+			return 0
+		}
+	})
+	if _, err := a.post(); !forge.Transient(err) {
+		t.Fatalf("GitHub down: %v", err)
+	}
+	a.w.gh.Set(func(*fakegithub.Server) { down = false })
+	if err := a.step(); err != nil {
+		t.Fatal(err)
+	}
+	var ours int
+	p := a.w.gh.Pull(1)
+	a.w.gh.Set(func(*fakegithub.Server) {
+		for _, c := range p.Comments {
+			if c.Author != "mallory" && strings.Contains(c.Body, "Fixed: renamed it.") {
+				ours++
+			}
+		}
+	})
+	if ours != 1 {
+		t.Errorf("dude's answer is on GitHub %d times, want once: someone else's marked comment was taken for it", ours)
+	}
+	recorded := a.w.str(`SELECT COALESCE(payload->'github'->>'feedbackId', '') FROM events WHERE run_id = $1 AND event_type = 'chat.message'`, ref.RunID)
+	if recorded == "" || strings.HasSuffix(recorded, "-0") {
+		t.Errorf("recorded %q", recorded)
+	}
+}
