@@ -25,6 +25,7 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	// A comment hides everything after it.
 	{"a comment hiding the check", "false", "set -o pipefail # ignored; false | true"},
 	{"a comment after the command", "false", "true # false"},
+	{"a comment hiding the command after a cd", "false", "cd #x && false"},
 	// The environment is part of what ran.
 	{"another PATH", "npx jest", "PATH=/tmp/fake npx jest"},
 	{"an assignment the call lacks", "NODE_ENV=production npx jest", "npx jest"},
@@ -179,10 +180,10 @@ func TestAnotherRunsCallsNeitherBackNorHint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0] != "none recorded" {
-		t.Fatalf("read %q from another Run's call", got)
+		t.Errorf("read %q from another Run's call", got)
 	}
 	if c, ok := closest[0]; !ok || len(c) != 0 {
-		t.Fatalf("closest %q: another Run's calls are not this Run's", c)
+		t.Errorf("closest %q: another Run's calls are not this Run's", c)
 	}
 }
 
@@ -219,6 +220,26 @@ func TestLongHintsLeaveEveryQuestionInTheWake(t *testing.T) {
 			bashCall(w, fmt.Sprintf("call_%d_%d", i, j), fmt.Sprintf("npx jest suite%d.test.ts --opt%d %s", i, j, strings.Repeat("x", 150)), "", 0)
 		}
 		report += fmt.Sprintf("  - command: 'npx jest suite%d.test.ts'\n    result: pass\n    evidence: 'ok'\n", i)
+	}
+	checks := make([]delivery.Check, 6)
+	for i := range checks {
+		checks[i] = delivery.Check{Command: fmt.Sprintf("npx jest suite%d.test.ts", i), Result: delivery.CheckPass}
+	}
+	var closest map[int][]string
+	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
+		_, closest, err = recordedCalls(context.Background(), tx, w.run.ID, checks, nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, c := range closest {
+		for _, n := range c {
+			total += len(n)
+		}
+	}
+	if total > closestCallsTotal || len(closest[0]) == 0 {
+		t.Errorf("the hints take %d bytes, over %d: %q", total, closestCallsTotal, closest)
 	}
 	checksReply(w, report+"```")
 	endTurn(w)
