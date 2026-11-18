@@ -304,12 +304,20 @@ func (w *world) modelWakes(task, run string) int {
 		AND (key LIKE 'model-waiting:'||$2||':%' OR key LIKE 'model-parked:'||$2||':%')`, task, run)
 }
 
+// modelParks is how many times run was parked for the model's refusals.
+func (w *world) modelParks(run string) int {
+	return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked'
+		AND (payload->>'model')::boolean`, run)
+}
+
 // retriedTurn sends the Run's held retry and waits for the retried turn
 // in flight; refused then fails that turn on agentErr, until dude has
-// retried it again or the Run is no longer running.
+// retried it again or parked it. Read from the Run's events, not its
+// status: lux's lifecycle events trail the agent's records, so a Run
+// whose refusal is recorded may not read running yet.
 func (w *world) retriedTurn(run string) (refused func(agentErr string)) {
 	w.t.Helper()
-	luxID, inputs := w.luxRunOf(run), w.turnRetries(run)
+	luxID, inputs, parked := w.luxRunOf(run), w.turnRetries(run), w.modelParks(run)
 	w.retryDue(run)
 	w.until("the retried turn in flight", func() bool {
 		return len(w.lux.Inputs(luxID)) == inputs && w.count(`SELECT count(*) FROM runs WHERE id = $1 AND agent_busy_at IS NOT NULL
@@ -319,7 +327,7 @@ func (w *world) retriedTurn(run string) (refused func(agentErr string)) {
 		w.t.Helper()
 		w.until("the retried turn refused", func() bool {
 			w.lux.FailTurn(luxID, agentErr)
-			return w.turnRetries(run) == inputs+1 || w.runStatus(run) != "running/"
+			return w.turnRetries(run) == inputs+1 || w.modelParks(run) > parked
 		})
 		for range 3 {
 			w.pump()
@@ -343,8 +351,8 @@ func TestAWorkingRetriedTurnEndsTheModelWait(t *testing.T) {
 	})
 	w.refusedFor(run, 2*time.Hour+time.Minute)
 	refused(rateLimited)
-	if got := w.runStatus(run); got != "running/" {
-		t.Fatalf("the Run is %s after one refusal following its work, want running", got)
+	if w.modelParks(run) != 0 {
+		t.Fatalf("the Run is %s after one refusal following its work, want not parked", w.runStatus(run))
 	}
 	if n := w.harnessRetries(run); n != 1 {
 		t.Errorf("streak of %d retries, want a new one (1)", n)
@@ -355,9 +363,10 @@ func TestAWorkingRetriedTurnEndsTheModelWait(t *testing.T) {
 	refused = w.retriedTurn(run)
 	w.refusedFor(run, 2*time.Hour+time.Minute)
 	refused(rateLimited)
-	if got := w.runStatus(run); got != "paused/idle" {
-		t.Fatalf("refused past the limit in a new streak with no work, the Run is %s, want parked (paused/idle)", got)
+	if w.modelParks(run) == 0 {
+		t.Fatalf("refused past the limit in a new streak with no work, the Run is %s, want parked", w.runStatus(run))
 	}
+	w.until("the Run parked", func() bool { return w.runStatus(run) == "paused/idle" })
 }
 
 // A retried turn that only thinks, then is refused (a thinking block
@@ -366,19 +375,28 @@ func TestAWorkingRetriedTurnEndsTheModelWait(t *testing.T) {
 // parked, its conductor told once.
 func TestAThinkingThenRefusedTurnDoesNotEndTheModelWait(t *testing.T) {
 	w, task, run := modelRefusingWorld(t, 1, true)
-	for cycle := 1; cycle <= 3 && w.runStatus(run) == "running/"; cycle++ {
+	thoughts := func() int {
+		return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.thought'`, run)
+	}
+	// A fixed number of cycles, not while the Run reads running: the first
+	// refusal can be seen before lux's lifecycle event makes it running.
+	for cycle := 1; cycle <= 3 && w.modelParks(run) == 0; cycle++ {
 		refused := w.retriedTurn(run)
 		w.lux.AgentSays(w.luxRunOf(run), map[string]any{"sessionUpdate": "agent_thought_chunk",
 			"content": map[string]any{"type": "text", "text": "Let me look at the code."}})
 		w.refusedFor(run, 2*time.Hour+time.Minute)
 		refused(overloaded)
+		// Flushed at the turn's end, before the refusal is translated.
+		w.until(fmt.Sprintf("thought %d recorded", cycle), func() bool { return thoughts() >= cycle })
+		if n := w.count(`SELECT count(*) FROM events t WHERE t.run_id = $1 AND t.event_type = 'agent.thought'
+			AND t.cursor > (SELECT max(cursor) FROM events WHERE run_id = $1 AND event_type IN ('run.turn.retried', 'run.parked'))`, run); n > 0 {
+			t.Fatalf("cycle %d: the thought was recorded after its refusal", cycle)
+		}
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.thought'`, run); n == 0 {
-		t.Fatal("no thought recorded")
+	if w.modelParks(run) == 0 {
+		t.Fatalf("refused past the limit after each thought, the Run is %s, want parked", w.runStatus(run))
 	}
-	if got := w.runStatus(run); got != "paused/idle" {
-		t.Fatalf("refused past the limit after each thought, the Run is %s, want parked (paused/idle)", got)
-	}
+	w.until("the Run parked", func() bool { return w.runStatus(run) == "paused/idle" })
 	if n := w.modelWakes(task, run); n != 1 {
 		t.Fatalf("%d model wakes, want the one model-parked", n)
 	}
