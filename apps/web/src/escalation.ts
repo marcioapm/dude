@@ -121,6 +121,8 @@ export function escalationWords(e: Escalation): EscalationWords {
       return failed("Fixer");
     case "test_failed":
       return failed("Tester");
+    case "simplify_failed":
+      return failed("Simplifier");
     case "test_failed_criteria":
     case "test_blocked": {
       const criteria = testCriteria(e);

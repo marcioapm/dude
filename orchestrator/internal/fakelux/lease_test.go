@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
@@ -36,6 +38,31 @@ func pushN(t *testing.T, c *lux.HTTPClient, runID string, n int) lux.PushRepoRes
 		t.Fatalf("push %s: %+v", id, got)
 	}
 	return got.Results[0]
+}
+
+// A scripted step whose files are already as its checkout started (the
+// agent wrote what was there) leaves the checkout unchanged, so its push
+// moves nothing: lux pushes the checkout's HEAD, up to date at the base.
+// No empty commit, which dude would read as work published past an
+// unchanged checkout.
+func TestAScriptedCommitOfWhatIsThereAlreadyPushesNothing(t *testing.T) {
+	repo := t.TempDir()
+	gitInit(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, "mine.txt"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "add", "mine.txt")
+	gitIn(t, repo, "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "mine")
+	base := gitIn(t, repo, "rev-parse", "main")
+	fake := fakelux.New(repo, "k", func(map[string]any) fakelux.Behaviour {
+		return fakelux.Behaviour{Commit: map[string]string{"mine.txt": "mine\n"}, Hang: true}
+	})
+	_, c, runID := startedWith(t, fake, lux.Spec{Image: lux.Image{Ref: "x"}, Workload: lux.Workload{Adapter: "opencode", Prompt: "go"},
+		Git: &lux.Git{Repositories: []lux.Repository{{Name: "app", URL: "file://" + repo, Ref: "main"}},
+			Push: &lux.Push{Branch: "pub"}}})
+	if res := pushN(t, c, runID, 1); res.Status != "up-to-date" || res.Commit != base {
+		t.Fatalf("push of an unchanged checkout: %+v, want up-to-date at %s", res, base)
+	}
 }
 
 func TestAPushIsRejectedUnlessTheBranchIsWhereThisRunLastPushedIt(t *testing.T) {

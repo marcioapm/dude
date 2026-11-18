@@ -119,31 +119,105 @@ func TestATransientTurnFailureIsRetriedAndTheRunGoesOn(t *testing.T) {
 	}
 }
 
-// Past maxTurnRetries the failure is the Run's, as any other: failed
-// with the agent's error, saying it was retried, and escalated as
-// implement_failed.
-func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
+// There is no retry count: refused continuously for the role's limit
+// (2 h), the Run is parked, not failed — with no conductor, handed to a
+// person, its error not the Run's. (Renamed from
+// TestATransientFailurePastTheBoundFailsTheRunAsBefore: the 4-retry
+// bound it encoded is gone.)
+func TestATransientFailurePastTheBoundParksTheRunForAPerson(t *testing.T) {
 	w := newWorld(t)
-	w.syncer.RetryAhead = 20 * time.Minute
 	w.implementerFailing(func(b *fakelux.Behaviour) { b.TurnError = acpLimited })
-	task := w.task()
+	task, run := w.task(), ""
 	w.deliver(task)
+	w.until("the first retry held", func() bool {
+		run = w.implementer(task)
+		return run != "" && w.turnRetries(run) == 1
+	})
+	for attempt := 2; attempt <= 6; attempt++ {
+		w.retryDue(run)
+		w.until("the next retry held", func() bool { return w.turnRetries(run) == attempt })
+	}
+	if got := w.str(`SELECT status::text FROM runs WHERE id = $1`, run); got != "running" {
+		t.Fatalf("the Run is %s after 6 retries, want running", got)
+	}
+	w.refusedFor(run, 2*time.Hour+time.Minute)
+	w.retryDue(run)
+	w.until("the Run parked", func() bool { return w.runStatus(run) == "paused/idle" })
 	w.until("the task to need a person", func() bool { return w.taskStatus(task) == "awaiting_input" })
-	run := w.implementer(task)
-	if n := w.turnRetries(run); n != 4 {
-		t.Errorf("%d retries before failing, want 4", n)
+	if got := w.runStatus(run); got != "paused/idle" {
+		t.Errorf("the Run is %s, want parked (paused/idle)", got)
 	}
-	errText := w.str(`SELECT status::text || ': ' || COALESCE(error, '') FROM runs WHERE id = $1`, run)
-	if !strings.HasPrefix(errText, "failed: the agent's turn failed: "+acpLimited) || !strings.Contains(errText, "retried a temporary model error 4 times") {
-		t.Errorf("the Run ended %q", errText)
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'`, run); n != 0 {
+		t.Errorf("%d run.failed", n)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'
-		AND payload->>'error' LIKE '%retried a temporary model error 4 times%'`, run); n != 1 {
-		t.Errorf("%d run.failed naming the retries, want 1", n)
+	if r := w.escalationReason(task); r != "" {
+		t.Errorf("escalated for %q", r)
 	}
-	if r := w.escalationReason(task); r != "implement_failed" {
-		t.Errorf("escalated for %q, want implement_failed", r)
+	// The park says what it is: the provider's refusals, not an agent
+	// that went quiet.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.parked' AND payload->>'reason' = 'idle'
+		AND (payload->>'model')::boolean AND payload->>'taskStatus' <> 'awaiting_input'`, run); n != 1 {
+		t.Errorf("%d run.parked marked model with the status before the ask, want 1", n)
 	}
+	// The person's Resume takes it up and puts the task back.
+	before := w.str(`SELECT payload->>'taskStatus' FROM events WHERE run_id = $1 AND event_type = 'run.parked'
+		ORDER BY cursor DESC LIMIT 1`, run)
+	if status, body := w.call("/internal/runs/"+run+"/resume", map[string]any{}); status != 200 {
+		t.Fatalf("resume: %d %v", status, body)
+	}
+	w.until("the Run resumed", func() bool { return w.str(`SELECT status::text FROM runs WHERE id = $1`, run) == "running" })
+	w.until("the task back, or still awaiting a person", func() bool {
+		return w.taskStatus(task) != "awaiting_input" || w.count(`SELECT count(*) FROM events WHERE run_id = $1
+			AND event_type = 'run.unparked'`, run) > 0
+	})
+	if got := w.taskStatus(task); got != before || got == "awaiting_input" {
+		t.Errorf("the task is %s after the person's resume, want %q (before the park)", got, before)
+	}
+}
+
+// Past the bound a talker's refused turn fails as before, and the Run is
+// parked, not failed: as for any failed turn (parkFailed), resumable, its
+// error naming the retries. (The name is the old phase-Run test's, kept
+// for the test-ID gate; it is the talker's turn that fails, not its Run.
+// A phase Run is parked too: TestATransientFailurePastTheBoundParksTheRunForAPerson.)
+func TestATransientFailurePastTheBoundFailsTheRunAsBefore(t *testing.T) {
+	tk, run := talkers(t)["conductor"](t)
+	tk.lux.FailTurns(tk.luxRunOf(run), 2, rateLimited)
+	if status, reached := tk.write("go on"); status != 200 || reached != run {
+		t.Fatalf("write: %d reached %q, want %s", status, reached, run)
+	}
+	tk.until("the refused turn retried", func() bool { return tk.turnRetries(run) == 1 })
+	tk.refusedFor(run, 7*24*time.Hour)
+	tk.retryDue(run)
+	tk.until("the failed turn recorded", func() bool {
+		return tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'`, run) > 0
+	})
+	if n := tk.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'
+		AND payload->>'error' LIKE '%retried a temporary model error 1 time)%'`, run); n != 1 {
+		t.Errorf("%d run.failed naming the retry, want 1", n)
+	}
+	tk.parkedAfterFailure(run)
+}
+
+// The Run's no-progress limit is the bound: set to 45 minutes for the
+// implementer, 46 minutes of refusals park it.
+func TestTheRolesTimeLimitBoundsAModelWait(t *testing.T) {
+	w := newWorld(t)
+	mustExec(t, w.owner, `UPDATE projects SET agent_models = jsonb_set(agent_models, '{implementer}',
+		COALESCE(agent_models->'implementer', '{}'::jsonb) || '{"timeLimitMinutes":45}') WHERE id = $1`, w.project)
+	w.implementerFailing(func(b *fakelux.Behaviour) { b.TurnError = acpLimited })
+	task, run := w.task(), ""
+	w.deliver(task)
+	w.until("the first retry held", func() bool {
+		run = w.implementer(task)
+		return run != "" && w.turnRetries(run) == 1
+	})
+	w.refusedFor(run, 44*time.Minute)
+	w.retryDue(run)
+	w.until("the second retry held", func() bool { return w.turnRetries(run) == 2 })
+	w.refusedFor(run, 46*time.Minute)
+	w.retryDue(run)
+	w.until("the Run parked", func() bool { return w.runStatus(run) == "paused/idle" })
 }
 
 // A failure that is not temporary — refused credentials, a bad request —
