@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -475,6 +476,26 @@ func TestOversizedNearestHintLeavesRoomForSmaller(t *testing.T) {
 	}
 	if total > closestCallsTotal {
 		t.Fatalf("hint lists use %d bytes, limit %d", total, closestCallsTotal)
+	}
+}
+
+// At most closestCallsMax nearest calls are named, even when more fit the
+// budget, and the nearest are the ones named.
+func TestOnlyTheThreeNearestCallsAreNamed(t *testing.T) {
+	w := newHarnessWorld(t)
+	for i, call := range []string{"make test a b c d", "make test a b c", "make test a b", "make test a", "make x"} {
+		bashCall(w, fmt.Sprintf("near%d", i), call, "", 0)
+	}
+	var closest map[int][]string
+	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
+		_, closest, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: "make test a b c d e", Result: delivery.CheckPass}}, nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`"make test a b c d" (exit 0)`, `"make test a b c" (exit 0)`, `"make test a b" (exit 0)`}
+	if !slices.Equal(closest[0], want) {
+		t.Fatalf("closest %q, want %q", closest[0], want)
 	}
 }
 
