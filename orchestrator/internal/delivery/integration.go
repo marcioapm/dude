@@ -285,15 +285,6 @@ func (e *Escalation) about(repo string, number int) bool {
 // resolve the conflict stays pull_request_conflict.
 const ReasonIntegrationFailed = "integration_failed"
 
-// integrationReason is the escalation a cause raises: integration_failed
-// for a failed Run, pull_request_conflict for the rest.
-func integrationReason(cause string) string {
-	if cause == causeRunFailed {
-		return ReasonIntegrationFailed
-	}
-	return "pull_request_conflict"
-}
-
 // integrationEscalation says the escalation stops at an integration of
 // the pull request's base: the conflict it could not resolve, or its
 // failed Run.
@@ -314,7 +305,11 @@ func (w *steps) integrationFailure(ctx context.Context, sc workflow.StepContext,
 	if err := w.integrationEvent(ctx, sc, st, "integration-refused", map[string]any{"cause": cause, "error": problem}); err != nil {
 		return workflow.Result{}, err
 	}
-	return w.escalate(ctx, sc, st, integrationReason(cause), detail)
+	reason := "pull_request_conflict"
+	if cause == causeRunFailed {
+		reason = ReasonIntegrationFailed
+	}
+	return w.escalate(ctx, sc, st, reason, detail)
 }
 
 // agentRun says the integration was an agent's Run; a merge GitHub made
