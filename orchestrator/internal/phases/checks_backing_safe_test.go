@@ -231,7 +231,7 @@ func TestUnprovenPassesAreNotRecordedAsTheCommandsExit(t *testing.T) {
 	for _, c := range unprovenPasses {
 		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
-			got := w.recordedAfter([][]any{{c.recorded, 0}}, c.reported, delivery.CheckPass, nil)
+			got := w.recordedAfter([][]any{{c.recorded, 0, "exit=0\n"}}, c.reported, delivery.CheckPass, nil)
 			if len(got) != 1 || got[0] != "none recorded" {
 				t.Fatalf("read %q for %q after %q, want none recorded", got, c.reported, c.recorded)
 			}
@@ -303,8 +303,8 @@ func TestHonestFormsOutsideTheGrammarBackNothing(t *testing.T) {
 	}
 }
 
-// Equivalent forms still back a pass: the same assignments in env or
-// assignment form, plain output redirects, a named directory, and a pipe
+// Equivalent forms still back a pass: the same assignments in the same
+// env/assignment partition, plain output redirects, a named directory, and a pipe
 // after an exact set of pipefail.
 func TestEquivalentFormsStillBack(t *testing.T) {
 	for _, c := range []struct{ reported, recorded string }{

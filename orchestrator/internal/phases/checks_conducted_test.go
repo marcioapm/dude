@@ -732,6 +732,10 @@ func TestRecordedCallsReadAFailureAtTheBase(t *testing.T) {
 		calls    [][]any
 		want     string
 	}{
+		{"dotdot inside worktree entry", "cd api && make test", [][]any{{"git worktree add ../b " + sha + " && cd ../b/x/../api && make test", 1}}, "none recorded"},
+		{"dotdot after checkout", "cd api && make test", [][]any{{"git checkout " + sha + " && cd x/../api && make test", 1}}, "none recorded"},
+		{"dotdot in separate relative cd", "cd api && make test", [][]any{{"git worktree add ../b " + sha + " && cd ../b && cd x/../api && make test", 1}}, "none recorded"},
+		{"nonbare dot inside worktree entry", "cd api && make test", [][]any{{"git worktree add ../b " + sha + " && cd ../b/./api && make test", 1}}, "none recorded"},
 		{"at the base", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && make test", 2}, {"make test", 2}}, "exit 2"},
 		{"at the base by its short SHA", "", [][]any{{"git worktree add ../task-base " + sha[:12] + " && cd ../task-base && make test", 2}}, "exit 2"},
 		{"checked out in place", "", [][]any{{"git checkout " + sha + " && make test", 2}}, "exit 2"},
