@@ -7,17 +7,18 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
-// #485: a pull request fixer is told, fresh or resumed, that it does not
-// answer or resolve on the pull request itself but reports its intended
-// answers; the conductor is told, whatever its saved prompts, to post and
-// resolve only after the published fix is verified on the current head,
-// from the publication rather than the report.
+// #485: a pull request fixer is told, fresh or resumed, that its replies
+// and resolutions are held and posted by dude only once its published fix
+// is on the pull request's head; the conductor is told, whatever its saved
+// prompts, that dude posts them and wakes it, and that its own replies post
+// at once.
 func TestReplyPublicationContract(t *testing.T) {
 	fixer := []string{
-		"reply_on_pull_request and resolve_thread are refused while you work",
-		"put in your final report its id",
-		"never as posted",
-		"after it confirms your published fix is on the pull request",
+		"reply_on_pull_request with in_reply_to its id",
+		"each answers held",
+		"only once your published fix is on the pull request's head",
+		"do not repeat it in your report or elsewhere",
+		"If your fix is never published, nothing you answered is posted",
 	}
 	in := goldenTask()
 	in.Tools = true
@@ -32,17 +33,17 @@ func TestReplyPublicationContract(t *testing.T) {
 				t.Errorf("the %s is not told %q", name, want)
 			}
 		}
-		if strings.Contains(text, "you may answer it on the pull request") {
-			t.Errorf("the %s is still told to answer on the pull request itself", name)
+		if strings.Contains(text, "refused while you work") || strings.Contains(text, "The conductor answers and resolves them") {
+			t.Errorf("the %s is still told its answers are refused for the conductor to relay", name)
 		}
 	}
 
 	conductor := []string{
-		"A pull request fixer cannot answer on the pull request or resolve its threads",
-		"only after its fix is published and its checks and review are done",
-		"the published commit, not the fixer's words",
-		"a force-push that dropped it does not",
-		"you post at once",
+		"A pull request fixer's answers on the pull request are held until its fix is published",
+		"dude posts its replies and resolves its threads itself, and wakes you",
+		"only from what the published fix changed",
+		"a force-push dropped the fix",
+		"Your own replies post at once",
 	}
 	cin := goldenTask()
 	cin.Tools, cin.CLI = true, true

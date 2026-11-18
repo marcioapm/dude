@@ -1,6 +1,6 @@
 # resolve_thread
 
-Resolve a review thread on one of your task's pull requests, once what it asked for is done (say so in it first, with reply_on_pull_request in_reply_to the thread's comment). A fixer answering pull request feedback is refused, before its fix is published: the conductor resolves its threads once the published fix is on the pull request. Refused for another pull request's thread.
+Resolve a review thread on one of your task's pull requests, once what it asked for is done (say so in it first, with reply_on_pull_request in_reply_to the thread's comment). A fixer answering pull request feedback resolves only the threads in its feedback, named by their line-comment-… id, and not at once: held, they are resolved by dude once the fixer's published fix is on the pull request's head (never, if it is not). Refused for another pull request's thread.
 
 ```json
 {

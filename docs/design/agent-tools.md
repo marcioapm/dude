@@ -234,6 +234,16 @@ marked as external text.
   per-Run and per-minute budgets count that attempt, so a call GitHub
   refuses still spends them. The successful call's `agent.tool.dude` is
   marked `attempted` and is not counted a second time.
+- A pull request fixer's `reply_on_pull_request` and `resolve_thread`, on a
+  comment of its batch, are checked from dude's own records and held, not
+  posted (#485): each is a `pull_request.answer_held` event on its Run, and
+  the call answers `held`. Once its fix is published and its Run has ended,
+  the delivery's `awaitPRFix` posts them, in the order made, if every pull
+  request they are on is open and its head contains the published commit;
+  otherwise they are withheld (`pull_request.answer_failed`). Each is
+  settled once, by a record naming its `answerId`; see
+  `delivery/answers.go` and `delivery/answers_post.go`. A live conductor is
+  woken with what was posted.
 
 ## Child sessions
 
