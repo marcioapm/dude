@@ -672,6 +672,10 @@ type Server struct {
 	// ManualChecks leaves checks wakes to the test's explicit decide_checks
 	// calls (or a deliberately unanswered deadline test).
 	ManualChecks bool
+	// fixerChecks, when set (SetFixerChecks), is the checks model
+	// (fakeagent.ChecksTurn) every fix Run decided from then on plays,
+	// whatever its own model. Guarded by mu.
+	fixerChecks string
 	// NoNestedHost: no host in the pool offers nested containers, so a Run
 	// asking for them waits, submitted, saying so in its stateReason, as
 	// lux's scheduler does (internal/server/hostfit.go).
@@ -1167,9 +1171,15 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	for _, name := range step.Lookups {
 		lookups = append(lookups, Lookup{Name: name, Allowed: network.Allows(name)})
 	}
+	checksModel := str("dude.model")
+	if s.fixerChecks != "" && str("dude.phase") == "fix" && !step.Hang {
+		if commands, report, ok := fakeagent.ChecksTurn(s.fixerChecks, 0); ok {
+			checksModel, step.Commands, step.Checks = s.fixerChecks, commands, report
+		}
+	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Checks: step.Checks, Commands: step.Commands,
-		ChecksModel: str("dude.model"), Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
+		ChecksModel: checksModel, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, ToolOutput: toolOutput, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open,
 		Verify: verify, NeverWake: str("dude.model") == fakeagent.HangModel, Defaults: str("dude.model") == fakeagent.DefaultsModel,
@@ -1241,6 +1251,16 @@ func (s *Server) Records(id string) []map[string]any {
 		out[i] = rec.Event
 	}
 	return out
+}
+
+// SetFixerChecks has every fix Run decided from now on play the checks
+// model's turns (fakeagent.ChecksTurn) whatever its own model:
+// ChecksFixedModel reports a failing check passing, and backs it once
+// sent back, so a fixer's first turn never publishes.
+func (s *Server) SetFixerChecks(model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fixerChecks = model
 }
 
 // CallsOf is what was asked of a Run, in order: "exec", "stop", "cancel".
