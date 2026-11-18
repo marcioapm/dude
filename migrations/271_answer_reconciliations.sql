@@ -36,7 +36,10 @@ ALTER TABLE answer_reconciliations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE answer_reconciliations FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON answer_reconciliations
   USING (organization_id = current_organization_id()) WITH CHECK (organization_id = current_organization_id());
+-- No DELETE: a row is its answer's outcome, kept with the task (default
+-- privileges, 002, would grant it).
 GRANT SELECT, INSERT, UPDATE ON answer_reconciliations TO dude_app;
+REVOKE DELETE ON answer_reconciliations FROM dude_app;
 -- The pass's cross-tenant probe for rows due; each is settled in its
 -- organization's own transaction.
 GRANT SELECT ON answer_reconciliations TO dude_sweeper;
