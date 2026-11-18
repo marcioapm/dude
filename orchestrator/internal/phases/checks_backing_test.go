@@ -28,10 +28,10 @@ func TestRecordedCallsBackWhatTheAgentRan(t *testing.T) {
 		{"redirect order differs", "make test > log 2>&1", [][]any{{"make test 2>&1 > log", 0}}, "none recorded"},
 		{"redirect target quoting differs", "make test > '$LOG'", [][]any{{"make test > \"$LOG\"", 0}}, "none recorded"},
 		// The environment is part of the command: the same assignments
-		// back it, in env or assignment form; missing or other ones do
+		// back it only with the same env/assignment partition; missing or other ones do
 		// not (#484 review: PATH or NODE_ENV change what runs).
-		{"env recorded, assignment reported", "NODE_OPTIONS=x npx jest a b", [][]any{{"env NODE_OPTIONS=x npx jest a b", 0}}, "exit 0"},
-		{"assignment recorded, env reported", "env NODE_OPTIONS=x npx jest a b", [][]any{{"NODE_OPTIONS=x npx jest a b", 0}}, "exit 0"},
+		{"env recorded, assignment reported", "NODE_OPTIONS=x npx jest a b", [][]any{{"env NODE_OPTIONS=x npx jest a b", 0}}, "none recorded"},
+		{"assignment recorded, env reported", "env NODE_OPTIONS=x npx jest a b", [][]any{{"NODE_OPTIONS=x npx jest a b", 0}}, "none recorded"},
 		{"assignment recorded, none reported", "npx jest a b", [][]any{{"NODE_OPTIONS=x npx jest a b", 0}}, "none recorded"},
 		{"assignment reported, none recorded", "NODE_OPTIONS=x npx jest a b", [][]any{{"npx jest a b", 0}}, "none recorded"},
 		{"other assignments on both sides", "NODE_OPTIONS=y npx jest a b", [][]any{{"env NODE_OPTIONS=x npx jest a b", 0}}, "none recorded"},
@@ -114,6 +114,50 @@ func TestASubagentsRecordedCallBacksAPass(t *testing.T) {
 			got := w.recordedAfter(nil, "python run_tests.py -k chart", delivery.CheckPass, nil)
 			if len(got) != 1 || got[0] != c.want {
 				t.Fatalf("read %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestChildCallIDCollisionKeepsItsOwnCompletion(t *testing.T) {
+	w := newHarnessWorld(t)
+	childBashCall(w, "a", "reused", "make test", "failed", 2)
+	childBashCall(w, "b", "reused", "ls", "ok", 0)
+	got := w.recordedAfter(nil, "make test", delivery.CheckPass, nil)
+	if len(got) != 1 || got[0] != "exit 2" {
+		t.Fatalf("read %q, want exit 2 from child_a", got)
+	}
+}
+
+// Even a malformed child event without childId must not complete a parent
+// call: event kind, independently of childId, is part of the join identity.
+func TestParentChildCompletionKindsStayIsolated(t *testing.T) {
+	for _, parentCall := range []bool{true, false} {
+		t.Run(map[bool]string{true: "parent call", false: "child call"}[parentCall], func(t *testing.T) {
+			w := newHarnessWorld(t)
+			called, completed, foreign := evToolCalled, evToolCompleted, evChildToolCompleted
+			if !parentCall {
+				called, completed, foreign = evChildToolCalled, evChildToolCompleted, evToolCompleted
+			}
+			if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
+				if err := w.s.event(context.Background(), tx, w.run, called, "agent", map[string]any{"tool": "bash", "callId": "collision", "input": map[string]any{"command": "make test"}}); err != nil {
+					return err
+				}
+				for _, e := range []struct {
+					kind string
+					exit int
+				}{{completed, 2}, {foreign, 0}} {
+					if err := w.s.event(context.Background(), tx, w.run, e.kind, "agent", map[string]any{"tool": "bash", "callId": "collision", "status": "completed", "exitCode": e.exit}); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			got := w.recordedAfter(nil, "make test", delivery.CheckPass, nil)
+			if len(got) != 1 || got[0] != "exit 2" {
+				t.Fatalf("read %q, want exit 2 from matching event kind", got)
 			}
 		})
 	}
