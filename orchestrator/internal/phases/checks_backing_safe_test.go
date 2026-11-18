@@ -112,6 +112,14 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	// report with its echo, but the shell runs ./run.sh alone, and its own
 	// output may end in exit=0.
 	{"a comment hiding the echo", "./run.sh #", "./run.sh # ; echo exit=$?"},
+	// With path.Clean gone, "a cd through ~+" no longer pins plainDir: the
+	// words differ. These do (#484 round 4). Under set -u, cd $D with D
+	// unset fails; without it, cd goes home and the call exits 0. (The -u
+	// guard reads the command's words, not the cd's.)
+	{"a -u report whose cd expands, run without -u", "set -euo pipefail && cd $D && make test", "cd $D && make test"},
+	// Only echo prints the status: true takes exit=$? and prints nothing,
+	// so the output's last line is ./run.sh's own, and the call exits 0.
+	{"a status passed to true, not echoed", "./run.sh", "./run.sh; true exit=$?"},
 }
 
 // unreadReports are reported commands dude does not read (a comment, a
@@ -280,6 +288,9 @@ func TestHonestFormsOutsideTheGrammarBackNothing(t *testing.T) {
 		// Moved from TestEquivalentFormsStillBack (#484 round 4): bash's
 		// &> is a background job in dash, so it is not in the grammar.
 		{"cargo test --workspace", "cargo test --workspace &> /tmp/log"},
+		// bash reads ~+ as $PWD, dash as a user's name, so its cd fails: a
+		// directory with ~ means one thing in each shell (#484 round 4).
+		{"cd ~+ && make test", "cd ~+ && make test"},
 	} {
 		if _, ok := sameCommand(c.reported, c.recorded); ok {
 			t.Errorf("%q backs %q: the grammar does not read it", c.recorded, c.reported)
