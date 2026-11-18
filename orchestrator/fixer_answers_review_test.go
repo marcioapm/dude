@@ -203,6 +203,22 @@ func TestAFixersAnswersThatCannotBeVerifiedStayHeld(t *testing.T) {
 		}
 		a.countPosted(t, "Fixed:", 1)
 	})
+	t.Run("the selection's database error", func(t *testing.T) {
+		// Not even the fixers read (a cancelled request, as a database
+		// going away mid-query is to the step): the step goes on.
+		a := newAnswering(t, newWorld(t))
+		ref := a.fixer("run_fixer")
+		a.answerAll(t, ref, "Fixed:")
+		a.published(ref, a.head(), "completed")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := a.store.FixerAnswersStep(ctx, a.w.org, a.task, ghForges{gh: a.gh}); err != nil {
+			t.Errorf("the step fails with %v", err)
+		}
+		if n := a.heldUnsettled(ref.RunID); n != 5 {
+			t.Errorf("%d answers still held, want 5", n)
+		}
+	})
 	t.Run("no GitHub", func(t *testing.T) {
 		a := newAnswering(t, newWorld(t))
 		ref := a.fixer("run_fixer")
