@@ -44,7 +44,6 @@ func reconciledLine(runID, label, ended, outcome, why, detail string) string {
 	return render(reconciledTmpl, struct{ RunID, Label, Ended, Outcome, Why, Detail string }{runID, label, ended, outcome, why, detail})
 }
 
-
 // settleReconciliationTx settles held answer id's open reconciliation, if
 // the delivery's end opened one, as outcome, once: said in the task's Chat
 // (EvChatNotice, about answer_reconciled), and the live conductor, if any,
