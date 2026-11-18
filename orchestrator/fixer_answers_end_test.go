@@ -46,7 +46,7 @@ func newBarrier(match func(r *http.Request, body string) bool) *barrier {
 func (b *barrier) open() { b.released.Do(func() { close(b.release) }) }
 
 func (b *barrier) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Method == "POST" {
+	{
 		var body string
 		if r.Body != nil {
 			raw, _ := io.ReadAll(r.Body)
@@ -165,7 +165,7 @@ func TestRound5TheEndNeverWithholdsAnAnswerBeingPosted(t *testing.T) {
 				// posted first).
 				inFlight := 0
 				match := func(r *http.Request, _ string) bool {
-					return strings.Contains(r.URL.Path, fmt.Sprintf("/comments/%d/replies", a.first))
+					return r.Method == "POST" && strings.Contains(r.URL.Path, fmt.Sprintf("/comments/%d/replies", a.first))
 				}
 				if write == "resolve" {
 					inFlight = 3
@@ -247,6 +247,14 @@ func TestRound5TheEndNeverWithholdsAnAnswerBeingPosted(t *testing.T) {
 				}
 				if !strings.Contains(wakes, "Withheld, never posted or resolved:") {
 					t.Errorf("the end's wake %q does not name what was withheld", wakes)
+				}
+				if _, list, ok := strings.Cut(wakes, "Withheld, never posted or resolved: "); ok {
+					list, _, _ = strings.Cut(list, ".")
+					for _, l := range strings.Split(list, ", ") {
+						if l == label {
+							t.Errorf("the end's wake says the answer in flight (%s) was withheld: %q", label, wakes)
+						}
+					}
 				}
 				if !strings.Contains(told, "answer "+label+", being posted when its delivery ended ("+end.why+"), was posted") {
 					t.Errorf("nobody was told the in-flight answer was posted: %q", told)
@@ -369,4 +377,101 @@ func TestRound5TheReconcilerSettlesAnAnswerItsPosterLeft(t *testing.T) {
 			t.Errorf("%d wakes of the uncertain answer, want at most one", n)
 		}
 	})
+}
+
+// A poster that listed the answers before the delivery ended, and claims
+// after it, claims nothing: the end's record stops it. Here the first
+// poster is inside its write of the first reply, its claim taken for
+// lapsed; a second, stale, poster listed the answers before the end and
+// reaches its claims after it. Without the end's record it would take the
+// lapsed claim over and, finding no comment yet, post it again.
+func TestRound5AStalePosterClaimsNothingAfterTheEnd(t *testing.T) {
+	a, ref := endedWithHeld(t)
+	ids := a.answerIDs(ref.RunID)
+	first := newBarrier(func(r *http.Request, _ string) bool {
+		return r.Method == "POST" && strings.Contains(r.URL.Path, fmt.Sprintf("/comments/%d/replies", a.first))
+	})
+	defer first.open()
+	p1 := &delivery.Store{DB: a.w.app}
+	errs := make(chan error, 2)
+	go func() { _, err := p1.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, first)); errs <- err }()
+	<-first.inside
+	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
+		ref.RunID, delivery.EvAnswerClaimed)
+	// The stale poster, held reading the pull request: it has listed the
+	// answers, and claims none yet.
+	stale := newBarrier(func(r *http.Request, _ string) bool { return r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/1") })
+	defer stale.open()
+	p2 := &delivery.Store{DB: a.w.app}
+	go func() { _, err := p2.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, stale)); errs <- err }()
+	<-stale.inside
+	a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
+	stale.open()
+	if err := <-errs; err != nil {
+		t.Logf("the stale poster: %v", err)
+	}
+	first.open()
+	if err := <-errs; err != nil {
+		t.Logf("the first poster: %v", err)
+	}
+	if n := a.claimsAfterEnd(); n != 0 {
+		t.Errorf("%d claims after the end", n)
+	}
+	if n := len(a.posted("Fixed: " + a.firstID)); n != 1 {
+		t.Errorf("the reply in flight is on GitHub %d times, want once", n)
+	}
+	if got := a.outcome(t, ref.RunID, ids[0]); got != "posted" {
+		t.Errorf("the reply in flight ended %q, want posted", got)
+	}
+	for _, i := range []int{1, 2, 3, 4} {
+		if got := a.outcome(t, ref.RunID, ids[i]); got != "withheld" {
+			t.Errorf("unclaimed answer %d ended %q, want withheld", i, got)
+		}
+	}
+}
+
+// Another poster's pass finds the fix gone from the pull request (a
+// force-push) while the first poster is inside its write of the first
+// reply: the pass withholds what nobody holds, never the answer being
+// written, which its poster then records posted. Before, the pass withheld
+// it too, and the poster, finding it settled, recorded nothing: GitHub
+// had a reply dude's records said was withheld.
+func TestRound5AWithholdingPassNeverOvertakesAPosterInFlight(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	before := a.head()
+	fix := a.w.gh.CommitOnTop(a.w.gh.Pull(1).Head, "the fix")
+	a.published(ref, fix, "completed")
+	ids := a.answerIDs(ref.RunID)
+	b := newBarrier(func(r *http.Request, _ string) bool {
+		return r.Method == "POST" && strings.Contains(r.URL.Path, fmt.Sprintf("/comments/%d/replies", a.first))
+	})
+	defer b.open()
+	p1 := &delivery.Store{DB: a.w.app}
+	errs := make(chan error, 1)
+	go func() { _, err := p1.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, b)); errs <- err }()
+	<-b.inside
+	forceBranch(t, a.w.gh, a.w.gh.Pull(1).Head, before)
+	if _, err := (&delivery.Store{DB: a.w.app}).PostFixerAnswers(context.Background(), a.w.org, a.task, a.gh); err != nil {
+		t.Logf("the withholding pass: %v", err)
+	}
+	if got := a.outcome(t, ref.RunID, ids[0]); got == "withheld" {
+		t.Errorf("the answer being written was withheld by another pass")
+	}
+	b.open()
+	if err := <-errs; err != nil {
+		t.Logf("the poster in flight: %v", err)
+	}
+	if n := len(a.posted("Fixed: " + a.firstID)); n != 1 {
+		t.Errorf("the reply in flight is on GitHub %d times, want once", n)
+	}
+	if got := a.outcome(t, ref.RunID, ids[0]); got != "posted" {
+		t.Errorf("the reply GitHub took ended %q, want posted", got)
+	}
+	for _, i := range []int{1, 2, 3, 4} {
+		if got := a.outcome(t, ref.RunID, ids[i]); got != "withheld" {
+			t.Errorf("answer %d ended %q, want withheld", i, got)
+		}
+	}
 }
