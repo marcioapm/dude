@@ -73,6 +73,9 @@ type ChecksAsked struct {
 	// "repo: branch at sha".
 	Bases     []ChecksBase `json:"bases,omitempty"`
 	TestPhase bool         `json:"testPhase,omitempty"`
+	// Closest: per reported pass (by index) no recorded call matched, the
+	// recorded calls nearest it, one-lined with how each ended.
+	Closest map[int][]string `json:"closest,omitempty"`
 	// Discharge marks the second ask about a turn's deferred checks, once
 	// the pull request is open (AskDeferredTx): each check's Result is
 	// CheckDeferred, its Evidence the conductor's reason for deferring it.

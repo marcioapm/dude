@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -19,6 +21,7 @@ var (
 	checksUnconducted    = delivery.MustText("notices/checks/unconducted")
 	checksUnconductedRej = delivery.MustText("notices/checks/unconducted-reject")
 	checksConductorSaid  = delivery.MustText("notices/checks/conductor-rejected")
+	checksUnbacked       = delivery.MustText("notices/checks/unbacked")
 )
 
 // conductedDelivery says the Run's task has a live delivery its conductor
@@ -118,10 +121,11 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 		if a.TestPhase, err = deliveryTests(ctx, tx, r.TaskID); err != nil {
 			return err
 		}
-		calls, err := recordedCalls(ctx, tx, r.ID, checks, bases)
+		calls, closest, err := recordedCalls(ctx, tx, r.ID, checks, bases)
 		if err != nil {
 			return err
 		}
+		a.Closest = closest
 		return delivery.AskChecksTx(ctx, tx, r.ref(), a, checksWakeLine(r, a, bases, calls))
 	})
 	d.pending = true
@@ -187,8 +191,14 @@ func clipTo(s string, n int) string {
 // N" only when the exit is the command's own. It is dude's own reading of
 // the ledger, not the agent's words: the conductor backs a pass, or a
 // failure as pre-existing, by it (or by reading the calls with run_chat).
-func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delivery.Check, bases []taskBase) ([]string, error) {
-	out := make([]string, len(checks))
+//
+// The calls read are the Run's own shell calls and its subagents' (a Task
+// or spawned agent's agent.child.tool.* calls), under the same rules.
+// closest names, per reported pass no call matched, up to
+// closestCallsMax of the recorded calls nearest it (closestCalls), each
+// one-lined with how it ended, so the agent can report one exactly.
+func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delivery.Check, bases []taskBase) (out []string, closest map[int][]string, err error) {
+	out = make([]string, len(checks))
 	wanted := false
 	for i, c := range checks {
 		if c.Result == delivery.CheckPass || c.Result == delivery.CheckFail && len(bases) > 0 {
@@ -196,54 +206,167 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delive
 		}
 	}
 	if !wanted {
-		return out, nil
+		return out, nil, nil
 	}
-	// The output is read only to attribute an exit 1 at the base
-	// (baseReading).
+	// The output is read to attribute an exit 1 at the base (baseReading);
+	// last is the end of its stdout (or merged output), where an echoed
+	// exit status is (sameCommand).
 	rows, err := tx.Query(ctx, `SELECT c.payload->'input'->>'command', d.payload->>'status', d.payload->'exitCode',
 			concat_ws(E'\n', d.payload->'output'->>'head', d.payload->'output'->>'tail', d.payload->'stdout'->>'head',
-				d.payload->'stdout'->>'tail', d.payload->'stderr'->>'head', d.payload->'stderr'->>'tail')
-		FROM events c JOIN events d ON d.run_id = c.run_id AND d.event_type = $3 AND d.payload->>'callId' = c.payload->>'callId'
-		WHERE c.run_id = $1 AND c.event_type = $2 AND c.payload->'input' ? 'command'
-		ORDER BY d.cursor`, runID, evToolCalled, evToolCompleted)
+				d.payload->'stdout'->>'tail', d.payload->'stderr'->>'head', d.payload->'stderr'->>'tail'),
+			coalesce(d.payload->'output'->>'tail', d.payload->'output'->>'head', d.payload->'stdout'->>'tail', d.payload->'stdout'->>'head', '')
+		FROM events c JOIN events d ON d.run_id = c.run_id AND d.payload->>'callId' = c.payload->>'callId'
+			AND d.event_type = CASE c.event_type WHEN $2 THEN $3 ELSE $5 END
+			AND d.payload->>'childId' IS NOT DISTINCT FROM c.payload->>'childId'
+		WHERE c.run_id = $1 AND c.event_type IN ($2, $4) AND c.payload->'input' ? 'command'
+		ORDER BY d.cursor`, runID, evToolCalled, evToolCompleted, evChildToolCalled, evChildToolCompleted)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
+	var seen []readCall
+	matched := make([]bool, len(checks))
 	for rows.Next() {
 		var command, status *string
 		var exit *float64
-		var output string
-		if err := rows.Scan(&command, &status, &exit, &output); err != nil {
-			return nil, err
+		var output, last string
+		if err := rows.Scan(&command, &status, &exit, &output, &last); err != nil {
+			return nil, nil, err
 		}
 		if command == nil {
 			continue
 		}
-		for i, c := range checks {
-			var base *baseCall
+		// An echoed status is read only from a call that exited 0 (or
+		// recorded no exit): a non-zero exit is not echo's, so the echo
+		// never ran.
+		reading := func(echoed bool, label string) string {
 			switch {
-			case c.Result == delivery.CheckPass && sameCommand(c.Command, *command):
-			case c.Result == delivery.CheckFail && len(bases) > 0:
-				if base = atBase(*command, c.Command, bases); base == nil {
-					continue
-				}
-			default:
-				continue
-			}
-			switch {
-			case exit != nil && base != nil:
-				out[i] = base.reading(int(*exit), output)
+			case echoed && (exit == nil || *exit == 0):
+				return echoedExit(label, last)
 			case exit != nil:
-				out[i] = fmt.Sprintf("exit %d", int(*exit))
+				return fmt.Sprintf("exit %d", int(*exit))
 			case status != nil && *status != "":
-				out[i] = *status
-			default:
-				out[i] = "completed"
+				return *status
+			}
+			return "completed"
+		}
+		sc := shellOf(*command, false)
+		r := reading(sc.echoed, sc.echo)
+		if sc.why != "" {
+			r += ", backing nothing: " + sc.why
+		}
+		seen = append(seen, readCall{*command, r})
+		for i, c := range checks {
+			switch {
+			case c.Result == delivery.CheckPass:
+				if call, ok := sameCommand(c.Command, *command); ok {
+					out[i], matched[i] = reading(call.echoed, call.echo), true
+				}
+			case c.Result == delivery.CheckFail && len(bases) > 0:
+				if base := atBase(*command, c.Command, bases); base != nil {
+					if exit != nil {
+						out[i] = base.reading(int(*exit), output)
+					} else {
+						out[i] = reading(false, "")
+					}
+				}
 			}
 		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	for i, c := range checks {
+		if c.Result == delivery.CheckPass && !matched[i] {
+			if closest == nil {
+				closest = map[int][]string{}
+			}
+			closest[i] = closestCalls(c.Command, seen)
+		}
+	}
+	return out, closest, nil
+}
+
+// unbackedHint is dude's word on an unbacked pass no recorded call
+// matched (closest has an entry for it only then): the recorded calls
+// nearest it, so the agent can report one exactly. "" for a pass a call
+// matched, whose recorded exit the wake already named.
+func unbackedHint(command string, closest []string) string {
+	if closest == nil {
+		return ""
+	}
+	return checksUnbacked.Render(struct {
+		Command string
+		Closest []string
+	}{clipTo(oneLine(command), closestCallMax), closest})
+}
+
+// readCall is a recorded shell call, one-lined, and how it ended.
+type readCall struct{ command, reading string }
+
+// closestCallsMax bounds the recorded calls an unmatched pass names, and
+// closestCallMax each one's length.
+const (
+	closestCallsMax = 3
+	closestCallMax  = 160
+)
+
+// closestCalls are the recorded calls nearest a reported command no call
+// matched, nearest first: by the share of the command's words (as
+// shellOf reads them: no environment, no plumbing) they have in common
+// (any word in common, distinct commands, the latest of equals first),
+// each quoted one-lined with how it ended.
+func closestCalls(reported string, calls []readCall) []string {
+	words := func(c shellCall) map[string]bool {
+		m := map[string]bool{}
+		for _, w := range strings.Fields(c.cmd) {
+			m[w] = true
+		}
+		return m
+	}
+	want := words(shellOf(reported, true))
+	type near struct {
+		line  string
+		score float64
+	}
+	var nears []near
+	done := map[string]bool{}
+	for i := len(calls) - 1; i >= 0; i-- {
+		command := oneLine(calls[i].command)
+		if done[command] {
+			continue
+		}
+		done[command] = true
+		have, common := words(shellOf(command, false)), 0
+		for w := range have {
+			if want[w] {
+				common++
+			}
+		}
+		if common > 0 {
+			nears = append(nears, near{fmt.Sprintf("%q (%s)", clipTo(command, closestCallMax), calls[i].reading),
+				float64(common) / float64(len(want)+len(have)-common)})
+		}
+	}
+	slices.SortStableFunc(nears, func(a, b near) int { return cmp.Compare(b.score, a.score) })
+	out := []string{} // never nil: unbackedHint says none is near
+	for _, n := range nears[:min(len(nears), closestCallsMax)] {
+		out = append(out, n.line)
+	}
+	return out
+}
+
+// echoedExit is a call's exit as it echoed it (sameCommand): the last
+// non-empty line of its recorded output is the label and a number.
+func echoedExit(label, last string) string {
+	lines := strings.Split(strings.TrimRight(last, " \t\r\n"), "\n")
+	line := strings.TrimSpace(lines[len(lines)-1])
+	if n, ok := strings.CutPrefix(line, label); ok && strings.Trim(n, "0123456789") == "" {
+		if exit, err := strconv.Atoi(n); err == nil {
+			return fmt.Sprintf("exit %d", exit)
+		}
+	}
+	return "unclear: its echoed exit status is not the end of its recorded output"
 }
 
 // inDir splits a command, one-lined, into the directory a single leading
@@ -265,17 +388,228 @@ func plainDir(dir string) bool {
 	return dir != "" && !strings.HasPrefix(dir, "-") && !strings.ContainsAny(dir, " ;|&<>$`'\"\\*?~(){}")
 }
 
-// sameCommand says a recorded shell call ran the reported command: both
-// one-lined and read the same way (inDir), the same command, in the
-// reported directory when the report names one (any, or none, when it
-// does not). So "cd api && make test" is a call of "make test" and of
-// itself, not of "cd web && make test". A call that only contains the
-// command (piped, ORed, echoed, grepped for, with more arguments or steps)
-// is not a call of it.
-func sameCommand(reported, recorded string) bool {
-	wantDir, want := inDir(reported)
-	dir, ran := inDir(recorded)
-	return ran == want && (wantDir == "" || wantDir == dir)
+// sameCommand says a recorded shell call ran the reported command, with an
+// exit status that is the command's own; the call read (shellOf) says
+// where that status is. Both sides are one-lined and read the same way:
+//   - a leading "cd DIR && " is the directory the command runs in. The
+//     report's directory, when it names one, must be the call's (any, or
+//     none, when it does not): "cd api && make test" is a call of "make
+//     test" and of itself, not of "cd web && make test". A report's
+//     trailing annotation naming a directory, "make test (api)", names it
+//     as "cd api && make test" does; any other annotation stays part of
+//     the command and matches nothing.
+//   - a leading "env" and VAR=value assignments are not the command: they
+//     are ignored when only one side has them, and must be the same set
+//     when both do.
+//   - output redirects ("> log", "2>&1", "&>> log") are dropped: they
+//     leave the exit status the command's.
+//   - a pipe ("| tail -5", "2>&1 | tee log") is dropped only when the call
+//     set pipefail first ("set -o pipefail && " or "; ", or "set -euo
+//     pipefail"): then exit 0 is every stage's, the command's too. Without
+//     it the status is the last stage's, and the call backs nothing.
+//   - a trailing "; echo exit=$?" (any plain label before $?) is dropped,
+//     and the call's exit is the number its recorded output ends with
+//     after the label (echoedExit), not echo's own 0.
+//   - steps joined by " && " stay part of the command (exit 0 is every
+//     step's); a call with ";", "||" or "&" anywhere else backs nothing:
+//     its status is its last step's.
+//
+// What remains must be the same words: a call that only contains the
+// command (echoed, grepped for, with more, fewer or other arguments or
+// steps) is not a call of it. A report's own plumbing is dropped the same
+// way, so "make test | tail" reported is backed by "make test" recorded,
+// never by "make test | tail" without pipefail.
+func sameCommand(reported, recorded string) (shellCall, bool) {
+	want, got := shellOf(reported, true), shellOf(recorded, false)
+	return got, got.why == "" && want.cmd != "" && want.cmd == got.cmd && (want.dir == "" || want.dir == got.dir) &&
+		(len(want.env) == 0 || len(got.env) == 0 || slices.Equal(want.env, got.env))
+}
+
+// shellCall is a shell command as sameCommand reads it.
+type shellCall struct {
+	dir string   // a leading cd's (or a report's annotation's)
+	env []string // its leading assignments, sorted
+	cmd string   // the command's words, plumbing dropped
+	// echoed: the call echoes its status last, after echo's label.
+	echo   string
+	echoed bool
+	// why the call's exit status is not the command's ("" when it is).
+	why string
+}
+
+var (
+	annotatedDir = regexp.MustCompile(`^(.*\S)\s+\(([^()\s]+)\)$`)
+	assignment   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	setFlagO     = regexp.MustCompile(`^-[a-zA-Z]*o$`)
+)
+
+// shellOf reads command, one-lined, as sameCommand says; reported reads a
+// report's directory annotation too.
+func shellOf(command string, reported bool) shellCall {
+	s := oneLine(command)
+	var c shellCall
+	var annotation string
+	if m := annotatedDir.FindStringSubmatch(s); reported && m != nil && !strings.HasPrefix(s, "cd ") && plainDir(m[2]) {
+		s, annotation = m[1], path.Clean(m[2])
+	}
+	toks, ok := shellTokens(s)
+	if !ok {
+		return shellCall{dir: annotation, cmd: s, why: "dude cannot read its quoting"}
+	}
+	pipefail := false
+prefix:
+	for {
+		j := slices.IndexFunc(toks, func(t shTok) bool { return t.op })
+		if j < 0 {
+			break
+		}
+		step, sep := toks[:j], toks[j].text
+		switch {
+		case setsPipefail(step) && (sep == "&&" || sep == ";"):
+			pipefail = true
+		case len(step) == 2 && step[0].text == "cd" && c.dir == "" && sep == "&&" && plainDir(step[1].text):
+			c.dir = path.Clean(step[1].text)
+		default:
+			break prefix
+		}
+		toks = toks[j+1:]
+	}
+	// The echo must end the call as written: one redirected elsewhere
+	// ("echo exit=$? >&2") is not read from the output's end.
+	if n := len(toks); n >= 3 && toks[n-3].op && toks[n-3].text == ";" && !toks[n-2].op && toks[n-2].text == "echo" && !toks[n-1].op &&
+		strings.HasSuffix(s, " echo "+toks[n-1].text) {
+		if label, ok := echoLabel(toks[n-1].text); ok {
+			c.echo, c.echoed, toks = label, true, toks[:n-3]
+		}
+	}
+	isPipe := func(t shTok) bool { return t.op && (t.text == "|" || t.text == "|&") }
+	if j := slices.IndexFunc(toks, isPipe); j >= 0 {
+		switch {
+		case slices.ContainsFunc(toks[j:], func(t shTok) bool { return t.op && !isPipe(t) }):
+			c.why = "its exit status is a later step's"
+		case !pipefail:
+			c.why = "its exit status is the last command's in its pipe (no set -o pipefail)"
+		}
+		toks = toks[:j]
+	}
+	if c.why == "" && slices.ContainsFunc(toks, func(t shTok) bool { return t.op && t.text != "&&" }) {
+		c.why = "its exit status is its last step's"
+	}
+	if len(toks) > 1 && toks[0].text == "env" && !toks[1].op && assignment.MatchString(toks[1].text) {
+		toks = toks[1:]
+	}
+	for len(toks) > 0 && !toks[0].op && assignment.MatchString(toks[0].text) {
+		c.env, toks = append(c.env, toks[0].text), toks[1:]
+	}
+	slices.Sort(c.env)
+	words := make([]string, len(toks))
+	for i, t := range toks {
+		words[i] = t.text
+	}
+	c.cmd = strings.Join(words, " ")
+	if c.dir == "" {
+		c.dir = annotation
+	}
+	return c
+}
+
+// setsPipefail: step is a set turning pipefail on ("set -o pipefail",
+// "set -euo pipefail"). A shell without the option fails set, a special
+// builtin, and exits (dash: 2), so "; " after it is as safe as " && ".
+func setsPipefail(step []shTok) bool {
+	for i := 2; i < len(step) && step[0].text == "set"; i++ {
+		if step[i].text == "pipefail" && setFlagO.MatchString(step[i-1].text) {
+			return true
+		}
+	}
+	return false
+}
+
+// echoLabel reads echo's one argument as a plain label before "$?":
+// exit=$?, "EXIT: $?".
+func echoLabel(word string) (string, bool) {
+	if len(word) >= 2 && word[0] == '"' && word[len(word)-1] == '"' {
+		word = word[1 : len(word)-1]
+	}
+	label, ok := strings.CutSuffix(word, "$?")
+	if !ok {
+		label, ok = strings.CutSuffix(word, "${?}")
+	}
+	return label, ok && !strings.ContainsAny(label, "$`'\"\\")
+}
+
+// shTok is a shell word, quoted as written, or an operator: a control
+// operator (&&, ||, ;, &, |, |&) or an output redirect (>, 2>>, &>, >&),
+// whose target is dropped with it.
+type shTok struct {
+	text string
+	op   bool
+}
+
+// shellTokens splits a one-lined command into words and operators,
+// dropping output redirects; false when its quoting does not close. A
+// subshell's or a $(…)'s parentheses are word characters: an operator
+// inside one is still read as one, so it backs nothing it would not
+// outside.
+func shellTokens(s string) ([]shTok, bool) {
+	var toks []shTok
+	var b strings.Builder
+	redirect := false
+	flush := func() {
+		if b.Len() > 0 && !redirect {
+			toks = append(toks, shTok{text: b.String()})
+		}
+		redirect = redirect && b.Len() == 0
+		b.Reset()
+	}
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == ' ':
+			flush()
+		case c == '\'' || c == '"' || c == '`':
+			// Closed by the next unescaped quote (any, in single quotes).
+			j := i + 1
+			for ; j < len(s) && s[j] != c; j++ {
+				if s[j] == '\\' && c != '\'' {
+					j++
+				}
+			}
+			if j >= len(s) {
+				return nil, false
+			}
+			b.WriteString(s[i : j+1])
+			i = j
+		case c == '\\' && i+1 < len(s):
+			b.WriteString(s[i : i+2])
+			i++
+		case c == '>' || c == '&' && i+1 < len(s) && s[i+1] == '>':
+			// An fd before it ("2>") is part of the redirect: >, >>, >|,
+			// >&, &>, &>>.
+			if strings.Trim(b.String(), "0123456789") == "" {
+				b.Reset()
+			}
+			flush()
+			if c == '&' {
+				i++
+			}
+			if i+1 < len(s) && strings.IndexByte(">|&", s[i+1]) >= 0 {
+				i++
+			}
+			redirect = true
+		case c == '|' || c == '&' || c == ';':
+			flush()
+			op := string(c)
+			if i+1 < len(s) && (s[i+1] == c && c != ';' || c == '|' && s[i+1] == '&') {
+				op += s[i+1 : i+2]
+				i++
+			}
+			toks, redirect = append(toks, shTok{text: op, op: true}), false
+		default:
+			b.WriteByte(c)
+		}
+	}
+	flush()
+	return toks, true
 }
 
 // baseCall is a recorded call that ran a reported command at a task's
@@ -480,8 +814,8 @@ func (b *baseCall) reading(exit int, output string) string {
 // of the report (nil: none read).
 func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls []string) string {
 	type question struct {
-		Command, Result, Evidence, Call string
-		Waiver                          bool
+		Command, Result, Evidence, Call, Closest string
+		Waiver                                   bool
 	}
 	type waiver struct {
 		N             int
@@ -493,7 +827,7 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls 
 	for i, c := range a.Check {
 		// The agent's evidence is its own words: quoted as external text,
 		// cut so every check's question fits the wake.
-		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), "", a.Waivers[i] != nil}
+		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), "", strings.Join(a.Closest[i], "; "), a.Waivers[i] != nil}
 		if i < len(calls) {
 			qs[i].Call = calls[i]
 		}
@@ -547,6 +881,9 @@ func verdictDecision(d checksDecision, checks []delivery.Check, asked *delivery.
 			d.ConductorPassed = true
 		case c.Result == delivery.CheckPass:
 			out.Result = "unverified"
+			if asked != nil {
+				out.JudgeReason = unbackedHint(c.Command, asked.Closest[i])
+			}
 			verified = false
 		default:
 			// The agent's own result and evidence stay, with the

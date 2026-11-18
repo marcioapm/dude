@@ -811,7 +811,7 @@ func (w *harnessWorld) recordedAfter(calls [][]any, command, result string, base
 	}
 	var got []string
 	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
-		got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: command, Result: result}}, bases)
+		got, _, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: command, Result: result}}, bases)
 		return err
 	}); err != nil {
 		w.t.Fatal(err)
