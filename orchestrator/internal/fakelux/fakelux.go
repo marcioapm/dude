@@ -13,6 +13,7 @@
 package fakelux
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -174,8 +175,10 @@ type execPlay struct {
 }
 
 type Run struct {
-	ID          string
-	Spec        json.RawMessage
+	ID   string
+	Spec json.RawMessage
+	// What dude's tool server answered its scripted calls (ToolAnswers).
+	toolAnswers []string
 	State       string
 	StateReason string
 	stage       string
@@ -2523,7 +2526,21 @@ func (s *Server) toolRequest(run *Run, tool, args string) (status int, body []by
 		status = res.StatusCode
 		body, _ = io.ReadAll(res.Body)
 	})
+	if status != 0 {
+		run.toolAnswers = append(run.toolAnswers, fmt.Sprintf("%s %d %s", tool, status, bytes.TrimSpace(body)))
+	}
 	return status, body, err
+}
+
+// ToolAnswers is what dude's tool server answered the Run's scripted
+// calls, in order: "<tool> <status> <body>", the body a refusal's reason.
+func (s *Server) ToolAnswers(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.toolAnswers)
+	}
+	return nil
 }
 
 // withDude gives fn a way to call dude's tools as the Run's container
@@ -3143,6 +3160,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		}
 		s.pushNow(run, spec, branch, in.RequestID)
 	})
+}
+
+// SetHoldPushes sets HoldPushes under the fake's lock: a test changing it
+// while a push goroutine reads it.
+func (s *Server) SetHoldPushes(hold bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.HoldPushes = hold
 }
 
 // ReleasePushes makes the pushes HoldPushes held, now, each reported with

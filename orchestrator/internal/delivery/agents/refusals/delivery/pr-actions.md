@@ -6,7 +6,6 @@
 
 {{- define "refusals/delivery/pr-actions/you-resolve-only-review-threads-in"}}you resolve only the review threads in your feedback, and it has none{{end}}
 
-
 {{- define "refusals/delivery/pr-actions/not-pull-request-your-task-you"}}%s is not a pull request of your task: you act only on your task's (pull_requests lists them){{end}}
 
 {{- define "refusals/delivery/pr-actions/there-nothing-do-on"}}%s#%d is %s: there is nothing to do on it{{end}}

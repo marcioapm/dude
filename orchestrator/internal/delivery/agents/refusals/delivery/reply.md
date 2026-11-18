@@ -2,7 +2,6 @@
 
 {{- define "refusals/delivery/reply/you-reply-only-pull-request-feedback"}}you reply only to the pull request feedback you were given, and you were given none{{end}}
 
-
 {{- define "refusals/delivery/reply/in-reply-must-be-one-comments"}}in_reply_to must be one of the comments in your feedback: %s{{end}}
 
 {{- define "refusals/delivery/reply/task-conductor-replies-on-its-pull"}}a task's conductor replies on its pull requests{{end}}

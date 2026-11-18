@@ -37,7 +37,7 @@ func earlyFixer(t *testing.T, holdPushes bool) (*world, string, int64, string) {
 	// The pull request's fixer, from here on, claims its check passes on
 	// its first turn, and is right only once sent back.
 	w.lux.SetFixerChecks(fakeagent.ChecksFixedModel)
-	w.lux.HoldPushes = holdPushes
+	w.lux.SetHoldPushes(holdPushes)
 	own := w.gh.LineComment(1, "ana", "FACTORY.md", "Please explain.")
 	w.gh.EditComment(1, own, fmt.Sprintf("Please explain.\n"+
 		"tool: reply_on_pull_request {\"pr\":\"1\",\"text\":%q,\"in_reply_to\":\"line-comment-%d\"}\n"+
@@ -136,7 +136,7 @@ func TestAPolicyDeliverysFixerAnswersArePostedAtPublication(t *testing.T) {
 	// person accepted the defaults (delivery.DeciderPolicy).
 	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text)) WHERE task_id = $1`,
 		task, delivery.DeciderPolicy)
-	w.lux.HoldPushes = true
+	w.lux.SetHoldPushes(true)
 	own := w.gh.LineComment(1, "ana", "FACTORY.md", "Please explain.")
 	w.gh.EditComment(1, own, fmt.Sprintf("Please explain.\n"+
 		"tool: reply_on_pull_request {\"pr\":\"1\",\"text\":%q,\"in_reply_to\":\"line-comment-%d\"}\n"+
@@ -152,7 +152,7 @@ func TestAPolicyDeliverysFixerAnswersArePostedAtPublication(t *testing.T) {
 	if n, resolved := w.threadState(own, fixerReplyText); n != 0 || resolved {
 		t.Fatalf("before publication: %d replies posted, resolved %v", n, resolved)
 	}
-	w.lux.HoldPushes = false
+	w.lux.SetHoldPushes(false)
 	w.lux.ReleasePushes()
 	w.until("the fix published and its answer posted", func() bool {
 		w.sync()
@@ -184,7 +184,7 @@ func TestAnAbandonedFixerHasNoDelayedReplies(t *testing.T) {
 		w.sync()
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status IN ('aborted', 'failed')`, fixer) == 1
 	})
-	w.lux.HoldPushes = false
+	w.lux.SetHoldPushes(false)
 	w.lux.ReleasePushes()
 	w.syncs(5)
 	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, fixer, delivery.EvGitCommitCreated); n != 0 {

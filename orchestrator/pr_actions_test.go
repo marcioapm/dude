@@ -464,6 +464,13 @@ func TestAScriptedFixerResolvesItsThreadThroughTheToolServer(t *testing.T) {
 		AND strpos(payload->>'text', 'dude resolve_thread answered 422') > 0`, fixer); n != 1 {
 		t.Errorf("the foreign resolution refused %d times, want once", n)
 	}
+	// Refused for the right reason: the thread is not in its feedback.
+	reason := fmt.Sprintf("line-comment-%d is not a thread in your feedback", earlier)
+	if answers := w.lux.ToolAnswers(w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, fixer)); !slices.ContainsFunc(answers, func(a string) bool {
+		return strings.HasPrefix(a, "resolve_thread 422 ") && strings.Contains(a, reason)
+	}) {
+		t.Errorf("the foreign resolution was not refused as %q: %q", reason, answers)
+	}
 	if got := w.ids(`SELECT payload->>'thread' FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'kind' = 'resolve_thread'`,
 		fixer, delivery.EvAnswerHeld); !slices.Equal(got, []string{fmt.Sprintf("line-comment-%d", own)}) {
 		t.Errorf("captured %v, want its own thread", got)
