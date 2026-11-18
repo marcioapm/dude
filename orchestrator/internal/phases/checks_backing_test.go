@@ -34,7 +34,10 @@ func TestRecordedCallsBackWhatTheAgentRan(t *testing.T) {
 		{"an annotation naming no directory", "python run_tests.py (run by subagent)", [][]any{{"python run_tests.py", 0}}, "none recorded"},
 		// Output plumbing that leaves the exit the command's own.
 		{"redirected to a log", "make test", [][]any{{"make test > /tmp/log 2>&1", 0}}, "exit 0"},
-		{"appended to a log", "make test", [][]any{{"make test &>> /tmp/log", 2}}, "exit 2"},
+		// Appended in the portable form (#484 round 4: it was bash's &>>,
+		// which dash reads as a background job; that form is the next case).
+		{"appended to a log", "make test", [][]any{{"make test >> /tmp/log 2>&1", 2}}, "exit 2"},
+		{"appended to a log with bash's &>>", "make test", [][]any{{"make test &>> /tmp/log", 2}}, "none recorded"},
 		{"teed with pipefail", "make test", [][]any{{"set -o pipefail && make test 2>&1 | tee /tmp/log", 0}}, "exit 0"},
 		{"tailed with set -euo pipefail", "cd api && make test", [][]any{{"set -euo pipefail; cd api && make test | tail -5", 1}}, "its pipe failed (exit 1), not proof of which command failed"},
 		{"its exit echoed", "make test", [][]any{{"make test > log 2>&1; echo exit=$?", 0, "exit=0\n"}}, "exit 0"},
