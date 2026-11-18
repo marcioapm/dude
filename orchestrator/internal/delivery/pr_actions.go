@@ -327,6 +327,11 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 		if c.batch != nil && !slices.ContainsFunc(t.CommentIDs, func(id int64) bool { return slices.Contains(c.batch, id) }) {
 			return done, refusef(rNotThreadInYourFeedbackYou, c.thread)
 		}
+		if c.batch != nil {
+			// A fixer's thread, its fix not published yet: the conductor
+			// resolves once the published fix is verified (#485).
+			return done, refusef(rFixNotOnPullRequestYet2, c.thread)
+		}
 		if !t.Resolved {
 			if err := gh.ResolveReviewThread(ctx, c.slug, t.ID); err != nil {
 				return done, ghRefusal(err)

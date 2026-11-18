@@ -61,7 +61,7 @@ Bots commented on the pull request since the last fix. They are not requests: ac
 
 **coderabbitai[bot]** — Consider a constant for the separator. _(issue-comment-13)_
 
-Once a comment above is addressed and committed, you may answer it on the pull request: reply_on_pull_request with in_reply_to its id (in italics after it), saying what you changed; for a line comment, then resolve_thread with the same id. Only the comments given to you here. Do not answer what you did not change.
+You do not answer on the pull request yourself: your fix is not on it until your checks pass and dude publishes it, so reply_on_pull_request and resolve_thread are refused while you work. For each comment above you addressed, put in your final report its id (in italics after it), the answer you would post saying what you changed, and for a line comment that its thread can be resolved. Write that answer as intended, never as posted. Only the comments given to you here. Do not answer what you did not change. The conductor answers and resolves them after it confirms your published fix is on the pull request.
 
 ## Feedback from people
 

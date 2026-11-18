@@ -67,7 +67,7 @@ type ReplyPost struct {
 	// conversation.
 	thread int64
 	body   string
-	// Who posted it: the conductor, or a fixer in its own batch.
+	// Who posted it: the conductor. A fixer is refused (#485).
 	by string
 }
 
@@ -110,11 +110,10 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	if err != nil {
 		return ReplyPost{}, err
 	}
-	// A fixer answering pull request feedback replies only to its own
-	// batch's comments, while it runs.
-	var batch []string
+	// A fixer is told which of its batch's comments it may name, and is
+	// then refused: it does not post (#485).
 	if caller.phase == PhaseFix {
-		batch = caller.batch
+		batch := caller.batch
 		switch {
 		case caller.ended():
 			return ReplyPost{}, refusef(rYourRunPostsNothing, caller.status)
@@ -123,20 +122,22 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 		case !slices.Contains(batch, strings.TrimSpace(in.InReplyTo)):
 			return ReplyPost{}, refusef(rInReplyMustBeOneComments, strings.Join(batch, ", "))
 		}
+		// Its fix is not published while it runs: a reply would claim
+		// what the pull request does not have yet. The conductor answers
+		// once the published fix is verified (#485).
+		return ReplyPost{}, refusef(rFixNotOnPullRequestYet, strings.TrimSpace(in.InReplyTo))
 	} else if caller.role != RoleConductor {
 		return ReplyPost{}, refuseText(rTaskConductorRepliesOnItsPull)
 	}
 	var live bool
-	if batch != nil {
-		live = true
-	} else if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
 		AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
 		return ReplyPost{}, err
 	}
 	if !live {
 		return ReplyPost{}, refuseText(rYouAreNoLongerThisTask5)
 	}
-	if batch == nil && strings.TrimSpace(in.InReplyTo) == "" {
+	if strings.TrimSpace(in.InReplyTo) == "" {
 		// T4: a review-only task's conductor posts no review of its own:
 		// dude's review is the output. Replies in a thread stay its.
 		if n, ok, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil {
@@ -157,9 +158,6 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 		return ReplyPost{}, err
 	}
 	p := ReplyPost{ref: ref, repo: repo, number: number, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo), by: "conductor"}
-	if batch != nil {
-		p.by = "fixer"
-	}
 	var author, said string
 	if p.inReplyTo != "" {
 		// Its words as last read: an edit since it was first recorded is
