@@ -52,8 +52,8 @@ func TestReviewerAnswersWhereTheFixerPublishedNothing(t *testing.T) {
 		ref.RunID, delivery.EvAnswerFailed); n != 5 {
 		t.Errorf("%d answers withheld, want 5", n)
 	}
-	if strings.Contains(done[0].Line(), "is on the pull request's head") {
-		t.Errorf("the wake claims the fix is on the head: %s", done[0].Line())
+	if strings.Contains(done[0].Line(), "is on the pull request, so dude posted") || !strings.Contains(done[0].Line(), "is not there") {
+		t.Errorf("the wake does not say the fix is not there: %s", done[0].Line())
 	}
 }
 
@@ -299,6 +299,11 @@ func (a *answering) settledOnEnd(t *testing.T, ref delivery.RunRef, why string) 
 		a.task, delivery.WakeRound)
 	if !strings.Contains(wake, why) {
 		t.Errorf("the conductor's wake %q does not say %q", wake, why)
+	}
+	// Ended, a fix can no longer reach the pull request: the wake does not
+	// ask for one.
+	if strings.Contains(wake, "once a fix is on the pull request") || strings.Contains(wake, "is not there") {
+		t.Errorf("the conductor's wake %q waits for a fix on an ended delivery", wake)
 	}
 }
 

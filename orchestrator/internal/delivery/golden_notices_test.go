@@ -48,7 +48,12 @@ func TestGoldenWakeLines(t *testing.T) {
 			Posted: []string{"line-comment-1", "issue-comment-2"}, Resolved: []string{"line-comment-1"},
 			Failed: []string{"line-comment-3: github 404: Not Found"}})},
 		{"fixer-answers-withheld", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
-			Withheld: "target#1's head 9999999 does not contain the published fix abc1234 (a force-push dropped it)"})},
+			Withheld: "target#1's head 9999999 does not contain the published fix abc1234 (a force-push dropped it)", Cause: CauseDropped})},
+		{"fixer-answers-withheld-merged", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
+			Withheld: "the pull request was merged", Cause: CauseEnded})},
+		{"fixer-answers-withheld-unverified", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
+			Withheld: "could not verify the fix is on the pull request: target#1's comparison with the fix could not be read: github 403: Forbidden",
+			Cause: CauseUnverified})},
 		{"run-failed", runFailedLine("review · security", "run_rev", "lux: the host\nwent away "+strings.Repeat("x", 130))},
 		{"escalated-stuck", escalatedLine(&Escalation{Reason: "stuck", Step: "fix"})},
 		{"escalated-test-failed", escalatedLine(&Escalation{Reason: ReasonTestFailedCriteria, Step: "fix", Detail: map[string]any{

@@ -31,6 +31,11 @@ type FixerAnswers struct {
 	// not on the pull request, the pull request ended, or dude could not
 	// verify it for answerVerifyBound.
 	Withheld string
+	// What kind of reason Withheld is, for the conductor's wake:
+	// CauseDropped (its fix is not on the pull request), CauseEnded (the
+	// pull request or the delivery ended), CauseUnverified (dude could not
+	// check, for answerVerifyBound).
+	Cause string
 	// Why its answers could not be verified this pass ("" when they
 	// were): they stay held, for a later pass.
 	Unverified string
@@ -42,6 +47,13 @@ type FixerAnswers struct {
 func (f FixerAnswers) settled() bool {
 	return len(f.Posted)+len(f.Resolved)+len(f.Failed) > 0 || f.Withheld != ""
 }
+
+// Causes of a fixer's withheld answers (FixerAnswers.Cause).
+const (
+	CauseDropped    = "dropped"
+	CauseEnded      = "ended"
+	CauseUnverified = "unverified"
+)
 
 // errAnswerBusy: another poster holds a fresh claim on one of the
 // answers; the caller tries again after answerClaimLease.
@@ -270,10 +282,10 @@ func (s *Store) postFixer(ctx context.Context, gh *forge.GitHub, f fixerToPost) 
 	}); err != nil || len(held) == 0 {
 		return done, err
 	}
-	if why, err := s.contained(ctx, gh, f, held, slugs, branches); err != nil {
+	if why, cause, err := s.contained(ctx, gh, f, held, slugs, branches); err != nil {
 		return s.unverified(ctx, f, done, err)
 	} else if why != "" {
-		return s.withhold(ctx, f, held, why)
+		return s.withhold(ctx, f, held, why, cause)
 	}
 	for _, h := range held {
 		var err error
@@ -321,7 +333,7 @@ func (s *Store) unverified(ctx context.Context, f fixerToPost, done FixerAnswers
 	}); rerr != nil || len(held) == 0 {
 		return done, nil
 	}
-	withheld, werr := s.withhold(ctx, f, held, "could not verify the fix is on the pull request: "+u.Why)
+	withheld, werr := s.withhold(ctx, f, held, "could not verify the fix is on the pull request: "+u.Why, CauseUnverified)
 	if werr != nil {
 		slog.Warn("withholding a fixer's answers past the bound failed", "run", f.ref.RunID, "error", werr)
 		return done, nil
@@ -349,8 +361,8 @@ func recordUnverifiedTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string) 
 
 // withhold settles held, the fixer's unsettled answers, as withheld for
 // why (EvAnswerFailed, withheld: final), and reports it.
-func (s *Store) withhold(ctx context.Context, f fixerToPost, held []heldOf, why string) (FixerAnswers, error) {
-	done := FixerAnswers{RunID: f.ref.RunID, Commits: f.commits, Withheld: why}
+func (s *Store) withhold(ctx context.Context, f fixerToPost, held []heldOf, why, cause string) (FixerAnswers, error) {
+	done := FixerAnswers{RunID: f.ref.RunID, Commits: f.commits, Withheld: why, Cause: cause}
 	for _, h := range held {
 		done.ids = append(done.ids, h.ID)
 	}
@@ -376,7 +388,7 @@ func (s *Store) withhold(ctx context.Context, f fixerToPost, held []heldOf, why 
 // The head is read from the pull request's branch, which GitHub moves at
 // once (the pull request's own read trails it by seconds after a push).
 // Each pull request is read once, however many answers are on it.
-func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, held []heldOf, slugs, branches map[string]string) (string, error) {
+func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, held []heldOf, slugs, branches map[string]string) (why, cause string, err error) {
 	type pr struct {
 		repo   string
 		number int
@@ -401,48 +413,49 @@ func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, 
 		seen[p] = true
 		slug := slugs[h.Repo]
 		if gh == nil {
-			return "", unverified("no GitHub is connected for %s#%d", h.Repo, h.Number)
+			return "", "", unverified("no GitHub is connected for %s#%d", h.Repo, h.Number)
 		}
 		if slug == "" {
-			return "", unverified("%s is not a GitHub repository dude knows", h.Repo)
+			return "", "", unverified("%s is not a GitHub repository dude knows", h.Repo)
 		}
-		ref, _, err := gh.Mergeability(ctx, slug, h.Number)
-		if err != nil {
-			return "", refusedOr(err, "pull request", h)
+		ref, _, rerr := gh.Mergeability(ctx, slug, h.Number)
+		if rerr != nil {
+			return "", "", refusedOr(rerr, "pull request", h)
 		}
 		if ref.State != forge.StateOpen && ref.State != forge.StateDraft {
-			return fmt.Sprintf("%s#%d is %s", h.Repo, h.Number, ref.State), nil
+			return fmt.Sprintf("%s#%d is %s", h.Repo, h.Number, ref.State), CauseEnded, nil
 		}
 		commit := f.commits[h.Repo]
 		if commit == "" {
 			// No commit of the fixer's there: nothing of its fix is on
 			// this pull request, so a "fixed" answer there would be false.
-			return fmt.Sprintf("its fix did not change %s", h.Repo), nil
+			return fmt.Sprintf("its fix did not change %s", h.Repo), CauseDropped, nil
 		}
 		head := ref.HeadSHA
 		if b := branches[h.PRID]; b != "" {
-			if head, err = gh.BranchSHA(ctx, slug, b); err != nil {
-				return "", refusedOr(err, "branch", h)
+			var berr error
+			if head, berr = gh.BranchSHA(ctx, slug, b); berr != nil {
+				return "", "", refusedOr(berr, "branch", h)
 			}
 			if head == "" {
-				return fmt.Sprintf("%s#%d's branch %s is gone", h.Repo, h.Number, b), nil
+				return fmt.Sprintf("%s#%d's branch %s is gone", h.Repo, h.Number, b), CauseDropped, nil
 			}
 		}
 		if head == commit {
 			continue
 		}
-		cmp, err := gh.CompareLineage(ctx, slug, commit, head)
+		cmp, cerr := gh.CompareLineage(ctx, slug, commit, head)
 		var fe *forge.Error
 		switch {
-		case errors.As(err, &fe) && (fe.Status == 404 || fe.Status == 422):
-			return fmt.Sprintf("%s#%d's head %s does not contain the published fix %s", h.Repo, h.Number, short(head), short(commit)), nil
-		case err != nil:
-			return "", refusedOr(err, "comparison with the fix", h)
+		case errors.As(cerr, &fe) && (fe.Status == 404 || fe.Status == 422):
+			return fmt.Sprintf("%s#%d's head %s does not contain the published fix %s", h.Repo, h.Number, short(head), short(commit)), CauseDropped, nil
+		case cerr != nil:
+			return "", "", refusedOr(cerr, "comparison with the fix", h)
 		case cmp.BehindBy > 0:
-			return fmt.Sprintf("%s#%d's head %s does not contain the published fix %s (a force-push dropped it)", h.Repo, h.Number, short(head), short(commit)), nil
+			return fmt.Sprintf("%s#%d's head %s does not contain the published fix %s (a force-push dropped it)", h.Repo, h.Number, short(head), short(commit)), CauseDropped, nil
 		}
 	}
-	return "", nil
+	return "", "", nil
 }
 
 // postHeldReply posts one held reply through the reply path's steps, its

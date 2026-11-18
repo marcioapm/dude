@@ -85,7 +85,7 @@ func settleHeldOnEndTx(ctx context.Context, tx pgx.Tx, org, taskID, why string, 
 			out[n-1].ids = append(out[n-1].ids, u.h.ID)
 			continue
 		}
-		out = append(out, FixerAnswers{RunID: u.ref.RunID, Commits: u.commits, Withheld: reason, ids: []string{u.h.ID}})
+		out = append(out, FixerAnswers{RunID: u.ref.RunID, Commits: u.commits, Withheld: reason, Cause: CauseEnded, ids: []string{u.h.ID}})
 	}
 	for _, f := range out {
 		if err := wakeAnswersTx(ctx, tx, org, taskID, f); err != nil {
