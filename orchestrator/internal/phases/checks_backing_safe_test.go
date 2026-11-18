@@ -95,6 +95,11 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	{"a status echoed through a pipe", "false", "false | echo exit=$?"},
 	// WORD: ${…} opens new quoting, so its pipe is inside the word.
 	{"a pipe inside ${…} in double quotes", `true "${x:-"`, `set -o pipefail && true "${x:-" | false "}"`},
+	// #484 round 4. dash (/bin/sh on layered images) reads "cmd &> f" as
+	// "cmd &" then "> f": the command runs in the background and the call
+	// exits 0.
+	{"&> under dash", "false", "false &> /dev/null"},
+	{"&>> under dash", "false", "false &>> /tmp/log"},
 }
 
 // unreadReports are reported commands dude does not read (a comment, a
@@ -256,6 +261,9 @@ func TestHonestFormsOutsideTheGrammarBackNothing(t *testing.T) {
 		{"make test", "make test >&2"},
 		{"make test", "make test 2>&-"},
 		{"make test", "> log make test"},
+		// Moved from TestEquivalentFormsStillBack (#484 round 4): bash's
+		// &> is a background job in dash, so it is not in the grammar.
+		{"cargo test --workspace", "cargo test --workspace &> /tmp/log"},
 	} {
 		if _, ok := sameCommand(c.reported, c.recorded); ok {
 			t.Errorf("%q backs %q: the grammar does not read it", c.recorded, c.reported)
@@ -295,7 +303,6 @@ func TestEquivalentFormsStillBack(t *testing.T) {
 		{"go test ./internal/memory -run RealEmbedder", "go test ./internal/memory -run RealEmbedder 2>&1"},
 		{"go test ./internal/delivery", "cd orchestrator && go test ./internal/delivery"},
 		{"cd orchestrator && go test ./internal/delivery", "set -o pipefail && cd orchestrator && go test ./internal/delivery 2>&1 | tail -40"},
-		{"cargo test --workspace", "cargo test --workspace &> /tmp/log"},
 		{"make lint", "make lint >/dev/null 2>&1"},
 		{"make lint", "make lint >> /tmp/log 2>> /tmp/err"},
 		{"make test", "make test; echo exit=$?"},

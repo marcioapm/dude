@@ -506,7 +506,7 @@ func expands(c shellCall) bool {
 //	SIMPLE   := ASSIGN* ["env" ASSIGN+] WORD+ REDIR*
 //	PIPE     := ("|" WORD+)+                               (only after PIPEFAIL)
 //	ECHO     := ";" "echo" "exit=$?"                       (last)
-//	REDIR    := (">" | ">>" | "2>" | "2>>" | "&>" | "&>>") WORD | "2>&1" | "1>&2"
+//	REDIR    := (">" | ">>" | "2>" | "2>>") WORD | "2>&1" | "1>&2"
 //
 // shellLex says what a WORD is. Spaces and tabs separate words; nothing
 // else does. A call spanning lines is not read: a newline separates
@@ -521,6 +521,10 @@ func expands(c shellCall) bool {
 // only from a call that completed or exited 0 (echoedExit). Nothing else
 // may run between the set and the command, so nothing can turn pipefail
 // off, change directory or the environment unseen.
+//
+// Every shape means the same in bash and in POSIX sh (dash, the agent's
+// /bin/sh on layered images): bash's "&>" is not one, as dash reads it as
+// a background job.
 type shellCall struct {
 	dir string // a leading cd's (or a report's annotation's)
 	// set is the leading pipefail set's option word ("-o", "-euo"; "" for
@@ -674,7 +678,7 @@ func echoedExit(last string) string {
 var assignment = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // shTok is a shell word, quoted as written, or an operator: a control
-// operator (&&, ;, |) or an output redirect (>, 2>>, &>, 2>&1, …).
+// operator (&&, ;, |) or an output redirect (>, 2>>, 2>&1, …).
 type shTok struct {
 	text string
 	op   bool
@@ -689,7 +693,7 @@ type shTok struct {
 
 // redirects are the output redirects dude reads, and whether each takes a
 // target word.
-var redirects = map[string]bool{">": true, ">>": true, "2>": true, "2>>": true, "&>": true, "&>>": true, "2>&1": false, "1>&2": false}
+var redirects = map[string]bool{">": true, ">>": true, "2>": true, "2>>": true, "2>&1": false, "1>&2": false}
 
 // shellLex splits a one-line command into words and operators, or says
 // why dude does not read it. A word is plain characters, a backslash and
@@ -835,24 +839,14 @@ func shellLex(s string) ([]shTok, string) {
 			flush()
 			toks = append(toks, shTok{text: r, op: true, redirect: true, target: target})
 		case '&':
-			switch {
-			case i+1 < len(s) && s[i+1] == '&':
-				op("&&")
-				i++
-			case i+1 < len(s) && s[i+1] == '>':
-				r := "&>"
-				i++
-				if i+1 < len(s) && s[i+1] == '>' {
-					r, i = r+">", i+1
-				}
-				if i+1 < len(s) && (s[i+1] == '&' || s[i+1] == '|') {
-					return nil, "it redirects in a way dude does not read"
-				}
-				flush()
-				toks = append(toks, shTok{text: r, op: true, redirect: true, target: true})
-			default:
+			// "&>" and "&>>" are bash's redirects of both streams, but
+			// POSIX sh (dash, /bin/sh on layered images) reads "cmd &>
+			// f" as "cmd &" then "> f": a background job, refused alike.
+			if i+1 >= len(s) || s[i+1] != '&' {
 				return nil, "it runs something in the background, whose exit is not waited for"
 			}
+			op("&&")
+			i++
 		case '|':
 			if i+1 < len(s) && (s[i+1] == '|' || s[i+1] == '&') {
 				return nil, "its exit status is a later step's"
