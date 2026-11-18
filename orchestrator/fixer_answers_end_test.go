@@ -394,16 +394,24 @@ func TestRound5AStalePosterClaimsNothingAfterTheEnd(t *testing.T) {
 	defer first.open()
 	p1 := &delivery.Store{DB: a.w.app}
 	errs := make(chan error, 2)
-	go func() { _, err := p1.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, first)); errs <- err }()
+	go func() {
+		_, err := p1.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, first))
+		errs <- err
+	}()
 	<-first.inside
 	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
 		ref.RunID, delivery.EvAnswerClaimed)
 	// The stale poster, held reading the pull request: it has listed the
 	// answers, and claims none yet.
-	stale := newBarrier(func(r *http.Request, _ string) bool { return r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/1") })
+	stale := newBarrier(func(r *http.Request, _ string) bool {
+		return r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/1")
+	})
 	defer stale.open()
 	p2 := &delivery.Store{DB: a.w.app}
-	go func() { _, err := p2.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, stale)); errs <- err }()
+	go func() {
+		_, err := p2.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, stale))
+		errs <- err
+	}()
 	<-stale.inside
 	a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
 	stale.open()
@@ -450,7 +458,10 @@ func TestRound5AWithholdingPassNeverOvertakesAPosterInFlight(t *testing.T) {
 	defer b.open()
 	p1 := &delivery.Store{DB: a.w.app}
 	errs := make(chan error, 1)
-	go func() { _, err := p1.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, b)); errs <- err }()
+	go func() {
+		_, err := p1.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, b))
+		errs <- err
+	}()
 	<-b.inside
 	forceBranch(t, a.w.gh, a.w.gh.Pull(1).Head, before)
 	if _, err := (&delivery.Store{DB: a.w.app}).PostFixerAnswers(context.Background(), a.w.org, a.task, a.gh); err != nil {
