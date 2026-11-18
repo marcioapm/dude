@@ -61,6 +61,10 @@ const (
 	// A held answer that will not be posted. Payload: { answerId, kind,
 	// error, withheld? }: withheld when the fix is not on the pull request.
 	EvAnswerFailed = "pull_request.answer_failed"
+	// Why a fixer's answers could not be verified on the pull request this
+	// pass (GitHub refusing a read, no GitHub, a database error): they
+	// stay held. Payload: { why }. Recorded once per reason in a row.
+	EvAnswerUnverified = "pull_request.answer_unverified"
 )
 
 // Kinds of held answers.

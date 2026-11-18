@@ -106,6 +106,12 @@ type Store struct {
 	// Test hook (PostFixerAnswers): called once GitHub took a fixer's
 	// answer, before it is recorded; an error stands for a crash there.
 	AfterAnswerPost AfterAnswerPost
+	// Test hook (PostFixerAnswers): called in a held reply's claim
+	// transaction, under the Chat lock, before the claim is written.
+	BeforeAnswerClaim BeforeAnswerClaim
+	// Now is the clock a fixer's answers' bound is read on
+	// (answerVerifyBound); nil is time.Now. Tests move it.
+	Now func() time.Time
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).

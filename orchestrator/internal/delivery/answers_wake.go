@@ -39,6 +39,9 @@ func (w *steps) wakeOnAnswers(ctx context.Context, sc workflow.StepContext, st *
 	}
 	return w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
 		for _, f := range done {
+			if !f.settled() {
+				continue
+			}
 			if err := wakeLiveConductorTx(ctx, tx, sc.OrganizationID, st.TaskID, WakeRound,
 				"answers:"+f.RunID+":"+strings.Join(f.ids, ","), answersLine(f)); err != nil {
 				return err

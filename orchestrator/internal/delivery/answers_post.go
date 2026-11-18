@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,8 +28,12 @@ type FixerAnswers struct {
 	// Answers that failed, each "<id>: <why>".
 	Failed []string
 	// Why its answers were withheld ("" when they were not): the fix is
-	// not on the pull request.
+	// not on the pull request, the pull request ended, or dude could not
+	// verify it for answerVerifyBound.
 	Withheld string
+	// Why its answers could not be verified this pass ("" when they
+	// were): they stay held, for a later pass.
+	Unverified string
 	// The held answers settled, by event id: the wake's key.
 	ids []string
 }
@@ -42,20 +47,67 @@ func (f FixerAnswers) settled() bool {
 // answers; the caller tries again after answerClaimLease.
 var errAnswerBusy = errors.New("another poster is posting a fixer's answer")
 
+// BeforeAnswerClaim is a test hook: called in a held reply's claim
+// transaction, under the task's Chat lock, once the answer was read
+// unsettled and unclaimed, before the claim is written. An error fails the
+// claim's transaction (a database failing there).
+type BeforeAnswerClaim func(answerID string) error
+
 // AfterAnswerPost is a test hook: called once GitHub took an answer,
 // before it is recorded. An error stands for the poster crashing there.
 type AfterAnswerPost func(answerID string) error
+
+// crashed is AfterAnswerPost's error: the poster gone, nothing after it
+// done.
+type crashed struct{ err error }
+
+func (c crashed) Error() string { return c.err.Error() }
+func (c crashed) Unwrap() error { return c.err }
 
 // fixerToPost is a published, ended fixer with answers not settled.
 type fixerToPost struct {
 	ref     RunRef
 	commits map[string]string
+	ended   time.Time
+}
+
+// Unverified is a fixer whose answers dude could not check against the
+// pull request (GitHub refused a read, no GitHub connected, no repository
+// slug): they stay held, retried on later passes, until
+// answerVerifyBound past the fixer's end withholds them.
+type Unverified struct {
+	RunID, Why string
+	// What failed, when it was an error of its own (a posting failure that
+	// is neither GitHub refusing nor GitHub down); nil for a reason.
+	Err error
+}
+
+func (u *Unverified) Error() string {
+	return "fixer " + u.RunID + "'s answers could not be verified on the pull request: " + u.Why
+}
+
+func (u *Unverified) Unwrap() error { return u.Err }
+
+// answerVerifyBound is how long a fixer's answers that could not be
+// verified wait, from its Run's end, before they are withheld: nothing
+// held waits forever.
+const answerVerifyBound = 24 * time.Hour
+
+// now is the store's clock (Store.Now, else time.Now).
+func (s *Store) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // PostFixerAnswers posts the held answers of the task's fixers whose fix is
 // published, in the order they published, each fixer's as the package
-// comment says. It returns what it did, by fixer; an error that is
-// forge.Transient, or errAnswerBusy, leaves the rest to a later call.
+// comment says. It returns what it did, by fixer: a fixer whose answers
+// could not be verified (FixerAnswers.Unverified) stays held, and stops
+// the fixers after it. An error stops it, the rest left to a later call:
+// forge.Transient or errAnswerBusy (try again soon), or a database error
+// selecting the fixers.
 func (s *Store) PostFixerAnswers(ctx context.Context, org, taskID string, gh *forge.GitHub) ([]FixerAnswers, error) {
 	var fixers []fixerToPost
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -68,11 +120,16 @@ func (s *Store) PostFixerAnswers(ctx context.Context, org, taskID string, gh *fo
 	var out []FixerAnswers
 	for _, f := range fixers {
 		done, err := s.postFixer(ctx, gh, f)
-		if done.settled() {
+		if done.settled() || done.Unverified != "" {
 			out = append(out, done)
 		}
 		if err != nil {
 			return out, err
+		}
+		if done.Unverified != "" && done.Withheld == "" {
+			// Fixers post in the order they published: a later one
+			// waits for this one's answers to be settled.
+			return out, nil
 		}
 	}
 	return out, nil
@@ -80,9 +137,9 @@ func (s *Store) PostFixerAnswers(ctx context.Context, org, taskID string, gh *fo
 
 // fixersToPostTx are the task's ended fix Runs with held answers not
 // settled and a fix published, oldest publication first, each with its
-// published head by repository (its latest).
+// published head by repository (its latest) and when it ended.
 func fixersToPostTx(ctx context.Context, tx pgx.Tx, org, taskID string) ([]fixerToPost, error) {
-	rows, err := tx.Query(ctx, `SELECT r.id, r.project_id,
+	rows, err := tx.Query(ctx, `SELECT r.id, r.project_id, COALESCE(r.ended_at, r.created_at),
 			(SELECT jsonb_object_agg(c.repo, c.head) FROM (SELECT DISTINCT ON (e.payload->>'repo') e.payload->>'repo' AS repo, e.payload->>'headSha' AS head
 				FROM events e WHERE e.run_id = r.id AND e.event_type = $2 ORDER BY e.payload->>'repo', e.cursor DESC) c),
 			(SELECT min(e.cursor) FROM events e WHERE e.run_id = r.id AND e.event_type = $2) AS published
@@ -99,7 +156,7 @@ func fixersToPostTx(ctx context.Context, tx pgx.Tx, org, taskID string) ([]fixer
 		var f fixerToPost
 		var cursor int64
 		f.ref = RunRef{Org: org, TaskID: taskID}
-		if err := rows.Scan(&f.ref.RunID, &f.ref.ProjectID, &f.commits, &cursor); err != nil {
+		if err := rows.Scan(&f.ref.RunID, &f.ref.ProjectID, &f.ended, &f.commits, &cursor); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -197,20 +254,9 @@ func (s *Store) postFixer(ctx context.Context, gh *forge.GitHub, f fixerToPost) 
 		return done, err
 	}
 	if why, err := s.contained(ctx, gh, f, held, slugs, branches); err != nil {
-		return done, err
+		return s.unverified(ctx, f, done, err)
 	} else if why != "" {
-		done.Withheld = why
-		for _, h := range held {
-			done.ids = append(done.ids, h.ID)
-		}
-		return done, s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error {
-			for _, h := range held {
-				if err := failAnswerTx(ctx, tx, f.ref, h, why, true); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+		return s.withhold(ctx, f, held, why)
 	}
 	for _, h := range held {
 		var err error
@@ -220,21 +266,114 @@ func (s *Store) postFixer(ctx context.Context, gh *forge.GitHub, f fixerToPost) 
 			err = s.postHeldReply(ctx, gh, f.ref, h, &done)
 		}
 		if err != nil {
-			return done, err
+			return s.unverified(ctx, f, done, err)
 		}
 	}
 	return done, nil
 }
 
+// unverified is postFixer's end on err: GitHub down or limiting, or
+// another poster at work, is returned as it is (a later pass tries again
+// soon). Anything else — GitHub refusing a read, no GitHub, a database
+// error — is no error: the fixer's answers stay held (done.Unverified, the
+// reason recorded on its Run as EvAnswerUnverified, once per reason) for
+// a later pass, until answerVerifyBound past the fixer's end, when what is
+// left is withheld: nothing held waits forever.
+func (s *Store) unverified(ctx context.Context, f fixerToPost, done FixerAnswers, err error) (FixerAnswers, error) {
+	if forge.Transient(err) || errors.Is(err, errAnswerBusy) || errors.As(err, new(crashed)) {
+		return done, err
+	}
+	var u *Unverified
+	if !errors.As(err, &u) {
+		u = &Unverified{RunID: f.ref.RunID, Why: err.Error(), Err: err}
+	}
+	slog.Warn("a fixer's answers are held: they could not be verified", "run", f.ref.RunID, "why", u.Why)
+	done.Unverified = u.Why
+	if rerr := s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error { return recordUnverifiedTx(ctx, tx, f.ref, u.Why) }); rerr != nil {
+		// Not even that recorded: still held, tried again on a later pass.
+		slog.Warn("recording why a fixer's answers could not be verified failed", "run", f.ref.RunID, "why", u.Why, "error", rerr)
+		return done, nil
+	}
+	if s.now().Sub(f.ended) < answerVerifyBound {
+		return done, nil
+	}
+	var held []heldOf
+	if rerr := s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) (err error) {
+		held, err = unsettledTx(ctx, tx, f.ref.RunID)
+		return err
+	}); rerr != nil || len(held) == 0 {
+		return done, nil
+	}
+	withheld, werr := s.withhold(ctx, f, held, "could not verify the fix is on the pull request: "+u.Why)
+	if werr != nil {
+		slog.Warn("withholding a fixer's answers past the bound failed", "run", f.ref.RunID, "error", werr)
+		return done, nil
+	}
+	withheld.Posted, withheld.Resolved, withheld.Failed = done.Posted, done.Resolved, done.Failed
+	withheld.ids = append(done.ids, withheld.ids...)
+	return withheld, nil
+}
+
+// recordUnverifiedTx records on the fixer's Run why its answers could not
+// be verified, unless that is already the last reason recorded.
+func recordUnverifiedTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string) error {
+	var last string
+	err := tx.QueryRow(ctx, `SELECT payload->>'why' FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor DESC LIMIT 1`,
+		ref.RunID, EvAnswerUnverified).Scan(&last)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if last == why {
+		return nil
+	}
+	_, err = ledger.Append(ctx, tx, ref.Event(EvAnswerUnverified, ledger.ActorSystem, map[string]any{"why": why}))
+	return err
+}
+
+// withhold settles held, the fixer's unsettled answers, as withheld for
+// why (EvAnswerFailed, withheld: final), and reports it.
+func (s *Store) withhold(ctx context.Context, f fixerToPost, held []heldOf, why string) (FixerAnswers, error) {
+	done := FixerAnswers{RunID: f.ref.RunID, Commits: f.commits, Withheld: why}
+	for _, h := range held {
+		done.ids = append(done.ids, h.ID)
+	}
+	return done, s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error {
+		for _, h := range held {
+			if err := failAnswerTx(ctx, tx, f.ref, h, why, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // contained is "" when every pull request the held answers are on is open
 // on GitHub and its head contains the fixer's published commit in its
-// repository; else why not. An error is GitHub not answering. The head is
-// read from the pull request's branch, which GitHub moves at once (the pull
-// request's own read trails it by seconds after a push).
+// repository. It is why not (the answers are withheld, for good) only on
+// positive evidence the fix is absent: the pull request not open, the
+// fixer having published nothing to its repository, its branch gone, or
+// GitHub's compare saying the head does not contain the commit (behind, or
+// a 404 or 422: no common history). Anything else is an error, the
+// answers left held: forge.Transient (GitHub down or limiting), or
+// *Unverified (GitHub refusing a read, no GitHub, no repository slug).
+// The head is read from the pull request's branch, which GitHub moves at
+// once (the pull request's own read trails it by seconds after a push).
+// Each pull request is read once, however many answers are on it.
 func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, held []heldOf, slugs, branches map[string]string) (string, error) {
 	type pr struct {
 		repo   string
 		number int
+	}
+	unverified := func(format string, args ...any) error {
+		return &Unverified{RunID: f.ref.RunID, Why: fmt.Sprintf(format, args...)}
+	}
+	// refusedOr is err as the caller returns it: GitHub not answering
+	// stays as it is, anything else could not be verified.
+	refusedOr := func(err error, what string, h heldOf) error {
+		if forge.Transient(err) {
+			return err
+		}
+		return unverified("%s#%d's %s could not be read: %v", h.Repo, h.Number, what, err)
 	}
 	seen := map[pr]bool{}
 	for _, h := range held {
@@ -244,15 +383,15 @@ func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, 
 		}
 		seen[p] = true
 		slug := slugs[h.Repo]
-		if gh == nil || slug == "" {
-			return fmt.Sprintf("%s#%d is not on a GitHub dude is connected to", h.Repo, h.Number), nil
+		if gh == nil {
+			return "", unverified("no GitHub is connected for %s#%d", h.Repo, h.Number)
+		}
+		if slug == "" {
+			return "", unverified("%s is not a GitHub repository dude knows", h.Repo)
 		}
 		ref, _, err := gh.Mergeability(ctx, slug, h.Number)
 		if err != nil {
-			if forge.Transient(err) {
-				return "", err
-			}
-			return fmt.Sprintf("%s#%d could not be read: %v", h.Repo, h.Number, err), nil
+			return "", refusedOr(err, "pull request", h)
 		}
 		if ref.State != forge.StateOpen && ref.State != forge.StateDraft {
 			return fmt.Sprintf("%s#%d is %s", h.Repo, h.Number, ref.State), nil
@@ -266,10 +405,7 @@ func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, 
 		head := ref.HeadSHA
 		if b := branches[h.PRID]; b != "" {
 			if head, err = gh.BranchSHA(ctx, slug, b); err != nil {
-				if forge.Transient(err) {
-					return "", err
-				}
-				return fmt.Sprintf("%s#%d's branch could not be read: %v", h.Repo, h.Number, err), nil
+				return "", refusedOr(err, "branch", h)
 			}
 			if head == "" {
 				return fmt.Sprintf("%s#%d's branch %s is gone", h.Repo, h.Number, b), nil
@@ -284,7 +420,7 @@ func (s *Store) contained(ctx context.Context, gh *forge.GitHub, f fixerToPost, 
 		case errors.As(err, &fe) && (fe.Status == 404 || fe.Status == 422):
 			return fmt.Sprintf("%s#%d's head %s does not contain the published fix %s", h.Repo, h.Number, short(head), short(commit)), nil
 		case err != nil:
-			return "", err
+			return "", refusedOr(err, "comparison with the fix", h)
 		case cmp.BehindBy > 0:
 			return fmt.Sprintf("%s#%d's head %s does not contain the published fix %s (a force-push dropped it)", h.Repo, h.Number, short(head), short(commit)), nil
 		}
@@ -332,6 +468,11 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 			return err
 		}
 		p.by, p.answerID = RoleFixer, h.ID
+		if s.BeforeAnswerClaim != nil {
+			if err := s.BeforeAnswerClaim(h.ID); err != nil {
+				return err
+			}
+		}
 		_, err = ledger.Append(ctx, tx, ref.Event(EvAnswerClaimed, ledger.ActorSystem, map[string]any{"answerId": h.ID}))
 		return err
 	}); err != nil || skip {
@@ -365,7 +506,7 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 	}
 	if s.AfterAnswerPost != nil {
 		if err := s.AfterAnswerPost(h.ID); err != nil {
-			return err
+			return crashed{err}
 		}
 	}
 	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
@@ -436,26 +577,45 @@ func (s *Store) failed(ctx context.Context, ref RunRef, h heldOf, why string, do
 }
 
 // fixerAnswers posts the task's published fixers' held answers
-// (PostFixerAnswers) and tells the conductor (wakeOnAnswers).
-// GitHub not answering, or another poster at work, is a Wait: the step runs
-// again, nothing it did before this counted twice.
+// (PostFixerAnswers) and tells the conductor (wakeOnAnswers). Posting
+// never fails the host step: GitHub not answering, or another poster at
+// work, is a Wait (the step runs again, nothing it did before counted
+// twice); anything else — answers that could not be verified, a database
+// error — is logged (and, for the former, recorded on the fixer's Run) and
+// the step goes on, the answers left held for a later pass.
 func (w *steps) fixerAnswers(ctx context.Context, sc workflow.StepContext, st *State) error {
 	if w.forges == nil {
 		return nil
 	}
 	gh, err := w.forges.For(ctx, sc.OrganizationID)
 	if err != nil {
-		return err
+		if forge.Transient(err) {
+			return forgeWait(err)
+		}
+		// No GitHub to post with now: the answers stay held, and the
+		// bound is counted when one is (contained, Unverified).
+		slog.Warn("a fixer's answers wait: no GitHub to post them with", "task", st.TaskID, "error", err)
+		gh = nil
 	}
 	done, err := w.s.PostFixerAnswers(ctx, sc.OrganizationID, st.TaskID, gh)
 	if werr := w.wakeOnAnswers(ctx, sc, st, done); werr != nil {
-		return werr
+		slog.Warn("waking the conductor with a fixer's answers failed", "task", st.TaskID, "error", werr)
 	}
 	switch {
+	case err == nil:
+		return nil
 	case errors.Is(err, errAnswerBusy):
 		return workflow.Wait{After: answerClaimLease, Why: err.Error()}
-	case err != nil:
+	case forge.Transient(err):
 		return forgeWait(err)
 	}
+	slog.Warn("a fixer's answers are held for a later pass", "task", st.TaskID, "error", err)
 	return nil
+}
+
+// FixerAnswersStep is the posting a delivery step does first (awaitPRFix,
+// movedOnPR): fixerAnswers, for task's delivery, with GitHub from forges.
+// Its error is what the step would fail or wait with.
+func (s *Store) FixerAnswersStep(ctx context.Context, org, taskID string, forges Forges) error {
+	return (&steps{s: s, forges: forges}).fixerAnswers(ctx, workflow.StepContext{OrganizationID: org}, &State{TaskID: taskID})
 }
