@@ -419,15 +419,15 @@ const (
 // closestCalls are the recorded calls (distinct, latest first) nearest a
 // reported command's words (callWords) no call matched, nearest first: by
 // the share of the command's words they have in common (any word in
-// common, the latest of equals first), each quoted as recorded with how it
-// ended.
+// common, the latest of equals first). Formatting is deferred until after
+// the top candidates are selected.
 func closestCalls(want map[string]bool, calls []readCall) []string {
 	type near struct {
-		line  string
+		at    int
 		score float64
 	}
 	var nears []near
-	for _, c := range calls {
+	for at, c := range calls {
 		common := 0
 		for w := range c.words {
 			if want[w] {
@@ -435,14 +435,15 @@ func closestCalls(want map[string]bool, calls []readCall) []string {
 			}
 		}
 		if common > 0 {
-			nears = append(nears, near{fmt.Sprintf("%q (%s)", clipTo(c.command, closestCallMax), c.reading),
-				float64(common) / float64(len(want)+len(c.words)-common)})
+			nears = append(nears, near{at: at,
+				score: float64(common) / float64(len(want)+len(c.words)-common)})
 		}
 	}
 	slices.SortStableFunc(nears, func(a, b near) int { return cmp.Compare(b.score, a.score) })
-	out := []string{}
+	out := make([]string, 0, min(len(nears), closestCallsMax))
 	for _, n := range nears[:min(len(nears), closestCallsMax)] {
-		out = append(out, n.line)
+		c := calls[n.at]
+		out = append(out, fmt.Sprintf("%q (%s)", clipTo(c.command, closestCallMax), c.reading))
 	}
 	return out
 }
