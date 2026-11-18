@@ -436,7 +436,7 @@ func (s *Store) failed(ctx context.Context, ref RunRef, h heldOf, why string, do
 }
 
 // fixerAnswers posts the task's published fixers' held answers
-// (PostFixerAnswers).
+// (PostFixerAnswers) and tells the conductor (wakeOnAnswers).
 // GitHub not answering, or another poster at work, is a Wait: the step runs
 // again, nothing it did before this counted twice.
 func (w *steps) fixerAnswers(ctx context.Context, sc workflow.StepContext, st *State) error {
@@ -447,7 +447,10 @@ func (w *steps) fixerAnswers(ctx context.Context, sc workflow.StepContext, st *S
 	if err != nil {
 		return err
 	}
-	_, err = w.s.PostFixerAnswers(ctx, sc.OrganizationID, st.TaskID, gh)
+	done, err := w.s.PostFixerAnswers(ctx, sc.OrganizationID, st.TaskID, gh)
+	if werr := w.wakeOnAnswers(ctx, sc, st, done); werr != nil {
+		return werr
+	}
 	switch {
 	case errors.Is(err, errAnswerBusy):
 		return workflow.Wait{After: answerClaimLease, Why: err.Error()}

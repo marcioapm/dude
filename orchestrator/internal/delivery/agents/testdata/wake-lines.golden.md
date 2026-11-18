@@ -26,6 +26,14 @@ Decision waiting: pull request feedback.
 
 Decision waiting: .
 
+## fixer-answers-posted
+
+Fixer run_fix's fix target@abc1234 is on the pull request's head, so dude posted its answers there: replied to line-comment-1, issue-comment-2; resolved line-comment-1; failed: line-comment-3: github 404: Not Found. Add to or correct them with reply_on_pull_request if they say more than the fix did.
+
+## fixer-answers-withheld
+
+Fixer run_fix's answers on the pull request were not posted: target#1's head 9999999 does not contain the published fix abc1234 (a force-push dropped it). Its fix target@abc1234 is not there; nothing it said was posted or resolved. Read its report (run_chat run_fix) and answer the comments yourself once a fix is on the pull request.
+
 ## run-failed
 
 Your review · security Run run_rev failed: lux: the host went away xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…

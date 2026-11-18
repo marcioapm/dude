@@ -44,6 +44,11 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"decision-waiting-before-pr", decisionWaitingNote(PointBeforePR, "")},
 		{"decision-waiting-pr-feedback", decisionWaitingNote(PointPRFeedback, "")},
 		{"decision-waiting-unknown", decisionWaitingNote("somewhere", "")},
+		{"fixer-answers-posted", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
+			Posted: []string{"line-comment-1", "issue-comment-2"}, Resolved: []string{"line-comment-1"},
+			Failed: []string{"line-comment-3: github 404: Not Found"}})},
+		{"fixer-answers-withheld", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
+			Withheld: "target#1's head 9999999 does not contain the published fix abc1234 (a force-push dropped it)"})},
 		{"run-failed", runFailedLine("review · security", "run_rev", "lux: the host\nwent away "+strings.Repeat("x", 130))},
 		{"escalated-stuck", escalatedLine(&Escalation{Reason: "stuck", Step: "fix"})},
 		{"escalated-test-failed", escalatedLine(&Escalation{Reason: ReasonTestFailedCriteria, Step: "fix", Detail: map[string]any{
