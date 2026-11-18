@@ -501,10 +501,9 @@ func sameCommand(reported, recorded string) (shellCall, bool) {
 //     test (api)") is backed only by a call run there; one naming none, by
 //     a call run in any.
 //   - The environment: both must make the same assignments in the same
-//     order. "env A=1 cmd" and "A=1 cmd" are the same only when no value
-//     expands anything (expands): env's values are expanded before any is
-//     assigned, and dash expands "~" in an assignment, not in env's
-//     argument.
+//     order and with the same partition before/after env. External env
+//     resolves executables, unlike shell assignment form (builtins and
+//     functions), even when no value expands.
 //   - A report setting -u (set -euo pipefail) with an expansion is backed
 //     only by a call that set it too: unset, the expansion fails there.
 func sameRead(want, got shellCall) bool {
@@ -515,17 +514,7 @@ func sameRead(want, got shellCall) bool {
 
 // sameEnv says two reads make the same assignments (sameRead).
 func sameEnv(want, got shellCall) bool {
-	if want.viaEnv == got.viaEnv && slices.Equal(want.pre, got.pre) && slices.Equal(want.env, got.env) {
-		return true
-	}
-	return !expands(want) && !expands(got) &&
-		slices.Equal(slices.Concat(want.pre, want.env), slices.Concat(got.pre, got.env))
-}
-
-// expands says an assignment of c's expands something, or may: "$", "`",
-// "~" or a glob.
-func expands(c shellCall) bool {
-	return slices.ContainsFunc(slices.Concat(c.pre, c.env), func(a string) bool { return strings.ContainsAny(a, "$`~*?[") })
+	return want.viaEnv == got.viaEnv && slices.Equal(want.pre, got.pre) && slices.Equal(want.env, got.env)
 }
 
 // shellCall is a shell command as dude reads it: a call backs a pass only

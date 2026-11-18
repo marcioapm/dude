@@ -308,8 +308,8 @@ func TestHonestFormsOutsideTheGrammarBackNothing(t *testing.T) {
 // after an exact set of pipefail.
 func TestEquivalentFormsStillBack(t *testing.T) {
 	for _, c := range []struct{ reported, recorded string }{
-		{"NODE_ENV=test npx jest", "env NODE_ENV=test npx jest"},
-		{"env A=1 B=2 npx jest", "A=1 B=2 npx jest"},
+		{"NODE_ENV=test npx jest", "NODE_ENV=test npx jest"},
+		{"env A=1 B=2 npx jest", "env A=1 B=2 npx jest"},
 		{"make test > /tmp/log 2>&1", "make test > /tmp/log 2>&1"},
 		{"make test (api)", "cd api && make test"},
 		{"make test 2>&1 | tee log", "set -o pipefail && make test 2>&1 | tee log"},
@@ -338,7 +338,7 @@ func TestEquivalentFormsStillBack(t *testing.T) {
 		{"make lint > /dev/null 2>&1", "make lint >/dev/null 2>&1"},
 		{"make lint >> /tmp/log 2>> /tmp/err", "make lint >> /tmp/log 2>> /tmp/err"},
 		{"make test", "make test; echo exit=$?"},
-		{"GOFLAGS=-count=1 go test ./x", "env GOFLAGS=-count=1 go test ./x"},
+		{"GOFLAGS=-count=1 go test ./x", "GOFLAGS=-count=1 go test ./x"},
 		{"GOFLAGS=-count=1 go test ./x 2>&1", "GOFLAGS=-count=1 go test ./x 2>&1"},
 		{"go test -run \"$T\" ./x", "go test -run \"$T\" ./x"},
 		{"go test -run ${T} ./x", "go test -run ${T} ./x"},
