@@ -774,6 +774,15 @@ func TestRecordedCallsReadAFailureAtTheBase(t *testing.T) {
 		// A checkout mid-merge, its stdout recorded before its stderr.
 		{"git's unresolved index error", "", [][]any{{"git checkout " + sha + " && make test", 1, "Makefile: needs merge\nerror: you need to resolve your current index first"}}, "unclear: exit 1, which a step before it may have returned"},
 		{"an error: line first", "", [][]any{{"git checkout " + sha + " && make test", 1, "\nerror: could not detach HEAD\n"}}, "unclear: exit 1, which a step before it may have returned"},
+		// One grammar judges the ledger (#484 review): a call over lines
+		// runs make, then test; a comment, a pipe or a background job
+		// leaves the exit not the command's.
+		{"split over lines at the base", "", [][]any{{"git checkout " + sha + " && make\ntest", 1, "make: Nothing to be done for 'all'.\n"}}, "none recorded"},
+		{"a comment at the base", "", [][]any{{"git checkout " + sha + " && make test # x", 2}}, "none recorded"},
+		{"piped at the base", "", [][]any{{"git checkout " + sha + " && make test | tail", 2}}, "none recorded"},
+		{"a background checkout", "", [][]any{{"git checkout " + sha + " & make test", 2}}, "none recorded"},
+		{"an ANSI-C quote at the base", "", [][]any{{"git checkout " + sha + ` && make test $'\'' ; true '\'`, 2}}, "none recorded"},
+		{"tabs at the base", "", [][]any{{"git checkout\t" + sha + "  &&\tmake  test", 2}}, "exit 2"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
