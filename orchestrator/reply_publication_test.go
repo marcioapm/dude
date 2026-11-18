@@ -11,10 +11,11 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
-// #485: a pull request fixer's "fixed" reply and thread resolution must
-// not reach GitHub while its fix is unpublished. The fixer is refused and
-// reports its intended answers; the conductor posts and resolves after it
-// verifies the published fix.
+// #485, decision (a): a pull request fixer's "fixed" reply and thread
+// resolution must not reach GitHub while its fix is unpublished. Its calls
+// are captured; dude posts them itself once the published fix is on the
+// pull request, whoever decides the delivery, and wakes a conductor with
+// what it posted.
 
 const fixerReplyText = "Fixed: it explains now."
 
@@ -54,12 +55,11 @@ func earlyFixer(t *testing.T, holdPushes bool) (*world, string, int64, string) {
 	return w, task, own, fixer
 }
 
-// fixerToldRefused says the fixer's agent was answered 422 for both its
-// reply and its resolution (the scripted agent says so in its message).
-func (w *world) fixerToldRefused(fixer string) bool {
-	return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message'
-		AND strpos(payload->>'text', 'dude reply_on_pull_request answered 422') > 0
-		AND strpos(payload->>'text', 'dude resolve_thread answered 422') > 0`, fixer) == 1
+// fixerCaptured says the fixer's reply and resolution both reached the
+// tool server and were captured on its Run, its reply's text with it.
+func (w *world) fixerCaptured(fixer string) bool {
+	return w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2
+		AND (payload->>'kind' = 'resolve_thread' OR payload->>'text' = $3)`, fixer, delivery.EvAnswerHeld, fixerReplyText) == 2
 }
 
 // threadState is the fake GitHub's replies in line comment own's thread
@@ -78,57 +78,106 @@ func (w *world) threadState(own int64, text string) (int, bool) {
 	return n, resolved
 }
 
-// A fixer replies and resolves its thread on its first turn, before its
-// checks are backed: both are refused saying its fix is not on the pull
-// request, and nothing reaches GitHub, however many syncs pass. Sent back,
-// it backs its checks and its fix is published; still nothing was posted
-// for it. The conductor then answers and resolves, and that is what GitHub
-// shows, once.
-func TestAFixersRepliesAreRefusedUntilTheConductorVerifiesPublication(t *testing.T) {
+// A conductor-decided delivery. A fixer replies and resolves its thread on
+// its first turn, before its checks are backed: both are captured, and
+// nothing reaches GitHub, however many syncs pass. Sent back, it backs its
+// checks and its fix is published: dude posts its reply once and resolves
+// its thread, and the conductor is woken naming the fixer, its published
+// commit and what was posted.
+func TestAFixersRepliesPostOnceItsFixIsPublished(t *testing.T) {
 	w, task, own, fixer := earlyFixer(t, false)
 	w.syncs(3)
 	if n, resolved := w.threadState(own, fixerReplyText); n != 0 || resolved {
 		t.Fatalf("before publication: %d replies posted, resolved %v", n, resolved)
 	}
-	if !w.fixerToldRefused(fixer) {
-		t.Error("the fixer was not refused both its reply and its resolution")
+	if !w.fixerCaptured(fixer) {
+		t.Error("the fixer's reply and resolution were not both captured")
 	}
-	w.until("the fixer's fix published", func() bool {
+	if d := w.str(`SELECT COALESCE(state->>'decider', '') FROM workflow_runs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1`, task); d != delivery.DeciderConductor {
+		t.Errorf("decided by %q, want the conductor", d)
+	}
+	w.until("the fixer's fix published and its answer posted", func() bool {
 		w.sync()
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'completed'`, fixer) == 1
+		n, resolved := w.threadState(own, fixerReplyText)
+		return n > 0 && resolved
 	})
 	if got := w.ids(`SELECT CASE WHEN (payload->>'verified')::bool THEN 'verified' ELSE 'unverified' END FROM events
 		WHERE run_id = $1 AND event_type = $2 ORDER BY cursor`, fixer, delivery.EvRunChecksJudged); strings.Join(got, ",") != "unverified,verified" {
 		t.Errorf("the fixer judged %v, want sent back once, then verified", got)
 	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, fixer, delivery.EvGitCommitCreated); n == 0 {
-		t.Fatal("the fixer's fix was not published")
+	head := w.str(`SELECT COALESCE((SELECT payload->>'headSha' FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor LIMIT 1), '')`,
+		fixer, delivery.EvGitCommitCreated)
+	if head == "" {
+		t.Fatal("its answer was posted with no fix of its published")
 	}
 	w.syncs(3)
+	if n, resolved := w.threadState(own, fixerReplyText); n != 1 || !resolved {
+		t.Errorf("after publication: %d of the fixer's replies posted, resolved %v; want one, resolved", n, resolved)
+	}
+	wake := w.str(`SELECT COALESCE(string_agg(line, ' | '), '') FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND key LIKE 'answers:' || $3 || ':%'`,
+		task, delivery.WakeRound, fixer)
+	for _, want := range []string{fixer, "target@" + head[:7], fmt.Sprintf("replied to line-comment-%d", own), fmt.Sprintf("resolved line-comment-%d", own)} {
+		if !strings.Contains(wake, want) {
+			t.Errorf("the conductor's wake %q does not name %q", wake, want)
+		}
+	}
+}
+
+// A policy-decided delivery (no conductor model: Deliver decides). A
+// person's line comment, and a fixer that answers it and resolves its
+// thread: before its fix is published (lux holding its push) nothing is on
+// GitHub; once published, the reply is there once and the thread is
+// resolved, with no conductor to relay it.
+func TestAPolicyDeliverysFixerAnswersArePostedAtPublication(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	task := w.reviewing()
+	// Deliver decides, as for a task whose conductor has no model or whose
+	// person accepted the defaults (delivery.DeciderPolicy).
+	mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{decider}', to_jsonb($2::text)) WHERE task_id = $1`,
+		task, delivery.DeciderPolicy)
+	w.lux.HoldPushes = true
+	own := w.gh.LineComment(1, "ana", "FACTORY.md", "Please explain.")
+	w.gh.EditComment(1, own, fmt.Sprintf("Please explain.\n"+
+		"tool: reply_on_pull_request {\"pr\":\"1\",\"text\":%q,\"in_reply_to\":\"line-comment-%d\"}\n"+
+		"tool: resolve_thread {\"pr\":\"1\",\"thread\":\"line-comment-%d\"}\nThanks.", fixerReplyText, own, own))
+	var fixer string
+	w.until("the fixer's calls captured", func() bool {
+		w.sync()
+		fixer = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback::text LIKE '%Please explain%'
+			ORDER BY created_at DESC LIMIT 1), '')`, task)
+		return fixer != "" && w.fixerCaptured(fixer)
+	})
+	w.syncs(3)
 	if n, resolved := w.threadState(own, fixerReplyText); n != 0 || resolved {
-		t.Fatalf("after publication: %d of the fixer's replies posted, resolved %v; nothing is posted later for it", n, resolved)
+		t.Fatalf("before publication: %d replies posted, resolved %v", n, resolved)
 	}
-	// The conductor verified the published fix: it answers and resolves.
-	const answer = "Published: the explanation is in the pull request's head."
-	if out := w.must(task, "reply_on_pull_request", fmt.Sprintf(`{"pr":"1","text":%q,"in_reply_to":"line-comment-%d"}`, answer, own)); out["url"] == "" {
-		t.Errorf("answered %v", out)
+	w.lux.HoldPushes = false
+	w.lux.ReleasePushes()
+	w.until("the fix published and its answer posted", func() bool {
+		w.sync()
+		n, resolved := w.threadState(own, fixerReplyText)
+		return n > 0 && resolved
+	})
+	w.syncs(3)
+	if n, resolved := w.threadState(own, fixerReplyText); n != 1 || !resolved {
+		t.Errorf("after publication: %d replies posted, resolved %v; want one, resolved", n, resolved)
 	}
-	w.must(task, "resolve_thread", fmt.Sprintf(`{"pr":"1","thread":"line-comment-%d"}`, own))
-	if n, resolved := w.threadState(own, answer); n != 1 || !resolved {
-		t.Errorf("%d of the conductor's replies posted, resolved %v; want one and resolved", n, resolved)
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, fixer, delivery.EvGitCommitCreated); n == 0 {
+		t.Error("answered with no fix published")
 	}
-	if n, _ := w.threadState(own, fixerReplyText); n != 0 {
-		t.Errorf("%d of the fixer's replies posted", n)
+	if n := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND role = 'conductor'`, task); n != 0 {
+		t.Errorf("%d conductor Runs on a policy delivery", n)
 	}
 }
 
 // A fixer aborted before its fix is published (lux holding its push) has
-// nothing waiting to go out: after the abort, the held push released and
-// more syncs, GitHub has no reply and no resolution of its.
+// its answers captured and never posted: after the abort, the held push
+// released and more syncs, GitHub has no reply and no resolution of its.
 func TestAnAbandonedFixerHasNoDelayedReplies(t *testing.T) {
 	w, _, own, fixer := earlyFixer(t, true)
-	if !w.fixerToldRefused(fixer) {
-		t.Error("the fixer was not refused both its reply and its resolution")
+	if !w.fixerCaptured(fixer) {
+		t.Error("the fixer's reply and resolution were not both captured")
 	}
 	mustExec(t, w.owner, `UPDATE runs SET control = 'abort' WHERE id = $1`, fixer)
 	w.until("the fixer aborted", func() bool {
@@ -146,7 +195,8 @@ func TestAnAbandonedFixerHasNoDelayedReplies(t *testing.T) {
 	}
 }
 
-// The conductor's own reply, while no fixer is involved, is posted at once.
+// The conductor's own reply, while no fixer is involved, is posted at once
+// (with a fixer live: TestReviewerEveryFixerReplyHeldConductorImmediateDuringFix).
 func TestTheConductorsReplyIsNotHeld(t *testing.T) {
 	w := conducting(t)
 	task := w.reviewing()
