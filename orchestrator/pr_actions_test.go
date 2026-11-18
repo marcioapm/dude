@@ -576,15 +576,6 @@ func TestAFixerResolvesOnlyTheThreadsItWasSent(t *testing.T) {
 	if err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", mine)}); err != nil {
 		t.Fatalf("resolving its own thread: %v", err)
 	}
-	w.gh.Set(func(s *fakegithub.Server) {
-		if !s.ResolvedThreads[s.ThreadID(mine)] || s.ResolvedThreads[s.ThreadID(theirs)] {
-			t.Errorf("resolved %v", s.ResolvedThreads)
-		}
-	})
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = 'run_fixer' AND event_type = 'pull_request.action'
-		AND payload->>'action' = 'resolve_thread'`); n != 1 {
-		t.Errorf("%d resolutions recorded", n)
-	}
 
 	// It answers its own batch's comment in the thread, and no other.
 	reply := func(to int64) error {
@@ -596,8 +587,14 @@ func TestAFixerResolvesOnlyTheThreadsItWasSent(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		_, err := delivery.PostReply(context.Background(), gh, p)
-		return err
+		posted, err := delivery.PostReply(context.Background(), gh, p)
+		if err != nil {
+			return err
+		}
+		return w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+			_, err := delivery.RecordReplyTx(context.Background(), tx, p, posted)
+			return err
+		})
 	}
 	w.sync()
 	if err := reply(theirs); err == nil || !strings.Contains(err.Error(), "one of the comments in your feedback") {
@@ -606,7 +603,31 @@ func TestAFixerResolvesOnlyTheThreadsItWasSent(t *testing.T) {
 	if err := reply(mine); err != nil {
 		t.Fatalf("replying in its batch: %v", err)
 	}
+	// Both are held until its fix is on the pull request (#485): its Run
+	// completing, its push published.
 	lines := w.gh.Pull(1).LineComments
+	if last := lines[len(lines)-1]; last.InReplyTo == mine {
+		t.Errorf("the reply was posted before the fix: %+v", last)
+	}
+	w.gh.Set(func(s *fakegithub.Server) {
+		if s.ResolvedThreads[s.ThreadID(mine)] {
+			t.Error("the thread was resolved before the fix")
+		}
+	})
+	mustExec(t, w.owner, `UPDATE runs SET status = 'completed' WHERE id = 'run_fixer'`)
+	if err := delivery.PostHeld(context.Background(), w.app.InOrg, gh, w.org, "run_fixer"); err != nil {
+		t.Fatal(err)
+	}
+	w.gh.Set(func(s *fakegithub.Server) {
+		if !s.ResolvedThreads[s.ThreadID(mine)] || s.ResolvedThreads[s.ThreadID(theirs)] {
+			t.Errorf("resolved %v", s.ResolvedThreads)
+		}
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = 'run_fixer' AND event_type = 'pull_request.action'
+		AND payload->>'action' = 'resolve_thread'`); n != 1 {
+		t.Errorf("%d resolutions recorded", n)
+	}
+	lines = w.gh.Pull(1).LineComments
 	if last := lines[len(lines)-1]; last.InReplyTo != mine || !strings.HasPrefix(last.Body, "Done: it says why now.") {
 		t.Errorf("the reply: %+v", last)
 	}
