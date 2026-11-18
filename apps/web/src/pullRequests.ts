@@ -180,7 +180,9 @@ export function pullRequestActivity(e: PersistedEvent, named: boolean): PullRequ
         "merge-base": ["merged ", ...base, ` into ${target} on GitHub; tested again if it touched the task's files`],
         "integration-started": ["started resolving ", `${target}'s conflicts with `, ...base],
         "integration-completed": ["resolved ", `${target}'s conflicts with `, ...base, ", then reviewed and tested it"],
-        "integration-refused": ["could not resolve ", `${target}'s conflicts with `, ...base, cause ? `: ${cause}` : ""],
+        "integration-refused": p.cause === "run_failed"
+          ? ["base merge Run failed", p.error ? `: ${str(p.error)}` : "", " while merging ", ...base, ` into ${target}`]
+          : ["could not resolve ", `${target}'s conflicts with `, ...base, cause ? `: ${cause}` : ""],
         "not-opened": [`opened no pull request for the fix's change in ${str(p.repo)}: #${String(p.number ?? "")} there was closed, and a person chose to go on without it`],
       };
       const parts = acts[str(p.action)];

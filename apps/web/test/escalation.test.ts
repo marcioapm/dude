@@ -136,6 +136,24 @@ describe("escalationWords", () => {
     expect([tried, beforePR, failed, older].filter((w) => /`|pair|budget|integration|stream_ended/.test(w.sentence)).length).toBe(0);
   });
 
+  test("a failed base merge Run reads as the Run's failure with its error, never as a conflict", () => {
+    const failed = escalationWords({ reason: "integration_failed", at,
+      detail: { repo: "web", number: 4, base: "main", integration: true, runId: "run_9", cause: "run_failed", error: "provider 429: rate limited\nretried 3 times" } });
+    expect(failed.short).toBe("Base merge Run failed");
+    expect(failed.sentence).toBe("The base merge Run failed: provider 429: rate limited while merging main into pull request web #4. Nothing says the merge is hard: try again once its cause is gone, or wait on it.");
+    expect(failed.parts?.filter((p) => typeof p !== "string")).toEqual([{ mono: "main" }]);
+    expect(failed.runId).toBe("run_9");
+    const beforePR = escalationWords({ reason: "integration_failed", at,
+      detail: { repo: "web", number: 0, base: "main", integration: true, runId: "run_8", cause: "run_failed", error: "lux 0 stream_ended" } });
+    expect(beforePR.sentence).toBe("The base merge Run failed: lux 0 stream_ended while merging main into the branch in web. Nothing says the merge is hard: try again once its cause is gone, or wait on it.");
+    expect([failed, beforePR].filter((w) => /conflict/i.test(`${w.short} ${w.sentence}`)).length).toBe(0);
+    // A real conflict keeps its words.
+    const conflict = escalationWords({ reason: "pull_request_conflict", at,
+      detail: { repo: "web", number: 4, base: "main", integration: true, cause: "no_merge", error: "the integration Run finished without publishing a merge" } });
+    expect(conflict.short).toBe("Could not resolve conflicts");
+    expect(conflict.sentence).toContain("still conflicts with main");
+  });
+
   test("delivery settings that don't load say what Deliver could not tell, the two ways on, and what does not load", () => {
     const said = "Deliver stopped before opening the pull request: this project's delivery settings no longer load, so it can't tell whether to open it, open a draft or ask you first. Pick this task's own Before the pull request in Overview, or have a project admin fix Settings → Delivery, then Retry.";
     expect(escalationWords({ reason: "pull_request_choice_unresolved", detail: null, at })).toEqual({ short: "Delivery settings don't load", sentence: said, runId: null });

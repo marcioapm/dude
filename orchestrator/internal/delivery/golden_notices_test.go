@@ -46,6 +46,9 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"decision-waiting-unknown", decisionWaitingNote("somewhere", "")},
 		{"run-failed", runFailedLine("review · security", "run_rev", "lux: the host\nwent away "+strings.Repeat("x", 130))},
 		{"escalated-stuck", escalatedLine(&Escalation{Reason: "stuck", Step: "fix"})},
+		{"escalated-integration-failed", escalatedLine(&Escalation{Reason: ReasonIntegrationFailed, Step: "prFix", Detail: map[string]any{
+			"repo": "web", "number": 4, "base": "main", "cause": causeRunFailed, "runId": "run_int", "integration": true,
+			"error": "provider 429: rate limited\nretried then failed"}})},
 		{"escalated-test-failed", escalatedLine(&Escalation{Reason: ReasonTestFailedCriteria, Step: "fix", Detail: map[string]any{
 			"criteria": []map[string]any{{"criterion": 2, "status": "fail", "text": "Paying sends\na receipt"}}}})},
 		{"escalated-test-blocked", escalatedLine(&Escalation{Reason: ReasonTestBlocked, Step: "test", Detail: map[string]any{
