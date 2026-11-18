@@ -119,6 +119,23 @@ func TestASubagentsRecordedCallBacksAPass(t *testing.T) {
 	}
 }
 
+func TestUnbackedGuidanceIsOncePerReport(t *testing.T) {
+	d := checksDecision{}
+	for _, command := range []string{"make test", "make lint"} {
+		d.Verdicts = append(d.Verdicts, checksVerdict{Command: command, Result: "unverified", Decision: delivery.VerdictUnbacked,
+			Reason: "no call", JudgeReason: unbackedHint(command, []string{}, true)})
+	}
+	text := d.sendBack()
+	if strings.Count(text, "as one bare command on one line") != 1 {
+		t.Fatalf("guidance must appear exactly once: %s", text)
+	}
+	for _, command := range []string{"make test", "make lint"} {
+		if !strings.Contains(text, `dude recorded no call of "`+command+`"`) {
+			t.Fatalf("missing specific evidence for %s: %s", command, text)
+		}
+	}
+}
+
 func TestChildCallIDCollisionKeepsItsOwnCompletion(t *testing.T) {
 	w := newHarnessWorld(t)
 	childBashCall(w, "a", "reused", "make test", "failed", 2)
@@ -224,7 +241,7 @@ func TestAnUnbackedPassNamesTheClosestRecordedCalls(t *testing.T) {
 			t.Errorf("names %s, not among the 3 nearest calls that may back it: %s\n%s", far, line, text)
 		}
 	}
-	if !strings.Contains(text, "If one of them is the check you meant, report it exactly as recorded") {
+	if !strings.Contains(text, "If one of the nearest calls is the check you meant, report it exactly as recorded") {
 		t.Errorf("the send-back does not say what to report: %s", text)
 	}
 }

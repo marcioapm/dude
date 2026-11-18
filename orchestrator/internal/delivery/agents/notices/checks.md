@@ -2,6 +2,9 @@
 {{range .Checks}}
 - {{.Command}}: {{.Reason}}{{with .JudgeReason}} — {{.}}{{end}}{{with .Decision}} (verdict: {{.}}){{end}}
 {{end}}
+{{- if .Unbacked}}
+If one of the nearest calls is the check you meant, report it exactly as recorded; otherwise run the intended check as one bare command on one line and report it exactly as run, with the same environment assignments and env/assignment partition, no comment or annotation, a pipe only after set -o pipefail, and every pipeline stage and redirect unchanged.
+{{end}}
 {{- if .Failed}}
 A reported failure that predates this task passes once this Run's own tool calls show the same command failing the same way at the commit of the target branch this task builds on{{with .Bases}} ({{.}}){{end}}: run it in a separate checkout of that commit (for example `git worktree add` of it beside your checkout), not by setting your change aside, since the commit you started from holds this task's earlier work, and report both results in its evidence. A failure that commit does not have, or one in code this task changed, must be fixed.
 {{end}}
@@ -9,7 +12,7 @@ Run the missing or unsuccessful checks as separate commands, read their output, 
 {{define "notices/checks/no-conductor"}}no conductor: only a person can pass a reported failure{{end}}
 {{define "notices/checks/unconducted-reject"}}not verified by the conductor: only a person can pass a reported failure{{end}}
 {{define "notices/checks/conductor-rejected"}}not passed by the conductor: {{.}}{{end}}
-{{define "notices/checks/unbacked"}}dude recorded no call of {{printf "%q" .Command}} whose exit status is its own; {{with .Closest}}the recorded calls nearest it whose exit status is their own: {{range $i, $c := .}}{{if $i}}; {{end}}{{$c}}{{end}}. If one of them is the check you meant, report it exactly as recorded; otherwise run the check{{else}}{{if .Elided}}the recorded calls nearest it are omitted here for space (run_chat reads them). If one of them is the check you meant, report it exactly as recorded; otherwise run the check{{else}}none it recorded is near it. Run it{{end}}{{end}} as one bare command on one line and report it exactly as run, with the same environment assignments, no comment or annotation, a pipe only after set -o pipefail{{end}}
+{{define "notices/checks/unbacked"}}dude recorded no call of {{printf "%q" .Command}} whose exit status is its own; {{with .Closest}}the recorded calls nearest it whose exit status is their own: {{range $i, $c := .}}{{if $i}}; {{end}}{{$c}}{{end}}{{else}}{{if .Elided}}the recorded calls nearest it are omitted here for space (run_chat reads them){{else}}none it recorded is near it{{end}}{{end}}{{end}}
 {{define "notices/checks/many"}}the report lists {{.Count}} checks, more than the {{.Max}} that are verified; report at most {{.Max}}, one per command you ran, not one per test or file{{end}}
 {{define "notices/checks/skip"}}Checks not verified: no conductor decides this delivery. Hand the task's decisions to its conductor to have checks reports verified before publication.{{end}}
 {{define "notices/checks/unconducted"}}Checks not verified by the conductor: it did not decide the report in time.{{end}}

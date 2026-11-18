@@ -274,10 +274,12 @@ func (d checksDecision) sendBack() string {
 	}
 	passable := len(d.bases) > 0
 	return checksText.Render(struct {
-		Checks []checksVerdict
-		Failed bool
-		Bases  string
-	}{failed, passable && slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(d.bases)})
+		Checks   []checksVerdict
+		Failed   bool
+		Bases    string
+		Unbacked bool
+	}{failed, passable && slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(d.bases),
+		slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Decision == delivery.VerdictUnbacked })})
 }
 
 // unpassed are the verdicts that did not pass: neither backed, waived,

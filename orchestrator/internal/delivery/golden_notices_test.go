@@ -160,6 +160,11 @@ func TestGoldenChecksPreexistingTexts(t *testing.T) {
 	failed := Check{Command: "npx tsc --noEmit", Result: CheckFail, Evidence: "95 errors on the parent, 94 with the change"}
 	type verdict struct{ Command, Result, Reason, JudgeReason, Decision string }
 	goldenLines(t, "checks-preexisting", [][2]string{
+		{"multiple-unbacked", MustText("notices/checks").Render(map[string]any{"Unbacked": true,
+			"Checks": []verdict{
+				{Command: "make test", Reason: "no call", Decision: VerdictUnbacked, JudgeReason: MustText("notices/checks/unbacked").Render(map[string]any{"Command": "make test", "Closest": []string{`"make test fast" (exit 2)`}})},
+				{Command: "make lint", Reason: "missing evidence", Decision: VerdictUnbacked, JudgeReason: MustText("notices/checks/unbacked").Render(map[string]any{"Command": "make lint", "Elided": true})},
+			}})},
 		{"send-back", MustText("notices/checks").Render(map[string]any{"Failed": true, "Bases": "api: main at 1111111, web: release/2 at 2222222",
 			"Checks": []verdict{{Command: failed.Command, Result: CheckFail, Reason: failed.Evidence, Decision: VerdictReject,
 				JudgeReason: MustText("notices/checks/conductor-rejected").Render("no run at the task's base is recorded")}}})},
