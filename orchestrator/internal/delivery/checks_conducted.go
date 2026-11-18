@@ -31,9 +31,9 @@ const (
 // keyed checks:<run>:<turn>.
 const WakeChecks = "checks"
 
-// checksLineChars bounds a checks wake's line: the report's summary and
+// ChecksLineChars bounds a checks wake's line, in characters: the report's summary and
 // one question per check (migration 250).
-const checksLineChars = 2000
+const ChecksLineChars = 2000
 
 // The conductor's verdicts on a checks report (decide_checks).
 const (

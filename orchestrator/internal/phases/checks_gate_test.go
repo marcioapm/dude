@@ -140,7 +140,7 @@ func TestChecksSendBackListsOnlyUnverifiedChecks(t *testing.T) {
 	}
 	want := "Your checks report was not verified. Nothing from this Run has been pushed.\n" +
 		"\n- make check: fixture evidence — dude recorded no call of \"make check\" whose exit status is its own; none it recorded is near it. " +
-		"Run it as one command and report it exactly as run, with no annotation, a pipe only after set -o pipefail (verdict: unbacked)\n" +
+		"Run it as one bare command on one line and report it exactly as run, with the same environment assignments, no comment or annotation, a pipe only after set -o pipefail (verdict: unbacked)\n" +
 		"\nRun the missing or unsuccessful checks as separate commands, read their output, and correct the report. " +
 		"End your next reply with a checks: YAML block. If you cannot proceed, ask a person what you need."
 	if payload.Message != want {

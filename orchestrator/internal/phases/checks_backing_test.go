@@ -19,11 +19,13 @@ func TestRecordedCallsBackWhatTheAgentRan(t *testing.T) {
 		calls          [][]any // command, exit[, output]
 		want           string
 	}{
-		// The environment is not the command.
+		// The environment is part of the command: the same assignments
+		// back it, in env or assignment form; missing or other ones do
+		// not (#484 review: PATH or NODE_ENV change what runs).
 		{"env recorded, assignment reported", "NODE_OPTIONS=x npx jest a b", [][]any{{"env NODE_OPTIONS=x npx jest a b", 0}}, "exit 0"},
 		{"assignment recorded, env reported", "env NODE_OPTIONS=x npx jest a b", [][]any{{"NODE_OPTIONS=x npx jest a b", 0}}, "exit 0"},
-		{"assignment recorded, none reported", "npx jest a b", [][]any{{"NODE_OPTIONS=x npx jest a b", 0}}, "exit 0"},
-		{"assignment reported, none recorded", "NODE_OPTIONS=x npx jest a b", [][]any{{"npx jest a b", 0}}, "exit 0"},
+		{"assignment recorded, none reported", "npx jest a b", [][]any{{"NODE_OPTIONS=x npx jest a b", 0}}, "none recorded"},
+		{"assignment reported, none recorded", "NODE_OPTIONS=x npx jest a b", [][]any{{"npx jest a b", 0}}, "none recorded"},
 		{"other assignments on both sides", "NODE_OPTIONS=y npx jest a b", [][]any{{"env NODE_OPTIONS=x npx jest a b", 0}}, "none recorded"},
 		// A report's annotation naming a directory is that directory.
 		{"annotated directory", "npm run typecheck (office/x)", [][]any{{"cd office/x && npm run typecheck", 0}}, "exit 0"},
@@ -34,7 +36,7 @@ func TestRecordedCallsBackWhatTheAgentRan(t *testing.T) {
 		{"redirected to a log", "make test", [][]any{{"make test > /tmp/log 2>&1", 0}}, "exit 0"},
 		{"appended to a log", "make test", [][]any{{"make test &>> /tmp/log", 2}}, "exit 2"},
 		{"teed with pipefail", "make test", [][]any{{"set -o pipefail && make test 2>&1 | tee /tmp/log", 0}}, "exit 0"},
-		{"tailed with set -euo pipefail", "cd api && make test", [][]any{{"set -euo pipefail; cd api && make test | tail -5", 1}}, "exit 1"},
+		{"tailed with set -euo pipefail", "cd api && make test", [][]any{{"set -euo pipefail; cd api && make test | tail -5", 1}}, "its pipe failed (exit 1), not proof of which command failed"},
 		{"its exit echoed", "make test", [][]any{{"make test > log 2>&1; echo exit=$?", 0, "exit=0\n"}}, "exit 0"},
 		{"its failing exit echoed", "make test", [][]any{{"make test > log 2>&1; echo exit=$?", 0, "exit=2\n"}}, "exit 2"},
 		{"its exit echoed, not shown", "make test", [][]any{{"make test; echo exit=$?", 0, "ok\n"}}, "unclear: its echoed exit status is not the end of its recorded output"},
@@ -107,13 +109,14 @@ func TestASubagentsRecordedCallBacksAPass(t *testing.T) {
 }
 
 // An unbacked pass comes back naming the recorded calls nearest it (up to
-// three, one-lined, with how each ended), so the agent can report one
-// exactly; the conductor's wake names them too.
+// three, with how each ended) whose exit status may be their own, so the
+// agent can report one exactly; the conductor's wake names them too.
 func TestAnUnbackedPassNamesTheClosestRecordedCalls(t *testing.T) {
 	w := newHarnessWorld(t)
 	cond := conducted(w)
 	for i, call := range []string{
 		"npx jest src/a.test.ts\n  --coverage=false",
+		"npx jest src/a.test.ts --watch=false",
 		"npx jest src/b.test.ts",
 		"git status",
 		"npx jest src/a.test.ts | tail -5",
@@ -133,8 +136,8 @@ func TestAnUnbackedPassNamesTheClosestRecordedCalls(t *testing.T) {
 	}
 	near := []string{
 		`"env NODE_OPTIONS=--max-old-space-size=6000 npx jest src/a.test.ts --coverage=false" (exit 0)`,
-		`"npx jest src/a.test.ts | tail -5" (exit 0, backing nothing: its exit status is the last command's in its pipe (no set -o pipefail))`,
-		`"npx jest src/a.test.ts --coverage=false" (exit 0)`,
+		`"npx jest src/a.test.ts --watch=false" (exit 0)`,
+		`"npx jest src/b.test.ts" (exit 0)`,
 	}
 	for _, n := range near {
 		if !strings.Contains(line, n) {
@@ -159,12 +162,14 @@ func TestAnUnbackedPassNamesTheClosestRecordedCalls(t *testing.T) {
 			t.Errorf("the send-back does not name %s: %s", n, text)
 		}
 	}
-	for _, far := range []string{`"git status"`, `"ls"`, `"npx jest src/b.test.ts"`} {
-		if strings.Contains(text, far) {
-			t.Errorf("the send-back names %s, not among the 3 nearest: %s", far, text)
+	// Calls that back nothing (piped without pipefail, spanning lines)
+	// are no calls to report: never named (#484 review).
+	for _, far := range []string{`"git status"`, `"ls"`, `tail -5`, `\n  --coverage`, `backing nothing`} {
+		if strings.Contains(text, far) || strings.Contains(line, far) {
+			t.Errorf("names %s, not among the 3 nearest calls that may back it: %s\n%s", far, line, text)
 		}
 	}
-	if !strings.Contains(text, "Report one of them exactly as recorded") {
+	if !strings.Contains(text, "If one of them is the check you meant, report it exactly as recorded") {
 		t.Errorf("the send-back does not say what to report: %s", text)
 	}
 }

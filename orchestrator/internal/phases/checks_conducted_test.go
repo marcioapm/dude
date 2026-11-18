@@ -545,11 +545,14 @@ func TestRecordedCallsReadTheReportedCommandNotOneContainingIt(t *testing.T) {
 		{"ORed with true", "make test", [][]any{{"make test || true", 0}}, "none recorded"},
 		{"grepped for", "make test", [][]any{{"make test", 2}, {`grep "make test" Makefile`, 0}}, "exit 2"},
 		{"a longer command", "go test ./...", [][]any{{"go test ./... -run X", 0}}, "none recorded"},
-		{"the command itself, last", "go test ./...", [][]any{{"go test ./... -run X", 1}, {"go  test\n./...", 0}}, "exit 0"},
+		{"the command itself, last", "go test ./...", [][]any{{"go test ./... -run X", 1}, {"go  test\t./...", 0}}, "exit 0"},
+		// A newline separates commands: dude does not read such a call.
+		{"the command split over lines", "go test ./...", [][]any{{"go test ./...", 1}, {"go  test\n./...", 0}}, "exit 1"},
 		{"in its directory", "make test", [][]any{{"cd api && make test", 0}}, "exit 0"},
 		{"in a directory, then more", "make test", [][]any{{"cd api && make test && echo ok", 0}}, "none recorded"},
 		{"reported with its cd", "cd api && make test", [][]any{{"cd api && make test", 0}}, "exit 0"},
-		{"reported with its cd, run in it", "cd api && make test", [][]any{{"cd  api &&\nmake test", 0}}, "exit 0"},
+		{"reported with its cd, run in it", "cd api && make test", [][]any{{"cd  api  &&\tmake test", 0}}, "exit 0"},
+		{"reported with its cd, run over lines", "cd api && make test", [][]any{{"cd  api &&\nmake test", 0}}, "none recorded"},
 		{"reported in another directory", "cd api && make test", [][]any{{"cd web && make test", 0}}, "none recorded"},
 		{"reported with its cd, run without", "cd api && make test", [][]any{{"make test", 0}}, "none recorded"},
 	} {

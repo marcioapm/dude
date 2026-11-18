@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -196,7 +197,10 @@ func clipTo(s string, n int) string {
 // or spawned agent's agent.child.tool.* calls), under the same rules.
 // closest names, per reported pass no call matched, up to
 // closestCallsMax of the recorded calls nearest it (closestCalls), each
-// one-lined with how it ended, so the agent can report one exactly.
+// with how it ended, so the agent can report one exactly; only calls whose
+// exit status may be their command's are named (a call that backs nothing
+// is no call to report), and all of them together within
+// closestCallsTotal bytes, so they never crowd out the wake's questions.
 func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delivery.Check, bases []taskBase) (out []string, closest map[int][]string, err error) {
 	out = make([]string, len(checks))
 	wanted := false
@@ -238,36 +242,40 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delive
 		}
 		// An echoed status is read only from a call that exited 0 (or
 		// recorded no exit): a non-zero exit is not echo's, so the echo
-		// never ran.
-		reading := func(echoed bool, label string) string {
+		// never ran. Under pipefail a non-zero status is some stage's.
+		reading := func(call shellCall) string {
+			r := "completed"
 			switch {
-			case echoed && (exit == nil || *exit == 0):
-				return echoedExit(label, last)
+			case call.echoed && (exit == nil || *exit == 0):
+				r = echoedExit(call.echo, last)
 			case exit != nil:
-				return fmt.Sprintf("exit %d", int(*exit))
+				r = fmt.Sprintf("exit %d", int(*exit))
 			case status != nil && *status != "":
-				return *status
+				r = *status
 			}
-			return "completed"
+			if call.piped && strings.HasPrefix(r, "exit ") && r != "exit 0" {
+				r = "its pipe failed (" + r + "), not proof of which command failed"
+			}
+			return r
 		}
 		sc := shellOf(*command, false)
-		r := reading(sc.echoed, sc.echo)
-		if sc.why != "" {
-			r += ", backing nothing: " + sc.why
+		if sc.why == "" {
+			// Only a call that may back a pass is offered as one to
+			// report (closestCalls).
+			seen = append(seen, readCall{*command, reading(sc)})
 		}
-		seen = append(seen, readCall{*command, r})
 		for i, c := range checks {
 			switch {
 			case c.Result == delivery.CheckPass:
 				if call, ok := sameCommand(c.Command, *command); ok {
-					out[i], matched[i] = reading(call.echoed, call.echo), true
+					out[i], matched[i] = reading(call), true
 				}
 			case c.Result == delivery.CheckFail && len(bases) > 0:
 				if base := atBase(*command, c.Command, bases); base != nil {
 					if exit != nil {
 						out[i] = base.reading(int(*exit), output)
 					} else {
-						out[i] = reading(false, "")
+						out[i] = reading(shellCall{})
 					}
 				}
 			}
@@ -276,12 +284,19 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delive
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
 	}
+	budget := closestCallsTotal
 	for i, c := range checks {
 		if c.Result == delivery.CheckPass && !matched[i] {
 			if closest == nil {
 				closest = map[int][]string{}
 			}
-			closest[i] = closestCalls(c.Command, seen)
+			closest[i] = []string{} // never nil: unbackedHint says none is near
+			for _, n := range closestCalls(c.Command, seen) {
+				if budget -= len(n); budget < 0 {
+					break
+				}
+				closest[i] = append(closest[i], n)
+			}
 		}
 	}
 	return out, closest, nil
@@ -301,21 +316,23 @@ func unbackedHint(command string, closest []string) string {
 	}{clipTo(oneLine(command), closestCallMax), closest})
 }
 
-// readCall is a recorded shell call, one-lined, and how it ended.
+// readCall is a recorded shell call and how it ended.
 type readCall struct{ command, reading string }
 
-// closestCallsMax bounds the recorded calls an unmatched pass names, and
-// closestCallMax each one's length.
+// closestCallsMax bounds the recorded calls an unmatched pass names,
+// closestCallMax each one's length, and closestCallsTotal all of a
+// report's together.
 const (
-	closestCallsMax = 3
-	closestCallMax  = 160
+	closestCallsMax   = 3
+	closestCallMax    = 160
+	closestCallsTotal = 600
 )
 
 // closestCalls are the recorded calls nearest a reported command no call
 // matched, nearest first: by the share of the command's words (as
 // shellOf reads them: no environment, no plumbing) they have in common
 // (any word in common, distinct commands, the latest of equals first),
-// each quoted one-lined with how it ended.
+// each quoted as recorded with how it ended.
 func closestCalls(reported string, calls []readCall) []string {
 	words := func(c shellCall) map[string]bool {
 		m := map[string]bool{}
@@ -332,7 +349,7 @@ func closestCalls(reported string, calls []readCall) []string {
 	var nears []near
 	done := map[string]bool{}
 	for i := len(calls) - 1; i >= 0; i-- {
-		command := oneLine(calls[i].command)
+		command := strings.TrimSpace(calls[i].command)
 		if done[command] {
 			continue
 		}
@@ -390,7 +407,12 @@ func plainDir(dir string) bool {
 
 // sameCommand says a recorded shell call ran the reported command, with an
 // exit status that is the command's own; the call read (shellOf) says
-// where that status is. Both sides are one-lined and read the same way:
+// where that status is. Both sides are read the same way, as written: dude
+// reads a restricted grammar and refuses what it does not read, so a call
+// that spans lines (a newline separates commands), has an unquoted "#"
+// (a comment hides what follows) or whose quoting does not close backs
+// nothing, and quoted text is compared as written, whitespace and all.
+// Outside quotes, runs of spaces and tabs separate words.
 //   - a leading "cd DIR && " is the directory the command runs in. The
 //     report's directory, when it names one, must be the call's (any, or
 //     none, when it does not): "cd api && make test" is a call of "make
@@ -398,15 +420,20 @@ func plainDir(dir string) bool {
 //     trailing annotation naming a directory, "make test (api)", names it
 //     as "cd api && make test" does; any other annotation stays part of
 //     the command and matches nothing.
-//   - a leading "env" and VAR=value assignments are not the command: they
-//     are ignored when only one side has them, and must be the same set
-//     when both do.
+//   - leading VAR=value assignments are part of what ran: a PATH or
+//     NODE_ENV changes which program runs and how. Both sides must have
+//     the same assignments in the same order; "env A=1 cmd" and "A=1 cmd"
+//     are the same only when no value expands anything ("$", "`"), since
+//     env's are expanded before any is assigned.
 //   - output redirects ("> log", "2>&1", "&>> log") are dropped: they
 //     leave the exit status the command's.
 //   - a pipe ("| tail -5", "2>&1 | tee log") is dropped only when the call
-//     set pipefail first ("set -o pipefail && " or "; ", or "set -euo
-//     pipefail"): then exit 0 is every stage's, the command's too. Without
-//     it the status is the last stage's, and the call backs nothing.
+//     first set pipefail by one exact step, "set -o pipefail" or "set
+//     -euo pipefail" (any of e, u and x before the o), followed by " && "
+//     or "; ": then exit 0 is every stage's, the command's too, while a
+//     non-zero exit is some stage's, not proof of which (pipeReading).
+//     Without it the status is the last stage's, and the call backs
+//     nothing; any other set, anywhere in the call, backs nothing too.
 //   - a trailing "; echo exit=$?" (any plain label before $?) is dropped,
 //     and the call's exit is the number its recorded output ends with
 //     after the label (echoedExit), not echo's own 0.
@@ -421,40 +448,59 @@ func plainDir(dir string) bool {
 // never by "make test | tail" without pipefail.
 func sameCommand(reported, recorded string) (shellCall, bool) {
 	want, got := shellOf(reported, true), shellOf(recorded, false)
-	return got, got.why == "" && want.cmd != "" && want.cmd == got.cmd && (want.dir == "" || want.dir == got.dir) &&
-		(len(want.env) == 0 || len(got.env) == 0 || slices.Equal(want.env, got.env))
+	return got, got.why == "" && !want.unread && want.cmd != "" && want.cmd == got.cmd && (want.dir == "" || want.dir == got.dir) &&
+		slices.Equal(want.env, got.env) && (want.viaEnv == got.viaEnv || !expands(want.env))
+}
+
+// expands says an assignment's value expands something.
+func expands(env []string) bool {
+	return slices.ContainsFunc(env, func(a string) bool { return strings.ContainsAny(a, "$`") })
 }
 
 // shellCall is a shell command as sameCommand reads it.
 type shellCall struct {
-	dir string   // a leading cd's (or a report's annotation's)
-	env []string // its leading assignments, sorted
-	cmd string   // the command's words, plumbing dropped
+	dir    string   // a leading cd's (or a report's annotation's)
+	env    []string // its leading assignments, in order
+	viaEnv bool     // made by env
+	cmd    string   // the command's words, plumbing dropped
 	// echoed: the call echoes its status last, after echo's label.
 	echo   string
 	echoed bool
-	// why the call's exit status is not the command's ("" when it is).
-	why string
+	// piped: a pipe after the command was dropped (under pipefail).
+	piped bool
+	// why the call's exit status is not the command's ("" when it is);
+	// unread when dude refused to read it at all.
+	why    string
+	unread bool
 }
 
 var (
 	annotatedDir = regexp.MustCompile(`^(.*\S)\s+\(([^()\s]+)\)$`)
 	assignment   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
-	setFlagO     = regexp.MustCompile(`^-[a-zA-Z]*o$`)
+	// setPipefail is the one option word of an exact pipefail set: o,
+	// after any of e, u and x.
+	setPipefail = regexp.MustCompile(`^-[eux]*o$`)
 )
 
-// shellOf reads command, one-lined, as sameCommand says; reported reads a
-// report's directory annotation too.
+// shellOf reads command as sameCommand says; reported reads a report's
+// directory annotation too. Only leading and trailing whitespace is
+// trimmed: nothing inside is collapsed before it is read.
 func shellOf(command string, reported bool) shellCall {
-	s := oneLine(command)
+	s := strings.TrimSpace(command)
 	var c shellCall
 	var annotation string
+	unread := func(why string) shellCall {
+		return shellCall{dir: annotation, cmd: s, why: why, unread: true}
+	}
+	if strings.ContainsAny(s, "\n\r") {
+		return unread("it spans lines, which dude does not read")
+	}
 	if m := annotatedDir.FindStringSubmatch(s); reported && m != nil && !strings.HasPrefix(s, "cd ") && plainDir(m[2]) {
 		s, annotation = m[1], path.Clean(m[2])
 	}
-	toks, ok := shellTokens(s)
-	if !ok {
-		return shellCall{dir: annotation, cmd: s, why: "dude cannot read its quoting"}
+	toks, err := shellTokens(s)
+	if err != "" {
+		return unread(err)
 	}
 	pipefail := false
 prefix:
@@ -490,18 +536,24 @@ prefix:
 		case !pipefail:
 			c.why = "its exit status is the last command's in its pipe (no set -o pipefail)"
 		}
-		toks = toks[:j]
+		toks, c.piped = toks[:j], true
 	}
 	if c.why == "" && slices.ContainsFunc(toks, func(t shTok) bool { return t.op && t.text != "&&" }) {
 		c.why = "its exit status is its last step's"
 	}
+	// A set past the leading pipefail one may turn it off, or stop the
+	// shell running anything ("set -n"): dude does not read its options.
+	for i, t := range toks {
+		if !t.op && t.text == "set" && (i == 0 || toks[i-1].op) && c.why == "" {
+			c.why = "a set dude does not read changes how it runs"
+		}
+	}
 	if len(toks) > 1 && toks[0].text == "env" && !toks[1].op && assignment.MatchString(toks[1].text) {
-		toks = toks[1:]
+		toks, c.viaEnv = toks[1:], true
 	}
 	for len(toks) > 0 && !toks[0].op && assignment.MatchString(toks[0].text) {
 		c.env, toks = append(c.env, toks[0].text), toks[1:]
 	}
-	slices.Sort(c.env)
 	words := make([]string, len(toks))
 	for i, t := range toks {
 		words[i] = t.text
@@ -513,16 +565,13 @@ prefix:
 	return c
 }
 
-// setsPipefail: step is a set turning pipefail on ("set -o pipefail",
-// "set -euo pipefail"). A shell without the option fails set, a special
+// setsPipefail: step is exactly a set turning pipefail on: "set -o
+// pipefail", or with any of e, u and x before the o ("set -euo
+// pipefail"), and nothing else: no other option, no "--" or positional
+// argument, no "+o". A shell without the option fails set, a special
 // builtin, and exits (dash: 2), so "; " after it is as safe as " && ".
 func setsPipefail(step []shTok) bool {
-	for i := 2; i < len(step) && step[0].text == "set"; i++ {
-		if step[i].text == "pipefail" && setFlagO.MatchString(step[i-1].text) {
-			return true
-		}
-	}
-	return false
+	return len(step) == 3 && step[0].text == "set" && setPipefail.MatchString(step[1].text) && step[2].text == "pipefail"
 }
 
 // echoLabel reads echo's one argument as a plain label before "$?":
@@ -546,12 +595,15 @@ type shTok struct {
 	op   bool
 }
 
-// shellTokens splits a one-lined command into words and operators,
-// dropping output redirects; false when its quoting does not close. A
+// shellTokens splits a one-line command into words and operators,
+// dropping output redirects; why it does not read it otherwise: its
+// quoting does not close, or an unquoted "#" may start a comment (a "#"
+// inside a word does not, but dude refuses it all the same). Spaces and
+// tabs outside quotes separate words; quoted text is kept as written. A
 // subshell's or a $(…)'s parentheses are word characters: an operator
 // inside one is still read as one, so it backs nothing it would not
 // outside.
-func shellTokens(s string) ([]shTok, bool) {
+func shellTokens(s string) ([]shTok, string) {
 	var toks []shTok
 	var b strings.Builder
 	redirect := false
@@ -564,8 +616,10 @@ func shellTokens(s string) ([]shTok, bool) {
 	}
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
-		case c == ' ':
+		case c == ' ' || c == '\t':
 			flush()
+		case c == '#':
+			return nil, "it has a comment, which dude does not read"
 		case c == '\'' || c == '"' || c == '`':
 			// Closed by the next unescaped quote (any, in single quotes).
 			j := i + 1
@@ -575,7 +629,7 @@ func shellTokens(s string) ([]shTok, bool) {
 				}
 			}
 			if j >= len(s) {
-				return nil, false
+				return nil, "dude cannot read its quoting"
 			}
 			b.WriteString(s[i : j+1])
 			i = j
@@ -609,7 +663,7 @@ func shellTokens(s string) ([]shTok, bool) {
 		}
 	}
 	flush()
-	return toks, true
+	return toks, ""
 }
 
 // baseCall is a recorded call that ran a reported command at a task's
@@ -622,7 +676,8 @@ type baseCall struct {
 }
 
 // atBase reads a recorded call as the reported command run at one of the
-// task's bases, nil when it is not one. The call, one-lined, is steps
+// task's bases, nil when it is not one. The call, on one line (one that
+// spans lines is not read), is steps
 // joined by " && " (a step with any other operator is read as one word
 // and matches nothing), and is one when:
 //   - a step checks a base's commit out by its SHA (the full one, or a
@@ -645,7 +700,8 @@ type baseCall struct {
 // (git diff SHA && make test, run at the head) is not at the base.
 func atBase(command, reported string, bases []taskBase) *baseCall {
 	wantDir, want := inDir(reported)
-	if path.IsAbs(wantDir) {
+	// A call spanning lines runs each line as a command: not read.
+	if path.IsAbs(wantDir) || strings.ContainsAny(command, "\n\r") {
 		return nil
 	}
 	steps := strings.Split(oneLine(command), " && ")
@@ -827,7 +883,7 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls 
 	for i, c := range a.Check {
 		// The agent's evidence is its own words: quoted as external text,
 		// cut so every check's question fits the wake.
-		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), "", strings.Join(a.Closest[i], "; "), a.Waivers[i] != nil}
+		qs[i] = question{oneLine(c.Command), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), "", "", a.Waivers[i] != nil}
 		if i < len(calls) {
 			qs[i].Call = calls[i]
 		}
@@ -838,13 +894,31 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase, calls 
 			ws = append(ws, waiver{i + 1, clipTo(oneLine(c.Command), checksWakeEvidenceMax), w.Role, w.Cursor})
 		}
 	}
-	return checksWake.Render(struct {
-		Phase, RunID, Bases string
-		Turn                int64
-		Waivers             []waiver
-		Checks              []question
-		TestPhase           bool
-	}{r.Phase, r.ID, joinBases(bases), a.Turn, ws, qs, a.TestPhase})
+	render := func() string {
+		return checksWake.Render(struct {
+			Phase, RunID, Bases string
+			Turn                int64
+			Waivers             []waiver
+			Checks              []question
+			TestPhase           bool
+		}{r.Phase, r.ID, joinBases(bases), a.Turn, ws, qs, a.TestPhase})
+	}
+	// The nearest calls are a convenience: each check's are named only
+	// while the whole line still fits the wake, so they never cut a later
+	// check's question off.
+	line := render()
+	for i := range qs {
+		if len(a.Closest[i]) == 0 {
+			continue
+		}
+		qs[i].Closest = oneLine(strings.Join(a.Closest[i], "; "))
+		if with := render(); utf8.RuneCountInString(oneLine(with)) <= delivery.ChecksLineChars {
+			line = with
+		} else {
+			qs[i].Closest = ""
+		}
+	}
+	return line
 }
 
 // verdictDecision is the gate's decision from the conductor's verdict, as
