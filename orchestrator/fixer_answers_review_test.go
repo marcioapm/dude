@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -330,3 +331,40 @@ func TestAFixersHeldAnswersAreSettledWhenTheDeliveryEnds(t *testing.T) {
 	})
 }
 
+// A fixer with many answers (160: past where a key naming each id
+// overflowed the wake's unique index, about 100) still wakes its
+// conductor, once, on a key of fixed size.
+func TestAFixerWithManyAnswersWakesItsConductorOnce(t *testing.T) {
+	w := conducting(t)
+	a := newAnswering(t, w)
+	if status, out := w.chat(a.task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	ref := a.fixer("run_fixer")
+	for i := range 160 {
+		if r, err := a.reply(ref, a.is, fmt.Sprintf("Fixed: part %d", i)); err != nil || r.Held == "" {
+			t.Fatalf("held reply %d: %+v %v", i, r, err)
+		}
+	}
+	a.published(ref, a.head(), "completed")
+	a.w.gh.Close(1)
+	for range 3 {
+		if err := a.step(); err != nil {
+			t.Fatalf("the step: %v", err)
+		}
+	}
+	if n := a.heldUnsettled(ref.RunID); n != 0 {
+		t.Errorf("%d answers left held", n)
+	}
+	keys := w.ids(`SELECT key FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND key LIKE 'answers:run_fixer:%'`, a.task, delivery.WakeRound)
+	if len(keys) != 1 {
+		t.Fatalf("%d wakes for the fixer's 160 answers, want one: %v", len(keys), keys)
+	}
+	if len(keys[0]) > len("answers:run_fixer:")+16 {
+		t.Errorf("the wake's key grows with the answers: %d bytes", len(keys[0]))
+	}
+	ids := w.ids(`SELECT id FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor`, ref.RunID, delivery.EvAnswerHeld)
+	if want := delivery.AnswersKeyForIDs(ref.RunID, ids); keys[0] != want {
+		t.Errorf("the wake's key %q, want %q (the answers it settled)", keys[0], want)
+	}
+}

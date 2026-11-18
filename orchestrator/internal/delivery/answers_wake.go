@@ -2,6 +2,8 @@ package delivery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"maps"
 	"slices"
 	"strings"
@@ -51,7 +53,21 @@ func (w *steps) wakeOnAnswers(ctx context.Context, sc workflow.StepContext, st *
 }
 
 // wakeAnswersTx wakes the task's live conductor, if any, with what was
-// done with fixer f's answers, keyed by the answers it settled.
+// done with fixer f's answers (answersKey).
 func wakeAnswersTx(ctx context.Context, tx pgx.Tx, org, taskID string, f FixerAnswers) error {
-	return wakeLiveConductorTx(ctx, tx, org, taskID, WakeRound, "answers:"+f.RunID+":"+strings.Join(f.ids, ","), answersLine(f))
+	return wakeLiveConductorTx(ctx, tx, org, taskID, WakeRound, answersKey(f), answersLine(f))
+}
+
+// answersKey is f's wake key: "answers:<run>:" and 16 hex digits of the
+// sha256 of the answers it settled, so a pass settling the same answers
+// again wakes nobody twice, however many there are, and the key stays far
+// inside the (task_id, key) index's row limit.
+func answersKey(f FixerAnswers) string {
+	sum := sha256.Sum256([]byte(strings.Join(f.ids, ",")))
+	return "answers:" + f.RunID + ":" + hex.EncodeToString(sum[:8])
+}
+
+// AnswersKeyForIDs is answersKey for run's answers ids; for tests.
+func AnswersKeyForIDs(run string, ids []string) string {
+	return answersKey(FixerAnswers{RunID: run, ids: ids})
 }
