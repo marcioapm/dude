@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -108,6 +109,10 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	// dash resolves a cd's .. physically: through x, a symlink, this is
 	// not ./api.
 	{"a cd through x/..", "make test (api)", "cd x/../api && make test"},
+	// The comment is the only defect: read as words, the call is the
+	// report with its echo, but the shell runs ./run.sh alone, and its own
+	// output may end in exit=0.
+	{"a comment hiding the echo", "./run.sh #", "./run.sh # ; echo exit=$?"},
 }
 
 // unreadReports are reported commands dude does not read (a comment, a
@@ -170,18 +175,22 @@ func completionOnly(w *harnessWorld, id, command, status, output string) {
 // a call that ended in error with no exit code never ran its echo, so an
 // "exit=0" its own output ends with is not its exit (#484 review).
 func TestAnEchoFromACallThatErredIsNotItsExit(t *testing.T) {
-	for _, c := range []struct{ name, status, want string }{
-		{"ended in error", "error", "error"},
-		{"failed", "failed", "failed"},
-		{"completed", "completed", "exit 0"},
-		{"no status", "", "unclear: no exit or status recorded, so its echo may not have run"},
+	for _, c := range []struct{ name, status, want, reported, command string }{
+		{"ended in error", "error", "error", "", ""},
+		{"failed", "failed", "failed", "", ""},
+		{"completed", "completed", "exit 0", "", ""},
+		{"no status", "", "unclear: no exit or status recorded, so its echo may not have run", "", ""},
+		// A comment hides the echo: the shell ran ./run.sh alone, so its
+		// own exit=0 is not the call's exit (#484 round 4).
+		{"a comment hiding the echo, completed", "completed", "none recorded", "./run.sh #", "./run.sh # ; echo exit=$?"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			reported, command := cmp.Or(c.reported, "./run.sh"), cmp.Or(c.command, "./run.sh; echo exit=$?")
 			w := newHarnessWorld(t)
-			completionOnly(w, "k1", "./run.sh; echo exit=$?", c.status, "step 1\nexit=0")
+			completionOnly(w, "k1", command, c.status, "step 1\nexit=0")
 			var got []string
 			if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
-				got, _, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: "./run.sh", Result: delivery.CheckPass}}, nil)
+				got, _, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: reported, Result: delivery.CheckPass}}, nil)
 				return err
 			}); err != nil {
 				t.Fatal(err)
