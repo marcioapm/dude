@@ -19,6 +19,65 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
+// TestRound3MaskedBranch404StaysHeld adopts the correctness review probe.
+func TestRound3MaskedBranch404StaysHeld(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_probe")
+	a.answerAll(t, ref, "Fixed:")
+	a.published(ref, a.head(), "completed")
+	a.w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == "GET" && (strings.Contains(r.URL.Path, "/git/ref/heads/") || r.URL.Path == "/repos/acme/target") {
+				return 404
+			}
+			return 0
+		}
+	})
+	if err := a.step(); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.heldUnsettled(ref.RunID); got != 5 {
+		t.Errorf("masked ref 404 settled answers: %d held; want 5 pending verification", got)
+	}
+}
+
+// Both reviewers independently reproduced this crash window. An incomplete
+// marker search must retain the answer honestly, including past the bound.
+func TestRound3RecoveryBeyondTenPagesDoesNotDuplicate(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_reviewer")
+	for i := range 1001 {
+		a.w.gh.Comment(1, "ana", fmt.Sprintf("old discussion %d", i))
+	}
+	text := "Reviewer unique recovered answer"
+	if _, err := a.reply(ref, a.is, text); err != nil {
+		t.Fatal(err)
+	}
+	a.published(ref, a.head(), "completed")
+	crash := errors.New("reviewer simulated lost ledger record")
+	a.store.AfterAnswerPost = func(string) error { return crash }
+	if _, err := a.post(); !errors.Is(err, crash) {
+		t.Fatalf("first post: %v", err)
+	}
+	a.store.AfterAnswerPost = nil
+	for _, age := range []time.Duration{0, 25 * time.Hour} {
+		if age != 0 {
+			a.store.Now = func() time.Time { return time.Now().Add(age) }
+		}
+		mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`, ref.RunID, delivery.EvAnswerClaimed)
+		done, err := a.post()
+		if err != nil || len(done) != 1 || done[0].Unverified == "" || done[0].Withheld != "" {
+			t.Fatalf("recovery age %s: %+v %v; want uncertain, not withheld", age, done, err)
+		}
+		if got := len(a.posted(text)); got != 1 {
+			t.Errorf("recovery duplicated an existing answer beyond page ten: %d posts, want 1", got)
+		}
+		if got := a.heldUnsettled(ref.RunID); got != 1 {
+			t.Errorf("uncertain answer discarded: %d unsettled, want 1", got)
+		}
+	}
+}
+
 // #485 round 3: the reviews' findings on round 2, as tests.
 
 // Reviewer (rev485t-t, finding 2; rev485t-q F1): a fixer that published to

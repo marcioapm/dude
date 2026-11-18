@@ -324,6 +324,18 @@ func (s *Store) unverified(ctx context.Context, f fixerToPost, done FixerAnswers
 		slog.Warn("recording why a fixer's answers could not be verified failed", "run", f.ref.RunID, "why", u.Why, "error", rerr)
 		return done, nil
 	}
+	if errors.Is(err, forge.ErrSearchIncomplete) {
+		// The external outcome is unknown, not withheld. Escalate at the
+		// bound without discarding the durable claim or inventing absence.
+		if s.now().Sub(f.ended) >= answerVerifyBound {
+			if rerr := s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error {
+				return recordUnverifiedTx(ctx, tx, f.ref, "manual reconciliation required: "+u.Why)
+			}); rerr != nil {
+				return done, rerr
+			}
+		}
+		return done, nil
+	}
 	if s.now().Sub(f.ended) < answerVerifyBound {
 		return done, nil
 	}
@@ -476,7 +488,7 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 		var at time.Time
 		var released bool
 		err := tx.QueryRow(ctx, `SELECT occurred_at, COALESCE((payload->>'released')::bool, false) FROM events
-			WHERE run_id = $1 AND event_type = '`+EvAnswerClaimed+`' AND payload->>'answerId' = $2 ORDER BY cursor DESC LIMIT 1`,
+			WHERE run_id = $1 AND event_type = '`+EvAnswerClaimed+`' AND `+settledAnswerID("events")+` = $2 ORDER BY cursor DESC LIMIT 1`,
 			ref.RunID, h.ID).Scan(&at, &released)
 		switch {
 		case err == nil:
@@ -516,8 +528,12 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 	var err error
 	if recovering {
 		// An earlier poster may have posted it: its comment is found by
-		// the answer's marker.
+		// the answer's marker. A bounded but incomplete search is not
+		// evidence of absence, so fail closed and retain the claim.
 		posted, err = gh.FindAnswer(ctx, p.slug, p.number, h.ID, p.thread != 0)
+		if errors.Is(err, forge.ErrSearchIncomplete) {
+			return &Unverified{RunID: ref.RunID, Why: "answer marker search was inconclusive after the bounded page limit", Err: err}
+		}
 	}
 	if err == nil && posted.ID == "" {
 		posted, err = postReply(ctx, gh, p)

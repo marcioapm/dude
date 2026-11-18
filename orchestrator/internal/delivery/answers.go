@@ -46,7 +46,7 @@ import (
 // resolved, failed or withheld (WakeRound, answersLine, keyed by a hash of
 // the answers settled), and may add to or correct the answers.
 //
-// Exactly once: each answer is settled by one record on the fixer's Run,
+// Deduplicated settlement: each answer is settled by one record on the fixer's Run,
 // its chat.message (a reply) or pull_request.action (a resolution) naming
 // its answerId, or an EvAnswerFailed. Under the task's Chat lock, a reply
 // is claimed (EvAnswerClaimed) before GitHub is called, and no transaction
@@ -55,7 +55,11 @@ import (
 // (forge.AnswerMarker), so a poster that finds an earlier claim — one
 // that crashed between GitHub's answer and the record, or whose answer was
 // lost — looks for that comment first (forge.FindAnswer, dude's own
-// comments only, bounded) and records it rather than posting again. A
+// comments only, bounded) and records it rather than posting again. If
+// that search is truncated, the external effect remains uncertain: no
+// blind repost, no final withholding. After 24 hours a manual reconciliation
+// reason is recorded, retaining the answer and claim. This is not a
+// distributed exactly-once guarantee. A
 // claim older than answerClaimLease is taken over: its holder is taken
 // for gone (posters of a task are also serialised by its delivery's
 // workflow lease; the record is re-checked under the lock, so one that

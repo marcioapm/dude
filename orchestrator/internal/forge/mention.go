@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -378,6 +379,10 @@ func (g *GitHub) ReplyToLineComment(ctx context.Context, slug string, number int
 // rather than posted twice.
 func AnswerMarker(answerID string) string { return "<!-- dude:answer " + answerID + " -->" }
 
+// ErrSearchIncomplete means the bounded search cannot establish absence.
+// Callers must retain the uncertain answer rather than blindly repost it.
+var ErrSearchIncomplete = errors.New("answer marker search was truncated")
+
 // FindAnswer is dude's comment on pull request number marked with
 // AnswerMarker(answerID): a reply in a review thread when line, else a
 // conversation comment; a zero Posted when there is none. Only a comment
@@ -385,9 +390,8 @@ func AnswerMarker(answerID string) string { return "<!-- dude:answer " + answerI
 // dude's (Own) and carries the marker on a line of its own counts: a
 // person quoting it, or typing it, does not. It reads at most
 // findAnswerPages pages of 100: it runs only for a poster recovering a
-// claim (delivery.postHeldReply), and posters of a task are serialised by
-// its delivery's workflow lease, so the bound keeps one recovery inside
-// the claim's lease rather than guarding against a second poster.
+// claim (delivery.postHeldReply). A full final page without an own-author
+// marker yields ErrSearchIncomplete, not conclusive absence.
 func (g *GitHub) FindAnswer(ctx context.Context, slug string, number int, answerID string, line bool) (Posted, error) {
 	path, prefix := fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number), "issue-comment-"
 	if line {
@@ -415,6 +419,9 @@ func (g *GitHub) FindAnswer(ctx context.Context, slug string, number int, answer
 				return p, nil
 			}
 		}
+	}
+	if len(comments) == findAnswerPages*100 {
+		return Posted{}, ErrSearchIncomplete
 	}
 	return Posted{}, nil
 }
