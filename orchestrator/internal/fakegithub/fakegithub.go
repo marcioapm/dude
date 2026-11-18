@@ -179,6 +179,10 @@ type Server struct {
 	// Issues (reads.go), and every API request received (Requests).
 	issues   map[int]*Issue
 	requests []string
+	// The writes a reviewer sees, in the order GitHub took them (Writes):
+	// "reply line-comment-<id>" (a reply in that line comment's thread),
+	// "comment <number>" (a conversation comment), "resolve <thread id>".
+	writes []string
 	// Every head a branch was moved to through the API, in order
 	// (BranchLog).
 	moves []move
@@ -1403,6 +1407,7 @@ func (s *Server) byNode(query, id string) (map[string]any, bool) {
 					s.Unresolved[p.Number]--
 				}
 				s.ResolvedThreads[id] = true
+				s.writes = append(s.writes, "resolve "+id)
 				return map[string]any{"data": map[string]any{"resolveReviewThread": map[string]any{
 					"thread": map[string]any{"id": id, "isResolved": true}}}}, true
 			}
@@ -1537,6 +1542,7 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 		}
 		c.ID = nextID.Add(1)
 		p.Comments = append(p.Comments, c)
+		s.writes = append(s.writes, fmt.Sprintf("comment %d", p.Number))
 		if s.CommentTimeoutOnce {
 			// Taken, and the answer never arrives: the connection is cut.
 			s.CommentTimeoutOnce = false
@@ -1555,6 +1561,7 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request) {
 	}
 	c.ID = nextID.Add(1)
 	p.LineComments = append(p.LineComments, c)
+	s.writes = append(s.writes, "reply line-comment-"+r.PathValue("id"))
 	write(w, 201, s.commentsJSON(p, []Comment{c}, "discussion_r")[0])
 }
 

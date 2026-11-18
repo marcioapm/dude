@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -366,5 +368,141 @@ func TestAFixerWithManyAnswersWakesItsConductorOnce(t *testing.T) {
 	ids := w.ids(`SELECT id FROM events WHERE run_id = $1 AND event_type = $2 ORDER BY cursor`, ref.RunID, delivery.EvAnswerHeld)
 	if want := delivery.AnswersKeyForIDs(ref.RunID, ids); keys[0] != want {
 		t.Errorf("the wake's key %q, want %q (the answers it settled)", keys[0], want)
+	}
+}
+
+// Reviewer R9 (rev485t-t, finding 3): two posters truly racing on a held
+// reply's claim. Store.BeforeAnswerClaim holds the first poster after it
+// read the answer unsettled and unclaimed, until the second has read it
+// too (or two seconds pass): under the task's Chat lock the second cannot
+// read until the first commits its claim, so the wait runs out and it
+// finds the claim; without the lock both read "no claim", both claim, and
+// both post. Each answer is on GitHub once.
+func TestAFixersRacingPostersPostEachAnswerOnce(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	a.published(ref, a.head(), "completed")
+	var mu sync.Mutex
+	arrived := 0
+	both := make(chan struct{})
+	a.store.BeforeAnswerClaim = func(string) error {
+		mu.Lock()
+		arrived++
+		n := arrived
+		if n == 2 {
+			close(both)
+		}
+		mu.Unlock()
+		if n == 1 {
+			select {
+			case <-both:
+			case <-time.After(2 * time.Second):
+			}
+		}
+		return nil
+	}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 2 {
+		wg.Add(1)
+		go func() { defer wg.Done(); <-start; _, _ = a.post() }()
+	}
+	close(start)
+	wg.Wait()
+	a.store.BeforeAnswerClaim = nil
+	for _, to := range []string{a.firstID, a.secondID, a.is} {
+		if got := len(a.posted("Fixed: " + to)); got > 1 {
+			t.Errorf("racing posters put the answer to %s on GitHub %d times", to, got)
+		}
+	}
+	// What the poster that found a claim left is posted past its lease.
+	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
+		ref.RunID, delivery.EvAnswerClaimed)
+	if err := a.step(); err != nil {
+		t.Fatal(err)
+	}
+	a.countPosted(t, "Fixed:", 1)
+}
+
+// Reviewer R12 (rev485t-t, finding 3): the head is read from the pull
+// request's branch, not its own read, which trails a push by seconds. A
+// fix force-pushed away while the pull request's read still shows it
+// (fakegithub's LaggingHead) has its answers withheld.
+func TestAFixersAnswersAreWithheldWhenOnlyAStalePullRequestReadShowsTheFix(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	before := a.head()
+	fix := a.w.gh.CommitOnTop(a.w.gh.Pull(1).Head, "the fix")
+	a.published(ref, fix, "completed")
+	forceBranch(t, a.w.gh, a.w.gh.Pull(1).Head, before)
+	a.w.gh.Set(func(s *fakegithub.Server) { s.LaggingHead = map[int]string{1: fix} })
+	done, err := a.post()
+	if err != nil || len(done) != 1 || !strings.Contains(done[0].Withheld, "does not contain the published fix") {
+		t.Fatalf("the branch force-pushed away, the pull request's read still at the fix: %+v %v", done, err)
+	}
+	a.countPosted(t, "Fixed:", 0)
+	if f, s := a.resolved(); f || s {
+		t.Errorf("resolved %v %v", f, s)
+	}
+}
+
+// Reviewer R7 (rev485t-t, finding 3): a fixer's replies land before its
+// threads are resolved — "say so in it first" — as GitHub took them
+// (fakegithub's write log).
+func TestAFixersRepliesLandBeforeItsThreadsAreResolved(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	a.published(ref, a.head(), "completed")
+	from := len(a.w.gh.Writes())
+	if err := a.step(); err != nil {
+		t.Fatal(err)
+	}
+	writes := a.w.gh.Writes()[from:]
+	at := func(w string) int { return slices.Index(writes, w) }
+	for _, c := range []int64{a.first, a.second} {
+		reply, resolve := at(fmt.Sprintf("reply line-comment-%d", c)), at("resolve "+a.w.gh.ThreadID(c))
+		if reply < 0 || resolve < 0 || resolve < reply {
+			t.Errorf("thread %d: its reply at %d, its resolution at %d, in %v; want the reply first", c, reply, resolve, writes)
+		}
+	}
+}
+
+// R14, defence in depth: a poster that outlived its claim's lease between
+// GitHub taking its reply and its record (a stall: AfterAnswerPost) finds
+// the answer settled by the poster that took the stale claim over (which
+// found the reply by its marker) and records nothing more: each answer is
+// on GitHub once and recorded once.
+func TestAFixersAnswerOutlivingItsClaimIsRecordedOnce(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	a.published(ref, a.head(), "completed")
+	stalled, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	a.store.AfterAnswerPost = func(string) error {
+		once.Do(func() { close(stalled); <-resume })
+		return nil
+	}
+	errs := make(chan error, 1)
+	go func() { _, err := a.post(); errs <- err }()
+	<-stalled
+	// The stalled poster's claim, past its lease: another takes it over.
+	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
+		ref.RunID, delivery.EvAnswerClaimed)
+	other := &delivery.Store{DB: a.w.app}
+	if _, err := other.PostFixerAnswers(context.Background(), a.w.org, a.task, a.gh); err != nil {
+		t.Fatalf("the poster taking over: %v", err)
+	}
+	close(resume)
+	if err := <-errs; err != nil {
+		t.Fatalf("the stalled poster: %v", err)
+	}
+	a.countPosted(t, "Fixed:", 1)
+	if n := a.w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'chat.message' AND payload->'github'->>'answerId' IS NOT NULL`,
+		ref.RunID); n != 3 {
+		t.Errorf("%d replies recorded, want 3: one record per answer", n)
 	}
 }
