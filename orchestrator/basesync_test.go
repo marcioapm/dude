@@ -501,6 +501,15 @@ func TestIntegrationFailureOffersRetryAndTellOptsOut(t *testing.T) {
 					w.sync()
 					return w.count(escalations, wi) == before+1 && w.escalationReason(wi) == delivery.ReasonIntegrationFailed && w.count(integrationRuns, wi) == 2
 				})
+				_, failed := w.escalationOf(wi)
+				mustExec(t, w.owner, `UPDATE runs SET keep = true, kept_until = now() + interval '1 day', lux_stop_reason = 'kept' WHERE id = $1`, failed.RunID())
+				if code, body := w.decide(w.person("owner"), wi, "stop", ""); code != 200 {
+					t.Fatal(code, body)
+				}
+				w.until("the failed integration to stop", func() bool { return w.taskStatus(wi) == "aborted" })
+				if got, _ := w.options(wi); strings.Join(got, " ") != "retry restart" {
+					t.Fatalf("a stopped integration with a kept Run offers %v, want retry restart (never resume)", got)
+				}
 			}
 		})
 	}

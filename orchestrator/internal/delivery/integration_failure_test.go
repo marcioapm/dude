@@ -35,6 +35,8 @@ func TestAnIntegrationFailureEscalatesAsItsCause(t *testing.T) {
 			for _, q := range []string{
 				`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_i', $1, 'P', 'p', 'P')`,
 				`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_i', $1, 'prj_i', 1, 'Greet', 'greet', 'running')`,
+				`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, role, kind, phase, keep, kept_until, lux_run_id, lux_stop_reason)
+					VALUES ('run_int', $1, 'prj_i', 'wi_i', 1, 'failed', 'implementer', 'agent', 'fix', true, now() + interval '1 day', 'lux_int', 'kept')`,
 			} {
 				if _, err := owner.Exec(ctx, q, org); err != nil {
 					t.Fatal(err)
@@ -50,6 +52,9 @@ func TestAnIntegrationFailureEscalatesAsItsCause(t *testing.T) {
 			e := st.Escalation
 			if e.Reason != c.reason {
 				t.Fatalf("reason %s, want %s", e.Reason, c.reason)
+			}
+			if e.At != "" {
+				t.Fatalf("resume at %q: a kept integration Run must be retried from fresh heads, not resumed", e.At)
 			}
 			if e.Step != "prFix" || !strings.Contains(strings.Join(e.Actions(), " "), "retry") {
 				t.Fatalf("retry to %q, actions %v: the integration cannot be retried", e.Step, e.Actions())
