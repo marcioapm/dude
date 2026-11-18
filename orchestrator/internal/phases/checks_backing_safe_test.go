@@ -305,10 +305,10 @@ func TestEquivalentFormsStillBack(t *testing.T) {
 	for _, c := range []struct{ reported, recorded string }{
 		{"NODE_ENV=test npx jest", "env NODE_ENV=test npx jest"},
 		{"env A=1 B=2 npx jest", "A=1 B=2 npx jest"},
-		{"make test", "make test > /tmp/log 2>&1"},
+		{"make test > /tmp/log 2>&1", "make test > /tmp/log 2>&1"},
 		{"make test (api)", "cd api && make test"},
-		{"make test", "set -o pipefail && make test 2>&1 | tee log"},
-		{"make test", "set -euo pipefail; make test | tail -5"},
+		{"make test 2>&1 | tee log", "set -o pipefail && make test 2>&1 | tee log"},
+		{"make test | tail -5", "set -euo pipefail; make test | tail -5"},
 		{"make test", "  make\ttest  "},
 		{"grep -c 'a # b' f", "grep -c 'a # b' f"},
 		{"test 'a  b' = 'a  b'", "test 'a  b' = 'a  b'"},
@@ -318,28 +318,27 @@ func TestEquivalentFormsStillBack(t *testing.T) {
 		{"go vet ./... (orchestrator)", "cd orchestrator && go vet ./..."},
 		{"go vet ./...", "cd orchestrator && go vet ./..."},
 		{"npm test", "npm test; echo exit=$?"},
-		{"go test ./...", "set -euo pipefail && go test ./... 2>&1 | tail -50"},
+		{"go test ./... 2>&1 | tail -50", "set -euo pipefail && go test ./... 2>&1 | tail -50"},
 		{"python3 -m pytest -q", "python3 -m pytest -q"},
 		{"go -C orchestrator test ./internal/phases/", "go -C orchestrator test ./internal/phases/"},
 		{"bun run typecheck", "bun run typecheck"},
-		{"bun run typecheck", "set -euo pipefail && bun run typecheck | tail"},
+		{"bun run typecheck | tail", "set -euo pipefail && bun run typecheck | tail"},
 		{"go test -run 'TestA|TestB' ./x", "go test -run 'TestA|TestB' ./x"},
 		{"go test -run 'TestA$' ./x", "go test -run 'TestA$' ./x"},
 		{"gofmt -l .", "gofmt -l ."},
 		{"npx jest --maxWorkers 2 packages/backend/pdf", "npx jest --maxWorkers 2 packages/backend/pdf"},
-		{"go test ./internal/memory -run RealEmbedder", "go test ./internal/memory -run RealEmbedder 2>&1"},
+		{"go test ./internal/memory -run RealEmbedder 2>&1", "go test ./internal/memory -run RealEmbedder 2>&1"},
 		{"go test ./internal/delivery", "cd orchestrator && go test ./internal/delivery"},
-		{"cd orchestrator && go test ./internal/delivery", "set -o pipefail && cd orchestrator && go test ./internal/delivery 2>&1 | tail -40"},
-		{"make lint", "make lint >/dev/null 2>&1"},
-		{"make lint", "make lint >> /tmp/log 2>> /tmp/err"},
+		{"cd orchestrator && go test ./internal/delivery 2>&1 | tail -40", "set -o pipefail && cd orchestrator && go test ./internal/delivery 2>&1 | tail -40"},
+		{"make lint > /dev/null 2>&1", "make lint >/dev/null 2>&1"},
+		{"make lint >> /tmp/log 2>> /tmp/err", "make lint >> /tmp/log 2>> /tmp/err"},
 		{"make test", "make test; echo exit=$?"},
 		{"GOFLAGS=-count=1 go test ./x", "env GOFLAGS=-count=1 go test ./x"},
-		{"GOFLAGS=-count=1 go test ./x", "GOFLAGS=-count=1 go test ./x 2>&1"},
+		{"GOFLAGS=-count=1 go test ./x 2>&1", "GOFLAGS=-count=1 go test ./x 2>&1"},
 		{"go test -run \"$T\" ./x", "go test -run \"$T\" ./x"},
 		{"go test -run ${T} ./x", "go test -run ${T} ./x"},
-		// A report's own pipe and echo are dropped, as round 2 did: the
-		// call must still prove the command alone.
-		{"make test | tail -5", "make test"},
+		// A report's pipe is identity; only the status echo is normalized.
+		{"make test | tail -5", "set -o pipefail && make test | tail -5"},
 		{"set -o pipefail && make test | tail -5", "set -o pipefail && make test | tail -5"},
 		{"make test; echo exit=$?", "make test"},
 	} {
@@ -353,7 +352,7 @@ func TestEquivalentFormsStillBack(t *testing.T) {
 // call it the command's own.
 func TestAPipesFailureIsNotTheCommandsExit(t *testing.T) {
 	w := newHarnessWorld(t)
-	got := w.recordedAfter([][]any{{"set -o pipefail && make test | tail -5", 1}}, "make test", delivery.CheckPass, nil)
+	got := w.recordedAfter([][]any{{"set -o pipefail && make test | tail -5", 1}}, "make test | tail -5", delivery.CheckPass, nil)
 	if len(got) != 1 || got[0] == "exit 1" || !strings.Contains(got[0], "not proof") {
 		t.Fatalf("read %q", got)
 	}

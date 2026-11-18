@@ -32,7 +32,7 @@ func BenchmarkSameCommandLong(b *testing.B) {
 	long := "go test ./internal/phases/ -run '" + strings.Repeat("TestSomethingRatherLong|", 4096/24) + "' -count=1"
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, ok := sameCommand(long, "set -o pipefail && "+long+" 2>&1 | tail -40"); !ok {
+		if _, ok := sameCommand(long+" 2>&1 | tail -40", "set -o pipefail && "+long+" 2>&1 | tail -40"); !ok {
 			b.Fatal("not backed")
 		}
 	}

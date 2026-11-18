@@ -19,6 +19,14 @@ func TestRecordedCallsBackWhatTheAgentRan(t *testing.T) {
 		calls          [][]any // command, exit[, output]
 		want           string
 	}{
+		// #484 round 5: a recorded exit proves only the full command run.
+		{"reported grep pipeline, recorded plain", "cat coverage.txt | grep -q 100%", [][]any{{"cat coverage.txt", 0}}, "none recorded"},
+		{"reported pipefail grep, recorded plain", "set -o pipefail && cat coverage.txt | grep -q PASS", [][]any{{"cat coverage.txt", 0}}, "none recorded"},
+		{"reported grep, recorded tail", "set -o pipefail && make test 2>&1 | grep -q PASS", [][]any{{"set -o pipefail && make test 2>&1 | tail -5", 0}}, "none recorded"},
+		{"plain report, self-overwriting recorded", "bash t.sh", [][]any{{"bash t.sh > t.sh", 0}}, "none recorded"},
+		{"self-overwriting report, plain recorded", "bash t.sh > t.sh", [][]any{{"bash t.sh", 0}}, "none recorded"},
+		{"redirect order differs", "make test > log 2>&1", [][]any{{"make test 2>&1 > log", 0}}, "none recorded"},
+		{"redirect target quoting differs", "make test > '$LOG'", [][]any{{"make test > \"$LOG\"", 0}}, "none recorded"},
 		// The environment is part of the command: the same assignments
 		// back it, in env or assignment form; missing or other ones do
 		// not (#484 review: PATH or NODE_ENV change what runs).
@@ -33,21 +41,21 @@ func TestRecordedCallsBackWhatTheAgentRan(t *testing.T) {
 		{"annotated directory, run at the root", "npm run typecheck (office/x)", [][]any{{"npm run typecheck", 0}}, "none recorded"},
 		{"an annotation naming no directory", "python run_tests.py (run by subagent)", [][]any{{"python run_tests.py", 0}}, "none recorded"},
 		// Output plumbing that leaves the exit the command's own.
-		{"redirected to a log", "make test", [][]any{{"make test > /tmp/log 2>&1", 0}}, "exit 0"},
+		{"redirected to a log", "make test > /tmp/log 2>&1", [][]any{{"make test > /tmp/log 2>&1", 0}}, "exit 0"},
 		// Appended in the portable form (#484 round 4: it was bash's &>>,
 		// which dash reads as a background job; that form is the next case).
-		{"appended to a log", "make test", [][]any{{"make test >> /tmp/log 2>&1", 2}}, "exit 2"},
+		{"appended to a log", "make test >> /tmp/log 2>&1", [][]any{{"make test >> /tmp/log 2>&1", 2}}, "exit 2"},
 		{"appended to a log with bash's &>>", "make test", [][]any{{"make test &>> /tmp/log", 2}}, "none recorded"},
-		{"teed with pipefail", "make test", [][]any{{"set -o pipefail && make test 2>&1 | tee /tmp/log", 0}}, "exit 0"},
-		{"tailed with set -euo pipefail", "cd api && make test", [][]any{{"set -euo pipefail; cd api && make test | tail -5", 1}}, "its pipe failed (exit 1), not proof of which command failed"},
-		{"its exit echoed", "make test", [][]any{{"make test > log 2>&1; echo exit=$?", 0, "exit=0\n"}}, "exit 0"},
-		{"its failing exit echoed", "make test", [][]any{{"make test > log 2>&1; echo exit=$?", 0, "exit=2\n"}}, "exit 2"},
+		{"teed with pipefail", "make test 2>&1 | tee /tmp/log", [][]any{{"set -o pipefail && make test 2>&1 | tee /tmp/log", 0}}, "exit 0"},
+		{"tailed with set -euo pipefail", "cd api && make test | tail -5", [][]any{{"set -euo pipefail; cd api && make test | tail -5", 1}}, "its pipe failed (exit 1), not proof of which command failed"},
+		{"its exit echoed", "make test > log 2>&1", [][]any{{"make test > log 2>&1; echo exit=$?", 0, "exit=0\n"}}, "exit 0"},
+		{"its failing exit echoed", "make test > log 2>&1", [][]any{{"make test > log 2>&1; echo exit=$?", 0, "exit=2\n"}}, "exit 2"},
 		{"its exit echoed, not shown", "make test", [][]any{{"make test; echo exit=$?", 0, "ok\n"}}, "unclear: its echoed exit status is not the end of its recorded output"},
 		{"its exit echoed elsewhere", "make test", [][]any{{"make test; echo exit=$? >&2", 0, "exit=0\n"}}, "none recorded"},
 		// Plumbing that makes the exit another command's.
 		{"tailed with no pipefail", "make test", [][]any{{"make test | tail -5", 0}}, "none recorded"},
 		{"tailed, reported tailed", "make test | tail -5", [][]any{{"make test | tail -5", 0}}, "none recorded"},
-		{"tailed, reported tailed, run plain", "make test | tail -5", [][]any{{"make test", 0}}, "exit 0"},
+		{"tailed, reported tailed, run plain", "make test | tail -5", [][]any{{"make test", 0}}, "none recorded"},
 		{"pipefail after the pipe", "make test", [][]any{{"make test | tail -5; set -o pipefail", 0}}, "none recorded"},
 		{"pipefail set off", "make test", [][]any{{"set +o pipefail && make test | tail -5", 0}}, "none recorded"},
 		{"its exit echoed after a pipe", "make test", [][]any{{"make test | tail; echo exit=$?", 0, "exit=0"}}, "none recorded"},

@@ -504,7 +504,7 @@ func sameCommand(reported, recorded string) (shellCall, bool) {
 //   - A report setting -u (set -euo pipefail) with an expansion is backed
 //     only by a call that set it too: unset, the expansion fails there.
 func sameRead(want, got shellCall) bool {
-	return got.why == "" && want.why == "" && want.cmd != "" && want.cmd == got.cmd &&
+	return got.why == "" && want.why == "" && want.cmd != "" && want.cmd == got.cmd && want.flow == got.flow &&
 		(want.dir == "" || want.dir == got.dir) && sameEnv(want, got) &&
 		(want.set != "-euo" || got.set == "-euo" || !strings.Contains(want.simple, "$"))
 }
@@ -526,7 +526,9 @@ func expands(c shellCall) bool {
 
 // shellCall is a shell command as dude reads it: a call backs a pass only
 // when it is, exactly, one of the shapes of this grammar, and a report
-// must read under it too, without PIPE and ECHO:
+// must read under it too. Optional PIPE and ECHO are read on both sides:
+// PIPE (including every stage and redirect) is part of identity; ECHO is
+// only an exit-status wrapper, normalized away:
 //
 //	CALL     := [PIPEFAIL SEP] [CD "&&"] SIMPLE [PIPE] [ECHO]
 //	PIPEFAIL := "set -o pipefail" | "set -euo pipefail"   (the call's first step)
@@ -563,7 +565,8 @@ type shellCall struct {
 	// env's, viaEnv: the command is run by env.
 	pre, env []string
 	viaEnv   bool
-	cmd      string // the command's words, quoted as written, redirects dropped
+	cmd      string // the command's words, quoted as written
+	flow     string // its command, redirects and every pipeline stage, quoted as written
 	simple   string // its assignments, env and words
 	echoed   bool   // a trailing "; echo exit=$?"
 	piped    bool   // a pipe after the command (under pipefail)
@@ -593,7 +596,8 @@ func readAnnotation(s string) (cmd, dir string, ok bool) {
 }
 
 // shellOf reads command under shellCall's grammar; reported reads a
-// report's: with its directory annotation, without PIPE or ECHO. Only
+// report's: with its directory annotation and the same optional PIPE and
+// ECHO as a recorded call. Only
 // leading and trailing spaces, tabs and newlines are trimmed: nothing
 // inside is collapsed before it is read. A report that names a directory
 // both ways ("cd api && make test (web)", however spaced, after a leading
@@ -656,6 +660,7 @@ func parseCall(toks []shTok, why string, reported bool) shellCall {
 		}
 	}
 	var words []string
+	commandStart := i
 	for i < end && isWord(toks[i]) {
 		words, i = append(words, toks[i].text), i+1
 	}
@@ -690,6 +695,11 @@ func parseCall(toks []shTok, why string, reported bool) shellCall {
 		}
 		c.piped = true
 	}
+	flow := make([]string, 0, end-commandStart)
+	for _, t := range toks[commandStart:end] {
+		flow = append(flow, t.text)
+	}
+	c.flow = strings.Join(flow, " ")
 	switch {
 	case i < end:
 		c.why = "it has a step, operator or word dude does not read there"
