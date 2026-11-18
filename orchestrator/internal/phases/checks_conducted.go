@@ -324,9 +324,9 @@ func (cr *callReader) read(command string, status *string, exit *float64, output
 				cr.out[i], cr.matched[i] = reading, true
 			}
 		case c.Result == delivery.CheckFail && steps != nil:
-			if base := atBase(steps, cr.wants[i], cr.bases); base != nil {
+			if others, ok := atBase(steps, cr.wants[i], cr.bases); ok {
 				if exit != nil {
-					cr.out[i] = base.reading(int(*exit), output)
+					cr.out[i] = baseReading(int(*exit), output, others)
 				} else {
 					cr.out[i] = "completed"
 					if status != nil && *status != "" {
@@ -730,13 +730,29 @@ type shTok struct {
 // target word.
 var redirects = map[string]bool{">": true, ">>": true, "2>": true, "2>>": true, "2>&1": false, "1>&2": false}
 
+// badQuoted says quoted text holds what dude refuses inside quotes
+// (shellLex): $(, a backtick, $', $", <( or >(. Inside double quotes each
+// opens a substitution or new quoting; inside single quotes they are
+// literal, and refused there too, conservatively, so a quoted word never
+// holds what another reading of its quotes would expand.
+func badQuoted(in string) bool {
+	for _, bad := range []string{"$(", "`", "$'", `$"`, "<(", ">("} {
+		if strings.Contains(in, bad) {
+			return true
+		}
+	}
+	return false
+}
+
 // shellLex splits a one-line command into words and operators, or says
 // why dude does not read it. A word is plain characters, a backslash and
 // the character it escapes, and single- or double-quoted strings, none
-// holding $(, a backtick, $', $", <( or >(; "$" outside single quotes
-// only as $NAME or ${NAME}, and $? only in the echo's exit=$?. Outside
-// quotes, any #, newline, carriage return, &, ;, |, (, ), {, }, <, > or !
-// other than in the operators shellCall reads makes the call unread.
+// holding what badQuoted refuses; "$" outside single quotes only as $NAME
+// or ${NAME}, and $? only in the echo's exit=$?. Outside quotes, a #, a
+// newline or carriage return, a lone & (a background job, and so "&>"),
+// "||" or "|&", ";;", any of ( ) { } < ` or !, and any redirect other
+// than those in redirects make the call unread; "&&", "|", ";" and those
+// redirects are the operators shellCall reads.
 func shellLex(s string) ([]shTok, string) {
 	const (
 		quoting   = "dude cannot read its quoting"
@@ -790,44 +806,31 @@ func shellLex(s string) ([]shTok, string) {
 			if j < 0 {
 				return nil, quoting
 			}
-			in := s[i+1 : i+1+j]
-			for _, bad := range []string{"$(", "`", "$'", `$"`, "<(", ">("} {
-				if strings.Contains(in, bad) {
-					return nil, expansion
-				}
+			if badQuoted(s[i+1 : i+1+j]) {
+				return nil, expansion
 			}
 			b.WriteString(s[i : i+2+j])
 			quoted, i = true, i+1+j
 		case '"':
-			end := i + 1
-			for ; end < len(s) && s[end] != '"'; end++ {
-				if s[end] == '\\' {
-					end++
-				}
-			}
-			if end >= len(s) {
-				return nil, quoting
-			}
-			for _, bad := range []string{"$(", "`", "$'", `$"`, "<(", ">("} {
-				if strings.Contains(s[i:end+1], bad) {
-					return nil, expansion
-				}
-			}
-			j := i + 1
+			// One scan finds the closing quote and reads each $ inside.
+			j, bad := i+1, false
 			for ; j < len(s) && s[j] != '"'; j++ {
 				switch s[j] {
 				case '\\':
 					j++
 				case '$':
-					n := dollar(s, j)
-					if n == 0 {
-						return nil, expansion
+					if n := dollar(s, j); n > 0 {
+						j += n - 1
+					} else {
+						bad = true
 					}
-					j += n - 1
 				}
 			}
 			if j >= len(s) {
 				return nil, quoting
+			}
+			if bad || badQuoted(s[i+1:j]) {
+				return nil, expansion
 			}
 			b.WriteString(s[i : j+1])
 			quoted, i = true, j
@@ -904,15 +907,6 @@ func shellLex(s string) ([]shTok, string) {
 	return toks, ""
 }
 
-// baseCall is a recorded call that ran a reported command at a task's
-// base (atBase).
-type baseCall struct {
-	// others: the call has a step other than checking the base out and
-	// entering a directory before the command, whose exit may be the
-	// call's.
-	others bool
-}
-
 // baseSteps reads a recorded call (shellLex's tokens, and why it refused
 // it) as atBase does: steps of words joined by "&&", and nothing else (no
 // redirect, pipe, ";" or echo). nil when it is not so.
@@ -940,7 +934,9 @@ func baseSteps(toks []shTok, why string) [][]string {
 
 // atBase reads a recorded call, as baseSteps read it, as the reported
 // command (want, shellOf's reading of the report) run at one of the
-// task's bases, nil when it is not one. It is one when:
+// task's bases (ok), and whether it has a step other than checking the
+// base out and entering a directory before the command, whose exit may be
+// the call's (others). It is one when:
 //   - a step checks a base's commit out by its SHA (the full one, or a
 //     prefix of 12 or more): "git worktree add [options] DIR SHA",
 //     "git checkout [options] SHA" or "git switch --detach [options] SHA";
@@ -963,12 +959,11 @@ func baseSteps(toks []shTok, why string) [][]string {
 // grammar judges the ledger: a call shellLex does not read (over lines,
 // with a comment, a pipe, a background job, ANSI-C quoting) is not at the
 // base, nor is a report shellOf does not read.
-func atBase(steps [][]string, want shellCall, bases []taskBase) *baseCall {
+func atBase(steps [][]string, want shellCall, bases []taskBase) (others, ok bool) {
 	if want.why != "" || want.set != "" || want.piped || want.echoed || path.IsAbs(want.dir) || len(steps) < 2 ||
 		strings.Join(steps[len(steps)-1], " ") != want.simple {
-		return nil
+		return false, false
 	}
-	call := &baseCall{}
 	// at is the checkout's directory relative to the shell's ("" before
 	// a step checked a base out); sub the command's under it.
 	at, sub, checkedOut := "", ".", false
@@ -976,7 +971,7 @@ func atBase(steps [][]string, want shellCall, bases []taskBase) *baseCall {
 		if wt, ok := checksOutBase(step, bases); ok {
 			// A second checkout, or one inside another, is not read.
 			if checkedOut {
-				return nil
+				return false, false
 			}
 			checkedOut = true
 			if wt == "" {
@@ -987,11 +982,11 @@ func atBase(steps [][]string, want shellCall, bases []taskBase) *baseCall {
 			continue
 		}
 		if step[0] != "cd" {
-			call.others = true
+			others = true
 			continue
 		}
 		if len(step) != 2 || !baseDir(step[1]) {
-			return nil
+			return false, false
 		}
 		dir := path.Clean(step[1])
 		switch {
@@ -1000,23 +995,23 @@ func atBase(steps [][]string, want shellCall, bases []taskBase) *baseCall {
 		case strings.HasPrefix(at, "\x00"):
 			wt := path.Clean(at[1:])
 			if dir != wt && !strings.HasPrefix(dir, wt+"/") {
-				return nil
+				return false, false
 			}
 			at, sub = wt, path.Clean("./"+strings.TrimPrefix(strings.TrimPrefix(dir, wt), "/"))
 		default:
 			if path.IsAbs(dir) || dir == ".." || strings.HasPrefix(dir, "../") {
-				return nil
+				return false, false
 			}
 			sub = path.Join(sub, dir)
 		}
 	}
 	if !checkedOut || strings.HasPrefix(at, "\x00") {
-		return nil
+		return false, false
 	}
 	if want.dir != "" && path.Clean(want.dir) != sub {
-		return nil
+		return false, false
 	}
-	return call
+	return others, true
 }
 
 // checksOutBase says a step's words check out one of bases by its SHA,
@@ -1090,7 +1085,8 @@ func stepFailed(output string) bool {
 	return false
 }
 
-// baseReading: reading is how a base call that exited exit ran, for the conductor:
+// baseReading is how a call at the base (atBase, others as it says) that
+// exited exit ran, for the conductor:
 // "exit N" only when the exit is the command's own. A call ends with the
 // exit of the first step that fails, so:
 //   - 0: every step, the command too, succeeded: "exit 0";
@@ -1106,14 +1102,14 @@ func stepFailed(output string) bool {
 //     range is the command's alone.
 //
 // Only "exit N" is dude's word that the command failed at the base.
-func (b *baseCall) reading(exit int, output string) string {
+func baseReading(exit int, output string, others bool) string {
 	unclear := fmt.Sprintf("unclear: exit %d, which a step before it may have returned", exit)
 	switch {
 	case exit == 0:
 		return "exit 0"
 	case exit >= 126 || exit < 0:
 		return fmt.Sprintf("did not run or was stopped: exit %d", exit)
-	case b.others:
+	case others:
 		return unclear
 	case strings.TrimSpace(output) == "" || stepFailed(output):
 		return unclear
