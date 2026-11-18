@@ -211,13 +211,15 @@ func recordedCalls(ctx context.Context, tx pgx.Tx, runID string, checks []delive
 	// The output is read only to attribute an exit 1 at the base
 	// (baseReading), so only with a base: it would make the sort spill;
 	// last is the end of its stdout (or merged output), where an echoed
-	// exit status is (echoedExit).
+	// exit status is (echoedExit). The IN beside the CASE changes no
+	// result: it lets the completion side be filtered before the join,
+	// not after it.
 	rows, err := tx.Query(ctx, `SELECT c.payload->'input'->>'command', d.payload->>'status', d.payload->'exitCode',
 			CASE WHEN $6 THEN concat_ws(E'\n', d.payload->'output'->>'head', d.payload->'output'->>'tail', d.payload->'stdout'->>'head',
 				d.payload->'stdout'->>'tail', d.payload->'stderr'->>'head', d.payload->'stderr'->>'tail') ELSE '' END,
 			coalesce(d.payload->'output'->>'tail', d.payload->'output'->>'head', d.payload->'stdout'->>'tail', d.payload->'stdout'->>'head', '')
 		FROM events c JOIN events d ON d.run_id = c.run_id AND d.payload->>'callId' = c.payload->>'callId'
-			AND d.event_type = CASE c.event_type WHEN $2 THEN $3 ELSE $5 END
+			AND d.event_type IN ($3, $5) AND d.event_type = CASE c.event_type WHEN $2 THEN $3 ELSE $5 END
 			AND d.payload->>'childId' IS NOT DISTINCT FROM c.payload->>'childId'
 		WHERE c.run_id = $1 AND c.event_type IN ($2, $4) AND c.payload->'input' ? 'command'
 		ORDER BY d.cursor`, runID, evToolCalled, evToolCompleted, evChildToolCalled, evChildToolCompleted, cr.baseFails)
