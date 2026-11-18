@@ -440,6 +440,39 @@ func TestALongClosestCallIsClipped(t *testing.T) {
 
 // Many unbacked passes with long nearest calls still leave every check's
 // question in the conductor's wake: the hints share a bound.
+func TestOversizedNearestHintLeavesRoomForSmaller(t *testing.T) {
+	w := newHarnessWorld(t)
+	// Three large hints spend most of the budget on the first check.
+	for i := range 3 {
+		bashCall(w, fmt.Sprintf("large%d", i), "first "+strings.Repeat("x", 150)+fmt.Sprint(i), "", 0)
+	}
+	// For the second check the nearest call does not fit, but the next does.
+	bashCall(w, "small", "second small", "", 0)
+	bashCall(w, "oversized", "second wanted "+strings.Repeat("y", 150), "", 0)
+	var closest map[int][]string
+	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
+		_, closest, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{
+			{Command: "first", Result: delivery.CheckPass},
+			{Command: "second wanted", Result: delivery.CheckPass},
+		}, nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(closest[1]) != 1 || !strings.Contains(closest[1][0], "second small") {
+		t.Fatalf("smaller hint lost after oversized candidate: %q", closest)
+	}
+	total := 0
+	for _, hints := range closest {
+		for _, hint := range hints {
+			total += len(hint) + len("; ") // includes quoting/status wrappers and separators
+		}
+	}
+	if total > closestCallsTotal {
+		t.Fatalf("hint lists use %d bytes, limit %d", total, closestCallsTotal)
+	}
+}
+
 func TestLongHintsLeaveEveryQuestionInTheWake(t *testing.T) {
 	w := newHarnessWorld(t)
 	conducted(w)

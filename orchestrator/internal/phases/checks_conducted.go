@@ -356,9 +356,13 @@ func (cr *callReader) closest() map[int][]string {
 		near := closestCalls(callWords(cr.wants[i]), latest)
 		closest[i] = []string{} // none near
 		for _, n := range near {
-			if budget -= len(n); budget < 0 {
-				break
+			// The quoted command and status are already in n; reserve a
+			// separator too (even for the first), independent of rendering.
+			size := len(n) + len("; ")
+			if size > budget {
+				continue
 			}
+			budget -= size
 			closest[i] = append(closest[i], n)
 		}
 		if len(near) > 0 && len(closest[i]) == 0 {

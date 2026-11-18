@@ -1460,11 +1460,13 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 		// A dispatched run's outcome, its link, and a read's error.
 		limit = workflowLineChars
 	}
-	text := clip(oneLine(line), limit)
+	var text string
 	if kind == WakeChecks {
 		// A checks wake quotes recorded commands (%q), whose runs of
 		// spaces are part of what ran: only its line breaks go.
 		text = clip(FlatLine(line), limit)
+	} else {
+		text = clip(oneLine(line), limit)
 	}
 	if kind == "escalation" && strings.HasSuffix(key, ":decided") {
 		// A person's words are not a machine-generated fact to summarize.
