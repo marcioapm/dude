@@ -442,10 +442,37 @@ func closestCalls(want map[string]bool, calls []readCall) []string {
 }
 
 // plainDir is a cd's argument dude reads as a directory: one word, nothing
-// the shell would expand or chain, and no option ("-" goes back to the
-// previous directory, "-P" and "-L" to the home one).
+// the shell would expand or chain, no option ("-" goes back to the
+// previous directory, "-P" and "-L" to the home one), and no ".."
+// component, nor a "." one but a bare ".". The word is compared as
+// written: bash's cd resolves "x/../api" lexically, to ./api, but dash's
+// (and bash's under set -P) physically, through x when it is a symlink,
+// so where it lands is not the word's to say.
 func plainDir(dir string) bool {
-	return dir != "" && !strings.HasPrefix(dir, "-") && !strings.ContainsAny(dir, " ;|&<>$`'\"\\*?~(){}#!")
+	if dir == "" || strings.HasPrefix(dir, "-") || strings.ContainsAny(dir, " ;|&<>$`'\"\\*?~(){}#!") {
+		return false
+	}
+	if dir == "." {
+		return true
+	}
+	for part := range strings.SplitSeq(dir, "/") {
+		if part == ".." || part == "." {
+			return false
+		}
+	}
+	return true
+}
+
+// baseDir is a directory a call at the base names (a worktree it adds, a
+// cd into it): leading ".." components, as a worktree beside the Run's
+// checkout is named, then a plainDir (or nothing). atBase follows the
+// path under it itself.
+func baseDir(dir string) bool {
+	rest := dir
+	for rest == ".." || strings.HasPrefix(rest, "../") {
+		rest = strings.TrimPrefix(strings.TrimPrefix(rest, ".."), "/")
+	}
+	return rest == "" && dir != "" || rest != "" && plainDir(rest)
 }
 
 // sameCommand says a recorded shell call ran the reported command, with an
@@ -544,9 +571,9 @@ type shellCall struct {
 }
 
 // readAnnotation splits a report's trailing "(DIR)", "make test (api)",
-// into the command and the directory; ok false with none. Whether the
-// command has a cd of its own too is shellOf's to say, on the lexed
-// command.
+// into the command and the directory, the word as written (plainDir); ok
+// false with none. Whether the command has a cd of its own too is
+// shellOf's to say, on the lexed command.
 func readAnnotation(s string) (cmd, dir string, ok bool) {
 	if !strings.HasSuffix(s, ")") {
 		return "", "", false
@@ -560,7 +587,7 @@ func readAnnotation(s string) (cmd, dir string, ok bool) {
 	if cmd == "" || !plainDir(dir) {
 		return "", "", false
 	}
-	return cmd, path.Clean(dir), true
+	return cmd, dir, true
 }
 
 // shellOf reads command under shellCall's grammar; reported reads a
@@ -609,7 +636,7 @@ func parseCall(toks []shTok, why string, reported bool) shellCall {
 	}
 	if len(toks) >= i+3 && plainWord(toks[i], "cd") && isWord(toks[i+1]) && plainDir(toks[i+1].text) &&
 		toks[i+2].op && toks[i+2].text == "&&" {
-		c.dir, i = path.Clean(toks[i+1].text), i+3
+		c.dir, i = toks[i+1].text, i+3
 	}
 	end := len(toks)
 	if n := end; n-i >= 4 && toks[n-3].op && toks[n-3].text == ";" && plainWord(toks[n-2], "echo") && toks[n-1].status {
@@ -963,7 +990,7 @@ func atBase(steps [][]string, want shellCall, bases []taskBase) *baseCall {
 			call.others = true
 			continue
 		}
-		if len(step) != 2 || !plainDir(step[1]) {
+		if len(step) != 2 || !baseDir(step[1]) {
 			return nil
 		}
 		dir := path.Clean(step[1])
@@ -1021,7 +1048,7 @@ func checksOutBase(f []string, bases []taskBase) (worktree string, ok bool) {
 	}
 	var sha string
 	switch {
-	case sub == "worktree" && len(args) == 2 && plainDir(args[0]):
+	case sub == "worktree" && len(args) == 2 && baseDir(args[0]):
 		worktree, sha = args[0], args[1]
 	case sub == "checkout" && len(args) == 1:
 		sha = args[0]

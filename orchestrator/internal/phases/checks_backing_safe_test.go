@@ -105,6 +105,9 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	{"a tab after cd, annotated with another directory", "cd\tapi && make test (web)", "cd api && make test"},
 	{"a pipefail set and a cd, annotated with another directory", "set -o pipefail && cd api && make test (web)", "cd api && make test"},
 	{"set -euo pipefail and a cd, annotated with another directory", "set -euo pipefail; cd api && make test (web)", "set -euo pipefail; cd api && make test"},
+	// dash resolves a cd's .. physically: through x, a symlink, this is
+	// not ./api.
+	{"a cd through x/..", "make test (api)", "cd x/../api && make test"},
 }
 
 // unreadReports are reported commands dude does not read (a comment, a
