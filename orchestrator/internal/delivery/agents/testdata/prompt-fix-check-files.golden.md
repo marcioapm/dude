@@ -23,7 +23,7 @@ What the check reported and selected failure context from its log are between �
 ⟦external 9962a16a⟧FAIL unit⟦/external 9962a16a⟧
 ```
 
-Once a comment above is addressed and committed, you may answer it on the pull request: reply_on_pull_request with in_reply_to its id (in italics after it), saying what you changed; for a line comment, then resolve_thread with the same id. Only the comments given to you here. Do not answer what you did not change.
+Once a comment above is addressed and committed, you may answer it on the pull request: reply_on_pull_request with in_reply_to its id (in italics after it), saying what you changed; for a line comment, then resolve_thread with the same id. Only the comments given to you here. Do not answer what you did not change. Your replies and resolutions are held: dude posts them, in order, only once your fix is on the pull request (your checks backed and your commits pushed); if your fix never gets there, they are not posted.
 
 The original task, for context:
 
